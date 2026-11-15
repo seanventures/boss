@@ -9484,6 +9484,11 @@ def build_default_registry() -> ToolRegistry:
     _register_run_turn_tools(reg)
     _register_diagnosis_tools(reg)
     _register_system_health_tools(reg)
+    # The Infra Agent's storage tools (BOSSAPP-1157): inspect, plan, move the executor, propose
+    # a rule, report, hold/release — typed, receipted, no shell (tools/storage_tools.py).
+    from .storage_tools import register_storage_tools
+
+    register_storage_tools(reg)
     _register_debug_session_tools(reg)
     _register_write_tools(reg)
     _register_operations_tools(reg)

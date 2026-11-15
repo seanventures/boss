@@ -821,6 +821,10 @@ BOSS_KG_MCP_HTTP_TOKEN="$(openssl rand -hex 24)"
 # keeps the existing key below; secrets stored under an earlier in-database key still decrypt
 # (the provisioned-key fallback) and are re-encrypted under this one when next written.
 BOSS_KMS_MASTER_KEY="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n')"
+# THE INSTALL'S ID (BOSSAPP-1157): the label every container, image, volume and backup BOSS makes
+# carries (`boss.install_id`); the Infra Agent's host helper deletes ONLY what carries it. Random,
+# stable, kept on reruns (below) and minted for older installs by reconcile_api_credentials.py.
+BOSS_INSTALL_ID="inst_$(openssl rand -hex 8)"
 
 # The directory that contains this installer, when it is already a BOSS checkout.
 # A downloaded one-liner lives in a temp file and returns nothing here.
@@ -1197,6 +1201,8 @@ if [ -f "$ENV_FILE" ]; then
   # NEVER REPLACED once written: secrets in the database were encrypted with it.
   _keep_kms="$(_existing BOSS_KMS_MASTER_KEY || true)"
   if [ -n "$_keep_kms" ]; then BOSS_KMS_MASTER_KEY="$_keep_kms"; fi
+  _keep_install_id="$(_existing BOSS_INSTALL_ID || true)"
+  if [ -n "$_keep_install_id" ]; then BOSS_INSTALL_ID="$_keep_install_id"; fi
   if [ -n "$_keep_db" ]; then
     BOSS_DB_PASSWORD="$_keep_db"
     ui_info "Reusing the existing database password — the data volume already expects it"
@@ -1239,6 +1245,7 @@ BOSS_CONSOLE_PASSWORD=${BOSS_CONSOLE_PASSWORD}
 BOSS_CONSOLE_SESSION_SECRET=${BOSS_CONSOLE_SESSION_SECRET}
 BOSS_KG_MCP_HTTP_TOKEN=${BOSS_KG_MCP_HTTP_TOKEN}
 BOSS_KMS_MASTER_KEY=${BOSS_KMS_MASTER_KEY}
+BOSS_INSTALL_ID=${BOSS_INSTALL_ID}
 BOSS_DEFAULT_ORG_ID=org_boss
 BOSS_DEFAULT_WORKSPACE_ID=ws_boss
 BOSS_DEFAULT_PROJECT_ID=boss-dogfood

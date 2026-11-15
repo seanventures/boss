@@ -72,8 +72,11 @@ func TestP8aT4NoVMOriginatesAPacket(t *testing.T) {
 	})
 	hb, _ := e.cp.LastHeartbeat(e.hostID())
 	f := hb.Facts
-	if !f.KVM || !f.FirecrackerLive || !f.Seccomp || !f.StrictSecrets || !f.NetPolicyOK || f.Jailer {
+	if !f.KVM || !f.FirecrackerLive || !f.Seccomp || !f.StrictSecrets || !f.NetPolicyOK {
 		t.Fatalf("heartbeat facts on KVM: %+v", f)
+	}
+	if f.Jailer != (os.Getenv("BOSS_E2E_JAILER_BIN") != "") {
+		t.Fatalf("jailer_on must be measured, not configured: %+v", f)
 	}
 	t.Logf("heartbeat facts: kvm=%v firecracker_live=%v seccomp=%v jailer=%v smt_off=%v ksm_off=%v swap_off=%v strict=%v net_policy_ok=%v reasons=%v",
 		f.KVM, f.FirecrackerLive, f.Seccomp, f.Jailer, f.SMTOff, f.KSMOff, f.SwapOff, f.StrictSecrets, f.NetPolicyOK, f.Reasons)
@@ -144,6 +147,35 @@ func TestP8aT4NoVMOriginatesAPacket(t *testing.T) {
 		}
 	}
 	t.Logf("positive control vm_01: guest=%v counters=%+v; other %d taps still 0", sc, c1, n-1)
+
+	// Second positive control on vm_02: jailed, it is a clone restored from
+	// vm_01's snapshot (uniform tap0 in its own netns); unjailed, a cold boot
+	// (replica snapshots are refused without the jailer). Either way its
+	// traffic must show on ITS OWN tap only, never on the template's.
+	if n >= 2 {
+		sc2 := control(t, e.mgr, "vm_02", "selfcheck_egress").Selfcheck
+		for k, v := range sc2 {
+			if v == "CONNECTED" || v == "REPLY" || v == "RESOLVED" {
+				t.Fatalf("restored replica egress escaped: %s=%s", k, v)
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+		c2, _ := nc.Counters(context.Background(), netpol.TapName("vm_02"))
+		if c2.Originated == 0 || c2.Metadata == 0 {
+			t.Fatalf("restored replica's egress was not counted on its own tap: %+v (guest saw %v)", c2, sc2)
+		}
+		c1b, _ := nc.Counters(context.Background(), netpol.TapName("vm_01"))
+		if c1b != c1 {
+			t.Fatalf("vm_02's traffic moved vm_01's tap counters: %+v → %+v", c1, c1b)
+		}
+		for i := 3; i <= n; i++ {
+			c, _ := nc.Counters(context.Background(), netpol.TapName(fmt.Sprintf("vm_%02d", i)))
+			if c.Originated != 0 || c.Metadata != 0 {
+				t.Fatalf("vm_%02d counters moved: %+v", i, c)
+			}
+		}
+		t.Logf("restored replica vm_02: own tap counters=%+v; vm_01's unchanged; other %d taps still 0", c2, n-2)
+	}
 }
 
 type upLog struct {

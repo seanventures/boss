@@ -90,6 +90,20 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
         _log.warning("system doctor not started", exc_info=True)
         started["system_doctor"] = False
     try:
+        # The storage watch (Infra Agent, BOSSAPP-1157): host readings → forecast → one incident
+        # per host; the deterministic cleanup executor advances on its tick; the install-wide
+        # work hold auto-releases when stuck. Layer 1 runs whether or not the agent is up.
+        from . import storage_watch
+
+        if getattr(settings, "storage_watch_enabled", True):
+            storage_watch.start(engine, settings)
+            started["storage_watch"] = True
+        else:
+            started["storage_watch"] = False
+    except Exception:  # noqa: BLE001
+        _log.warning("storage watch not started", exc_info=True)
+        started["storage_watch"] = False
+    try:
         # Scheduled self-backups (BOSSAPP-838): every API process starts it; the DB lease lets
         # exactly one of them back up.
         from . import backup_scheduler
@@ -137,6 +151,19 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
     except Exception:  # noqa: BLE001
         _log.warning("ticket sync scheduler not started", exc_info=True)
         started["ticket_sync"] = False
+    try:
+        # Event intake (P9a, BOSSAPP-1093): the inbox processor — every API process runs one;
+        # rows are claimed SKIP LOCKED so two processes are competing consumers, never a race.
+        from . import event_intake
+
+        if getattr(settings, "intake_processor_enabled", True):
+            event_intake.start(engine, settings)
+            started["intake_processor"] = True
+        else:
+            started["intake_processor"] = False
+    except Exception:  # noqa: BLE001
+        _log.warning("event intake processor not started", exc_info=True)
+        started["intake_processor"] = False
     try:
         # The reflection agent's schedule (BOSSAPP-888): paused by default — a tick does work
         # only for a project that turned reflection on, and it only ever proposes.

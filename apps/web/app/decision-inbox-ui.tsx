@@ -23,6 +23,7 @@ import { isAreaId } from "../lib/area-ids";
 import { displayTitle } from "../lib/directive-subject";
 import { PrdRecordView } from "./prd-record";
 import { TypedAnswer, TypedDecisionForm } from "./typed-form-ui";
+import { StorageDeleteFromDecision } from "./infra/storage-delete-decision";
 import { DecisionOptions, optionsOf } from "./decision-options-ui";
 import { AlwaysAllowOption, alwaysAllowOffer } from "./always-allow-ui";
 import { parseForm } from "../lib/typed-form";
@@ -1277,6 +1278,10 @@ export function DecisionActions({ decision, projectId, actorId }: {
   if (proposal && (decision.status === "pending" || decision.status === "delegated")) {
     if (answered) return <p className="tq-said" data-testid="secret-proposal-sent">{answered === "stored" ? "Stored — the agent can use it now." : "Declined — the agent was told."}</p>;
     return <SecretProposalCard decisionId={decision.id} proposal={proposal} actorId={actorId} onDone={setAnswered} />;
+  }
+  // THE INFRA AGENT'S DELETION (BOSSAPP-1156, S4): exact items, GB, the rule proposal, one tap.
+  if (decision.kind === "storage_delete" && (decision.status === "pending" || decision.status === "delegated")) {
+    return <StorageDeleteFromDecision decision={decision} projectId={projectId} actor={actorId} />;
   }
   if (typedForm) {
     if (answered) return <p className="tq-said" data-testid="typed-sent">{answered === "approved" ? "Answer sent — the agent carries on with it." : "Declined — the agent was told why."}</p>;

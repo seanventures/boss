@@ -1,6 +1,7 @@
 package vmm
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -50,9 +51,9 @@ func TestVMIDPattern(t *testing.T) {
 	}
 }
 
-func TestSnapshotSeamsSayP8b(t *testing.T) {
+func TestRestoreNeedsASnapshot(t *testing.T) {
 	for _, m := range []Manager{&Process{}, &Firecracker{}} {
-		if _, err := m.Restore(nil, Spec{}, SnapshotRef{}); err != ErrNotImplemented {
+		if _, err := m.Restore(context.Background(), Spec{VMID: "x"}, SnapshotRef{}); err != ErrNoSnapshot {
 			t.Fatal(err)
 		}
 	}

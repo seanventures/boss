@@ -23,6 +23,9 @@ _log = logging.getLogger("boss.system_services")
 #: An interval means it beats; a service whose last beat is older than three intervals is stale.
 KNOWN: dict[str, tuple[str, str, str, Optional[int]]] = {
     "system_doctor": ("Doctor", "thread", "api", 15),
+    # The storage watch (Infra Agent, BOSSAPP-1157): readings → forecast → incidents; the
+    # deterministic executor advances on its tick. The Infra Agent itself is an agent, not here.
+    "storage_watch": ("Storage watch", "thread", "api", 30),
     "reaper": ("Reaper", "thread", "api", None),
     "stop_watch": ("Stop watch", "thread", "api", None),
     "ledger": ("Ownership ledger", "thread", "api", None),
@@ -33,6 +36,7 @@ KNOWN: dict[str, tuple[str, str, str, Optional[int]]] = {
     "skill_sources": ("Skill source sync", "scheduler", "api", None),
     "extension_scheduler": ("Extension scheduler", "scheduler", "api", None),
     "ticket_sync": ("Ticket sync", "scheduler", "api", None),
+    "intake_processor": ("Event intake", "thread", "api", 2),
     "reflection": ("Reflection schedule", "scheduler", "api", None),
     "bot_clock": ("Bot clock", "worker_tick", "worker", 60),
     "worker_sweeps": ("Worker sweeps", "worker_tick", "worker", 5),

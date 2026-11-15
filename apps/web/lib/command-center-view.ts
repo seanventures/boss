@@ -17,6 +17,7 @@ import {
 } from "./agents-live-board";
 import { usePolled, type Polled } from "./factory-floor";
 import type { HostAdvice } from "../app/host-advice";
+import { parseIncident, type StorageIncident } from "./infra-storage";
 import { TZ_COOKIE, viewUrl } from "./command-center-view-server";
 
 export { TZ_COOKIE, viewUrl };
@@ -138,6 +139,9 @@ export type CommandCenterView = {
   host: HostAdvice;
   systems: SystemDot[];
   budgetRefusal: BudgetRefusal | null;
+  /** The Infra Agent's open storage incident (contract §9): null when none, `undefined` from an
+   *  API that does not carry the field yet (the page then reads the shell's poll instead). */
+  infraIncident?: StorageIncident | null;
 };
 
 /** What the page holds: the last good view (or none) and whether the API answered last time. */
@@ -267,6 +271,7 @@ export function parseCommandCenterView(w: unknown): CommandCenterView {
             ...(typeof h.action === "string" ? { action: h.action } : {}),
             ...(typeof h.cause === "string" ? { cause: h.cause } : {}) },
     systems: arr(o.systems).map(parseSystem),
+    ...("infra_incident" in o ? { infraIncident: parseIncident(o.infra_incident) } : {}),
     budgetRefusal: (() => {
       const r = obj(o.budget_refusal);
       return o.budget_refusal ? {

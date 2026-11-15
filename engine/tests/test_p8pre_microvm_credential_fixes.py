@@ -62,18 +62,27 @@ def test_python_and_go_agree_on_every_engine_env_name():
 
 
 def test_a_claude_code_submit_carries_no_openai_or_azure_key():
+    """The v1.0 narrowing, on the frozen legacy lane where v1.0 still exists (P8b S9); the
+    default v1.1 body carries NO credential at all, whatever the spec holds."""
     spec = {"task_id": "crun_t5", "owner": "o", "repo": "r", "engine": "claude_code",
             "claude_oauth_token": "oat-not-real", "openai_api_key": "sk-not-real",
             "openai_base_url": "https://api.example/v1", "azure_key": "az-not-real",
             "azure_endpoint": "https://az.example", "model": "gpt"}
-    body = sc.build_submit_request(spec, "p")
+    body = sc.build_submit_request(spec, "p", legacy=True)
+    assert body["contract_version"] == sc.LEGACY_CONTRACT_VERSION
     assert body["engine_env"] == {"CLAUDE_CODE_OAUTH_TOKEN": "oat-not-real"}
-    assert sc.validate_submit_request(body) == []
+    assert sc.validate_submit_request(body, strict_secrets=False, allow_legacy=True) == []
     # The openai lane keeps its own names and nothing of claude's.
-    body = sc.build_submit_request({**spec, "engine": "openai"}, "p")
+    body = sc.build_submit_request({**spec, "engine": "openai"}, "p", legacy=True)
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in body["engine_env"]
     assert body["engine_env"]["OPENAI_API_KEY"] == "sk-not-real"
     assert body["engine_env"]["AZURE_OPENAI_KEY"] == "az-not-real"
+    # v1.1: none of it rides; the flat credential fields are gone, not emptied.
+    body = sc.build_submit_request(spec, "p")
+    assert body["contract_version"] == sc.CONTRACT_VERSION
+    assert not (set(body) & sc.RAW_CREDENTIAL_FIELDS)
+    assert "oat-not-real" not in str(body) and "sk-not-real" not in str(body)
+    assert sc.validate_submit_request(body) == []
 
 
 def test_code_task_service_builds_no_foreign_model_fields_for_claude_code():
@@ -89,10 +98,10 @@ def test_code_task_service_builds_no_foreign_model_fields_for_claude_code():
 
 def test_an_unknown_engine_env_name_is_refused_by_name_never_by_value():
     body = sc.build_submit_request({"task_id": "crun_t5", "owner": "o", "repo": "r",
-                                    "engine": "openai"}, "p")
+                                    "engine": "openai"}, "p", legacy=True)
     body["engine_env"]["SOMETHING_ELSE"] = "value-not-printed"
     body["engine_env"]["CLAUDE_CODE_OAUTH_TOKEN"] = "value-not-printed"
-    problems = sc.validate_submit_request(body)
+    problems = sc.validate_submit_request(body, strict_secrets=False, allow_legacy=True)
     assert problems == [
         "engine_env_not_for_engine: engine_env CLAUDE_CODE_OAUTH_TOKEN is not read by engine openai",
         "engine_env_unknown: engine_env SOMETHING_ELSE is not a name the guest reads",
@@ -107,10 +116,24 @@ def test_the_micro_vm_provider_refuses_before_it_submits(monkeypatch):
     from boss_engine.services.sandbox_provider import MicroVMProvider
 
     provider = MicroVMProvider.__new__(MicroVMProvider)
+    provider.settings = Settings()
+    # The legacy lane keeps its by-name refusal.
+    monkeypatch.setenv(sc.LEGACY_ENV, "1")
     with pytest.raises(sc.EngineEnvRefused) as refused:
         provider._submit_body({"task_id": "crun_t5", "owner": "o", "repo": "r",
                                "engine": "claude_code", "anthropic_api_key": KEY}, "p")
     assert refused.value.reason == sc.ENGINE_ENV_UNKNOWN and KEY not in str(refused.value)
+    # v1.1 (the default): the key never rides, so there is nothing to refuse — and a body that
+    # somehow carried one is refused by field name before it is sent.
+    monkeypatch.delenv(sc.LEGACY_ENV)
+    body = provider._submit_body({"task_id": "crun_t5", "owner": "o", "repo": "r",
+                                  "engine": "claude_code", "anthropic_api_key": KEY,
+                                  "token": TOKEN}, "p")
+    assert KEY not in str(body) and TOKEN not in str(body)
+    assert body["contract_version"] == sc.CONTRACT_VERSION and "handles" in body
+    with pytest.raises(sc.RawCredentialRefused) as raw:
+        sc.ensure_no_raw_credential({**body, "git_token": TOKEN})
+    assert raw.value.reason == sc.RAW_CREDENTIAL_FIELD and TOKEN not in str(raw.value)
 
 
 def test_the_lane_stays_frozen_by_default():

@@ -223,3 +223,27 @@ skills:
       required_permissions: [model_call]
     policy:
       requires_receipt: false
+
+  # THE INFRA AGENT'S BUNDLE (BOSSAPP-1157, boss-infra-agent-lld.md §3): BOSS's own storage tools
+  # offered by their names (agent_baseline.bundles → tools/storage_tools.py). Every write is
+  # `safe`: it moves the deterministic executor along, opens a card, or writes words. Nothing
+  # here deletes anything the executor would not delete on its own; tier 3 always goes to a
+  # person through the card the executor opens. Granted to infra_agent; never in the baseline.
+  - id: storage.steward
+    kind: engine_read
+    risk_tier: 1
+    mock_mode: false
+    load: eager
+    description: Inspect a host's storage (usage by type, forecast, the open incident and its plan), move the deterministic cleanup one notch, propose a permanent retention rule, write the cause and the report notes, and set or release the install-wide work hold within its rules.
+    data_boundary: internal
+    input_schema:
+      bundle_tool: string
+    output_schema: { result: object }
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [infra_agent]
+      required_permissions: [system_operate]
+    policy:
+      requires_receipt: false
+      tools: [storage_inspect, storage_plan, storage_run_step, storage_propose_rule, storage_report, work_hold_set, work_hold_release]

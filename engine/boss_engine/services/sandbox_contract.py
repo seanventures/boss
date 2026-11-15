@@ -1,4 +1,4 @@
-"""#99 — the async Python⇄Go sandbox job contract (spec 10 §4).
+"""#99 — the async Python⇄Go sandbox job contract (spec 10 §4), v1.1 (P8b S9, BOSSAPP-1070).
 
 The Python engine dispatches a whole coding task to an external **sandbox-service** (the Go
 Firecracker service, S1) over HTTP and never blocks a worker on the execution: **submit → poll →
@@ -12,12 +12,34 @@ parse is defensive (a malformed guest response degrades to a failed run, never a
 
 Ownership: the **Python side is canonical**; the Go service conforms. Changes are **additive** and bump
 :data:`CONTRACT_VERSION`.
+
+v1.1 — NO CREDENTIAL IN THE BODY (boss-agent-hosts-lld.md §4.2, S9). v1.0 carried the run's git
+token and model credential (``git_token``, ``engine_env``) INTO the guest; P8-pre closed the worst
+leaks and P8b removes the fields. A v1.1 body carries instead:
+
+  * ``handles``   — ``{egr, mdl, mcpgw, run}``: opaque ``boss_*`` placeholders, worthless off the VM
+                     (they are redeemed only through the VM's own vsock socket on its own host);
+  * ``endpoints`` — the guest-loopback ports boss-vsockd bridges (71xx: model, git/api, mcp,
+                     run plane, connect);
+  * ``mcp``       — the MCP gateway URLs (``servers: {name: url}``), handle in ``handles.mcpgw``.
+
+Both validators (Python here, Go ``contract.ValidateSubmit``) refuse a v1.1 body that carries a raw
+credential field, or — on a ``strict_secrets`` host — any secret-shaped value (``env_refs``'s name
+shape, and the well-known key prefixes). **v1.0 is accepted only for the frozen legacy lane**
+(``BOSS_SANDBOX_CONTRACT_LEGACY=1``), with a deprecation log line, and never by a strict host.
 """
 from __future__ import annotations
 
+import logging
+import os
+import re
 from typing import Any, Optional
 
-CONTRACT_VERSION = "1.0"
+log = logging.getLogger(__name__)
+
+CONTRACT_VERSION = "1.1"
+LEGACY_CONTRACT_VERSION = "1.0"
+LEGACY_ENV = "BOSS_SANDBOX_CONTRACT_LEGACY"
 
 # --- job status (the guest's poll response `status`) -------------------------
 QUEUED, RUNNING, DONE, FAILED, TIMEOUT, CANCELLED = (
@@ -47,6 +69,11 @@ def available(settings) -> bool:
     return bool((getattr(settings, "sandbox_agent_url", "") or "").strip())
 
 
+def legacy_lane_enabled() -> bool:
+    """The frozen v1.0 lane, on only when the operator says so (BOSS_SANDBOX_CONTRACT_LEGACY=1)."""
+    return (os.environ.get(LEGACY_ENV) or "").strip().lower() in ("1", "true", "yes")
+
+
 # --- routes (the Go service implements these) --------------------------------
 def submit_path() -> str:
     return "/v1/sandbox/tasks"
@@ -70,7 +97,116 @@ def heartbeat_path(sandbox_task_id: str) -> str:
     return f"/v1/sandbox/tasks/{sandbox_task_id}/heartbeat"
 
 
-# --- submit request ----------------------------------------------------------
+# --- v1.1: handles, endpoints, mcp --------------------------------------------
+#: The guest's handles, by kind, and the prefix each must carry (identity/runs.py, mcp_gateway,
+#: streaming_model_gateway). A value under one of these names that does not carry its prefix is a
+#: raw credential, and refused.
+HANDLE_PREFIXES: dict[str, str] = {
+    "egr": "boss_egr_", "mdl": "boss_mdl_", "mcpgw": "boss_mcpgw_", "run": "boss_run_",
+}
+#: Guest-loopback endpoints boss-vsockd bridges to boss-hostd (LLD §3.8; HOST_API.md §4.1).
+#: Fixed by the host image, sent so a guest never guesses a port.
+DEFAULT_ENDPOINTS: dict[str, str] = {
+    "model": "http://127.0.0.1:7101",
+    "git": "http://127.0.0.1:7102",
+    "mcp": "http://127.0.0.1:7103",
+    "run_plane": "http://127.0.0.1:7104",
+    "connect": "http://127.0.0.1:7105",
+}
+_ENDPOINT_RE = re.compile(r"^http://127\.0\.0\.1:71\d\d$")
+
+#: Fields a v1.1 body never carries: the v1.0 credential fields and every flat guest-spec name
+#: a credential ever rode under. Present (even empty) → refused by name.
+RAW_CREDENTIAL_FIELDS: frozenset[str] = frozenset({
+    "git_token", "engine_env", "token", "claude_oauth_token", "anthropic_api_key",
+    "openai_api_key", "azure_key", "github_token", "gh_token", "api_key", "password",
+})
+#: Well-known credential shapes, refused wherever they appear in a strict body (a key stuffed
+#: into `instructions` or `resources` is still a key in the guest).
+_SECRET_VALUE = re.compile(
+    r"(sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{32,}|gh[pousr]_[A-Za-z0-9]{30,}"
+    r"|github_pat_[A-Za-z0-9_]{40,}|glpat-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{20,}"
+    r"|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})")
+
+RAW_CREDENTIAL_FIELD = "raw_credential_field"
+SECRET_SHAPED_VALUE = "secret_shaped_value"
+CONTRACT_DEPRECATED = "contract_deprecated"
+CONTRACT_LEGACY_REFUSED = "contract_legacy_refused"
+
+
+class RawCredentialRefused(ValueError):
+    """A v1.1 body about to carry a credential into the guest. Carries field NAMES only."""
+
+    def __init__(self, reason: str, problems: list[str]):
+        self.reason = reason
+        self.problems = list(problems)
+        super().__init__("; ".join(problems))
+
+
+#: env_refs._SECRET_NAME (env_refs.py:253-257) minus the bare ``_KEY$`` — a contract body names
+#: ids that way (dedupe_key, idempotency_key); API/ACCESS/PRIVATE keys still match. Go mirrors it.
+_SECRET_NAME = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSPHRASE|_PAT$|API_KEY|ACCESS_KEY|PRIVATE_KEY"
+                          r"|CREDENTIAL)")
+
+
+def _name_carries_secret(name: str) -> bool:
+    from .env_refs import _NOT_SECRET_NAME
+
+    upper = str(name).upper()
+    return bool(_SECRET_NAME.search(upper)) and not _NOT_SECRET_NAME.search(upper)
+
+
+def secret_problems(body: Any, *, strict: bool = True) -> list[str]:
+    """Every place a v1.1 body carries a credential (field names, never values). A raw credential
+    field is refused always; a secret-shaped value (a secret-named key with a non-handle value,
+    or a well-known key shape anywhere) only on a strict host. Go's ``SecretProblems`` has the
+    same order and wording."""
+    problems: list[str] = []
+    if not isinstance(body, dict):
+        return problems
+    for name in sorted(RAW_CREDENTIAL_FIELDS & set(body)):
+        problems.append(f"{RAW_CREDENTIAL_FIELD}: {name} is not a v1.1 field; the guest holds handles")
+    handles = body.get("handles") if isinstance(body.get("handles"), dict) else {}
+    for kind in sorted(HANDLE_PREFIXES):
+        value, prefix = handles.get(kind), HANDLE_PREFIXES[kind]
+        if value and not str(value).startswith(prefix):
+            problems.append(f"{RAW_CREDENTIAL_FIELD}: handles.{kind} is not a {prefix} handle")
+    if strict:
+        problems += _walk(body, "")
+    return problems
+
+
+def _walk(node: Any, path: str) -> list[str]:
+    out: list[str] = []
+    if isinstance(node, dict):
+        for key in sorted(node, key=str):
+            value = node[key]
+            here = f"{path}.{key}" if path else str(key)
+            if here.startswith("handles.") and isinstance(value, str) and value.startswith("boss_"):
+                continue
+            if isinstance(value, str) and value and _name_carries_secret(str(key)) \
+                    and not value.startswith("boss_"):
+                out.append(f"{SECRET_SHAPED_VALUE}: {here} is named like a secret and holds a value")
+                continue
+            out += _walk(value, here)
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            out += _walk(value, f"{path}[{i}]")
+    elif isinstance(node, str) and _SECRET_VALUE.search(node):
+        out.append(f"{SECRET_SHAPED_VALUE}: {path or 'body'} holds a credential-shaped value")
+    return out
+
+
+def ensure_no_raw_credential(body: dict[str, Any], *, strict: bool = True) -> None:
+    """Raise RawCredentialRefused, by name, before a body that carries a credential is sent."""
+    problems = secret_problems(body, strict=strict)
+    if problems:
+        reason = (RAW_CREDENTIAL_FIELD if problems[0].startswith(RAW_CREDENTIAL_FIELD + ":")
+                  else SECRET_SHAPED_VALUE)
+        raise RawCredentialRefused(reason, problems)
+
+
+# --- v1.0 (legacy lane only) ---------------------------------------------------
 _ENGINE_ENV_MAP = (
     ("CLAUDE_CODE_OAUTH_TOKEN", "claude_oauth_token"),
     # The console's Anthropic API key, when a claude_code guest runs on it (claude_credential).
@@ -88,7 +224,7 @@ _ENGINE_ENV_MAP = (
 )
 
 
-#: The engine_env names the guest reads — exactly Go's ``engineEnvToSpec`` keys
+#: The engine_env names a v1.0 guest reads — exactly Go's ``engineEnvToSpec`` keys
 #: (services/sandbox-service/internal/contract/contract.go). Anything else is refused by name.
 GUEST_ENGINE_ENV_NAMES = frozenset({
     "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
@@ -113,7 +249,7 @@ ENGINE_ENV_NOT_FOR_ENGINE = "engine_env_not_for_engine"
 
 
 class EngineEnvRefused(ValueError):
-    """A submit body whose engine_env the guest cannot honour. Carries names only, never a
+    """A v1.0 submit body whose engine_env the guest cannot honour. Carries names only, never a
     value; ``reason`` is ENGINE_ENV_UNKNOWN or ENGINE_ENV_NOT_FOR_ENGINE."""
 
     def __init__(self, reason: str, problems: list[str]):
@@ -131,7 +267,7 @@ def engine_env_for(engine: str, env: dict[str, Any]) -> dict[str, Any]:
 
 
 def engine_env_problems(engine: Any, env: Any) -> list[str]:
-    """Named refusals for engine_env (Go's ``EngineEnvProblems``, same order and wording)."""
+    """Named refusals for a v1.0 engine_env (Go's ``EngineEnvProblems``, same order and wording)."""
     if not isinstance(env, dict):
         return []
     name_of_engine = str(engine or "").strip().lower()
@@ -146,16 +282,9 @@ def engine_env_problems(engine: Any, env: Any) -> list[str]:
     return problems
 
 
-def build_submit_request(spec: dict[str, Any], tenant_id: Optional[str], *,
-                         task_id: Optional[str] = None) -> dict[str, Any]:
-    """The versioned submit body: BOSS's flat guest_spec → the sandbox-service submit shape. Model
-    creds ride in ``engine_env`` per task (never baked into the guest image)."""
-    engine = str(spec.get("engine") or "openai").lower()
-    # Only the selected engine's credential rides in engine_env (P8-pre S5).
-    env = engine_env_for(engine, {k: spec[f] for k, f in _ENGINE_ENV_MAP if spec.get(f)})
-    tid = task_id or spec.get("task_id") or "crun_unknown"
+# --- submit request ----------------------------------------------------------
+def _common(spec: dict[str, Any], tenant_id: Optional[str], tid: str, engine: str) -> dict[str, Any]:
     return {
-        "contract_version": CONTRACT_VERSION,
         "task_id": tid,
         "tenant_id": tenant_id or "default",
         "repo": {
@@ -163,12 +292,10 @@ def build_submit_request(spec: dict[str, Any], tenant_id: Optional[str], *,
             "base_branch": spec.get("base_branch") or "main",
             "work_branch": spec.get("work_branch") or f"boss/code/{tid}",
         },
-        "git_token": spec.get("token") or "",
         "instructions": spec.get("instructions", ""),
         "acceptance_criteria": spec.get("acceptance_criteria", []),
         "test_commands": spec.get("test_commands", []),
         "engine": engine,
-        "engine_env": env,
         "run_mutation": bool(spec.get("run_mutation", False)),
         # Diagnostic/offline flag the Go side already types (SubmitRequest.test_mode):
         # test_mode guests init a throwaway repo instead of cloning, so the
@@ -183,6 +310,34 @@ def build_submit_request(spec: dict[str, Any], tenant_id: Optional[str], *,
         "resources": {**(spec.get("resources") or {}),
                       **({"max_turns": spec["max_turns"]} if spec.get("max_turns") else {})},
     }
+
+
+def build_submit_request(spec: dict[str, Any], tenant_id: Optional[str], *,
+                         task_id: Optional[str] = None, handles: Optional[dict[str, str]] = None,
+                         endpoints: Optional[dict[str, str]] = None,
+                         mcp: Optional[dict[str, Any]] = None, legacy: bool = False
+                         ) -> dict[str, Any]:
+    """The versioned submit body: BOSS's flat guest_spec → the sandbox-service submit shape.
+
+    v1.1 (default): no credential. ``handles`` are the guest's placeholders (``spec["handles"]``
+    when not given), ``endpoints`` the loopback ports (the defaults), ``mcp`` the gateway URLs.
+    ``legacy=True`` builds a v1.0 body for the frozen lane — model creds in ``engine_env``, the
+    git token in ``git_token`` — and logs that it is deprecated."""
+    engine = str(spec.get("engine") or "openai").lower()
+    tid = task_id or spec.get("task_id") or "crun_unknown"
+    body = _common(spec, tenant_id, tid, engine)
+    if legacy:
+        log.warning("%s: sandbox contract v%s is deprecated (P8b S9); task %s is built on the "
+                    "frozen legacy lane, which carries credentials into the guest",
+                    CONTRACT_DEPRECATED, LEGACY_CONTRACT_VERSION, tid)
+        env = engine_env_for(engine, {k: spec[f] for k, f in _ENGINE_ENV_MAP if spec.get(f)})
+        return {"contract_version": LEGACY_CONTRACT_VERSION, **body,
+                "git_token": spec.get("token") or "", "engine_env": env}
+    given = dict(handles if handles is not None else (spec.get("handles") or {}))
+    return {"contract_version": CONTRACT_VERSION, **body,
+            "handles": {k: str(given[k]) for k in HANDLE_PREFIXES if given.get(k)},
+            "endpoints": {**DEFAULT_ENDPOINTS, **(endpoints or {})},
+            "mcp": {"servers": dict((mcp or spec.get("mcp") or {}).get("servers") or {})}}
 
 
 # --- response parsing (defensive) --------------------------------------------
@@ -222,25 +377,55 @@ def parse_result(resp: Any) -> dict[str, Any]:
     }
 
 
-def validate_submit_request(body: dict[str, Any]) -> list[str]:
+def validate_submit_request(body: dict[str, Any], *, strict_secrets: bool = True,
+                            allow_legacy: Optional[bool] = None) -> list[str]:
     """Return a list of contract violations in a submit body (empty = valid). For tests + a Go
-    conformance check."""
+    conformance check (Go's ``ValidateSubmitWith`` has the same reasons and wording).
+
+    A v1.1 body is refused when it carries a raw credential field, and — when ``strict_secrets``
+    (the host's mode; the default) — any secret-shaped value. A v1.0 body is accepted only when
+    ``allow_legacy`` (default: the legacy lane's switch) and never on a strict host."""
     problems: list[str] = []
-    if body.get("contract_version") != CONTRACT_VERSION:
+    version = body.get("contract_version")
+    if version == LEGACY_CONTRACT_VERSION:
+        legacy = legacy_lane_enabled() if allow_legacy is None else allow_legacy
+        if not legacy:
+            problems.append(f"{CONTRACT_LEGACY_REFUSED}: contract_version {LEGACY_CONTRACT_VERSION} "
+                            f"is the frozen legacy lane; send {CONTRACT_VERSION}")
+        elif strict_secrets:
+            problems.append(f"{CONTRACT_LEGACY_REFUSED}: contract_version {LEGACY_CONTRACT_VERSION} "
+                            "carries credentials and is refused by a strict_secrets host")
+        else:
+            log.warning("%s: a contract v%s submit was accepted on the legacy lane",
+                        CONTRACT_DEPRECATED, LEGACY_CONTRACT_VERSION)
+            if not isinstance(body.get("engine_env"), dict):
+                problems.append("engine_env must be an object")
+            problems += engine_env_problems(body.get("engine"), body.get("engine_env"))
+    elif version != CONTRACT_VERSION:
         problems.append(f"contract_version must be {CONTRACT_VERSION}")
+    else:
+        problems += secret_problems(body, strict=strict_secrets)
+        if not isinstance(body.get("handles"), dict):
+            problems.append("handles must be an object")
+        endpoints = body.get("endpoints")
+        if not isinstance(endpoints, dict):
+            problems.append("endpoints must be an object")
+        else:
+            for name in sorted(endpoints):
+                if not _ENDPOINT_RE.match(str(endpoints[name])):
+                    problems.append(f"endpoints.{name} must be a guest-loopback 71xx URL")
+        if body.get("mcp") is not None and not isinstance(body.get("mcp"), dict):
+            problems.append("mcp must be an object")
     if not body.get("task_id"):
         problems.append("task_id is required")
     repo = body.get("repo") or {}
     if not repo.get("owner") or not repo.get("name"):
         problems.append("repo.owner and repo.name are required")
-    if not isinstance(body.get("engine_env"), dict):
-        problems.append("engine_env must be an object")
-    problems += engine_env_problems(body.get("engine"), body.get("engine_env"))
     return problems
 
 
 def ensure_engine_env_valid(body: dict[str, Any]) -> None:
-    """Raise EngineEnvRefused, by name, before a body the guest cannot honour is sent."""
+    """Raise EngineEnvRefused, by name, before a v1.0 body the guest cannot honour is sent."""
     problems = engine_env_problems(body.get("engine"), body.get("engine_env"))
     if problems:
         reason = (ENGINE_ENV_UNKNOWN if problems[0].startswith(ENGINE_ENV_UNKNOWN + ":")

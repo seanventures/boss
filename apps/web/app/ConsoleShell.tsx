@@ -21,6 +21,8 @@ import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
 import { dockWidthFor, railForDock } from "../lib/shell-rail";
 import { ProjectStrip } from "./project-strip";
 import { STRIP_NOTICE_SLOT } from "./strip-notice";
+import { InfraStripBanner } from "./infra/infra-strip-banner";
+import { InfraIncidentProvider } from "../lib/infra-storage";
 import { useFullPage } from "./workflows/full-page";
 import { ProjectMenu, type ProjectMenuItem } from "./project-menu";
 import { useDetailsDismiss } from "../lib/details-dismiss";
@@ -427,7 +429,11 @@ export default function ConsoleShell(props: ConsoleShellProps) {
       stub={identity?.stub ?? false}
       unavailable={identity ? (identity.unavailable ?? false) : true}
     >
-      <ConsoleShellInner {...props} />
+      {/* ONE POLL of the Infra Agent's incident for the whole page (BOSSAPP-1156): the strip, the
+          Command Center card and Storage read it from here. */}
+      <InfraIncidentProvider projectId={scope.projectId ?? scope.project}>
+        <ConsoleShellInner {...props} />
+      </InfraIncidentProvider>
       <ConsentHost />
     </IdentityProvider>
   );
@@ -1773,6 +1779,9 @@ function ConsoleShellInner({
           </div>
         ) : null}
 
+        {/* S1 · A STORAGE INCIDENT, ON EVERY PAGE (BOSSAPP-1156): red, flashing until acknowledged,
+            never hidden while the Infra Agent is still working. Nothing at all on a healthy host. */}
+        <InfraStripBanner projectId={scope.projectId ?? scope.project} actor={scope.actor} orgId={orgId ?? null} />
         {/* The open project's archived notice, when the Builds chip in the top bar has one. */}
         <div id={STRIP_NOTICE_SLOT} className="bx-strip-notice" />
 

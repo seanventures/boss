@@ -56,7 +56,9 @@ export type AttentionKind = "approval" | "failed_step" | "readiness" | "gate_ove
   | "system_health" | "infra";
 export type DecisionKindWire = "workflow_gate" | "deploy_gate" | "pull_request" | "refusal" | "general"
   // Read in Approvals, never decided inline: a person approves the document they read.
-  | "architecture_review";
+  | "architecture_review"
+  // The Infra Agent's irreversible deletion (BOSSAPP-1156): its own card, wherever decisions show.
+  | "storage_delete";
 
 export type AttentionAction = {
   action: "approve" | "reject" | "revise" | "delegate" | "execute";

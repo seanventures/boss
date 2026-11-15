@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -40,8 +41,14 @@ func TestGoldenSubmitShape(t *testing.T) {
 	if req.Engine != "claude_code" {
 		t.Fatalf("engine=%q", req.Engine)
 	}
-	if req.EngineEnv["CLAUDE_CODE_OAUTH_TOKEN"] != "tok" {
-		t.Fatalf("engine_env=%v", req.EngineEnv)
+	if req.Handles["mdl"] != "boss_mdl_example-handle-not-a-credential" || req.Handles["egr"] == "" {
+		t.Fatalf("handles=%v", req.Handles)
+	}
+	if req.Endpoints["model"] != "http://127.0.0.1:7101" {
+		t.Fatalf("endpoints=%v", req.Endpoints)
+	}
+	if req.GitToken != "" || req.EngineEnv != nil {
+		t.Fatalf("a v1.1 body carries no credential field: %q %v", req.GitToken, req.EngineEnv)
 	}
 	if problems := ValidateSubmit(req); len(problems) != 0 {
 		t.Fatalf("expected valid golden submit, got %v", problems)
@@ -49,7 +56,7 @@ func TestGoldenSubmitShape(t *testing.T) {
 }
 
 func TestValidateSubmitRejectsUnknownVersionAndMissingFields(t *testing.T) {
-	req := SubmitRequest{ContractVersion: "0.9", EngineEnv: map[string]string{}}
+	req := SubmitRequest{ContractVersion: "0.9", Handles: map[string]string{}, Endpoints: map[string]string{}}
 	problems := ValidateSubmit(req)
 	joined := ""
 	for _, p := range problems {
@@ -72,10 +79,47 @@ func TestEchoSkipsRepoRequirement(t *testing.T) {
 		TaskID:          "exercise_echo_api",
 		Engine:          "echo",
 		TestMode:        true,
-		EngineEnv:       map[string]string{},
+		Handles:         map[string]string{},
+		Endpoints:       map[string]string{},
 	}
 	if problems := ValidateSubmit(req); len(problems) != 0 {
 		t.Fatalf("echo should not require repo: %v", problems)
+	}
+}
+
+// P8b S9: the legacy fixture is refused by default and by every strict host, accepted
+// (with its engine_env rules) only on the legacy lane; a v1.1 body never carries a credential.
+func TestLegacyBodyOnlyOnTheLegacyLane(t *testing.T) {
+	req, err := DecodeSubmit(testdata(t, "submit_legacy_v10.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := ValidateSubmit(req); len(p) == 0 || RefusalReason(p) != ReasonContractLegacyRefused {
+		t.Fatalf("default options must refuse v1.0: %v", p)
+	}
+	if p := ValidateSubmitWith(req, Options{StrictSecrets: true, AllowLegacy: true}); len(p) == 0 ||
+		RefusalReason(p) != ReasonContractLegacyRefused {
+		t.Fatalf("a strict host must refuse v1.0 even on the legacy lane: %v", p)
+	}
+	if p := ValidateSubmitWith(req, Options{StrictSecrets: false, AllowLegacy: true}); len(p) != 0 {
+		t.Fatalf("the legacy lane accepts the v1.0 golden: %v", p)
+	}
+	v11, _ := DecodeSubmit(testdata(t, "submit_valid.json"))
+	v11.Raw["git_token"] = "ghs_value-not-printed"
+	p := ValidateSubmit(v11)
+	if RefusalReason(p) != ReasonRawCredentialField || contains(strings.Join(p, ";"), "value-not-printed") {
+		t.Fatalf("raw credential field: %v", p)
+	}
+	v11, _ = DecodeSubmit(testdata(t, "submit_valid.json"))
+	v11.Raw["instructions"] = "use AKIAIOSFODNN7EXAMPLE to log in"
+	if RefusalReason(ValidateSubmit(v11)) != ReasonSecretShapedValue {
+		t.Fatalf("a key shape anywhere in a strict body is refused: %v", ValidateSubmit(v11))
+	}
+	if p := ValidateSubmitWith(v11, Options{StrictSecrets: false}); len(p) != 0 {
+		t.Fatalf("a non-strict host judges fields, not shapes: %v", p)
+	}
+	if OptionsFromEnv() != DefaultOptions {
+		t.Fatalf("strict on, legacy off by default: %+v", OptionsFromEnv())
 	}
 }
 

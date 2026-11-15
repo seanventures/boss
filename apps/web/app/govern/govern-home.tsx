@@ -22,6 +22,8 @@ import { WherePeopleDecide } from "./decide-tab";
 import { SharingTab } from "./sharing-tab";
 import { SPEND_PERIODS, SpendHome, type SpendPeriod } from "./spend-home";
 import { SpendTab } from "./spend-tab";
+import { StorageCard } from "../infra/storage-card";
+import { StorageIncidentReport } from "../infra/storage-incident-report";
 
 export const GOVERN_POLL_MS = 15_000;
 /**
@@ -31,7 +33,7 @@ export const GOVERN_POLL_MS = 15_000;
  * Sharing and Self-fix. Old links keep working: ?tab=spend|envelopes|sharing|selffix open what
  * they opened, ?focus=… still lands on that row of the board.
  */
-type Tab = "overview" | "limits" | "autonomy" | "areas" | "board" | "spend" | "envelopes" | "sharing" | "selffix";
+type Tab = "overview" | "limits" | "autonomy" | "areas" | "board" | "spend" | "envelopes" | "sharing" | "selffix" | "infrastructure";
 const MAIN: { key: Tab; label: string; tip: string }[] = [
   { key: "overview", label: "Spend", tip: "How much, on which model and project" },
   { key: "limits", label: "Limits", tip: "Caps, what happens at them, per project" },
@@ -48,23 +50,30 @@ const MORE: { key: Tab; label: string; tip: string }[] = [
   { key: "envelopes", label: "Envelopes", tip: "Allocations, initiatives and commitments" },
   { key: "sharing", label: "Sharing", tip: "What this install tells the BOSS project, and the switch" },
   { key: "selffix", label: "Self-fix", tip: "BOSS fixing its own bugs: the switch and the caps" },
+  // STORAGE (BOSSAPP-1156): what takes the room, where it is heading, the retention rules that
+  // keep it tidy, and every storage incident's report (`?incident=`). Policy lives here; the
+  // host drawer in Infra › Fleet links to the same card for one host (`?host=`).
+  { key: "infrastructure", label: "Infrastructure", tip: "Storage by type, growth and forecast, retention rules, incident reports" },
 ];
 const TABS = new Set<Tab>([...MAIN, ...MORE].map((t) => t.key));
 
-function readTab(): { tab: Tab; focus: string | null } {
-  if (typeof window === "undefined") return { tab: "overview", focus: null };
+type Place = { tab: Tab; focus: string | null; host: string | null; incident: string | null };
+function readTab(): Place {
+  if (typeof window === "undefined") return { tab: "overview", focus: null, host: null, incident: null };
   const q = new URLSearchParams(window.location.search);
   const tab = q.get("tab") as Tab | null;
   const focus = q.get("focus");
-  if (tab && TABS.has(tab)) return { tab, focus };
+  const host = q.get("host");
+  const incident = q.get("incident");
+  if (tab && TABS.has(tab)) return { tab, focus, host, incident };
   // A link to one limit (Setup's Budget row, the Log) lands on that row of the board.
-  return { tab: focus ? "board" : "overview", focus };
+  return { tab: focus ? "board" : "overview", focus, host, incident };
 }
 
 export function GovernHome({ projectId, actor }: { projectId: string; actor: string }) {
   const live = useConsoleLive();
   // Read after mount: the server renders the default tab, and the first paint must match it.
-  const [{ tab, focus }, setPlace] = useState<{ tab: Tab; focus: string | null }>({ tab: "overview", focus: null });
+  const [{ tab, focus, host, incident }, setPlace] = useState<Place>({ tab: "overview", focus: null, host: null, incident: null });
   const [period, setPeriod] = useState<SpendPeriod>("month");
   // Spend reads its own window only once the URL has been read: a link to another tab must not
   // first fetch the landing's spend (one read opens Govern).
@@ -77,14 +86,18 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
     return () => window.removeEventListener("popstate", on);
   }, []);
   const moreRef = useRef<HTMLDetailsElement | null>(null);
-  const go = (next: Tab, nextFocus: string | null = null) => {
-    setPlace({ tab: next, focus: nextFocus });
+  const go = (next: Tab, nextFocus: string | null = null, more: { host?: string | null; incident?: string | null } = {}) => {
+    const nextHost = next === "infrastructure" ? (more.host === undefined ? host : more.host) : null;
+    const nextIncident = next === "infrastructure" ? (more.incident === undefined ? incident : more.incident) : null;
+    setPlace({ tab: next, focus: nextFocus, host: nextHost, incident: nextIncident });
     if (moreRef.current) moreRef.current.open = false;
     try {
       const q = new URLSearchParams(window.location.search);
       q.set("area", "budget");
       if (next === "overview") q.delete("tab"); else q.set("tab", next);
       if (nextFocus) q.set("focus", nextFocus); else q.delete("focus");
+      if (nextHost) q.set("host", nextHost); else q.delete("host");
+      if (nextIncident) q.set("incident", nextIncident); else q.delete("incident");
       window.history.replaceState(null, "", `${window.location.pathname}?${q.toString()}`);
     } catch { /* in-memory state still moves */ }
   };
@@ -141,7 +154,7 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
           </span>
         </details>
       </header>
-      {tab !== "overview" && tab !== "limits" && tab !== "autonomy" && tab !== "areas" ? (
+      {tab !== "overview" && tab !== "limits" && tab !== "autonomy" && tab !== "areas" && tab !== "infrastructure" ? (
         <GovernMeter meter={data?.meter ?? null} error={view.error} onRetry={view.reload} />
       ) : null}
       {frozen ? (
@@ -172,6 +185,10 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
         <SharingTab projectId={projectId} actor={actor} paused={!live} />
       ) : tab === "selffix" ? (
         <SelfFixTab projectId={projectId} actor={actor} paused={!live} />
+      ) : tab === "infrastructure" ? (
+        incident
+          ? <StorageIncidentReport projectId={projectId} incidentId={incident} />
+          : <StorageCard projectId={projectId} actor={actor} hostId={host} onHost={(h) => go("infrastructure", null, { host: h })} />
       ) : (
         <EnvelopesTab projectId={projectId} actor={actor} paused={!live} />
       )}

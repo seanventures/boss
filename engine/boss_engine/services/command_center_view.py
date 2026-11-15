@@ -836,7 +836,8 @@ def systems(*, probe: Mapping[str, Any], basics: Optional[Mapping[str, Any]],
 def status(*, counts: Mapping[str, Any], attention: list[Mapping[str, Any]],
            budget: Mapping[str, Any], host: Mapping[str, Any], runs_24h: int, ever: bool,
            last_work_at: Optional[str], now: datetime,
-           refusal: Optional[Mapping[str, Any]] = None) -> ViewStatus:
+           refusal: Optional[Mapping[str, Any]] = None,
+           infra: Optional[Mapping[str, Any]] = None) -> ViewStatus:
     """THE STATE SENTENCE (§4.5), first matching rule wins. Row 1 (`Can't reach BOSS`) is the
     web's: only it can know. Pure.
 
@@ -851,6 +852,12 @@ def status(*, counts: Mapping[str, Any], attention: list[Mapping[str, Any]],
         over = str((refusal or {}).get("period") or period)
         return {"key": "budget_stopped", "text": "Budget stopped work", "tone": "red",
                 "tip": f"Over the {over} cap. Raise it in Govern › Limits."}
+    if infra and str(infra.get("severity") or "") == "critical" and infra.get("status") != "resolved":
+        # THE INFRA AGENT IS CLEANING (BOSSAPP-1157, LLD §6.2): between the budget and the host,
+        # because it is the one red state BOSS is already fixing by itself.
+        return {"key": "infra_incident", "text": "Infra Agent is cleaning", "tone": "red",
+                "tip": _clip(str(infra.get("cause_text") or
+                                 "Storage is critical; work is paused at its checkpoints"))}
     if host.get("show") and host.get("severity") == "critical":
         return {"key": "host_critical", "text": "Host struggling", "tone": "red",
                 "tip": _clip(str(host.get("headline") or "The host needs attention"))}
@@ -933,6 +940,8 @@ def etag_of(view: Mapping[str, Any], board_etag: str) -> str:
                  view["host"].get("headline")],
         "systems": [(s["key"], s["tone"], s["tip"]) for s in view["systems"]],
         "refusal": [(view.get("budget_refusal") or {}).get(k) for k in ("period", "actual_usd_micros")],
+        "infra": [(view.get("infra_incident") or {}).get(k) for k in ("id", "status", "freed_gb",
+                                                                      "acknowledged_by")],
     }
     digest = hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode())
     return f'"cc-{digest.hexdigest()[:24]}"'
@@ -1070,6 +1079,8 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
     old_total = _quiet(connection, "old questions", old_questions, connection, project_id, now,
                        default=None)
     attention, cleanup = group_old_findings(board["attention"], now, old_total)
+    # The Infra Agent's open incident (BOSSAPP-1157): the most severe one, as the strip sees it.
+    infra_incident = _quiet(connection, "the infra agent", _infra_incident, connection, default=None)
     view: dict[str, Any] = {
         "project_id": project_id,
         "etag": "",
@@ -1078,7 +1089,8 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
         "status": status(counts={**counts, "moving": moving}, attention=board["attention"],
                          budget=budget_full,
                          host=host, runs_24h=runs_24h, ever=ever,
-                         last_work_at=today["last_work_at"], now=now, refusal=refusal),
+                         last_work_at=today["last_work_at"], now=now, refusal=refusal,
+                         infra=infra_incident),
         "counts": counts,
         "attention": attention,
         "missions": board["missions"],
@@ -1094,6 +1106,14 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
         "host": {k: v for k, v in host.items() if k != "gauges"},
         "systems": dots,
         "budget_refusal": refusal,
+        "infra_incident": infra_incident,
     }
     view["etag"] = etag_of(view, board["etag"])
     return view
+
+
+def _infra_incident(connection: Any) -> Optional[dict[str, Any]]:
+    from .storage_incidents import open_rows, public
+
+    rows = open_rows(connection)
+    return public(connection, rows[0]) if rows else None

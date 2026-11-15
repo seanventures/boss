@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -87,8 +88,13 @@ func newEnv(t *testing.T) *env {
 	case "process":
 		e.mgr = &vmm.Process{Root: e.runDir, GuestBin: e.guest}
 	case "firecracker":
-		e.mgr = &vmm.Firecracker{Root: e.runDir, Bin: os.Getenv("BOSS_E2E_FC_BIN"),
-			Kernel: os.Getenv("BOSS_E2E_FC_KERNEL"), Rootfs: os.Getenv("BOSS_E2E_FC_ROOTFS")}
+		fc := &vmm.Firecracker{Root: e.runDir, Bin: os.Getenv("BOSS_E2E_FC_BIN"),
+			Kernel: os.Getenv("BOSS_E2E_FC_KERNEL"), Rootfs: os.Getenv("BOSS_E2E_FC_ROOTFS"),
+			SnapDir: filepath.Join(e.state, "snapshots"), OverlayMiB: envInt("BOSS_E2E_OVERLAY_MIB", 1024)}
+		if jb := os.Getenv("BOSS_E2E_JAILER_BIN"); jb != "" {
+			fc.Jailer = &vmm.Jailer{Bin: jb, ChrootBase: envOr("BOSS_E2E_JAILER_CHROOT", "/srv/boss-jail-e2e")}
+		}
+		e.mgr = fc
 		if err := e.mgr.Check(); err != nil {
 			t.Skipf("firecracker not ready: %v", err)
 		}
@@ -135,6 +141,12 @@ func (e *env) startHostd() {
 		"BOSS_HOSTD_NETADM_SOCKET="+os.Getenv("BOSS_E2E_NETADM_SOCKET"),
 		"BOSS_HOSTD_MAX_VMS=80",
 		"BOSS_MICROVM_CLAIMS_FROZEN="+envOr("BOSS_E2E_FROZEN", "true"),
+		"BOSS_HOSTD_JAILER_BIN="+os.Getenv("BOSS_E2E_JAILER_BIN"),
+		"BOSS_HOSTD_JAILER_CHROOT="+envOr("BOSS_E2E_JAILER_CHROOT", "/srv/boss-jail-e2e"),
+		"BOSS_HOSTD_SNAP_DIR="+filepath.Join(e.state, "snapshots"),
+		"BOSS_HOSTD_OVERLAY_MIB="+envOr("BOSS_E2E_OVERLAY_MIB", "1024"),
+		"BOSS_HOSTD_REPLICA_SURGE="+envOr("BOSS_E2E_REPLICA_SURGE", "0"), // P8a tests count processes; P8b opts in
+		"BOSS_HOSTD_VM_PREFIX="+os.Getenv("BOSS_E2E_VM_PREFIX"),
 	)
 	cmd.Stdout, cmd.Stderr = logf, logf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -148,6 +160,15 @@ func (e *env) startHostd() {
 func envOr(k, d string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
+	}
+	return d
+}
+
+func envInt(k string, d int) int {
+	if v := os.Getenv(k); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return d
 }

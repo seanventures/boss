@@ -60,12 +60,13 @@ func pollUntilTerminal(t *testing.T, srv http.Handler, id string, budget time.Du
 func TestProcessBackendRunsEchoTaskEndToEnd(t *testing.T) {
 	srv := liveServer(t, false)
 	body, _ := json.Marshal(map[string]any{
-		"contract_version": "1.0",
+		"contract_version": "1.1",
 		"task_id":          "crun_live_echo",
 		"tenant_id":        "default",
 		"engine":           "echo",
 		"test_mode":        true,
-		"engine_env":       map[string]string{},
+		"handles":          map[string]string{},
+		"endpoints":        map[string]string{},
 		"repo":             map[string]string{},
 		"instructions":     "echo round-trip",
 		"timeout":          120,
@@ -199,11 +200,12 @@ func TestCancelLandsTerminalCancelled(t *testing.T) {
 	// A task that sleeps long enough to be cancelled mid-flight: echo guest in
 	// test_mode runs quickly, so use its own test_commands to stall.
 	body, _ := json.Marshal(map[string]any{
-		"contract_version": "1.0",
+		"contract_version": "1.1",
 		"task_id":          "crun_cancel_me",
 		"engine":           "echo",
 		"test_mode":        true,
-		"engine_env":       map[string]string{},
+		"handles":          map[string]string{},
+		"endpoints":        map[string]string{},
 		"repo":             map[string]string{},
 		"test_commands":    []string{"python3 -c 'import time; time.sleep(300)'"},
 		"timeout":          600,

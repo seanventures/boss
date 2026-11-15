@@ -79,7 +79,9 @@ def test_echo_submit_body_is_echo_only():
     assert body["engine"] == ECHO_ENGINE
     assert body["test_mode"] is True
     assert body["task_id"] == ECHO_EXERCISE_TASK_ID
-    assert body["engine_env"] == {}
+    # v1.1 (P8b S9): no credential field at all; the echo holds no handle and needs none.
+    assert "engine_env" not in body and "git_token" not in body
+    assert body["handles"] == {} and body["endpoints"]["model"] == "http://127.0.0.1:7101"
     assert "claude" not in str(body).lower()
     assert body["run_mutation"] is False
 

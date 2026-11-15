@@ -28,6 +28,11 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(system_health_router)
     except ImportError:
         pass
+    # The Infra Agent's storage self-healing (BOSSAPP-1157): incidents, summary, rules, hold,
+    # the host helper's samples and signed jobs. Unguarded: the strip polls it on every area.
+    from .infra_storage import router as infra_storage_router
+
+    app.include_router(infra_storage_router)
     # Identity IdP catalog + setup blueprints
     try:
         from .idp_catalog import router as identity_router

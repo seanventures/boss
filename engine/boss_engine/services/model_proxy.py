@@ -45,6 +45,14 @@ actually crossed it (requests, input/output/cache tokens, read from the provider
 that the engine attaches to the session's result as `_proxy_usage`, and `run_usage` sums per run
 — a consistency check, never a second charge.
 
+ONE IMPLEMENTATION WITH THE CENTRAL GATEWAY (P8b S10)
+-----------------------------------------------------
+The adapters, the header rewrite and the usage reader come from streaming_model_gateway, the
+central streaming gateway a microVM's calls cross; this proxy is the local lane's loopback
+listener over the same rules. With BOSS_MODEL_PROXY_VIA_GATEWAY=1 (and BOSS_MODEL_GATEWAY_URL)
+a local session's handle is issued at that gateway instead, so both lanes run one code path.
+Off by default: nothing changes for `runtime: local`.
+
 WHAT IS NOT COVERED
 -------------------
 A subscription login (CLAUDE_CODE_OAUTH_TOKEN, the Codex ChatGPT login file, a Grok session) is
@@ -60,8 +68,6 @@ import functools
 import hashlib
 import json
 import logging
-import os
-import re
 import secrets
 import threading
 import time
@@ -83,91 +89,12 @@ MAX_BODY_BYTES = 64 * 1024 * 1024
 #: How much of a non-streamed answer is kept to read its `usage` (the body itself is streamed).
 _USAGE_KEEP = 4 * 1024 * 1024
 
-#: Never forwarded, in either direction: hop-by-hop headers and every credential header a client
-#: could send under any provider's name.
-_HOP = frozenset({"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
-                  "trailer", "trailers", "transfer-encoding", "upgrade", "host", "content-length"})
-_CREDENTIAL_HEADERS = frozenset({"authorization", "x-api-key", "api-key", "x-goog-api-key",
-                                 "cookie", "proxy-authorization"})
-
-
-# ── Providers ─────────────────────────────────────────────────────────────────────────────────
-
-@dataclass(frozen=True)
-class ProviderAdapter:
-    """One provider's model API: where it is, which paths are model calls, how the credential
-    goes on the request, and which environment names a client reads."""
-
-    name: str
-    upstream: str
-    #: (METHOD, full-match regex on the path after the provider prefix).
-    paths: tuple[tuple[str, str], ...]
-    header: str
-    header_format: str
-    #: The variables the real key would occupy in a client's environment (all are replaced).
-    key_env: tuple[str, ...]
-    #: The variables a client reads its base URL from, and the suffix each one wants.
-    base_env: tuple[tuple[str, str], ...]
-    #: An install-environment override of the upstream (a corporate gateway), read in BOSS.
-    upstream_env: tuple[str, ...] = ()
-
-    def allows(self, method: str, path: str) -> bool:
-        return any(method.upper() == m and re.fullmatch(p, path) for m, p in self.paths)
-
-    def credential_header(self, credential: str) -> tuple[str, str]:
-        return self.header, self.header_format.format(credential)
-
-    def resolve_upstream(self, override: Optional[str] = None) -> str:
-        if override:
-            return override.rstrip("/")
-        for name in self.upstream_env:
-            value = (os.environ.get(name) or "").strip()
-            if value and not _is_ours(value):
-                return value.rstrip("/")
-        return self.upstream
-
-
-_MODEL_ID = r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}"
-_OPENAI_PATHS = (
-    ("POST", r"/v1/chat/completions"), ("POST", r"/v1/responses"),
-    ("POST", r"/v1/completions"), ("POST", r"/v1/embeddings"),
-    ("GET", r"/v1/models"), ("GET", rf"/v1/models/{_MODEL_ID}"),
-)
-
-ANTHROPIC = ProviderAdapter(
-    name="anthropic", upstream="https://api.anthropic.com",
-    paths=(("POST", r"/v1/messages"), ("POST", r"/v1/messages/count_tokens"),
-           ("GET", r"/v1/models"), ("GET", rf"/v1/models/{_MODEL_ID}")),
-    header="x-api-key", header_format="{}",
-    # The Claude CLI sends ANTHROPIC_API_KEY as x-api-key and ANTHROPIC_AUTH_TOKEN as a bearer;
-    # it reads ANTHROPIC_BASE_URL. litellm-based CLIs (aider) read ANTHROPIC_API_BASE.
-    key_env=("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
-    base_env=(("ANTHROPIC_BASE_URL", ""), ("ANTHROPIC_API_BASE", "")),
-    upstream_env=("ANTHROPIC_BASE_URL",),
-)
-OPENAI = ProviderAdapter(
-    name="openai", upstream="https://api.openai.com", paths=_OPENAI_PATHS,
-    header="authorization", header_format="Bearer {}",
-    key_env=("OPENAI_API_KEY",),
-    base_env=(("OPENAI_BASE_URL", "/v1"), ("OPENAI_API_BASE", "/v1")),
-    upstream_env=("OPENAI_BASE_URL",),
-)
-OPENROUTER = ProviderAdapter(
-    name="openrouter", upstream="https://openrouter.ai/api", paths=_OPENAI_PATHS,
-    header="authorization", header_format="Bearer {}",
-    key_env=("OPENROUTER_API_KEY",),
-    base_env=(("OPENROUTER_API_BASE", "/v1"), ("OPENROUTER_BASE_URL", "/v1")),
-)
-
-ADAPTERS: dict[str, ProviderAdapter] = {a.name: a for a in (ANTHROPIC, OPENAI, OPENROUTER)}
-#: Which adapter a provider key variable belongs to (shield_env).
-KEY_ENV_PROVIDER: dict[str, str] = {
-    name: a.name for a in ADAPTERS.values() for name in a.key_env}
-
-
-def _is_ours(url: str) -> bool:
-    return url.startswith(f"http://{HOST}:") and any(
-        f"/{name}" in url for name in ADAPTERS)
+#: The adapters, header rewrite and usage reader are THE ONE IMPLEMENTATION shared with the
+#: central streaming gateway (streaming_model_gateway, P8b S10): a `runtime: local` run and a
+#: microVM run cross the same code. Re-exported here so existing callers keep their names.
+from .streaming_model_gateway import (  # noqa: E402
+    ADAPTERS, ANTHROPIC, HOP_HEADERS as _HOP, KEY_ENV_PROVIDER, OPENAI, OPENROUTER, GatewayClient,
+    PlaceholderRefused, ProviderAdapter, UsageReader as _UsageReader, outbound_headers)
 
 
 # ── Grants ────────────────────────────────────────────────────────────────────────────────────
@@ -229,71 +156,6 @@ def _httpx_upstream(method: str, url: str, headers: Mapping[str, str], body: byt
             yield resp.status_code, dict(resp.headers), resp.iter_raw()
         finally:
             resp.close()
-
-
-class _UsageReader:
-    """Reads the provider's own `usage` out of an answer as it streams past: SSE events
-    (Anthropic message_start / message_delta, OpenAI's final chunk) or one JSON body."""
-
-    def __init__(self, content_type: str) -> None:
-        self.sse = "text/event-stream" in (content_type or "")
-        self.buf = b""
-        self.kept = 0
-        self.found: dict[str, int] = {}
-
-    def feed(self, chunk: bytes) -> None:
-        if self.sse:
-            self.buf += chunk
-            *lines, self.buf = self.buf.split(b"\n")
-            for line in lines:
-                self._sse_line(line)
-        elif self.kept < _USAGE_KEEP:
-            self.buf += chunk[: _USAGE_KEEP - self.kept]
-            self.kept += len(chunk)
-
-    def _sse_line(self, line: bytes) -> None:
-        line = line.strip()
-        if not line.startswith(b"data:"):
-            return
-        try:
-            event = json.loads(line[5:].strip() or b"null")
-        except ValueError:
-            return
-        if isinstance(event, dict):
-            self._take(event.get("usage"))
-            message = event.get("message")
-            if isinstance(message, dict):
-                self._take(message.get("usage"))
-            response = event.get("response")
-            if isinstance(response, dict):
-                self._take(response.get("usage"))
-
-    def _take(self, usage: Any) -> None:
-        if not isinstance(usage, dict):
-            return
-        names = {"input_tokens": ("input_tokens", "prompt_tokens"),
-                 "output_tokens": ("output_tokens", "completion_tokens"),
-                 "cache_read_input_tokens": ("cache_read_input_tokens",),
-                 "cache_creation_input_tokens": ("cache_creation_input_tokens",)}
-        for key, sources in names.items():
-            for src in sources:
-                value = usage.get(src)
-                if isinstance(value, int) and value >= 0:
-                    # message_delta carries the running total, so the last value wins.
-                    self.found[key] = value
-                    break
-
-    def finish(self) -> dict[str, int]:
-        if self.sse:
-            self._sse_line(self.buf)
-        else:
-            try:
-                body = json.loads(self.buf or b"null")
-            except ValueError:
-                body = None
-            if isinstance(body, dict):
-                self._take(body.get("usage"))
-        return dict(self.found)
 
 
 class ModelProxy:
@@ -429,15 +291,12 @@ class ModelProxy:
                 return 403, "not_a_model_path", None
         return 200, "", grant
 
-    def forward_headers(self, grant: Grant, headers: Mapping[str, str]) -> dict[str, str]:
-        out = {k: v for k, v in headers.items()
-               if k.lower() not in _HOP and k.lower() not in _CREDENTIAL_HEADERS
-               and k.lower() != "accept-encoding"}
-        name, value = ADAPTERS[grant.provider].credential_header(grant.credential)
-        out[name] = value
-        # Identity: the usage is read from the bytes as they pass.
-        out["accept-encoding"] = "identity"
-        return out
+    def forward_headers(self, grant: Grant, headers: Mapping[str, str], *, method: str = "POST",
+                        url: str = "", body: bytes = b"") -> dict[str, str]:
+        """The shared rewrite (streaming_model_gateway.outbound_headers): every client
+        credential header dropped, the real one attached (or the request signed)."""
+        return outbound_headers(ADAPTERS[grant.provider], headers, grant.credential,
+                                method=method, url=url, body=body)
 
     def tally(self, grant: Grant, usage: Mapping[str, int]) -> None:
         with self._lock:
@@ -513,7 +372,11 @@ def _handler_for(proxy: ModelProxy):
             if body is None:
                 return self._send(413, _refusal(provider, 413, "body_too_large"))
             url = grant.upstream + rest + (f"?{query}" if query else "")
-            out_headers = proxy.forward_headers(grant, headers)
+            try:
+                out_headers = proxy.forward_headers(grant, headers, method=self.command,
+                                                    url=url, body=body)
+            except PlaceholderRefused:
+                return self._send(503, _refusal(provider, 503, "key_unavailable"))
             try:
                 with proxy.upstream(self.command, url, out_headers, body) as (code, resp_headers,
                                                                                chunks):
@@ -660,12 +523,50 @@ def shield(env: dict, provider: str, credential: str, *, settings: Any = None,
     adapter = ADAPTERS[provider]
     proxy = proxy or get()
     run_id, project_id = _run_binding()
-    issued = proxy.issue(provider, credential, ttl=session_ttl(settings), run_id=run_id,
-                         project_id=project_id, upstream=upstream)
+    via = _via_gateway(provider, run_id=run_id, project_id=project_id, settings=settings)
+    if via is not None:
+        token, base = via
+        _register_redaction(token)
+        _current_scope_add(proxy, token)   # revoked at the gateway when the session ends (TTL)
+        env_update = {name: token for name in adapter.key_env[:1]}
+        env_update.update({name: base + suffix for name, suffix in adapter.base_env})
+    else:
+        issued = proxy.issue(provider, credential, ttl=session_ttl(settings), run_id=run_id,
+                             project_id=project_id, upstream=upstream)
+        env_update = dict(issued.env)
     for name in adapter.key_env:
         env.pop(name, None)
-    env.update(issued.env)
+    env.update(env_update)
     return env
+
+
+def _via_gateway(provider: str, *, run_id: Optional[str], project_id: Optional[str],
+                 settings: Any) -> Optional[tuple[str, str]]:
+    """LOCAL-LANE PARITY, BEHIND A FLAG (P8b S10): with BOSS_MODEL_PROXY_VIA_GATEWAY=1 and a
+    central gateway configured, the session's handle is issued AT THE GATEWAY and its base URL
+    points there — the same code path a microVM crosses — instead of this process's loopback
+    proxy. Off by default: `runtime: local` keeps the loopback proxy exactly as before. The
+    gateway reads the key by REFERENCE, so a run with no project (nothing to look a reference
+    up for) stays on the loopback proxy, with a log line."""
+    if not GatewayClient.enabled():
+        return None
+    if not project_id:
+        log.info("model proxy: no project for this session; staying on the loopback proxy")
+        return None
+    try:
+        from ..db import get_engine
+        from .streaming_model_gateway import credential_ref_for
+
+        with get_engine(settings).begin() as connection:
+            ref = credential_ref_for(connection, settings, project_id, provider)
+        if not ref:
+            return None
+        return GatewayClient().issue(provider=provider, project_id=project_id,
+                                     run_id=run_id or f"local:{project_id}", credential_ref=ref)
+    except Exception as exc:  # noqa: BLE001 — the loopback proxy still shields the key
+        log.warning("model proxy: the central gateway could not issue a handle (%s); staying on "
+                    "the loopback proxy", type(exc).__name__)
+        return None
 
 
 def shield_env(env: dict, *, settings: Any = None, proxy: Optional[ModelProxy] = None) -> dict:

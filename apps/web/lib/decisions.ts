@@ -64,7 +64,9 @@ export type DecisionAttention = "needs_action" | "expired" | "resolved";
 
 export type DecisionKind =
   | "refusal" | "deploy_gate" | "workflow_gate" | "architecture_review" | "pull_request"
-  | "general";
+  | "general"
+  // The Infra Agent's irreversible deletion (BOSSAPP-1156): drawn as its own card (S4).
+  | "storage_delete";
 
 export type DecisionActionOffer = {
   action: "approve" | "reject" | "revise" | "delegate" | "execute" | "settle";

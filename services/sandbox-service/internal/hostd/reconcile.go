@@ -39,6 +39,17 @@ func (a *Agent) adoptRunning(ctx context.Context) error {
 			a.mu.Lock()
 			continue
 		}
+		if vm.Spec != nil && vm.Spec.Warm {
+			// A warm VM has no identity yet: back into the pool it goes.
+			sp := *vm.Spec
+			w := &warmVM{slot: vm.ID, vm: vm, ready: true, since: time.Now(),
+				key: poolKey{sp.DeploymentID, a.shape(sp)}}
+			if sp.Net != nil {
+				w.tap = sp.Net.Tap
+			}
+			a.warm[vm.ID] = w
+			continue
+		}
 		st := &vmState{id: vm.ID, vm: vm, state: "adopted", startedAt: time.Now()}
 		if rec, ok := cached[vm.ID]; ok {
 			for _, ts := range rec.Restarts {
@@ -156,12 +167,31 @@ func (a *Agent) Reconcile(ctx context.Context) {
 		a.ensureAttached(ctx, st, dv)
 	}
 
+	a.fillPools(ctx, ds, live)
+	a.gcSnapshots(ds)
+
 	// Sweep taps that no running VM owns (left by a crash).
 	a.mu.Lock()
 	owned := map[string]bool{}
 	for _, st := range a.vms {
 		if st.tap != "" {
 			owned[st.tap] = true
+		}
+	}
+	for _, w := range a.warm {
+		if w.tap != "" {
+			owned[w.tap] = true
+		}
+	}
+	liveIDs := map[string]bool{}
+	for _, st := range a.vms {
+		if st.vm != nil {
+			liveIDs[vmm.FirecrackerID(st.vm.ID)] = true
+		}
+	}
+	for _, w := range a.warm {
+		if w.vm != nil {
+			liveIDs[vmm.FirecrackerID(w.vm.ID)] = true
 		}
 	}
 	var orphanTaps []string
@@ -179,6 +209,9 @@ func (a *Agent) Reconcile(ctx context.Context) {
 		if err := a.cfg.Net.Remove(ctx, t); err == nil {
 			a.event("", "orphan_tap_removed", "", "", map[string]string{"tap": t})
 		}
+	}
+	if sw, ok := a.cfg.Manager.(interface{ SweepNetns(map[string]bool) }); ok && live {
+		sw.SweepNetns(liveIDs)
 	}
 	if live {
 		a.observed.Store(ds.Generation)
@@ -265,11 +298,47 @@ func (a *Agent) startVM(ctx context.Context, dv hostapi.DesiredVM, prior *vmStat
 	a.mu.Unlock()
 
 	spec := a.vmSpec(dv)
-	if spec.Net != nil {
-		c := a.creds.Load()
-		err := a.cfg.Net.Ensure(ctx, netpol.VMNet{VMID: dv.VMID, Tap: spec.Net.Tap, VMIP: dv.VMIP,
-			VIP: dv.VIP, VIPPorts: dv.VIPPorts, OwnerUID: a.cfg.TapOwnerUID, VMPrefix: c.VMPrefix})
-		if err != nil {
+	spec.RuntimeVersion = a.cfg.RuntimeVersion
+	claimStart := time.Now()
+	owner, _ := a.cfg.Manager.(vmm.LinkOwner)
+	ownsLink := owner != nil && owner.OwnsReplicaLink()
+
+	// Warm claim (LLD §3.3 "restoring → ready"): a ready VM of this shape
+	// takes the identity; nothing boots.
+	if w := a.takeWarm(poolKey{dv.DeploymentID, a.shape(spec)}); w != nil {
+		st.setState(hostapi.StateRestoring, "")
+		a.event(dv.VMID, "vm_state", hostapi.StateProvisioning, hostapi.StateRestoring,
+			map[string]string{"mode": dv.Mode, "warm": w.slot})
+		if spec.Net != nil {
+			spec.Net.Tap = w.tap // the spare's link carries this replica's policy
+		}
+		w.vm.Claim(spec)
+		if spec.Net != nil {
+			if err := a.ensureNet(ctx, spec); err != nil {
+				_ = a.cfg.Manager.Stop(ctx, w.vm)
+				_ = a.cfg.Net.Remove(ctx, w.tap)
+				a.fail(st, "net_setup_failed: "+err.Error())
+				return
+			}
+			st.mu.Lock()
+			st.tap = w.tap
+			st.mu.Unlock()
+		}
+		st.mu.Lock()
+		st.vm, st.claimStart = w.vm, claimStart
+		st.mu.Unlock()
+		a.persist(st)
+		a.attach(ctx, st)
+		return
+	}
+
+	// No spare: restore from the shape's snapshot, or cold boot (and take the
+	// first snapshot). A link-owning backend builds the replica link at
+	// Create, so the policy follows; a plain tap is created first.
+	st.setState(hostapi.StateBooting, "")
+	a.event(dv.VMID, "vm_state", hostapi.StateProvisioning, hostapi.StateBooting, map[string]string{"mode": dv.Mode})
+	if spec.Net != nil && !ownsLink {
+		if err := a.ensureNet(ctx, spec); err != nil {
 			a.fail(st, "net_setup_failed: "+err.Error())
 			return
 		}
@@ -277,18 +346,47 @@ func (a *Agent) startVM(ctx context.Context, dv hostapi.DesiredVM, prior *vmStat
 		st.tap = spec.Net.Tap
 		st.mu.Unlock()
 	}
-	st.setState(hostapi.StateBooting, "")
-	a.event(dv.VMID, "vm_state", hostapi.StateProvisioning, hostapi.StateBooting, map[string]string{"mode": dv.Mode})
-	vm, err := a.cfg.Manager.Create(ctx, spec)
+	vm, kind, err := a.boot(ctx, spec)
 	if err != nil {
-		a.fail(st, "create_failed: "+err.Error())
+		a.fail(st, kind+"_failed: "+err.Error())
 		return
 	}
+	if spec.Net != nil && ownsLink {
+		if err := a.ensureNet(ctx, spec); err != nil {
+			_ = a.cfg.Manager.Stop(ctx, vm)
+			a.fail(st, "net_setup_failed: "+err.Error())
+			return
+		}
+	}
 	st.mu.Lock()
-	st.vm = vm
+	st.vm, st.claimStart = vm, claimStart
+	if spec.Net != nil {
+		st.tap = spec.Net.Tap
+	}
 	st.mu.Unlock()
 	a.persist(st)
 	a.attach(ctx, st)
+}
+
+// ensureNet applies the replica's network policy to its host link.
+func (a *Agent) ensureNet(ctx context.Context, spec vmm.Spec) error {
+	c := a.creds.Load()
+	dv := a.desiredOf(spec.VMID)
+	return a.cfg.Net.Ensure(ctx, netpol.VMNet{VMID: spec.VMID, Tap: spec.Net.Tap, VMIP: spec.VMIP,
+		VIP: dv.VIP, VIPPorts: dv.VIPPorts, OwnerUID: a.cfg.TapOwnerUID, VMPrefix: c.VMPrefix})
+}
+
+func (a *Agent) desiredOf(vmID string) hostapi.DesiredVM {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.desired != nil {
+		for _, dv := range a.desired.VMs {
+			if dv.VMID == vmID {
+				return dv
+			}
+		}
+	}
+	return hostapi.DesiredVM{}
 }
 
 // fail records a start failure and routes it through the restart policy.
@@ -491,16 +589,31 @@ func (a *Agent) watchdog(ctx context.Context, st *vmState, vm *vmm.VM) {
 		case <-ctx.Done():
 		}
 	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-vm.Exited:
-			if ctx.Err() == nil {
-				report("process_exit")
+	for first := true; ; first = false {
+		if first {
+			// The first exchange (the bootstrap) goes out at once: a warm
+			// claim must not wait a whole tick for its identity.
+			select {
+			case <-ctx.Done():
+				return
+			case <-vm.Exited:
+				if ctx.Err() == nil {
+					report("process_exit")
+				}
+				return
+			default:
 			}
-			return
-		case <-t.C:
+		} else {
+			select {
+			case <-ctx.Done():
+				return
+			case <-vm.Exited:
+				if ctx.Err() == nil {
+					report("process_exit")
+				}
+				return
+			case <-t.C:
+			}
 		}
 		ok := a.exchange(st, vm)
 		st.mu.Lock()
@@ -557,7 +670,9 @@ func (a *Agent) exchange(st *vmState, vm *vmm.VM) bool {
 	if boot {
 		seed := make([]byte, 32)
 		_, _ = rand.Read(seed)
-		b := &guest.Bootstrap{VMID: dv.VMID, Mode: dv.Mode, Seed: seed, Slots: dv.Slots, RunHoldMS: a.cfg.RunHoldMS}
+		vm.Taint("identity") // from here on this VM is never snapshotted (S15)
+		b := &guest.Bootstrap{VMID: dv.VMID, Mode: dv.Mode, Seed: seed, Slots: dv.Slots, RunHoldMS: a.cfg.RunHoldMS,
+			CID: vmm.GuestCID(vm.ID), HostTimeUnixNano: time.Now().UnixNano(), Restored: vm.Restored}
 		if dv.Mode == hostapi.ModeReplica {
 			b.VMIP, b.Gateway, b.VIP, b.MAC = dv.VMIP, netpol.Gateway, dv.VIP, netpol.MACFor(dv.VMIP)
 			if dv.ReplicaHandle != "" {
@@ -592,6 +707,14 @@ func (a *Agent) exchange(st *vmState, vm *vmm.VM) bool {
 	st.mu.Lock()
 	if boot {
 		st.bootstrapped = true
+		if !st.claimStart.IsZero() {
+			kind := "cold_claim"
+			if vm.Restored {
+				kind = "warm_claim"
+			}
+			a.timing(st.id, kind, st.claimStart)
+			st.claimStart = time.Time{}
+		}
 	}
 	slotsChanged := st.totalSlots != total
 	st.busySlots, st.totalSlots = busy, total

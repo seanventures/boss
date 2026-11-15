@@ -23,6 +23,8 @@ import { PulseRow } from "./command-center/pulse";
 import { AppsShelf, TemplatesShelf } from "./command-center/rails";
 import { ConnectorsShelf } from "./command-center/connectors-shelf";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
+import { InfraCriticalCardView } from "./infra/infra-critical-card";
+import { useInfraIncident, withInfraStatus } from "../lib/infra-storage";
 import { OnboardingHelpRows } from "./onboarding-help-card";
 import { HelpPopover } from "./command-center/help-popover";
 import { nextAction } from "./command-center/next-action";
@@ -50,10 +52,12 @@ function useVisible(): boolean {
 }
 
 /** How much the page may move. Exported for the tests. */
-export function motionOf({ paused, hidden, reachable, hostCritical, reduced }: {
+export function motionOf({ paused, hidden, reachable, hostCritical, reduced, infraIncident = false }: {
   paused: boolean; hidden: boolean; reachable: boolean; hostCritical: boolean; reduced: boolean;
+  /** A storage incident is open (BOSSAPP-1156): the page's own motion stops so the strip's pulse is the one thing that moves. */
+  infraIncident?: boolean;
 }): MotionMode {
-  if (paused || hidden || !reachable || hostCritical) return "none";
+  if (paused || hidden || !reachable || hostCritical || infraIncident) return "none";
   return reduced ? "reduced" : "full";
 }
 
@@ -162,11 +166,19 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   const [reduced, setReduced] = useState(false);
   useEffect(() => { setReduced(reducedMotion()); }, []);
   const hostCritical = !!view?.host.show && view.host.severity === "critical";
-  const motion = motionOf({ paused: !live, hidden: !visible, reachable, hostCritical, reduced });
+  // THE INFRA AGENT'S INCIDENT (BOSSAPP-1156): the critical card above the Now cards, the status
+  // line says so (between budget_stopped and host_critical), and the page's motion stops.
+  // The view carries it (contract §9); an API without the field yet falls back to the shell's one
+  // poll of /incidents/current (useInfraIncident reads the shared provider, never a second poll).
+  const infra = useInfraIncident(projectId);
+  const fromView = view?.infraIncident;
+  const open = fromView !== undefined ? fromView : infra.incident;
+  const infraIncident = open && open.status !== "resolved" ? open : null;
+  const motion = motionOf({ paused: !live, hidden: !visible, reachable, hostCritical, reduced, infraIncident: !!infraIncident });
   const host = useHostAdvice(projectId, 60_000, view?.host ?? { show: false });
   const now = useNow(30_000);
 
-  const status = statusOf(view, reachable, readAt, !live);
+  const status = withInfraStatus(statusOf(view, reachable, readAt, !live), infraIncident);
   const statusTip = !reachable && error ? `${status.tip}, ${error}` : status.tip;
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -310,6 +322,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
 
       <ReturningBrief view={view} projectId={projectId} orgId={orgId} viewer={viewer ?? actor}
                       reachable={reachable} visible={visible} container={rootRef} />
+      {infraIncident ? <InfraCriticalCardView incident={infraIncident} projectId={projectId} actor={actor} orgId={orgId} sample={infra.sample} /> : null}
       {nowCards}
       <AgentsAtWorkCard view={ambient} orgId={orgId} />
       <AppsShelf apps={appRows} attention={attention} orgId={orgId} />

@@ -14,7 +14,7 @@ import (
 )
 
 // Version is the host API contract version boss-hostd advertises.
-const Version = "1.0"
+const Version = "1.1"
 
 // Paths (host → control plane). %s is the host id from enrolment.
 const (
@@ -120,7 +120,7 @@ type RenewRequest struct {
 type Attestation struct {
 	KVM             bool `json:"kvm_live"`
 	FirecrackerLive bool `json:"firecracker_live"`
-	Jailer          bool `json:"jailer_on"` // P8b: always false in P8a
+	Jailer          bool `json:"jailer_on"` // true only when every VM runs under the jailer (P8b)
 	Seccomp         bool `json:"seccomp_default"`
 	SMTOff          bool `json:"smt_off"`
 	KSMOff          bool `json:"ksm_off"`
@@ -167,7 +167,8 @@ type ReplicaStatus struct {
 	DropsOriginated uint64 `json:"drops_originated"` // nftables: packets the VM tried to originate
 }
 
-// PoolDepth is one per_run warm pool (P8b fills them).
+// PoolDepth is one warm pool: ready warm VMs (depth) against the wanted
+// minimum (per_run min_warm, default 2; replica surge spares).
 type PoolDepth struct {
 	Depth   int `json:"depth"`
 	MinWarm int `json:"min_warm"`

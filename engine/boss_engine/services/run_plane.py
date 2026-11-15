@@ -284,9 +284,35 @@ def _lease_one(connection: Any, settings: Any, jobs: Any, job: dict, replica: st
         return None
     if status == "queued":
         _start(connection, run)
-    return {"run_id": run_id, "job_id": job["id"], "replica_id": replica,
-            "epoch": int(leased["fence_epoch"]), "run_token": leased["lease_token"],
-            "kind": job["kind"], "lease_expires_at": leased["lease_expires_at"]}
+    taken = {"run_id": run_id, "job_id": job["id"], "replica_id": replica,
+             "epoch": int(leased["fence_epoch"]), "run_token": leased["lease_token"],
+             "kind": job["kind"], "lease_expires_at": leased["lease_expires_at"]}
+    # The GUEST's handles for this run (P8b S10): `boss_mdl_` bound to (run, epoch, this
+    # replica's VM), redeemed only at the central model gateway through the host. The host
+    # passes them to the VM with the work item and never writes them (HOST_API.md §4.5).
+    taken["handles"] = _guest_handles(connection, settings, job, run_id, replica,
+                                      int(leased["fence_epoch"]))
+    return taken
+
+
+def _guest_handles(connection: Any, settings: Any, job: dict, run_id: str, replica: str,
+                   epoch: int) -> dict:
+    from . import streaming_model_gateway as smg
+
+    try:
+        row = connection.execute(text(
+            "SELECT r.vm_id, r.org_id, r.deployment_id FROM agent_replicas r WHERE r.id = :r"),
+            {"r": replica}).mappings().first()
+        if row is None:
+            return {}
+        with connection.begin_nested():
+            return smg.guest_handles(connection, settings, org_id=str(row["org_id"]),
+                                     project_id=str(job["project_id"]), run_id=run_id,
+                                     epoch=epoch, vm_id=row["vm_id"],
+                                     deployment_id=row["deployment_id"])
+    except Exception as exc:  # noqa: BLE001 — the run still starts; its model calls fail closed
+        log.warning("no model handle for run %s: %s", run_id, type(exc).__name__)
+        return {}
 
 
 _ROUND_ROBIN: dict = {}
@@ -797,7 +823,15 @@ def settle(connection: Any, settings: Any, host_id: str, run_id: str, lease: Lea
                                       handed_back=None)
     if not result.get("job_deferred"):
         jobs.complete(connection, owner_of(lease.replica_id), lease.job_id, lease.token, result)
+    _revoke_handles(connection, run_id, "run settled")
     return result
+
+
+def _revoke_handles(connection: Any, run_id: str, reason: str) -> None:
+    """The run's model handles die with its lease (P8b S10)."""
+    from . import streaming_model_gateway as smg
+
+    smg.revoke_run(connection, run_id, reason)
 
 
 def fail(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef,
@@ -818,6 +852,7 @@ def fail(connection: Any, settings: Any, host_id: str, run_id: str, lease: Lease
     _jobs(settings).fail(connection, owner_of(lease.replica_id), lease.job_id, lease.token,
                          {"message": str(error)[:500], "type": "RuntimeError"}, retryable=False,
                          retry_delay_seconds=0)
+    _revoke_handles(connection, run_id, "run failed")
     return {"status": "failed", "run_id": run_id}
 
 

@@ -131,11 +131,22 @@ PROPOSE_FACT_TOOLS: tuple[str, ...] = ("kg_propose_fact",
 TICKET_READ_TOOLS: tuple[str, ...] = ("ticket_get", "ticket_search", "ticket_browse")
 TICKET_WRITE_TOOLS: tuple[str, ...] = ("ticket_import", "ticket_comment", "ticket_transition")
 
+#: `storage.steward` offers the Infra Agent's tools (BOSSAPP-1157, tools/storage_tools.py): read a
+#: host's storage and the open incident, move the deterministic executor one notch, propose a
+#: retention rule, write the cause and report, set/release the work hold within its rules. Every
+#: write is `safe` (the executor dry-runs, receipts and asks for tier 3 itself). Granted to
+#: infra_agent only; never in the baseline.
+STORAGE_READ_TOOLS: tuple[str, ...] = ("storage_inspect", "storage_plan")
+STORAGE_WRITE_TOOLS: tuple[str, ...] = ("storage_run_step", "storage_propose_rule", "storage_report",
+                                        "work_hold_set", "work_hold_release")
+STORAGE_TOOLS: tuple[str, ...] = STORAGE_READ_TOOLS + STORAGE_WRITE_TOOLS
+
 #: Bundles allowed to offer a write tool, and which ones: {bundle: its writes}. Each such tool must
 #: declare reversibility "safe"; any other tool a bundle names must be a read.
 BUNDLE_WRITES: dict[str, tuple[str, ...]] = {"knowledge.propose": PROPOSE_FACT_TOOLS,
                                              "boss.fundamentals": FUNDAMENTALS_WRITES,
-                                             "tickets.write": TICKET_WRITE_TOOLS}
+                                             "tickets.write": TICKET_WRITE_TOOLS,
+                                             "storage.steward": STORAGE_WRITE_TOOLS}
 WRITE_BUNDLES: frozenset[str] = frozenset(BUNDLE_WRITES)
 
 
@@ -156,7 +167,7 @@ def bundles() -> dict[str, tuple[str, ...]]:
     return {"repo.read": REPO_READ_TOOLS, "boss.fundamentals": FUNDAMENTALS_TOOLS,
             "boss.propose_fix": PROPOSE_TOOLS, "knowledge.read": KNOWLEDGE_TOOLS,
             "knowledge.propose": PROPOSE_FACT_TOOLS, "tickets.read": TICKET_READ_TOOLS,
-            "tickets.write": TICKET_WRITE_TOOLS}
+            "tickets.write": TICKET_WRITE_TOOLS, "storage.steward": STORAGE_TOOLS}
 
 
 def bundle_tool_spec(skill_id: str, tool: str, *, edition: str | None = None) -> Any:

@@ -123,6 +123,30 @@ def require_worker_principal() -> None:
             "message": "only the worker principal may call the worker protocol"})
 
 
+def require_host_tools_principal() -> None:
+    """THE HOST HELPER'S ROUTES (`boss steward`, BOSSAPP-1157: storage readings, the signed job
+    lease and its result): only the Host tools service account (`sva_host_tools`, keyed from the
+    host shell by `boss identity host-key`), with its own key — under every mode. A person's or
+    an admin's token never posts a reading or a result: a forged reading would set the
+    install-wide hold. Raises HTTPException 403."""
+    from fastapi import HTTPException
+
+    from boss_engine.identity.host_tools import HOST_TOOLS_PRINCIPAL
+    from boss_engine.identity.principal import PrincipalKind
+
+    ctx = REQUEST_IDENTITY.get()
+    # No legacy bridge, under every mode: the host key is an identity key (boss identity
+    # host-key), so nothing older than identity ever needs these routes, and a forged reading
+    # from an Owner's key would set the install-wide hold.
+    ok = (ctx is not None and ctx.run_token is None and ctx.principal.id == HOST_TOOLS_PRINCIPAL
+          and ctx.principal.kind in (PrincipalKind.SERVICE_ACCOUNT, PrincipalKind.SYSTEM))
+    if not ok:
+        raise HTTPException(status_code=403, detail={
+            "error": "forbidden", "permission": "system:operate",
+            "message": "only the host tools key (boss identity host-key) may post storage "
+                       "readings or take host jobs"})
+
+
 def require_self_installer() -> None:
     """THE host self-installer's routes (BOSS fixes itself: tickets, reports, health): only its
     own system principal, `sys_self_installer`, with its own key — under every mode. There is no

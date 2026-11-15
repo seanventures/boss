@@ -14825,3 +14825,323 @@ ALTER TABLE jobs ADD COLUMN IF NOT EXISTS target TEXT;
 CREATE INDEX IF NOT EXISTS idx_jobs_target_claimable ON jobs (target, priority, created_at)
   WHERE target IS NOT NULL AND status IN ('queued', 'failed_retryable', 'leased', 'running');
 -- ================================ end P8a ==
+
+-- =====================================================================================-- INFRA AGENT: STORAGE SELF-HEALING (BOSSAPP-1145 · ST-6 1151 · ST-10 1155 · ST-12 1157).
+-- boss-infra-agent-lld.md §5.1. Readings → incidents → receipted actions → rules; the host
+-- helper's signed pull queue. `system_state['infra_hold']` is the install-wide work hold.
+-- =====================================================================================-- One reading per host every 30 s (steward / hostd / the API's own Postgres figures). Kept 30
+-- days; the storage watch drops older rows on its tick.
+CREATE TABLE IF NOT EXISTS storage_samples (
+  host_id TEXT NOT NULL,
+  at TIMESTAMPTZ NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('steward', 'hostd', 'api')),
+  total_gb NUMERIC,
+  free_gb NUMERIC,
+  used_pct NUMERIC,
+  docker_alloc_gb NUMERIC,
+  docker_used_gb NUMERIC,
+  images_gb NUMERIC,
+  cache_gb NUMERIC,
+  volumes_gb NUMERIC,
+  logs_gb NUMERIC,
+  backups_gb NUMERIC,
+  backups_n INTEGER,
+  pg_temp_gb NUMERIC,
+  pg_db_gb NUMERIC,
+  by_type JSONB NOT NULL DEFAULT '{}'::jsonb,
+  host_label TEXT,
+  PRIMARY KEY (host_id, at)
+);
+CREATE INDEX IF NOT EXISTS idx_storage_samples_at ON storage_samples (at);
+
+-- One open incident per host; warn → critical reuses it.
+CREATE TABLE IF NOT EXISTS storage_incidents (
+  id TEXT PRIMARY KEY,
+  host_id TEXT NOT NULL,
+  host_label TEXT,
+  status TEXT NOT NULL CHECK (status IN ('warn', 'critical', 'asking', 'resuming', 'resolved')),
+  severity TEXT NOT NULL DEFAULT 'warn' CHECK (severity IN ('warn', 'critical')),
+  opened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ,
+  cause_key TEXT,
+  cause_text TEXT,
+  free_pct_start NUMERIC,
+  free_pct_now NUMERIC,
+  target_pct NUMERIC NOT NULL DEFAULT 25,
+  freed_gb NUMERIC NOT NULL DEFAULT 0,
+  eta_seconds INTEGER,
+  hold_since TIMESTAMPTZ,
+  hold_released_at TIMESTAMPTZ,
+  paused_runs INTEGER NOT NULL DEFAULT 0,
+  plan JSONB NOT NULL DEFAULT '[]'::jsonb,
+  flow JSONB NOT NULL DEFAULT '[]'::jsonb,
+  agent_run_id TEXT,
+  lease_owner TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  acknowledged_by TEXT,
+  acknowledged_at TIMESTAMPTZ,
+  spend_usd NUMERIC NOT NULL DEFAULT 0,
+  report JSONB,
+  project_id TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS storage_incident_open ON storage_incidents (host_id)
+  WHERE status <> 'resolved';
+CREATE INDEX IF NOT EXISTS idx_storage_incidents_opened ON storage_incidents (opened_at DESC);
+CREATE INDEX IF NOT EXISTS idx_storage_incidents_cause ON storage_incidents (cause_key, opened_at DESC);
+
+-- One row per tool call (dry runs too), each real one receipted.
+CREATE TABLE IF NOT EXISTS storage_actions (
+  id TEXT PRIMARY KEY,
+  incident_id TEXT REFERENCES storage_incidents(id) ON DELETE CASCADE,
+  host_id TEXT NOT NULL,
+  tool TEXT NOT NULL,
+  tier SMALLINT NOT NULL,
+  where_run TEXT NOT NULL DEFAULT 'host' CHECK (where_run IN ('host', 'api')),
+  args JSONB NOT NULL DEFAULT '{}'::jsonb,
+  plan_hash TEXT NOT NULL,
+  dry_run BOOLEAN NOT NULL DEFAULT true,
+  items INTEGER,
+  bytes BIGINT,
+  status TEXT NOT NULL CHECK (status IN ('planned', 'queued', 'running', 'done', 'failed', 'refused')),
+  receipt_id TEXT,
+  decision_id TEXT,
+  actor TEXT NOT NULL,
+  started_at TIMESTAMPTZ,
+  ended_at TIMESTAMPTZ,
+  result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_storage_actions_incident ON storage_actions (incident_id, created_at);
+
+-- Retention rules and thresholds. host_id NULL = every host. source: default|operator|learned.
+CREATE TABLE IF NOT EXISTS retention_rules (
+  id TEXT PRIMARY KEY,
+  host_id TEXT,
+  kind TEXT NOT NULL CHECK (kind IN ('backups', 'images', 'build_cache', 'logs', 'telemetry',
+                                     'scratch_db', 'kg_derived', 'docker_trim', 'threshold')),
+  rule JSONB NOT NULL DEFAULT '{}'::jsonb,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  source TEXT NOT NULL DEFAULT 'default' CHECK (source IN ('default', 'operator', 'learned')),
+  decision_id TEXT,
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS retention_rules_one_per_kind_host
+  ON retention_rules (kind, COALESCE(host_id, ''));
+
+-- The host helper's pull queue (§7): typed verbs, Ed25519-signed, expiring, leased once.
+CREATE TABLE IF NOT EXISTS host_jobs (
+  id TEXT PRIMARY KEY,
+  host_id TEXT NOT NULL,
+  action_id TEXT REFERENCES storage_actions(id) ON DELETE SET NULL,
+  verb TEXT NOT NULL,
+  args JSONB NOT NULL DEFAULT '{}'::jsonb,
+  signature TEXT NOT NULL,
+  key_id TEXT NOT NULL DEFAULT '',
+  expires_at TIMESTAMPTZ NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'leased', 'done', 'failed', 'expired')),
+  leased_to TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  result JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_host_jobs_pull ON host_jobs (host_id, status, created_at);
+
+-- ST-6: every backup BOSS writes carries owner/kind/ttl labels and a retain-until.
+ALTER TABLE backups ADD COLUMN IF NOT EXISTS label JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE backups ADD COLUMN IF NOT EXISTS retain_until TIMESTAMPTZ;
+-- ============================ end Infra Agent storage ==
+-- ================================ P9a: EVENT INTAKE (BOSSAPP-1093; boss-eventing-lld.md §4) ==
+-- The front door and the inbox for anything that happens in another system. One connection row
+-- per connected source install (its secrets live in the secret backend; `secret_refs` holds only
+-- references), one `intake_events` row per accepted delivery (deduplicated on the source's own
+-- id), a cursor per polled/subscribed stream, and the provider-side subscriptions BOSS keeps
+-- alive. The layer is called INTAKE everywhere (inbox_items / inbox_messages are other things).
+CREATE TABLE IF NOT EXISTS intake_connections (
+  id TEXT PRIMARY KEY,
+  project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+  org_id TEXT,
+  kind TEXT NOT NULL,                       -- adapter key (webhook, github, slack, ...)
+  name TEXT NOT NULL DEFAULT '',
+  mode TEXT NOT NULL DEFAULT 'push'
+    CHECK (mode IN ('push', 'poll', 'subscribe', 'socket', 'stream')),
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,       -- non-secret: tenant, instance, self identity
+  secret_refs JSONB NOT NULL DEFAULT '{}'::jsonb,  -- {"signing_secret": "sref_..."} only
+  path_token TEXT NOT NULL,                        -- the unguessable URL segment; NOT the authenticator
+  chat_endpoint_id TEXT REFERENCES chat_endpoints(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'paused', 'disabled', 'auth_failed', 'rate_limited')),
+  limits JSONB NOT NULL DEFAULT '{}'::jsonb,       -- {rps, burst, hard_cap_per_min, max_backlog}
+  health JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  on_behalf_of TEXT,
+  grant_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_intake_connections_path_token ON intake_connections (path_token);
+CREATE INDEX IF NOT EXISTS idx_intake_connections_project ON intake_connections (project_id, kind);
+
+-- THE INBOX. Inserted by the front door (verify -> insert -> commit -> 2xx), claimed by the
+-- processor (SKIP LOCKED, a lease), finished with a status. `raw` is the verified body;
+-- `headers` is allow-listed (never a signature). A redelivery hits UNIQUE (connection_id,
+-- dedupe_key) and only bumps `duplicates`.
+CREATE TABLE IF NOT EXISTS intake_events (
+  id TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL REFERENCES intake_connections(id) ON DELETE CASCADE,
+  project_id TEXT,
+  dedupe_key TEXT NOT NULL,
+  source_event_id TEXT,
+  type TEXT,
+  subject TEXT,
+  conversation_key TEXT,
+  status TEXT NOT NULL DEFAULT 'received'
+    CHECK (status IN ('received', 'processing', 'routed', 'ignored', 'filtered', 'refused',
+                      'failed', 'dead', 'shed', 'digest')),
+  raw BYTEA,
+  raw_sha256 TEXT,
+  raw_ref TEXT,
+  headers JSONB NOT NULL DEFAULT '{}'::jsonb,
+  envelope JSONB,
+  actor_kind TEXT,
+  actor_external_id TEXT,
+  principal_id TEXT,
+  screen JSONB,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  lease_until TIMESTAMPTZ,
+  claimed_by TEXT,
+  last_error TEXT,
+  retry_count_seen INTEGER NOT NULL DEFAULT 0,
+  duplicates INTEGER NOT NULL DEFAULT 0,
+  outcome JSONB NOT NULL DEFAULT '[]'::jsonb,       -- [{trigger_id, fire_outcome, run_id}]
+  replays INTEGER NOT NULL DEFAULT 0,
+  replay_of TEXT,
+  trace_id TEXT,
+  verify_scheme TEXT,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  event_time TIMESTAMPTZ,
+  processed_at TIMESTAMPTZ,
+  raw_expires_at TIMESTAMPTZ,                       -- retention: raw nulled after 14 days
+  expires_at TIMESTAMPTZ,                           -- retention: row deleted after 30/90 days
+  UNIQUE (connection_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_intake_events_due ON intake_events (next_attempt_at, received_at)
+  WHERE status IN ('received', 'failed');
+CREATE INDEX IF NOT EXISTS idx_intake_events_conversation
+  ON intake_events (conversation_key, received_at) WHERE conversation_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_intake_events_project ON intake_events (project_id, received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_intake_events_connection_status
+  ON intake_events (connection_id, status, received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_intake_events_retention ON intake_events (expires_at)
+  WHERE expires_at IS NOT NULL;
+-- WAKE THE PROCESSOR AT COMMIT (the boss_events_notify shape): the payload is the row's identity
+-- only; a rolled-back insert is never announced, so the processor never sees an uncommitted row.
+CREATE OR REPLACE FUNCTION boss_intake_notify() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pg_notify('boss_intake', json_build_object(
+    'id', NEW.id, 'connection_id', NEW.connection_id, 'status', NEW.status)::text);
+  RETURN NULL;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'intake_events_notify_boss_intake'
+                 AND tgrelid = 'intake_events'::regclass) THEN
+    CREATE TRIGGER intake_events_notify_boss_intake AFTER INSERT ON intake_events
+      FOR EACH ROW EXECUTE FUNCTION boss_intake_notify();
+  END IF;
+END $$;
+
+-- Per-source position for poll / subscribe / stream (empty use in P9a). The cursor advances in
+-- the same transaction as the page's inserts, so a crash re-reads at most one page.
+CREATE TABLE IF NOT EXISTS intake_cursors (
+  connection_id TEXT NOT NULL REFERENCES intake_connections(id) ON DELETE CASCADE,
+  stream_key TEXT NOT NULL,
+  cursor TEXT,
+  cursor_time TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_error TEXT,
+  resync_required BOOLEAN NOT NULL DEFAULT false,
+  PRIMARY KEY (connection_id, stream_key)
+);
+
+-- Provider-side subscriptions BOSS must keep alive (Graph, Gmail watch; P9c). The clientState
+-- value lives in the secret backend; only its hash is here.
+CREATE TABLE IF NOT EXISTS intake_subscriptions (
+  id TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL REFERENCES intake_connections(id) ON DELETE CASCADE,
+  provider_subscription_id TEXT,
+  resource TEXT NOT NULL,
+  client_state_hash TEXT,
+  expires_at TIMESTAMPTZ,
+  renew_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'renewing', 'reauthorization_required', 'removed', 'failed')),
+  last_lifecycle TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_intake_subscriptions_renew ON intake_subscriptions (renew_at)
+  WHERE status IN ('active', 'renewing');
+
+-- ROUTES ARE TRIGGERS (§4.2): a fifth kind, `intake`, on agent_triggers — pause, authority,
+-- fires, health and the console row come free. The filter DSL, thread keys and identity mode are
+-- P9a-2; the columns are here so that build is additive too.
+DO $$ BEGIN
+  ALTER TABLE agent_triggers DROP CONSTRAINT IF EXISTS agent_triggers_kind_check;
+  ALTER TABLE agent_triggers ADD CONSTRAINT agent_triggers_kind_check
+    CHECK (kind IN ('cron', 'event', 'webhook', 'monitor', 'intake'));
+END $$;
+ALTER TABLE agent_triggers ADD COLUMN IF NOT EXISTS connection_id TEXT
+  REFERENCES intake_connections(id) ON DELETE CASCADE;
+ALTER TABLE agent_triggers ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 100;
+ALTER TABLE agent_triggers ADD COLUMN IF NOT EXISTS thread_key TEXT;
+ALTER TABLE agent_triggers ADD COLUMN IF NOT EXISTS identity_mode TEXT;
+ALTER TABLE agent_triggers ADD COLUMN IF NOT EXISTS reply_mode TEXT;
+ALTER TABLE agent_triggers ADD COLUMN IF NOT EXISTS limits JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE agent_triggers ADD COLUMN IF NOT EXISTS quiet_hours JSONB NOT NULL DEFAULT '{}'::jsonb;
+CREATE INDEX IF NOT EXISTS idx_agent_triggers_connection
+  ON agent_triggers (connection_id, priority, created_at) WHERE connection_id IS NOT NULL;
+-- One fire per (route, event): dedupe key intake:<event id> (a replay that forces: intake:<id>:r<n>).
+ALTER TABLE agent_trigger_fires ADD COLUMN IF NOT EXISTS intake_event_id TEXT;
+DO $$ BEGIN
+  ALTER TABLE agent_trigger_fires DROP CONSTRAINT IF EXISTS agent_trigger_fires_outcome_check;
+  ALTER TABLE agent_trigger_fires ADD CONSTRAINT agent_trigger_fires_outcome_check
+    CHECK (outcome IN ('admitted', 'skipped', 'refused', 'failed', 'filtered', 'deferred', 'shed'));
+END $$;
+CREATE INDEX IF NOT EXISTS idx_agent_trigger_fires_intake_event
+  ON agent_trigger_fires (intake_event_id) WHERE intake_event_id IS NOT NULL;
+-- ================================ end P9a ==
+
+-- ================================ P8b: contract v1.1 and the model gateway (BOSSAPP-1070/1071) ==
+-- MODEL-GATEWAY HANDLES (boss-agent-hosts-lld.md §3.9, §3.1): the `boss_mdl_` placeholder a
+-- guest holds instead of a provider key. Stored HASHED, bound to (run, fence_epoch, vm_id), ≤ the
+-- run's life, revoked at run end or on a replay. `credential_ref` names WHERE the gateway reads the
+-- real key (secret_ref:<id> | env:<NAME> | llm_gateway:<id>); the row never holds a key.
+CREATE TABLE IF NOT EXISTS model_gateway_handles (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  org_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  fence_epoch BIGINT NOT NULL DEFAULT 0,
+  vm_id TEXT,
+  deployment_id TEXT,
+  provider TEXT NOT NULL,
+  upstream TEXT,
+  credential_ref TEXT NOT NULL,
+  models TEXT[] NOT NULL DEFAULT '{}',
+  requests BIGINT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  revoked_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_model_gateway_handles_run ON model_gateway_handles (run_id);
+-- The gateway asks "which epoch is this run at now" on every call (a fenced epoch is refused
+-- within one request, §3.8 step 2); jobs are found by the run id in their payload.
+CREATE INDEX IF NOT EXISTS idx_jobs_payload_run_id ON jobs ((payload->>'run_id'));
+-- ================================ end P8b ==

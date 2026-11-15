@@ -9,6 +9,9 @@
            the secret lives in the secret backend and is shown ONCE, at creation and rotation
   monitor  a polled check with a cycle cap (agent_wakeups' semantics): fires every
            `every_seconds` until `max_cycles`, then pauses itself with the reason
+  intake   an event-intake ROUTE (P9a, boss-eventing-lld.md §5): fired by the intake processor
+           for events of one intake connection (services/event_intake.py); the filter DSL,
+           thread key and identity mode are P9a-2, this kind is the row they live on
 
 EVERY KIND COMPILES TO "ADMIT A RUN ON A THREAD" (thread_runs.admit, through
 agent_deployments.admit_run): the run and its job in one transaction, pinned to the version the
@@ -37,7 +40,7 @@ from sqlalchemy.engine import Connection
 
 from .core import emit_event, make_id
 
-KINDS = ("cron", "event", "webhook", "monitor")
+KINDS = ("cron", "event", "webhook", "monitor", "intake")
 #: workflow_schedules.CONCURRENCY_POLICIES — the same three words.
 CONCURRENCY = ("always_enqueue", "skip_if_active", "coalesce")
 #: The finest interval an operator may ask for (the bots' clock ticks once a minute).
@@ -127,6 +130,19 @@ def normalise_config(kind: str, config: Optional[Mapping[str, Any]]) -> dict:
                                f"{', '.join(sorted(event_dispatch.DISPATCHABLE_EVENT_TYPES))}.")
         cfg["event_type"] = event_type
         cfg["filter"] = {str(k): v for k, v in dict(cfg.get("filter") or {}).items()}
+    elif kind == "intake":
+        # P9a-1 keeps the route's config as the console sends it and checks only its shape;
+        # P9a-2 compiles `match` (the filter DSL), `thread_key`, `addressing` and `fanout`.
+        for key in ("match", "triage"):
+            if key in cfg and not isinstance(cfg[key], dict):
+                raise TriggerError(f"{key} must be an object.")
+        fanout = str(cfg.get("fanout") or "first_match")
+        if fanout not in ("first_match", "all_matches"):
+            raise TriggerError("fanout must be first_match or all_matches.")
+        cfg["fanout"] = fanout
+        for key in ("thread_key", "goal", "addressing"):
+            if key in cfg and cfg[key] is not None and not isinstance(cfg[key], str):
+                raise TriggerError(f"{key} must be text.")
     return cfg
 
 
@@ -209,6 +225,10 @@ def words(row: Mapping[str, Any]) -> dict:
         token = str(row.get("path_token") or "")
         return {"when": "When", "what": "A webhook is called",
                 "detail": f"…{INBOUND_PATH_PREFIX}{token[:4]}…" if token else ""}
+    if kind == "intake":
+        return {"when": "When", "what": "An event arrives",
+                "detail": row.get("name") or (f"connection {row.get('connection_id')}"
+                                              if row.get("connection_id") else "")}
     return {"when": "When", "what": cfg.get("check") or row.get("name") or "A monitor fires",
             "detail": _every_words(int(cfg.get("every_seconds") or 60))
             + (f", at most {cfg['max_cycles']} checks" if cfg.get("max_cycles") else "")}
@@ -227,7 +247,8 @@ def short_words(row: Mapping[str, Any]) -> str:
 _CONCURRENCY_WORDS = {"skip_if_active": "If still running: skip",
                       "coalesce": "If still running: run once after",
                       "always_enqueue": "If still running: queue"}
-_KIND_WORDS = {"cron": "Schedule", "event": "Event", "webhook": "Webhook", "monitor": "Monitor"}
+_KIND_WORDS = {"cron": "Schedule", "event": "Event", "webhook": "Webhook", "monitor": "Monitor",
+               "intake": "Event route"}
 
 
 def describe(connection: Connection, row: Mapping[str, Any], *, previews: int = 3) -> dict:
@@ -253,6 +274,9 @@ def describe(connection: Connection, row: Mapping[str, Any], *, previews: int = 
         "runs_as": ({"on_behalf_of": row.get("on_behalf_of"), "grant_id": row.get("grant_id")}
                     if row.get("on_behalf_of") else None),
     }
+    if row["kind"] == "intake":
+        out["connection_id"] = row.get("connection_id")
+        out["priority"] = int(row.get("priority") or 100)
     if row["kind"] == "webhook" and row.get("path_token"):
         out["url_path"] = INBOUND_PATH_PREFIX + str(row["path_token"])
     if row["kind"] in ("cron", "monitor") and row["status"] == "on":
@@ -299,10 +323,22 @@ def create(connection: Connection, *, project_id: str, deployment_id: str, kind:
            actor: str, config: Optional[Mapping[str, Any]] = None,
            input: Optional[Mapping[str, Any]] = None, concurrency: str = "skip_if_active",
            name: str = "", legacy_ref: Optional[str] = None, status: str = "on",
-           next_fire_at: Optional[datetime] = None, auto_pause: bool = True) -> dict:
-    """A new trigger on a deployment. A webhook's signing secret is in the answer ONCE."""
+           next_fire_at: Optional[datetime] = None, auto_pause: bool = True,
+           connection_id: Optional[str] = None, priority: int = 100) -> dict:
+    """A new trigger on a deployment. A webhook's signing secret is in the answer ONCE. An
+    `intake` route names the intake connection whose events it fires on (`connection_id`)."""
     if concurrency not in CONCURRENCY:
         raise TriggerError(f"concurrency must be one of {', '.join(CONCURRENCY)}.")
+    if kind == "intake":
+        if not connection_id:
+            raise TriggerError("an intake route names the connection it listens to.")
+        owner = connection.execute(text(
+            "SELECT project_id FROM intake_connections WHERE id = :c"), {"c": connection_id}
+        ).scalar()
+        if owner is None or str(owner) != str(project_id):
+            raise TriggerError("no such intake connection in this project.", status=404)
+    elif connection_id:
+        raise TriggerError("only an intake route has a connection.")
     dep = connection.execute(text(
         "SELECT * FROM agent_deployments WHERE id = :d AND project_id = :p"),
         {"d": deployment_id, "p": project_id}).mappings().first()
@@ -326,14 +362,16 @@ def create(connection: Connection, *, project_id: str, deployment_id: str, kind:
     connection.execute(text("""
         INSERT INTO agent_triggers (id, project_id, deployment_id, kind, name, config, input,
                concurrency, status, auto_pause, thread_id, next_fire_at, path_token,
-               secret_ref_id, legacy_ref, created_by, on_behalf_of, grant_id)
+               secret_ref_id, legacy_ref, created_by, on_behalf_of, grant_id, connection_id,
+               priority)
         VALUES (:id, :p, :d, :k, :n, CAST(:c AS JSONB), CAST(:i AS JSONB), :cc, :s, :ap, :t,
-                :nf, :tok, :ref, :legacy, :by, :obo, :grant)"""),
+                :nf, :tok, :ref, :legacy, :by, :obo, :grant, :conn, :prio)"""),
         {"id": trigger_id, "p": project_id, "d": deployment_id, "k": kind, "n": name[:120],
          "c": json.dumps(cfg), "i": json.dumps(dict(input or {})), "cc": concurrency,
          "s": status, "ap": bool(auto_pause), "t": thread_id, "nf": first, "tok": path_token,
          "ref": secret_ref, "legacy": legacy_ref, "by": actor,
-         "obo": (link or {}).get("on_behalf_of"), "grant": (link or {}).get("grant_id")})
+         "obo": (link or {}).get("on_behalf_of"), "grant": (link or {}).get("grant_id"),
+         "conn": connection_id, "prio": int(priority)})
     if kind == "event" and not cfg.get("internal"):
         sub_id = make_id("esub")
         connection.execute(text("""
@@ -506,16 +544,17 @@ def _message(trigger: Mapping[str, Any], extra: Optional[Mapping[str, Any]]) -> 
 
 def _record(connection: Connection, trigger: Mapping[str, Any], *, outcome: str,
             reason: str = "", run_id: Optional[str] = None,
-            scheduled_for: Optional[datetime] = None, dedupe_key: Optional[str] = None) -> bool:
+            scheduled_for: Optional[datetime] = None, dedupe_key: Optional[str] = None,
+            intake_event_id: Optional[str] = None) -> bool:
     """One firing row. False when `dedupe_key` was already fired (nothing written)."""
     got = connection.execute(text("""
         INSERT INTO agent_trigger_fires (id, project_id, trigger_id, scheduled_for, outcome,
-               reason, run_id, dedupe_key)
-        VALUES (:id, :p, :t, :at, :o, :r, :run, :dk)
+               reason, run_id, dedupe_key, intake_event_id)
+        VALUES (:id, :p, :t, :at, :o, :r, :run, :dk, :iev)
         ON CONFLICT (trigger_id, dedupe_key) DO NOTHING RETURNING id"""),
         {"id": make_id("atf"), "p": trigger["project_id"], "t": trigger["id"],
          "at": scheduled_for, "o": outcome, "r": reason[:300] or None, "run": run_id,
-         "dk": dedupe_key}).scalar()
+         "dk": dedupe_key, "iev": intake_event_id}).scalar()
     return got is not None
 
 
@@ -531,6 +570,7 @@ def fire(connection: Connection, trigger_id: str, *, actor: str = "boss",
     trigger = get(connection, trigger_id, lock=True)
     if trigger is None:
         return {"outcome": "refused", "reason": "no such trigger"}
+    iev = (finalize_extra or {}).get("intake_event_id")
     if dedupe_key and connection.execute(text(
             "SELECT 1 FROM agent_trigger_fires WHERE trigger_id = :t AND dedupe_key = :k"),
             {"t": trigger_id, "k": dedupe_key}).scalar():
@@ -539,17 +579,17 @@ def fire(connection: Connection, trigger_id: str, *, actor: str = "boss",
 
     if projects_archive.is_archived(connection, trigger["project_id"]):
         _record(connection, trigger, outcome="refused", reason="project archived",
-                scheduled_for=scheduled_for, dedupe_key=dedupe_key)
+                scheduled_for=scheduled_for, dedupe_key=dedupe_key, intake_event_id=iev)
         return {"outcome": "refused", "reason": "the project is archived"}
     if trigger["status"] != "on":
         _record(connection, trigger, outcome="refused", reason="paused",
-                scheduled_for=scheduled_for, dedupe_key=dedupe_key)
+                scheduled_for=scheduled_for, dedupe_key=dedupe_key, intake_event_id=iev)
         return {"outcome": "refused", "reason": "paused"}
     dep = agent_deployments.by_id(connection, trigger["deployment_id"])
     if dep is None or dep["status"] != "live" or (
             dep["runner"] == "deployed_agent" and not dep.get("version")):
         _record(connection, trigger, outcome="refused", reason="not deployed",
-                scheduled_for=scheduled_for, dedupe_key=dedupe_key)
+                scheduled_for=scheduled_for, dedupe_key=dedupe_key, intake_event_id=iev)
         return {"outcome": "refused", "reason": "the agent is not deployed"}
     thread = connection.execute(text(
         "SELECT active_run_id FROM agent_threads WHERE id = :t FOR UPDATE"),
@@ -568,7 +608,7 @@ def fire(connection: Connection, trigger_id: str, *, actor: str = "boss",
         skip_reason = "a run is already waiting (coalesce)"
     if skip_reason:
         _record(connection, trigger, outcome="skipped", reason=skip_reason, run_id=active,
-                scheduled_for=scheduled_for, dedupe_key=dedupe_key)
+                scheduled_for=scheduled_for, dedupe_key=dedupe_key, intake_event_id=iev)
         connection.execute(text(
             "UPDATE agent_triggers SET skips = skips + 1, last_outcome = 'skipped', "
             "updated_at = now() WHERE id = :t"), {"t": trigger_id})
@@ -585,7 +625,7 @@ def fire(connection: Connection, trigger_id: str, *, actor: str = "boss",
         # THE GRANT IT RAN ON ENDED: refused, and the trigger pauses until someone renews it.
         reason = f"Renew authority: the standing grant this trigger runs on ended ({lost})."
         _record(connection, trigger, outcome="refused", reason=reason,
-                scheduled_for=scheduled_for, dedupe_key=dedupe_key)
+                scheduled_for=scheduled_for, dedupe_key=dedupe_key, intake_event_id=iev)
         connection.execute(text(
             "UPDATE agent_triggers SET status = 'paused', paused_reason = :r, paused_by = 'boss', "
             "paused_at = now(), updated_at = now() WHERE id = :t"), {"r": reason, "t": trigger_id})
@@ -608,10 +648,10 @@ def fire(connection: Connection, trigger_id: str, *, actor: str = "boss",
         # Unlinked and unattended under enforce: nobody's authority to run it on.
         reason = "no standing grant: re-save the trigger signed in to link yours"
         _record(connection, trigger, outcome="refused", reason=reason,
-                scheduled_for=scheduled_for, dedupe_key=dedupe_key)
+                scheduled_for=scheduled_for, dedupe_key=dedupe_key, intake_event_id=iev)
         return {"outcome": "refused", "reason": reason}
     _record(connection, trigger, outcome="admitted", run_id=admitted["run_id"],
-            scheduled_for=scheduled_for, dedupe_key=dedupe_key)
+            scheduled_for=scheduled_for, dedupe_key=dedupe_key, intake_event_id=iev)
     connection.execute(text("""
         UPDATE agent_triggers SET fires = fires + 1, last_fired_at = now(), last_run_id = :r,
                last_outcome = 'admitted', cycle = cycle + 1, updated_at = now() WHERE id = :t"""),
@@ -651,6 +691,12 @@ def tick(connection: Connection, *, now: Optional[datetime] = None, limit: int =
     trigger fires only when the hook says it is due (a focused agent's own due rule)."""
     current = now or _now()
     fired, skipped = [], []
+    # THE INSTALL-WIDE WORK HOLD (Infra Agent, BOSSAPP-1157): due triggers are not fired and
+    # next_fire_at is NOT advanced, so nothing is lost — they fire on the first tick after release.
+    from . import work_hold
+
+    if work_hold.active(connection, "agent.trigger"):
+        return {"fired": [], "skipped": [{"reason": "infra_hold"}], "held": True}
     for trigger in due(connection, now=current, limit=limit, project_id=project_id):
         source = _source_of(trigger.get("legacy_ref"))
         if source and source not in (sources or set()):

@@ -3,6 +3,8 @@ package guest
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -65,13 +67,17 @@ type Daemon struct {
 	NetSetup func(b *Bootstrap) error
 	// NoInbox leaves the work inbox to boss-runtime (P8b images).
 	NoInbox bool
+	// Restored marks a process-backend guest started from a snapshot record.
+	Restored bool
 
-	mu    sync.Mutex
-	boot  *Bootstrap
-	ports map[int]int
-	start time.Time
-	busy  int
-	runs  []string
+	mu       sync.Mutex
+	boot     *Bootstrap
+	ports    map[int]int
+	start    time.Time
+	busy     int
+	runs     []string
+	reseeded bool
+	restored bool
 }
 
 // Run serves until ctx ends.
@@ -180,9 +186,10 @@ func (d *Daemon) handle(req Request) Response {
 	boot := d.boot
 	d.mu.Unlock()
 	base := Response{OK: true, Bootstrapped: boot != nil, Ports: d.ports,
-		Uptime: time.Since(d.start).Milliseconds()}
+		Uptime: time.Since(d.start).Milliseconds(), ClockUnix: time.Now().Unix()}
 	d.mu.Lock()
 	base.BusySlots = d.busy
+	base.Reseeded, base.Restored = d.reseeded, d.restored || d.Restored
 	if boot != nil {
 		base.VMID = boot.VMID
 		base.TotalSlots = slotsOf(boot)
@@ -202,7 +209,15 @@ func (d *Daemon) handle(req Request) Response {
 			return base // idempotent: a restarted host re-bootstraps adopted VMs
 		}
 		b := *req.Bootstrap
-		mixSeed(b.Seed)
+		// Identity arrives: reseed first (a restored clone shares its
+		// siblings' RNG state until this), then the clock, then the NIC.
+		credited, err := reseed(b.Seed)
+		if err != nil {
+			log.Printf("boss-vsockd: reseed: %v", err)
+		}
+		if err := setClock(b.HostTimeUnixNano); err != nil {
+			log.Printf("boss-vsockd: clock: %v", err)
+		}
 		if b.Mode == "replica" && d.NetSetup != nil {
 			if err := d.NetSetup(&b); err != nil {
 				return Response{Error: "bootstrap: net setup: " + err.Error()}
@@ -211,9 +226,19 @@ func (d *Daemon) handle(req Request) Response {
 		b.Seed = nil // never kept
 		d.mu.Lock()
 		d.boot = &b
+		d.reseeded, d.restored = credited, b.Restored
 		d.mu.Unlock()
 		base.Bootstrapped = true
 		base.VMID = b.VMID
+		base.Reseeded, base.Restored = credited, b.Restored
+		base.ClockUnix = time.Now().Unix()
+		return base
+	case "rng":
+		buf := make([]byte, 16)
+		if _, err := rand.Read(buf); err != nil {
+			return Response{Error: "rng: " + err.Error()}
+		}
+		base.RNG = hex.EncodeToString(buf)
 		return base
 	case "ifaces":
 		ifs, err := net.Interfaces()
@@ -245,20 +270,6 @@ func (d *Daemon) handle(req Request) Response {
 		return base
 	default:
 		return Response{Error: "unknown op " + strconv.Quote(req.Op)}
-	}
-}
-
-func mixSeed(seed []byte) {
-	if len(seed) == 0 {
-		return
-	}
-	// Writing mixes into the pool without crediting entropy; VMGenID does the
-	// rest on restore (P8b). Best effort in the process backend.
-	if f, err := os.OpenFile("/dev/urandom", os.O_WRONLY, 0); err == nil {
-		_, _ = f.Write(seed)
-		f.Close()
-	} else {
-		log.Printf("boss-vsockd: seed not mixed: %v", err)
 	}
 }
 
