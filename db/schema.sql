@@ -14826,6 +14826,134 @@ CREATE INDEX IF NOT EXISTS idx_jobs_target_claimable ON jobs (target, priority, 
   WHERE target IS NOT NULL AND status IN ('queued', 'failed_retryable', 'leased', 'running');
 -- ================================ end P8a ==
 
+-- =====================================================================================-- INFRA AGENT: STORAGE SELF-HEALING (BOSSAPP-1145 · ST-6 1151 · ST-10 1155 · ST-12 1157).
+-- boss-infra-agent-lld.md §5.1. Readings → incidents → receipted actions → rules; the host
+-- helper's signed pull queue. `system_state['infra_hold']` is the install-wide work hold.
+-- =====================================================================================-- One reading per host every 30 s (steward / hostd / the API's own Postgres figures). Kept 30
+-- days; the storage watch drops older rows on its tick.
+CREATE TABLE IF NOT EXISTS storage_samples (
+  host_id TEXT NOT NULL,
+  at TIMESTAMPTZ NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('steward', 'hostd', 'api')),
+  total_gb NUMERIC,
+  free_gb NUMERIC,
+  used_pct NUMERIC,
+  docker_alloc_gb NUMERIC,
+  docker_used_gb NUMERIC,
+  images_gb NUMERIC,
+  cache_gb NUMERIC,
+  volumes_gb NUMERIC,
+  logs_gb NUMERIC,
+  backups_gb NUMERIC,
+  backups_n INTEGER,
+  pg_temp_gb NUMERIC,
+  pg_db_gb NUMERIC,
+  by_type JSONB NOT NULL DEFAULT '{}'::jsonb,
+  host_label TEXT,
+  PRIMARY KEY (host_id, at)
+);
+CREATE INDEX IF NOT EXISTS idx_storage_samples_at ON storage_samples (at);
+
+-- One open incident per host; warn → critical reuses it.
+CREATE TABLE IF NOT EXISTS storage_incidents (
+  id TEXT PRIMARY KEY,
+  host_id TEXT NOT NULL,
+  host_label TEXT,
+  status TEXT NOT NULL CHECK (status IN ('warn', 'critical', 'asking', 'resuming', 'resolved')),
+  severity TEXT NOT NULL DEFAULT 'warn' CHECK (severity IN ('warn', 'critical')),
+  opened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ,
+  cause_key TEXT,
+  cause_text TEXT,
+  free_pct_start NUMERIC,
+  free_pct_now NUMERIC,
+  target_pct NUMERIC NOT NULL DEFAULT 25,
+  freed_gb NUMERIC NOT NULL DEFAULT 0,
+  eta_seconds INTEGER,
+  hold_since TIMESTAMPTZ,
+  hold_released_at TIMESTAMPTZ,
+  paused_runs INTEGER NOT NULL DEFAULT 0,
+  plan JSONB NOT NULL DEFAULT '[]'::jsonb,
+  flow JSONB NOT NULL DEFAULT '[]'::jsonb,
+  agent_run_id TEXT,
+  lease_owner TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  acknowledged_by TEXT,
+  acknowledged_at TIMESTAMPTZ,
+  spend_usd NUMERIC NOT NULL DEFAULT 0,
+  report JSONB,
+  project_id TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS storage_incident_open ON storage_incidents (host_id)
+  WHERE status <> 'resolved';
+CREATE INDEX IF NOT EXISTS idx_storage_incidents_opened ON storage_incidents (opened_at DESC);
+CREATE INDEX IF NOT EXISTS idx_storage_incidents_cause ON storage_incidents (cause_key, opened_at DESC);
+
+-- One row per tool call (dry runs too), each real one receipted.
+CREATE TABLE IF NOT EXISTS storage_actions (
+  id TEXT PRIMARY KEY,
+  incident_id TEXT REFERENCES storage_incidents(id) ON DELETE CASCADE,
+  host_id TEXT NOT NULL,
+  tool TEXT NOT NULL,
+  tier SMALLINT NOT NULL,
+  where_run TEXT NOT NULL DEFAULT 'host' CHECK (where_run IN ('host', 'api')),
+  args JSONB NOT NULL DEFAULT '{}'::jsonb,
+  plan_hash TEXT NOT NULL,
+  dry_run BOOLEAN NOT NULL DEFAULT true,
+  items INTEGER,
+  bytes BIGINT,
+  status TEXT NOT NULL CHECK (status IN ('planned', 'queued', 'running', 'done', 'failed', 'refused')),
+  receipt_id TEXT,
+  decision_id TEXT,
+  actor TEXT NOT NULL,
+  started_at TIMESTAMPTZ,
+  ended_at TIMESTAMPTZ,
+  result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_storage_actions_incident ON storage_actions (incident_id, created_at);
+
+-- Retention rules and thresholds. host_id NULL = every host. source: default|operator|learned.
+CREATE TABLE IF NOT EXISTS retention_rules (
+  id TEXT PRIMARY KEY,
+  host_id TEXT,
+  kind TEXT NOT NULL CHECK (kind IN ('backups', 'images', 'build_cache', 'logs', 'telemetry',
+                                     'scratch_db', 'kg_derived', 'docker_trim', 'threshold')),
+  rule JSONB NOT NULL DEFAULT '{}'::jsonb,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  source TEXT NOT NULL DEFAULT 'default' CHECK (source IN ('default', 'operator', 'learned')),
+  decision_id TEXT,
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS retention_rules_one_per_kind_host
+  ON retention_rules (kind, COALESCE(host_id, ''));
+
+-- The host helper's pull queue (§7): typed verbs, Ed25519-signed, expiring, leased once.
+CREATE TABLE IF NOT EXISTS host_jobs (
+  id TEXT PRIMARY KEY,
+  host_id TEXT NOT NULL,
+  action_id TEXT REFERENCES storage_actions(id) ON DELETE SET NULL,
+  verb TEXT NOT NULL,
+  args JSONB NOT NULL DEFAULT '{}'::jsonb,
+  signature TEXT NOT NULL,
+  key_id TEXT NOT NULL DEFAULT '',
+  expires_at TIMESTAMPTZ NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'leased', 'done', 'failed', 'expired')),
+  leased_to TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  result JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_host_jobs_pull ON host_jobs (host_id, status, created_at);
+
+-- ST-6: every backup BOSS writes carries owner/kind/ttl labels and a retain-until.
+ALTER TABLE backups ADD COLUMN IF NOT EXISTS label JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE backups ADD COLUMN IF NOT EXISTS retain_until TIMESTAMPTZ;
+-- ============================ end Infra Agent storage ==
 -- ================================ P9a: EVENT INTAKE (BOSSAPP-1093; boss-eventing-lld.md §4) ==
 -- The front door and the inbox for anything that happens in another system. One connection row
 -- per connected source install (its secrets live in the secret backend; `secret_refs` holds only

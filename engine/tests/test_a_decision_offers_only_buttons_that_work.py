@@ -33,6 +33,15 @@ SAMPLES = {
         "action": "approve_change_set", "change_set_id": "chs_1",
         "pull_requests": [{"repository": "acme/api", "pr_number": 1}, {"repository": "acme/web", "pr_number": 2}]}},
     "general": {"status": "pending", "recommendation": {"action": "role.autonomy_change"}},
+    # The Infra Agent's cards (BOSSAPP-1157): a tier-3 storage deletion carrying its rule
+    # proposal, and a proposed permanent retention rule.
+    "storage_delete": {"status": "pending", "recommendation": {
+        "action": "storage_delete", "incident_id": "si_1", "tool": "storage.remove_backups",
+        "plan_hash": "abc", "items": 348, "gb": 161.0,
+        "rule_proposal": {"kind": "backups", "rule": {"keep_newest": 10}, "preticked": True}}},
+    "storage_rule": {"status": "pending", "recommendation": {
+        "action": "storage_rule", "kind": "backups", "rule": {"keep_newest": 10, "keep_days": 7, "cap_gb": 20},
+        "incident_id": "si_1"}},
 }
 
 

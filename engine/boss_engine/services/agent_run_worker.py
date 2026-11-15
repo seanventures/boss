@@ -79,7 +79,14 @@ def execute(engine: Any, settings: Any, *, kind: str, job_id: str, run_id: str, 
             return {"status": status, "run_id": run_id, "noop": True}
         stop = (lambda: _stop_requested(engine, run_id)) if (
             run["finalize_ctx"] or {}).get("thread_id") else None
-        token = agent_loop._DRIVE.set({"commit": True, "fence": lease.fence, "drain": drain,
+        # THE INSTALL-WIDE WORK HOLD (Infra Agent, BOSSAPP-1157): a run under the hold ends at
+        # its next step boundary exactly as a deploy drain does ("drained"); _settle hands the
+        # job back with reason infra_hold instead. Interactive chat and the Infra Agent's own
+        # runs are exempt (work_hold.exempt_job).
+        from . import work_hold
+
+        token = agent_loop._DRIVE.set({"commit": True, "fence": lease.fence,
+                                       "drain": work_hold.drain_or_hold(engine, drain, kind, run_id),
                                        "should_stop": stop})
         try:
             outcome = _drive(connection, settings, run, kind=kind)
@@ -269,6 +276,15 @@ def _settle(connection: Any, jobs: Any, lease: Lease, run_id: str, outcome: dict
         return {"status": status, "run_id": run_id, "reason": outcome.get("reason")}
     if status == "drained":
         thread_runs.finish(connection, run_id, "drained")
+        from . import owned_process, work_hold
+
+        if not owned_process.draining() and work_hold.active(connection, fresh=True):
+            # PAUSED BY THE INFRA AGENT at a checkpoint (BOSSAPP-1157): the job goes back with
+            # no attempt spent and resumes from this checkpoint when the hold is released.
+            work_hold.hand_back(connection, jobs, worker_id=lease.worker_id, job_id=lease.job_id,
+                                lease_token=lease.lease_token, run_id=run_id, run_table="agent_runs")
+            return {"job_deferred": True, "status": "drained", "run_id": run_id,
+                    "paused_by": work_hold.PAUSED_BY}
         if handed_back is None or not handed_back():
             # A DEPLOY IS NOT THE JOB'S FAILURE: back to the queue, the attempt given back.
             jobs.defer_leased(connection, lease.worker_id, lease.job_id, lease.lease_token,

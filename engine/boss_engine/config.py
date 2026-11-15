@@ -107,6 +107,10 @@ class Settings(BaseSettings):
     # 6 hourly (storage hygiene layer 1): a day of hourly dumps of a multi-GB database was the
     # backups volume's biggest tenant; the daily/weekly/monthly tiers keep the history.
     backup_keep_hourly: int = Field(default=6, alias="BOSS_BACKUP_KEEP_HOURLY", ge=1)
+    #: The Infra Agent's install-wide work hold never outlives this (BOSSAPP-1157): an unanswered
+    #: tier-3 card releases the hold after it; the incident stays open and says so.
+    storage_max_hold_seconds: int = Field(default=7200, alias="BOSS_STORAGE_MAX_HOLD_SECONDS",
+                                          ge=60, le=7 * 24 * 3600)
     backup_keep_daily: int = Field(default=7, alias="BOSS_BACKUP_KEEP_DAILY", ge=0)
     backup_keep_weekly: int = Field(default=4, alias="BOSS_BACKUP_KEEP_WEEKLY", ge=0)
     backup_keep_monthly: int = Field(default=6, alias="BOSS_BACKUP_KEEP_MONTHLY", ge=0)

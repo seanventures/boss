@@ -34,6 +34,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Optional, Sequence
 
 from . import build_budget as _build_budget
+from .work_hold import PauseAtCheckpoint as _PauseAtCheckpoint
 from . import repair_findings
 from . import parallel_build as _parallel_build
 from . import pr_integrity_review
@@ -5678,6 +5679,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
     def _mark_stage_done(stage: str) -> None:
         mark_stage_done(engine, project_id, run_id, stage)
+        # THE INSTALL-WIDE WORK HOLD (Infra Agent, BOSSAPP-1157): a stage boundary is the
+        # build's checkpoint. Under the hold the stage's work is kept (committed above, marked
+        # done here) and the job is handed back with no attempt spent; the resume path skips
+        # completed stages. Never mid-stage: the hold never kills.
+        from . import work_hold as _work_hold
+
+        if _work_hold.active_for_run(engine, "code.task", run_id):
+            raise _PauseAtCheckpoint(stage)
 
     # BOSSAPP-826 WORKSPACE SNAPSHOTS: armed at the provision site below only when
     # BOSS_WORKSPACE_SNAPSHOTS=remote and the sandbox is remote. None otherwise, so with
@@ -10301,6 +10310,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         return {"status": "superseded", "done": True, "reason": str(exc)}
     except CodeTaskCancelled as exc:
         return _honour_cancel(exc)
+    except _PauseAtCheckpoint as exc:
+        # PAUSED BY THE INFRA AGENT at a stage boundary (BOSSAPP-1157): not a failure. The job
+        # goes back to the queue with its attempt, the run says paused_by='infra_agent', and
+        # the next lease resumes from finalize_ctx.completed_stages once the hold lifts.
+        from . import work_hold as _work_hold
+
+        return _work_hold.hand_back_run(engine, jobs, run_id, project_id, fencing_token,
+                                        stage=exc.stage)
     except Exception as exc:  # noqa: BLE001 — fail the run gracefully on any agent/model error
         # WHERE IT DIED, NOT ONLY WHAT IT SAID (crash_frames): crun_944194c4 failed with a bare
         # "I/O operation on closed file." and no traceback anywhere. The log gets the whole

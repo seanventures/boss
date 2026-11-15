@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2252 operations.
+# 2268 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -945,6 +945,9 @@
 "GET /v1/harness/score": ["permit assurance:read @ org", "OAPVU"]
 "GET /v1/health-snapshots": ["permit system:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/health-snapshots/refresh": ["permit system:operate @ project(body=project_id)", "OA"]
+"GET /v1/host-jobs/lease": ["permit system:operate @ org +writes_on_get", "OA"]
+"GET /v1/host-jobs/public-key": ["permit system:read @ org", "OAPVU"]
+"POST /v1/host-jobs/{job_id}/result": ["permit system:operate @ org", "OA"]
 "POST /v1/hosts/enrol": ["public:host_join_token", "OAPVU"]
 "GET /v1/hosts/{agent_host_id}/desired": ["permit fleet:host @ org", "-"]
 "POST /v1/hosts/{agent_host_id}/events": ["permit fleet:host @ org", "-"]
@@ -1173,6 +1176,19 @@
 "GET /v1/infra/resources": ["permit infra:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/infra/resources/{resource_id}/terminate": ["permit infra:terminate @ project(body=project_id)", "OA"]
 "POST /v1/infra/resources/{resource_id}/terminate/queue": ["permit infra:terminate @ project(body=project_id)", "OA"]
+"POST /v1/infra/storage/clean": ["permit autonomy:manage @ org", "OA"]
+"GET /v1/infra/storage/hold": ["permit system:read @ org", "OAPVU"]
+"POST /v1/infra/storage/hold/release": ["permit autonomy:manage @ org", "OA"]
+"GET /v1/infra/storage/incidents": ["permit system:read @ org", "OAPVU"]
+"GET /v1/infra/storage/incidents/current": ["permit system:read @ org", "OAPVU"]
+"GET /v1/infra/storage/incidents/{incident_id}": ["permit system:read @ org", "OAPVU"]
+"POST /v1/infra/storage/incidents/{incident_id}/acknowledge": ["permit system:operate @ org", "OA"]
+"POST /v1/infra/storage/incidents/{incident_id}/replan": ["permit autonomy:manage @ org", "OA"]
+"GET /v1/infra/storage/incidents/{incident_id}/report.md": ["permit system:read @ org", "OAPVU"]
+"GET /v1/infra/storage/rules": ["permit system:read @ org", "OAPVU"]
+"PUT /v1/infra/storage/rules": ["permit autonomy:manage @ org", "OA"]
+"POST /v1/infra/storage/samples": ["permit system:operate @ org", "OA"]
+"GET /v1/infra/storage/summary": ["permit system:read @ org", "OAPVU"]
 "GET /v1/infra/targets/{target_id}": ["permit deployment:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/infra/targets/{target_id}/deploy": ["permit deployment:create @ project(body=project_id) +confine(path.target_id->deployment_target) +production(target=path.target_id)", "OAP"]
 "POST /v1/infra/targets/{target_id}/move": ["permit deployment_target:manage @ project(body=project_id)", "OA"]

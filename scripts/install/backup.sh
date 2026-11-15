@@ -163,12 +163,17 @@ trap 'rm -rf "$BACKUP"' EXIT
 SESSION_KEYS_FILE="$BACKUP/.excluded-sessions.json"
 python3 "$ARCHIVE_HELPER" env "$ENV_FILE" "$BACKUP/.env" "$SESSION_KEYS_FILE"
 printf '%s\n' "$LAYOUT" > "$BACKUP/.metadata.json"
-python3 - "$BACKUP/.metadata.json" "$API_IMAGE_ID" "$DB_IMAGE_ID" "$STAMP" <<'PYMETA'
+# THE MANIFEST NAMES ITS INSTALL (BOSSAPP-1157): the Infra Agent's host helper deletes a backup
+# only when manifest.json carries this install's id; without it a directory is never a candidate.
+python3 - "$BACKUP/.metadata.json" "$API_IMAGE_ID" "$DB_IMAGE_ID" "$STAMP" \
+  "$(grep -m 1 '^BOSS_INSTALL_ID=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)" <<'PYMETA'
 import json, sys
 from pathlib import Path
 path = Path(sys.argv[1])
 metadata = json.loads(path.read_text())
-metadata.update(api_image_id=sys.argv[2], db_image_id=sys.argv[3], created_utc=sys.argv[4])
+metadata.update(api_image_id=sys.argv[2], db_image_id=sys.argv[3], created_utc=sys.argv[4],
+                install_id=(sys.argv[5] if len(sys.argv) > 5 else "") or None,
+                owner="boss.backup", kind="backup.upgrade")
 path.write_text(json.dumps(metadata))
 PYMETA
 if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then

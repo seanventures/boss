@@ -434,6 +434,9 @@ services:
       BOSS_PREVIEW_PORT: ${BOSS_PREVIEW_PORT:-3001}
       BOSS_PREVIEW_ORIGIN: ${BOSS_PREVIEW_ORIGIN:-}
       BOSS_DEDICATED_HOST: ${BOSS_DEDICATED_HOST:-}
+      # The install's id (install.sh / reconcile_api_credentials.py): the label every BOSS-made
+      # container, image, volume and backup carries; the Infra Agent cleans labelled things only.
+      BOSS_INSTALL_ID: ${BOSS_INSTALL_ID:-}
       BOSS_CONTROL_PLANE_URL: http://api:8000
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}

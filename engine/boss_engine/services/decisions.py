@@ -815,7 +815,7 @@ class DecisionService:
             refreshed = self.get_row(connection, decision_id)
             self._handle_approved_follow_on(
                 connection, refreshed, actor, note=note, force=force, always_allow=always_allow,
-                choose=choose,
+                choose=choose, answer=answer,
             )
             if force:
                 # A FORCED approval overrode BOSS's own gate: kept as a decision example
@@ -1074,6 +1074,7 @@ class DecisionService:
         force: bool = False,
         always_allow: Optional[dict] = None,
         choose: Optional[str] = None,
+        answer: Optional[dict] = None,
     ) -> None:
         """Approval context must be explicitly threaded into the follow-on.
 
@@ -1115,6 +1116,23 @@ class DecisionService:
 
             agent_deployments.on_promotion_answered(connection, row, verdict="approve",
                                                     actor=actor)
+            return
+        if action == "storage_delete":
+            # THE INFRA AGENT'S TIER-3 CARD (BOSSAPP-1157, storage_cleanup): approving runs
+            # exactly the dry run's plan_hash (or re-plans a stale one) and, when the rule box
+            # was ticked, writes the retention rule so next time it is automatic.
+            from . import storage_cleanup
+
+            body = answer if isinstance(answer, dict) else {}
+            storage_cleanup.on_delete_decision(connection, connection.engine, row, verdict="approve",
+                                               actor=actor, make_rule=body.get("make_rule"),
+                                               args=body.get("args") if isinstance(body.get("args"), dict)
+                                               else None)
+            return
+        if action == "storage_rule":
+            from . import storage_incidents
+
+            storage_incidents.on_rule_decision(connection, row, verdict="approve", actor=actor)
             return
         if action == "resume_interrupt":
             # A KERNEL RUN'S INTERRUPT ANSWERED (AP-P2, services/interrupts.py): the run resumes
@@ -1652,6 +1670,13 @@ class DecisionService:
             # a promotion is re-asked by promoting again).
             agent_deployments.on_promotion_answered(connection, row, verdict="reject",
                                                     actor=actor)
+            return
+        if recommendation_action == "storage_delete" and action == "reject":
+            # "Not now" (BOSSAPP-1157): the step is re-asked in an hour or on a further fall.
+            from . import storage_cleanup
+
+            storage_cleanup.on_delete_decision(connection, connection.engine, row, verdict="reject",
+                                               actor=actor)
             return
         if recommendation_action == interrupts.ACTION and action == "reject":
             # Declined: the call does not run; the run resumes (with the batch) told so. (Like a

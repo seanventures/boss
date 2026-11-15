@@ -291,7 +291,11 @@ KNOWN_ACTIONS = (REFUSAL_REASONS | CARRIED_OUT_ON_APPROVAL | WORKFLOW_GATE_ACTIO
                  | RECORDED_ON_APPROVAL | AMBIENT_CARD_ACTIONS)
 
 KINDS = ("refusal", "deploy_gate", "workflow_gate", "architecture_review", "pull_request",
-         "change_set", "general")
+         "change_set",
+         # The Infra Agent's cards (BOSSAPP-1157): a tier-3 storage deletion that carries its rule
+         # proposal (S4), and a proposed permanent retention rule (storage_incidents.learn).
+         "storage_delete", "storage_rule",
+         "general")
 
 #: A decision still awaiting an answer (not yet approved, rejected, executed, expired or
 #: withdrawn). THE shared definition of "open": a guard elsewhere that needs to know whether a
@@ -358,6 +362,8 @@ def kind_of(decision: Mapping[str, Any]) -> str:
         return "pull_request"
     if action == "approve_change_set":
         return "change_set"
+    if action in ("storage_delete", "storage_rule"):
+        return action
     return "general"
 
 
