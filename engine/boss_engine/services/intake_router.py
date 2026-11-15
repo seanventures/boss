@@ -757,10 +757,14 @@ def fire_all(connection: Connection, fires: list[Fire], *, actor: str = "intake"
 # ---------------------------------------------------------------------------------------------
 
 def preview_match(connection: Connection, *, project_id: str, connection_id: str, match: Any,
-                  limit: int = 50) -> dict[str, Any]:
+                  limit: int = 50, reveal: bool = False) -> dict[str, Any]:
     """Which of the connection's last `limit` parsed events the filter would match, and why
     (the console's preview before saving a route). Compiles the filter the way the processor
-    does; a filter that does not compile is the first thing it reports."""
+    does; a filter that does not compile is the first thing it reports. Without `reveal`
+    (user:read) the filter reads the redacted envelope (event_intake.redact_people), so a leaf's
+    `actual` never echoes an email or principal and `matched` is no oracle for one."""
+    from . import event_intake
+
     try:
         compiled = intake_filters.compile_filter(match)
     except intake_filters.FilterError as error:
@@ -774,6 +778,8 @@ def preview_match(connection: Connection, *, project_id: str, connection_id: str
     matched = 0
     for r in rows:
         envelope = _json(r.get("envelope"), {}) or {}
+        if reveal is not True:
+            envelope = event_intake.redact_people(envelope)
         got = compiled.explain(envelope)
         matched += 1 if got["matched"] else 0
         data = envelope.get("data") or {}
@@ -787,7 +793,8 @@ def preview_match(connection: Connection, *, project_id: str, connection_id: str
                        "received_at": r["received_at"].isoformat() if r["received_at"] else None,
                        "matched": got["matched"], "leaves": got["leaves"]})
     return {"ok": True, "matched": matched, "considered": len(rows), "leaves": compiled.leaves,
-            "regex_engine": intake_filters.REGEX_ENGINE, "events": events}
+            "regex_engine": intake_filters.REGEX_ENGINE, "events": events,
+            "people_redacted": reveal is not True}
 
 
 __all__ = ["ADDRESSING", "FANOUT", "FIRE_OUTCOMES", "Fire", "chat_messages", "choose_chat_route",

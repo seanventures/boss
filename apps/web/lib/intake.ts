@@ -182,6 +182,8 @@ export type Fire = { id: string; trigger_id: string; outcome: string; reason: st
 export type EventDetail = EventSummary & {
   dedupe_key: string; conversation_key: string; verify_scheme: string; envelope: R; screen: R; outcome: Outcome[]; fires: Fire[];
   raw: unknown; replay_of: string; principal_id: string;
+  /** The caller lacks user:read: who the chat user is in BOSS (principal, emails) was withheld by the API. */
+  people_redacted: boolean;
 };
 export function parseOutcome(v: unknown): Outcome {
   const x = o(v);
@@ -202,6 +204,8 @@ export function parseEventDetail(v: unknown): EventDetail {
     fires: a(x.fires).map((f) => ({ id: s(o(f).id), trigger_id: s(o(f).trigger_id), outcome: s(o(f).outcome), reason: s(o(f).reason),
       run_id: s(o(f).run_id), fired_at: s(o(f).fired_at), trigger_name: s(o(f).trigger_name) })),
     raw: x.raw ?? null, replay_of: s(x.replay_of), principal_id: s(x.principal_id),
+    // Fail closed: only an explicit false from the API shows the person.
+    people_redacted: x.people_redacted !== false,
   };
 }
 
