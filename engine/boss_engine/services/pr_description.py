@@ -22,7 +22,7 @@ _GATE_WORDS = {
     "code_review_passed": "Review passed", "security_clean": "Security clean",
     "consistent": "Consistent", "nothing_broke": "Nothing broke", "app_serves": "App starts",
     "web_package_honest": "Package honest", "template_tests": "Template tests",
-    "no_committed_secrets": "No secrets",
+    "no_committed_secrets": "No secrets", "acceptance_met": "Must-haves met",
 }
 
 

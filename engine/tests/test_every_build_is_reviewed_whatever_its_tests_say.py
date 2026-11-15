@@ -26,7 +26,9 @@ def test_a_code_reviewer_always_sits(lane, profile, risk_tier):
 
 
 def test_the_lean_profile_narrows_the_panel_but_keeps_the_code_reviewer():
-    assert g.review_panel_seats("full", 0, LEAN, ci_files=False) == {"regression", "review_code"}
+    # The acceptance check is a floor like the code reviewer (acceptance_gate.py, BOSSAPP-1211).
+    assert g.review_panel_seats("full", 0, LEAN, ci_files=False) == {
+        "regression", "review_code", "acceptance_check"}
 
 
 def test_above_tier_one_the_full_panel_sits_and_a_ci_change_adds_security():

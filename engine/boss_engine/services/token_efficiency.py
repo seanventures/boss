@@ -130,6 +130,7 @@ KNOWN_STAGES: tuple[str, ...] = (
     "review_code",
     "consistency_check",
     "security_check",
+    "acceptance_check",
     "review_panel",
     "check_tests",
     "run_all_tests",

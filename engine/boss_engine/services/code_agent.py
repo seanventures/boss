@@ -137,7 +137,8 @@ LOW_EFFORT_THINKING_CAP = 4000
 #: seats (same diff, running beside it) were done in 1.9 and 2.9; it gated the whole panel.
 #: The reviewer and the consistency check read across many turns, so their cap bounds the
 #: reasoning behind each step and the verdict, never how many files they may open.
-STAGE_THINKING_CAPS = {"security_check": 6000, "review_code": 6000, "consistency_check": 6000}
+STAGE_THINKING_CAPS = {"security_check": 6000, "review_code": 6000, "consistency_check": 6000,
+                       "acceptance_check": 6000}
 _THINKING_CAP_ENV = "BOSS_CODE_AGENT_MAX_THINKING_TOKENS"
 
 
@@ -161,7 +162,7 @@ WRITING_STAGES = frozenset({"write_tests", "implement", "solo", "repair", "guest
 #: Stages that JUDGE or DESIGN: their thinking is the product, so they run at high.
 REASONING_STAGES = frozenset({"standards", "spec", "plan", "design", "review_plan",
                               "review_code", "security_check", "consistency_check",
-                              "review_panel", "check_tests", "quality"})
+                              "acceptance_check", "review_panel", "check_tests", "quality"})
 WRITING_EFFORT_DEFAULT = "low"
 REASONING_EFFORT = "high"
 

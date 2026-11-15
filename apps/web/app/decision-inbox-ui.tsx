@@ -13,7 +13,7 @@ import { ActionForm, DecisionResolveForm } from "./client-forms";
 import { ActionPreview, actionPreviewOf, previewLead } from "./action-preview";
 import { HeldArguments } from "./held-arguments";
 import { ArchitectureDoc } from "./architecture-doc";
-import { ChecksFailing, checksFailingOf } from "./checks-failing";
+import { automatedChecksLine, ChecksFailing, checksFailingOf, MustHaves, mustHavesOf } from "./checks-failing";
 import { architectureDocOf } from "../lib/architecture";
 import { AreaLink } from "./area-link";
 import { linkTo, navigate } from "./agents/live-util";
@@ -107,16 +107,12 @@ export function formatRecommendation(decision: DecisionFeedItem): string {
   const title = str("title");
   const pr = str("pull_request_url");
   const prNum = pr ? `#${pr.split("/").pop()}` : "";
-  const vstatus = str("validation_status");
-  const vsummary = str("validation_summary");
 
   if (action === "review_pull_request") {
     return [
       title ? `Approve the code change “${title}”.` : "Approve this code change.",
       pr ? `${isLocalChangeUrl(pr) ? "Change set" : "Pull request"} ${prNum} is open ${prWhere(pr)} with the full diff to review.` : "",
-      vstatus
-        ? `Automated checks: ${vstatus.replaceAll("_", " ")}${vsummary ? `, ${vsummary}` : ""}.`
-        : "",
+      automatedChecksLine(r),
       "Approving opens/merges the PR; rejecting keeps it blocked for changes.",
     ]
       .filter(Boolean)
@@ -992,6 +988,7 @@ function DecisionInboxRow({
           {/* A PR that opened with its checks failing says so FIRST, security first: its merge
               is the person's stated decision, never a click (engine checks_failing.py). */}
           {checksFailingOf(rec) ? <ChecksFailing record={checksFailingOf(rec)!} /> : null}
+          {mustHavesOf(rec) ? <MustHaves data={mustHavesOf(rec)!} /> : null}
           {/* An expired card says so before its buttons: "Approve and merge" on a pull request
               from weeks ago is a different act from the same button on one raised today. */}
           {expired ? (
