@@ -250,7 +250,7 @@ def test_the_backoff_schedule_is_capped():
         25) == 86400
 
 
-def test_an_error_step_cannot_bind_the_failed_steps_output():
+def test_an_error_step_binds_the_failed_steps_output_but_a_rerun_needs_it_completed():
     spec, _ = workflows.normalise_workflow_spec({"entry_step": "a", "steps": [
         {"id": "a", "kind": "task", "next": ["b"]},
         {"id": "b", "kind": "task", "next": ["c"], "on_error": "e"},
@@ -258,8 +258,11 @@ def test_an_error_step_cannot_bind_the_failed_steps_output():
         {"id": "e", "kind": "task"},
     ]}, check_agents=False)
     before = workflows._runs_before(spec)
-    assert before["e"] == {"a"}, "b failed: what came before it is certain, its output is not"
+    assert before["e"] == {"a"}, "b failed: it did not complete, so a re-run cannot pin it"
     assert before["c"] == {"a", "b"}
+    # AMEX-G10: b's FAILED output is in the run context on its error path, so `e` may bind it.
+    readable = workflows._runs_before(spec, failed_counts=True)
+    assert readable["e"] == {"a", "b"} and readable["c"] == {"a", "b"}
 
 
 # ── backoff ────────────────────────────────────────────────────────────────────────────────

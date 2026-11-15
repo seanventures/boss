@@ -440,3 +440,120 @@ def test_config_targets_are_made_only_by_create_config_target(eng, project, gate
         make(f"{gateway['base']}/-/reload", actor="agent:deploy-lead")
     monkeypatch.setenv("BOSS_CONFIG_RELOAD_URLS", "https://gw.internal.example/-/reload")
     assert make("https://gw.internal.example/-/reload")["ok"]
+
+
+def test_two_runs_in_flight_each_promote_only_what_they_staged(eng, project, gateway, dirs):  # noqa: F811
+    """AMEX-G9 (BOSSAPP-1167): promote_config is bound to its own run's staging step.
+
+    Two onboarding runs, A and B, each stage a different tenant file; B's staging deploy
+    succeeds after A's. Before the fix A's promotion took "the latest succeeded staging deploy
+    for the app" — B's bundle. Now the runner accepts only a deployment THIS run's config_deploy
+    step produced, the tool refuses a source whose bytes differ from that step's hash, and
+    inside a run there is no fallback at all."""
+    from boss_engine.services.github_actions import WORKFLOW_RUN_ID
+    from boss_engine.services.workflow_capability_runner import (SettledCapabilityError,
+                                                                 _bound_promotion)
+    from boss_engine.tools.builtin import build_default_registry
+
+    settings = _fresh_settings()
+    gateway["state"].update(healthy=True, reloads=0)
+    with eng.begin() as c:
+        _target(c, settings, project, "staging", dirs["staging"], gateway)
+        production = _target(c, settings, project, "production", dirs["production"], gateway)
+        set_approval_policy(c, project_id=project, environment="staging", requires_approval=False,
+                            actor="usr_owner", note="staging is for trying things")
+    tools = {s.name: s for s in build_default_registry().specs()}
+
+    class Ctx:
+        engine = eng
+
+    Ctx.settings = settings
+
+    def stage(run_id, name, body):
+        token = WORKFLOW_RUN_ID.set(run_id)
+        try:
+            out = tools["deploy_config"].handler(
+                Ctx(), project_id=project, actor=PERSON,
+                args={"app_name": "Northgate Gateway", "environment": "staging",
+                      "files": {name: body}})
+        finally:
+            WORKFLOW_RUN_ID.reset(token)
+        assert out["status"] == "planned", out
+        assert _apply(eng, settings, project, out["deployment_run_id"])["status"] == "succeeded"
+        # What the config_deploy step's output holds once its deployment succeeded.
+        return {"capability": "config_deploy", "status": "succeeded",
+                "deployment_id": out["deployment_id"], "bundle_sha256": out["bundle_sha256"]}
+
+    a = stage("wfr_tenant_a", "lumen-pay.yaml", "id: lumen-pay\nversion: 1\n")
+    b = stage("wfr_tenant_b", "orbit-travel.yaml", "id: orbit-travel\nversion: 1\n")
+    assert a["bundle_sha256"] != b["bundle_sha256"]
+    with eng.begin() as c:
+        packet = _run(c, a["deployment_id"])["release_packet"]
+    assert packet["workflow_run_id"] == "wfr_tenant_a", "the deployment names the run that made it"
+
+    spec = {"entry_step": "validate", "steps": [
+        {"id": "validate", "kind": "capability", "binding": {"custom_step": "step_gwlint"}},
+        {"id": "deploy_staging", "kind": "capability",
+         "binding": {"capability": "config_deploy"}},
+        {"id": "relay", "kind": "capability", "binding": {"custom_step": "step_mcp_relay"}},
+        {"id": "retry_staging", "kind": "capability",
+         "binding": {"capability": "config_deploy"}},
+    ]}
+    run_a = {"run_id": "wfr_tenant_a", "steps": {
+        "deploy_staging": a, "validate": {"exit_code": 0},
+        # A custom (MCP) step's output may SAY it is a config deploy of B's bundle: forged.
+        "relay": {**b, "capability": "config_deploy"},
+        # A config_deploy step that FAILED into its error path is not a staging result.
+        "retry_staging": {**b, "step_status": "failed"}}}
+    binding = {"app_name": "Northgate Gateway", "from_environment": "staging",
+               "environment": "production"}
+
+    def bind(context, inputs):
+        with eng.begin() as c:
+            return _bound_promotion(c, context, inputs, spec=spec)
+
+    # The runner: no id, another run's id (however it is dressed up), a hash that disagrees.
+    with pytest.raises(SettledCapabilityError, match="needs the deployment"):
+        bind(run_a, binding)
+    with pytest.raises(SettledCapabilityError, match="not deployed by this run"):
+        bind(run_a, {**binding, "deployment_id": b["deployment_id"]})
+    with pytest.raises(SettledCapabilityError, match="not the one"):
+        bind(run_a, {**binding, "deployment_id": a["deployment_id"],
+                     "bundle_sha256": b["bundle_sha256"]})
+    # A real config_deploy step whose output names B's deployment: the database says B's run
+    # planned it, so A cannot promote it.
+    forged = {**run_a, "steps": {**run_a["steps"], "deploy_staging": b}}
+    with pytest.raises(SettledCapabilityError, match="not planned by this workflow run"):
+        bind(forged, {**binding, "deployment_id": b["deployment_id"]})
+    bound = bind(run_a, {**binding, "deployment_id": a["deployment_id"]})
+    assert bound["deployment_run_id"] == a["deployment_id"]
+    assert bound["bundle_sha256"] == a["bundle_sha256"] and "deployment_id" not in bound
+
+    def promote(run_id, args):
+        token = WORKFLOW_RUN_ID.set(run_id)
+        try:
+            return tools["promote_config"].handler(Ctx(), project_id=project, actor=PERSON,
+                                                   args=args)
+        finally:
+            WORKFLOW_RUN_ID.reset(token)
+
+    # The tool, inside a run: no fallback to "the latest" (which is B's), and a source whose
+    # bytes differ from the expected hash is refused before anything is planned.
+    no_source = promote("wfr_tenant_a", binding)
+    assert no_source["status"] == "failed" and "own staging step" in no_source["reason"]
+    crossed = promote("wfr_tenant_a", {**binding, "deployment_id": b["deployment_id"],
+                                       "bundle_sha256": a["bundle_sha256"]})
+    assert crossed["status"] == "failed" and "not planned by this workflow run" in crossed["reason"]
+    crossed = promote("wfr_tenant_b", {**binding, "deployment_id": b["deployment_id"],
+                                       "bundle_sha256": a["bundle_sha256"]})
+    assert crossed["status"] == "failed" and "different bundle" in crossed["reason"]
+    # `deployment_id` is read (it was silently dropped before) and A ships A's bytes.
+    promoted = promote("wfr_tenant_a", {**bound, "target_id": production["target_id"]})
+    assert promoted["status"] == "planned", promoted
+    assert promoted["promoted_from"] == a["deployment_id"]
+    assert promoted["bundle_sha256"] == a["bundle_sha256"] != b["bundle_sha256"]
+    alias = promote("", {"deployment_id": b["deployment_id"], "target_id": production["target_id"]})
+    assert alias["status"] == "planned" and alias["promoted_from"] == b["deployment_id"]
+    # Outside a workflow too, the source is named, never "the latest for the app".
+    guessed = promote("", binding)
+    assert guessed["status"] == "failed" and "Name the deployment" in guessed["reason"]

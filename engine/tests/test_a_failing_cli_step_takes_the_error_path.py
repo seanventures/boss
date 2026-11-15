@@ -275,3 +275,109 @@ def test_a_built_in_skill_that_reports_an_exit_code_is_judged_as_before(eng, pro
         assert custom_steps.exit_failure(c, project, "gwlint", "Run", {"exit_code": 0}) is None
         assert custom_steps.exit_failure(c, project, "gwlint", "Run", {"exit_code": True}) is None
         assert custom_steps.exit_failure(c, project, "gwlint", "Run", "not a dict") is None
+
+
+# ── the error path reads what the failed step said (AMEX-G10, BOSSAPP-1168) ────────────────
+
+def _publish_report_on_error(c, project_id, step_key):
+    name = f"wf_{uuid.uuid4().hex[:6]}"
+    definition = workflows.create_definition(
+        c, project_id=project_id, workflow_key=name, name=name, description=None,
+        actor="test", namespace="product")
+    return workflows.publish_version(
+        c, project_id=project_id, definition_id=definition["id"], actor="test",
+        spec={"entry_step": "validate", "steps": [
+            {"id": "validate", "kind": "capability", "next": ["deploy"], "on_error": "report",
+             "max_attempts": 1, "approval": {"mode": "auto"},
+             "binding": {"custom_step": step_key, "inputs": {"file": "tenants/lumen-pay.yaml"}}},
+            {"id": "deploy", "kind": "capability", "approval": {"mode": "auto"},
+             "binding": {"capability": "cost_check", "inputs": {}}},
+            # THE ERROR STEP BINDS THE FAILED STEP'S OUTPUT, as any step binds a result.
+            {"id": "report", "kind": "capability", "approval": {"mode": "auto"},
+             "next": ["fixable"],
+             "binding": {"capability": "smoke_test", "inputs": {
+                 "url": {"from_step": "validate", "field": "log_tail"}}}},
+            # …and a condition after it judges the failed step's exit code.
+            {"id": "fixable", "kind": "condition",
+             "expression": {"path": "steps.validate.output.exit_code", "op": "eq", "value": 1},
+             "on_true": "fix", "on_false": "human_only"},
+            {"id": "fix", "kind": "capability", "approval": {"mode": "auto"},
+             "binding": {"capability": "cost_check", "inputs": {}}},
+            {"id": "human_only", "kind": "capability", "approval": {"mode": "auto"},
+             "binding": {"capability": "cost_check", "inputs": {}}},
+        ]})
+
+
+def test_the_error_path_reads_the_failed_steps_output(eng, project, monkeypatch):
+    import boss_engine.services.agent_loop as agent_loop
+
+    monkeypatch.setattr(agent_loop, "_invoke_agent_skill", lambda *a, **k: dict(EXITED))
+    probe = RecordingTool("http_probe", {"status": 200, "ms": 1})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry(
+        [probe, RecordingTool("get_costs", {"spend_usd": 0})]))
+    with eng.begin() as c:
+        step_key = _authored(c, project, f"gwlint_{uuid.uuid4().hex[:6]}", fail_on_exit=True)
+        run = _start(c, project, _publish_report_on_error(c, project, step_key)["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        assert _rows(c, run["id"])["validate"]["status"] == "failed"
+        # In the run context, marked as a failure — never mistaken for a result.
+        seen = runner._run_context(c, run["id"])["steps"]["validate"]
+        assert seen["step_status"] == "failed" and seen["exit_code"] == 1
+        for _ in range(4):
+            runner.tick(c, Ctx(eng), project_id=project)
+        rows = _rows(c, run["id"])
+    assert rows["report"]["status"] == "succeeded", rows["report"]
+    assert probe.calls and "SEC-004" in probe.calls[0]["args"]["url"], \
+        "the error step never received the validator's report"
+    assert rows["fixable"]["output"]["result"] is True
+    assert rows["fix"]["status"] == "succeeded" and rows["human_only"]["status"] == "skipped"
+    assert rows["deploy"]["status"] == "skipped"
+
+
+def test_a_failure_still_being_retried_is_not_an_answer(eng, project, monkeypatch):
+    """Only a terminal failure that went on along its error path is read; an attempt that will
+    run again is not in the context."""
+    _wire(monkeypatch, EXITED)
+    with eng.begin() as c:
+        step_key = _authored(c, project, f"gwlint_{uuid.uuid4().hex[:6]}", fail_on_exit=True)
+        run = _start(c, project, _publish(c, project, step_key)["id"])
+        c.execute(text("UPDATE workflow_step_runs SET status='failed', "
+                       "output=CAST(:o AS JSONB) WHERE workflow_run_id=:r AND step_id='validate'"),
+                  {"o": '{"exit_code": 1}', "r": run["id"]})
+        assert "validate" not in runner._run_context(c, run["id"])["steps"]
+
+
+@pytest.mark.parametrize("fail_on_exit", [True, False])
+def test_every_tail_is_redacted_on_failure_and_on_success(eng, project, monkeypatch,
+                                                          fail_on_exit):
+    """Review of #125: `stderr_tail` (and any `*_tail`) reached the run unscrubbed, and a
+    successful step's output was not scrubbed at all — yet the error path and every later step
+    read it."""
+    from boss_engine.services import run_secret_redaction
+
+    secret = f"sk-live-{uuid.uuid4().hex}"
+    run_secret_redaction.register(secret, run_id=f"other-run-{uuid.uuid4().hex[:6]}")
+    leaked = {"status": "succeeded",
+              "result": {**EXITED["result"], "log_tail": f"token {secret}",
+                         "stderr_tail": f"curl: auth {secret}", "trace_tail": secret}}
+    _wire(monkeypatch, leaked)
+    with eng.begin() as c:
+        step_key = _authored(c, project, f"gwlint_{uuid.uuid4().hex[:6]}",
+                             fail_on_exit=fail_on_exit)
+        run = _start(c, project, _publish(c, project, step_key)["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        validate = _rows(c, run["id"])["validate"]
+    assert validate["status"] == ("failed" if fail_on_exit else "succeeded")
+    for field in ("log_tail", "stderr_tail", "trace_tail"):
+        assert secret not in validate["output"][field], field
+
+
+
+def test_a_step_cannot_name_both_a_custom_step_and_a_capability():
+    """Review of #125: the runner runs the custom step while a reader of the template believed
+    the capability (a forged "config_deploy" staging step)."""
+    _, problems = workflows.normalise_workflow_spec({"entry_step": "s", "steps": [
+        {"id": "s", "kind": "capability",
+         "binding": {"custom_step": "step_relay", "capability": "config_deploy"}}]},
+        check_agents=False)
+    assert any("both a custom step and a capability" in str(p) for p in problems), problems

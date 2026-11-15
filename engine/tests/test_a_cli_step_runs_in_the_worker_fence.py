@@ -331,3 +331,141 @@ def test_the_executor_runs_a_declared_skill_in_the_fence_and_labels_the_run(fenc
     with pytest.raises(skill_executors.SandboxIsolationUnavailable, match="untrusted"):
         skill_executors.execute_sandboxed_command(
             context, {"_skill_key": "gwlint.validate", "files": {"tenant_yaml": "x"}})
+
+
+# ── AMEX-G12 (BOSSAPP-1170): the pinned image is not what runs; declared local CLIs are ──────
+
+def _gwlint_tree(tmp_path):
+    """A stand-in CLI tree, as the read-only /opt/northgate/gwlint mount would hold it."""
+    root = tmp_path / "opt" / "northgate"
+    bin_dir = root / "gwlint" / "bin"
+    bin_dir.mkdir(parents=True)
+    cli = bin_dir / "gwlint"
+    cli.write_text("#!/bin/sh\necho \"gwlint ok $*\"\n")
+    cli.chmod(0o755)
+    return root, root / "gwlint"
+
+
+def _run_gwlint(monkeypatch, settings, declared, command="gwlint validate *.yaml"):
+    from boss_engine.services import skill_definitions
+
+    skill = {"skill_key": "gwlint_validate", "enabled": True, "inputs": [],
+             "config": {"image": "ghcr.io/northgate/gwlint@sha256:" + "0" * 64,
+                        "command": command, "timeout_seconds": 30,
+                        "outputs": [], **({"local_binaries": declared} if declared else {})}}
+    monkeypatch.setattr(skill_definitions, "get_skill", lambda c, p, k: dict(skill))
+    monkeypatch.setattr(skill_executors, "_as_held", lambda context, s: s)
+    monkeypatch.setattr(local_fenced, "keep_produced", lambda *a, **kw: {})
+    context = SimpleNamespace(settings=settings, connection=None, project_id="p_amex",
+                              created_by_job_id=None)
+    return skill_executors.execute_sandboxed_command(
+        context, {"_skill_key": "gwlint_validate", "files": {"lumen-pay.yaml": "id: lumen\n"}})
+
+
+def test_a_declared_cli_under_an_allowed_root_runs_and_is_recorded(fence, monkeypatch, tmp_path):
+    root, tree = _gwlint_tree(tmp_path)
+    out = _run_gwlint(monkeypatch, _settings(local_fenced_binaries=str(root)), [str(tree)])
+    assert out["exit_code"] == 0 and "gwlint ok validate lumen-pay.yaml" in out["log_tail"]
+    assert out["image_used"] is False
+    [recorded] = out["local_binaries"]
+    assert recorded["path"] == str(tree) and recorded["kind"] == "directory"
+    assert len(recorded["sha256"]) == 64, "a directory is hashed over every file"
+    cli = tree / "bin" / "gwlint"
+    out = _run_gwlint(monkeypatch, _settings(local_fenced_binaries=str(root)), [str(cli)])
+    import hashlib
+    assert out["local_binaries"][0]["sha256"] == hashlib.sha256(cli.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("allowed,why", [("", "BOSS_LOCAL_FENCED_BINARIES"),
+                                         ("/somewhere/else", "not under a root")])
+def test_a_cli_outside_the_allow_list_is_refused_before_anything_runs(
+        fence, monkeypatch, tmp_path, allowed, why):
+    _, tree = _gwlint_tree(tmp_path)
+    with pytest.raises(skill_executors.SandboxIsolationUnavailable, match=why):
+        _run_gwlint(monkeypatch, _settings(local_fenced_binaries=allowed), [str(tree)])
+
+
+def test_a_missing_or_world_writable_cli_is_refused(fence, monkeypatch, tmp_path):
+    root, tree = _gwlint_tree(tmp_path)
+    with pytest.raises(skill_executors.SandboxIsolationUnavailable, match="does not exist"):
+        _run_gwlint(monkeypatch, _settings(local_fenced_binaries=str(root)),
+                    [str(root / "missing")])
+    (tree / "bin" / "gwlint").chmod(0o777)
+    with pytest.raises(skill_executors.SandboxIsolationUnavailable, match="writable"):
+        _run_gwlint(monkeypatch, _settings(local_fenced_binaries=str(root)),
+                    [str(tree / "bin" / "gwlint")])
+    (tree / "bin" / "gwlint").chmod(0o755)
+    # A symlink cannot smuggle a path out of the allowed root.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "escape").symlink_to(outside)
+    with pytest.raises(skill_executors.SandboxIsolationUnavailable, match="not under a root"):
+        _run_gwlint(monkeypatch, _settings(local_fenced_binaries=str(root)),
+                    [str(root / "escape")])
+
+
+def test_local_binaries_are_validated_when_the_skill_is_authored():
+    from boss_engine.services import skill_definitions as sd
+
+    image = "ghcr.io/northgate/gwlint@sha256:" + "a" * 64
+    cfg = sd.validate_config("sandboxed_command", {"image": image, "command": "gwlint x",
+                                                   "local_binaries": ["/opt/northgate/gwlint/"]},
+                             [])
+    assert cfg["local_binaries"] == ["/opt/northgate/gwlint"]
+    assert "local_binaries" not in sd.validate_config(
+        "sandboxed_command", {"image": image, "command": "x"}, [])
+    for bad in (["relative/gwlint"], ["/opt/../etc"], ["/"], ["/x"] * 17):
+        with pytest.raises(sd.SkillDefinitionError, match="local_binaries"):
+            sd.validate_config("sandboxed_command",
+                               {"image": image, "command": "x", "local_binaries": bad}, [])
+
+
+def test_nothing_a_sandbox_user_could_change_stands_in_the_way(fence, monkeypatch, tmp_path):
+    """Review of #125: not only the file's own write bit. A file deep in the tree, a parent
+    directory, or anything owned by a pool uid would let one run swap the tool another trusts."""
+    root, tree = _gwlint_tree(tmp_path)
+    settings = _settings(local_fenced_binaries=str(root))
+    (tree / "lib").mkdir()
+    (tree / "lib" / "rules.js").write_text("module.exports = {}\n")
+    (tree / "lib" / "rules.js").chmod(0o664)
+    with pytest.raises(skill_executors.SandboxIsolationUnavailable, match="group"):
+        _run_gwlint(monkeypatch, settings, [str(tree)])
+    (tree / "lib" / "rules.js").chmod(0o644)
+    (tree / "bin").chmod(0o777)
+    with pytest.raises(skill_executors.SandboxIsolationUnavailable, match="every user"):
+        _run_gwlint(monkeypatch, settings, [str(tree / "bin" / "gwlint")])
+    (tree / "bin").chmod(0o755)
+    monkeypatch.setattr(local_fenced, "_is_pool_uid", lambda uid: uid == os.getuid())
+    with pytest.raises(skill_executors.SandboxIsolationUnavailable, match="sandbox user"):
+        _run_gwlint(monkeypatch, settings, [str(tree)])
+
+
+def test_a_cli_changed_while_it_ran_is_refused(fence, monkeypatch, tmp_path):
+    root, tree = _gwlint_tree(tmp_path)
+    cli = tree / "bin" / "gwlint"
+    with pytest.raises(skill_executors.SandboxIsolationUnavailable, match="changed while"):
+        _run_gwlint(monkeypatch, _settings(local_fenced_binaries=str(root)), [str(tree)],
+                    command=f"echo '# swapped' >> {cli}")
+
+
+def test_symlinks_must_stay_in_the_tree_and_only_hashed_dirs_go_on_path(fence, monkeypatch,
+                                                                       tmp_path):
+    root, tree = _gwlint_tree(tmp_path)
+    settings = _settings(local_fenced_binaries=str(root))
+    # npm's .bin links stay inside the tree: allowed, and their targets are hashed.
+    (tree / "node_modules" / ".bin").mkdir(parents=True)
+    (tree / "node_modules" / ".bin" / "gw").symlink_to(tree / "bin" / "gwlint")
+    assert _run_gwlint(monkeypatch, settings, [str(tree)])["exit_code"] == 0
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "evil").write_text("#!/bin/sh\necho evil\n")
+    (tree / "node_modules" / ".bin" / "evil").symlink_to(outside / "evil")
+    with pytest.raises(skill_executors.SandboxIsolationUnavailable, match="links outside"):
+        _run_gwlint(monkeypatch, settings, [str(tree)])
+    (tree / "node_modules" / ".bin" / "evil").unlink()
+    # A declared FILE's directory is not put on PATH: only the file itself was checked.
+    (tree / "bin" / "other").write_text("#!/bin/sh\necho other\n")
+    (tree / "bin" / "other").chmod(0o755)
+    out = _run_gwlint(monkeypatch, settings, [str(tree / "bin" / "gwlint")],
+                      command="other 2>&1; echo rc=$?")
+    assert "rc=127" in out["log_tail"], out["log_tail"]

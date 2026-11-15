@@ -832,8 +832,10 @@ def execute(
         # on the command), and spreading the two together let a tool's output silently
         # overwrite the tier the step actually ran at, so the evidence said tier 0 for a step
         # that needed an approval at tier 2.
+        # Scrubbed on success as on failure: the run context hands this output to the next
+        # step, a PR comment, a decision card.
         return {
-            **(result.get("result") or {}),
+            **redacted_output(result.get("result") or {}, run_id),
             "_step": {
                 "custom_step": key, "label": row["label"], "binding": "skill",
                 "skill_id": row["skill_id"], "risk_tier": risk["risk_tier"],
@@ -888,9 +890,12 @@ def redacted_output(output: dict[str, Any], run_id: Optional[str]) -> dict[str, 
 
     del run_id  # the wider scrub covers it
     out = dict(output)
-    for field in ("log_tail", "stdout", "stderr"):
-        if isinstance(out.get(field), str):
-            out[field] = str(scrub(out[field]))
+    # EVERY log-shaped field: `log_tail`, `stderr_tail` and any other `*_tail`, plus raw
+    # stdout/stderr (review of #125 — stderr_tail reached the run unscrubbed).
+    for field, value in list(out.items()):
+        if isinstance(value, str) and (field in ("stdout", "stderr")
+                                       or str(field).endswith("_tail")):
+            out[field] = str(scrub(value))
     return out
 
 

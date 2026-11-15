@@ -450,6 +450,28 @@ def _decided(route: Mapping[str, Any], conn: IntakeConnection, event_row: Mappin
                 extra={**_base_extra(conn, event_row), **(extra or {})})
 
 
+def _load_lazy_fields(conn: IntakeConnection, event: IntakeEvent,
+                      routes: list[Mapping[str, Any]]) -> IntakeEvent:
+    """Fields the adapter fills only on demand (`lazy_fields`, e.g. a GitHub pull request's
+    changed files, AMEX-G11), loaded when — and only when — some route's filter reads them.
+    A failed load leaves the field empty with its error; the event still routes."""
+    from ..connectors.intake import REGISTRY
+
+    adapter = REGISTRY.get(conn.kind)
+    lazy = tuple(getattr(adapter, "lazy_fields", ()) or ())
+    if not lazy or not hasattr(adapter, "load_lazy"):
+        return event
+    filters = json.dumps([(_json(r.get("config"), {}) or {}).get("match") for r in routes],
+                         default=str)
+    for name in lazy:
+        if f'"{name}"' in filters:
+            try:
+                event = adapter.load_lazy(conn, event, name)
+            except Exception as error:  # noqa: BLE001 — the event routes without the field
+                event.data[f"{name.rsplit('.', 1)[-1]}_error"] = type(error).__name__
+    return event
+
+
 def route(connection: Connection, conn: IntakeConnection, event: IntakeEvent,
           event_row: Mapping[str, Any], *, replay_n: int = 0, settings: Any = None,
           now: Optional[datetime] = None) -> list[Fire]:
@@ -464,6 +486,7 @@ def route(connection: Connection, conn: IntakeConnection, event: IntakeEvent,
     if not routes:
         return []
     by_id = {str(r["id"]): r for r in routes}
+    event = _load_lazy_fields(conn, event, routes)
     chat = is_chat(conn)
     fires: list[Fire] = []
     event_id = str(event_row["id"])

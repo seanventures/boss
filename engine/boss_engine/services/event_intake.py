@@ -29,6 +29,7 @@ of `create_connection` / `rotate_secret` ONCE.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import secrets as _secrets
@@ -215,7 +216,7 @@ def create_connection(connection: Connection, *, project_id: str, kind: str, act
             continue
         cfg[str(key)] = value
     for f in manifest.auth_fields:
-        if not f.get("secret") and f.get("required", True) and cfg.get(f["name"]) in (None, ""):
+        if not f.get("secret") and _required_in(f, mode) and cfg.get(f["name"]) in (None, ""):
             raise IntakeServiceError(f"{f['label']} is required.", code="missing_field")
     # ONE CHAT APP PER INSTALL (§15 D1): a chat source is bound to the install's chat endpoint
     # and uses ITS credentials — nothing is minted or typed twice.
@@ -235,7 +236,7 @@ def create_connection(connection: Connection, *, project_id: str, kind: str, act
             value = _mint(fname)
             shown[fname] = value
         if not value:
-            if f.get("required", True):
+            if _required_in(f, mode):
                 raise IntakeServiceError(f"{f['label']} is required.", code="missing_secret")
             continue
         refs[fname] = _store_secret(connection, project_id, connection_id, fname, value, actor)
@@ -261,6 +262,15 @@ def create_connection(connection: Connection, *, project_id: str, kind: str, act
         out["secret"] = next(iter(shown.values()))
         out["secret_shown_once"] = True
     return out
+
+
+def _required_in(field: Mapping[str, Any], mode: str) -> bool:
+    """A manifest auth field is required in `mode`: a field that names its `modes` is required
+    exactly in those (GitHub's webhook secret in push, its repository in poll); any other field
+    by its `required` flag (default true)."""
+    if isinstance(field.get("modes"), list):
+        return mode in field["modes"]
+    return bool(field.get("required", True))
 
 
 #: Chat sources whose connection rides on a chat endpoint (§15 D1), by intake kind.
@@ -1149,6 +1159,35 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
                                        "WHERE id = :id AND attempts > 0"), {"id": event_id})
                         return {"id": event_id, "status": "received",
                                 "reason": f"deferred behind {earlier['id']}"}
+                # THE SAME COMMIT BY WEBHOOK AND BY POLL is one event (AMEX-G1). The source
+                # names the commit (`data.head_key`); a copy that arrived the OTHER way and was
+                # already processed wins. Same-way copies are the inbox's dedupe key's job, and
+                # a forced replay always runs.
+                head_key = str(ev.data.get("head_key") or "")
+                if head_key and conversation and not force_n:
+                    by = str(ev.data.get("delivered_by") or "webhook")
+                    # Across the project's connections of this kind too: a webhook connection
+                    # and a poll connection on one repository see the same commit once. The
+                    # lock is per repository and commit, so two connections cannot both pass.
+                    c.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                              {"k": f"{conn.project_id}:{conn.kind}:{head_key}"})
+                    twin = c.execute(text("""
+                        SELECT e.id FROM intake_events e
+                          JOIN intake_connections ic ON ic.id = e.connection_id
+                         WHERE ic.project_id = :p AND ic.kind = :kind AND e.id <> :id
+                           AND e.status IN ('routed', 'filtered', 'ignored', 'digest', 'refused')
+                           AND e.envelope -> 'data' ->> 'head_key' = :k
+                           AND (e.connection_id <> :c OR
+                                COALESCE(e.envelope -> 'data' ->> 'delivered_by', 'webhook')
+                                <> :by)
+                         LIMIT 1"""),
+                        {"p": conn.project_id, "kind": conn.kind, "c": conn.id,
+                         "id": event_id, "k": head_key, "by": by}).scalar()
+                    if twin:
+                        filtered_reason = f"the same commit already arrived as {twin}"
+                        all_outcomes.append({"filtered": filtered_reason, "event": ev.id,
+                                             "duplicate_of": twin})
+                        continue
                 fires = intake_router.route(c, conn, ev, row, replay_n=force_n,
                                             settings=settings, now=now)
                 caused_by = (ev.bosscausality or {}).get("deployment_id")
@@ -1269,6 +1308,158 @@ def process_due(engine: Any, settings: Any = None, *, limit: int = PROCESSOR_BAT
     for row in rows:
         got = process_one(engine, settings, row, now=now)
         out[got["status"]] = out.get(got["status"], 0) + 1
+    return out
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# The poller (AMEX-G1, BOSSAPP-1175): sources BOSS reads, for an install nobody can reach
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+#: `poll_seconds` on a connection: how often it is polled (GitHub: 2-4 conditional requests a
+#: poll, and a 304 is free, so 30 s stays far inside 5,000 requests an hour).
+POLL_SECONDS_DEFAULT = 30
+POLL_SECONDS_MIN = 15
+#: The longest a failing connection waits between polls.
+POLL_BACKOFF_MAX_SECONDS = 900
+POLL_STREAM_KEY = "poll"
+#: A cursor not advanced for this long belongs to a connection that was dormant (paused, or
+#: its workers down): its next poll is a fresh BASELINE at now, not a replay of everything
+#: that moved meanwhile.
+POLL_DORMANT_SECONDS = 3600
+
+
+def poll_seconds(config: Mapping[str, Any]) -> int:
+    try:
+        wanted = int(str((config or {}).get("poll_seconds") or POLL_SECONDS_DEFAULT).strip())
+    except ValueError:
+        wanted = POLL_SECONDS_DEFAULT
+    return max(POLL_SECONDS_MIN, wanted)
+
+
+def _insert_polled(connection: Connection, row: Mapping[str, Any], raw: StoredRaw,
+                   received: datetime) -> Optional[str]:
+    """One polled delivery into the inbox, exactly as the front door inserts a pushed one:
+    deduplicated on (connection, dedupe_key), announced to the processor at commit."""
+    event_id = make_id("iev")
+    return connection.execute(text("""
+        INSERT INTO intake_events (id, connection_id, project_id, dedupe_key, source_event_id,
+               status, raw, raw_sha256, headers, trace_id, verify_scheme, received_at,
+               raw_expires_at, expires_at)
+        VALUES (:id, :c, :p, :dk, :sid, 'received', :raw, :sha, CAST(:h AS JSONB), :tr, 'poll',
+                :at, :rexp, :exp)
+        ON CONFLICT (connection_id, dedupe_key) DO NOTHING RETURNING id"""),
+        {"id": event_id, "c": row["id"], "p": row.get("project_id"),
+         "dk": raw.dedupe_key[:500], "sid": raw.dedupe_key.split(":", 1)[-1][:200],
+         "raw": raw.body, "sha": hashlib.sha256(raw.body).hexdigest(),
+         "h": json.dumps(kept_headers(raw.headers)), "tr": make_id("itr"), "at": received,
+         "rexp": received + timedelta(days=RAW_RETENTION_DAYS),
+         "exp": received + timedelta(days=ENVELOPE_RETENTION_DAYS)}).scalar()
+
+
+def poll_due(engine: Any, settings: Any = None, *, now: Optional[datetime] = None,
+             holder: str = HOLDER, connection_id: Optional[str] = None) -> dict:
+    """Poll every active `poll` connection that is due. ONE POLLER PER CONNECTION: its cursor
+    row is locked `FOR UPDATE SKIP LOCKED` for the poll, so two workers never poll one
+    connection (the other skips it), and a crash releases the lock with the transaction. The
+    deliveries and the advanced cursor commit together: a crash re-reads one poll, and the
+    inbox's dedupe key absorbs the repeat. A refusal or a rate limit backs off (doubling, at
+    most 15 minutes, or the source's own Retry-After) and is written on the connection's
+    health; the token is never written anywhere."""
+    from ..db import begin
+    from ..connectors.intake.contract import AuthFailed, Cursor, RateLimited
+
+    settings = settings or _settings()
+    now = now or _now()
+    out = {"polled": 0, "inserted": 0, "skipped": 0, "failed": 0}
+    with begin(engine) as c:
+        rows = [dict(r) for r in c.execute(text(
+            "SELECT * FROM intake_connections WHERE mode = 'poll' AND status = 'active' "
+            "AND (CAST(:only AS TEXT) IS NULL OR id = :only)"), {"only": connection_id}
+        ).mappings()]
+    for crow in rows:
+        health = _json(crow.get("health"), {}) or {}
+        state = dict(health.get("poll") or {})
+        due = _event_time(state.get("next_poll_at"))
+        if due is not None and due > now:
+            out["skipped"] += 1
+            continue
+        adapter = REGISTRY.get(str(crow["kind"]))
+        if adapter is None or not adapter.can("poll"):
+            continue
+        interval = poll_seconds(_json(crow.get("config"), {}) or {})
+        with begin(engine) as c:
+            c.execute(text("""
+                INSERT INTO intake_cursors (connection_id, stream_key, cursor, cursor_time)
+                VALUES (:c, :k, NULL, :since) ON CONFLICT DO NOTHING"""),
+                {"c": crow["id"], "k": POLL_STREAM_KEY, "since": now})
+        with begin(engine) as c:
+            cur = c.execute(text("""
+                SELECT * FROM intake_cursors WHERE connection_id = :c AND stream_key = :k
+                   FOR UPDATE SKIP LOCKED"""),
+                {"c": crow["id"], "k": POLL_STREAM_KEY}).mappings().first()
+            if cur is None:
+                out["skipped"] += 1          # another worker is polling this connection now
+                continue
+            # DUE IS DECIDED UNDER THE LOCK: another worker may have polled between the read
+            # above and taking the lock.
+            crow = dict(c.execute(text("SELECT * FROM intake_connections WHERE id = :c"),
+                                  {"c": crow["id"]}).mappings().first() or crow)
+            state = dict((_json(crow.get("health"), {}) or {}).get("poll") or {})
+            due = _event_time(state.get("next_poll_at"))
+            if due is not None and due > now:
+                out["skipped"] += 1
+                continue
+            conn = to_intake_connection(c, settings, crow)
+            last = _event_time(cur.get("updated_at"))
+            if cur.get("cursor") and last is not None and \
+                    (now - last).total_seconds() > POLL_DORMANT_SECONDS:
+                cursor = Cursor(stream_key=POLL_STREAM_KEY, value=None,
+                                cursor_time=now.isoformat())      # dormant: a new baseline
+            else:
+                cursor = Cursor(stream_key=POLL_STREAM_KEY, value=cur.get("cursor"),
+                                cursor_time=_iso(cur.get("cursor_time")))
+            try:
+                with c.begin_nested():
+                    result = adapter.poll(conn, cursor, PROCESSOR_BATCH)
+            except Exception as error:  # noqa: BLE001 — written on the connection, backed off
+                failures = int(state.get("failures") or 0) + 1
+                wait = min(POLL_BACKOFF_MAX_SECONDS, interval * (2 ** min(failures, 6)))
+                if isinstance(error, RateLimited) and error.retry_after:
+                    wait = max(wait, int(error.retry_after))
+                kind = ("rate_limited" if isinstance(error, RateLimited) else
+                        "auth_failed" if isinstance(error, AuthFailed) else "error")
+                state.update(failures=failures, last_error=f"{kind}: {error}"[:300],
+                             last_poll_at=now.isoformat(),
+                             next_poll_at=(now + timedelta(seconds=wait)).isoformat(),
+                             holder=holder[:80])
+                c.execute(text("UPDATE intake_cursors SET last_error = :e "
+                               "WHERE connection_id = :c AND stream_key = :k"),
+                          {"e": state["last_error"], "c": crow["id"], "k": POLL_STREAM_KEY})
+                c.execute(text("UPDATE intake_connections SET health = health || "
+                               "CAST(:h AS JSONB) WHERE id = :id"),
+                          {"h": json.dumps({"poll": state}), "id": crow["id"]})
+                out["failed"] += 1
+                continue
+            inserted = 0
+            for raw in result.deliveries:
+                if _insert_polled(c, crow, raw, now):
+                    inserted += 1
+            nxt = result.next_cursor
+            c.execute(text("""
+                UPDATE intake_cursors SET cursor = :v, cursor_time = COALESCE(:t, cursor_time),
+                       last_error = NULL, resync_required = false, updated_at = :now
+                 WHERE connection_id = :c AND stream_key = :k"""),
+                {"v": nxt.value, "t": _event_time(nxt.cursor_time), "c": crow["id"],
+                 "k": POLL_STREAM_KEY, "now": now})
+            state = {"failures": 0, "last_error": None, "last_poll_at": now.isoformat(),
+                     "next_poll_at": (now + timedelta(seconds=interval)).isoformat(),
+                     "last_found": len(result.deliveries), "last_inserted": inserted,
+                     "total_inserted": int(state.get("total_inserted") or 0) + inserted,
+                     "interval_seconds": interval, "holder": holder[:80]}
+            c.execute(text("UPDATE intake_connections SET health = health || CAST(:h AS JSONB) "
+                           "WHERE id = :id"), {"h": json.dumps({"poll": state}), "id": crow["id"]})
+            out["polled"] += 1
+            out["inserted"] += inserted
     return out
 
 
@@ -1662,6 +1853,10 @@ def start(engine: Any, settings: Any) -> bool:
             wake.wait(tick)
             wake.clear()
             try:
+                try:
+                    poll_due(engine, settings)
+                except Exception:  # noqa: BLE001 — a failed poll never stops processing
+                    logger.warning("intake poll failed", exc_info=True)
                 got = process_due(engine, settings)
                 while got["claimed"] >= PROCESSOR_BATCH and not _STOP.is_set():
                     got = process_due(engine, settings)
@@ -1700,8 +1895,9 @@ __all__ = [
     "SERVICE_KEY", "SHED_RAW_BYTES", "accept", "flush_refusals",
     "ATTESTATION_KEY", "IntakeServiceError", "backoff_seconds", "clear_sso_attestation",
     "set_sso_attestation", "claim", "connection_by_token", "create_connection",
-    "connection_people", "dead_letters", "delete_connection", "revoke_person_link", "describe_connection", "get_connection", "get_event",
-    "inbound_path", "list_connections", "list_events", "process_due", "process_one", "receive",
+    "connection_people", "dead_letters", "delete_connection", "describe_connection",
+    "get_connection", "get_event", "inbound_path", "list_connections", "list_events", "poll_due",
+    "poll_seconds", "process_due", "process_one", "receive", "revoke_person_link",
     "replay", "rotate_secret", "set_connection_status", "start", "status_counts", "stop",
     "sweep_retention", "test_connection", "to_intake_connection", "update_connection",
 ]

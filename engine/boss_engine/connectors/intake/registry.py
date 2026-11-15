@@ -161,12 +161,18 @@ def validate(raw: Any, *, where: str = "manifest") -> Manifest:
                 or not isinstance(item.get("label"), str):
             problems.append(f"auth_fields[{index}] needs a name and a label")
             continue
-        unknown = set(item) - {"name", "label", "secret", "placeholder", "required", "help"}
+        unknown = set(item) - {"name", "label", "secret", "placeholder", "required", "help",
+                               "modes"}
         if unknown:
             problems.append(f"auth_fields[{index}] unknown {sorted(unknown)}")
         for flag in ("secret", "required"):
             if flag in item and not isinstance(item[flag], bool):
                 problems.append(f"auth_fields[{index}].{flag} must be true/false")
+        # `modes`: the field is required only in these modes (a webhook secret means nothing
+        # to a polled connection).
+        if "modes" in item and (not isinstance(item["modes"], list)
+                                or any(m not in modes for m in item["modes"])):
+            problems.append(f"auth_fields[{index}].modes must list modes this source has")
         fields.append(dict(item))
     names = [f["name"] for f in fields]
     if len(set(names)) != len(names):

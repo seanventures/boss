@@ -3130,6 +3130,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         exposure=Exposure(tags=("deploy", "config")))
     def deploy_config(ctx, *, project_id, actor, args):
         from ..services.config_deploy import deploy_files
+        from ..services.github_actions import WORKFLOW_RUN_ID
 
         return deploy_files(
             ctx.engine, ctx.settings, project_id=project_id, actor=actor,
@@ -3141,19 +3142,30 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             environment=(str(args["environment"]) if args.get("environment") else None),
             approval_decision_id=(str(args["approval_decision_id"])
                                   if args.get("approval_decision_id") else None),
-            person_required=args.get("person_required") is True)
+            person_required=args.get("person_required") is True,
+            # Which run deployed it, set by the runner on the server (never an argument), so a
+            # promotion can be checked against the run that staged it (AMEX-G9).
+            workflow_run_id=WORKFLOW_RUN_ID.get() or None)
 
     @reg.tool(
         "promote_config",
         "Promote the EXACT configuration a succeeded config deployment shipped — the same bytes, "
         "by sha256 — to the next environment's config_dir target (AMEX-G4): staging → "
-        "production by default. Names the source by deployment_run_id, or by app_name + "
-        "from_environment (the latest succeeded one). Same gates as deploy_config under the "
+        "production by default. Name the source by deployment_run_id (or deployment_id) — "
+        "it is never guessed; list_deployments shows them. Inside a workflow it must be the "
+        "run's own staging deployment with its bundle_sha256; a mismatch is refused. Same "
+        "gates as deploy_config under the "
         "destination environment's rules: production asks a person in Approvals unless its "
         "policy says otherwise; dual control is honoured. Planned is NOT shipped.",
         _obj({"deployment_run_id": {"type": "string",
                                     "description": "optional deprun_ of the succeeded config deployment"},
-              "app_name": {"type": "string", "description": "the system's name (with from_environment)"},
+              "deployment_id": {"type": "string",
+                                "description": "the same as deployment_run_id (a config_deploy "
+                                               "step's output is named deployment_id)"},
+              "bundle_sha256": {"type": "string",
+                                "description": "optional: the bundle hash the source must have "
+                                               "shipped; refused when it differs"},
+              "app_name": {"type": "string", "description": "the system's name (finds the destination target)"},
               "from_environment": {"type": "string", "description": "where it passed (default staging)"},
               "environment": {"type": "string", "description": "where it goes (default production)"},
               "target_id": {"type": "string", "description": "optional exact destination deptgt_"},
@@ -3167,10 +3179,16 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         exposure=Exposure(tags=("deploy", "config")))
     def promote_config(ctx, *, project_id, actor, args):
         from ..services.config_deploy import promote
+        from ..services.github_actions import WORKFLOW_RUN_ID
 
+        # `deployment_id` is what a config_deploy step's output calls it; it was silently
+        # ignored before, and the tool fell back to the app's latest staging deploy (AMEX-G9).
+        source = args.get("deployment_run_id") or args.get("deployment_id")
         return promote(
             ctx.engine, ctx.settings, project_id=project_id, actor=actor,
-            deployment_run_id=(str(args["deployment_run_id"]) if args.get("deployment_run_id") else None),
+            deployment_run_id=(str(source) if source else None),
+            expected_bundle_sha256=(str(args["bundle_sha256"]) if args.get("bundle_sha256") else None),
+            workflow_run_id=WORKFLOW_RUN_ID.get() or None,
             app_name=(str(args["app_name"]) if args.get("app_name") else None),
             from_environment=str(args.get("from_environment") or "staging"),
             environment=str(args.get("environment") or "production"),
@@ -9321,7 +9339,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "Run a list of HTTP contract cases against a deployed API — each with a method, "
         "headers, a JSON body, the status it must answer and JSON-path assertions — and "
         "report a table. A failed case is a failed contract: the step fails, with the table. "
-        "Unavailable in Community until URLs can be bound to the current project.",
+        "Reaches public hosts and this project's own deployment targets; in Community only "
+        "the exact URLs (scheme, host, port) of deployment targets a person created.",
         _obj({"cases": {"type": "array", "items": _CONTRACT_CASE, "minItems": 1,
                         "maxItems": 100},
               "base_url": {"type": "string",
@@ -9337,19 +9356,33 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         exposure=Exposure(tags=("network", "tests"), surfaces=("chat", "agent_step", "mcp"),
                           search_hint="contract test api assert status json body staging"))
     def contract_test(ctx, *, project_id, actor, args):
-        from ..services.contract_tests import project_deployment_hosts, run_cases
+        from ..services.contract_tests import (project_deployment_hosts, project_origins,
+                                               run_cases)
 
-        if _community_restricted(ctx.settings):
-            return {"ok": False, "error": "Community URL probes require a project-bound "
-                    "destination and a network policy; use recorded deployment health."}
         # WHERE IT MAY SEND: public hosts, and the private ones that are THIS project's own
         # deployment targets and hosts — read from the database, never from the arguments.
+        #
+        # COMMUNITY (AMEX-G8, BOSSAPP-1166) used to refuse the tool outright: Community has no
+        # egress network policy, so a URL probe could reach anywhere. Now every request — and
+        # every redirect hop — must go to the exact scheme, host and port of a deployment
+        # target a PERSON created (`project_origins`): not another port on that host, not a
+        # public host, not a target an agent made. DNS is resolved once per hop and the
+        # connection goes to the checked address. The same governance applies (permission,
+        # irreversible on resume).
+        project_only = _community_restricted(ctx.settings)
         with ctx.begin() as db:
-            allowed = project_deployment_hosts(db, args.get("project_id") or project_id)
+            allowed = project_deployment_hosts(db, project_id)
+            origins = project_origins(db, project_id) if project_only else frozenset()
+        if project_only and not origins:
+            return {"ok": False, "error": "In Community a contract test reaches only the URLs "
+                    "of this project's deployment targets that a person created, and this "
+                    "project has none. A person creates the target (with its health URL) "
+                    "first."}
         per_request = _turn_seconds(int(args.get("timeout_s") or 10))
         return run_cases(args.get("cases"), base_url=str(args.get("base_url") or ""),
                          timeout_s=per_request, headers=args.get("headers"),
-                         allowed_private=allowed, deadline_s=_turn_seconds(300))
+                         allowed_private=allowed, deadline_s=_turn_seconds(300),
+                         project_only=project_only, origins=origins)
 
     @reg.tool(
         "git_history",
