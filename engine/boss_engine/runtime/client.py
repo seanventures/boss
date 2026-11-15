@@ -94,16 +94,21 @@ class RunPlaneClient:
     def __init__(self, transport: HttpTransport, replica_id: str):
         self.transport, self.replica_id = transport, replica_id
 
+    def _replica(self) -> dict:
+        # In a VM, boss-hostd's guest gateway overwrites this from the socket the call came in
+        # on; on the process backend the runtime stands in for the host and says it itself.
+        return {"X-Boss-Replica": self.replica_id}
+
     def next(self, *, ttl: Optional[int] = None) -> Optional[dict]:
-        out = self.transport.request("POST", f"{PREFIX}/next",
-                                     json={"replica_id": self.replica_id, "ttl": ttl})
+        out = self.transport.request("POST", f"{PREFIX}/next", json={"ttl": ttl},
+                                     headers=self._replica())
         return out.get("run_package")
 
     def admit(self, *, caller: str, input: Any, thread_id: Optional[str] = None,
               double_text: Optional[str] = None, ttl: Optional[int] = None) -> dict:
         return self.transport.request("POST", f"{PREFIX}/admit", json={
-            "replica_id": self.replica_id, "caller": caller, "input": input,
-            "thread_id": thread_id, "double_text": double_text, "ttl": ttl})
+            "caller": caller, "input": input, "thread_id": thread_id,
+            "double_text": double_text, "ttl": ttl}, headers=self._replica())
 
     def run(self, package: dict) -> "RunHandle":
         lease = package["lease"]

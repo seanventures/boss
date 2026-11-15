@@ -321,6 +321,15 @@ def heartbeat(connection: Any, host: fleet_ca.HostIdentity, body: dict) -> dict:
         raise FleetError("this host is revoked.", status=403, code="host_revoked")
     _apply_facts(connection, host.host_id, facts)
     seen = _observe(connection, host.host_id, body.get("replicas") or ())
+    if isinstance(body.get("replicas"), list):
+        # A heartbeat lists EVERY VM the host runs: a replica wanted stopped that it no longer
+        # lists is gone, and leaves the desired state (fleet.desired lists it until then).
+        reported = [str(r.get("replica_id")) for r in body["replicas"]
+                    if isinstance(r, dict) and r.get("replica_id")]
+        connection.execute(text(
+            "UPDATE agent_replicas SET observed_state = 'gone', updated_at = now() "
+            "WHERE host_id = :h AND desired_state = 'stopped' AND observed_state <> 'gone' "
+            "AND NOT (id = ANY(:seen))"), {"h": host.host_id, "seen": reported})
     renew_due = bool(row["cert_not_after"] and row["cert_not_after"] - _now() <= timedelta(
         hours=fleet_ca.HOST_CERT_HOURS * (1 - fleet_ca.RENEW_FRACTION)))
     return {"host_id": host.host_id, "desired_generation": int(row["desired_generation"]),
@@ -335,6 +344,40 @@ def observed(connection: Any, host: fleet_ca.HostIdentity, body: dict) -> dict:
             "UPDATE agent_hosts SET observed_generation = GREATEST(observed_generation, :g) "
             "WHERE id = :i"), {"g": int(body["observed_generation"]), "i": host.host_id})
     return {"host_id": host.host_id, "replicas_seen": seen}
+
+
+#: The kinds boss-hostd reports (HOST_API.md §2.7), recorded as host_events rows.
+EVENT_KINDS = ("vm_state", "restart", "crashloop", "handle_replay", "refused", "adopted",
+               "orphan_tap_removed")
+EVENT_ACTORS = ("watchdog", "gateway", "reconciler")
+
+
+def host_events_ingest(connection: Any, host: fleet_ca.HostIdentity, events: list) -> dict:
+    """POST /v1/hosts/{id}/events: the watchdog's and gateway's detail (crashloops, handle
+    replays) as host_events rows, so the trace and the Fleet doctor see them (§3.1)."""
+    if not isinstance(events, list):
+        raise FleetError("`events` is a list.")
+    if len(events) > GUEST_CALL_BATCH_MAX:
+        raise FleetError(f"at most {GUEST_CALL_BATCH_MAX} events per batch.", status=413)
+    accepted, rejected = 0, []
+    for index, event in enumerate(events):
+        if not isinstance(event, dict) or event.get("kind") not in EVENT_KINDS:
+            rejected.append({"index": index, "reason": "kind_unknown"})
+            continue
+        if any(isinstance(v, str) and _HANDLE.search(v) for v in
+               [*event.values(), *((event.get("detail") or {}).values()
+                                   if isinstance(event.get("detail"), dict) else [])]):
+            rejected.append({"index": index, "reason": "raw_handle_refused"})
+            continue
+        detail = {str(k)[:60]: str(v)[:300] for k, v in (event.get("detail") or {}).items()} \
+            if isinstance(event.get("detail"), dict) else {}
+        detail.update({k: str(event[k])[:60] for k in ("from", "to", "at") if event.get(k)})
+        actor = event.get("actor") if event.get("actor") in EVENT_ACTORS else "watchdog"
+        host_event(connection, org_id=host.org_id, host_id=host.host_id,
+                   kind=str(event["kind"]), detail=detail, actor=actor,
+                   vm_id=_clean(event.get("vm_id"), 120))
+        accepted += 1
+    return {"accepted": accepted, "rejected": rejected}
 
 
 # ── Desired state ───────────────────────────────────────────────────────────────────────────
@@ -360,7 +403,9 @@ def desired(connection: Any, host_id: str) -> dict:
     vms = [{"replica_id": r["id"], "vm_id": r["vm_id"], "vm_mode": r["vm_mode"],
             "state": r["desired_state"], "deployment_id": r["deployment_id"],
             "project_id": r["project_id"], "agent_key": r["agent_key"],
-            "environment": r["environment"], "agent_version": r["agent_version"],
+            "environment": r["environment"],
+            # A string on the wire (docs/infra/HOST_API.md §2.5: Go's DesiredVM.AgentVersion).
+            "agent_version": str(r["agent_version"]) if r["agent_version"] is not None else None,
             "image_digest": r["image_digest"], "resources": _json(r["resources"], {}),
             "slots": int(r["slots"]), "weight": int(r["rs_weight"]),
             "vm_ip": str(r["vm_ip"]) if r["vm_ip"] is not None else None,
@@ -500,5 +545,5 @@ def get_host(connection: Any, org_id: str, host_id: str) -> Optional[dict]:
 
 __all__ = ["ATTESTATION", "FleetError", "HEARTBEAT_SECONDS", "JOIN_TOKEN_PREFIX", "ROUTES",
            "UNREACHABLE_SECONDS", "desired", "endpoints", "enrol", "get_host", "heartbeat",
-           "host_event", "ingest_guest_calls", "issue_join_token", "list_hosts", "observed",
+           "host_event", "host_events_ingest", "ingest_guest_calls", "issue_join_token", "list_hosts", "observed",
            "renew", "revoke", "revoke_join_token", "set_cordon", "watch"]

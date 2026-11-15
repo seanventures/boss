@@ -3,7 +3,7 @@ boss-agent-hosts-lld.md §3.2, §3.13.3). ONE router for the phase.
 
   HOSTS (boss-hostd → control plane; authenticated as the host, `fleet:host`, system only)
       POST /v1/hosts/enrol                               public: a one-time join token + CSR
-      POST /v1/hosts/{agent_host_id}/renew | /heartbeat | /observed | /guest-calls
+      POST /v1/hosts/{agent_host_id}/renew | /heartbeat | /observed | /guest-calls | /events
       GET  /v1/hosts/{agent_host_id}/desired?since=&wait=  level-based watch (long-poll)
   RUN PLANE (boss-hostd on a VM's behalf; `fleet:host`; every run call fenced)
       POST /v1/run-plane/next | /admit
@@ -70,13 +70,17 @@ class GuestCallsBody(BaseModel):
     calls: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class HostEventsBody(BaseModel):
+    events: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class NextBody(BaseModel):
-    replica_id: str
+    replica_id: Optional[str] = None
     ttl: Optional[int] = None
 
 
 class AdmitBody(BaseModel):
-    replica_id: str
+    replica_id: Optional[str] = None
     caller: str = ""
     input: Any = None
     thread_id: Optional[str] = None
@@ -322,30 +326,61 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
             _fleet_fail(error)
             raise
 
+    @router.post("/v1/hosts/{agent_host_id}/events")
+    @permit(P.FLEET_HOST, scope=Scope.org())
+    def host_events(agent_host_id: str, body: HostEventsBody, request: Request) -> dict[str, Any]:
+        """The watchdog's and the guest gateway's detail (HOST_API.md §2.7) as host_events."""
+        host = _host(request, agent_host_id)
+        try:
+            with begin(engine) as connection:
+                return _fleet.host_events_ingest(connection, host, body.events)
+        except Exception as error:  # noqa: BLE001
+            _fleet_fail(error)
+            raise
+
     # ── the run plane ─────────────────────────────────────────────────────────────────────
+
+    def _replica(header: Optional[str], claimed: Optional[str]) -> str:
+        """WHICH REPLICA IS CALLING is the host's word, never the guest's: boss-hostd's guest
+        gateway sets X-Boss-Replica from the vsock socket the call arrived on (HOST_API.md
+        §4.2). A body `replica_id` that names another replica is refused."""
+        replica = str(header or "").strip()
+        if not replica:
+            raise HTTPException(status_code=400, detail={
+                "error": "replica_header_required",
+                "message": "the host names the replica in X-Boss-Replica"})
+        if claimed and claimed != replica:
+            raise HTTPException(status_code=403, detail={
+                "error": "replica_mismatch",
+                "message": "a guest cannot speak for another replica"})
+        return replica
 
     @router.post("/v1/run-plane/next")
     @permit(P.FLEET_HOST, scope=Scope.org())
-    def rp_next(body: NextBody, request: Request) -> dict[str, Any]:
+    def rp_next(body: NextBody, request: Request,
+                x_boss_replica: Optional[str] = Header(default=None)) -> dict[str, Any]:
         """The replica's next admitted run, leased to it (or null)."""
         host = _host(request)
+        replica = _replica(x_boss_replica, body.replica_id)
         try:
             with begin(engine) as connection:
                 return {"run_package": run_plane.next_run(connection, _settings(), host.host_id,
-                                                          body.replica_id, ttl=body.ttl)}
+                                                          replica, ttl=body.ttl)}
         except Exception as error:  # noqa: BLE001
             _fleet_fail(error)
             raise
 
     @router.post("/v1/run-plane/admit")
     @permit(P.FLEET_HOST, scope=Scope.org())
-    def rp_admit(body: AdmitBody, request: Request) -> dict[str, Any]:
+    def rp_admit(body: AdmitBody, request: Request,
+                 x_boss_replica: Optional[str] = Header(default=None)) -> dict[str, Any]:
         """PDP agent:invoke on the forwarded caller + thread_runs.admit + the lease to this
         replica, in one transaction."""
         host = _host(request)
+        replica = _replica(x_boss_replica, body.replica_id)
         try:
             with begin(engine) as connection:
-                return run_plane.admit(connection, _settings(), host.host_id, body.replica_id,
+                return run_plane.admit(connection, _settings(), host.host_id, replica,
                                        caller=body.caller, input=body.input,
                                        thread_id=body.thread_id, double_text=body.double_text,
                                        traceparent=body.traceparent, ttl=body.ttl)
@@ -362,7 +397,8 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
                  x_boss_fence_epoch: Optional[str] = Header(default=None)) -> dict[str, Any]:
         lease = _lease(x_boss_replica, x_boss_job, x_boss_run_token, x_boss_fence_epoch)
         if body.action == "heartbeat":
-            return _run_call(request, run_id, lease, run_plane.heartbeat, ttl=body.ttl)
+            return _run_call(request, run_id, lease, run_plane.heartbeat, ttl=body.ttl,
+                             one_statement=True)
         if body.action in ("settle", "hand_back"):
             outcome = body.outcome if body.action == "settle" else {"status": "drained"}
             out = _run_call(request, run_id, lease, run_plane.settle, outcome=outcome)

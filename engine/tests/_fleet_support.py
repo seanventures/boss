@@ -4,7 +4,6 @@ with a deployed agent. Nothing here holds or prints a real credential."""
 from __future__ import annotations
 
 import base64
-import os
 import uuid
 from typing import Any, Optional
 
@@ -108,6 +107,12 @@ def org_of(engine, project_id: str) -> str:
             "WHERE p.id = :p"), {"p": project_id}).scalar())
 
 
+def own_pool() -> str:
+    """A pool of this test's own: the bench database is shared, and a host only ever serves
+    the deployments of its pool, so tests never place onto each other's hosts."""
+    return f"t_{uuid.uuid4().hex[:10]}"
+
+
 def make_project(engine) -> str:
     pid = f"p_{uuid.uuid4().hex[:10]}"
     with engine.begin() as c:
@@ -123,7 +128,8 @@ def make_project(engine) -> str:
 
 
 def deploy_agent(engine, project_id: str, *, key: Optional[str] = None, env: str = "dev",
-                 runtime: str = "microvm", replicas: int = 1) -> dict:
+                 runtime: str = "microvm", replicas: int = 1,
+                 pool: Optional[str] = None) -> dict:
     from boss_engine.agents import versions
     from boss_engine.services import agent_deployments
 
@@ -137,7 +143,8 @@ def deploy_agent(engine, project_id: str, *, key: Optional[str] = None, env: str
         dep = agent_deployments.deploy(c, project_id, key, env, actor="ceo", version=1)
         if runtime == "microvm":
             dep = agent_deployments.set_runtime(c, project_id, key, env, actor="ceo",
-                                                runtime="microvm", replicas=replicas)
+                                                runtime="microvm", replicas=replicas,
+                                                placement={"pool": pool} if pool else None)
     return dep
 
 
@@ -177,4 +184,4 @@ def join_token(engine, org_id: str, **kw: Any) -> str:
 
 
 __all__ = ["FakeHost", "TEST_MASTER_KEY", "cleanup_project", "deploy_agent", "fleet_app",
-           "join_token", "make_project", "org_of", "use_test_master_key"]
+           "join_token", "make_project", "org_of", "own_pool", "use_test_master_key"]

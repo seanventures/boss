@@ -255,12 +255,11 @@ def authenticate(creds: RequestCredentials, *, db: Any = None) -> Optional[AuthC
 
         if _host_proof(creds):
             # AN AGENT HOST'S CALL (P8a, the run plane's hot path): its proof is verified by ONE
-            # statement (the pinned certificate and the single-use jti together), so it runs in
-            # autocommit — no BEGIN/COMMIT round trips around it (P8a-T5).
-            from ..db import get_engine
+            # statement (the pinned certificate and the single-use jti together), in autocommit
+            # on fleet_ca's proof engine — no BEGIN/COMMIT and no pre-ping round trips (P8a-T5).
+            from ..services import fleet_ca
 
-            with get_engine().connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-                return _authenticate(creds, conn)
+            return fleet_ca.on_proof_connection(lambda conn: _authenticate(creds, conn))
         with begin() as conn:
             return _authenticate(creds, conn, memo=True)
     return _authenticate(creds, db)

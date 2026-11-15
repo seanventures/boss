@@ -393,6 +393,36 @@ def verify_proof(db: Any, token: str, *, htm: str, path: str,
     return host
 
 
+_PROOF_ENGINE: dict = {}
+
+
+def on_proof_connection(fn: Any) -> Any:
+    """`fn(connection)` on an AUTOCOMMIT connection of a small engine kept for host proofs. The
+    app's engine pre-pings every checkout (a round trip); this one does not, and instead retries
+    once on a connection the database dropped — the same resilience, one round trip fewer on
+    every run-plane call."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import DBAPIError
+
+    from ..db import get_engine
+
+    base = get_engine()
+    key = str(base.url)
+    engine = _PROOF_ENGINE.get(key)
+    if engine is None:
+        engine = _PROOF_ENGINE[key] = create_engine(
+            base.url, future=True, pool_pre_ping=False, pool_size=4, max_overflow=16,
+            isolation_level="AUTOCOMMIT")
+    for attempt in (1, 2):
+        try:
+            with engine.connect() as connection:
+                return fn(connection)
+        except DBAPIError as exc:
+            if attempt == 2 or not exc.connection_invalidated:
+                raise
+    raise RuntimeError("unreachable")
+
+
 def verify_forwarded_cert(db: Any, escaped_pem: str) -> HostIdentity:
     """Form 2: a leaf a trusted TLS terminator verified and forwarded. Re-checked against the CA."""
     from cryptography import x509

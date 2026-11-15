@@ -8,7 +8,8 @@ replica set into a DESIRED STATE with a generation counter (services/fleet.desir
     co-located (NFR-1).
   * dev / staging: soft anti-affinity — spread first, then the least-loaded host.
   * eligible host: same org, `ready`, beaten within UNREACHABLE_SECONDS, not revoked, in the
-    deployment's pool, carrying its labels, of its backend when it names one.
+    deployment's pool (`default` when it names none), carrying its labels, of its backend when
+    it names one.
   * a host silent for more than UNREACHABLE_SECONDS turns `unreachable`; its replicas are stopped
     there and placed elsewhere (the run they held resumes from its checkpoint when its lease
     expires — fencing makes the move safe, §2.14.2).
@@ -61,7 +62,9 @@ def _eligible(host: dict, dep: dict) -> bool:
     placement = _json(dep.get("placement"), {})
     if host["org_id"] != dep["org_id"] or host["status"] != "ready" or host["revoked_at"]:
         return False
-    if placement.get("pool") and placement["pool"] != host["pool"]:
+    # A host serves exactly its pool: a deployment that names none runs in `default` (§3.14.1
+    # "filter by pool") — never spilling onto a pool somebody set aside.
+    if (placement.get("pool") or "default") != host["pool"]:
         return False
     if placement.get("backend") and placement["backend"] != host["backend"]:
         return False

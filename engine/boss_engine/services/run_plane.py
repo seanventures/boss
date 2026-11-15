@@ -375,14 +375,26 @@ def _admit_as_caller(connection: Any, settings: Any, replica: dict, *, ctx: Any,
 def heartbeat(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef, *,
               ttl: Any = None) -> dict:
     """Renew the lease (10 s cadence; TTL 30 s) and answer whether the run should stop at its
-    next step boundary (a double-text interrupt, a cancel: thread_runs.stop_requested)."""
-    from . import thread_runs
-
-    fence(connection, settings, host_id, run_id, lease)
-    out = _jobs(settings).heartbeat(connection, owner_of(lease.replica_id), lease.job_id,
-                                    lease.token, _ttl(ttl))
-    return {"lease_expires_at": out["lease_expires_at"],
-            "stop": thread_runs.stop_requested(connection, run_id)}
+    next step boundary (a double-text interrupt, a cancel: thread_runs.stop_requested) — the
+    fence, the renewal and the stop flag in ONE statement (P8a-T5). What jobs.heartbeat does to
+    the lease row, without its `job.heartbeat` event: on the run plane the row's heartbeat_at
+    is the record (a host beats every run every 10 s; §2.15.6 write load)."""
+    replica_for_any(connection, host_id, lease.replica_id)
+    row = connection.execute(text(f"""
+        WITH lease AS ({_LEASE_HELD}),
+        beat AS (
+          UPDATE jobs SET status = CASE WHEN status = 'leased' THEN 'running' ELSE status END,
+                 heartbeat_at = now(), lease_expires_at = now() + make_interval(secs => :ttl),
+                 updated_at = now()
+           WHERE id IN (SELECT id FROM lease) RETURNING lease_expires_at)
+        SELECT (SELECT lease_expires_at FROM beat) AS expires_at,
+               (SELECT t.metadata->>'stop_run' FROM agent_runs r
+                  JOIN agent_threads t ON t.id = r.thread_id WHERE r.id = :run) AS stop_run"""),
+        {**_lease_params(lease, run_id), "ttl": _ttl(ttl)}).mappings().first()
+    if row is None or row["expires_at"] is None:
+        _refused(connection, settings, host_id, run_id, lease)
+    return {"lease_expires_at": row["expires_at"].isoformat(),
+            "stop": bool(row["stop_run"]) and row["stop_run"] == run_id}
 
 
 def settle(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef,
