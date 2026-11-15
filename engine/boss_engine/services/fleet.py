@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import logging
 import os
 import re
 import secrets
@@ -31,6 +32,8 @@ from sqlalchemy import text
 
 from . import fleet_ca
 from .core import make_id
+
+log = logging.getLogger(__name__)
 
 JOIN_TOKEN_PREFIX = "boss_hjt_"
 JOIN_TOKEN_HOURS = 24
@@ -154,7 +157,8 @@ def host_tokens_required(connection: Any, host_id: Optional[str]) -> bool:
     yes for a host that advertised the `host_tokens` capability (sticky), no for a host that
     predates S13. BOSS_HOST_TOKENS_REQUIRED=1 forces it on for every host (tests, a strict
     install); it never turns the requirement off. Cached 30 s per host — the flag only ever goes
-    from false to true, so a stale answer is at most 30 s of the old leniency."""
+    from false to true, so a stale answer is at most 30 s of the old leniency. A database error
+    FAILS CLOSED (required) and is not cached."""
     import time as _time
 
     if (os.environ.get(HOST_TOKENS_REQUIRED_ENV) or "").strip().lower() in ("1", "true", "yes"):
@@ -169,8 +173,9 @@ def host_tokens_required(connection: Any, host_id: Optional[str]) -> bool:
         with connection.begin_nested():
             value = bool(connection.execute(text(
                 "SELECT host_tokens FROM agent_hosts WHERE id = :h"), {"h": host_id}).scalar())
-    except Exception:  # noqa: BLE001 — an install mid-upgrade: no column, nothing required yet
-        value = False
+    except Exception:  # noqa: BLE001 — FAIL CLOSED: an unreadable answer is "required"
+        log.warning("host_tokens unreadable for %s: treating the token as required", host_id)
+        return True                      # never cached: the next call asks again
     _HOST_TOKENS_CACHE[host_id] = (value, now + _HOST_TOKENS_TTL)
     return value
 

@@ -370,6 +370,14 @@ def test_tokens_are_required_per_host_from_its_sticky_capability(monkeypatch):
     fleet._record_capabilities(Writer(), "hst_x", ["host_tokens"])
     fleet._record_capabilities(Writer(), "hst_x", [])
     assert seen == ["UPDATE agent_hosts SET host_tokens = true WHERE id = :i AND NOT host_tokens"]
+    # FAIL CLOSED: an unreadable answer is "required", and is not cached.
+    class Broken(Conn):
+        def execute(self, stmt, params=None):
+            raise RuntimeError("database away")
+
+    fleet._HOST_TOKENS_CACHE.clear()
+    assert fleet.host_tokens_required(Broken(False), "hst_new") is True
+    assert "hst_new" not in fleet._HOST_TOKENS_CACHE
     monkeypatch.setenv(fleet.HOST_TOKENS_REQUIRED_ENV, "1")
     assert fleet.host_tokens_required(old_host, "hst_new") is True
     fleet._HOST_TOKENS_CACHE.clear()

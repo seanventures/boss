@@ -818,6 +818,13 @@ POST /v1/run-plane/runs/{run_id}/tokens        (host-authenticated; the lease he
   `Boss-Run-Assertion`; the host's own calls are authenticated by its proof), and egress
   (`boss:egress`, verified when attached; not yet required there, because the git route sends no
   host identity to egress — that lands with the egress route's `HostProof`).
+- **Egress follow-up (open).** (1) Give the git/REST route `HostProof: true` so boss-hostd sends
+  its `BossHost` proof and binding headers to egress, and have egress verify the proof
+  (`fleet_ca.verify_proof`) to learn the host. (2) Then require the `boss:egress` token per host
+  exactly as the other destinations do (`fleet.host_tokens_required(connection, host_id)`), so a
+  host with `host_tokens` cannot reach egress without its token.
+- **Fail closed.** If the control plane cannot read whether a host requires tokens (a database
+  error), it treats the token as required; the answer is not cached.
 - **Minted before the VM hears of the run.** `boss-hostd` mints a claimed run's tokens before
   writing the work line; a refused mint hands the run back with reason `tokens_unavailable:
   <code>`. A run a replica admits itself (`/v1/run-plane/admit`) is minted in the gateway before

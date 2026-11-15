@@ -76,11 +76,12 @@ func (r Rule) matches(port int, method, path string) bool {
 	return r.PathMatch == nil || r.PathMatch(path)
 }
 
-// TokenMintingPath reports whether a run-plane path mints or exchanges
-// credentials: /v1/run-plane/runs/<run>/tokens (and anything below it). A
-// guest may never reach one: it would get the run's tokens bound to a key IT
-// chose (P8b S13; HOST_API.md §4.8). Trailing slashes and case are folded so
-// no spelling slips past.
+// TokenMintingPath reports whether a path mints or exchanges credentials:
+// /v1/run-plane/runs/<run>/tokens (and anything below it). A guest may never
+// reach one: it would get the run's tokens bound to a key IT chose (P8b S13;
+// HOST_API.md §4.8). The WHOLE path is case-folded (prefix included) and
+// trailing slashes are ignored, so no spelling slips past; the rule that uses
+// it matches on this alone, never on a case-sensitive prefix.
 func TokenMintingPath(p string) bool {
 	segs := strings.Split(strings.Trim(strings.ToLower(p), "/"), "/")
 	// v1 / run-plane / runs / <run> / tokens …
@@ -107,11 +108,16 @@ func CleanPath(decoded, escaped string) bool {
 	if decoded == "" || decoded[0] != '/' || strings.Contains(decoded, "\\") {
 		return false
 	}
+	// Path parameters (";") and whitespace, raw or decoded: an upstream may
+	// read "tokens;a" or "tokens " as "tokens" where the route table did not.
+	if strings.ContainsAny(decoded, "; \t\r\n\v\f") || strings.ContainsAny(escaped, "; \t\r\n\v\f") {
+		return false
+	}
 	if gopath.Clean(decoded) != strings.TrimSuffix(decoded, "/") && gopath.Clean(decoded) != decoded {
 		return false
 	}
 	low := strings.ToLower(escaped)
-	for _, bad := range []string{"%2f", "%5c", "%2e", "%00"} {
+	for _, bad := range []string{"%2f", "%5c", "%2e", "%00", "%3b", "%20", "%09", "%0a", "%0d"} {
 		if strings.Contains(low, bad) {
 			return false
 		}
@@ -159,7 +165,7 @@ func DefaultRules() []Rule {
 		{ID: "run-plane-hosts-denied", Port: guest.PortRunPlane, PathPrefix: "/v1/run-plane/hosts/", Route: RouteRunPlane, Deny: true},
 		// Token minting is the HOST's own call (cpclient.RunTokens): a VM that
 		// reached it would get the run's tokens for its own key (S13).
-		{ID: "run-plane-tokens-denied", Port: guest.PortRunPlane, PathPrefix: "/v1/run-plane/runs/", PathMatch: TokenMintingPath, Route: RouteRunPlane, Deny: true},
+		{ID: "run-plane-tokens-denied", Port: guest.PortRunPlane, PathMatch: TokenMintingPath, Route: RouteRunPlane, Deny: true},
 		{ID: "run-plane", Port: guest.PortRunPlane, PathPrefix: "/v1/run-plane/", Route: RouteRunPlane, Handle: HandleRun, Endpoint: runUp, HostAuth: true, SocketIdentity: true, Audience: hostapi.AudRunPlane},
 		{ID: "connect-p8b", Port: guest.PortConnect, Route: RouteConnect, Deny: true},
 		{ID: "default-deny", Deny: true, Route: "deny"},

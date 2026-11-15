@@ -383,3 +383,41 @@ func TestAnAdmittedRunGetsItsTokensFirstOrIsRefused(t *testing.T) {
 		t.Fatalf("old control plane: %d", status)
 	}
 }
+
+// Re-review LOW (PR #121): no spelling of the minting path reaches the control
+// plane — upper-case prefix, a path parameter, encoded whitespace.
+func TestNoSpellingOfTheMintingPathIsForwarded(t *testing.T) {
+	r := newRig(t)
+	r.gw.Runs.Put("run_b", RunLease{ReplicaID: "rep_b", JobID: "job_b", Token: "lease_B", Epoch: 1})
+	before := len(r.seen)
+	for _, p := range []string{
+		"/V1/RUN-PLANE/RUNS/run_b/TOKENS",
+		"/v1/run-plane/RUNS/run_b/tokens",
+		"/v1/run-plane/runs/run_b/tokens;a",
+		"/v1/run-plane/runs/run_b/tokens%20",
+		"/v1/run-plane/runs/run_b/tokens%3Ba",
+		"/v1/run-plane/runs/run_b/tokens%09",
+	} {
+		status, _ := r.call("vm-b", guest.PortRunPlane, "POST", p, map[string]string{"Content-Type": "application/json"})
+		if status != http.StatusForbidden && status != http.StatusBadRequest {
+			t.Fatalf("%s: %d %+v", p, status, r.lastCall())
+		}
+		if why := r.lastCall().RejectedBy; why != "route_denied" && why != "path_not_canonical" {
+			t.Fatalf("%s refused for %q", p, why)
+		}
+	}
+	if len(r.seen) != before {
+		t.Fatal("a spelling of the minting path was forwarded")
+	}
+	if !TokenMintingPath("/V1/RUN-PLANE/RUNS/x/TOKENS") || TokenMintingPath("/v1/run-plane/runs/x/lease") {
+		t.Fatal("TokenMintingPath must fold the whole path")
+	}
+	for _, p := range []string{"/a;b", "/a b", "/a%20b", "/a%3bb", "/a\tb"} {
+		if CleanPath(strings.ReplaceAll(p, "%20", " "), p) {
+			t.Fatalf("CleanPath accepted %q", p)
+		}
+	}
+	if !CleanPath("/v1/run-plane/runs/run_b/lease", "/v1/run-plane/runs/run_b/lease") {
+		t.Fatal("an ordinary path must stay clean")
+	}
+}
