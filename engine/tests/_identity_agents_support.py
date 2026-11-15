@@ -110,6 +110,11 @@ def reset(engine) -> None:
     with engine.begin() as c:
         c.execute(text("SET LOCAL session_replication_role = replica"))   # bypass append-only / last-owner triggers
         c.execute(text("TRUNCATE " + ", ".join(_TRUNCATE) + " CASCADE"))
+        # github_repos is org-scoped (no project FK), so truncating projects never removes it.
+        # A row an egress suite left for org_boss makes the next suite's mint refuse
+        # (403 vs 200) on the shared database (BOSSAPP-1187).
+        if c.execute(text("SELECT to_regclass('public.github_repos') IS NOT NULL")).scalar():
+            c.execute(text("DELETE FROM github_repos WHERE org_id IN ('org_boss', 'org_other')"))
         c.execute(text("INSERT INTO orgs (id, name) VALUES ('org_boss','BOSS'), ('org_other','Other') "
                        "ON CONFLICT DO NOTHING"))
 
