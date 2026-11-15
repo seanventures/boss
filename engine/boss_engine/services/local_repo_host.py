@@ -24,8 +24,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Iterator, Mapping, Optional
 
 from sqlalchemy import text
 
@@ -48,6 +51,74 @@ LOCAL_PR_HOST = "boss-local"
 
 class LocalHostUnsupported(RuntimeError):
     """A GitHub-only operation asked of a local repository."""
+
+
+# ── whose connection a change-set write runs on ──────────────────────────────────────────────
+#
+# NEVER WAIT ON OUR OWN LOCK (crun_ce0f6332 / crun_496feb42, 2026-11-11 and -15). The pipeline
+# opens a pull request inside ONE transaction (software_factory.propose_pull_request on `c`):
+# local_review.on_change_proposed UPDATEs the change set's row on `c`, and the `checks failing`
+# label was then written by add_labels on a SECOND connection with `SELECT … FOR UPDATE` on the
+# same row. That second connection waited on `c`'s row lock, `c` waited on it, and Postgres
+# ended `c` 300 s later as idle in transaction: the build failed after all its work was done.
+#
+# So a caller that holds a transaction binds it (`writes_on(c)`), and every change-set read
+# and write below runs on that connection (in a savepoint) instead of a connection of its own.
+# Without a binding the adapter's own transaction carries a lock timeout, so any cycle left
+# fails fast and in words, and the guard below names a caller that still holds a written
+# transaction (strict — an error — in tests, a warning in production).
+
+_CALLER_CONNECTION: ContextVar[Any] = ContextVar("local_repo_host_caller_connection", default=None)
+
+#: How long the adapter's OWN transaction waits for a row lock before it fails in words.
+LOCK_TIMEOUT = "30s"
+
+#: Set (any non-empty value but 0) to make the guard raise instead of log: the tests do.
+STRICT_GUARD_ENV = "BOSS_STRICT_TRANSACTION_GUARD"
+
+
+class LocalHostTransactionCycle(RuntimeError):
+    """The adapter was about to open its own transaction while its caller holds a written one."""
+
+
+@contextmanager
+def writes_on(connection: Any) -> Iterator[None]:
+    """Inside this block every LocalGitAdapter (a local project's, or a GitHub repository's
+    mirror during an outage) reads and writes change sets on `connection`, the caller's open
+    transaction, so it can never wait on a lock that transaction holds."""
+    token = _CALLER_CONNECTION.set(connection)
+    try:
+        yield
+    finally:
+        _CALLER_CONNECTION.reset(token)
+
+
+def _written_transaction_open() -> Optional[Any]:
+    """The caller's transaction (db.begin, this thread) when it has written anything, or None.
+    A transaction that has written has a transaction id; one that only read has none."""
+    from ..db import open_transaction
+
+    outer = open_transaction()
+    if outer is None:
+        return None
+    try:
+        if outer.dialect.name != "postgresql":
+            return None
+        xid = outer.execute(text("SELECT txid_current_if_assigned()")).scalar()
+    except Exception:  # noqa: BLE001 — a closed or failed caller connection is not ours to judge
+        return None
+    return outer if xid is not None else None
+
+
+def _guard_own_transaction(what: str) -> None:
+    if _written_transaction_open() is None:
+        return
+    message = (f"local repo host: {what} would open its own transaction while the caller holds "
+               "a written one; bind it with local_repo_host.writes_on(connection) so it cannot "
+               "wait on the caller's own row locks")
+    if os.environ.get(STRICT_GUARD_ENV, "") not in ("", "0"):
+        raise LocalHostTransactionCycle(message)
+    log.warning(message)
 
 
 def change_set_url(full_name: str, number: int) -> str:
@@ -136,6 +207,27 @@ class LocalGitAdapter:
     def __repr__(self) -> str:
         return f"LocalGitAdapter({self.repository_full_name!r}, {str(self.git_dir)!r})"
 
+    @contextmanager
+    def _tx(self, what: str, *, independent: bool = False, read: bool = False) -> Iterator[Any]:
+        """The connection a change-set read or write runs on: the caller's (writes_on), in a
+        savepoint, or the adapter's own short transaction with a lock timeout.
+        `independent`: this write must commit on its own whatever the caller does (a change
+        set's number is allocated and visible at once, as GitHub's PR is) and touches no row the
+        caller can hold — it never joins the caller's transaction. `read`: takes no lock (MVCC),
+        so it needs no guard; bound, it still reads on the caller's connection and sees the
+        caller's own uncommitted writes."""
+        caller = None if independent else _CALLER_CONNECTION.get()
+        if caller is not None:
+            with caller.begin_nested():
+                yield caller
+            return
+        if not independent and not read:
+            _guard_own_transaction(what)
+        with self.engine.begin() as c:
+            if c.dialect.name == "postgresql":
+                c.execute(text(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'"))
+            yield c
+
     def clone_url(self, token: str = "") -> str:
         return local_repo.file_url(self.git_dir)
 
@@ -213,7 +305,7 @@ class LocalGitAdapter:
         return dict(row)
 
     def change_set(self, number: int) -> dict[str, Any]:
-        with self.engine.begin() as c:
+        with self._tx("change_set", read=True) as c:
             return self._row(c, number)
 
     def create_pull_request(self, branch_name: str, title: str, body: str,
@@ -236,7 +328,7 @@ class LocalGitAdapter:
             run_id = branch_name.rsplit("/", 1)[-1]
         if not self.project_id:
             raise local_repo.LocalRepoError("A change set needs the project it belongs to.")
-        with self.engine.begin() as c:
+        with self._tx("create_pull_request", independent=True) as c:
             c.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
                       {"k": f"local_change_sets:{self.repository_full_name}"})
             open_row = c.execute(text(
@@ -266,7 +358,7 @@ class LocalGitAdapter:
                                  number=number)
 
     def add_labels(self, pull_request_number: int, labels: list[str]) -> None:
-        with self.engine.begin() as c:
+        with self._tx("add_labels") as c:
             row = self._row(c, pull_request_number, lock=True)
             have = list(row.get("labels") or [])
             have += [label for label in labels if label not in have]
@@ -274,14 +366,14 @@ class LocalGitAdapter:
                            "WHERE id = :id"), {"l": json.dumps(have), "id": row["id"]})
 
     def mark_ready_for_review(self, pull_request_number: int) -> bool:
-        with self.engine.begin() as c:
+        with self._tx("mark_ready_for_review") as c:
             c.execute(text("UPDATE local_change_sets SET draft = false, updated_at = now() "
                            "WHERE repository = :r AND number = :n"),
                       {"r": self.repository_full_name, "n": int(pull_request_number)})
         return True
 
     def update_pull_request_body(self, pull_number: int, body: str) -> None:
-        with self.engine.begin() as c:
+        with self._tx("update_pull_request_body") as c:
             c.execute(text("UPDATE local_change_sets SET body = :b, updated_at = now() "
                            "WHERE repository = :r AND number = :n"),
                       {"b": body, "r": self.repository_full_name, "n": int(pull_number)})
@@ -300,7 +392,7 @@ class LocalGitAdapter:
     def open_pull_request_for(self, branch_name: str) -> Optional[dict]:
         """The open change set whose head is this branch ({number, url, title}), or None —
         GitHubAdapter.open_pull_request_for, for pr_follow_up.prepare_branch."""
-        with self.engine.begin() as c:
+        with self._tx("open_pull_request_for", read=True) as c:
             row = c.execute(text(
                 "SELECT number, title FROM local_change_sets WHERE repository = :r "
                 "AND branch = :b AND state = 'open' ORDER BY number DESC LIMIT 1"),
@@ -317,7 +409,7 @@ class LocalGitAdapter:
         default squash merge leaves its commits off the base's history, so without
         pr_follow_up's restack every later change set from it is an add/add conflict that can
         never merge (BOSSAPP-980, helpdesk-laptop change #2, 2026-11-10)."""
-        with self.engine.begin() as c:
+        with self._tx("last_merged_pull_request", read=True) as c:
             row = c.execute(text(
                 "SELECT number, head_sha, merged_sha, merged_at FROM local_change_sets "
                 "WHERE repository = :r AND branch = :b AND state = 'merged' "
@@ -386,7 +478,7 @@ class LocalGitAdapter:
         moved, else a merge commit (`squash` when the install's merge method says so). Only a
         person's approved decision reaches this (software_factory.merge_pull_request)."""
         git_dir = self._require()
-        with self.engine.begin() as c:
+        with self._tx("merge_pull_request") as c:
             row = self._row(c, pull_request_number, lock=True)
             if row["state"] == "merged":
                 return PullRequestMergeResult(sha=row.get("merged_sha") or "", merged=True,
@@ -429,12 +521,12 @@ class LocalGitAdapter:
         from . import local_review
 
         if not self.project_id:
-            with self.engine.begin() as c:
+            with self._tx("close_change_set") as c:
                 c.execute(text("UPDATE local_change_sets SET state = 'closed', updated_at = now() "
                                "WHERE repository = :r AND number = :n AND state = 'open'"),
                           {"r": self.repository_full_name, "n": int(pull_number)})
             return
-        with self.engine.begin() as c:
+        with self._tx("close_change_set") as c:
             try:
                 local_review.close_change(c, self.settings, project_id=self.project_id,
                                           number=int(pull_number), actor="boss")
@@ -445,7 +537,7 @@ class LocalGitAdapter:
     def _note(self, number: int, *, kind: str, body: str, event: Optional[str] = None,
               comments: Optional[list] = None, in_reply_to: Optional[int] = None,
               author: str = "boss") -> int:
-        with self.engine.begin() as c:
+        with self._tx("_note") as c:
             row = self._row(c, number)
             # ONE NOTE PER WORDS: a build's review conversation posted again (a retried finalize,
             # a follow-up re-posting the rounds it inherited) is the same note, not a second copy.
@@ -479,7 +571,7 @@ class LocalGitAdapter:
         # Each inline comment gets its own id, as GitHub gives review comments theirs.
         numbered = []
         for comment in comments or []:
-            with self.engine.begin() as c:
+            with self._tx("create_review", read=True) as c:
                 cid = int(c.execute(text("SELECT nextval('local_change_set_note_ids')")).scalar())
             numbered.append({**comment, "id": cid})
         note = self._note(pull_number, kind="review", body=body, event=normalized, comments=numbered)
@@ -488,7 +580,7 @@ class LocalGitAdapter:
             state={"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED"}.get(normalized, "COMMENTED"))
 
     def notes(self, pull_number: int) -> list[dict[str, Any]]:
-        with self.engine.begin() as c:
+        with self._tx("notes", read=True) as c:
             row = self._row(c, pull_number)
             rows = c.execute(text(
                 "SELECT id, number, kind, event, body, comments, in_reply_to, author, created_at "
@@ -523,7 +615,7 @@ class LocalGitAdapter:
         return []
 
     def update_review_body(self, pull_number: int, review_id: int, body: str) -> None:
-        with self.engine.begin() as c:
+        with self._tx("update_review_body") as c:
             c.execute(text("UPDATE local_change_set_notes SET body = :b, updated_at = now() "
                            "WHERE number = :n AND kind = 'review'"), {"b": body, "n": int(review_id)})
 

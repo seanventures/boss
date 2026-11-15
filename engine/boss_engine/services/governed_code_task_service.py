@@ -5713,8 +5713,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if not n:
                 return None
             with _transaction(engine) as c:
+                # A RESCUE NEEDS NO FRESH RESERVATION (rescue_of_run): the money was spent, and
+                # this exit settles it on the build's own hold. Passing None here used to
+                # raise a blocking "Missing active reservation" card on every failure and never
+                # open the partial PR (since rc.1).
                 pr = sf.propose_pull_request(
-                    c, project_id, task_id, reservation_id=None,
+                    c, project_id, task_id, reservation_id=reservation_id,
+                    rescue_of_run=run_id,
                     dedupe_key=f"code:task:{run_id}", title=f"[partial] {title}",
                     branch_name=work_branch,
                     summary=("INCOMPLETE — this run did not finish.\n\n"
@@ -5738,6 +5743,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                "code_task_run", run_id,
                                {"url": url, "files": n, "reason": reason[:200]})
                     return url
+                # NOT OPENED: an event on the run, never a card a person must clear.
+                emit_event(c, project_id, "code_task.partial_pr_failed", "boss",
+                           "code_task_run", run_id,
+                           {"status": str(pr.get("status") or ""),
+                            "error": str(pr.get("message") or pr.get("error") or "")[:200],
+                            "reason": reason[:200]})
         except Exception as exc:  # noqa: BLE001 — a failed rescue must never mask the real exit
             _log_caught(logger)
             try:
