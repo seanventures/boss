@@ -20,10 +20,12 @@ from __future__ import annotations
 import atexit
 import logging
 import os
-import uuid
+import secrets
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import create_engine, text
+
+from boss_engine.dev.test_databases import drop_schema_in_batches, test_schema_name
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +53,10 @@ def confine_to_private_schema(base_url: str) -> str | None:
     Returns the schema name, or None if the database is unreachable — in which case the suite
     skips anyway, and failing here would replace a clear skip with an import error.
     """
-    schema = f"boss_test_{uuid.uuid4().hex[:12]}"
+    # `boss_test_api<rand>_<UTC stamp>` (BOSSAPP-1162): the stamp is the only place a sweeper can
+    # read this schema's age from when the drop below never runs (a killed shard, a lock-table
+    # failure). `boss dev sweep-test-db` removes stamped schemas past 24 h and nothing else.
+    schema = test_schema_name(f"api{secrets.token_hex(4)}")
     admin = create_engine(base_url, future=True, isolation_level="AUTOCOMMIT")
     try:
         with admin.connect() as connection:
@@ -70,10 +75,18 @@ def confine_to_private_schema(base_url: str) -> str | None:
             with cleanup.connect() as connection:
                 # A connection this process leaked "idle in transaction" (it holds a lock on a
                 # table in the schema) made the DROP wait forever at exit, after every test had
-                # passed: an API shard of the CI p0 job hung for 18 minutes. Wait a bounded time;
-                # a schema left behind is tidy-up, not a failure.
-                connection.execute(text("SET lock_timeout = '20s'"))
-                connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+                # passed: an API shard of the CI p0 job hung for 18 minutes. Wait a bounded time
+                # (the helper sets lock_timeout); a schema left behind is tidy-up, not a failure.
+                #
+                # IN BATCHES, NOT ONE CASCADE (BOSSAPP-1162). This schema holds ~2100 relations;
+                # one DROP SCHEMA CASCADE locks every one of them in a single transaction, and
+                # three shards ending together exhausted the server's whole lock table ("out of
+                # shared memory"), so the drop failed and 146 schemas (4.8 GB) stayed behind.
+                def execute(sql: str):
+                    result = connection.execute(text(sql))
+                    return result.fetchall() if result.returns_rows else None
+
+                drop_schema_in_batches(execute, schema)
         except Exception:  # noqa: BLE001 — a leaked schema is tidy-up, not a failure
             log.warning("could not drop test schema %s", schema)
         finally:
