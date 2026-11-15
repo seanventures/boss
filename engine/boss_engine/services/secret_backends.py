@@ -1034,6 +1034,73 @@ def backend_for(kind: str, settings: Settings) -> SecretBackend:
 _BACKEND_PREFERENCE = ("infisical", "platform_secret_store", "vault", "database", "local_vault")
 
 
+def _named_store(value: str) -> Optional[str]:
+    chosen = (value or "").strip().strip("'\"").lower()
+    if "#" in chosen:
+        chosen = chosen.split("#", 1)[0].strip()
+    return chosen if chosen in ("database", "infisical") else None
+
+
+def _install_recorded_store() -> Optional[str]:
+    """The installer's answer in ``$BOSS_INSTALL_DIR/.env``, that one key only.
+
+    Containers inherit BOSS_COMMUNITY_SECRET_STORE. A host bench often does not,
+    and then its own Infisical settings pick a second store (BOSSAPP-1033). The
+    rest of the file holds credentials and is not loaded.
+    """
+    root = (os.environ.get("BOSS_INSTALL_DIR") or "").strip()
+    if not root:
+        return None
+    path = os.path.join(root, ".env")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        text = line.strip()
+        if text.startswith("export "):
+            text = text[len("export "):].strip()
+        if not text or text.startswith("#") or "=" not in text:
+            continue
+        key, _, value = text.partition("=")
+        if key.strip() != "BOSS_COMMUNITY_SECRET_STORE":
+            continue
+        return _named_store(value)
+    return None
+
+
+def _host_bench_against_install() -> bool:
+    """A host process pointed at an install, not the install's own container."""
+    if os.path.exists("/.dockerenv") or os.environ.get("KUBERNETES_SERVICE_HOST"):
+        return False
+    return bool((os.environ.get("BOSS_BENCH_DATABASE_URL") or "").strip()
+                or (os.environ.get("BOSS_HOST_BENCH") or "").strip())
+
+
+class InstallStoreMismatch(SecretUnavailable):
+    """This process would use a different secret store than the install."""
+
+
+def _refuse_divergent_host_store(kind: str) -> None:
+    """A host bench must not heal a store the install did not choose.
+
+    When the install recorded a choice, `operator_chosen_backend` already
+    returned it. This is the remaining case: ambient Infisical on the host,
+    and no recorded choice. Refusing beats writing a credential the containers
+    will not read.
+    """
+    if kind != "infisical" or not _host_bench_against_install():
+        return
+    if operator_chosen_backend() == "infisical":
+        return
+    raise InstallStoreMismatch(
+        "host bench must not point at a different store than the install: "
+        "this process would use infisical, and the install did not choose it. "
+        "Set BOSS_COMMUNITY_SECRET_STORE to the install's store, or "
+        "BOSS_INSTALL_DIR to the directory whose .env records it.")
+
+
 def operator_chosen_backend() -> Optional[str]:
     """The secret store the operator chose at install time, if they chose one.
 
@@ -1042,9 +1109,13 @@ def operator_chosen_backend() -> Optional[str]:
     Infisical was still running from an earlier install stored the next credential in Infisical
     anyway, because the preference order below takes "the most protected store that answers".
     An explicit choice is the operator's to make; the preference order is for when nobody chose.
+
+    The process environment wins. A host that was not given the variable still
+    sees the copy the installer wrote under BOSS_INSTALL_DIR, so the host and
+    the containers name one store.
     """
-    chosen = (os.environ.get("BOSS_COMMUNITY_SECRET_STORE") or "").strip().lower()
-    return chosen if chosen in ("database", "infisical") else None
+    chosen = _named_store(os.environ.get("BOSS_COMMUNITY_SECRET_STORE") or "")
+    return chosen if chosen else _install_recorded_store()
 
 
 def database_key_is_external() -> bool:
@@ -1089,6 +1160,7 @@ def durable_secret_backend(settings: Settings) -> str:
         if health.get("ok") is False:
             continue
         if health.get("durable") is True:
+            _refuse_divergent_host_store(kind)
             return kind
     # NOT `local_vault`, WHICH IS WHAT THE DEFAULT WOULD HAVE PICKED. If nothing on this
     # installation claims durability, the database is still the only store here that survives
@@ -1138,6 +1210,7 @@ def pick_default_backend(settings: Settings) -> tuple[str, list[str]]:
             if health.get("transient"):
                 passed_over.append(f"{kind}: {health.get('error') or 'did not answer'}")
             continue
+        _refuse_divergent_host_store(kind)
         return kind, passed_over
     return "database", passed_over
 
