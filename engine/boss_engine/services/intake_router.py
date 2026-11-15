@@ -218,6 +218,196 @@ def chat_messages(route: Mapping[str, Any], conn: IntakeConnection, event: Intak
 
 
 # ---------------------------------------------------------------------------------------------
+# Chat: which agent, and where the answer goes (§5.2, §9.1)
+# ---------------------------------------------------------------------------------------------
+
+#: `@BOSS support: why did …` / `@BOSS support, why …` — a leading agent name.
+_LEADING_NAME = re.compile(r"^\s*([A-Za-z][A-Za-z0-9 _.\-]{0,40}?)\s*[:,]\s*(\S.*)$", re.S)
+
+
+def _norm(name: Any) -> str:
+    return re.sub(r"[\s_.\-]+", "", str(name or "").casefold())
+
+
+def route_names(route: Mapping[str, Any], dep: Optional[Mapping[str, Any]]) -> list[str]:
+    """What a person may call a route's agent: its key, the route's name, the route's aliases."""
+    cfg = _json(route.get("config"), {}) or {}
+    names = [(dep or {}).get("agent_key"), route.get("name"), *(cfg.get("aliases") or [])]
+    return [n for n in (_norm(x) for x in names) if n]
+
+
+def _owned_route(connection: Connection, routes: list, envelope: Mapping[str, Any]
+                 ) -> Optional[dict]:
+    for candidate in routes:
+        cfg = _json(candidate.get("config"), {}) or {}
+        key = render_thread_key(candidate.get("thread_key") or cfg.get("thread_key"), envelope)
+        if not key:
+            continue
+        dep = _deployment(connection, str(candidate["deployment_id"]))
+        if dep and thread_owned(connection, str(candidate["project_id"]), str(candidate["id"]),
+                                key, str(dep["agent_key"])):
+            return candidate
+    return None
+
+
+def choose_chat_route(connection: Connection, settings: Any, conn: IntakeConnection,
+                      crow: Mapping[str, Any], event: IntakeEvent, routes: list, *,
+                      now: Optional[datetime] = None) -> Optional[tuple]:
+    """WHICH AGENT ANSWERS in a shared workspace (§5.2), when more than one route could:
+
+      1. the thread is already owned (a follow-up continues with the same agent);
+      2. a leading agent name (`@BOSS support: …`) — the name is taken off the person's words;
+      3. a channel → route binding (`config.channels`), or a route whose own filter chose it;
+      4. the connection's default DM agent, for a direct message;
+      5. triage, when a route has it on (the loop below runs it);
+      6. else nobody: the person gets a short reply listing the agents they may use.
+
+    Returns None (let the loop decide: one route, fan-out, not addressed, triage, an unlinked
+    sender who must be prompted to link first), ("route", route) or ("listed", None)."""
+    envelope = event.to_dict()
+    matching = []
+    for candidate in routes:
+        cfg = _json(candidate.get("config"), {}) or {}
+        if str(cfg.get("fanout") or "first_match") == "all_matches":
+            return None
+        try:
+            compiled = intake_filters.compiled_for(str(candidate["id"]), candidate.get("updated_at"),
+                                                   cfg.get("match"))
+        except intake_filters.FilterError:
+            continue
+        if compiled.matches(envelope):
+            matching.append((candidate, compiled))
+    if len(matching) <= 1:
+        if matching and _addressed(envelope):
+            _take_leading_name(connection, event, [matching[0][0]])
+        return None
+    candidates = [m[0] for m in matching]
+    owned = _owned_route(connection, candidates, envelope)
+    if owned is not None:
+        return "route", owned
+    if not _addressed(envelope):
+        return None
+    named = _take_leading_name(connection, event, candidates)
+    if named is not None:
+        return "route", named
+    data = event.data or {}
+    channel = str(data.get("channel") or "")
+    for candidate, compiled in matching:
+        cfg = _json(candidate.get("config"), {}) or {}
+        if channel and channel in [str(c) for c in (cfg.get("channels") or [])]:
+            return "route", candidate
+    for candidate, compiled in matching:
+        if getattr(compiled, "leaves", 0):
+            return "route", candidate
+    if str(data.get("channel_type") or "") == "im":
+        wanted = _norm(conn.get("default_dm_agent"))
+        if wanted:
+            for candidate in candidates:
+                dep = _deployment(connection, str(candidate["deployment_id"]))
+                if wanted in route_names(candidate, dep) or wanted == _norm(candidate["id"]):
+                    return "route", candidate
+    if any(intake_guards.triage_spec(c) is not None for c in candidates):
+        return None
+    principal, _link, _method, _why = intake_identity.find_person(connection, crow, conn, event)
+    if principal is None:
+        return None          # the identity step prompts the link first (T7)
+    _list_agents(connection, settings, crow, event, candidates, principal, now=now)
+    return "listed", None
+
+
+def _take_leading_name(connection: Connection, event: IntakeEvent, candidates: list
+                       ) -> Optional[dict]:
+    """A leading agent name picks that route and is taken off the person's words."""
+    words = str((event.data or {}).get("text") or "")
+    got = _LEADING_NAME.match(words)
+    if not got:
+        return None
+    wanted = _norm(got.group(1))
+    for candidate in candidates:
+        dep = _deployment(connection, str(candidate["deployment_id"]))
+        if wanted and wanted in route_names(candidate, dep):
+            event.data["text"] = got.group(2).strip()
+            event.data["addressed_agent"] = (dep or {}).get("agent_key")
+            return candidate
+    return None
+
+
+def _list_agents(connection: Connection, settings: Any, crow: Mapping[str, Any],
+                 event: IntakeEvent, candidates: list, principal_id: str, *,
+                 now: Optional[datetime] = None) -> bool:
+    """The short reply when no agent was chosen: ONLY the agents this person may use; when
+    there are none, one line saying how to ask for access (never the full roster)."""
+    endpoint_id = crow.get("chat_endpoint_id")
+    user = event.bossactor.external_id
+    if not endpoint_id or not user:
+        return False
+    usable = []
+    for candidate in candidates:
+        dep = _deployment(connection, str(candidate["deployment_id"]))
+        if dep is None:
+            continue
+        label = str(dep["agent_key"])
+        acting, _why = intake_identity.person_acting(connection, principal_id,
+                                                     project_id=str(candidate["project_id"]),
+                                                     agent_key=label)
+        if acting is not None:
+            usable.append(label)
+    names = sorted(set(usable))
+    if names:
+        words = ("Which agent should answer? Start your message with its name, for example "
+                 f"`@BOSS {names[0]}: …`. You can ask: " + ", ".join(f"*{n}*" for n in names)
+                 + ".")
+    else:
+        words = ("No agent here can act for you yet. Ask an admin for access, or grant one "
+                 f"yourself in BOSS under Account › Agents ({intake_identity.GRANT_PATH}).")
+    from .notify import enqueue_chat
+
+    data = event.data or {}
+    channel = str(data.get("channel") or "")
+    conv = event.bossconversation or {}
+    if str(data.get("channel_type") or "") == "im":
+        payload = {"op": "post", "channel": channel, "message": {"text": words}}
+        if conv.get("reply_thread_ts"):
+            payload["thread"] = conv["reply_thread_ts"]
+    else:
+        payload = {"op": "ephemeral", "channel": channel, "user": user, "text": words,
+                   "thread": conv.get("reply_thread_ts") or data.get("ts")}
+    got = enqueue_chat(connection, endpoint_id=str(endpoint_id),
+                       project_id=str(candidates[0]["project_id"]), kind="response",
+                       payload=payload, dedupe_key=f"pick:intake:{event.bossdedupe or event.id}")
+    return got is not None
+
+
+def reply_target(crow: Mapping[str, Any], event: IntakeEvent, route: Mapping[str, Any],
+                 dep: Optional[Mapping[str, Any]]) -> dict:
+    """`finalize_ctx.reply_to` of a conversational run: the ONLY place its replies may go
+    (chat_reply reads it; the model never names a target)."""
+    conv = event.bossconversation or {}
+    data = event.data or {}
+    cfg = _json(route.get("config"), {}) or {}
+    thread = conv["reply_thread_ts"] if "reply_thread_ts" in conv else (
+        conv.get("thread_ts") or data.get("ts"))
+    status = cfg.get("status_text", chat_status_default()) if cfg.get("status", True) is not \
+        False else False
+    return {"chat_endpoint_id": crow["chat_endpoint_id"],
+            "channel": conv.get("channel") or data.get("channel"),
+            "thread_ts": thread, "trigger_ts": data.get("ts"),
+            "conversation_key": conv.get("key"),
+            "external_user_id": event.bossactor.external_id,
+            "team_id": data.get("team_id") or conv.get("team_id"),
+            "deployment_id": (dep or {}).get("id") or route.get("deployment_id"),
+            "hops": int((event.bosscausality or {}).get("hops") or 0),
+            "status": status, "stream": bool(cfg.get("stream")),
+            "reply": str(route.get("reply_mode") or cfg.get("reply") or "auto")}
+
+
+def chat_status_default() -> str:
+    from .chat_reply import DEFAULT_STATUS
+
+    return DEFAULT_STATUS
+
+
+# ---------------------------------------------------------------------------------------------
 # The decision
 # ---------------------------------------------------------------------------------------------
 
@@ -274,10 +464,20 @@ def route(connection: Connection, conn: IntakeConnection, event: IntakeEvent,
     if not routes:
         return []
     by_id = {str(r["id"]): r for r in routes}
-    envelope = event.to_dict()
     chat = is_chat(conn)
     fires: list[Fire] = []
     event_id = str(event_row["id"])
+    if chat:
+        # WHICH AGENT (§5.2): one Slack app fronts many agents; pick one before the loop.
+        picked = choose_chat_route(connection, settings, conn, crow, event, routes, now=now)
+        if picked is not None:
+            kind, chosen = picked
+            if kind == "listed":
+                return [_decided(routes[0], conn, event_row, f"intake:{event_id}", "filtered",
+                                 "no agent was named: replied with the agents this person may "
+                                 "use", record=False)]
+            routes = [chosen]
+    envelope = event.to_dict()
 
     for candidate in routes:
         cfg = _json(candidate.get("config"), {}) or {}
@@ -368,12 +568,7 @@ def route(connection: Connection, conn: IntakeConnection, event: IntakeEvent,
         extra = {**_base_extra(conn, event_row), "subject": subject.audit(),
                  "route_reason": reason, "thread_key": thread_key}
         if crow.get("chat_endpoint_id"):
-            conv = envelope.get("bossconversation") or {}
-            extra["reply_to"] = {"chat_endpoint_id": crow["chat_endpoint_id"],
-                                 "channel": conv.get("channel") or (event.data or {}).get("channel"),
-                                 "thread_ts": conv.get("thread_ts") or (event.data or {}).get("ts"),
-                                 "conversation_key": conv.get("key"),
-                                 "external_user_id": event.bossactor.external_id}
+            extra["reply_to"] = reply_target(crow, event, target, dep)
         if subject.kind == "none":
             fires.append(_decided(target, conn, event_row, dedupe, "refused",
                                   f"unlinked sender: {subject.reason}"
@@ -511,6 +706,16 @@ def fire_all(connection: Connection, fires: list[Fire], *, actor: str = "intake"
                     policy=f.policy, messages=f.messages)
         except Exception as error:  # noqa: BLE001 — recorded, the event retries
             got = {"outcome": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
+        if got.get("outcome") == "admitted" and got.get("run_id") and f.extra.get("reply_to"):
+            # THE FIRST SIGN OF LIFE (§9.2): "Looking into it…" in the person's thread, sent the
+            # moment this transaction commits — before the agent has even started.
+            try:
+                from . import chat_reply
+
+                with connection.begin_nested():
+                    chat_reply.on_admitted(connection, str(got["run_id"]))
+            except Exception:  # noqa: BLE001 — the run's own reply still answers
+                logger.warning("status for run %s not queued", got.get("run_id"), exc_info=True)
         entry = {"trigger_id": f.trigger_id, "fire_outcome": got.get("outcome"),
                  "run_id": got.get("run_id"), "reason": got.get("reason") or f.reason,
                  "dedupe_key": f.dedupe_key}
@@ -556,6 +761,7 @@ def preview_match(connection: Connection, *, project_id: str, connection_id: str
             "regex_engine": intake_filters.REGEX_ENGINE, "events": events}
 
 
-__all__ = ["ADDRESSING", "FANOUT", "FIRE_OUTCOMES", "Fire", "chat_messages", "dedupe_key_for",
+__all__ = ["ADDRESSING", "FANOUT", "FIRE_OUTCOMES", "Fire", "chat_messages", "choose_chat_route",
+           "dedupe_key_for", "reply_target", "route_names",
            "event_text", "fire_all", "is_chat", "preview_match", "render_thread_key", "route",
            "routes_for", "thread_owned"]

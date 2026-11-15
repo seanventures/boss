@@ -53,6 +53,15 @@ def world(engine) -> IdentityWorld:
     return w
 
 
+@pytest.fixture(autouse=True)
+def unpaced(monkeypatch):
+    """These tests are about decisions, not Slack's per-channel pace (test_intake_slack_db
+    covers the bucket): every row may go at once."""
+    from boss_engine.services import chat_reply
+
+    monkeypatch.setattr(chat_reply.BUCKETS, "wait_for", lambda key, now=None: 0.0)
+
+
 @pytest.fixture
 def client():
     return TestClient(main.app, raise_server_exceptions=False)
@@ -516,3 +525,39 @@ def test_discord_is_a_declared_stub_that_refuses_rather_than_pretends(engine, wo
     r = client.post(f"/v1/webhooks/inbound/chat/{ep['id']}", content=b"{}",
                     headers={"Content-Type": "application/json"})
     assert r.status_code == 401 and r.json()["error"] == "discord_not_implemented"
+
+
+# ---- P9a-3: one Slack app per install (the Events API reaches the intake layer) ------------------
+
+def test_an_events_api_delivery_to_the_endpoint_url_reaches_the_slack_intake_connection(
+        engine, world, client, channel):
+    from boss_engine.services import event_intake
+
+    ep = _endpoint(engine, world.project_a)
+    event = {"type": "app_mention", "user": "U0PRIYA", "channel": "C0DECIDE",
+             "text": "<@U0BOSS> why did the payments job fail?", "ts": f"{time.time():.6f}"}
+    body = json.dumps({"type": "event_callback", "team_id": "T9TK3CUKW",
+                       "event_id": f"Ev{uuid.uuid4().hex[:10].upper()}", "event": event}).encode()
+    # No intake connection on the endpoint yet: the mention is heard and dropped, as before.
+    before = _slack_post(client, ep["id"], body, "application/json")
+    assert before.status_code == 200 and before.json()["status"] == "ignored"
+    with engine.begin() as c:
+        conn = event_intake.create_connection(c, project_id=world.project_a, kind="slack",
+                                              actor="test", name="slack",
+                                              config={"chat_endpoint_id": ep["id"]})
+    try:
+        first = _slack_post(client, ep["id"], body, "application/json")
+        again = _slack_post(client, ep["id"], body, "application/json")
+        assert first.status_code == 200 and first.json()["status"] == "received"
+        assert again.status_code == 200 and again.json()["status"] == "duplicate"
+        forged = _slack_post(client, ep["id"], body, "application/json", secret="wrong")
+        assert forged.status_code == 401
+        with engine.connect() as c:
+            rows = c.execute(text("SELECT verify_scheme, duplicates FROM intake_events "
+                                  "WHERE connection_id = :c"), {"c": conn["id"]}).all()
+        assert len(rows) == 1 and rows[0][0] == "slack_v0" and rows[0][1] == 1
+    finally:
+        with engine.begin() as c:
+            c.execute(text("DELETE FROM intake_events WHERE connection_id = :c"),
+                      {"c": conn["id"]})
+            c.execute(text("DELETE FROM intake_connections WHERE id = :c"), {"c": conn["id"]})

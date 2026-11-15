@@ -238,6 +238,7 @@
   "/v1/environments",
   "/v1/hardware/places",
   "/v1/hardware/resolve",
+  "/v1/host-jobs/lease",
   "/v1/kit",
   "/v1/knowledge/eval",
   "/v1/mcp/servers",

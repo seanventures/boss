@@ -834,29 +834,81 @@ def deliver_chat_due(engine, settings: Any, *, now: Optional[datetime] = None, l
     """Claim due chat messages (a 2-minute lease, SKIP LOCKED) and send each OUTSIDE the claiming
     transaction, one transaction per message: one dead channel blocks nothing else. A failure
     is retried with backoff; after MAX_CHAT_ATTEMPTS the row is `dead` and an event says so.
-    `endpoint_id` sends just that endpoint's (a press's answer, right after its request commits)."""
+    `endpoint_id` sends just that endpoint's (a press's answer, right after its request commits).
+
+    P9a-6 (boss-eventing-lld.md §7.2, §9.4): a run's rows go in `op_seq` order (a row is not
+    claimed while an earlier one of its run is unsent); a per-channel token bucket keeps Slack's
+    ≈1 message/s per channel; the channel's "slow down" (429 + Retry-After) and a row waiting on
+    an earlier one are rescheduled WITHOUT spending an attempt."""
     from ..db import begin
+    from . import chat_reply
+    from .chat_adapters import ChatRateLimited
     from .core import emit_event
 
     now = now or _now()
     if sender is None:
         from .chat_channels import deliver as sender
     with begin(engine) as c:
-        ids_clause = "AND endpoint_id = :ep " if endpoint_id else ""
+        ids_clause = "AND o.endpoint_id = :ep " if endpoint_id else ""
         rows = [dict(r) for r in c.execute(sql(
-            "UPDATE chat_outbox SET next_attempt_at = :lease WHERE id IN (SELECT id FROM "
-            " chat_outbox WHERE status IN ('pending', 'failed') AND next_attempt_at <= :now "
+            "UPDATE chat_outbox SET next_attempt_at = :lease WHERE id IN (SELECT o.id FROM "
+            " chat_outbox o WHERE o.status IN ('pending', 'failed') AND o.next_attempt_at <= :now "
             + ids_clause +
-            " ORDER BY created_at LIMIT :n FOR UPDATE SKIP LOCKED) RETURNING *"),
+            " AND (o.run_id IS NULL OR NOT EXISTS (SELECT 1 FROM chat_outbox e "
+            "      WHERE e.run_id = o.run_id AND e.op_seq < o.op_seq "
+            "        AND e.status IN ('pending', 'failed'))) "
+            " ORDER BY o.created_at, o.op_seq LIMIT :n FOR UPDATE OF o SKIP LOCKED) RETURNING *"),
             {"now": now, "lease": now + timedelta(minutes=2), "n": limit,
              "ep": endpoint_id}).mappings().all()]
-    out = {"sent": 0, "failed": 0, "dead": 0}
+    rows.sort(key=lambda r: (r["created_at"], r.get("op_seq") or 0))
+    out = {"sent": 0, "failed": 0, "dead": 0, "waiting": 0, "rate_limited": 0, "skipped": 0}
+
+    def later(row_id: str, seconds: float, *, word: Optional[str] = None,
+              rate_limited: bool = False) -> None:
+        with begin(engine) as c:
+            c.execute(sql(
+                "UPDATE chat_outbox SET next_attempt_at = :t, "
+                " last_error = COALESCE(:w, last_error), "
+                " rate_limited = rate_limited + :rl WHERE id = :i"),
+                {"t": now + timedelta(seconds=max(0.05, float(seconds))), "w": word,
+                 "rl": 1 if rate_limited else 0, "i": row_id})
+
     for row in rows:
+        payload = _json(row.get("payload"), {}) or {}
+        key = chat_reply.bucket_key(row, payload)
+        if key:
+            wait = chat_reply.BUCKETS.wait_for(key)
+            if wait > 0:
+                later(row["id"], wait)
+                out["waiting"] += 1
+                continue
         with begin(engine) as c:
             try:
                 with c.begin_nested():
                     receipt = sender(c, settings, row)
+            except chat_reply.NotYet as waiting:
+                later(row["id"], waiting.delay)
+                out["waiting"] += 1
+                continue
+            except ChatRateLimited as slow:
+                # NOT A FAILURE: wait what the channel asked, then try again; no attempt spent —
+                # up to MAX_RATE_LIMITED times, then it counts as a failed attempt below.
+                seconds = float(slow.retry_after or 1.0)
+                blocked = chat_reply.channel_of(row, payload)
+                if blocked:
+                    chat_reply.BUCKETS.block(blocked, seconds)
+                if int(row.get("rate_limited") or 0) + 1 < chat_reply.MAX_RATE_LIMITED:
+                    later(row["id"], seconds, word=f"rate limited: retry after {seconds:g} s",
+                          rate_limited=True)
+                    out["rate_limited"] += 1
+                    continue
+                exc_for_failure: Exception = slow
             except Exception as exc:  # noqa: BLE001 — a dead channel is a receipt, not a crash
+                exc_for_failure = exc
+            else:
+                exc_for_failure = None
+            if exc_for_failure is not None:
+                exc = exc_for_failure
                 attempts = int(row["attempts"]) + 1
                 dead = attempts >= MAX_CHAT_ATTEMPTS
                 word = f"{type(exc).__name__}: {exc}"[:300]
@@ -879,7 +931,10 @@ def deliver_chat_due(engine, settings: Any, *, now: Optional[datetime] = None, l
                 "UPDATE chat_outbox SET status = 'sent', sent_at = :now, attempts = attempts + 1, "
                 " receipt = CAST(:r AS JSONB), last_error = NULL WHERE id = :i"),
                 {"now": now, "r": json.dumps(receipt or {}, default=str), "i": row["id"]})
-            out["sent"] += 1
+            if isinstance(receipt, dict) and receipt.get("skipped") is not None:
+                out["skipped"] += 1
+            else:
+                out["sent"] += 1
     return out
 
 

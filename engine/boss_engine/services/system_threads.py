@@ -165,6 +165,31 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
         _log.warning("event intake processor not started", exc_info=True)
         started["intake_processor"] = False
     try:
+        # The chat reply outbox (P9a-6, BOSSAPP-1098): woken by NOTIFY at commit, so a reply goes
+        # out milliseconds after an agent writes it; every API process runs one (SKIP LOCKED).
+        from . import chat_reply
+
+        if getattr(settings, "chat_outbox_sender_enabled", True):
+            chat_reply.start(engine, settings)
+            started["chat_outbox_sender"] = True
+        else:
+            started["chat_outbox_sender"] = False
+    except Exception:  # noqa: BLE001
+        _log.warning("chat outbox sender not started", exc_info=True)
+        started["chat_outbox_sender"] = False
+    try:
+        # Slack Socket Mode (P9a-3): one leased consumer per socket connection, install-wide.
+        from ..connectors.intake.slack import socket_mode
+
+        if getattr(settings, "intake_processor_enabled", True):
+            socket_mode.start(engine, settings)
+            started["slack_socket_mode"] = True
+        else:
+            started["slack_socket_mode"] = False
+    except Exception:  # noqa: BLE001
+        _log.warning("slack socket mode not started", exc_info=True)
+        started["slack_socket_mode"] = False
+    try:
         # The reflection agent's schedule (BOSSAPP-888): paused by default — a tick does work
         # only for a project that turned reflection on, and it only ever proposes.
         from . import reflection

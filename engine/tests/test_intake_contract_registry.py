@@ -33,11 +33,26 @@ GITHUB_MANIFEST = yaml.safe_load((ROOT / "github" / "manifest.yaml").read_text()
 
 def test_every_shipped_folder_loads_and_is_registered():
     folders = {p.name for p in ROOT.iterdir() if (p / "manifest.yaml").is_file()}
-    assert folders == {"webhook", "github"} <= set(REGISTRY.adapters)
+    assert folders == {"webhook", "github", "slack"} <= set(REGISTRY.adapters)
     for key in folders:
         adapter = get_intake_adapter(key)
         assert isinstance(adapter, IntakeAdapterBase) and adapter.key == key
         assert adapter.manifest.key == key and adapter.intake_capabilities == adapter.manifest.capabilities
+
+
+def test_the_slack_manifest_rides_on_the_chat_endpoint_and_acks_within_3_s():
+    slack = get_intake_adapter("slack").manifest
+    assert slack.modes == ("push", "socket") and slack.dedupe == ("id",)
+    assert slack.ack["deadline_ms"] == 3000 and slack.ack["success_status"] == 200
+    assert slack.ack["retry_signal_headers"] == ["x-slack-retry-num", "x-slack-retry-reason"]
+    fields = {f["name"]: f for f in slack.auth_fields}
+    assert fields["chat_endpoint_id"].get("required", True) is True
+    assert all(fields[n]["secret"] and fields[n]["required"] is False
+               for n in ("signing_secret", "bot_token", "app_token"))
+    assert slack.capabilities["reply"] and slack.capabilities["stream_reply"]
+    assert set(slack.event_types) == {"com.slack.message.app_mention", "com.slack.message.im",
+                                      "com.slack.message.channel",
+                                      "com.slack.message.thread_reply"}
 
 
 def test_unknown_source_is_a_clear_error():

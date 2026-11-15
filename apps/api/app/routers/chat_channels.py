@@ -243,6 +243,30 @@ def _receive(endpoint_id: str, headers: dict[str, str], raw: bytes) -> dict:
     return result
 
 
+def _forward_event(endpoint_id: str, headers: dict[str, str], raw: bytes):
+    """ONE SLACK APP PER INSTALL (P9a-3, §15 D1): an Events API delivery (a JSON
+    `event_callback`) to an endpoint that has a Slack intake connection goes to the intake front
+    door — verified there with the same signing secret, stored once, answered 200 within Slack's
+    3 s. None when this request is not one (an interaction, a handshake, no connection)."""
+    if not headers.get("content-type", "").startswith("application/json") \
+            or b'"event_callback"' not in raw:
+        return None
+    from boss_engine.connectors.intake.contract import RawRequest
+    from boss_engine.services import event_intake
+
+    engine = get_engine()
+    with begin(engine) as connection:
+        endpoint = chat.get_endpoint(connection, endpoint_id)
+        if endpoint is None or endpoint["kind"] != "slack" or endpoint["status"] != "active":
+            return None
+        bound = chat.bound_intake_connection(connection, endpoint_id)
+    if bound is None:
+        return None
+    request = RawRequest(method="POST", headers=headers, body=raw)
+    return event_intake.receive(engine, "slack", str(bound["path_token"]), request,
+                                settings=_settings())
+
+
 def _send_queued(endpoint_id: str) -> None:
     from boss_engine.services.notify import deliver_chat_due
 
@@ -261,6 +285,10 @@ async def receive_chat(endpoint_id: str, request: Request):
     if too_large:
         return JSONResponse(status_code=413, content={"error": "too_large"})
     headers = {key.lower(): value for key, value in request.headers.items()}
+    forwarded = await run_in_threadpool(_forward_event, endpoint_id, headers, raw)
+    if forwarded is not None:
+        return JSONResponse(status_code=int(forwarded["http_status"]),
+                            content=forwarded.get("body") or {"status": forwarded.get("outcome")})
     result = await run_in_threadpool(_receive, endpoint_id, headers, raw)
     status = result.get("status")
     # What the press queued (the card update, the presser's answer, a link DM) is sent AFTER the

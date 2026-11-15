@@ -44,6 +44,8 @@ SLACK_ACTION_PREFIX = "boss_decide_"
 SLACK_NOTE_CALLBACK = "boss_decide_note"
 SLACK_NOTE_BLOCK = "note"
 SLACK_NOTE_INPUT = "note_input"
+#: The metadata event type on every message BOSS posts to Slack (loop prevention, layer 2).
+SLACK_MARKER = "boss_run"
 
 
 class ChatVerifyRefused(Exception):
@@ -58,6 +60,16 @@ class ChatSendFailed(RuntimeError):
     """The channel refused or could not be reached. The message never includes a secret."""
 
 
+class ChatRateLimited(ChatSendFailed):
+    """The channel said slow down (HTTP 429 / `ratelimited`). Not a failure: the outbox waits
+    `retry_after` seconds (the channel's Retry-After) and tries again without spending an
+    attempt (boss-eventing-lld.md §7.2)."""
+
+    def __init__(self, message: str, retry_after: Optional[float] = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 def _default_transport(method: str, url: str, headers: Mapping[str, str],
                        body: Optional[bytes], purpose: str) -> tuple[int, Any]:
     from ..identity.http import fetch
@@ -67,6 +79,12 @@ def _default_transport(method: str, url: str, headers: Mapping[str, str],
         data = resp.json()
     except ValueError:
         data = None
+    if resp.status == 429:
+        # The one header a sender needs is carried in the answer (the transport's shape is
+        # (status, data), which every test fake implements).
+        retry = {str(k).lower(): v for k, v in (resp.headers or {}).items()}.get("retry-after")
+        data = {**(data if isinstance(data, dict) else {}), "ok": False,
+                "error": "ratelimited", "retry_after": retry}
     return resp.status, data
 
 
@@ -241,36 +259,101 @@ class SlackChat:
             {"Content-Type": "application/json; charset=utf-8",
              "Authorization": f"Bearer {bot_token}"},
             json.dumps(body).encode(), "chat.slack")
+        if status == 429 or (isinstance(data, dict) and data.get("error") == "ratelimited"):
+            retry = (data or {}).get("retry_after") if isinstance(data, dict) else None
+            try:
+                seconds = float(retry) if retry not in (None, "") else None
+            except (TypeError, ValueError):
+                seconds = None
+            raise ChatRateLimited(f"Slack rate-limited {method}", retry_after=seconds)
         if status >= 300 or not isinstance(data, dict):
             raise ChatSendFailed(f"Slack answered {status} to {method}")
         if not data.get("ok"):
             raise ChatSendFailed(f"Slack refused {method}: {data.get('error') or 'unknown'}")
         return data
 
+    @staticmethod
+    def _marker(item: Mapping[str, Any]) -> dict[str, Any]:
+        """LOOP PREVENTION, LAYER 2 (boss-eventing-lld.md §7.1): every message BOSS posts says it
+        is BOSS's — the run, the deployment, the hop count and the endpoint — so its echo in the
+        Events API is recognised as ours and never wakes an agent."""
+        meta = item.get("metadata")
+        if isinstance(meta, dict) and meta.get("event_type"):
+            return dict(meta)
+        payload = {k: v for k, v in {"endpoint_id": item.get("endpoint_id"),
+                                     "run_id": item.get("run_id"),
+                                     "deployment_id": item.get("deployment_id"),
+                                     "hops": item.get("hops")}.items() if v not in (None, "")}
+        return {"event_type": SLACK_MARKER, "event_payload": payload}
+
     def send(self, bot_token: str, item: Mapping[str, Any]) -> dict[str, Any]:
         kind = item.get("op")
         if kind == "post":
-            body = {"channel": item["channel"], **item["message"]}
+            body = {"channel": item["channel"], **item["message"],
+                    "metadata": self._marker(item)}
             if item.get("thread"):
                 body["thread_ts"] = item["thread"]
             data = self._call(bot_token, "chat.postMessage", body)
-            return {"channel": data.get("channel") or item["channel"], "thread": data.get("ts")}
+            return {"channel": data.get("channel") or item["channel"], "thread": data.get("ts"),
+                    "ts": data.get("ts"),
+                    "bot_id": (data.get("message") or {}).get("bot_id")
+                    if isinstance(data.get("message"), dict) else None}
         if kind == "update":
             data = self._call(bot_token, "chat.update",
                               {"channel": item["channel"], "ts": item["thread"],
-                               **item["message"]})
-            return {"channel": item["channel"], "thread": data.get("ts") or item["thread"]}
+                               **item["message"], "metadata": self._marker(item)})
+            return {"channel": item["channel"], "thread": data.get("ts") or item["thread"],
+                    "ts": data.get("ts") or item["thread"]}
         if kind == "ephemeral":
-            self._call(bot_token, "chat.postEphemeral",
-                       {"channel": item["channel"], "user": item["user"], "text": item["text"]})
+            body = {"channel": item["channel"], "user": item["user"], "text": item["text"]}
+            if item.get("thread"):
+                body["thread_ts"] = item["thread"]
+            self._call(bot_token, "chat.postEphemeral", body)
             return {"channel": item["channel"]}
         if kind == "dm":
             opened = self._call(bot_token, "conversations.open", {"users": item["user"]})
             channel = ((opened.get("channel") or {}).get("id")) or ""
             if not channel:
                 raise ChatSendFailed("Slack opened no direct message channel")
-            self._call(bot_token, "chat.postMessage", {"channel": channel, "text": item["text"]})
-            return {"channel": channel}
+            data = self._call(bot_token, "chat.postMessage",
+                              {"channel": channel, "text": item["text"],
+                               "metadata": self._marker(item)})
+            return {"channel": channel, "ts": data.get("ts")}
+        if kind == "react":
+            try:
+                self._call(bot_token, "reactions.add",
+                           {"channel": item["channel"], "timestamp": item["ts"],
+                            "name": str(item["emoji"]).strip(":")})
+            except ChatRateLimited:
+                raise
+            except ChatSendFailed as refused:
+                if "already_reacted" not in str(refused):
+                    raise
+            return {"channel": item["channel"], "ts": item["ts"]}
+        if kind == "set_status":
+            # The assistant-thread status line (clears on the next reply or after 2 minutes).
+            self._call(bot_token, "assistant.threads.setStatus",
+                       {"channel_id": item["channel"], "thread_ts": item["thread"],
+                        "status": str(item.get("text") or "")[:100]})
+            return {"channel": item["channel"], "thread": item["thread"]}
+        if kind == "stream_start":
+            body = {"channel": item["channel"], "thread_ts": item["thread"]}
+            for key in ("recipient_user_id", "recipient_team_id"):
+                if item.get(key):
+                    body[key] = item[key]
+            if item.get("text"):
+                body["markdown_text"] = str(item["text"])[:12000]
+            data = self._call(bot_token, "chat.startStream", body)
+            return {"channel": item["channel"], "ts": data.get("ts"), "thread": item["thread"]}
+        if kind in ("stream_append", "stream_stop"):
+            body = {"channel": item["channel"], "ts": item["ts"]}
+            if item.get("text"):
+                body["markdown_text"] = str(item["text"])[:12000]
+            if kind == "stream_stop":
+                body["metadata"] = self._marker(item)
+            data = self._call(bot_token, "chat.appendStream" if kind == "stream_append"
+                              else "chat.stopStream", body)
+            return {"channel": item["channel"], "ts": data.get("ts") or item["ts"]}
         raise ChatSendFailed(f"unknown Slack outbox op {kind!r}")
 
     def open_note_form(self, bot_token: str, trigger: str, *, token: str, action: str,
@@ -431,6 +514,6 @@ def adapter_for(kind: str) -> Any:
         raise ValueError(f"unknown chat kind {kind!r}") from None
 
 
-__all__ = ["ADAPTERS", "ChatInbound", "ChatSendFailed", "ChatVerifyRefused", "DecisionCard",
+__all__ = ["ADAPTERS", "ChatInbound", "ChatRateLimited", "ChatSendFailed", "SLACK_MARKER", "ChatVerifyRefused", "DecisionCard",
            "DiscordChat", "SlackChat", "TelegramChat", "TRANSPORT", "adapter_for",
            "slack_signature"]

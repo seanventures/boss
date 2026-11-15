@@ -166,6 +166,23 @@ def normalise_config(kind: str, config: Optional[Mapping[str, Any]]) -> dict:
         for key in ("thread_key", "goal"):
             if key in cfg and cfg[key] is not None and not isinstance(cfg[key], str):
                 raise TriggerError(f"{key} must be text.")
+        # P9a-3/6 (chat): which agent (channel bindings, the names a person may use) and how it
+        # answers (the status line, streaming behind a flag, auto or tool-only final reply).
+        for key in ("channels", "aliases"):
+            value = cfg.get(key)
+            if value is not None and not (isinstance(value, list) and len(value) <= 100
+                                          and all(isinstance(v, str) and 0 < len(v) <= 80
+                                                  for v in value)):
+                raise TriggerError(f"{key} is a list of names (at most 100).")
+        if cfg.get("status_text") is not None and (not isinstance(cfg["status_text"], str)
+                                                   or len(cfg["status_text"]) > 200):
+            raise TriggerError("status_text is text of at most 200 characters.")
+        for key in ("status", "stream"):
+            if key in cfg and not isinstance(cfg[key], bool):
+                raise TriggerError(f"{key} is true or false.")
+        if cfg.get("reply") is not None and cfg["reply"] not in ("auto", "tool"):
+            raise TriggerError("reply is auto (the run's answer is posted when it ends) or tool "
+                               "(only what the agent sends with chat_reply).")
     return cfg
 
 

@@ -403,7 +403,7 @@ def revoke_link(connection, principal_id: str, link_id: str) -> bool:
 
 
 # --------------------------------------------------------------------------------------------- #
-# Threads
+# Threads (a decision card's message; P9a-3: a conversation's thread, see chat_reply)
 # --------------------------------------------------------------------------------------------- #
 def bind_thread(connection, endpoint: Mapping[str, Any], *, channel: str, thread: str,
                 decision_id: Optional[str] = None, run_id: Optional[str] = None,
@@ -565,19 +565,44 @@ def deliver(connection, settings: Any, row: Mapping[str, Any]) -> dict[str, Any]
         raise NotConfigured("The chat endpoint was removed or disabled")
     adapter = adapter_for(endpoint["kind"])
     payload = dict(_json(row.get("payload"), {}))
+    # Every message BOSS posts names the endpoint it came from (Slack metadata `boss_run`), so
+    # its echo is recognised as ours (loop prevention, layer 2).
+    payload.setdefault("endpoint_id", endpoint["id"])
+    if row.get("run_id"):
+        # A conversational run's row (P9a-6): what it edits is resolved now, from receipts.
+        from . import chat_reply
+
+        prepared = chat_reply.prepare(connection, row, payload)
+        if prepared is not None and "skip" in prepared:
+            return {"skipped": prepared["skip"]}
+        payload = prepared or payload
     if row["kind"] == "decision_card":
         decision = _decision(connection, payload["decision_id"])
         if decision is None or not _open(decision):
             return {"skipped": "the decision was answered before its card was sent"}
         card = build_card(connection, settings, endpoint, decision)
         payload["message"] = adapter.render_decision(card)
+    # The bot token is read from the secret store HERE, for this one call, and never leaves it.
     token = endpoint_secret(connection, settings, endpoint, "bot_token") \
         if "bot_token" in adapter.secret_names else ""
     receipt = adapter.send(token, payload)
     if row["kind"] == "decision_card":
         bind_thread(connection, endpoint, channel=str(receipt.get("channel") or ""),
                     thread=str(receipt.get("thread") or ""), decision_id=payload["decision_id"])
+    if row.get("run_id"):
+        from . import chat_reply
+
+        chat_reply.after_send(connection, row, payload, receipt or {})
     return receipt
+
+
+def bound_intake_connection(connection, endpoint_id: str) -> Optional[dict]:
+    """The intake connection riding on this chat endpoint (one Slack app per install, §15 D1):
+    the Events API traffic of the endpoint's URL goes to it."""
+    row = connection.execute(sql(
+        "SELECT * FROM intake_connections WHERE chat_endpoint_id = :e AND mode = 'push' "
+        "ORDER BY created_at LIMIT 1"), {"e": endpoint_id}).mappings().first()
+    return dict(row) if row else None
 
 
 def _queue(connection, endpoint: Mapping[str, Any], kind: str, payload: dict,
@@ -849,7 +874,7 @@ def open_note_form(connection, settings: Any, endpoint: Mapping[str, Any],
 
 
 __all__ = ["ACTION_TTL", "ChatRefused", "ChatVerifyRefused", "ChatSendFailed", "KINDS",
-           "bind_thread", "build_card", "confirm_link", "create_endpoint", "decide_as_person",
+           "bind_thread", "bound_intake_connection", "build_card", "confirm_link", "create_endpoint", "decide_as_person",
            "deliver", "endpoint_urls", "find_link", "get_endpoint", "handle_inbound",
            "link_url", "links_of", "list_endpoints", "mint_action", "on_decision_created",
            "open_note_form", "peek_link", "read_action", "revoke_link", "set_endpoint_status",

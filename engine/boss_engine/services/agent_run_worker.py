@@ -50,8 +50,11 @@ class Lease:
         self.jobs, self.worker_id, self.job_id, self.lease_token = (jobs, worker_id, job_id,
                                                                     lease_token)
 
-    def fence(self, connection: Any) -> None:
-        self.jobs.require_active_lease(connection, self.worker_id, self.job_id, self.lease_token)
+    def fence(self, connection: Any) -> dict:
+        """Raises LeaseNotFoundError when another worker holds the job; else the job row (its
+        `fence_epoch` is this execution's epoch — the reply outbox fences on it)."""
+        return self.jobs.require_active_lease(connection, self.worker_id, self.job_id,
+                                              self.lease_token)
 
 
 def execute(engine: Any, settings: Any, *, kind: str, job_id: str, run_id: str, worker_id: str,
@@ -346,6 +349,14 @@ def _settled_hooks(connection: Any, run_id: str) -> None:
             agent_triggers.on_run_settled(connection, run_id)
     except Exception:  # noqa: BLE001 — bookkeeping never fails the run's settlement
         log.debug("trigger bookkeeping for %s failed", run_id, exc_info=True)
+    try:
+        # P9a-6: a conversation's run that never sent a final reply answers with its own text.
+        from . import chat_reply
+
+        with connection.begin_nested():
+            chat_reply.on_run_settled(connection, run_id)
+    except Exception:  # noqa: BLE001 — the run's settlement stands; the console has the answer
+        log.warning("chat reply for settled run %s not queued", run_id, exc_info=True)
 
 
 __all__ = ["AgentRunRow", "KINDS", "Lease", "RUNNERS", "drive_options", "execute",
