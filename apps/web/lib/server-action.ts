@@ -32,6 +32,13 @@ export async function act(
     // a failure of the action.
     const identity = error instanceof ApiRefusal ? error.identity : identityOfThrown(error);
     if (identity) return failResult(identitySentence(identity), { data: { identity } });
+    // NEEDS YOUR CONSENT IS A QUESTION, NOT A FAILURE (BOSSAPP-1163). A 409 consent_required from
+    // any action — Request changes on a merge decision starts a follow-up build the person's
+    // grants may not cover — travels back as `data.consent`, and ActionForm opens the consent
+    // sheet and sends the same submit once more. Described as a failure it read "Reload to see
+    // its current state before trying again" over a dead end.
+    const consent = consentOfThrown(error);
+    if (consent) return failResult("Needs your consent", { data: { consent } });
     // A REFUSAL THAT SAYS WHO TO ASK AND WHERE (e.g. seat_required: the seat's holders and
     // Identity › Approval seats) is shown as written, with its link — never followed by the
     // generic "ask an Admin", which sent people to the wrong person.
@@ -74,16 +81,37 @@ function identityOfThrown(error: unknown): IdentityRefusalInfo | null {
   return typeof e.status === "number" ? identityRefusal(e.status, e.body) : null;
 }
 
+/**
+ * The consent request a thrown 409 carries (the typed client's BossApiError, an ApiRefusal from
+ * apiFetch: both keep `status` and the parsed `body`), flat or under FastAPI's `detail`; null
+ * for anything else. The shape is lib/identity/consent.ts consentFromBody's input.
+ */
+export function consentOfThrown(error: unknown): Record<string, unknown> | null {
+  if (!error || typeof error !== "object") return null;
+  const e = error as { status?: unknown; body?: unknown };
+  if (e.status !== 409 || !e.body || typeof e.body !== "object") return null;
+  const body = e.body as Record<string, unknown>;
+  if (body.error === "consent_required") return body;
+  const inner = body.detail;
+  if (inner && typeof inner === "object" && (inner as Record<string, unknown>).error === "consent_required") {
+    return inner as Record<string, unknown>;
+  }
+  return null;
+}
+
 /** An HTTP refusal, carrying the status so the failure can say what to do about it. */
 export class ApiRefusal extends Error {
   status: number;
   /** Set when the API refused for identity (401 step_up_required, 403 forbidden + permission). */
   identity: IdentityRefusalInfo | null;
-  constructor(message: string, status: number, identity: IdentityRefusalInfo | null = null) {
+  /** The parsed refusal body, when there was one (a 409 consent_required's request lives here). */
+  body: unknown;
+  constructor(message: string, status: number, identity: IdentityRefusalInfo | null = null, body: unknown = null) {
     super(message);
     this.name = "ApiRefusal";
     this.status = status;
     this.identity = identity;
+    this.body = body;
   }
 }
 
@@ -91,10 +119,12 @@ export class ApiRefusal extends Error {
 export async function refusalFrom(response: Response): Promise<ApiRefusal> {
   let said = "";
   let identity: IdentityRefusalInfo | null = null;
+  let parsed: unknown = null;
   try {
     const raw = await response.text();
     try {
       const body = JSON.parse(raw) as { detail?: unknown; error?: unknown; message?: unknown };
+      parsed = body;
       identity = identityRefusal(response.status, body);
       const detail = body.detail ?? body.error ?? body.message;
       if (typeof detail === "string") said = detail;
@@ -110,9 +140,9 @@ export async function refusalFrom(response: Response): Promise<ApiRefusal> {
   } catch {
     /* an unreadable body still has a status */
   }
-  if (identity) return new ApiRefusal(identitySentence(identity), response.status, identity);
+  if (identity) return new ApiRefusal(identitySentence(identity), response.status, identity, parsed);
   return new ApiRefusal(said || `BOSS's API refused the request (HTTP ${response.status})`,
-                        response.status);
+                        response.status, null, parsed);
 }
 
 /**

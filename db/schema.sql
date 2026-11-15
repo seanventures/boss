@@ -15145,3 +15145,39 @@ CREATE INDEX IF NOT EXISTS idx_model_gateway_handles_run ON model_gateway_handle
 -- within one request, §3.8 step 2); jobs are found by the run id in their payload.
 CREATE INDEX IF NOT EXISTS idx_jobs_payload_run_id ON jobs ((payload->>'run_id'));
 -- ================================ end P8b ==
+
+-- ================================ BOSSAPP-1163: standing grants cover the project's local repos ==
+-- A grant now names the repositories BOSS keeps ON THIS MACHINE as `resources.local.repos`
+-- (identity/grants.py). Standing grants made before that named none, so a schedule on a
+-- local-first project stopped at its next fire (consent.require_for_workflow: AuthorityLost
+-- `grant_no_longer_covers`). Each live standing grant (never a task grant, never the Captain
+-- authority, which keeps its own repositories) gains its OWN projects' registered local
+-- repositories, nothing else. Idempotent: a grant already naming them all is not touched.
+-- In a DO block: the grants table's statement trigger bumps the permission epoch, so the
+-- UPDATE runs only when some grant still misses a repository (not on every deploy).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM identity_delegation_grants g JOIN github_repository_bindings b
+                ON b.project_id = ANY(g.project_ids) AND b.host = 'local'
+               AND COALESCE(b.status, 'active') = 'active'
+               AND split_part(b.full_name, '/', 1) = 'local_' || b.project_id
+             WHERE g.status = 'active' AND g.task_run_id IS NULL AND COALESCE(g.authority_kind, '') <> 'captain'
+               AND NOT (COALESCE(g.resources->'local'->'repos', '[]'::jsonb) ? b.full_name)) THEN
+    UPDATE identity_delegation_grants g
+       SET resources = jsonb_set(COALESCE(g.resources, '{}'::jsonb), '{local}', jsonb_build_object('repos', (
+             SELECT jsonb_agg(DISTINCT u.r ORDER BY u.r) FROM (
+               SELECT jsonb_array_elements_text(COALESCE(g.resources->'local'->'repos', '[]'::jsonb)) AS r
+               UNION
+               SELECT b.full_name FROM github_repository_bindings b
+                WHERE b.project_id = ANY(g.project_ids) AND b.host = 'local'
+                  AND COALESCE(b.status, 'active') = 'active'
+                  AND split_part(b.full_name, '/', 1) = 'local_' || b.project_id) u)))
+     WHERE g.status = 'active' AND g.task_run_id IS NULL AND COALESCE(g.authority_kind, '') <> 'captain'
+       AND EXISTS (SELECT 1 FROM github_repository_bindings b
+                    WHERE b.project_id = ANY(g.project_ids) AND b.host = 'local'
+                      AND COALESCE(b.status, 'active') = 'active'
+                      AND split_part(b.full_name, '/', 1) = 'local_' || b.project_id
+                      AND NOT (COALESCE(g.resources->'local'->'repos', '[]'::jsonb) ? b.full_name));
+  END IF;
+END $$;
+-- ================================ end BOSSAPP-1163 ==

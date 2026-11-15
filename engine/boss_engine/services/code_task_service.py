@@ -2955,11 +2955,20 @@ def _parent_workflow_run(connection, parent_run_id: str) -> Optional[str]:
 
 
 def _consent_repos(owner: Optional[str], repo: Optional[str], repo_host: Optional[str]) -> list[str]:
-    """The GitHub repositories a build's grant must cover: `owner/repo` when the build names one on
-    GitHub, else none. A build with no repository asked for consent on a repo called "/" (round 3
-    upgrade walk), which no grant can ever cover, so the start answered 409 for good."""
+    """The repositories a build's grant must cover: `owner/repo` when the build names one on GitHub
+    or ON THIS MACHINE (a local repository, `local_<project>/<name>`: granted as `resources.local`,
+    BOSSAPP-1163 — whether the spec says `repo_host: local` or the owner says it), else none. A
+    build with no repository asked for consent on a repo called "/" (round 3 upgrade walk), which
+    no grant can ever cover, so the start answered 409 for good."""
+    from .local_repo import is_local_owner
+
     owner, repo = str(owner or "").strip().strip("/"), str(repo or "").strip().strip("/")
-    if (repo_host or "github") != "github" or not owner or not repo:
+    if not owner or not repo:
+        return []
+    host = (repo_host or "github").strip().lower()
+    if host == "local" or is_local_owner(owner):
+        return [f"{owner}/{repo}"]
+    if host != "github":
         return []
     return [f"{owner}/{repo}"]
 

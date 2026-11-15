@@ -21,6 +21,7 @@ import {
 } from './actions';
 
 import { callAction } from "../lib/call-action";
+import { askConsent, consentFromBody } from "../lib/identity/consent";
 import type { Permission } from "../lib/identity/permissions.gen";
 import { useCan } from "../components/identity/identity-provider";
 import { FormPermission } from "../components/identity/form-permission";
@@ -193,7 +194,13 @@ export function ActionForm({
         return { ok: false, error: describeActionError(err) };
       }
     };
-    const outcome = await submit();
+    let outcome = await submit();
+    // NEEDS YOUR CONSENT IS A QUESTION, NOT A FAILURE (BOSSAPP-1163). The action answers a 409
+    // consent_required as `{ok: false, data: {consent}}` (lib/server-action.ts act): the consent
+    // sheet opens here, with the exact agents and repositories the API named, and once the
+    // person grants, the same submit is sent once more. Cancelled, the refusal stands as written.
+    const asked = !outcome.ok ? consentFromBody(outcome.data?.consent) : null;
+    if (asked && await askConsent(asked)) outcome = await submit();
     setResult(outcome);
     onResult?.(outcome);
     if (outcome.ok) {

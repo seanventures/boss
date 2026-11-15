@@ -4176,6 +4176,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         dec_mod = services_module("decisions")
         svc = dec_mod.DecisionService(ctx.settings)
         from ..identity.approvals import ApprovalPending, ApprovalRefused
+        from ..identity.consent import ConsentRequired
 
         try:
             with ctx.begin() as c:
@@ -4197,6 +4198,14 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                     return {"ok": True, "action": action, "actor": who, **pending.body()}
         except ApprovalRefused as refused:
             return {"ok": False, "status": refused.code, **refused.body()}
+        except ConsentRequired:
+            # NEEDS YOUR CONSENT IS A QUESTION, NOT A FAILURE (BOSSAPP-1163). Request changes on a
+            # merge decision starts a follow-up build, and that asks for the person's grant. Caught
+            # as data here it read "ConsentRequired: consent_required": the registry never made its
+            # consent result, the console's press got no 409 and no sheet, the dock spent the offer
+            # and started a repair turn, and the button was gone on the next visit. Raised, the
+            # registry answers consent_result and the press opens the consent sheet.
+            raise
         except Exception as exc:  # surface engine errors as data, never a stack trace
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         return {"ok": True, "action": action, "actor": who, "decision": _json_safe(dict(row))}

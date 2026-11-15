@@ -16,7 +16,7 @@
  * "Remember for <app>" picks the standing grant; unticked, the grant ends with the run.
  */
 import React, { useEffect, useState } from "react";
-import { FileCode, GithubLogo, LockKey, ShieldCheck } from "@phosphor-icons/react";
+import { FileCode, GithubLogo, Laptop, LockKey, ShieldCheck } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../../app/agent-avatar";
 import { idPost, refusalSentence } from "../../lib/identity/api";
@@ -95,6 +95,8 @@ function PlainConsentSheet({ request, onClose }: { request: ConsentRequest; onCl
         {known.map((p) => <Perm key={p} p={p} sm />)}
         {other.map((p) => <Perm key={p} p={p} sm />)}
         {request.github ? <span className="idn-chip"><GithubLogo size={13} aria-hidden /> {request.github.repos.join(", ") || request.github.repo}, {request.github.summary}</span> : null}
+        {/* A repository BOSS keeps on this machine (a local-first project): named, not GitHub. */}
+        {request.local ? <span className="idn-chip" data-testid="consent-local"><Laptop size={13} aria-hidden /> {request.local.repos.join(", ") || request.local.repo}, {request.local.summary}</span> : null}
       </div>
       <div className="idn-opts" data-testid="consent-durations">
         {durations.map((d, i) => (
