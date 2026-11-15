@@ -1,0 +1,30 @@
+key: webhook
+label: Generic webhook
+icon: webhook
+description: Any system that can POST signed JSON to a URL. Standard Webhooks (webhook-id / webhook-timestamp / webhook-signature) and the BOSS v1 scheme (X-BOSS-Signature v1= over "<timestamp>.<body>") are both accepted; CloudEvents bodies are carried through.
+docs_url: https://www.standardwebhooks.com/
+adapter: WebhookIntakeAdapter
+order: 90
+modes: [push]
+capabilities:
+  verify: true
+  handshake: true
+  parse: true
+  poll: false
+  subscribe: false
+  stream: false
+  reply: false
+  stream_reply: false
+  identity: false
+  conversation: true
+  health: false
+ack:
+  deadline_ms: 10000
+  success_status: 202
+  retry_signal_headers: []
+dedupe: [delivery_id, body_sha256]
+auth_fields:
+  - {name: signing_secret, label: Signing secret (whsec_…), secret: true, help: Minted by BOSS and shown once; paste it into the sender.}
+  - {name: allowed_origins, label: Allowed origins, required: false, help: CloudEvents abuse-protection handshake answers only these origins (comma-separated); empty means any.}
+default_hosts: []
+event_types: [com.boss.webhook.received]

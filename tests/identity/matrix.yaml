@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2236 operations.
+# 2252 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -1185,6 +1185,22 @@
 "POST /v1/instance/admins": ["permit instance:manage @ org", "OA"]
 "DELETE /v1/instance/admins/{principal_id}": ["permit instance:manage @ org", "OA"]
 "GET /v1/instance/backups": ["permit instance:read @ org", "OA"]
+"GET /v1/intake/catalog": ["permit integration:read @ org", "OAPVU"]
+"GET /v1/intake/connections": ["permit integration:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/intake/connections": ["permit integration:manage @ project(body=project_id)", "OA"]
+"DELETE /v1/intake/connections/{connection_id}": ["permit integration:manage @ intake_connection(path=connection_id)", "OA"]
+"GET /v1/intake/connections/{connection_id}": ["permit integration:read @ intake_connection(path=connection_id)", "OAPVU"]
+"PATCH /v1/intake/connections/{connection_id}": ["permit integration:manage @ intake_connection(path=connection_id)", "OA"]
+"POST /v1/intake/connections/{connection_id}/pause": ["permit integration:manage @ intake_connection(path=connection_id)", "OA"]
+"POST /v1/intake/connections/{connection_id}/resume": ["permit integration:manage @ intake_connection(path=connection_id)", "OA"]
+"POST /v1/intake/connections/{connection_id}/rotate-secret": ["permit integration:manage @ intake_connection(path=connection_id)", "OA"]
+"POST /v1/intake/connections/{connection_id}/test": ["permit integration:manage @ intake_connection(path=connection_id)", "OA"]
+"GET /v1/intake/dead-letters": ["permit integration:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/intake/events": ["permit integration:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/intake/events/replay": ["permit integration:manage @ project(body=project_id)", "OA"]
+"GET /v1/intake/events/{intake_event_id}": ["permit integration:read @ intake_event(path=intake_event_id)", "OAPVU"]
+"OPTIONS /v1/intake/{kind}/{connection}": ["public:hmac_signed_webhook", "OAPVU"]
+"POST /v1/intake/{kind}/{connection}": ["public:hmac_signed_webhook", "OAPVU"]
 "GET /v1/integration-registry/connections": ["permit integration:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/integration-registry/connections": ["permit integration:manage @ project(body=project_id)", "OA"]
 "PATCH /v1/integration-registry/connections/{connection_id}": ["permit integration:manage @ project(body=project_id)", "OA"]
