@@ -22,6 +22,12 @@ envelope (services/intake_router): booleans `all` / `any` / `not`, and leaves of
                                                service a filter author may not mean).
   changed                                      record sources: `value` (a field name, or a list)
                                                is in `data.changed_fields`
+  glob                                         a path glob (or a list of them) over a path, or
+                                               over a list of paths / {filename} objects (any
+                                               one matches): `*` and `?` stay inside one path
+                                               segment, `**` spans segments, `[abc]` a class.
+                                               {"field": "data.changed_files", "op": "glob",
+                                                "value": "tenants/*.yaml"}
 
 Fields are dotted envelope paths: `type`, `source`, `subject`, `data.*`, `bossactor.kind`,
 `bossactor.email_domain` (derived), `bossscreen.verdict`, `bossconversation.*`.
@@ -49,7 +55,12 @@ CACHE_TTL_SECONDS = 5.0
 
 BOOL_OPS = ("all", "any", "not")
 LEAF_OPS = ("eq", "ne", "in", "nin", "prefix", "suffix", "contains", "exists",
-            "gt", "gte", "lt", "lte", "matches", "changed")
+            "gt", "gte", "lt", "lte", "matches", "changed", "glob")
+#: A glob is a path pattern, not a program: short, and a bounded number of wildcards.
+MAX_GLOB_CHARS = 256
+MAX_GLOB_PATTERNS = 16
+#: A path longer than this never matches (no file list entry is this long).
+MAX_GLOB_PATH = 1024
 
 
 class FilterError(ValueError):
@@ -336,6 +347,13 @@ def _compile_leaf(node: Mapping[str, Any], counter: dict) -> Callable[[Mapping[s
     if op == "matches":
         predicate = compile_pattern(value)
         return lambda e: predicate(_as_text(lookup(e, path)))
+    if op == "glob":
+        globs = compile_globs(value)
+
+        def _glob(e: Mapping[str, Any]) -> bool:
+            return any(g(p) for p in _paths(lookup(e, path)) for g in globs)
+
+        return _glob
     # changed: `value` names the field(s); `path` is where the changed list lives (default
     # data.changed_fields when the author writes the conventional field).
     names = [value] if isinstance(value, str) else value
@@ -353,6 +371,145 @@ def _compile_leaf(node: Mapping[str, Any], counter: dict) -> Callable[[Mapping[s
         return any(n in have for n in names)
 
     return _changed
+
+
+# ---------------------------------------------------------------------------------------------
+# Path globs (AMEX-G11): `tenants/*.yaml` over a pull request's changed files
+# ---------------------------------------------------------------------------------------------
+
+def _paths(value: Any) -> list[str]:
+    """The paths a field holds: one path, or a list of paths or of {filename|path} objects."""
+    items = value if isinstance(value, list) else [value]
+    out: list[str] = []
+    for item in items:
+        if isinstance(item, Mapping):
+            item = item.get("filename") or item.get("path")
+        if isinstance(item, str) and item and len(item) <= MAX_GLOB_PATH:
+            out.append(item)
+    return out
+
+
+def _segment_tokens(segment: str) -> list[tuple[str, Any]]:
+    """`*` → ("star",), `?` → ("any",), `[a-z]` / `[!x]` → ("class", (negated, ranges)),
+    anything else → ("char", c)."""
+    tokens: list[tuple[str, Any]] = []
+    i = 0
+    while i < len(segment):
+        ch = segment[i]
+        if ch == "*":
+            if not tokens or tokens[-1][0] != "star":
+                tokens.append(("star", None))
+        elif ch == "?":
+            tokens.append(("any", None))
+        elif ch == "[" and "]" in segment[i + 2:] or (ch == "[" and segment[i + 1:i + 2] == "]"):
+            close = segment.index("]", i + 2)
+            body = segment[i + 1:close]
+            negated = body[:1] in ("!", "^")
+            body = body[1:] if negated else body
+            ranges = []
+            k = 0
+            while k < len(body):
+                if k + 2 < len(body) and body[k + 1] == "-":
+                    ranges.append((body[k], body[k + 2]))
+                    k += 3
+                else:
+                    ranges.append((body[k], body[k]))
+                    k += 1
+            tokens.append(("class", (negated, tuple(ranges))))
+            i = close
+        else:
+            tokens.append(("char", ch))
+        i += 1
+    return tokens
+
+
+def _segment_matcher(segment: str) -> Callable[[str], bool]:
+    """One path segment's pattern, matched WITHOUT regular expressions (the text is a file name
+    an outsider chose): the classic one-star-backtrack walk, O(len(text) × len(pattern))."""
+    if not any(ch in segment for ch in "*?["):
+        return lambda text: text == segment
+    tokens = _segment_tokens(segment)
+
+    def one(token: tuple[str, Any], ch: str) -> bool:
+        kind, arg = token
+        if kind == "any":
+            return True
+        if kind == "char":
+            return ch == arg
+        negated, ranges = arg
+        inside = any(lo <= ch <= hi for lo, hi in ranges)
+        return inside != negated
+
+    def match(text: str) -> bool:
+        t = p = 0
+        star, mark = -1, 0
+        while t < len(text):
+            if p < len(tokens) and tokens[p][0] != "star" and one(tokens[p], text[t]):
+                t += 1
+                p += 1
+            elif p < len(tokens) and tokens[p][0] == "star":
+                star, mark = p, t
+                p += 1
+            elif star >= 0:
+                p = star + 1
+                mark += 1
+                t = mark
+            else:
+                return False
+        while p < len(tokens) and tokens[p][0] == "star":
+            p += 1
+        return p == len(tokens)
+
+    return match
+
+
+def compile_globs(value: Any) -> list[Callable[[str], bool]]:
+    """`glob`'s predicates. Refuses a pattern that is empty, too long, or absolute."""
+    patterns = [value] if isinstance(value, str) else value
+    if not isinstance(patterns, list) or not patterns or \
+            not all(isinstance(p, str) and p.strip() for p in patterns):
+        raise FilterError("glob takes a path pattern (or a list of them), e.g. tenants/*.yaml.")
+    if len(patterns) > MAX_GLOB_PATTERNS:
+        raise FilterError(f"glob takes at most {MAX_GLOB_PATTERNS} patterns.")
+    out = []
+    for raw in patterns:
+        pattern = raw.strip()
+        if len(pattern) > MAX_GLOB_CHARS:
+            raise FilterError(f"a glob is at most {MAX_GLOB_CHARS} characters.")
+        if pattern.startswith("/"):
+            raise FilterError("a glob is relative to the repository root (no leading /).")
+        parts = pattern.split("/")
+        if any(p == "" for p in parts):
+            raise FilterError(f"not a path pattern: {pattern!r}.")
+        out.append(_path_glob([None if p == "**" else _segment_matcher(p) for p in parts]))
+    return out
+
+
+def _path_glob(parts: list) -> Callable[[str], bool]:
+    def match(path: str) -> bool:
+        segments = path.split("/")
+        # (pattern index, segment index) reachable: O(patterns × segments), no recursion.
+        states = {(0, 0)}
+        seen: set = set()
+        while states:
+            i, j = states.pop()
+            if (i, j) in seen:
+                continue
+            seen.add((i, j))
+            if i == len(parts):
+                if j == len(segments):
+                    return True
+                continue
+            part = parts[i]
+            if part is None:                         # `**`: zero or more segments
+                states.add((i + 1, j))
+                if j < len(segments):
+                    states.add((i, j + 1))
+            elif j < len(segments) and part(segments[j]):
+                states.add((i + 1, j + 1))
+        return False
+
+    return match
 
 
 def validate(spec: Any) -> dict[str, Any]:
@@ -400,5 +557,5 @@ def cache_size() -> int:
 
 __all__ = ["BOOL_OPS", "CACHE_TTL_SECONDS", "Compiled", "FilterError", "LEAF_OPS", "MAX_DEPTH",
            "MAX_LEAVES", "MAX_PATTERN_BYTES", "REGEX_ENGINE", "RegexTimeout", "cache_size",
-           "compile_filter", "compile_pattern", "compiled_for", "invalidate", "lookup",
+           "compile_filter", "compile_globs", "compile_pattern", "compiled_for", "invalidate", "lookup",
            "validate"]
