@@ -15,6 +15,28 @@ Per request:
   4. write one identity_egress_log row: method, path TEMPLATE, status, bytes, run, jti, chain.
      Never a body, a query string or a token.
 A refusal is 403 (rules) or 401 (credential), with a fixed body that names no secret.
+
+THE HOST ROUTE (P8b S11, BOSSAPP-1072; HOST_API.md §4.9). A microVM has no network: its git and
+REST calls reach egress only through `boss-hostd`, under the guest's own spelling:
+
+    /git/<host>/<owner>/<repo>.git/...    git smart-HTTP   (github.com, bitbucket.org)
+    /api/<host>/...                       REST             (github.com | api.github.com,
+                                                            bitbucket.org | api.bitbucket.org)
+
+  0. the HOST is identified first: its `BossHost` proof (fleet_ca.verify_proof), or a client
+     certificate a named TLS terminator forwarded — exactly as the model gateway and the API do;
+  1. the guest's handle arrives MOVED into `X-Boss-Handle`, with the host's word on VM, run and
+     epoch; the VM handle's row (identity/egress_handles.py) must agree (another VM, run or org:
+     a replay — revoked, `host_events(handle_replay)`, 401; a stale epoch: 409 fenced);
+  2. the run's `boss:egress` token (`X-Boss-Delegation` + the host's `DPoP` proof) is REQUIRED
+     from a host that advertised `host_tokens` (fleet.host_tokens_required), as at every other
+     destination; the run's authority (repos, permissions, push pattern) is that token's;
+  3. then the same rule table, push inspection and injection as below — with two more rules on
+     this route: a push never deletes a branch (`branch_delete`), and an unrouted git host is
+     refused by name (`git_host_not_routed`; `strict_secrets_git_host_refused` in strict mode).
+Bitbucket (D19) is routed: its repositories come from the token's `bitbucket` resources and the
+injected credential is the install's Bitbucket token (BOSS_BITBUCKET_TOKEN, or the
+username + app password pair). GitLab and every other host are refused until routed.
 """
 from __future__ import annotations
 
@@ -32,6 +54,13 @@ from boss_engine.identity.principal import RunTokenClaims
 log = logging.getLogger("boss.egress")
 
 GIT_UPSTREAM_ENV = "BOSS_GITHUB_GIT_URL"
+BITBUCKET_GIT_ENV = "BOSS_BITBUCKET_GIT_URL"       # default https://bitbucket.org
+BITBUCKET_API_ENV = "BOSS_BITBUCKET_API_URL"       # default https://api.bitbucket.org
+STRICT_ENV = "BOSS_EGRESS_STRICT_SECRETS"
+#: The host route's guest-facing host names → the provider that serves them (D19).
+GIT_HOSTS = {"github.com": "github", "bitbucket.org": "bitbucket"}
+API_HOSTS = {"github.com": "github-api", "api.github.com": "github-api",
+             "bitbucket.org": "bitbucket-api", "api.bitbucket.org": "bitbucket-api"}
 #: The ONLY inbound headers that cross the proxy (an allowlist: a header nobody thought of —
 #: X-HTTP-Method-Override, a hop-by-hop header, a credential under a new name — never does).
 _FORWARD = frozenset({"accept", "content-type", "user-agent", "git-protocol", "x-github-api-version",
@@ -164,6 +193,52 @@ def anonymous_read_allowed(provider: str, decision: Any, code: str, perms: Mappi
     return code in _UNCOVERED or code.startswith("mint_failed_4")
 
 
+def _strict() -> bool:
+    return (os.environ.get(STRICT_ENV) or "").strip().lower() in ("1", "true", "yes")
+
+
+def bitbucket_repos(task: Any) -> list[str]:
+    """The run's Bitbucket repositories (`workspace/repo_slug`), from its token's task binding."""
+    repos = ((getattr(task, "resources", None) or {}).get("bitbucket")) or []
+    return [r for r in repos if isinstance(r, str)]
+
+
+def bitbucket_credential() -> str:
+    """The install's Bitbucket credential, held only in this process: an access token
+    (BOSS_BITBUCKET_TOKEN), else `username:app_password`. "" when Bitbucket is not connected.
+    Bitbucket cannot mint a per-run token, so the run's down-scoping is the rule table: its own
+    repositories, its own ref pattern, no force-push, no delete."""
+    token = (os.environ.get("BOSS_BITBUCKET_TOKEN") or "").strip()
+    if token:
+        return token
+    user = (os.environ.get("BOSS_BITBUCKET_USERNAME") or "").strip()
+    password = (os.environ.get("BOSS_BITBUCKET_APP_PASSWORD") or "").strip()
+    return f"{user}:{password}" if user and password else ""
+
+
+def _bitbucket_basic(credential: str) -> str:
+    """git over HTTPS: an access token rides as `x-token-auth:<token>`; an app password as
+    `username:app_password`."""
+    pair = credential if ":" in credential else f"x-token-auth:{credential}"
+    return "Basic " + base64.b64encode(pair.encode()).decode()
+
+
+def _check_push_offline(body: bytes, pattern: str, perms: Mapping[str, str], *,
+                        allow_delete: bool) -> egress_rules.RuleDecision:
+    """A push to a host egress cannot ask about commits outside the pack (Bitbucket): the ref,
+    delete and fast-forward rules decided from the pack alone. A non-fast-forward update whose
+    old tip is not an ancestor IN THE PACK is refused as a force-push. GitHub workflow rules do
+    not apply to a Bitbucket repository."""
+    try:
+        updates, pack = egress_rules.parse_receive_pack(body)
+        objects = egress_rules.parse_pack(pack, allow_unresolved=True) if pack else {}
+    except Exception:  # noqa: BLE001 — anything unparseable is refused
+        return egress_rules.RuleDecision(False, "/{o}/{r}.git/git-receive-pack", "unparseable_push")
+    return egress_rules.check_push(updates, objects, push_pattern=pattern,
+                                   perms={**perms, "workflows": "write"},
+                                   is_ancestor=lambda _old, _desc: False, allow_delete=allow_delete)
+
+
 class EgressProxy:
     def __init__(self, engine: Any, *, upstream: Optional[Upstream] = None):
         self.engine = engine
@@ -171,11 +246,12 @@ class EgressProxy:
 
     # ---- the one entry point ----------------------------------------------------------------------
     def handle(self, req: EgressRequest) -> EgressResponse:
+        first = req.path.lstrip("/").split("/", 1)[0]
+        if first in ("git", "api"):
+            return self._host_route(req, first)
         provider, _, rest_raw = req.path.lstrip("/").partition("/")
         rest_raw = "/" + rest_raw
-        claims: Optional[RunTokenClaims] = None
         template = "{unparsed}"
-        token = ""
         presented = _credential(req)
         # THE CHALLENGE (round 2 walk): git (libcurl, CURLAUTH_ANY) sends its credential only after a
         # 401 that names a scheme. Without `WWW-Authenticate: Basic` every clone and push through
@@ -190,11 +266,9 @@ class EgressProxy:
             except tokens.TokenError as exc:
                 self._deny_event(db, None, provider, req.method, template, exc.reason)
                 return EgressResponse(401, challenge, b'{"error":"unauthenticated"}')
-            # P8b S13: a microVM run's host attaches the run's boss:egress token and its proof.
-            # When present it must verify for THIS audience and name this run — a model-gateway,
-            # MCP or run-plane token is refused here. (Not yet REQUIRED here: the git route sends
-            # no host identity to egress, so the per-host requirement cannot be read; HOST_API.md
-            # §4.8. BOSS_HOST_TOKENS_REQUIRED=1 forces it.)
+            # P8b S13: a token attached here must verify for THIS audience and name this run. The
+            # direct route carries no host identity, so only BOSS_HOST_TOKENS_REQUIRED=1 makes it
+            # required; a microVM's calls come by the host route, where it is required per host.
             from boss_engine.identity import delegation, host_delegation
             from boss_engine.services.fleet import host_tokens_required
 
@@ -209,52 +283,181 @@ class EgressProxy:
                                  f"run_token_{exc.reason}")
                 return EgressResponse(401, {"content-type": "application/json"},
                                       b'{"error":"run_token_refused"}')
-            # THE PATH FIRST: decoded and canonical BEFORE any rule sees it; `..`, `.`, `//` and
-            # encoded separators are refused outright, and the upstream gets exactly this path.
+            judged = self._judge(db, claims, provider, rest_raw, req, allow_delete=True)
+            if isinstance(judged, EgressResponse):
+                return judged
+        return self._send(claims, provider, req, judged)
+
+    # ---- the host route (P8b S11) -------------------------------------------------------------------
+    def _host_route(self, req: EgressRequest, kind: str) -> EgressResponse:
+        from boss_engine.identity import delegation, egress_handles, host_delegation
+        from boss_engine.services import fleet_ca
+        from boss_engine.services.fleet import host_tokens_required
+
+        h = {str(k).lower(): str(v) for k, v in req.headers.items()}
+        parts = req.path.lstrip("/").split("/", 2)
+        guest_host = parts[1].lower() if len(parts) > 1 else ""
+        rest_raw = "/" + (parts[2] if len(parts) > 2 else "")
+        provider = (GIT_HOSTS if kind == "git" else API_HOSTS).get(guest_host, "")
+        template = f"/{kind}/{{host}}"
+
+        def answer(status: int, reason: str) -> EgressResponse:
+            return EgressResponse(status, {"content-type": "application/json"},
+                                  json.dumps({"error": "refused", "reason": reason}).encode())
+
+        with self.engine.begin() as db:
+            # 0. WHO IS CALLING: an enrolled host, by its proof or a terminator's forwarded cert.
+            scheme, _, proof = (h.get("authorization") or "").partition(" ")
+            forwarded = h.get(fleet_ca.FORWARDED_CERT_HEADER)
             try:
-                rest, encoded = egress_rules.canonical_path(rest_raw)
-            except egress_rules.PathRefused as exc:
-                return self._refuse(db, claims, provider, req.method, template, str(exc))
-            if any(h in _REFUSE_HEADERS for h in req.headers):
-                return self._refuse(db, claims, provider, req.method, template, "method_override")
-            if len(req.body) > egress_rules.MAX_PUSH_BYTES:
-                return self._refuse(db, claims, provider, req.method, template, "body_too_large")
-            perms = github_app.run_permissions(claims, db=db)
-            repos = github_app.run_repos(claims.task)
-            pattern = github_app.push_ref_pattern(claims, db=db)
-            pairs = parse_qsl(req.query, keep_blank_values=True)
-            query = dict(pairs)
-            if len(query) != len(pairs):
-                # One key twice: the rules would judge one value and GitHub might act on the other.
-                return self._refuse(db, claims, provider, req.method, template, "duplicate_query_key")
-            minted: dict[str, str] = {}
-
-            def installation_token() -> str:
-                if "t" not in minted:
-                    minted["t"] = self._installation_token(claims, db)
-                return minted["t"]
-
-            if provider == "github":
-                decision = egress_rules.check_git(req.method, rest, query, perms=perms, repos=repos)
-            elif provider == "github-api":
-                body_json = None
-                if req.body and req.method.upper() in ("POST", "PUT", "PATCH"):
-                    try:
-                        body_json = json.loads(req.body)
-                    except ValueError:
-                        body_json = None
-                try:
-                    decision = egress_rules.check_api(
-                        req.method, rest, perms=perms, repos=repos,
-                        body=body_json if isinstance(body_json, dict) else None, push_pattern=pattern,
-                        pr_head=lambda repo, n: self._pr_head(repo, n, installation_token()))
-                except github_app.GitHubRefused as exc:
-                    return self._refuse(db, claims, provider, req.method, "/repos/{o}/{r}/pulls/{n}", exc.code)
+                if scheme.lower() == fleet_ca.AUTH_SCHEME and proof.strip():
+                    host = fleet_ca.verify_proof(db, proof.strip(), htm=req.method.upper(),
+                                                 path=req.path)
+                elif forwarded and fleet_ca.is_cert_terminator(req.peer):
+                    host = fleet_ca.verify_forwarded_cert(db, forwarded)
+                else:
+                    return answer(401, "host_proof_required")
+            except fleet_ca.FleetAuthError as exc:
+                return answer(exc.status, exc.code)
+            # 1. THE HANDLE, against the host's word.
+            raw = (h.get("x-boss-handle") or "").strip()
+            vm_id = (h.get("x-boss-vm") or "").strip()
+            run_word = (h.get("x-boss-run") or "").strip()
+            if not raw.startswith(egress_handles.PREFIX):
+                return answer(401, "no_handle")
+            if not vm_id or not run_word:
+                return answer(400, "binding_headers_required")
+            row = egress_handles.load(db, raw)
+            if row is None:
+                return answer(401, "unknown_handle")
+            if row.revoked_at is not None:
+                return answer(401, "handle_revoked")
+            if not row.live():
+                return answer(401, "handle_expired")
+            why = None
+            if row.org_id and row.org_id != host.org_id:
+                why = "another_org"
             else:
-                decision = egress_rules.RuleDecision(False, "{unknown}", "unknown_provider")
-            template = decision.template
-            if not decision.allowed:
-                return self._refuse(db, claims, provider, req.method, template, decision.reason)
+                if row.vm_id is None:
+                    row.vm_id = egress_handles.bind_vm(db, row.token_hash, vm_id)
+                if row.vm_id != vm_id:
+                    why = "another_vm"
+                elif row.run_id != run_word:
+                    why = "another_run"
+            if why:
+                egress_handles.revoke(db, row.token_hash, f"handle_replay:{why}")
+                try:
+                    from boss_engine.services import fleet
+
+                    with db.begin_nested():
+                        fleet.host_event(db, org_id=row.org_id or host.org_id, host_id=host.host_id,
+                                         vm_id=vm_id, kind="handle_replay", actor="egress",
+                                         detail={"why": why, "run_id": row.run_id,
+                                                 "bound_vm": row.vm_id,
+                                                 "handle_fp": row.token_hash[:16],
+                                                 "presented_run": run_word})
+                except Exception:  # noqa: BLE001 — the refusal stands without the event
+                    log.warning("handle replay on %s could not be recorded", host.host_id)
+                return answer(401, "handle_replay")
+            epoch_word = (h.get("x-boss-fence-epoch") or "").strip()
+            if epoch_word and epoch_word != str(row.fence_epoch):
+                return answer(409, "fenced")
+            from boss_engine.services.streaming_model_gateway import current_epoch
+
+            now_epoch = current_epoch(db, row.run_id)
+            if now_epoch is not None and now_epoch != row.fence_epoch:
+                return answer(409, "fenced")
+            # 2. THE RUN'S TOKEN for egress, required per host (S13).
+            try:
+                claims = host_delegation.check(
+                    db, h, audience=delegation.AUD_EGRESS, run_id=row.run_id,
+                    method=req.method, url=req.url or req.path,
+                    required=host_tokens_required(db, host.host_id))
+            except host_delegation.DelegationRefused as exc:
+                self._deny_event(db, None, provider or guest_host, req.method, template,
+                                 f"run_token_{exc.reason}")
+                return answer(401, f"run_token_{exc.reason}")
+            if claims is None:
+                # A host that predates S13: the run's egress token must have been handed over
+                # server to server (runs.register_egress), as on the local lane.
+                with runs._lock:  # noqa: SLF001
+                    claims = runs._EGRESS.get(row.token_hash)  # noqa: SLF001
+                if claims is None or claims.task.run_id != row.run_id:
+                    return answer(401, "egress_not_registered")
+            # 3. THE ROUTE: a host egress injects for, or a refusal that names it (D19).
+            if not provider:
+                reason = ("strict_secrets_git_host_refused" if _strict()
+                          else "git_host_not_routed")
+                return self._refuse(db, claims, guest_host or "unknown", req.method, template, reason)
+            judged = self._judge(db, claims, provider, rest_raw, req, allow_delete=False)
+            if isinstance(judged, EgressResponse):
+                return judged
+        return self._send(claims, provider, req, judged)
+
+    # ---- the rule table, the push inspection and the credential -------------------------------------
+    def _judge(self, db: Any, claims: RunTokenClaims, provider: str, rest_raw: str,
+               req: EgressRequest, *, allow_delete: bool) -> Any:
+        """An EgressResponse (a refusal), or (url, headers, template, token, rest) to send."""
+        template = "{unparsed}"
+        # THE PATH FIRST: decoded and canonical BEFORE any rule sees it; `..`, `.`, `//` and
+        # encoded separators are refused outright, and the upstream gets exactly this path.
+        try:
+            rest, encoded = egress_rules.canonical_path(rest_raw)
+        except egress_rules.PathRefused as exc:
+            return self._refuse(db, claims, provider, req.method, template, str(exc))
+        if any(h in _REFUSE_HEADERS for h in req.headers):
+            return self._refuse(db, claims, provider, req.method, template, "method_override")
+        if len(req.body) > egress_rules.MAX_PUSH_BYTES:
+            return self._refuse(db, claims, provider, req.method, template, "body_too_large")
+        perms = github_app.run_permissions(claims, db=db)
+        repos = github_app.run_repos(claims.task)
+        bb_repos = bitbucket_repos(claims.task)
+        pattern = github_app.push_ref_pattern(claims, db=db)
+        pairs = parse_qsl(req.query, keep_blank_values=True)
+        query = dict(pairs)
+        if len(query) != len(pairs):
+            # One key twice: the rules would judge one value and GitHub might act on the other.
+            return self._refuse(db, claims, provider, req.method, template, "duplicate_query_key")
+        minted: dict[str, str] = {}
+
+        def installation_token() -> str:
+            if "t" not in minted:
+                minted["t"] = self._installation_token(claims, db)
+            return minted["t"]
+
+        def body_json() -> Optional[dict]:
+            if req.body and req.method.upper() in ("POST", "PUT", "PATCH"):
+                try:
+                    parsed = json.loads(req.body)
+                except ValueError:
+                    return None
+                return parsed if isinstance(parsed, dict) else None
+            return None
+
+        if provider == "github":
+            decision = egress_rules.check_git(req.method, rest, query, perms=perms, repos=repos)
+        elif provider == "github-api":
+            try:
+                decision = egress_rules.check_api(
+                    req.method, rest, perms=perms, repos=repos, body=body_json(), push_pattern=pattern,
+                    pr_head=lambda repo, n: self._pr_head(repo, n, installation_token()))
+            except github_app.GitHubRefused as exc:
+                return self._refuse(db, claims, provider, req.method, "/repos/{o}/{r}/pulls/{n}", exc.code)
+        elif provider == "bitbucket":
+            decision = egress_rules.check_git(req.method, rest, query, perms=perms, repos=bb_repos)
+        elif provider == "bitbucket-api":
+            decision = egress_rules.check_bitbucket_api(req.method, rest, perms=perms, repos=bb_repos,
+                                                        body=body_json(), push_pattern=pattern)
+        else:
+            decision = egress_rules.RuleDecision(False, "{unknown}", "unknown_provider")
+        template = decision.template
+        if not decision.allowed:
+            return self._refuse(db, claims, provider, req.method, template, decision.reason)
+        if provider.startswith("bitbucket"):
+            token = bitbucket_credential()
+            if not token:
+                return self._refuse(db, claims, provider, req.method, template, "bitbucket_not_connected")
+        else:
             try:
                 token = installation_token()
             except github_app.GitHubRefused as exc:
@@ -264,16 +467,25 @@ class EgressProxy:
                 # public dependency): forwarded with no credential at all. GitHub serves it only
                 # if it is public; the run's rules above still decided the repo and the method.
                 token = ""
-            if provider == "github" and rest.endswith("/git-receive-pack") and req.method.upper() == "POST":
-                if req.headers.get("content-encoding"):
-                    return self._refuse(db, claims, provider, req.method, template, "encoded_push")
-                verdict = self._check_push(req.body, rest, perms, pattern, token)
-                if not verdict.allowed:
-                    return self._refuse(db, claims, provider, req.method, template, verdict.reason)
-            try:
-                url, headers = self._upstream_request(provider, encoded, req, token)
-            except egress_rules.PathRefused as exc:
-                return self._refuse(db, claims, provider, req.method, template, str(exc))
+        if provider in ("github", "bitbucket") and rest.endswith("/git-receive-pack") \
+                and req.method.upper() == "POST":
+            if req.headers.get("content-encoding"):
+                return self._refuse(db, claims, provider, req.method, template, "encoded_push")
+            if provider == "github":
+                verdict = self._check_push(req.body, rest, perms, pattern, token,
+                                           allow_delete=allow_delete)
+            else:
+                verdict = _check_push_offline(req.body, pattern, perms, allow_delete=allow_delete)
+            if not verdict.allowed:
+                return self._refuse(db, claims, provider, req.method, template, verdict.reason)
+        try:
+            url, headers = self._upstream_request(provider, encoded, req, token)
+        except egress_rules.PathRefused as exc:
+            return self._refuse(db, claims, provider, req.method, template, str(exc))
+        return (url, headers, template, token, rest)
+
+    def _send(self, claims: RunTokenClaims, provider: str, req: EgressRequest, judged: Any) -> EgressResponse:
+        url, headers, template, token, rest = judged
         # Upstream call outside the DB transaction.
         try:
             resp = self.upstream(req.method.upper(), url, headers, req.body)
@@ -331,7 +543,7 @@ class EgressProxy:
         return str(head.get("ref") or "") or None
 
     def _check_push(self, body: bytes, rest: str, perms: Mapping[str, str], pattern: str,
-                    token: str) -> egress_rules.RuleDecision:
+                    token: str, *, allow_delete: bool = True) -> egress_rules.RuleDecision:
         tpl = "/{o}/{r}.git/git-receive-pack"
         repo = "/".join(rest.strip("/").split("/")[:2]).removesuffix(".git")
 
@@ -373,7 +585,8 @@ class EgressProxy:
             return resp.status == 200 and (resp.json() or {}).get("status") in ("ahead", "identical")
 
         return egress_rules.check_push(updates, objects, push_pattern=pattern, perms=perms, is_ancestor=is_ancestor,
-                                       remote_tree=remote_tree, remote_commit_tree=remote_commit_tree)
+                                       remote_tree=remote_tree, remote_commit_tree=remote_commit_tree,
+                                       allow_delete=allow_delete)
 
     def _upstream_request(self, provider: str, encoded: str, req: EgressRequest,
                           token: str) -> tuple[str, dict[str, str]]:
@@ -383,6 +596,13 @@ class EgressProxy:
             if token:                       # "" = an anonymous read (anonymous_read_allowed)
                 basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
                 headers["Authorization"] = f"Basic {basic}"
+        elif provider == "bitbucket":
+            base = (os.environ.get(BITBUCKET_GIT_ENV) or "https://bitbucket.org").rstrip("/")
+            headers["Authorization"] = _bitbucket_basic(token)
+        elif provider == "bitbucket-api":
+            base = (os.environ.get(BITBUCKET_API_ENV) or "https://api.bitbucket.org").rstrip("/")
+            headers["Authorization"] = (_bitbucket_basic(token) if ":" in token
+                                        else f"Bearer {token}")
         else:
             base = github_app.api_base()
             headers["Authorization"] = f"Bearer {token}"

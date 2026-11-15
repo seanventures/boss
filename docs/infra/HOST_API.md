@@ -618,7 +618,7 @@ to the same vsock port.
 | Port | Route | Rule (first match wins; terminal deny) | Upstream |
 |---|---|---|---|
 | 7101 | model | `POST /anthropic/v1/messages`, `/openai/v1/chat/completions`, `/openai/v1/responses` | `endpoints.model_gateway` — the central streaming model gateway (§4.6) |
-| 7102 | git / api | `GET,POST /git/…`; `GET,POST,PATCH,PUT /api/…` | `endpoints.egress` (P8b) |
+| 7102 | git / api | `GET /_boss/git-credential` answered by the host (§4.9); `GET,POST /git/<host>/…`; `GET,POST,PATCH,PUT /api/<host>/…` | `endpoints.egress` — boss-egress's host route (§4.9) |
 | 7103 | mcp | `POST /mcp/<server>` (GET and DELETE refused: no server-initiated stream, no session) | `endpoints.mcp_gateway` — the control plane's own `/mcp` route (§4.7) |
 | 7104 | run_plane | `/v1/run-plane/next`, `/v1/run-plane/hosts/…` **denied** (VMs never poll for work) and `/v1/run-plane/runs/<run>/tokens` **denied** (only the host mints, §4.8); any other `/v1/run-plane/…` | `endpoints.run_plane` (the control plane) |
 | 7105 | connect | denied until P8b | — |
@@ -844,13 +844,13 @@ POST /v1/run-plane/runs/{run_id}/tokens        (host-authenticated; the lease he
   (`boss:model`), the MCP gateway (`boss:mcp`), the run plane (`boss:run_plane`, on every
   `/v1/run-plane/runs/{run}/…` call a VM's gateway forwarded — recognised by its
   `Boss-Run-Assertion`; the host's own calls are authenticated by its proof), and egress
-  (`boss:egress`, verified when attached; not yet required there, because the git route sends no
-  host identity to egress — that lands with the egress route's `HostProof`).
-- **Egress follow-up (open).** (1) Give the git/REST route `HostProof: true` so boss-hostd sends
-  its `BossHost` proof and binding headers to egress, and have egress verify the proof
-  (`fleet_ca.verify_proof`) to learn the host. (2) Then require the `boss:egress` token per host
-  exactly as the other destinations do (`fleet.host_tokens_required(connection, host_id)`), so a
-  host with `host_tokens` cannot reach egress without its token.
+  (`boss:egress`), each **required per host** by the same rule (§4.9 closes the egress
+  follow-up: the git/REST route carries `HostProof`, egress learns the host from the proof and
+  calls `fleet.host_tokens_required(connection, host_id)`).
+- **Egress follow-up (closed by P8b-5, BOSSAPP-1072).** The git/REST route has `HostProof: true`;
+  egress verifies the proof (or a terminator's forwarded certificate) to learn the host, and a
+  host with `host_tokens` cannot reach egress without its `boss:egress` token
+  (`401 run_token_required`).
 - **Fail closed.** If the control plane cannot read whether a host requires tokens (a database
   error), it treats the token as required; the answer is not cached.
 - **Minted before the VM hears of the run.** `boss-hostd` mints a claimed run's tokens before
@@ -864,6 +864,65 @@ POST /v1/run-plane/runs/{run_id}/tokens        (host-authenticated; the lease he
   `agent:invoke` (`400 bad_scope` if nothing is left).
 - At the run's end (`settle`, `fail`, hand back) the host forgets the key and tokens
   (`UnbindRun`), and the control plane revokes the run's tokens with its handles.
+
+### 4.9 The git and REST route: what boss-hostd sends to boss-egress (P8b S11, BOSSAPP-1072)
+
+**In the guest** (contract v1.1; the in-guest agent's `configure_git_relay`), git is pointed at the
+relay and nothing else changes:
+
+```
+url.http://127.0.0.1:7102/git/github.com/.insteadOf    https://github.com/
+url.http://127.0.0.1:7102/git/bitbucket.org/.insteadOf https://bitbucket.org/
+credential.helper = ""                                 (reset)
+credential.helper = !f() { … GET http://127.0.0.1:7102/_boss/git-credential[?run=<run>] … }; f
+```
+
+No token and no handle is written to any git config or environment variable. The helper asks
+**boss-hostd**, which answers `username=boss\npassword=<this VM's boss_egr_ handle>` from the
+socket's identity (never another VM's; a VM holding several runs' handles must name the run; a
+fenced run's handle is never handed out). git sends it only after a challenge, so a git/api call
+with no handle is answered `401` with `WWW-Authenticate: Basic` and never forwarded. Hosts with no
+insteadOf (GitLab, any other) fail closed in the guest: it has no network.
+
+**On the forward** the git and REST rules carry `HostProof: true` and `Audience: boss:egress`, so
+boss-hostd sends exactly what it sends to the model and MCP gateways (§4.6, §4.7): `Authorization:
+BossHost <proof>` over the egress path, the handle **moved** into `X-Boss-Handle` (from the guest's
+HTTP Basic password or bearer), `X-Boss-Vm`, `X-Boss-Run`, `X-Boss-Fence-Epoch`,
+`X-Boss-Deployment`, the `Boss-Run-Assertion`, and the run's `boss:egress` token in
+`X-Boss-Delegation` with a fresh `DPoP` proof over the forwarded URL. The guest path is kept:
+`/git/<host>/<owner>/<repo>.git/…` and `/api/<host>/…` under `endpoints.egress`
+(`BOSS_EGRESS_HOST_URL`, else `BOSS_EGRESS_URL`; absent → `503 gateway_unconfigured`).
+
+**What egress does** (`apps/egress/boss_egress/proxy.py`, `_host_route`):
+
+| Check | Answer |
+|---|---|
+| The host: its `BossHost` proof (`fleet_ca.verify_proof`), or a client certificate a named terminator (`BOSS_HOST_CERT_TERMINATORS`) forwarded | `401 host_proof_required` or fleet_ca's own code |
+| The handle (`identity_egress_credentials`, hashed, `sandbox_id = 'host:'`) | `401 no_handle \| unknown_handle \| handle_revoked \| handle_expired`; `X-Boss-Vm`/`X-Boss-Run` missing → `400 binding_headers_required` |
+| Its binding against the host's word | another org, VM or run → **replay**: revoked, `host_events(handle_replay, actor=egress)`, `401 handle_replay`; an unbound handle binds to the first VM that redeems it |
+| Its epoch | not the handle's, or not the run's current one → `409 fenced` |
+| The run's `boss:egress` token (`identity/host_delegation.py`) | **required per host** (`host_tokens`): `401 run_token_required`; another destination's token `run_token_bad_aud`; another key `run_token_dpop_key_mismatch`; another run `run_token_mismatch`. A host that predates S13 and attaches none is served only if the run's egress token was registered server to server, else `401 egress_not_registered` |
+| The git host (D19) | `github.com`, `bitbucket.org` (git); `github.com`/`api.github.com`, `bitbucket.org`/`api.bitbucket.org` (REST). Any other → `403 git_host_not_routed` (`strict_secrets_git_host_refused` with `BOSS_EGRESS_STRICT_SECRETS=1`) |
+| The rule table, on the token's task binding | GitHub: `egress_rules.check_git` / `check_api` on the token's `github` repos and permissions; Bitbucket: `check_git` / `check_bitbucket_api` on its `bitbucket` repos. `repo_outside_run`, `insufficient_permission`, … |
+| Pushes | only `refs/heads/boss/<run>-*` (`ref_not_allowed`); never a force-push (`force_push`); **never a branch delete on this route** (`branch_delete`), not even the run's own |
+
+Then every inbound credential is stripped and the real one injected: a per-run, down-scoped GitHub
+installation token (minted on first use for the token's repos only, held in egress's memory), or
+the install's Bitbucket credential (`BOSS_BITBUCKET_TOKEN` as `x-token-auth`, else
+`BOSS_BITBUCKET_USERNAME` + `BOSS_BITBUCKET_APP_PASSWORD`). Bitbucket cannot mint per-run tokens,
+so its down-scoping is the rule table; its pushes are judged from the pack alone (a non-fast-forward
+whose old tip is not in the pushed history is a force-push). One `identity_egress_log` row per call,
+never a body, query or token.
+
+**The run's git scope** is the token's, not the handle's: `POST /v1/run-plane/runs/{run}/tokens`
+mints the `boss:egress` token with `repos`, `bitbucket_repos` and `github_needs` from the job's
+payload, else the deployment's `metadata` (`run_plane.run_git_scope`). Nothing named → nothing
+reachable. The handle is minted with the run's lease (`run_plane._guest_handles`, `handles.egr`,
+bound to the replica's VM) and revoked with it.
+
+**The local lane is unchanged**: `runs.egress_access` (the per-run shim socket, the network-bound
+credential, `/github/…` and `/github-api/…`). A VM handle presented there is refused
+(`egress_host_route_only`).
 
 ## 5. Networking (LLD §3.7)
 
@@ -1398,6 +1457,7 @@ Python control plane as it was built.
 - A TLS-handshake health check on the directors (decision 31); director metrics into Prometheus
   scraping (today: `127.0.0.1:9446/metrics` on each director).
 - The TLS self-check before `serving`.
-- The egress gateway route (the model and MCP gateways are live: §4.6, §4.7); the gateways'
-  mTLS listeners; egress verifying the `boss:egress` delegation token (§4.8).
+- ~~The egress gateway route; egress verifying the `boss:egress` delegation token~~ (done, P8b-5:
+  §4.9). The gateways' mTLS listeners.
+- GitLab and other git hosts (D19: refused until routed); the D22 per-deployment CONNECT allowlist.
 - Upstream token exchange for tool-scoped MCP tokens where a provider supports it (§4.7).

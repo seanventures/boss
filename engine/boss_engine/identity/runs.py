@@ -96,12 +96,17 @@ class RunStart:
     step: Optional[str] = None
     scope: frozenset[str] = frozenset()
     github_needs: Optional[Mapping[str, str]] = None
+    #: Bitbucket Cloud repositories (`workspace/repo_slug`) the run may reach through egress
+    #: (P8b S11, D19). Kept apart from `repos`: a GitHub installation token is never minted for one.
+    bitbucket_repos: tuple[str, ...] = ()
 
 
 def _task(start: RunStart) -> TaskBinding:
     resources: dict[str, Any] = {}
     if start.repos:
         resources["github"] = list(start.repos)
+    if start.bitbucket_repos:
+        resources["bitbucket"] = list(start.bitbucket_repos)
     if start.github_needs:
         resources["github_permissions"] = dict(start.github_needs)
     return TaskBinding(run_id=start.run_id, project_id=start.project_id, step=start.step, resources=resources)
@@ -564,6 +569,10 @@ def resolve_egress(raw: Optional[str], *, db: Any, peer: Optional[str] = None) -
                           "FROM identity_egress_credentials WHERE token_hash = :h"), {"h": h}).mappings().first()
     if row is None or row["revoked_at"] is not None or row["expires_at"] <= datetime.now(timezone.utc):
         raise tokens.TokenError("unauthenticated", 401, "egress_credential_dead")
+    if str(row.get("sandbox_id") or "") == "host:":
+        # A microVM's handle (identity/egress_handles.py) is redeemed ONLY through its host, which
+        # proves the VM; presented here directly it is worthless (P8b S11).
+        raise tokens.TokenError("unauthenticated", 401, "egress_host_route_only")
     _check_network(db, row, peer)
     with _lock:
         claims = _EGRESS.get(h)

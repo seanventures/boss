@@ -15441,3 +15441,16 @@ CREATE INDEX IF NOT EXISTS idx_agent_certs_replica ON agent_certs (replica_id, n
 ALTER TABLE agent_hosts ADD COLUMN IF NOT EXISTS isolation_ok BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS isolation_required BOOLEAN NOT NULL DEFAULT false;
 -- ================================ end P8b-9/11 ==
+
+-- ================================ P8b-5: git and REST through boss-hostd → egress (BOSSAPP-1072) ==
+-- boss-agent-hosts-lld.md §3.8, §3.11 (S11), D19; HOST_API.md §4.9. A microVM's `boss_egr_` handle
+-- is redeemed only through its host (sandbox_id = 'host:'; runs.resolve_egress refuses it on the
+-- direct route) and is bound to (org, run, epoch, vm) like the model and MCP handles: a handle
+-- minted before its VM exists binds to the first VM that redeems it; another VM's use is a replay.
+ALTER TABLE identity_egress_credentials ADD COLUMN IF NOT EXISTS org_id TEXT;
+ALTER TABLE identity_egress_credentials ADD COLUMN IF NOT EXISTS vm_id TEXT;
+ALTER TABLE identity_egress_credentials ADD COLUMN IF NOT EXISTS fence_epoch BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE identity_egress_credentials ADD COLUMN IF NOT EXISTS deployment_id TEXT;
+ALTER TABLE identity_egress_credentials ADD COLUMN IF NOT EXISTS revoked_reason TEXT;
+CREATE INDEX IF NOT EXISTS idx_identity_egress_credentials_run ON identity_egress_credentials (run_id);
+-- ================================ end P8b-5 ==
