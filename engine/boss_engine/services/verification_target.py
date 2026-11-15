@@ -778,6 +778,53 @@ def named_directory(command: str) -> str | None:
     return value or None
 
 
+#: The required stacks whose own gate BOSS runs in place of whatever the tree looks like.
+#: Node is not here: a Node requirement keeps the tree-driven plan (its scripts decide).
+_REQUIRED_GATE_STACKS = ("go", "java", "python")
+
+
+def required_app_stack(spec: dict[str, Any] | None) -> str | None:
+    """The ONE non-Node language the brief or contract REQUIRES of the app ("go", "java",
+    "python"), else None.
+
+    Required means declared: the spec's structured ``required_stack`` or a ``Stack:`` line
+    (acceptance_gate.required_stack's HARD entries — the same reading the acceptance gate holds
+    the build to). Words that merely name a language never count, and a stack of several
+    languages (a Go backend and a React front end) is the multi-service planner's, not this."""
+    try:
+        from .acceptance_gate import required_stack
+
+        hard = {r["stack"] for r in required_stack(spec or {}) if r.get("hard")}
+    except Exception:  # noqa: BLE001 — an unreadable spec requires nothing; the tree decides
+        return None
+    if len(hard) != 1:
+        return None
+    (key,) = hard
+    return key if key in _REQUIRED_GATE_STACKS else None
+
+
+def _required_toolchain_plan(required: str, app_dir: Path) -> GatePlan:
+    """The Go or Java gate for an app whose brief requires it (required_app_stack), in its
+    folder. A package.json, a Vite config or a Playwright harness beside it never makes it npm;
+    without the toolchain it is toolchain_missing, a person's to fix (GatePlan.needs_human)."""
+    from . import toolchains
+
+    build = toolchains.detect_java(app_dir) if required == "java" else None
+    if not toolchains.has(required):
+        manifest = "go.mod" if required == "go" else toolchains.build_file(build or "maven")
+        message = toolchains.missing_message(required, manifest)
+        if not (app_dir / manifest).is_file():
+            label = toolchains.LABELS.get(required, required)
+            message = message.replace(f"(it has a {manifest})", f"(its brief requires {label})")
+        return GatePlan([], app_dir, "toolchain_missing", message, error=message)
+    # No build file yet (an empty repo's first plan): Maven, the default Java build.
+    commands = (list(toolchains.GO_GATE) if required == "go"
+                else toolchains.java_gate_commands(build or "maven"))
+    return GatePlan(commands, app_dir, "toolchain", " && ".join(commands),
+                    timeout_seconds=toolchains.GATE_TIMEOUT_SECONDS,
+                    steps=[(c, app_dir) for c in commands])
+
+
 def resolve_gate_plan(
     spec: dict[str, Any],
     title: str,
@@ -883,6 +930,21 @@ def resolve_gate_plan(
         declared = _manifest_plan()
         if declared is not None:
             return declared
+    # THE STACK THE BRIEF REQUIRES IS THE GATE (required_app_stack): a Go brief is gated by
+    # `go vet` and `go test` whatever other manifests the tree grows. Northgate's brief said
+    # "Stack: Go." on an empty repo: the first plan (no go.mod yet) was the npm default, the
+    # test author was told "the gate runs npm", wrote a package.json that delegated to Go, and
+    # with that package.json beside the go.mod every later verify was npm again
+    # (crun_ce0f6332b459476a9768, 2026-11-15). With the toolchain on or off.
+    required = required_app_stack(spec)
+    if required in ("go", "java"):
+        return _required_toolchain_plan(required, where.path)
+    if required == "python":
+        commands = [PYTHON_TEST_CMD]
+        cwd = _cwd(commands)
+        if is_pytest_project(cwd):
+            commands = [PYTEST_CMD]
+        return GatePlan(commands, cwd, "default", " && ".join(commands))
     # A MULTI-SERVICE APP (services.stacks): a backend and a web front end — or two backends —
     # each in its own directory with its own manifest. Each is installed, built and unit-tested
     # in its own toolchain, then the backend is started and the e2e runs against it. Treating
