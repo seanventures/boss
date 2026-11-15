@@ -30,6 +30,8 @@ from boss_engine.services import workflow_catalogue as catalogue
 from boss_engine.services import workflows
 from boss_engine.services.knowledge.store import PostgresKnowledgeStore
 
+from ._pg_foreign_keys import tables_referencing
+
 STORE = PostgresKnowledgeStore()
 TEMPLATE_KEY = "kg_investigation_pipeline"
 
@@ -78,11 +80,7 @@ def project(pg_engine):
     with pg_engine.begin() as c:
         # Seeding installs role agents (rulebook_extraction's analyst in every project): every
         # row the project owns goes, in as many passes as the foreign keys between them need.
-        owned = [str(t) for t in c.execute(text(
-            "SELECT DISTINCT tc.table_name FROM information_schema.table_constraints tc "
-            "JOIN information_schema.constraint_column_usage cu ON cu.constraint_name = "
-            "tc.constraint_name WHERE tc.constraint_type = 'FOREIGN KEY' AND cu.table_name = "
-            "'projects' AND tc.table_name <> 'projects'")).scalars().all()]
+        owned = tables_referencing(c, "projects")
         for _pass in range(3):
             for table in ("workflow_step_runs", "workflow_runs", "workflow_mappings",
                           "workflow_versions", "workflow_definitions", "decisions", "events",
