@@ -2694,3 +2694,41 @@ def execute_knowledge_propose(context: "SkillExecutorContext", inputs: dict[str,
     from .agent_baseline import run_bundled_tool
 
     return run_bundled_tool(context, "knowledge.propose", inputs)
+
+
+# ── THE ACCEPTANCE AGENT'S PLAYBOOKS (epic BOSSAPP-1213, AA-D) ───────────────────────────────
+# acceptance.verification and acceptance.findings_triage return the method the Acceptance Agent
+# (Assay) follows — a shipped SKILL.md, named by the skill's policy.playbook. Like a guide they
+# run nothing and grant nothing. acceptance.sandbox's executor arrives with the sandbox (AA-E).
+
+def _shipped_playbook(context: "SkillExecutorContext", skill_id: str) -> dict[str, Any]:
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(getattr(context.settings, "specpack_root", "") or "")
+    if not (root / "skills").is_dir():
+        root = Path(__file__).resolve().parents[3] / "packages" / "specpack"
+    spec = yaml.safe_load((root / "skills" / "acceptance.yaml").read_text(encoding="utf-8"))
+    entry = next((s for s in spec.get("skills") or [] if s.get("id") == skill_id), None)
+    rel = str(((entry or {}).get("policy") or {}).get("playbook") or "")
+    if not rel or ".." in Path(rel).parts:
+        raise SkillExecutorConfigurationError(f"skill {skill_id!r} names no playbook.")
+    body = (root / "skills" / rel).read_text(encoding="utf-8")
+    if body.startswith("---"):
+        body = body.split("---", 2)[-1].lstrip("\n")
+    return {"text": f"Guide: {skill_id}. It explains how; it grants nothing.\n\n{body}"}
+
+
+@register_executor("acceptance.verification")
+def execute_acceptance_verification(context: "SkillExecutorContext", inputs: dict[str, Any]
+                                    ) -> dict[str, Any]:
+    """The acceptance method (plan → exercise → judge → report), as a playbook."""
+    return _shipped_playbook(context, "acceptance.verification")
+
+
+@register_executor("acceptance.findings_triage")
+def execute_acceptance_findings_triage(context: "SkillExecutorContext", inputs: dict[str, Any]
+                                       ) -> dict[str, Any]:
+    """How a finding is matched to an open one before it is called new, as a playbook."""
+    return _shipped_playbook(context, "acceptance.findings_triage")

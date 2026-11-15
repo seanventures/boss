@@ -148,6 +148,18 @@ passport_presets:
                   meeting:convene,
                   agent:read, decision:read, deployment:read, host:read, observability:read, project:read, sandbox:read, system:read, workflow:read]
     external_ceiling: {github: {contents: read, pull_requests: write}}
+  # THE ACCEPTANCE AGENT (Assay, epic BOSSAPP-1213): checks delivered work against what was
+  # asked and NEVER changes it. A reviewer's reads without its writes: no code_task:steer, no
+  # meeting:convene, no security_scan:run, and read-only GitHub (no pull_requests: write). It
+  # reads tickets (integration:read) and never writes them; it runs only in its own sandbox.
+  - key: acceptor
+    name: Acceptor
+    agents: [assay]
+    permissions: [knowledge:read, code_task:read, repository:read, github:read, preview:read,
+                  artifact:read, assurance:read, workflow_run:read, skill:read, skill:invoke,
+                  memory:read, spend:reserve, meeting:read, integration:read,
+                  agent:read, decision:read, deployment:read, host:read, observability:read, project:read, sandbox:read, system:read, workflow:read]
+    external_ceiling: {github: {contents: read, pull_requests: read}}
   - key: planner
     name: Planner
     agents: [juno, atlas, keystone, rally, vector, cadence, marshal]

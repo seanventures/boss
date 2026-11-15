@@ -1,0 +1,77 @@
+# THE ACCEPTANCE AGENT'S SKILLS (epic BOSSAPP-1213, AA-D BOSSAPP-1218;
+# boss-acceptance-agent-lld.md §4.1). Granted to the Acceptance role `acceptance_agent` (Assay)
+# through role_skills, like every grant; nobody holds them by default (allowed_callers is empty).
+#
+#   acceptance.verification   the method, as a playbook: plan → exercise → judge → report,
+#                             against the frozen acceptance contract. Runs nothing.
+#   acceptance.findings_triage how a finding is matched to an open one before it is called new.
+#                             Runs nothing.
+#   acceptance.sandbox        the throwaway copy of the branch the agent exercises: it may build,
+#                             start, request, run the CLI and edit files there; every command is
+#                             RECORDED by the sandbox (the exec log is the evidence BOSS verifies),
+#                             egress is loopback (+ the run's own target), and nothing is pushed.
+#                             Its executor arrives with the acceptance sandbox (AA-E); until then
+#                             the grant is held but not offered (agent_steps.held_skills offers
+#                             only what can run).
+skills:
+  - id: acceptance.verification
+    kind: analysis
+    risk_tier: 0
+    mock_mode: false
+    load: eager
+    description: "The acceptance method: plan each contract item (run it, inspect it, or needs a person), exercise the work, judge met / partial / missing / needs a person with evidence, and report. Returns the playbook; runs nothing."
+    data_boundary: internal
+    input_schema:
+      topic: string?
+    output_schema: { text: string }
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: []
+      required_permissions: [repo_read]
+    policy:
+      requires_receipt: false
+      playbook: acceptance_verification/SKILL.md
+
+  - id: acceptance.findings_triage
+    kind: analysis
+    risk_tier: 0
+    mock_mode: false
+    load: eager
+    description: "How to match a finding to the open findings it repeats (same as F-n) before calling it new, and how to word one so it can be tracked and proved fixed. Returns the playbook; runs nothing."
+    data_boundary: internal
+    input_schema:
+      topic: string?
+    output_schema: { text: string }
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: []
+      required_permissions: [repo_read]
+    policy:
+      requires_receipt: false
+      playbook: findings_triage/SKILL.md
+
+  - id: acceptance.sandbox
+    kind: compute
+    risk_tier: 1
+    mock_mode: false
+    load: on_demand
+    description: "Run commands in a throwaway copy of the branch under check — build, start, send requests to loopback, run the app's CLI, edit its config to test behaviour. Every command is recorded with its exit code and output; nothing is pushed, merged or deployed."
+    data_boundary: internal
+    input_schema:
+      argv: array
+      cwd: string?
+      timeout_s: integer?
+    output_schema: { exec_id: string, exit: integer, stdout: string, stderr: string }
+    cost: { estimator: runtime, category: tool }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: []
+      required_permissions: [repo_read]
+    policy:
+      requires_receipt: false
+      writes: scratch_copy_only
+      push: never
+      records_commands: true
+      egress: [loopback, run_target]
