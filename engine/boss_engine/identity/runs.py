@@ -5,8 +5,17 @@ A run is `run_<kind>:<entity>` (`ct` code task, `wf` workflow run, `ag` agent lo
 a child run is `<parent run>/<name>`. The supervisor holds, per run, a `Shim`: the Ed25519 DPoP key
 pair (generated here, never written anywhere) and the run's current tokens. When BOSS executes a
 run in its own process (workflow steps, agent turns, the code-task orchestrator), the API process
-IS the shim; in a microVM sandbox the shim is a separate uid inside the VM and only its public key
-crosses the bootstrap channel (`start_run(..., dpop_jkt=...)`).
+IS the shim — the LOCAL lane.
+
+THE MICROVM LANE HAS NO SHIM IN THE GUEST (P8b S13, BOSSAPP-1074; boss-agent-hosts-lld.md §3.12.2).
+A DPoP key inside a VM that runs model-written code is no protection: the guest is the thing that
+might be stolen from. So `boss-hostd` is the shim: it generates the run's key pair in its own
+memory, never writes it, and calls `start_run(..., dpop_jkt=<its thumbprint>)` through the run
+plane (run_plane.host_tokens). The Shim BOSS keeps for such a run holds NO private key
+(`key is None`, `host_held`): one token per destination audience (model gateway, MCP gateway,
+egress, run plane), each usable only with a proof the host signs. The guest holds run handles
+only. Rotation is the host's too: it brings a new jkt before two thirds of the TTL; the previous
+tokens are not revoked, so a call already in flight completes.
 
 What never happens: a run gets a GitHub token (the egress proxy injects one), a long-lived BOSS
 key, or a token wider than person ∩ ceilings ∩ grant ∩ task.
@@ -44,15 +53,33 @@ def _hash(raw: str) -> str:
 
 @dataclass
 class Shim:
-    """The credential shim for one run: key + tokens. `repr` shows neither."""
+    """The credential shim for one run: key + tokens. `repr` shows neither.
+
+    `key` is None for a HOST-HELD shim (P8b S13): the key lives in boss-hostd's memory and only
+    its thumbprint (`jkt`) is known here, so this process can mint and revoke the run's tokens
+    but never sign a proof for them."""
     run_id: str
-    key: dpop.DPoPKey = field(default_factory=dpop.DPoPKey.generate, repr=False)
+    key: Optional[dpop.DPoPKey] = field(default_factory=dpop.DPoPKey.generate, repr=False)
     tokens: dict[str, IssuedToken] = field(default_factory=dict, repr=False)
     egress_credential: Optional[str] = field(default=None, repr=False)
     renewed_at: float = field(default_factory=time.monotonic, repr=False)
+    #: The DPoP thumbprint the tokens are bound to: the key's own, or the host's (host-held).
+    host_jkt: Optional[str] = None
+
+    @property
+    def host_held(self) -> bool:
+        return self.key is None
+
+    @property
+    def jkt(self) -> str:
+        if self.key is not None:
+            return self.key.jkt
+        return str(self.host_jkt or "")
 
     def authorization(self, audience: str, method: str, url: str) -> dict[str, str]:
         """Headers for one call: `Authorization: DPoP <token>` and a fresh `DPoP` proof."""
+        if self.key is None:
+            raise tokens.TokenError("invalid_request", 400, "host_held_shim_cannot_sign")
         tok = self.tokens[audience].access_token
         return {"Authorization": f"DPoP {tok}", "DPoP": self.key.proof(method, url, access_token=tok)}
 
@@ -81,21 +108,37 @@ def _task(start: RunStart) -> TaskBinding:
 
 
 def start_run(ctx: AuthContext, start: RunStart, *, grant_id: Optional[str], db: Any,
-              audiences: tuple[str, ...] = (AUD_API,), sandbox_id: Optional[str] = None) -> Shim:
+              audiences: tuple[str, ...] = (AUD_API,), sandbox_id: Optional[str] = None,
+              dpop_jkt: Optional[str] = None) -> Shim:
     """The FIRST hop. `ctx` is the person's verified request context (obo) or the agent's own
     (autonomous). Mints one token per audience, all bound to this run's DPoP key; with repos, also
-    an egress token and the run's `boss_egr_` credential."""
-    shim = Shim(run_id=start.run_id)
+    an egress token and the run's `boss_egr_` credential.
+
+    `dpop_jkt` (P8b S13): the thumbprint of a key pair boss-hostd generated for this run and never
+    writes. The tokens are bound to THAT key; this process keeps no private key for the run
+    (`Shim.host_held`), so nothing here can sign a proof for them, and the renewal loop leaves
+    them alone — the host brings a fresh jkt (another `start_run`) before two thirds of the TTL.
+    A host-held run never gets a `boss_egr_` credential here: its git goes through boss-hostd."""
+    if dpop_jkt is not None:
+        jkt = str(dpop_jkt).strip()
+        if not jkt or len(jkt) > 128 or any(ch in jkt for ch in "=/+ \t\n"):
+            raise tokens.TokenError("invalid_request", 400, "bad_dpop_jkt")
+        shim = Shim(run_id=start.run_id, key=None, host_jkt=jkt)
+    else:
+        shim = Shim(run_id=start.run_id)
     task = _task(start)
     agent = AgentInstance(start.agent_id, start.run_id)
     auds = list(audiences) + ([AUD_EGRESS] if start.repos and AUD_EGRESS not in audiences else [])
     for aud in auds:
         shim.tokens[aud] = tokens.mint_run_token(subject=ctx, agent=agent, grant_id=grant_id, task=task,
-                                                 audience=aud, scope=start.scope, cnf_jkt=shim.key.jkt, db=db)
-    if AUD_EGRESS in shim.tokens:
+                                                 audience=aud, scope=start.scope, cnf_jkt=shim.jkt, db=db)
+    if AUD_EGRESS in shim.tokens and not shim.host_held:
         shim.egress_credential = issue_egress_credential(shim, sandbox_id=sandbox_id or sandbox_network_id(), db=db)
     with _lock:
-        _SHIMS[start.run_id] = shim
+        if shim.host_held:
+            _HOST_SHIMS[start.run_id] = shim      # never renewed here: the host rotates it
+        else:
+            _SHIMS[start.run_id] = shim
     return shim
 
 
@@ -169,10 +212,28 @@ def end_run(run_id: str, *, db: Any, org_id: str, reason: str = "run ended") -> 
     with _lock:
         for rid in [k for k in _SHIMS if k == run_id or k.startswith(run_id + "/")]:
             _SHIMS.pop(rid, None)
+        for rid in [k for k in _HOST_SHIMS if k == run_id or k.startswith(run_id + "/")]:
+            _HOST_SHIMS.pop(rid, None)
 
 
 _SHIMS: dict[str, Shim] = {}
+#: Host-held shims (P8b S13): tokens bound to a boss-hostd key. Kept apart so the renewal loop
+#: (which needs the private key) never touches them; `end_run` clears both.
+_HOST_SHIMS: dict[str, Shim] = {}
 _lock = threading.Lock()
+
+
+def host_shim_for(run_id: str) -> Optional[Shim]:
+    """The host-held shim of a microVM run (its current tokens; no key), or None."""
+    with _lock:
+        return _HOST_SHIMS.get(run_id)
+
+
+def forget_host_shim(run_id: str) -> None:
+    """The run's lease ended on the run plane: drop its host-held shim (the tokens themselves
+    are revoked in Postgres by the caller; the host forgets its key)."""
+    with _lock:
+        _HOST_SHIMS.pop(run_id, None)
 
 # ---- renewal at runtime: a run's tokens (and egress) never die at 5 minutes mid-build ----------------
 

@@ -297,22 +297,42 @@ def _lease_one(connection: Any, settings: Any, jobs: Any, job: dict, replica: st
 
 def _guest_handles(connection: Any, settings: Any, job: dict, run_id: str, replica: str,
                    epoch: int) -> dict:
+    """The guest's placeholders for this run: `mdl` (P8b S10) and `mcpgw` with the `mcp_servers`
+    map (P8b S12; the deployment's agent key is the role whose MCP grant is the allowlist). Each
+    is minted on its own: one failing leaves the other, and the run still starts — the calls it
+    cannot make fail closed at the gateways."""
+    from . import mcp_gateway
     from . import streaming_model_gateway as smg
 
     try:
         row = connection.execute(text(
-            "SELECT r.vm_id, r.org_id, r.deployment_id FROM agent_replicas r WHERE r.id = :r"),
+            "SELECT r.vm_id, r.org_id, r.deployment_id, d.agent_key FROM agent_replicas r "
+            "LEFT JOIN agent_deployments d ON d.id = r.deployment_id WHERE r.id = :r"),
             {"r": replica}).mappings().first()
-        if row is None:
-            return {}
+    except Exception as exc:  # noqa: BLE001 — the run still starts; every gateway call fails closed
+        log.warning("no handles for run %s: %s", run_id, type(exc).__name__)
+        return {}
+    if row is None:
+        return {}
+    handles: dict = {}
+    try:
         with connection.begin_nested():
-            return smg.guest_handles(connection, settings, org_id=str(row["org_id"]),
-                                     project_id=str(job["project_id"]), run_id=run_id,
-                                     epoch=epoch, vm_id=row["vm_id"],
-                                     deployment_id=row["deployment_id"])
+            handles.update(smg.guest_handles(connection, settings, org_id=str(row["org_id"]),
+                                             project_id=str(job["project_id"]), run_id=run_id,
+                                             epoch=epoch, vm_id=row["vm_id"],
+                                             deployment_id=row["deployment_id"]))
     except Exception as exc:  # noqa: BLE001 — the run still starts; its model calls fail closed
         log.warning("no model handle for run %s: %s", run_id, type(exc).__name__)
-        return {}
+    try:
+        with connection.begin_nested():
+            handles.update(mcp_gateway.guest_handle(
+                connection, settings, org_id=str(row["org_id"]),
+                project_id=str(job["project_id"]), run_id=run_id, epoch=epoch,
+                vm_id=row["vm_id"], role_key=row["agent_key"],
+                deployment_id=row["deployment_id"]))
+    except Exception as exc:  # noqa: BLE001 — the run still starts; its tool calls fail closed
+        log.warning("no MCP handle for run %s: %s", run_id, type(exc).__name__)
+    return handles
 
 
 _ROUND_ROBIN: dict = {}
@@ -828,10 +848,100 @@ def settle(connection: Any, settings: Any, host_id: str, run_id: str, lease: Lea
 
 
 def _revoke_handles(connection: Any, run_id: str, reason: str) -> None:
-    """The run's model handles die with its lease (P8b S10)."""
+    """The run's model and MCP handles die with its lease (P8b S10, S12), and so do the
+    host-held tokens minted for it (S13)."""
+    from . import mcp_gateway
     from . import streaming_model_gateway as smg
 
     smg.revoke_run(connection, run_id, reason)
+    mcp_gateway.revoke_run_handles(connection, run_id, reason)
+    try:
+        with connection.begin_nested():
+            connection.execute(text(
+                "UPDATE identity_run_credentials SET revoked_at = now() WHERE run_id = :r "
+                "AND revoked_at IS NULL"), {"r": run_id})
+    except Exception:  # noqa: BLE001 — an install mid-upgrade
+        log.debug("identity_run_credentials not available; nothing revoked for %s", run_id)
+    from ..identity import runs as identity_runs
+
+    identity_runs.forget_host_shim(run_id)
+
+
+# ── S13: the HOST's tokens for a run (boss-agent-hosts-lld.md §3.12.2) ──────────────────────
+
+#: What a deployed agent's run may do with the tokens its host holds: invoke agents (its own
+#: tool surface over the run plane). Narrowed live by the person's permissions (OBO), the
+#: agent's ceiling and the grant — never widened by the host.
+HOST_RUN_SCOPE = frozenset({"agent:invoke"})
+
+
+def host_tokens(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef, *,
+                jkt: str, audiences: Optional[list] = None, scope: Optional[list] = None) -> dict:
+    """POST /v1/run-plane/runs/{run}/tokens: the run's DELEGATED, PER-DESTINATION tokens, bound
+    to a DPoP key boss-hostd generated for this run and never writes (`jkt` is its thumbprint).
+    Fenced like every run call. One token per audience (model gateway, MCP gateway, egress, run
+    plane; RFC 8707), each refused by every other destination; `boss:api` is never issued to a
+    host. The subject is the run's own: the person the job was enqueued for (OBO, with their
+    grant) or the deployment's agent itself (autonomous). A second call with a new jkt is the
+    host's ROTATION: fresh tokens, the previous ones left to expire, so a call in flight with the
+    old pair still completes (nothing here revokes on rotation; the run's end does)."""
+    from ..identity import delegation, lineage, tokens
+    from ..identity import runs as identity_runs
+    from ..identity.principal import AuthContext, AuthMethod
+
+    job = fence(connection, settings, host_id, run_id, lease)
+    wanted = tuple(dict.fromkeys(str(a) for a in (audiences or delegation.HOST_AUDIENCES)))
+    for aud in wanted:
+        if aud not in delegation.HOST_AUDIENCES:
+            raise RunPlaneError("bad_audience", 400,
+                                f"a host is issued tokens for {', '.join(delegation.HOST_AUDIENCES)}"
+                                f" only, never {aud}")
+    replica = replica_for(connection, host_id, lease.replica_id)
+    project_id = str(job["project_id"])
+    agent_key = str(replica.get("agent_key") or "")
+    agent_id = identity_runs.agent_for_role(connection, project_id, agent_key)
+    if not agent_id:
+        raise RunPlaneError("no_agent_passport", 409,
+                            f"the deployed agent '{agent_key}' has no Passport (roles.agent_id), "
+                            "so no run token can name it as the actor")
+    acting = lineage.acting_for_job_id(connection, lease.job_id)
+    org_id = str(replica.get("org_id") or connection.execute(text(
+        "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE p.id = :p"), {"p": project_id}).scalar() or "")
+    if acting is not None and acting.grant_id:
+        subject = identity_runs.subject_for(acting, db=connection)
+        grant_id: Optional[str] = acting.grant_id
+    else:
+        from ..identity import grants
+
+        principal = grants.principal(connection, agent_id)
+        if principal is None or not principal.active:
+            raise RunPlaneError("no_authority", 409,
+                                "this run acts for nobody and its agent is not an active "
+                                "autonomous principal")
+        subject = AuthContext(principal=principal, method=AuthMethod.SYSTEM)
+        grant_id = None
+    # Never wider than a host run may be: a requested scope is NARROWED to HOST_RUN_SCOPE.
+    chosen = (frozenset(str(k) for k in scope) & HOST_RUN_SCOPE) if scope else HOST_RUN_SCOPE
+    if not chosen:
+        raise RunPlaneError("bad_scope", 400,
+                            f"a host run's scope is within {', '.join(sorted(HOST_RUN_SCOPE))}")
+    try:
+        shim = identity_runs.start_run(
+            subject, identity_runs.RunStart(run_id=run_id, agent_id=agent_id,
+                                            project_id=project_id, scope=chosen),
+            grant_id=grant_id, db=connection, audiences=wanted, dpop_jkt=jkt)
+    except tokens.TokenError as exc:
+        raise RunPlaneError(f"token_{exc.reason}", 409 if exc.status >= 400 else exc.status,
+                            "the identity service refused to mint this run's tokens: "
+                            f"{exc.reason}") from exc
+    issued = {aud: {"access_token": tok.access_token, "token_type": "DPoP",
+                    "expires_in": int(tok.expires_in), "jti": tok.jti}
+              for aud, tok in shim.tokens.items()}
+    ttl = min((int(tok.expires_in) for tok in shim.tokens.values()),
+              default=delegation.RUN_TOKEN_TTL_SECONDS)
+    return {"run_id": run_id, "jkt": jkt, "org_id": org_id, "tokens": issued,
+            "expires_in": ttl, "rotate_after_seconds": max(1, (ttl * 2) // 3)}
 
 
 def fail(connection: Any, settings: Any, host_id: str, run_id: str, lease: LeaseRef,
@@ -1205,4 +1315,5 @@ __all__ = ["KINDS", "LEASE_TTL_SECONDS", "LeaseRef", "RunPlaneError", "admit", "
            "budget_reserve", "budget_settle", "event_write", "fail", "fence", "fenced",
            "get_checkpoints", "get_writes", "heartbeat", "interrupt_answers", "ledger_seq",
            "ledger_write", "open_interrupt", "owner_of", "put_checkpoint",
-           "put_write", "replica_for", "run_package", "settle", "hand_back", "host_next", "claim_for_host", "span_write", "tool_invoke", "tool_schemas"]
+           "put_write", "replica_for", "run_package", "settle", "hand_back", "host_next", "claim_for_host", "span_write", "tool_invoke", "tool_schemas",
+           "host_tokens", "HOST_RUN_SCOPE"]

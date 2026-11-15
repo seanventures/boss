@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import logging
 import os
 import re
 import secrets
@@ -31,6 +32,8 @@ from sqlalchemy import text
 
 from . import fleet_ca
 from .core import make_id
+
+log = logging.getLogger(__name__)
 
 JOIN_TOKEN_PREFIX = "boss_hjt_"
 JOIN_TOKEN_HOURS = 24
@@ -138,9 +141,57 @@ def _allocate_prefix(connection: Any, org_id: str) -> str:
     raise FleetError("the VM address plan is full.", status=409, code="address_plan_full")
 
 
+#: The capability a host advertises when it holds per-run DPoP keys (P8b S13; HOST_API.md §4.8).
+CAP_HOST_TOKENS = "host_tokens"
+HOST_TOKENS_REQUIRED_ENV = "BOSS_HOST_TOKENS_REQUIRED"
+_HOST_TOKENS_CACHE: dict = {}
+_HOST_TOKENS_TTL = 30.0
+
+
+def _advertises_host_tokens(capabilities: Any) -> bool:
+    return isinstance(capabilities, (list, tuple)) and CAP_HOST_TOKENS in capabilities
+
+
+def host_tokens_required(connection: Any, host_id: Optional[str]) -> bool:
+    """Whether forwards from this host MUST carry the run's delegated token (P8b S13 decision):
+    yes for a host that advertised the `host_tokens` capability (sticky), no for a host that
+    predates S13. BOSS_HOST_TOKENS_REQUIRED=1 forces it on for every host (tests, a strict
+    install); it never turns the requirement off. Cached 30 s per host — the flag only ever goes
+    from false to true, so a stale answer is at most 30 s of the old leniency. A database error
+    FAILS CLOSED (required) and is not cached."""
+    import time as _time
+
+    if (os.environ.get(HOST_TOKENS_REQUIRED_ENV) or "").strip().lower() in ("1", "true", "yes"):
+        return True
+    if not host_id:
+        return False
+    now = _time.monotonic()
+    hit = _HOST_TOKENS_CACHE.get(host_id)
+    if hit is not None and hit[1] > now and hit[0]:
+        return True
+    try:
+        with connection.begin_nested():
+            value = bool(connection.execute(text(
+                "SELECT host_tokens FROM agent_hosts WHERE id = :h"), {"h": host_id}).scalar())
+    except Exception:  # noqa: BLE001 — FAIL CLOSED: an unreadable answer is "required"
+        log.warning("host_tokens unreadable for %s: treating the token as required", host_id)
+        return True                      # never cached: the next call asks again
+    _HOST_TOKENS_CACHE[host_id] = (value, now + _HOST_TOKENS_TTL)
+    return value
+
+
+def _record_capabilities(connection: Any, host_id: str, capabilities: Any) -> None:
+    if _advertises_host_tokens(capabilities):
+        connection.execute(text(
+            "UPDATE agent_hosts SET host_tokens = true WHERE id = :i AND NOT host_tokens"),
+            {"i": host_id})
+        _HOST_TOKENS_CACHE.pop(host_id, None)
+
+
 def enrol(connection: Any, *, join_token: str, csr_pem: str, svid_csr_pem: Optional[str] = None,
           hostname: str = "", backend: str = "firecracker", facts: Optional[dict] = None,
-          capacity: Optional[dict] = None, labels: Optional[dict] = None) -> dict:
+          capacity: Optional[dict] = None, labels: Optional[dict] = None,
+          capabilities: Optional[list] = None) -> dict:
     """Spend a join token: a host row, its 24 h certificate (and SVID intermediate) and its VM
     address block. A token that is unknown, spent, revoked or expired is refused identically."""
     if backend not in ("firecracker", "process"):
@@ -173,6 +224,7 @@ def enrol(connection: Any, *, join_token: str, csr_pem: str, svid_csr_pem: Optio
     except fleet_ca.FleetAuthError as exc:
         raise FleetError(f"the CSR was refused: {exc.code}", status=400, code=exc.code) from exc
     _apply_facts(connection, host_id, facts or {})
+    _record_capabilities(connection, host_id, capabilities)
     connection.execute(text(
         "UPDATE agent_hosts SET cert_fingerprint = :f, cert_not_after = :na WHERE id = :i"),
         {"f": issued.fingerprint, "na": issued.not_after, "i": host_id})
@@ -200,7 +252,16 @@ def endpoints(host_id: str) -> dict:
             "renew": f"/v1/hosts/{host_id}/renew", "run_plane": "/v1/run-plane",
             # The central streaming model gateway boss-hostd forwards the guest's model calls
             # to (P8b S10; HOST_API.md §4.6). Absent → the host answers 503 gateway_unconfigured.
-            "model_gateway": _model_gateway_url()}
+            "model_gateway": _model_gateway_url(),
+            # The MCP/tool gateway lives on the control plane (P8b S12; HOST_API.md §4.7): the
+            # guest's /mcp/<server> is forwarded here, relative to the control-plane URL.
+            "mcp_gateway": _mcp_gateway_route()}
+
+
+def _mcp_gateway_route() -> str:
+    from .mcp_gateway import HOST_ROUTE
+
+    return HOST_ROUTE
 
 
 def _model_gateway_url() -> str:
@@ -332,6 +393,7 @@ def heartbeat(connection: Any, host: fleet_ca.HostIdentity, body: dict) -> dict:
     if row is None:
         raise FleetError("this host is revoked.", status=403, code="host_revoked")
     _apply_facts(connection, host.host_id, facts)
+    _record_capabilities(connection, host.host_id, body.get("capabilities"))
     seen = _observe(connection, host.host_id, body.get("replicas") or ())
     if isinstance(body.get("replicas"), list):
         # A heartbeat lists EVERY VM the host runs: a replica wanted stopped that it no longer

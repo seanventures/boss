@@ -301,3 +301,35 @@ func TestAdoptedVMWithChangedDigestIsReplaced(t *testing.T) {
 	})
 	h.crash()
 }
+
+// Review MED (PR #121): the run's tokens are minted BEFORE the VM hears of
+// the run; a refused mint hands the run back with the reason and the VM never
+// accepts it (P8b S13).
+func TestRunTokensAreMintedBeforeDeliveryOrTheRunIsHandedBack(t *testing.T) {
+	h := newHarness(t)
+	h.cp.AddJoinToken("j")
+	h.start(h.config("j"))
+	id := h.agent.HostID()
+	h.cp.SetDesired(id, replicas(1, nil))
+	h.waitFor(15*time.Second, "serving", func() bool { return len(h.serving()) == 1 })
+	h.waitFor(10*time.Second, "BOSS knows the replica", func() bool { return h.cp.Work(id).ReplicasKnown == 1 })
+
+	h.cp.SetTokensRefused(true)
+	h.cp.Enqueue("dep-x", "run_tok_refused")
+	h.waitFor(5*time.Second, "a hand-back", func() bool { return len(h.cp.Work(id).HandBacks) >= 1 })
+	if got := h.inboxRuns("vm_1"); len(got) != 0 {
+		t.Fatalf("the VM accepted %v without its tokens", got)
+	}
+	// (BOSS re-queues it and the host may already be re-claiming it: what
+	// matters is that no usable token exists and the VM never got the run.)
+	if _, ok := h.agent.gw.Keys.Pair("run_tok_refused", hostapi.AudMCP); ok {
+		t.Fatal("a refused mint leaves no usable token")
+	}
+
+	h.cp.SetTokensRefused(false)
+	h.waitFor(5*time.Second, "delivered", func() bool { return len(h.inboxRuns("vm_1")) == 1 })
+	if _, ok := h.agent.gw.Keys.Pair("run_tok_refused", hostapi.AudMCP); !ok {
+		t.Fatal("a delivered run holds its tokens")
+	}
+	h.crash()
+}

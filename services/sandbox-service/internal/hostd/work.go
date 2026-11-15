@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
+	"github.com/seanheiney/boss/services/sandbox-service/internal/cpclient"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/gateway"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/guest"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
@@ -102,6 +104,7 @@ func (a *Agent) deliver(ctx context.Context, run hostapi.Assignment) (handedBack
 	}
 	a.correctDrift(run.ReplicaID, reason)
 	a.gw.Runs.Delete(run.RunID)
+	a.gw.UnbindRun(run.RunID)
 	a.logf("run %s → replica %s refused (%s): handing back", run.RunID, run.ReplicaID, reason)
 	a.event(a.vmOfReplica(run.ReplicaID), "handed_back", "", "",
 		map[string]string{"run_id": run.RunID, "replica_id": run.ReplicaID, "reason": reason})
@@ -183,35 +186,75 @@ func (a *Agent) tryDeliver(run hostapi.Assignment) string {
 		return "inbox_unreachable"
 	}
 	defer c.Close()
-	// The run token stays with the host (gateway run map); the VM gets ids only.
+	// The run token stays with the host (gateway run map); the VM gets ids and
+	// its placeholders only. The handles are bound to (run, epoch, THIS VM)
+	// before the VM can present one (P8b S10/S12), and the run's delegated
+	// tokens are minted for a key this host generates and never writes (S13).
 	a.gw.Runs.Put(run.RunID, gateway.RunLease{ReplicaID: run.ReplicaID, JobID: run.JobID,
 		Token: run.RunToken, Epoch: run.Epoch})
-	w := guest.Work{Op: "run", RunID: run.RunID, JobID: run.JobID, ReplicaID: run.ReplicaID, Epoch: run.Epoch}
+	st.mu.Lock()
+	vmID, depID := st.id, st.spec.DeploymentID
+	st.mu.Unlock()
+	a.gw.BindRun(vmID, run.ReplicaID, depID, run.RunID, run.Epoch, run.Handles)
+	// The run's tokens exist BEFORE the VM is told about the run: its first
+	// gateway call already carries them. A refused mint hands the run back
+	// with the reason (a control plane that predates S13 answers 404: the run
+	// goes ahead on the host proof alone, as it did before).
+	if a.gw.Keys != nil {
+		kctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := a.gw.Keys.Ensure(kctx, run)
+		cancel()
+		if err != nil && !cpclient.IsNotFound(err) {
+			release()
+			a.gw.Runs.Delete(run.RunID)
+			a.gw.UnbindRun(run.RunID)
+			return "tokens_unavailable: " + tokenFailure(err)
+		}
+	}
+	w := guest.Work{Op: "run", RunID: run.RunID, JobID: run.JobID, ReplicaID: run.ReplicaID, Epoch: run.Epoch,
+		Handles: run.Handles}
 	raw, _ := json.Marshal(w)
 	if _, err := c.Write(append(raw, '\n')); err != nil {
 		release()
 		a.gw.Runs.Delete(run.RunID)
+		a.gw.UnbindRun(run.RunID)
 		return "inbox_write_failed"
 	}
 	line, err := bufio.NewReader(c).ReadBytes('\n')
 	if err != nil {
 		release()
 		a.gw.Runs.Delete(run.RunID)
+		a.gw.UnbindRun(run.RunID)
 		return "inbox_no_answer"
 	}
 	var reply guest.InboxReply
 	if json.Unmarshal(line, &reply) != nil {
 		release()
 		a.gw.Runs.Delete(run.RunID)
+		a.gw.UnbindRun(run.RunID)
 		return "inbox_bad_answer"
 	}
 	if !reply.OK {
 		release()
 		a.gw.Runs.Delete(run.RunID)
+		a.gw.UnbindRun(run.RunID)
 		if reply.Reason == "" {
 			reply.Reason = "refused"
 		}
 		return "vm_refused: " + reply.Reason
 	}
 	return ""
+}
+
+// tokenFailure is the hand-back reason for a refused mint: the control plane's
+// named code, never a token or a key.
+func tokenFailure(err error) string {
+	var ae *cpclient.APIError
+	if errors.As(err, &ae) && ae.Reason != "" {
+		return ae.Reason
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	return "unreachable"
 }
