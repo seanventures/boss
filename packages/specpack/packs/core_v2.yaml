@@ -49,6 +49,10 @@ installs:
     # Assembles the file the publisher then puts out. Split from media_publisher so an editing
     # mistake is caught by somebody who did not make it.
     - video_editor
+    # Checks delivered work against its frozen acceptance contract, item by item, with
+    # evidence (epic BOSSAPP-1213): separate from QA, so who writes the tests is not who
+    # accepts the work.
+    - acceptance_agent
   workflows:
     - ceo_command_to_pr
     - decision_inbox
@@ -82,5 +86,6 @@ installs:
     - coding_pipeline
     - work_tracker
     - mattermost
+    - acceptance
   canaries: []
 status: planned

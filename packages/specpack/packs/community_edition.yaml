@@ -69,7 +69,9 @@ installs:
   # turn and its voice test/draft (conversation_spend, voice_spend): the same durable
   # model-job shape as model_gateway's typed_decision and architecture.draft, and every edition
   # can talk to its agents.
+  # `acceptance` is the Acceptance Agent's (epic BOSSAPP-1213): its method and findings
+  # playbooks, and the sandbox it exercises the work in.
   skills: [model_gateway, github, software_factory, model_providers, work_tracker,
            mattermost, youtube, video, meeting_ops, email, agent_code, mobile,
-           kit, slack, deployment, agent_conversation, agent_voice]
+           kit, slack, deployment, agent_conversation, agent_voice, acceptance]
 status: active  # Independent product; Cloud is opt-in via Easy Connect

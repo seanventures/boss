@@ -43,6 +43,10 @@ installs:
     # Reads a regulation's clauses against the knowledge graph for banking_regulatory_compliance
     # and kg_investigation_pipeline; named by both templates, so a default install carries it.
     - compliance_officer
+    # Checks delivered work against its frozen acceptance contract, item by item, with
+    # evidence (epic BOSSAPP-1213): separate from QA, so who writes the tests is not who
+    # accepts the work.
+    - acceptance_agent
   workflows:
     - ceo_command_to_pr
     - decision_inbox
@@ -70,5 +74,6 @@ installs:
     - deployment
     - ssh_host
     - coding_pipeline
+    - acceptance
   canaries: []
 status: active

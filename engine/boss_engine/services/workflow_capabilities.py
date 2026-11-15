@@ -1335,6 +1335,10 @@ REGISTERED_ROLES = frozenset({
     # THE AGENT WORLD CAST (agent-world spec §0.1): the engineers a build is staffed with and
     # the two who keep it running. Installed by core_v1/core_v2 with a voice, skills and MCP.
     "backend_engineer", "frontend_engineer", "operations_engineer", "sre", "docs_writer",
+    # CHECKS DELIVERED WORK AGAINST WHAT WAS ASKED (epic BOSSAPP-1213): the Acceptance Agent,
+    # separate from QA so the one who writes the tests is not the one who accepts the work. The
+    # `acceptance` step that names it arrives with a later ticket; the role ships now.
+    "acceptance_agent",
     # A PERSON. Not an agent BOSS runs — the one participant it cannot.
     #
     # A gate exists because somebody wants a human to look. With no way to SAY that, the only

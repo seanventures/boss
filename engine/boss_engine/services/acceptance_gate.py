@@ -44,9 +44,6 @@ KEY = "acceptance"
 SUMMARY_KEY = "acceptance_summary"
 #: Items per reviewer pass: a longer list is judged in several passes (`run_check`), never cut.
 MAX_ITEMS = 40
-#: The most items one check holds a build to; beyond it the check is `not_run`, never `met`.
-MAX_TOTAL_ITEMS = 400
-MAX_ITEM_CHARS = 1000
 MAX_TREE_FILES = 600
 
 MET, PARTIAL, MISSING, UNJUDGED = "met", "partial", "missing", "unjudged"
@@ -56,190 +53,27 @@ _SKIP_DIRS = frozenset({".git", "node_modules", "vendor", ".venv", "venv", "dist
 
 
 # ---------------------------------------------------------------------------------------------
-# What was asked
+# What was asked: the ACCEPTANCE CONTRACT (acceptance/contract.py, BOSSAPP-1214). The item
+# extraction moved there unchanged and is re-exported here, so every caller and test of the gate
+# reads the same functions.
 # ---------------------------------------------------------------------------------------------
 
-def _norm(s: Any) -> str:
-    return " ".join(str(s or "").split())
-
-
-def brief_must_haves(text: str) -> list[str]:
-    """The "Must-haves:" block of a rendered brief (project_experience.add_project.render_brief):
-    its bullet lines, until the block ends at a blank line or a line that is not a bullet."""
-    lines = str(text or "").splitlines()
-    out: list[str] = []
-    for i, line in enumerate(lines):
-        if re.match(r"^\s*\**must[- ]haves?\**\s*:?\s*\**\s*$", line, re.I):
-            for nxt in lines[i + 1:]:
-                m = re.match(r"^\s*(?:[-*•]|\d+[.)])\s+(.*\S)\s*$", nxt)
-                if not m:
-                    break
-                out.append(_norm(m.group(1)))
-            break
-    return out
-
-
-_HEADING = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
-_BOLD_HEADING = re.compile(r"^\s*\*\*(.+?)\*\*\s*:?\s*$")
-_ITEM_LINE = re.compile(r"^\s*(?:[-*•+]|\d+[.)])\s+(.*\S)\s*$")
-#: A sub-list that is explicitly NOT gating (stretch goals, built-but-unverified, nice-to-have).
-_NOT_GATING = re.compile(r"not[\s-]+gating|non[\s-]?gating|unverified|stretch|nice[\s-]to[\s-]have"
-                         r"|optional|if time allows|best[\s-]effort|out of scope", re.I)
-
-
-def _sections(markdown: str) -> list[tuple[int, str, list[str]]]:
-    """(level, heading, body lines) for each markdown heading; level 7 for a bold-line heading."""
-    out: list[tuple[int, str, list[str]]] = []
-    cur: Optional[tuple[int, str, list[str]]] = None
-    for line in str(markdown or "").splitlines():
-        h = _HEADING.match(line)
-        b = None if h else _BOLD_HEADING.match(line)
-        if h or b:
-            cur = (len(h.group(1)) if h else 7, (h.group(2) if h else b.group(1)).strip(), [])
-            out.append(cur)
-        elif cur is not None:
-            cur[2].append(line)
-    return out
-
-
-def prd_gating_criteria(markdown: str) -> list[str]:
-    """The PRD's acceptance list: under its "Acceptance" heading, the items of a "tested and
-    gating" sub-list when it has one, else every item not under a sub-list that says it is not
-    gating (stretch, built-but-unverified, optional). Empty when the document has no acceptance
-    section. Parsing a document's structure, not judging it."""
-    secs = _sections(markdown)
-    first_plain: list[str] = []
-    for i, (level, heading, body) in enumerate(secs):
-        if not re.search(r"acceptance", heading, re.I):
-            continue
-        # The acceptance section and its sub-sections (deeper headings, or bold-line headings).
-        block = [(heading, body)]
-        for lvl2, h2, b2 in secs[i + 1:]:
-            if lvl2 <= level:
-                break
-            block.append((h2, b2))
-        gating = [(h, b) for h, b in block[1:]
-                  if re.search(r"gating|must[\s-]pass|required", h, re.I)
-                  and not _NOT_GATING.search(h)]
-        chosen = gating or [(h, b) for h, b in block if h == heading or not _NOT_GATING.search(h)]
-        items = _items_of(chosen)
-        if gating and items:
-            # A labelled gating list is the PRD's own answer: it wins over a plain list (the
-            # person's words quoted above the PRD often carry an earlier acceptance list).
-            return items
-        if items and not first_plain:
-            first_plain = items
-    return first_plain
-
-
-def _items_of(sections: list[tuple[str, list[str]]]) -> list[str]:
-    items: list[str] = []
-    for _h, body in sections:
-        for line in body:
-            m = _ITEM_LINE.match(line)
-            if m and not line.startswith(("    ", "\t")):
-                items.append(_norm(m.group(1)))
-    return items
-
-
-def _spec_of(value: Any) -> dict:
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except ValueError:
-            return {}
-    return dict(value) if isinstance(value, Mapping) else {}
-
-
-def acceptance_items(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """What the build is held to, numbered: the brief's must-haves, the PRD's tested-and-gating
-    list, then the run's acceptance criteria — deduplicated, each whole up to MAX_ITEM_CHARS, at
-    most MAX_TOTAL_ITEMS (`items_dropped` says how many more there were; judged in passes of
-    MAX_ITEMS by `run_check`). The existing-tests promise
-    is left to the regression gate, which measures it."""
-    return _items_and_dropped(spec)[0]
-
-
-def items_dropped(spec: Mapping[str, Any]) -> int:
-    return _items_and_dropped(spec)[1]
-
-
-def item_key(text: str) -> str:
-    """A short stable key for an item's text: what records which items a check judged."""
-    import hashlib
-
-    norm = re.sub(r"\W+", " ", str(text or "").lower()).strip()
-    return hashlib.sha1(norm.encode()).hexdigest()[:12]
-
-
-def _raw_items(spec: Mapping[str, Any]) -> list[tuple[str, str]]:
-    from .code_task_service import EXISTING_TESTS_CRITERION
-
-    spec = _spec_of(spec)
-    if isinstance(spec.get(UNION_KEY), list):
-        return [(str(i.get("source") or "criterion"), _norm(i.get("text")))
-                for i in spec[UNION_KEY] if isinstance(i, Mapping)]
-    instructions = str(spec.get("instructions") or "")
-    raw: list[tuple[str, str]] = []
-    raw += [("must_have", m) for m in brief_must_haves(instructions)]
-    raw += [("prd_gating", m) for m in prd_gating_criteria(instructions)]
-    raw += [("criterion", _norm(c)) for c in (spec.get("acceptance_criteria") or [])
-            if _norm(c) and _norm(c) != _norm(EXISTING_TESTS_CRITERION)]
-    return raw
-
-
-def _items_and_dropped(spec: Mapping[str, Any]) -> tuple[list[dict[str, Any]], int]:
-    raw = _raw_items(spec)
-    seen: set[str] = set()
-    items: list[dict[str, Any]] = []
-    dropped = 0
-    for source, item in raw:
-        key = re.sub(r"\W+", " ", item.lower()).strip()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        if len(items) >= MAX_TOTAL_ITEMS:
-            dropped += 1
-            continue
-        items.append({"n": len(items) + 1, "text": item[:MAX_ITEM_CHARS], "source": source})
-    return items, dropped
-
-
-#: A spec key holding a lineage's union of items (items_spec): every slice's, deduplicated.
-UNION_KEY = "_acceptance_union_items"
-
-
-def lineage_build_rows(connection: Any, root: str) -> list[dict]:
-    """Every BUILD of the lineage — the runs that are not follow-ups, oldest first: the
-    original build, its repair children (same spec) and, for a decomposed PRD, every slice
-    (prd_decomposition starts slices 2..N as non-follow-ups sharing the root id, each with its
-    own items). Their items together are what the pull request must deliver."""
-    from sqlalchemy import text
-
-    rows = connection.execute(text(
-        "SELECT id, spec FROM code_task_runs WHERE (id = :r OR finalize_ctx->>'root_run_id' = :r) "
-        "AND COALESCE(finalize_ctx->>'is_followup', 'false') <> 'true' "
-        "AND finalize_ctx->>'deferred_from_run' IS NULL "
-        "ORDER BY created_at, id"), {"r": root}).all()
-    return [{"id": r[0], "spec": _spec_of(r[1])} for r in rows]
-
-
-def union_spec(builds: list[dict]) -> dict:
-    """One spec holding the union of every build's items (the first build's instructions are
-    kept for its declared stack)."""
-    raw: list[dict] = []
-    for b in builds:
-        raw += [{"source": src, "text": t} for src, t in _raw_items(b["spec"])]
-    first = builds[0]["spec"] if builds else {}
-    return {"instructions": first.get("instructions") or "",
-            **({"required_stack": first["required_stack"]} if first.get("required_stack")
-               else {}),
-            UNION_KEY: raw}
+from .acceptance import contract as _contract  # noqa: E402
+from .acceptance.contract import (  # noqa: E402,F401 — re-exported (#136's names)
+    MAX_ITEM_CHARS, MAX_TOTAL_ITEMS, UNION_KEY, _BOLD_HEADING, _HEADING, _ITEM_LINE,
+    _NOT_GATING, _items_and_dropped, _items_of, _norm, _raw_items, _sections, _spec_of,
+    acceptance_items, brief_must_haves, item_key, items_dropped, lineage_build_rows,
+    prd_gating_criteria, union_spec)
 
 
 def items_spec(connection: Any, *, run_id: str, fctx: Mapping[str, Any],
                own_spec: Mapping[str, Any]) -> tuple[dict, dict]:
     """(the spec whose items this run is held to, where they came from {run_id, root}).
+
+    HELD TO THE CONTRACT (BOSSAPP-1214): when the lineage has a frozen acceptance contract (one
+    is frozen here the first time a lineage is checked), its items come FIRST — the ticket's
+    criteria among them — and whatever the lineage's builds add beyond it (a later decomposed
+    slice) follows, so a check never holds a run to less than it did before. `held_to_contract`.
 
     A FOLLOW-UP is held to the UNION of its lineage's builds (`lineage_build_rows`): its own spec is the
     findings it was sent to fix, and judged against those alone it "passes" while the must-haves
@@ -249,16 +83,55 @@ def items_spec(connection: Any, *, run_id: str, fctx: Mapping[str, Any],
     fctx = fctx or {}
     is_followup = bool(fctx.get("is_followup") or fctx.get("deferred_from_run"))
     if not is_followup:
-        return _spec_of(own_spec), {"run_id": run_id, "root": True}
+        return held_to_contract(connection, run_id=run_id, fctx=fctx, own_spec=own_spec,
+                                spec=_spec_of(own_spec), source={"run_id": run_id, "root": True})
     root = str(fctx.get("root_run_id") or fctx.get("deferred_from_run") or "").strip()
     builds = ([b for b in lineage_build_rows(connection, root) if b["id"] != run_id]
               if (root and connection is not None) else [])
     if not builds:
-        return {}, {"run_id": None, "root": False,
-                    "why": "the lineage's builds (and so its must-haves) could not be found"}
+        return held_to_contract(
+            connection, run_id=run_id, fctx=fctx, own_spec=own_spec, spec={},
+            source={"run_id": None, "root": False,
+                    "why": "the lineage's builds (and so its must-haves) could not be found"})
     # Found, with or without items: an item-less build's follow-up is `no_items`, not a failure.
-    return union_spec(builds), {"run_id": builds[0]["id"], "root": True,
-                                "builds": [b["id"] for b in builds]}
+    return held_to_contract(connection, run_id=run_id, fctx=fctx, own_spec=own_spec,
+                            spec=union_spec(builds),
+                            source={"run_id": builds[0]["id"], "root": True,
+                                    "builds": [b["id"] for b in builds]})
+
+
+def held_to_contract(connection: Any, *, run_id: str, fctx: Mapping[str, Any],
+                     own_spec: Mapping[str, Any], spec: Mapping[str, Any],
+                     source: Mapping[str, Any]) -> tuple[dict, dict]:
+    """(spec, source) with the lineage's acceptance contract applied: the contract's items, then
+    the items of `spec` it does not hold. Unchanged when there is no contract to hold the run
+    to, or no database to keep one in (a check never fails because the contract could not be
+    read: it falls back to exactly what it judged before)."""
+    if connection is None or not hasattr(connection, "begin_nested"):
+        return dict(spec), dict(source)
+    try:
+        with connection.begin_nested():
+            contract = _contract.ensure_for_run(connection, run_id=run_id, fctx=fctx,
+                                                own_spec=own_spec)
+    except Exception:  # noqa: BLE001 — the check judges what it judged before
+        import logging
+
+        logging.getLogger(__name__).warning("acceptance contract unavailable for this check")
+        return dict(spec), dict(source)
+    if contract is None:
+        return dict(spec), dict(source)
+    held = _contract.gate_items(contract)
+    keys = {_contract._key(i["text"]) for i in held}  # noqa: SLF001
+    beyond = [{"source": s, "text": t} for s, t in _raw_items(spec)
+              if _contract._key(t) not in keys]  # noqa: SLF001
+    base = dict(spec)
+    out_source = dict(source)
+    if not out_source.get("root"):
+        # The builds are gone but the contract is not: the run is held to it, never to nothing.
+        out_source = {"run_id": contract["lineage_root_run_id"], "root": True}
+    out_source["contract"] = {"id": contract["id"], "version": contract["version"],
+                              "items": len(held)}
+    return {**base, UNION_KEY: held + beyond}, out_source
 
 
 # ---------------------------------------------------------------------------------------------

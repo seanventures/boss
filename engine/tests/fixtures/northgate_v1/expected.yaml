@@ -1,0 +1,226 @@
+# The Northgate v1 replay fixture (BOSSAPP-1217, epic BOSSAPP-1213). Loaded by
+# engine/tests/_acceptance_fixtures.py; checked by test_acceptance_northgate_fixture.py.
+# `human_text` is the person's request-changes note, word for word (customer name removed).
+fixture: northgate_v1
+about: Northgate v1 as BOSS delivered it, and what a person's acceptance check found on it. The battle
+  test for the Acceptance Agent (epic BOSSAPP-1213, AA-C BOSSAPP-1217).
+tree:
+  bundle: tree.bundle
+  branch: main
+  source_commit: 92f7785
+  source_tree: 0196d55cb56fe3e5eac6c0e44fdd8b9451dcad39
+  note: One commit holding exactly the tree of 92f7785 (git tree id above); the build's history is not
+    carried.
+ticket:
+  file: ticket.md
+  provider: jira
+  key: NG-1
+  title: 'Northgate API Gateway: automate tenant API onboarding'
+spec:
+  instructions: instructions.md
+  acceptance_criteria: prd_gating
+  note: 'The build''s spec as today''s pipeline makes it: the instructions as dumped from the run, and
+    the PRD''s tested-and-gating list as its acceptance criteria (prd_acceptance_inputs).'
+contract:
+  items: 23
+  from_brief: 6
+  from_prd: 17
+verdict: not_met
+catch_threshold: 11
+required_catches:
+- language
+- rulebook_20
+- hot_reload_lint
+- gwlint_fix
+- make_run_staging
+human_check_intro: 'Independent acceptance check on 92f7785: the build is a Node prototype covering part
+  of the brief; it must be the Go gateway the brief describes, with a YAML rulebook non-engineers can
+  read, and every demo step must work exactly as the README says.'
+points:
+- id: RC-1
+  key: language
+  kind: gap
+  title: Built in Node, the brief says Go
+  required: true
+  contract_items:
+  - AC-1
+  - AC-6
+  human_text: 'Language: brief says Go, one static binary. Rewrite gateway and gwlint in Go (one module,
+    cmd/northgate-gateway, cmd/gwlint); remove Node, package.json and the vite/react/playwright leftovers.
+    Check: go vet ./... and go test ./... clean; make test runs them; the built binary is a static Go
+    executable.'
+  facts:
+  - absent: go.mod
+  - present: package.json
+  - present: gateway/src/server.js
+- id: RC-2
+  key: rulebook_20
+  kind: gap
+  title: Rulebook is code, not a YAML rulebook of >=20 rules
+  required: true
+  contract_items:
+  - AC-3
+  human_text: 'Rulebook as data: rules/api-guidelines.yaml with >=20 rules (id, severity using both error
+    and warn, title, why, fix); gwlint loads it. Add missing rules: JWT audience required, PII fields
+    declared, rate limits within min/max bounds, /internal and /debug blocked, methods limited to an allowed
+    list. Check: editing a fix text in the YAML changes gwlint output.'
+  facts:
+  - absent: rules/api-guidelines.yaml
+  - present: gwlint/src/rules.js
+- id: RC-3
+  key: json_schema
+  kind: gap
+  title: No tenant JSON Schema file used by gwlint and reload
+  required: false
+  contract_items:
+  - AC-2
+  - AC-3
+  - AC-16
+  human_text: 'JSON Schema: schema/tenant.schema.json (tenant id, owner, contact, tier, routes, auth,
+    limits, CORS, upstreams, deprecation), used by gwlint (exit 2 on schema failure, names the field)
+    and by gateway reload.'
+  facts:
+  - absent: schema/tenant.schema.json
+- id: RC-4
+  key: hot_reload_lint
+  kind: gap
+  title: Hot reload applies a config that drops auth instead of rejecting it
+  required: true
+  contract_items:
+  - AC-11
+  - AC-12
+  human_text: 'Hot reload from the repo file, with linting: mount ./config/staging and ./config/production
+    as separate config dirs; on reload apply the schema and error-severity rules so a config that drops
+    auth is rejected, not applied; log every rejection as a JSON line. Check: host edit takes effect within
+    2s; removing auth is rejected and logged and a request without a token still gets 401.'
+  facts:
+  - file_lacks:
+      path: gateway/src/config.js
+      pattern: gwlint|api-guidelines|rules
+- id: RC-5
+  key: auth_scopes_mtls
+  kind: gap
+  title: No route scopes (403) and no mTLS
+  required: false
+  contract_items:
+  - AC-2
+  human_text: 'Auth: enforce route scopes (missing scope -> 403); implement mTLS (TLS listener + client
+    cert verification) for tier partner-sensitive; harbor-health without a client cert is refused, with
+    a demo-CA cert succeeds.'
+  facts:
+  - file_lacks:
+      path: gateway/src/server.js
+      pattern: (?i)mtls|requestCert|403
+- id: RC-6
+  key: json_logs_pii
+  kind: gap
+  title: No structured access logs with PII redaction
+  required: false
+  contract_items:
+  - AC-20
+  human_text: Structured JSON access logs (request id, tenant, route, status, latency) with a configurable
+    PII redaction list, with unit tests.
+  facts:
+  - file_lacks:
+      path: gateway/src/server.js
+      pattern: (?i)redact
+- id: RC-7
+  key: gateway_features
+  kind: gap
+  title: Rewrite, timeouts, retries, circuit breaker, header rules missing
+  required: false
+  contract_items:
+  - AC-1
+  - AC-2
+  human_text: 'Missing gateway features: path-prefix routing and rewrite, upstream timeouts, retries with
+    backoff for idempotent methods only, circuit breaker, header add/remove/rename, request-id propagation;
+    a unit test each.'
+  facts:
+  - file_lacks:
+      path: gateway/src/server.js
+      pattern: (?i)circuit|retry|rewrite
+- id: RC-8
+  key: gwlint_fix
+  kind: gap
+  title: gwlint --fix drops comments and key order; no validate <dir>
+  required: true
+  contract_items:
+  - AC-4
+  - AC-17
+  - AC-18
+  human_text: 'gwlint: validate <dir>; --fix keeps comments and key order; label human-only rules "needs
+    a human"; line numbers point at the offending route''s own line.'
+  facts:
+  - file_has:
+      path: gwlint/src/fixer.js
+      pattern: yaml\.dump\(
+- id: RC-9
+  key: shipped_configs_pass
+  # NO CONTRACT ITEM states it (AC-15 is the good EXAMPLE passing, not the shipped configs): a
+  # catch beyond the contract, counted when the verdict's FINDING lines name it (score(findings=)).
+  kind: finding
+  title: Shipped tenant configs do not pass gwlint
+  required: false
+  contract_items: []
+  human_text: Every shipped config/*/tenants/*.yaml passes gwlint (https mock upstreams or a documented
+    rule-sanctioned staging exception).
+  facts:
+  - file_has:
+      path: config/tenants/lumen-pay.yaml
+      pattern: 'url: http://'
+  - file_has:
+      path: gwlint/src/rules.js
+      pattern: SEC-UPSTREAM-002
+- id: RC-10
+  key: demo_from_host
+  kind: gap
+  title: No make token; /readyz does not reflect JWKS reachability
+  required: false
+  contract_items:
+  - AC-13
+  human_text: 'Demo usable from the host: make token (or a published mint endpoint); /readyz reflects
+    JWKS reachability, not recent client traffic.'
+  facts:
+  - file_lacks:
+      path: Makefile
+      pattern: '(?m)^token:'
+- id: RC-11
+  key: make_run_staging
+  kind: gap
+  title: README quick start missing; make run-staging is not the documented Go demo
+  required: true
+  contract_items:
+  - AC-5
+  - AC-7
+  - AC-23
+  human_text: 'README: what it is; 5-minute quick start (make run-staging, get a token, 200/401/429 curls,
+    hot-reload edit, gwlint bad -> fix -> validate); YAML reference; rulebook table generated from rules/api-guidelines.yaml
+    (make docs, with a test failing when stale); how gwlint runs in CI/BOSS; tenant onboarding steps (fork/branch
+    -> add tenant file -> PR -> BOSS validates). Check: an independent agent follows the README literally
+    on a fresh clone and every step produces the stated output.'
+  facts:
+  - file_lacks:
+      path: README.md
+      pattern: run-staging
+  - file_has:
+      path: Makefile
+      pattern: run-staging:\n\tdocker compose
+- id: RC-12
+  key: keep
+  kind: keep
+  title: 'Keep: exit codes, --json, the bad example''s violations, health endpoints, no branding'
+  required: false
+  contract_items:
+  - AC-14
+  - AC-15
+  human_text: 'Keep: exit codes 0/1/2, --json, the 5 named violations in the bad example, the good example
+    passing, /healthz /readyz /metrics, no customer branding.'
+  facts: []
+positive_control:
+  name: HelpDesk stats (known good)
+  fixture: bench/harness/fixtures/helpdesk-lite
+  overlay: bench/harness/solutions/helpdesk-stats
+  suite: bench/harness/suite.yaml
+  task: helpdesk-stats
+  verdict: met
+  max_human_items: 1

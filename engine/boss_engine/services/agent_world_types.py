@@ -82,6 +82,8 @@ CANONICAL_ROLE_KEYS: frozenset[str] = frozenset({
     "dq_remediation_advisor", "dq_incident_closure_agent", "dq_escalation_agent",
     # a rulebook's rules read into the Knowledge Graph (rulebook source G5)
     "rulebook_analyst",
+    # checks delivered work against its frozen acceptance contract (epic BOSSAPP-1213)
+    "acceptance_agent",
     # archetypes, "thinks like" agents (§0.1.3, §8)
     "first_principles_researcher", "visionary_founder", "relentless_operator",
     "teacher_who_simplifies",
