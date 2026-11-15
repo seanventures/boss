@@ -208,6 +208,7 @@ import { KnowledgeMovedCard } from "./knowledge/moved-card";
 import { AskBossHero } from "./ask-boss-hero";
 import { ActionForm } from "./client-forms";
 import { actorWords } from "../lib/actor-words";
+import { automatedChecksLine } from "./checks-failing";
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
     return "n/a";
@@ -227,18 +228,6 @@ function metadataString(
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-/** A merge card's failing gates (engine checks_failing): with any, never "checks: passed". */
-function checksFailingLabels(r: Record<string, unknown>): string {
-  const cf = r.checks_failing as Record<string, unknown> | undefined;
-  const gates = cf && Array.isArray(cf.gates) ? cf.gates : [];
-  return gates
-    .map((g) => (g && typeof g === "object"
-      ? String((g as Record<string, unknown>).label || (g as Record<string, unknown>).gate || "")
-      : ""))
-    .filter(Boolean)
-    .join(", ");
-}
-
 function formatRecommendation(decision: DecisionFeedItem): string {
   const r = decision.recommendation || {};
   const str = (k: string): string => (typeof r[k] === "string" ? (r[k] as string) : "");
@@ -246,19 +235,13 @@ function formatRecommendation(decision: DecisionFeedItem): string {
   const title = str("title");
   const pr = str("pull_request_url");
   const prNum = pr ? `#${pr.split("/").pop()}` : "";
-  const vstatus = str("validation_status");
-  const vsummary = str("validation_summary");
 
   // A code-change / PR review, spell out WHAT is being approved and its check status.
   if (action === "review_pull_request") {
     return [
       title ? `Approve the code change “${title}”.` : "Approve this code change.",
       pr ? `${isLocalChangeUrl(pr) ? "Change set" : "Pull request"} ${prNum} is open ${prWhere(pr)} with the full diff to review.` : "",
-      checksFailingLabels(r)
-        ? `Automated checks: failing (${checksFailingLabels(r)}).`
-        : vstatus
-        ? `Automated checks: ${vstatus.replaceAll("_", " ")}${vsummary ? `, ${vsummary}` : ""}.`
-        : "",
+      automatedChecksLine(r),
       "Approving opens/merges the PR; rejecting keeps it blocked for changes.",
     ]
       .filter(Boolean)

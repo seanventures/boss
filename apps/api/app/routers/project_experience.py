@@ -246,10 +246,14 @@ def _brief_fields(payload: "NewWorkBody", said: str) -> dict[str, Any]:
     from boss_engine.services.project_experience import understanding
 
     brief = payload.brief if isinstance(payload.brief, dict) else None
-    criteria = [" ".join(str(c).split())[:300] for c in
+    from boss_engine.services.project_experience.add_project import (MAX_DIRECTIVE,
+                                                                     MAX_DONE_WHEN_CHARS)
+
+    # Whole criteria and a whole brief (BOSSAPP-1212): only the quoted words are trimmed.
+    criteria = [" ".join(str(c).split())[:MAX_DONE_WHEN_CHARS] for c in
                 ((brief or {}).get("done_when") or payload.acceptance_criteria or [])
                 if str(c or "").strip()][:12]
-    out: dict[str, Any] = {"directive": understanding.directive(said, brief)[:8000]}
+    out: dict[str, Any] = {"directive": understanding.directive(said, brief)[:MAX_DIRECTIVE]}
     if criteria:
         out["acceptance_criteria"] = criteria
     if brief and str(brief.get("title") or "").strip():

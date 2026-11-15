@@ -2385,7 +2385,8 @@ class SoftwareFactoryService:
         # shipped past refuted reviews and missing must-haves (Northgate, dec_ef42b38d). The
         # card carries the UNION of the gates the lineage shipped past, and the must-have table.
         card_checks, acceptance = _acceptance_gate.merge_card_checks(
-            connection, run_id=run_id, evidence=evidence, checks_failing=checks_failing)
+            connection, run_id=run_id, evidence=evidence, checks_failing=checks_failing,
+            pr_url=pr.url)
 
         # A local change set is "change #N", never a PR (BOSSAPP-946).
         _local = getattr(self.github, "kind", "") == "local"
@@ -2412,9 +2413,7 @@ class SoftwareFactoryService:
                     + (f"change #{pr.number}. " if _local else f"pull request #{pr.number}. ")
                     + (f"{_acceptance_gate.headline(acceptance)}. "
                        if _acceptance_gate.headline(acceptance) else "")
-                    + (f"Automated checks: failing ({_checks_failing.headline(card_checks)}); "
-                       f"CI {validation_status}" if card_checks
-                       else f"Automated checks: {validation_status}")
+                    + _acceptance_gate.card_words(card_checks, acceptance, validation_status)
                     + (f" — {validation_summary}" if validation_summary else "")
                     + (". Review the change in BOSS (it is on this machine), then approve to merge "
                        "into the default branch or reject to send back."
@@ -2466,8 +2465,13 @@ class SoftwareFactoryService:
                                                      "source")}
                               for i in acceptance.get("items") or []],
                     "stack": acceptance.get("stack") or {},
+                    "why": acceptance.get("why") or "",
+                    "items_dropped": int(acceptance.get("items_dropped") or 0),
                     "table": _acceptance_gate.must_have_table(acceptance)}}
-                   if isinstance(acceptance, dict) and acceptance.get("verdict") else {}),
+                   if isinstance(acceptance, dict) and acceptance.get("verdict")
+                   # Never checked against the root's must-haves: the card says so.
+                   else {_acceptance_gate.KEY: {"verdict": "not_checked", "items": []}}
+                   if run_id else {}),
                 # The knowledge the card is "based on": facts matched to this change's symbols
                 # (knowledge/runtime.remember_written_files). Empty when none matched.
                 "cited_fact_ids": citations,

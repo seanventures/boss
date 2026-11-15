@@ -18,6 +18,9 @@ WHAT IT DOES.
   - A deterministic check that the stack the spec requires has its manifest in the tree (a Go
     brief has a go.mod). `required_stack` is the one function RCA-A's structured
     `required_stack` replaces.
+  - The gate FAILS CLOSED: it passes only when every item is MET with evidence that exists in
+    the tree (not docs alone) and the reviewer's own summary line agrees. A PARTIAL, MISSING or
+    unanswered item, a contradiction, or items that could not be found never pass.
   - A MISSING item or a missing manifest is a fact, not an opinion: the gate is in the advisory
     hard floor (governed_code_task_service._ADVISORY_HARD_FLOOR), so under `lean` it gets its
     repair rounds and then a labelled checks-failing draft PR with a follow-up carrying the
@@ -147,8 +150,17 @@ def _spec_of(value: Any) -> dict:
 
 def acceptance_items(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
     """What the build is held to, numbered: the brief's must-haves, the PRD's tested-and-gating
-    list, then the run's acceptance criteria — deduplicated, each whole up to MAX_ITEM_CHARS.
-    The existing-tests promise is left to the regression gate, which measures it."""
+    list, then the run's acceptance criteria — deduplicated, each whole up to MAX_ITEM_CHARS, at
+    most MAX_ITEMS (`items_dropped` says how many more there were). The existing-tests promise
+    is left to the regression gate, which measures it."""
+    return _items_and_dropped(spec)[0]
+
+
+def items_dropped(spec: Mapping[str, Any]) -> int:
+    return _items_and_dropped(spec)[1]
+
+
+def _items_and_dropped(spec: Mapping[str, Any]) -> tuple[list[dict[str, Any]], int]:
     from .code_task_service import EXISTING_TESTS_CRITERION
 
     spec = _spec_of(spec)
@@ -160,88 +172,103 @@ def acceptance_items(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
             if _norm(c) and _norm(c) != _norm(EXISTING_TESTS_CRITERION)]
     seen: set[str] = set()
     items: list[dict[str, Any]] = []
+    dropped = 0
     for source, item in raw:
         key = re.sub(r"\W+", " ", item.lower()).strip()
         if not key or key in seen:
             continue
         seen.add(key)
-        items.append({"n": len(items) + 1, "text": item[:MAX_ITEM_CHARS], "source": source})
         if len(items) >= MAX_ITEMS:
-            break
-    return items
+            dropped += 1
+            continue
+        items.append({"n": len(items) + 1, "text": item[:MAX_ITEM_CHARS], "source": source})
+    return items, dropped
+
+
+def lineage_root_row(connection: Any, root: str) -> Optional[dict]:
+    """The lineage's ORIGINAL build: the earliest run of the lineage that is not a follow-up.
+    Not simply the `root_run_id` row: a web-app build and a decomposed PRD mint a root id with
+    no code_task_runs row of its own (start_web_app_build, prd_decomposition), and falling back
+    to the follow-up's own "Fixed: [MAJOR] …" criteria is how a follow-up "met" its must-haves."""
+    from sqlalchemy import text
+
+    row = connection.execute(text(
+        "SELECT id, spec FROM code_task_runs WHERE (id = :r OR finalize_ctx->>'root_run_id' = :r) "
+        "AND COALESCE(finalize_ctx->>'is_followup', 'false') <> 'true' "
+        "AND finalize_ctx->>'deferred_from_run' IS NULL "
+        "ORDER BY created_at, id LIMIT 1"), {"r": root}).first()
+    return {"id": row[0], "spec": _spec_of(row[1])} if row else None
 
 
 def items_spec(connection: Any, *, run_id: str, fctx: Mapping[str, Any],
-               own_spec: Mapping[str, Any]) -> dict:
-    """Whose items a run is held to. A FOLLOW-UP inherits its lineage root's: its own spec is
-    the findings it was sent to fix, and judged against those alone it "passes" while the
-    must-haves the root missed stay missing (crun_15f0504ac9f64eaeb4a1). Every other run (a
-    repair child copies its parent's spec) is held to its own."""
-    root = str((fctx or {}).get("root_run_id") or "").strip()
-    if not (fctx or {}).get("is_followup") or not root or root == run_id or connection is None:
-        return _spec_of(own_spec)
-    from sqlalchemy import text
+               own_spec: Mapping[str, Any]) -> tuple[dict, dict]:
+    """(the spec whose items this run is held to, where they came from {run_id, root}).
 
-    row = connection.execute(text("SELECT spec FROM code_task_runs WHERE id = :id"),
-                             {"id": root}).first()
-    root_spec = _spec_of(row[0]) if row else {}
-    return root_spec if acceptance_items(root_spec) else _spec_of(own_spec)
+    A FOLLOW-UP is held to its lineage's ORIGINAL build (`lineage_root_row`): its own spec is the
+    findings it was sent to fix, and judged against those alone it "passes" while the must-haves
+    the root missed stay missing (crun_15f0504ac9f64eaeb4a1). When that build cannot be found
+    the follow-up has NO items (`root: False`, and the check is not_run) — never its own. Every
+    other run (a repair child copies its parent's spec) is held to its own, which is the root's."""
+    fctx = fctx or {}
+    is_followup = bool(fctx.get("is_followup") or fctx.get("deferred_from_run"))
+    if not is_followup:
+        return _spec_of(own_spec), {"run_id": run_id, "root": True}
+    root = str(fctx.get("root_run_id") or fctx.get("deferred_from_run") or "").strip()
+    found = lineage_root_row(connection, root) if (root and connection is not None) else None
+    if found and found["id"] != run_id and acceptance_items(found["spec"]):
+        return found["spec"], {"run_id": found["id"], "root": True}
+    return {}, {"run_id": None, "root": False,
+                "why": "the lineage's original build (and so its must-haves) could not be found"}
 
 
 # ---------------------------------------------------------------------------------------------
 # The required stack (RCA-A replaces `required_stack` with the spec's structured field)
 # ---------------------------------------------------------------------------------------------
 
-_NEGATED = re.compile(r"(?:\bno|\bnot|\bwithout|\binstead of|\bnever|\bavoid)\s+(?:\w+\s+){0,1}$",
-                      re.I)
-STACKS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
-    ("go", ("go.mod",),
-     (r"\bGolang\b", r"\(\s*Go\s*\)", r"\b(?:in|using|with|written in)\s+Go\b(?!\s+to\b)",
-      r"\bGo\s+(?:\d|service|binary|module|CLI|gateway|server|backend|API|program|code)\b",
-      r"\bgo\.mod\b")),
-    ("rust", ("Cargo.toml",), (r"\bRust\b", r"\bCargo\.toml\b")),
-    ("python", ("pyproject.toml", "requirements.txt", "setup.py", "setup.cfg", "Pipfile"),
-     (r"\bPython\b", r"\bFastAPI\b", r"\bDjango\b", r"\bFlask\b")),
-    ("node", ("package.json",),
-     (r"\bNode(?:\.js)?\b", r"\bTypeScript\b", r"\bNext\.js\b", r"\bReact\b", r"\bExpress\b",
-      r"\bNestJS\b")),
-    ("java", ("pom.xml", "build.gradle", "build.gradle.kts"),
-     (r"\bJava\b", r"\bSpring Boot\b", r"\bKotlin\b")),
-)
+def _language_key(word: str) -> Optional[str]:
+    from . import stacks
 
-
-def _stack_text(spec: Mapping[str, Any]) -> str:
-    """Where a stack REQUIREMENT is stated: the title, the must-haves and any "Stack:" line.
-    Never the whole PRD, which names rejected alternatives and the tools around the app."""
-    spec = _spec_of(spec)
-    instructions = str(spec.get("instructions") or "")
-    first = instructions.strip().splitlines()[0] if instructions.strip() else ""
-    stack_lines = re.findall(r"(?im)^\s*\**stack\**\s*:\s*(.+)$", instructions)
-    return "\n".join([first, *brief_must_haves(instructions), *stack_lines])
+    word = re.split(r"[\s/\-_.,;:()]+", str(word or "").strip().lower(), maxsplit=1)[0]
+    key = stacks._normalise_language(word)  # noqa: SLF001
+    return key if key in stacks.LANGUAGES else None
 
 
 def required_stack(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """The stacks the spec REQUIRES, conservatively: named in the title, a must-have or a
-    "Stack:" line, not negated ("no Python"). [{stack, manifests, because}]. THE ONE PLACE RCA-A
-    replaces with the spec's structured `required_stack`."""
+    """The stacks the spec names, each `hard` or not: [{stack, manifests, because, hard}].
+
+    HARD (a missing manifest fails the gate): the spec's structured `required_stack` (RCA-A), or
+    a `Stack:` line (stacks.declared_stack — the add-project start's and the architecture's).
+    SOFT: languages the brief's words name (stacks.languages_named on the directive, with its
+    negation and migration-source handling). Words are not a declaration ("React to alerts"),
+    so a soft stack never fails the gate by itself: the reviewer is told and judges it, and the
+    record carries a note. THE ONE PLACE RCA-A replaces with the structured field."""
+    from . import stacks
+
     spec = _spec_of(spec)
+    out: list[dict[str, Any]] = []
+
+    def add(key: Optional[str], because: str, hard: bool) -> None:
+        if not key or any(o["stack"] == key for o in out):
+            return
+        out.append({"stack": key, "manifests": list(stacks.LANGUAGES[key].manifests),
+                    "because": because, "hard": hard})
+
     structured = spec.get("required_stack")
     if isinstance(structured, list) and structured:
-        known = {s: m for s, m, _ in STACKS}
-        return [{"stack": str(s), "manifests": list(known.get(str(s), ())),
-                 "because": "the spec's required_stack"}
-                for s in structured if str(s) in known]
-    text = _stack_text(spec)
-    out = []
-    for stack, manifests, patterns in STACKS:
-        for pat in patterns:
-            hit = next((m for m in re.finditer(pat, text)
-                        if not _NEGATED.search(text[max(0, m.start() - 24):m.start()])), None)
-            if hit:
-                lo, hi = max(0, hit.start() - 40), min(len(text), hit.end() + 40)
-                out.append({"stack": stack, "manifests": list(manifests),
-                            "because": _norm(text[lo:hi])})
-                break
+        for s in structured:
+            add(_language_key(s.get("language") if isinstance(s, Mapping) else s),
+                "the spec's required_stack", True)
+        return out
+    instructions = str(spec.get("instructions") or "")
+    for d in stacks.declared_stack(instructions) or []:
+        add(_language_key(d.get("language")), f"Stack: line ({d.get('service')})", True)
+    if out:
+        return out
+    directive = stacks.directive_text(instructions)
+    first = directive.strip().splitlines()[0] if directive.strip() else ""
+    words = "\n".join([first, *brief_must_haves(directive)])
+    for key in stacks.languages_named(words):
+        add(key, "named in the brief's words", False)
     return out
 
 
@@ -257,10 +284,11 @@ def _walk(root: Path, max_depth: int = 6) -> Iterable[Path]:
 
 
 def stack_manifest_check(root: Any, spec: Mapping[str, Any]) -> dict[str, Any]:
-    """Each required stack and the manifest found for it (None = missing) in the branch tree."""
+    """Each named stack and the manifest found for it (None = absent). `missing` holds only the
+    HARD stacks with no manifest (they fail the gate); `notes` the soft ones (they do not)."""
     required = required_stack(spec)
     if not required or root is None:
-        return {"required": required, "found": {}, "missing": []}
+        return {"required": required, "found": {}, "missing": [], "notes": []}
     wanted = {m for r in required for m in r["manifests"]}
     present: dict[str, str] = {}
     for p in _walk(Path(root)):
@@ -269,7 +297,10 @@ def stack_manifest_check(root: Any, spec: Mapping[str, Any]) -> dict[str, Any]:
     found = {r["stack"]: next((present[m] for m in r["manifests"] if m in present), None)
              for r in required}
     return {"required": required, "found": found,
-            "missing": [s for s, path in found.items() if not path]}
+            "missing": [r["stack"] for r in required if r["hard"] and not found[r["stack"]]],
+            "notes": [f"the brief's words name {r['stack']} but no {'/'.join(r['manifests'])} "
+                      "is in the tree (not a declared stack, so the reviewer judges it)"
+                      for r in required if not r["hard"] and not found[r["stack"]]]}
 
 
 def tree_listing(root: Any, limit: int = MAX_TREE_FILES) -> str:
@@ -289,14 +320,20 @@ def tree_listing(root: Any, limit: int = MAX_TREE_FILES) -> str:
 # The reviewer
 # ---------------------------------------------------------------------------------------------
 
+def _stack_lines(stack: Mapping[str, Any]) -> str:
+    lines = []
+    for r in stack.get("required") or []:
+        path = (stack.get("found") or {}).get(r["stack"])
+        state = f"manifest {path}" if path else "NO manifest found: " + "/".join(r["manifests"])
+        kind = ("REQUIRED (declared)" if r["hard"]
+                else "named in the brief's words (judge whether it is really required)")
+        lines.append(f"- {r['stack']}: {kind}; {state}")
+    return ("\n\nSTACK:\n" + "\n".join(lines)) if lines else ""
+
+
 def acceptance_prompt(items: list[dict], *, title: str, stack: Mapping[str, Any],
                       tree: str) -> str:
     listed = "\n".join(f"ITEM {i['n']} [{i['source']}]: {i['text']}" for i in items)
-    stack_lines = ""
-    if stack.get("required"):
-        stack_lines = "\n\nREQUIRED STACK (from the spec): " + ", ".join(
-            f"{r['stack']} ({'manifest ' + str(stack['found'].get(r['stack'])) if stack['found'].get(r['stack']) else 'NO manifest found: ' + '/'.join(r['manifests'])})"
-            for r in stack["required"])
     return (
         "You are BOSS's ACCEPTANCE REVIEWER for the build \"" + str(title or "") + "\". "
         "Your one question: does the code ON THIS BRANCH — the whole working tree in front of "
@@ -305,12 +342,14 @@ def acceptance_prompt(items: list[dict], *, title: str, stack: Mapping[str, Any]
         "commit messages claim. A stub, a TODO, a hard-coded demo answer, a test that asserts "
         "nothing, or a feature present in a different language/stack than required is not MET. "
         "Do NOT edit any file.\n\n"
-        "THE ITEMS:\n" + listed + stack_lines + "\n\n"
+        "THE ITEMS:\n" + listed + _stack_lines(stack) + "\n\n"
         "Answer EVERY item, one line each, in this exact form:\n"
-        "  ITEM <n>: MET — <the file(s) and function(s)/test(s) that deliver it>\n"
+        "  ITEM <n>: MET — <the source file path(s) in this tree, and the function or test that "
+        "delivers it>\n"
         "  ITEM <n>: PARTIAL — <what exists (files) and what is still missing>\n"
         "  ITEM <n>: MISSING — <what you looked for and where; what is absent>\n"
-        "MET requires file evidence (a path in the tree). When unsure, say PARTIAL and why.\n"
+        "MET requires a path that exists in the tree and is code, configuration or a test — a "
+        "README or other document alone is not evidence. When unsure, say PARTIAL and why.\n"
         "End with EXACTLY one final line:\n  ACCEPTANCE: MET\n  ACCEPTANCE: NOT MET\n\n"
         "THE BRANCH'S FILES:\n" + (tree or "(empty)") + "\n"
     )
@@ -319,49 +358,101 @@ def acceptance_prompt(items: list[dict], *, title: str, stack: Mapping[str, Any]
 _ANSWER = re.compile(
     r"(?im)^[\s>*\-•]*\**\s*ITEM\s*#?\s*(\d+)\s*\**\s*[:.)\-]\s*\**\s*(MET|PARTIAL|MISSING)\b\**"
     r"\s*(?:[—–:\-]+\s*)?(.*)$")
-_PATHISH = re.compile(r"[\w.\-]+/[\w.\-/]+|\b[\w\-]+\.(?:go|py|js|mjs|ts|tsx|jsx|rs|java|kt|rb|"
-                      r"php|cs|yaml|yml|json|toml|md|sql|sh|html|css|mod)\b")
+_SUMMARY = re.compile(r"(?im)^[\s>*`]*ACCEPTANCE\s*:\s*\**\s*(NOT\s+MET|MET)\b")
+_PATHISH = re.compile(r"(?<![\w/.-])([\w.\-]+(?:/[\w.\-]+)+|[\w\-]+\.[A-Za-z][\w]{0,8})"
+                      r"(?::\d+)?(?![\w/])")
+_DOC_PATH = re.compile(r"(?i)(^|/)(readme[^/]*|changelog[^/]*|docs?/.*|[^/]*\.(md|rst|txt|adoc))$")
 
 
-def parse_acceptance(reply: str, items: list[dict]) -> list[dict[str, Any]]:
+def _resolve(root: Path, cited: str) -> Optional[str]:
+    """The tree path a cited path names (exact, else a unique suffix match), or None."""
+    cited = cited.strip("`'\".,;:()[]").lstrip("./")
+    if not cited or ".." in Path(cited).parts:
+        return None
+    direct = root / cited
+    if direct.is_file():
+        return cited
+    hits = [p for p in _walk(root) if str(p.relative_to(root)).endswith("/" + cited)
+            or (("/" not in cited) and p.name == cited)]
+    return str(hits[0].relative_to(root)) if len(hits) == 1 else None
+
+
+def evidence_paths(root: Any, why: str) -> tuple[list[str], list[str]]:
+    """(cited paths that exist in the tree, cited paths that do not)."""
+    if root is None:
+        return [], []
+    found, absent = [], []
+    for m in _PATHISH.finditer(str(why or "")):
+        cited = m.group(1)
+        if re.fullmatch(r"\d+(\.\d+)*", cited):
+            continue
+        hit = _resolve(Path(root), cited)
+        (found if hit else absent).append(hit or cited)
+    return list(dict.fromkeys(found)), list(dict.fromkeys(absent))
+
+
+def parse_acceptance(reply: str, items: list[dict], *, root: Any) -> list[dict[str, Any]]:
     """Each item with the reviewer's status and evidence (the LAST answer for an item wins).
-    A MET with no file cited reads as PARTIAL: the protocol asks for evidence, and an
-    unevidenced claim is what this gate exists to stop."""
+
+    A MET stands only on evidence: at least one cited path that EXISTS in the tree and is not a
+    document (README, *.md, docs/). Otherwise it reads as PARTIAL, saying why — an unevidenced
+    or invented claim is what this gate exists to stop."""
     answers: dict[int, tuple[str, str]] = {}
     for m in _ANSWER.finditer(str(reply or "")):
         answers[int(m.group(1))] = (m.group(2).lower(), _norm(m.group(3))[:600])
     out = []
     for it in items:
         status, why = answers.get(int(it["n"]), (UNJUDGED, ""))
-        if status == MET and not _PATHISH.search(why):
-            status, why = PARTIAL, (why + " (no file evidence cited)").strip()
+        if status == MET:
+            found, absent = evidence_paths(root, why)
+            code = [f for f in found if not _DOC_PATH.search(f)]
+            if not code:
+                reason = ("only documents cited" if found
+                          else f"cited paths not in the tree: {', '.join(absent[:4])}" if absent
+                          else "no file evidence cited")
+                status, why = PARTIAL, f"{why} ({reason})".strip()
         out.append({**it, "status": status, "evidence": why})
     return out
 
 
-def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any]) -> dict[str, Any]:
-    """The gate's record. verdict:
-      met       every item MET or PARTIAL, every required manifest present
-      not_met   an item MISSING, or a required stack's manifest absent (facts)
-      not_run   the reviewer answered nothing parseable (the check's fault, not the code's)
-      no_items  nothing to hold the build to (and no stack requirement)"""
+def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
+          root: Any, source: Optional[Mapping[str, Any]] = None,
+          dropped: int = 0) -> dict[str, Any]:
+    """The gate's record. It FAILS CLOSED; verdict:
+      met       EVERY item MET with evidence in the tree, every declared manifest present, and
+                the reviewer's own summary line says MET
+      not_met   an item MISSING or PARTIAL, a declared stack's manifest absent, or the reviewer's
+                summary contradicting its items (facts — repair, then a checks-failing PR)
+      not_run   the reviewer left items unanswered, or the items could not be found (the
+                check's fault, not the code's: it is re-run, and never passes)
+      no_items  the run states nothing to hold it to (a non-follow-up with no criteria)"""
     stack = dict(stack or {})
-    judged = parse_acceptance(reply or "", items) if items else []
-    answered = [i for i in judged if i["status"] != UNJUDGED]
+    source = dict(source or {"root": True})
+    judged = parse_acceptance(reply or "", items, root=root) if items else []
+    m = list(_SUMMARY.finditer(str(reply or "")))
+    summary = (" ".join(m[-1].group(1).upper().split()) if m else None)
     missing = [i["n"] for i in judged if i["status"] == MISSING]
     partial = [i["n"] for i in judged if i["status"] == PARTIAL]
     unjudged = [i["n"] for i in judged if i["status"] == UNJUDGED]
-    stack_missing = list(stack.get("missing") or [])
-    if stack_missing or missing:
+    met = [i["n"] for i in judged if i["status"] == MET]
+    why = ""
+    if stack.get("missing") or missing or partial:
         verdict = "not_met"
+    elif not source.get("root"):
+        verdict, why = "not_run", str(source.get("why") or "the must-haves were not found")
     elif not items:
         verdict = "no_items"
-    elif not answered:
-        verdict = "not_run"
+    elif unjudged:
+        verdict, why = "not_run", f"{len(unjudged)} of {len(items)} items were not answered"
+    elif summary != "MET":
+        verdict = "not_met"
+        why = ("the reviewer's summary says NOT MET although every item reads met"
+               if summary == "NOT MET" else "the reviewer gave no ACCEPTANCE summary line")
     else:
         verdict = "met"
-    return {"verdict": verdict, "items": judged, "missing": missing, "partial": partial,
-            "unjudged": unjudged, "stack": stack,
+    return {"verdict": verdict, "why": why, "summary_line": summary, "items": judged,
+            "missing": missing, "partial": partial, "unjudged": unjudged, "met": met,
+            "stack": stack, "source": source, "items_dropped": int(dropped or 0),
             "counts": {s: sum(1 for i in judged if i["status"] == s)
                        for s in (MET, PARTIAL, MISSING, UNJUDGED)}}
 
@@ -372,38 +463,32 @@ def passed(record: Optional[Mapping[str, Any]]) -> bool:
 
 def findings_summary(record: Optional[Mapping[str, Any]]) -> str:
     """The gate's findings as FINDING lines (review_comments.parse_findings reads them), so the
-    checks-failing PR, its card and its follow-up carry each missing item verbatim."""
+    checks-failing PR, its card and its follow-up carry each unmet item verbatim."""
     record = record or {}
     lines = []
-    for stack in (record.get("stack") or {}).get("missing") or []:
-        req = next((r for r in (record.get("stack") or {}).get("required") or []
-                    if r.get("stack") == stack), {})
-        lines.append(f"FINDING: MAJOR — Required stack '{stack}' has no manifest in the tree "
-                     f"(expected {' or '.join(req.get('manifests') or [])}; the spec says: "
-                     f"\"{req.get('because', '')}\").")
-    for i in record.get("items") or []:
-        if i.get("status") == MISSING:
-            lines.append(f"FINDING: MAJOR — Must-have {i['n']} MISSING: {i['text']}"
-                         + (f" — {i['evidence']}" if i.get("evidence") else ""))
-    for i in record.get("items") or []:
-        if i.get("status") == PARTIAL:
-            lines.append(f"FINDING: MAJOR — Must-have {i['n']} only PARTIAL: {i['text']}"
-                         + (f" — {i['evidence']}" if i.get("evidence") else ""))
-    if record.get("verdict") == "not_run":
-        lines.append("The acceptance reviewer answered no item; the must-haves were not checked.")
+    stack = record.get("stack") or {}
+    for name in stack.get("missing") or []:
+        req = next((r for r in stack.get("required") or [] if r.get("stack") == name), {})
+        lines.append(f"FINDING: MAJOR — Required stack '{name}' has no manifest in the tree "
+                     f"(expected {' or '.join(req.get('manifests') or [])}; declared by "
+                     f"{req.get('because', 'the spec')}).")
+    for status, word in ((MISSING, "MISSING"), (PARTIAL, "only PARTIAL"),
+                         (UNJUDGED, "not judged")):
+        for i in record.get("items") or []:
+            if i.get("status") == status:
+                lines.append(f"FINDING: MAJOR — Must-have {i['n']} {word}: {i['text']}"
+                             + (f" — {i['evidence']}" if i.get("evidence") else ""))
+    if record.get("why"):
+        lines.append(f"FINDING: MAJOR — Acceptance check: {record['why']}.")
+    for note in stack.get("notes") or []:
+        lines.append(f"Note: {note}.")
+    if record.get("items_dropped"):
+        lines.append(f"Note: {record['items_dropped']} further items beyond the first "
+                     f"{MAX_ITEMS} were not checked.")
     return "\n".join(lines)
 
 
-def partial_followups(record: Optional[Mapping[str, Any]]) -> list[dict[str, str]]:
-    """PARTIAL items of a build that otherwise met its must-haves: queued as follow-up work
-    (deferred findings), never dropped."""
-    return [{"severity": "major",
-             "text": f"Must-have {i['n']} only partially delivered: {i['text']}"
-                     + (f" — {i['evidence']}" if i.get("evidence") else "")}
-            for i in (record or {}).get("items") or [] if i.get("status") == PARTIAL]
-
-
-_STATUS_WORD = {MET: "met", PARTIAL: "partial", MISSING: "MISSING", UNJUDGED: "not judged"}
+_STATUS_WORD = {MET: "met", PARTIAL: "PARTIAL", MISSING: "MISSING", UNJUDGED: "NOT JUDGED"}
 
 
 def must_have_table(record: Optional[Mapping[str, Any]]) -> str:
@@ -412,6 +497,7 @@ def must_have_table(record: Optional[Mapping[str, Any]]) -> str:
     items = record.get("items") or []
     if not items and not (record.get("stack") or {}).get("required"):
         return ""
+
     def cell(s: Any) -> str:
         return _norm(s).replace("|", "\\|")
     rows = ["| # | Must-have | Status | Evidence |", "|---|---|---|---|"]
@@ -419,20 +505,29 @@ def must_have_table(record: Optional[Mapping[str, Any]]) -> str:
              f"| {cell(i.get('evidence'))} |" for i in items]
     for r in (record.get("stack") or {}).get("required") or []:
         path = ((record.get("stack") or {}).get("found") or {}).get(r["stack"])
+        status = "met" if path else ("MISSING" if r.get("hard") else "not declared, not found")
         rows.append(f"| stack | {r['stack']} manifest ({' or '.join(r['manifests'])}) "
-                    f"| {'met' if path else 'MISSING'} | {cell(path or 'not in the tree')} |")
+                    f"| {status} | {cell(path or 'not in the tree')} |")
+    if record.get("items_dropped"):
+        rows.append(f"\n{record['items_dropped']} further items beyond the first {MAX_ITEMS} "
+                    "were not checked.")
     return "\n".join(rows)
 
 
 def headline(record: Optional[Mapping[str, Any]]) -> str:
-    c = (record or {}).get("counts") or {}
-    if not (record or {}).get("items"):
+    record = record or {}
+    c = record.get("counts") or {}
+    if record.get("verdict") == "not_run" and not record.get("items"):
+        return f"Must-haves: not checked ({record.get('why') or 'no answer'})"
+    if not record.get("items"):
         return ""
     bits = [f"{c.get(MET, 0)} met", f"{c.get(PARTIAL, 0)} partial", f"{c.get(MISSING, 0)} missing"]
     if c.get(UNJUDGED):
         bits.append(f"{c[UNJUDGED]} not judged")
     if (record.get("stack") or {}).get("missing"):
         bits.append("required stack missing: " + ", ".join(record["stack"]["missing"]))
+    if record.get("items_dropped"):
+        bits.append(f"{record['items_dropped']} not checked (over {MAX_ITEMS})")
     return "Must-haves: " + ", ".join(bits)
 
 
@@ -447,6 +542,12 @@ def pr_section(record: Optional[Mapping[str, Any]]) -> str:
 # The lineage, for the merge card
 # ---------------------------------------------------------------------------------------------
 
+#: Gates a later build judges on the WHOLE tree, so its pass clears an earlier failure.
+#: Judgment seats (review, security, consistency) re-judge only a follow-up's own delta and do
+#: not; `acceptance_met` clears only by a check against the ROOT's items (see lineage_failures).
+WHOLE_TREE_GATES = frozenset({"nothing_broke", "app_serves", "existing_tests_intact"})
+
+
 def _gates_shipped_past(fctx: Mapping[str, Any]) -> list[str]:
     fctx = fctx or {}
     out: list[str] = []
@@ -457,14 +558,27 @@ def _gates_shipped_past(fctx: Mapping[str, Any]) -> list[str]:
     return [g for g in dict.fromkeys(out) if g]
 
 
-def lineage_failures(connection: Any, *, run_id: str,
+def _gates_passed(value: Any) -> set[str]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return set()
+    return {str(g) for g in value or []} if isinstance(value, list) else set()
+
+
+def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = None,
                      current_acceptance: Optional[Mapping[str, Any]] = None,
                      current_failing: Iterable[str] = ()) -> dict[str, Any]:
-    """The gates this pull request's builds SHIPPED PAST, across the lineage (root_run_id):
-    {"gates": {gate: [run ids]}, "acceptance": the latest acceptance record}. A run that went
-    on to a repair child never shipped (its child re-judged the whole spec) and is not counted.
-    `acceptance_met` clears when the latest acceptance check (the root's must-haves, whole
-    tree) met them; no other gate clears, because a follow-up re-judges only its own delta."""
+    """The gates THIS pull request's builds shipped past, across the lineage (root_run_id):
+    {"gates": {gate: [run ids]}, "acceptance": the latest acceptance record against the root's
+    items (None: never checked)}.
+
+    Scoped to the pull request (`pr_url`; the current run is always in): an earlier, merged PR
+    of the same lineage is not this one. A run that went on to a repair child never shipped and
+    is not counted. A WHOLE_TREE_GATES failure clears when a later build of the PR passed that
+    gate; `acceptance_met` clears only when the latest acceptance check AGAINST THE ROOT'S ITEMS
+    met them; a judgment seat's failure never clears (a follow-up re-judges its own delta)."""
     from sqlalchemy import text
 
     row = connection.execute(text(
@@ -473,39 +587,54 @@ def lineage_failures(connection: Any, *, run_id: str,
     gates: dict[str, list[str]] = {}
     for g in current_failing or ():
         gates.setdefault(str(g), []).append(run_id)
-    latest_acc = dict(current_acceptance) if current_acceptance else None
+    cur = dict(current_acceptance) if current_acceptance else None
+    cur_ok = bool(cur and cur.get("verdict") in ("met", "not_met")
+                  and (cur.get("source") or {"root": True}).get("root"))
     if row is None:
-        return {"gates": gates, "acceptance": latest_acc}
+        acc = cur if cur_ok else None
+        if acc and acc.get("verdict") == "not_met":
+            gates.setdefault(GATE, [run_id])
+        return {"gates": gates, "acceptance": acc}
     project_id, root = row[0], row[1]
     rows = connection.execute(text(
-        "SELECT id, status, pull_request_url, finalize_ctx, state->'acceptance' AS acc "
-        "FROM code_task_runs WHERE project_id = :p "
-        "AND (id = :root OR finalize_ctx->>'root_run_id' = :root) ORDER BY created_at"),
+        "SELECT r.id, r.status, r.pull_request_url, r.finalize_ctx, r.state->'acceptance' AS acc, "
+        "q.gates_passed FROM code_task_runs r LEFT JOIN quality_gates q "
+        "ON q.code_task_run_id = r.id AND q.project_id = r.project_id "
+        "WHERE r.project_id = :p AND (r.id = :root OR r.finalize_ctx->>'root_run_id' = :root) "
+        "ORDER BY r.created_at, r.id"),
         {"p": project_id, "root": root}).mappings().all()
     acc_seen, acc_run = None, None
-    for r in rows:
+    passed_after: dict[str, int] = {}
+    failed_at: dict[str, int] = {}
+    for idx, r in enumerate(rows):
+        this = r["id"] == run_id
+        if not this and pr_url and r["pull_request_url"] != pr_url:
+            continue
         fctx = _spec_of(r["finalize_ctx"])
-        shipped = (r["id"] == run_id or r["pull_request_url"]
-                   or r["status"] == "completed")
+        shipped = this or r["pull_request_url"] or r["status"] == "completed"
         if shipped and r["status"] not in ("repairing", "cancelled", "failed"):
             for g in _gates_shipped_past(fctx):
-                gates.setdefault(g, [])
-                if r["id"] not in gates[g]:
-                    gates[g].append(r["id"])
+                runs = gates.setdefault(g, [])
+                if r["id"] not in runs:
+                    runs.append(r["id"])
+                failed_at[g] = idx
+            for g in _gates_passed(r["gates_passed"]) & WHOLE_TREE_GATES:
+                passed_after[g] = idx
         acc = _spec_of(r["acc"])
-        if acc.get("verdict") in ("met", "not_met") and r["id"] != run_id:
+        if (acc.get("verdict") in ("met", "not_met") and not this
+                and (acc.get("source") or {"root": True}).get("root")):
             acc_seen, acc_run = acc, r["id"]
-    if latest_acc is None or latest_acc.get("verdict") not in ("met", "not_met"):
-        latest_acc, latest_run = (acc_seen, acc_run) if acc_seen else (latest_acc, run_id)
-    else:
-        latest_run = run_id
-    if latest_acc and latest_acc.get("verdict") == "met":
+    for g in list(gates):
+        if g in WHOLE_TREE_GATES and passed_after.get(g, -1) > failed_at.get(g, 10 ** 9):
+            gates.pop(g)
+    latest, latest_run = (cur, run_id) if cur_ok else (acc_seen, acc_run)
+    if latest and latest.get("verdict") == "met":
         gates.pop(GATE, None)
-    elif latest_acc and latest_acc.get("verdict") == "not_met":
+    elif latest and latest.get("verdict") == "not_met":
         runs = gates.setdefault(GATE, [])
         if latest_run and latest_run not in runs:
             runs.append(latest_run)
-    return {"gates": gates, "acceptance": latest_acc}
+    return {"gates": gates, "acceptance": latest}
 
 
 def card_checks_failing(lineage: Mapping[str, Any], *, run_id: str) -> Optional[dict[str, Any]]:
@@ -534,12 +663,14 @@ def card_checks_failing(lineage: Mapping[str, Any], *, run_id: str) -> Optional[
 
 
 def merge_card_checks(connection: Any, *, run_id: Optional[str], evidence: Any,
-                      checks_failing: Optional[dict]) -> tuple[Optional[dict], Optional[dict]]:
+                      checks_failing: Optional[dict], pr_url: Optional[str] = None
+                      ) -> tuple[Optional[dict], Optional[dict]]:
     """(the checks-failing record the merge card carries, the acceptance record it shows).
 
-    The run's own checks-failing record when it has one; else the lineage's (`lineage_failures`)
-    — so a follow-up whose own checks passed still shows the gates its PR's earlier builds
-    shipped past. Never raises: a card whose lineage cannot be read still opens with its own."""
+    The run's own checks-failing record when it has one; else the pull request's lineage's
+    (`lineage_failures`) — so a follow-up whose own checks passed still shows the gates its PR's
+    earlier builds shipped past. The acceptance record is None when the must-haves were never
+    checked against the root's items: the card then says so, never "passed". Never raises."""
     import logging
 
     acceptance = evidence.get(KEY) if isinstance(evidence, Mapping) else None
@@ -550,22 +681,39 @@ def merge_card_checks(connection: Any, *, run_id: Optional[str], evidence: Any,
         from . import checks_failing as cf
 
         with connection.begin_nested():
-            lineage = lineage_failures(connection, run_id=run_id, current_acceptance=acceptance,
+            lineage = lineage_failures(connection, run_id=run_id, pr_url=pr_url,
+                                       current_acceptance=acceptance,
                                        current_failing=cf.gate_names(checks_failing))
-        acceptance = lineage.get("acceptance") or acceptance
+        acceptance = lineage.get("acceptance") or (
+            acceptance if isinstance(acceptance, Mapping) else None)
         if not checks_failing:
             card = card_checks_failing(lineage, run_id=run_id)
-    except Exception:  # noqa: BLE001 — the card still opens; its own checks still show
-        logging.getLogger(__name__).warning("lineage checks not read for %s", run_id,
-                                            exc_info=True)
+    except Exception as exc:  # noqa: BLE001 — the card still opens; its own checks still show
+        # Never the exception text: a driver error can carry the connection URL.
+        logging.getLogger(__name__).warning("lineage checks not read for %s (%s)", run_id,
+                                            type(exc).__name__)
     return card, acceptance
 
 
+def card_words(card: Optional[Mapping[str, Any]], acceptance: Optional[Mapping[str, Any]],
+               validation_status: str) -> str:
+    """The card's "Automated checks" sentence. Never "passed" while a gate of the PR failed or
+    the must-haves were not checked, met in full, against the root's items."""
+    from . import checks_failing as cf
+
+    if card:
+        return f"Automated checks: failing ({cf.headline(card)}); CI {validation_status}"
+    if not acceptance or acceptance.get("verdict") not in ("met", "no_items"):
+        why = headline(acceptance) if acceptance else "Must-haves: not checked"
+        return f"Automated checks: CI {validation_status}; {why}"
+    return f"Automated checks: {validation_status}"
+
+
 __all__ = [
-    "merge_card_checks",
+    "card_words", "evidence_paths", "items_dropped", "lineage_root_row", "merge_card_checks",
     "GATE", "SEAT", "KEY", "SUMMARY_KEY", "acceptance_items", "acceptance_prompt",
     "brief_must_haves", "card_checks_failing", "findings_summary", "headline", "items_spec",
-    "judge", "lineage_failures", "must_have_table", "parse_acceptance", "partial_followups",
+    "judge", "lineage_failures", "must_have_table", "parse_acceptance",
     "passed", "pr_section", "prd_gating_criteria", "required_stack", "stack_manifest_check",
     "tree_listing",
 ]

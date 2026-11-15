@@ -89,36 +89,90 @@ export function ChecksFailing({ record }: { record: ChecksFailingRecord }) {
   );
 }
 
+/** The failing gates a merge card carries (checks_failing, or its PR lineage's), labelled. */
+export function failingGateLabels(r: Record<string, unknown>): string {
+  const cf = r.checks_failing as Record<string, unknown> | undefined;
+  const gates = cf && Array.isArray(cf.gates) ? cf.gates : [];
+  return gates
+    .map((g) => (g && typeof g === "object"
+      ? String((g as Record<string, unknown>).label || (g as Record<string, unknown>).gate || "")
+      : ""))
+    .filter(Boolean)
+    .join(", ");
+}
+
+/**
+ * The card's "Automated checks" sentence (engine acceptance_gate.card_words). Never "passed"
+ * while a gate of the pull request failed, or while the must-haves were not all met — partial,
+ * missing, not judged, or never checked. A card from an older API (no acceptance record) reads
+ * as before.
+ */
+export function automatedChecksLine(r: Record<string, unknown>): string {
+  const vstatus = str(r.validation_status);
+  const vsummary = str(r.validation_summary);
+  const failing = failingGateLabels(r);
+  if (failing) return `Automated checks: failing (${failing}).`;
+  const acc = r.acceptance && typeof r.acceptance === "object"
+    ? (r.acceptance as Record<string, unknown>) : null;
+  const verdict = acc ? str(acc.verdict) : "";
+  if (acc && verdict !== "met" && verdict !== "no_items") {
+    const items = mustHavesOf(r)?.items ?? [];
+    const open = items.filter((i) => i.status !== "met").length;
+    const why = verdict === "not_checked" || !items.length
+      ? "must-haves not checked"
+      : `${open} of ${items.length} must-haves not met`;
+    return `Automated checks: ${vstatus ? `CI ${vstatus.replaceAll("_", " ")}; ` : ""}${why}.`;
+  }
+  return vstatus
+    ? `Automated checks: ${vstatus.replaceAll("_", " ")}${vsummary ? `, ${vsummary}` : ""}.`
+    : "";
+}
+
 /**
  * THE MUST-HAVE TABLE (engine services/acceptance_gate.py, BOSSAPP-1211): what the acceptance
  * check found for each must-have of the brief and the PRD's tested-and-gating list, on the whole
  * branch, with the files it cites. Missing first, so the card leads with what is not delivered.
  */
 export type MustHaveItem = { n: number; text: string; status: string; evidence: string };
+export type MustHaveRecord = { verdict: string; items: MustHaveItem[]; why: string; dropped: number };
 
 export function mustHavesOf(recommendation: Record<string, unknown> | null | undefined
-): { verdict: string; items: MustHaveItem[] } | null {
+): MustHaveRecord | null {
   const raw = recommendation?.acceptance;
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   const items = (Array.isArray(r.items) ? r.items : [])
     .filter((i): i is Record<string, unknown> => !!i && typeof i === "object")
     .map((i) => ({ n: typeof i.n === "number" ? i.n : 0, text: str(i.text),
-                   status: str(i.status), evidence: str(i.evidence) }))
+                   status: str(i.status) || "unjudged", evidence: str(i.evidence) }))
     .filter((i) => i.text);
-  if (!items.length) return null;
+  const verdict = str(r.verdict);
+  if (!items.length && verdict !== "not_checked" && verdict !== "not_run") return null;
   const rank: Record<string, number> = { missing: 0, partial: 1, unjudged: 2, met: 3 };
   items.sort((a, b) => (rank[a.status] ?? 2) - (rank[b.status] ?? 2) || a.n - b.n);
-  return { verdict: str(r.verdict), items };
+  return { verdict, items, why: str(r.why),
+           dropped: typeof r.items_dropped === "number" ? r.items_dropped : 0 };
 }
 
-export function MustHaves({ data }: { data: { verdict: string; items: MustHaveItem[] } }) {
-  const missing = data.items.filter((i) => i.status === "missing").length;
+const WORD: Record<string, string> = { missing: "MISSING", partial: "PARTIAL", unjudged: "NOT JUDGED", met: "met" };
+
+export function MustHaves({ data }: { data: MustHaveRecord }) {
+  const count = (s: string) => data.items.filter((i) => i.status === s).length;
+  const open = data.items.length - count("met");
+  if (!data.items.length) {
+    return (
+      <p className="dq-guidance" data-testid="decision-must-haves">
+        <b>Must-haves not checked</b>{data.why ? `: ${data.why}` : ""}. Read the change against
+        the brief before merging.
+      </p>
+    );
+  }
   return (
-    <details className="dq-guidance" open={missing > 0} data-testid="decision-must-haves">
+    <details className="dq-guidance" open={open > 0} data-testid="decision-must-haves">
       <summary>
-        Must-haves: {data.items.filter((i) => i.status === "met").length} met,{" "}
-        {data.items.filter((i) => i.status === "partial").length} partial, {missing} missing
+        Must-haves: {count("met")} met, {count("partial")} partial, {count("missing")} missing
+        {count("unjudged") ? `, ${count("unjudged")} not judged` : ""}
+        {data.dropped ? `, ${data.dropped} more not checked` : ""}
       </summary>
       <table className="v2-table">
         <thead><tr><th>#</th><th>Must-have</th><th>Status</th><th>Evidence</th></tr></thead>
@@ -127,7 +181,7 @@ export function MustHaves({ data }: { data: { verdict: string; items: MustHaveIt
             <tr key={i.n} data-status={i.status}>
               <td>{i.n}</td>
               <td>{i.text}</td>
-              <td><b>{i.status === "missing" ? "MISSING" : i.status}</b></td>
+              <td><b>{WORD[i.status] ?? i.status}</b></td>
               <td className="v2-mono">{i.evidence}</td>
             </tr>
           ))}

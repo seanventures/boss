@@ -15,6 +15,8 @@ import json
 import uuid
 from pathlib import Path
 
+import pytest
+
 from boss_engine.services import acceptance_gate as ag
 from boss_engine.services import checks_failing as cf
 from boss_engine.services import fix_lane_triage
@@ -75,8 +77,10 @@ def _brief() -> dict:
     })
 
 
-def _northgate_spec() -> dict:
+def _northgate_spec(*, stack_line: bool = True) -> dict:
     directive = add_project.render_brief(_brief(), "Build the Northgate demo.")
+    if stack_line:
+        directive += "\n\nStack: go."       # what the add-project start appends for a pick
     instructions = (directive + "\n\n---\n\nTHE PRODUCT SPEC BELOW IS THE BRIEF.\n\n" + PRD)
     return {"instructions": instructions,
             **prd_acceptance_inputs({"acceptance_criteria": [DONE_WHEN]}, PRD)}
@@ -92,6 +96,8 @@ def _northgate_tree(root: Path, *, rulebook: bool, go_mod: bool = True) -> Path:
         "Makefile": "run-staging:\n\tdocker compose up\n",
         "config/gateway.yaml": "listen: :8080\n",
         "config/tenants/lumen-pay.yaml": "tenant: lumen-pay\n",
+        "README.md": "# Northgate\n",
+        "docs/design.md": "design\n",
     }
     if go_mod:
         files["go.mod"] = "module northgate\n\ngo 1.22\n"
@@ -126,14 +132,29 @@ class TreeReadingReviewer:
         return {"summary": "\n".join(lines) + f"\nACCEPTANCE: {verdict}", "cost_usd_micros": 0}
 
 
-def _check(root: Path, spec: dict, reviewer) -> dict:
+class Says:
+    """A reviewer that says exactly `reply` (the reviewer's concrete inputs, scripted)."""
+
+    def __init__(self, reply: str):
+        self.reply = reply
+
+    def run_role(self, prompt, cwd, *, read_only=False, **_):
+        return {"summary": self.reply, "cost_usd_micros": 0}
+
+
+def _check(root: Path, spec: dict, reviewer, *, source=None) -> dict:
     """What the pipeline's acceptance seat does (governed_code_task_service._run_acceptance_check)."""
     items = ag.acceptance_items(spec)
     stack = ag.stack_manifest_check(root, spec)
     reply = reviewer.run_role(ag.acceptance_prompt(items, title="Northgate", stack=stack,
                                                    tree=ag.tree_listing(root)),
                               root, read_only=True)
-    return ag.judge(items, reply["summary"], stack)
+    return ag.judge(items, reply["summary"], stack, root=root, source=source,
+                    dropped=ag.items_dropped(spec))
+
+
+def _all_met(n: int, cite: str = "cmd/northgate/main.go") -> str:
+    return "\n".join(f"ITEM {i}: MET — {cite}" for i in range(1, n + 1)) + "\nACCEPTANCE: MET"
 
 
 # ── RCA-F: the brief is never cut mid-requirement ──────────────────────────────────────────
@@ -148,6 +169,17 @@ def test_long_must_haves_and_done_when_round_trip_through_render_brief_uncut():
     # The cap is the directive's (MAX_DIRECTIVE), and only the quoted words give way to it.
     assert len(rendered) <= add_project.MAX_DIRECTIVE
     assert "In the person's words:" in rendered and rendered.endswith("…")
+    # Room is reserved for what the start appends (the Stack: line), so it is never cut.
+    reserved = add_project.render_brief(brief, "words " * 4000, reserve=500)
+    assert len(reserved) + 500 <= add_project.MAX_DIRECTIVE
+
+
+def test_the_new_work_directive_keeps_the_brief_whole():
+    from boss_engine.services.project_experience import understanding
+
+    done = ["x" * 1500]
+    out = understanding.directive("words " * 5000, {"title": "T", "done_when": done})
+    assert done[0] in out and len(out) <= add_project.MAX_DIRECTIVE
 
 
 def test_the_brief_keeps_more_than_six_must_haves():
@@ -165,28 +197,60 @@ def test_build_acceptance_criteria_equal_the_prds_gating_list():
     out = prd_acceptance_inputs({"acceptance_criteria": [DONE_WHEN], "title": "x"}, PRD)
     assert out["acceptance_criteria"] == expected
     assert out["title"] == "x"
-    # The not-gating sub-list never becomes a criterion.
     assert not any("mTLS" in c for c in out["acceptance_criteria"])
-    # A PRD without an acceptance section leaves the criteria as they were.
     assert prd_acceptance_inputs({"acceptance_criteria": ["a"]}, "# PRD\n\n## Goals\n- g\n") == {
         "acceptance_criteria": ["a"]}
 
 
-def test_a_follow_up_inherits_its_roots_items():
-    class Conn:
-        def execute(self, *_a, **_k):
-            return type("R", (), {"first": lambda self: (json.dumps(_northgate_spec()),)})()
+class _Rows:
+    """A connection whose lineage holds `rows` [(id, spec, fctx)] (the root-row query only)."""
 
+    def __init__(self, rows):
+        self.rows = rows
+
+    def execute(self, _sql, params):
+        root = params["r"]
+        hits = [r for r in self.rows
+                if (r[0] == root or r[2].get("root_run_id") == root)
+                and not r[2].get("is_followup") and not r[2].get("deferred_from_run")]
+        first = (hits[0][0], json.dumps(hits[0][1])) if hits else None
+        return type("R", (), {"first": lambda self: first})()
+
+
+def test_a_follow_up_inherits_its_roots_items():
     own = {"instructions": "Fix the two MINOR findings", "acceptance_criteria": ["Fixed: a"]}
-    spec = ag.items_spec(Conn(), run_id="crun_f", own_spec=own,
-                         fctx={"is_followup": True, "root_run_id": "crun_root"})
+    conn = _Rows([("crun_root", _northgate_spec(), {})])
+    spec, source = ag.items_spec(conn, run_id="crun_f", own_spec=own,
+                                 fctx={"is_followup": True, "root_run_id": "crun_root"})
     texts = [i["text"] for i in ag.acceptance_items(spec)]
     assert LONG_MUST_HAVE in texts and RULEBOOK in texts
+    assert source == {"run_id": "crun_root", "root": True}
     # A root run (or a repair child, whose spec is its parent's) is held to its own.
-    assert ag.items_spec(Conn(), run_id="crun_r", own_spec=own, fctx={}) == own
+    assert ag.items_spec(conn, run_id="crun_r", own_spec=own, fctx={})[0] == own
 
 
-# ── RCA-E: the gate ─────────────────────────────────────────────────────────────────────────
+def test_a_web_app_lineage_without_a_root_row_resolves_the_original_build():
+    """start_web_app_build / prd_decomposition mint a root id with no code_task_runs row: the
+    original build is the earliest non-follow-up run of the lineage, never the follow-up."""
+    own = {"instructions": "Fix", "acceptance_criteria": ["Fixed: [MAJOR] x"]}
+    conn = _Rows([("crun_build1", _northgate_spec(), {"root_run_id": "wapp_root"}),
+                  ("crun_f", own, {"root_run_id": "wapp_root", "is_followup": True})])
+    spec, source = ag.items_spec(conn, run_id="crun_f", own_spec=own,
+                                 fctx={"is_followup": True, "root_run_id": "wapp_root"})
+    assert source["run_id"] == "crun_build1"
+    assert RULEBOOK in [i["text"] for i in ag.acceptance_items(spec)]
+
+
+def test_a_follow_up_whose_root_cannot_be_found_is_not_run_never_its_own_items(tmp_path):
+    own = {"instructions": "Fix", "acceptance_criteria": ["Fixed: [MAJOR] x"]}
+    spec, source = ag.items_spec(_Rows([]), run_id="crun_f", own_spec=own,
+                                 fctx={"is_followup": True, "root_run_id": "wapp_gone"})
+    assert spec == {} and source["root"] is False
+    rec = ag.judge([], None, {}, root=tmp_path, source=source)
+    assert rec["verdict"] == "not_run" and not ag.passed(rec)
+
+
+# ── RCA-E: the gate fails closed ───────────────────────────────────────────────────────────
 
 def test_the_items_are_the_must_haves_the_prd_gating_list_and_the_criteria():
     items = ag.acceptance_items(_northgate_spec())
@@ -196,19 +260,86 @@ def test_the_items_are_the_must_haves_the_prd_gating_list_and_the_criteria():
     assert all(len(i["text"]) <= ag.MAX_ITEM_CHARS for i in items)
 
 
-def test_the_required_stack_comes_from_the_must_haves_not_the_whole_prd():
-    stacks = ag.required_stack(_northgate_spec())
-    assert [s["stack"] for s in stacks] == ["go"], stacks   # not the PRD's Python/Node mentions
-    assert ag.required_stack({"instructions": "Notes app\n\nMust-haves:\n- no Python, please"}) == []
-    # RCA-A's structured field wins when present.
-    assert [s["stack"] for s in ag.required_stack({"required_stack": ["rust"]})] == ["rust"]
+def test_items_over_the_cap_are_counted_and_said(tmp_path):
+    spec = {"acceptance_criteria": [f"criterion {i}" for i in range(ag.MAX_ITEMS + 5)]}
+    assert len(ag.acceptance_items(spec)) == ag.MAX_ITEMS and ag.items_dropped(spec) == 5
+    (tmp_path / "a.go").write_text("package a\n")
+    rec = ag.judge(ag.acceptance_items(spec), _all_met(ag.MAX_ITEMS, "a.go"), {}, root=tmp_path,
+                   dropped=5)
+    assert "5 further items" in ag.must_have_table(rec) and "5 not checked" in ag.headline(rec)
 
 
-def test_a_go_brief_without_go_mod_fails_on_the_manifest_alone(tmp_path):
+def test_fifteen_items_with_one_answered_is_never_met(tmp_path):
+    root = _northgate_tree(tmp_path, rulebook=True)
+    spec = {"acceptance_criteria": [f"criterion {i}" for i in range(15)]}
+    rec = _check(root, spec, Says("ITEM 1: MET — cmd/northgate/main.go\nACCEPTANCE: MET"))
+    assert rec["verdict"] == "not_run" and len(rec["unjudged"]) == 14 and not ag.passed(rec)
+    assert g.classify_gate_faults(failing=[ag.GATE], evidence={ag.KEY: rec}) == {ag.GATE: "HARNESS"}
+
+
+def test_all_partial_fails_the_gate(tmp_path):
+    root = _northgate_tree(tmp_path, rulebook=True)
+    spec = {"acceptance_criteria": ["a", "b", "c"]}
+    reply = "\n".join(f"ITEM {i}: PARTIAL — cmd/gwlint/main.go has half" for i in (1, 2, 3))
+    rec = _check(root, spec, Says(reply + "\nACCEPTANCE: NOT MET"))
+    assert rec["verdict"] == "not_met" and rec["partial"] == [1, 2, 3] and not ag.passed(rec)
+    assert "only PARTIAL" in ag.findings_summary(rec)
+
+
+def test_the_summary_line_is_read_and_a_contradiction_fails(tmp_path):
+    root = _northgate_tree(tmp_path, rulebook=True)
+    spec = {"acceptance_criteria": ["a", "b"]}
+    said_not_met = _all_met(2).replace("ACCEPTANCE: MET", "ACCEPTANCE: NOT MET")
+    assert _check(root, spec, Says(said_not_met))["verdict"] == "not_met"
+    no_line = _all_met(2).replace("\nACCEPTANCE: MET", "")
+    assert _check(root, spec, Says(no_line))["verdict"] == "not_met"
+    assert _check(root, spec, Says(_all_met(2)))["verdict"] == "met"
+
+
+@pytest.mark.parametrize("cite,why", [
+    ("README.md", "only documents"),
+    ("docs/design.md", "only documents"),
+    ("cmd/northgate/handler_does_not_exist.go", "not in the tree"),
+    ("it is all there", "no file evidence"),
+])
+def test_met_needs_code_evidence_that_exists_in_the_tree(tmp_path, cite, why):
+    root = _northgate_tree(tmp_path, rulebook=True)
+    rec = _check(root, {"acceptance_criteria": ["a"]}, Says(_all_met(1, cite)))
+    assert rec["items"][0]["status"] == ag.PARTIAL and why in rec["items"][0]["evidence"]
+    assert rec["verdict"] == "not_met"
+
+
+def test_a_suffix_of_a_real_path_is_evidence(tmp_path):
+    root = _northgate_tree(tmp_path, rulebook=True)
+    rec = _check(root, {"acceptance_criteria": ["a"]}, Says(_all_met(1, "gwlint/main.go:12")))
+    assert rec["verdict"] == "met", rec["items"]
+
+
+@pytest.mark.parametrize("words", [
+    "Alert hub\n\nMust-haves:\n- React to alerts within a minute",
+    "Rules engine\n\nMust-haves:\n- Express the rules as YAML",
+    "Port the CLI from Python to Rust",
+])
+def test_words_never_hard_fail_on_a_stack_they_do_not_declare(tmp_path, words):
+    (tmp_path / "main.go").write_text("package main\n")
+    stack = ag.stack_manifest_check(tmp_path, {"instructions": words})
+    assert stack["missing"] == [], stack       # soft at most: a note, never a failure
+    assert all(not r["hard"] for r in stack["required"])
+
+
+def test_a_declared_stack_without_its_manifest_fails(tmp_path):
     root = _northgate_tree(tmp_path, rulebook=True, go_mod=False)
-    rec = _check(root, _northgate_spec(), TreeReadingReviewer())
-    assert rec["verdict"] == "not_met" and rec["stack"]["missing"] == ["go"]
+    spec = _northgate_spec()
+    stack = ag.stack_manifest_check(root, spec)
+    assert stack["missing"] == ["go"]
+    rec = _check(root, spec, TreeReadingReviewer())
+    assert rec["verdict"] == "not_met"
     assert "Required stack 'go' has no manifest" in ag.findings_summary(rec)
+    # The structured field (RCA-A) is hard too.
+    assert ag.required_stack({"required_stack": ["go"]})[0]["hard"] is True
+    # Without the Stack: line, the brief's "(Go)" is a soft note.
+    soft = ag.stack_manifest_check(root, _northgate_spec(stack_line=False))
+    assert soft["missing"] == [] and soft["notes"]
 
 
 def test_a_missing_rulebook_fails_acceptance_and_lean_opens_a_labelled_draft_with_a_follow_up(
@@ -223,62 +354,58 @@ def test_a_missing_rulebook_fails_acceptance_and_lean_opens_a_labelled_draft_wit
     assert failing == [ag.GATE]
 
     lean = resolve_profile("lean")
-    assert lean["advisory_gate"] is True and ag.SEAT in lean["panel_checks"]
-    # Under lean the seat sits — the fix lane included (a follow-up is usually a fix-lane run).
+    assert lean["advisory_gate"] is True
     for lane in ("full", fix_lane_triage.LANE_FIX):
         assert ag.SEAT in g.review_panel_seats(lane, 1, lean, ci_files=False)
     evidence = {ag.KEY: rec, ag.SUMMARY_KEY: ag.findings_summary(rec)}
     faults = g.classify_gate_faults(failing=failing, evidence=evidence)
     assert faults == {ag.GATE: "WORK"}
-    # A fact, not an opinion: the advisory profile repairs it first…
     kw = dict(failing=failing, advisory_gate=True, max_repair_rounds=2, open_pr=True,
               faults=faults, fix_round_ran=True)
     assert g.resolve_gate_failure_action(rounds_used=0, never_block=True, **kw) == "repair"
-    # …and past the repair rounds the PR opens with its checks failing — never a clean ship.
     assert g.resolve_gate_failure_action(rounds_used=2, never_block=True, **kw) \
         == "ship_with_dissent"
     assert g.resolve_gate_failure_action(rounds_used=2, never_block=False,
                                          open_pr_when_failing=True, **kw) == cf.ACTION
-    # Both terminals record the checks-failing record: a draft labelled PR, its section and
-    # the follow-up's findings carry the missing rulebook verbatim.
     record = cf.collect(failing, evidence, details={ag.GATE: ag.headline(rec)})
     assert cf.gate_names(record) == [ag.GATE]
     assert any(RULEBOOK in f["text"] for f in record["findings"])
     section = cf.pr_section(record)
     assert "## Checks failing" in section and "Must-haves met" in section
-    follow = cf.followup_findings(record)
-    assert any(RULEBOOK in f["text"] for f in follow)
+    assert any(RULEBOOK in f["text"] for f in cf.followup_findings(record))
     assert "| MISSING |" in ag.pr_section(rec)
 
 
-def test_the_full_tree_passes_and_partials_become_follow_ups(tmp_path):
+def test_the_full_tree_passes(tmp_path):
     root = _northgate_tree(tmp_path, rulebook=True)
     rec = _check(root, _northgate_spec(), TreeReadingReviewer())
-    assert rec["verdict"] == "met" and ag.passed(rec), rec["missing"]
-    reply = "ITEM 1: MET — cmd/northgate/main.go\nITEM 2: PARTIAL — cmd/gwlint/main.go has 12 rules"
-    items = ag.acceptance_items(_northgate_spec())[:2]
-    rec2 = ag.judge(items, reply, {})
-    assert rec2["verdict"] == "met" and rec2["partial"] == [2]
-    assert ag.partial_followups(rec2)[0]["severity"] == "major"
+    assert rec["verdict"] == "met" and ag.passed(rec), rec["items"]
 
 
-def test_a_met_without_file_evidence_is_partial_and_a_silent_reviewer_is_not_a_pass():
-    items = ag.acceptance_items(_northgate_spec())[:2]
-    rec = ag.judge(items, "ITEM 1: MET — it is all there\nITEM 2: MET — see main.go", {})
-    assert [i["status"] for i in rec["items"]] == [ag.PARTIAL, ag.MET]
-    silent = ag.judge(items, "Looks good to me.", {})
-    assert silent["verdict"] == "not_run" and not ag.passed(silent)
-    faults = g.classify_gate_faults(failing=[ag.GATE], evidence={ag.KEY: silent})
-    assert faults == {ag.GATE: "HARNESS"}
+@pytest.mark.parametrize("profile", [{}, {"panel_checks": ["regression"]},
+                                     {"panel_checks": ["review_code"]}])
+def test_the_seat_always_sits_whatever_a_custom_profile_lists(profile):
+    for tier in (0, 1, 2):
+        assert ag.SEAT in g.review_panel_seats("full", tier, profile, ci_files=False)
 
 
 def test_the_scripted_conformance_engine_plays_the_acceptance_seat(tmp_path):
-    root = _northgate_tree(tmp_path, rulebook=True)
-    spec = _northgate_spec()
-    ok = _check(root, spec, ScriptedEngine(faults=set(), caps=set()))
-    assert ok["verdict"] == "met", ok
-    bad = _check(root, spec, ScriptedEngine(faults={"acceptance_missing"}, caps=set()))
+    import shutil
+
+    from boss_engine.services import scripted_engine as se
+
+    shutil.copytree(se._DEFAULT_FIXTURE, tmp_path, dirs_exist_ok=True)  # noqa: SLF001
+    spec = {"acceptance_criteria": ["slug lowercases and joins words with hyphens",
+                                    "GET /?q= answers the slug as JSON"]}
+    eng_ = ScriptedEngine(faults={"acceptance_missing"}, caps=set(), app_dir="")
+    bad = _check(tmp_path, spec, eng_)
     assert bad["verdict"] == "not_met" and bad["missing"] == [1]
+    # Still missing until a fix turn DELIVERS it (writes the marker), not until the fault expires.
+    assert _check(tmp_path, spec, eng_)["missing"] == [1]
+    (tmp_path / se.ACCEPTANCE_MARKER).write_text("export const delivered = true;\n")
+    assert _check(tmp_path, spec, eng_)["verdict"] == "met"
+    assert _check(tmp_path, spec, ScriptedEngine(faults=set(), caps=set(),
+                                                 app_dir=""))["verdict"] == "met"
 
 
 def test_the_gate_is_a_hard_floor_fact_and_convergeable():
@@ -286,6 +413,22 @@ def test_the_gate_is_a_hard_floor_fact_and_convergeable():
     assert ag.GATE in g._CONVERGEABLE
     assert ag.SEAT in g._ALL_PANEL_SEATS
     assert cf.SEAT_OF_GATE[ag.GATE] == (ag.SEAT, ag.SUMMARY_KEY)
+
+
+def test_the_acceptance_seat_is_a_registered_reasoning_stage():
+    from boss_engine.services import code_agent, token_efficiency
+
+    assert ag.SEAT in code_agent.REASONING_STAGES and ag.SEAT in code_agent.STAGE_THINKING_CAPS
+    assert ag.SEAT in token_efficiency.KNOWN_STAGES
+
+
+def test_an_unanswered_reviewer_is_asked_again_before_anything_ships():
+    import inspect
+
+    src = inspect.getsource(g)
+    block = src[src.index('evidence["review_escalated_turns"] = escalated'):]
+    block = block[:block.index("gate_faults = classify_gate_faults")]
+    assert "_run_acceptance_check(max_turns=escalated)" in block
 
 
 def test_an_advisory_ship_queues_its_major_findings_not_only_the_minor_ones():
@@ -299,75 +442,116 @@ def test_an_advisory_ship_queues_its_major_findings_not_only_the_minor_ones():
     assert sum("typo" in f["text"] for f in out) == 1
 
 
-# ── the merge card speaks for the whole lineage ────────────────────────────────────────────
+@pytest.mark.parametrize("acc,expect", [
+    (None, "Must-haves: not checked"),
+    ({"verdict": "not_met", "items": [{"n": 1, "status": "partial"}],
+      "counts": {"met": 0, "partial": 1, "missing": 0}}, "1 partial"),
+    ({"verdict": "met", "items": []}, "Automated checks: passed"),
+])
+def test_the_card_never_says_passed_unless_the_must_haves_were_met(acc, expect):
+    words = ag.card_words(None, acc, "passed")
+    assert expect in words
+    if acc is None or acc["verdict"] != "met":
+        assert "Automated checks: passed" not in words
 
-def _run(c, project_id, *, fctx, status="completed", pr=None, state=None, spec=None):
+
+# ── the merge card speaks for the whole pull request ───────────────────────────────────────
+
+PR = "https://g.test/a/b/pull/7"
+
+
+def _run(c, project_id, *, fctx, status="completed", pr=None, state=None, spec=None,
+         passed=None):
     from sqlalchemy import text
 
     rid = f"crun_{uuid.uuid4().hex[:12]}"
     c.execute(text(
         "INSERT INTO code_task_runs (id, project_id, status, title, spec, state, finalize_ctx, "
-        "pull_request_url) VALUES (:i, :p, :s, 'Northgate', CAST(:sp AS JSONB), "
-        "CAST(:st AS JSONB), CAST(:f AS JSONB), :u)"),
+        "pull_request_url, created_at) VALUES (:i, :p, :s, 'Northgate', CAST(:sp AS JSONB), "
+        "CAST(:st AS JSONB), CAST(:f AS JSONB), :u, clock_timestamp())"),
         {"i": rid, "p": project_id, "s": status, "sp": json.dumps(spec or {}),
          "st": json.dumps(state or {}), "f": json.dumps(fctx), "u": pr})
+    if passed is not None:
+        c.execute(text(
+            "INSERT INTO quality_gates (id, project_id, code_task_run_id, risk_tier, status, "
+            "fail_closed, gates_passed, gates_failed, evidence) VALUES (:q, :p, :r, 1, 'pass', "
+            "true, CAST(:gp AS JSONB), '[]'::jsonb, '{}'::jsonb)"),
+            {"q": f"qg_{uuid.uuid4().hex[:12]}", "p": project_id, "r": rid,
+             "gp": json.dumps(passed)})
     return rid
 
 
-def test_a_clean_follow_up_on_a_pr_whose_parent_shipped_failing_is_never_passed(eng, project):
+def _cleanup(eng, project):
     from sqlalchemy import text
 
-    missing = ag.judge(ag.acceptance_items(_northgate_spec())[:2],
-                       "ITEM 1: MET — cmd/northgate/main.go\nITEM 2: MISSING — no rulebook", {})
     with eng.begin() as c:
-        root = _run(c, project, pr="https://g.test/a/b/pull/7", spec=_northgate_spec(),
-                    state={ag.KEY: missing},
-                    fctx={"advisory_failing_gates": ["code_review_passed", "consistent"]})
+        c.execute(text("DELETE FROM quality_gates WHERE project_id = :p"), {"p": project})
+        c.execute(text("DELETE FROM code_task_runs WHERE project_id = :p"), {"p": project})
+
+
+def _rec(reply: str, root: Path, n: int = 2) -> dict:
+    return ag.judge(ag.acceptance_items(_northgate_spec())[:n], reply, {}, root=root)
+
+
+def test_a_clean_follow_up_on_a_pr_whose_parent_shipped_failing_is_never_passed(
+        eng, project, tmp_path):
+    from sqlalchemy import text
+
+    tree = _northgate_tree(tmp_path, rulebook=True)
+    missing = _rec("ITEM 1: MET — cmd/northgate/main.go\nITEM 2: MISSING — no rulebook\n"
+                   "ACCEPTANCE: NOT MET", tree)
+    with eng.begin() as c:
+        root = _run(c, project, pr=PR, spec=_northgate_spec(), state={ag.KEY: missing},
+                    fctx={"advisory_failing_gates": ["code_review_passed", "consistent",
+                                                     "nothing_broke"]})
         c.execute(text("UPDATE code_task_runs SET finalize_ctx = finalize_ctx || "
                        "jsonb_build_object('root_run_id', id) WHERE id = :i"), {"i": root})
-        # A repair attempt that never shipped is not counted.
         _run(c, project, status="repairing", fctx={"root_run_id": root,
                                                    "advisory_failing_gates": ["app_serves"]})
+        # An earlier, merged PR of the same lineage is not this PR.
+        _run(c, project, pr="https://g.test/a/b/pull/3",
+             fctx={"root_run_id": root, "advisory_failing_gates": ["security_clean"]})
+        # A later build of THIS PR passed the whole suite: nothing_broke clears.
+        _run(c, project, pr=PR, fctx={"root_run_id": root}, passed=["nothing_broke"])
         follow = _run(c, project, status="running",
                       fctx={"root_run_id": root, "is_followup": True})
     try:
         with eng.begin() as c:
-            # The follow-up's own checks are clean (no checks_failing of its own).
             card, acceptance = ag.merge_card_checks(c, run_id=follow, evidence={},
-                                                    checks_failing=None)
+                                                    checks_failing=None, pr_url=PR)
         assert card is not None, "a clean follow-up must not read as passed"
-        names = cf.gate_names(card)
-        assert set(names) == {"code_review_passed", "consistent", ag.GATE}
-        assert "app_serves" not in names
+        assert set(cf.gate_names(card)) == {"code_review_passed", "consistent", ag.GATE}
         assert all(root in (gate.get("detail") or "") for gate in card["gates"])
         assert any("no rulebook" in f["text"] for f in card["findings"])
         assert acceptance["verdict"] == "not_met"
-        assert cf.decision_summary(card).startswith("CHECKS FAILING")
+        assert ag.card_words(card, acceptance, "passed").startswith("Automated checks: failing")
 
-        # The follow-up's own acceptance check meets the root's must-haves: that gate clears,
-        # the parent's refuted review does not (a follow-up re-judges only its own delta).
-        met = ag.judge(ag.acceptance_items(_northgate_spec())[:2],
-                       "ITEM 1: MET — cmd/northgate/main.go\nITEM 2: MET — "
-                       "config/api-guidelines.yaml", {})
+        # A follow-up's met against its OWN items clears nothing.
+        own_met = {**_rec(_all_met(2), tree), "source": {"run_id": follow, "root": False}}
         with eng.begin() as c:
-            card2, acc2 = ag.merge_card_checks(c, run_id=follow, evidence={ag.KEY: met},
-                                               checks_failing=None)
+            card1, _ = ag.merge_card_checks(c, run_id=follow, evidence={ag.KEY: own_met},
+                                            checks_failing=None, pr_url=PR)
+        assert ag.GATE in cf.gate_names(card1)
+        # Met against the ROOT's items clears acceptance; the refuted review does not clear.
+        root_met = {**_rec(_all_met(2), tree), "source": {"run_id": root, "root": True}}
+        assert root_met["verdict"] == "met"
+        with eng.begin() as c:
+            card2, acc2 = ag.merge_card_checks(c, run_id=follow, evidence={ag.KEY: root_met},
+                                               checks_failing=None, pr_url=PR)
         assert set(cf.gate_names(card2)) == {"code_review_passed", "consistent"}
         assert acc2["verdict"] == "met"
     finally:
-        with eng.begin() as c:
-            c.execute(text("DELETE FROM code_task_runs WHERE project_id = :p"), {"p": project})
+        _cleanup(eng, project)
 
 
-def test_a_lineage_with_nothing_failing_keeps_a_plain_card(eng, project):
-    from sqlalchemy import text
-
+def test_a_lineage_never_checked_says_so_and_nothing_failing_keeps_a_plain_card(eng, project):
     with eng.begin() as c:
         root = _run(c, project, pr="https://g.test/a/b/pull/8", fctx={})
     try:
         with eng.begin() as c:
-            card, _ = ag.merge_card_checks(c, run_id=root, evidence={}, checks_failing=None)
-        assert card is None
+            card, acc = ag.merge_card_checks(c, run_id=root, evidence={}, checks_failing=None,
+                                             pr_url="https://g.test/a/b/pull/8")
+        assert card is None and acc is None
+        assert "not checked" in ag.card_words(card, acc, "passed")
     finally:
-        with eng.begin() as c:
-            c.execute(text("DELETE FROM code_task_runs WHERE project_id = :p"), {"p": project})
+        _cleanup(eng, project)

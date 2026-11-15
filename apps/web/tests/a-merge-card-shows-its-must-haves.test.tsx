@@ -40,9 +40,25 @@ describe("a merge card with a failing lineage", () => {
     expect(text).not.toContain("Automated checks: passed");
   });
 
-  it("a card with nothing failing still reads as before", () => {
+  it("a card whose must-haves were met, or from an older API, reads as before", () => {
+    const { checks_failing: _drop, acceptance: _a, ...older } = REC;
+    expect(formatRecommendation(card(older))).toContain("Automated checks: passed");
+    const met = { ...older, acceptance: { verdict: "met", items: [
+      { n: 1, text: "a", status: "met", evidence: "x.go" }] } };
+    expect(formatRecommendation(card(met))).toContain("Automated checks: passed");
+  });
+
+  it("never says passed while a must-have is partial, unjudged or never checked", () => {
     const { checks_failing: _drop, ...plain } = REC;
-    expect(formatRecommendation(card(plain))).toContain("Automated checks: passed");
+    const partial = { ...plain, acceptance: { verdict: "not_met", items: [
+      { n: 1, text: "a", status: "met", evidence: "x.go" },
+      { n: 2, text: "b", status: "partial", evidence: "half" }] } };
+    expect(formatRecommendation(card(partial))).toContain("1 of 2 must-haves not met");
+    const unchecked = { ...plain, acceptance: { verdict: "not_checked", items: [] } };
+    const words = formatRecommendation(card(unchecked));
+    expect(words).toContain("must-haves not checked");
+    expect(words).not.toContain("Automated checks: passed");
+    expect(mustHavesOf(unchecked)!.items).toEqual([]);
   });
 
   it("lists the must-haves, missing first", () => {

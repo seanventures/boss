@@ -426,11 +426,16 @@ def _run_input(body: CreateAndStartBody, brief: dict[str, Any], repo: Optional[s
                ) -> dict[str, Any]:
     from boss_engine.services.project_experience import add_project
 
-    directive = add_project.render_brief(brief, body.words) if brief else body.words.strip()
+    extra = ""
     if body.audience:
-        directive += f"\n\nWho it is for: {body.audience.strip()}"
+        extra += f"\n\nWho it is for: {body.audience.strip()}"
     if body.stack:
-        directive += f"\n\nStack: {body.stack}."
+        extra += f"\n\nStack: {body.stack}."
+    named_now = [str(t.get("name") or "").strip() for t in body.talks_to
+                 if not (t.get("provider_app_key") and t.get("alias"))]
+    reserve = len(extra) + (len(", ".join(n for n in named_now if n)) + 20 if any(named_now) else 0)
+    directive = (add_project.render_brief(brief, body.words, reserve=reserve) if brief
+                 else body.words.strip()) + extra
     criteria = [c.strip() for c in body.done_when if c.strip()]
     if brief.get("done_when"):
         criteria = [str(brief["done_when"]), *criteria]

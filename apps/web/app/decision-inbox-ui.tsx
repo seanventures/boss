@@ -13,7 +13,7 @@ import { ActionForm, DecisionResolveForm } from "./client-forms";
 import { ActionPreview, actionPreviewOf, previewLead } from "./action-preview";
 import { HeldArguments } from "./held-arguments";
 import { ArchitectureDoc } from "./architecture-doc";
-import { ChecksFailing, checksFailingOf, MustHaves, mustHavesOf } from "./checks-failing";
+import { automatedChecksLine, ChecksFailing, checksFailingOf, MustHaves, mustHavesOf } from "./checks-failing";
 import { architectureDocOf } from "../lib/architecture";
 import { AreaLink } from "./area-link";
 import { linkTo, navigate } from "./agents/live-util";
@@ -100,19 +100,6 @@ function roleInitials(name: string): string {
   return initials.toUpperCase();
 }
 
-/** The failing gates a merge card carries (engine checks_failing / acceptance_gate lineage):
- * a card with any never reads "Automated checks: passed". */
-function failingGates(r: Record<string, unknown>): string {
-  const cf = r.checks_failing as Record<string, unknown> | undefined;
-  const gates = cf && Array.isArray(cf.gates) ? cf.gates : [];
-  return gates
-    .map((g) => (g && typeof g === "object"
-      ? String((g as Record<string, unknown>).label || (g as Record<string, unknown>).gate || "")
-      : ""))
-    .filter(Boolean)
-    .join(", ");
-}
-
 export function formatRecommendation(decision: DecisionFeedItem): string {
   const r = decision.recommendation || {};
   const str = (k: string): string => (typeof r[k] === "string" ? (r[k] as string) : "");
@@ -120,18 +107,12 @@ export function formatRecommendation(decision: DecisionFeedItem): string {
   const title = str("title");
   const pr = str("pull_request_url");
   const prNum = pr ? `#${pr.split("/").pop()}` : "";
-  const vstatus = str("validation_status");
-  const vsummary = str("validation_summary");
 
   if (action === "review_pull_request") {
     return [
       title ? `Approve the code change “${title}”.` : "Approve this code change.",
       pr ? `${isLocalChangeUrl(pr) ? "Change set" : "Pull request"} ${prNum} is open ${prWhere(pr)} with the full diff to review.` : "",
-      failingGates(r)
-        ? `Automated checks: failing (${failingGates(r)}).`
-        : vstatus
-        ? `Automated checks: ${vstatus.replaceAll("_", " ")}${vsummary ? `, ${vsummary}` : ""}.`
-        : "",
+      automatedChecksLine(r),
       "Approving opens/merges the PR; rejecting keeps it blocked for changes.",
     ]
       .filter(Boolean)

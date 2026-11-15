@@ -169,7 +169,7 @@ def raw_brief(words: str) -> dict[str, Any]:
             "open_questions": [], "added": [], "pinned": [], "raw": True}
 
 
-def render_brief(brief: Mapping[str, Any], words: str = "") -> str:
+def render_brief(brief: Mapping[str, Any], words: str = "", *, reserve: int = 0) -> str:
     """The brief as the start's directive: the structure the PRD meeting reads best (a one-line
     directive produces a panel arguing about one line). The person's own words go last, whole."""
     parts: list[str] = []
@@ -196,7 +196,9 @@ def render_brief(brief: Mapping[str, Any], words: str = "") -> str:
     head = "\n\n".join(parts)
     if said and said not in parts:
         # The structure is never cut; the quoted words get what is left of the cap.
-        room = MAX_DIRECTIVE - len(head) - len("\n\nIn the person's words:\n")
+        # `reserve`: what the caller appends after the brief (the Stack: and "Who it is for"
+        # lines), so it is never the part cut by the directive's cap.
+        room = MAX_DIRECTIVE - max(0, int(reserve)) - len(head) - len("\n\nIn the person's words:\n")
         if room > 200:
             quoted = said if len(said) <= room else said[:room - 2].rstrip() + " …"
             head = (head + "\n\n" if head else "") + f"In the person's words:\n{quoted}"

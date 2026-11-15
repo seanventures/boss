@@ -60,6 +60,8 @@ from .engine_contract import EngineCapabilities
 from .workspace_perms import tidies_workspace
 
 ENGINE = "scripted"
+#: What the `acceptance_missing` fault's fix round writes: the "missing must-have", delivered.
+ACCEPTANCE_MARKER = "src/acceptance-delivered.js"
 MODEL = "scripted-v1"
 
 _DEFAULT_FIXTURE = (Path(__file__).resolve().parents[3] / "tests" / "e2e" / "fixtures"
@@ -333,12 +335,14 @@ class ScriptedEngine:
 
         if stage == "acceptance_check" or "ACCEPTANCE REVIEWER" in text:
             # The acceptance check (acceptance_gate.py): every item MET with the fixture's files
-            # as evidence; the `acceptance_missing` fault answers item 1 MISSING once.
-            evidence = ", ".join(sorted(impl)) or "src/app.js"
+            # as evidence. The `acceptance_missing` fault answers item 1 MISSING until a writing
+            # turn told the must-haves were not delivered has written ACCEPTANCE_MARKER — so a
+            # pass proves the fix round DELIVERED it, not that the fault ran out.
+            evidence = ", ".join(p for p in sorted(impl) if (root / p).exists()) or "the tree"
             lines = []
+            delivered = (root / (prefix + ACCEPTANCE_MARKER)).exists()
             for n in re.findall(r"(?m)^ITEM (\d+) \[", text):
-                if ("acceptance_missing" in self.faults and n == "1"
-                        and "acceptance_missing" not in state.fired):
+                if "acceptance_missing" in self.faults and n == "1" and not delivered:
                     state.fired.add("acceptance_missing")
                     lines.append(f"ITEM {n}: MISSING — looked through {evidence}; nothing "
                                  "implements it (scripted fault: acceptance_missing)")
@@ -366,6 +370,10 @@ class ScriptedEngine:
         if read_only:
             return f"Read {', '.join(sorted(impl))}. Nothing further.", written
         # A writing stage: implement, solo, repair, quality, a fix round, an install fix.
+        if "MUST-HAVES NOT DELIVERED" in text and "acceptance_missing" in self.faults:
+            # The fix round for the acceptance check delivers the missing must-have.
+            self._write(root, prefix + ACCEPTANCE_MARKER,
+                        "export const delivered = true;\n", turns, written)
         broken = self._generic_failing_test(root, impl, state)
         for rel, body in impl.items():
             if rel == broken:

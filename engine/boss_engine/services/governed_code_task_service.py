@@ -620,13 +620,11 @@ def review_panel_seats(lane: str, risk_tier: int, profile: dict, *, ci_files: bo
     if ci_files:
         seats |= {"review_code", "security_check"}
     seats |= {"review_code"}
-    # THE ACCEPTANCE CHECK SITS WHEREVER THE PROFILE ASKED FOR IT, the fix lane included: a
-    # follow-up is most often a fix-lane run, and it is exactly the run whose clean result must
-    # not read as "the must-haves are delivered" (acceptance_gate.py, BOSSAPP-1211).
-    base = (_ALL_PANEL_SEATS if risk_tier >= 2
-            else ((profile or {}).get("panel_checks") or _ALL_PANEL_SEATS))
-    if _acceptance_gate.SEAT in base:
-        seats |= {_acceptance_gate.SEAT}
+    # THE ACCEPTANCE CHECK ALWAYS SITS — a floor, like the code reviewer: on every profile
+    # (a custom profile whose `panel_checks` predates it does not silently drop it) and in the
+    # fix lane, where follow-ups usually run — exactly the runs whose clean result must not read
+    # as "the must-haves are delivered" (acceptance_gate.py, BOSSAPP-1211).
+    seats |= {_acceptance_gate.SEAT}
     return seats
 
 
@@ -8718,33 +8716,41 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # against the root run's must-haves and the PRD's tested-and-gating list, by an
             # LLM reviewer on the consistency lane, plus the required stack's manifest. Before
             # the gate decision, so a missing must-have is decided like any other fact.
-            def _run_acceptance_check() -> tuple[dict, int]:
+            def _run_acceptance_check(max_turns: Optional[int] = None) -> tuple[dict, int]:
                 _stack: dict = {}
+                _source: dict = {"root": True}
                 try:
                     with _transaction(engine) as c:
-                        _acc_spec = _acceptance_gate.items_spec(
+                        _acc_spec, _source = _acceptance_gate.items_spec(
                             c, run_id=run_id, fctx=fctx, own_spec=spec)
                     _items = _acceptance_gate.acceptance_items(_acc_spec)
+                    _dropped = _acceptance_gate.items_dropped(_acc_spec)
                     _stack = _acceptance_gate.stack_manifest_check(review_root, _acc_spec)
                     if not _items:
-                        return _acceptance_gate.judge([], None, _stack), 0
+                        return _acceptance_gate.judge([], None, _stack, root=review_root,
+                                                      source=_source), 0
                     set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
                                     run_id=run_id, stage=_acceptance_gate.SEAT)
                     rr = consistency_agent.run_role(
                         _acceptance_gate.acceptance_prompt(
                             _items, title=title, stack=_stack,
                             tree=_acceptance_gate.tree_listing(review_root)),
-                        review_root, read_only=True, model=consistency_model) or {}
-                    rec = _acceptance_gate.judge(_items, rr.get("summary", ""), _stack)
+                        review_root, read_only=True, model=consistency_model,
+                        max_turns=max_turns or int(getattr(
+                            settings, "code_agent_review_max_turns", 16) or 16)) or {}
+                    rec = _acceptance_gate.judge(_items, rr.get("summary", ""), _stack,
+                                                 root=review_root, source=_source,
+                                                 dropped=_dropped)
                     rec["model"] = rr.get("model") or (rr.get("usage") or {}).get("model")
                     rec["reply"] = (rr.get("summary") or "")[:6000]
                     return rec, int(rr.get("cost_usd_micros") or 0)
                 except Exception as exc:  # noqa: BLE001 — a check that could not run is not a pass
                     _log_caught(logger)
-                    rec = _acceptance_gate.judge([], None, _stack)
-                    if rec["verdict"] == "no_items":
+                    rec = _acceptance_gate.judge([], None, _stack, root=None, source=_source)
+                    if rec["verdict"] in ("no_items", "met"):
                         rec["verdict"] = "not_run"
-                    rec["error"] = f"{type(exc).__name__}: {exc}"[:300]
+                    # The class only: an exception's text can carry a connection URL.
+                    rec["why"] = f"the check could not run ({type(exc).__name__})"
                     return rec, 0
 
             if _acceptance_gate.SEAT in enabled_seats:
@@ -8753,10 +8759,6 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _acceptance_record, _acc_cost = _run_acceptance_check()
                 cost += _acc_cost
                 gates[_acceptance_gate.GATE] = _acceptance_gate.passed(_acceptance_record)
-                # PARTIAL items of a build that met its must-haves leave as follow-up work.
-                if gates[_acceptance_gate.GATE]:
-                    deferred_findings = (list(deferred_findings)
-                                         + _acceptance_gate.partial_followups(_acceptance_record))
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.acceptance_checked", "boss",
                                "code_task_run", run_id,
@@ -9351,10 +9353,6 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         evidence[_acceptance_gate.SUMMARY_KEY] = (
                             _acceptance_gate.findings_summary(_acceptance_record))
                         gates[_acceptance_gate.GATE] = _acceptance_gate.passed(_acceptance_record)
-                        if gates[_acceptance_gate.GATE]:
-                            deferred_findings = (list(deferred_findings)
-                                                 + _acceptance_gate.partial_followups(
-                                                     _acceptance_record))
                     if "tests_strong_enough" in failing:
                         # THE WEAK-SUITE SEAT RE-JUDGES: plant one bug again and expect the
                         # strengthened suite to catch it. Serial, after the read-only seats: it
@@ -9753,6 +9751,19 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         evidence["review_summary"] = (rr.get("summary") or "")[:4000]
                         evidence["adversarial_verdict"] = verdict
                         evidence["review_escalated_turns"] = escalated
+                    if (_acceptance_gate.GATE in failing
+                            and (_acceptance_record or {}).get("verdict") == "not_run"
+                            and (_acceptance_record.get("source") or {}).get("root", True)):
+                        # THE ACCEPTANCE REVIEWER LEFT ITEMS UNANSWERED: ask it again with the
+                        # escalated budget before anything ships past it (never the coder).
+                        with _transaction(engine) as c:
+                            _phase(c, _acceptance_gate.SEAT)
+                        _acceptance_record, _acc_cost = _run_acceptance_check(max_turns=escalated)
+                        cost += _acc_cost
+                        evidence[_acceptance_gate.KEY] = _acceptance_record
+                        evidence[_acceptance_gate.SUMMARY_KEY] = (
+                            _acceptance_gate.findings_summary(_acceptance_record))
+                        gates[_acceptance_gate.GATE] = _acceptance_gate.passed(_acceptance_record)
                     failing = [k for k, v in gates.items() if not v]
                     with _transaction(engine) as c:
                         c.execute(sql(
@@ -9942,7 +9953,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                               # than rediscovering it (crun_3e370c11's ImportError).
                               + (" 'app_serves' failed: "
                                  + _app_serves_sentence(app_serves_record)[:1600]
-                                 if "app_serves" in failing else ""))
+                                 if "app_serves" in failing else "")
+                              # The must-haves the acceptance check found undelivered.
+                              + ("\n\nMUST-HAVES NOT DELIVERED (the acceptance check read the "
+                                 "whole branch; deliver each one for real):\n"
+                                 + _acceptance_gate.findings_summary(_acceptance_record)[:4000]
+                                 if _acceptance_gate.GATE in failing and _acceptance_record
+                                 else ""))
                     # BOSS's own decision, so under the person's grant or not at all
                     # (retry_code_task(automatic=True)).
                     nxt = retry_code_task(engine, settings, jobs, run_id, fix_note=_repair_note,
