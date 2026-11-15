@@ -163,14 +163,15 @@ def test_health_path_is_declarable_and_java_gets_build_time(tmp_path, java_on):
 
 # ---- egress ------------------------------------------------------------------------------------------
 
-def test_egress_allows_maven_central_and_the_gradle_portal_and_nothing_broader(monkeypatch):
+def test_egress_allows_maven_central_and_the_gradle_portal_and_nothing_broader(monkeypatch,
+                                                                              java_on):
     sys.path.insert(0, str(ROOT))
     from apps.egress.boss_egress import connect
 
     monkeypatch.delenv("BOSS_EGRESS_CONNECT_ALLOW", raising=False)
     for host in ("repo.maven.apache.org", "repo1.maven.org", "plugins.gradle.org",
                  "plugins-artifacts.gradle.org"):
-        assert host in connect.DEFAULT_ALLOW and connect.host_allowed(host)
+        assert host in connect.TOOLCHAIN_ALLOW["java"] and connect.host_allowed(host)
     for host in ("services.gradle.org", "downloads.gradle.org", "maven.org", "evil.maven.org",
                  "jitpack.io", "oss.sonatype.org"):
         assert not connect.host_allowed(host), host
@@ -181,6 +182,17 @@ def test_egress_allows_maven_central_and_the_gradle_portal_and_nothing_broader(m
 
 
 # ---- the sandbox: proxy config and per-project caches ---------------------------------------------
+
+def test_maven_hosts_are_closed_on_an_install_without_java(monkeypatch, java_off):
+    """Every allowlisted host is a way out too: an install without Java does not open them."""
+    sys.path.insert(0, str(ROOT))
+    from apps.egress.boss_egress import connect
+
+    monkeypatch.delenv("BOSS_EGRESS_CONNECT_ALLOW", raising=False)
+    for host in connect.TOOLCHAIN_ALLOW["java"]:
+        assert host not in connect.DEFAULT_ALLOW and not connect.host_allowed(host), host
+    assert connect.host_allowed("registry.npmjs.org")
+
 
 def test_maven_and_gradle_get_the_egress_proxy_in_their_own_config(tmp_path, java_on):
     home = tmp_path / "home"
@@ -248,17 +260,40 @@ def test_setup_says_how_to_turn_java_on(java_off):
 
 # ---- the install surface ------------------------------------------------------------------------------
 
+#: Every compose service built from python-runtime (so every one takes BOSS_TOOLCHAINS), and the
+#: ones whose processes run builds (so each mounts the per-project toolchain cache). Asserted per
+#: service, not by count: a count went stale twice when a service was added (BOSSAPP-1200).
+BUILT_FROM_PYTHON_RUNTIME = ("api", "worker", "mcp-tools", "kg-mcp", "egress", "runner")
+MOUNTS_THE_TOOLCHAIN_CACHE = ("api", "worker", "runner")
+
+
+def _compose_services() -> dict:
+    import yaml
+
+    compose = yaml.safe_load((ROOT / "scripts" / "install" / "community-compose.yml").read_text())
+    return compose["services"]
+
+
 def test_toolchains_are_opt_in_in_the_image_and_compose():
     dockerfile = (ROOT / "Dockerfile.community").read_text()
     assert "ARG BOSS_TOOLCHAINS=none" in dockerfile
-    assert "FROM toolchains-${BOSS_TOOLCHAINS} AS toolchains" in dockerfile
     assert "AS toolchains-none" in dockerfile and "AS toolchains-java" in dockerfile
-    java = dockerfile.split("AS toolchains-java", 1)[1].split("FROM toolchains-", 1)[0]
+    assert "FROM toolchains-${TC_JAVA} AS tc-java" in dockerfile
+    assert "COPY --from=toolchains /opt/toolchains /opt/toolchains" in dockerfile
+    java = dockerfile.split("AS toolchains-java", 1)[1].split("\nFROM ", 1)[0]
     assert "sha256sum -c" in java and "sha512sum -c" in java
     assert not re.search(r"\|\s*(ba)?sh\b", java), "a download is never piped into a shell"
-    compose = (ROOT / "scripts" / "install" / "community-compose.yml").read_text()
-    assert compose.count("BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}") == 4
-    assert compose.count("boss_community_toolchain_cache_v2:/var/lib/boss/toolchain-cache") == 2
+    services = _compose_services()
+    for name in BUILT_FROM_PYTHON_RUNTIME:
+        args = services[name]["build"]["args"]
+        assert args.get("BOSS_TOOLCHAINS") == "${BOSS_TOOLCHAINS:-none}", name
+    built = {n for n, svc in services.items() if (svc.get("build") or {}).get("dockerfile")
+             == "Dockerfile.community" and (svc["build"].get("target") or "") != "web"}
+    assert built == set(BUILT_FROM_PYTHON_RUNTIME), "a new python-runtime service: list it above"
+    for name, svc in services.items():
+        mounted = "boss_community_toolchain_cache_v2:/var/lib/boss/toolchain-cache" in (
+            svc.get("volumes") or [])
+        assert mounted == (name in MOUNTS_THE_TOOLCHAIN_CACHE), name
     boss_sh = (ROOT / "scripts" / "install" / "boss.sh").read_text()
     assert "toolchains) cmd_toolchains" in boss_sh
 

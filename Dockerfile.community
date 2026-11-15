@@ -4,10 +4,24 @@
 # that every copied path belongs in that tree before publication.
 # Pin the multi-architecture base indexes reviewed for this release candidate.
 # OPT-IN TOOLCHAINS (docs/community/TOOLCHAINS.md). Python and Node are always in the image; any
-# other stack is chosen per install: BOSS_TOOLCHAINS=java in .env (compose passes it here) selects
-# the toolchains-java stage below. The default, "none", selects an empty one, and BuildKit never
-# builds a stage nothing uses, so a default install downloads no JDK at all.
+# other stack is chosen per install: BOSS_TOOLCHAINS in .env (compose passes it here) is "none" or a
+# comma-separated list of toolchains — java, go, security — e.g. "java,go". Each toolchain's
+# selector below is its own stage name when the list holds it and "none" otherwise, so each
+# tc-<name> stage is either that toolchain or the empty one, and BuildKit never builds a stage
+# nothing uses: a default install downloads no JDK and no Go at all.
+#   _TC_LIST     ",java,go,"  (commas around every name, so ",go," never matches "golang")
+#   _TC_<X>_HIT  the whole list replaced by "<x>" when it holds ",<x>,", else unchanged
+#   TC_<X>       "<x>", or "none" when _TC_<X>_HIT is still the list (it starts with a comma)
+# String replacement in ARG values needs the dockerfile:1.7 frontend this file pins (line 1).
+# An unknown name fails the build in the `toolchains` stage, in words.
 ARG BOSS_TOOLCHAINS=none
+ARG _TC_LIST=",${BOSS_TOOLCHAINS},"
+ARG _TC_JAVA_HIT=${_TC_LIST/*,java,*/java}
+ARG TC_JAVA=${_TC_JAVA_HIT/,*/none}
+ARG _TC_GO_HIT=${_TC_LIST/*,go,*/go}
+ARG TC_GO=${_TC_GO_HIT/,*/none}
+ARG _TC_SECURITY_HIT=${_TC_LIST/*,security,*/security}
+ARG TC_SECURITY=${_TC_SECURITY_HIT/,*/none}
 
 # THE SANDBOX HELPER (IDENTITY.md §7.6): the one privileged binary, built here so the runtime image
 # carries no compiler. scripts/sandbox/boss-sandbox-exec.c says what it may do (and nothing more).
@@ -117,7 +131,71 @@ manifest["security"] = dict(zip(("semgrep", "semgrep_rules", "osv_scanner", "zap
 json.dump(manifest, open(path, "w"))
 PY
 
-FROM toolchains-${BOSS_TOOLCHAINS} AS toolchains
+# GO: the official release tarball, pinned with its published SHA-256 per architecture (go.dev/dl
+# and dl.google.com/go/<file>.sha256 agree), checked before it is unpacked, downloaded with
+# Python's urllib. Everything lands under /opt/toolchains/go, with go and gofmt linked from
+# /opt/toolchains/bin. The release's own $GOROOT/go.env (GOPROXY=…,direct, GOTOOLCHAIN=auto) is
+# rewritten, so `go` is safe without any per-run environment: modules only from the Go module
+# proxy (no `direct` fetch from a source host), always checked against sum.golang.org, and a
+# go.mod's `toolchain` line never downloads another Go. toolchains.sandbox_env sets the same and
+# more for every sandboxed run.
+FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS toolchains-go
+ARG TARGETARCH
+ARG GO_VERSION=1.27.4
+ARG GO_SHA256_AMD64=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
+ARG GO_SHA256_ARM64=3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92
+RUN set -eu; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) go_sum="$GO_SHA256_AMD64" ;; \
+      arm64) go_sum="$GO_SHA256_ARM64" ;; \
+      *) echo "no Go toolchain for $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    get() { python -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' "$1" "$2"; }; \
+    cd /tmp; \
+    get "https://dl.google.com/go/go$GO_VERSION.linux-${TARGETARCH:-amd64}.tar.gz" go.tgz; \
+    echo "$go_sum  go.tgz" | sha256sum -c -; \
+    mkdir -p /opt/toolchains/go /opt/toolchains/bin; \
+    tar -xzf go.tgz -C /opt/toolchains/go --strip-components=1; \
+    rm -rf go.tgz /opt/toolchains/go/api /opt/toolchains/go/test; \
+    printf 'GOPROXY=https://proxy.golang.org\nGOSUMDB=sum.golang.org\nGOTOOLCHAIN=local\n' \
+      > /opt/toolchains/go/go.env; \
+    ln -s ../go/bin/go /opt/toolchains/bin/go; \
+    ln -s ../go/bin/gofmt /opt/toolchains/bin/gofmt; \
+    chmod -R a+rX,go-w /opt/toolchains; \
+    /opt/toolchains/bin/go version | grep -q "go$GO_VERSION "; \
+    printf '{"go": {"go": "%s"}}\n' "$GO_VERSION" > /opt/toolchains/manifest.json
+
+# THE INSTALL'S TOOLCHAINS: every selected stage's /opt/toolchains laid over one tree (their files
+# never overlap: each lives under its own directory, with its own links in bin/), and their
+# manifests merged into one manifest.json. A selector that is "none" contributes an empty tree.
+FROM toolchains-${TC_JAVA} AS tc-java
+FROM toolchains-${TC_GO} AS tc-go
+FROM toolchains-${TC_SECURITY} AS tc-security
+FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS toolchains
+ARG BOSS_TOOLCHAINS
+COPY --from=tc-java /opt/toolchains /opt/toolchains
+COPY --from=tc-java /opt/toolchains/manifest.json /tmp/tc-manifests/java.json
+COPY --from=tc-go /opt/toolchains /opt/toolchains
+COPY --from=tc-go /opt/toolchains/manifest.json /tmp/tc-manifests/go.json
+COPY --from=tc-security /opt/toolchains /opt/toolchains
+COPY --from=tc-security /opt/toolchains/manifest.json /tmp/tc-manifests/security.json
+RUN python - "$BOSS_TOOLCHAINS" <<'PY'
+import json, pathlib, sys
+known = {"none", "java", "go", "security"}
+names = sys.argv[1].split(",")
+bad = [n for n in names if n not in known] or (["none"] if "none" in names and len(names) > 1 else [])
+if bad:
+    sys.exit(f"BOSS_TOOLCHAINS={sys.argv[1]!r}: unknown or misplaced {', '.join(map(repr, bad))}. "
+             "Use none, or a comma-separated list (no spaces) of: java, go, security.")
+merged = {}
+for f in sorted(pathlib.Path("/tmp/tc-manifests").glob("*.json")):
+    merged.update(json.loads(f.read_text()))
+missing = [n for n in names if n != "none" and n not in merged]
+if missing:
+    sys.exit(f"BOSS_TOOLCHAINS asked for {missing} and the image has {sorted(merged)}")
+pathlib.Path("/opt/toolchains/manifest.json").write_text(json.dumps(merged, sort_keys=True) + "\n")
+print("toolchains:", ", ".join(sorted(merged)) or "none")
+PY
 
 FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS python-runtime
 

@@ -1,19 +1,23 @@
 """PER-STACK TOOLCHAINS IN THE BUILD SANDBOX (docs/community/TOOLCHAINS.md).
 
 The API/worker image always carries Python and Node. Anything else is opt-in per install:
-`BOSS_TOOLCHAINS=java` in .env selects the `toolchains-java` stage of Dockerfile.community, which
-puts a pinned, checksum-verified Temurin JDK, Maven and Gradle under /opt/toolchains and writes
-/opt/toolchains/manifest.json. An install without it carries an empty manifest and nothing else.
+`BOSS_TOOLCHAINS=java` (or several, `java,go`) in .env selects the `toolchains-java` (and
+`toolchains-go`) stages of Dockerfile.community, which put a pinned, checksum-verified Temurin
+JDK, Maven and Gradle (a Go release) under /opt/toolchains and write /opt/toolchains/manifest.json.
+An install without any carries an empty manifest and nothing else.
 
 This module is the one place that knows:
 
 * which toolchains this image has (`installed`, read from the manifest);
-* which stack a checkout is (`detect_java`: pom.xml, build.gradle, build.gradle.kts);
-* the commands that test and build it (`java_gate_commands`) and run it (`java_preview_command`);
+* which stack a checkout is (`detect_java`: pom.xml, build.gradle, build.gradle.kts;
+  `detect_go`: go.mod);
+* the commands that test and build it (`java_gate_commands`, `GO_GATE`) and run it
+  (`java_preview_command`, `go_run_command`);
 * what to say when the toolchain is not there (`missing_message`) — in words, never "mvn: not
   found";
-* how a sandboxed run reaches Maven Central and the Gradle plugin portal (only through
-  boss-egress's CONNECT proxy: `write_proxy_config`), and how its dependency caches persist per
+* how a sandboxed run reaches Maven Central, the Gradle plugin portal and the Go module proxy
+  (only through boss-egress's CONNECT proxy: `write_proxy_config`, `sandbox_env`), and how its
+  dependency caches persist per
   PROJECT across runs without ever being handed to another project (`restore_cache`,
   `save_cache`).
 """
@@ -23,6 +27,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any, Optional
@@ -41,8 +46,11 @@ DEFAULT_CACHE_MAX_MB = 2048
 KNOWN = {"java": "Java (Temurin JDK 21, Maven, Gradle)",
          # The security review's scanners (APP_TEMPLATES_AND_SECURITY_LOOP.md §4.5); the stage is
          # built on the Java one because ZAP needs a JRE, so this install has Java too.
+         "go": "Go (1.27, go vet, go test)",
          "security": "Security scanners (Semgrep, OSV-Scanner, OWASP ZAP; includes Java)"}
 ENABLE_HINT = "boss toolchains enable {name}"
+#: What a person reads for each toolchain in a refusal ("needs Go").
+LABELS = {"java": "Java", "go": "Go", "security": "the security scanners"}
 
 MAVEN_FILES = ("pom.xml",)
 GRADLE_FILES = ("build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts")
@@ -54,9 +62,16 @@ MAVEN_GATE = ["mvn -B -ntp verify"]
 GRADLE_GATE = ["gradle --no-daemon --console=plain build"]
 GATE_TIMEOUT_SECONDS = 1200
 
-#: Per-project caches, relative to the sandbox HOME: (cache name, path under HOME).
-#: Gradle's downloaded modules only — its transforms and daemons are per-machine scratch.
-CACHE_DIRS = (("m2", ".m2/repository"), ("gradle", ".gradle/caches/modules-2"))
+GO_MANIFESTS = ("go.mod",)
+#: Vet, then the tests (they compile every package). Two plain commands: the sandbox runs each
+#: without a shell, so the gate is `go vet ./... && go test ./...` as two steps.
+GO_GATE = ["go vet ./...", "go test ./..."]
+
+#: Per-project caches, relative to the sandbox HOME: (cache name, path under HOME, toolchain).
+#: Gradle's downloaded modules only — its transforms and daemons are per-machine scratch. Go's
+#: module cache (GOMODCACHE) and its build cache (GOCACHE), where sandbox_env puts them.
+CACHE_DIRS = (("m2", ".m2/repository", "java"), ("gradle", ".gradle/caches/modules-2", "java"),
+              ("gomod", "go/pkg/mod", "go"), ("gobuild", ".cache/go-build", "go"))
 
 
 def manifest_path() -> Path:
@@ -77,6 +92,17 @@ def installed() -> dict[str, dict[str, str]]:
 
 def has(name: str) -> bool:
     return name in installed()
+
+
+def parse_selection(value: Optional[str]) -> list[str]:
+    """BOSS_TOOLCHAINS as a list: "java,go" -> ["java", "go"]; "none" or empty -> []. The same
+    reading as the Dockerfile's and boss.sh's: comma-separated, no spaces, "none" alone."""
+    out = []
+    for part in str(value or "").split(","):
+        part = part.strip().lower()
+        if part and part != "none" and part not in out:
+            out.append(part)
+    return out
 
 
 def setup_summary() -> list[dict[str, Any]]:
@@ -113,13 +139,93 @@ def build_file(build: str) -> str:
     return "pom.xml" if build == "maven" else "build.gradle"
 
 
+def enable_instructions(name: str) -> str:
+    """How a person turns toolchain `name` on, in one clause."""
+    return (f"`{ENABLE_HINT.format(name=name)}` on the BOSS host (or set "
+            f"BOSS_TOOLCHAINS={name} in .env — comma-separated with any others, e.g. "
+            f"BOSS_TOOLCHAINS=java,go — and run `boss update`)")
+
+
 def missing_message(name: str, found: str) -> str:
     """The words a build shows when the project needs a toolchain this install does not have."""
-    label = {"java": "Java", "security": "the security scanners"}.get(name, name)
+    label = LABELS.get(name, name)
     return (f"This project needs {label} (it has a {found}), and {label} is not turned on for "
-            f"this BOSS. Turn it on with `{ENABLE_HINT.format(name=name)}` on the BOSS host "
-            f"(or set BOSS_TOOLCHAINS={name} in .env and run `boss update`), then run the build "
-            f"again.")
+            f"this BOSS. Turn it on with {enable_instructions(name)}, then run the build again. "
+            f"BOSS does not build it in another language instead.")
+
+
+def unsupported_message(label: str, found: str) -> str:
+    """The words a build shows for a project in a language BOSS cannot build at all."""
+    return (f"This project is {label} (it has a {found}), which BOSS cannot build. BOSS does not "
+            "build it in another language instead; see docs/community/SUPPORTED_STACKS.md.")
+
+
+# ---- Go --------------------------------------------------------------------------------------
+
+def detect_go(root: Path | str) -> bool:
+    """Is the checkout's root a Go module (go.mod)?"""
+    return any((Path(root) / name).is_file() for name in GO_MANIFESTS)
+
+
+def go_main_package(app_root: Path | str) -> str:
+    """The package `go build` makes the server from: the module root when it is `package main`,
+    else the first ./cmd/<name> with a main.go."""
+    base = Path(app_root)
+    pkg_main = re.compile(r"^package\s+main\b", re.M)
+    for f in sorted(base.glob("*.go")):
+        if not f.name.endswith("_test.go") and pkg_main.search(_head(f)):
+            return "."
+    cmd = base / "cmd"
+    if cmd.is_dir():
+        for d in sorted(p for p in cmd.iterdir() if p.is_dir()):
+            if (d / "main.go").is_file():
+                return f"./cmd/{d.name}"
+    return "."
+
+
+def _head(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[:4000]
+    except OSError:
+        return ""
+
+
+def go_run_command(app_root: Path | str) -> list[str]:
+    """Build the server binary into the run's TMPDIR (never into the checkout), then run it. The
+    app reads its port from $PORT (BOSS's contract for every backend)."""
+    pkg = go_main_package(app_root)
+    return ["sh", "-lc",
+            f'out="${{TMPDIR:-/tmp}}/boss-go-app-$$" && go build -o "$out" {pkg} '
+            f'&& exec "$out"']
+
+
+def sandbox_env(home: Path | str) -> dict[str, str]:
+    """The environment a sandboxed run gets for the toolchains this image carries. Go: modules
+    only from the Go module proxy and checked against the checksum database, both reached
+    through boss-egress (HTTPS_PROXY, which Go honours); caches under the run's HOME, where
+    restore_cache/save_cache keep them per project; the image's pinned Go, never a toolchain
+    download a go.mod `toolchain` line asks for; a module cache the run can delete."""
+    if not has("go"):
+        return {}
+    home = str(home)
+    return {"GOPATH": f"{home}/go", "GOMODCACHE": f"{home}/go/pkg/mod",
+            "GOCACHE": f"{home}/.cache/go-build", "GOPROXY": GOPROXY, "GOSUMDB": GOSUMDB,
+            "GOTOOLCHAIN": "local", "GOFLAGS": "-modcacherw",
+            # Nothing skips the proxy or the checksum database, whatever a project's own
+            # environment or go.work says. Empty, not unset: an empty value overrides go env -w.
+            # Not -mod=readonly: building a Go change means `go get` / `go mod tidy` updating
+            # go.mod and go.sum, and every added module is still checked against GOSUMDB.
+            **{name: "" for name in GO_PRIVATE_VARS}}
+
+
+#: The variables that would let a module skip GOPROXY or GOSUMDB (or fetch over plain HTTP).
+GO_PRIVATE_VARS = ("GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GONOSUMCHECK", "GOINSECURE")
+
+
+#: The only module source (no `,direct`: a direct fetch would go to a VCS host the egress
+#: allowlist does not include) and the checksum database every module is checked against.
+GOPROXY = "https://proxy.golang.org"
+GOSUMDB = "sum.golang.org"
 
 
 def java_package_command(build: str) -> str:
@@ -301,13 +407,19 @@ def _copy_tree(src: Path, dst: Path, *, open_modes: bool) -> int:
     return total
 
 
+def _caches() -> list[tuple[str, str]]:
+    """(name, path under HOME) of every cache whose toolchain this image carries."""
+    return [(name, rel) for name, rel, tool in CACHE_DIRS if has(tool)]
+
+
 def restore_cache(home: Path, project_id: Optional[str]) -> list[str]:
-    """Into a fresh run's HOME: this project's Maven/Gradle downloads from earlier runs."""
-    if not project_id or not has("java"):
+    """Into a fresh run's HOME: this project's Maven/Gradle/Go downloads from earlier runs."""
+    caches = _caches()
+    if not project_id or not caches:
         return []
     base = project_cache_dir(project_id)
     restored = []
-    for name, rel in CACHE_DIRS:
+    for name, rel in caches:
         src = base / name
         if not src.is_dir():
             continue
@@ -327,12 +439,13 @@ def restore_cache(home: Path, project_id: Optional[str]) -> list[str]:
 def save_cache(home: Path, project_id: Optional[str]) -> list[str]:
     """At run end, before the run directory goes: keep this project's downloads for its next run.
     Replaced whole (copy beside, then swap), so a concurrent restore never sees half a cache."""
-    if not project_id or not has("java"):
+    caches = _caches()
+    if not project_id or not caches:
         return []
     limit = int(os.environ.get(CACHE_MAX_ENV) or DEFAULT_CACHE_MAX_MB) * 1024 * 1024
     base = project_cache_dir(project_id)
     saved = []
-    for name, rel in CACHE_DIRS:
+    for name, rel in caches:
         src = home / rel
         if not src.is_dir():
             continue

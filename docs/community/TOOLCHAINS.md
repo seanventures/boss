@@ -2,24 +2,34 @@
 
 BOSS builds, tests and previews projects inside its build sandbox (see [SANDBOX.md](SANDBOX.md)).
 Python 3.11 and Node 20 are always installed. Other stacks are **opt-in for each install**, so an
-install that never builds Java doesn't carry a JDK.
+install that never builds Java doesn't carry a JDK, and one that never builds Go carries no Go.
 
 | Toolchain | What you get | Image cost |
 |---|---|---|
 | `python`, `node` | Always installed | — |
 | `java` | Temurin JDK 21.0.12.1+1, Maven 3.9.16, Gradle 8.14.6 | about 0.5 GB on the api/worker image |
+| `go` | Go 1.27.4 (`go`, `gofmt`) | about 0.25 GB on the api/worker image |
+| `security` | Semgrep, OSV-Scanner, OWASP ZAP (includes Java) | see the security review docs |
 
-## Turn Java on
+`BOSS_TOOLCHAINS` is `none` (the default) or a comma-separated list with no spaces, such as
+`java,go`. An unknown name stops the image build with a message that says what is accepted.
+
+## Turn a toolchain on
 
 On the BOSS host:
 
 ```sh
-boss toolchains enable java     # saves BOSS_TOOLCHAINS=java in .env, rebuilds api + worker, restarts them
+boss toolchains enable java     # adds java to BOSS_TOOLCHAINS in .env, rebuilds api + worker, restarts them
+boss toolchains enable go       # now BOSS_TOOLCHAINS=java,go
 boss toolchains                 # what .env asks for, and what the running image has
-boss toolchains disable java    # back to none
+boss toolchains disable java    # removes java and keeps go; the last one off leaves none
 ```
 
-You can also set `BOSS_TOOLCHAINS=java` in the install's `.env` yourself and run `boss update`.
+You can also set `BOSS_TOOLCHAINS=java,go` in the install's `.env` yourself and run `boss update`.
+
+`security` is built on the Java stage (OWASP ZAP needs its JRE), so an install with `security`
+has Java whatever the list says. `boss toolchains disable java` refuses while `security` is on and
+tells you to turn the scanners off first.
 Every later `boss update` and `boss upgrade` keeps the setting, because the installer builds
 with that `.env`.
 
@@ -28,10 +38,13 @@ that is off shows the command that turns it on.
 
 ## Why a build stage, and not a volume or a second image
 
-`Dockerfile.community` has one stage per toolchain (`toolchains-none`, `toolchains-java`).
-`ARG BOSS_TOOLCHAINS` chooses one, and `python-runtime` copies `/opt/toolchains` from it. BuildKit
-skips any stage that nothing uses, so a default install never downloads a JDK. We picked this
-over the alternatives:
+`Dockerfile.community` has one stage per toolchain (`toolchains-none`, `toolchains-java`,
+`toolchains-go`, `toolchains-security`). From `ARG BOSS_TOOLCHAINS` it works out, for each
+toolchain, either that toolchain's stage or the empty one (`tc-java`, `tc-go`, `tc-security`).
+The `toolchains` stage lays their `/opt/toolchains` trees over one another and merges their
+manifests into one `manifest.json`, and `python-runtime` copies `/opt/toolchains` from it.
+BuildKit skips any stage that nothing uses, so a default install never downloads a JDK or Go. We
+picked this over the alternatives:
 
 - **A separate `api-java` image** would have to be built, tagged and kept in step with the api,
   worker, egress and mcp-tools images. Every compose file, the upgrade path and `boss prune`
@@ -44,7 +57,8 @@ With a build stage there is one image, one tag, and one setting in `.env`, and t
 reviewed in the Dockerfile.
 
 Each download is pinned and checked against its published checksum before it's unpacked:
-SHA-256 for the JDK (one per architecture) and Gradle, SHA-512 for Maven. The downloads use
+SHA-256 for the JDK (one per architecture) and Gradle, SHA-512 for Maven, SHA-256 for the Go
+release tarball (one per architecture, as published on go.dev/dl). The downloads use
 Python's `urllib`, and nothing is piped into a shell. The JDK's `jmods` and `src.zip` are
 removed, which means `jlink` isn't available.
 
@@ -62,16 +76,64 @@ removed, which means `jlink` isn't available.
 - **Java turned off.** The build fails with: *"This project needs Java (it has a pom.xml), and
   Java is not turned on for this BOSS. Turn it on with `boss toolchains enable java` …"*.
 
+## What the build loop does with a Go project
+
+- **Detection.** The app's directory has a `go.mod` and no `package.json` or Python manifest. A
+  task's own `test_commands` and a `boss.verify.yaml` still come first.
+- **Gate.** `go vet ./...`, then `go test ./...` (two steps, each run without a shell). The gate
+  has 20 minutes, like Java's, because a first build downloads its modules.
+- **Running it.** A Go backend is built with `go build` into the run's temporary directory (the
+  module root when it is `package main`, else the first `./cmd/<name>` with a `main.go`) and
+  started; it must listen on `$PORT`. `boss.preview.command` still overrides this.
+- **The pinned Go only.** The image rewrites Go's own `$GOROOT/go.env` to
+  `GOPROXY=https://proxy.golang.org`, `GOSUMDB=sum.golang.org`, `GOTOOLCHAIN=local`, so `go` is
+  safe even without a per-run environment, and every sandboxed run gets the same plus
+  `GOPRIVATE`, `GONOPROXY`, `GONOSUMDB`, `GONOSUMCHECK`, `GOINSECURE` set empty. A `toolchain` line
+  in `go.mod` never downloads another Go. `-mod=readonly` is not set: a Go change needs `go get`
+  and `go mod tidy` to update go.mod and go.sum, and every module they add is still checked
+  against the checksum database.
+- **Go turned off.** The build stops before anything is spent: *"This build needs Go, which is
+  not turned on for this BOSS: turn it on with `boss toolchains enable go` on the BOSS host (or
+  set BOSS_TOOLCHAINS=go in .env … and run `boss update`) …"*. A tree with a `go.mod` and no Go
+  gets the same words from the gate (`toolchain_missing`), never the npm or Python default.
+
+## A stack BOSS does not have is never swapped for another
+
+When the brief asks for a language that is off on this install (Go or Java without its
+toolchain), the build stops and says how to turn it on. When it asks for a language BOSS cannot
+build at all (Rust, Ruby, PHP, .NET, Elixir, Scala), the build stops with `stack_unsupported`. In
+neither case does BOSS build the app in another language: a panel or an architecture that picks
+"the closest supported stack" does not override the language the operator asked for. A tree that
+holds such a language's manifest (`Cargo.toml`, `Gemfile`, …) and no Node or Python app gets a
+`toolchain_missing` gate in words, never the npm or Python default.
+
+A `go.mod` (or a Maven/Gradle build) in the app's directory without its toolchain is
+`toolchain_missing` **even with a `package.json` or a Python manifest beside it**, so a repair that
+adds one cannot turn the gate into npm's. The plan reports it as a person's to fix
+(`GatePlan.needs_human`), not a repairable failure. When a directory holds both a Java build and
+a `go.mod`, the one most of its source is written in decides (Java on a tie).
+
 ## Network and caches
 
 - Maven and Gradle reach the internet only through boss-egress's CONNECT proxy. They ignore
   `HTTPS_PROXY`, so at run start BOSS writes the proxy into the run's own `~/.m2/settings.xml`
   and `~/.gradle/gradle.properties`. The default allowlist (`BOSS_EGRESS_CONNECT_ALLOW`) gains
   these hosts and nothing else: `repo.maven.apache.org`, `repo1.maven.org`,
-  `plugins.gradle.org` and `plugins-artifacts.gradle.org`. A project that needs another
+  `plugins.gradle.org` and `plugins-artifacts.gradle.org` (only on an install with Java). A project that needs another
   repository (a company Nexus, JitPack) has to be added to the allowlist by the operator.
+- Go honours `HTTPS_PROXY`, so it needs no config file. Each run gets
+  `GOPROXY=https://proxy.golang.org` (no `direct`: a module is never fetched from its source
+  host) and `GOSUMDB=sum.golang.org`, and the allowlist gains exactly those two hosts. The proxy
+  serves module zips itself, so `storage.googleapis.com` is not needed. Private modules are not
+  supported in the sandbox: nothing may skip the proxy or the checksum database.
+- **Toolchain hosts open only with the toolchain.** boss-egress reads the image's manifest: the
+  Maven and Gradle hosts are allowed only when Java is installed, the Go hosts only when Go is.
+  Every allowed host is also a way out: a module proxy fetches any public path it is asked for,
+  so a run could encode data into its requests. An install that doesn't build Go doesn't open the
+  Go proxy at all. `BOSS_EGRESS_CONNECT_ALLOW` still replaces the whole list.
 - **Caches are kept per project.** When a build ends, BOSS copies the run's `~/.m2/repository`
-  and `~/.gradle/caches/modules-2` into `/var/lib/boss/toolchain-cache/<hash of project id>`.
+  and `~/.gradle/caches/modules-2` (Java), or `~/go/pkg/mod` (`GOMODCACHE`) and
+  `~/.cache/go-build` (`GOCACHE`) (Go), into `/var/lib/boss/toolchain-cache/<hash of project id>`.
   That directory is on the `boss_community_toolchain_cache_v2` volume and is readable only by the
   `boss` user. The project's next build starts with a copy of it. A build never gets another
   project's cache, and no two runs share a live directory, because each run works on its own
@@ -118,7 +180,7 @@ exec java -Dserver.port="$PORT" -jar target/<app>.jar [server config.yml]
 
 ## A project's own image (built by hand)
 
-When a project needs something no toolchain stage carries (a different JDK, Go, browsers, a
+When a project needs something no toolchain stage carries (a different JDK or Go, browsers, a
 private CLI), build its image once instead of reinstalling it every run. This needs the docker
 build runtime (`BOSS_SANDBOX_COMMAND_RUNTIME=docker`); the console says so when it is off.
 

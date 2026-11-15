@@ -306,7 +306,7 @@ def test_the_security_layer_is_one_registry_entry_and_a_pinned_checksummed_stage
     lock = (ROOT / "engine/boss_engine/security_scan/semgrep-requirements.lock").read_text()
     pinned = [line for line in lock.splitlines() if "==" in line and not line.startswith("#")]
     assert pinned and all("--hash=sha256:" in lock.split(p, 1)[1].split("\n", 2)[1] for p in pinned)
-    assert 'KNOWN_TOOLCHAINS=(java security)' in (ROOT / "scripts/install/boss.sh").read_text()
+    assert 'KNOWN_TOOLCHAINS=(java go security)' in (ROOT / "scripts/install/boss.sh").read_text()
     from apps.egress.boss_egress import connect
 
     assert "api.osv.dev" in connect.DEFAULT_ALLOW                      # D6: OSV online

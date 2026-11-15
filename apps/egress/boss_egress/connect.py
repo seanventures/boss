@@ -33,14 +33,42 @@ DEFAULT_ALLOW = (
     "registry.npmjs.org", "registry.yarnpkg.com", "pypi.org", "files.pythonhosted.org",
     "playwright.azureedge.net", "playwright-akamai.azureedge.net", "playwright-verizon.azureedge.net",
     "cdn.playwright.dev", "nodejs.org",
-    # Java (an opt-in toolchain, docs/community/TOOLCHAINS.md): Maven Central and the Gradle
-    # plugin portal (which redirects its downloads to plugins-artifacts). Nothing broader: no
-    # services.gradle.org, so a project's ./gradlew cannot fetch a distribution; BOSS runs the
-    # image's pinned Gradle instead.
-    "repo.maven.apache.org", "repo1.maven.org", "plugins.gradle.org", "plugins-artifacts.gradle.org",
     # The security review's dependency audit (OSV-Scanner, online by default: decision D6).
     "api.osv.dev",
 )
+#: OPT-IN TOOLCHAINS' HOSTS (docs/community/TOOLCHAINS.md), allowed only when THIS image carries the
+#: toolchain (its /opt/toolchains/manifest.json; egress is built from the same python-runtime
+#: stage as the api and worker, with the same BOSS_TOOLCHAINS). Every allowlisted host is a way
+#: OUT as well as in: a package proxy that accepts arbitrary paths (proxy.golang.org fetches any
+#: public module path on request; Maven Central and the Gradle portal take any GET) can carry
+#: data a sandboxed run encodes into the requests it makes. That is why each list is the
+#: smallest that builds, and why an install without the toolchain does not open them at all.
+TOOLCHAIN_ALLOW = {
+    # Java: Maven Central and the Gradle plugin portal (which redirects its downloads to
+    # plugins-artifacts). Nothing broader: no services.gradle.org, so a project's ./gradlew
+    # cannot fetch a distribution; BOSS runs the image's pinned Gradle instead.
+    "java": ("repo.maven.apache.org", "repo1.maven.org", "plugins.gradle.org",
+             "plugins-artifacts.gradle.org"),
+    # Go: the module proxy and the checksum database (GOPROXY/GOSUMDB, set per run by
+    # toolchains.sandbox_env and in the image's go.env). The proxy serves module zips itself (no
+    # redirect to storage.googleapis.com), and with GOPROXY set to it there is no `direct` VCS
+    # fallback, so no source host is needed.
+    "go": ("proxy.golang.org", "sum.golang.org"),
+}
+
+
+def toolchain_hosts() -> tuple[str, ...]:
+    """The hosts of the opt-in toolchains this image carries (none when the manifest is absent)."""
+    try:
+        from boss_engine.services import toolchains
+
+        have = toolchains.installed()
+    except Exception as exc:  # noqa: BLE001 — fail closed: no toolchain hosts
+        log.warning("could not read the toolchain manifest; no toolchain hosts allowed: %s", exc)
+        return ()
+    return tuple(h for name, hosts in TOOLCHAIN_ALLOW.items() if name in have for h in hosts)
+
+
 #: Never through the tunnel, whatever the allowlist says.
 NEVER = ("github.com", "*.github.com", "*.githubusercontent.com", "api.github.com")
 MAX_HEADER = 8192
@@ -64,7 +92,8 @@ def _model_hosts() -> tuple[str, ...]:
 
 def allowlist() -> tuple[str, ...]:
     raw = (os.environ.get("BOSS_EGRESS_CONNECT_ALLOW") or "").strip()
-    hosts = tuple(h.strip().lower() for h in raw.split(",") if h.strip()) if raw else DEFAULT_ALLOW
+    hosts = (tuple(h.strip().lower() for h in raw.split(",") if h.strip()) if raw
+             else DEFAULT_ALLOW + toolchain_hosts())
     if strict_secrets():
         hosts = tuple(h for h in hosts if not _matches(h, _model_hosts()) and h not in _model_hosts())
     return hosts

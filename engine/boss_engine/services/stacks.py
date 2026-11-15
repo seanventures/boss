@@ -15,16 +15,17 @@ This module is both halves of the fix.
 
 * THE REGISTRY. `LANGUAGES` is the build code itself: each entry carries the functions that
   install, build, unit-test and start a service in that language (`_python_steps`,
-  `_node_steps`, `_java_steps`, `_start_*`). A language is BUILDABLE because it has those
-  functions here, and READY because its toolchain is in this image (`toolchains.installed()`):
-  Python and Node are always in the image, Java only when the install turned it on. Nothing else
+  `_node_steps`, `_java_steps`, `_go_steps`, `_start_*`). A language is BUILDABLE because it has
+  those functions here, and READY because its toolchain is in this image
+  (`toolchains.installed()`): Python and Node are always in the image, Java and Go only when the
+  install turned them on. Nothing else
   keeps a list. `capabilities()` is what the API, the console, the panel's prompt and the
   architect's prompt all read; `check_text()` / `check_build()` / `check_architecture()` are the
   refusals Start, architecture approval and the build give, in words, naming what IS supported
   and how to turn a toolchain on when it is merely off.
 
 * THE PLAN. `detect_services()` reads an app directory's manifests (requirements.txt /
-  pyproject.toml, package.json, pom.xml / build.gradle) and says which services it holds and
+  pyproject.toml, package.json, pom.xml / build.gradle, go.mod) and says which services it holds and
   which role each plays (backend, frontend, an e2e harness). When an app is MORE THAN ONE
   service, `stack_plan()` gives each its own install, build and unit tests in its own toolchain
   (pytest, npm scripts, Maven/Gradle), then names the backend's real start command and the
@@ -60,6 +61,7 @@ MAX_SERVICES = 4
 PYTHON_MANIFESTS = ("requirements.txt", "pyproject.toml", "setup.py", "Pipfile")
 NODE_MANIFESTS = ("package.json",)
 JAVA_MANIFESTS = toolchains.MAVEN_FILES + toolchains.GRADLE_FILES
+GO_MANIFESTS = toolchains.GO_MANIFESTS
 
 PIP_INSTALL = ("python3 -m pip install --user --disable-pip-version-check --no-input -q "
                "-r requirements.txt")
@@ -112,6 +114,13 @@ class Language:
     #: install / build / lint / typecheck / test / e2e — THE commands `steps` runs (None: not
     #: a separate step for this language). The adapter registry and the docs read them here.
     commands: Mapping[str, Optional[str]] = field(default_factory=dict)
+    #: Regexes that name the language in a brief, for a language whose name is also an
+    #: everyday word ("Go": "go to", "go live" are not requests). Read with `words`.
+    patterns: tuple[str, ...] = ()
+    #: Regexes for the language's own tooling ("go vet", "go test ./..."). A mention of the
+    #: tooling is a request only in a sentence that states a requirement ("… clean", "must
+    #: pass"): "our CLI runs `go test ./...` separately" asks for nothing.
+    tooling_patterns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -299,6 +308,49 @@ def _start_java(service: Service, path: Path) -> Optional[list[str]]:
     return toolchains.java_preview_command(path, build) if build else None
 
 
+# -- Go -------------------------------------------------------------------------------------
+
+def _go_steps(service: Service, path: Path) -> list[tuple[str, Path]]:
+    return [(c, path) for c in toolchains.GO_GATE] if toolchains.detect_go(path) else []
+
+
+def _start_go(service: Service, path: Path) -> Optional[list[str]]:
+    return toolchains.go_run_command(path) if toolchains.detect_go(path) else None
+
+
+#: "Go" in a brief. The name is an everyday verb, so only phrasings that can only mean the
+#: language: "(Go)", "(Go, medium complexity)", "idiomatic Go", "a Go service", "written in Go",
+#: "go vet", "go test ./...", go.mod — never "go to", "go live", "go-to-market".
+_GO_NOT_LANGUAGE = (r"(?![\s-]*(?:to|back|ahead|live|through|for|into|out|over|away|and|or|"
+                    r"beyond|further|wrong|down|up|public|here|there|on|off|with|by)\b)")
+#: After a preposition that already says "language" ("in Go", "to Go" after a migration verb),
+#: only the idioms "go back", "go live", "go ahead"… are not the language: "in Go to serve the
+#: app", "to Go for the gateway", "in Go with Gin" are.
+_GO_NOT_LANGUAGE_AFTER_PREP = (r"(?![\s-]*(?:back|ahead|live|through|out|over|away|beyond|"
+                               r"further|wrong|down|up|public|here|there|off)\b)")
+GO_PATTERNS = (
+    r"\bgolang\b",
+    r"\bgo\s+(?:backend|service|server|api|microservices?|modules?|binary|binaries|app|"
+    r"application|code|programming|language|cli|library|package|toolchain|gateway|proxy|"
+    r"daemon|codebase|project|worker|workers|tool|program|1\.\d+)\b",
+    r"\b(?:in|using|written in|built in|build in|idiomatic|plain|pure|modern)\s+go\b"
+    + _GO_NOT_LANGUAGE_AFTER_PREP,
+    r"\b(?:with|on)\s+go\b" + _GO_NOT_LANGUAGE,
+    # A parenthesised language tag: "(Go)", "(Go, medium complexity)", "(Go/Gin)".
+    r"\(\s*go\s*(?:[,;/)]|\s+\d)",
+    r"\bgo\s*(?:\+|/|and)\s*(?:react|vue|svelte|htmx)\b",
+    r"\bgin(?:-gonic)?\s+(?:framework|router)\b",
+    # Go as the TARGET of a migration: "port the Node service to Go".
+    r"\b(?:port\w*|re-?writ\w*|migrat\w*|convert\w*|mov(?:e|es|ed|ing)|translat\w*)\b"
+    r"[^.;\n]{0,60}?\b(?:to|into)\s+go\b" + _GO_NOT_LANGUAGE_AFTER_PREP)
+#: The go command and its files: "go vet", "go test ./...", "go build ./cmd/x", "go mod tidy",
+#: go.mod. Requests only in a sentence that states a requirement (Language.tooling_patterns).
+GO_TOOLING_PATTERNS = (
+    r"\bgo\s+(?:vet|fmt|mod\s+(?:init|tidy|download|vendor))\b",
+    r"\bgo\s+(?:test|build|run|install|generate)\s+(?:-[\w=.]+\s+)*\.{1,3}/",
+    r"`go\s+(?:test|build|run)\b", r"\bgofmt\b", r"\bgo\.mod\b")
+
+
 def _npm_install() -> str:
     from .verification_target import NPM_INSTALL_CMD
 
@@ -355,19 +407,23 @@ LANGUAGES: dict[str, Language] = {
                   + toolchains.GRADLE_GATE[0], "lint": None, "typecheck": None,
                   "test": toolchains.MAVEN_GATE[0] + " | " + toolchains.GRADLE_GATE[0],
                   "e2e": None}),
+    "go": Language(
+        "go", "Go", "go", GO_MANIFESTS,
+        (Framework("gin", "Gin", "backend", ("github.com/gin-gonic/gin",), ()),
+         Framework("echo", "Echo", "backend", ("github.com/labstack/echo",), ()),
+         Framework("chi", "chi", "backend", ("github.com/go-chi/chi",), ()),
+         Framework("fiber", "Fiber", "backend", ("github.com/gofiber/fiber",), ()),
+         # The standard library's net/http: no dependency to detect it by.
+         Framework("net-http", "net/http", "backend", (), ())),
+        _go_steps, _start_go, ("golang",),
+        runtime="go 1.27", package_manager="go modules",
+        commands={"install": None, "build": None, "lint": toolchains.GO_GATE[0],
+                  "typecheck": None, "test": toolchains.GO_GATE[1], "e2e": None},
+        patterns=GO_PATTERNS, tooling_patterns=GO_TOOLING_PATTERNS),
 }
 
 #: Languages BOSS recognises in a brief or an architecture and cannot build. For the words only.
 UNSUPPORTED: tuple[Unsupported, ...] = (
-    Unsupported("go", "Go", (
-        r"\bgolang\b",
-        r"\bgo\s+(?:backend|service|server|api|microservice|module|binary|app|application|"
-        r"code|programming|language|1\.\d+)\b",
-        r"\b(?:in|using|with|written in|built in|build in|on)\s+go\b"
-        r"(?![\s-]*(?:to|back|ahead|live|through|for|into|out|over|away|and|or|beyond|"
-        r"further|wrong|down|up|public|here|there)\b)",
-        r"\bgo\s*(?:\+|/|and)\s*(?:react|vue|svelte|htmx)\b",
-        r"\bgo\.mod\b", r"\bgin(?:-gonic)?\s+(?:framework|router)\b")),
     Unsupported("rust", "Rust", (r"\brust\b(?!-)", r"\b(?:actix|axum)\b", r"\bcargo\.toml\b")),
     Unsupported("ruby", "Ruby", (r"\bruby\b", r"\bruby on rails\b",
                                  r"\brails\s+(?:app|api|backend|server|application)\b",
@@ -378,10 +434,43 @@ UNSUPPORTED: tuple[Unsupported, ...] = (
     Unsupported("elixir", "Elixir", (r"\belixir\b", r"\bphoenix\s+(?:framework|liveview)\b")),
     Unsupported("scala", "Scala", (r"\bscala\b",)),
 )
-_UNSUPPORTED_MANIFESTS = {"go.mod": "go", "Cargo.toml": "rust", "Gemfile": "ruby",
+_UNSUPPORTED_MANIFESTS = {"Cargo.toml": "rust", "Gemfile": "ruby",
                           "composer.json": "php", "mix.exs": "elixir", "build.sbt": "scala"}
 _NEGATION = re.compile(r"\b(?:not|no|never|without|instead of|avoid|rather than|except|"
                        r"don'?t use|do not use|rejected|considered)\b[^.,;\n]{0,24}$", re.I)
+#: A list under a negation: "has no node, npm, pip3, java, go, ruby, php" names nothing it wants.
+_NEGATED_LIST = re.compile(r"\b(?:not|no|never|without|lacks?)\s+(?:[\w.+#/-]+\s*,\s*){1,15}"
+                           r"(?:and\s+|or\s+)?$", re.I)
+#: An inventory of tool names (a JSON array of three or more bare words, as a spec's allowed
+#: commands are dumped: ["bazel", "bundle", "cargo", …, "ruby"]) is not a request for any.
+_NAME_INVENTORY = re.compile(r"\[\s*\"[\w.+-]{1,24}\"(?:\s*,\s*\"[\w.+-]{1,24}\"){2,}\s*\]")
+#: …unless its key says it IS the stack: `"stack": ["go", "react", "postgres"]` is a request.
+_STACK_KEY = re.compile(r"[\"']?(?:stacks?|languages?|frameworks?|runtimes?|backend|frontend|"
+                        r"required_stack)[\"']?\s*[:=]\s*$", re.I)
+#: A language is the SOURCE of a migration only in these shapes, the language right after the
+#: verb (and its determiners), or right after "from" in a sentence with such a verb:
+#:   "Rewrite our Go codebase in Node", "Port our Go service to Python (FastAPI)" — the verb, X,
+#:   then to/into/in and ANOTHER language directly;
+#:   "Migrate from Java to Go", "move away from Python" — "from X" after a migration verb;
+#:   "to replace our Python one", "retire the Java service" — X is what goes away.
+#: Anything else names X as wanted: "Build a Go service to replace the legacy Java one" asks for
+#: Go (and names Java only as what it replaces).
+_MIGRATION_VERBS = (r"re-?writ\w*|port(?:s|ed|ing)?|migrat\w*|convert\w*|translat\w*|"
+                    r"mov(?:e|es|ed|ing)|switch\w*")
+_DETERMINERS = r"(?:(?:our|the|this|that|its|their|my|existing|current|legacy|old|whole|entire|a|an)\s+){0,3}"
+_SOURCE_AFTER_VERB = re.compile(rf"\b(?:{_MIGRATION_VERBS})\s+{_DETERMINERS}$", re.I)
+_SOURCE_AFTER_FROM = re.compile(rf"\b(?:{_MIGRATION_VERBS}|away)\b[^.;\n]{{0,40}}?\bfrom\s+"
+                                rf"{_DETERMINERS}$", re.I)
+_REPLACED = re.compile(rf"\b(?:replac\w*|retir\w*|deprecat\w*|sunset\w*)\s+{_DETERMINERS}$", re.I)
+_TARGET_LEAD = re.compile(r"^\s*(?:(?:code(?:base)?|service|services|app|application|api|backend|"
+                          r"server|project|monolith|stack|implementation|version|one)\s+){0,2}"
+                          r"(?:to|into|in)\s+(?:(?:the|a|an|plain|modern|idiomatic)\s+)?", re.I)
+#: A sentence that states a requirement (for tooling mentions).
+_REQUIREMENT = re.compile(r"\b(?:must|clean|pass(?:es|ing)?|green|requires?|required|should|"
+                          r"needs? to|has to|have to)\b", re.I)
+#: Where a sentence ends: never inside a code span or a path ("`go test ./...` must pass").
+_SENTENCE_END = re.compile(r"(?<![./])[.!?;](?=\s|$)|\n")
+_CODE_SPAN = re.compile(r"`[^`\n]*`")
 
 
 # ── The adapter registry (BOSS_OSS_v1 stack recommendations §6-7) ───────────────────────────
@@ -464,7 +553,8 @@ class Adapter:
 
 #: How a backend starts when its framework names no template (the language's own rule).
 _DEFAULT_START = {"node": "exec npm start", "python": "exec python3 main.py",
-                  "java": "java -jar <the built jar>"}
+                  "java": "java -jar <the built jar>",
+                  "go": 'go build -o <binary> <main package> && exec <binary> (on "$PORT")'}
 
 _REACT_VITE = Component("frontend", "node", ("react", "vite"))
 ADAPTERS: tuple[Adapter, ...] = (
@@ -488,6 +578,9 @@ ADAPTERS: tuple[Adapter, ...] = (
     Adapter("java-dropwizard", "Java Dropwizard", "best_effort",
             (Component("backend", "java", ("dropwizard",)),),
             note="needs the Java toolchain on the install"),
+    Adapter("go-service", "Go service (net/http, Gin, Echo, chi, Fiber)", "best_effort",
+            (Component("backend", "go", ("net-http", "gin", "echo", "chi", "fiber")),),
+            note="needs the Go toolchain on the install"),
 )
 
 
@@ -611,7 +704,9 @@ def render_supported_stacks_md() -> str:
             cmd = f.start or (_DEFAULT_START.get(lang.key, "") if f.role == "backend" else "")
             if cmd:
                 lines.append(f"| {f.label} ({lang.label}) | {f.role} | `{cmd}` |")
-    lines += ["", "A multi-service app is a backend and a web front end, each in its own "
+    lines += ["", "Go builds a server with `go build` (the module root's `package main`, else "
+              "the first `./cmd/<name>`) and runs it; it listens on `$PORT`.", ""]
+    lines += ["A multi-service app is a backend and a web front end, each in its own "
               "directory with its own manifest. Data: `DATABASE_URL` (PostgreSQL) with a local "
               "SQLite file when it is unset, for local development.", ""]
     return "\n".join(lines)
@@ -691,33 +786,114 @@ def prompt_block() -> str:
 
 # ── Reading a stack out of words ────────────────────────────────────────────────────────────
 
-def _matches(pattern: str, text: str) -> bool:
+def _sentence(text: str, start: int, end: int) -> tuple[str, str]:
+    """(the sentence before the match, the sentence after it). Punctuation inside a code span
+    never ends a sentence (the span is masked, same length, before splitting)."""
+    masked = _CODE_SPAN.sub(lambda m: "`" + "_" * (len(m.group(0)) - 2) + "`", text)
+    lo, hi = max(0, start - 200), end + 200
+    before_m = masked[lo:start]
+    cuts = list(_SENTENCE_END.finditer(before_m))
+    cut_lo = lo + cuts[-1].end() if cuts else lo
+    after_m = masked[end:hi]
+    cut = _SENTENCE_END.search(after_m)
+    cut_hi = end + cut.start() if cut else min(hi, len(text))
+    return text[cut_lo:start], text[end:cut_hi]
+
+
+def _other_language_words(key: Optional[str]) -> list[str]:
+    words: list[str] = []
+    for lang in LANGUAGES.values():
+        if lang.key != key:
+            words += [lang.label.lower(), *lang.words, *(w for f in lang.frameworks
+                                                         for w in (f.label.lower(), *f.words))]
+    for u in UNSUPPORTED:
+        if u.key != key:
+            words.append(u.label.lower())
+    return [w for w in dict.fromkeys(words) if len(w) > 1]
+
+
+def _is_source(text: str, start: int, end: int, key: Optional[str]) -> bool:
+    """Is the language at text[start:end] what the sentence moves code AWAY from? Only in the
+    explicit shapes above (_SOURCE_AFTER_VERB + a target language right after to/into/in,
+    _SOURCE_AFTER_FROM, _REPLACED) — never because some other language appears later."""
+    before, after = _sentence(text, start, end)
+    if _SOURCE_AFTER_FROM.search(before) or _REPLACED.search(before):
+        return True
+    if not _SOURCE_AFTER_VERB.search(before):
+        return False
+    lead = _TARGET_LEAD.match(after)
+    if lead is None:
+        return False
+    target = after[lead.end():].lower()
+    return any(re.match(rf"{re.escape(w)}(?![\w])", target) for w in _other_language_words(key))
+
+
+def _matches(pattern: str, text: str, key: Optional[str] = None, *,
+             requirement: bool = False) -> bool:
+    """Does `text` ask for what `pattern` names? Not under a negation ("not in Go", "has no
+    node, java, go"), not as the SOURCE of a migration ("rewrite our Go codebase in Node"), and
+    — for `requirement` patterns (a language's tooling) — only in a sentence that states one."""
     for m in re.finditer(pattern, text, re.I):
         before = text[max(0, m.start() - 40):m.start()]
-        if not _NEGATION.search(before):
-            return True
+        if _NEGATION.search(before) or _NEGATED_LIST.search(text[max(0, m.start() - 160):m.start()]):
+            continue
+        if _is_source(text, m.start(), m.end(), key):
+            continue
+        if requirement and not _REQUIREMENT.search("".join(_sentence(text, m.start(), m.end()))):
+            continue
+        return True
     return False
 
 
+def _drop_inventory(m: "re.Match[str]") -> str:
+    if _STACK_KEY.search(m.string[max(0, m.start() - 40):m.start()]):
+        return m.group(0)
+    return " "
+
+
+def _requests_only(text: str) -> str:
+    """Text without what names a language and asks for none: BOSS's own sentences about the
+    deploy machine ("has no node, npm, pip3, java, go, ruby, php, make") and inventories of
+    tool names (a spec's allowed-command list) — never an array its key calls the stack. The
+    Northgate spec was read as asking for Ruby and PHP from exactly those (2026-11-15)."""
+    return _NAME_INVENTORY.sub(_drop_inventory, _DEPLOY_BRIEFS.sub("", str(text or "")))
+
+
 def unsupported_named(text: str) -> list[str]:
-    """The unsupported languages a piece of text asks for (Go, Rust, …), in UNSUPPORTED order."""
-    body = str(text or "")
+    """The unsupported languages a piece of text asks for (Rust, Ruby, …), in UNSUPPORTED order."""
+    body = _requests_only(text)
     if not body.strip():
         return []
-    return [u.key for u in UNSUPPORTED if any(_matches(p, body) for p in u.patterns)]
+    return [u.key for u in UNSUPPORTED if any(_matches(p, body, u.key) for p in u.patterns)]
 
 
 def languages_named(text: str) -> list[str]:
-    """The supported languages a piece of text names (by language or framework)."""
-    body = str(text or "")
+    """The supported languages a piece of text names (by language, framework or pattern)."""
+    body = _requests_only(text)
     out = []
     for lang in LANGUAGES.values():
         words = list(lang.words) + [w for f in lang.frameworks for w in f.words]
         # "Java" is not "JavaScript".
         patterns = [r"\bjava\b(?!\s*script)" if w == "java" else rf"\b{re.escape(w)}\b"
-                    for w in words]
-        if any(_matches(p, body) for p in patterns):
+                    for w in words] + list(lang.patterns)
+        if any(_matches(p, body, lang.key) for p in patterns) or any(
+                _matches(p, body, lang.key, requirement=True) for p in lang.tooling_patterns) \
+                or lang.key in _stack_array_languages(body):
             out.append(lang.key)
+    return out
+
+
+def _stack_array_languages(text: str) -> set[str]:
+    """Languages named as bare elements of an array its key calls the stack:
+    `"stack": ["go", "react"]` names Go (a bare "go" is otherwise never the language)."""
+    out: set[str] = set()
+    for m in re.finditer(r"\[([^\[\]\n]{0,400})\]", text):
+        if not _STACK_KEY.search(text[max(0, m.start() - 40):m.start()]):
+            continue
+        for item in re.findall(r"[\"']([^\"']{1,40})[\"']", m.group(1)):
+            key = _normalise_language(item)
+            if key in LANGUAGES:
+                out.add(key)
     return out
 
 
@@ -761,8 +937,9 @@ def verdict(unsupported: Iterable[str] = (), off: Iterable[str] = (), *,
         sentences.append(f"{where} asks for {names}, which BOSS cannot build.")
     for key in off:
         sentences.append(f"{where} needs {_label(key)}, which is not turned on for this BOSS: "
-                         f"turn it on with `{enable_hint(key)}` on the BOSS host, then start "
-                         "again.")
+                         f"turn it on with "
+                         f"{toolchains.enable_instructions(LANGUAGES[key].toolchain or key)}, "
+                         "then start again. BOSS does not build it in another language instead.")
     sentences.append(f"BOSS builds {supported_sentence()}.")
     if unsupported:
         sentences.append("Rewrite the brief for one of those, or start anyway to keep it as a "
@@ -892,17 +1069,29 @@ def check_build(instructions: str, *, template_stack: Optional[str] = None) -> S
     """The build's last guard before anything is spent: the approved architecture's declared
     stack when the brief carries one, else the directive (the text before the spec) and the
     template's stack. The spec and the architecture's prose are not read for language names:
-    an alternative the architect rejected is not a request."""
+    an alternative the architect rejected is not a request.
+
+    THE STACK THE OPERATOR ASKED FOR IS NEVER SWAPPED. Northgate's brief asked for a Go gateway
+    on an install without Go; the panel "converged" on Node and the build shipped Node
+    (2026-11-15). A language the directive asks for that is off on this install, or that BOSS
+    cannot build, stops the build — with how to turn it on — even when an architecture declares
+    another stack: proceeding in a different language is never the answer to a missing one."""
     text = str(instructions or "")
+    asked = check_text(directive_text(text), template_stack=template_stack, where="This build")
     declared = declared_stack(text)
     if declared:
         result = check_architecture(text)
         if template_stack and template_stack in LANGUAGES and not language_ready(template_stack):
-            return verdict(result.unsupported, [*result.off, template_stack], where="This build")
+            result = verdict(result.unsupported, [*result.off, template_stack], where="This build")
+        if not asked.ok:
+            return verdict([*asked.unsupported, *result.unsupported], [*asked.off, *result.off],
+                           where="This build")
+        if not result.ok and result.message.startswith("This build"):
+            return result
         return StackVerdict(result.ok, result.unsupported, result.off,
                             result.message.replace("The architecture", "This build's approved "
                                                    "architecture", 1))
-    return check_text(directive_text(text), template_stack=template_stack, where="This build")
+    return asked
 
 
 # ── The services an app directory holds ─────────────────────────────────────────────────────
@@ -921,6 +1110,11 @@ def _service_in_unsafe(path: Path, rel: str) -> Optional[Service]:
     for manifest, key in _UNSUPPORTED_MANIFESTS.items():
         if (path / manifest).is_file():
             return Service(rel, key, None, "backend", supported=False)
+    if compiled_stack(path) == "go":
+        text = _read(path / "go.mod")
+        framework = next((f.key for f in LANGUAGES["go"].frameworks
+                          if any(m in text for m in f.markers)), "net-http")
+        return Service(rel, "go", framework, "backend")
     if any((path / m).is_file() for m in JAVA_MANIFESTS):
         text = _read(path / "pom.xml") + _read(path / "build.gradle") + _read(path / "build.gradle.kts")
         framework = next((f.key for f in LANGUAGES["java"].frameworks
@@ -952,6 +1146,53 @@ def _service_in_unsafe(path: Path, rel: str) -> Optional[Service]:
         if (path / "manage.py").is_file():
             framework = "django"
         return Service(rel, "python", framework, "backend")
+    return None
+
+
+def _count_sources(base: Path, suffix: str, cap: int = 400) -> int:
+    n = 0
+    stack = [(base, 0)]
+    while stack and n < cap:
+        d, level = stack.pop()
+        try:
+            entries = list(d.iterdir())
+        except OSError:
+            continue
+        for p in entries:
+            if p.is_symlink():
+                continue
+            if p.is_dir():
+                if level < 4 and p.name not in SKIP_DIRS - {"src"} and not p.name.startswith("."):
+                    stack.append((p, level + 1))
+            elif p.suffix == suffix:
+                n += 1
+    return n
+
+
+def compiled_stack(path: Path | str) -> Optional[str]:
+    """"java" or "go" when `path` is a build of either (pom.xml / build.gradle, go.mod), else None.
+    A directory with BOTH is the one most of its source is in, Java on a tie: a stray go.mod in
+    a Maven project does not make it a Go service."""
+    base = Path(path)
+    try:
+        java = any((base / m).is_file() for m in JAVA_MANIFESTS)
+        go = any((base / m).is_file() for m in GO_MANIFESTS)
+    except OSError:
+        return None
+    if java and go:
+        return "go" if _count_sources(base, ".go") > _count_sources(base, ".java") else "java"
+    return "java" if java else "go" if go else None
+
+
+def unsupported_manifest(path: Path | str) -> Optional[tuple[str, str]]:
+    """(language label, manifest) when `path` holds the manifest of a language BOSS cannot
+    build (Cargo.toml, Gemfile, …), else None."""
+    for manifest, key in _UNSUPPORTED_MANIFESTS.items():
+        try:
+            if (Path(path) / manifest).is_file():
+                return _label(key), manifest
+        except OSError:
+            continue
     return None
 
 
