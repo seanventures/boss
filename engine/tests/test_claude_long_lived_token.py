@@ -32,7 +32,7 @@ def store(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(cli_harness, "stored_credential",
                         lambda _s, name, **_k: held.get(name))
-    monkeypatch.setattr(cc, "_store_lookup", lambda _s, name: held.get(name, ""))
+    monkeypatch.setattr(cc, "_store_lookup", lambda _s, name, *_where: held.get(name, ""))
     return held
 
 

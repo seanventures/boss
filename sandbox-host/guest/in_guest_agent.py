@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -55,19 +56,64 @@ def _prepare_repo(spec):
         # BOSS-267: host-aware clone (the guest is dependency-free, so the tiny URL map lives
         # inline; the host passes spec.repo_host — absent -> github, unchanged behavior).
         host = (spec.get("repo_host") or "github").lower()
+        clean = (f"https://bitbucket.org/{owner}/{repo}.git" if host == "bitbucket"
+                 else f"https://github.com/{owner}/{repo}.git")
         if host == "bitbucket":
             url = (f"https://x-token-auth:{token}@bitbucket.org/{owner}/{repo}.git"
-                   if token else f"https://bitbucket.org/{owner}/{repo}.git")
+                   if token else clean)
         else:
             url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
-                   if token else f"https://github.com/{owner}/{repo}.git")
+                   if token else clean)
         rc, _o, e = _run(["git", "clone", "--depth", "1", "--branch", branch, url, str(WORK)])
         if rc != 0:
             raise RuntimeError("clone failed: " + (e or "").replace(token or "\0", "***")[:300])
+        # P8-pre S2: the token must not outlive the clone. git records the clone URL as
+        # origin in .git/config, where the agent's own Bash tool could read it
+        # (`git remote -v`). The guest never fetches or pushes again (the host owns git).
+        _git(["remote", "set-url", "origin", clean], WORK)
+        _scrub_git_config()
     _git(["config", "user.name", "boss-agent"], WORK)
     _git(["config", "user.email", "boss-agent@users.noreply.github.com"], WORK)
     try:
         (WORK / ".git" / "info" / "exclude").write_text(ARTIFACT_IGNORES, encoding="utf-8")
+    except OSError:
+        pass
+
+
+_URL_CREDENTIAL = re.compile(r"(?i)\b(https?://)[^/@\s\"']+@")
+
+
+_EXTRA_HEADER = re.compile(r"(?im)^[ \t]*extraheader[ \t]*=.*(\r?\n|$)")
+
+
+def _scrub_git_config(work=None):
+    """Remove credentials from every git config of the repo (P8-pre S2): user:token@ in URLs
+    and http.extraheader lines, in .git/config and .git/modules/*/config alike. Runs after the
+    clone and again before a task ends, so a retained workspace never keeps a token."""
+    git_dir = Path(work if work is not None else WORK) / ".git"
+    if not git_dir.is_dir():
+        return
+    for cfg in [git_dir / "config", *git_dir.glob("modules/**/config"),
+                *git_dir.glob("worktrees/*/config")]:
+        if cfg.is_symlink() or not cfg.is_file():
+            continue
+        try:
+            raw = cfg.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        clean = _EXTRA_HEADER.sub("", _URL_CREDENTIAL.sub(r"\1", raw))
+        if clean != raw:
+            try:
+                cfg.write_text(clean, encoding="utf-8")
+            except OSError:
+                pass
+
+
+def _forget_spec():
+    """Delete the spec file once it is read (P8-pre S2): it carries the task's credentials,
+    and a failed task's workspace is retained for inspection."""
+    try:
+        SPEC.unlink()
     except OSError:
         pass
 
@@ -289,6 +335,7 @@ def _diff():
 
 def main():
     spec = json.loads(SPEC.read_text())
+    _forget_spec()
     try:
         _prepare_repo(spec)
         summary = _run_agent(spec)
@@ -300,6 +347,8 @@ def main():
         }
     except Exception as ex:  # noqa: BLE001
         out = {"status": "error", "error": str(ex)}
+    finally:
+        _scrub_git_config()
     RESULT.write_text(json.dumps(out))
     # stdout log NEVER includes source (the diff) — only metadata
     print(json.dumps({k: v for k, v in out.items() if k != "diff"}))
