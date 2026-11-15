@@ -3710,7 +3710,7 @@ select.input:focus {
 .fk-form {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(8.94737rem, 1fr));
   gap: 10px 12px;
   align-items: end;
   width: 100%;

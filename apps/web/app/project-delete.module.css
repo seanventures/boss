@@ -52,7 +52,7 @@
   padding: 0;
   list-style: none;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(6.31579rem, 1fr));
   gap: 4px 14px;
 }
 .counts li { display: flex; gap: 6px; align-items: baseline; color: var(--ink-soft); font-size: var(--fs-meta); min-width: 0; }

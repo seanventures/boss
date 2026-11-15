@@ -100,7 +100,7 @@ a.wd-chip:hover { border-color: var(--accent-line); color: var(--ink); }
 .wd-mini i[data-zero] { opacity: .25; }
 
 /* the popover */
-.wd-pop { display: flex; flex-direction: column; gap: 12px; max-width: 720px; width: 100%; padding: 14px 16px; border-radius: 14px; min-width: 0;
+.wd-pop { display: flex; flex-direction: column; gap: 12px; max-width: 37.89474rem; width: 100%; padding: 14px 16px; border-radius: 14px; min-width: 0;
   border: 1.5px solid var(--amber); background: var(--surface); box-shadow: var(--shadow); animation: wd-rise .15s ease-out; }
 .wd-pop[data-kind="change_list"] { border-color: var(--border-strong); }
 .wd-pop-h { display: flex; align-items: center; gap: 10px; }
@@ -117,7 +117,7 @@ a.wd-chip:hover { border-color: var(--accent-line); color: var(--ink); }
 .wd-seg button:disabled { opacity: .45; cursor: not-allowed; }
 .wd-winform { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .wd-trail { display: flex; flex-direction: column; font-size: var(--fs-meta); }
-.wd-trail > div { display: grid; grid-template-columns: 3.6rem 18px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px dashed var(--border); color: var(--ink-soft); }
+.wd-trail > div { display: grid; grid-template-columns: 3.6rem 0.94737rem minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px dashed var(--border); color: var(--ink-soft); }
 .wd-trail > div > span:nth-child(3) { overflow-wrap: anywhere; }
 .wd-trail > div > :nth-child(4) { align-self: center; justify-self: end; height: auto; }
 .wd-t { font-family: var(--mono); color: var(--faint); font-size: var(--fs-tag); }
@@ -126,7 +126,7 @@ a.wd-chip:hover { border-color: var(--accent-line); color: var(--ink); }
   border: 1px solid color-mix(in srgb, var(--red) 40%, var(--border)); font-size: var(--fs-body); }
 
 /* change a rule in plain words */
-.wd-in { position: relative; display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 8px 12px; padding: 12px 14px; border-radius: 14px;
+.wd-in { position: relative; display: grid; grid-template-columns: 2.10526rem minmax(0, 1fr); gap: 8px 12px; padding: 12px 14px; border-radius: 14px;
   border: 1.5px solid var(--accent-line); background: var(--surface); box-shadow: var(--glow); }
 .wd-in-kind { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; color: var(--accent-text); background: var(--accent-soft); }
 /* grows with the words (a phone showed 3 lines of a 4-line rule), up to 14 lines, then scrolls */
@@ -143,7 +143,7 @@ a.wd-chip:hover { border-color: var(--accent-line); color: var(--ink); }
 .wd-ub-h small { display: block; color: var(--faint); font-size: var(--fs-meta); margin-top: 2px; }
 .wd-ub-reply { margin: 0; color: var(--muted); font-size: var(--fs-body); }
 .wd-ub-grid { display: grid; grid-template-columns: minmax(0, 1fr); }
-.wd-ub-f { display: grid; grid-template-columns: 11rem minmax(0, 1fr) 22px; gap: 10px; align-items: start; padding: 8px 0; border-top: 1px solid var(--border);
+.wd-ub-f { display: grid; grid-template-columns: 11rem minmax(0, 1fr) 1.15789rem; gap: 10px; align-items: start; padding: 8px 0; border-top: 1px solid var(--border);
   color: var(--ink-soft); min-width: 0; line-height: 1.5; }
 .wd-ub-f > span:nth-child(2) { min-width: 0; overflow-wrap: anywhere; }
 .wd-lbl { font-family: var(--mono); font-size: var(--fs-label); letter-spacing: .08em; text-transform: uppercase; color: var(--faint); padding-top: 2px; }
@@ -180,9 +180,9 @@ a.wd-chip:hover { border-color: var(--accent-line); color: var(--ink); }
 @media (max-width: 640px) {
   .wd-kv { grid-template-columns: minmax(0, 1fr); gap: 3px; }
   .wd-kv > span:nth-child(even) { margin-bottom: 8px; }
-  .wd-ub-f { grid-template-columns: minmax(0, 1fr) 22px; }
+  .wd-ub-f { grid-template-columns: minmax(0, 1fr) 1.15789rem; }
   .wd-ub-f > .wd-lbl { grid-column: 1 / -1; }
-  .wd-trail > div { grid-template-columns: 3rem 16px minmax(0, 1fr); }
+  .wd-trail > div { grid-template-columns: 3rem 0.84211rem minmax(0, 1fr); }
   .wd-trail > div > :nth-child(4) { grid-column: 3; justify-self: start; align-self: start; }
   .wd-pop { padding: 12px; }
 }

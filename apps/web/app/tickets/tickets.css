@@ -114,7 +114,7 @@ a.tk-key:hover { text-decoration: underline; }
 /* No overflow:hidden on the table: a row's ⋯ menu opens below the last row and was clipped. */
 .tk-systems-head { border-radius: var(--r-lg) var(--r-lg) 0 0; }
 .tk-systems-head, .tk-system {
-  display: grid; grid-template-columns: minmax(10rem, 1.3fr) minmax(9rem, 1.4fr) minmax(7rem, 1fr) minmax(8rem, 1.1fr) minmax(6rem, .8fr) 34px;
+  display: grid; grid-template-columns: minmax(10rem, 1.3fr) minmax(9rem, 1.4fr) minmax(7rem, 1fr) minmax(8rem, 1.1fr) minmax(6rem, .8fr) 1.78947rem;
   gap: 10px; align-items: center; padding: 10px 12px; min-width: 0;
 }
 .tk-systems-head { background: var(--surface-2); color: var(--muted); font: 700 var(--fs-tag)/1.2 var(--sans); letter-spacing: .04em; text-transform: uppercase; }
@@ -185,7 +185,7 @@ a.tk-key:hover { text-decoration: underline; }
 }
 @media (max-width: 640px) {
   .tk-systems-head { display: none; }
-  .tk-system { grid-template-columns: minmax(0, 1fr) 34px; }
+  .tk-system { grid-template-columns: minmax(0, 1fr) 1.78947rem; }
   .tk-system > .tk-cell { grid-column: 1; }
   .tk-system > .tk-cell::before { content: attr(data-label); color: var(--faint); font: 700 var(--fs-label)/1.2 var(--sans); text-transform: uppercase; letter-spacing: .04em; }
   .tk-system > .tk-cell-menu { grid-column: 2; grid-row: 1; }
@@ -202,7 +202,7 @@ a.tk-key:hover { text-decoration: underline; }
 .tk-setup .su-row-body { container-type: inline-size; container-name: tksetup; }
 @container tksetup (max-width: 860px) {
   .tk-systems-head { display: none; }
-  .tk-system { grid-template-columns: minmax(0, 1fr) 34px; }
+  .tk-system { grid-template-columns: minmax(0, 1fr) 1.78947rem; }
   .tk-system > .tk-cell { grid-column: 1; }
   .tk-system > .tk-cell::before { content: attr(data-label); color: var(--faint); font: 700 var(--fs-label)/1.2 var(--sans); text-transform: uppercase; letter-spacing: .04em; }
   .tk-system > .tk-cell-menu { grid-column: 2; grid-row: 1; }

@@ -291,7 +291,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
     if (layout !== "setup" || params.focus !== "budget") return;
     try {
       const url = new URL(window.location.href);
-      url.searchParams.set("area", "govern");
+      url.searchParams.set("area", "budget");
       url.searchParams.set("tab", "limits");
       url.searchParams.delete("focus");
       window.location.replace(url.toString());
@@ -372,7 +372,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
             <section className="su-row" data-testid="su-row-budget" aria-label="Budget" data-focused={focus === "budget" || undefined}>
               <div className="su-row-label"><SectionLabel as="span" tip="Monthly, daily and per-project caps.">Budget</SectionLabel></div>
               <div className="su-row-body su-line">
-                <a className="su-link" href="?area=govern&tab=limits" data-testid="su-budget-govern">Set in Govern › Limits ↗</a>
+                <a className="su-link" href="?area=budget&tab=limits" data-testid="su-budget-govern">Set in Govern › Limits ↗</a>
               </div>
             </section>
           </div>
