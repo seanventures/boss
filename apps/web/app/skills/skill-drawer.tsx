@@ -76,7 +76,7 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
     const config: Record<string, unknown> =
       draft.behaviour_kind === "sandboxed_command"
         ? { image: draft.image.trim(), command: draft.command.trim(), timeout_seconds: Number(draft.timeout_seconds) || 300,
-            network: draft.network, outputs: names(draft.produces) }
+            network: draft.network, outputs: names(draft.produces), fail_on_exit: draft.fail_on_exit }
         : draft.behaviour_kind === "mcp_tool"
           ? { mcp_server_id: draft.mcp_server_id.trim(), tool_name: draft.tool_name.trim() }
           : draft.behaviour_kind === "agent_program"
@@ -224,6 +224,12 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
                   <textarea rows={3} value={draft.command} spellCheck={false} data-testid="skill-command"
                             onChange={(e) => set({ command: e.target.value })} />
                 </label>
+                <div className="kit-field">
+                  <span className="kit-field-label" data-tip="A non-zero exit code fails the workflow step, so its on-error path and retries apply">Fail on exit code</span>
+                  <button type="button" role="switch" aria-checked={draft.fail_on_exit} className="kit-switch"
+                          data-testid="skill-fail-on-exit" aria-label="Fail on exit code"
+                          onClick={() => set({ fail_on_exit: !draft.fail_on_exit })} />
+                </div>
               </>
             ) : draft.behaviour_kind === "mcp_tool" ? (
               <>
