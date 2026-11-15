@@ -77,6 +77,25 @@ export function parseSimulation(w: unknown): Simulation {
            explanation: str(o.explanation), matched_rules: arr(o.matched_rules).map(parseRule) };
 }
 
+/** Who a rule applies to, picked the way a rate-limit bucket is picked — not typed as a magic string. */
+export const SCOPE_KINDS = ["project", "org", "agent", "workflow"] as const;
+export type ScopeKind = (typeof SCOPE_KINDS)[number];
+export const SCOPE_KIND_WORDS: Record<ScopeKind, string> = {
+  project: "This project", org: "Whole org", agent: "An agent", workflow: "A workflow",
+};
+
+/**
+ * `project` | `org` | `agent:<role_key>` | `workflow:<id>`. An agent or a workflow with no
+ * picked target is refused here; the engine refuses the same shape (BOSSAPP-1041).
+ */
+export function readScope(kind: string, target: string): { scope: string; error: string | null } {
+  if (kind === "project" || kind === "org") return { scope: kind, error: null };
+  const id = target.trim();
+  if (kind === "agent") return id ? { scope: `agent:${id}`, error: null } : { scope: "", error: "Pick an agent" };
+  if (kind === "workflow") return id ? { scope: `workflow:${id}`, error: null } : { scope: "", error: "Pick a workflow" };
+  return { scope: "", error: "Pick who this applies to" };
+}
+
 /** "agent:forge" → "Agent forge"; "org" → "Org"; "workflow:w1" → "Workflow w1". */
 export function scopeWords(scope: string): string {
   const [kind, ...rest] = scope.split(":");

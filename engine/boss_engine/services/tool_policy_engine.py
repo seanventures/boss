@@ -965,6 +965,61 @@ def _suggesting_entries() -> dict[str, Mapping[str, Any]]:
     return entries
 
 
+def _as_map(value: Any) -> Mapping[str, Any]:
+    if isinstance(value, str):
+        value = _loads(value, {}) or {}
+    return value if isinstance(value, Mapping) else {}
+
+
+def _norm_url(url: Any) -> str:
+    return str(url or "").strip().rstrip("/").lower()
+
+
+def _entry_urls(entry: Mapping[str, Any]) -> set[str]:
+    found = {_norm_url(entry.get("url"))}
+    http = entry.get("http")
+    if isinstance(http, Mapping):
+        found.add(_norm_url(http.get("url")))
+    return {u for u in found if u}
+
+
+def _entry_names(entry: Mapping[str, Any]) -> set[str]:
+    return {str(entry.get(k) or "").strip().lower() for k in ("key", "name", "label")} - {""}
+
+
+def _entry_for(server: Mapping[str, Any], entries: Mapping[str, Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
+    """The catalogue entry whose suggested rules apply to this server.
+
+    Provenance (``catalogue`` / ``connector_key``) wins when that entry actually suggests rules.
+    An installed catalogue server often lacks that key — the console's "added" flag is a name
+    match, and the connector GitHub entry shares the MCP URL but suggests nothing — so a
+    publisher id, the same URL, or the same name still finds the entry that has rules
+    (BOSSAPP-1041). A hand-added server that matches none of those suggests nothing."""
+    key = _catalogue_key(server)
+    primary = entries.get(key) if key else None
+    if primary and primary.get("suggested_rules"):
+        return primary
+    found: list[Mapping[str, Any]] = []
+    pid = str(_as_map(server.get("publisher")).get("id") or "").strip()
+    if pid:
+        found.extend(entries[f"{prefix}:{pid}"] for prefix in ("mcp", "connector") if f"{prefix}:{pid}" in entries)
+    url = _norm_url(server.get("url"))
+    if url:
+        found.extend(entry for entry in entries.values() if url in _entry_urls(entry))
+    name = str(server.get("name") or "").strip().lower()
+    if name:
+        found.extend(entry for entry in entries.values() if name in _entry_names(entry))
+    seen: set[int] = set()
+    for entry in found:
+        mark = id(entry)
+        if mark in seen:
+            continue
+        seen.add(mark)
+        if entry.get("suggested_rules"):
+            return entry
+    return primary
+
+
 def suggested_rules(connection: Any, project_id: str) -> list[dict]:
     """The DEFAULT rules the MCP catalogue suggests for the servers this project registered from
     it (``suggested_rules`` on a catalogue entry, e.g. "at most 60 Composio executions an hour per
@@ -978,7 +1033,7 @@ def suggested_rules(connection: Any, project_id: str) -> list[dict]:
     existing = list_rules(connection, project_id)
     out: list[dict] = []
     for server in list_mcp_servers(connection, project_id):
-        entry = entries.get(_catalogue_key(server) or "")
+        entry = _entry_for(server, entries)
         if not entry:
             continue
         names = {str(server.get("name") or ""), str(server.get("id") or "")}

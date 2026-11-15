@@ -155,3 +155,62 @@ describe("rate limits: buckets and suggested limits (BOSSAPP-868)", () => {
     expect(post?.body).toEqual({ project_id: "p1", ...rule });
   });
 });
+
+describe("who a rule applies to (BOSSAPP-1041)", () => {
+  function set(el: HTMLInputElement | HTMLSelectElement, value: string) {
+    const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(el, value);
+    el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
+  }
+
+  it("picks a project, an agent or a workflow and refuses an agent with no target", async () => {
+    const posts: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const method = String(init?.method ?? "GET");
+      const path = String(url);
+      if (method === "POST") {
+        posts.push(JSON.parse(String(init?.body ?? "{}")));
+        return json({ policy: {} }, 201);
+      }
+      if (path.includes("/v1/roles")) return json({ items: [{ role_key: "backend_engineer", display_name: "Backend" }] });
+      if (path.includes("/v1/workflows")) return json({ items: [{ id: "wf_nightly", name: "Nightly" }] });
+      if (path.includes("/suggestions")) return json({ suggestions: [] });
+      return json({ policies: [] });
+    }));
+    await mount(<ToolRules projectId="p1" actor="ceo" />);
+    await settle();
+    ($('[data-testid="tool-rules-add"]') as HTMLButtonElement).click();
+    await settle();
+    const applies = $('[aria-label="Scope"]');
+    expect(applies?.tagName, "Applies to is a picker, like the rate-limit bucket").toBe("SELECT");
+    set(applies as HTMLSelectElement, "agent");
+    await settle();
+    expect(($('[data-testid="tool-rules-save"]') as HTMLButtonElement).disabled).toBe(true);
+    ($('[data-testid="tool-rules-save"]') as HTMLButtonElement).click();
+    await settle();
+    expect(posts).toHaveLength(0);
+    const agent = $('[aria-label="Agent"]') as HTMLSelectElement;
+    expect(agent?.tagName).toBe("SELECT");
+    set(agent, "backend_engineer");
+    await settle();
+    ($('[data-testid="tool-rules-save"]') as HTMLButtonElement).click();
+    await settle();
+    expect(posts.at(-1)?.scope).toBe("agent:backend_engineer");
+    ($('[data-testid="tool-rules-add"]') as HTMLButtonElement).click();
+    await settle();
+    set($('[aria-label="Scope"]') as HTMLSelectElement, "workflow");
+    await settle();
+    set($('[aria-label="Workflow"]') as HTMLSelectElement, "wf_nightly");
+    await settle();
+    ($('[data-testid="tool-rules-save"]') as HTMLButtonElement).click();
+    await settle();
+    expect(posts.at(-1)?.scope).toBe("workflow:wf_nightly");
+    ($('[data-testid="tool-rules-add"]') as HTMLButtonElement).click();
+    await settle();
+    set($('[aria-label="Scope"]') as HTMLSelectElement, "project");
+    await settle();
+    ($('[data-testid="tool-rules-save"]') as HTMLButtonElement).click();
+    await settle();
+    expect(posts.at(-1)?.scope).toBe("project");
+  });
+});

@@ -15,8 +15,8 @@ import React, { useCallback, useEffect, useState } from "react";
 import { GatedButton } from "../../components/gated";
 import {
   BUCKET_WORDS, BUCKETS, conditionWords, createRule, EFFECT_WORDS, EFFECTS, ordered, rateWords, readConditions,
-  readRules, readSuggestions, revokeRule, scopeWords, simulate, updateRule, parseSimulation,
-  type Bucket, type Effect, type Rule, type Simulation, type Suggestion,
+  readRules, readScope, readSuggestions, revokeRule, SCOPE_KIND_WORDS, SCOPE_KINDS, scopeWords, simulate, updateRule, parseSimulation,
+  type Bucket, type Effect, type Rule, type ScopeKind, type Simulation, type Suggestion,
 } from "../../lib/tool-policies";
 
 type Filter = "all" | "decision";
@@ -143,7 +143,10 @@ function Suggested({ projectId, rulesVersion, onAdded }: { projectId: string; ru
 
 function AddRule({ projectId, onAdded }: { projectId: string; onAdded: () => void }) {
   const [effect, setEffect] = useState<Effect>("deny");
-  const [scope, setScope] = useState("project");
+  const [kind, setKind] = useState<ScopeKind>("project");
+  const [target, setTarget] = useState("");
+  const [agents, setAgents] = useState<{ value: string; label: string }[]>([]);
+  const [workflows, setWorkflows] = useState<{ value: string; label: string }[]>([]);
   const [priority, setPriority] = useState("100");
   const [server, setServer] = useState("*");
   const [tool, setTool] = useState("");
@@ -153,10 +156,32 @@ function AddRule({ projectId, onAdded }: { projectId: string; onAdded: () => voi
   const [bucket, setBucket] = useState<Bucket>("project");
   const [err, setErr] = useState<string | null>(null);
   const parsed = readConditions(conds);
+  const scope = readScope(kind, target);
+  const choices = kind === "agent" ? agents : kind === "workflow" ? workflows : [];
+  useEffect(() => {
+    let live = true;
+    const load = async (path: string) => {
+      try {
+        const r = await fetch(path, { cache: "no-store" });
+        return r.ok ? await r.json() as { items?: { role_key?: string; display_name?: string; id?: string; name?: string; workflow_key?: string }[] } : null;
+      } catch { return null; }
+    };
+    const enc = encodeURIComponent(projectId);
+    void load(`/v1/roles?project_id=${enc}`).then((b) => {
+      if (!live) return;
+      setAgents((b?.items ?? []).map((r) => ({ value: r.role_key || "", label: r.display_name || r.role_key || "" })).filter((o) => o.value));
+    });
+    void load(`/v1/workflows?project_id=${enc}`).then((b) => {
+      if (!live) return;
+      setWorkflows((b?.items ?? []).map((w) => ({ value: w.id || "", label: w.name || w.workflow_key || w.id || "" })).filter((o) => o.value));
+    });
+    return () => { live = false; };
+  }, [projectId]);
   const save = async () => {
     if (parsed.error) { setErr(parsed.error); return; }
+    if (scope.error) { setErr(scope.error); return; }
     const r = await createRule(projectId, {
-      effect, scope: scope.trim() || "project", priority: Number(priority) || 0,
+      effect, scope: scope.scope, priority: Number(priority) || 0,
       selector: { server: server.trim() || "*", tool: tool.trim() || "*" }, conditions: parsed.conditions,
       ...(effect === "rate_limit" ? { rate_limit: { max_calls: Number(cap) || 0, window_seconds: Number(windowS) || 60,
                                                      ...(bucket === "project" ? {} : { bucket }) } } : {}),
@@ -167,8 +192,17 @@ function AddRule({ projectId, onAdded }: { projectId: string; onAdded: () => voi
     <div className="tp-form" data-testid="tool-rules-form">
       <label>Does<select aria-label="Effect" value={effect} onChange={(e) => setEffect(e.target.value as Effect)}>
         {EFFECTS.map((x) => <option key={x} value={x}>{EFFECT_WORDS[x]}</option>)}</select></label>
-      <label>Applies to<input aria-label="Scope" value={scope} placeholder="project, org, agent:forge, workflow:<id>"
-                             onChange={(e) => setScope(e.target.value)} /></label>
+      <label>Applies to<select aria-label="Scope" value={kind}
+        onChange={(e) => { setKind(e.target.value as ScopeKind); setTarget(""); setErr(null); }}>
+        {SCOPE_KINDS.map((k) => <option key={k} value={k}>{SCOPE_KIND_WORDS[k]}</option>)}
+      </select></label>
+      {kind === "agent" || kind === "workflow" ? (
+        <label>{kind === "agent" ? "Agent" : "Workflow"}
+          <select aria-label={kind === "agent" ? "Agent" : "Workflow"} value={target} onChange={(e) => { setTarget(e.target.value); setErr(null); }}>
+            <option value="">{kind === "agent" ? "Pick an agent" : "Pick a workflow"}</option>
+            {choices.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select></label>
+      ) : null}
       <label>Priority<input aria-label="Priority" inputMode="numeric" value={priority} onChange={(e) => setPriority(e.target.value)} /></label>
       <label>Server<input aria-label="Server" value={server} placeholder="* or a name" onChange={(e) => setServer(e.target.value)} /></label>
       <label>Tool<input aria-label="Tool" value={tool} placeholder="delete_* or a name" onChange={(e) => setTool(e.target.value)} /></label>
@@ -183,7 +217,7 @@ function AddRule({ projectId, onAdded }: { projectId: string; onAdded: () => voi
         placeholder={"$.path prefix /prod\n$.branch equals \"main\""} onChange={(e) => setConds(e.target.value)} /></label>
       {err || parsed.error ? <p className="tp-said">{err ?? parsed.error}</p> : null}
       <GatedButton permission="mcp_server:review" projectId={projectId} className="kit-btn" data-testid="tool-rules-save"
-                   onClick={() => void save()}>Save rule</GatedButton>
+                   disabled={!!scope.error || !!parsed.error} onClick={() => void save()}>Save rule</GatedButton>
     </div>
   );
 }
