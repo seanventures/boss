@@ -891,15 +891,24 @@ def deliver_chat_due(engine, settings: Any, *, now: Optional[datetime] = None, l
                 out["waiting"] += 1
                 continue
             except ChatRateLimited as slow:
-                # NOT A FAILURE: wait what the channel asked, then try again; no attempt spent.
+                # NOT A FAILURE: wait what the channel asked, then try again; no attempt spent —
+                # up to MAX_RATE_LIMITED times, then it counts as a failed attempt below.
                 seconds = float(slow.retry_after or 1.0)
-                if key:
-                    chat_reply.BUCKETS.block(key, seconds)
-                later(row["id"], seconds, word=f"rate limited: retry after {seconds:g} s",
-                      rate_limited=True)
-                out["rate_limited"] += 1
-                continue
+                blocked = chat_reply.channel_of(row, payload)
+                if blocked:
+                    chat_reply.BUCKETS.block(blocked, seconds)
+                if int(row.get("rate_limited") or 0) + 1 < chat_reply.MAX_RATE_LIMITED:
+                    later(row["id"], seconds, word=f"rate limited: retry after {seconds:g} s",
+                          rate_limited=True)
+                    out["rate_limited"] += 1
+                    continue
+                exc_for_failure: Exception = slow
             except Exception as exc:  # noqa: BLE001 — a dead channel is a receipt, not a crash
+                exc_for_failure = exc
+            else:
+                exc_for_failure = None
+            if exc_for_failure is not None:
+                exc = exc_for_failure
                 attempts = int(row["attempts"]) + 1
                 dead = attempts >= MAX_CHAT_ATTEMPTS
                 word = f"{type(exc).__name__}: {exc}"[:300]

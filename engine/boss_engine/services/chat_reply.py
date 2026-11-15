@@ -44,6 +44,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import threading
 import time
 from typing import Any, Mapping, Optional
@@ -66,6 +67,9 @@ MAX_CHUNK = 3500
 #: Per-channel send rate (Slack chat.postMessage ≈ 1/s per channel, short bursts allowed).
 CHANNEL_RATE_PER_SECOND = 1.0
 CHANNEL_BURST = 3.0
+#: A row the channel rate-limits more often than this is counted as a failed attempt (it
+#: then backs off and dead-letters like any failure) instead of waiting forever.
+MAX_RATE_LIMITED = 20
 #: The run plane sets this to the lease epoch it just checked (run_plane.tool_invoke).
 FENCE_EPOCH: contextvars.ContextVar = contextvars.ContextVar("boss_chat_fence_epoch", default=None)
 NOTIFY_CHANNEL = "boss_chat_outbox"
@@ -196,6 +200,35 @@ def _insert(connection: Connection, *, run: Mapping[str, Any], target: Mapping[s
     return {"outbox_id": row_id, "op_seq": seq, "duplicate": False}
 
 
+#: Slack's special tokens that notify people: broadcasts (`<!channel>`, `<!here>`,
+#: `<!everyone>`), user groups (`<!subteam^S…>`) and users (`<@U…>` / `<@W…>`).
+_PING = re.compile(r"<\s*(!\s*(?:channel|here|everyone|group)\b|!\s*subteam\^[^>|]*|@\s*[UWB][A-Z0-9]*)"
+                   r"(?:\|([^>]*))?\s*>", re.I)
+_ZWSP = "\u200b"
+
+
+def inert(words: str) -> str:
+    """AGENT TEXT NEVER PINGS ANYONE (review of P9a-6): a prompt-injected reply could otherwise
+    @channel a whole workspace or page a user group. Every broadcast, user-group and user
+    mention token is rewritten to plain text with a zero-width space after the `@`, which Slack
+    renders but never resolves; any other `<!…>` command is defused the same way."""
+    def plain(match: "re.Match[str]") -> str:
+        token, label = match.group(1).replace(" ", ""), match.group(2)
+        if token.lower().startswith("!subteam"):
+            name = label or "group"
+        elif token.startswith("@"):
+            name = label or "user"
+        else:
+            name = token[1:].lower()
+        return "@" + _ZWSP + name.lstrip("@")
+
+    words = _PING.sub(plain, str(words or ""))
+    words = re.sub(r"<\s*!", "<" + _ZWSP + "!", words)
+    # A bare `@here` / `@channel` / `@everyone` is only text without link_names, but keep it inert.
+    return re.sub(r"(?<![\w\u200b])@(here|channel|everyone)\b", "@" + _ZWSP + r"\1", words,
+                  flags=re.I)
+
+
 def _chunks(words: str) -> list[str]:
     words = str(words or "").strip() or "(no answer)"
     out = []
@@ -225,6 +258,7 @@ def say(connection: Connection, run_id: str, words: str, *, final: bool, kind: s
                 "message": "This run was not started by a chat conversation; there is nobody "
                            "to reply to."}
     epoch = current_epoch(connection, run_id) if epoch is None else int(epoch)
+    words = inert(words)
     live = _open_live(connection, run_id)
     base = {"channel": target["channel"], "thread": target.get("thread_ts")}
     stream = (kind == "agent_reply" and bool(target.get("stream")) and streaming_enabled(settings))
@@ -388,8 +422,9 @@ def on_run_settled(connection: Connection, run_id: str) -> Optional[dict]:
     status = str(run.get("status") or "")
     words = str(run.get("output_text") or "").strip()
     if status != "completed" or not words:
-        reason = str(run.get("error") or status or "it stopped").strip()
-        words = words or f"I could not finish this ({reason[:200]})."
+        # Never the run's internal error text: it can name hosts, paths or tools.
+        words = words or ("I could not finish this. The details are in BOSS under this "
+                          "agent's runs.")
     return say(connection, run_id, words, final=True, kind="agent_reply",
                dedupe=f"chat:{run_id}:settled")
 
@@ -530,15 +565,25 @@ UNMETERED_OPS = ("react", "set_status")
 
 
 def bucket_key(row: Mapping[str, Any], payload: Mapping[str, Any]) -> Optional[str]:
-    """The channel bucket a row spends from: a conversation's traffic (the agents' rows, which a
-    busy channel can multiply); a decision card or a link prompt is one message a person caused,
-    and the channel's own 429 still paces it."""
-    if str(row.get("kind") or "") not in KINDS or str(payload.get("op") or "") in UNMETERED_OPS:
+    """The channel bucket a row spends from: EVERY row that names a channel (or a DM's user) —
+    agents' replies, decision cards, link prompts — so together they keep Slack's ≈1/s per
+    channel. Reactions and the status line are other rate tiers.
+
+    FOLLOW-UP (noted in review): the buckets are per API process, so N replicas may send up to
+    N/s into one channel; Slack's 429 + Retry-After (honoured below, and it blocks the channel
+    for this process) is what bounds that today. A shared (Postgres) bucket is the follow-up."""
+    if str(payload.get("op") or "") in UNMETERED_OPS:
         return None
     channel = payload.get("channel") or payload.get("user")
     if not channel:
         return None
     return str(row.get("channel_key") or f"{row['endpoint_id']}:{channel}")
+
+
+def channel_of(row: Mapping[str, Any], payload: Mapping[str, Any]) -> Optional[str]:
+    """The channel a 429 blocks, whatever the op (a reaction's 429 slows its channel too)."""
+    channel = payload.get("channel") or payload.get("user")
+    return str(row.get("channel_key") or f"{row['endpoint_id']}:{channel}") if channel else None
 
 
 def prepare(connection: Connection, row: Mapping[str, Any], payload: dict) -> Optional[dict]:
@@ -693,6 +738,6 @@ def stop() -> None:
 
 __all__ = ["BUCKETS", "ChatToolSet", "DEFAULT_STATUS", "FENCE_EPOCH", "KINDS", "NOTIFY_CHANNEL",
            "NotYet", "REACT", "REPLY", "ReplyFenced", "STATUS", "TOOL_NAMES", "after_send",
-           "bind_conversation", "bucket_key", "current_epoch", "drain", "on_admitted",
+           "bind_conversation", "bucket_key", "channel_of", "inert", "current_epoch", "drain", "on_admitted",
            "on_run_settled", "prepare", "react", "reply_to_of", "say", "start", "stop",
            "streaming_enabled", "with_chat_tools"]

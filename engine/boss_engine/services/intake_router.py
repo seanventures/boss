@@ -335,30 +335,31 @@ def _take_leading_name(connection: Connection, event: IntakeEvent, candidates: l
 def _list_agents(connection: Connection, settings: Any, crow: Mapping[str, Any],
                  event: IntakeEvent, candidates: list, principal_id: str, *,
                  now: Optional[datetime] = None) -> bool:
-    """The short reply when no agent was chosen: the agents this person may use (those they
-    have granted, or every one of the connection's when they granted none yet)."""
+    """The short reply when no agent was chosen: ONLY the agents this person may use; when
+    there are none, one line saying how to ask for access (never the full roster)."""
     endpoint_id = crow.get("chat_endpoint_id")
     user = event.bossactor.external_id
     if not endpoint_id or not user:
         return False
-    usable, every = [], []
+    usable = []
     for candidate in candidates:
         dep = _deployment(connection, str(candidate["deployment_id"]))
         if dep is None:
             continue
         label = str(dep["agent_key"])
-        every.append(label)
         acting, _why = intake_identity.person_acting(connection, principal_id,
                                                      project_id=str(candidate["project_id"]),
                                                      agent_key=label)
         if acting is not None:
             usable.append(label)
-    names = sorted(set(usable or every))
-    if not names:
-        return False
-    first = names[0]
-    words = ("Which agent should answer? Start your message with its name, for example "
-             f"`@BOSS {first}: …`. You can ask: " + ", ".join(f"*{n}*" for n in names) + ".")
+    names = sorted(set(usable))
+    if names:
+        words = ("Which agent should answer? Start your message with its name, for example "
+                 f"`@BOSS {names[0]}: …`. You can ask: " + ", ".join(f"*{n}*" for n in names)
+                 + ".")
+    else:
+        words = ("No agent here can act for you yet. Ask an admin for access, or grant one "
+                 f"yourself in BOSS under Account › Agents ({intake_identity.GRANT_PATH}).")
     from .notify import enqueue_chat
 
     data = event.data or {}

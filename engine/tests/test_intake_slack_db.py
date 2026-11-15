@@ -666,3 +666,103 @@ def test_socket_mode_one_leased_consumer_stores_once_and_acks_after_commit(world
         and rows[0][2] == 1
     socket_mode.release_lease(engine, cid, "holder-a")
     assert socket_mode.take_lease(engine, cid, "holder-b"), "released: another process takes it"
+
+
+# ═══ review fixes ═════════════════════════════════════════════════════════════════════════════
+
+def test_an_injected_reply_pings_nobody(world):
+    engine, pid, fake = world
+    _slack, run = _admitted_run(engine, pid, fake)
+    injected = ("<!channel> urgent! <!here|here> <!everyone> ping <!subteam^S0ONCALL|@oncall> "
+                "and <@U0CEO|ceo> and <@W0ADMIN> and plain @here; see <https://ok.example|docs>")
+    with engine.begin() as c:
+        chat_reply.say(c, run["id"], injected, final=True, kind="agent_reply",
+                       dedupe=f"chat:{run['id']}:inject")
+    _flush(engine)
+    answer = fake.named("chat.update")[-1]["text"]
+    for token in ("<!channel>", "<!here", "<!everyone>", "<!subteam", "<@U0CEO", "<@W0ADMIN"):
+        assert token not in answer, (token, answer)
+    assert "<!" not in answer and "<@" not in answer
+    assert "@​channel" in answer and "@​oncall" in answer and "@​ceo" in answer
+    assert "@​here" in answer and "<https://ok.example|docs>" in answer, "links stay links"
+    assert chat_reply.inert("<! channel>") == "@\u200bchannel"
+    assert chat_reply.inert("<!date^1|x>").startswith("<\u200b!date")
+
+
+def test_socket_mode_routes_interactivity_to_the_chat_handler(world, monkeypatch):
+    from boss_engine.connectors.intake.slack import socket_mode
+
+    engine, pid, fake = world
+    slack = make_slack(engine, pid, mode="socket", secrets={"app_token": "xapp-test-token"})
+    with engine.begin() as c:
+        row = dict(c.execute(text("SELECT * FROM intake_connections WHERE id = :c"),
+                             {"c": slack["connection"]["id"]}).mappings().one())
+    press = {"type": "block_actions", "user": {"id": "U0PRESSER", "username": "presser"},
+             "container": {"type": "message", "message_ts": "1700000000.000100",
+                           "channel_id": "C0SUPPORT"},
+             "channel": {"id": "C0SUPPORT"}, "trigger_id": "t-1",
+             "actions": [{"action_id": "boss_decide_approve", "value": "cha_forged.sig",
+                          "type": "button"}]}
+    ack = socket_mode.handle_envelope(engine, _settings(), row, {
+        "envelope_id": "env-int-1", "type": "interactive", "payload": press})
+    assert ack == {"envelope_id": "env-int-1"}
+    answers = [r for r in _outbox(engine, pid) if (r["payload"] or {}).get("op") == "ephemeral"]
+    assert answers, "the press reached the decision handler and was answered in words"
+    with engine.begin() as c:
+        stored = c.execute(text("SELECT count(*) FROM intake_events WHERE connection_id = :c"),
+                           {"c": slack["connection"]["id"]}).scalar()
+    assert stored == 0, "a press is not an intake event"
+
+
+def test_every_channel_row_spends_the_bucket_and_a_429_blocks_the_channel(world):
+    engine, pid, fake = world
+    slack = make_slack(engine, pid)
+    from boss_engine.services.notify import enqueue_chat
+
+    with engine.begin() as c:
+        for n in range(5):
+            enqueue_chat(c, endpoint_id=slack["endpoint"]["id"], project_id=pid,
+                         kind="message", payload={"op": "post", "channel": "C0CARDS",
+                                                  "message": {"text": f"card {n}"}},
+                         dedupe_key=f"card:{pid}:{n}")
+    got = _deliver(engine)
+    assert got["sent"] == 3 and got["waiting"] == 2, got
+    chat_reply.BUCKETS.reset()
+    fake.fail_next("chat.postMessage", ("429", "30"))
+    got = _deliver(engine, at=5)
+    assert got["rate_limited"] == 1 and got["sent"] == 0 and got["waiting"] == 1, \
+        "the 429 blocks the channel for the row behind it too"
+    # A row the channel keeps refusing stops waiting after MAX_RATE_LIMITED and backs off.
+    with engine.begin() as c:
+        c.execute(text("UPDATE chat_outbox SET rate_limited = :n WHERE project_id = :p "
+                       "AND status = 'pending'"), {"n": chat_reply.MAX_RATE_LIMITED, "p": pid})
+    chat_reply.BUCKETS.reset()
+    fake.fail_next("chat.postMessage", ("429", "1"))
+    got = _deliver(engine, at=60)
+    assert got["failed"] == 1, got
+
+
+def test_the_list_reply_names_only_usable_agents_or_says_how_to_get_access(world, monkeypatch):
+    from boss_engine.services import intake_identity
+
+    engine, pid, fake = world
+    slack = make_slack(engine, pid)
+    _person(engine, slack)
+    for key in ("support", "billing"):
+        _route(engine, pid, deploy_local_agent(engine, pid, key=key), slack, name=key,
+               identity_mode="person")
+    monkeypatch.setattr(intake_identity, "person_acting",
+                        lambda c, p, *, project_id, agent_key: (
+                            (object(), "ok") if agent_key == "support" else (None, "no_grant")))
+    _receive(engine, slack, mention("anyone?", channel="C0ONE"))
+    _process(engine)
+    monkeypatch.setattr(intake_identity, "person_acting",
+                        lambda c, p, *, project_id, agent_key: (None, "no_grant"))
+    _receive(engine, slack, mention("anyone at all?", channel="C0TWO"))
+    _process(engine)
+    _flush(engine)
+    texts = {c["channel"]: c["text"] for c in fake.named("chat.postEphemeral")}
+    assert "*support*" in texts["C0ONE"] and "billing" not in texts["C0ONE"]
+    assert texts["C0TWO"].startswith("No agent here can act for you") \
+        and "support" not in texts["C0TWO"]
+    assert runs_of(engine, pid) == []

@@ -88,8 +88,12 @@ def handle_envelope(engine: Any, settings: Any, row: Mapping[str, Any],
         return None
     if kind == "disconnect":
         raise Reconnect(str(envelope.get("reason") or "disconnect"))
+    if kind == "interactive":
+        # In Socket Mode, decision-button presses and modal submissions arrive HERE, not at the
+        # endpoint URL: they take the same path the URL does (chat_channels.handle_inbound).
+        return handle_interactive(engine, settings, row, envelope)
     if kind != "events_api":
-        # Interactivity and slash commands go to the chat endpoint's URL; acked, not stored.
+        # Slash commands: BOSS has none; acked so Slack does not resend them.
         return {"envelope_id": envelope_id} if envelope_id else None
     payload = envelope.get("payload")
     if not isinstance(payload, dict):
@@ -111,6 +115,42 @@ def handle_envelope(engine: Any, settings: Any, row: Mapping[str, Any],
     if int(got.get("http_status") or 500) >= 300:
         return None
     return {"envelope_id": envelope_id} if envelope_id else None
+
+
+def handle_interactive(engine: Any, settings: Any, row: Mapping[str, Any],
+                       envelope: Mapping[str, Any]) -> Optional[dict]:
+    """A Socket Mode `interactive` envelope (block_actions / view_submission) through the chat
+    endpoint's own handler: the signed single-use token, the identity link and the decision
+    rules all apply exactly as on the URL. The ack can carry the modal's answer."""
+    from ....services import chat_channels
+    from ....services.chat_adapters import SlackChat
+    from ....services.chat_reply import _kick
+
+    envelope_id = str(envelope.get("envelope_id") or "")
+    payload = envelope.get("payload")
+    endpoint_id = row.get("chat_endpoint_id")
+    if not isinstance(payload, dict) or not endpoint_id:
+        return {"envelope_id": envelope_id} if envelope_id else None
+    inbound = SlackChat()._interaction(payload)  # noqa: SLF001 — the one interaction parser
+    with engine.begin() as c:
+        endpoint = chat_channels.get_endpoint(c, str(endpoint_id))
+        if endpoint is None or endpoint.get("status") != "active":
+            return {"envelope_id": envelope_id} if envelope_id else None
+        result = chat_channels.handle_inbound(c, settings, endpoint, inbound)
+    if result.get("status") == "note_required":
+        try:
+            with engine.begin() as c:
+                chat_channels.open_note_form(c, settings, endpoint, result, inbound)
+        except Exception:  # noqa: BLE001 — the press is answered in words by the outbox
+            log.warning("socket mode: note form not opened", exc_info=True)
+    _kick()
+    ack: dict = {"envelope_id": envelope_id} if envelope_id else {}
+    if inbound.kind == "note_submitted":
+        ack["payload"] = ({"response_action": "clear"}
+                          if result.get("status") in ("done", "pending_second") else
+                          {"response_action": "errors",
+                           "errors": {"note": str(result.get("words") or "Refused")[:150]}})
+    return ack or None
 
 
 # ── the socket ──────────────────────────────────────────────────────────────────────────────
@@ -286,4 +326,5 @@ def stop() -> None:
 
 
 __all__ = ["CONNECT", "Consumer", "HOLDER", "LEASE_TTL", "Reconnect", "handle_envelope",
+           "handle_interactive",
            "job_name", "open_url", "release_lease", "start", "stop", "supervise", "take_lease"]

@@ -53,6 +53,15 @@ def world(engine) -> IdentityWorld:
     return w
 
 
+@pytest.fixture(autouse=True)
+def unpaced(monkeypatch):
+    """These tests are about decisions, not Slack's per-channel pace (test_intake_slack_db
+    covers the bucket): every row may go at once."""
+    from boss_engine.services import chat_reply
+
+    monkeypatch.setattr(chat_reply.BUCKETS, "wait_for", lambda key, now=None: 0.0)
+
+
 @pytest.fixture
 def client():
     return TestClient(main.app, raise_server_exceptions=False)
