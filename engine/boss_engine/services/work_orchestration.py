@@ -91,18 +91,62 @@ def tracker_is_connected(provider_key: str, configuration: Any) -> bool:
         return False   # a host credential bound to another provider is not a usable token
 
 
+def _config_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return {}
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _mirror_credential(connection: Connection, config: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """A mapping row keeps no token. One call uses the home row's credential, resolved in the
+    home project — the same rule ticket_connection uses for reads (BOSSAPP-1231)."""
+    home_id = str(config.get("mirror_of") or "")
+    if not home_id:
+        return None
+    home = connection.execute(
+        text("SELECT project_id, provider_key, status, configuration FROM work_tracker_providers "
+             "WHERE id = :i"),
+        {"i": home_id},
+    ).mappings().first()
+    if home is None or home["status"] != "active":
+        return None
+    home_config = _config_dict(home["configuration"])
+    if not tracker_is_connected(str(home["provider_key"]), home_config):
+        return None
+    merged = {k: v for k, v in config.items()
+              if k not in ("secret_ref_id", "last4", "fingerprint", "api_token",
+                           "access_token", "token", "pat", "password")}
+    merged["_credential_project_id"] = str(home["project_id"])
+    if home_config.get("secret_ref_id"):
+        merged["secret_ref_id"] = home_config["secret_ref_id"]
+    elif home_config.get("credential") == "github_connection":
+        merged["credential"] = "github_connection"
+    elif home_config.get("api_token"):
+        merged["api_token"] = home_config["api_token"]
+    elif home_config.get("credential_ref"):
+        merged["credential_ref"] = home_config["credential_ref"]
+    return merged
+
+
 def with_credential(connection: Connection, project_id: str,
                     configuration: dict[str, Any]) -> dict[str, Any]:
     """The configuration with its token resolved for ONE call: from the secret store, or from
-    the project's GitHub connection. The result is used and dropped, never stored."""
+    the project's GitHub connection. The result is used and dropped, never stored.
+
+    A mapping row names the home project (``_credential_project_id``); the secret is resolved
+    there, because it is not this project's."""
     config = dict(configuration or {})
+    credential_project = str(config.pop("_credential_project_id", "") or "") or project_id
     if config.get("api_token"):
         return config
     if config.get("credential") == "github_connection" or config.get("secret_ref_id"):
         from ..config import get_settings
         from .kit_connections import _tracker_config_with_token
 
-        return _tracker_config_with_token(connection, get_settings(), project_id,
+        return _tracker_config_with_token(connection, get_settings(), credential_project,
                                           str(config.get("provider_key") or ""), config)
     return config
 
@@ -123,15 +167,18 @@ def connected_tracker(connection: Connection, project_id: str,
         {"p": project_id, "k": wanted},
     ).mappings().all()
     for row in rows:
-        config = row["configuration"]
-        if isinstance(config, str):
-            try:
-                config = json.loads(config)
-            except ValueError:
-                config = {}
-        if tracker_is_connected(str(row["provider_key"]), config or {}):
+        config = _config_dict(row["configuration"])
+        # A mirror does not fall back to a dormant copy of the token. The home credential, or
+        # nothing from this row.
+        if config.get("mirror_of"):
+            followed = _mirror_credential(connection, config)
+            if followed is None:
+                continue
             return {"provider_key": row["provider_key"], "display_name": row["display_name"],
-                    "configuration": dict(config or {})}
+                    "configuration": followed}
+        if tracker_is_connected(str(row["provider_key"]), config):
+            return {"provider_key": row["provider_key"], "display_name": row["display_name"],
+                    "configuration": config}
     return None
 
 

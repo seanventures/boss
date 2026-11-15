@@ -450,7 +450,13 @@ def test_a_mapping_gives_the_other_project_a_mirror_and_disconnect_pauses(world,
         assert theirs["id"] == mirror["connection_id"] and theirs["status"] == "connected"
         assert theirs["managed_from"] == {"connection_id": cid, "project_id": world.project_a}
         assert theirs["settings"]["mappings"][1]["external_project"] == "OPS"
-        # The mirror reads with its own (project-scoped) copy of the token.
+        # The mirror stores no token. The read resolves the home credential (BOSSAPP-1231).
+        with engine.connect() as db:
+            mirror_config = db.execute(text(
+                "SELECT configuration FROM work_tracker_providers WHERE id = :i"),
+                {"i": mirror["connection_id"]}).scalar()
+        assert "secret_ref_id" not in mirror_config and "last4" not in mirror_config
+        assert "fingerprint" not in mirror_config
         read = client.get(f"/v1/ticket-systems/{mirror['connection_id']}/tickets/KAN-2")
         assert read.status_code == 200, read.text
         refused = client.patch(f"/v1/ticket-systems/{mirror['connection_id']}",

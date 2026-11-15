@@ -15534,3 +15534,61 @@ CREATE TABLE IF NOT EXISTS acceptance_contracts (
 CREATE INDEX IF NOT EXISTS idx_acceptance_contracts_lineage
   ON acceptance_contracts (lineage_root_run_id, version DESC);
 -- ================================ end AA-A ==
+
+-- BOSSAPP-1231: a project mapping used to copy the home connection's token into the mapping
+-- row (its own secret_refs row and the vault ciphertext in secret_material). Reads resolve
+-- the home credential, so the copy is dormant. Drop the copy and its vault material. A
+-- reference the home row still names is left in the store; the mirror only loses the pointer.
+-- secret_access_events is append-only and is not touched.
+DO $bossapp_1231$
+DECLARE
+  r RECORD;
+BEGIN
+  FOR r IN
+    SELECT s.id AS secret_ref_id, s.ref_key
+    FROM work_tracker_providers m
+    JOIN secret_refs s ON s.id = m.configuration->>'secret_ref_id'
+    WHERE COALESCE(m.configuration->>'mirror_of', '') <> ''
+      AND COALESCE(m.configuration->>'secret_ref_id', '') <> ''
+      AND s.project_id = m.project_id
+      AND NOT EXISTS (
+        SELECT 1 FROM work_tracker_providers h
+        WHERE h.id <> m.id
+          AND COALESCE(h.configuration->>'mirror_of', '') = ''
+          AND h.configuration->>'secret_ref_id' = s.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM delivery_bot_identities b WHERE b.credential_secret_ref_id = s.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM deployment_hosts dh WHERE dh.key_secret_ref = s.id
+      )
+  LOOP
+    UPDATE secret_refs SET supersedes_secret_ref_id = NULL
+      WHERE supersedes_secret_ref_id = r.secret_ref_id;
+    DELETE FROM secret_material
+      WHERE ref_key = r.ref_key
+        AND NOT EXISTS (
+          SELECT 1 FROM secret_refs other
+          WHERE other.ref_key = r.ref_key AND other.id <> r.secret_ref_id
+        );
+    DELETE FROM secret_refs WHERE id = r.secret_ref_id;
+  END LOOP;
+
+  UPDATE work_tracker_providers AS m
+  SET configuration = m.configuration
+        - 'secret_ref_id' - 'last4' - 'fingerprint'
+        - 'api_token' - 'access_token' - 'token' - 'pat' - 'password'
+        - 'oauth_client_secret' - 'oauth_client_secret_ref',
+      updated_at = now()
+  WHERE COALESCE(m.configuration->>'mirror_of', '') <> ''
+    AND (
+      m.configuration ? 'secret_ref_id' OR m.configuration ? 'last4'
+      OR m.configuration ? 'fingerprint' OR m.configuration ? 'api_token'
+      OR m.configuration ? 'access_token' OR m.configuration ? 'token'
+      OR m.configuration ? 'pat' OR m.configuration ? 'password'
+      OR m.configuration ? 'oauth_client_secret'
+      OR m.configuration ? 'oauth_client_secret_ref'
+    );
+END
+$bossapp_1231$;
