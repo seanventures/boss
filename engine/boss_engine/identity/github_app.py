@@ -263,23 +263,21 @@ def mint_for_run(claims: RunTokenClaims, *, task: TaskBinding, db: Any):
     repos = run_repos(task)
     if not repos:
         raise GitHubRefused("no_repo")
-    # THE REGISTRY (multirepo/registry.py): a repository the operator unticked, or one GitHub no
-    # longer lists, is out of the next mint — a run already holding a token keeps it until it ends.
-    from ..multirepo import grants as repo_grants
-    from ..multirepo import registry as repo_registry
+    # THE RUN'S GIT SCOPE (identity/repo_scope.py, the one check every git provider shares):
+    # the registry (a repository the operator unticked, or one GitHub no longer lists, is out of
+    # the next mint — a run already holding a token keeps it until it ends), the change set's
+    # grant (a multi-repo build reaches only its app's repositories) and, on someone's behalf,
+    # the person's grant.
+    from . import repo_scope
 
-    refused = repo_registry.mint_allowed(db, claims.org_id, repos)
-    if refused:
-        raise GitHubRefused("repo_not_allowed")
-    # THE RUN'S GRANT (multirepo/grants.py): a build of a multi-repo app reaches only its app's
-    # repositories, exactly — never one outside the set the person consented to.
-    if repo_grants.outside_run_grant(db, task.run_id, repos):
-        raise GitHubRefused("repo_outside_app")
     grant = grants.load(claims.grant_id, db=db)
+    reason = repo_scope.refusal(db, provider=repo_scope.GITHUB, org_id=claims.org_id,
+                                run_id=task.run_id, grant=grant, obo=claims.mode.value == "obo",
+                                repos=repos)
+    if reason:
+        raise GitHubRefused(reason)
     if claims.mode.value == "obo":
         gh = grants.github_resources(grant)
-        if not set(repos) <= set(gh.get("repos") or ()):
-            raise GitHubRefused("repo_outside_grant")
         # At run start the guard asks GitHub NOW (no 15-minute cache): access the person lost a
         # minute ago is not lent to their agent.
         grants.check_grant_repo_access(grant, claims.org_id, claims.sub, gh, db=db, use_cache=False)

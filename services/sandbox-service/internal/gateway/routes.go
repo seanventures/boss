@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/base64"
 	"net/http"
 	gopath "path"
 	"strings"
@@ -52,6 +53,14 @@ type Rule struct {
 	// key signed. A token for another audience is never attached here, and
 	// would be refused there.
 	Audience string
+	// Credential answers locally, never forwarded: git's credential helper
+	// asks here and gets the VM's own boss_egr_ handle (P8b S11, HOST_API.md
+	// §4.9). The socket is the VM, so no VM can learn another's handle.
+	Credential bool
+	// Challenge answers a call that presents no handle with 401 and
+	// `WWW-Authenticate: Basic`: git sends its credential only after a
+	// challenge that names a scheme, and only then asks the helper.
+	Challenge bool
 }
 
 func (r Rule) matches(port int, method, path string) bool {
@@ -151,8 +160,13 @@ func DefaultRules() []Rule {
 		{ID: "model-anthropic-messages", Port: guest.PortModel, Methods: post, HostProof: true, Audience: hostapi.AudModel, PathPrefix: "/anthropic/v1/messages", Route: RouteModel, Handle: HandleModel, Endpoint: modelUp},
 		{ID: "model-openai-chat", Port: guest.PortModel, Methods: post, HostProof: true, Audience: hostapi.AudModel, PathPrefix: "/openai/v1/chat/completions", Route: RouteModel, Handle: HandleModel, Endpoint: modelUp},
 		{ID: "model-openai-responses", Port: guest.PortModel, Methods: post, HostProof: true, Audience: hostapi.AudModel, PathPrefix: "/openai/v1/responses", Route: RouteModel, Handle: HandleModel, Endpoint: modelUp},
-		{ID: "git-smart-http", Port: guest.PortGit, Methods: git, Audience: hostapi.AudEgress, PathPrefix: "/git/", Route: RouteGit, Handle: HandleEgress, Endpoint: egrUp},
-		{ID: "git-rest-api", Port: guest.PortGit, Methods: rest, Audience: hostapi.AudEgress, PathPrefix: "/api/", Route: RouteAPI, Handle: HandleEgress, Endpoint: egrUp},
+		// Git and REST go to boss-egress with the HOST's proof, the handle moved
+		// into X-Boss-Handle, the host's word on VM/run/epoch and the run's
+		// boss:egress token (P8b S11, HOST_API.md §4.9). Egress names the host
+		// from the proof and requires the token per host, as every gateway does.
+		{ID: "git-credential", Port: guest.PortGit, Methods: []string{http.MethodGet}, PathPrefix: GitCredentialPath, Route: RouteGit, Credential: true},
+		{ID: "git-smart-http", Port: guest.PortGit, Methods: git, HostProof: true, Challenge: true, Audience: hostapi.AudEgress, PathPrefix: "/git/", Route: RouteGit, Handle: HandleEgress, Endpoint: egrUp},
+		{ID: "git-rest-api", Port: guest.PortGit, Methods: rest, HostProof: true, Challenge: true, Audience: hostapi.AudEgress, PathPrefix: "/api/", Route: RouteAPI, Handle: HandleEgress, Endpoint: egrUp},
 		// The MCP gateway (P8b S12, HOST_API.md §4.7) takes the model gateway's
 		// contract: the host's proof, the handle MOVED into X-Boss-Handle and the
 		// host's word on VM, run and epoch. POST only: MCP streamable HTTP here has
@@ -215,14 +229,31 @@ func StripGuestHeaders(h http.Header, keep ...string) {
 	}
 }
 
-// handleFrom finds a boss_ handle in the guest's auth headers.
+// GitCredentialPath is where the guest's git credential helper asks for the
+// VM's egress handle (P8b S11). Answered by the gateway itself.
+const GitCredentialPath = "/_boss/git-credential"
+
+// handleFrom finds a boss_ handle in the guest's auth headers. Git presents
+// it as HTTP Basic (`<user>:<handle>`, from the credential helper).
 func handleFrom(h http.Header) string {
 	for _, name := range []string{"Authorization", "X-Api-Key", "Proxy-Authorization", "Api-Key"} {
 		for _, v := range h.Values(name) {
 			v = strings.TrimSpace(v)
 			if i := strings.IndexByte(v, ' '); i > 0 {
 				scheme := strings.ToLower(v[:i])
-				if scheme == "bearer" || scheme == "basic" || scheme == "token" {
+				if scheme == "basic" {
+					if raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(v[i+1:])); err == nil {
+						user, pass, _ := strings.Cut(string(raw), ":")
+						if strings.HasPrefix(pass, "boss_") {
+							return pass
+						}
+						if strings.HasPrefix(user, "boss_") {
+							return user
+						}
+					}
+					continue
+				}
+				if scheme == "bearer" || scheme == "token" {
 					v = strings.TrimSpace(v[i+1:])
 				}
 			}

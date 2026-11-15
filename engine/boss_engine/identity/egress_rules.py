@@ -187,6 +187,52 @@ def check_git(method: str, path: str, query: Mapping[str, str], *, perms: Mappin
     return RuleDecision(True, "/{o}/{r}.git/" + op, need=need)
 
 
+# ---- Bitbucket Cloud REST (P8b S11, D19) -------------------------------------------------------------------
+
+_BB_REPO_PATH = re.compile(r"^/2\.0/repositories/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(/.*)?$")
+_BB_FORBIDDEN = re.compile(r"^/(permissions-config|hooks|deploy-keys|deployments|environments|"
+                           r"branch-restrictions|pipelines_config)(/|$)")
+
+
+def check_bitbucket_api(method: str, path: str, *, perms: Mapping[str, str], repos: Iterable[str],
+                        body: Optional[Mapping[str, Any]] = None,
+                        push_pattern: str = "") -> RuleDecision:
+    """The Bitbucket REST surface a run may use: reads of its own repositories, opening a pull
+    request FROM one of its own branches, and commenting on a pull request. Nothing else — no
+    branch or tag writes (git does those, under the ref rules), no merge, no settings."""
+    m = _BB_REPO_PATH.match(path)
+    if not m:
+        return _deny("/2.0/{other}", "not_in_rule_table")
+    repo, sub = f"{m.group(1)}/{m.group(2)}", m.group(3) or ""
+    tpl = "/2.0/repositories/{w}/{r}" + ("/" + sub.strip("/").split("/")[0] if sub else "")
+    if not _in_run(repo, repos):
+        return _deny(tpl, "repo_outside_run")
+    if _BB_FORBIDDEN.match(sub):
+        return _deny(tpl, "forbidden_endpoint")
+    verb = method.upper()
+    if verb in ("GET", "HEAD"):
+        need = ("pull_requests", "read") if sub.startswith("/pullrequests") else ("contents", "read")
+        if not _level_ok(perms, need):
+            return RuleDecision(False, tpl, "insufficient_permission", need)
+        return RuleDecision(True, tpl, need=need)
+    if verb == "POST" and sub == "/pullrequests":
+        need = ("pull_requests", "write")
+        if not _level_ok(perms, need):
+            return RuleDecision(False, tpl, "insufficient_permission", need)
+        source = ((body or {}).get("source") or {}).get("branch") or {}
+        branch = str(source.get("name") or "") if isinstance(source, dict) else ""
+        if not branch or not fnmatch.fnmatchcase(f"refs/heads/{branch}",
+                                                 push_pattern or "refs/heads/boss/*"):
+            return _deny(tpl, "pr_not_the_runs")
+        return RuleDecision(True, tpl, need=need)
+    if verb == "POST" and re.fullmatch(r"/pullrequests/\d+/comments", sub):
+        need = ("pull_requests", "write")
+        if not _level_ok(perms, need):
+            return RuleDecision(False, tpl, "insufficient_permission", need)
+        return RuleDecision(True, tpl, need=need)
+    return _deny(tpl, "not_in_rule_table")
+
+
 # ---- receive-pack: commands and the pack ----------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -284,13 +330,18 @@ class UnverifiablePack(ValueError):
     """A thin pack whose delta bases could not be fetched and verified."""
 
 
-def parse_pack(pack: bytes, *, fetch_base: Optional[Callable[[str], Optional[tuple[int, bytes]]]] = None
-               ) -> dict[str, tuple[int, bytes]]:
+def parse_pack(pack: bytes, *, fetch_base: Optional[Callable[[str], Optional[tuple[int, bytes]]]] = None,
+               allow_unresolved: bool = False) -> dict[str, tuple[int, bytes]]:
     """sha -> (type, data) for every object in the pack. A REF_DELTA against an object NOT in the
     pack (a thin pack — git's default for a push) is resolved by fetching its base from the
     remote (`fetch_base(sha)` -> (type, data), verified against the sha); a delta that still
     cannot be resolved raises UnverifiablePack: its type and sha are unknown, so nothing can be
-    said about what it changes."""
+    said about what it changes.
+
+    `allow_unresolved=True` leaves such deltas OUT instead (a host whose objects egress cannot
+    fetch, Bitbucket): only the ref, delete and fast-forward rules may then be decided, and they
+    fail closed on anything missing — a new tip that is absent is `unverifiable_push`, a commit
+    walk that cannot reach the old tip is a force-push."""
     import hashlib
 
     if not pack:
@@ -368,7 +419,7 @@ def parse_pack(pack: bytes, *, fetch_base: Optional[Callable[[str], Optional[tup
                 if fetched is not None and fetched[0] in _TYPE_NAMES and sha_of(*fetched) == base:
                     by_sha[base] = fetched
                     progress = True
-    if pending:
+    if pending and not allow_unresolved:
         raise UnverifiablePack("unresolvable delta")
     return by_sha
 
@@ -406,14 +457,18 @@ RemoteCommitTree = Callable[[str], Optional[str]]
 def check_push(updates: list[RefUpdate], objects: Mapping[str, tuple[int, bytes]], *, push_pattern: str,
                perms: Mapping[str, str], is_ancestor: Callable[[str, str], bool],
                remote_tree: Optional[RemoteTree] = None,
-               remote_commit_tree: Optional[RemoteCommitTree] = None) -> RuleDecision:
+               remote_commit_tree: Optional[RemoteCommitTree] = None,
+               allow_delete: bool = True) -> RuleDecision:
     """`is_ancestor(old, descendant)` asks GitHub (compare API) about commits outside the pack.
 
     Workflows: EVERY pushed commit's `.github/workflows` must be identical to its FIRST parent's
     (resolved from the pack, else from the remote). So neither an intermediate commit that changes
     them and a later one that changes them back, nor a commit that reuses an existing tree (not in
     the pack, so "unchanged" by presence) with other workflows, nor a merge that takes them from a
-    second parent, gets through without `workflows: write`."""
+    second parent, gets through without `workflows: write`.
+
+    `allow_delete=False` (the microVM lane, P8b S11): a branch is never deleted, not even the
+    run's own (`branch_delete`)."""
     tpl = "/{o}/{r}.git/git-receive-pack"
     if not updates:
         return _deny(tpl, "no_updates")
@@ -422,6 +477,8 @@ def check_push(updates: list[RefUpdate], objects: Mapping[str, tuple[int, bytes]
         if not fnmatch.fnmatchcase(u.ref, push_pattern):
             return _deny(tpl, "ref_not_allowed")               # main, other branches, tags
         if u.is_delete:
+            if not allow_delete:
+                return _deny(tpl, "branch_delete")
             continue                                           # deleting the run's own branch
         commit = objects.get(u.new)
         if commit is None or commit[0] != OBJ_COMMIT:
