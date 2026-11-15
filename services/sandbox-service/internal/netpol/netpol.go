@@ -9,6 +9,7 @@
 //	                     later packets refresh only a live flow
 //	                   everything else                                     → drop   (indrop_)
 //	OUT (from the VM): to 169.254.169.254                                  → drop   (meta_)
+//	                   a health-check reply to a director on a flow it opened → accept (reply_)
 //	                   to any internal net (VM pool, host, infra, link-local) → drop (orig_)
 //	                   a reply on a learned flow (not a bare SYN)          → accept (reply_)
 //	                     RST deletes the flow; FIN moves it to closing_ (30 s)
@@ -239,6 +240,15 @@ func RenderVM(v VMNet) string {
 	inner := "gre ip daddr . gre ip saddr . gre tcp dport . gre tcp sport" // reply orientation
 	// OUT: from the VM.
 	w("add rule %s out_%s ip daddr 169.254.169.254 counter name meta_%s drop", tb, t, t)
+	if v.VIP != "" && len(v.VIPPorts) > 0 {
+		// The directors' health check (P8b-10): a SYN inside GRE from a director's own
+		// address, answered by the VM's SYN-ACK to that address. Directors sit on the
+		// infra network, which is internal, so this ONE reply shape is allowed before
+		// the internal-net drop: non-SYN, from the VIP, to a director, on a flow that
+		// director opened (learned from its GRE SYN). Nothing else internal ever is.
+		w("add rule %s out_%s ip saddr %s tcp sport %s ip daddr @directors tcp flags & (syn|ack) != syn %s @flows_%s counter name reply_%s accept",
+			tb, t, v.VIP, portSet(v.VIPPorts), tuple, t, t)
+	}
 	w("add rule %s out_%s ip daddr @internal_nets counter name orig_%s drop", tb, t, t)
 	if v.VIP != "" && len(v.VIPPorts) > 0 {
 		reply := fmt.Sprintf("ip saddr %s tcp sport %s", v.VIP, portSet(v.VIPPorts))

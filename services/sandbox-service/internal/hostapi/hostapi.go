@@ -28,9 +28,25 @@ const (
 	PathReplicas   = "/v1/hosts/%s/replicas"
 	PathHostsNext  = "/v1/run-plane/hosts/next"
 	PathRunLease   = "/v1/run-plane/runs/%s/lease"
+	// VIP members (P8b-10): PUT registers or re-weights a real server, DELETE
+	// removes it. %s = VIP, %s = replica id. The host sends the same call to
+	// the control plane (the durable record) and to every director
+	// (boss-lbd, the sub-second path). HOST_API.md §9.
+	PathVIPMember = "/v1/vips/%s/members/%s"
+	// Directors (boss-lbd) enrol through PathEnrol with role "director" and
+	// then use these. %s is the director id.
+	PathDirectorHeartbeat = "/v1/directors/%s/heartbeat"
+	PathDirectorDesired   = "/v1/directors/%s/desired"
+	PathDirectorRenew     = "/v1/directors/%s/renew"
 	// PathRunTokens (P8b S13): the run's delegated, per-destination tokens
 	// for the HOST's DPoP key (HOST_API.md §4.8).
 	PathRunTokens = "/v1/run-plane/runs/%s/tokens"
+)
+
+// Enrol roles (P8b-10). A join token is issued for one role.
+const (
+	RoleHost     = "host"
+	RoleDirector = "director"
 )
 
 // Headers the gateway sets on a forward to a central gateway (P8b S13,
@@ -117,6 +133,12 @@ type EnrolRequest struct {
 	Facts     Attestation       `json:"facts"`
 	Capacity  Capacity          `json:"capacity"`
 	Labels    map[string]string `json:"labels,omitempty"`
+	// Role is "host" (default) or "director" (boss-lbd, P8b-10); the join
+	// token was issued for exactly one role. Address is the IPv4 the node
+	// is reached at (directors: GRE source + withdraw-push listener; hosts:
+	// the next hop of their vm_prefix route on the directors).
+	Role    string `json:"role,omitempty"`
+	Address string `json:"address,omitempty"`
 	// Capabilities the host has (P8b S13: CapHostTokens).
 	Capabilities []string `json:"capabilities,omitempty"`
 }
@@ -219,6 +241,9 @@ type HeartbeatRequest struct {
 	Backend         string `json:"backend,omitempty"`
 	ClaimsFrozen    bool   `json:"claims_frozen"`
 	ContractVersion string `json:"contract_version,omitempty"`
+	// Address is the host's reachable IPv4 (P8b-10): the directors route the
+	// host's vm_prefix through it.
+	Address string `json:"address,omitempty"`
 	// Capabilities, re-sent every heartbeat (sticky on the control plane).
 	Capabilities []string `json:"capabilities,omitempty"`
 }
@@ -345,8 +370,133 @@ type DesiredState struct {
 	// Revocations are handle fingerprints the gateway must refuse.
 	Revocations []string `json:"revocations"`
 	// Extensions the Go host honours when present (absent in P8a = defaults).
-	Directors    []string `json:"directors,omitempty"`     // IPv4 allowed to send IPIP (P8b)
+	Directors    []string `json:"directors,omitempty"`     // IPv4 allowed to send GRE to replicas (P8b)
 	ClaimsFrozen bool     `json:"claims_frozen,omitempty"` // per_run gate, ORed with the host's switch
+	// DirectorPush (P8b-10) is where the host pushes real-server withdraws
+	// and registrations directly, over mTLS, besides the control plane.
+	DirectorPush []DirectorEndpoint `json:"director_push,omitempty"`
+}
+
+// DirectorEndpoint is one boss-lbd withdraw-push listener.
+type DirectorEndpoint struct {
+	ID      string `json:"id"`
+	Address string `json:"address"`
+	Port    int    `json:"port"`
+}
+
+// VIPMember is the body of PUT PathVIPMember (weight 0 = drained; the
+// DELETE carries vm_ip as a query parameter). Both the control plane and
+// boss-lbd accept it.
+type VIPMember struct {
+	VMIP   string `json:"vm_ip"`
+	Weight int    `json:"weight"`
+	Ports  []int  `json:"ports,omitempty"`
+	HostID string `json:"host_id,omitempty"`
+	Reason string `json:"reason,omitempty"` // serving | unhealthy | process_exit | drain | stopped
+	// Seq orders a host's pushes for one member (P8b-10 review): the host
+	// takes it when it decides, the director and the control plane apply a
+	// push only if no newer one for that member was applied (latest wins).
+	// DELETE carries it as the "seq" query parameter.
+	Seq int64 `json:"seq,omitempty"`
+}
+
+// ---- Directors (boss-lbd, P8b-10; HOST_API.md §9) --------------------------
+
+// DirectorDesired: GET /v1/directors/{id}/desired?since&wait. Level-based,
+// like the host's: every VIP the pair fronts with its serving real servers,
+// the static route per host, and the VRRP grouping both directors agree on
+// (the control plane computes it, so A and B never disagree on who is MASTER
+// of a group).
+type DirectorDesired struct {
+	Changed    bool           `json:"changed"`
+	DirectorID string         `json:"director_id"`
+	Generation int64          `json:"generation"`
+	Status     string         `json:"status,omitempty"`
+	Self       DirectorPeer   `json:"self"`
+	Peer       *DirectorPeer  `json:"peer,omitempty"`
+	Directors  []DirectorPeer `json:"directors"`
+	VIPPools   []string       `json:"vip_pools"` // CIDRs: an IPVS service inside them is ours
+	VIPs       []DirectorVIP  `json:"vips"`
+	Groups     []VRRPGroup    `json:"groups"`
+	Hosts      []DirectorHost `json:"hosts"`
+	// SyncIface is the interface for the IPVS connection sync daemons ("" =
+	// the director's own choice).
+	SyncIface string `json:"sync_iface,omitempty"`
+}
+
+// DirectorPeer is one director of the pair. Side is "A" or "B" (by id order).
+type DirectorPeer struct {
+	ID      string `json:"id"`
+	Address string `json:"address"`
+	Side    string `json:"side"`
+	Port    int    `json:"port,omitempty"` // withdraw-push listener
+}
+
+// DirectorVIP is one virtual service family: (VIP, every port), rr or wlc,
+// persistence off, GRE tunnel real servers.
+type DirectorVIP struct {
+	VIP          string           `json:"vip"`
+	Ports        []int            `json:"ports"`
+	Scheduler    string           `json:"scheduler"` // rr | wlc
+	DeploymentID string           `json:"deployment_id,omitempty"`
+	Group        int              `json:"group"`
+	Members      []DirectorMember `json:"members"`
+}
+
+// DirectorMember is a serving replica: an IPVS real server.
+type DirectorMember struct {
+	ReplicaID string `json:"replica_id"`
+	VMIP      string `json:"vm_ip"`
+	HostID    string `json:"host_id,omitempty"`
+	Weight    int    `json:"weight"`
+	Slots     int    `json:"slots,omitempty"`
+}
+
+// VRRPGroup is one keepalived instance: up to ~50 VIPs, MASTER on one side.
+type VRRPGroup struct {
+	Group  int      `json:"group"`
+	VRID   int      `json:"vrid"`
+	Master string   `json:"master"` // director id
+	VIPs   []string `json:"vips"`
+}
+
+// DirectorHost is one static route the directors need: vm_prefix via address.
+type DirectorHost struct {
+	HostID   string `json:"host_id"`
+	Address  string `json:"address"`
+	VMPrefix string `json:"vm_prefix"`
+}
+
+// DirectorHeartbeatRequest: POST /v1/directors/{id}/heartbeat every 2 s. It
+// also asks for the director lease of every group this node is MASTER of.
+type DirectorHeartbeatRequest struct {
+	Address            string            `json:"address,omitempty"`
+	GroupsMaster       []int             `json:"groups_master"`
+	KeepalivedLive     bool              `json:"keepalived_live"`
+	IPVS               DirectorIPVSState `json:"ipvs"`
+	ObservedGeneration int64             `json:"observed_generation"`
+	ContractVersion    string            `json:"contract_version,omitempty"`
+}
+
+type DirectorIPVSState struct {
+	Services  int    `json:"services"`
+	Dests     int    `json:"dests"`
+	Conns     int64  `json:"conns"`
+	SyncState string `json:"sync_state"` // master+backup | off
+}
+
+// DirectorHeartbeatResponse: Leases maps group → the director id holding
+// its lease (5 s TTL). A MASTER whose group another director holds goes
+// FAULT (keepalived track script), which ends a split brain.
+type DirectorHeartbeatResponse struct {
+	DirectorID        string            `json:"director_id"`
+	DesiredGeneration int64             `json:"desired_generation"`
+	Leases            map[string]string `json:"leases"`
+	// LeaseExpires: group → the lease's expiry (unix ms, the control
+	// plane's clock; compared only with itself: a renewal is an increase).
+	LeaseExpires     map[string]int64 `json:"lease_expires,omitempty"`
+	Renew            bool             `json:"renew"`
+	HeartbeatSeconds int              `json:"heartbeat_seconds,omitempty"`
 }
 
 // Endpoint keys in DesiredState.Endpoints.

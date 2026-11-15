@@ -25,6 +25,7 @@ import (
 	"github.com/seanheiney/boss/services/sandbox-service/internal/cpclient"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/gateway"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanheiney/boss/services/sandbox-service/internal/lbd"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/netpol"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/pki"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/vmm"
@@ -53,6 +54,9 @@ type Config struct {
 	Hostname       string
 	Pool           string
 	Labels         []string
+	// Address is this host's reachable IPv4 (the directors route its
+	// vm_prefix through it). Empty = detected toward the control plane.
+	Address string
 
 	Manager vmm.Manager
 	Net     netpol.Manager
@@ -141,6 +145,9 @@ func (c *Config) defaults() {
 	if c.Logf == nil {
 		c.Logf = log.Printf
 	}
+	if c.Address == "" {
+		c.Address = detectAddress(c.CPURL)
+	}
 }
 
 // Agent is one running boss-hostd fleet agent.
@@ -177,6 +184,13 @@ type Agent struct {
 	gone    map[string]hostapi.ReplicaStatus
 	taps    map[string]bool // taps seen at start (orphan sweep)
 	hbCount int
+
+	// Director pushes (directors.go).
+	pushMu  sync.Mutex
+	push    *lbd.Pusher
+	pushCA  string
+	pushSeq atomic.Int64
+	lanes   map[string]*memberLane
 
 	// Warm pools (pool.go).
 	warm         map[string]*warmVM    // slot id → warm VM
@@ -270,6 +284,7 @@ func (a *Agent) Enrol(ctx context.Context) error {
 	resp, err := a.client.Enrol(ctx, hostapi.EnrolRequest{
 		JoinToken: a.cfg.JoinToken, CSR: csr, SVIDCSR: caCSR, Hostname: a.cfg.Hostname,
 		Backend: a.cfg.Manager.Name(), Facts: a.facts(ctx), Capacity: a.capacity(), Labels: labels,
+		Role: hostapi.RoleHost, Address: a.cfg.Address,
 		Capabilities: []string{hostapi.CapHostTokens},
 	})
 	if err != nil {
@@ -517,7 +532,7 @@ func (a *Agent) StateGen() int64 { return a.stateGen.Load() }
 
 // detailOnly are event kinds that change no replica state: they neither
 // bump state_gen nor push /observed.
-var detailOnly = map[string]bool{"handed_back": true, "handle_replay": true, "orphan_tap_removed": true,
+var detailOnly = map[string]bool{"handed_back": true, "handle_replay": true, "orphan_tap_removed": true, "director_push": true,
 	"vm_timing": true, "warm_ready": true, "warm_failed": true, "warm_dropped": true, "snapshot": true,
 	"snapshot_failed": true, "snapshot_gc": true}
 

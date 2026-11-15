@@ -15,9 +15,17 @@ boss-agent-hosts-lld.md §3.2, §3.13.3). ONE router for the phase.
       POST …/interrupts, GET …/interrupts/answers
       POST …/budget/reserve | …/budget/settle | …/ledger | …/ledger/seq | …/spans | …/events
       GET  …/tools, POST …/tools/{name}/invoke              BOSS-state tools (D1a)
+  DIRECTORS (boss-lbd → control plane; P8b-10, authenticated as a director, `fleet:host`)
+      POST /v1/hosts/enrol with role "director"      a join token issued for a director
+      POST /v1/directors/{director_id}/heartbeat | /renew
+      GET  /v1/directors/{director_id}/desired?since=&wait=   VIPs → serving real servers, routes, VRRP groups
+  VIP MEMBERS (boss-hostd; the durable record of a withdraw or registration, `fleet:host`)
+      PUT/DELETE /v1/vips/{vip}/members/{replica_id}
   CONSOLE (a person; `fleet:read` / `fleet:manage`, org)
       GET  /v1/fleet/hosts(/{agent_host_id}), POST /v1/fleet/join-tokens (+ DELETE …/{token_id}),
       POST /v1/fleet/hosts/{agent_host_id}/revoke | /cordon | /uncordon, POST /v1/fleet/reconcile
+      GET  /v1/fleet/directors, POST /v1/fleet/directors/{director_id}/retire
+      GET/POST /v1/fleet/vip-pools
       PUT  /v1/agents/{role_key}/deployments/{environment}/runtime   `agent:deploy`
 
 HOST AUTHENTICATION is decided here in EVERY authz mode (never left to the guard's mode): the
@@ -48,8 +56,32 @@ class EnrolBody(BaseModel):
     facts: dict[str, Any] = Field(default_factory=dict)
     capacity: dict[str, Any] = Field(default_factory=dict)
     labels: dict[str, Any] = Field(default_factory=dict)
+    role: str = "host"  # host | director (P8b-10)
+    address: Optional[str] = None
     #: What the host can do (P8b S13: "host_tokens" — it holds per-run DPoP keys).
     capabilities: list[str] = Field(default_factory=list)
+
+
+class DirectorHeartbeatBody(BaseModel):
+    address: Optional[str] = None
+    groups_master: list[int] = Field(default_factory=list)
+    keepalived_live: bool = False
+    ipvs: dict[str, Any] = Field(default_factory=dict)
+    observed_generation: int = 0
+
+
+class VIPMemberBody(BaseModel):
+    vm_ip: Optional[str] = None
+    weight: int = Field(default=0, ge=0, le=65535)
+    ports: list[int] = Field(default_factory=list)
+    reason: str = ""
+    seq: Optional[int] = Field(default=None, ge=0)
+
+
+class VIPPoolBody(BaseModel):
+    cidr: str
+    routing: str = "ipvs"
+    actor: Optional[str] = None
 
 
 class RenewBody(BaseModel):
@@ -66,6 +98,7 @@ class HeartbeatBody(BaseModel):
     warm_pools: dict[str, Any] = Field(default_factory=dict)
     bgp_state: Optional[str] = None
     observed_generation: int = 0
+    address: Optional[str] = None
     capabilities: list[str] = Field(default_factory=list)
 
 
@@ -165,6 +198,7 @@ class JoinTokenBody(BaseModel):
     labels: dict[str, str] = Field(default_factory=dict)
     hours: int = Field(default=24, ge=1, le=168)
     actor: Optional[str] = None
+    role: str = "host"  # host | director
 
 
 class RevokeBody(BaseModel):
@@ -189,7 +223,8 @@ class RuntimeBody(BaseModel):
 
 def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., str]] = None,
                        settings: Optional[Callable[[], Any]] = None) -> APIRouter:
-    from boss_engine.services import agent_deployments, fleet_ca, fleet_scheduler, run_plane
+    from boss_engine.services import (agent_deployments, fleet_ca, fleet_directors, fleet_scheduler,
+                                      run_plane)
 
     router = APIRouter(tags=["fleet"])
 
@@ -226,6 +261,23 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
                 "error": "not_this_host", "message": "a host acts only for itself"})
         return fleet_ca.HostIdentity(cred.id, ctx.principal.org_id, "", "ready")
 
+    def _director(request: Request, director_id: Optional[str] = None) -> fleet_ca.HostIdentity:
+        ctx = _auth(request)
+        cred = getattr(ctx, "credential", None)
+        if ctx is None or cred is None or cred.kind != "director_cert":
+            raise HTTPException(status_code=401, detail={
+                "error": "director_credential_required",
+                "message": "this route answers only an enrolled director (boss-lbd)"})
+        if director_id is not None and director_id != cred.id:
+            raise HTTPException(status_code=403, detail={
+                "error": "not_this_director", "message": "a director acts only for itself"})
+        return fleet_ca.HostIdentity(cred.id, ctx.principal.org_id, "", "ready", "director")
+
+    def _wake(out: dict) -> dict:
+        """Directors (and hosts) a committed change must wake: after the commit, never inside."""
+        run_plane.wake_desired(out.pop("_wake", None) or [])
+        return out
+
     def _org(request: Request, connection: Any) -> str:
         ctx = _auth(request)
         if ctx is not None:
@@ -242,7 +294,7 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
         return str(ctx.principal.id) if ctx is not None else str(claimed or "operator")
 
     def _fleet_fail(error: Exception):
-        if isinstance(error, _fleet.FleetError):
+        if isinstance(error, (_fleet.FleetError, fleet_directors.DirectorError)):
             raise HTTPException(status_code=error.status,
                                 detail={"error": error.code, "message": str(error)}) from error
         if isinstance(error, run_plane.RunPlaneError):
@@ -320,12 +372,13 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
                 out = _fleet.enrol(connection, join_token=body.join_token, csr_pem=body.csr_pem,
                                    svid_csr_pem=body.svid_csr_pem, hostname=body.hostname,
                                    backend=body.backend, facts=body.facts,
-                                   capacity=body.capacity, labels=body.labels,
-                                   capabilities=body.capabilities)
+                                   capacity=body.capacity, labels=body.labels, role=body.role,
+                                   address=body.address, capabilities=body.capabilities)
         except Exception as error:  # noqa: BLE001
             _fleet_fail(error)
             raise
         fleet_scheduler.reconcile(engine, _settings())
+        run_plane.WAITERS.wake_all()  # a new director or host changes every desired state
         return out
 
     @router.post("/v1/hosts/{agent_host_id}/renew")
@@ -350,6 +403,7 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
         except Exception as error:  # noqa: BLE001
             _fleet_fail(error)
             raise
+        _wake(out)
         fleet_scheduler.maybe_reconcile(engine, _settings())
         return out
 
@@ -377,8 +431,77 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
         except Exception as error:  # noqa: BLE001
             _fleet_fail(error)
             raise
+        _wake(out)
         run_plane.wake_host(host.host_id)
         return out
+
+    # ── directors (boss-lbd, P8b-10) ──────────────────────────────────────────────────────
+
+    @router.post("/v1/directors/{director_id}/heartbeat")
+    @permit(P.FLEET_HOST, scope=Scope.org())
+    def director_heartbeat(director_id: str, body: DirectorHeartbeatBody,
+                           request: Request) -> dict[str, Any]:
+        """Liveness, IPVS/keepalived facts, and the director lease of every group it is MASTER
+        of (5 s TTL); answers every group's holder."""
+        director = _director(request, director_id)
+        try:
+            with begin(engine) as connection:
+                return fleet_directors.heartbeat(connection, director, body.model_dump())
+        except Exception as error:  # noqa: BLE001
+            _fleet_fail(error)
+            raise
+
+    @router.get("/v1/directors/{director_id}/desired")
+    @permit(P.FLEET_HOST, scope=Scope.org())
+    async def director_desired(director_id: str, request: Request, since: int = 0,
+                               wait: float = 0.0) -> dict[str, Any]:
+        """Level-based: every VIP with its serving real servers, the route per host, the VRRP
+        groups, once the director's generation is past `since` (long-poll)."""
+        await run_in_threadpool(_director, request, director_id)
+        try:
+            return await fleet_directors.watch(engine, director_id, since=since, wait=wait)
+        except Exception as error:  # noqa: BLE001
+            _fleet_fail(error)
+            raise
+
+    @router.post("/v1/directors/{director_id}/renew")
+    @permit(P.FLEET_HOST, scope=Scope.org())
+    def director_renew(director_id: str, body: RenewBody, request: Request) -> dict[str, Any]:
+        director = _director(request, director_id)
+        try:
+            with begin(engine) as connection:
+                return fleet_directors.renew(connection, director, csr_pem=body.csr_pem)
+        except Exception as error:  # noqa: BLE001
+            _fleet_fail(error)
+            raise
+
+    def _vip_member(request: Request, vip: str, replica_id: str, method: str, vm_ip: Optional[str],
+                    weight: Optional[int], reason: str, seq: Optional[int] = None) -> dict:
+        host = _host(request)
+        try:
+            with begin(engine) as connection:
+                out = fleet_directors.vip_member(connection, host, vip=vip, replica_id=replica_id,
+                                                 method=method, vm_ip=vm_ip, weight=weight,
+                                                 reason=reason, seq=seq)
+        except Exception as error:  # noqa: BLE001
+            _fleet_fail(error)
+            raise
+        return _wake(out)
+
+    @router.put("/v1/vips/{vip}/members/{replica_id}")
+    @permit(P.FLEET_HOST, scope=Scope.org())
+    def vip_member_put(vip: str, replica_id: str, body: VIPMemberBody,
+                       request: Request) -> dict[str, Any]:
+        """The host registers (weight > 0) or drains (weight 0) one of its replicas behind the
+        VIP: the durable record of what it also pushed to the directors directly."""
+        return _vip_member(request, vip, replica_id, "PUT", body.vm_ip, body.weight, body.reason,
+                           body.seq)
+
+    @router.delete("/v1/vips/{vip}/members/{replica_id}")
+    @permit(P.FLEET_HOST, scope=Scope.org())
+    def vip_member_delete(vip: str, replica_id: str, request: Request, vm_ip: Optional[str] = None,
+                          reason: str = "", seq: Optional[int] = None) -> dict[str, Any]:
+        return _vip_member(request, vip, replica_id, "DELETE", vm_ip, 0, reason, seq)
 
     @router.put("/v1/hosts/{agent_host_id}/replicas")
     @permit(P.FLEET_HOST, scope=Scope.org())
@@ -395,6 +518,7 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
             _fleet_fail(error)
             raise
         run_plane.wake_host(host.host_id)
+        _wake(out)
         return out
 
     @router.post("/v1/hosts/{agent_host_id}/guest-calls")
@@ -720,7 +844,8 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
             with begin(engine) as connection:
                 return _fleet.issue_join_token(connection, org_id=_org(request, connection),
                                                actor=_who(request, body.actor), pool=body.pool,
-                                               labels=body.labels, hours=body.hours)
+                                               labels=body.labels, hours=body.hours,
+                                               role=body.role)
         except Exception as error:  # noqa: BLE001
             _fleet_fail(error)
             raise
@@ -747,7 +872,7 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
             _fleet_fail(error)
             raise
         out["reconcile"] = fleet_scheduler.reconcile(engine, _settings())
-        run_plane.wake_desired([agent_host_id])
+        run_plane.wake_desired([agent_host_id, *out.pop("directors_woken", [])])
         return out
 
     def _cordon(agent_host_id: str, request: Request, body: ActorBody, cordoned: bool) -> dict:
@@ -771,6 +896,51 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
     @permit(P.FLEET_MANAGE, scope=Scope.org())
     def uncordon(agent_host_id: str, body: ActorBody, request: Request) -> dict[str, Any]:
         return _cordon(agent_host_id, request, body, False)
+
+    @router.get("/v1/fleet/directors")
+    @permit(P.FLEET_READ, scope=Scope.org())
+    def list_directors(request: Request) -> dict[str, Any]:
+        with begin(engine) as connection:
+            return {"directors": fleet_directors.list_directors(connection,
+                                                               _org(request, connection))}
+
+    @router.post("/v1/fleet/directors/{director_id}/retire")
+    @permit(P.FLEET_MANAGE, scope=Scope.org())
+    def retire_director(director_id: str, body: RevokeBody, request: Request) -> dict[str, Any]:
+        """Retire a director: its certificate and every later call are refused; the peer takes
+        every VRRP group at its next desired state."""
+        try:
+            with begin(engine) as connection:
+                out = fleet_directors.retire(connection, org_id=_org(request, connection),
+                                             director_id=director_id,
+                                             actor=_who(request, body.actor), reason=body.reason)
+        except Exception as error:  # noqa: BLE001
+            _fleet_fail(error)
+            raise
+        run_plane.WAITERS.wake_all()
+        return out
+
+    @router.get("/v1/fleet/vip-pools")
+    @permit(P.FLEET_READ, scope=Scope.org())
+    def list_vip_pools(request: Request) -> dict[str, Any]:
+        with begin(engine) as connection:
+            return {"pools": fleet_directors.list_vip_pools(connection, _org(request, connection))}
+
+    @router.post("/v1/fleet/vip-pools", status_code=201)
+    @permit(P.FLEET_MANAGE, scope=Scope.org())
+    def add_vip_pool(body: VIPPoolBody, request: Request) -> dict[str, Any]:
+        """A VIP range (D8): production microVM agents take the next free address on their first
+        placement."""
+        try:
+            with begin(engine) as connection:
+                out = fleet_directors.add_vip_pool(connection, org_id=_org(request, connection),
+                                                   cidr=body.cidr, routing=body.routing,
+                                                   actor=_who(request, body.actor))
+        except Exception as error:  # noqa: BLE001
+            _fleet_fail(error)
+            raise
+        out["reconcile"] = fleet_scheduler.reconcile(engine, _settings())
+        return out
 
     @router.post("/v1/fleet/reconcile")
     @permit(P.FLEET_MANAGE, scope=Scope.org())

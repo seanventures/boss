@@ -153,5 +153,47 @@ func ReplicaNetSetup(b *Bootstrap) error {
 	if err := netlink.RouteReplace(&netlink.Route{LinkIndex: link.Attrs().Index, Gw: gw, Flags: int(netlink.FLAG_ONLINK)}); err != nil {
 		return fmt.Errorf("default route: %w", err)
 	}
+	if b.VIP != "" {
+		if err := replicaVIPSetup(ip, b.VIP); err != nil {
+			// The VM still serves the internal pull loop without its VIP; the
+			// directors' health check keeps it out of the VIP until this works.
+			log.Printf("boss-vsockd: vip %s: %v", b.VIP, err)
+		}
+	}
+	return nil
+}
+
+// GREDevice is the guest's decapsulating tunnel (P8b-10, HOST_API.md §9).
+const GREDevice = "bgre0"
+
+// replicaVIPSetup makes the VM a GRE-mode IPVS real server (LLD §3.7.1,
+// amended to GRE): the VIP on lo (never announced: arp_ignore=1 and
+// arp_announce=2 are set above) and a GRE device with local = vm_ip and no
+// fixed remote, so encapsulated callers from either director decapsulate to
+// the VIP. Replies leave eth0 with source = VIP (DSR); the host's nftables
+// let them out only on a flow it learned from the caller's SYN.
+func replicaVIPSetup(vmIP net.IP, vip string) error {
+	v := net.ParseIP(vip).To4()
+	if v == nil {
+		return fmt.Errorf("vip %q is not IPv4", vip)
+	}
+	lo, err := netlink.LinkByName("lo")
+	if err != nil {
+		return fmt.Errorf("lo: %w", err)
+	}
+	if err := netlink.AddrReplace(lo, &netlink.Addr{IPNet: &net.IPNet{IP: v, Mask: net.CIDRMask(32, 32)}}); err != nil {
+		return fmt.Errorf("vip on lo: %w", err)
+	}
+	gre, err := netlink.LinkByName(GREDevice)
+	if err != nil {
+		gre = &netlink.Gretun{LinkAttrs: netlink.LinkAttrs{Name: GREDevice}, Local: vmIP, Ttl: 64}
+		if err := netlink.LinkAdd(gre); err != nil {
+			return fmt.Errorf("gre device (ip_gre in the guest kernel?): %w", err)
+		}
+	}
+	if err := netlink.LinkSetUp(gre); err != nil {
+		return fmt.Errorf("gre up: %w", err)
+	}
+	_ = os.WriteFile("/proc/sys/net/ipv4/conf/"+GREDevice+"/rp_filter", []byte("0"), 0o644)
 	return nil
 }

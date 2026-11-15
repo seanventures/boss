@@ -15187,6 +15187,72 @@ CREATE INDEX IF NOT EXISTS idx_model_gateway_handles_run ON model_gateway_handle
 CREATE INDEX IF NOT EXISTS idx_jobs_payload_run_id ON jobs ((payload->>'run_id'));
 -- ================================ end P8b ==
 
+-- ================================ P8b-10: IPVS directors (boss-lbd), BOSSAPP-1077 =====-- boss-agent-hosts-lld.md §3.14.2 (directors), §3.14.4 (split brain, director lease), §3.1
+-- (`lb_directors`, here `director_nodes`; `vip_pool`). docs/infra/HOST_API.md §9. Additive.
+
+-- THE DIRECTOR PAIR. A director enrols like a host (join token with role 'director'), holds a
+-- fleet certificate (agent_certs.kind 'director'), heartbeats every 2 s and long-polls its own
+-- desired state (`desired_generation`, bumped whenever a serving set, a VIP, a host route or
+-- the pair itself changes). `address` is its IPv4: GRE source toward the hosts, the VRRP
+-- unicast peer, and the mTLS withdraw-push listener (port 7446).
+CREATE TABLE IF NOT EXISTS director_nodes (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  hostname TEXT NOT NULL DEFAULT '',
+  address INET,
+  labels JSONB NOT NULL DEFAULT '{}'::jsonb,
+  cert_fingerprint TEXT,
+  cert_not_after TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'ready'
+    CHECK (status IN ('ready', 'draining', 'unreachable', 'retired')),
+  keepalived_live BOOLEAN NOT NULL DEFAULT false,
+  ipvs_state JSONB NOT NULL DEFAULT '{}'::jsonb,
+  groups_master JSONB NOT NULL DEFAULT '[]'::jsonb,
+  desired_generation BIGINT NOT NULL DEFAULT 1,
+  observed_generation BIGINT NOT NULL DEFAULT 0,
+  last_heartbeat_at TIMESTAMPTZ,
+  enrolled_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at TIMESTAMPTZ,
+  revoked_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_director_nodes_org ON director_nodes (org_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_director_nodes_fingerprint ON director_nodes (cert_fingerprint)
+  WHERE cert_fingerprint IS NOT NULL;
+
+-- THE DIRECTOR LEASE (§3.14.4): one holder per (org, VRRP group), 5 s TTL, renewed by the
+-- holder's heartbeat. A MASTER whose group another director holds goes FAULT (boss-lbd's
+-- keepalived track script), so at most one director stays MASTER of a group.
+CREATE TABLE IF NOT EXISTS director_leases (
+  org_id TEXT NOT NULL,
+  vrrp_group INTEGER NOT NULL,
+  holder TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (org_id, vrrp_group)
+);
+
+-- Director certificates live in agent_certs with their own kind (host_id = the director id).
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_certs_kind_check') THEN
+    ALTER TABLE agent_certs DROP CONSTRAINT agent_certs_kind_check;
+  END IF;
+  ALTER TABLE agent_certs ADD CONSTRAINT agent_certs_kind_check
+    CHECK (kind IN ('host', 'host_svid', 'replica', 'director'));
+END $$;
+
+-- The host's reachable IPv4: the directors route its vm_prefix through it (one static route per
+-- host, §3.7.1). Reported by boss-hostd at enrol and in every heartbeat (BOSS_HOSTD_ADDRESS or
+-- detected toward the control plane).
+ALTER TABLE agent_hosts ADD COLUMN IF NOT EXISTS address INET;
+-- A join token is issued for one role: 'host' (boss-hostd) or 'director' (boss-lbd).
+ALTER TABLE agent_host_join_tokens ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'host';
+-- The newest host push applied per replica (the host's sequence): a late, older push is refused.
+ALTER TABLE agent_replicas ADD COLUMN IF NOT EXISTS rs_seq BIGINT NOT NULL DEFAULT 0;
+-- The VIP's VRRP group, fixed at allocation (stable: adding a VIP never moves another's MASTER).
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS vrrp_group INTEGER;
+-- ================================ end P8b-10 ==
+=======
 -- =====================================================================================-- P8b-6/7: THE MCP/TOOL GATEWAY HANDLES AND HOST-HELD TOKENS (BOSSAPP-1073, BOSSAPP-1074;
 -- boss-agent-hosts-lld.md §3.10, §3.12.2). The `boss_mcpgw_` placeholder a guest holds instead of
 -- any MCP upstream credential, redeemed only at the control plane's /mcp/<server> route through

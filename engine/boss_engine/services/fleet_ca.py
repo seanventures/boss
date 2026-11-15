@@ -34,6 +34,7 @@ expired, not revoked, and its host not revoked or retired.
 from __future__ import annotations
 
 import datetime as _dt
+import ipaddress
 import hashlib
 import os
 import secrets
@@ -209,7 +210,7 @@ class Issued:
 
 
 def _issue(connection: Any, *, org_id: str, host_id: str, csr_pem: str, kind: str,
-           hours: int = HOST_CERT_HOURS) -> Issued:
+           hours: int = HOST_CERT_HOURS, address: Optional[str] = None) -> Issued:
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
@@ -224,22 +225,29 @@ def _issue(connection: Any, *, org_id: str, host_id: str, csr_pem: str, kind: st
                .subject_name(x509.Name([
                    x509.NameAttribute(NameOID.ORGANIZATION_NAME, f"BOSS org {org_id}"),
                    x509.NameAttribute(NameOID.COMMON_NAME,
-                                      host_id if kind == "host" else f"{host_id} SVID issuer")]))
+                                      host_id if kind in ("host", "director")
+                                      else f"{host_id} SVID issuer")]))
                .issuer_name(ca.cert.subject).public_key(csr.public_key()).serial_number(serial)
                .not_valid_before(now - _dt.timedelta(minutes=5)).not_valid_after(not_after)
                .add_extension(x509.SubjectAlternativeName(
-                   [x509.UniformResourceIdentifier(spiffe)]), critical=False)
+                   [x509.UniformResourceIdentifier(spiffe)]
+                   + ([x509.IPAddress(ipaddress.ip_address(address))] if address else [])),
+                   critical=False)
                .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(
                    ca.key.public_key()), critical=False))
-    if kind == "host":
+    if kind in ("host", "director"):
+        # A director (boss-lbd) also SERVES: hosts push withdraws to it over mTLS and verify
+        # its certificate against the fleet CA, so it carries server auth too (P8b-10).
+        ekus = [ExtendedKeyUsageOID.CLIENT_AUTH]
+        if kind == "director":
+            ekus.append(ExtendedKeyUsageOID.SERVER_AUTH)
         builder = (builder
                    .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
                    .add_extension(x509.KeyUsage(
                        digital_signature=True, content_commitment=False, key_encipherment=False,
                        data_encipherment=False, key_agreement=False, key_cert_sign=False,
                        crl_sign=False, encipher_only=False, decipher_only=False), critical=True)
-                   .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]),
-                                  critical=False))
+                   .add_extension(x509.ExtendedKeyUsage(ekus), critical=False))
     else:
         # The host's SVID issuer: it may sign VM leaf SVIDs only (pathlen 0), only inside the
         # install's trust domain. URI name constraints bind the host part; the `/host/<id>/`
@@ -267,6 +275,13 @@ def _issue(connection: Any, *, org_id: str, host_id: str, csr_pem: str, kind: st
     return Issued(pem, fp, not_after, format(serial, "x"))
 
 
+def issue_director_cert(connection: Any, *, org_id: str, director_id: str, csr_pem: str,
+                        address: Optional[str] = None) -> Issued:
+    """A director's 24 h certificate (client + server auth, IP SAN = its address)."""
+    return _issue(connection, org_id=org_id, host_id=director_id, csr_pem=csr_pem,
+                  kind="director", address=address)
+
+
 def issue_host_cert(connection: Any, *, org_id: str, host_id: str, csr_pem: str) -> Issued:
     return _issue(connection, org_id=org_id, host_id=host_id, csr_pem=csr_pem, kind="host")
 
@@ -288,22 +303,30 @@ class HostIdentity:
     org_id: str
     fingerprint: str
     status: str
+    role: str = "host"  # host | director (P8b-10: the same certificate shape, its own table)
 
 
 #: The certificate must be one this CA issued, unexpired, AND the host's CURRENT one: a renewal
 #: supersedes the certificate it replaced (agent_hosts.cert_fingerprint is the pin).
-_HOST_SQL = text("""
-    SELECT c.host_id, c.org_id, c.fingerprint, c.public_key_pem, h.status, h.revoked_at,
-           c.revoked_at AS cert_revoked_at, (h.cert_fingerprint = c.fingerprint) AS current
-      FROM agent_certs c JOIN agent_hosts h ON h.id = c.host_id
-     WHERE c.fingerprint = :f AND c.kind = 'host' AND c.not_after > now()""")
-
-_PINNED_AND_SPENT = text("""
-    WITH cert AS (
+#: Hosts (agent_hosts) and directors (director_nodes, P8b-10) share the certificate shape; the
+#: row says which (`role`), and the fleet router holds each to its own routes.
+_CERT_ROWS = """
       SELECT c.host_id, c.org_id, c.fingerprint, c.public_key_pem, h.status, h.revoked_at,
-             c.revoked_at AS cert_revoked_at, (h.cert_fingerprint = c.fingerprint) AS current
+             c.revoked_at AS cert_revoked_at, (h.cert_fingerprint = c.fingerprint) AS current,
+             'host' AS role
         FROM agent_certs c JOIN agent_hosts h ON h.id = c.host_id
-       WHERE c.fingerprint = :f AND c.kind = 'host' AND c.not_after > now()),
+       WHERE c.fingerprint = :f AND c.kind = 'host' AND c.not_after > now()
+      UNION ALL
+      SELECT c.host_id, c.org_id, c.fingerprint, c.public_key_pem, n.status, n.revoked_at,
+             c.revoked_at AS cert_revoked_at, (n.cert_fingerprint = c.fingerprint) AS current,
+             'director' AS role
+        FROM agent_certs c JOIN director_nodes n ON n.id = c.host_id
+       WHERE c.fingerprint = :f AND c.kind = 'director' AND c.not_after > now()"""
+
+_HOST_SQL = text(_CERT_ROWS)
+
+_PINNED_AND_SPENT = text(f"""
+    WITH cert AS ({_CERT_ROWS}),
     spent AS (
       -- the jti is spent only once the certificate matched: an unknown certificate fills
       -- nothing (the replay cache is not a sink for strangers' proofs)
@@ -326,7 +349,8 @@ def _host_of(row: Any) -> tuple[HostIdentity, str]:
     if not row["current"]:
         raise FleetAuthError("host_certificate_superseded")
     return (HostIdentity(str(row["host_id"]), str(row["org_id"]), str(row["fingerprint"]),
-                         str(row["status"])), str(row["public_key_pem"]))
+                         str(row["status"]), str(row.get("role") or "host")),
+            str(row["public_key_pem"]))
 
 
 def _verify_signature(public_pem: str, alg: str, signing_input: bytes, signature: bytes) -> None:
