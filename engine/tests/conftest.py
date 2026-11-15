@@ -36,6 +36,11 @@ def name_the_driver(environ) -> None:
 
 name_the_driver(os.environ)
 
+# A RUNAWAY QUERY FAILS FAST (BOSSAPP-1144). A test-helper catalog join ran for minutes on the
+# shared bench DB and spilled 6-11 GB of temp files. libpq reads PGOPTIONS for every connection
+# this process opens that does not name its own `options`, so one line covers every engine.
+os.environ.setdefault("PGOPTIONS", "-c statement_timeout=60000")
+
 from sqlalchemy import text
 
 # Identity needs a PERSISTENT server key and refuses to run without one (F3/L2). Tests get a fixed,

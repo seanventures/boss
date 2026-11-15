@@ -32,6 +32,8 @@ from boss_engine.services import workflow_outcomes as outcomes
 from boss_engine.services import workflows
 from boss_engine.services.workflow_capabilities import CAPABILITIES, CAPABILITY_KEYS
 
+from ._pg_foreign_keys import foreign_key_parents
+
 # Fixtures and helpers are shared with the runner's own suite, so these tests exercise the same
 # real database and the same recording tool registry. Only non-test names are imported, so
 # nothing from that module is collected twice.
@@ -226,14 +228,7 @@ def _insert_awaited(c, project_id: str, table: str, row_id: str, status: str) ->
     values: dict = {"id": row_id, "status": status}
     # A REQUIRED REFERENCE GETS A REAL PARENT ROW. A deployment run must name a deployment
     # target that exists; "x" breaks the foreign key. Parents are made the same generic way.
-    parents = dict(c.execute(
-        text("SELECT kcu.column_name, ccu.table_name FROM information_schema.table_constraints tc "
-             "JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = "
-             "tc.constraint_name AND kcu.table_schema = tc.table_schema "
-             "JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = "
-             "tc.constraint_name AND ccu.table_schema = tc.table_schema "
-             "WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = :t "
-             "AND tc.table_schema = current_schema()"), {"t": table}).all())
+    parents = foreign_key_parents(c, table)
     for col in columns:
         name, kind = col["column_name"], col["data_type"]
         if name in values:

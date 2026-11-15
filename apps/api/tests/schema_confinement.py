@@ -27,6 +27,9 @@ from sqlalchemy import create_engine, text
 
 log = logging.getLogger(__name__)
 
+#: A runaway query fails instead of filling the disk with temp files (BOSSAPP-1144).
+STATEMENT_TIMEOUT_MS = 60000
+
 
 def with_search_path(url: str, schema: str) -> str:
     """Pin every connection made from `url` to `schema`.
@@ -37,7 +40,8 @@ def with_search_path(url: str, schema: str) -> str:
     """
     parts = urlsplit(url)
     query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "options"]
-    query.append(("options", f"-csearch_path={schema}"))
+    # The URL's options replace PGOPTIONS, so the suite's statement timeout rides along here.
+    query.append(("options", f"-csearch_path={schema} -cstatement_timeout={STATEMENT_TIMEOUT_MS}"))
     return urlunsplit(parts._replace(query=urlencode(query)))
 
 

@@ -13,6 +13,12 @@ os.environ.setdefault("BOSS_IDENTITY_SERVER_KEY", "dGVzdC1vbmx5LWlkZW50aXR5LXNlc
 # extension of the secret-reference env allowlist (services/env_refs.py), as an install would.
 os.environ.setdefault("BOSS_SECRET_REF_ENV_ALLOW", "BOSS_TEST_*,BOSS_E2E_*")
 
+# A RUNAWAY QUERY FAILS FAST (BOSSAPP-1144). A test-helper catalog join ran for minutes on the
+# shared bench DB and spilled 6-11 GB of temp files. libpq reads PGOPTIONS for every connection
+# this process opens that does not name its own `options`; the private-schema URL carries the
+# same timeout in its own `options` (schema_confinement.with_search_path).
+os.environ.setdefault("PGOPTIONS", "-c statement_timeout=60000")
+
 # CONFINE THIS RUN BEFORE ANYTHING READS DATABASE_URL.
 #
 # The application builds its own engine when `apps.api.app.main` is imported, a few lines
