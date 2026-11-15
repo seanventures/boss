@@ -39,7 +39,7 @@ STAGE_STATION: dict[str, str] = {
     "run_tests": "check", "check_tests": "check", "run_all_tests": "check", "iac_verify": "check",
     "serve_check": "check", "validating": "check", "test_arbitration": "check",
     "review_code": "review", "security_check": "review", "consistency_check": "review",
-    "regression": "review", "review_panel": "review", "convergence": "review",
+    "acceptance_check": "review", "regression": "review", "review_panel": "review", "convergence": "review",
     "awaiting_gate_override": "review",
     "opening_pr": "pr",
 }
@@ -368,6 +368,7 @@ GATE_LABELS: dict[str, tuple[str, str]] = {
     "code_review_passed": ("Review passed", "review"),
     "security_clean": ("Security clean", "review"),
     "consistent": ("Consistent", "review"),
+    "acceptance_met": ("Must-haves met", "review"),
     "nothing_broke": ("Nothing broke", "check"),
     "app_serves": ("App starts", "check"),
     "web_package_honest": ("Package honest", "build"),

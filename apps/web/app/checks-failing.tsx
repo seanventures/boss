@@ -88,3 +88,51 @@ export function ChecksFailing({ record }: { record: ChecksFailingRecord }) {
     </div>
   );
 }
+
+/**
+ * THE MUST-HAVE TABLE (engine services/acceptance_gate.py, BOSSAPP-1211): what the acceptance
+ * check found for each must-have of the brief and the PRD's tested-and-gating list, on the whole
+ * branch, with the files it cites. Missing first, so the card leads with what is not delivered.
+ */
+export type MustHaveItem = { n: number; text: string; status: string; evidence: string };
+
+export function mustHavesOf(recommendation: Record<string, unknown> | null | undefined
+): { verdict: string; items: MustHaveItem[] } | null {
+  const raw = recommendation?.acceptance;
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const items = (Array.isArray(r.items) ? r.items : [])
+    .filter((i): i is Record<string, unknown> => !!i && typeof i === "object")
+    .map((i) => ({ n: typeof i.n === "number" ? i.n : 0, text: str(i.text),
+                   status: str(i.status), evidence: str(i.evidence) }))
+    .filter((i) => i.text);
+  if (!items.length) return null;
+  const rank: Record<string, number> = { missing: 0, partial: 1, unjudged: 2, met: 3 };
+  items.sort((a, b) => (rank[a.status] ?? 2) - (rank[b.status] ?? 2) || a.n - b.n);
+  return { verdict: str(r.verdict), items };
+}
+
+export function MustHaves({ data }: { data: { verdict: string; items: MustHaveItem[] } }) {
+  const missing = data.items.filter((i) => i.status === "missing").length;
+  return (
+    <details className="dq-guidance" open={missing > 0} data-testid="decision-must-haves">
+      <summary>
+        Must-haves: {data.items.filter((i) => i.status === "met").length} met,{" "}
+        {data.items.filter((i) => i.status === "partial").length} partial, {missing} missing
+      </summary>
+      <table className="v2-table">
+        <thead><tr><th>#</th><th>Must-have</th><th>Status</th><th>Evidence</th></tr></thead>
+        <tbody>
+          {data.items.map((i) => (
+            <tr key={i.n} data-status={i.status}>
+              <td>{i.n}</td>
+              <td>{i.text}</td>
+              <td><b>{i.status === "missing" ? "MISSING" : i.status}</b></td>
+              <td className="v2-mono">{i.evidence}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </details>
+  );
+}

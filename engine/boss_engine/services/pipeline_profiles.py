@@ -190,7 +190,13 @@ PROFILES: dict[str, dict] = {
         # prototype run — they are all dropped. What remains is `regression`, which is not an
         # LLM call at all: it just executes the suite, so it costs seconds and it is the one
         # signal that says "this actually runs".
-        "panel_checks": ["regression"],
+        #
+        # AND THE ACCEPTANCE CHECK (acceptance_gate.py, BOSSAPP-1211). Northgate shipped under
+        # lean missing ~15 must-haves; the opinions were advisory and nothing asked whether the
+        # brief was delivered. One read-only session holds the whole branch against the root's
+        # must-haves and the PRD's tested-and-gating list; a missing item is a fact (advisory
+        # hard floor): a labelled checks-failing draft PR + a follow-up, never "passed".
+        "panel_checks": ["regression", "acceptance_check"],
         # THE POINT OF LEAN. Over three days, 22 runs produced 2 PRs; runs died with
         # "PR not created: blocked" because the panel stayed unhappy and the gate refused to
         # open a PR. Here the reviewer's verdict is recorded on the PR and never withholds it.

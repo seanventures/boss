@@ -48,6 +48,7 @@ from ..templates import run_env as _run_env
 from . import agent_acts, baseline_verify, ci_gate, design_prompts, plane_sync, review_comments, verification_target
 from . import red_first, repair_review_scope, review_input, review_panel
 from . import approved_prd_design
+from . import acceptance_gate as _acceptance_gate
 from .knowledge import learning_context, learning_writeback  # learning while executing (BOSSAPP-768)
 from .bakeoff import (
     fixture_for_run as bakeoff_fixture_for_run,
@@ -327,6 +328,10 @@ def classify_gate_faults(
                 evidence.get("security_summary", ""),
                 evidence.get("security_verdict"),
             )
+        elif gate == "acceptance_met":
+            # A reviewer that answered no item said nothing about the code: re-run the check,
+            # never the coder. A missing item or a missing manifest is WORK.
+            inconclusive = (evidence.get("acceptance") or {}).get("verdict") == "not_run"
         elif gate == "app_serves":
             # The app did not answer is WORK. The check could not even start it (no tree to
             # copy, launcher failed) is BOSS's fault, and must not send the coder to fix it.
@@ -615,6 +620,13 @@ def review_panel_seats(lane: str, risk_tier: int, profile: dict, *, ci_files: bo
     if ci_files:
         seats |= {"review_code", "security_check"}
     seats |= {"review_code"}
+    # THE ACCEPTANCE CHECK SITS WHEREVER THE PROFILE ASKED FOR IT, the fix lane included: a
+    # follow-up is most often a fix-lane run, and it is exactly the run whose clean result must
+    # not read as "the must-haves are delivered" (acceptance_gate.py, BOSSAPP-1211).
+    base = (_ALL_PANEL_SEATS if risk_tier >= 2
+            else ((profile or {}).get("panel_checks") or _ALL_PANEL_SEATS))
+    if _acceptance_gate.SEAT in base:
+        seats |= {_acceptance_gate.SEAT}
     return seats
 
 
@@ -835,7 +847,10 @@ _DELIVERY_PHASES = frozenset({"opening_pr", "waiting_for_ci"})
 
 # The full adversarial panel. A profile may enable a subset via `panel_checks`; `regression`
 # is the only seat that is not an LLM call (it executes the test suite).
-_ALL_PANEL_SEATS = ("review_code", "security_check", "regression", "consistency_check")
+#: `acceptance_check` (acceptance_gate.py) holds the WHOLE branch against the root's must-haves and
+#: the PRD's tested-and-gating list; its gate is `acceptance_met`.
+_ALL_PANEL_SEATS = ("review_code", "security_check", "regression", "consistency_check",
+                    "acceptance_check")
 
 # The ONLY thing that stops an advisory profile opening a PR: there is no code to open one
 # with. That is not a gate exercising judgement, it is the absence of a deliverable.
@@ -852,8 +867,12 @@ _ALL_PANEL_SEATS = ("review_code", "security_check", "regression", "consistency_
 #: Named apart from _TEST_GATES (which decides when a repair re-authors tests): reusing the name
 #: silently replaced that set at import and stopped weak-suite gates from re-running write_tests.
 _FAIL_CLOSED_TEST_GATES = ("written_tests_pass", "nothing_broke", "coder_did_not_edit_tests")
+# A MISSING MUST-HAVE IS A FACT TOO (acceptance_gate.py, BOSSAPP-1211): Northgate shipped under
+# `lean` missing ~15 must-haves its reviewers had named, and its follow-up's card read "passed".
+# `acceptance_met` is here so an advisory build gets its repair rounds and then a labelled
+# checks-failing draft PR with a follow-up carrying the missing items — never a clean card.
 _ADVISORY_HARD_FLOOR = ("code_written", "app_serves", "template_tests", "no_committed_secrets",
-                        *_FAIL_CLOSED_TEST_GATES)
+                        *_FAIL_CLOSED_TEST_GATES, "acceptance_met")
 
 # Gates no autonomy setting may ship past. `app_serves` is not a reviewer's opinion: BOSS
 # started the build's own run command and nothing answered HTTP. The Lead Triage Inbox build
@@ -1215,7 +1234,8 @@ _JUDGMENT_GATES = frozenset({"code_review_passed", "security_clean", "consistent
 #: What the in-run warm round can work on. Anything else failing (a template gate, an IaC gate,
 #: tests written after the code) is not a finding a warm round fixes: the legacy paths judge it.
 _CONVERGEABLE = _JUDGMENT_GATES | frozenset({"written_tests_pass", "nothing_broke",
-                                             "web_package_honest", "app_serves"})
+                                             "web_package_honest", "app_serves",
+                                             "acceptance_met"})
 
 
 #: What a template gate's `because` names as the gate it is a consequence of.
@@ -3389,6 +3409,24 @@ def _findings_to_pass_two(engine, project_id: str, run_id: str, workflow_run_id:
     return False, "handed to the workflow's More tests pass, which works on this branch next"
 
 
+def advisory_followup_findings(failing, evidence: dict, deferred: list) -> list[dict]:
+    """The follow-up's findings for a build an advisory profile shipped past failing judgment
+    gates: each failing seat's findings verbatim (checks_failing.collect, security first), then
+    the below-threshold ones already deferred, without repeating any."""
+    from . import checks_failing as _cf
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    for f in _cf.followup_findings(_cf.collect(failing, evidence)) + list(deferred or []):
+        text = " ".join(str(f.get("text") or "").split())
+        key = re.sub(r"\W+", " ", text.lower()).strip()
+        if not key or any(key in k or k in key for k in seen):
+            continue
+        seen.add(key)
+        out.append(f)
+    return out
+
+
 def _spawn_deferred_findings_task(
     engine, settings, jobs, *, project_id, task_id, spec, base_branch,
     findings: list[dict], parent_run_id: str, parent_title: str,
@@ -3424,9 +3462,9 @@ def _spawn_deferred_findings_task(
         heading = "FAILING CHECKS AND OPEN FINDINGS"
     else:
         title_lead = "Follow-up: deferred review findings"
-        why = ("An adversarial review of the parent change graded these findings BELOW the "
-               "blocking threshold, so the change shipped and they were deferred to this task. "
-               "Fix them on top of the shipped branch.")
+        why = ("The parent change shipped with these review findings still open (graded below "
+               "the blocking threshold, or recorded as advisory by its profile), so they were "
+               "deferred to this task. Fix them on top of the shipped branch, most severe first.")
         heading = "DEFERRED FINDINGS"
     with _transaction(engine) as c:
         return start_code_task(
@@ -7896,6 +7934,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         cons_verdict = "skipped"
         review_confidence = None  # #9: fraction of the refute panel that could not refute
         deferred_findings: list[dict] = []  # sub-threshold review findings → follow-up task
+        # The acceptance check's record (acceptance_gate.judge), when its seat sat.
+        _acceptance_record: Optional[dict] = None
         panel_size = 1
         review_seat = None  # the panel seat whose findings stand for the review (§6.4)
         review_cost = 0
@@ -8673,6 +8713,58 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 gates["nothing_broke"] = regressions_ok
             # block on explicit drift, and on a check that never saw the change (review_input)
             gates["consistent"] = cons_verdict not in ("drift", "hollow")
+
+            # THE ACCEPTANCE CHECK (acceptance_gate.py, BOSSAPP-1211): the WHOLE branch held
+            # against the root run's must-haves and the PRD's tested-and-gating list, by an
+            # LLM reviewer on the consistency lane, plus the required stack's manifest. Before
+            # the gate decision, so a missing must-have is decided like any other fact.
+            def _run_acceptance_check() -> tuple[dict, int]:
+                _stack: dict = {}
+                try:
+                    with _transaction(engine) as c:
+                        _acc_spec = _acceptance_gate.items_spec(
+                            c, run_id=run_id, fctx=fctx, own_spec=spec)
+                    _items = _acceptance_gate.acceptance_items(_acc_spec)
+                    _stack = _acceptance_gate.stack_manifest_check(review_root, _acc_spec)
+                    if not _items:
+                        return _acceptance_gate.judge([], None, _stack), 0
+                    set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
+                                    run_id=run_id, stage=_acceptance_gate.SEAT)
+                    rr = consistency_agent.run_role(
+                        _acceptance_gate.acceptance_prompt(
+                            _items, title=title, stack=_stack,
+                            tree=_acceptance_gate.tree_listing(review_root)),
+                        review_root, read_only=True, model=consistency_model) or {}
+                    rec = _acceptance_gate.judge(_items, rr.get("summary", ""), _stack)
+                    rec["model"] = rr.get("model") or (rr.get("usage") or {}).get("model")
+                    rec["reply"] = (rr.get("summary") or "")[:6000]
+                    return rec, int(rr.get("cost_usd_micros") or 0)
+                except Exception as exc:  # noqa: BLE001 — a check that could not run is not a pass
+                    _log_caught(logger)
+                    rec = _acceptance_gate.judge([], None, _stack)
+                    if rec["verdict"] == "no_items":
+                        rec["verdict"] = "not_run"
+                    rec["error"] = f"{type(exc).__name__}: {exc}"[:300]
+                    return rec, 0
+
+            if _acceptance_gate.SEAT in enabled_seats:
+                with _transaction(engine) as c:
+                    _phase(c, _acceptance_gate.SEAT)
+                _acceptance_record, _acc_cost = _run_acceptance_check()
+                cost += _acc_cost
+                gates[_acceptance_gate.GATE] = _acceptance_gate.passed(_acceptance_record)
+                # PARTIAL items of a build that met its must-haves leave as follow-up work.
+                if gates[_acceptance_gate.GATE]:
+                    deferred_findings = (list(deferred_findings)
+                                         + _acceptance_gate.partial_followups(_acceptance_record))
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.acceptance_checked", "boss",
+                               "code_task_run", run_id,
+                               {"verdict": _acceptance_record.get("verdict"),
+                                "counts": _acceptance_record.get("counts"),
+                                "missing": _acceptance_record.get("missing"),
+                                "stack_missing": (_acceptance_record.get("stack") or {})
+                                .get("missing") or []})
         if iac_result is not None:
             gates.update(_iac_gates(iac_result))
 
@@ -8742,6 +8834,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # back to their own); absent = the pre-merge shape (refute panel / fix lane).
             **({"review_panel_merged": dict(_merged_record)} if _merged_record else {}),
             "review_change_files": len(_review_change.paths),
+            # THE ACCEPTANCE CHECK (acceptance_gate.py): per-item met/partial/missing with file
+            # evidence, and its findings as FINDING lines for the checks-failing PR and follow-up.
+            **({_acceptance_gate.KEY: _acceptance_record,
+                _acceptance_gate.SUMMARY_KEY: _acceptance_gate.findings_summary(
+                    _acceptance_record)} if _acceptance_record else {}),
             "security_verdict": sec_verdict,
             "consistency_verdict": cons_verdict,
             # IaC verify lane (T3): the full per-step JSON result rides the quality-gate
@@ -8961,6 +9058,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         finding_bits.append(_anchored_findings(
                             r4.get("summary") or "", root, stage="security_check",
                             header="SECURITY FINDINGS:"))
+                    if _acceptance_gate.GATE in failing and _acceptance_record:
+                        # The must-haves the acceptance reviewer found missing, each with what
+                        # it looked for: the warm round delivers them, the check re-runs after.
+                        finding_bits.append(
+                            "MUST-HAVES NOT DELIVERED (the acceptance check read the whole "
+                            "branch; deliver each one for real — no stubs, no hard-coded demo "
+                            "answers, in the required stack):\n"
+                            + _acceptance_gate.findings_summary(_acceptance_record))
                     if "app_serves" in failing:
                         # The app's OWN error, not "preview timed out": this is what lets the
                         # implementer fix an ImportError instead of guessing at a port.
@@ -9137,9 +9242,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 review_root, read_only=True, model=security_model))
                         return rs2, _hollow
 
+                    def _reseat_acceptance():
+                        # The whole branch again, against the same items: never a delta.
+                        rec, acc_cost = _run_acceptance_check()
+                        return {"summary": rec.get("reply") or "", "cost_usd_micros": acc_cost,
+                                "acceptance": rec}, None
+
                     _seat_fns = {"code_review_passed": ("review_code", _reseat_review),
                                  "consistent": ("consistency_check", _reseat_consistency),
-                                 "security_clean": ("security_check", _reseat_security)}
+                                 "security_clean": ("security_check", _reseat_security),
+                                 _acceptance_gate.GATE: (_acceptance_gate.SEAT,
+                                                         _reseat_acceptance)}
                     _wanted = [_seat_fns[gname] for gname in failing if gname in _seat_fns]
                     if _wanted:
                         with _transaction(engine) as c:
@@ -9229,6 +9342,19 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                                "hollow": _hollow}},
                             reviewed=repair_review_scope.snapshot(_review_change))
                         gates["security_clean"] = sec_verdict == "clean"
+                    if _acceptance_gate.GATE in failing:
+                        _ra, _ = _reseat[_acceptance_gate.SEAT]
+                        cost += int(_ra.get("cost_usd_micros") or 0)
+                        _acceptance_record = _ra.get("acceptance") or {"verdict": "not_run",
+                                                                        "items": [], "stack": {}}
+                        evidence[_acceptance_gate.KEY] = _acceptance_record
+                        evidence[_acceptance_gate.SUMMARY_KEY] = (
+                            _acceptance_gate.findings_summary(_acceptance_record))
+                        gates[_acceptance_gate.GATE] = _acceptance_gate.passed(_acceptance_record)
+                        if gates[_acceptance_gate.GATE]:
+                            deferred_findings = (list(deferred_findings)
+                                                 + _acceptance_gate.partial_followups(
+                                                     _acceptance_record))
                     if "tests_strong_enough" in failing:
                         # THE WEAK-SUITE SEAT RE-JUDGES: plant one bug again and expect the
                         # strengthened suite to catch it. Serial, after the read-only seats: it
@@ -9662,6 +9788,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # ADVISORY first pass: surface the failing checks (their verdicts are already
                 # recorded on the run, so the UI shows exactly which failed) but PROCEED to open the
                 # PR + preview. No block, no dead-end — the user retries-to-improve when they want.
+                #
+                # AN ADVISORY FINDING IS STILL WORK (BOSSAPP-1212). Only the below-threshold
+                # findings used to become the follow-up; the MAJOR and BLOCKER ones the panel
+                # graded as blocking — the ones that matter — were recorded on the run and then
+                # nothing acted on them (Northgate). Every failing seat's findings now ride the
+                # follow-up, ahead of the deferred ones.
+                deferred_findings = advisory_followup_findings(
+                    failing, evidence, deferred_findings)
                 with _transaction(engine) as c:
                     c.execute(sql(
                         "UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx,'{}'::jsonb) "
@@ -9689,6 +9823,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     for _g in _blockers:
                         _details.setdefault(_g, "a BLOCKER-level finding is still open after "
                                                 "its fix round")
+                if _acceptance_gate.GATE in failing and _acceptance_record:
+                    _details[_acceptance_gate.GATE] = (
+                        _acceptance_gate.headline(_acceptance_record)
+                        or "the must-haves were not checked")
                 checks_record = {
                     **_checks_failing.collect(failing, evidence, details=_details),
                     "hard": action == _checks_failing.ACTION,
@@ -10036,6 +10174,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _pr_summary = _cf_section(_checks) + _generated_pr_summary(
                 engine, settings, run_id, project_id, title=title, evidence=evidence,
                 gates=gates, paths=[f.path for f in _pr_files], qg_id=qg_id)
+            # THE MUST-HAVE TABLE (acceptance_gate.pr_section) right after the failing checks.
+            _acc_section = _acceptance_gate.pr_section(evidence.get(_acceptance_gate.KEY))
+            if _acc_section:
+                _cf_lead = _cf_section(_checks)
+                _pr_summary = _cf_lead + _acc_section + _pr_summary[len(_cf_lead):]
             proposal = sf.propose_pull_request(
                 c, project_id, task_id, reservation_id=reservation_id,
                 dedupe_key=f"code:task:{run_id}", title=title,

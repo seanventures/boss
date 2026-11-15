@@ -174,7 +174,9 @@ def add_project_connectors(project_id: str, payload: ConnectorsBody,
     from boss_engine.services.project_experience import add_project
 
     pinned = {k: v for k, v in payload.brief.items() if k in add_project.BRIEF_FIELDS}
-    body = UnderstandBody(words=payload.words or add_project.render_brief(payload.brief),
+    # The rewrite reads at most MAX_TEXT of words; the pinned brief itself travels whole.
+    body = UnderstandBody(words=(payload.words
+                                 or add_project.render_brief(payload.brief))[:add_project.MAX_TEXT],
                           pinned=pinned, previous=payload.brief)
     with begin(_engine) as connection:
         _require_project(connection, project_id)
@@ -435,7 +437,10 @@ def _run_input(body: CreateAndStartBody, brief: dict[str, Any], repo: Optional[s
     links = [l.strip() for l in body.read_first if l.strip().lower().startswith(("http://", "https://"))]
     run_input: dict[str, Any] = {k: v for k, v in body.inputs.items()
                                  if v not in (None, "") and k not in ("directive", "title")}
-    run_input.update({"title": (brief.get("title") or body.name)[:80], "directive": directive[:8000]})
+    # MAX_DIRECTIVE, not 8000: the rendered brief keeps every must-have and its done-when whole
+    # (BOSSAPP-1212); only the person's quoted words are trimmed to fit it.
+    run_input.update({"title": (brief.get("title") or body.name)[:80],
+                      "directive": directive[:add_project.MAX_DIRECTIVE]})
     if criteria:
         run_input["acceptance_criteria"] = criteria[:12]
     if links:
@@ -452,7 +457,7 @@ def _run_input(body: CreateAndStartBody, brief: dict[str, Any], repo: Optional[s
         run_input["app_links"] = links
     if any(named):
         run_input["directive"] = (run_input["directive"] + "\n\nIt talks to: "
-                                  + ", ".join(n for n in named if n) + ".")[:8000]
+                                  + ", ".join(n for n in named if n) + ".")[:add_project.MAX_DIRECTIVE]
     return run_input
 
 

@@ -13,7 +13,7 @@ import { ActionForm, DecisionResolveForm } from "./client-forms";
 import { ActionPreview, actionPreviewOf, previewLead } from "./action-preview";
 import { HeldArguments } from "./held-arguments";
 import { ArchitectureDoc } from "./architecture-doc";
-import { ChecksFailing, checksFailingOf } from "./checks-failing";
+import { ChecksFailing, checksFailingOf, MustHaves, mustHavesOf } from "./checks-failing";
 import { architectureDocOf } from "../lib/architecture";
 import { AreaLink } from "./area-link";
 import { linkTo, navigate } from "./agents/live-util";
@@ -100,6 +100,19 @@ function roleInitials(name: string): string {
   return initials.toUpperCase();
 }
 
+/** The failing gates a merge card carries (engine checks_failing / acceptance_gate lineage):
+ * a card with any never reads "Automated checks: passed". */
+function failingGates(r: Record<string, unknown>): string {
+  const cf = r.checks_failing as Record<string, unknown> | undefined;
+  const gates = cf && Array.isArray(cf.gates) ? cf.gates : [];
+  return gates
+    .map((g) => (g && typeof g === "object"
+      ? String((g as Record<string, unknown>).label || (g as Record<string, unknown>).gate || "")
+      : ""))
+    .filter(Boolean)
+    .join(", ");
+}
+
 export function formatRecommendation(decision: DecisionFeedItem): string {
   const r = decision.recommendation || {};
   const str = (k: string): string => (typeof r[k] === "string" ? (r[k] as string) : "");
@@ -114,7 +127,9 @@ export function formatRecommendation(decision: DecisionFeedItem): string {
     return [
       title ? `Approve the code change “${title}”.` : "Approve this code change.",
       pr ? `${isLocalChangeUrl(pr) ? "Change set" : "Pull request"} ${prNum} is open ${prWhere(pr)} with the full diff to review.` : "",
-      vstatus
+      failingGates(r)
+        ? `Automated checks: failing (${failingGates(r)}).`
+        : vstatus
         ? `Automated checks: ${vstatus.replaceAll("_", " ")}${vsummary ? `, ${vsummary}` : ""}.`
         : "",
       "Approving opens/merges the PR; rejecting keeps it blocked for changes.",
@@ -992,6 +1007,7 @@ function DecisionInboxRow({
           {/* A PR that opened with its checks failing says so FIRST, security first: its merge
               is the person's stated decision, never a click (engine checks_failing.py). */}
           {checksFailingOf(rec) ? <ChecksFailing record={checksFailingOf(rec)!} /> : null}
+          {mustHavesOf(rec) ? <MustHaves data={mustHavesOf(rec)!} /> : null}
           {/* An expired card says so before its buttons: "Approve and merge" on a pull request
               from weeks ago is a different act from the same button on one raised today. */}
           {expired ? (

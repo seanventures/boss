@@ -4064,6 +4064,7 @@ def _perform_capability(
     if key == "build":
         spec = str(inputs.get("spec_markdown") or "").strip()
         inputs = {k: v for k, v in inputs.items() if k != "spec_markdown"}
+        inputs = prd_acceptance_inputs(inputs, spec)
         if spec:
             directive = str(inputs.get("instructions") or "").strip()
             inputs = {**inputs, "instructions": (
@@ -4181,6 +4182,21 @@ def _perform_capability(
 
     # STARTED IS NOT FINISHED. See `_settle_started_work`.
     return _settle_started_work(capability, key, result)
+
+
+def prd_acceptance_inputs(inputs: dict[str, Any], spec_markdown: str) -> dict[str, Any]:
+    """THE PRD'S ACCEPTANCE LIST IS THE BUILD'S (BOSSAPP-1212). A build that follows a PRD was
+    held to the brief's one "done when" sentence (cut at 400 characters on Northgate) while the
+    PRD's seventeen tested-and-gating criteria sat in its instructions as prose: no gate, no
+    reviewer and no card was ever asked about them. When the PRD has an acceptance section, its
+    tested-and-gating items (acceptance_gate.prd_gating_criteria) become the build's
+    `acceptance_criteria`; a PRD without one leaves the criteria as they were."""
+    from .acceptance_gate import prd_gating_criteria
+
+    criteria = prd_gating_criteria(spec_markdown or "")
+    if not criteria:
+        return inputs
+    return {**inputs, "acceptance_criteria": criteria}
 
 
 def _bound_promotion(connection: Connection, context: dict[str, Any], inputs: dict[str, Any],

@@ -2376,7 +2376,16 @@ class SoftwareFactoryService:
         from ..multirepo import change_sets as _change_sets
 
         set_member = _change_sets.member_change_set(connection, run_id) if run_id else None
+        from . import acceptance_gate as _acceptance_gate
         from . import checks_failing as _checks_failing
+
+        # THE CARD SPEAKS FOR THE WHOLE PULL REQUEST (acceptance_gate.lineage_failures,
+        # BOSSAPP-1211). A follow-up's own checks judge only the findings it was sent to fix, so
+        # its clean result said "Automated checks: passed" on a PR whose earlier builds had
+        # shipped past refuted reviews and missing must-haves (Northgate, dec_ef42b38d). The
+        # card carries the UNION of the gates the lineage shipped past, and the must-have table.
+        card_checks, acceptance = _acceptance_gate.merge_card_checks(
+            connection, run_id=run_id, evidence=evidence, checks_failing=checks_failing)
 
         # A local change set is "change #N", never a PR (BOSSAPP-946).
         _local = getattr(self.github, "kind", "") == "local"
@@ -2386,7 +2395,7 @@ class SoftwareFactoryService:
             project_id,
             task_id,
             (f"Checks failing — decide the merge: {title} ({_ref})"
-             if checks_failing else
+             if card_checks else
              f"Approve follow-up fix after #{follow_up['after']}: "
              f"{pr_follow_up.work_name(title)} ({_ref})" if follow_up else
              f"Approve code change: {title} ({_ref})"),
@@ -2397,11 +2406,15 @@ class SoftwareFactoryService:
                 **sealed_evidence,
                 "action": "review_pull_request",
                 "summary": (
-                    (_checks_failing.decision_summary(checks_failing) + " "
-                     if checks_failing else "")
+                    (_checks_failing.decision_summary(card_checks) + " "
+                     if card_checks else "")
                     + f"BOSS built “{title}” in a sandbox and opened "
                     + (f"change #{pr.number}. " if _local else f"pull request #{pr.number}. ")
-                    + f"Automated checks: {validation_status}"
+                    + (f"{_acceptance_gate.headline(acceptance)}. "
+                       if _acceptance_gate.headline(acceptance) else "")
+                    + (f"Automated checks: failing ({_checks_failing.headline(card_checks)}); "
+                       f"CI {validation_status}" if card_checks
+                       else f"Automated checks: {validation_status}")
                     + (f" — {validation_summary}" if validation_summary else "")
                     + (". Review the change in BOSS (it is on this machine), then approve to merge "
                        "into the default branch or reject to send back."
@@ -2441,9 +2454,20 @@ class SoftwareFactoryService:
                 # What the merge card leads with, and what makes its approval a person's stated
                 # decision rather than a click (decisions.transition, checks_failing.py).
                 **({_checks_failing.KEY: {
-                    **checks_failing,
-                    "draft": bool(getattr(self.github, "supports_draft_pull_requests", False)),
-                    "label": _checks_failing.LABEL}} if checks_failing else {}),
+                    **card_checks,
+                    "draft": bool(checks_failing) and bool(
+                        getattr(self.github, "supports_draft_pull_requests", False)),
+                    "label": _checks_failing.LABEL}} if card_checks else {}),
+                # The must-have table (acceptance_gate.py): per item met/partial/missing with
+                # file evidence, from the latest acceptance check of this PR's lineage.
+                **({_acceptance_gate.KEY: {
+                    "verdict": acceptance.get("verdict"), "counts": acceptance.get("counts"),
+                    "items": [{k: i.get(k) for k in ("n", "text", "status", "evidence",
+                                                     "source")}
+                              for i in acceptance.get("items") or []],
+                    "stack": acceptance.get("stack") or {},
+                    "table": _acceptance_gate.must_have_table(acceptance)}}
+                   if isinstance(acceptance, dict) and acceptance.get("verdict") else {}),
                 # The knowledge the card is "based on": facts matched to this change's symbols
                 # (knowledge/runtime.remember_written_files). Empty when none matched.
                 "cited_fact_ids": citations,

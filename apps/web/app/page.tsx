@@ -227,6 +227,18 @@ function metadataString(
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+/** A merge card's failing gates (engine checks_failing): with any, never "checks: passed". */
+function checksFailingLabels(r: Record<string, unknown>): string {
+  const cf = r.checks_failing as Record<string, unknown> | undefined;
+  const gates = cf && Array.isArray(cf.gates) ? cf.gates : [];
+  return gates
+    .map((g) => (g && typeof g === "object"
+      ? String((g as Record<string, unknown>).label || (g as Record<string, unknown>).gate || "")
+      : ""))
+    .filter(Boolean)
+    .join(", ");
+}
+
 function formatRecommendation(decision: DecisionFeedItem): string {
   const r = decision.recommendation || {};
   const str = (k: string): string => (typeof r[k] === "string" ? (r[k] as string) : "");
@@ -242,7 +254,9 @@ function formatRecommendation(decision: DecisionFeedItem): string {
     return [
       title ? `Approve the code change “${title}”.` : "Approve this code change.",
       pr ? `${isLocalChangeUrl(pr) ? "Change set" : "Pull request"} ${prNum} is open ${prWhere(pr)} with the full diff to review.` : "",
-      vstatus
+      checksFailingLabels(r)
+        ? `Automated checks: failing (${checksFailingLabels(r)}).`
+        : vstatus
         ? `Automated checks: ${vstatus.replaceAll("_", " ")}${vsummary ? `, ${vsummary}` : ""}.`
         : "",
       "Approving opens/merges the PR; rejecting keeps it blocked for changes.",
