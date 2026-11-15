@@ -18,6 +18,10 @@ are the shapes it will read.
   POST    /v1/intake/connections/{connection_id}/pause | /resume
   PUT/DELETE /v1/intake/connections/{connection_id}/sso-attestation   identity_provider:manage
 
+  PEOPLE LINKS (E7)
+  GET     /v1/intake/connections/{connection_id}/people                  integration:read
+  POST    /v1/intake/connections/{connection_id}/people/{link_id}/revoke integration:manage
+
   EVENTS (E5) and DEAD LETTERS (E6)
   GET     /v1/intake/events?project_id=&status=&connection_id=&q=&hours=&limit=
   GET     /v1/intake/events/{intake_event_id}        envelope, guards, raw, the fires it caused
@@ -285,6 +289,39 @@ def build_intake_router(*, engine, settings: Callable[[], Any],
             try:
                 return event_intake.clear_sso_attestation(db, project_id=project_id,
                                                           connection_id=connection_id, actor=who)
+            except Exception as error:  # noqa: BLE001
+                _fail(error)
+
+    # ── people links (E7) ────────────────────────────────────────────────────────────────────
+
+    @router.get("/v1/intake/connections/{connection_id}/people")
+    @permit(P.INTEGRATION_READ, scope=Scope.of("intake_connection", path="connection_id"))
+    def intake_connection_people(connection_id: str) -> dict:
+        """Who each chat user of this connection is in BOSS: linked (method, when, the person),
+        revoked in the last 30 days, and the chat users heard from who are not linked (guests
+        flagged); plus the SSO attestation. Never a link code."""
+        with begin(engine) as db:
+            project_id = _connection_project(db, connection_id)
+            require_reader(db, project_id)
+            try:
+                return event_intake.connection_people(db, project_id=project_id,
+                                                      connection_id=connection_id)
+            except Exception as error:  # noqa: BLE001
+                _fail(error)
+
+    @router.post("/v1/intake/connections/{connection_id}/people/{link_id}/revoke")
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.of("intake_connection", path="connection_id"))
+    def revoke_intake_person(connection_id: str, link_id: str,
+                             body: Optional[ActorBody] = None) -> dict:
+        """An admin ends one chat user's link; their next message gets a new link prompt."""
+        with begin(engine) as db:
+            project_id = _connection_project(db, connection_id)
+            actor = require_write_actor(db, project_id, (body or ActorBody()).actor,
+                                        "integration_manage")
+            try:
+                return event_intake.revoke_person_link(db, project_id=project_id,
+                                                       connection_id=connection_id,
+                                                       link_id=link_id, actor=actor)
             except Exception as error:  # noqa: BLE001
                 _fail(error)
 

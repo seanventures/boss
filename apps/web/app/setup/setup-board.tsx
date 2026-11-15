@@ -43,6 +43,7 @@ import { ToolchainsRow } from "./toolchains-row";
 import { GatewaysRow } from "./gateways-row";
 import { PoolsRow } from "./pools-row";
 import { TicketSystemsRow } from "./ticket-systems-row";
+import { EventsRow } from "../events/events-row";
 import { SharingAsk } from "../improve/sharing-ask";
 import { CiWorkflowsToggle } from "./ci-workflows-toggle";
 import { GitHubSigninRow, useSignin } from "./github-signin-row";
@@ -447,6 +448,8 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
         </ModelsRow>
         {/* TICKET SYSTEMS (BOSSAPP-1047 T1): the one place Jira, Plane, GitHub Issues… connect. */}
         <div ref={ref("ticket_systems")}><TicketSystemsRow projectId={projectId} focused={focus === "ticket_systems"} /></div>
+        {/* EVENTS (P9a-7): what wakes the agents; the way into Setup › Events. */}
+        <EventsRow projectId={projectId} />
         {/* NO TRY IT HERE (operator, 2026-11-04: "Why trying out sample project is in Repos and
             Models"): Setup is connections only. The sample and the one-sentence PR live on the
             Welcome (step 3); `focus=try` opens it. */}
@@ -542,6 +545,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
             }} />
           </ModelsRow>
           <div ref={ref("ticket_systems")}><TicketSystemsRow projectId={projectId} focused={focus === "ticket_systems"} /></div>
+          <EventsRow projectId={projectId} />
           <details className="su-advanced su-advanced-all" data-testid="su-advanced-all" ref={classicRef}
                    open={classicOpen}
                    onToggle={(e) => setClassicOpen((e.currentTarget as HTMLDetailsElement).open)}>

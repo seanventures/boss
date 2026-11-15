@@ -1483,6 +1483,127 @@ def dead_letters(connection: Connection, project_id: str, *, limit: int = 100,
     return {"dead_letters": items, "per_connection": sorted(per.values(), key=lambda x: x["name"])}
 
 
+# ── people links (E7) ──────────────────────────────────────────────────────────────────────────
+
+#: A revoked link stays on the People screen this long, so an admin sees what was just undone.
+REVOKED_SHOWN_DAYS = 30
+
+_GUEST_KEYS = ("is_restricted", "is_ultra_restricted", "user_is_restricted", "is_stranger",
+               "is_external", "is_guest")
+
+
+def _guest(data: Mapping[str, Any], cfg: Mapping[str, Any]) -> bool:
+    """The guest rule of intake_identity.is_guest, on a stored envelope's `data`: a Slack guest,
+    a Slack Connect user from another workspace, a Teams guest or another tenant."""
+    if any(data.get(k) is True for k in _GUEST_KEYS):
+        return True
+    if str(data.get("user_type") or data.get("userType") or "").lower() == "guest":
+        return True
+    team, own = data.get("user_team_id") or data.get("team_id"), cfg.get("team_id")
+    if team and own and str(team) != str(own):
+        return True
+    tenant, own_tenant = data.get("tenant_id") or data.get("tenantId"), cfg.get("tenant_id")
+    return bool(tenant and own_tenant and str(tenant) != str(own_tenant))
+
+
+def _display_of(envelope: Any) -> str:
+    env = _json(envelope, {}) or {}
+    return str((env.get("bossactor") or {}).get("display") or "")
+
+
+def connection_people(connection: Connection, *, project_id: str, connection_id: str) -> dict:
+    """E7: who each chat user of this connection is in BOSS. Linked people (method code /
+    sso_email / aad_oid, when, the BOSS person), links revoked in the last 30 days, and the chat
+    users BOSS has heard from who are not linked (guests flagged: never auto-linked), with when a
+    link prompt last went to them. Plus the connection's SSO attestation. Never a link code."""
+    row = get_connection(connection, connection_id, project_id=project_id)
+    if row is None:
+        raise IntakeServiceError("no such connection in this project.", status=404, code="not_found")
+    cfg = _json(row.get("config"), {}) or {}
+    endpoint_id = row.get("chat_endpoint_id")
+    counts = {"linked": 0, "not_linked": 0, "guests": 0, "revoked": 0}
+    out: dict[str, Any] = {"connection_id": connection_id, "kind": row["kind"],
+                           "endpoint_id": endpoint_id, "attestation": cfg.get(ATTESTATION_KEY),
+                           "people": [], "counts": counts}
+    if not endpoint_id:
+        return out
+    links = connection.execute(text("""
+        SELECT l.id, l.external_user_id, l.external_name, l.external_email, l.method,
+               l.verified_at, l.revoked_at, l.principal_id,
+               p.display_name AS person_name, u.email AS person_email
+          FROM chat_identity_links l
+          LEFT JOIN identity_principals p ON p.id = l.principal_id
+          LEFT JOIN identity_users u ON u.principal_id = l.principal_id
+         WHERE l.endpoint_id = :e AND l.verified_at IS NOT NULL
+           AND (l.revoked_at IS NULL OR l.revoked_at > now() - make_interval(days => :d))
+         ORDER BY l.revoked_at NULLS FIRST, l.verified_at DESC"""),
+        {"e": endpoint_id, "d": REVOKED_SHOWN_DAYS}).mappings().all()
+    last_seen = {str(r["actor_external_id"]): r for r in connection.execute(text("""
+        SELECT DISTINCT ON (actor_external_id) actor_external_id, envelope, received_at
+          FROM intake_events
+         WHERE connection_id = :c AND actor_kind = 'user' AND COALESCE(actor_external_id, '') <> ''
+         ORDER BY actor_external_id, received_at DESC"""), {"c": connection_id}).mappings().all()}
+    prompted = {str(r["actor_external_id"]): r["at"] for r in connection.execute(text("""
+        SELECT actor_external_id, max(received_at) AS at FROM intake_events
+         WHERE connection_id = :c AND status = 'refused' AND actor_external_id IS NOT NULL
+         GROUP BY actor_external_id"""), {"c": connection_id}).mappings().all()}
+    listed: set[str] = set()
+    people: list[dict] = []
+    for r in links:
+        uid = str(r["external_user_id"])
+        if uid in listed:
+            continue                      # a revoked link under a newer live one: show the live one
+        listed.add(uid)
+        state = "revoked" if r["revoked_at"] is not None else "linked"
+        heard = last_seen.get(uid)
+        people.append({
+            "external_user_id": uid,
+            "display": r["external_name"] or (_display_of(heard["envelope"]) if heard else ""),
+            "state": state, "link_id": r["id"], "method": r["method"] or "code",
+            "person": ({"principal_id": r["principal_id"], "name": r["person_name"] or "",
+                        "email": r["person_email"] or r["external_email"] or ""}
+                       if r["principal_id"] else None),
+            "linked_at": _iso(r["verified_at"]), "revoked_at": _iso(r["revoked_at"]),
+            "last_seen_at": _iso(heard["received_at"]) if heard else None,
+            "guest": False, "prompted_at": None})
+        counts["revoked" if state == "revoked" else "linked"] += 1
+    for uid, r in last_seen.items():
+        if uid in listed:
+            continue
+        guest = _guest((_json(r["envelope"], {}) or {}).get("data") or {}, cfg)
+        people.append({
+            "external_user_id": uid, "display": _display_of(r["envelope"]),
+            "state": "guest" if guest else "not_linked", "link_id": None, "method": None,
+            "person": None, "linked_at": None, "revoked_at": None,
+            "last_seen_at": _iso(r["received_at"]), "guest": guest,
+            "prompted_at": _iso(prompted.get(uid))})
+        counts["guests" if guest else "not_linked"] += 1
+    out["people"] = people
+    return out
+
+
+def revoke_person_link(connection: Connection, *, project_id: str, connection_id: str,
+                       link_id: str, actor: str) -> dict:
+    """An admin ends one chat user's link to a BOSS person. Their next message gets a new link
+    prompt; an SSO auto-link is not silently remade (intake_identity skips a revoked pair)."""
+    row = get_connection(connection, connection_id, project_id=project_id)
+    if row is None or not row.get("chat_endpoint_id"):
+        raise IntakeServiceError("no such chat connection in this project.", status=404,
+                                 code="not_found")
+    done = connection.execute(text(
+        "UPDATE chat_identity_links SET revoked_at = now(), updated_at = now() "
+        "WHERE id = :l AND endpoint_id = :e AND revoked_at IS NULL "
+        "RETURNING id, external_user_id, method"),
+        {"l": link_id, "e": row["chat_endpoint_id"]}).mappings().first()
+    if done is None:
+        raise IntakeServiceError("no such live link on this connection.", status=404,
+                                 code="not_found")
+    emit_event(connection, project_id, "chat.link_revoked", actor, "intake_connection",
+               connection_id, {"link_id": link_id, "external_user_id": done["external_user_id"],
+                               "method": done["method"], "by_admin": True})
+    return {"revoked": link_id, "external_user_id": done["external_user_id"]}
+
+
 def sweep_retention(connection: Connection, *, now: Optional[datetime] = None) -> dict:
     """§4.5: raw bodies are nulled after 14 days (the hash stays); rows go after 30 days
     (routed/ignored/...) or 90 days (dead/refused); a row still being worked is never touched."""
@@ -1579,7 +1700,7 @@ __all__ = [
     "SERVICE_KEY", "SHED_RAW_BYTES", "accept", "flush_refusals",
     "ATTESTATION_KEY", "IntakeServiceError", "backoff_seconds", "clear_sso_attestation",
     "set_sso_attestation", "claim", "connection_by_token", "create_connection",
-    "dead_letters", "delete_connection", "describe_connection", "get_connection", "get_event",
+    "connection_people", "dead_letters", "delete_connection", "revoke_person_link", "describe_connection", "get_connection", "get_event",
     "inbound_path", "list_connections", "list_events", "process_due", "process_one", "receive",
     "replay", "rotate_secret", "set_connection_status", "start", "status_counts", "stop",
     "sweep_retention", "test_connection", "to_intake_connection", "update_connection",

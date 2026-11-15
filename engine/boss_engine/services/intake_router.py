@@ -753,8 +753,14 @@ def preview_match(connection: Connection, *, project_id: str, connection_id: str
         envelope = _json(r.get("envelope"), {}) or {}
         got = compiled.explain(envelope)
         matched += 1 if got["matched"] else 0
+        data = envelope.get("data") or {}
+        # What the console shows beside each row: the words and who said them (already screened
+        # text from the stored envelope; never the raw body).
+        words = next((str(data[k]) for k in TEXT_KEYS
+                      if isinstance(data.get(k), str) and data[k].strip()), "")
         events.append({"id": r["id"], "type": r["type"], "subject": r["subject"],
-                       "status": r["status"],
+                       "status": r["status"], "text": words[:200],
+                       "actor": str((envelope.get("bossactor") or {}).get("display") or ""),
                        "received_at": r["received_at"].isoformat() if r["received_at"] else None,
                        "matched": got["matched"], "leaves": got["leaves"]})
     return {"ok": True, "matched": matched, "considered": len(rows), "leaves": compiled.leaves,

@@ -152,6 +152,7 @@ import { fetchAssuranceFeed } from "../lib/assurance";
 import { fetchDiscoveriesFeed } from "../lib/discoveries";
 import { DiscoveriesHome } from "./discoveries-ui";
 import { SetupBoard } from "./setup/setup-board";
+import { SetupArea } from "./events/events-home";
 import { fetchSetupSummary, landingArea } from "../lib/setup-server";
 import { KitHome } from "./skills/kit-home";
 import { MemoryHome } from "./memory-ui";
@@ -1457,7 +1458,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             one server view (app/setup/setup-board.tsx). Outgoing email lives in Skills and MCP. */}
         {shows("setup") ? (
         <section className="panel-stack" data-area="setup" aria-label="Repo and models">
-          <SetupBoard projectId={activeProjectId} actor={activeActorId} layout="setup" />
+          {/* Setup › Events (P9a-7): `&events=<tab>` shows what wakes the agents instead of the board. */}
+          <SetupArea projectId={activeProjectId} actor={activeActorId} initialEvents={resolvedSearchParams.events || ""} />
         </section>
         ) : null}
 

@@ -4,12 +4,12 @@
   "canonical_key": "method + path",
   "request_body_type_enforcement_note": "pass_through_documented fields appear in OpenAPI but SkipValidation preserves the handler's existing input coercion and error statuses; runtime_validated_input_schema is a legacy schema-presence flag",
   "edition": "community",
-  "operation_count": 2264,
+  "operation_count": 2266,
   "counts": {
-    "api_policy_gated": 1942,
+    "api_policy_gated": 1943,
     "excluded": 127,
     "human_confirmation_gated": 78,
-    "operator_only_unavailable": 117
+    "operator_only_unavailable": 118
   },
   "operations": [
     {
@@ -21627,6 +21627,42 @@
       "typed_input_schema": true,
       "runtime_validated_input_schema": true,
       "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": false
+    },
+    {
+      "method": "GET",
+      "path": "/v1/intake/connections/{connection_id}/people",
+      "alias": "get_v1_intake_connections_connection_id_people_666b58f7",
+      "domain": "other",
+      "summary": "Intake Connection People",
+      "mcp_status": "api_policy_gated",
+      "reason": null,
+      "input_schema_quality": "parameters_only",
+      "mounted_input_schema_quality": "parameters_only",
+      "request_body_type_enforcement": "no_json_body",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/intake/connections/{connection_id}/people/{link_id}/revoke",
+      "alias": "post_v1_intake_connections_connection_id_people_link_id_revoke_eda5946b",
+      "domain": "other",
+      "summary": "Revoke Intake Person",
+      "mcp_status": "operator_only_unavailable",
+      "reason": "trusted_operator_confirmation_unavailable",
+      "input_schema_quality": "typed_json_body",
+      "mounted_input_schema_quality": "typed_json_body",
+      "request_body_type_enforcement": "pydantic_fields",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": false,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": false
     },

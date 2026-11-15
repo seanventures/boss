@@ -766,3 +766,67 @@ def test_the_list_reply_names_only_usable_agents_or_says_how_to_get_access(world
     assert texts["C0TWO"].startswith("No agent here can act for you") \
         and "support" not in texts["C0TWO"]
     assert runs_of(engine, pid) == []
+
+
+# ═══ people links (E7, P9a-7) ═════════════════════════════════════════════════════════════════
+
+def test_people_lists_linked_unlinked_and_guests_and_an_admin_revoke_sticks(world):
+    engine, pid, _fake = world
+    slack = make_slack(engine, pid)
+    dep = deploy_local_agent(engine, pid)
+    _route(engine, pid, dep, slack, name="support")
+    _person(engine, slack, "U0PRIYA")
+    _receive(engine, slack, mention("hello", user="U0PRIYA"))
+    _receive(engine, slack, mention("who am I?", user="U0STRANGER"))
+    guest = mention("from the vendor", user="U0VENDOR")
+    guest["user_team"] = "T0OTHER"
+    _receive(engine, slack, guest)
+    while _process(engine)["claimed"]:
+        pass
+    cid = slack["connection"]["id"]
+    with engine.begin() as c:
+        got = event_intake.connection_people(c, project_id=pid, connection_id=cid)
+    by = {p["external_user_id"]: p for p in got["people"]}
+    assert by["U0PRIYA"]["state"] == "linked" and by["U0PRIYA"]["method"] == "code"
+    assert by["U0PRIYA"]["person"]["principal_id"]
+    assert by["U0STRANGER"]["state"] == "not_linked" and by["U0STRANGER"]["prompted_at"]
+    assert by["U0VENDOR"]["state"] == "guest" and by["U0VENDOR"]["guest"] is True
+    assert got["counts"] == {"linked": 1, "not_linked": 1, "guests": 1, "revoked": 0}
+    assert "link_code_hash" not in json.dumps(got, default=str)
+
+    link_id = by["U0PRIYA"]["link_id"]
+    with engine.begin() as c:
+        event_intake.revoke_person_link(c, project_id=pid, connection_id=cid, link_id=link_id,
+                                        actor="ceo")
+    with engine.begin() as c:
+        again = event_intake.connection_people(c, project_id=pid, connection_id=cid)
+        with pytest.raises(event_intake.IntakeServiceError):
+            event_intake.revoke_person_link(c, project_id=pid, connection_id=cid,
+                                            link_id=link_id, actor="ceo")
+    after = {p["external_user_id"]: p for p in again["people"]}
+    assert after["U0PRIYA"]["state"] == "revoked" and after["U0PRIYA"]["revoked_at"]
+    assert again["counts"]["revoked"] == 1 and again["counts"]["linked"] == 0
+    # The next message from a revoked user is refused (a new link prompt), never re-linked.
+    first = _receive(engine, slack, mention("still me", user="U0PRIYA"))["event_id"]
+    while _process(engine)["claimed"]:
+        pass
+    assert event_row(engine, first)["status"] == "refused"
+
+
+def test_preview_match_says_the_words_and_who_said_them(world):
+    from boss_engine.services import intake_router
+
+    engine, pid, _fake = world
+    slack = make_slack(engine, pid)
+    _receive(engine, slack, mention("why did the payments job fail?", user="U0PRIYA"))
+    _receive(engine, slack, channel_message("lunch at 12:30?", user="U0DEV"))
+    while _process(engine)["claimed"]:
+        pass
+    with engine.begin() as c:
+        got = intake_router.preview_match(
+            c, project_id=pid, connection_id=slack["connection"]["id"],
+            match={"field": "type", "op": "eq", "value": "com.slack.message.app_mention"})
+    assert got["ok"] and got["matched"] == 1 and got["considered"] == 2
+    hit = next(e for e in got["events"] if e["matched"])
+    assert "payments job" in hit["text"]
+    assert all("actor" in e for e in got["events"])
