@@ -1,0 +1,332 @@
+"""EVENT INTAKE over HTTP (P9a-1, BOSSAPP-1093; boss-eventing-lld.md §2.2, §10.1, §11;
+wireframes E1 Sources, E5 Stream, E6 Dead letters). The console work is a later ticket; these
+are the shapes it will read.
+
+  THE FRONT DOOR (public, signed by the source itself)
+  POST    /v1/intake/{kind}/{connection}            verify → insert → commit → the source's 2xx
+  OPTIONS /v1/intake/{kind}/{connection}            CloudEvents abuse-protection handshake
+
+  CONNECTIONS (E1)                                   integration:read / integration:manage
+  GET     /v1/intake/catalog                         the adapters: label, modes, fields, hosts
+  GET     /v1/intake/connections?project_id=         rows with health, last hour, backlog, rules
+  POST    /v1/intake/connections                     create; a minted secret is in the answer ONCE
+  GET     /v1/intake/connections/{connection_id}
+  PATCH   /v1/intake/connections/{connection_id}     name, config, limits, source-issued secrets
+  DELETE  /v1/intake/connections/{connection_id}
+  POST    /v1/intake/connections/{connection_id}/test            secrets resolve, inbox stats
+  POST    /v1/intake/connections/{connection_id}/rotate-secret   new secret, shown ONCE
+  POST    /v1/intake/connections/{connection_id}/pause | /resume
+
+  EVENTS (E5) and DEAD LETTERS (E6)
+  GET     /v1/intake/events?project_id=&status=&connection_id=&q=&hours=&limit=
+  GET     /v1/intake/events/{intake_event_id}        envelope, guards, raw, the fires it caused
+  GET     /v1/intake/dead-letters?project_id=
+  POST    /v1/intake/events/replay                   {project_id, intake_event_ids, mode, reason}
+
+The front door does blocking DB work, so it runs in the threadpool (never on the event loop,
+LLD finding F9) and reads a bounded body (413 beyond 1 MB, as the chat route does).
+"""
+from __future__ import annotations
+
+from typing import Any, Callable, Optional
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, Field
+
+from boss_engine.connectors.intake import REGISTRY
+from boss_engine.connectors.intake.contract import MAX_BODY_BYTES, RawRequest
+from boss_engine.db import begin
+from boss_engine.identity import P, PublicReason, Scope, permit, public
+from boss_engine.services import event_intake
+
+
+class ProjectBody(BaseModel):
+    project_id: str
+    actor: Optional[str] = None
+
+
+class ConnectionCreateBody(ProjectBody):
+    kind: str
+    name: str = ""
+    mode: str = "push"
+    config: dict[str, Any] = Field(default_factory=dict)
+    #: secret field values (the connection keeps only references); a missing `signing_secret`
+    #: is minted and shown once in the answer
+    secrets: dict[str, str] = Field(default_factory=dict)
+    limits: dict[str, int] = Field(default_factory=dict)
+
+
+class ConnectionPatchBody(BaseModel):
+    actor: Optional[str] = None
+    name: Optional[str] = None
+    config: Optional[dict[str, Any]] = None
+    secrets: Optional[dict[str, str]] = None
+    limits: Optional[dict[str, int]] = None
+
+
+class ActorBody(BaseModel):
+    actor: Optional[str] = None
+    reason: str = ""
+
+
+class RotateBody(BaseModel):
+    actor: Optional[str] = None
+    field: Optional[str] = None
+
+
+class ReplayBody(ProjectBody):
+    intake_event_ids: list[str] = Field(default_factory=list, max_length=500)
+    mode: str = "reprocess"
+    reason: str = ""
+
+
+async def _read_bounded(request: Request) -> tuple[bytes, bool]:
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+        return b"", True
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_BODY_BYTES:
+            return b"", True
+        chunks.append(chunk)
+    return b"".join(chunks), False
+
+
+def _fail(error: Exception):
+    if isinstance(error, event_intake.IntakeServiceError):
+        raise HTTPException(status_code=error.status,
+                            detail={"error": error.code, "message": str(error)}) from error
+    raise error
+
+
+def build_intake_router(*, engine, settings: Callable[[], Any],
+                        require_write_actor: Callable[..., str],
+                        require_reader: Callable[..., None]) -> APIRouter:
+    router = APIRouter(tags=["event-intake"])
+
+    def _public_base(request: Request) -> str:
+        try:
+            from .ticket_sync import _public_base as base_of
+
+            return base_of(request, "so the source can reach BOSS")
+        except HTTPException:
+            return ""
+
+    def _with_url(request: Request, out: dict) -> dict:
+        base = _public_base(request)
+        if base and out.get("url_path"):
+            out["url"] = base + out["url_path"]
+        return out
+
+    def _connection_project(db, connection_id: str) -> str:
+        row = event_intake.get_connection(db, connection_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail={"error": "not_found",
+                                                        "message": "No such intake connection."})
+        return str(row["project_id"])
+
+    # ── connections (E1) ─────────────────────────────────────────────────────────────────────
+
+    @router.get("/v1/intake/catalog")
+    @permit(P.INTEGRATION_READ, scope=Scope.org())
+    def intake_catalog() -> dict:
+        """The sources BOSS can connect: manifests (label, modes, capabilities, auth fields,
+        official hosts). Secret fields are flagged; the console renders them as password inputs."""
+        return {"sources": [m.to_dict() for m in REGISTRY.manifests()]}
+
+    @router.get("/v1/intake/connections")
+    @permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
+    def list_intake_connections(project_id: str, request: Request) -> dict:
+        with begin(engine) as db:
+            require_reader(db, project_id)
+            rows = event_intake.list_connections(db, project_id)
+        return {"connections": [_with_url(request, r) for r in rows]}
+
+    @router.post("/v1/intake/connections", status_code=201)
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
+    def create_intake_connection(body: ConnectionCreateBody, request: Request) -> dict:
+        """Connect a source. The URL to paste into the source and (for sources BOSS signs for) the
+        minted secret are in THIS answer only."""
+        with begin(engine) as db:
+            actor = require_write_actor(db, body.project_id, body.actor, "integration_manage")
+            try:
+                out = event_intake.create_connection(
+                    db, project_id=body.project_id, kind=body.kind, actor=actor, name=body.name,
+                    mode=body.mode, config=body.config, secrets=body.secrets, limits=body.limits)
+            except Exception as error:  # noqa: BLE001
+                _fail(error)
+        return _with_url(request, out)
+
+    @router.get("/v1/intake/connections/{connection_id}")
+    @permit(P.INTEGRATION_READ, scope=Scope.of("intake_connection", path="connection_id"))
+    def get_intake_connection(connection_id: str, request: Request) -> dict:
+        with begin(engine) as db:
+            project_id = _connection_project(db, connection_id)
+            require_reader(db, project_id)
+            row = event_intake.get_connection(db, connection_id, project_id=project_id)
+            rows = event_intake.list_connections(db, project_id)
+        found = next((r for r in rows if r["id"] == connection_id), None)
+        if row is None or found is None:
+            raise HTTPException(status_code=404, detail={"error": "not_found"})
+        return _with_url(request, found)
+
+    @router.patch("/v1/intake/connections/{connection_id}")
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.of("intake_connection", path="connection_id"))
+    def patch_intake_connection(connection_id: str, body: ConnectionPatchBody,
+                                request: Request) -> dict:
+        with begin(engine) as db:
+            project_id = _connection_project(db, connection_id)
+            actor = require_write_actor(db, project_id, body.actor, "integration_manage")
+            try:
+                out = event_intake.update_connection(
+                    db, project_id=project_id, connection_id=connection_id, actor=actor,
+                    name=body.name, config=body.config, limits=body.limits, secrets=body.secrets)
+            except Exception as error:  # noqa: BLE001
+                _fail(error)
+        return _with_url(request, out)
+
+    @router.delete("/v1/intake/connections/{connection_id}")
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.of("intake_connection", path="connection_id"))
+    def delete_intake_connection(connection_id: str, actor: Optional[str] = None) -> dict:
+        with begin(engine) as db:
+            project_id = _connection_project(db, connection_id)
+            who = require_write_actor(db, project_id, actor, "integration_manage")
+            deleted = event_intake.delete_connection(db, project_id=project_id,
+                                                     connection_id=connection_id, actor=who)
+        return {"deleted": deleted, "connection_id": connection_id}
+
+    @router.post("/v1/intake/connections/{connection_id}/test")
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.of("intake_connection", path="connection_id"))
+    def test_intake_connection(connection_id: str, body: Optional[ActorBody] = None) -> dict:
+        """Do the secrets resolve, does the adapter's own check pass, what does the inbox say.
+        Records the result on the connection's health."""
+        with begin(engine) as db:
+            project_id = _connection_project(db, connection_id)
+            require_write_actor(db, project_id, (body or ActorBody()).actor, "integration_manage")
+            try:
+                return event_intake.test_connection(db, settings(), project_id=project_id,
+                                                    connection_id=connection_id)
+            except Exception as error:  # noqa: BLE001
+                _fail(error)
+
+    @router.post("/v1/intake/connections/{connection_id}/rotate-secret")
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.of("intake_connection", path="connection_id"))
+    def rotate_intake_secret(connection_id: str, request: Request,
+                             body: Optional[RotateBody] = None) -> dict:
+        """A new BOSS-minted signing secret, shown ONCE; the old one stops verifying at once."""
+        body = body or RotateBody()
+        with begin(engine) as db:
+            project_id = _connection_project(db, connection_id)
+            actor = require_write_actor(db, project_id, body.actor, "integration_manage")
+            try:
+                out = event_intake.rotate_secret(db, project_id=project_id,
+                                                 connection_id=connection_id, actor=actor,
+                                                 field_name=body.field)
+            except Exception as error:  # noqa: BLE001
+                _fail(error)
+        return _with_url(request, out)
+
+    def _set_status(connection_id: str, body: Optional[ActorBody], status: str) -> dict:
+        body = body or ActorBody()
+        with begin(engine) as db:
+            project_id = _connection_project(db, connection_id)
+            actor = require_write_actor(db, project_id, body.actor, "integration_manage")
+            try:
+                return event_intake.set_connection_status(
+                    db, project_id=project_id, connection_id=connection_id, actor=actor,
+                    status=status, reason=body.reason)
+            except Exception as error:  # noqa: BLE001
+                _fail(error)
+
+    @router.post("/v1/intake/connections/{connection_id}/pause")
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.of("intake_connection", path="connection_id"))
+    def pause_intake_connection(connection_id: str, body: Optional[ActorBody] = None) -> dict:
+        """Paused: deliveries are still answered 2xx (the source must not retry) and dropped."""
+        return _set_status(connection_id, body, "paused")
+
+    @router.post("/v1/intake/connections/{connection_id}/resume")
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.of("intake_connection", path="connection_id"))
+    def resume_intake_connection(connection_id: str, body: Optional[ActorBody] = None) -> dict:
+        return _set_status(connection_id, body, "active")
+
+    # ── events (E5) and dead letters (E6) ────────────────────────────────────────────────────
+
+    @router.get("/v1/intake/events")
+    @permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
+    def list_intake_events(project_id: str, status: Optional[str] = None,
+                           connection_id: Optional[str] = None, q: Optional[str] = None,
+                           hours: Optional[int] = None, limit: int = 100,
+                           before: Optional[str] = None) -> dict:
+        """The stream: newest first, each with its status chip (routed / ignored / filtered /
+        refused / failed / dead / shed / digest), and the chips' counts for the period."""
+        with begin(engine) as db:
+            require_reader(db, project_id)
+            return event_intake.list_events(db, project_id, status=status,
+                                            connection_id=connection_id, q=q,
+                                            since_hours=hours, limit=limit, before=before)
+
+    @router.get("/v1/intake/events/{intake_event_id}")
+    @permit(P.INTEGRATION_READ, scope=Scope.of("intake_event", path="intake_event_id"))
+    def get_intake_event(intake_event_id: str) -> dict:
+        """One event in full: envelope, guards (screen verdict, loop hops), the raw body, the
+        fires it caused and their runs."""
+        with begin(engine) as db:
+            row = event_intake.get_event(db, intake_event_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail={"error": "not_found"})
+            require_reader(db, str(row.get("project_id") or ""))
+            return row
+
+    @router.get("/v1/intake/dead-letters")
+    @permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
+    def list_intake_dead_letters(project_id: str, connection_id: Optional[str] = None,
+                                 limit: int = 100) -> dict:
+        with begin(engine) as db:
+            require_reader(db, project_id)
+            return event_intake.dead_letters(db, project_id, limit=limit,
+                                             connection_id=connection_id)
+
+    @router.post("/v1/intake/events/replay")
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
+    def replay_intake_events(body: ReplayBody) -> dict:
+        """Reprocess: only routes that have not admitted a run for the event fire. Force (with a
+        typed reason, logged with your name): every route runs once more."""
+        with begin(engine) as db:
+            actor = require_write_actor(db, body.project_id, body.actor, "integration_manage")
+            try:
+                return event_intake.replay(db, project_id=body.project_id,
+                                           ids=body.intake_event_ids, actor=actor,
+                                           mode=body.mode, reason=body.reason)
+            except Exception as error:  # noqa: BLE001
+                _fail(error)
+
+    # ── the front door ───────────────────────────────────────────────────────────────────────
+
+    @router.api_route("/v1/intake/{kind}/{connection}", methods=["POST", "OPTIONS"],
+                      status_code=202)
+    @public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=event_intake.receive)
+    async def receive_intake(kind: str, connection: str, request: Request):
+        """A source's delivery. Public by necessity; nothing is stored unless the adapter's own
+        verification (Standard Webhooks / BOSS v1 / X-Hub-Signature-256, on the raw bytes) accepts
+        it under this connection's secret. Answers the source's success code once the row is
+        committed; a duplicate, a paused connection and a storm are 2xx too; 401 a bad signature;
+        404 an unknown URL; 413 too large; 503 only when the database is down."""
+        raw, too_large = await _read_bounded(request)
+        if too_large:
+            return JSONResponse(status_code=413, content={"status": "too_large"})
+        req = RawRequest(method=request.method,
+                         headers={k.lower(): v for k, v in request.headers.items()}, body=raw,
+                         query=dict(request.query_params), path=str(request.url.path))
+        result = await run_in_threadpool(event_intake.receive, engine, kind, connection, req,
+                                         settings=settings())
+        headers = {str(k): str(v) for k, v in (result.get("headers") or {}).items()}
+        if result.get("body") is None:
+            return Response(status_code=int(result["http_status"]), headers=headers)
+        return JSONResponse(status_code=int(result["http_status"]), content=result["body"],
+                            headers=headers)
+
+    return router
