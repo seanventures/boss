@@ -183,6 +183,26 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/tickets.ts#retryTicketSync": "work_tracker:write",         // POST /v1/work-items/{id}/ticket-sync/retry
   "lib/tickets.ts#answerTicketChanged": "decision:approve",       // POST /v1/decisions/{id}/{approve|reject}
 
+  // lib/intake.ts — Setup › Events (P9a-7, BOSSAPP-1099): connections, Slack, rules, replay, people
+  "lib/intake.ts#createConnection": "integration:manage",         // POST /v1/intake/connections
+  "lib/intake.ts#updateConnection": "integration:manage",         // PATCH /v1/intake/connections/{id}
+  "lib/intake.ts#deleteConnection": "integration:manage",         // DELETE /v1/intake/connections/{id}
+  "lib/intake.ts#testConnection": "integration:manage",           // POST /v1/intake/connections/{id}/test
+  "lib/intake.ts#rotateConnectionSecret": "integration:manage",   // POST /v1/intake/connections/{id}/rotate-secret
+  "lib/intake.ts#setConnectionPaused": "integration:manage",      // POST /v1/intake/connections/{id}/pause|resume
+  "lib/intake.ts#attestConnection": "identity_provider:manage",   // PUT /v1/intake/connections/{id}/sso-attestation
+  "lib/intake.ts#clearAttestation": "identity_provider:manage",   // DELETE /v1/intake/connections/{id}/sso-attestation
+  "lib/intake.ts#createSlackEndpoint": "integration:manage",      // POST /v1/chat/endpoints (kind slack)
+  "lib/intake.ts#replayEvents": "integration:manage",             // POST /v1/intake/events/replay (reprocess | force)
+  "lib/intake.ts#previewMatch": "integration:read",               // POST /v1/agents/{role}/triggers/preview-match (a read-only dry run)
+  "lib/intake.ts#createRule": "agent:deploy",                     // POST /v1/agents/{role}/triggers (kind intake)
+  "lib/intake.ts#updateRule": "agent:deploy",                     // PATCH /v1/agent-triggers/{id}
+  "lib/intake.ts#deleteRule": "agent:deploy",                     // DELETE /v1/agent-triggers/{id}
+  "lib/intake.ts#setRulePaused": "agent:lifecycle",               // POST /v1/agent-triggers/{id}/pause|resume
+  "lib/intake.ts#setRuleBudget": "budget:manage",                 // POST /v1/budget-policies/scoped (scope trigger, per day)
+  "lib/intake.ts#removeRuleBudget": "budget:manage",              // DELETE /v1/budget-policies/scoped/{id}
+  "lib/intake.ts#revokePerson": "integration:manage",             // POST /v1/intake/connections/{id}/people/{link}/revoke
+
   // lib/llm-gateways.ts — Setup › Advanced › Gateways (BOSSAPP-887)
   "lib/llm-gateways.ts#createGateway": "model_provider:manage",   // POST /v1/llm-gateways
   "lib/llm-gateways.ts#updateGateway": "model_provider:manage",   // PATCH /v1/llm-gateways/{id}
@@ -338,6 +358,11 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     // sign-in (oauth/start/load, oauth/me) is connection:use_own, checked by the helper's gate.
     "/v1/ticket-systems": "integration:manage",
     "/v1/ticket-systems/": "integration:manage",
+    // Setup › Events (lib/intake.ts, P9a-7): connect, replay and the Slack chat endpoint; each
+    // helper's own gate (registered above) is what the screens check.
+    "/v1/intake/connections": "integration:manage",
+    "/v1/intake/events/replay": "integration:manage",
+    "/v1/chat/endpoints": "integration:manage",
     // Setup › Advanced › Gateways (lib/llm-gateways.ts, BOSSAPP-887).
     "/v1/llm-gateways": "model_provider:manage",
     // Activity › Feedback › Reflection (lib/reflection.ts, BOSSAPP-888).

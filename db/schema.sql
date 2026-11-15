@@ -15071,6 +15071,10 @@ CREATE INDEX IF NOT EXISTS idx_intake_events_connection_status
   ON intake_events (connection_id, status, received_at DESC);
 CREATE INDEX IF NOT EXISTS idx_intake_events_retention ON intake_events (expires_at)
   WHERE expires_at IS NOT NULL;
+-- People links (E7, P9a-7): the chat users a connection has heard from, newest first.
+CREATE INDEX IF NOT EXISTS idx_intake_events_connection_actor
+  ON intake_events (connection_id, actor_external_id, received_at DESC)
+  WHERE actor_external_id IS NOT NULL;
 -- WAKE THE PROCESSOR AT COMMIT (the boss_events_notify shape): the payload is the row's identity
 -- only; a rolled-back insert is never announced, so the processor never sees an uncommitted row.
 CREATE OR REPLACE FUNCTION boss_intake_notify() RETURNS trigger

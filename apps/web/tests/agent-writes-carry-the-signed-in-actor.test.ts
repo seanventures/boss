@@ -84,6 +84,9 @@ const KNOWN_AGENT_WRITERS = [
   // The read gate (lib/identity/read-gates.ts) names /api/kit and /api/mcp in its table of
   // proxies it judges GETs for; it sends nothing itself, so it carries no actor to check.
   "lib/identity/read-gates.ts",
+  // Setup › Events (P9a-7): an agent's event rules (its triggers of kind intake) and the
+  // would-match preview, sent with the signed-in actor Setup hands the Events screens.
+  "lib/intake.ts",
   "lib/agents-org-board.ts",
   "lib/agents-activity.ts",
 ];
