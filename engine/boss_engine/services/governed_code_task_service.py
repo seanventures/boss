@@ -3942,6 +3942,33 @@ def escalation_route_record(route: Optional[dict], last_result: Optional[dict]) 
             "model": model or "(the engine's default model)"}
 
 
+def escalation_reached_a_stronger_lane(before: Optional[dict], after: Optional[dict]) -> bool:
+    """True only when escalation resolved a different engine or model.
+
+    The same pair is not a frontier retry (BOSSAPP-1032). A missing route compares
+    as absent, so two empty routes are the same lane."""
+    left, right = before or {}, after or {}
+    return (left.get("engine"), left.get("model")) != (right.get("engine"), right.get("model"))
+
+
+def write_tests_exhausted_message(*, stronger_lane: bool) -> str:
+    """What the operator reads when the test author wrote nothing.
+
+    "escalating to a frontier model" is said only when a different lane actually
+    ran. The same engine and model is "no stronger lane is configured"."""
+    if stronger_lane:
+        return (
+            "Test author produced no test files even after escalating to a frontier "
+            "model — likely an ambiguous task or a repo without a test setup. Review "
+            "the spec/acceptance criteria and retry."
+        )
+    return (
+        "Test author produced no test files. No stronger lane is configured — "
+        "likely an ambiguous task or a repo without a test setup. Review the "
+        "spec/acceptance criteria and retry."
+    )
+
+
 def _implement_budget_seconds(engine, project_id, settings) -> int:
     """build_implement_budget_minutes in seconds; 0 = no budget. Never raises."""
     try:
@@ -6971,9 +6998,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             with _transaction(engine) as c:
                 _phase(c, "write_tests")
 
+            # Whether the write_tests retry actually moved to another engine or model.
+            # The operator-facing failure reads this (BOSSAPP-1032).
+            _tests_escalation = {"stronger": False, "skipped": False}
+
             def _attempt_write_tests(escalate: bool):
                 """One QA/write-tests pass → (r1, test_files, test_changes|None). escalate
-                forces the frontier model + a sharper prompt to recover a weak first pass."""
+                retries on a stronger lane when one is configured. The same engine and
+                model is not run again and is not called a frontier pass."""
                 nonlocal cost
                 prompt = _qa_prompt(
                     title, instructions, criteria, test_cmd,
@@ -7042,17 +7074,58 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         "description or plan.\n\n" + prompt
                     )
                 if use_microvm:
+                    before = dict(stage_routes.get("write_tests") or {})
+                    override = ""
+                    if escalate and not stage_router.is_smart():
+                        # Fixed mode names the hard-problems engine here. The same
+                        # engine and model is not a second lane — skip it.
+                        override = str(settings.code_agent_strong_engine or "").strip()
+                        strong_model = str(settings.code_agent_strong_model or "").strip() or None
+                        if (override and override.lower()
+                                != str(before.get("engine") or "").strip().lower()):
+                            after = {"engine": override, "model": strong_model}
+                        elif override:
+                            after = {"engine": before.get("engine"),
+                                     "model": strong_model or before.get("model")}
+                        else:
+                            after = before
+                        if not escalation_reached_a_stronger_lane(before, after):
+                            _tests_escalation["stronger"] = False
+                            _tests_escalation["skipped"] = True
+                            return {"escalation": "skipped", "route": after}, [], None
+                        _tests_escalation["stronger"] = True
+                        _tests_escalation["skipped"] = False
+                    elif escalate:
+                        override = _vm_escalation("write_tests", True, "no_output")
                     res = _guest_stage(
                         "write_tests", "write_tests", prompt, test_cmds=[],
                         stage_title=f"QA: author tests — {title}",
-                        engine_override=_vm_escalation("write_tests", escalate, "no_output"),
+                        engine_override=override,
                     )
+                    if escalate and stage_router.is_smart():
+                        after = dict(stage_routes.get("write_tests") or {})
+                        moved = escalation_reached_a_stronger_lane(before, after)
+                        _tests_escalation["stronger"] = moved
+                        _tests_escalation["skipped"] = not moved
                     r = {"cost_usd_micros": res.cost_usd_micros, "summary": res.summary,
                          "usage": res.usage, "model": stage_routes["write_tests"]["model"]}
                     changes = [fc for fc in res.diff if _is_test_path(fc.path)]
                     return r, [fc.path for fc in changes], changes
                 set_llm_context(stage="write_tests")
-                a, m = _route_escalated("write_tests") if escalate else _route("write_tests")
+                if escalate:
+                    before = dict(stage_routes.get("write_tests") or {})
+                    decision = _await_route(
+                        "write_tests", signal="no_output", previous=before)
+                    after = {"engine": decision.engine, "model": decision.model}
+                    if not escalation_reached_a_stronger_lane(before, after):
+                        _tests_escalation["stronger"] = False
+                        _tests_escalation["skipped"] = True
+                        return {"escalation": "skipped", "route": after}, [], None
+                    _tests_escalation["stronger"] = True
+                    _tests_escalation["skipped"] = False
+                    a, m = _routed_agent("write_tests", decision)
+                else:
+                    a, m = _route("write_tests")
                 fan = _build_fan_out(engine, project_id, settings)
                 # SPLIT BY BOSS, NOT LEFT TO THE MODEL (parallel_build): a first, from-scratch
                 # pass with a design partition writes each part's suite in its own session, at
@@ -7090,19 +7163,30 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 "existing_tests": len(_app_tests),
                                 "note": "the existing suite stands as the oracle; not re-authoring"})
             if not test_files:
-                # SELF-HEAL: don't hard-fail on a weak/empty first pass — escalate to a
-                # frontier model and retry once, visibly, before giving up.
-                with _transaction(engine) as c:
-                    emit_event(c, project_id, "code_task.step_escalating", "boss",
-                               "code_task_run", run_id,
-                               {"step": "write_tests", "reason": "no_test_files",
-                                "action": "retry_on_frontier"})
+                # SELF-HEAL once, on a stronger lane when one is configured. The same
+                # engine and model is not a frontier retry (BOSSAPP-1032).
                 r1, test_files, test_changes = _attempt_write_tests(escalate=True)
-                if test_files:
+                if _tests_escalation["stronger"]:
                     with _transaction(engine) as c:
-                        emit_event(c, project_id, "code_task.step_recovered", "boss",
+                        emit_event(c, project_id, "code_task.step_escalating", "boss",
                                    "code_task_run", run_id,
-                                   {"step": "write_tests", "recovered_by": "frontier_retry"})
+                                   {"step": "write_tests", "reason": "no_test_files",
+                                    "action": "retry_on_frontier"})
+                    if test_files:
+                        with _transaction(engine) as c:
+                            emit_event(c, project_id, "code_task.step_recovered", "boss",
+                                       "code_task_run", run_id,
+                                       {"step": "write_tests",
+                                        "recovered_by": "frontier_retry"})
+                else:
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.escalation_skipped", "boss",
+                                   "code_task_run", run_id,
+                                   {"step": "write_tests", "reason": "no_stronger_lane",
+                                    "engine": (stage_routes.get("write_tests") or {}).get(
+                                        "engine"),
+                                    "model": (stage_routes.get("write_tests") or {}).get(
+                                        "model")})
             # THE TEST BUDGET, COUNTED BY BOSS (test_budget). The prompt states the cap; a suite
             # that is still over gets ONE trim turn on the test author's own warm session, and
             # what remains over is recorded on the build, never passed silently.
@@ -7187,9 +7271,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 with _transaction(engine) as c:
                     return _fail(
                         c, run_id, project_id,
-                        "Test author produced no test files even after escalating to a frontier "
-                        "model — likely an ambiguous task or a repo without a test setup. Review "
-                        "the spec/acceptance criteria and retry.",
+                        write_tests_exhausted_message(
+                            stronger_lane=_tests_escalation["stronger"]),
                         failure_class="needs_human", reason_code="no_test_files")
             if not use_microvm:
                 # The placed template tests are frozen with QA's own.
