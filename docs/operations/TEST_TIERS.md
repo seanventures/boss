@@ -57,6 +57,60 @@ How it runs:
 A fresh database needs the schema and the install's first-boot seed:
 `python scripts/ci_apply_schema.py boss_test`.
 
+### The test Postgres (BOSSAPP-1152, 1162)
+
+Tests do not run inside the install's database server. Until November 2026 the engine and API
+suites, the harness bench and developers' scratch databases all lived in the same Postgres as
+the live BOSS (~9 GB of them on one laptop), and one slow test query spilled 11 GB of temp
+files next to the real data. Three rules now hold, all in `engine/boss_engine/dev/test_databases.py`:
+
+**1. A second Postgres for dev and test.** The `db-test` compose service (profile `dev`, same
+image as `db`, port **55700**, volume `boss_community_pg_test` labelled `owner=boss kind=test
+ttl=24h`) is where test databases belong. It runs with `max_locks_per_transaction=1024`,
+`temp_file_limit=1GB` and a `statement_timeout` of 60 s for every connection.
+
+```bash
+boss dev up            # or: docker compose -f scripts/install/community-compose.yml --env-file .env --profile dev up -d db-test
+export BOSS_TEST_DATABASE_URL="postgresql+psycopg://boss:$BOSS_DB_PASSWORD@localhost:55700/boss_test"
+export BOSS_TEST_PG_URL="postgresql://boss:$BOSS_DB_PASSWORD@localhost:55700"   # test-tier.sh creates boss_test and the shards there
+```
+
+**2. The suites refuse the live server.** Both conftests check `BOSS_TEST_DATABASE_URL` (the
+API suite: `DATABASE_URL`) against the install's server — `BOSS_DATABASE_URL`, or a
+`DATABASE_URL` that is not itself named like a test database. On that server only a database
+called `boss_test*` or `boss_scratch*` is allowed; anything else stops with a message that says
+how to start `db-test`. (The shared bench database `boss_test_bench` passes by name.)
+
+**3. Throwaways carry their birthday and are swept.** A test that makes its own database or
+schema names it `boss_scratch_<purpose>_<stamp>` / `boss_test_<purpose>_<stamp>` with a UTC
+`YYYYmmddtHHMMSS` stamp (`scratch_database()` and `test_schema_name()` do this), and drops it
+in `finally`/`atexit`. Postgres records no creation time for a schema or database, so the stamp
+is the only age a sweeper can trust — and the reason it can promise to touch nothing else:
+`boss`, `boss_lf_dev`, `boss_test`, `boss_test_bench`, `boss_test_t1` have no stamp and are
+never candidates. Every test session starts by sweeping stamped names past 24 h and by a
+lock-table preflight; on demand:
+
+```bash
+boss dev sweep-test-db --dry-run              # inside the install, against db-test
+python -m boss_engine dev sweep-test-db --url "$BOSS_TEST_DATABASE_URL" --dry-run   # any test server
+python -m boss_engine dev sweep-test-db --url "$BOSS_TEST_DATABASE_URL"             # drop them
+python -m boss_engine dev test-db-preflight --url "$BOSS_TEST_DATABASE_URL"
+```
+
+`--include-unstamped` adds the API suite's legacy `boss_test_<12 hex>` schemas (the shape before
+the stamp) that no other session holds a lock in. Use it once, when no suite from before the
+change is running.
+
+**Why schemas were left behind ("out of shared memory").** The API suite gives each run a
+private schema of ~2100 relations (578 tables, 675 indexes, toast tables, sequences). One
+`DROP SCHEMA … CASCADE` locks every one of them in a single transaction, and the server's lock
+table has only `max_locks_per_transaction (64) × max_connections (100) = 6400` slots for every
+session together. Three API shards ending at once asked for ~6350 — the drop failed and the
+schema stayed; 146 of them (298,000 catalog rows, 4.8 GB) then slowed every catalog query the
+suites make. The schema is now dropped a hundred tables at a time (`drop_schema_in_batches`),
+`db-test` runs with 1024 locks per transaction, and the session preflight warns when a server's
+lock table is too small for the schema it is about to hold.
+
 **CI runs** three jobs on every pull request:
 
 - `p0`: this tier's engine and API suites;

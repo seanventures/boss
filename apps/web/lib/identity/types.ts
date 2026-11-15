@@ -257,6 +257,8 @@ export interface Delegation {
   permissions: Permission[];
   projects: string[];
   github: GithubResource | null;
+  /** Repositories on this machine the grant covers (local-first projects, BOSSAPP-1163). */
+  local?: { repos: string[] } | null;
   subdelegation: { allowed: boolean; to: string[] };
   max_depth: number;
   created_at: string;

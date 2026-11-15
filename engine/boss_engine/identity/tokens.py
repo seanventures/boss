@@ -306,8 +306,8 @@ def mint_run_token(*, subject: AuthContext, agent: AgentInstance, grant_id: Opti
             if grant is None:
                 raise _refused("grant_required")
             if task.resources.get("github"):
-                allowed_repos = set(grants.github_resources(grant).get("repos") or ())
-                if not set(task.resources["github"]) <= allowed_repos:
+                # GitHub and local repositories alike (grants.grant_repos, BOSSAPP-1163).
+                if not {str(r).lower() for r in task.resources["github"]} <= grants.grant_repos(grant):
                     raise _refused("repo_outside_grant")
                 grants.check_grant_repo_access(grant, org_id, sub, grants.github_resources(grant), db=db)
         elif subject.principal.kind == PrincipalKind.AGENT and subject.principal.id == agent.agent_id:

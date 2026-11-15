@@ -570,7 +570,68 @@ def build_parser() -> argparse.ArgumentParser:
     pl = sub.add_parser("plugin", help="infrastructure plugins: init, validate, test")
     _plugin_commands(pl.add_subparsers(dest="plugin_cmd", required=True))
     pl.set_defaults(func=lambda a: int(a.run(a)))
+
+    dev = sub.add_parser("dev", help="developer tooling: the test databases")
+    _dev_commands(dev.add_subparsers(dest="dev_cmd", required=True))
     return p
+
+
+def _dev_commands(sub) -> None:
+    """`boss dev ...` (storage hygiene, BOSSAPP-1152/1162). The URL is the test server's:
+    BOSS_TEST_DATABASE_URL, or --url. Passwords are never printed."""
+    sw = sub.add_parser(
+        "sweep-test-db",
+        help="drop boss_scratch_*_<stamp> databases and boss_test_*_<stamp> schemas older than the TTL; nothing else",
+    )
+    sw.add_argument("--url", default=None, help="test server URL (default BOSS_TEST_DATABASE_URL)")
+    sw.add_argument("--dry-run", action="store_true", help="list what would go; drop nothing")
+    sw.add_argument("--max-age-hours", type=float, default=None,
+                    help="TTL in hours (default 24, the ttl=24h label)")
+    sw.add_argument("--include-unstamped", action="store_true",
+                    help="also the API suite's legacy boss_test_<12 hex> schemas that no session holds a lock in; "
+                         "only when no suite from before the stamp is running")
+    sw.set_defaults(func=_cmd_dev_sweep)
+    pf = sub.add_parser("test-db-preflight",
+                        help="is the server's lock table big enough for the schema? (max_locks_per_transaction)")
+    pf.add_argument("--url", default=None, help="test server URL (default BOSS_TEST_DATABASE_URL)")
+    pf.add_argument("--runs", type=int, default=None, help="test runs that may end at once (default 3)")
+    pf.set_defaults(func=_cmd_dev_preflight)
+
+
+def _dev_url(args) -> str:
+    url = args.url or os.environ.get("BOSS_TEST_DATABASE_URL", "")
+    if not url:
+        print("boss dev: name the test server with --url or BOSS_TEST_DATABASE_URL", file=sys.stderr)
+        raise SystemExit(2)
+    return url
+
+
+def _cmd_dev_sweep(args) -> int:
+    from .dev.test_databases import DEFAULT_TTL_HOURS, redacted, sweep
+
+    url = _dev_url(args)
+    ttl = args.max_age_hours if args.max_age_hours is not None else DEFAULT_TTL_HOURS
+    report = sweep(url, ttl_hours=ttl, dry_run=args.dry_run, include_unstamped=args.include_unstamped)
+    print(f"test-db sweep on {redacted(url)} (TTL {ttl:g} h{', dry run' if args.dry_run else ''})")
+    for line in report.lines():
+        print(line)
+    return 1 if report.failures else 0
+
+
+def _cmd_dev_preflight(args) -> int:
+    from .dev.test_databases import DEFAULT_CONCURRENT_RUNS, _connect, _executor, lock_preflight, psycopg_dsn, redacted
+
+    url = _dev_url(args)
+    with _connect(psycopg_dsn(url)) as connection:
+        headroom = lock_preflight(_executor(connection), concurrent_runs=args.runs or DEFAULT_CONCURRENT_RUNS)
+    print(f"test-db preflight on {redacted(url)}: {headroom.relations} relations per schema, "
+          f"{headroom.capacity} lock slots, {headroom.needed} needed for {headroom.concurrent_runs} runs")
+    message = headroom.message()
+    if message:
+        print("WARNING: " + message)
+        return 1
+    print("ok")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

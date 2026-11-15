@@ -3,7 +3,11 @@ person's grants cover answers `409 consent_required` with what the console's con
 Owned by S3.
 
     raise ConsentRequired  ->  409 {"error": "consent_required", "task", "task_run_id", "agents",
-                                    "permissions", "projects", "github", "durations", "max_days"}
+                                    "permissions", "projects", "github", "local", "durations", "max_days"}
+
+`github` names the run's GitHub repositories and the access asked on them; `local` names the
+repositories BOSS keeps on this machine (local-first projects, BOSSAPP-1163) — granted as
+`resources.local`, no GitHub access, but covered like any repository the work names.
 
 The sheet then creates a grant (POST /v1/identity/me/delegations with `kind: "task"` — bound to
 `task_run_id`, a `pending:` id the next matching run CLAIMS — or `kind: "standing"`), and the
@@ -43,6 +47,30 @@ CONSENT_GITHUB_NEEDS = {"contents": "write", "pull_requests": "write"}
 def _github_summary(needs: dict[str, str], pattern: str) -> str:
     parts = [f"{GITHUB_LABELS.get(k, k)} {v}" for k, v in sorted(needs.items()) if k != "metadata"]
     return ", ".join(parts) + (f" · pushes only to {pattern}" if needs.get("contents") == "write" else "")
+
+
+#: What the sheet says of a repository BOSS keeps on this machine (services/local_repo.py).
+LOCAL_SUMMARY = "on this machine"
+
+
+def repo_blocks(repos: Iterable[str], needs: Optional[dict[str, str]] = None, *,
+                summary: bool = True) -> dict[str, Any]:
+    """The consent body's `github` and `local` blocks for the repositories the work names
+    (BOSSAPP-1163). A repository on this machine (`local_<project>/<name>`) is no GitHub access:
+    it is asked for, and granted, as `local` — the sheet's grant body sends both back as
+    `resources.github` / `resources.local`, and grants.covers reads the union. Either block is
+    None when the work names no repository of that kind, so a body without one reads as before."""
+    from . import grants
+
+    github, local = grants.split_repos(repos)
+    needs = dict(needs or CONSENT_GITHUB_NEEDS)
+    gh: Optional[dict[str, Any]] = None
+    if github:
+        gh = {"repo": github[0], "repos": github, "permissions": needs}
+        if summary:
+            gh["summary"] = _github_summary(needs, "boss/*")
+    return {"github": gh,
+            "local": {"repo": local[0], "repos": local, "summary": LOCAL_SUMMARY} if local else None}
 
 
 def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, project_id: Optional[str],
@@ -238,7 +266,7 @@ def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_
             "error": "consent_required", "task": task[:200], "task_run_id": None,
             "agents": [{"id": p.agent_id, "name": _name(db, p.agent_id), "role_key": p.role_key} for p in agents],
             "permissions": sorted(needed), "projects": [project_id] if project_id else [],
-            "github": ({"repo": repos[0], "repos": repos, "permissions": needs} if repos else None),
+            **repo_blocks(repos, needs, summary=False),
             "durations": [{"kind": "standing", "label": f"For {int(pol.delegation_default_days)} days",
                            "days": int(pol.delegation_default_days)}],
             "max_days": int(pol.delegation_max_days),
@@ -252,8 +280,7 @@ def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_
         "agents": [{"id": p.agent_id, "name": _name(db, p.agent_id), "role_key": p.role_key} for p in agents],
         "permissions": sorted(needed),
         "projects": [project_id] if project_id else [],
-        "github": ({"repo": repos[0], "repos": repos, "permissions": needs,
-                    "summary": _github_summary(needs, "boss/*")} if repos else None),
+        **repo_blocks(repos, needs),
         "durations": [{"kind": "task", "label": "For this build only", "days": None},
                       {"kind": "standing", "label": f"For {int(pol.delegation_default_days)} days",
                        "days": int(pol.delegation_default_days)}],
@@ -481,10 +508,11 @@ def workflow_needs(db: Any, project_id: str, spec: Any, input_data: Any) -> tupl
         default = _resolved_builder()
         if default not in roles:
             roles.append(default)
-    # A LOCAL REPOSITORY (BOSSAPP-918) is on this machine: no GitHub access is asked for it.
-    from ..services.local_repo import is_local
-
-    repos = [r for r in (_repos_for(db, project_id, input_data) if builds else []) if not is_local(r)]
+    # A LOCAL REPOSITORY (BOSSAPP-918) is on this machine: no GitHub access is asked for it — but
+    # it IS named, as `local` (BOSSAPP-1163). Dropped here, the run's grant was minted with no
+    # repositories at all, and the first follow-up build on the local repository (Request changes
+    # on the merge decision) was refused `consent_required` by that very grant.
+    repos = _repos_for(db, project_id, input_data) if builds else []
     return roles, frozenset(perms), repos
 
 
@@ -680,8 +708,7 @@ def _consent_body(db: Any, *, ctx_person: str, org_id: str, agents, needed, proj
         "task_run_id": None if standing_only else grants.PENDING_PREFIX + secrets.token_urlsafe(12),
         "agents": [{"id": p.agent_id, "name": _name(db, p.agent_id), "role_key": p.role_key} for p in agents],
         "permissions": sorted(needed), "projects": [project_id] if project_id else [],
-        "github": ({"repo": repos[0], "repos": repos, "permissions": needs, "summary": _github_summary(needs, "boss/*")}
-                   if repos else None),
+        **repo_blocks(repos, needs),
         "durations": durations, "max_days": int(pol.delegation_max_days),
     }
 
@@ -719,9 +746,12 @@ def own_github_refusal(db: Any, *, org_id: str, person_id: str, project_id: str,
     if any(grants.covers(g, agent_ids=agent_ids, permissions=needed, project_id=project_id,
                          repos=repos, run_id=None) for g in grants.for_person(person_id, db=db)):
         return {"state": "not_asked", "covered": True}
+    github_repos, _local = grants.split_repos(repos)
+    if not github_repos:
+        return {"state": "not_asked"}                 # only repositories on this machine: no GitHub
     if not grants.repo_guard_active(org_id, db=db):
         return {"state": "not_checked"}
-    gh = {"repos": repos, **CONSENT_GITHUB_NEEDS}
+    gh = {"repos": github_repos, **CONSENT_GITHUB_NEEDS}
     linked = bool(db.execute(text(
         "SELECT 1 FROM identity_vault_items WHERE owner_principal_id = :p AND kind = 'oauth_user' "
         "AND provider = 'github' AND status = 'active' LIMIT 1"), {"p": person_id}).first())

@@ -125,6 +125,80 @@ services:
       retries: 30
       start_period: 10s
 
+  # --- dev/test Postgres: where developers and the test suites work ------------
+  #
+  # NOT the BOSS database either (storage hygiene layer 1, BOSSAPP-1152). Until this existed the
+  # engine and API suites, the harness bench and developers' scratch databases all lived inside
+  # `db`, next to the live data: ~9 GB of them on one install, and one slow test query spilled
+  # 11 GB of temp files there. Now the suites refuse a database inside `db` unless it is named
+  # boss_test* / boss_scratch* (engine/boss_engine/dev/test_databases.py), and this server is
+  # where they belong:
+  #   docker compose -f scripts/install/community-compose.yml --env-file .env --profile dev up -d db-test
+  #   export BOSS_TEST_DATABASE_URL=postgresql+psycopg://boss:$BOSS_DB_PASSWORD@localhost:55700/boss_test
+  # Opt-in (profile `dev`): an install that never runs tests never starts it. Its data is a
+  # volume of its own (boss_community_pg_test), so `boss_test` and the API shards' databases
+  # survive a restart and a `docker compose down` of the stack; it is labelled kind=test with a
+  # 24 h TTL for everything created inside it, so the Infra Agent's cleanup may remove the whole
+  # volume when space is short and nothing is lost that a test run does not recreate.
+  # Server flags, in order:
+  #   max_locks_per_transaction=1024: one test schema holds ~2100 relations; the default 64 x
+  #     max_connections 100 = 6400 shared lock slots ran out when three API shards dropped their
+  #     schemas together ("out of shared memory", BOSSAPP-1162) and the schemas stayed behind;
+  #   temp_file_limit=1GB: a runaway test query fails before it fills the disk;
+  #   statement_timeout=60s: the default for every test connection (a test that needs longer
+  #     sets its own on the connection, as the suites' PGOPTIONS already do);
+  #   idle_in_transaction_session_timeout: a leaked transaction cannot hold locks for hours.
+  db-test:
+    build:
+      context: .
+      dockerfile: db-image/Dockerfile
+    image: boss-community-db:pg16.12-vector0.8.1-age1.6.0
+    pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
+    profiles: ["dev"]
+    restart: unless-stopped
+    logging: *boss-logging
+    labels:
+      owner: boss
+      kind: test
+      ttl: 24h
+    mem_limit: ${BOSS_TEST_DB_MEM_LIMIT:-2g}
+    oom_score_adj: 300
+    shm_size: 512m
+    environment:
+      POSTGRES_DB: boss_test
+      POSTGRES_USER: boss
+      POSTGRES_PASSWORD: ${BOSS_DB_PASSWORD:?set BOSS_DB_PASSWORD (install.sh generates it; never the old default)}
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=age
+      - -c
+      - max_locks_per_transaction=${BOSS_TEST_PG_MAX_LOCKS_PER_TRANSACTION:-1024}
+      - -c
+      - temp_file_limit=${BOSS_TEST_PG_TEMP_FILE_LIMIT:-1GB}
+      - -c
+      - statement_timeout=${BOSS_TEST_PG_STATEMENT_TIMEOUT:-60s}
+      - -c
+      - idle_in_transaction_session_timeout=${BOSS_PG_IDLE_IN_TRANSACTION_TIMEOUT:-15min}
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+    ports:
+      # Loopback only, like `db`. 55700: never 5432 (the install) or 5433 (build services), so a
+      # URL tells which server it is at a glance, and the suites' live-server guard can too.
+      - "127.0.0.1:${BOSS_TEST_POSTGRES_PORT:-55700}:5432"
+    volumes:
+      - boss_community_pg_test:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U boss -d boss_test"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
   # --- optional secret store -------------------------------------------------
   #
   # `docker compose up` gives you BOSS alone and secrets fall back to the database, which is
@@ -1237,6 +1311,13 @@ volumes:
   boss_community_grok_home:
   boss_community_infisical_redis:
   boss_community_pg:
+  # The dev/test Postgres (profile `dev`). Labelled so cleanup knows it is BOSS's, a test
+  # volume, and rebuildable: a test run recreates whatever it needs (storage hygiene, ST-6).
+  boss_community_pg_test:
+    labels:
+      owner: boss
+      kind: test
+      ttl: 24h
   boss_community_prometheus:
   boss_community_grafana:
   boss_community_grafana_dashboards:
