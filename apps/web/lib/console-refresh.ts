@@ -265,7 +265,16 @@ export const EVENT_INVALIDATES: ReadonlyArray<readonly [string, readonly string[
   ["self_fix.", ["self_fixes"]],
   ["work_item.", ["work", "agent_ops"]],
   ["budget.", ["budget"]],
+  // The Infra Agent's storage incident (BOSSAPP-1156): the strip is on every area, the card on
+  // the Command Center, the Storage card under Govern; a paused run shows on the work screens.
+  ["storage.", ["*", "overview", "dashboard", "budget", "infra", "delivery_workflows", "project", "decisions"]],
+  ["infra.hold", ["*", "overview", "dashboard", "delivery_workflows", "project", "work", "agent_ops"]],
 ];
+
+/** A storage event: the client polls (the strip, the card, Storage) restart on it. */
+export function isStorageEvent(eventType: string): boolean {
+  return eventType.startsWith("storage.") || eventType.startsWith("infra.hold");
+}
 
 /** The polled keys an event invalidates. Every event invalidates the Activity log. */
 export function invalidatedKeys(eventType: string): string[] {

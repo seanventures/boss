@@ -74,6 +74,7 @@ const PASSTHROUGH: Record<string, string> = {
   "lib/documents.ts": "its helpers (registered) send through obsWrite; app/projects/work-docs.tsx gates each press on work_item:manage",
   "lib/inbox.ts": "its helpers (registered) send through obsWrite; app/projects/work-inbox.tsx gates each press on work_item:read",
   "lib/tool-policies.ts": "its helpers (registered) send through obsWrite; app/skills/tool-rules.tsx gates each press on mcp_server:review / mcp_server:read",
+  "lib/infra-storage.ts": "its helpers (registered) send through obsWrite; the strip (app/infra/infra-strip-banner.tsx) gates Acknowledge on system:operate, Storage (app/infra/storage-card.tsx) gates Clean now and the rule toggles on autonomy:manage, the deletion card (app/infra/storage-delete-decision.tsx) gates Delete and the alternatives on decision:approve",
   "app/always-allow-ui.tsx": "sends through obsWrite (/v1/decisions/ registered); its one press is a GatedButton on decision:approve",
 };
 

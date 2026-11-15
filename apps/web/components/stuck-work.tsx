@@ -12,7 +12,13 @@ import React, { useState } from "react";
 import { diagnosedBy, type Diagnosis, type WaitReason } from "../lib/stuck-work";
 import { isWaitingForGitHub } from "../lib/github-wait";
 import { GitHubWait } from "./github-wait";
+import { AgentAvatar } from "../app/agent-avatar";
 import "./stuck-work.css";
+
+/** The engine's wait code for a run the Infra Agent holds (stuck_work: `infra_hold`). */
+export function isInfraHold(code: string | null | undefined): boolean {
+  return !!code && /^infra_hold/.test(code);
+}
 
 const WHO_WORD: Record<string, string> = { you: "Your move", boss: "BOSS is on it", queue: "In the queue", stuck: "Stuck" };
 const STEP_WORD: Record<string, string> = { stuck: "Stuck", checked: "Checked", cause: "Cause", tried: "Tried", next: "Next" };
@@ -22,6 +28,19 @@ export function WhyLine({ why, testId = "why-line", compact = false }: { why: Wa
   // WAITING FOR GITHUB (BOSSAPP-922): the one drawing, on every surface WhyLine is on.
   if (isWaitingForGitHub(why.code)) {
     return <span className="sw-why" data-who={why.who} data-code={why.code} data-testid={testId}><GitHubWait nextAt={why.nextAt} compact={compact} /></span>;
+  }
+  // PAUSED BY THE INFRA AGENT (BOSSAPP-1156): the one chip, with the agent's face, on every
+  // surface a run shows why it waits. It stopped at a checkpoint; nothing is lost or repeated.
+  if (isInfraHold(why.code)) {
+    return (
+      <span className="sw-why sw-why-infra" data-who={why.who} data-code={why.code} data-testid={testId}
+            title={[why.words, why.detail || "Stopped at its last checkpoint; it continues by itself when the disk is back above target. Nothing is lost or repeated."].filter(Boolean).join("\n")}>
+        <AgentAvatar agent="infra_steward" size={16} aiBadge={false} />
+        <span className="sw-why-words">{why.words || "Paused by Infra Agent"}</span>
+        {!compact && why.detail ? <span className="sw-why-detail">{why.detail}</span> : null}
+        <span className="sw-sr">{WHO_WORD[why.who] ?? ""}</span>
+      </span>
+    );
   }
   return (
     <span className="sw-why" data-who={why.who} data-code={why.code} data-testid={testId}

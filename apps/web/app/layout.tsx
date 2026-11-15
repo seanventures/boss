@@ -29,6 +29,8 @@ import "../components/v2/templates/templates.css";
 import "./activity/log.css";
 import "./activity/tool-calls.css";
 import "./govern/govern.css";
+// Infra Agent · storage self-healing (the strip, the Command Center card, Storage, the deletion card, the report).
+import "./infra/infra-storage.css";
 import "./self-fix/self-fix.css";
 // Identity: the identity screens, My account and the sign-in sheet (idn- classes).
 import "./identity/identity.css";
