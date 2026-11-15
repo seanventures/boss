@@ -424,7 +424,14 @@ def _poll(c: Any, engine: Any, inc: dict, plan: list, step: dict, *, actor: str)
         if int(step["tier"]) == 3:
             return _ask(c, inc, plan, step, items)
         return _execute_host(c, inc, plan, step, items, actor=actor)
-    # The real run came back.
+    # The real run came back: it must be the run we asked for (the helper echoes plan_hash).
+    if str(result.get("plan_hash") or "") != str(step.get("plan_hash") or ""):
+        step.update({"state": "failed", "reason": "the helper's result names another plan_hash",
+                     "ended_at": _iso(_now())})
+        _finish_action(c, step.get("action_id"), status="failed", result=result)
+        _receipt_done(c, step.get("receipt_id"), False, {"error": "plan_hash mismatch"})
+        _save_plan(c, inc["id"], plan)
+        return {"incident_id": inc["id"], "state": "failed", "tool": step["tool"]}
     freed = size / 1e9
     step.update({"state": "done", "freed_gb": round(freed, 3), "ended_at": _iso(_now()),
                  "detail": f"{len(items)} items, {freed:.1f} GB freed"})
@@ -597,11 +604,27 @@ def replan_step(connection: Any, incident_id: str, *, tool: str, args: Mapping[s
         return None
     for step in plan:
         if step["tool"] == tool and step.get("state") in ("ask", "refused", "planned"):
+            if step.get("decision_id"):
+                withdraw_card(connection, str(step["decision_id"]), reason="planned again with other arguments")
             step.update({"state": "planned", "args": {**(step.get("args") or {}), **dict(args)},
                          "plan_hash": None, "items": None, "gb": None, "decision_id": None, "reason": None})
             _save_plan(connection, incident_id, plan)
+            if inc.get("status") == "asking":
+                from . import storage_incidents
+
+                storage_incidents.set_status(connection, incident_id, inc.get("severity") or "critical")
             return step
     return None
+
+
+def withdraw_card(connection: Any, decision_id: str, *, reason: str) -> bool:
+    """An open tier-3 card that no longer matches its plan is withdrawn, never left approvable."""
+    from .decision_actions import OPEN_STATUSES
+
+    return bool(connection.execute(text(
+        "UPDATE decisions SET status = 'withdrawn', resolution_note = :n, updated_at = now() "
+        "WHERE id = :d AND status = ANY(:open) RETURNING id"),
+        {"d": decision_id, "n": reason[:300], "open": sorted(OPEN_STATUSES)}).first())
 
 
 # ── API-side tools (Postgres) ───────────────────────────────────────────────────────────────

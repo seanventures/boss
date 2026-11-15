@@ -190,6 +190,19 @@ def release(connection: Any, *, actor: str, reason: str = "",
     return {"hold": status(connection), "resumed_jobs": len(resumed)}
 
 
+def expired(hold: Mapping[str, Any], max_seconds: int, *, now: Optional[datetime] = None) -> bool:
+    """Has an active hold outlived `max_seconds` (BOSS_STORAGE_MAX_HOLD_SECONDS)? Pure."""
+    if not hold.get("active") or not hold.get("since"):
+        return False
+    try:
+        since = datetime.fromisoformat(str(hold["since"]))
+    except ValueError:
+        return False
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
+    return ((now or _now()) - since).total_seconds() > max(60, int(max_seconds))
+
+
 def paused_jobs(connection: Any, *, limit: int = 200) -> list[dict[str, Any]]:
     """Jobs the hold is keeping: queued with last_error.code='infra_hold' (claim refused or
     handed back at a checkpoint), oldest first."""

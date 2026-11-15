@@ -49,7 +49,12 @@ TOOL_OF = {"prune_build_cache": "storage.prune_build_cache", "remove_images": "s
            "remove_orphan_volumes": "storage.remove_orphan_volumes", "cap_logs": "storage.cap_logs",
            "docker_trim": "storage.docker_trim", "remove_backups": "storage.remove_backups", "du": "storage.du"}
 LABEL = "boss.install_id"
-BACKUP_PREFIX = "boss-backup-"
+#: What backup.sh names a backup (`boss-<UTC stamp>-<pid>`, backup_archive.BACKUP_NAME). A
+#: directory is a candidate ONLY when its manifest.json is complete and names THIS install.
+BACKUP_NAME_PREFIX = "boss-"
+#: The cap wins over keep-N / keep-days, but never below this many newest backups
+#: (backup_archive.CAP_FLOOR): a rollback to the release before last stays possible.
+CAP_FLOOR = 3
 #: Pinned so a `docker run` of it is never "whatever :latest is today" (LLD §7.2). Alpine 3.20.3.
 TRIM_IMAGE = "alpine@sha256:beefdbd8a1da6d2915566fde36db9db0b524eb737fc57cd1367effd16dc0d06d"
 DOCKER_RAW_CANDIDATES = (
@@ -209,6 +214,10 @@ class Env:
         self.log_path = Path(log_path or self._env("BOSS_STEWARD_LOG", "") or (self.state_dir / "steward.log"))
         self.docker = docker or ["docker"]
         self.image_tag = self._env("BOSS_COMMUNITY_IMAGE_TAG", "") or self._env("COMPOSE_PROJECT_NAME", "boss-community")
+        #: Build cache is Docker-wide. It is pruned only through a BOSS-owned buildx builder
+        #: (BOSS_BUILDX_BUILDER) or on a host that runs nothing but BOSS (BOSS_DEDICATED_HOST=1).
+        self.buildx_builder = self._env("BOSS_BUILDX_BUILDER", "")
+        self.dedicated = self._env("BOSS_DEDICATED_HOST", "0").lower() in ("1", "true", "yes")
         self.is_mac = platform.system() == "Darwin"
 
     @staticmethod
@@ -262,21 +271,45 @@ def api(env: Env, method: str, path: str, body: Optional[dict] = None, *, timeou
     return json.loads(raw) if raw else {}
 
 
-def public_key(env: Env, fetch: Callable[[], dict]) -> dict:
-    """BOSS's signing key, cached on disk; refreshed when the job names another key id."""
-    cache = env.state_dir / "steward-pubkey.json"
+PIN_FILE = "steward-pubkey.json"
+
+
+def pinned_key(env: Env) -> Optional[dict]:
     try:
-        cached = json.loads(cache.read_text())
+        data = json.loads((env.state_dir / PIN_FILE).read_text())
+        return data if isinstance(data, dict) and data.get("public_key") else None
     except (OSError, ValueError):
-        cached = None
-    if cached is None:
-        cached = fetch()
-        try:
-            env.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-            cache.write_text(json.dumps(cached))
-        except OSError:
-            pass
-    return cached
+        return None
+
+
+def pin_key(env: Env, key: dict) -> None:
+    env.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = env.state_dir / PIN_FILE
+    path.write_text(json.dumps({"key_id": key.get("key_id"), "algorithm": key.get("algorithm"),
+                                "public_key": key.get("public_key"), "pinned_at": now_iso()}))
+    path.chmod(0o600)
+
+
+def unpin_key(env: Env) -> bool:
+    """`boss steward rekey`: forget the pin; the next run pins whatever BOSS publishes (TOFU again)."""
+    try:
+        (env.state_dir / PIN_FILE).unlink()
+        return True
+    except OSError:
+        return False
+
+
+def public_key(env: Env, fetch: Callable[[], dict]) -> dict:
+    """TRUST ON FIRST USE. The first run pins the key BOSS publishes; from then on the pin is the
+    truth. A job (or a published key) under another key id is REFUSED, never re-fetched: a
+    rotated or impersonated API cannot talk the helper into a new key. The operator confirms a
+    real rotation with `boss steward rekey`."""
+    pinned = pinned_key(env)
+    if pinned is not None:
+        return pinned
+    fetched = fetch()
+    pin_key(env, fetched)
+    return pinned_key(env) or fetched
 
 
 # ── readings ────────────────────────────────────────────────────────────────────────────────
@@ -342,36 +375,43 @@ def docker_raw(env: Env) -> tuple[Optional[float], Optional[float]]:
     return None, None
 
 
+def backup_manifest(entry: Path) -> Optional[dict[str, Any]]:
+    """The backup's manifest.json when it is a complete BOSS backup, else None."""
+    m = entry / "manifest.json"
+    if not entry.is_dir() or entry.is_symlink() or not m.is_file():
+        return None
+    try:
+        data = json.loads(m.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("complete") is not True:
+        return None
+    return data
+
+
 def walk_backups(env: Env) -> list[dict[str, Any]]:
-    """Every backup under BACKUP_ROOT: {path, name, bytes, mtime, install_id|None}. Only entries
-    named boss-backup-*; anything else in the folder is not ours and is never listed."""
+    """THE BACKUP LABEL GATE (LLD §7.2). Only a directory under BACKUP_ROOT that is named
+    boss-*, is not a symlink, and carries a complete manifest.json whose install_id is THIS
+    install's is a backup of ours. Anything else in the folder — an operator's own copy, a
+    folder named boss-backup-x, another install's backup — is never listed, so never sampled,
+    never a candidate, never deleted."""
     root = env.backup_root
     out: list[dict[str, Any]] = []
-    if not root.is_dir():
+    if not root.is_dir() or not env.install_id:
         return out
     for entry in sorted(root.iterdir()):
-        if not entry.name.startswith(BACKUP_PREFIX):
+        if not entry.name.startswith(BACKUP_NAME_PREFIX):
+            continue
+        manifest = backup_manifest(entry)
+        if manifest is None or str(manifest.get("install_id") or "") != env.install_id:
             continue
         try:
-            if entry.is_dir():
-                size = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
-            else:
-                size = entry.stat().st_size
+            size = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file() and not f.is_symlink())
             mtime = entry.stat().st_mtime
         except OSError:
             continue
-        install = None
-        for manifest in ("manifest.json", ".metadata.json", "metadata.json"):
-            m = entry / manifest if entry.is_dir() else None
-            if m is not None and m.is_file():
-                try:
-                    data = json.loads(m.read_text())
-                    install = str(data.get("install_id") or data.get("boss.install_id") or "") or None
-                except (OSError, ValueError):
-                    install = None
-                break
         out.append({"path": str(entry), "name": entry.name, "bytes": float(size), "mtime": mtime,
-                    "install_id": install})
+                    "install_id": env.install_id})
     return out
 
 
@@ -431,12 +471,20 @@ def verb_du(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[l
 
 def verb_prune_build_cache(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:
     keep = int(args.get("keep_storage_gb") or 10)
+    if not env.buildx_builder and not env.dedicated:
+        raise Refused("the build cache is Docker-wide; on a shared machine BOSS prunes only its own "
+                      "buildx builder (set BOSS_BUILDX_BUILDER) or a dedicated host (BOSS_DEDICATED_HOST=1)")
     df = docker_df(env, runner)
     over = max(0.0, df["cache"] - keep * 1e9)
-    items = [f"build-cache:above-{keep}GB"] if over > 0 else []
+    scope = f"builder:{env.buildx_builder}" if env.buildx_builder else "dedicated-host"
+    items = [f"build-cache:{scope}:above-{keep}GB"] if over > 0 else []
     if dry_run or not items:
         return items, over
-    res = runner([*env.docker, "builder", "prune", "-f", "--keep-storage", f"{keep}gb"], timeout=900)
+    if env.buildx_builder:
+        argv = [*env.docker, "buildx", "prune", "--builder", env.buildx_builder, "-f", "--keep-storage", f"{keep}gb"]
+    else:
+        argv = [*env.docker, "builder", "prune", "-f", "--keep-storage", f"{keep}gb"]
+    res = runner(argv, timeout=900)
     if res.returncode != 0:
         raise Refused(f"docker builder prune failed: {(res.stderr or '').strip()[:160]}")
     after = docker_df(env, runner)
@@ -564,38 +612,35 @@ def verb_docker_trim(env: Env, args: dict, *, dry_run: bool, runner: Callable) -
 
 def select_backups(backups: list[dict[str, Any]], *, keep_newest: int, keep_days: float, cap_gb: float,
                    install_id: str, root: Path, now: Optional[float] = None) -> list[dict[str, Any]]:
-    """The label gate for backups + the retention rule, pure: under `root`, named boss-backup-*,
-    a manifest (if any) naming THIS install; keep the newest N and anything younger than
-    keep_days; then the oldest go until the rest fit under cap_gb."""
+    """The retention rule, pure (backup_archive's rule, so the script and the agent agree):
+    only backups under `root` named boss-* whose manifest named THIS install; keep the newest N
+    and anything younger than keep_days; everything else goes. Then the cap: while the kept set
+    is over cap_gb and more than CAP_FLOOR remain, the oldest kept one goes too. Oldest first."""
     now = now or time.time()
     root_real = root.resolve()
     ours = []
     for b in backups:
         p = Path(b["path"])
         try:
-            if root_real not in p.resolve().parents:
+            if p.is_symlink() or root_real not in p.resolve().parents:
                 continue
         except OSError:
             continue
-        if not p.name.startswith(BACKUP_PREFIX):
+        if not p.name.startswith(BACKUP_NAME_PREFIX):
             continue
-        if b.get("install_id") and install_id and b["install_id"] != install_id:
+        if not install_id or b.get("install_id") != install_id:
             continue
         ours.append(b)
     ours.sort(key=lambda b: b["mtime"], reverse=True)       # newest first
-    protected = set(b["path"] for b in ours[:max(0, int(keep_newest))])
-    protected |= set(b["path"] for b in ours if now - b["mtime"] < float(keep_days) * 86400)
-    candidates = [b for b in ours if b["path"] not in protected]      # oldest at the end
-    total = sum(b["bytes"] for b in ours)
-    to_delete: list[dict[str, Any]] = []
-    # Beyond keep-N / keep-days: every candidate is past the rule. Within the cap on top: the
-    # oldest first until the kept set fits.
+    keep_n = max(0, int(keep_newest))
+    protected = {b["path"] for b in ours[:keep_n]}
+    protected |= {b["path"] for b in ours if now - b["mtime"] < float(keep_days) * 86400}
+    to_delete = [b for b in reversed(ours) if b["path"] not in protected]     # oldest first
+    kept = [b for b in ours if b["path"] in protected]                      # newest first
     cap = float(cap_gb) * 1e9
-    for b in reversed(candidates):                           # oldest first
-        if total <= cap and len(to_delete) >= 0 and cap > 0 and total - sum(x["bytes"] for x in to_delete) <= cap:
-            # Under the cap already: still remove what the keep rules do not protect.
-            pass
-        to_delete.append(b)
+    if cap > 0:
+        while kept and len(kept) > CAP_FLOOR and sum(b["bytes"] for b in kept) > cap:
+            to_delete.append(kept.pop())                                    # the oldest kept
     return to_delete
 
 
@@ -612,7 +657,10 @@ def verb_remove_backups(env: Env, args: dict, *, dry_run: bool, runner: Callable
     root_real = env.backup_root.resolve()
     for b in chosen:
         p = Path(b["path"])
-        if root_real not in p.resolve().parents or not p.name.startswith(BACKUP_PREFIX):
+        manifest = backup_manifest(p)
+        if (p.is_symlink() or root_real not in p.resolve().parents
+                or not p.name.startswith(BACKUP_NAME_PREFIX) or manifest is None
+                or str(manifest.get("install_id") or "") != env.install_id):
             continue  # the gate, once more, at the moment of deletion
         try:
             if p.is_dir() and not p.is_symlink():
@@ -642,7 +690,8 @@ def check_job(env: Env, job: dict, pubkey: dict, *, now: Optional[_dt.datetime] 
         if k not in job:
             raise Refused(f"job is missing {k}")
     if job.get("key_id") and pubkey.get("key_id") and job["key_id"] != pubkey["key_id"]:
-        raise Refused("job signed by a key this helper does not know")
+        raise Refused("job signed by a key this helper does not know (pinned key differs; if BOSS "
+                      "rotated its key on purpose, run `boss steward rekey`)")
     payload = canonical(str(job["id"]), str(job["host_id"]), str(job["verb"]), dict(job["args"] or {}),
                         str(job["expires_at"]))
     if not verify_signature(str(pubkey.get("public_key") or ""), payload, str(job["signature"])):
@@ -714,12 +763,8 @@ def once(env: Env, *, runner: Callable = run_cmd, sample_only: bool = False) -> 
             log_line(env, report)
             return report
         pubkey = public_key(env, lambda: api(env, "GET", "/v1/host-jobs/public-key"))
-        if job.get("key_id") and pubkey.get("key_id") != job.get("key_id"):
-            pubkey = api(env, "GET", "/v1/host-jobs/public-key")     # rotated: refresh once
-            try:
-                (env.state_dir / "steward-pubkey.json").write_text(json.dumps(pubkey))
-            except OSError:
-                pass
+        # A key id other than the pinned one is refused inside perform/check_job ("signed by a
+        # key this helper does not know"); nothing here refreshes the pin — `steward rekey` does.
         result = perform(env, job, pubkey, runner=runner)
         api(env, "POST", f"/v1/host-jobs/{job['id']}/result", result)
         report["job"] = {"id": job["id"], "verb": job["verb"], "ok": result["ok"], "dry_run": result["dry_run"],
@@ -737,12 +782,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--backup-dir", default=None)
     ap.add_argument("--sample-only", action="store_true", help="post the reading; take no job")
     ap.add_argument("--print", action="store_true", help="print the reading and exit (no network)")
+    ap.add_argument("--rekey", action="store_true",
+                    help="forget the pinned signing key; the next run pins BOSS's current one")
     ap.add_argument("--version", action="store_true")
     ns = ap.parse_args(argv)
     if ns.version:
         print(VERSION)
         return 0
     env = Env(ns.install_dir, api_url=ns.api_url, backup_root=ns.backup_dir)
+    if ns.rekey:
+        forgot = unpin_key(env)
+        log_line(env, {"host_id": env.host_id, "rekey": forgot})
+        print("pinned signing key forgotten; the next run pins BOSS's current key" if forgot
+              else "no pinned key to forget")
+        return 0
     if ns.print:
         print(json.dumps(collect(env), indent=2, default=str))
         return 0

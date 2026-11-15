@@ -505,12 +505,17 @@ def tick(engine: Any, settings: Any = None, *, sample_api: bool = True) -> dict[
                 except Exception as exc:  # noqa: BLE001 — one host never stops the others
                     _log.warning("storage watch: host %s not evaluated", host_id, exc_info=True)
                     report["hosts"].append({"host_id": host_id, "error": f"{type(exc).__name__}"})
-            # A stuck hold: incident gone, or the host silent for 15 min with a good last reading.
+            # A stuck hold: incident gone, or the host silent for 15 min with a good last reading,
+            # or the hold older than the maximum (BOSS_STORAGE_MAX_HOLD_SECONDS, 2 h): released,
+            # the incident kept open, an alert raised.
             hold = work_hold.state(c, fresh=True)
             if hold.get("active"):
                 inc = storage_incidents.get(c, str(hold.get("incident_id") or ""))
+                max_seconds = int(getattr(settings, "storage_max_hold_seconds", 7200) or 7200)
                 if inc is None or inc["status"] == "resolved":
                     work_hold.release(c, actor="boss", reason="its incident is resolved")
+                elif work_hold.expired(hold, max_seconds):
+                    storage_incidents.expire_hold(c, inc, max_seconds=max_seconds)
                 else:
                     s = latest(c, str(hold.get("host_id") or ""), within=timedelta(days=2)) or {}
                     at = s.get("at")

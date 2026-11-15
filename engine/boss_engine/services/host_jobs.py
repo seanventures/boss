@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Optional
@@ -24,6 +25,10 @@ from typing import Any, Mapping, Optional
 from sqlalchemy import text
 
 from .core import make_id
+
+_log = logging.getLogger("boss.host_jobs")
+SEED_SECRET_NAME = "host_jobs_signing_seed"
+_SEED_CACHE: dict[str, bytes] = {}
 
 VERBS = ("du", "prune_build_cache", "remove_images", "remove_orphan_volumes", "cap_logs",
          "docker_trim", "remove_backups")
@@ -54,13 +59,55 @@ def canonical(id_: str, host_id: str, verb: str, args: Mapping[str, Any], expire
 
 # ── keys ────────────────────────────────────────────────────────────────────────────────────
 
+def _secret_backend():
+    """The install's secret store as secrets_service picks it (secret_backends.default_secret_backend:
+    managed store → vault → local encrypted vault → database). None when nothing answers."""
+    try:
+        from ..config import get_settings
+        from . import secret_backends
+
+        settings = get_settings()
+        kind = secret_backends.default_secret_backend(settings)
+        if not kind or str(kind).lower() in ("database", "db", "postgres"):
+            return None          # the database IS system_state: nothing gained by going around
+        return secret_backends.backend_for(str(kind), settings)
+    except Exception:  # noqa: BLE001 — no store reachable: the fallback below says so
+        _log.info("host-jobs signing seed: no secret store reachable; using system_state", exc_info=True)
+        return None
+
+
 def _seed(connection: Any) -> bytes:
+    """The Ed25519 seed, in this order: BOSS_HOST_JOBS_SIGNING_KEY; the install's secret store
+    (`host_jobs_signing_seed`); system_state only when no store exists. Generated once, cached."""
     raw = (os.environ.get("BOSS_HOST_JOBS_SIGNING_KEY") or "").strip()
     if raw:
         seed = base64.b64decode(raw)
         if len(seed) != 32:
             raise HostJobError("BOSS_HOST_JOBS_SIGNING_KEY must be a base64 32-byte Ed25519 seed")
         return seed
+    if _SEED_CACHE.get("seed"):
+        return _SEED_CACHE["seed"]
+    backend = _secret_backend()
+    if backend is not None:
+        try:
+            found = backend.get(SEED_SECRET_NAME)
+            if found:
+                _SEED_CACHE["seed"] = base64.b64decode(found)
+                return _SEED_CACHE["seed"]
+        except Exception:  # noqa: BLE001 — not there yet, or unreachable: try to write it
+            pass
+        seed = os.urandom(32)
+        try:
+            backend.put(SEED_SECRET_NAME, base64.b64encode(seed).decode("ascii"))
+            _SEED_CACHE["seed"] = seed
+            connection.execute(text(
+                "INSERT INTO system_state (key, value, updated_at) VALUES (:k, CAST(:v AS JSONB), now()) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"),
+                {"k": STATE_KEY, "v": json.dumps({"where": "secret_store", "name": SEED_SECRET_NAME,
+                                                  "created_at": _now().isoformat()})})
+            return seed
+        except Exception:  # noqa: BLE001 — a store that cannot write: fall through
+            _log.warning("host-jobs signing seed could not be written to the secret store", exc_info=True)
     value = connection.execute(text("SELECT value FROM system_state WHERE key = :k"),
                                {"k": STATE_KEY}).scalar()
     if isinstance(value, str):
@@ -72,7 +119,7 @@ def _seed(connection: Any) -> bytes:
         "INSERT INTO system_state (key, value, updated_at) VALUES (:k, CAST(:v AS JSONB), now()) "
         "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"),
         {"k": STATE_KEY, "v": json.dumps({"seed": base64.b64encode(seed).decode("ascii"),
-                                          "created_at": _now().isoformat()})})
+                                          "where": "system_state", "created_at": _now().isoformat()})})
     return seed
 
 

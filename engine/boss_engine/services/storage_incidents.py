@@ -355,7 +355,8 @@ def on_level(connection: Any, *, host_id: str, level: str, previous: str,
         _update(connection, inc_id, **changes)
         _hold(connection, inc_id, host_id, project_id)
         inc = _row(connection, inc_id)
-        _update(connection, inc_id, plan=storage_cleanup.build_plan(connection, inc, sample, max_tier=3))
+        _update(connection, inc_id, plan=storage_cleanup.build_plan(connection, inc, sample, max_tier=3,
+                                                                    keep=_json(inc.get("plan"), []) or []))
         _emit(connection, project_id, "storage.incident.escalated", inc_id,
               {"incident_id": inc_id, "host_id": host_id, "cause_key": cause_key})
         inc = _row(connection, inc_id)
@@ -407,6 +408,26 @@ def _admit_agent(connection: Any, inc: Mapping[str, Any]) -> None:
             _update(connection, inc["id"], agent_run_id=run_id)
     except Exception:  # noqa: BLE001 — the executor never waits on the model
         _log.info("infra agent not admitted for %s", inc["id"], exc_info=True)
+
+
+def expire_hold(connection: Any, inc: Mapping[str, Any], *, max_seconds: int) -> dict[str, Any]:
+    """The hold reached its maximum (LLD review): paused work is released, the incident stays open
+    (its card still asks), the report notes it and an alert event is raised."""
+    project_id = inc.get("project_id") or default_project(connection)
+    out = work_hold.release(connection, actor="boss",
+                            reason=f"the work hold reached its maximum of {max_seconds // 60} minutes",
+                            project_id=project_id)
+    connection.execute(text(
+        "UPDATE storage_incidents SET hold_released_at = now(), report = COALESCE(report, '{}'::jsonb) "
+        "|| jsonb_build_object('hold_expired', true, 'hold_expired_at', CAST(:t AS text), "
+        "'hold_max_seconds', CAST(:m AS integer)), updated_at = now() WHERE id = :id"),
+        {"t": _now().isoformat(), "m": int(max_seconds), "id": inc["id"]})
+    _emit(connection, project_id, "infra.hold.expired", inc["id"],
+          {"incident_id": inc["id"], "host_id": inc["host_id"], "max_seconds": int(max_seconds),
+           "resumed_jobs": out.get("resumed_jobs", 0), "status": inc.get("status"),
+           "alert": "storage is still below target; work resumed; the incident still needs you"})
+    refresh_flow(connection, inc["id"])
+    return out
 
 
 def set_status(connection: Any, incident_id: str, status: str) -> None:

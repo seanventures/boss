@@ -108,16 +108,19 @@ def world(pg, tmp_path, monkeypatch):
     install = tmp_path / "install"
     install.mkdir()
     (install / ".env").write_text(f"BOSS_INSTALL_ID={INSTALL}\nBOSS_HOST_ID={HOST}\n"
-                                  "BOSS_HOST_API_KEY=fake\nBOSS_COMMUNITY_IMAGE_TAG=v1\n")
+                                  "BOSS_HOST_API_KEY=fake\nBOSS_COMMUNITY_IMAGE_TAG=v1\nBOSS_DEDICATED_HOST=1\n")
     backups = tmp_path / "boss-backups"
     backups.mkdir()
     now = time.time()
     for i in range(14):
-        d = backups / f"boss-backup-2026-10-{i + 1:02d}"
+        # as backup.sh writes them: boss-<stamp>-<pid> with a complete manifest naming this install
+        d = backups / f"boss-202610{i + 1:02d}T000000Z-{100 + i}"
         d.mkdir()
         (d / "boss.dump").write_bytes(b"x" * 4096)
+        (d / "manifest.json").write_text(json.dumps({"complete": True, "install_id": INSTALL}))
         os.utime(d, (now - (40 - i) * 86400, now - (40 - i) * 86400))
     (backups / "my-photos").mkdir()
+    (backups / "boss-backup-x").write_bytes(b"an operator's own file")
     env = steward.Env(str(install), api_url="http://127.0.0.1:1", backup_root=str(backups),
                       state_dir=str(tmp_path / "state"), docker=["fake-docker"])
     env.is_mac = False
@@ -219,7 +222,7 @@ def test_fake_disk_detect_hold_clean_ask_resume(pg, world):
     rec = decision["recommendation"]
     assert kind_of(decision) == "storage_delete" and decision["status"] == "pending"
     assert rec["items"] == 4 and rec["rule_proposal"]["kind"] == "backups"      # keep newest 10 of 14
-    assert sorted(rec["to_delete"]) == [f"boss-backup-2026-10-{i:02d}" for i in (1, 2, 3, 4)]
+    assert sorted(rec["to_delete"]) == [f"boss-202610{i:02d}T000000Z-{99 + i}" for i in (1, 2, 3, 4)]
     assert rec["plan_hash"] == step["plan_hash"]
     assert receipts and all(r == "succeeded" for r in receipts), "every real step is receipted"
     assert any(a["dry_run"] for a in actions) and any(not a["dry_run"] and a["status"] == "done" for a in actions)
@@ -251,8 +254,9 @@ def test_fake_disk_detect_hold_clean_ask_resume(pg, world):
     storage_cleanup.advance_all(pg)
     inc = _incident(pg)
     assert _plan_states(inc)["storage.remove_backups"] == "done"
-    assert not (backups / "boss-backup-2026-10-01").exists() and (backups / "boss-backup-2026-10-05").exists()
-    assert (backups / "my-photos").exists() and (backups / "boss-backup-2026-10-14").exists()
+    assert not (backups / "boss-20261001T000000Z-100").exists() and (backups / "boss-20261005T000000Z-104").exists()
+    assert (backups / "my-photos").exists() and (backups / "boss-20261014T000000Z-113").exists()
+    assert (backups / "boss-backup-x").exists(), "an operator's file named like a backup is never ours"
     assert inc["status"] == "critical", "asking is over; still cleaning until the host reports"
 
     # ── resume: the host reports free space above target twice → resolved, released, reported ──

@@ -21,8 +21,8 @@ Every route is JSON. Times are ISO-8601 UTC strings. Sizes are **GB (decimal, 1e
 | `POST /v1/infra/storage/hold/release` | `autonomy:manage` @ org (step-up) | safety valve |
 | `GET /v1/infra/storage/rules` | `system:read` @ org | Storage card |
 | `PUT /v1/infra/storage/rules` | `autonomy:manage` @ org (step-up) | thresholds + retention |
-| `POST /v1/infra/storage/samples` | `system:operate` @ org (host key) | `boss steward` only |
-| `GET /v1/host-jobs/lease` · `POST /v1/host-jobs/{id}/result` · `GET /v1/host-jobs/public-key` | `system:operate` @ org (host key) | `boss steward` only |
+| `POST /v1/infra/storage/samples` | `system:operate` @ org **and the Host tools principal only** (`sva_host_tools`, the key from `boss identity host-key`; any other principal gets 403) | `boss steward` only |
+| `GET /v1/host-jobs/lease` · `POST /v1/host-jobs/{id}/result` (`system:operate`) · `GET /v1/host-jobs/public-key` (`system:read`) | Host tools principal only (403 otherwise) | `boss steward` only |
 | tier-3 cards | existing `/v1/decisions/*` | decision kind `storage_delete`, rule proposals kind `storage_rule` |
 
 The console reads permissions from `apps/web/lib/identity/read-routes.gen.ts` (regenerated with the matrix).
@@ -123,6 +123,8 @@ type HoldStatus = {
 `GET /v1/infra/storage/hold` → `{ "hold": HoldStatus }`.
 `POST /v1/infra/storage/hold/release` body `{ "reason": string }` → `{ "hold": HoldStatus, "resumed_jobs": number }`. Emits `infra.hold.released`.
 
+**Maximum hold:** a hold never outlives `BOSS_STORAGE_MAX_HOLD_SECONDS` (default 7200). Past it the watch releases the hold (`infra.hold.expired` event, `alert` text in its data), paused work resumes, and the incident **stays open** with `report.hold_expired = true` and `hold.released_at` set while its card still asks — the strip keeps showing it.
+
 A paused job is recognised anywhere by `jobs.last_error.code == "infra_hold"`; its `message` is `"Paused by the Infra Agent (incident si_…): storage is being cleaned; resumes from its checkpoint"` and `last_error.incident_id` carries the id. `code_task_runs.finalize_ctx.paused_by == "infra_agent"` for builds. Agents-at-work rows show a `paused · checkpoint` chip on that.
 
 ## 4. Storage summary (S3)
@@ -191,7 +193,7 @@ Tier-3 cards are ordinary decisions. `recommendation` carries:
   "alternatives": [ { "label": "Keep 20 instead", "args": { "keep_newest": 20 } } ],
   "never_automatic": ["unlabelled", "data volumes", "non-scratch databases"] }
 ```
-`decision_actions.kind_of` → `"storage_delete"`. Approving executes exactly `plan_hash` (an expired dry run re-plans and re-asks); the approve body may carry `{ "make_rule": true, "args": {…alternative} }`. Reject = "Not now": re-asked in 1 h or on further fall. Rule proposals (cause seen twice) are decisions with `recommendation.action = "storage_rule"`, kind `storage_rule`.
+`decision_actions.kind_of` → `"storage_delete"`. Approving executes exactly `plan_hash` (an expired dry run re-plans and re-asks). The approve body (`POST /v1/decisions/{id}/approve`) carries the choices in its typed `answer`: `{ "answer": { "make_rule": true, "args": { "keep_newest": 20 } } }` — `make_rule` defaults to the card's `rule_proposal.preticked`; `args` re-plans with those arguments (a new dry run, re-asked if still tier 3). `POST …/incidents/{id}/replan` does the same from outside the card and **withdraws the old card**. Reject = "Not now": re-asked in 1 h or on further fall. Rule proposals (cause seen twice) are decisions with `recommendation.action = "storage_rule"`, kind `storage_rule`.
 
 ## 8. Events (SSE `GET /v1/events/stream?kinds=storage.,infra.`)
 
@@ -220,7 +222,9 @@ type HostJob = { id: string; host_id: string; verb: "du"|"prune_build_cache"|"re
   key_id: string };
 ```
 `POST /v1/host-jobs/{id}/result` body `{ "ok": boolean, "dry_run": boolean, "items": string[], "bytes": number, "error"?: string, "plan_hash": string }` → `{ "recorded": true }`.
-`GET /v1/host-jobs/public-key` → `{ "key_id": string, "algorithm": "Ed25519", "public_key": "<base64 raw 32 bytes>" }`.
+`GET /v1/host-jobs/public-key` → `{ "key_id": string, "algorithm": "Ed25519", "public_key": "<base64 raw 32 bytes>" }`. The steward **pins** this on first use (TOFU, `~/.boss/steward-pubkey.json`) and refuses any job under another `key_id` until the operator runs `boss steward rekey`. The seed lives in the install's secret store (`host_jobs_signing_seed`; `BOSS_HOST_JOBS_SIGNING_KEY` overrides), system_state only when no store exists.
+
+Backups the steward may touch: directories under `BACKUP_ROOT` named `boss-*` (backup.sh: `boss-<stamp>-<pid>`) whose `manifest.json` is complete and names this install (`install_id`, written by backup.sh); anything else — an operator's `boss-backup-x`, a folder without a manifest, another install's backup — is never sampled, never a candidate. Build cache is pruned only through `BOSS_BUILDX_BUILDER` or on `BOSS_DEDICATED_HOST=1`.
 
 ## 11. P8 KVM hosts: `boss-hostd` `storage` verbs (documented, not built)
 

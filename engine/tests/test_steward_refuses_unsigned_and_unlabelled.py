@@ -46,7 +46,7 @@ def env(tmp_path, monkeypatch):
     install = tmp_path / "install"
     install.mkdir()
     (install / ".env").write_text("BOSS_INSTALL_ID=inst_abc\nBOSS_HOST_API_KEY=not-a-real-key\n"
-                                  "BOSS_COMMUNITY_IMAGE_TAG=v1\n")
+                                  "BOSS_COMMUNITY_IMAGE_TAG=v1\nBOSS_DEDICATED_HOST=1\n")
     backups = tmp_path / "backups"
     backups.mkdir()
     for name in ("BOSS_INSTALL_ID", "BOSS_HOST_ID", "BOSS_HOST_API_KEY", "BOSS_BACKUP_DIR"):
@@ -182,60 +182,161 @@ def test_helper_label_gate_volumes(env, keypair, docker):
     assert real["ok"] and docker.removed == [("volume", "boss_tmp_1")]
 
 
-def test_helper_label_gate_backups_stay_under_root_and_named(env, keypair, docker, tmp_path):
+def _real_backup(root, stamp: str, pid: int, *, install_id="inst_abc", age_days: float, size=4096,
+                 complete=True):
+    """A backup as backup.sh writes it: boss-<stamp>-<pid> with a complete manifest naming the install."""
+    d = root / f"boss-{stamp}-{pid}"
+    d.mkdir()
+    (d / "boss.dump").write_bytes(b"x" * size)
+    (d / "manifest.json").write_text(json.dumps({"format": "boss-backup/2", "complete": complete,
+                                                 "install_id": install_id, "created_utc": stamp}))
+    t = time.time() - age_days * 86400
+    os.utime(d, (t, t))
+    return d
+
+
+def test_helper_label_gate_backups_need_a_manifest_naming_this_install(env, keypair, docker, tmp_path):
     priv, pub = keypair
     root = env.backup_root
-    now = time.time()
-    # twelve old backups of ours, one of another install, one stranger's folder, one symlink out
-    for i in range(12):
-        d = root / f"boss-backup-2026-10-{i + 1:02d}"
-        d.mkdir()
-        (d / "boss.dump").write_bytes(b"x" * 1000)
-        os.utime(d, (now - (30 - i) * 86400, now - (30 - i) * 86400))
-    foreign = root / "boss-backup-foreign"
-    foreign.mkdir()
-    (foreign / "manifest.json").write_text(json.dumps({"install_id": "inst_other"}))
-    os.utime(foreign, (now - 60 * 86400, now - 60 * 86400))
-    stranger = root / "my-photos"
-    stranger.mkdir()
-    (stranger / "a.jpg").write_bytes(b"y" * 5000)
-    outside = tmp_path / "elsewhere"
-    outside.mkdir()
-    (outside / "boss.dump").write_bytes(b"z" * 1000)
-    os.symlink(outside, root / "boss-backup-link")
-    os.utime(root / "boss-backup-link", (now - 90 * 86400, now - 90 * 86400), follow_symlinks=False)
+    ours = [_real_backup(root, f"202610{i + 1:02d}T000000Z", 100 + i, age_days=30 - i) for i in range(12)]
+    # things in the folder that are NOT ours, whatever the job says:
+    operator_file = root / "boss-backup-x"                       # an operator's own file
+    operator_file.write_bytes(b"mine" * 100)
+    no_manifest = root / "boss-20260901T000000Z-7"               # BOSS-shaped name, no manifest
+    no_manifest.mkdir(); (no_manifest / "boss.dump").write_bytes(b"y" * 10)
+    foreign = _real_backup(root, "20260801T000000Z", 9, install_id="inst_other", age_days=90)
+    incomplete = _real_backup(root, "20260701T000000Z", 8, age_days=120, complete=False)
+    stranger = root / "my-photos"; stranger.mkdir(); (stranger / "a.jpg").write_bytes(b"z" * 5000)
+    outside = tmp_path / "elsewhere"; outside.mkdir(); (outside / "manifest.json").write_text(
+        json.dumps({"complete": True, "install_id": "inst_abc"}))
+    os.symlink(outside, root / "boss-20260601T000000Z-5")       # a link out, with a matching manifest
+
+    # sampling counts ours only
+    sampled = steward.walk_backups(env)
+    assert sorted(b["name"] for b in sampled) == sorted(d.name for d in ours)
+    assert steward.collect(env, runner=docker)["backups_n"] == 12
 
     args = {"install_id": "inst_abc", "dry_run": True, "keep_newest": 10, "keep_days": 7, "cap_gb": 20}
     dry = steward.perform(env, _job(priv, env, "remove_backups", args), pub, runner=docker)
     assert dry["ok"]
-    # keep the newest 10 of ours → the two oldest go; never the foreign, the stranger, the link
-    assert dry["items"] == ["boss-backup-2026-10-01", "boss-backup-2026-10-02"]
-    real = steward.perform(env, _job(priv, env, "remove_backups", {**args, "dry_run": False, "plan_hash": dry["plan_hash"]}), pub, runner=docker)
-    assert real["ok"] and sorted(real["items"]) == ["boss-backup-2026-10-01", "boss-backup-2026-10-02"]
-    assert not (root / "boss-backup-2026-10-01").exists()
-    assert (root / "boss-backup-2026-10-03").exists() and (root / "boss-backup-2026-10-12").exists()
-    assert foreign.exists() and stranger.exists() and (outside / "boss.dump").exists()
-    assert (root / "boss-backup-link").is_symlink()
+    assert dry["items"] == [ours[0].name, ours[1].name], "keep the newest 10 of ours: the two oldest go"
+    real = steward.perform(env, _job(priv, env, "remove_backups", {**args, "dry_run": False,
+                                                                 "plan_hash": dry["plan_hash"]}), pub, runner=docker)
+    assert real["ok"] and sorted(real["items"]) == sorted([ours[0].name, ours[1].name])
+    assert not ours[0].exists() and not ours[1].exists() and ours[2].exists() and ours[11].exists()
+    for untouched in (operator_file, no_manifest, foreign, incomplete, stranger, outside / "manifest.json"):
+        assert untouched.exists(), untouched
+    assert (root / "boss-20260601T000000Z-5").is_symlink()
+
+
+def test_select_backups_cap_wins_but_never_below_the_floor():
+    now = time.time()
+    root = Path("/tmp/fake-root")
+    backups = [{"path": f"/tmp/fake-root/boss-2026100{i}T000000Z-{i}", "name": f"b{i}", "bytes": 10e9,
+                "mtime": now - i * 86400, "install_id": "inst_abc"} for i in range(1, 7)]   # 6 × 10 GB, 1..6 days old
+
+    def pick(**kw):
+        import types
+        fake_paths = {b["path"] for b in backups}
+        orig_resolve, orig_is_symlink = Path.resolve, Path.is_symlink
+        Path.resolve = lambda self: self  # noqa: E731 — the tree is imaginary
+        Path.is_symlink = lambda self: False  # noqa: E731
+        try:
+            return [b["name"] for b in steward.select_backups(backups, install_id="inst_abc", root=root, now=now, **kw)]
+        finally:
+            Path.resolve, Path.is_symlink = orig_resolve, orig_is_symlink
+
+    # keep-N / keep-days: nothing is protected by age (all ≥ 1 day with keep_days=0.5) → keep the 3 newest
+    assert pick(keep_newest=3, keep_days=0.5, cap_gb=1000) == ["b6", "b5", "b4"]
+    # the cap wins over keep 5: the kept five hold 50 GB → the oldest kept go (b5, b4) until the
+    # floor of 3 stops it at 30 GB, whatever the cap says
+    assert pick(keep_newest=5, keep_days=0.5, cap_gb=45) == ["b6", "b5"]
+    assert pick(keep_newest=5, keep_days=0.5, cap_gb=25) == ["b6", "b5", "b4"]
+    assert pick(keep_newest=5, keep_days=0.5, cap_gb=1) == ["b6", "b5", "b4"], "never below CAP_FLOOR"
+    # a foreign or unlabelled entry is never selected
+    backups.append({"path": "/tmp/fake-root/boss-x", "name": "foreign", "bytes": 99e9, "mtime": now - 400 * 86400,
+                    "install_id": "inst_other"})
+    backups.append({"path": "/tmp/fake-root/boss-y", "name": "nolabel", "bytes": 99e9, "mtime": now - 400 * 86400,
+                    "install_id": None})
+    assert "foreign" not in pick(keep_newest=1, keep_days=0.5, cap_gb=1000)
+    assert "nolabel" not in pick(keep_newest=1, keep_days=0.5, cap_gb=1000)
 
 
 def test_an_item_that_appeared_since_the_dry_run_is_left_alone(env, keypair, docker):
     priv, pub = keypair
     root = env.backup_root
-    now = time.time()
-    for i in range(3):
-        d = root / f"boss-backup-{i}"
-        d.mkdir()
-        (d / "boss.dump").write_bytes(b"x")
-        os.utime(d, (now - (40 - i) * 86400, now - (40 - i) * 86400))
+    ours = [_real_backup(root, f"2026100{i + 1}T000000Z", 10 + i, age_days=40 - i) for i in range(3)]
     args = {"install_id": "inst_abc", "dry_run": True, "keep_newest": 1, "keep_days": 7, "cap_gb": 20}
     dry = steward.perform(env, _job(priv, env, "remove_backups", args), pub, runner=docker)
-    assert dry["items"] == ["boss-backup-0", "boss-backup-1"]
-    late = root / "boss-backup-late-but-old"
-    late.mkdir()
-    os.utime(late, (now - 50 * 86400, now - 50 * 86400))
+    assert dry["items"] == [ours[0].name, ours[1].name]
+    late = _real_backup(root, "20260901T000000Z", 99, age_days=50)
     real = steward.perform(env, _job(priv, env, "remove_backups", {**args, "dry_run": False, "plan_hash": dry["plan_hash"]}), pub, runner=docker)
     assert not real["ok"] and "changed since the dry run" in real["error"]
-    assert late.exists() and (root / "boss-backup-0").exists()
+    assert late.exists() and ours[0].exists()
+
+
+def test_build_cache_prune_is_scoped_to_boss(env, keypair, docker):
+    priv, pub = keypair
+    args = {"install_id": "inst_abc", "dry_run": True, "keep_storage_gb": 10}
+    # a shared machine with no BOSS builder: refused, never host-wide
+    env.buildx_builder, env.dedicated = "", False
+    out = steward.perform(env, _job(priv, env, "prune_build_cache", args), pub, runner=docker)
+    assert not out["ok"] and "Docker-wide" in out["error"]
+    # a BOSS buildx builder: pruned through it only
+    env.buildx_builder = "boss-builder"
+    calls = []
+
+    def runner(argv, timeout=120.0):
+        calls.append(argv)
+        return docker(argv, timeout)
+
+    dry = steward.perform(env, _job(priv, env, "prune_build_cache", args), pub, runner=runner)
+    assert dry["ok"] and dry["items"] == ["build-cache:builder:boss-builder:above-10GB"]
+    real = steward.perform(env, _job(priv, env, "prune_build_cache", {**args, "dry_run": False, "plan_hash": dry["plan_hash"]}), pub, runner=runner)
+    assert real["ok"]
+    prunes = [c for c in calls if "prune" in c]
+    assert prunes and all(c[1:3] == ["buildx", "prune"] and "--builder" in c and "boss-builder" in c for c in prunes)
+    assert not any(c[1:3] == ["builder", "prune"] for c in calls), "never the host-wide prune on a shared machine"
+
+
+def test_the_pinned_signing_key_is_trusted_on_first_use_and_a_change_is_refused(env, keypair, docker, tmp_path):
+    priv, pub = keypair
+    fetches = []
+
+    def fetch():
+        fetches.append(1)
+        return pub
+
+    first = steward.public_key(env, fetch)
+    assert first["key_id"] == "k1" and len(fetches) == 1
+    assert steward.pinned_key(env)["public_key"] == pub["public_key"]
+    # a rotated key published by the API is NOT picked up by itself
+    other = {**pub, "key_id": "k2", "public_key": base64.b64encode(b"\x01" * 32).decode()}
+    again = steward.public_key(env, lambda: other)
+    assert again["key_id"] == "k1", "the pin is the truth"
+    job = _job(priv, env, "du", {}, key_id="k2")
+    out = steward.perform(env, job, again, runner=docker)
+    assert not out["ok"] and "rekey" in out["error"]
+    # the operator confirms the rotation: rekey forgets the pin, the next run pins the new key
+    assert steward.unpin_key(env) and steward.pinned_key(env) is None
+    assert steward.public_key(env, lambda: other)["key_id"] == "k2"
+    assert steward.main(["--install-dir", str(env.install_dir), "--backup-dir", str(env.backup_root), "--rekey"]) == 0
+
+
+def test_expires_at_round_trips_through_json_and_timezones(env, keypair):
+    """What the API signs (a datetime) and what the helper verifies (the JSON string) are the
+    same bytes; Z and +00:00 spellings both parse to the same moment."""
+    from boss_engine.services import host_jobs
+
+    at = datetime(2026, 11, 14, 18, 2, 3, tzinfo=timezone.utc)
+    api_bytes = host_jobs.canonical("j1", "h", "du", {"a": 1}, at)
+    helper_bytes = steward.canonical("j1", "h", "du", {"a": 1}, json.loads(json.dumps(at.isoformat())))
+    assert api_bytes == helper_bytes
+    assert steward.parse_iso("2026-11-14T18:02:03Z") == steward.parse_iso("2026-11-14T18:02:03+00:00") == at
+    assert steward.parse_iso("2026-11-14T18:02:03") == at, "a naive stamp is read as UTC"
+    priv, pub = keypair
+    job = _job(priv, env, "du", {})
+    assert steward.check_job(env, job, pub, now=at - timedelta(days=1)) == {}
 
 
 def test_pure_python_ed25519_verifier_agrees_with_cryptography(keypair):

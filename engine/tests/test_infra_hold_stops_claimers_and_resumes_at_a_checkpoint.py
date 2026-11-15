@@ -237,3 +237,23 @@ def test_the_kernel_drain_hook_folds_the_hold_in_and_settle_tells_them_apart():
     settle = inspect.getsource(w._settle)
     assert "work_hold.hand_back(" in settle and 'reason="interrupted_by_deploy"' in settle
     assert settle.index("work_hold.hand_back(") < settle.index('reason="interrupted_by_deploy"')
+
+
+def test_a_hold_expires_after_its_maximum_and_the_approve_body_reaches_the_card():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime(2026, 11, 14, 20, 0, tzinfo=timezone.utc)
+    hold = {"active": True, "since": (now - timedelta(hours=1)).isoformat()}
+    assert not work_hold.expired(hold, 7200, now=now)
+    assert work_hold.expired(hold, 1800, now=now)
+    assert not work_hold.expired({**hold, "active": False}, 60, now=now)
+    assert not work_hold.expired({"active": True}, 60, now=now), "no since: never expired by time"
+    from boss_engine.config import Settings
+
+    assert Settings.model_fields["storage_max_hold_seconds"].default == 7200
+    # the watch applies it; the approve body's {make_rule, args} reaches the storage card hook
+    from boss_engine.services import decisions, storage_watch
+
+    assert "work_hold.expired(hold, max_seconds)" in inspect.getsource(storage_watch.tick)
+    hook = inspect.getsource(decisions.DecisionService._handle_approved_follow_on)
+    assert "make_rule=body.get(\"make_rule\")" in hook and "answer" in hook

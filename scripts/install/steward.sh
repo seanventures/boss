@@ -5,6 +5,7 @@
 #   steward.sh install               launchd agent (macOS) / systemd user timer (Linux), every 30 s
 #   steward.sh uninstall             remove it
 #   steward.sh status                is it installed, when did it last run, last log line
+#   steward.sh rekey                 forget the pinned API signing key (after a deliberate rotation)
 #
 # Pull only: it calls the local API with the host key (BOSS_HOST_API_KEY in .env, issued by
 # `boss identity host-key`). No listener. It never prints the key. Needs python3 and docker on the
@@ -86,6 +87,7 @@ case "${1:-}" in
   install) cmd_install ;;
   uninstall) cmd_uninstall ;;
   status) cmd_status ;;
+  rekey) "$(python_bin)" -I "$HELPER" --install-dir "$INSTALL_DIR" --rekey ;;
   -h|--help|help|"") usage ;;
   *) echo "steward: unknown command $1" >&2; usage; exit 2 ;;
 esac

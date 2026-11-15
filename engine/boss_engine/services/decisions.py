@@ -815,7 +815,7 @@ class DecisionService:
             refreshed = self.get_row(connection, decision_id)
             self._handle_approved_follow_on(
                 connection, refreshed, actor, note=note, force=force, always_allow=always_allow,
-                choose=choose,
+                choose=choose, answer=answer,
             )
             if force:
                 # A FORCED approval overrode BOSS's own gate: kept as a decision example
@@ -1074,6 +1074,7 @@ class DecisionService:
         force: bool = False,
         always_allow: Optional[dict] = None,
         choose: Optional[str] = None,
+        answer: Optional[dict] = None,
     ) -> None:
         """Approval context must be explicitly threaded into the follow-on.
 
@@ -1122,8 +1123,11 @@ class DecisionService:
             # was ticked, writes the retention rule so next time it is automatic.
             from . import storage_cleanup
 
+            body = answer if isinstance(answer, dict) else {}
             storage_cleanup.on_delete_decision(connection, connection.engine, row, verdict="approve",
-                                               actor=actor)
+                                               actor=actor, make_rule=body.get("make_rule"),
+                                               args=body.get("args") if isinstance(body.get("args"), dict)
+                                               else None)
             return
         if action == "storage_rule":
             from . import storage_incidents

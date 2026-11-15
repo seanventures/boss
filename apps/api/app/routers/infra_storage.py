@@ -18,6 +18,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from boss_engine.db import begin, get_engine
 from boss_engine.identity import P, Scope, permit
 
+from ..identity_guard import require_host_tools_principal
+
 router = APIRouter(tags=["infra-storage"])
 
 
@@ -294,6 +296,7 @@ def post_sample(payload: SampleBody) -> dict[str, Any]:
     """One reading from the host (df, docker system df, Docker.raw, backups, logs)."""
     from boss_engine.services import storage_incidents, storage_rules, storage_watch
 
+    require_host_tools_principal()
     source = payload.source if payload.source in storage_watch.SOURCES else "steward"
     raw = payload.model_dump()
     try:
@@ -312,9 +315,10 @@ def post_sample(payload: SampleBody) -> dict[str, Any]:
 @router.get("/v1/host-jobs/public-key")
 @permit(P.SYSTEM_READ, scope=Scope.org())
 def get_host_jobs_public_key() -> dict[str, Any]:
-    """The Ed25519 key the helper verifies every job against."""
+    """The Ed25519 key the helper verifies every job against (pinned on first use: TOFU)."""
     from boss_engine.services import host_jobs
 
+    require_host_tools_principal()
     with begin(get_engine()) as connection:
         return host_jobs.public_key(connection)
 
@@ -326,6 +330,7 @@ def lease_host_job(host_id: str = Query(min_length=1, max_length=120),
     """Zero or one signed, typed job for this host (the helper's pull; a lease is a write)."""
     from boss_engine.services import host_jobs
 
+    require_host_tools_principal()
     with begin(get_engine()) as connection:
         return {"job": host_jobs.lease(connection, host_id=host_id, leased_to=leased_to)}
 
@@ -336,6 +341,7 @@ def post_host_job_result(job_id: str, payload: HostJobResultBody) -> dict[str, A
     """The helper's report: bytes freed and the exact item list; the executor reads it on its tick."""
     from boss_engine.services import host_jobs
 
+    require_host_tools_principal()
     with begin(get_engine()) as connection:
         found = host_jobs.record_result(connection, job_id, payload.model_dump())
     if found is None:
