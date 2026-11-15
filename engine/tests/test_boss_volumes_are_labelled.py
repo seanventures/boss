@@ -108,6 +108,56 @@ def test_the_upgrade_and_dev_up_run_the_relabel_step():
     assert boss.index('set_env_value BOSS_INSTALL_ID "inst_$(openssl rand -hex 8)"') < up
 
 
+def test_a_pre_relabel_upgrade_sh_still_relabels(tmp_path):
+    """An upgrade started by a pre-#131 upgrade.sh never reaches the relabel that the new
+    upgrade.sh runs after the installer. That old script's last act is to run the fetched
+    install.sh, so the relabel has to be in there, after the containers are up, and a failure
+    of it still leaves the upgrade successful."""
+    install = (ROOT / "install.sh").read_text()
+    started = install.index('ui_ok "Containers started"')
+    step = install.index("--relabel-volumes </dev/null", started)
+    assert "echo 'BOSS volume labels were not checked" in install[step:]
+    block_at = install.index("# VOLUME LABELS (BOSSAPP-1193)", started)
+    echo_at = install.index("were not checked", block_at)
+    block = install[block_at:install.index("\nfi\n", echo_at) + len("\nfi\n")]
+    # The driver that is already on disk has no relabel of its own. It only runs the installer.
+    old = "#!/usr/bin/env bash\nset -euo pipefail\nbash \"$FETCHED_INSTALLER\"\n"
+    assert "--relabel-volumes" not in old
+
+    install_dir = tmp_path / "boss"
+    steward_dir = install_dir / "scripts" / "install"
+    steward_dir.mkdir(parents=True)
+    log = install_dir / "relabel.log"
+    (steward_dir / "steward.py").write_text(
+        "# --relabel-volumes\n"
+        "import pathlib, sys\n"
+        "pathlib.Path(sys.argv[sys.argv.index('--install-dir') + 1], 'relabel.log')"
+        ".write_text('relabelled\\n')\n"
+        "raise SystemExit(0)\n")
+    fetched = tmp_path / "install.sh"
+    fetched.write_text("#!/usr/bin/env bash\nset -euo pipefail\n"
+                       f"INSTALL_DIR={str(install_dir)!r}\n" + block)
+    fetched.chmod(0o755)
+    driver = tmp_path / "upgrade.sh"
+    driver.write_text(old)
+    driver.chmod(0o755)
+    import os
+    import subprocess
+
+    ran = subprocess.run(["bash", str(driver)], cwd=tmp_path,
+                         env={**os.environ, "FETCHED_INSTALLER": str(fetched)},
+                         capture_output=True, text=True)
+    assert ran.returncode == 0, ran.stderr
+    assert log.read_text() == "relabelled\n"
+
+    (steward_dir / "steward.py").write_text("# --relabel-volumes\nimport sys\nraise SystemExit(1)\n")
+    failed = subprocess.run(["bash", str(driver)], cwd=tmp_path,
+                            env={**os.environ, "FETCHED_INSTALLER": str(fetched)},
+                            capture_output=True, text=True)
+    assert failed.returncode == 0, failed.stderr
+    assert "volume labels were not checked" in failed.stderr
+
+
 def test_boss_scripts_never_let_compose_ask_a_question():
     """Compose's only question here is "Recreate (data will be lost)?". Every compose call in
     boss.sh that could create a volume (up, create, run, start, restart) reads stdin from
