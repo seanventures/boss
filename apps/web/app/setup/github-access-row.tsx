@@ -43,6 +43,8 @@ export type Verified = {
   repos?: { full_name: string; installed: boolean | null; fix_url: string | null }[];
   installed_on?: string[] | null; repository_selection?: string | null;
   links?: AppLinks;
+  /** Per flow (builds, making repositories): can the App do it, and the exact fix (BOSSAPP-1160). */
+  flows?: Record<string, { ok: boolean | null; missing: string[]; words: string; fix_url: string | null; reason?: string }>;
 };
 export type GitHubStatus = {
   mode: GitHubMode;
@@ -154,6 +156,19 @@ function VerifiedLines({ v, links, checking, onCheck }: {
       </span>
       {gaps.length === 0 ? (
         <span className="su-line" data-testid="gh-perm-all"><Dot tone="green" /><span>All permissions accepted ✓</span></span>
+      ) : null}
+      {v.flows?.create_repository && v.flows.create_repository.ok !== null ? (
+        <span className="su-line" data-testid="gh-flow-create" data-ok={String(v.flows.create_repository.ok)}
+              data-reason={v.flows.create_repository.reason || undefined}>
+          <Dot tone={v.flows.create_repository.ok ? "green" : v.flows.create_repository.reason === "personal_account" ? "grey" : "amber"} />
+          <span>{v.flows.create_repository.ok ? "Can create repos ✓" : v.flows.create_repository.words}</span>
+          {!v.flows.create_repository.ok && v.flows.create_repository.fix_url ? (
+            <Out href={v.flows.create_repository.fix_url} testid="gh-flow-create-fix"
+                 tip="On the App's page, set Administration to “Read and write” and save. Then accept it on the installation and Check again.">
+              Grant on GitHub
+            </Out>
+          ) : null}
+        </span>
       ) : null}
       {shown.map((p) => (
         <span key={p.name} className="su-line" data-testid={`gh-perm-${p.name}`} data-state={p.state}>

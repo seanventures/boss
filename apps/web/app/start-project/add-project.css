@@ -459,5 +459,7 @@
 .npx-newrepo-check { display: flex; gap: 6px; align-items: flex-start; font-size: var(--fs-meta); color: var(--ink-soft); flex-wrap: wrap; }
 .npx-newrepo-check .npx-ok { margin-left: 0; flex: none; margin-top: 2px; }
 .npx-newrepo-check[data-ok="false"] { color: var(--amber); }
+.npx-newrepo-via { align-self: flex-end; margin-bottom: 6px; white-space: nowrap; }
+.npx-newrepo-fixes { margin: 0; padding-left: 16px; font-size: var(--fs-meta); color: var(--amber); display: grid; gap: 2px; }
 .npx-newrepo-check > span { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
 .npx-node[data-where="local"] .npx-v::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); margin-right: 6px; vertical-align: middle; }
