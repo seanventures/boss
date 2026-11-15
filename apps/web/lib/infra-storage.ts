@@ -640,7 +640,9 @@ export type DeleteAnswer = { action: "approve"; makeRule: boolean } | { action: 
 export async function answerStorageDelete(decisionId: string, _actor: string, ask: StorageAsk, answer: DeleteAnswer): Promise<WriteResult> {
   if (infraDemoMode()) return sampleWrite();
   if (answer.action === "approve") {
-    const body = { content_hash: ask.planHash, plan_hash: ask.planHash, make_rule: answer.makeRule };
+    // The decision API reads the person's answer under `answer` (pydantic drops top-level extras);
+    // content_hash stays top-level, as every approval binds to what was shown.
+    const body = { content_hash: ask.planHash, answer: { make_rule: answer.makeRule, plan_hash: ask.planHash } };
     return obsWrite(`/v1/decisions/${encodeURIComponent(decisionId)}/approve`, body, { scope: `decision:${decisionId}`, label: "Delete" });
   }
   return obsWrite(`/v1/decisions/${encodeURIComponent(decisionId)}/reject`, { note: answer.note }, { scope: `decision:${decisionId}`, label: "Not now" });

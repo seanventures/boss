@@ -115,8 +115,8 @@ describe("the deletion card", () => {
     replanned.mockRestore();
     await storage.answerStorageDelete("d1", "alice", ask, { action: "approve", makeRule: true });
     expect(calls[0].url).toContain("/v1/decisions/d1/approve");
-    expect(calls[0].body).toEqual({ plan_hash: "ph_7c1e9a", content_hash: "ph_7c1e9a", make_rule: true });
-    expect(calls[0].body).not.toHaveProperty("args");
+    expect(calls[0].body).toEqual({ content_hash: "ph_7c1e9a", answer: { make_rule: true, plan_hash: "ph_7c1e9a" } });
+    expect(calls[0].body).not.toHaveProperty("make_rule");
     await storage.replanStorageStep("si_1", "storage.remove_backups", { keep_newest: 20 });
     expect(calls[1].url).toContain("/v1/infra/storage/incidents/si_1/replan");
     expect(calls[1].body).toEqual({ tool: "storage.remove_backups", args: { keep_newest: 20 } });
