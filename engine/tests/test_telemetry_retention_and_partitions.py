@@ -53,6 +53,88 @@ def test_only_tick_receipts_are_ever_candidates():
     assert "status IN ('succeeded', 'failed')" in tr.POLICY_BY_KEY["receipts"].scope_sql
 
 
+def test_an_old_single_keep_days_still_counts_when_an_operator_changed_it():
+    # The shipped 30 is not an operator's choice: the per-table defaults stand.
+    assert tr.overrides_from_rule({"keep_days": 30}) == {}
+    got = tr.overrides_from_rule({"keep_days": 60, "tables": {"receipts": 45}})
+    assert got["receipts"] == 45 and got["events"] == 60 and got["app_metrics_scrapes"] == 60
+    assert tr.effective_days(tr.POLICY_BY_KEY["events"], tr.overrides_from_rule({"keep_days": 1})) == 30
+
+
+class _Rows:
+    def __init__(self, rows=None, boom=False):
+        self.rows, self.boom = rows or [], boom
+
+    def execute(self, *_a, **_k):
+        if self.boom:
+            raise RuntimeError("catalogue unreadable")
+        return self
+
+    def all(self):
+        return self.rows
+
+
+def test_receipt_protection_fails_closed():
+    one = ("public", "cost_receipts", [3], [1], "receipt_id")
+    assert "cost_receipts" in tr._receipt_refs_protect(_Rows([one]))
+    assert tr._receipt_refs_protect(_Rows([])) == "false"
+    assert tr._receipt_refs_protect(_Rows(boom=True)) == tr.FAIL_CLOSED
+    assert tr._receipt_refs_protect(_Rows([one, ("public", "pairs", [2, 3], [1, 2], "a")])) == tr.FAIL_CLOSED
+    assert tr._receipt_refs_protect(_Rows([("public", 'we"ird', [2], [1], "receipt_id")])) == tr.FAIL_CLOSED
+    assert tr._receipt_refs_protect(_Rows([("other_schema", "refs", [2], [1], "receipt_id")])) == \
+        'EXISTS (SELECT 1 FROM "other_schema"."refs" x WHERE x."receipt_id" = t.id)'
+
+
+def test_events_retention_is_a_delete_list_unknown_kinds_are_kept():
+    # Only chatter is in any events policy's scope; nothing else is ever row-deleted.
+    for p in tr.POLICIES:
+        if p.table == "events":
+            assert p.scope_sql, p.key
+    assert tr.POLICY_BY_KEY["events"].archive_sql == f"NOT {tr.CHATTER_SQL}"
+    for unknown in ("workflow.merge_landed", "workflow.run_deleted", "project.created",
+                    "incident.resolved", "code_task.review_panel_merged"):
+        assert unknown not in tr.NOISE_EVENT_TYPES and not unknown.endswith(".ticked")
+
+
+_CTID_DELETE = __import__("re").compile(
+    r"(?:DELETE\s+FROM|UPDATE)\s+(?:ONLY\s+)?\"?(\w+)\"?[^;]*?\bctid\b", __import__("re").I | __import__("re").S)
+
+
+def test_no_ctid_delete_on_a_partitioned_table():
+    """A `ctid IN (SELECT ctid …)` delete on a PARTITIONED table matches the same physical position
+    in every partition (resource_reaper deleted live audit events that way, ST-8 review). The class:
+    no source file deletes or updates by ctid on a table that is partitioned — by schema.sql or
+    by a runtime conversion (telemetry_retention: events)."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    schema = (root / "db" / "schema.sql").read_text(encoding="utf-8")
+    schema = re.sub(r"--[^\n]*", "", schema)
+    partitioned = set()
+    for m in re.finditer(r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?\"?(\w+)\"?\s*\(", schema, re.I):
+        depth, j = 0, m.end() - 1
+        while j < len(schema):
+            depth += {"(": 1, ")": -1}.get(schema[j], 0)
+            if depth == 0:
+                break
+            j += 1
+        if re.match(r"\s*PARTITION\s+BY", schema[j + 1:j + 40], re.I):
+            partitioned.add(m.group(1).lower())
+    partitioned |= {p.table for p in tr.POLICIES if p.partitioned}
+    assert {"events", "run_events", "identity_egress_log"} <= partitioned
+    offenders = []
+    for base in ("engine/boss_engine", "apps/api/app", "services", "scripts"):
+        for path in (root / base).rglob("*.py"):
+            src = path.read_text(encoding="utf-8", errors="ignore")
+            if "ctid" not in src:
+                continue
+            for m in _CTID_DELETE.finditer(src):
+                if m.group(1).lower() in partitioned:
+                    offenders.append(f"{path.relative_to(root)}: {m.group(1)}")
+    assert not offenders, offenders
+
+
 def test_the_cutover_month_is_always_at_least_two_days_away():
     assert tr._cutover(datetime(2026, 11, 14, tzinfo=timezone.utc)) == datetime(2026, 12, 1, tzinfo=timezone.utc)
     assert tr._cutover(datetime(2026, 11, 30, 12, tzinfo=timezone.utc)) == datetime(2027, 1, 1, tzinfo=timezone.utc)
@@ -142,11 +224,14 @@ def test_dry_run_equals_real_and_nothing_protected_or_new_is_touched(db):
     gone: dict[str, set[str]] = {"events": set(), "receipts": set(), "anomaly_signals": set()}
     with db.begin() as c:
         for _ in range(7):
-            gone["events"].add(_event(c, "job.created", old))           # past 90 d
-            gone["events"].add(_event(c, "receipt.created", mid))       # noise past 30 d
-            keep["events"].add(_event(c, "job.created", mid))           # inside 90 d
-            keep["events"].add(_event(c, "decision.approved", old))     # audit: never row-deleted
+            gone["events"].add(_event(c, "metatron.drive.completed", old))   # chatter past 90 d
+            gone["events"].add(_event(c, "receipt.created", mid))            # noise past 30 d
+            gone["events"].add(_event(c, "factory_flow.ticked", NOW - timedelta(days=20)))  # tick past 14 d
+            keep["events"].add(_event(c, "job.created", old))                # not chatter: kept
+            keep["events"].add(_event(c, "workflow.merge_landed", old))      # a kind nobody listed
+            keep["events"].add(_event(c, "decision.approved", old))
             keep["events"].add(_event(c, "receipt.created", new))
+            keep["events"].add(_event(c, "process_manager.ticked", NOW - timedelta(days=5)))
         for _ in range(5):
             gone["receipts"].add(_receipt(c, "metatron.watch", mid))
             keep["receipts"].add(_receipt(c, "metatron.watch", new))
@@ -179,7 +264,7 @@ def test_dry_run_equals_real_and_nothing_protected_or_new_is_touched(db):
         for t in keep:
             assert _ids(c, t) == keep[t], t
     by = {t["policy"]: t for t in real["tables"]}
-    assert by["events"]["rows"] == 7 and by["events_noise"]["rows"] == 7
+    assert by["events"]["rows"] == 7 and by["events_noise"]["rows"] == 7 and by["events_ticks"]["rows"] == 7
     assert by["receipts"]["rows"] == 5 and by["anomaly_signals"]["rows"] == 8
     # Nothing left to do: a second pass is a no-op.
     assert tr.sweep(db, now=NOW, dry_run=True)["rows"] == 0
@@ -200,12 +285,38 @@ def test_a_real_sweep_leaves_a_receipt_with_rows_and_bytes(db):
     assert {t["policy"] for t in result["tables"]} >= {"events", "receipts"}
 
 
-def test_events_convert_online_twice_and_keep_everything(db):
+def _leave_a_stale_bound(db) -> None:
+    """What a conversion that died after step 2 leaves: a NOT VALID bound already in the past."""
     with db.begin() as c:
-        ids = _ids(c, "events")
+        c.execute(text("ALTER TABLE events ADD CONSTRAINT events_legacy_bound "
+                       "CHECK (created_at < '2026-11-01T00:00:00+00:00') NOT VALID"))
+    with pytest.raises(Exception):
+        with db.begin() as c:
+            _event(c, "job.created", datetime.now(timezone.utc))
+
+
+def test_a_bound_a_crashed_conversion_left_never_blocks_inserts(db):
+    from boss_engine.db import ensure_schema
+
+    _leave_a_stale_bound(db)
+    ensure_schema(db)            # the boot path drops it while events is still a plain table
+    with db.begin() as c:
+        _event(c, "job.created", datetime.now(timezone.utc))
+        assert not tr.is_partitioned(c, "events")
+    _leave_a_stale_bound(db)
+    assert tr.clear_stale_bound(db) is True   # the service path, before anything that can fail
+    with db.begin() as c:
+        _event(c, "job.created", datetime.now(timezone.utc))
+    assert tr.clear_stale_bound(db) is False
+
+
+def test_events_convert_online_twice_and_keep_everything(db):
+    _leave_a_stale_bound(db)     # a crashed earlier attempt: the next pass still converts
+    with db.begin() as c:
         _event(c, "job.created", NOW - timedelta(days=20))
         ids = _ids(c, "events")
     first = tr.ensure_partitioned(db, now=NOW)
+    assert first.get("stale_bound_dropped") is True
     assert first.get("converted") is True, first
     second = tr.ensure_partitioned(db, now=NOW)
     assert second.get("converted") is False and not second.get("error"), second
@@ -232,6 +343,15 @@ def test_events_convert_online_twice_and_keep_everything(db):
         where = dict(c.execute(text("SELECT id, tableoid::regclass::text FROM events WHERE id IN (:a, :b)"),
                                {"a": a, "b": b}).all())
     assert where[b] == "events_2026_12"
+    # A new month keeps the project key the old table had.
+    with pytest.raises(Exception):
+        with db.begin() as c:
+            c.execute(text("INSERT INTO events (id, project_id, event_type, actor, entity_type, entity_id, "
+                           "created_at) VALUES ('evt_badproj', 'no_such_project', 'job.created', 't', 'x', 'y', "
+                           "'2026-12-07T00:00:00+00:00')"))
+    with db.connect() as c:
+        assert c.execute(text("SELECT count(*) FROM pg_constraint WHERE contype = 'f' "
+                              "AND conrelid = 'events'::regclass")).scalar() >= 1
     # The schema applies on top of the partitioned table without a new failure.
     from boss_engine.db import ensure_schema
 
@@ -244,13 +364,42 @@ def test_events_convert_online_twice_and_keep_everything(db):
         assert tr.is_partitioned(c, "events")
 
 
+def test_the_reaper_never_deletes_from_a_partitioned_events_by_position(db):
+    """A non-tick row sitting at the same ctid as an old tick row, in another partition, survives
+    resource_reaper.prune_tables (which used to delete events by `ctid IN (…)`)."""
+    from boss_engine.services import resource_reaper
+
+    with db.begin() as c:
+        tick = _event(c, "job.heartbeat", datetime.now(timezone.utc) - timedelta(days=20))
+        pos = c.execute(text("SELECT ctid::text, tableoid::regclass::text FROM events WHERE id = :i"),
+                        {"i": tick}).first()
+    twin = None
+    for n in range(2000):
+        with db.begin() as c:
+            i = _event(c, "decision.approved", datetime(2031, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=n))
+            got = c.execute(text("SELECT ctid::text, tableoid::regclass::text FROM events WHERE id = :i"),
+                            {"i": i}).first()
+        assert got[1] != pos[1]
+        if got[0] == pos[0]:
+            twin = i
+            break
+    assert twin, f"no row reached {pos[0]} in the default partition"
+    resource_reaper.prune_tables(db)
+    with db.connect() as c:
+        assert twin in _ids(c, "events"), "a live event at the same position was deleted"
+    with db.begin() as c:
+        c.execute(text("DELETE FROM events WHERE created_at >= '2031-01-01'"))
+
+
 def test_an_expired_month_drops_whole_and_its_audit_events_are_archived(db):
     assert tr.ensure_partitioned(db, now=NOW).get("converted") is False
     later = datetime(2027, 3, 15, tzinfo=timezone.utc)   # legacy (to 2026-12-01) is past 90 days
     with db.connect() as c:
         audit = {str(r[0]) for r in c.execute(text(
-            "SELECT id FROM events_legacy WHERE split_part(event_type, '.', 1) = 'decision'")).all()}
-    assert audit
+            f"SELECT id FROM events_legacy t WHERE NOT {tr.CHATTER_SQL}")).all()}
+        merged = {str(r[0]) for r in c.execute(text(
+            "SELECT id FROM events_legacy WHERE event_type = 'workflow.merge_landed'")).all()}
+    assert audit and merged and merged <= audit
     dry = tr.sweep(db, now=later, dry_run=True)
     assert "events_legacy" in dry["partitions"]
     assert "partition:events_legacy" in dry["items"]
@@ -260,6 +409,7 @@ def test_an_expired_month_drops_whole_and_its_audit_events_are_archived(db):
     with db.connect() as c:
         assert c.execute(text("SELECT to_regclass('events_legacy')")).scalar() is None
         assert {str(r[0]) for r in c.execute(text("SELECT id FROM events_archive")).all()} >= audit
+        assert c.execute(text("SELECT count(*) FROM events_archive WHERE event_type = 'workflow.merge_landed'")).scalar() == len(merged)
         assert tr.is_partitioned(c, "events")
 
 
@@ -280,6 +430,12 @@ def test_one_process_sweeps_at_a_time(db):
     try:
         assert holder.execute(text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": tr.LOCK_NAME}).scalar()
         assert tr.run_once(db, now=NOW) == {"skipped": "busy"}
+        # The Infra Agent's tier-2 step takes the same lock: a real run removes nothing now.
+        from boss_engine.services import storage_cleanup
+
+        assert storage_cleanup.run_api_tool(db, None, "storage.drop_partitions", {"keep_days": 30},
+                                            dry_run=False) == ([], 0)
+        assert tr.sweep_locked(db, dry_run=True) is not None
         holder.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": tr.LOCK_NAME})
         holder.commit()
     finally:

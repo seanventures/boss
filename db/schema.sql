@@ -2720,6 +2720,18 @@ CREATE TABLE IF NOT EXISTS events_archive (
 );
 CREATE INDEX IF NOT EXISTS idx_events_archive_project_created
   ON events_archive(project_id, created_at DESC);
+-- A conversion that died between adding its NOT VALID `created_at < cutover` check and the swap
+-- leaves the check on the PLAIN table; once the cutover passes, every event insert would fail.
+-- Only a conversion in flight may hold it, and none is in flight while the schema applies: drop
+-- it here (the retention service also drops it before it starts). No-op once events is
+-- partitioned (the bound then lives on nothing) and on a fresh install.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class WHERE oid = to_regclass('events') AND relkind = 'r')
+     AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'events_legacy_bound'
+                 AND conrelid = to_regclass('events')) THEN
+    ALTER TABLE events DROP CONSTRAINT events_legacy_bound;
+  END IF;
+END $$;
 
 -- A human approves one exact, short-lived MCP HTTP request. No submitted body
 -- or credential material is stored: only a digest and redacted review preview.

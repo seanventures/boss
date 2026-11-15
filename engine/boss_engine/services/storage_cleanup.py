@@ -754,7 +754,11 @@ def _drop_partitions(engine: Any, connection: Any, keep_days: int, *, dry_run: b
     from . import telemetry_retention
 
     del connection, keep_days
-    report = telemetry_retention.sweep(engine, dry_run=dry_run, only=expected)
+    # A real run takes the same advisory lock as the hourly pass: never two sweeps at once.
+    report = telemetry_retention.sweep_locked(engine, dry_run=dry_run, only=expected)
+    if report is None:
+        _log.info("telemetry sweep already running; this step removes nothing itself")
+        return [], 0
     return list(report["items"]), int(report["bytes"] or 0)
 
 

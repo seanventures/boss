@@ -10,8 +10,9 @@ WHAT THIS DOES, per table (`POLICIES`; the days are settings — the `telemetry`
 `tables` map — under a hard floor):
 
     policy               rows it may delete                          default  floor
-    events               every row except audit kinds (see below)    90 d     30 d (audit)
+    events               known chatter kinds only (CHATTER)           90 d     30 d (audit)
     events_noise         loop chatter (receipt.created, *.completed)  30 d     14 d
+    events_ticks         *.ticked, job.heartbeat (was resource_reaper) 14 d      7 d
     receipts             tick receipts only (allow-list), settled,   30 d     30 d (audit)
                          and referenced by NO foreign key
     anomaly_signals      signals not tied to an open incident        30 d      7 d
@@ -24,10 +25,12 @@ AUDIT EVIDENCE IS NEVER DELETED.
   receipt is out of scope by construction, and a tick receipt that ANY foreign key points at (a
   cost line, a ledger row, a rollout, a delivery…) is kept: the referencing columns are read from
   pg_constraint on every sweep, so a new FK is honoured without touching this file.
-* Events: rows whose kind is audit-relevant (`AUDIT_EVENT_PREFIXES`: decisions, GitHub, deploys,
-  secrets, identity, settings, budget, ledger …) are never deleted row by row. When a whole month
-  partition expires they are first copied into `events_archive` (same columns, kept) and only then
-  is the partition dropped.
+* Events: a DELETE-list, not a keep-list. Only kinds known to be loop chatter (`*.ticked`,
+  `job.heartbeat`, `receipt.created`, the overwatch/drive completions …) are ever deleted row by
+  row; every other kind — including kinds nobody listed yet (workflow.merge_landed,
+  project.created, incident.resolved, …) — is kept. When a whole month partition expires, every
+  non-chatter row is first copied into `events_archive` (kept; checked before the drop) and only
+  then is the partition dropped.
 
 HOW IT DELETES.
 * `events` is range-partitioned by month on created_at (`ensure_partitioned`), so an expired
@@ -90,20 +93,16 @@ SERVICE_KEY = "telemetry_retention"
 #: check is enforced on inserts at once, and a swap that keeps failing must never reach it.
 CUTOVER_MARGIN = timedelta(days=2)
 
-#: Event kinds that are audit evidence: never deleted row by row, archived before a month drops.
-AUDIT_EVENT_PREFIXES: tuple[str, ...] = (
-    "decision", "typed_decision", "github", "deploy", "deployment", "deployment_run",
-    "deployment_target", "deployment_environment_policy", "secret", "secret_ref", "identity",
-    "settings", "ledger", "budget", "changeset", "quality_gate", "self_fix", "entitlement",
-    "role", "rolespec", "connection", "integration", "policy", "release", "merge",
-    "resource_receipt", "surface_ownership", "approval", "auth",
-)
 #: Loop chatter: the record of the same thing lives elsewhere (receipt.created repeats the
-#: receipt; the overwatch/drive completions repeat their tick rows).
+#: receipt; the overwatch/drive completions repeat their tick rows). THE DELETE-LIST: an event
+#: kind not named here (or matching TICK_EVENT_SQL) is never deleted row by row, and is archived
+#: before its month partition drops — an unknown kind is treated as evidence.
 NOISE_EVENT_TYPES: tuple[str, ...] = (
     "receipt.created", "metatron.drive.completed", "metatron.overwatch.completed",
     "metatron.command.staff", "metatron.command.loop", "captain.coordinated",
 )
+#: Ticks and heartbeats (resource_reaper pruned these at 14 days before ST-8).
+TICK_EVENT_SQL = "(t.event_type LIKE '%.ticked' OR t.event_type = 'job.heartbeat')"
 #: The ONLY receipt kinds retention may delete: the always-on loops' per-tick receipts.
 TICK_RECEIPT_KINDS: tuple[str, ...] = (
     "ai_sre.overwatch", "metatron.watch", "metatron.overwatch", "process_manager.tick",
@@ -124,20 +123,38 @@ def _lits(values: Sequence[str]) -> str:
     return "ARRAY[" + ", ".join(f"'{v}'" for v in values) + "]::text[]"
 
 
+#: Protects EVERY row: what a protection that cannot be built safely falls back to.
+FAIL_CLOSED = "true"
+
+
 def _receipt_refs_protect(connection: Any) -> str:
-    """`t` (a receipt) is referenced by any foreign key: read from the catalogue every sweep."""
-    rows = connection.execute(text("""
-        SELECT c.conrelid::regclass::text AS tbl, a.attname AS col
-          FROM pg_constraint c
-          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
-         WHERE c.contype = 'f' AND c.confrelid = to_regclass('receipts')
-           AND array_length(c.conkey, 1) = 1""")).all()
+    """`t` (a receipt) is referenced by any foreign key: read from the catalogue every sweep.
+
+    FAILS CLOSED: a catalogue read that errors, a multi-column key, or a referencing table or
+    column this function cannot quote safely makes the predicate `true` — every receipt is
+    protected and nothing is deleted until the shape is understood."""
+    try:
+        rows = connection.execute(text("""
+            SELECT n.nspname AS sch, r.relname AS tbl, c.conkey, c.confkey,
+                   (SELECT a.attname FROM pg_attribute a
+                     WHERE a.attrelid = c.conrelid AND a.attnum = c.conkey[1]) AS col
+              FROM pg_constraint c
+              JOIN pg_class r ON r.oid = c.conrelid
+              JOIN pg_namespace n ON n.oid = r.relnamespace
+             WHERE c.contype = 'f' AND c.confrelid = to_regclass('receipts')""")).all()
+    except Exception:  # noqa: BLE001
+        _log.warning("receipt references unreadable: every receipt kept", exc_info=True)
+        return FAIL_CLOSED
     parts = []
-    for tbl, col in rows:
-        tbl, col = str(tbl).strip('"'), str(col)
-        if not (_IDENT.match(tbl) and _IDENT.match(col)):
-            continue
-        parts.append(f'EXISTS (SELECT 1 FROM "{tbl}" x WHERE x."{col}" = t.id)')
+    for sch, tbl, conkey, confkey, col in rows:
+        if len(list(conkey or [])) != 1 or len(list(confkey or [])) != 1:
+            _log.warning("receipt reference %s.%s has several columns: every receipt kept", sch, tbl)
+            return FAIL_CLOSED
+        if not (sch and tbl and col and _IDENT.match(str(sch)) and _IDENT.match(str(tbl))
+                and _IDENT.match(str(col))):
+            _log.warning("receipt reference %s.%s.%s cannot be quoted: every receipt kept", sch, tbl, col)
+            return FAIL_CLOSED
+        parts.append(f'EXISTS (SELECT 1 FROM "{sch}"."{tbl}" x WHERE x."{col}" = t.id)')
     return " OR ".join(parts) if parts else "false"
 
 
@@ -154,25 +171,38 @@ class Policy:
     scope_sql: str = ""
     #: Rows never deleted (alias t): a constant predicate, or one built per sweep.
     protect_sql: str | Callable[[Any], str] = ""
-    #: Monthly partitions: expired months are dropped (protected rows archived first).
+    #: Monthly partitions: expired months are dropped, `archive_sql` rows copied first.
     partitioned: bool = False
+    #: Rows of an expiring partition kept in `<table>_archive` before the drop (alias t).
+    archive_sql: str = ""
+    #: Rows per delete statement (smaller where every delete fires many FK checks).
+    batch: int = 0
 
     def protect(self, connection: Any) -> str:
         p = self.protect_sql(connection) if callable(self.protect_sql) else self.protect_sql
         return p or "false"
 
 
-_AUDIT_EVENT = f"split_part(t.event_type, '.', 1) = ANY({_lits(AUDIT_EVENT_PREFIXES)})"
+_NOISE_EVENT = f"t.event_type = ANY({_lits(NOISE_EVENT_TYPES)})"
+#: Every kind retention may delete from `events`. Anything else is kept / archived.
+CHATTER_SQL = f"({_NOISE_EVENT} OR {TICK_EVENT_SQL})"
 
 POLICIES: tuple[Policy, ...] = (
     Policy("events", "events", "created_at", 90, AUDIT_FLOOR_DAYS, True, "Events",
-           protect_sql=_AUDIT_EVENT, partitioned=True),
+           scope_sql=CHATTER_SQL, partitioned=True, archive_sql=f"NOT {CHATTER_SQL}"),
     Policy("events_noise", "events", "created_at", 30, 14, False, "Loop events",
-           scope_sql=f"t.event_type = ANY({_lits(NOISE_EVENT_TYPES)})", protect_sql=_AUDIT_EVENT),
+           scope_sql=_NOISE_EVENT),
+    Policy("events_ticks", "events", "created_at", 14, DIAGNOSTIC_FLOOR_DAYS, False, "Tick events",
+           scope_sql=TICK_EVENT_SQL),
+    # Every receipt delete fires one RI check per referencing FK (19 on the laptop, none of
+    # the referencing columns indexed; the largest, cost_receipts, ~4k rows). Measured on a
+    # scratch DB with 50k tick receipts and a 4k-row unindexed referencer: 500 rows 1.3 s,
+    # 1000 rows 1.5 s, 5000 rows 2.5 s per statement. 1000 keeps each statement well inside
+    # STATEMENT_TIMEOUT with room for referencers ten times that size.
     Policy("receipts", "receipts", "created_at", 30, AUDIT_FLOOR_DAYS, True, "Tick receipts",
            scope_sql=(f"t.effect_kind = ANY({_lits(TICK_RECEIPT_KINDS)}) "
                       "AND t.status IN ('succeeded', 'failed')"),
-           protect_sql=_receipt_refs_protect),
+           protect_sql=_receipt_refs_protect, batch=1_000),
     Policy("anomaly_signals", "anomaly_signals", "ts", 30, DIAGNOSTIC_FLOOR_DAYS, False,
            "Anomaly signals",
            protect_sql=("t.incident_id IS NOT NULL AND EXISTS (SELECT 1 FROM incidents i "
@@ -214,8 +244,33 @@ def effective_days(policy: Policy, overrides: Optional[Mapping[str, Any]] = None
     return max(policy.floor_days, asked)
 
 
+#: The single `keep_days` the telemetry rule shipped with before ST-8.
+LEGACY_KEEP_DAYS_DEFAULT = 30
+_WARNED_KEEP_DAYS: set[int] = set()
+
+
+def overrides_from_rule(rule: Mapping[str, Any]) -> dict[str, Any]:
+    """The per-policy overrides a `telemetry` rule asks for. `tables` wins; an old single
+    `keep_days` an operator CHANGED from the shipped 30 still counts — for every policy without
+    its own entry (each under its floor) — and says once that it should move to `tables`."""
+    tables = dict(rule.get("tables") or {})
+    raw = rule.get("keep_days")
+    try:
+        legacy = int(raw) if raw not in (None, "") else None
+    except (TypeError, ValueError):
+        legacy = None
+    if legacy is not None and legacy != LEGACY_KEEP_DAYS_DEFAULT:
+        if legacy not in _WARNED_KEEP_DAYS:
+            _WARNED_KEEP_DAYS.add(legacy)
+            _log.warning("telemetry rule keep_days=%s applies to every table without its own entry; "
+                         "set per-table days in the rule's `tables` map instead", legacy)
+        for p in POLICIES:
+            tables.setdefault(p.key, legacy)
+    return tables
+
+
 def configured_days(connection: Any) -> dict[str, int]:
-    """Per-policy days from the `telemetry` retention rule's `tables` map (install-wide)."""
+    """Per-policy days from the `telemetry` retention rule (install-wide), under the floors."""
     overrides: dict[str, Any] = {}
     try:
         row = connection.execute(text(
@@ -223,7 +278,7 @@ def configured_days(connection: Any) -> dict[str, int]:
             "ORDER BY host_id NULLS FIRST LIMIT 1")).first()
         if row is not None and row[1]:
             rule = row[0] if isinstance(row[0], dict) else json.loads(row[0] or "{}")
-            overrides = dict(rule.get("tables") or {})
+            overrides = overrides_from_rule(rule)
     except Exception:  # noqa: BLE001 — no rules table: the defaults
         pass
     return {p.key: effective_days(p, overrides) for p in POLICIES}
@@ -290,13 +345,23 @@ def _autocommit(engine: Any):
 
 # ── indexes (CONCURRENTLY, never at boot) ───────────────────────────────────────────────────
 
-def ensure_indexes(engine: Any) -> list[str]:
+#: After a build that failed (a lock wait, a timeout), wait this long before the next try —
+#: never a CONCURRENTLY rebuild of the same index every hour.
+INDEX_RETRY_AFTER = timedelta(hours=24)
+_INDEX_BACKOFF: dict[str, datetime] = {}
+
+
+def ensure_indexes(engine: Any, *, now: Optional[datetime] = None) -> list[str]:
     """Build each missing timestamp index CONCURRENTLY (writers keep writing). An INVALID one a
-    crashed build left behind is dropped and built again. Returns the indexes built."""
+    crashed build left behind is dropped and built again. A build that fails backs off for
+    INDEX_RETRY_AFTER. Returns the indexes built."""
+    now = now or _now()
     made: list[str] = []
     with _autocommit(engine) as c:
         c.execute(text(f"SET lock_timeout = '{LOCK_TIMEOUT}'"))
         for name, table, column in TS_INDEXES:
+            if _INDEX_BACKOFF.get(name) and _INDEX_BACKOFF[name] > now:
+                continue
             try:
                 if not _exists(c, table):
                     continue
@@ -309,8 +374,11 @@ def ensure_indexes(engine: Any) -> list[str]:
                     c.execute(text(f'DROP INDEX CONCURRENTLY IF EXISTS "{name}"'))
                 c.execute(text(f'CREATE INDEX CONCURRENTLY IF NOT EXISTS "{name}" ON "{table}" ("{column}")'))
                 made.append(name)
-            except Exception:  # noqa: BLE001 — the sweep still runs; the next pass retries
-                _log.info("telemetry index %s not built", name, exc_info=True)
+                _INDEX_BACKOFF.pop(name, None)
+            except Exception:  # noqa: BLE001 — the sweep still runs; retried after the back-off
+                _INDEX_BACKOFF[name] = now + INDEX_RETRY_AFTER
+                _log.info("telemetry index %s not built; retried after %s", name, INDEX_RETRY_AFTER,
+                          exc_info=True)
         c.execute(text("RESET lock_timeout"))
     return made
 
@@ -321,7 +389,6 @@ LEGACY = "events_legacy"
 DEFAULT_PART = "events_default"
 _LEGACY_CHECK = "events_legacy_bound"
 _HELPER_INDEX = "events_id_created_key"
-_CHECK_BOUND = re.compile(r"created_at < '([^']+)'")
 
 
 def _cutover(now: datetime) -> datetime:
@@ -329,23 +396,34 @@ def _cutover(now: datetime) -> datetime:
     return nxt if nxt - now >= CUTOVER_MARGIN else _add_months(nxt, 1)
 
 
-def _legacy_check_bound(connection: Any) -> Optional[datetime]:
-    row = connection.execute(text(
-        "SELECT pg_get_constraintdef(oid), convalidated FROM pg_constraint "
-        "WHERE conname = :n AND conrelid = to_regclass('events')"), {"n": _LEGACY_CHECK}).first()
-    if row is None:
-        return None
-    m = _CHECK_BOUND.search(str(row[0]))
-    return _ts_literal(m.group(1)) if m else None
+def clear_stale_bound(engine: Any) -> bool:
+    """Drop `events_legacy_bound` from a plain `events`: only a conversion in flight should hold
+    it, and this runs before one starts. True when one was there. Never raises (logged)."""
+    try:
+        with engine.connect() as c:
+            plain = c.execute(text(
+                "SELECT relkind = 'r' FROM pg_class WHERE oid = to_regclass('events')")).scalar() is True
+            there = plain and c.execute(text(
+                "SELECT count(*) FROM pg_constraint WHERE conname = :n "
+                "AND conrelid = to_regclass('events')"), {"n": _LEGACY_CHECK}).scalar()
+        if not there:
+            return False
+        _log.warning("events carried a stale %s from an interrupted conversion; dropping it", _LEGACY_CHECK)
+        return _drop_legacy_check(engine)
+    except Exception:  # noqa: BLE001
+        _log.warning("stale events bound not checked", exc_info=True)
+        return False
 
 
-def _drop_legacy_check(engine: Any) -> None:
+def _drop_legacy_check(engine: Any) -> bool:
     try:
         with engine.begin() as c:
             c.execute(text(f"SET LOCAL lock_timeout = '{SWAP_LOCK_TIMEOUT}'"))
             c.execute(text(f'ALTER TABLE events DROP CONSTRAINT IF EXISTS "{_LEGACY_CHECK}"'))
+        return True
     except Exception:  # noqa: BLE001
         _log.warning("events legacy check not dropped; the next pass retries", exc_info=True)
+        return False
 
 
 def ensure_partitioned(engine: Any, *, now: Optional[datetime] = None) -> dict[str, Any]:
@@ -354,6 +432,9 @@ def ensure_partitioned(engine: Any, *, now: Optional[datetime] = None) -> dict[s
     next months. Never raises; a step that cannot get its lock in time is retried next pass."""
     now = now or _now()
     out: dict[str, Any] = {"converted": False, "made": [], "seconds": {}}
+    # FIRST, before anything that can fail: a bound a crashed pass left on the PLAIN table goes.
+    # Left there, every insert after its cutover would fail. (schema.sql drops it at boot too.)
+    out["stale_bound_dropped"] = clear_stale_bound(engine)
     try:
         with engine.connect() as c:
             if not _exists(c, "events"):
@@ -387,22 +468,17 @@ def _convert_events(engine: Any, *, now: datetime) -> dict[str, Any]:
                            "ON events (id, created_at)"))
     t["unique_index"] = round(time.monotonic() - t0, 2)
 
-    # 2. The bound the legacy partition will cover: everything before the cutover month. Added
-    #    NOT VALID (no scan, a brief lock) and validated (a scan that blocks no writer). A bound
-    #    left by a pass that died is reused only while it is still CUTOVER_MARGIN away.
-    with engine.connect() as c:
-        bound = _legacy_check_bound(c)
-    if bound is not None and bound - now < CUTOVER_MARGIN:
-        _drop_legacy_check(engine)
-        bound = None
-    cutover = bound or _cutover(now)
+    # 2. The bound the legacy partition will cover: everything before the cutover month (at least
+    #    CUTOVER_MARGIN away). Added NOT VALID (no scan, a brief lock) and validated (a scan that
+    #    blocks no writer). Always fresh: ensure_partitioned dropped any older one first.
+    cutover = _cutover(now)
     t0 = time.monotonic()
     try:
-        if bound is None:
-            with engine.begin() as c:
-                c.execute(text(f"SET LOCAL lock_timeout = '{SWAP_LOCK_TIMEOUT}'"))
-                c.execute(text(f'ALTER TABLE events ADD CONSTRAINT "{_LEGACY_CHECK}" '
-                               f"CHECK (created_at < '{cutover.isoformat()}') NOT VALID"))
+        with engine.begin() as c:
+            c.execute(text(f"SET LOCAL lock_timeout = '{SWAP_LOCK_TIMEOUT}'"))
+            c.execute(text(f'ALTER TABLE events DROP CONSTRAINT IF EXISTS "{_LEGACY_CHECK}"'))
+            c.execute(text(f'ALTER TABLE events ADD CONSTRAINT "{_LEGACY_CHECK}" '
+                           f"CHECK (created_at < '{cutover.isoformat()}') NOT VALID"))
         with engine.begin() as c:
             c.execute(text("SET LOCAL statement_timeout = 0"))
             c.execute(text(f"SET LOCAL lock_timeout = '{SWAP_LOCK_TIMEOUT}'"))
@@ -442,6 +518,11 @@ def _swap(c: Any, *, cutover: datetime, now: datetime) -> None:
     fks = c.execute(text(
         "SELECT conrelid::regclass::text, conname FROM pg_constraint "
         "WHERE contype = 'f' AND confrelid = 'events'::regclass")).all()
+    # The keys events itself holds (events.project_id → projects): re-declared on the parent so
+    # every new month keeps them. The legacy table's identical key is ATTACHED, not re-checked.
+    own_fks = c.execute(text(
+        "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint "
+        "WHERE contype = 'f' AND conrelid = 'events'::regclass")).all()
     # A partitioned table can only be referenced through its whole key (id, created_at). The two
     # references (webhook_deliveries/inbound_webhooks.event_id, ON DELETE SET NULL) become soft
     # references: the column stays, the readers already LEFT JOIN.
@@ -472,6 +553,8 @@ def _swap(c: Any, *, cutover: datetime, now: datetime) -> None:
     # Same names, same definitions on the parent: the legacy indexes match and are attached.
     for name, idef in indexes:
         c.execute(text(_parent_index_sql(str(name), str(idef))))
+    for name, cdef in own_fks:
+        c.execute(text(f'ALTER TABLE events ADD CONSTRAINT "{name}" {cdef}'))
     for _name, tdef in triggers:
         c.execute(text(re.sub(r"\bON (public\.)?events_legacy\b|\bON (public\.)?events\b", "ON events",
                               str(tdef), count=1)))
@@ -618,9 +701,10 @@ def plan(connection: Any, *, now: Optional[datetime] = None,
             r.partitions.append(part["name"])
             r.bytes += int(connection.execute(text("SELECT pg_total_relation_size(:t)"),
                                               {"t": part["name"]}).scalar() or 0)
+            keep = p.archive_sql or "false"
             got = connection.execute(text(
-                f'SELECT count(*) FILTER (WHERE NOT ({p.protect(connection)})), '
-                f'count(*) FILTER (WHERE {p.protect(connection)}) FROM "{part["name"]}" t')).first()
+                f'SELECT count(*) FILTER (WHERE NOT ({keep})), '
+                f'count(*) FILTER (WHERE {keep}) FROM "{part["name"]}" t')).first()
             r.rows += int(got[0] or 0)
             r.archived += int(got[1] or 0)
         dropping.setdefault(p.table, []).extend(r.partitions)
@@ -649,7 +733,7 @@ def items_of(results: Sequence[TableResult]) -> list[str]:
 
 def sweep(engine: Any, *, now: Optional[datetime] = None, dry_run: bool = False,
           days: Optional[Mapping[str, int]] = None, only: Optional[Sequence[str]] = None,
-          budget_seconds: float = TABLE_BUDGET_SECONDS, batch: int = BATCH,
+          budget_seconds: float = TABLE_BUDGET_SECONDS, batch: Optional[int] = None,
           receipt: bool = True) -> dict[str, Any]:
     """One pass. `only` (the executor's dry-run items) limits a real run to exactly those.
     Returns {at, dry_run, tables: [...], rows, bytes, partitions, receipt_id}."""
@@ -661,7 +745,6 @@ def sweep(engine: Any, *, now: Optional[datetime] = None, dry_run: bool = False,
             return _report(results, now=now, dry_run=True)
         live = [p for p in POLICIES if _exists(c, p.table)]
         preds = _predicates(c, live, days, now)
-        protects = {p.key: p.protect(c) for p in live}
         archive_cols = _archive_columns(c) if _exists(c, "events_archive") else []
         expired = {p.key: _expired_partitions(c, p, preds[p.key][1]) for p in live}
     params = _params(preds)
@@ -673,9 +756,10 @@ def sweep(engine: Any, *, now: Optional[datetime] = None, dry_run: bool = False,
             for part in expired.get(p.key) or []:
                 if only is not None and f"partition:{part['name']}" not in only:
                     continue
-                _drop_partition(engine, p, part["name"], protects[p.key], archive_cols, r)
+                _drop_partition(engine, p, part["name"], p.archive_sql or "false", archive_cols, r)
             if only is None or f"rows:{p.key}" in only:
-                _delete_rows(engine, p, pred, params, r, budget_seconds=budget_seconds, batch=batch)
+                _delete_rows(engine, p, pred, params, r, budget_seconds=budget_seconds,
+                             batch=int(batch or p.batch or BATCH))
         except Exception as exc:  # noqa: BLE001 — one table never stops the others
             _log.warning("telemetry retention: %s not finished", p.key, exc_info=True)
             r.error = f"{type(exc).__name__}: {exc}"[:300]
@@ -697,7 +781,7 @@ def _drop_partition(engine: Any, p: Policy, name: str, protect: str, cols: Seque
         archived = 0
         if protect != "false":
             if not cols:
-                raise RuntimeError("events_archive is missing: audit rows would be lost")
+                raise RuntimeError("events_archive is missing: kept rows would be lost")
             collist = ", ".join(f'"{x}"' for x in cols)
             selected = ", ".join(f't."{x}"' for x in cols)
             archived = int(c.execute(text(
@@ -708,7 +792,7 @@ def _drop_partition(engine: Any, p: Policy, name: str, protect: str, cols: Seque
                 f'SELECT count(*) FROM "{name}" t WHERE {protect} AND NOT EXISTS '
                 f"(SELECT 1 FROM events_archive a WHERE a.id = t.id)")).scalar() or 0)
             if missing:
-                raise RuntimeError(f"{missing} audit rows of {name} not archived; not dropped")
+                raise RuntimeError(f"{missing} kept rows of {name} not archived; not dropped")
             protected = int(c.execute(text(f'SELECT count(*) FROM "{name}" t WHERE {protect}')).scalar() or 0)
         else:
             protected = 0
@@ -724,11 +808,14 @@ def _drop_partition(engine: Any, p: Policy, name: str, protect: str, cols: Seque
 def _delete_rows(engine: Any, p: Policy, pred: str, params: Mapping[str, Any], r: TableResult, *,
                  budget_seconds: float, batch: int) -> None:
     started = time.monotonic()
+    # The candidates are LOCKED (FOR UPDATE SKIP LOCKED: a row someone is referencing right now
+    # holds a KEY SHARE lock and is skipped), and the predicate — protection included — is
+    # evaluated AGAIN by the DELETE itself, so a reference that appeared between the two is seen.
     stmt = text(f"""
         WITH v AS (SELECT t.id, t."{p.ts}" AS ts, pg_column_size(ROW(t.*)) AS sz
-                     FROM "{p.table}" t WHERE {pred} LIMIT :batch),
-             gone AS (DELETE FROM "{p.table}" d USING v
-                       WHERE d.id = v.id AND d."{p.ts}" = v.ts RETURNING d.id, v.sz)
+                     FROM "{p.table}" t WHERE {pred} LIMIT :batch FOR UPDATE OF t SKIP LOCKED),
+             gone AS (DELETE FROM "{p.table}" t USING v
+                       WHERE t.id = v.id AND t."{p.ts}" = v.ts AND {pred} RETURNING t.id, v.sz)
         SELECT count(*), COALESCE(sum(gone.sz), 0) FROM gone""")
     while True:
         with engine.begin() as c:
@@ -828,36 +915,64 @@ _LAST: dict[str, Any] = {}
 _THREAD: Optional[threading.Thread] = None
 
 
+class _LeaderLock:
+    """The session advisory lock every real sweep runs under (hourly pass, Infra Agent tier 2)."""
+
+    def __init__(self, engine: Any):
+        self.engine, self.conn, self.held = engine, None, False
+
+    def __enter__(self) -> bool:
+        self.conn = self.engine.connect()
+        self.held = bool(self.conn.execute(text("SELECT pg_try_advisory_lock(hashtext(:k))"),
+                                           {"k": LOCK_NAME}).scalar())
+        self.conn.commit()
+        return self.held
+
+    def __exit__(self, *exc: Any) -> None:
+        try:
+            if self.held:
+                self.conn.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": LOCK_NAME})
+                self.conn.commit()
+        finally:
+            self.conn.close()
+
+
+def leader_lock(engine: Any) -> _LeaderLock:
+    return _LeaderLock(engine)
+
+
+def sweep_locked(engine: Any, **kwargs: Any) -> Optional[dict[str, Any]]:
+    """A REAL sweep under the leader lock; None when another process holds it (it is sweeping
+    now). A dry run takes no lock."""
+    if kwargs.get("dry_run"):
+        return sweep(engine, **kwargs)
+    with leader_lock(engine) as held:
+        if not held:
+            return None
+        return sweep(engine, **kwargs)
+
+
 def run_once(engine: Any, *, now: Optional[datetime] = None, convert: bool = True) -> dict[str, Any]:
     """Indexes → partitions → sweep, under the leader lock (a session advisory lock on its own
     connection). A second process gets {"skipped": "busy"} at once."""
     from . import system_services
 
-    lock = engine.connect()
-    try:
-        got = lock.execute(text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": LOCK_NAME}).scalar()
-        lock.commit()
-        if not got:
+    with leader_lock(engine) as held:
+        if not held:
             return {"skipped": "busy"}
-        try:
-            report: dict[str, Any] = {"indexes": ensure_indexes(engine)}
-            if convert:
-                report["partitioning"] = ensure_partitioned(engine, now=now)
-            report["sweep"] = sweep(engine, now=now)
-            last = {k: report["sweep"][k] for k in ("at", "rows", "bytes", "partitions", "archived",
-                                                     "errors", "receipt_id")}
-            last["tables"] = [{k: t[k] for k in ("policy", "rows", "bytes", "days")}
-                              for t in report["sweep"]["tables"]]
-            ok = not report["sweep"]["errors"] and not report.get("partitioning", {}).get("error")
-            system_services.beat(engine, SERVICE_KEY, ok=ok,
-                                 error=None if ok else "; ".join(report["sweep"]["errors"])[:400]
-                                 or report.get("partitioning", {}).get("error"),
-                                 details={"last_sweep": last})
-        finally:
-            lock.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": LOCK_NAME})
-            lock.commit()
-    finally:
-        lock.close()
+        report: dict[str, Any] = {"indexes": ensure_indexes(engine, now=now)}
+        if convert:
+            report["partitioning"] = ensure_partitioned(engine, now=now)
+        report["sweep"] = sweep(engine, now=now)
+        last = {k: report["sweep"][k] for k in ("at", "rows", "bytes", "partitions", "archived",
+                                                 "errors", "receipt_id")}
+        last["tables"] = [{k: t[k] for k in ("policy", "rows", "bytes", "days")}
+                          for t in report["sweep"]["tables"]]
+        ok = not report["sweep"]["errors"] and not report.get("partitioning", {}).get("error")
+        system_services.beat(engine, SERVICE_KEY, ok=ok,
+                             error=None if ok else "; ".join(report["sweep"]["errors"])[:400]
+                             or report.get("partitioning", {}).get("error"),
+                             details={"last_sweep": last})
     _LAST.clear()
     _LAST.update(report)
     return report
@@ -887,7 +1002,8 @@ def start(engine: Any, settings: Any = None, *, interval: float = INTERVAL_SECON
     return _THREAD
 
 
-__all__ = ["AUDIT_EVENT_PREFIXES", "AUDIT_FLOOR_DAYS", "POLICIES", "POLICY_BY_KEY", "Policy",
-           "TICK_RECEIPT_KINDS", "configured_days", "effective_days", "ensure_indexes",
-           "ensure_months", "ensure_partitioned", "is_partitioned", "items_of", "partitions",
-           "plan", "run_once", "share", "start", "sweep"]
+__all__ = ["AUDIT_FLOOR_DAYS", "CHATTER_SQL", "NOISE_EVENT_TYPES", "POLICIES", "POLICY_BY_KEY",
+           "Policy", "TICK_RECEIPT_KINDS", "clear_stale_bound", "configured_days", "effective_days",
+           "ensure_indexes", "ensure_months", "ensure_partitioned", "is_partitioned", "items_of",
+           "leader_lock", "overrides_from_rule", "partitions", "plan", "run_once", "share",
+           "start", "sweep", "sweep_locked"]
