@@ -12,7 +12,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { CaretRight, MagnifyingGlass, Pause, Play, Pulse, ShieldCheck, Tray } from "@phosphor-icons/react";
 
 import {
-  STATUS_CHIPS, eventFlow, methodWords, placeOf, readEvent, readEvents, readRunStatus,
+  STATUS_CHIPS, eventFlow, labelOfKind, methodWords, placeOf, readEvent, readEvents, readRunStatus,
   type EventDetail, type EventList, type EventSummary, type Read,
 } from "../../lib/intake";
 import { EvFrame, useEv } from "./frame";
@@ -37,7 +37,10 @@ const fmtSecs = (s: number) => (s < 10 ? `${s.toFixed(2)} s` : s < 120 ? `${Math
 export function eventTitle(e: EventSummary): string {
   const who = e.actor.display || e.actor.external_id;
   if (e.kind === "slack") return `${who || "Someone"} in ${placeOf(e)}`;
-  return [e.connection_name, e.subject].filter(Boolean).join(" · ") || e.type;
+  // A record's subject often repeats its connection ("org/repo" · "org/repo@refs/heads/main"):
+  // say the connection once, then what happened.
+  const what = e.subject && !e.subject.startsWith(e.connection_name) ? e.subject : labelOfKind(e.kind);
+  return [e.connection_name, what].filter(Boolean).join(" · ") || e.type;
 }
 
 export function StreamTab() {
@@ -167,7 +170,7 @@ export function EventPanel({ id, projectId }: { id: string; projectId: string })
       </div>
       <EventFlowView nodes={nodes} testId="ev-detail-flow" />
       <div className="ev-timing">
-        {saved !== null ? <span title="From the source's own time to BOSS saving it">{fmtSecs(saved)} to saved</span> : null}
+        {saved !== null && saved < 600 ? <span title="From the source's own time to BOSS saving it">{fmtSecs(saved)} to saved</span> : null}
         {done !== null ? <span title="From saved to the router's answer">{fmtSecs(done)} to routed</span> : null}
         {e.screen_verdict ? <span title="Checked for hidden instructions before any agent read it"><ShieldCheck size={13} aria-hidden /> text screened: {e.screen_verdict}</span> : null}
         {e.attempts > 1 ? <span>{e.attempts} tries</span> : null}

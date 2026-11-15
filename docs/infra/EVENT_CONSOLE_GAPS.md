@@ -17,12 +17,11 @@ live; Rules → budget $5, quiet hours Wait → Save rule (checked in the API: `
 `limits` and a `trigger` scoped budget written); Stream → chips, a dead event opened as a flow;
 Dead letters → tick → Reprocess, tick → Force… → reason → Force run; People → Revoke → confirm.
 
-**Not done: the 1440 / 1024 / 768 / 390 pass and the screenshots.** The headless pass
-(`walk.py`: each screen at four widths, a check that nothing runs past the right edge, the
-wireframes rendered beside) was stopped when the laptop's free disk fell to 7 GiB, under the
-10 GiB floor for this work. The layout answers to container queries (`.ev` is the container),
-so the narrow rules are the ones the vitest file exercises by structure only. Run it when there
-is room: `python3 -I walk.py docs/infra/walk/events-console <wireframes dir>`.
+**The four widths.** After the review fixes, `walk.py` (headless Chromium) opened every screen at
+1440, 1024, 768 and 390 against a freshly seeded scratch DB, opened an event on the stream, and
+checked that nothing runs past the right edge: **24 of 24 views, 0 overflows**. Screenshots are
+in `docs/infra/walk/events-console/`, named `<screen>-<width>.jpg`, beside `<screen>-wireframe.jpg`
+(each wireframe rendered at the 1440 it was drawn at).
 
 | Screen | Status | Notes |
 |---|---|---|
@@ -47,8 +46,16 @@ is room: `python3 -I walk.py docs/infra/walk/events-console <wireframes dir>`.
 - Dead letters repeated "nothing stuck" per connection when nothing was stuck → said once.
 - Test said "nothing to check" for Slack (its secrets live on the chat endpoint) → says what was checked, if anything.
 
+- (4-width pass) A GitHub event's title repeated its repository ("org/repo · org/repo@refs/heads/main") and said "1419 min to saved" (the record's own age) → the connection once, then what happened; record age is not shown as delivery time.
+- (4-width pass) Long BOSS emails wrapped mid-word on People at 1024 → one line with an ellipsis.
+
+## Review fixes (PR #128)
+
+- People: who each BOSS person is (name, email) is withheld unless the caller holds `user:read` (Owner, Admin, Auditor); a hidden row says "A BOSS person · name hidden". "Link sent" comes from the outbox's own link prompt only, never for a guest. Paged (`limit`/`offset`), indexed on `(connection_id, actor_external_id, received_at)`. A Revoked filter; Turn on goes to the picked connection's kind.
+- Save rule says every failed step after the rule (budget set or removed, triage) in red.
+- Rule writes carry the signed-in actor; the rule switch keeps its refusal tooltip; numbers use a pinned locale; the Events row is wrapped so the first-run board keeps its numbered rows.
+
 ## Follow-ups
 
-- The four-width pass and screenshots (blocked on disk).
 - A real "BOSS posts a test message" for E2, and link-prompt sends for E7, need API.
 - A rule filter on the events API for E5.

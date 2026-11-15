@@ -226,7 +226,7 @@ export function placeOf(e: EventSummary | EventDetail): string {
   const ch = s(o(o(env).data).channel) || s(o(o(env).bossconversation).channel);
   if (ch) return `#${ch}`;
   if (e.kind === "slack" && e.subject) return `#${e.subject.split("/")[0]}`;
-  return e.subject || e.connection_name || labelOfKind(e.kind) || e.type;
+  return e.connection_name || e.subject || labelOfKind(e.kind) || e.type;
 }
 function shortReason(r: string): string {
   return r.split(/[.;(:]/)[0].trim().slice(0, 28);

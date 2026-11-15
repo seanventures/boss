@@ -278,7 +278,8 @@ details.ev-more[open] > summary { margin-bottom: 10px; }
 .ev-person-id { display: flex; gap: 10px; align-items: center; min-width: 0; }
 .ev-person-id > div { display: flex; flex-direction: column; min-width: 0; }
 .ev-person-id b, .ev-person-id span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ev-person-boss { align-items: flex-start; }
+.ev-person-boss { align-items: flex-start; min-width: 0; }
+.ev-person-boss > b, .ev-person-boss > .ev-faint { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ev-person-act { display: flex; gap: 10px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
 @container ev (max-width: 620px) {
   .ev-person { grid-template-columns: minmax(0, 1fr) minmax(0, auto); }
