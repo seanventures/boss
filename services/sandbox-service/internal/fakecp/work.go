@@ -337,10 +337,43 @@ func (cp *CP) routeRunPlane(w http.ResponseWriter, r *http.Request) bool {
 	case r.URL.Path == hostapi.PathHostsNext && r.Method == http.MethodPost:
 		cp.hostsNext(w, r)
 		return true
+	case strings.HasPrefix(r.URL.Path, "/v1/run-plane/runs/") && strings.HasSuffix(r.URL.Path, "/tokens") && r.Method == http.MethodPost:
+		cp.runTokens(w, r)
+		return true
 	case strings.HasPrefix(r.URL.Path, "/v1/run-plane/runs/") && strings.HasSuffix(r.URL.Path, "/lease") && r.Method == http.MethodPost:
 		run := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/run-plane/runs/"), "/lease")
 		cp.runLease(w, r, run)
 		return true
 	}
 	return false
+}
+
+// SetTokensRefused makes POST …/tokens answer 409 (the identity service
+// refused the run's tokens), for hand-back tests (P8b S13).
+func (cp *CP) SetTokensRefused(refuse bool) { cp.tokensRefused.Store(refuse) }
+
+// TokenMints is how many run-token mints the host asked for.
+func (cp *CP) TokenMints() int64 { return cp.tokenMints.Load() }
+
+// runTokens answers POST /v1/run-plane/runs/{run}/tokens like the control
+// plane: one opaque token per audience for the host's jkt (HOST_API.md §4.8).
+func (cp *CP) runTokens(w http.ResponseWriter, r *http.Request) {
+	if _, ok := cp.authHost(w, r, ""); !ok {
+		return
+	}
+	cp.tokenMints.Add(1)
+	if cp.tokensRefused.Load() {
+		writeJSON(w, http.StatusConflict, map[string]any{"detail": map[string]string{
+			"error": "token_grant_inactive", "message": "the identity service refused this run's tokens"}})
+		return
+	}
+	var req hostapi.RunTokensRequest
+	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req)
+	run := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/run-plane/runs/"), "/tokens")
+	out := hostapi.RunTokensResponse{RunID: run, JKT: req.JKT, ExpiresIn: 300, RotateAfterSeconds: 200,
+		Tokens: map[string]hostapi.IssuedToken{}}
+	for _, aud := range req.Audiences {
+		out.Tokens[aud] = hostapi.IssuedToken{AccessToken: "fake." + aud + "." + run, TokenType: "DPoP", ExpiresIn: 300}
+	}
+	writeJSON(w, http.StatusOK, out)
 }

@@ -119,7 +119,8 @@ def build_app(engine: Optional[Any] = None, *, upstream=None, listen: bool = Fal
         body = await request.body()
         req = EgressRequest(method=request.method, path=_raw_path(request), query=request.url.query,
                             headers={k.lower(): v for k, v in request.headers.items()}, body=body,
-                            peer=(request.client.host if request.client else "unknown"))
+                            peer=(request.client.host if request.client else "unknown"),
+                            url=str(request.url).split("?", 1)[0])
         from starlette.concurrency import run_in_threadpool
 
         resp = await run_in_threadpool(proxy.handle, req)

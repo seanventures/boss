@@ -285,6 +285,7 @@ func (a *Agent) Enrol(ctx context.Context) error {
 		JoinToken: a.cfg.JoinToken, CSR: csr, SVIDCSR: caCSR, Hostname: a.cfg.Hostname,
 		Backend: a.cfg.Manager.Name(), Facts: a.facts(ctx), Capacity: a.capacity(), Labels: labels,
 		Role: hostapi.RoleHost, Address: a.cfg.Address,
+		Capabilities: []string{hostapi.CapHostTokens},
 	})
 	if err != nil {
 		return fmt.Errorf("enrol: %w", err)
@@ -453,6 +454,11 @@ func (a *Agent) Run(ctx context.Context) error {
 		}}
 	a.gw.Audit = a.calls.Add
 	a.gw.Event = a.events.Add
+	// P8b S13: per-run DPoP keys and delegated tokens live here, in memory,
+	// rotated at two thirds of their TTL; the VM never sees either.
+	a.gw.Keys = &gateway.RunKeys{Mint: a.client.RunTokens, Log: a.logf}
+	a.gw.MintNotSupported = cpclient.IsNotFound
+	go a.gw.Keys.RotateLoop(ctx, 5*time.Second)
 
 	a.touchCP() // the headless window starts now if the control plane never answers
 	if err := a.adoptRunning(ctx); err != nil {

@@ -2,12 +2,16 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
 )
 
 // RunLease is what the HOST holds for a run its VM is driving (HOST_API.md
@@ -104,6 +108,29 @@ func (g *Gateway) stripAdmitToken(resp *http.Response, replicaID string) error {
 				}
 				if runID != "" {
 					g.Runs.Put(runID, l)
+					// S13: the admitted run's tokens exist before the guest learns
+					// of the run, so its next call already carries them. A refused
+					// mint answers the guest 503 tokens_unavailable (the lease then
+					// expires and BOSS re-queues the run); a control plane that
+					// predates S13 (404) leaves the run on the host proof alone.
+					if g.Keys != nil {
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						err := g.Keys.Ensure(ctx, hostapi.Assignment{RunID: runID, JobID: l.JobID,
+							ReplicaID: replicaID, Epoch: l.Epoch, RunToken: tok})
+						cancel()
+						if err != nil && !g.mintNotSupported(err) {
+							g.Runs.Delete(runID)
+							g.Keys.Forget(runID)
+							body, _ := json.Marshal(map[string]string{"error": "boss guest gateway: tokens_unavailable",
+								"reason": "tokens_unavailable"})
+							resp.StatusCode, resp.Status = http.StatusServiceUnavailable, "503 Service Unavailable"
+							resp.Header.Set("Content-Type", "application/json")
+							resp.Body = io.NopCloser(bytes.NewReader(body))
+							resp.ContentLength = int64(len(body))
+							resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+							return nil
+						}
+					}
 				}
 				delete(lease, "run_token")
 				if out, err := json.Marshal(doc); err == nil {
@@ -116,4 +143,13 @@ func (g *Gateway) stripAdmitToken(resp *http.Response, replicaID string) error {
 	resp.ContentLength = int64(len(raw))
 	resp.Header.Set("Content-Length", strconv.Itoa(len(raw)))
 	return nil
+}
+
+// mintNotSupported reports a mint refused because the control plane does not
+// serve the tokens endpoint (404): it predates P8b S13.
+func (g *Gateway) mintNotSupported(err error) bool {
+	if g.MintNotSupported != nil {
+		return g.MintNotSupported(err)
+	}
+	return false
 }

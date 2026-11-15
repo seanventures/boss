@@ -41,8 +41,17 @@ type Rule struct {
 	// HostProof adds the host's BossHost proof and the binding headers
 	// (X-Boss-Handle, X-Boss-Vm, X-Boss-Run, X-Boss-Fence-Epoch,
 	// X-Boss-Deployment) to a forward that still presents the VM's SVID
-	// (P8b S10: the model gateway, HOST_API.md §4.6).
+	// (P8b S10: the model gateway, HOST_API.md §4.6; S12: the MCP gateway, §4.7).
 	HostProof bool
+	// PathMatch, when set, must also accept the path (a rule that a prefix
+	// alone cannot express, e.g. /v1/run-plane/runs/<any run>/tokens).
+	PathMatch func(path string) bool
+	// Audience is the destination's token audience (P8b S13, HOST_API.md §4.8):
+	// when the host holds the run's token for it, the forward carries
+	// X-Boss-Delegation (that token only) and a DPoP proof the host's per-run
+	// key signed. A token for another audience is never attached here, and
+	// would be refused there.
+	Audience string
 }
 
 func (r Rule) matches(port int, method, path string) bool {
@@ -61,7 +70,23 @@ func (r Rule) matches(port int, method, path string) bool {
 			return false
 		}
 	}
-	return prefixMatch(path, r.PathPrefix)
+	if !prefixMatch(path, r.PathPrefix) {
+		return false
+	}
+	return r.PathMatch == nil || r.PathMatch(path)
+}
+
+// TokenMintingPath reports whether a path mints or exchanges credentials:
+// /v1/run-plane/runs/<run>/tokens (and anything below it). A guest may never
+// reach one: it would get the run's tokens bound to a key IT chose (P8b S13;
+// HOST_API.md §4.8). The WHOLE path is case-folded (prefix included) and
+// trailing slashes are ignored, so no spelling slips past; the rule that uses
+// it matches on this alone, never on a case-sensitive prefix.
+func TokenMintingPath(p string) bool {
+	segs := strings.Split(strings.Trim(strings.ToLower(p), "/"), "/")
+	// v1 / run-plane / runs / <run> / tokens …
+	return len(segs) >= 5 && segs[0] == "v1" && segs[1] == "run-plane" && segs[2] == "runs" &&
+		segs[4] == "tokens"
 }
 
 // prefixMatch matches on a segment boundary: "/v1/messages" matches itself
@@ -83,11 +108,16 @@ func CleanPath(decoded, escaped string) bool {
 	if decoded == "" || decoded[0] != '/' || strings.Contains(decoded, "\\") {
 		return false
 	}
+	// Path parameters (";") and whitespace, raw or decoded: an upstream may
+	// read "tokens;a" or "tokens " as "tokens" where the route table did not.
+	if strings.ContainsAny(decoded, "; \t\r\n\v\f") || strings.ContainsAny(escaped, "; \t\r\n\v\f") {
+		return false
+	}
 	if gopath.Clean(decoded) != strings.TrimSuffix(decoded, "/") && gopath.Clean(decoded) != decoded {
 		return false
 	}
 	low := strings.ToLower(escaped)
-	for _, bad := range []string{"%2f", "%5c", "%2e", "%00"} {
+	for _, bad := range []string{"%2f", "%5c", "%2e", "%00", "%3b", "%20", "%09", "%0a", "%0d"} {
 		if strings.Contains(low, bad) {
 			return false
 		}
@@ -118,16 +148,25 @@ func DefaultRules() []Rule {
 	git := []string{http.MethodGet, http.MethodPost}
 	rest := []string{http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodPut}
 	return []Rule{
-		{ID: "model-anthropic-messages", Port: guest.PortModel, Methods: post, HostProof: true, PathPrefix: "/anthropic/v1/messages", Route: RouteModel, Handle: HandleModel, Endpoint: modelUp},
-		{ID: "model-openai-chat", Port: guest.PortModel, Methods: post, HostProof: true, PathPrefix: "/openai/v1/chat/completions", Route: RouteModel, Handle: HandleModel, Endpoint: modelUp},
-		{ID: "model-openai-responses", Port: guest.PortModel, Methods: post, HostProof: true, PathPrefix: "/openai/v1/responses", Route: RouteModel, Handle: HandleModel, Endpoint: modelUp},
-		{ID: "git-smart-http", Port: guest.PortGit, Methods: git, PathPrefix: "/git/", Route: RouteGit, Handle: HandleEgress, Endpoint: egrUp},
-		{ID: "git-rest-api", Port: guest.PortGit, Methods: rest, PathPrefix: "/api/", Route: RouteAPI, Handle: HandleEgress, Endpoint: egrUp},
-		{ID: "mcp", Port: guest.PortMCP, Methods: []string{http.MethodGet, http.MethodPost, http.MethodDelete}, PathPrefix: "/mcp/", Route: RouteMCP, Handle: HandleMCP, Endpoint: mcpUp},
+		{ID: "model-anthropic-messages", Port: guest.PortModel, Methods: post, HostProof: true, Audience: hostapi.AudModel, PathPrefix: "/anthropic/v1/messages", Route: RouteModel, Handle: HandleModel, Endpoint: modelUp},
+		{ID: "model-openai-chat", Port: guest.PortModel, Methods: post, HostProof: true, Audience: hostapi.AudModel, PathPrefix: "/openai/v1/chat/completions", Route: RouteModel, Handle: HandleModel, Endpoint: modelUp},
+		{ID: "model-openai-responses", Port: guest.PortModel, Methods: post, HostProof: true, Audience: hostapi.AudModel, PathPrefix: "/openai/v1/responses", Route: RouteModel, Handle: HandleModel, Endpoint: modelUp},
+		{ID: "git-smart-http", Port: guest.PortGit, Methods: git, Audience: hostapi.AudEgress, PathPrefix: "/git/", Route: RouteGit, Handle: HandleEgress, Endpoint: egrUp},
+		{ID: "git-rest-api", Port: guest.PortGit, Methods: rest, Audience: hostapi.AudEgress, PathPrefix: "/api/", Route: RouteAPI, Handle: HandleEgress, Endpoint: egrUp},
+		// The MCP gateway (P8b S12, HOST_API.md §4.7) takes the model gateway's
+		// contract: the host's proof, the handle MOVED into X-Boss-Handle and the
+		// host's word on VM, run and epoch. POST only: MCP streamable HTTP here has
+		// no server-initiated stream and no session to DELETE (the control plane
+		// answers 405 to both, so they are refused here without a forward).
+		{ID: "mcp", Port: guest.PortMCP, Methods: post, HostProof: true, Audience: hostapi.AudMCP, PathPrefix: "/mcp/", Route: RouteMCP, Handle: HandleMCP, Endpoint: mcpUp},
+		{ID: "mcp-other-methods-denied", Port: guest.PortMCP, PathPrefix: "/mcp/", Route: RouteMCP, Deny: true},
 		// VMs never poll for work: the host holds the one hosts/next (§3.13.0).
 		{ID: "run-plane-next-denied", Port: guest.PortRunPlane, PathPrefix: "/v1/run-plane/next", Route: RouteRunPlane, Deny: true},
 		{ID: "run-plane-hosts-denied", Port: guest.PortRunPlane, PathPrefix: "/v1/run-plane/hosts/", Route: RouteRunPlane, Deny: true},
-		{ID: "run-plane", Port: guest.PortRunPlane, PathPrefix: "/v1/run-plane/", Route: RouteRunPlane, Handle: HandleRun, Endpoint: runUp, HostAuth: true, SocketIdentity: true},
+		// Token minting is the HOST's own call (cpclient.RunTokens): a VM that
+		// reached it would get the run's tokens for its own key (S13).
+		{ID: "run-plane-tokens-denied", Port: guest.PortRunPlane, PathMatch: TokenMintingPath, Route: RouteRunPlane, Deny: true},
+		{ID: "run-plane", Port: guest.PortRunPlane, PathPrefix: "/v1/run-plane/", Route: RouteRunPlane, Handle: HandleRun, Endpoint: runUp, HostAuth: true, SocketIdentity: true, Audience: hostapi.AudRunPlane},
 		{ID: "connect-p8b", Port: guest.PortConnect, Route: RouteConnect, Deny: true},
 		{ID: "default-deny", Deny: true, Route: "deny"},
 	}
@@ -149,6 +188,7 @@ var strippedHeaders = []string{
 	"Authorization", "Proxy-Authorization", "X-Api-Key", "Api-Key", "Cookie",
 	"X-Auth-Token", "Private-Token", "X-Amz-Security-Token",
 	"Forwarded", "X-Forwarded-", "X-Real-Ip", "X-Boss-", "Boss-",
+	"DPoP", // a guest-made proof never stands in for the host's (S13)
 }
 
 // LeaseHeaders are the lease data a guest runtime may carry on run-plane

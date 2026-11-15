@@ -84,29 +84,95 @@ type Gateway struct {
 	HostCert  func() *tls.Certificate
 	Rules     []Rule
 	// Runs is the host's run → lease map (the run token stays here).
-	Runs  *RunMap
-	Audit func(hostapi.GuestCall)
-	Event func(hostapi.HostEvent)
+	Runs *RunMap
+	// Keys holds the per-run DPoP keys and delegated tokens (P8b S13); nil
+	// forwards without X-Boss-Delegation (the gateways then rely on the
+	// host proof alone, until BOSS_HOST_TOKENS_REQUIRED).
+	Keys *RunKeys
+	// MintNotSupported classifies a mint error as "the control plane has no
+	// tokens endpoint" (cpclient.IsNotFound), so the run proceeds without.
+	MintNotSupported func(error) bool
+	Audit            func(hostapi.GuestCall)
+	Event            func(hostapi.HostEvent)
 	// Enabled gates forwarding (false while the host is revoked).
 	Enabled func() bool
 
-	mu        sync.RWMutex
-	bindings  map[string]Binding // handle → binding
-	fences    map[string]int64   // run → min epoch
-	revoked   map[string]bool    // handle fingerprint → revoked
-	endpoints map[string]string
-	vmIdent   map[string]Binding // vm id → its replica identity
-	vms       map[string]*vmGW
-	hostTr    *http.Transport
+	mu       sync.RWMutex
+	bindings map[string]Binding // handle → binding (desired state)
+	// runBindings are the handles that arrived WITH a claimed run (hosts/next
+	// Assignment.Handles, HOST_API.md §2.8): bound here to (run, epoch, the
+	// delivering VM) until the lease ends. Kept apart from `bindings`, which a
+	// desired-state Update rebuilds.
+	runBindings map[string]Binding
+	runHandles  map[string][]string // run → its handles, for UnbindRun
+	fences      map[string]int64    // run → min epoch
+	revoked     map[string]bool     // handle fingerprint → revoked
+	endpoints   map[string]string
+	vmIdent     map[string]Binding // vm id → its replica identity
+	vms         map[string]*vmGW
+	hostTr      *http.Transport
 }
 
 func New(hostID string, minter *pki.Minter, cas *x509.CertPool) *Gateway {
 	return &Gateway{
 		HostID: hostID, Minter: minter, UpstreamCAs: cas, Rules: DefaultRules(),
 		bindings: map[string]Binding{}, fences: map[string]int64{}, revoked: map[string]bool{},
+		runBindings: map[string]Binding{}, runHandles: map[string][]string{},
 		vms: map[string]*vmGW{}, vmIdent: map[string]Binding{}, endpoints: map[string]string{},
 		Runs: NewRunMap(),
 	}
+}
+
+// handleKinds maps the names a work item's `handles` uses (contract v1.1:
+// mdl, egr, mcpgw, run) and the desired-state names (model, egress, mcp,
+// run) to the gateway's handle kinds.
+var handleKinds = map[string]string{
+	"mdl": HandleModel, "model": HandleModel,
+	"egr": HandleEgress, "egress": HandleEgress,
+	"mcpgw": HandleMCP, "mcp": HandleMCP,
+	"run": HandleRun,
+}
+
+// BindRun binds the handles that arrived with a claimed run to (run, epoch,
+// the VM that takes it). Non-string entries (mcp_servers) are not handles
+// and are ignored. A later BindRun for the same run replaces the first.
+func (g *Gateway) BindRun(vmID, replicaID, deploymentID, runID string, epoch int64, handles map[string]any) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, h := range g.runHandles[runID] {
+		delete(g.runBindings, h)
+	}
+	var bound []string
+	for name, v := range handles {
+		kind, known := handleKinds[name]
+		raw, isStr := v.(string)
+		if !known || !isStr || raw == "" {
+			continue
+		}
+		g.runBindings[raw] = Binding{Kind: kind, VMID: vmID, ReplicaID: replicaID, DeploymentID: deploymentID, RunID: runID, Epoch: epoch}
+		bound = append(bound, raw)
+	}
+	g.runHandles[runID] = bound
+}
+
+// UnbindRun forgets a run's handles (its lease ended or was handed back).
+func (g *Gateway) UnbindRun(runID string) {
+	g.mu.Lock()
+	for _, h := range g.runHandles[runID] {
+		delete(g.runBindings, h)
+	}
+	delete(g.runHandles, runID)
+	g.mu.Unlock()
+	if g.Keys != nil {
+		g.Keys.Forget(runID)
+	}
+}
+
+// RunBound reports how many handles a run has bound (tests).
+func (g *Gateway) RunBound(runID string) int {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return len(g.runHandles[runID])
 }
 
 // Update applies the desired state's bindings, fences, endpoints and
@@ -268,6 +334,9 @@ func (g *Gateway) resolve(v *vmGW, rule Rule, handle string) (Binding, *denial) 
 	fp := Fingerprint(handle)
 	g.mu.RLock()
 	b, ok := g.bindings[handle]
+	if !ok {
+		b, ok = g.runBindings[handle]
+	}
 	revoked := g.revoked[fp]
 	minEpoch, fenced := g.fences[b.RunID]
 	g.mu.RUnlock()
@@ -449,6 +518,21 @@ func (g *Gateway) serve(v *vmGW, port int, w http.ResponseWriter, r *http.Reques
 			ends = leaseEnds(r)
 		}
 	}
+	// S13: the run's delegated token for THIS destination, with the host's
+	// proof. The (token, key) pair is captured here, once per request, so a
+	// rotation between now and the proof never pairs a new key with an old
+	// token; the previous pair stays valid until it expires.
+	var pair TokenPair
+	havePair := false
+	if g.Keys != nil && rule.Audience != "" {
+		tokenRun := b.RunID
+		if leaseRun != "" {
+			tokenRun = leaseRun
+		}
+		if tokenRun != "" {
+			pair, havePair = g.Keys.Pair(tokenRun, rule.Audience)
+		}
+	}
 	var authErr error
 	proxy := &httputil.ReverseProxy{
 		Transport:     transport,
@@ -479,6 +563,17 @@ func (g *Gateway) serve(v *vmGW, port int, w http.ResponseWriter, r *http.Reques
 			if runToken != "" {
 				pr.Out.Header.Set("X-Boss-Run-Token", runToken)
 			}
+			if havePair {
+				htu := NormalizeHTU(pr.Out.URL.Scheme, pr.Out.URL.Host, pr.Out.URL.Path)
+				if hs, err := pair.Headers(pr.Out.Method, htu, time.Now()); err == nil {
+					for k, v := range hs {
+						pr.Out.Header.Set(k, v)
+					}
+				} else {
+					authErr = err
+					pr.Out.URL.Host = "invalid.invalid" // never forwarded with a half-made proof
+				}
+			}
 			if setAuth != nil {
 				authErr = setAuth(pr.Out.Header, pr.Out.Method, pr.Out.URL.Path)
 				if authErr != nil {
@@ -492,6 +587,7 @@ func (g *Gateway) serve(v *vmGW, port int, w http.ResponseWriter, r *http.Reques
 			}
 			if ends && resp.StatusCode >= 200 && resp.StatusCode <= 299 {
 				g.Runs.Delete(leaseRun) // the lease ended: forget the token
+				g.UnbindRun(leaseRun)   // and the run's handles, keys and tokens (S13)
 			}
 			if r.URL.Path == "/v1/run-plane/admit" {
 				return g.stripAdmitToken(resp, b.ReplicaID)

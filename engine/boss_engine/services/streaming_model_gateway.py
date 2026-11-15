@@ -88,6 +88,12 @@ DEPLOYMENT_HEADER = "x-boss-deployment"
 ASSERTION_HEADER = "boss-run-assertion"
 TRACE_HEADER = "traceparent"
 HOST_AUTH_SCHEME = "bosshost"
+#: S13 (BOSSAPP-1074): the run's delegated token for THIS destination (aud boss:model), bound to
+#: the HOST's DPoP key, and the proof that key signed for this very request. Optional until
+#: BOSS_HOST_TOKENS_REQUIRED=1; when present it must verify, and name the handle's run.
+DELEGATION_HEADER = "x-boss-delegation"
+DPOP_HEADER = "dpop"
+HOST_TOKENS_REQUIRED_ENV = "BOSS_HOST_TOKENS_REQUIRED"
 #: A handle outlives no run: the longest session BOSS starts, plus grace (model_proxy.session_ttl).
 HANDLE_TTL_SECONDS = 3600 + 900
 MAX_BODY_BYTES = 64 * 1024 * 1024
@@ -927,7 +933,7 @@ _AUDIT_SQL = ("INSERT INTO guest_calls (org_id, host_id, call_id, at, vm_id, run
               "deployment_id, route, dest_host, method, path_template, status, bytes_in, "
               "bytes_out, duration_ms, handle_fp, verdict, rule_id, rejected_by, trace_id) "
               "VALUES (:org_id, :host_id, :call_id, :at, :vm_id, :run_id, :epoch, "
-              ":deployment_id, 'model', :dest_host, :method, :path_template, :status, :bytes_in, "
+              ":deployment_id, :route, :dest_host, :method, :path_template, :status, :bytes_in, "
               ":bytes_out, :duration_ms, :handle_fp, :verdict, :rule_id, :rejected_by, "
               ":trace_id) ON CONFLICT (host_id, call_id) DO NOTHING")
 
@@ -957,10 +963,12 @@ class AuditQueue:
         self.dropped = 0
 
     def put(self, row: Mapping[str, Any]) -> None:
+        """Queue one row. `route` defaults to `model`; the MCP gateway (P8b S12) shares this
+        writer with `route = "mcp"`."""
         with self._lock:
             if len(self._rows) == self._rows.maxlen:
                 self.dropped += 1
-            self._rows.append(dict(row))
+            self._rows.append({"route": "model", **dict(row)})
 
     def pending(self) -> int:
         with self._lock:
@@ -1240,8 +1248,67 @@ class ModelGateway:
         raise Refused(401, "handle_replay", "that handle belongs to another VM; it is revoked")
 
     def _resolve_in_tx(self, caller: Caller, raw: str) -> Handle:
+        # A refusal still COMMITS what it wrote (a replay's revocation and its host_events
+        # row): raising out of the transaction would roll them back.
+        refused: Optional[Refused] = None
+        handle = None
         with self.engine.begin() as connection:
-            return self.resolve(connection, caller, raw)
+            try:
+                handle = self.resolve(connection, caller, raw)
+            except Refused as exc:
+                refused = exc
+        if refused is not None:
+            raise refused
+        return handle
+
+    # ---- S13: the run's delegated token, for THIS destination -----------------------------------
+    @staticmethod
+    def check_delegation(connection: Any, headers: Mapping[str, str], *, run_id: str, method: str,
+                         url: str, host_id: Optional[str] = None) -> Optional[Any]:
+        """`X-Boss-Delegation` + `DPoP`, when the host attached them: a run token minted FOR the
+        model gateway (aud boss:model — the MCP gateway's, egress's or the run plane's token is
+        `bad_aud`), bound to the host's key (the proof's), naming the handle's run. None when
+        none was attached and none is required (BOSS_HOST_TOKENS_REQUIRED)."""
+        from ..identity import delegation, host_delegation
+        from .fleet import host_tokens_required
+
+        try:
+            return host_delegation.check(
+                connection, headers, audience=delegation.AUD_MODEL, run_id=run_id, method=method,
+                url=url, required=host_tokens_required(connection, host_id)
+                if not host_delegation.presented(headers) else False)
+        except host_delegation.DelegationRefused as exc:
+            raise Refused(401, f"run_token_{exc.reason}",
+                          "the run's delegated token was refused") from None
+
+    def requires_tokens(self, host_id: Optional[str]) -> bool:
+        """Per host (fleet.host_tokens_required): only asked when no token was presented."""
+        from .fleet import host_tokens_required
+
+        if self.engine is None:          # no database (unit tests): only the override counts
+            return host_tokens_required(None, None)
+        with self.engine.connect() as connection:
+            return host_tokens_required(connection, host_id)
+
+    def _check_delegation_in_tx(self, headers: Mapping[str, str], *, run_id: str, method: str,
+                                url: str, host_id: Optional[str] = None) -> None:
+        from ..identity import host_delegation
+
+        if not host_delegation.presented(headers):
+            if self.requires_tokens(host_id):
+                raise Refused(401, "run_token_required",
+                              "this host's forwards carry the run's delegated token (S13)")
+            return
+        # Committed even on a refusal: a spent DPoP jti must stay spent.
+        refused: Optional[Refused] = None
+        with self.engine.begin() as connection:
+            try:
+                self.check_delegation(connection, headers, run_id=run_id, method=method, url=url,
+                                      host_id=host_id)
+            except Refused as exc:
+                refused = exc
+        if refused is not None:
+            raise refused
 
     # ---- one request ------------------------------------------------------------------------------
     async def handle(self, request: Any) -> Any:
@@ -1295,6 +1362,14 @@ class ModelGateway:
         audit.update(org_id=handle.org_id, run_id=handle.run_id, epoch=handle.fence_epoch,
                      deployment_id=handle.deployment_id or caller.deployment_id,
                      vm_id=caller.vm_id or handle.vm_id)
+        if not caller.direct:
+            try:
+                await run_in_threadpool(self._check_delegation_in_tx, headers,
+                                        run_id=handle.run_id, method=method,
+                                        url=str(request.url).split("?", 1)[0],
+                                        host_id=caller.host_id)
+            except Refused as exc:
+                return refuse(exc.status, exc.reason, str(exc))
         if handle.provider != provider:
             return refuse(401, "foreign_provider", "that handle is for another provider")
         if not adapter.allows(method, rest):
@@ -1482,7 +1557,7 @@ class GatewayClient:
         return raw, f"{gateway_url()}/{provider}"
 
 
-__all__ = ["ADAPTERS", "ANTHROPIC", "AZURE_OPENAI", "BEDROCK", "CREDENTIAL_HEADERS",
+__all__ = ["ADAPTERS", "ANTHROPIC", "AZURE_OPENAI", "BEDROCK", "CREDENTIAL_HEADERS", "DELEGATION_HEADER", "DPOP_HEADER",
            "HOP_HEADERS", "KEY_ENV_PROVIDER", "MODEL_HOSTS", "AuditQueue", "Caller",
            "GatewayClient", "GovernedBudget", "Handle", "KeyResolver", "KeyUnavailable",
            "ModelGateway", "OPENAI", "OPENROUTER", "PlaceholderRefused", "ProviderAdapter",
