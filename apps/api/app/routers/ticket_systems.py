@@ -117,8 +117,10 @@ def _may_manage(project_id: str) -> bool:
 
 def _with_can_manage(body: dict) -> dict:
     """A ``not_shared`` refusal says whether the caller may share it themselves."""
-    if body.get("error") == "not_shared" and body.get("home_project"):
-        body["can_manage"] = _may_manage(str(body["home_project"]))
+    if body.get("error") == "not_shared":
+        # A home the caller cannot read is unnamed (""): they cannot manage it either.
+        home = str(body.get("home_project") or "")
+        body["can_manage"] = bool(home) and _may_manage(home)
     return body
 
 
@@ -191,10 +193,12 @@ def list_ticket_systems(project_id: str,
     with begin(_engine()) as connection:
         _reader(connection, project_id)
         listed = intake.list_connections(connection, project_id, scope=scope)
+        name = reach.project_name(connection, project_id)
     for view in listed:
-        home = (view.get("home_project") or {}).get("id") or view.get("project_id")
+        home = (view.get("home_project") or {}).get("id") if view.get("home_project") \
+            else view.get("project_id")
         view["can_manage"] = _may_manage(str(home)) if home else False
-    return {"project_id": project_id, "scope": scope, "connections": listed}
+    return {"project_id": project_id, "project_name": name, "scope": scope, "connections": listed}
 
 
 @router.get("/v1/ticket-systems/org")
@@ -207,12 +211,14 @@ def list_org_ticket_systems(project_id: str) -> dict:
     each with ``usable_here`` (for the project filter) and ``can_manage`` (integration:manage at
     its home: share, settings, test, disconnect). Anyone who may read this project's ticket
     systems may see the org's list; never a token, and the token's last4, fingerprint and OAuth
-    app only to those who manage the connection."""
+    app only to those who manage the connection. A home project the caller cannot read stays
+    hidden: "another project", the org's Owners, no account, no mappings onto it, no counts
+    (ticket_intake.org_view)."""
     with begin(_engine()) as connection:
         _reader(connection, project_id)
         listed = intake.list_org_connections(connection, project_id)
     for view in listed:
-        view["can_manage"] = _may_manage(str(view["project_id"]))
+        view["can_manage"] = bool(view["project_id"]) and _may_manage(str(view["project_id"]))
         if not view["can_manage"]:
             for secretish in ("last4", "fingerprint", "oauth_app"):
                 view[secretish] = None

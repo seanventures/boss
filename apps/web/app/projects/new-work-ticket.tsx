@@ -9,7 +9,7 @@
  * from the ticket, one press (lib/tickets importAndStart).
  */
 import React, { useEffect, useRef, useState } from "react";
-import { CheckCircle, MagnifyingGlass } from "@phosphor-icons/react";
+import { CheckCircle, Info, MagnifyingGlass } from "@phosphor-icons/react";
 
 import { TYPE_WORDS, readConnections, readResolve, ticketSetupHref, workflowFor, type Ticket, type TypedError } from "../../lib/tickets";
 import { NotSharedLine, TicketCard, TkReadState, WorkflowPick } from "../tickets/ticket-parts";
@@ -70,8 +70,8 @@ export function NewWorkTicket({ resolved, workflow, onWorkflow, projectId }: {
     const hidden = resolved.errors.find((e) => e.shared_from);
     if (hidden?.shared_from) {
       return (
-        <p className="tk-error" role="alert" data-testid="px-nw-ticket-not-shared">
-          {hidden.ref ? `${hidden.ref}: ` : ""}<NotSharedLine info={hidden.shared_from} projectId={projectId} testid="px-nw-not-shared" /></p>
+        <p className="tk-heads-up" role="status" data-testid="px-nw-ticket-not-shared">
+          <Info size={14} aria-hidden />{hidden.ref ? <b className="tk-mono-text">{hidden.ref}</b> : null}<NotSharedLine info={hidden.shared_from} projectId={projectId} testid="px-nw-not-shared" /></p>
       );
     }
     return resolved.errors.length ? (

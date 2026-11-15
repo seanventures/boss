@@ -23,8 +23,11 @@ export type SectionId = "repos" | "models" | "ticket_systems" | "events";
 export function readOpen(): Partial<Record<SectionId, boolean>> {
   try {
     const raw = window.localStorage.getItem(SECTIONS_KEY);
-    const v = raw ? JSON.parse(raw) : {};
-    return v && typeof v === "object" ? v : {};
+    const v: unknown = raw ? JSON.parse(raw) : {};
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    // Only booleans count: anything else stored under the key is ignored, never trusted.
+    return Object.fromEntries(Object.entries(v as Record<string, unknown>).filter(([, open]) => typeof open === "boolean")) as
+      Partial<Record<SectionId, boolean>>;
   } catch { return {}; }
 }
 function writeOpen(id: SectionId, open: boolean): void {

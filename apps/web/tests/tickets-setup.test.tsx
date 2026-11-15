@@ -99,9 +99,12 @@ describe("Setup › Ticket systems (T1)", () => {
     // Nothing maps here: say where its tickets land; the whole mapping is the tooltip.
     expect($('[data-testid="tk-maps-wtp_home"]')?.textContent).toBe("None · lands in BOSS dogfood bootstrap");
     expect($('[data-testid="tk-maps-wtp_home"]')?.getAttribute("title")).toBe("KAN → BOSS dogfood bootstrap");
-    // The one door says a REAL key of the connection, never a made-up LEND-142.
-    expect($('[data-testid="tk-where-key"]')?.textContent).toBe("KAN-12");
-    expect($('[data-testid="tk-where-new"]')?.getAttribute("href")).toBe("?area=project&project_id=helpdesk-laptop&tab=work&compose=1");
+    // Nothing lands here: say where KAN tickets go and open New work THERE (never a made-up key).
+    expect($('[data-testid="tk-where-new"]')).toBeNull();
+    expect($('[data-testid="tk-where-lands"]')?.textContent).toBe("KAN tickets land in BOSS dogfood bootstrap.");
+    expect($('[data-testid="tk-where-there"]')?.getAttribute("href")).toBe("?area=project&project_id=boss-dogfood&tab=work&compose=1");
+    expect($('[data-testid="tk-where-there"]')?.textContent).toBe("New work in BOSS dogfood bootstrap →");
+    expect($('[data-testid="tk-map-here"]')).toBeNull();   // not this viewer's to map
     expect(parseConnection(shared).reach).toBe("org");
     await click('[data-testid="tk-menu-wtp_home"]');
     expect(($('[data-testid="tk-off-wtp_home"]') as HTMLButtonElement | null)?.disabled
@@ -151,6 +154,9 @@ describe("Setup › Ticket systems (T1)", () => {
     expect($('[data-testid="tk-unshared-wtp_other-ask"]')?.textContent?.trim())
       .toBe("Ask Param G or Sean (owner of BOSS dogfood bootstrap) to share it");
     expect(askOwnerWords({ id: "x", name: "Ops", owners: [] })).toBe("Ask an owner of Ops to share it");
+    // A project the viewer may not read is never named: an org owner is asked.
+    expect(askOwnerWords({ id: "", name: "another project", owners: ["Param G"], hidden: true })).toBe("Ask an org owner (Param G) to share it");
+    expect(askOwnerWords({ id: "", name: "another project", owners: [], hidden: true })).toBe("Ask an org owner to share it");
   });
 
   it("All in org lists every connection with where it was added and whose token, managed per row", async () => {
@@ -193,12 +199,40 @@ describe("Setup › Ticket systems (T1)", () => {
     expect($('[data-testid="tk-said"]')?.textContent).toBe("Jira is shared with the whole org.");
   });
 
+  it("names the project New work opens in, and offers Map KAN here to whoever may", async () => {
+    const calls = api((url) => {
+      if (url.startsWith("/v1/ticket-systems?project_id=northgate")) return json({ project_name: "Northgate Gateway", connections: [
+        { ...JIRA, id: "wtp_home", project_id: "boss-dogfood", reach: "org", can_manage: true,
+          home_project: { id: "boss-dogfood", name: "BOSS dogfood bootstrap", owners: [] },
+          settings: { ...JIRA.settings, mappings: [{ external_project: "KAN", boss_project_id: "boss-dogfood", default: true }], project_keys: ["KAN"] } }] });
+      return undefined;
+    });
+    await mount(<TicketSystemsRow projectId="northgate" />);
+    expect($('[data-testid="tk-where-there"]')?.textContent).toBe("New work in BOSS dogfood bootstrap →");
+    expect($('[data-testid="tk-map-here"]')?.textContent).toBe("Map KAN here");
+    await click('[data-testid="tk-map-here"]');
+    const patch = calls.find((c) => c.method === "PATCH")!;
+    expect([patch.url, patch.body]).toEqual(["/v1/ticket-systems/wtp_home",
+      { mappings: [{ external_project: "KAN", boss_project_id: "northgate", default: true }] }]);
+    expect($('[data-testid="tk-said"]')?.textContent).toBe("KAN tickets now land in Northgate Gateway.");
+  });
+
+  it("when keys land here, New work names this project and the key, without a made-up number", async () => {
+    api((url) => (url.startsWith("/v1/ticket-systems?project_id=") ? json({ project_name: "Northgate Gateway", connections: [JIRA] }) : undefined));
+    await mount(<TicketSystemsRow projectId="p1" />);
+    expect($('[data-testid="tk-where-new"]')?.textContent).toBe("New work in Northgate Gateway →");
+    expect($('[data-testid="tk-where-key"]')?.textContent).toBe("LEND");
+    expect($('[data-testid="tk-where"]')?.textContent).not.toMatch(/LEND-\d/);
+  });
+
   it("the folded section's line says what is there", () => {
     const c = parseConnection({ ...JIRA, settings: { ...JIRA.settings, share_with_org: true,
       mappings: [{ external_project: "KAN", boss_project_id: "a", default: true }, { external_project: "SAM", boss_project_id: "b" }] } });
-    expect(ticketSummary([c], [])).toBe("Jira · shared · 2 projects mapped");
-    expect(ticketSummary([], [parseConnection(HIDDEN)])).toBe("Jira in BOSS dogfood bootstrap · not shared here");
-    expect(ticketSummary([], [])).toBe("None yet");
+    expect(ticketSummary([c], [], "a")).toBe("Jira · shared · KAN here");
+    // Mapped, but not to this project: never "2 projects mapped".
+    expect(ticketSummary([c], [], "elsewhere")).toBe("Jira · shared · maps elsewhere");
+    expect(ticketSummary([], [parseConnection(HIDDEN)], "a")).toBe("Jira in BOSS dogfood bootstrap · not shared here");
+    expect(ticketSummary([], [], "a")).toBe("None yet");
   });
 
   it("lists a connection, tests it, opens its settings and disconnects only after confirming", async () => {

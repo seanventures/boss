@@ -569,9 +569,7 @@ def list_connections(db: Connection, project_id: str, *, scope: str = "all"
             continue
         view = serialize(db, row)
         view["reach"] = "org"
-        view["home_project"] = {"id": row["project_id"],
-                                "name": reach.project_name(db, str(row["project_id"]))}
-        out.append(view)
+        out.append(org_view(db, row, view))
     for row in reach.unshared_rows(db, project_id):
         out.append({"id": row["id"], "provider": row["provider_key"],
                     "label": label_of(row), "status": "not_shared", "reach": "unshared",
@@ -579,18 +577,43 @@ def list_connections(db: Connection, project_id: str, *, scope: str = "all"
     return out
 
 
+def org_view(db: Connection, row: dict[str, Any], view: dict[str, Any]) -> dict[str, Any]:
+    """A connection homed in ANOTHER project, as this caller may see it (PR #140 review): every
+    org member sees its provider, site, sharing and status; its home's name and owners, the
+    account whose token it uses, the BOSS projects it maps to and its counts only when the
+    caller can read that home (project:read). Otherwise "another project", the org's Owners to
+    ask, and only the mappings onto projects the caller can read."""
+    from . import ticket_reach as reach
+
+    home = reach.home_view(db, str(row["project_id"]))
+    view["home_project"] = home
+    names: dict[str, str] = {}
+    settings = view.get("settings")
+    if isinstance(settings, dict):
+        seen = []
+        for m in settings.get("mappings") or []:
+            pid = str(m.get("boss_project_id") or "")
+            if pid and reach.may_see_project(pid):
+                seen.append(m)
+                names[pid] = reach.project_name(db, pid)
+        settings["mappings"] = seen
+    view["project_names"] = names
+    if home.get("hidden"):
+        view.update({"project_id": "", "account": None, "fields": {}, "last4": None,
+                     "fingerprint": None, "oauth_app": None, "mirrors": [], "managed_from": None,
+                     "bindings": {"total": 0, "paused": 0}})
+    else:
+        view["mirrors"] = [m for m in view.get("mirrors") or []
+                           if reach.may_see_project(str(m.get("project_id") or ""))]
+    return view
+
+
 def list_org_connections(db: Connection, project_id: str) -> list[dict[str, Any]]:
     """Setup › Ticket systems › All: every connection of the org (ticket_reach.org_connections)
     as the console lists it — where it was added, whose token (the account BOSS acts as), shared
-    or not, its mappings, its status. Never a token; the caller adds ``can_manage``."""
+    or not, its mappings, its status — each as this caller may see it (:func:`org_view`). Never
+    a token; the caller adds ``can_manage``."""
     from . import ticket_reach as reach
-
-    names: dict[str, str] = {}
-
-    def name(pid: str) -> str:
-        if pid not in names:
-            names[pid] = reach.project_name(db, pid)
-        return names[pid]
 
     out = []
     for row in reach.org_connections(db, project_id):
@@ -598,11 +621,7 @@ def list_org_connections(db: Connection, project_id: str) -> list[dict[str, Any]
         view["reach"] = "project" if str(row["project_id"]) == project_id else (
             "org" if row["shared"] else "unshared")
         view["usable_here"] = row["usable_here"]
-        view["home_project"] = reach.home_view(db, str(row["project_id"]))
-        view["project_names"] = {pid: name(pid) for pid in (
-            str(m.get("boss_project_id") or "") for m in view["settings"].get("mappings") or [])
-            if pid}
-        out.append(view)
+        out.append(org_view(db, row, view))
     return out
 
 
@@ -1086,7 +1105,7 @@ def resolve_text(db: Connection, project_id: str, said: str, *,
                         "not_connected": found}
             if found.get("ok"):
                 view = dict(found["ticket"])
-                view["maps_to"] = found["maps_to"]
+                view["maps_to"] = reach.visible_maps_to(found["maps_to"])
                 view["connection_reach"] = found["connection"]["reach"]
                 return {"refs": [{"connection_id": view["connection_id"],
                                   "provider": view["provider"], "key": view["key"]}],
@@ -1114,7 +1133,8 @@ def resolve_text(db: Connection, project_id: str, said: str, *,
         view = ticket_view(ticket, in_boss=None, full=True)
         view["connection_id"] = row["id"]
         view["in_boss"] = mark([ticket], in_boss_map(db, family_ids(db, row)))[0]["in_boss"]
-        view["maps_to"] = reach.mapped_project(db, row, ticket.key or ref.label())
+        view["maps_to"] = reach.visible_maps_to(
+            reach.mapped_project(db, row, ticket.key or ref.label()))
         view["connection_reach"] = row.get("reach") or "project"
         reach.audit_read(db, project_id, row, ticket.key or ref.label(), reader=person_id)
         tickets.append(view)

@@ -270,3 +270,7 @@ a.tk-key:hover { text-decoration: underline; }
 .tk-empty-org .tk-empty-ico { margin: 0 0 4px; width: 40px; height: 40px; }
 .tk-system-name > .tk-stack { min-width: 0; }
 .tk-system-name > .tk-stack > .tk-faint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* New work's "not shared here": a heads-up with a way out, not an error. */
+.tk-heads-up { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0; padding: 8px 12px; border-radius: var(--r);
+  border: 1px solid var(--amber-soft); background: var(--surface-2); color: var(--ink); font-size: var(--fs-ui); }
+.tk-heads-up > svg { color: var(--amber); flex: none; }

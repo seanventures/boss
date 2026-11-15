@@ -28,7 +28,7 @@ import { GatedButton, useGate } from "../../components/gated";
 import { SectionLabel } from "../section-label";
 import { NotSharedLine, ProviderMono, TkEmpty, TkReadState } from "../tickets/ticket-parts";
 import {
-  disconnectTicketSystem, notSharedOf, pickupWords, readConnectionsAndHidden, readOrgConnections, readOrgName, saveTicketSettings,
+  disconnectTicketSystem, notSharedOf, pickupWords, readOrgConnections, readOrgName, readTicketSetup, saveTicketSettings,
   shareWords, testTicketSystem, writesWords, type Connection, type Read,
 } from "../../lib/tickets";
 import { AddTicketSystem } from "./add-ticket-system";
@@ -66,19 +66,25 @@ export function mapsHere(c: Connection, projectId: string): string {
 const homeName = (c: Connection, projectId: string) =>
   c.home_project && c.home_project.id !== projectId ? c.home_project.name : "this project";
 
-/** One line for Setup's collapsed section: "Jira · shared · 2 projects mapped". */
-export function ticketSummary(usable: Connection[], hidden: Connection[]): string {
+/** One line for Setup's collapsed section, about THIS project: "Jira · shared · KAN here", or
+ *  "Jira · shared · maps elsewhere" when none of its keys land here (never a count of mappings
+ *  that says nothing about this project). */
+export function ticketSummary(usable: Connection[], hidden: Connection[], projectId: string): string {
   if (!usable.length && hidden.length) {
     const c = hidden[0];
     return `${c.label} in ${c.home_project?.name ?? "another project"} · not shared here`;
   }
   if (!usable.length) return "None yet";
-  const c = usable[0];
+  const c = usable.find((x) => mapsHere(x, projectId)) ?? usable[0];
   const shared = c.reach === "org" || c.settings.share_with_org;
-  const projects = new Set(c.settings.mappings.map((m) => m.boss_project_id)).size;
+  const here = mapsHere(c, projectId);
   const more = usable.length > 1 ? ` · +${usable.length - 1} more` : "";
-  return `${c.label} · ${shared ? "shared" : "this project only"}${projects ? ` · ${projects} project${projects === 1 ? "" : "s"} mapped` : ""}${more}`;
+  return `${c.label} · ${shared ? "shared" : "this project only"} · ${here ? `${here === "All" ? "all keys" : here} here` : "maps elsewhere"}${more}`;
 }
+
+/** The ticket-system project keys a connection knows (its mappings, then its project list). */
+export const keysOf = (c: Connection): string[] =>
+  [...new Set([...c.settings.mappings.map((m) => m.external_project), ...c.settings.project_keys])].filter(Boolean);
 
 const readParam = (key: string): string => {
   try { return new URLSearchParams(window.location.search).get(key) ?? ""; } catch { return ""; }
@@ -89,6 +95,7 @@ export function TicketSystemsRow({ projectId, focused = false, onSummary }: {
 }) {
   const [view, setView] = useState<View>(() => (typeof window !== "undefined" && readParam("tk") === "all" ? "all" : "here"));
   const [read, setRead] = useState<Read<Connection[]> | null>(null);
+  const [projectName, setProjectName] = useState("");
   const [orgRead, setOrgRead] = useState<Read<Connection[]> | null>(null);
   const [said, setSaid] = useState<{ text: string; tone: "green" | "red" } | null>(null);
   const [drawer, setDrawer] = useState<{ mode: "add" } | { mode: "edit"; connection: Connection } | null>(null);
@@ -100,7 +107,11 @@ export function TicketSystemsRow({ projectId, focused = false, onSummary }: {
   const [orgName, setOrgName] = useState("");
   useEffect(() => { void readOrgName().then(setOrgName); }, []);
 
-  const load = useCallback(async () => { setRead(await readConnectionsAndHidden(projectId)); }, [projectId]);
+  const load = useCallback(async () => {
+    const r = await readTicketSetup(projectId);
+    if (r.ok) setProjectName(r.data.projectName);
+    setRead(r.ok ? { ok: true, data: r.data.connections } : r);
+  }, [projectId]);
   const loadOrg = useCallback(async () => { setOrgRead(await readOrgConnections(projectId)); }, [projectId]);
   useEffect(() => { setRead(null); void load(); }, [load]);
   useEffect(() => { if (view === "all") { setOrgRead(null); void loadOrg(); } }, [view, loadOrg]);
@@ -111,7 +122,7 @@ export function TicketSystemsRow({ projectId, focused = false, onSummary }: {
   const hidden = all.filter((c) => c.reach === "unshared");
   const items = all.filter((c) => c.reach !== "unshared");
   const orgItems = orgRead?.ok ? orgRead.data : [];
-  useEffect(() => { if (read?.ok) onSummary?.(ticketSummary(items, hidden)); }, [read]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (read?.ok) onSummary?.(ticketSummary(items, hidden, projectId)); }, [read]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // "Share it" landed here (?tk=all&share=<id>): ask that connection's sharing once it is listed.
   const asked = useRef("");
@@ -157,6 +168,15 @@ export function TicketSystemsRow({ projectId, focused = false, onSummary }: {
                  : { text: r.error ?? "The test failed.", tone: "red" });
     if (r.ok) reload();
   };
+  /** "Map KAN here": that key's tickets land in this project (a mirror here; manage at its home). */
+  const mapHere = async (c: Connection, key: string) => {
+    setSaid(null);
+    const others = c.settings.mappings.filter((m) => m.external_project !== key);
+    const was = c.settings.mappings.find((m) => m.external_project === key);
+    const r = await saveTicketSettings(c.id, { mappings: [...others, { external_project: key, boss_project_id: projectId, default: Boolean(was?.default) }] });
+    setSaid(r.ok ? { text: `${key} tickets now land in ${projectName || "this project"}.`, tone: "green" } : { text: r.error ?? "Not saved.", tone: "red" });
+    if (r.ok) reload();
+  };
   const disconnect = async (c: Connection) => {
     setConfirm(null);
     const r = await disconnectTicketSystem(c.id);
@@ -167,7 +187,13 @@ export function TicketSystemsRow({ projectId, focused = false, onSummary }: {
 
   /** Sharing, one control per row: a pill that says the state and, pressed, asks to switch it. */
   const sharePill = (c: Connection, inAll: boolean) => {
-    if (c.status === "disconnected" || c.managed_from) return <span className="tk-faint">—</span>;
+    if (c.status === "disconnected") return <span className="tk-faint">—</span>;
+    if (c.managed_from) {
+      // A copy here of a connection shared from its home: used here, managed there.
+      return <span className="tk-pill" data-tone="green" data-testid={`tk-shared-${c.id}`}
+                   title="Shared from the project it was added in; its settings live there.">
+        <Globe size={12} aria-hidden /> Shared</span>;
+    }
     const home = c.home_project && c.home_project.id !== projectId ? c.home_project.name : "this project";
     if (!inAll && c.reach === "org") {
       return <span className="tk-pill" data-tone="green" data-testid={`tk-shared-${c.id}`}
@@ -290,10 +316,15 @@ export function TicketSystemsRow({ projectId, focused = false, onSummary }: {
   // THE EMPTY STATE NEVER HIDES THE ORG'S CONNECTION: the first unshared one is the headline.
   const firstHidden = hidden[0] ?? null;
   const live = items.filter((c) => c.status !== "disconnected");
-  // A REAL key of a connection this project uses (one that maps here first), never a made-up one.
-  const exampleKey = [...live.flatMap((c) => mapsHere(c, projectId).split(", ")),
-                      ...live.flatMap((c) => [...c.settings.mappings.map((m) => m.external_project), ...c.settings.project_keys])]
-    .find((k) => /^[A-Z][A-Z0-9_]+$/.test(k));
+  const here = projectName || "this project";
+  // WHICH PROJECT (operator: "When I click on New work - which project it would take you?"):
+  // a connection whose keys land HERE gets "New work in <this project>"; one whose keys all land
+  // elsewhere says where, opens New work THERE, and offers "Map KAN here" to whoever may.
+  const landsHere = live.find((c) => mapsHere(c, projectId));
+  const elsewhere = landsHere ? null : live[0] ?? null;
+  const hereKey = landsHere ? mapsHere(landsHere, projectId).split(", ").find((k) => /^[A-Z][A-Z0-9_]+$/.test(k)) : undefined;
+  const awayKeys = elsewhere ? keysOf(elsewhere).slice(0, 3) : [];
+  const awayHome = elsewhere?.home_project;
 
   return (
     <section className="su-row tk-setup" data-testid="su-row-ticket_systems" aria-label="Ticket systems" id="su-ticket_systems"
@@ -379,15 +410,27 @@ export function TicketSystemsRow({ projectId, focused = false, onSummary }: {
 
         {/* ONE DOOR, NOT FOUR (operator: "When I click on New work - what is the expectation - which
             project it would take you?"). The four "Where tickets show up" cards linked three times
-            to the same page and showed a made-up key. One line now says what happens and where:
-            a real key of this project, pasted into New work, starts in THIS project. */}
-        {view === "here" && live.length ? (
+            to the same page and showed a made-up key. One line now names the project. */}
+        {view === "here" && landsHere ? (
           <div className="tk-try" data-testid="tk-where">
             <Sparkle size={14} aria-hidden />
-            <span>Paste {exampleKey ? <b className="tk-mono-text" data-testid="tk-where-key">{exampleKey}-12</b> : "a ticket key"} or a ticket link into New work, or ask BOSS to implement it.</span>
+            <span>Paste {hereKey ? <>a <b className="tk-mono-text" data-testid="tk-where-key">{hereKey}</b> key</> : "a ticket key"} or a ticket link into New work, or ask BOSS to implement it.</span>
             <a className="tk-linkbtn" href={`?area=project&project_id=${encodeURIComponent(projectId)}&tab=work&compose=1`} data-testid="tk-where-new"
-               title="Opens New work in this project. A ticket mapped to another project says so before it starts.">
-              New work in this project →</a>
+               title={`Opens New work in ${here}.`}>New work in {here} →</a>
+          </div>
+        ) : null}
+        {view === "here" && elsewhere && awayKeys.length ? (
+          <div className="tk-try" data-testid="tk-where-elsewhere">
+            <Sparkle size={14} aria-hidden />
+            <span data-testid="tk-where-lands"><b className="tk-mono-text">{awayKeys.join(", ")}</b> tickets land in {awayHome?.name ?? "another project"}.</span>
+            {awayHome && !awayHome.hidden && awayHome.id ? (
+              <a className="tk-linkbtn" href={`?area=project&project_id=${encodeURIComponent(awayHome.id)}&tab=work&compose=1`} data-testid="tk-where-there"
+                 title={`Opens New work in ${awayHome.name}, where these tickets belong.`}>New work in {awayHome.name} →</a>
+            ) : null}
+            {elsewhere.can_manage && manage.allowed ? (
+              <button type="button" className="su-btn su-btn-sm" data-testid="tk-map-here" onClick={() => void mapHere(elsewhere, awayKeys[0])}
+                      title={`${awayKeys[0]} tickets will land in ${here} instead.`}>Map {awayKeys[0]} here</button>
+            ) : null}
           </div>
         ) : null}
         <div className="tk-faint tk-vault"><ShieldCheck size={13} aria-hidden /> <span title="Tokens are stored in BOSS's vault. Agents never see them; BOSS makes every call for them.">Tokens stay in BOSS&apos;s vault</span>{" "}

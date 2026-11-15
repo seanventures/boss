@@ -155,10 +155,8 @@ def _reads(row: dict[str, Any]) -> bool:
                 and not row["configuration"].get("ticket_system"))
 
 
-def owner_names(db: Connection, project_id: str, *, limit: int = 3) -> list[str]:
-    """Who to ask about a connection homed in ``project_id``: the people who hold Owner on that
-    project, else the org's Owners. Display names only (never an email or an id)."""
-    names = [str(n) for n in db.execute(text(
+def _project_owner_names(db: Connection, project_id: str, limit: int) -> list[str]:
+    return [str(n) for n in db.execute(text(
         "SELECT p.display_name FROM identity_role_bindings b JOIN identity_principals p "
         "ON p.id = b.subject_id WHERE b.subject_type = 'principal' AND b.role_id = 'arl_owner' "
         "AND b.scope_type = 'project' AND b.scope_id = :p AND p.kind = 'user' "
@@ -166,8 +164,10 @@ def owner_names(db: Connection, project_id: str, *, limit: int = 3) -> list[str]
         "AND p.id NOT IN ('usr_legacy_shared', 'usr_network_operator') "
         "ORDER BY b.granted_at, p.display_name LIMIT :n"),
         {"p": project_id, "n": limit}).scalars().all() if n]
-    if names:
-        return names
+
+
+def org_owner_names(db: Connection, project_id: str, *, limit: int = 3) -> list[str]:
+    """The org's Owners (display names), for "Ask an org owner to share it"."""
     org = org_of(db, project_id)
     if org is None:
         return []
@@ -184,21 +184,53 @@ def owner_names(db: Connection, project_id: str, *, limit: int = 3) -> list[str]
         {"o": org, "owner": OWNER_ROLE_ID, "n": limit}).scalars().all() if n]
 
 
+def owner_names(db: Connection, project_id: str, *, limit: int = 3) -> list[str]:
+    """Who to ask about a connection homed in ``project_id``: the people who hold Owner on that
+    project, else the org's Owners. Display names only (never an email or an id)."""
+    return _project_owner_names(db, project_id, limit) or org_owner_names(db, project_id,
+                                                                            limit=limit)
+
+
+#: How a project the caller may not read is named (never its name or id).
+ANOTHER_PROJECT = "another project"
+
+
+def may_see_project(project_id: str) -> bool:
+    """WHAT A TICKET SYSTEM SAYS ABOUT ITS HOME (PR #140 review): ticket systems are an org-wide
+    setting, but a project the caller cannot read (project:read) stays hidden, as /v1/projects
+    hides it. Not enforced (legacy mode): visible, as the rest of that mode."""
+    from ..identity import viewer
+
+    said = viewer.may(project_id, "project:read")
+    return True if said is None else bool(said)
+
+
 def home_view(db: Connection, project_id: str) -> dict[str, Any]:
-    """A connection's home project as the console names it, with whom to ask about it."""
-    return {"id": project_id, "name": project_name(db, project_id),
-            "owners": owner_names(db, project_id)}
+    """A connection's home project as the console names it, with whom to ask about it — or,
+    for a project the caller cannot read, "another project" and the org's Owners."""
+    if may_see_project(project_id):
+        return {"id": project_id, "name": project_name(db, project_id),
+                "owners": owner_names(db, project_id)}
+    return {"id": "", "name": ANOTHER_PROJECT, "owners": org_owner_names(db, project_id),
+            "hidden": True}
 
 
 def not_shared_error(db: Connection, row: dict[str, Any]) -> intake.TicketApiError:
-    home = project_name(db, str(row["project_id"]))
+    label = intake.label_of(row)
+    home = home_view(db, str(row["project_id"]))
+    if home.get("hidden"):
+        return intake.TicketApiError(
+            "not_shared", f"The {label} connection was added in another project and is not "
+                          "shared with this project. An org owner can share it with the whole "
+                          "org in Setup › Ticket systems.",
+            status=403, home_project="", home_project_name=ANOTHER_PROJECT,
+            connection_id=str(row["id"]), label=label, owners=home["owners"])
     return intake.TicketApiError(
-        "not_shared", f"The {intake.label_of(row)} connection was added in {home} and is not "
+        "not_shared", f"The {label} connection was added in {home['name']} and is not "
                       "shared with this project. A person who manages integrations there can "
                       "turn on \"Share with the whole org\" in Setup › Ticket systems.",
-        status=403, home_project=str(row["project_id"]), home_project_name=home,
-        connection_id=str(row["id"]), label=intake.label_of(row),
-        owners=owner_names(db, str(row["project_id"])))
+        status=403, home_project=str(row["project_id"]), home_project_name=home["name"],
+        connection_id=str(row["id"]), label=label, owners=home["owners"])
 
 
 def org_connections(db: Connection, project_id: str) -> list[dict[str, Any]]:
@@ -329,6 +361,13 @@ def mapped_project(db: Connection, row: dict[str, Any], key: str) -> dict[str, A
     if not target:
         target = describe(db, row)["home_project"]
     return {"project_id": target, "name": project_name(db, target), "by": how}
+
+
+def visible_maps_to(maps_to: dict[str, Any]) -> dict[str, Any]:
+    """``maps_to`` for a person: a BOSS project they cannot read is "another project"."""
+    if maps_to.get("project_id") and not may_see_project(str(maps_to["project_id"])):
+        return {**maps_to, "project_id": "", "name": ANOTHER_PROJECT}
+    return maps_to
 
 
 def _key_shaped(ref: str) -> bool:

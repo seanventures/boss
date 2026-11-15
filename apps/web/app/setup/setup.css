@@ -860,9 +860,25 @@ button.su-chip[aria-checked="true"] { color: var(--accent); border-color: var(--
 .su-sec-body > div > .su-row > .su-row-label { display: none; }
 .su-sec-body > div > .su-row { grid-template-columns: minmax(0, 1fr) auto; }
 .su-sec-body .su-row[data-focused] { box-shadow: none; }
-.su-advanced-all > .su-advanced-summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.su-advanced-all > .su-advanced-summary .su-sec-sum { color: var(--muted); font-weight: 400; }
+/* Advanced is the same fold as the others: card, icon, title, one line, caret. */
+.su-advanced.su-advanced-all { margin-top: 0; padding-top: 0; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
+.su-advanced-all[open] { box-shadow: var(--shadow-sm); }
+.su-advanced-all > .su-advanced-summary {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px;
+  min-height: 52px; padding: 10px 16px; margin: 0; list-style: none; color: var(--ink); font-size: inherit; border-radius: var(--r-xl);
+}
+.su-advanced-all > .su-advanced-summary::-webkit-details-marker { display: none; }
+.su-advanced-all > .su-advanced-summary:hover { background: var(--surface-2); }
+.su-advanced-all > .su-advanced-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.su-advanced-all[open] > .su-advanced-summary { margin-bottom: 0; border-radius: var(--r-xl) var(--r-xl) 0 0; border-bottom: 1px solid var(--border); }
+.su-advanced-all[open] .su-sec-caret { transform: rotate(180deg); }
 .su-advanced-all > .su-advanced-summary .su-sec-sum::before { display: none; }
+.su-advanced-all > .su-adv-list { padding: 8px 16px 14px; }
+@media (max-width: 640px) {
+  .su-advanced-all > .su-advanced-summary { grid-template-columns: auto minmax(0, 1fr) auto; padding: 10px 12px; }
+  .su-advanced-all > .su-advanced-summary .su-sec-sum { grid-column: 2 / 3; grid-row: 2; white-space: normal; }
+  .su-advanced-all > .su-advanced-summary .su-sec-caret { grid-column: 3; grid-row: 1; }
+}
 @media (max-width: 640px) {
   .su-sec-head { grid-template-columns: auto minmax(0, 1fr) auto; padding: 10px 12px; }
   .su-sec-head .su-sec-sum { grid-column: 2 / 3; grid-row: 2; white-space: normal; }

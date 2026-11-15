@@ -56,7 +56,9 @@ export type Connection = {
   oauth_app: OAuthApp | null;
 };
 /** A connection's home project: where it was added, managed and shared from, and whom to ask. */
-export type HomeProject = { id: string; name: string; owners: string[] };
+export type HomeProject = { id: string; name: string; owners: string[];
+  /** A project the viewer may not read: unnamed ("another project", id ""), its owners the org's. */
+  hidden?: boolean };
 export type OAuthApp = { client_id: string; secret_set: boolean; from_host: boolean; callback_url: string };
 /** Whether "Connect with Atlassian" can start: an app is set on the connection or on the host. */
 export const oauthReady = (c: Connection | null): boolean =>
@@ -140,8 +142,10 @@ export function parseConnection(v: unknown): Connection {
     managed_from: mf && s(mf.connection_id) ? { connection_id: s(mf.connection_id), project_id: s(mf.project_id) } : null,
     mirrors: a(x.mirrors).map((m) => ({ connection_id: s(o(m).connection_id), project_id: s(o(m).project_id), status: s(o(m).status) })),
     reach: s(x.reach) === "org" ? "org" : s(x.reach) === "unshared" ? "unshared" : "project",
-    home_project: s(o(x.home_project).id) ? { id: s(o(x.home_project).id), name: s(o(x.home_project).name) || s(o(x.home_project).id),
-                                             owners: strs(o(x.home_project).owners) } : null,
+    home_project: s(o(x.home_project).id) || s(o(x.home_project).name)
+      ? { id: s(o(x.home_project).id), name: s(o(x.home_project).name) || s(o(x.home_project).id),
+          owners: strs(o(x.home_project).owners), hidden: o(x.home_project).hidden === true || !s(o(x.home_project).id) }
+      : null,
     can_manage: x.can_manage === true,
     usable_here: x.usable_here !== false,
     project_names: Object.fromEntries(Object.entries(o(x.project_names)).map(([k, val]) => [k, s(val)])),
@@ -196,10 +200,11 @@ export function parseTicket(v: unknown): Ticket {
 /** A `not_shared` refusal's "who has it" (the API's home_project, home_project_name, owners, can_manage). */
 export function parseNotShared(v: unknown): NotShared | undefined {
   const e = o(v);
-  if (s(e.error) !== "not_shared" || !s(e.home_project)) return undefined;
+  if (s(e.error) !== "not_shared" || !(s(e.home_project) || s(e.home_project_name))) return undefined;
   return { connection_id: s(e.connection_id), label: s(e.label) || "The ticket system",
-           home: { id: s(e.home_project), name: s(e.home_project_name) || s(e.home_project), owners: strs(e.owners) },
-           can_manage: e.can_manage === true };
+           home: { id: s(e.home_project), name: s(e.home_project_name) || s(e.home_project), owners: strs(e.owners),
+                   hidden: !s(e.home_project) },
+           can_manage: e.can_manage === true && Boolean(s(e.home_project)) };
 }
 const parseErrors = (v: unknown): TypedError[] => a(v).map((e) => ({
   connection_id: s(o(e).connection_id) || undefined, ref: s(o(e).ref) || undefined, error: s(o(e).error), message: s(o(e).message),
@@ -342,6 +347,8 @@ export function shareHref(currentSearch: string, projectId: string | undefined, 
 /** "Ask Param G, owner of BOSS dogfood bootstrap, to share it" — names when the API gave them. */
 export function askOwnerWords(home: HomeProject): string {
   const names = home.owners.slice(0, 3);
+  // A project the viewer may not read is never named: ask an org owner (their names are fine).
+  if (home.hidden) return names.length ? `Ask an org owner (${names.join(" or ")}) to share it` : "Ask an org owner to share it";
   return names.length ? `Ask ${names.join(" or ")} (owner of ${home.name}) to share it`
     : `Ask an owner of ${home.name} to share it`;
 }
@@ -363,6 +370,10 @@ export const readConnections = (projectId: string) =>
 /** The same, plus other projects' connections NOT shared with this one (named only: Setup). */
 export const readConnectionsAndHidden = (projectId: string) =>
   ticketRead(`/v1/ticket-systems?project_id=${enc(projectId)}`, (v) => a(o(v).connections).map(parseConnection));
+/** The same list with the asking project's name ("New work in Northgate Gateway"). */
+export const readTicketSetup = (projectId: string) =>
+  ticketRead(`/v1/ticket-systems?project_id=${enc(projectId)}`, (v) => ({
+    connections: a(o(v).connections).map(parseConnection), projectName: s(o(v).project_name) }));
 /** Setup › Ticket systems › All: every connection of the org, wherever it was added. */
 export const readOrgConnections = (projectId: string) =>
   ticketRead(`/v1/ticket-systems/org?project_id=${enc(projectId)}`, (v) => a(o(v).connections).map(parseConnection));

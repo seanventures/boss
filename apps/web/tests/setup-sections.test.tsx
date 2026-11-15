@@ -52,6 +52,16 @@ describe("a Setup section", () => {
     expect($('[data-testid="su-sec-ticket_systems-toggle"]')?.getAttribute("aria-expanded")).toBe("true");
   });
 
+  it("trusts only booleans from storage", async () => {
+    window.localStorage.setItem(SECTIONS_KEY, JSON.stringify({ ticket_systems: "yes", events: true }));
+    await mount(section());
+    expect($('[data-testid="su-sec-ticket_systems-toggle"]')?.getAttribute("aria-expanded")).toBe("false");
+    window.localStorage.setItem(SECTIONS_KEY, "[true]");
+    unmount();
+    await mount(section());
+    expect($('[data-testid="su-sec-ticket_systems-toggle"]')?.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("works when storage throws", async () => {
     const real = window.localStorage.getItem;
     window.localStorage.getItem = () => { throw new Error("blocked"); };

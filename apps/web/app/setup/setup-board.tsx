@@ -20,7 +20,7 @@
  */
 import { GatedButton, useGate } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowClockwise, Cpu, GitBranch, Lightning, SlidersHorizontal, Ticket } from "@phosphor-icons/react";
+import { ArrowClockwise, CaretDown, Cpu, GitBranch, Lightning, SlidersHorizontal, Ticket } from "@phosphor-icons/react";
 
 import { fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import {
@@ -575,8 +575,9 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
                      title="The org's GitHub App, repo registry, CI, builds, routing, budget, public URL."
                      data-tip="The org's GitHub App, repo registry, CI, builds, routing, budget, public URL.">
               <span className="su-sec-icon" aria-hidden><SlidersHorizontal size={16} /></span>
-              Advanced settings
-              <span className="su-sec-sum">GitHub App, CI, builds, routing, public URL</span>
+              <span className="su-sec-title">Advanced</span>
+              <span className="su-sec-sum">GitHub App, CI, builds, routing, public URL, Improve BOSS</span>
+              <CaretDown size={14} aria-hidden className="su-sec-caret" />
             </summary>
             <div className="su-board su-board-inner su-adv-list">
               {signinShown ? (
@@ -587,9 +588,10 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
                                  }} />
               ) : null}
               {advancedItems}
+              {/* Improve BOSS (asked once) lives with the other org-wide options, not loose under the folds. */}
+              <SharingAsk projectId={projectId} actor={actor ?? ""} />
             </div>
           </details>
-          <SharingAsk projectId={projectId} actor={actor ?? ""} />
         </div>
       </BoardContext.Provider>
     );
