@@ -117,7 +117,13 @@ def _read_edition(edition: str) -> list[dict]:
         [sys.executable, str(Path(__file__).resolve()), "--dump-edition", edition],
         cwd=ROOT, capture_output=True, text=True, check=True,
     )
-    return json.loads(result.stdout)
+    # The app's import may print a line of its own first (identity's route-coverage report);
+    # the dump is the JSON array that follows it.
+    out = result.stdout
+    start = out.find("[{")
+    if start < 0:
+        start = out.find("[]")
+    return json.loads(out[start:] if start >= 0 else out)
 
 
 def build_matrix() -> dict:

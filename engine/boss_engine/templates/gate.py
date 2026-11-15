@@ -189,7 +189,8 @@ MICROVM_REFUSAL = (
     "(BOSS_GOVERNED_SANDBOX_PROVIDER=microvm): the micro-VM guest returns a command's exit code "
     "and output, not the JUnit report this gate counts, so BOSS cannot prove the template's tests "
     "passed. Build template applies on the local sandbox instead: set "
-    "BOSS_GOVERNED_SANDBOX_PROVIDER=local (the default) and apply the template again.")
+    "BOSS_GOVERNED_SANDBOX_PROVIDER=local_fenced (the default) or =local and apply the "
+    "template again.")
 
 
 def microvm_refusal(settings: Any) -> Optional[str]:

@@ -158,6 +158,7 @@ SUPPORTED_PROVIDERS = {
             # ChangeSet. See services/governed_host_deploy.py.
             "ssh_host.app.deploy",
         ],
+
     },
 }
 
@@ -176,6 +177,13 @@ PHASED_APPLY_SKILLS: dict[str, str] = {
     "ssh_host.app.deploy": (
         "is a host deployment: approve its decision{decision} in Approvals and BOSS's worker "
         "applies it (services/governed_host_deploy.py). It is never approved or applied "
+        "through the ChangeSet routes."
+    ),
+    # Configuration files into a config_dir target (AMEX-G4): the same decision, the same
+    # worker job, a different phase two (services/config_deploy.py).
+    "config_dir.files.deploy": (
+        "is a configuration deployment: approve its decision{decision} in Approvals and BOSS's "
+        "worker applies it (services/config_deploy.py). It is never approved or applied "
         "through the ChangeSet routes."
     ),
 }

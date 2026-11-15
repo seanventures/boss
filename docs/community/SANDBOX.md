@@ -29,6 +29,25 @@ Set these in `.env`, then restart (`boss update`).
 | | `auto` | Isolate when possible; otherwise run unisolated, with a warning in the log. |
 | | `off` | Never isolate. |
 
+## A skill's command runs in the same fence
+
+An authored skill of kind `sandboxed_command` (a linter, `ffmpeg`, a validator such as `gwlint validate tenant.yaml`) used to run only on a microVM substrate. On a `runtime: local` install it now runs in the fence described above, under the default provider `local_fenced`:
+
+- its own pool user and its own directory for the one call, gone when the command ends;
+- the command's current directory is that workdir, and a step's `files` inputs (the YAML it was handed) are written there — the input's placeholder in the command becomes the file's path;
+- the same network rules as a build: loopback and the egress relays only; no `DATABASE_URL`, no provider keys in its environment;
+- a bounded timeout and capped output; the declared outputs it produced are kept as artifacts (`produced_artifacts` on the step's output) so a `Deploy config` step can ship exactly those bytes.
+
+This is **not** strong isolation: the command shares the control plane's kernel. Every run says so (`isolation: {provider: local_fenced, strong: false}`), it never counts towards exposing a write-capable agent publicly, and an install marked `BOSS_DEPLOYMENT_TRUST=untrusted` refuses it — such a command then needs a microVM substrate (`BOSS_GOVERNED_SANDBOX_PROVIDER=microvm`). With `BOSS_GOVERNED_SANDBOX_PROVIDER=local` the old refusal stands.
+
+| Setting | Values | Meaning |
+| --- | --- | --- |
+| `BOSS_GOVERNED_SANDBOX_PROVIDER` | `local_fenced` (default) | A skill's command runs in the worker's per-run fence (needs the fence up: `BOSS_SANDBOX_ISOLATION` not `off`). |
+| | `local` | A skill's command is refused (it would run as BOSS's own user). Builds are unchanged. |
+| | `microvm` | A skill's command runs on the sandbox host (strong isolation). |
+| `BOSS_DEPLOYMENT_TRUST` | `trusted` (default) | Your own projects on your own machine. |
+| | `untrusted` | Commands run only under strong isolation; `local_fenced` is refused. |
+
 ## A host that cannot fence builds
 
 The fence needs iptables with the *owner* match, including ip6tables when the kernel supports IPv6. Some hosts do not have it: rootless Docker, gVisor, and some WSL2 and VPS kernels.

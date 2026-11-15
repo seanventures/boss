@@ -715,6 +715,25 @@ def build_sandbox_command(template: str, inputs: dict[str, Any], workdir: str = 
     return _re.sub(r"\{([a-z][a-z0-9_]*)\}", swap, template)
 
 
+#: Providers that are a SEPARATE KERNEL per command: the only ones whose isolation is strong.
+STRONG_ISOLATION_PROVIDERS = frozenset({"microvm", "firecracker", "kata", "sandbox_host"})
+#: Providers that isolate a command from other runs and from the control plane's secrets
+#: WITHOUT a separate kernel (services/local_fenced.py). Accepted for an authored command on a
+#: `runtime: local` install; labelled non-strong on every run and never counted by
+#: a2a_server.strong_isolation() (AP-D11).
+NON_STRONG_PROVIDERS = frozenset({"local_fenced"})
+LOCAL_FENCED = "local_fenced"
+
+
+def isolation_grade(settings: Settings) -> dict[str, Any]:
+    """Where an authored command would run here, and how well it is isolated:
+    {provider, strong, ready, why}. `strong` is True only for a separate-kernel substrate."""
+    provider = str(getattr(settings, "governed_sandbox_provider", "") or "").strip().lower()
+    ready, why = _isolation_available(settings)
+    return {"provider": provider or "local", "strong": provider in STRONG_ISOLATION_PROVIDERS,
+            "ready": ready, "why": why}
+
+
 def _isolation_available(settings: Settings) -> tuple[bool, str]:
     """Whether this deployment has somewhere to run a customer's command.
 
@@ -722,17 +741,30 @@ def _isolation_available(settings: Settings) -> tuple[bool, str]:
     OWN HOST. Running an operator-authored ffmpeg line there is remote code execution against
     the box that holds every project's credentials, so this refuses rather than degrades. A
     refusal an operator can read beats a capability that quietly runs in the wrong place.
+
+    `local_fenced` (AMEX-G2) is the worker's own per-run fence — a pool uid, deny-by-default
+    egress except the loopback relays, a per-run directory — and is accepted when that fence is
+    actually up (local_fenced.fence_problem), never on an install marked untrusted. It is NOT
+    strong isolation, and `isolation_grade` says so.
     """
     provider = str(getattr(settings, "governed_sandbox_provider", "") or "").strip().lower()
-    if provider in ("microvm", "firecracker", "kata", "sandbox_host"):
+    if provider in STRONG_ISOLATION_PROVIDERS:
         url = str(getattr(settings, "sandbox_agent_url", "") or "").strip()
         if url:
             return True, provider
         return False, "the sandbox provider is set but BOSS_SANDBOX_AGENT_URL is empty"
+    if provider in NON_STRONG_PROVIDERS:
+        from .local_fenced import fence_problem
+
+        problem = fence_problem(settings)
+        if problem:
+            return False, f"the sandbox provider is {provider}, but {problem}"
+        return True, provider
     return False, (
         f"this deployment's sandbox provider is {provider or 'local'}, which runs on the "
         "control plane's own host. A command authored in a skill only runs where there is real "
-        "isolation — set BOSS_GOVERNED_SANDBOX_PROVIDER to a microVM substrate."
+        "isolation — set BOSS_GOVERNED_SANDBOX_PROVIDER to local_fenced (the worker's per-run "
+        "fence, the default) or to a microVM substrate."
     )
 
 
@@ -761,25 +793,72 @@ def execute_sandboxed_command(
     skill = _as_held(context, skill)
 
     config = skill["config"]
-    ready, why = _isolation_available(context.settings)
-    if not ready:
+    grade = isolation_grade(context.settings)
+    if not grade["ready"]:
         raise SandboxIsolationUnavailable(
-            f"{skill_key} runs a command and cannot be executed here: {why}")
+            f"{skill_key} runs a command and cannot be executed here: {grade['why']}")
 
+    # FILES, NOT ONLY STRINGS (AMEX-G2). `files` maps an input name to content (a string, or
+    # {text|content|base64}); each is written into the workdir and the input's placeholder
+    # becomes that file's path, so a skill whose command reads `{tenant_yaml}` is handed a
+    # file, not a 4 KB argument. A `files` entry counts as the input being present.
+    files = inputs.get("files") if isinstance(inputs.get("files"), dict) else {}
     missing = [entry["name"] for entry in skill["inputs"]
-               if entry.get("required") and not str(inputs.get(entry["name"], "")).strip()]
+               if entry.get("required") and not str(inputs.get(entry["name"], "")).strip()
+               and entry["name"] not in files]
     if missing:
         raise SkillExecutorConfigurationError(
             f"{skill_key} needs {', '.join(missing)}.")
 
-    command = build_sandbox_command(str(config.get("command") or ""), inputs)
     from .core import make_id
+
+    task_id = f"skill-{skill_key}-{make_id('sbx')[-8:]}"
+    timeout = int(config.get("timeout_seconds") or 300)
+    isolation = {"provider": grade["provider"], "strong": grade["strong"]}
+    if grade["provider"] in NON_STRONG_PROVIDERS:
+        from .local_fenced import LocalFenceUnavailable, LocalFencedSandbox, keep_produced
+
+        try:
+            fenced = LocalFencedSandbox(context.settings, task_id=task_id, files=files,
+                                        project_id=context.project_id)
+        except (LocalFenceUnavailable, ValueError) as exc:
+            raise SandboxIsolationUnavailable(
+                f"{skill_key} runs a command and cannot be executed here: {exc}") from exc
+        try:
+            # The file inputs' placeholders are their paths inside the fenced workdir.
+            command = build_sandbox_command(str(config.get("command") or ""),
+                                            {**inputs, **fenced.inputs}, workdir=str(fenced.workdir))
+            result = fenced.run(command, timeout=timeout)
+            produced = {entry["name"]: entry.get("path") or entry["name"]
+                        for entry in (config.get("outputs") or [])}
+            found = fenced.produced_files(config.get("outputs") or [])
+            kept = keep_produced(context.connection, context.settings,
+                                 project_id=context.project_id, skill_key=skill_key,
+                                 produced=found, created_by_job_id=context.created_by_job_id)
+            return {
+                "skill_key": skill_key,
+                "image": config.get("image"),
+                "exit_code": result.exit_code,
+                "produced": produced,
+                # name → artifact id, for a deploy_config step after this directory is gone.
+                "produced_artifacts": kept,
+                "produced_sha256": {name: item["sha256"] for name, item in found.items()},
+                "log_tail": str(result.stdout or "")[-4000:],
+                "stderr_tail": str(result.stderr or "")[-2000:],
+                "timed_out": bool(result.timed_out),
+                "output_truncated": bool(result.truncated),
+                # NON-STRONG, SAID ON THE RUN: a pool uid behind iptables, not a separate kernel.
+                "isolation": isolation,
+            }
+        finally:
+            fenced.teardown()
+
+    command = build_sandbox_command(str(config.get("command") or ""), inputs)
     from .sandbox_provider import make_sandbox_provider
 
-    sandbox = make_sandbox_provider(context.settings).acquire(
-        task_id=f"skill-{skill_key}-{make_id('sbx')[-8:]}")
+    sandbox = make_sandbox_provider(context.settings).acquire(task_id=task_id)
     try:
-        result = sandbox.run(command, timeout=int(config.get("timeout_seconds") or 300))
+        result = sandbox.run(command, timeout=timeout)
         produced = {entry["name"]: entry.get("path") or entry["name"]
                     for entry in (config.get("outputs") or [])}
         return {
@@ -791,6 +870,7 @@ def execute_sandboxed_command(
             # The tail only. A command's whole stdout can be a video's worth of progress lines.
             "log_tail": str(getattr(result, "stdout", "") or (
                 result.get("stdout", "") if isinstance(result, dict) else ""))[-4000:],
+            "isolation": isolation,
         }
     finally:
         sandbox.teardown()

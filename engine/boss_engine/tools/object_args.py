@@ -31,6 +31,10 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "decide": {"decision_id": "decision"},
     "deploy_app": {"run_id": CODE_TASK, "target_id": "deployment_target", "host_id": "deployment_host",
                    "approval_decision_id": "decision"},
+    "deploy_config": {"target_id": "deployment_target", "approval_decision_id": "decision"},
+    "promote_config": {"deployment_run_id": "deployment_run", "target_id": "deployment_target",
+                       "approval_decision_id": "decision"},
+    "create_config_target": {"host_id": "deployment_host"},
     "describe_deployment_target": {"target_id": "deployment_target"},
     "describe_workflow_run": {"run_id": "workflow_run"},
     "precheck_workflow": {"run_id": "workflow_run", "build_run_id": CODE_TASK},
@@ -117,6 +121,12 @@ PRODUCTION: dict[str, Production] = {
     "deploy_app": Production(target="args:target_id", environment="args:environment",
                              environment_default="staging"),
     "redeploy": Production(code_task="args:run_id"),
+    # Configuration deploys (config_deploy, AMEX-G4): the target names the environment; a
+    # promotion defaults to production, so it needs deployment:production unless told otherwise.
+    "deploy_config": Production(target="args:target_id", environment="args:environment",
+                                environment_default="staging"),
+    "promote_config": Production(target="args:target_id", environment="args:environment",
+                                 environment_default="production"),
 }
 
 

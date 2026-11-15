@@ -1701,9 +1701,21 @@ class Settings(BaseSettings):
     #             sandbox-service; the control plane commits each stage's diff to the
     #             work branch (git is the state carrier) and keeps ALL judgment —
     #             design, review panel, gates, Decision, PR — host-side.
+    #   local_fenced = the default for a `runtime: local` install (AMEX-G2, BOSSAPP-1138): the
+    #             build stages run exactly as `local`, and an authored `sandboxed_command`
+    #             skill runs in the worker's own per-run fence (sandbox_identity: a pool uid,
+    #             deny-by-default egress except the loopback relays, a per-run directory).
+    #             Real isolation from other runs and from the control plane's secrets, NOT a
+    #             separate kernel: every surface labels it non-strong and it never satisfies
+    #             a2a_server.strong_isolation() (AP-D11). `local` keeps refusing such skills.
     governed_sandbox_provider: str = Field(
-        default="local", alias="BOSS_GOVERNED_SANDBOX_PROVIDER"
+        default="local_fenced", alias="BOSS_GOVERNED_SANDBOX_PROVIDER"
     )
+    # What this install runs for whom. `trusted` (the default): the operator's own projects on
+    # their own machine. `untrusted`: code or configuration BOSS did not author, for tenants the
+    # operator does not vouch for — a command then runs ONLY under strong isolation (a microVM),
+    # never in the worker's fence, however well that fence is configured.
+    deployment_trust: str = Field(default="trusted", alias="BOSS_DEPLOYMENT_TRUST")
     # --- IaC verify lane (spec 05 §3.2 / T3) --------------------------------
     # Terraform-compatible binary for the IaC verify lane. "auto" prefers OpenTofu
     # (`tofu`, the MPL-licensed choice — spec 05 Open Decision #2) and falls back to
