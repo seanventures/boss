@@ -105,7 +105,7 @@ export function StreamTab() {
           <ReadState read={read} what="Events" onRetry={() => setTick((x) => x + 1)} testId="ev-stream" />
           {list?.search_truncated ? (
             <span className="ev-faint" data-testid="ev-search-truncated"
-                  title="Without “View people” a search checks each event with people's emails and BOSS accounts hidden, so it stops after the newest ones. Narrow the period or source to reach older events.">
+                  title="A search checks each event with URL credentials hidden, and without “View people” with people's emails and BOSS accounts hidden too, so it stops after the newest ones. Narrow the period or source to reach older events.">
               Searched the newest {(list.search_limit || 5000).toLocaleString("en-US")} events
             </span>
           ) : null}

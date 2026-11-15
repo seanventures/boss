@@ -86,6 +86,39 @@ def test_a_signed_delivery_with_no_session_starts_a_run(client, engine, workflow
     assert client.get(BASE, params={"project_id": PROJECT}).status_code in (401, 503)
 
 
+def test_a_webhook_runs_input_hides_a_url_credential_and_keeps_a_username(client, engine, workflow_key):
+    """BOSSAPP-1203: the run detail and the delivery-run list are read views. A query token and
+    a URL password in the body the webhook started are hidden there; the stored input the steps
+    read keeps them, and a service-account username is not a secret."""
+    made = _create(client, workflow_key)
+    token = "fake-qs-token-1203"
+    password = "fake-qs-pw-1203"
+    user = "deploy-bot-prod-account-01"
+    body = json.dumps({"clone": f"https://{user}:{password}@git.example/r?access_token={token}",
+                       "who": user}).encode()
+    started = _deliver(client, made, body, made["secret"], delivery="evt-cred")
+    assert started.status_code == 202, started.text
+    run_id = started.json()["run_id"]
+    detail = client.get(f"/v1/workflow-runs/{run_id}", params={"project_id": PROJECT})
+    assert detail.status_code == 200, detail.text
+    shown = detail.json()["input"]
+    assert token not in json.dumps(shown) and password not in json.dumps(shown)
+    assert shown["who"] == user
+    assert shown["clone"] == f"https://{user}:***@git.example/r?access_token=***"
+    listed = client.get("/v1/delivery-workflows/runs", params={"project_id": PROJECT})
+    assert listed.status_code == 200, listed.text
+    row = next(r for r in listed.json()["runs"] if r["id"] == run_id)
+    assert token not in json.dumps(row["input"]) and password not in json.dumps(row["input"])
+    broad = client.get("/v1/workflow-runs", params={"project_id": PROJECT})
+    assert broad.status_code == 200, broad.text
+    item = next(r for r in broad.json()["items"] if r["id"] == run_id)
+    assert token not in json.dumps(item["input"]) and item["input"]["who"] == user
+    with engine.begin() as connection:
+        stored = connection.execute(text("SELECT input FROM workflow_runs WHERE id = :i"),
+                                    {"i": run_id}).scalar()
+    assert token in json.dumps(stored) and password in json.dumps(stored)
+
+
 @pytest.mark.parametrize("case,status,reason", [
     ("bad", 401, "bad_signature"),
     ("stale", 401, "stale_timestamp"),

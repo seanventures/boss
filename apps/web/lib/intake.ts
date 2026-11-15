@@ -171,8 +171,8 @@ export const parseCounts = (v: unknown): Counts => {
   return Object.fromEntries([...EVENT_STATUSES, "total"].map((k) => [k, n(x[k])])) as Counts;
 };
 export type EventList = { events: EventSummary[]; counts: Counts;
-  /** A search without View people re-checks events one by one and stops after `search_limit` of
-   *  the newest; true when it stopped there with older events unread (BOSSAPP-1199). */
+  /** A search re-checks each event with URL credentials hidden, and without View people with
+   *  people's emails hidden, and stops after `search_limit` of the newest (BOSSAPP-1199, 1203). */
   search_truncated: boolean; search_limit: number };
 export const parseEventList = (v: unknown): EventList => ({ events: a(o(v).events).map(parseEvent).filter((e) => e.id), counts: parseCounts(o(v).counts),
   search_truncated: o(v).search_truncated === true, search_limit: n(o(v).search_limit) });

@@ -371,9 +371,67 @@ def test_a_text_body_kept_as_base64_is_masked_and_an_opaque_one_is_kept():
     ("https://acme.test/u/jane@acme.test", "https://acme.test/u/jane@acme.test"),
     ("https://acme.test/x?email=jane@acme.test", "https://acme.test/x?email=jane@acme.test"),
     ("no url here", "no url here"),
+    # BOSSAPP-1203: a query token is a credential; a long service-account name is a username.
+    ("https://host/x?access_token=fake-qs-token-1203", "https://host/x?access_token=***"),
+    ("https://host/x?sig=fake-qs-sig-1203&ok=1", "https://host/x?sig=***&ok=1"),
+    ("https://bucket.s3.amazonaws.com/k?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=fake-qs-sig-1203",
+     "https://bucket.s3.amazonaws.com/k?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=***"),
+    ("https://bucket.s3.amazonaws.com/k?X-Amz-Credential=AKIAFAKE1203%2F20261115&X-Amz-Security-Token=fake-qs-token-1203",
+     "https://bucket.s3.amazonaws.com/k?X-Amz-Credential=***&X-Amz-Security-Token=***"),
+    ("https://host/x?user=alice&token=fake-qs-token-1203#access_token=fake-qs-token-1203",
+     "https://host/x?user=alice&token=***#access_token=***"),
+    ("https://host/cb?next=https://ci:fake-qs-pw-1203@git.example/r",
+     "https://host/cb?next=https://ci:***@git.example/r"),
+    ("https://host/cb?next=https%3A%2F%2Fci%3Afake-qs-pw-1203%40git.example%2Fr",
+     "https://host/cb?next=https%3A%2F%2Fci%3A***%40git.example%2Fr"),
+    ("https://deploy-bot-prod-account-01@git.example/r",
+     "https://deploy-bot-prod-account-01@git.example/r"),
+    ("https://host/cb?next=https%3A%2F%2Fdeploy-bot-prod-account-01%40git.example%2Fr",
+     "https://host/cb?next=https%3A%2F%2Fdeploy-bot-prod-account-01%40git.example%2Fr"),
 ])
 def test_the_url_credential_masker(given, shown):
     from boss_engine.services.redaction import mask_url_credentials, mask_url_credentials_in
 
     assert mask_url_credentials(given) == shown
     assert mask_url_credentials_in({"k": [given, 7, None]}) == {"k": [shown, 7, None]}
+    assert mask_url_credentials_in({"a": {"b": [given]}}) == {"a": {"b": [shown]}}
+
+
+def test_a_query_string_token_is_hidden_in_an_intake_read(world, engine, monkeypatch):
+    """BOSSAPP-1203: detail, the list and a search hide a query token and a URL password, and
+    still show a service-account username."""
+    _as(monkeypatch, "owner")
+    token = "fake-qs-token-1203"
+    password = "fake-qs-pw-1203"
+    user = "deploy-bot-prod-account-01"
+    clone = f"https://{user}:{password}@git.example/r?access_token={token}"
+    encoded = f"https://host/cb?next=https%3A%2F%2Fci%3A{password}%40git.example%2Fr"
+    ev = f"iev_{uuid.uuid4().hex[:12]}"
+    envelope = {"specversion": "1.0", "id": "eq", "source": "webhook://x", "type": "com.acme.push",
+                "data": {"clone": clone, "next": encoded, "who": user},
+                "bossconnection": world.conn}
+    with engine.begin() as c:
+        c.execute(text("""
+            INSERT INTO intake_events (id, connection_id, project_id, dedupe_key, type, subject,
+                   status, raw, envelope, headers, actor_kind, actor_external_id, processed_at)
+            VALUES (:id, :c, :p, 'k-qs', 'com.acme.push', :subj, 'routed', :raw,
+                    CAST(:env AS JSONB), CAST(:h AS JSONB), 'user', 'U0DEV', now())"""),
+            {"id": ev, "c": world.conn, "p": world.pid, "raw": json.dumps({"clone": clone}).encode(),
+             "subj": clone, "env": json.dumps(envelope),
+             "h": json.dumps({"ce-source": clone})})
+    one = world.client.get(f"/v1/intake/events/{ev}").json()
+    blob = json.dumps(one)
+    assert token not in blob and password not in blob
+    assert one["envelope"]["data"]["who"] == user
+    assert one["envelope"]["data"]["clone"] == f"https://{user}:***@git.example/r?access_token=***"
+    assert one["subject"] == one["envelope"]["data"]["clone"]
+    assert one["headers"]["ce-source"] == one["envelope"]["data"]["clone"]
+    assert one["raw"]["clone"] == one["envelope"]["data"]["clone"]
+    assert password not in one["envelope"]["data"]["next"]
+    listed = world.client.get("/v1/intake/events", params={"project_id": world.pid}).json()
+    assert token not in json.dumps(listed) and password not in json.dumps(listed)
+    for needle in (token, password):
+        got = world.client.get("/v1/intake/events", params={"project_id": world.pid, "q": needle}).json()
+        assert got["events"] == []
+    found = world.client.get("/v1/intake/events", params={"project_id": world.pid, "q": user}).json()
+    assert [e["id"] for e in found["events"]] == [ev]

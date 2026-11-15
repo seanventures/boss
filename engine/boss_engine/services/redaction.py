@@ -99,42 +99,96 @@ def has_pii(text: str) -> bool:
     return bool(redact(text)[1])
 
 
-# ── URL userinfo: one masker for every read view (BOSSAPP-1202) ─────────────────────────────
+# ── URL credentials: one masker for every read view (BOSSAPP-1202, BOSSAPP-1203) ────────────
 #
 # `scheme://user:PASSWORD@host` keeps the user and the host and loses the password:
 # `https://user:***@host/x`, `https://x-access-token:***@github.com/o/r`. A userinfo with no
 # password whose user is itself a token (`https://ghp_…@github.com`) loses the user instead:
-# `https://***@github.com`. Not a URL, so never touched: an scp-style remote
-# (`git@github.com:o/r.git`) and an email address. The password runs to the LAST `@` before the
-# path, so `user:p@ss@host` is masked whole; a percent-encoded one (`p%40ss`) is just text.
+# `https://***@github.com`. A long service-account name (`deploy-bot-prod-account-01`) is a
+# username and stays. The same password is masked when the userinfo is percent-encoded inside a
+# query value, and a token query or fragment param (`access_token`, `sig`, `X-Amz-Signature`)
+# loses its value. Not a URL, so never touched: an scp-style remote (`git@github.com:o/r.git`)
+# and an email address. The password runs to the LAST `@` before the path, so `user:p@ss@host`
+# is masked whole; a percent-encoded one inside userinfo (`p%40ss`) is just text.
 URL_SECRET_MASK = "***"
 _URL_USERINFO = re.compile(
     r"(?P<scheme>\b[A-Za-z][A-Za-z0-9+.\-]{0,31}://)"
     r"(?P<user>[^\s:/?#@\"'<>\\]*)"
     r"(?::(?P<password>[^\s/?#\"'<>\\]*))?"
     r"@(?=[^\s/?#@\"'<>\\]*(?:[/?#\s\"'<>\\]|$))")
-#: A user name that is really a credential: a provider token prefix, or a long opaque string
-#: (letters AND digits, 24+ chars: a 40-hex classic token, a JWT-ish blob).
-_TOKEN_USER = re.compile(
-    r"^(?:gh[pousr]_|github_pat_|glpat-|xox[abposr]-|sk-|AKIA|ASIA|eyJ)"
-    r"|^(?=[A-Za-z0-9._~%+\-]*[0-9])(?=[A-Za-z0-9._~%+\-]*[A-Za-z])[A-Za-z0-9._~%+\-]{24,}$")
+_TOKEN_PREFIX = re.compile(
+    r"^(?:gh[pousr]_|github_pat_|glpat-|xox[abposr]-|sk-|AKIA|ASIA|eyJ)")
+#: Letters AND digits, 24+ chars, no word breaks: a 40-hex classic token, a JWT-ish blob.
+_OPAQUE_USER = re.compile(
+    r"^(?=[A-Za-z0-9._~%+\-]*[0-9])(?=[A-Za-z0-9._~%+\-]*[A-Za-z])[A-Za-z0-9._~%+\-]{24,}$")
+#: `deploy`, `account` — a separator-bounded word, so the opaque rule does not eat a username.
+_NAME_WORD = re.compile(r"(?:^|[._\-])[A-Za-z]{3,}(?=[._\-]|$)")
+_ENCODED_USERINFO = re.compile(
+    r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]{0,31})(?P<enc_scheme>%3[Aa]%2[Ff]%2[Ff])"
+    r"(?P<user>(?:(?!%3[Aa]|%40)(?:%[0-9A-Fa-f]{2}|[A-Za-z0-9._~+\-]))*)"
+    r"(?:(?P<enc_colon>%3[Aa])(?P<password>(?:(?!%40)(?:%[0-9A-Fa-f]{2}|[A-Za-z0-9._~+\-]))*))?"
+    r"(?P<enc_at>%40)")
+_TOKEN_PARAM = re.compile(
+    r"(?ix)^(?:access[_\-]?token|refresh[_\-]?token|id[_\-]?token|api[_\-]?token"
+    r"|session[_\-]?token|security[_\-]?token|auth[_\-]?token|api[_\-]?key|apikey"
+    r"|access[_\-]?key|client[_\-]?secret|secret|password|passwd|pwd|credential"
+    r"|signature|sig|token|key"
+    r"|.*[_\-](?:token|signature|secret|password|credential|sig|access[_\-]?key|secret[_\-]?key))$")
+_QUERY_SECRET = re.compile(
+    r"(?P<lead>[?&#])(?P<name>[A-Za-z][A-Za-z0-9_.\-]*)=(?P<value>[^&#\s\"'<>\\]+)")
+
+
+def _user_is_secret(user: str) -> bool:
+    if not user:
+        return False
+    if _TOKEN_PREFIX.match(user):
+        return True
+    return bool(_OPAQUE_USER.match(user) and not _NAME_WORD.search(user))
 
 
 def _mask_userinfo(m: "re.Match[str]") -> str:
     user, password = m.group("user"), m.group("password")
     if password is not None and password != "":
         return f"{m.group('scheme')}{user}:{URL_SECRET_MASK}@"
-    if password is None and user and _TOKEN_USER.search(user):
+    if password is None and _user_is_secret(user):
         return f"{m.group('scheme')}{URL_SECRET_MASK}@"
     return m.group(0)
 
 
+def _mask_encoded_userinfo(m: "re.Match[str]") -> str:
+    from urllib.parse import unquote
+
+    user = unquote(m.group("user"))
+    password = unquote(m.group("password")) if m.group("password") is not None else None
+    if password is not None and password != "":
+        return (f"{m.group('scheme')}{m.group('enc_scheme')}{m.group('user')}"
+                f"{m.group('enc_colon')}{URL_SECRET_MASK}{m.group('enc_at')}")
+    if password is None and _user_is_secret(user):
+        return f"{m.group('scheme')}{m.group('enc_scheme')}{URL_SECRET_MASK}{m.group('enc_at')}"
+    return m.group(0)
+
+
+def _mask_query_secret(m: "re.Match[str]") -> str:
+    if not _TOKEN_PARAM.match(m.group("name")):
+        return m.group(0)
+    return f"{m.group('lead')}{m.group('name')}={URL_SECRET_MASK}"
+
+
 def mask_url_credentials(text: str) -> str:
-    """`text` with the credential part of every URL's userinfo replaced by `***` (above).
-    Anywhere in the string: a bare URL or one inside free text. Everything else is unchanged."""
-    if not text or "@" not in text or "://" not in text:
+    """`text` with URL credentials replaced by `***`: userinfo (raw or percent-encoded) and
+    token query/fragment params. Anywhere in the string. Everything else is unchanged."""
+    if not text:
         return text
-    return _URL_USERINFO.sub(_mask_userinfo, text)
+    encoded = "%3a%2f%2f" in text.lower()
+    if "://" not in text and not encoded:
+        return text
+    if "@" in text and "://" in text:
+        text = _URL_USERINFO.sub(_mask_userinfo, text)
+    if encoded:
+        text = _ENCODED_USERINFO.sub(_mask_encoded_userinfo, text)
+    if any(mark in text for mark in ("?", "&", "#")):
+        text = _QUERY_SECRET.sub(_mask_query_secret, text)
+    return text
 
 
 def mask_url_credentials_in(value, *, _depth: int = 0):

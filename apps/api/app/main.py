@@ -26735,7 +26735,7 @@ def list_delivery_runs(project_id: str, limit: int = 25, include_test: bool = Fa
             "workflow_name": run["workflow_name"],
             "version": run["version"],
             "actor": run["actor"],
-            "input": run["input"] or {},
+            "input": workflow_runtime.shown_run_input(run["input"] or {}),
             "blocked_reason": run["blocked_reason"],
             "error": run["error"],
             "steps": run_steps,

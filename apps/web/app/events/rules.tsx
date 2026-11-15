@@ -359,6 +359,10 @@ function RuleEditor({ start, conn, chat, agents, rules, eventTypes, canEdit, bud
                 <Chip tone={x.matched ? "green" : "grey"}>{x.matched ? "match" : "no"}</Chip>
               </span>
             ))}
+            <span className="ev-faint" data-testid="ev-match-credentials-hidden"
+              title="URL credentials are hidden in this preview for every role, so a rule on a password or a token may match a live event the preview did not.">
+              Credentials hidden in this preview
+            </span>
             {shown.people_redacted ? (
               <span className="ev-faint" data-testid="ev-match-people-hidden"
                 title="People's emails and BOSS accounts were hidden from this preview (seeing them needs “View people”: Owner, Admin or Auditor). A rule on those fields may match live events the preview did not.">

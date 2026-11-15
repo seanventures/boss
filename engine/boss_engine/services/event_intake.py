@@ -387,11 +387,11 @@ def describe_connection(connection: Connection, row: Mapping[str, Any], *,
         "label": manifest.label if manifest else row["kind"],
         "icon": manifest.icon if manifest else row["kind"],
         "name": row.get("name") or "", "mode": row["mode"], "status": row["status"],
-        "config": _json(row.get("config"), {}) or {},
+        "config": mask_url_credentials_in(_json(row.get("config"), {}) or {}),
         "secret_fields": sorted(k for k in refs if not k.endswith("_previous")),   # names only
         "url_path": inbound_path(str(row["kind"]), str(row["path_token"])),
         "chat_endpoint_id": row.get("chat_endpoint_id"),
-        "limits": _limits(row.get("limits")), "health": health,
+        "limits": _limits(row.get("limits")), "health": mask_url_credentials_in(health),
         "rules": rules, "created_by": row.get("created_by"),
         "runs_as": ({"on_behalf_of": row.get("on_behalf_of"), "grant_id": row.get("grant_id")}
                     if row.get("on_behalf_of") else None),
@@ -403,6 +403,21 @@ def describe_connection(connection: Connection, row: Mapping[str, Any], *,
         out["dead"] = int(counts.get("dead") or 0)
         out["last_event_at"] = _iso(counts.get("last_event_at"))
     return out
+
+
+def _keep_shown_secret(stored: Any, incoming: Any) -> Any:
+    """A read view sends a masked URL back unchanged. That is the stored secret, not a new one."""
+    if isinstance(stored, str) and isinstance(incoming, str):
+        shown = mask_url_credentials(stored)
+        if incoming == shown and shown != stored:
+            return stored
+        return incoming
+    if isinstance(stored, dict) and isinstance(incoming, dict):
+        return {key: _keep_shown_secret(stored[key], value) if key in stored else value
+                for key, value in incoming.items()}
+    if isinstance(stored, list) and isinstance(incoming, list) and len(stored) == len(incoming):
+        return [_keep_shown_secret(old, new) for old, new in zip(stored, incoming)]
+    return incoming
 
 
 def update_connection(connection: Connection, *, project_id: str, connection_id: str, actor: str,
@@ -428,7 +443,7 @@ def update_connection(connection: Connection, *, project_id: str, connection_id:
             elif value is None:
                 cfg.pop(str(key), None)
             else:
-                cfg[str(key)] = value
+                cfg[str(key)] = _keep_shown_secret(cfg.get(str(key)), value)
     refs = dict(_json(row.get("secret_refs"), {}) or {})
     for fname, value in given_secrets.items():
         if fname not in secret_fields:
