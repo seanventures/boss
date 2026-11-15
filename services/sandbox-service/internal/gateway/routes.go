@@ -43,6 +43,9 @@ type Rule struct {
 	// X-Boss-Deployment) to a forward that still presents the VM's SVID
 	// (P8b S10: the model gateway, HOST_API.md §4.6; S12: the MCP gateway, §4.7).
 	HostProof bool
+	// PathMatch, when set, must also accept the path (a rule that a prefix
+	// alone cannot express, e.g. /v1/run-plane/runs/<any run>/tokens).
+	PathMatch func(path string) bool
 	// Audience is the destination's token audience (P8b S13, HOST_API.md §4.8):
 	// when the host holds the run's token for it, the forward carries
 	// X-Boss-Delegation (that token only) and a DPoP proof the host's per-run
@@ -67,7 +70,22 @@ func (r Rule) matches(port int, method, path string) bool {
 			return false
 		}
 	}
-	return prefixMatch(path, r.PathPrefix)
+	if !prefixMatch(path, r.PathPrefix) {
+		return false
+	}
+	return r.PathMatch == nil || r.PathMatch(path)
+}
+
+// TokenMintingPath reports whether a run-plane path mints or exchanges
+// credentials: /v1/run-plane/runs/<run>/tokens (and anything below it). A
+// guest may never reach one: it would get the run's tokens bound to a key IT
+// chose (P8b S13; HOST_API.md §4.8). Trailing slashes and case are folded so
+// no spelling slips past.
+func TokenMintingPath(p string) bool {
+	segs := strings.Split(strings.Trim(strings.ToLower(p), "/"), "/")
+	// v1 / run-plane / runs / <run> / tokens …
+	return len(segs) >= 5 && segs[0] == "v1" && segs[1] == "run-plane" && segs[2] == "runs" &&
+		segs[4] == "tokens"
 }
 
 // prefixMatch matches on a segment boundary: "/v1/messages" matches itself
@@ -139,6 +157,9 @@ func DefaultRules() []Rule {
 		// VMs never poll for work: the host holds the one hosts/next (§3.13.0).
 		{ID: "run-plane-next-denied", Port: guest.PortRunPlane, PathPrefix: "/v1/run-plane/next", Route: RouteRunPlane, Deny: true},
 		{ID: "run-plane-hosts-denied", Port: guest.PortRunPlane, PathPrefix: "/v1/run-plane/hosts/", Route: RouteRunPlane, Deny: true},
+		// Token minting is the HOST's own call (cpclient.RunTokens): a VM that
+		// reached it would get the run's tokens for its own key (S13).
+		{ID: "run-plane-tokens-denied", Port: guest.PortRunPlane, PathPrefix: "/v1/run-plane/runs/", PathMatch: TokenMintingPath, Route: RouteRunPlane, Deny: true},
 		{ID: "run-plane", Port: guest.PortRunPlane, PathPrefix: "/v1/run-plane/", Route: RouteRunPlane, Handle: HandleRun, Endpoint: runUp, HostAuth: true, SocketIdentity: true, Audience: hostapi.AudRunPlane},
 		{ID: "connect-p8b", Port: guest.PortConnect, Route: RouteConnect, Deny: true},
 		{ID: "default-deny", Deny: true, Route: "deny"},

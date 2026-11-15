@@ -15180,6 +15180,11 @@ DO $$ BEGIN
   ALTER TABLE identity_run_credentials ADD CONSTRAINT identity_run_credentials_aud_check
     CHECK (aud IN ('boss:api', 'boss:mcp', 'boss:egress', 'boss:token', 'boss:model', 'boss:run_plane'));
 END $$;
+-- Whether a host holds per-run DPoP keys (P8b S13 decision, 2026-11-15): advertised by the host
+-- as the `host_tokens` capability at enrol and heartbeat, and STICKY — it is only ever turned
+-- on, so a host cannot downgrade itself. From then on every forward from that host must carry
+-- the run's delegated token for its destination (model gateway, MCP gateway, run plane, egress).
+ALTER TABLE agent_hosts ADD COLUMN IF NOT EXISTS host_tokens BOOLEAN NOT NULL DEFAULT false;
 -- ================================ end P8b-6/7 ==
 -- ================================ AMEX-G3 (BOSSAPP-1139): a non-zero exit fails the step ==
 -- `skill.sandboxed_command` always returned `exit_code`, and the workflow runner never read it:

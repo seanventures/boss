@@ -229,6 +229,7 @@ func (a *Agent) Heartbeat(ctx context.Context) hostapi.HeartbeatRequest {
 		Pressure: pressure(a.cfg.StateDir), Replicas: replicas, WarmPools: pools, BGPState: "none",
 		ObservedGeneration: a.observed.Load(), Status: status, Backend: a.cfg.Manager.Name(),
 		ClaimsFrozen: frozen, ContractVersion: hostapi.Version,
+		Capabilities: []string{hostapi.CapHostTokens},
 	}
 }
 

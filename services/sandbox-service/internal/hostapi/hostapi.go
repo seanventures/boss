@@ -49,6 +49,12 @@ const (
 	AudRunPlane = "boss:run_plane"
 )
 
+// CapHostTokens is the capability a host advertises at enrol and heartbeat
+// when it holds per-run DPoP keys (P8b S13). The control plane records it
+// stickily and from then on REQUIRES the run's delegated token on every
+// forward from this host (HOST_API.md §4.8).
+const CapHostTokens = "host_tokens"
+
 // HostAudiences is what the host asks for per run, in table order.
 var HostAudiences = []string{AudModel, AudMCP, AudEgress, AudRunPlane}
 
@@ -111,6 +117,8 @@ type EnrolRequest struct {
 	Facts     Attestation       `json:"facts"`
 	Capacity  Capacity          `json:"capacity"`
 	Labels    map[string]string `json:"labels,omitempty"`
+	// Capabilities the host has (P8b S13: CapHostTokens).
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // EnrolResponse (201) — also the renew response (a subset of fields).
@@ -211,6 +219,8 @@ type HeartbeatRequest struct {
 	Backend         string `json:"backend,omitempty"`
 	ClaimsFrozen    bool   `json:"claims_frozen"`
 	ContractVersion string `json:"contract_version,omitempty"`
+	// Capabilities, re-sent every heartbeat (sticky on the control plane).
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 type HeartbeatResponse struct {

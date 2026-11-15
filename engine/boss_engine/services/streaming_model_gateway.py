@@ -1264,39 +1264,51 @@ class ModelGateway:
     # ---- S13: the run's delegated token, for THIS destination -----------------------------------
     @staticmethod
     def check_delegation(connection: Any, headers: Mapping[str, str], *, run_id: str, method: str,
-                         url: str) -> Optional[Any]:
+                         url: str, host_id: Optional[str] = None) -> Optional[Any]:
         """`X-Boss-Delegation` + `DPoP`, when the host attached them: a run token minted FOR the
         model gateway (aud boss:model — the MCP gateway's, egress's or the run plane's token is
         `bad_aud`), bound to the host's key (the proof's), naming the handle's run. None when
         none was attached and none is required (BOSS_HOST_TOKENS_REQUIRED)."""
-        h = {str(k).lower(): str(v) for k, v in headers.items()}
-        token = (h.get(DELEGATION_HEADER) or "").strip()
-        if not token:
-            if (os.environ.get(HOST_TOKENS_REQUIRED_ENV) or "").strip().lower() in ("1", "true", "yes"):
-                raise Refused(401, "run_token_required",
-                              "this gateway requires the run's delegated token (S13)")
-            return None
-        from ..identity import tokens
+        from ..identity import delegation, host_delegation
+        from .fleet import host_tokens_required
 
         try:
-            claims = tokens.verify_for_model(token, dpop_proof=(h.get(DPOP_HEADER) or "").strip()
-                                             or None, htm=method, htu=url, db=connection)
-        except tokens.TokenError as exc:
+            return host_delegation.check(
+                connection, headers, audience=delegation.AUD_MODEL, run_id=run_id, method=method,
+                url=url, required=host_tokens_required(connection, host_id)
+                if not host_delegation.presented(headers) else False)
+        except host_delegation.DelegationRefused as exc:
             raise Refused(401, f"run_token_{exc.reason}",
                           "the run's delegated token was refused") from None
-        bound = str(claims.task.run_id or "")
-        if bound != run_id and not run_id.startswith(bound + "/") and not bound.startswith(run_id + "/"):
-            raise Refused(401, "run_token_mismatch", "the delegated token names another run")
-        return claims
+
+    def requires_tokens(self, host_id: Optional[str]) -> bool:
+        """Per host (fleet.host_tokens_required): only asked when no token was presented."""
+        from .fleet import host_tokens_required
+
+        if self.engine is None:          # no database (unit tests): only the override counts
+            return host_tokens_required(None, None)
+        with self.engine.connect() as connection:
+            return host_tokens_required(connection, host_id)
 
     def _check_delegation_in_tx(self, headers: Mapping[str, str], *, run_id: str, method: str,
-                                url: str) -> None:
-        h = {str(k).lower(): str(v) for k, v in headers.items()}
-        if not (h.get(DELEGATION_HEADER) or "").strip() and \
-                (os.environ.get(HOST_TOKENS_REQUIRED_ENV) or "").strip().lower() not in ("1", "true", "yes"):
+                                url: str, host_id: Optional[str] = None) -> None:
+        from ..identity import host_delegation
+
+        if not host_delegation.presented(headers):
+            if self.requires_tokens(host_id):
+                raise Refused(401, "run_token_required",
+                              "this host's forwards carry the run's delegated token (S13)")
             return
+        # Committed even on a refusal: a spent DPoP jti must stay spent.
+        refused: Optional[Refused] = None
         with self.engine.begin() as connection:
-            self.check_delegation(connection, headers, run_id=run_id, method=method, url=url)
+            try:
+                self.check_delegation(connection, headers, run_id=run_id, method=method, url=url,
+                                      host_id=host_id)
+            except Refused as exc:
+                refused = exc
+        if refused is not None:
+            raise refused
 
     # ---- one request ------------------------------------------------------------------------------
     async def handle(self, request: Any) -> Any:
@@ -1354,7 +1366,8 @@ class ModelGateway:
             try:
                 await run_in_threadpool(self._check_delegation_in_tx, headers,
                                         run_id=handle.run_id, method=method,
-                                        url=str(request.url).split("?", 1)[0])
+                                        url=str(request.url).split("?", 1)[0],
+                                        host_id=caller.host_id)
             except Refused as exc:
                 return refuse(exc.status, exc.reason, str(exc))
         if handle.provider != provider:

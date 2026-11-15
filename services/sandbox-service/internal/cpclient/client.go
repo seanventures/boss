@@ -42,6 +42,13 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("control plane %d %s: %s", e.Status, e.Reason, e.Message)
 }
 
+// IsNotFound reports whether the control plane answered 404 (an endpoint it
+// does not serve, e.g. run tokens on a control plane that predates P8b S13).
+func IsNotFound(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && ae.Status == http.StatusNotFound
+}
+
 // IsRevoked reports whether err is the control plane refusing a revoked host.
 func IsRevoked(err error) bool {
 	var ae *APIError

@@ -134,10 +134,16 @@ func (r *RunKeys) Ensure(ctx context.Context, a hostapi.Assignment) error {
 	return nil
 }
 
+// clearMinting ends a failed mint. A run that never held a key is dropped
+// (nothing usable stays behind); a run being ROTATED keeps its current pair
+// until it expires, so in-flight calls are untouched.
 func (r *RunKeys) clearMinting(runID string) {
 	r.mu.Lock()
 	if cur := r.runs[runID]; cur != nil {
 		cur.minting = false
+		if cur.key == nil {
+			delete(r.runs, runID)
+		}
 	}
 	r.mu.Unlock()
 }

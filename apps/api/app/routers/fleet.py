@@ -48,6 +48,8 @@ class EnrolBody(BaseModel):
     facts: dict[str, Any] = Field(default_factory=dict)
     capacity: dict[str, Any] = Field(default_factory=dict)
     labels: dict[str, Any] = Field(default_factory=dict)
+    #: What the host can do (P8b S13: "host_tokens" — it holds per-run DPoP keys).
+    capabilities: list[str] = Field(default_factory=list)
 
 
 class RenewBody(BaseModel):
@@ -64,6 +66,7 @@ class HeartbeatBody(BaseModel):
     warm_pools: dict[str, Any] = Field(default_factory=dict)
     bgp_state: Optional[str] = None
     observed_generation: int = 0
+    capabilities: list[str] = Field(default_factory=list)
 
 
 class ObservedBody(BaseModel):
@@ -264,6 +267,7 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
         """A fenced run call in its own transaction — or, for the hot writes whose fence and
         write are ONE statement (run_plane._LEASE_HELD), in autocommit: no BEGIN/COMMIT trips."""
         host = _host(request)
+        _run_plane_delegation(request, host.host_id, run_id)
         try:
             if one_statement:
                 with engine.connect().execution_options(
@@ -274,6 +278,36 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
         except Exception as error:  # noqa: BLE001
             _fleet_fail(error)
             raise
+
+    _ASSERTION_HEADER = "boss-run-assertion"
+
+    def _via_guest_gateway(request: Request) -> bool:
+        """The call was forwarded for a VM by its host's guest gateway, which sets the run
+        assertion on every forward (HOST_API.md §4.2 step 5); the host's own calls carry none."""
+        return bool((request.headers.get(_ASSERTION_HEADER) or "").strip())
+
+    def _run_plane_delegation(request: Request, host_id: str, run_id: str) -> None:
+        """S13: a run call forwarded for a VM carries the run's boss:run_plane token and the
+        host's proof; required for a host that advertised `host_tokens` (sticky). The host's
+        own calls (hand back, minting) are the host's, authenticated by its proof alone."""
+        if not _via_guest_gateway(request):
+            return
+        from boss_engine.identity import delegation, host_delegation
+
+        refused: Optional[str] = None
+        with begin(engine) as connection:   # committed: a spent jti stays spent
+            try:
+                host_delegation.check(
+                    connection, dict(request.headers), audience=delegation.AUD_RUN_PLANE,
+                    run_id=run_id, method=request.method, url=str(request.url).split("?", 1)[0],
+                    required=(not host_delegation.presented(request.headers)
+                              and _fleet.host_tokens_required(connection, host_id)))
+            except host_delegation.DelegationRefused as exc:
+                refused = exc.reason
+        if refused is not None:
+            raise HTTPException(status_code=401, detail={
+                "error": f"run_token_{refused}",
+                "message": "the run's delegated run-plane token was refused"})
 
     # ── hosts ─────────────────────────────────────────────────────────────────────────────
 
@@ -286,7 +320,8 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
                 out = _fleet.enrol(connection, join_token=body.join_token, csr_pem=body.csr_pem,
                                    svid_csr_pem=body.svid_csr_pem, hostname=body.hostname,
                                    backend=body.backend, facts=body.facts,
-                                   capacity=body.capacity, labels=body.labels)
+                                   capacity=body.capacity, labels=body.labels,
+                                   capabilities=body.capabilities)
         except Exception as error:  # noqa: BLE001
             _fleet_fail(error)
             raise
@@ -494,6 +529,12 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
         HOST's key (body.jkt). Fenced like every run call; the host keeps the answer in memory
         and attaches one token (plus a proof) per forward. Called again with a new jkt, it is
         the host's rotation at two thirds of the TTL."""
+        if _via_guest_gateway(request):
+            # A VM must never mint tokens for a key it holds (P8b-T5): the host's guest gateway
+            # denies this path, and this refuses it again should one ever be forwarded.
+            raise HTTPException(status_code=403, detail={
+                "error": "host_only", "message": "run tokens are the host's own call; a VM "
+                "never mints them (HOST_API.md §4.8)"})
         lease = _lease(x_boss_replica, x_boss_job, x_boss_run_token, x_boss_fence_epoch)
         return _run_call(request, run_id, lease, run_plane.host_tokens, jkt=body.jkt,
                          audiences=body.audiences, scope=body.scope)
@@ -817,7 +858,7 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
                 try:
                     grant = lane.resolve(connection, caller, raw)
                     lane.check_delegation(connection, headers, run_id=grant.run_id or "",
-                                          method="POST", url=url)
+                                          method="POST", url=url, host_id=host.host_id)
                 except _mcpgw.Refused as exc:
                     refused = exc
             if refused is not None:
@@ -847,7 +888,9 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
         rpc_method = str(message.get("method") or "") if isinstance(message, dict) else "batch"
 
         def done(status: int, verdict: str = "allow", rejected: Optional[str] = None,
-                 size: int = 0) -> None:
+                 size: int = 0, answer: Any = None) -> None:
+            if answer is not None and verdict == "allow":
+                verdict, rejected = _mcpgw.answer_verdict(answer)
             lane.record(caller, grant, server_key=server_key, rpc_method=rpc_method,
                         status=status, verdict=verdict, rejected_by=rejected, started=started,
                         handle_fp=fp, bytes_in=len(raw_body), bytes_out=size)
@@ -860,7 +903,7 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
                 done(202)
                 return Response(status_code=202)
             out = _json.dumps(answers).encode()
-            done(200, size=len(out))
+            done(200, size=len(out), answer=answers)
             return Response(out, media_type="application/json")
         if not isinstance(message, dict):
             done(400, "deny", "invalid_request")
@@ -876,6 +919,7 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
             # then the one result event. The handler runs in a worker thread; the response
             # drains its queue, and a client that hangs up stops the keepalives.
             sink = _mcpgw.QueueSink()
+            final: dict = {}
 
             def work() -> None:
                 try:
@@ -886,6 +930,7 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
                     logging.getLogger("boss.mcp_gateway").warning(
                         "mcp gateway call failed: %s", type(exc).__name__, exc_info=True)
                     answer = _mcpgw._rpc_error(message.get("id"), -32603, "internal error")
+                final["answer"] = answer
                 sink.finish(answer)
 
             import threading
@@ -905,7 +950,10 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
                         yield chunk
                 finally:
                     sink.gone.set()
-                    done(200, size=sent)
+                    if "answer" in final:
+                        done(200, size=sent, answer=final["answer"])
+                    else:
+                        done(200, "allow", "client_disconnected", size=sent)
 
             return StreamingResponse(relay(), media_type="text/event-stream",
                                      headers={"cache-control": "no-cache", "connection": "close"})
@@ -918,7 +966,7 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
                                                            type(exc).__name__, exc_info=True)
             answer = _mcpgw._rpc_error(message.get("id"), -32603, "internal error")
         out = _json.dumps(answer).encode()
-        done(200, size=len(out))
+        done(200, size=len(out), answer=answer)
         return Response(out, media_type="application/json")
 
     @router.get("/mcp/{server}")

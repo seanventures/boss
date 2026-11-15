@@ -1057,8 +1057,12 @@ HOST_ROUTE = "/mcp"
 _AUDIT_ROUTE = "mcp"
 
 
-def host_tokens_required() -> bool:
-    return (os.environ.get(HOST_TOKENS_REQUIRED_ENV) or "").strip().lower() in ("1", "true", "yes")
+def host_tokens_required(connection: Any = None, host_id: Optional[str] = None) -> bool:
+    """Per host (P8b S13 decision): required once the host advertised `host_tokens`;
+    BOSS_HOST_TOKENS_REQUIRED=1 forces it on everywhere (fleet.host_tokens_required)."""
+    from .fleet import host_tokens_required as required
+
+    return required(connection, host_id)
 
 
 class Refused(Exception):
@@ -1090,8 +1094,14 @@ class HostCaller:
             epoch = int(epoch_raw) if epoch_raw else None
         except ValueError:
             raise Refused(400, "bad_epoch", "X-Boss-Fence-Epoch is an integer") from None
-        return cls(host_id=host_id, org_id=org_id, vm_id=(h.get(VM_HEADER) or "").strip() or None,
-                   run_id=(h.get(RUN_HEADER) or "").strip() or None, epoch=epoch,
+        vm_id = (h.get(VM_HEADER) or "").strip() or None
+        run_id = (h.get(RUN_HEADER) or "").strip() or None
+        if not vm_id or not run_id:
+            # Without the host's word on the VM and run, the binding and replay checks would be
+            # skipped: refused, never resolved on the handle alone.
+            raise Refused(400, "binding_headers_required",
+                          "a host forward names the VM and the run (X-Boss-Vm, X-Boss-Run)")
+        return cls(host_id=host_id, org_id=org_id, vm_id=vm_id, run_id=run_id, epoch=epoch,
                    deployment_id=(h.get(DEPLOYMENT_HEADER) or "").strip() or None,
                    trace_id=(h.get(TRACE_HEADER) or "").strip()[:64] or None)
 
@@ -1315,30 +1325,45 @@ class HostLane:
 
     # ---- S13: the run's delegated token ----------------------------------------------------
     def check_delegation(self, connection: Any, headers: Mapping[str, str], *, run_id: str,
-                         method: str, url: str) -> Optional[Any]:
+                         method: str, url: str, host_id: Optional[str] = None) -> Optional[Any]:
         """`X-Boss-Delegation` + `DPoP`, when the host attached them: a run token minted FOR
         this gateway (aud boss:mcp; one for the model gateway, egress or the run plane is
         `bad_aud`), bound to the host's key (the proof's), naming this run. Returns the claims,
         or None when none was attached and none is required."""
-        h = {str(k).lower(): str(v) for k, v in headers.items()}
-        token = (h.get(DELEGATION_HEADER) or "").strip()
-        if not token:
-            if host_tokens_required():
-                raise Refused(401, "run_token_required",
-                              "this gateway requires the run's delegated token (S13)")
-            return None
-        from ..identity import tokens
+        from ..identity import delegation, host_delegation
 
         try:
-            claims = tokens.verify_for_mcp(token, dpop_proof=(h.get(DPOP_HEADER) or "").strip()
-                                           or None, htm=method, htu=url, db=connection)
-        except tokens.TokenError as exc:
+            return host_delegation.check(
+                connection, headers, audience=delegation.AUD_MCP, run_id=run_id, method=method,
+                url=url, required=host_tokens_required(connection, host_id)
+                if not host_delegation.presented(headers) else False)
+        except host_delegation.DelegationRefused as exc:
             raise Refused(401, f"run_token_{exc.reason}",
                           "the run's delegated token was refused") from None
-        bound = str(claims.task.run_id or "")
-        if bound != run_id and not run_id.startswith(bound + "/") and not bound.startswith(run_id + "/"):
-            raise Refused(401, "run_token_mismatch", "the delegated token names another run")
-        return claims
+
+
+def answer_verdict(answer: Any) -> tuple[str, Optional[str]]:
+    """What one JSON-RPC answer means for the audit row: ("deny", why) for a JSON-RPC error or a
+    tool result the gateway refused (boss.denied_by_policy / denied_by_person / approval_timed_out
+    / run_ended / unknown_tool / bad_arguments), ("allow", None) otherwise — a tool that ran and
+    failed upstream (boss.tool_failed) was allowed. A batch is a deny when any answer is."""
+    if isinstance(answer, list):
+        for item in answer:
+            verdict, why = answer_verdict(item)
+            if verdict == "deny":
+                return verdict, why
+        return "allow", None
+    if not isinstance(answer, dict):
+        return "allow", None
+    if isinstance(answer.get("error"), dict):
+        return "deny", f"rpc_{answer['error'].get('code')}"
+    result = answer.get("result")
+    if isinstance(result, dict) and result.get("isError"):
+        kind = str(((result.get("structuredContent") or {}).get("error") or {}).get("type") or "")
+        kind = kind.removeprefix("boss.")
+        if kind and kind != "tool_failed":
+            return "deny", kind
+    return "allow", None
 
 
 class QueueSink(Sink):
@@ -1554,5 +1579,5 @@ __all__ = ["ACTION_ASK_PERSON", "ACTION_REQUEST_APPROVAL", "ACTION_TOOL_CALL", "
            "HostCaller", "HostLane", "McpGateway", "PATH_PREFIX", "QueueSink", "RUN_SERVER",
            "RUN_TOOLS", "Refused", "TOKEN_PREFIX", "Verdict", "bind_guest_vm", "enabled",
            "fingerprint", "get", "guest_handle", "guest_servers", "host_tokens_required",
-           "issue_guest_handle", "load_guest_handle", "presented_handle", "revoke_guest_handle",
+           "answer_verdict", "issue_guest_handle", "load_guest_handle", "presented_handle", "revoke_guest_handle",
            "revoke_run_handles", "set_gateway", "tool_error", "tool_policy_verdict"]

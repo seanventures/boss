@@ -921,7 +921,11 @@ def host_tokens(connection: Any, settings: Any, host_id: str, run_id: str, lease
                                 "autonomous principal")
         subject = AuthContext(principal=principal, method=AuthMethod.SYSTEM)
         grant_id = None
-    chosen = frozenset(str(k) for k in scope) if scope else HOST_RUN_SCOPE
+    # Never wider than a host run may be: a requested scope is NARROWED to HOST_RUN_SCOPE.
+    chosen = (frozenset(str(k) for k in scope) & HOST_RUN_SCOPE) if scope else HOST_RUN_SCOPE
+    if not chosen:
+        raise RunPlaneError("bad_scope", 400,
+                            f"a host run's scope is within {', '.join(sorted(HOST_RUN_SCOPE))}")
     try:
         shim = identity_runs.start_run(
             subject, identity_runs.RunStart(run_id=run_id, agent_id=agent_id,

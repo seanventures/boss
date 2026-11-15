@@ -88,9 +88,12 @@ type Gateway struct {
 	// Keys holds the per-run DPoP keys and delegated tokens (P8b S13); nil
 	// forwards without X-Boss-Delegation (the gateways then rely on the
 	// host proof alone, until BOSS_HOST_TOKENS_REQUIRED).
-	Keys  *RunKeys
-	Audit func(hostapi.GuestCall)
-	Event func(hostapi.HostEvent)
+	Keys *RunKeys
+	// MintNotSupported classifies a mint error as "the control plane has no
+	// tokens endpoint" (cpclient.IsNotFound), so the run proceeds without.
+	MintNotSupported func(error) bool
+	Audit            func(hostapi.GuestCall)
+	Event            func(hostapi.HostEvent)
 	// Enabled gates forwarding (false while the host is revoked).
 	Enabled func() bool
 

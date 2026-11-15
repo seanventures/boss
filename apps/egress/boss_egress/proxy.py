@@ -53,6 +53,9 @@ class EgressRequest:
     headers: Mapping[str, str] = field(default_factory=dict)   # lowercase keys
     body: bytes = field(default=b"", repr=False)
     peer: Optional[str] = None                 # the source address (the sandbox's network identity)
+    #: The URL as the caller addressed it (scheme://host/path, no query): the `htu` a host's DPoP
+    #: proof is checked against (P8b S13). "" when unknown (a direct, in-process call).
+    url: str = ""
 
 
 @dataclass(frozen=True)
@@ -187,6 +190,25 @@ class EgressProxy:
             except tokens.TokenError as exc:
                 self._deny_event(db, None, provider, req.method, template, exc.reason)
                 return EgressResponse(401, challenge, b'{"error":"unauthenticated"}')
+            # P8b S13: a microVM run's host attaches the run's boss:egress token and its proof.
+            # When present it must verify for THIS audience and name this run — a model-gateway,
+            # MCP or run-plane token is refused here. (Not yet REQUIRED here: the git route sends
+            # no host identity to egress, so the per-host requirement cannot be read; HOST_API.md
+            # §4.8. BOSS_HOST_TOKENS_REQUIRED=1 forces it.)
+            from boss_engine.identity import delegation, host_delegation
+            from boss_engine.services.fleet import host_tokens_required
+
+            try:
+                host_delegation.check(
+                    db, req.headers, audience=delegation.AUD_EGRESS, run_id=claims.task.run_id,
+                    method=req.method, url=req.url or req.path,
+                    required=(not host_delegation.presented(req.headers)
+                              and host_tokens_required(db, None)))
+            except host_delegation.DelegationRefused as exc:
+                self._deny_event(db, claims, provider, req.method, template,
+                                 f"run_token_{exc.reason}")
+                return EgressResponse(401, {"content-type": "application/json"},
+                                      b'{"error":"run_token_refused"}')
             # THE PATH FIRST: decoded and canonical BEFORE any rule sees it; `..`, `.`, `//` and
             # encoded separators are refused outright, and the upstream gets exactly this path.
             try:

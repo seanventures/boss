@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
@@ -56,6 +57,9 @@ type CP struct {
 	NoEvents bool
 	// RunPlane, if set, serves /v1/run-plane/* (host-authenticated) for tests.
 	RunPlane http.Handler
+
+	tokensRefused atomic.Bool
+	tokenMints    atomic.Int64
 	// OnClaim, if set, runs after each claim and before the answer is sent.
 	OnClaim func(hostapi.Assignment)
 	work    workState

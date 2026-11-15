@@ -592,7 +592,7 @@ to the same vsock port.
 | 7101 | model | `POST /anthropic/v1/messages`, `/openai/v1/chat/completions`, `/openai/v1/responses` | `endpoints.model_gateway` — the central streaming model gateway (§4.6) |
 | 7102 | git / api | `GET,POST /git/…`; `GET,POST,PATCH,PUT /api/…` | `endpoints.egress` (P8b) |
 | 7103 | mcp | `POST /mcp/<server>` (GET and DELETE refused: no server-initiated stream, no session) | `endpoints.mcp_gateway` — the control plane's own `/mcp` route (§4.7) |
-| 7104 | run_plane | `/v1/run-plane/next` and `/v1/run-plane/hosts/…` **denied** (VMs never poll for work); any other `/v1/run-plane/…` | `endpoints.run_plane` (the control plane) |
+| 7104 | run_plane | `/v1/run-plane/next`, `/v1/run-plane/hosts/…` **denied** (VMs never poll for work) and `/v1/run-plane/runs/<run>/tokens` **denied** (only the host mints, §4.8); any other `/v1/run-plane/…` | `endpoints.run_plane` (the control plane) |
 | 7105 | connect | denied until P8b | — |
 | 7105 (guest side) | **work inbox** (host-initiated, 1.1) | the host connects to the **guest's** port 7105; §4.5 | — |
 | 5000 | control (host-initiated) | `bootstrap`, `ping`, `ifaces`, `selfcheck_egress`, `selfcheck_gateway` | — |
@@ -737,6 +737,7 @@ guest-made proof never stands in for the host's.
 | Check | Answer |
 |---|---|
 | The handle's row (`mcp_gateway_handles`, hashed) | `401 no_handle \| unknown_handle \| handle_revoked \| handle_expired` |
+| The host's word itself | `X-Boss-Vm` or `X-Boss-Run` missing → `400 binding_headers_required` |
 | Its binding against the host's word | another org, VM or run → **replay**: the row is revoked, a `host_events(handle_replay, actor=mcp_gateway)` row is written, `401 handle_replay`; a code task's unbound handle is bound to the first VM that redeems it |
 | Its epoch | not the handle's, or not the run's current one in Postgres → `409 fenced` within that one request |
 | `<server>` against the row's `servers` (the agent's MCP grant, agents.held_mcp_servers) | not on it → `403`, a typed `boss.denied_by_policy` result; `boss_run` (the run's own tools) is always on |
@@ -763,7 +764,9 @@ the server is the tool-scoped token today.
 
 **Audit.** One `guest_calls` row per call: `route = mcp`, `rule_id = mcp-<server>`,
 `path_template = /mcp/<server>/<jsonrpc method>`, `rejected_by = mcp_gateway:<reason>` on a
-refusal, the handle's fingerprint, never the handle, a body or an argument; batched off the
+refusal — including a call the policy refused inside a 200 JSON-RPC answer (`verdict = deny`,
+`rejected_by = mcp_gateway:denied_by_policy`) — the handle's fingerprint, never the handle, a body
+or an argument; batched off the
 request path (the model gateway's writer).
 
 **Handles.** Minted with the run's lease (`run_plane._guest_handles`): `handles.mcpgw` bound to
@@ -802,9 +805,28 @@ POST /v1/run-plane/runs/{run_id}/tokens        (host-authenticated; the lease he
   again; the previous tokens are not revoked (the run's end revokes them all), so a forward that
   already captured its `(token, key)` pair completes, and a new token never pairs with the old
   key. The guest's handles never change, so a rotation is invisible to the agent.
-- **Until every host sends them**, a forward without `X-Boss-Delegation` is accepted on the host
-  proof alone; `BOSS_HOST_TOKENS_REQUIRED=1` on the control plane refuses it (`401
-  run_token_required`). The local lane is unchanged: the API process is its own shim.
+- **Required per host (decision, PR #121 review).** A host that holds per-run keys advertises
+  `capabilities: ["host_tokens"]` at enrol and on every heartbeat; the control plane records it
+  in `agent_hosts.host_tokens`, **sticky** (a host cannot un-advertise it). From then on every
+  forward from that host must carry its token: `401 run_token_required` otherwise — at the model
+  gateway, the MCP gateway and the run plane. A host that predates S13 (no capability) may still
+  forward on its host proof alone. `BOSS_HOST_TOKENS_REQUIRED=1` only forces the requirement on
+  (tests, a strict install); it never turns it off. The local lane is unchanged.
+- **Where each token is verified** (one check, `identity/host_delegation.py`): the model gateway
+  (`boss:model`), the MCP gateway (`boss:mcp`), the run plane (`boss:run_plane`, on every
+  `/v1/run-plane/runs/{run}/…` call a VM's gateway forwarded — recognised by its
+  `Boss-Run-Assertion`; the host's own calls are authenticated by its proof), and egress
+  (`boss:egress`, verified when attached; not yet required there, because the git route sends no
+  host identity to egress — that lands with the egress route's `HostProof`).
+- **Minted before the VM hears of the run.** `boss-hostd` mints a claimed run's tokens before
+  writing the work line; a refused mint hands the run back with reason `tokens_unavailable:
+  <code>`. A run a replica admits itself (`/v1/run-plane/admit`) is minted in the gateway before
+  the answer reaches the guest; a refused mint answers the guest `503 tokens_unavailable`. A
+  control plane without the endpoint (`404`) leaves the run on the host proof alone.
+- **A guest can never mint.** The route table denies `/v1/run-plane/runs/<run>/tokens` (and
+  anything below it, any case) before the run-plane rule (`run-plane-tokens-denied`), and the
+  control plane refuses a forwarded one (`403 host_only`). The requested scope is narrowed to
+  `agent:invoke` (`400 bad_scope` if nothing is left).
 - At the run's end (`settle`, `fail`, hand back) the host forgets the key and tokens
   (`UnbindRun`), and the control plane revokes the run's tokens with its handles.
 

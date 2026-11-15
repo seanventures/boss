@@ -314,3 +314,72 @@ func TestEnsureSurvivesAMintFailureAndNeverLogsTheKey(t *testing.T) {
 		}
 	}
 }
+
+// Review HIGH (PR #121): a guest may never reach the host's token-minting
+// call. If it could, it would POST its OWN jkt and the gateway would attach
+// the run token and the host proof, handing the guest all four tokens bound
+// to a key it holds.
+func TestAGuestCannotMintTokensThroughTheGateway(t *testing.T) {
+	r := newRig(t)
+	bindWorkItem(r)
+	r.gw.Runs.Put("run_9", RunLease{ReplicaID: "rep_a", JobID: "job_9", Token: "lease_SECRET", Epoch: 4})
+	r.gw.Runs.Put("run_b", RunLease{ReplicaID: "rep_b", JobID: "job_b", Token: "lease_B", Epoch: 1})
+	before := len(r.seen)
+	for _, c := range []struct{ vm, path string }{
+		{"vm-a", "/v1/run-plane/runs/run_9/tokens"},
+		{"vm-a", "/v1/run-plane/runs/run_9/tokens/"},
+		{"vm-a", "/v1/run-plane/runs/run_9/TOKENS"},
+		{"vm-a", "/v1/run-plane/runs/run_9/tokens/rotate"},
+		{"vm-b", "/v1/run-plane/runs/run_b/tokens"}, // a replica, by its socket alone
+	} {
+		status, _ := r.call(c.vm, guest.PortRunPlane, "POST", c.path, map[string]string{
+			"Authorization": "Bearer boss_run_W", "Content-Type": "application/json"})
+		if status != http.StatusForbidden || r.lastCall().RejectedBy != "route_denied" || r.lastCall().RuleID != "run-plane-tokens-denied" {
+			t.Fatalf("%s %s: %d %+v", c.vm, c.path, status, r.lastCall())
+		}
+	}
+	if len(r.seen) != before {
+		t.Fatal("a token-minting call from a guest must never be forwarded")
+	}
+	// Ordinary run calls still go through.
+	if status, _ := r.call("vm-b", guest.PortRunPlane, "GET", "/v1/run-plane/runs/run_b", nil); status != 200 {
+		t.Fatalf("run package: %d", status)
+	}
+	for _, p := range []string{"/v1/run-plane/runs/run_9/tokensX", "/v1/run-plane/runs/tokens", "/v1/run-plane/runs/run_9/lease"} {
+		if TokenMintingPath(p) {
+			t.Fatalf("%s is not a minting path", p)
+		}
+	}
+}
+
+// Review MED (PR #121): an admitted run's tokens are minted BEFORE the guest
+// sees the lease; a refused mint answers 503 tokens_unavailable and the host
+// forgets the run token, so nothing runs without its tokens.
+func TestAnAdmittedRunGetsItsTokensFirstOrIsRefused(t *testing.T) {
+	r := newRig(t)
+	m := &fakeMinter{ttl: 300}
+	r.gw.Keys = &RunKeys{Mint: m.mint}
+	admit := func() (int, string) {
+		return r.call("vm-b", guest.PortRunPlane, "POST", "/v1/run-plane/admit", map[string]string{"Content-Type": "application/json"})
+	}
+	if status, body := admit(); status != 200 || strings.Contains(body, "lease_SECRET_adm") {
+		t.Fatalf("admit: %d %s", status, body)
+	}
+	if _, ok := r.gw.Keys.Pair("run_adm", hostapi.AudRunPlane); !ok || m.calls.Load() != 1 {
+		t.Fatal("the admitted run's tokens must exist when the guest gets the answer")
+	}
+	m.fail = true
+	r.gw.Keys.Forget("run_adm")
+	status, body := admit()
+	if status != http.StatusServiceUnavailable || !strings.Contains(body, "tokens_unavailable") || strings.Contains(body, "lease_SECRET_adm") {
+		t.Fatalf("refused mint: %d %s", status, body)
+	}
+	if _, ok := r.gw.Runs.Get("run_adm"); ok {
+		t.Fatal("a run without its tokens must not stay in the host's run map")
+	}
+	// A control plane that predates S13 (404): the run goes ahead without tokens.
+	r.gw.MintNotSupported = func(error) bool { return true }
+	if status, _ := admit(); status != 200 {
+		t.Fatalf("old control plane: %d", status)
+	}
+}

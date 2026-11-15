@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
+	"github.com/seanheiney/boss/services/sandbox-service/internal/cpclient"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/gateway"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/guest"
 	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
@@ -194,13 +196,20 @@ func (a *Agent) tryDeliver(run hostapi.Assignment) string {
 	vmID, depID := st.id, st.spec.DeploymentID
 	st.mu.Unlock()
 	a.gw.BindRun(vmID, run.ReplicaID, depID, run.RunID, run.Epoch, run.Handles)
+	// The run's tokens exist BEFORE the VM is told about the run: its first
+	// gateway call already carries them. A refused mint hands the run back
+	// with the reason (a control plane that predates S13 answers 404: the run
+	// goes ahead on the host proof alone, as it did before).
 	if a.gw.Keys != nil {
-		go func() {
-			// Bounded: a control plane that hangs must not pin a goroutine per run.
-			kctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			_ = a.gw.Keys.Ensure(kctx, run)
-		}()
+		kctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := a.gw.Keys.Ensure(kctx, run)
+		cancel()
+		if err != nil && !cpclient.IsNotFound(err) {
+			release()
+			a.gw.Runs.Delete(run.RunID)
+			a.gw.UnbindRun(run.RunID)
+			return "tokens_unavailable: " + tokenFailure(err)
+		}
 	}
 	w := guest.Work{Op: "run", RunID: run.RunID, JobID: run.JobID, ReplicaID: run.ReplicaID, Epoch: run.Epoch,
 		Handles: run.Handles}
@@ -235,4 +244,17 @@ func (a *Agent) tryDeliver(run hostapi.Assignment) string {
 		return "vm_refused: " + reply.Reason
 	}
 	return ""
+}
+
+// tokenFailure is the hand-back reason for a refused mint: the control plane's
+// named code, never a token or a key.
+func tokenFailure(err error) string {
+	var ae *cpclient.APIError
+	if errors.As(err, &ae) && ae.Reason != "" {
+		return ae.Reason
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	return "unreachable"
 }

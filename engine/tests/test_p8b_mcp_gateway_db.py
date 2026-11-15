@@ -375,13 +375,44 @@ def test_host_tokens_are_per_destination_dpop_bound_and_refused_across_gateways(
     assert world.mcp("boss_run", ping, extra=proof(new_mcp, host_key)).status_code == 401, \
         "a new token never pairs with the old key"
 
-    # Required mode: a forward without the delegated token is refused.
-    os.environ[gw.HOST_TOKENS_REQUIRED_ENV] = "1"
-    try:
-        bare = world.mcp("boss_run", ping)
-        assert bare.status_code == 401 and bare.json()["error"]["data"]["reason"] == "run_token_required"
-    finally:
-        os.environ.pop(gw.HOST_TOKENS_REQUIRED_ENV, None)
+    # THE RUN PLANE verifies ITS audience on a call a VM's gateway forwarded (it carries the run
+    # assertion): boss:run_plane passes, the MCP token is bad_aud.
+    pkg = f"/v1/run-plane/runs/{world.work['run_id']}"
+    via_vm = {**world.lease_headers(), "Boss-Run-Assertion": "a.b.c"}
+    rp_token = rotated.json()["tokens"][delegation.AUD_RUN_PLANE]["access_token"]
+    good = world.host.call("GET", pkg, headers={
+        **via_vm, "X-Boss-Delegation": rp_token,
+        "DPoP": next_key.proof("GET", "http://testserver" + pkg, access_token=rp_token)})
+    assert good.status_code == 200, good.text
+    bad = world.host.call("GET", pkg, headers={
+        **via_vm, "X-Boss-Delegation": new_mcp,
+        "DPoP": next_key.proof("GET", "http://testserver" + pkg, access_token=new_mcp)})
+    assert bad.status_code == 401 and bad.json()["detail"]["error"] == "run_token_bad_aud"
+    # A VM can never reach the minting call (review HIGH): refused even if forwarded.
+    minted_by_vm = world.tokens(dpop.DPoPKey.generate().jkt, headers=via_vm)
+    assert minted_by_vm.status_code == 403 and minted_by_vm.json()["detail"]["error"] == "host_only"
+    # A requested scope is capped at the host run scope.
+    wide = world.host.call("POST", f"{pkg}/tokens", headers=world.lease_headers(),
+                           json={"jkt": dpop.DPoPKey.generate().jkt, "scope": ["code_task:steer"]})
+    assert wide.status_code == 400 and wide.json()["detail"]["error"] == "bad_scope"
+
+    # REQUIRED PER HOST (decision): once this host advertises `host_tokens` (sticky), a forward
+    # without its token is refused — at the MCP gateway and on the run plane.
+    from boss_engine.services import fleet
+
+    beat = world.host.heartbeat(capabilities=[fleet.CAP_HOST_TOKENS])
+    assert beat.status_code == 200, beat.text
+    fleet._HOST_TOKENS_CACHE.clear()  # noqa: SLF001
+    bare = world.mcp("boss_run", ping)
+    assert bare.status_code == 401 and bare.json()["error"]["data"]["reason"] == "run_token_required"
+    bare_rp = world.host.call("GET", pkg, headers=via_vm)
+    assert bare_rp.status_code == 401 and bare_rp.json()["detail"]["error"] == "run_token_required"
+    assert world.host.call("GET", pkg, headers=world.lease_headers()).status_code == 200, \
+        "the host's OWN run calls are the host's (no VM, no run token needed)"
+    world.host.heartbeat(capabilities=[])       # it cannot un-advertise itself
+    fleet._HOST_TOKENS_CACHE.clear()  # noqa: SLF001
+    with eng.begin() as c:
+        assert fleet.host_tokens_required(c, world.host.host_id) is True
 
     # RUN END: the handle and every token of the run die together.
     from boss_engine.services import run_plane

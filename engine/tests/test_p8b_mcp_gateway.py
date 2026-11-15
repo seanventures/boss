@@ -291,8 +291,8 @@ def test_a_missing_delegated_token_is_tolerated_unless_required(monkeypatch):
 
 
 def test_a_wrong_audience_or_a_wrong_key_is_refused_in_words(monkeypatch):
-    """verify_for_mcp is the audience pin; its refusal reasons reach the host as
-    run_token_<reason>, never with the token itself."""
+    """Every destination runs ONE check (identity/host_delegation) with ITS audience; the
+    refusal reaches the host as run_token_<reason>, never with the token itself."""
     from boss_engine.identity import tokens
 
     calls: list = []
@@ -301,23 +301,103 @@ def test_a_wrong_audience_or_a_wrong_key_is_refused_in_words(monkeypatch):
         calls.append(kw)
         raise tokens.TokenError("invalid_token", 401, "bad_aud")
 
-    monkeypatch.setattr(tokens, "verify_for_mcp", refuse)
+    monkeypatch.setattr(tokens, "verify_run_token", refuse)
     with pytest.raises(gw.Refused) as refused:
         _gateway().host_lane.check_delegation(None, {"X-Boss-Delegation": "model.token.x", "DPoP": "p"},
-                                         run_id="run_1", method="POST", url="https://cp/mcp/jira")
+                                              run_id="run_1", method="POST", url="https://cp/mcp/jira")
     assert refused.value.reason == "run_token_bad_aud"
     assert "model.token.x" not in str(refused.value)
+    assert calls[0]["audience"] == delegation.AUD_MCP
     assert calls[0]["dpop_proof"] == "p" and calls[0]["htm"] == "POST" and calls[0]["htu"] == "https://cp/mcp/jira"
+    # The model gateway asks for ITS audience through the same check.
+    from boss_engine.services import streaming_model_gateway as smg
+
+    with pytest.raises(smg.Refused):
+        smg.ModelGateway.check_delegation(None, {"X-Boss-Delegation": "t", "DPoP": "p"},
+                                          run_id="run_1", method="POST", url="u")
+    assert calls[-1]["audience"] == delegation.AUD_MODEL
 
     class Claims:
         class task:
             run_id = "run_other"
 
-    monkeypatch.setattr(tokens, "verify_for_mcp", lambda token, **kw: Claims())
+    monkeypatch.setattr(tokens, "verify_run_token", lambda token, **kw: Claims())
     with pytest.raises(gw.Refused) as other:
         _gateway().host_lane.check_delegation(None, {"X-Boss-Delegation": "t", "DPoP": "p"},
-                                         run_id="run_1", method="POST", url="u")
+                                              run_id="run_1", method="POST", url="u")
     assert other.value.reason == "run_token_mismatch"
+
+
+def test_tokens_are_required_per_host_from_its_sticky_capability(monkeypatch):
+    """Decision (PR #121): a host that advertised `host_tokens` must attach the token; one that
+    predates S13 may not. The env var only forces it on (tests); it never turns it off."""
+    from boss_engine.services import fleet
+
+    monkeypatch.delenv(fleet.HOST_TOKENS_REQUIRED_ENV, raising=False)
+    fleet._HOST_TOKENS_CACHE.clear()
+
+    class Conn:
+        def __init__(self, value):
+            self.value, self.asked = value, 0
+
+        def begin_nested(self):
+            import contextlib
+
+            return contextlib.nullcontext()
+
+        def execute(self, stmt, params=None):
+            self.asked += 1
+            assert "SELECT host_tokens FROM agent_hosts" in str(stmt) and params == {"h": "hst_new"}
+            return FakeResult(scalar=self.value)
+
+    new_host, old_host = Conn(True), Conn(False)
+    assert fleet.host_tokens_required(new_host, "hst_new") is True
+    with pytest.raises(gw.Refused) as refused:
+        _gateway().host_lane.check_delegation(new_host, {}, run_id="run_1", method="POST",
+                                              url="u", host_id="hst_new")
+    assert refused.value.reason == "run_token_required"
+    fleet._HOST_TOKENS_CACHE.clear()
+    assert fleet.host_tokens_required(old_host, "hst_new") is False
+    assert _gateway().host_lane.check_delegation(old_host, {}, run_id="run_1", method="POST",
+                                                 url="u", host_id="hst_new") is None
+    # Advertising is sticky: the UPDATE only ever sets it true.
+    seen: list = []
+
+    class Writer:
+        def execute(self, stmt, params=None):
+            seen.append(str(stmt))
+
+    fleet._record_capabilities(Writer(), "hst_x", ["host_tokens"])
+    fleet._record_capabilities(Writer(), "hst_x", [])
+    assert seen == ["UPDATE agent_hosts SET host_tokens = true WHERE id = :i AND NOT host_tokens"]
+    monkeypatch.setenv(fleet.HOST_TOKENS_REQUIRED_ENV, "1")
+    assert fleet.host_tokens_required(old_host, "hst_new") is True
+    fleet._HOST_TOKENS_CACHE.clear()
+
+
+def test_a_forward_without_the_hosts_word_on_vm_and_run_is_400():
+    for headers in ({"X-Boss-Run": "run_1"}, {"X-Boss-Vm": "vm_a"}, {}):
+        with pytest.raises(gw.Refused) as refused:
+            gw.HostCaller.from_headers(headers, host_id="hst_1", org_id="org_1")
+        assert refused.value.status == 400 and refused.value.reason == "binding_headers_required"
+
+
+def test_the_audit_verdict_follows_the_answer():
+    deny = gw.tool_error("denied_by_policy", "no")
+    assert gw.answer_verdict({"jsonrpc": "2.0", "id": 1, "result": deny}) == ("deny", "denied_by_policy")
+    assert gw.answer_verdict({"jsonrpc": "2.0", "id": 1, "error": {"code": -32004}}) == ("deny", "rpc_-32004")
+    assert gw.answer_verdict({"jsonrpc": "2.0", "id": 1,
+                              "result": gw.tool_error("tool_failed", "upstream 500")}) == ("allow", None)
+    assert gw.answer_verdict({"jsonrpc": "2.0", "id": 1, "result": {"content": []}}) == ("allow", None)
+    assert gw.answer_verdict([{"result": {}}, {"result": deny}]) == ("deny", "denied_by_policy")
+
+
+def test_a_host_run_scope_is_capped():
+    from boss_engine.services import run_plane
+
+    assert run_plane.HOST_RUN_SCOPE == frozenset({"agent:invoke"})
+    src = (ROOT / "engine" / "boss_engine" / "services" / "run_plane.py").read_text()
+    assert "& HOST_RUN_SCOPE) if scope else HOST_RUN_SCOPE" in src
 
 
 # ── the contract agrees across the three sides ───────────────────────────────────────────────
@@ -335,6 +415,10 @@ def test_the_go_route_table_carries_the_host_proof_and_the_mcp_audience():
     assert 'PathRunTokens = "/v1/run-plane/runs/%s/tokens"' in hostapi
     # A guest-made DPoP header never survives the host's strip.
     assert '"DPoP"' in routes.split("var strippedHeaders")[1].split("}")[0]
+    # A guest never reaches the host's token-minting call (review HIGH, PR #121): the deny
+    # rule sits BEFORE the run-plane rule (first match wins).
+    order = [line.split('ID: "')[1].split('"')[0] for line in routes.splitlines() if 'ID: "' in line]
+    assert order.index("run-plane-tokens-denied") < order.index("run-plane")
     # The endpoint boss-hostd forwards to is the control plane's own /mcp route, and the guest
     # URL is the vsock relay's port 7103.
     from boss_engine.services import fleet
