@@ -606,20 +606,59 @@ class PinnedVerifyManifest:
     text: str | None
     manifest: Any = None
     error: str | None = None
+    #: The folders (repo-relative POSIX, "" for the root) that held a Node or Python app's
+    #: manifest in the BASE tree, before any agent wrote a file; None when it was not read.
+    #: What the base tree was decides whether a go.mod / pom.xml beside it is the app's stack
+    #: (resolve_gate_plan): a file an agent ADDS never flips the gate.
+    base_apps: frozenset[str] | None = None
+
+
+#: A Node or Python app's manifest: one of these beside a go.mod or pom.xml in the base tree
+#: makes that folder a Node / Python app with a stray build file (a Hugo site's go.mod).
+APP_MANIFESTS = ("package.json", "requirements.txt", "pyproject.toml", "setup.py", "Pipfile")
+_BASE_SKIP_DIRS = frozenset({"node_modules", "vendor", "__pycache__", "venv", "dist", "build",
+                             "target", "coverage"})
+_BASE_WALK_LIMIT = 20000
+
+
+def base_app_dirs(root: Path | str) -> frozenset[str] | None:
+    """The folders under `root` holding a Node or Python app's manifest (APP_MANIFESTS), as
+    repo-relative POSIX paths ("" for the root). None when the tree cannot be read or is larger
+    than the walk allows: the caller then treats every folder as having none."""
+    import os
+
+    base = Path(root)
+    found: set[str] = set()
+    walked = 0
+    try:
+        for current, dirs, files in os.walk(base):
+            walked += 1
+            if walked > _BASE_WALK_LIMIT:
+                return None
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _BASE_SKIP_DIRS]
+            if any(name in files for name in APP_MANIFESTS):
+                rel = Path(current).relative_to(base).as_posix()
+                found.add("" if rel == "." else rel)
+    except (OSError, ValueError):
+        return None
+    return frozenset(found)
 
 
 def pin_verify_manifest(root: Path | str) -> PinnedVerifyManifest:
-    """Read and parse the manifest of a freshly provisioned checkout. Call before any agent."""
+    """Read and parse the manifest of a freshly provisioned checkout, and note which folders
+    of it are Node / Python apps (base_apps). Call before any agent."""
     from . import verify_manifest
 
+    apps = base_app_dirs(root)
     path = Path(root) / verify_manifest.MANIFEST_NAME
     if not path.is_file():
-        return PinnedVerifyManifest(None)
+        return PinnedVerifyManifest(None, base_apps=apps)
     text = path.read_text(encoding="utf-8", errors="replace")
     try:
-        return PinnedVerifyManifest(text, verify_manifest.parse_verify_manifest(text))
+        return PinnedVerifyManifest(text, verify_manifest.parse_verify_manifest(text),
+                                    base_apps=apps)
     except verify_manifest.VerifyManifestError as exc:
-        return PinnedVerifyManifest(text, error=str(exc))
+        return PinnedVerifyManifest(text, error=str(exc), base_apps=apps)
 
 
 def verify_manifest_tampered(pinned: PinnedVerifyManifest, root: Path | str) -> str | None:
@@ -775,6 +814,8 @@ def resolve_gate_plan(
     from . import app_root, verify_manifest
 
     base = Path(root)
+    # What the BASE tree held, read before any agent ran: never the lazily pinned copy below.
+    base_apps = pinned.base_apps if pinned is not None else None
     # The named app: the pinned benchmark app, else the one folder the brief names.
     named = app_id or app_scope(spec, None)
     where = app_root.resolve(base, app_id=named, recorded=recorded, changed=changed,
@@ -898,12 +939,26 @@ def resolve_gate_plan(
     # Python manifest beside it: otherwise a repair that adds a package.json flips the gate to
     # npm and "passes" code nobody compiled (the class of the Northgate build, 2026-11-15).
     # toolchain_missing is a person's to fix (GatePlan.needs_human), never a repair's.
+    # EXCEPT A NODE OR PYTHON APP WITH A STRAY BUILD FILE: when the BASE tree (pinned before
+    # any agent ran) already held a package.json / Python manifest in this folder, the folder
+    # is that app (a Hugo site's go.mod) and is gated as it, exactly as it is with the
+    # toolchain on. Only the base tree counts, so a file an agent adds never flips the gate.
+    try:
+        app_rel = app_dir.relative_to(base).as_posix()
+    except ValueError:
+        app_rel = None
+    app_in_base = base_apps is not None and app_rel is not None \
+        and ("" if app_rel == "." else app_rel) in base_apps
     if java and not toolchains.has("java"):
-        message = toolchains.missing_message("java", toolchains.build_file(java))
-        return GatePlan([], app_dir, "toolchain_missing", message, error=message)
+        if not app_in_base:
+            message = toolchains.missing_message("java", toolchains.build_file(java))
+            return GatePlan([], app_dir, "toolchain_missing", message, error=message)
+        java = None
     if compiled == "go" and not toolchains.has("go"):
-        message = toolchains.missing_message("go", "go.mod")
-        return GatePlan([], app_dir, "toolchain_missing", message, error=message)
+        if not app_in_base:
+            message = toolchains.missing_message("go", "go.mod")
+            return GatePlan([], app_dir, "toolchain_missing", message, error=message)
+        compiled = None
     if java and not node_here:
         commands = toolchains.java_gate_commands(java)
         # A first build downloads its dependencies through egress: give it the manifest's room.
