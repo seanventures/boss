@@ -33,13 +33,28 @@ os.environ.setdefault("PGOPTIONS", "-c statement_timeout=60000")
 # This is what makes the reset in `clean_tables` safe: it can only ever name tables in here.
 from apps.api.tests.db_guard import assert_safe_to_wipe as _assert_safe_to_wipe  # noqa: E402
 from apps.api.tests.schema_confinement import confine_to_private_schema  # noqa: E402
+from boss_engine.dev.test_databases import guard_test_url, session_start  # noqa: E402
 
 _BASE_DATABASE_URL = os.environ.get("DATABASE_URL", "")
 if _BASE_DATABASE_URL:
     _assert_safe_to_wipe(_BASE_DATABASE_URL)
+    # AND NOT INSIDE THE LIVE INSTALL'S SERVER (BOSSAPP-1152): on the server BOSS_DATABASE_URL
+    # names, a test database must say so by name (boss_test*, boss_scratch*). The separate test
+    # Postgres is the `db-test` compose service; the refusal says how to start it.
+    guard_test_url(variable="DATABASE_URL")
     _TEST_SCHEMA = confine_to_private_schema(_BASE_DATABASE_URL)
 else:
     _TEST_SCHEMA = None
+
+
+def pytest_sessionstart(session):
+    """Storage hygiene first (BOSSAPP-1162): drop stamped throwaways past their TTL — never an
+    unstamped name — and warn when the server's lock table is too small for a schema this size,
+    the failure that left 146 schemas behind. Best effort; a line each when there is news."""
+    if _TEST_SCHEMA is None:
+        return
+    for line in session_start(_BASE_DATABASE_URL):
+        print(line)
 
 import pytest
 from fastapi.testclient import TestClient
