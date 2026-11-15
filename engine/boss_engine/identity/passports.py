@@ -521,7 +521,59 @@ def _grow_to_preset(db: Any, passport: "Passport") -> bool:
 #: person who takes the permission away afterwards is not overruled on the next boot.
 CUSTOM_CEILING_BASELINE_ONCE: dict[str, tuple[str, ...]] = {
     "knowledge_read_for_custom_ceilings": ("knowledge:read",),
+    # ticket_get/search/browse moved from integration:read to ticket:read (2026-11-15): every
+    # agent looks a named ticket up (boss.fundamentals).
+    "ticket_read_for_custom_ceilings": ("ticket:read",),
 }
+
+#: Permissions a CUSTOM human access role gains ONCE per org because an existing permission it
+#: holds was split: {once-key: (the permission it already holds, the permission it gains)}. A
+#: custom role that could read integrations (and so tickets, before ticket:read existed) keeps
+#: reading tickets after the upgrade. Audited as a role version; a person who removes the new
+#: permission afterwards is not overruled.
+CUSTOM_ROLE_SPLITS_ONCE: dict[str, tuple[str, str]] = {
+    "ticket_read_for_custom_roles": ("integration:read", "ticket:read"),
+}
+
+
+def grant_splits_to_custom_roles(db: Any, *, org_id: str) -> dict[str, list[str]]:
+    """Give every custom access role of `org_id` that holds a split permission its new half, once
+    per org per entry (CUSTOM_ROLE_SPLITS_ONCE). Returns role_id -> added."""
+    from sqlalchemy import text
+
+    out: dict[str, list[str]] = {}
+    if not db.execute(text("SELECT to_regclass('schema_once') IS NOT NULL")).scalar():
+        return out
+    for name, (held, gained) in CUSTOM_ROLE_SPLITS_ONCE.items():
+        key = f"{name}:{org_id}"
+        if db.execute(text("SELECT 1 FROM schema_once WHERE key = :k"), {"k": key}).first():
+            continue
+        if not db.execute(text("SELECT 1 FROM identity_permissions WHERE key = :k"),
+                          {"k": gained}).first():
+            continue   # the catalogue is not seeded yet: try again on the next boot
+        roles = db.execute(text(
+            "SELECT r.id FROM identity_access_roles r WHERE r.org_id = :o AND NOT r.builtin "
+            "AND EXISTS (SELECT 1 FROM identity_access_role_permissions p WHERE p.role_id = r.id "
+            "AND p.permission_key = :h) AND NOT EXISTS (SELECT 1 FROM "
+            "identity_access_role_permissions p WHERE p.role_id = r.id AND p.permission_key = :g) "
+            "ORDER BY r.id"), {"o": org_id, "h": held, "g": gained}).scalars().all()
+        for role_id in roles:
+            db.execute(text("INSERT INTO identity_access_role_permissions (role_id, permission_key) "
+                            "VALUES (:r, :g) ON CONFLICT DO NOTHING"), {"r": role_id, "g": gained})
+            version = db.execute(text(
+                "UPDATE identity_access_roles SET version = version + 1, updated_at = now() "
+                "WHERE id = :r RETURNING version"), {"r": role_id}).scalar()
+            perms = sorted(db.execute(text(
+                "SELECT permission_key FROM identity_access_role_permissions WHERE role_id = :r"),
+                {"r": role_id}).scalars().all())
+            db.execute(text(
+                "INSERT INTO identity_access_role_versions (role_id, version, permissions, "
+                "changed_by) VALUES (:r, :v, :p, 'sys_migration') ON CONFLICT DO NOTHING"),
+                {"r": role_id, "v": version, "p": perms})
+            out[role_id] = [gained]
+        db.execute(text("INSERT INTO schema_once (key) VALUES (:k) ON CONFLICT (key) DO NOTHING"),
+                   {"k": key})
+    return out
 
 
 def grant_baseline_to_custom_ceilings(db: Any, *, org_id: str) -> dict[str, list[str]]:
@@ -561,7 +613,7 @@ def grant_baseline_to_custom_ceilings(db: Any, *, org_id: str) -> dict[str, list
                                    actor_id="sys_migration",
                                    details={"preset": "custom", "added": missing,
                                             "reason": "baseline read for every agent"})
-            out[agent_id] = missing
+            out.setdefault(agent_id, []).extend(missing)
         db.execute(text("INSERT INTO schema_once (key) VALUES (:k) ON CONFLICT (key) DO NOTHING"),
                    {"k": key})
     return out

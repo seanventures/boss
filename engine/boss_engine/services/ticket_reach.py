@@ -61,7 +61,10 @@ SHARE_KEY = "share_with_org"
 MAX_FAN_OUT = 5
 PER_CONNECTION_SECONDS = 8.0
 CACHE_SECONDS = 180.0
-_CACHE: dict[tuple[str, str], tuple[float, str, str]] = {}
+#: Keyed by (project, the reachable connection ids, key): what one project may read — and the
+#: sites named in its "not found" — is never served to another project, and a sharing change
+#: (a different reachable set) is a different entry.
+_CACHE: dict[tuple[str, frozenset, str], tuple[float, str, str]] = {}
 _CACHE_LOCK = threading.Lock()
 
 
@@ -277,18 +280,38 @@ def not_connected(project_id: str) -> dict[str, Any]:
                     "share it with the whole org."}
 
 
-def _cached(org: str, key: str) -> Optional[tuple[str, str]]:
+def nothing_reachable(db: Connection, project_id: str, *, provider: Optional[str] = None
+                      ) -> dict[str, Any]:
+    """Why no connection can serve this project: ``not_shared`` when another project of the org
+    has one that is not shared with it (so search, browse, comment and import say the same as
+    ticket_get), else ``not_connected``."""
+    wanted = str(provider or "").strip().lower()
+    if wanted.startswith("kit:tickets:"):
+        wanted = wanted.rsplit(":", 1)[-1]
+    hidden = [r for r in unshared_rows(db, project_id)
+              if _reads(r) and (not wanted or str(r["provider_key"]) == wanted)]
+    if hidden:
+        return {"ok": False, **not_shared_error(db, hidden[0]).body()}
+    return not_connected(project_id)
+
+
+def _cache_key(project_id: str, rows: list[dict[str, Any]], key: str
+               ) -> tuple[str, frozenset, str]:
+    return (project_id, frozenset(str(r["id"]) for r in rows), key)
+
+
+def _cached(where: tuple[str, frozenset, str]) -> Optional[tuple[str, str]]:
     with _CACHE_LOCK:
-        hit = _CACHE.get((org, key))
+        hit = _CACHE.get(where)
         if hit is None or hit[0] < time.monotonic():
-            _CACHE.pop((org, key), None)
+            _CACHE.pop(where, None)
             return None
         return hit[1], hit[2]
 
 
-def _remember(org: str, key: str, connection_id: str, message: str) -> None:
+def _remember(where: tuple[str, frozenset, str], connection_id: str, message: str) -> None:
     with _CACHE_LOCK:
-        _CACHE[(org, key)] = (time.monotonic() + CACHE_SECONDS, connection_id, message)
+        _CACHE[where] = (time.monotonic() + CACHE_SECONDS, connection_id, message)
 
 
 def clear_cache() -> None:
@@ -390,8 +413,8 @@ def lookup(db: Connection, project_id: str, ref: str, *, person_id: Optional[str
                                f"owns. Connected: {sites}.",
                     "searched": [describe(db, r) for r in rows]}
         key = said.upper()
-        org = str(org_of(db, project_id) or "")
-        hit = _cached(org, key)
+        slot = _cache_key(project_id, rows, key)
+        hit = _cached(slot)
         if hit is not None and not hit[0]:
             return {"ok": False, "error": "not_found", "message": hit[1], "cached": True}
         owners = _key_based(rows, key)
@@ -399,7 +422,7 @@ def lookup(db: Connection, project_id: str, ref: str, *, person_id: Optional[str
             owners = [o for o in owners if str(o[0]["id"]) == hit[0]] or owners
         guessed = True
     else:
-        guessed = False
+        guessed, slot = False, None
     searched: list[dict[str, Any]] = []
     for (row, tref), (result, ticket, words) in zip(owners, _read_many(db, owners, person_id)):
         where = describe(db, row)
@@ -407,7 +430,7 @@ def lookup(db: Connection, project_id: str, ref: str, *, person_id: Optional[str
             searched.append({**where, "result": result, **({"message": words} if words else {})})
             continue
         if guessed:
-            _remember(str(org_of(db, project_id) or ""), tref.label(), str(row["id"]), "")
+            _remember(slot, str(row["id"]), "")
         audit_read(db, project_id, row, ticket.key or tref.label(), reader=reader or person_id)
         view = intake.ticket_view(ticket, full=full)
         view["connection_id"] = str(row["id"])
@@ -424,7 +447,7 @@ def lookup(db: Connection, project_id: str, ref: str, *, person_id: Optional[str
     if not failed:
         message = f"{label} was not found in {places}."
         if guessed:
-            _remember(str(org_of(db, project_id) or ""), label, "", message)
+            _remember(slot, "", message)
         return {"ok": False, "error": "not_found", "message": message, "searched": searched}
     first = failed[0]
     return {"ok": False, "error": first["result"],

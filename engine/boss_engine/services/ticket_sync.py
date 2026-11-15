@@ -1084,9 +1084,9 @@ def ticket_import_items(db: Any, settings: Any, *, project_id: str, items: list[
     try:
         row = _intake_row(db, project_id, connection_id=connection_id, provider=provider)
         if row is None:
-            raise TicketSyncError("No ticket system is connected to this project or shared with "
-                                  "the whole org. Connect one in Setup › Ticket systems.",
-                                  status=409, code="not_connected")
+            why = reach.nothing_reachable(db, project_id, provider=provider)
+            raise TicketSyncError(why["message"], status=403 if why["error"] == "not_shared"
+                                  else 409, code=why["error"])
         read = intake.read_for_import(db, row, items, person_id=_person(actor),
                                       project_id=project_id, reader=actor)
         row = reach.project_row_for(db, settings, project_id, row, actor=actor)

@@ -402,3 +402,60 @@ def test_a_cli_chat_turn_is_offered_ticket_get_and_reads_the_ticket(eng, org, fa
     assert read["result"]["ok"], read["result"]
     assert read["result"]["ticket"]["title"] == "Add Apple Pay"
     assert "Add Apple Pay" in cli.calls[1][0]
+
+
+# ── re-review (2026-11-15): no cache crosses projects; every tool says not_shared ────────────
+
+def test_one_projects_cached_not_found_never_reaches_another_project(eng, org, fake):
+    """The home project's (unshared) Jira lacks ZED-2; "here" has its OWN Jira, which holds it.
+    Asked in the home first (a cached "not found in <home site>"), then here within the cache
+    window: here still finds it, and never sees the home's site."""
+    from boss_engine.services import ticket_reach
+
+    other = FakeJira()
+    try:
+        other._add("ZED-2", {"title": "Only on the other site", "type": "Task",
+                             "status": "To Do", "body": "x", "labels": []})
+        own = f"trk_{uuid.uuid4().hex[:12]}"
+        with eng.begin() as c:
+            c.execute(text(
+                "INSERT INTO work_tracker_providers (id, project_id, provider_key, display_name, "
+                "status, is_default, configuration, created_by) VALUES (:id, :p, 'jira', 'Jira', "
+                "'active', true, CAST(:c AS JSONB), 'test')"),
+                {"id": own, "p": org["here"], "c": json.dumps({
+                    "base_url": other.base, "email": EMAIL, "project_key": "KAN",
+                    "api_token": TOKEN, "ticket_system": True, "settings": {}})})
+        home = _tool("ticket_get")(Ctx(eng), project_id=org["home"], actor="usr_test",
+                                   args={"ref": "ZED-2"})
+        assert home["error"] == "not_found" and fake.base in home["message"], home
+        here = _tool("ticket_get")(Ctx(eng), project_id=org["here"], actor="usr_test",
+                                   args={"ref": "ZED-2"})
+        assert here["ok"], here
+        assert here["ticket"]["title"] == "Only on the other site"
+        assert fake.base not in json.dumps(here)
+        again = _tool("ticket_get")(Ctx(eng), project_id=org["home"], actor="usr_test",
+                                    args={"ref": "ZED-2"})
+        assert again.get("cached") is True and other.base not in again["message"]
+    finally:
+        ticket_reach.clear_cache()
+        other.close()
+
+
+def test_after_unsharing_every_ticket_tool_says_not_shared(eng, org, fake):
+    _share(eng, org["cid"], True)
+    assert _tool("ticket_get")(Ctx(eng), project_id=org["here"], actor="usr_test",
+                               args={"ref": STORY})["ok"]
+    _share(eng, org["cid"], False)
+    calls = {
+        "ticket_get": {"ref": STORY},
+        "ticket_search": {"query": "Apple"},
+        "ticket_browse": {"what": "projects"},
+        "ticket_comment": {"ref": STORY, "body": "hi"},
+        "ticket_transition": {"ref": STORY, "to": "review"},
+        "ticket_import": {"items": [{"key": STORY}]},
+    }
+    for name, args in calls.items():
+        got = _tool(name)(Ctx(eng), project_id=org["here"], actor="usr_test", args=args)
+        assert got["ok"] is False and got["error"] == "not_shared", (name, got)
+        assert "BOSS dogfood bootstrap" in got["message"], (name, got)
+    assert not fake.requests(method="POST"), "a write reached the unshared site"

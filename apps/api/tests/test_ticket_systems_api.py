@@ -605,7 +605,8 @@ def test_a_ticket_system_is_used_from_another_project_only_once_shared(world, cl
         assert refused.json()["errors"][0]["error"] == "not_shared"
         blocked = client.post(f"/v1/projects/{world.project_b}/tickets/import", json={
             "provider": "jira", "items": [{"key": "KAN-5"}]})
-        assert blocked.status_code == 404, blocked.text   # nothing reachable by that name here
+        assert blocked.status_code == 403, blocked.text
+        assert blocked.json()["detail"]["error"] == "not_shared"
         # Only its home's managers may share it.
         tried = client.patch(f"/v1/ticket-systems/{cid}", json={"share_with_org": True})
         assert tried.status_code in (403, 404), tried.text

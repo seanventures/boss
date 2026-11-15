@@ -142,12 +142,6 @@ def _failure(error: BaseException) -> dict[str, Any]:
     return out
 
 
-def _not_connected() -> dict[str, Any]:
-    from ..services.ticket_reach import not_connected
-
-    return not_connected("")
-
-
 def _ticket(ticket: Any, *, full: bool = True) -> dict[str, Any]:
     out = {"provider": ticket.provider, "key": ticket.key, "url": ticket.url,
            "title": ticket.title, "type": ticket.type, "status": ticket.status,
@@ -232,7 +226,9 @@ def _search(ctx, *, project_id, actor, args):
         with ctx.begin() as db:
             row, conn = _connection(db, ctx, pid, actor, args)
             if conn is None:
-                return _not_connected()
+                from ..services.ticket_reach import nothing_reachable
+
+                return nothing_reachable(db, pid, provider=args.get("provider"))
             found = get_ticket_adapter(conn.provider).search(
                 conn, str(args.get("query") or ""), args.get("project") or None, filters,
                 limit=int(args.get("limit") or 20))
@@ -257,7 +253,9 @@ def _browse(ctx, *, project_id, actor, args):
         with ctx.begin() as db:
             row, conn = _connection(db, ctx, pid, actor, args)
             if conn is None:
-                return _not_connected()
+                from ..services.ticket_reach import nothing_reachable
+
+                return nothing_reachable(db, pid, provider=args.get("provider"))
             from ..services.ticket_reach import audit_read
 
             audit_read(db, pid, row, f"browse: {what} {args.get('project') or args.get('epic') or ''}"
@@ -320,7 +318,9 @@ def _write(ctx, project_id, actor, args, op: str, payload: dict[str, Any]):
         with ctx.begin() as db:
             row, conn = _connection(db, ctx, pid, actor, args)
             if conn is None:
-                return _not_connected()
+                from ..services.ticket_reach import nothing_reachable
+
+                return nothing_reachable(db, pid, provider=args.get("provider"))
             if row.get("reach") == "org":
                 # Shared for READING. Writing into the ticket system as another project's
                 # connection is that project's to do.

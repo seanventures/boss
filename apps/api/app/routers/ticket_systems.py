@@ -478,6 +478,9 @@ def _import_row(connection, project_id: str, payload: TicketImportBody) -> dict:
                                                        "the ticket system (provider).")
     row = ticket_sync._intake_row(connection, project_id, provider=wanted)
     if row is None:
+        why = reach.nothing_reachable(connection, project_id, provider=wanted)
+        if why["error"] == "not_shared":
+            raise intake.TicketApiError("not_shared", why["message"], status=403)
         raise intake.TicketApiError("not_found", f"No connected {intake.label_of(wanted)} is "
                                                  "reachable from this project.", status=404)
     return row

@@ -72,23 +72,25 @@ def c(pg_engine):
 
 def test_a_custom_ceiling_gains_knowledge_read_once_and_audited(c):
     added = passports.grant_baseline_to_custom_ceilings(c, org_id=ORG)
-    assert added == {"agt_cccustom001": ["knowledge:read"]}
-    assert _ceiling(c, "agt_cccustom001") == {"code_task:read", "knowledge:read"}
+    # + ticket:read (2026-11-15): the ticket reads every agent holds, each its own once-entry.
+    assert added == {"agt_cccustom001": ["knowledge:read", "ticket:read"]}
+    assert _ceiling(c, "agt_cccustom001") == {"code_task:read", "knowledge:read", "ticket:read"}
     assert _ceiling(c, "agt_ccpreset001") == {"code_task:read"}         # a preset grows by _grow_to_preset
     assert _ceiling(c, "agt_ccrevoke001") == {"code_task:read"}         # a revoked agent is left alone
     assert c.execute(text("SELECT version FROM identity_agent_passports WHERE agent_id = 'agt_cccustom001'")
-                     ).scalar_one() == 2
-    event = c.execute(text(
+                     ).scalar_one() == 3
+    events = c.execute(text(
         "SELECT actor_principal_id, details FROM identity_security_events WHERE org_id = :o "
         "AND event_type = 'agent.passport.ceiling_changed' AND target_id = 'agt_cccustom001'"),
-        {"o": ORG}).mappings().one()
-    assert event["actor_principal_id"] == "sys_migration" and event["details"]["added"] == ["knowledge:read"]
+        {"o": ORG}).mappings().all()
+    assert [e["actor_principal_id"] for e in events] == ["sys_migration", "sys_migration"]
+    assert sorted(e["details"]["added"] for e in events) == [["knowledge:read"], ["ticket:read"]]
 
 
 def test_a_person_who_removes_it_afterwards_is_not_overruled(c):
     passports.grant_baseline_to_custom_ceilings(c, org_id=ORG)
     c.execute(text("DELETE FROM identity_agent_ceilings WHERE agent_id = 'agt_cccustom001' "
-                   "AND permission_key = 'knowledge:read'"))
+                   "AND permission_key IN ('knowledge:read', 'ticket:read')"))
     assert passports.grant_baseline_to_custom_ceilings(c, org_id=ORG) == {}
     assert _ceiling(c, "agt_cccustom001") == {"code_task:read"}
 
@@ -97,3 +99,35 @@ def test_the_identity_seed_runs_it(c):
     """The migration runs where every upgraded install already maps identity: M0's seed."""
     migration.seed(c, org_id=ORG)
     assert "knowledge:read" in _ceiling(c, "agt_cccustom001")
+
+
+def test_a_custom_human_role_that_read_integrations_gains_ticket_read_once(c):
+    """ticket_get/search/browse moved from integration:read to ticket:read (2026-11-15): a custom
+    access role that held integration:read keeps reading tickets, once, as an audited version;
+    one without it, and a built-in role, are left alone; a later removal is not overruled."""
+    for rid, perms in (("arl_cc_reader", ["integration:read", "project:read"]),
+                       ("arl_cc_plain", ["project:read"])):
+        c.execute(text("INSERT INTO identity_access_roles (id, org_id, key, name, builtin, "
+                       "bindable_scopes) VALUES (:i, :o, :i, :i, false, ARRAY['project'])"),
+                  {"i": rid, "o": ORG})
+        for key in perms:
+            c.execute(text("INSERT INTO identity_access_role_permissions (role_id, permission_key) "
+                           "VALUES (:r, :k)"), {"r": rid, "k": key})
+    added = passports.grant_splits_to_custom_roles(c, org_id=ORG)
+    assert added == {"arl_cc_reader": ["ticket:read"]}
+
+    def perms(rid):
+        return set(c.execute(text("SELECT permission_key FROM identity_access_role_permissions "
+                                  "WHERE role_id = :r"), {"r": rid}).scalars().all())
+
+    assert perms("arl_cc_reader") == {"integration:read", "project:read", "ticket:read"}
+    assert perms("arl_cc_plain") == {"project:read"}
+    version = c.execute(text("SELECT version, permissions, changed_by FROM "
+                             "identity_access_role_versions WHERE role_id = 'arl_cc_reader'")
+                        ).mappings().one()
+    assert version["changed_by"] == "sys_migration" and "ticket:read" in version["permissions"]
+    c.execute(text("DELETE FROM identity_access_role_permissions WHERE role_id = 'arl_cc_reader' "
+                   "AND permission_key = 'ticket:read'"))
+    assert passports.grant_splits_to_custom_roles(c, org_id=ORG) == {}
+    assert "ticket:read" not in perms("arl_cc_reader")
+
