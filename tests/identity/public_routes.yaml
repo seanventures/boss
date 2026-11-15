@@ -9,10 +9,10 @@ DELETE /v1/previews/{preview_id}/web/{path:path}:
 GET /.well-known/agent-card.json:
   reason: jwks
   verifier: null
-GET /.well-known/boss-mcp-client.json:
+GET /.well-known/boss-jwks.json:
   reason: jwks
   verifier: null
-GET /.well-known/boss-jwks.json:
+GET /.well-known/boss-mcp-client.json:
   reason: jwks
   verifier: null
 GET /.well-known/oauth-authorization-server:
@@ -108,6 +108,9 @@ GET /v1/previews/{preview_id}/web/{path:path}:
 GET /v1/ticket-systems/oauth/callback:
   reason: oauth_state_bound_callback
   verifier: boss_engine.connectors.tickets.auth:complete_oauth
+OPTIONS /v1/intake/{kind}/{connection}:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.event_intake:receive
 PATCH /v1/previews/{preview_id}/web:
   reason: preview_capability_url
   verifier: boss_engine.services.preview_service:proxy_preview
@@ -237,6 +240,9 @@ POST /v1/ingest/prom/remote_write:
 POST /v1/ingest/{source_id}/{kind}:
   reason: hmac_signed_webhook
   verifier: boss_engine.services.monitoring:authenticate
+POST /v1/intake/{kind}/{connection}:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.event_intake:receive
 POST /v1/investigations/{investigation_id}/db:
   reason: per_investigation_callback_token
   verifier: boss_engine.services.debug_session:authorise
@@ -285,12 +291,12 @@ POST /v1/webhooks/bitbucket:
 POST /v1/webhooks/github:
   reason: hmac_signed_webhook
   verifier: boss_engine.services.webhooks:InboundWebhookService.ingest
-POST /v1/webhooks/inbound/chat/{endpoint_id}:
-  reason: hmac_signed_webhook
-  verifier: boss_engine.services.chat_channels:verify_request
 POST /v1/webhooks/inbound/agent/{path_token}:
   reason: hmac_signed_webhook
   verifier: boss_engine.services.agent_triggers:receive
+POST /v1/webhooks/inbound/chat/{endpoint_id}:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.chat_channels:verify_request
 POST /v1/webhooks/inbound/workflow/{path_token}:
   reason: hmac_signed_webhook
   verifier: boss_engine.services.workflow_webhooks:receive

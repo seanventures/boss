@@ -33,6 +33,7 @@ KNOWN: dict[str, tuple[str, str, str, Optional[int]]] = {
     "skill_sources": ("Skill source sync", "scheduler", "api", None),
     "extension_scheduler": ("Extension scheduler", "scheduler", "api", None),
     "ticket_sync": ("Ticket sync", "scheduler", "api", None),
+    "intake_processor": ("Event intake", "thread", "api", 2),
     "reflection": ("Reflection schedule", "scheduler", "api", None),
     "bot_clock": ("Bot clock", "worker_tick", "worker", 60),
     "worker_sweeps": ("Worker sweeps", "worker_tick", "worker", 5),

@@ -1,0 +1,35 @@
+key: github
+label: GitHub
+icon: github
+description: Issues, pull requests, pushes, comments and reviews from a GitHub repository or App installation; agents act through the GitHub MCP tools.
+docs_url: https://docs.github.com/en/webhooks
+adapter: GitHubIntakeAdapter
+order: 40
+modes: [push]
+capabilities:
+  verify: true
+  handshake: true
+  parse: true
+  poll: false
+  subscribe: false
+  stream: false
+  reply: false
+  stream_reply: false
+  identity: true
+  conversation: true
+  health: false
+ack:
+  deadline_ms: 10000
+  success_status: 202
+  retry_signal_headers: []
+dedupe: [delivery_id]
+auth_fields:
+  - {name: webhook_secret, label: Webhook secret, secret: true, help: The secret set on the repository or App webhook (X-Hub-Signature-256).}
+  - {name: api_token, label: API token, secret: true, required: false, help: Optional. Used only to fetch the changed-files list of a push lazily; never handed to an agent.}
+  - {name: repository, label: Repository (owner/name), required: false, help: Restrict deliveries to one repository; empty accepts every repository the webhook sends.}
+  - {name: bot_login, label: Our bot login, required: false, help: Events this login causes are dropped (loop prevention). Defaults to the install's GitHub App bot.}
+  - {name: allow_bots, label: Allowed bot logins, required: false, help: Other bots whose events may wake agents (comma-separated); every other bot is dropped.}
+default_hosts: [api.github.com, github.com]
+guard_provider: github
+self_identity: [bot_login]
+event_types: [com.github.push, com.github.pull_request.*, com.github.issues.*, com.github.issue_comment.*, com.github.pull_request_review.*, com.github.pull_request_review_comment.*, com.github.release.*, com.github.workflow_run.*, com.github.check_suite.*]

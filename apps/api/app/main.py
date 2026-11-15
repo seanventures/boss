@@ -32113,6 +32113,16 @@ app.include_router(build_ticket_sync_router(
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
 ))
+# EVENT INTAKE (P9a, BOSSAPP-1093): the signed front door for events from other systems, the
+# inbox, connections, the stream and dead letters (routers/intake.py; services/event_intake.py).
+from .routers.intake import build_intake_router
+
+app.include_router(build_intake_router(
+    engine=engine,
+    settings=get_settings,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+))
 # THE PROJECT WIKI (BOSSAPP-891): pages and revisions; agents propose, people approve
 # (routers/wiki.py).
 from .routers.wiki import build_wiki_router
