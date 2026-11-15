@@ -1,0 +1,38 @@
+key: slack
+label: Slack
+icon: slack
+description: People talk to agents in Slack — an @mention, a direct message, or a reply in a thread the agent already answers. Uses the install's one Slack app (the chat endpoint's signing secret and bot token); replies go back into the same thread through the reply outbox.
+docs_url: https://docs.slack.dev/apis/events-api/
+adapter: SlackIntakeAdapter
+order: 10
+modes: [push, socket]
+capabilities:
+  verify: true
+  handshake: true
+  parse: true
+  poll: false
+  subscribe: false
+  stream: false
+  reply: true
+  stream_reply: true
+  identity: true
+  conversation: true
+  health: false
+ack:
+  deadline_ms: 3000
+  success_status: 200
+  retry_signal_headers: [x-slack-retry-num, x-slack-retry-reason]
+dedupe: [id]
+auth_fields:
+  - {name: chat_endpoint_id, label: Slack chat endpoint, help: "The install's Slack app (Settings › Chat). Its signing secret and bot token are used; nothing is typed twice."}
+  - {name: signing_secret, label: Signing secret, secret: true, required: false, help: "Taken from the chat endpoint. Give it only to override."}
+  - {name: bot_token, label: Bot token (xoxb-…), secret: true, required: false, help: "Taken from the chat endpoint; read by the reply outbox at send time, never by an agent."}
+  - {name: app_token, label: App-level token (xapp-…), secret: true, required: false, help: "Socket Mode only (connections:write). One BOSS process holds the socket at a time."}
+  - {name: team_id, label: Workspace id (T…), required: false, help: "Events from another workspace are refused; people from another workspace are never auto-linked."}
+  - {name: bot_user_id, label: Our bot user id (U…), required: false, help: "Learned from each event's authorizations when empty. Messages it writes never wake an agent."}
+  - {name: bot_id, label: Our bot id (B…), required: false, help: "Learned from the first message the outbox posts when empty."}
+  - {name: default_dm_agent, label: Default agent for direct messages, required: false, help: "The agent key (or route name) that answers a direct message that names no agent."}
+default_hosts: [slack.com, wss-primary.slack.com, wss-backup.slack.com]
+guard_provider: slack
+self_identity: [bot_user_id, bot_id]
+event_types: [com.slack.message.app_mention, com.slack.message.im, com.slack.message.channel, com.slack.message.thread_reply]

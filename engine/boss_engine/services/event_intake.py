@@ -218,6 +218,10 @@ def create_connection(connection: Connection, *, project_id: str, kind: str, act
     for f in manifest.auth_fields:
         if not f.get("secret") and _required_in(f, mode) and cfg.get(f["name"]) in (None, ""):
             raise IntakeServiceError(f"{f['label']} is required.", code="missing_field")
+    # ONE CHAT APP PER INSTALL (§15 D1): a chat source is bound to the install's chat endpoint
+    # and uses ITS credentials — nothing is minted or typed twice.
+    endpoint = _bind_chat_endpoint(connection, project_id, adapter.key, cfg)
+    endpoint_secrets = set((_json((endpoint or {}).get("secret_refs"), {}) or {}))
     connection_id = make_id("icn")
     shown: dict[str, str] = {}
     refs: dict[str, str] = {}
@@ -226,6 +230,8 @@ def create_connection(connection: Connection, *, project_id: str, kind: str, act
             continue
         fname = f["name"]
         value = given_secrets.get(fname)
+        if not value and fname in endpoint_secrets:
+            continue
         if not value and fname == "signing_secret":
             value = _mint(fname)
             shown[fname] = value
@@ -238,10 +244,12 @@ def create_connection(connection: Connection, *, project_id: str, kind: str, act
     link = _standing_link(connection)
     connection.execute(text("""
         INSERT INTO intake_connections (id, project_id, org_id, kind, name, mode, config,
-               secret_refs, path_token, status, limits, created_by, on_behalf_of, grant_id)
+               secret_refs, path_token, status, limits, created_by, on_behalf_of, grant_id,
+               chat_endpoint_id)
         VALUES (:id, :p, :org, :k, :n, :m, CAST(:c AS JSONB), CAST(:s AS JSONB), :tok, 'active',
-                CAST(:l AS JSONB), :by, :obo, :grant)"""),
+                CAST(:l AS JSONB), :by, :obo, :grant, :che)"""),
         {"id": connection_id, "p": project_id, "org": org_id, "k": adapter.key, "n": name[:120],
+         "che": (endpoint or {}).get("id"),
          "m": mode, "c": json.dumps(cfg, default=str), "s": json.dumps(refs), "tok": path_token,
          "l": json.dumps(_limits(limits)), "by": actor,
          "obo": (link or {}).get("on_behalf_of"), "grant": (link or {}).get("grant_id")})
@@ -263,6 +271,45 @@ def _required_in(field: Mapping[str, Any], mode: str) -> bool:
     if isinstance(field.get("modes"), list):
         return mode in field["modes"]
     return bool(field.get("required", True))
+
+
+#: Chat sources whose connection rides on a chat endpoint (§15 D1), by intake kind.
+CHAT_ENDPOINT_KINDS = {"slack": "slack"}
+
+
+def _bind_chat_endpoint(connection: Connection, project_id: str, kind: str,
+                        cfg: dict) -> Optional[dict]:
+    """The chat endpoint a chat connection rides on (`config.chat_endpoint_id`): same project,
+    same channel kind, active. Its team id is copied into the connection's config when the
+    connection names none (the guest / other-workspace checks read it)."""
+    wanted = CHAT_ENDPOINT_KINDS.get(kind)
+    endpoint_id = str(cfg.get("chat_endpoint_id") or "").strip()
+    if not wanted:
+        if endpoint_id:
+            raise IntakeServiceError(f"a {kind} connection does not use a chat endpoint.")
+        return None
+    row = connection.execute(text(
+        "SELECT * FROM chat_endpoints WHERE id = :e AND project_id = :p"),
+        {"e": endpoint_id, "p": project_id}).mappings().first() if endpoint_id else None
+    if row is None:
+        raise IntakeServiceError(f"chat_endpoint_id must name a {wanted} chat endpoint of this "
+                                 "project (Settings › Chat).", code="missing_field")
+    if row["kind"] != wanted or row["status"] != "active":
+        raise IntakeServiceError(f"chat endpoint {endpoint_id} is not an active {wanted} "
+                                 "endpoint.", code="bad_endpoint")
+    taken = connection.execute(text(
+        "SELECT id FROM intake_connections WHERE chat_endpoint_id = :e LIMIT 1"),
+        {"e": endpoint_id}).scalar()
+    if taken:
+        raise IntakeServiceError(f"chat endpoint {endpoint_id} already has an intake connection "
+                                 f"({taken}): one Slack app, one connection.", status=409,
+                                 code="endpoint_taken")
+    ecfg = _json(row.get("config"), {}) or {}
+    for key in ("team_id", "bot_user_id", "bot_id"):
+        if ecfg.get(key) and not cfg.get(key):
+            cfg[key] = ecfg[key]
+    cfg["chat_endpoint_id"] = endpoint_id
+    return dict(row)
 
 
 def _standing_link(connection: Connection) -> Optional[dict]:
@@ -341,6 +388,7 @@ def describe_connection(connection: Connection, row: Mapping[str, Any], *,
         "config": _json(row.get("config"), {}) or {},
         "secret_fields": sorted(k for k in refs if not k.endswith("_previous")),   # names only
         "url_path": inbound_path(str(row["kind"]), str(row["path_token"])),
+        "chat_endpoint_id": row.get("chat_endpoint_id"),
         "limits": _limits(row.get("limits")), "health": health,
         "rules": rules, "created_by": row.get("created_by"),
         "runs_as": ({"on_behalf_of": row.get("on_behalf_of"), "grant_id": row.get("grant_id")}
@@ -367,6 +415,10 @@ def update_connection(connection: Connection, *, project_id: str, connection_id:
     cfg = dict(_json(row.get("config"), {}) or {})
     given_secrets = {k: str(v) for k, v in dict(secrets or {}).items() if v not in (None, "")}
     _refuse_attestation(config)
+    if config is not None and "chat_endpoint_id" in dict(config) and \
+            str(dict(config)["chat_endpoint_id"] or "") != str(row.get("chat_endpoint_id") or ""):
+        raise IntakeServiceError("a connection's chat endpoint is fixed: create a new connection "
+                                 "for another Slack app.", code="endpoint_fixed")
     if config is not None:
         for key, value in dict(config).items():
             if key in secret_fields:
@@ -582,8 +634,18 @@ def test_connection(connection: Connection, settings: Any, *, project_id: str,
 def to_intake_connection(connection: Connection, settings: Any, row: Mapping[str, Any]
                          ) -> IntakeConnection:
     """The adapter's view of a row; secrets resolve from the backend when asked, never before."""
-    refs = _json(row.get("secret_refs"), {}) or {}
+    refs = dict(_json(row.get("secret_refs"), {}) or {})
     project_id = row.get("project_id")
+    config = dict(_json(row.get("config"), {}) or {})
+    if row.get("chat_endpoint_id"):
+        # §15 D1: the endpoint's secrets (signing secret, bot token) resolve through the
+        # connection; a secret the connection stores itself overrides.
+        endpoint_refs = _json(connection.execute(text(
+            "SELECT secret_refs FROM chat_endpoints WHERE id = :e"),
+            {"e": row["chat_endpoint_id"]}).scalar(), {}) or {}
+        for name, ref in endpoint_refs.items():
+            refs.setdefault(name, ref)
+        config["chat_endpoint_id"] = row["chat_endpoint_id"]
 
     def resolve(name: str) -> Optional[str]:
         ref = refs.get(name)
@@ -595,7 +657,7 @@ def to_intake_connection(connection: Connection, settings: Any, row: Mapping[str
 
     return IntakeConnection(
         str(row["id"]), str(project_id or ""), str(row["kind"]), mode=str(row["mode"]),
-        config=_json(row.get("config"), {}) or {}, secret_resolver=resolve,
+        config=config, secret_resolver=resolve,
         org_id=row.get("org_id"), name=str(row.get("name") or ""), status=str(row["status"]),
         limits=_limits(row.get("limits")), app_settings=settings, db=connection)
 
@@ -792,12 +854,24 @@ def receive(engine: Any, kind: str, path_token: str, request: RawRequest, *,
     if verified is None:
         _count_refusal(engine, row, reason, now_s)
         return _refuse(401, ACK_REFUSED, reason)
-    # Step 2: verified. A handshake (GitHub ping, Slack url_verification) stores nothing; a
-    # paused connection stores nothing and still gets a 2xx; everything else is ONE insert.
+    return accept(engine, adapter, row, request, verified, settings=settings, now=now_s)
+
+
+def accept(engine: Any, adapter: Any, row: Mapping[str, Any], request: RawRequest, verified: Any,
+           *, settings: Any = None, now: Optional[float] = None, handshake: bool = True) -> dict:
+    """Step 2 of the front door, for a delivery whose proof was already accepted (the push route
+    after `verify`; a Socket Mode consumer, whose socket the app-level token authenticated): a
+    handshake stores nothing; a paused connection stores nothing and still gets a 2xx;
+    everything else is ONE insert, deduplicated on the source's own id, committed before the
+    answer."""
+    from ..db import begin
+
+    now_s = time.time() if now is None else now
+    settings = settings or _settings()
     try:
         with begin(engine) as c:
             conn = to_intake_connection(c, settings, row)
-            if adapter.can("handshake"):
+            if handshake and adapter.can("handshake"):
                 shake = adapter.handshake(conn, request)
                 if shake is not None:
                     return {"outcome": ACK_HANDSHAKE, "http_status": shake.status,
@@ -1697,7 +1771,7 @@ def stop() -> None:
 __all__ = [
     "BACKOFF_SECONDS", "BUCKETS", "CONNECTION_STATUSES", "DEFAULT_LIMITS", "LEASE_SECONDS",
     "MAX_ATTEMPTS", "MAX_HOPS", "PATH_PREFIX", "REFUSALS", "REPLAY_MODES", "ROTATION_GRACE_SECONDS",
-    "SERVICE_KEY", "SHED_RAW_BYTES", "flush_refusals",
+    "SERVICE_KEY", "SHED_RAW_BYTES", "accept", "flush_refusals",
     "ATTESTATION_KEY", "IntakeServiceError", "backoff_seconds", "clear_sso_attestation",
     "set_sso_attestation", "claim", "connection_by_token", "create_connection",
     "dead_letters", "delete_connection", "describe_connection", "get_connection", "get_event",

@@ -15155,6 +15155,44 @@ DO $$ BEGIN
       FOR EACH ROW EXECUTE FUNCTION boss_jobs_notify();
   END IF;
 END $$;
+-- ── P9a-3/6 (BOSSAPP-1095, 1098): Slack conversations and the reply outbox ─────────────────────
+-- A CONVERSATION'S REPLIES ARE OUTBOX ROWS (services/chat_reply.py): an agent's chat_reply /
+-- chat_status / chat_react write one row each — never a send — under the run's lease epoch
+-- (`fence_epoch`; a stale executor's insert is refused), in the run's order (`op_seq`, unique per
+-- run) and deduplicated per tool call (`dedupe_key`). `channel_key` is the per-channel rate bucket;
+-- `rate_limited` counts the channel's 429s (they never spend an attempt).
+ALTER TABLE chat_outbox ADD COLUMN IF NOT EXISTS run_id TEXT;
+ALTER TABLE chat_outbox ADD COLUMN IF NOT EXISTS fence_epoch BIGINT;
+ALTER TABLE chat_outbox ADD COLUMN IF NOT EXISTS op_seq INTEGER;
+ALTER TABLE chat_outbox ADD COLUMN IF NOT EXISTS chat_thread_id TEXT;
+ALTER TABLE chat_outbox ADD COLUMN IF NOT EXISTS channel_key TEXT;
+ALTER TABLE chat_outbox ADD COLUMN IF NOT EXISTS rate_limited INTEGER NOT NULL DEFAULT 0;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_outbox_run_op ON chat_outbox (run_id, op_seq)
+  WHERE run_id IS NOT NULL;
+-- A conversation (Slack channel + thread) bound to its agent thread, route and latest run; the
+-- messages BOSS posted in it (`bot_message_refs`, newest 50) for edits and loop checks.
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS conversation_key TEXT;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS agent_thread_id TEXT;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS trigger_id TEXT;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS bot_message_refs JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS idx_chat_threads_run ON chat_threads (run_id) WHERE run_id IS NOT NULL;
+-- WAKE THE SENDER AT COMMIT: the first attempt goes out milliseconds after the row commits, not
+-- at the next outbox tick (§9.4). The payload is the row's identity only.
+CREATE OR REPLACE FUNCTION boss_chat_outbox_notify() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pg_notify('boss_chat_outbox', json_build_object(
+    'id', NEW.id, 'endpoint_id', NEW.endpoint_id, 'kind', NEW.kind)::text);
+  RETURN NULL;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'chat_outbox_notify_boss_chat_outbox'
+                 AND tgrelid = 'chat_outbox'::regclass) THEN
+    CREATE TRIGGER chat_outbox_notify_boss_chat_outbox AFTER INSERT ON chat_outbox
+      FOR EACH ROW EXECUTE FUNCTION boss_chat_outbox_notify();
+  END IF;
+END $$;
 -- ================================ end P9a ==
 
 -- ================================ P8b: contract v1.1 and the model gateway (BOSSAPP-1070/1071) ==

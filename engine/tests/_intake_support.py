@@ -247,3 +247,146 @@ def event_row(engine, event_id: str) -> dict:
     with engine.begin() as c:
         return dict(c.execute(text("SELECT * FROM intake_events WHERE id = :i"),
                               {"i": event_id}).mappings().one())
+
+
+# ---- Slack (P9a-3/6) ----------------------------------------------------------------------------
+
+SLACK_SIGNING = "slack-signing-secret-for-tests"
+SLACK_BOT_TOKEN = "xoxb-test-bot-token-never-leaves-the-outbox"
+SLACK_TEAM = "T0TEST"
+SLACK_BOT_USER = "U0BOSS"
+SLACK_BOT_ID = "B0BOSS"
+
+
+class FakeSlack:
+    """A fake Slack Web API (chat_adapters.TRANSPORT): records every call with the time it
+    arrived, answers like Slack does, and can answer 429 / 500 to the next calls of a method."""
+
+    def __init__(self):
+        import threading as _threading
+
+        self.calls: list[dict] = []
+        self.lock = _threading.Lock()
+        self.script: dict[str, list] = {}
+        self._ts = 1700000000.0
+
+    def fail_next(self, method: str, *answers) -> None:
+        """Queue answers for the next calls of `method`: ("429", retry_after) or ("500",)."""
+        self.script.setdefault(method, []).extend(answers)
+
+    def __call__(self, method, url, headers, body, purpose):
+        name = url.rsplit("/", 1)[-1]
+        try:
+            payload = json.loads(body or b"{}")
+        except ValueError:
+            payload = {}
+        with self.lock:
+            self.calls.append({"name": name, "body": payload, "at": time.monotonic(),
+                               "auth": headers.get("Authorization", "")})
+            queued = self.script.get(name) or []
+            answer = queued.pop(0) if queued else None
+            self._ts += 0.0001
+            ts = f"{self._ts:.6f}"
+        if answer is not None:
+            if answer[0] == "429":
+                return 429, {"ok": False, "error": "ratelimited", "retry_after": answer[1]}
+            return 500, None
+        if name == "chat.postMessage":
+            return 200, {"ok": True, "channel": payload.get("channel"), "ts": ts,
+                         "message": {"bot_id": SLACK_BOT_ID, "ts": ts}}
+        if name == "chat.update":
+            return 200, {"ok": True, "channel": payload.get("channel"), "ts": payload.get("ts")}
+        if name == "conversations.open":
+            return 200, {"ok": True, "channel": {"id": "D0DM" + str(payload.get("users"))[-4:]}}
+        if name == "chat.startStream":
+            return 200, {"ok": True, "ts": ts}
+        if name == "apps.connections.open":
+            return 200, {"ok": True, "url": "wss://wss-primary.slack.com/link/?ticket=t"}
+        return 200, {"ok": True}
+
+    def named(self, name: str) -> list[dict]:
+        with self.lock:
+            return [c["body"] for c in self.calls if c["name"] == name]
+
+
+def make_slack(engine, pid: str, *, mode: str = "push", channel: str = "C0SUPPORT",
+               config: Optional[dict] = None, secrets: Optional[dict] = None) -> dict:
+    """The install's Slack app as a chat endpoint, and the Slack intake connection riding on it
+    (one Slack app per install, D1). Returns {endpoint, connection, token}."""
+    from boss_engine.config import get_settings
+    from boss_engine.services import chat_channels, event_intake
+
+    with engine.begin() as c:
+        endpoint = chat_channels.create_endpoint(
+            c, get_settings(), project_id=pid, kind="slack", name="slack",
+            config={"channel": channel, "team_id": SLACK_TEAM},
+            secrets={"signing_secret": SLACK_SIGNING, "bot_token": SLACK_BOT_TOKEN}, actor="ceo")
+        conn = event_intake.create_connection(
+            c, project_id=pid, kind="slack", actor="ceo", name="slack", mode=mode,
+            config={"chat_endpoint_id": endpoint["id"], "bot_user_id": SLACK_BOT_USER,
+                    **(config or {})}, secrets=secrets or {})
+    return {"endpoint": endpoint, "connection": conn, "token": token_of(conn["url_path"])}
+
+
+def slack_body(event: dict, *, event_id: Optional[str] = None, team: str = SLACK_TEAM) -> dict:
+    return {"token": "x", "team_id": team, "api_app_id": "A0BOSS", "type": "event_callback",
+            "event_id": event_id or f"Ev{uuid.uuid4().hex[:10].upper()}",
+            "event_time": int(time.time()), "event": event,
+            "authorizations": [{"team_id": team, "user_id": SLACK_BOT_USER, "is_bot": True}]}
+
+
+def slack_request(body: dict | bytes, *, secret: str = SLACK_SIGNING, retry: int = 0,
+                  timestamp: Optional[int] = None):
+    from boss_engine.connectors.intake.contract import RawRequest
+    from boss_engine.services.chat_adapters import slack_signature
+
+    raw = body if isinstance(body, bytes) else json.dumps(body).encode()
+    ts = str(timestamp if timestamp is not None else int(time.time()))
+    headers = {"content-type": "application/json", "x-slack-request-timestamp": ts,
+               "x-slack-signature": slack_signature(secret, ts, raw)}
+    if retry:
+        headers["x-slack-retry-num"] = str(retry)
+        headers["x-slack-retry-reason"] = "http_timeout"
+    return RawRequest(method="POST", headers=headers, body=raw)
+
+
+def mention(text_: str = "why did the payments job fail?", *, user: str = "U0PRIYA",
+            channel: str = "C0SUPPORT", ts: Optional[str] = None,
+            thread_ts: Optional[str] = None) -> dict:
+    ev = {"type": "app_mention", "user": user, "channel": channel,
+          "text": f"<@{SLACK_BOT_USER}> {text_}", "ts": ts or f"{time.time():.6f}",
+          "team": SLACK_TEAM}
+    if thread_ts:
+        ev["thread_ts"] = thread_ts
+    return ev
+
+
+def channel_message(text_: str, *, user: str = "U0PRIYA", channel: str = "C0SUPPORT",
+                    ts: Optional[str] = None, thread_ts: Optional[str] = None,
+                    **extra: Any) -> dict:
+    ev = {"type": "message", "channel_type": "channel", "user": user, "channel": channel,
+          "text": text_, "ts": ts or f"{time.time():.6f}", "team": SLACK_TEAM, **extra}
+    if thread_ts:
+        ev["thread_ts"] = thread_ts
+    return ev
+
+
+def direct_message(text_: str, *, user: str = "U0PRIYA", channel: str = "D0PRIYA",
+                   ts: Optional[str] = None) -> dict:
+    return {"type": "message", "channel_type": "im", "user": user, "channel": channel,
+            "text": text_, "ts": ts or f"{time.time():.6f}", "team": SLACK_TEAM}
+
+
+def purge_slack(engine, pid: str) -> None:
+    with engine.begin() as c:
+        for sql in ("DELETE FROM chat_threads WHERE project_id = :p",
+                    "DELETE FROM extension_job_leases WHERE extension_id = 'boss.intake' AND "
+                    "job IN (SELECT 'slack_socket:' || id FROM intake_connections "
+                    "WHERE project_id = :p)",
+                    "DELETE FROM secret_refs WHERE project_id = :p"):
+            try:
+                with c.begin_nested():
+                    c.execute(text(sql), {"p": pid})
+            except Exception:  # noqa: BLE001
+                pass
+    purge(engine, pid)
