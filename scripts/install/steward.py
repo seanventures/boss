@@ -49,6 +49,12 @@ TOOL_OF = {"prune_build_cache": "storage.prune_build_cache", "remove_images": "s
            "remove_orphan_volumes": "storage.remove_orphan_volumes", "cap_logs": "storage.cap_logs",
            "docker_trim": "storage.docker_trim", "remove_backups": "storage.remove_backups", "du": "storage.du"}
 LABEL = "boss.install_id"
+#: What a labelled volume holds. Only a REBUILDABLE kind is removed by a job: a test database a
+#: run recreates, a cache, a scratch area, a build or preview workspace. A volume of ours with any
+#: other kind — `data`, or no kind at all — may be the only copy of something (a preview's
+#: database, a stopped install's Postgres): irreversible, never removed by the helper (ST-14).
+KIND_LABEL = "boss.kind"
+REBUILDABLE_VOLUME_KINDS = ("test", "cache", "scratch", "build", "preview")
 #: What backup.sh names a backup (`boss-<UTC stamp>-<pid>`, backup_archive.BACKUP_NAME). A
 #: directory is a candidate ONLY when its manifest.json is complete and names THIS install.
 BACKUP_NAME_PREFIX = "boss-"
@@ -458,10 +464,16 @@ def _labelled(env: Env, runner: Callable, kind: str, extra: list[str] = ()) -> l
     return rows
 
 
-def _inspect_label(env: Env, runner: Callable, kind: str, ref: str) -> str:
-    res = runner([*env.docker, kind, "inspect", "--format", f'{{{{index .Labels "{LABEL}"}}}}' if kind == "volume"
-                  else f'{{{{index .Config.Labels "{LABEL}"}}}}', ref])
+def _inspect_label(env: Env, runner: Callable, kind: str, ref: str, label: str = LABEL) -> str:
+    res = runner([*env.docker, kind, "inspect", "--format", f'{{{{index .Labels "{label}"}}}}' if kind == "volume"
+                  else f'{{{{index .Config.Labels "{label}"}}}}', ref])
     return (res.stdout or "").strip()
+
+
+def _rebuildable_volume(env: Env, runner: Callable, name: str) -> bool:
+    """Ours AND of a rebuildable kind, read from the volume itself at the moment it is asked."""
+    return (_inspect_label(env, runner, "volume", name) == env.install_id
+            and _inspect_label(env, runner, "volume", name, KIND_LABEL) in REBUILDABLE_VOLUME_KINDS)
 
 
 def verb_du(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:
@@ -529,8 +541,8 @@ def verb_remove_orphan_volumes(env: Env, args: dict, *, dry_run: bool, runner: C
     items, size = [], 0.0
     for row in _labelled(env, runner, "volume", ["--filter", "dangling=true"]):
         name = str(row.get("Name") or "")
-        if not name:
-            continue
+        if not name or not _rebuildable_volume(env, runner, name):
+            continue  # a data volume (or one with no kind) is never the helper's to remove
         ins = runner([*env.docker, "volume", "inspect", "--format", "{{.CreatedAt}}", name])
         created = (ins.stdout or "").strip()
         try:
@@ -544,8 +556,8 @@ def verb_remove_orphan_volumes(env: Env, args: dict, *, dry_run: bool, runner: C
         return items, size
     done = []
     for name in items:
-        if _inspect_label(env, runner, "volume", name) != env.install_id:
-            continue
+        if not _rebuildable_volume(env, runner, name):
+            continue  # THE GATE, AGAIN, per volume at the moment of removal
         res = runner([*env.docker, "volume", "rm", name], timeout=120)
         if res.returncode == 0:
             done.append(name)

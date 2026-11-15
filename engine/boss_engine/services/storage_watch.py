@@ -38,6 +38,10 @@ _log = logging.getLogger("boss.storage_watch")
 INTERVAL_SECONDS = 30.0
 KEEP_DAYS = 30
 FORECAST_WINDOW_DAYS = 7
+#: A forecast needs readings spanning at least this long. A slope fitted to minutes of readings
+#: turns a build writing a few GB into "full in hours" — a CRITICAL level from a blip, which is
+#: exactly what the two-reading rule exists to stop (ST-14). Below it: no forecast, free % rules.
+MIN_FORECAST_SPAN = timedelta(days=1)
 #: A reading older than this is stale; the Storage card says so.
 STALE_AFTER = timedelta(minutes=2)
 #: No helper reading for this long during an incident = "helper unreachable" (spec `escalate`).
@@ -100,6 +104,11 @@ class Forecast:
     window_days: int = FORECAST_WINDOW_DAYS
     samples: int = 0
     with_rules_days_until_full: Optional[float] = None
+    span_hours: float = 0.0
+
+    @property
+    def enough_history(self) -> bool:
+        return self.span_hours >= MIN_FORECAST_SPAN.total_seconds() / 3600.0
 
     def as_dict(self) -> dict[str, Any]:
         return {"growth_gb_per_day": round(self.growth_gb_per_day, 3),
@@ -107,7 +116,8 @@ class Forecast:
                 else round(self.days_until_full, 1),
                 "full_at": self.full_at, "window_days": self.window_days, "samples": self.samples,
                 "with_rules_days_until_full": None if self.with_rules_days_until_full is None
-                else round(self.with_rules_days_until_full, 1)}
+                else round(self.with_rules_days_until_full, 1),
+                "span_hours": round(self.span_hours, 1), "enough_history": self.enough_history}
 
 
 def slope_gb_per_day(points: Sequence[tuple[datetime, float]]) -> float:
@@ -131,12 +141,18 @@ def forecast(points: Sequence[tuple[datetime, float]], free_gb: Optional[float],
              window_days: int = FORECAST_WINDOW_DAYS) -> Forecast:
     """`days_until_full = free_gb / max(slope, 0.1)` when the disk is growing; None (never)
     when the slope is zero or negative. `rules_reclaim_gb` is what the enabled rules would
-    hand back, for the dashed green "with rules" line."""
+    hand back, for the dashed green "with rules" line. Readings spanning less than
+    MIN_FORECAST_SPAN give no slope and no forecast: minutes of data say nothing about days."""
     now = now or _now()
     since = now - timedelta(days=window_days)
     window = [(t, v) for t, v in points if t >= since]
+    times = [t for t, _ in window]
+    span = (max(times) - min(times)).total_seconds() / 3600.0 if len(times) >= 2 else 0.0
+    out = Forecast(samples=len(window), window_days=window_days, span_hours=span)
+    if not out.enough_history:
+        return out
     slope = slope_gb_per_day(window)
-    out = Forecast(growth_gb_per_day=slope, samples=len(window), window_days=window_days)
+    out.growth_gb_per_day = slope
     if free_gb is None or slope <= 0:
         return out
     rate = max(slope, 0.1)
@@ -281,21 +297,22 @@ def collect_api_sample(connection: Any) -> dict[str, Any]:
         out["free_gb"] = usage.free / 1e9
     except OSError:
         pass
+    # Each probe under its own savepoint: a role without the right (pg_ls_tmpdir needs
+    # pg_monitor) is a NULL reading — never an aborted transaction for everything after it.
+    probes = (("pg_db_gb", "SELECT COALESCE(sum(pg_database_size(datname)), 0) FROM pg_database "
+                           "WHERE NOT datistemplate"),
+              ("pg_temp_gb", "SELECT COALESCE(sum(size), 0) FROM pg_ls_tmpdir()"))
+    for key, sql in probes:
+        try:
+            with connection.begin_nested():
+                out[key] = float(connection.execute(text(sql)).scalar() or 0) / 1e9
+        except Exception:  # noqa: BLE001 — a role without the right is a NULL reading
+            pass
     try:
-        out["pg_db_gb"] = float(connection.execute(text(
-            "SELECT COALESCE(sum(pg_database_size(datname)), 0) FROM pg_database "
-            "WHERE NOT datistemplate")).scalar() or 0) / 1e9
-    except Exception:  # noqa: BLE001 — a role without the right is a NULL reading
-        pass
-    try:
-        out["pg_temp_gb"] = float(connection.execute(text(
-            "SELECT COALESCE(sum(size), 0) FROM pg_ls_tmpdir()")).scalar() or 0) / 1e9
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        row = connection.execute(text(
-            "SELECT count(*) AS n, COALESCE(sum(bytes), 0) AS b FROM backups "
-            "WHERE status = 'verified'")).mappings().one()
+        with connection.begin_nested():
+            row = connection.execute(text(
+                "SELECT count(*) AS n, COALESCE(sum(bytes), 0) AS b FROM backups "
+                "WHERE status = 'verified'")).mappings().one()
         out["backups_n"] = int(row["n"] or 0)
         out["backups_gb"] = float(row["b"] or 0) / 1e9
     except Exception:  # noqa: BLE001
@@ -576,7 +593,7 @@ def start(engine: Any, settings: Any, *, interval: float = INTERVAL_SECONDS) -> 
     return _THREAD
 
 
-__all__ = ["FORECAST_WINDOW_DAYS", "Forecast", "HELPER_UNREACHABLE_AFTER", "INTERVAL_SECONDS",
+__all__ = ["FORECAST_WINDOW_DAYS", "Forecast", "MIN_FORECAST_SPAN", "HELPER_UNREACHABLE_AFTER", "INTERVAL_SECONDS",
            "KEEP_DAYS", "LEVELS", "STALE_AFTER", "at_floor", "by_type_rows", "clean_sample",
            "collect_api_sample", "evaluate_host", "exit_ok", "forecast", "free_pct_of", "hosts",
            "last_report", "last_two", "latest", "local_host_id", "next_level", "prune", "raw_level",
