@@ -114,6 +114,47 @@ def _in_run(repo: str, repos: Iterable[str]) -> bool:
     return repo.lower() in {r.lower() for r in repos}
 
 
+def _same_repo(a: str, b: str) -> bool:
+    def norm(x: str) -> str:
+        return str(x).strip().strip("/").removesuffix(".git").strip("/").lower()
+    return norm(a) == norm(b)
+
+
+def _bb_body_repo_ok(block: Any, repo: str) -> bool:
+    """A Bitbucket PR body's `source` / `destination` block may name a repository; when it does,
+    it must be the URL's repository (BOSSAPP-1183). A `uuid` cannot be checked against the URL's
+    name, so a block naming one is refused (fail closed); so is a malformed block."""
+    if block is None:
+        return True
+    if not isinstance(block, Mapping):
+        return False
+    named = block.get("repository")
+    if named is None:
+        return True
+    if not isinstance(named, Mapping) or named.get("uuid") is not None:
+        return False
+    full_name = named.get("full_name")
+    if full_name is None:
+        # no full_name: only an empty/name-less block is harmless; anything else is unverifiable
+        return not any(named.get(k) is not None for k in ("name", "slug", "links"))
+    return isinstance(full_name, str) and _same_repo(full_name, repo)
+
+
+def _gh_pr_head_ok(body: Optional[Mapping[str, Any]], repo: str) -> bool:
+    """A GitHub PR body may name another repository as its head — `head: "owner:branch"` (a fork)
+    or `head_repo` (another repo of the same org). Either must be the URL's repository."""
+    head = str((body or {}).get("head", ""))
+    owner, name = repo.split("/", 1)
+    if ":" in head and head.split(":", 1)[0].strip().lower() != owner.lower():
+        return False
+    head_repo = (body or {}).get("head_repo")
+    if head_repo is not None:
+        if not isinstance(head_repo, str):
+            return False
+        return _same_repo(head_repo, repo) if "/" in head_repo.strip("/") else _same_repo(head_repo, name)
+    return True
+
+
 #: What an agent may change on a pull request (PATCH): never its base, never anything but its own.
 _PR_PATCH_FIELDS = frozenset({"title", "body", "state", "maintainer_can_modify"})
 
@@ -146,6 +187,8 @@ def check_api(method: str, path: str, *, perms: Mapping[str, str], repos: Iterab
                 if not branch or not fnmatch.fnmatchcase(f"refs/heads/{branch}", push_pattern or "refs/heads/boss/*"):
                     return RuleDecision(False, template, "ref_not_allowed")
             if method == "POST" and template == "/repos/{o}/{r}/pulls":
+                if not _gh_pr_head_ok(body, repo):
+                    return RuleDecision(False, template, "pr_cross_repo")
                 head = str((body or {}).get("head", "")).split(":")[-1]
                 if not fnmatch.fnmatchcase(f"refs/heads/{head}", push_pattern or "refs/heads/boss/*"):
                     return RuleDecision(False, template, "pr_head_not_run_branch")
@@ -224,6 +267,11 @@ def check_bitbucket_api(method: str, path: str, *, perms: Mapping[str, str], rep
         if not branch or not fnmatch.fnmatchcase(f"refs/heads/{branch}",
                                                  push_pattern or "refs/heads/boss/*"):
             return _deny(tpl, "pr_not_the_runs")
+        # BOSSAPP-1183: the source (and destination) repository is the URL's, never another repo
+        # of the workspace whose boss/* branch would expose that repo's content.
+        for side in ("source", "destination"):
+            if not _bb_body_repo_ok((body or {}).get(side), repo):
+                return _deny(tpl, "pr_cross_repo")
         return RuleDecision(True, tpl, need=need)
     if verb == "POST" and re.fullmatch(r"/pullrequests/\d+/comments", sub):
         need = ("pull_requests", "write")

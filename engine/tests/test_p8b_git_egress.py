@@ -143,7 +143,7 @@ def test_no_registered_bitbucket_repo_means_none_is_reachable(monkeypatch):
     assert _bb(["ws/app"]) == ()
     monkeypatch.setenv("BOSS_TARGET_BITBUCKET_WORKSPACE", "ws")
     monkeypatch.setenv("BOSS_TARGET_BITBUCKET_REPO", "app")
-    assert _bb(["ws/app", "WS/App.git", "ws/other"]) == ("ws/app", "WS/App.git")
+    assert _bb(["ws/app", "WS/App.git", "ws/other"]) == ("ws/app",)
 
 
 def test_on_someones_behalf_a_bitbucket_repo_must_also_be_in_their_grant(bb_registry):
@@ -200,3 +200,66 @@ def test_github_is_judged_exactly_as_before(monkeypatch):
     task = SimpleNamespace(run_id="arun_1", resources={"github": ["acme/unticked"]})
     with pytest.raises(github_app.GitHubRefused, match="repo_not_allowed"):
         github_app.mint_for_run(claims, task=task, db=None)
+
+
+# ---- BOSSAPP-1183: a PR body never names another repository than its URL --------------------------
+
+_BB_PR = "/2.0/repositories/ws/app/pullrequests"
+_SRC = {"name": "boss/arun_1-x"}
+
+
+@pytest.mark.parametrize("body,reason", [
+    ({"source": {"branch": _SRC, "repository": {"full_name": "ws/app"}}}, None),
+    ({"source": {"branch": _SRC, "repository": {"full_name": "WS/App.git/"}}}, None),
+    ({"source": {"branch": _SRC, "repository": {"full_name": "ws/app"}},
+      "destination": {"branch": {"name": "main"}, "repository": {"full_name": "ws/app"}}}, None),
+    ({"source": {"branch": _SRC, "repository": {"full_name": "ws/secret"}}}, "pr_cross_repo"),
+    ({"source": {"branch": _SRC, "repository": {"uuid": "{0000-1111}"}}}, "pr_cross_repo"),
+    ({"source": {"branch": _SRC, "repository": {"full_name": "ws/app", "uuid": "{0000-1111}"}}}, "pr_cross_repo"),
+    ({"source": {"branch": _SRC, "repository": {"name": "secret"}}}, "pr_cross_repo"),
+    ({"source": {"branch": _SRC, "repository": "ws/secret"}}, "pr_cross_repo"),
+    ({"source": {"branch": _SRC},
+      "destination": {"branch": {"name": "main"}, "repository": {"full_name": "ws/secret"}}}, "pr_cross_repo"),
+])
+def test_a_bitbucket_pr_source_and_destination_are_the_urls_repo(body, reason):
+    decision = rules.check_bitbucket_api("POST", _BB_PR, perms=PERMS, repos=["ws/app"], body=body,
+                                         push_pattern=PATTERN)
+    assert decision.allowed is (reason is None), decision
+    if reason:
+        assert decision.reason == reason
+
+
+@pytest.mark.parametrize("body,reason", [
+    ({"head": "boss/arun_1-x", "base": "main"}, None),
+    ({"head": "acme:boss/arun_1-x", "base": "main"}, None),
+    ({"head": "boss/arun_1-x", "head_repo": "web", "base": "main"}, None),
+    ({"head": "boss/arun_1-x", "head_repo": "acme/web", "base": "main"}, None),
+    ({"head": "evil:boss/arun_1-x", "base": "main"}, "pr_cross_repo"),
+    ({"head": "boss/arun_1-x", "head_repo": "secret", "base": "main"}, "pr_cross_repo"),
+    ({"head": "boss/arun_1-x", "head_repo": "acme/secret", "base": "main"}, "pr_cross_repo"),
+])
+def test_a_github_pr_head_is_the_urls_repo(body, reason):
+    decision = rules.check_api("POST", "/repos/acme/web/pulls", perms=PERMS, repos=["acme/web"],
+                               body=body, push_pattern=PATTERN)
+    assert decision.allowed is (reason is None), decision
+    if reason:
+        assert decision.reason == reason
+
+
+# ---- BOSSAPP-1185: the run's Bitbucket repos are stored normalised, so mint and egress agree --------
+
+@pytest.mark.parametrize("named", ["ws/app.git", "ws/app/", "WS/App", " ws/App.git/ "])
+def test_a_bitbucket_repo_is_stored_normalised_and_allowed_at_egress(bb_registry, named):
+    scope = _bb([named])
+    assert scope == ("ws/app",)
+    decision = rules.check_bitbucket_api("GET", "/2.0/repositories/ws/app", perms=PERMS, repos=scope,
+                                         push_pattern=PATTERN)
+    assert decision.allowed, decision
+
+
+def test_egress_allows_a_bitbucket_repo_the_token_named_with_dot_git(bb_registry):
+    from apps.egress.boss_egress import proxy
+
+    claims = SimpleNamespace(grant_id=None, org_id="org_1", mode=SimpleNamespace(value="autonomous"),
+                             task=SimpleNamespace(run_id="arun_1", resources={"bitbucket": ["WS/app.git"]}))
+    assert proxy.bitbucket_repos(claims, None) == ["ws/app"]

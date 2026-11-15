@@ -89,8 +89,13 @@ def granted(db: Any, *, provider: str, org_id: Optional[str], run_id: str, grant
             repos: Iterable[str]) -> tuple[str, ...]:
     """The repositories of `repos` the run may reach — each judged alone by `refusal`. A refused
     one is simply not in the run's scope, so every call to it is `repo_outside_run`."""
+    # Bitbucket names are stored NORMALISED (BOSSAPP-1185): the registry and grants compare `_norm`
+    # forms, and egress compares the token's names exactly, so `acme/API.git/` must enter the
+    # token as `acme/api` or a repo the mint allowed is refused at egress. GitHub keeps its names
+    # verbatim (its obo check has always been exact).
+    names = (_norm(r) for r in repos) if provider == BITBUCKET else (str(r) for r in repos)
     out = []
-    for repo in dict.fromkeys(str(r) for r in repos):
+    for repo in dict.fromkeys(names):
         try:
             ok = refusal(db, provider=provider, org_id=org_id, run_id=run_id, grant=grant, obo=obo,
                          repos=[repo]) is None
