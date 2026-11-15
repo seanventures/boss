@@ -288,13 +288,78 @@ def test_the_items_are_the_must_haves_the_prd_gating_list_and_the_criteria():
     assert all(len(i["text"]) <= ag.MAX_ITEM_CHARS for i in items)
 
 
-def test_items_over_the_cap_are_counted_and_said(tmp_path):
-    spec = {"acceptance_criteria": [f"criterion {i}" for i in range(ag.MAX_ITEMS + 5)]}
-    assert len(ag.acceptance_items(spec)) == ag.MAX_ITEMS and ag.items_dropped(spec) == 5
+def test_items_over_the_total_cap_are_said_and_never_met(tmp_path):
+    n = ag.MAX_TOTAL_ITEMS
+    spec = {"acceptance_criteria": [f"criterion {i}" for i in range(n + 5)]}
+    assert len(ag.acceptance_items(spec)) == n and ag.items_dropped(spec) == 5
     (tmp_path / "a.go").write_text("package a\n")
-    rec = ag.judge(ag.acceptance_items(spec), _all_met(ag.MAX_ITEMS, "a.go"), {}, root=tmp_path,
-                   dropped=5)
+    rec = ag.judge(ag.acceptance_items(spec), _all_met(n, "a.go"), {}, root=tmp_path, dropped=5)
+    assert rec["verdict"] == "not_run" and not ag.passed(rec)
     assert "5 further items" in ag.must_have_table(rec) and "5 not checked" in ag.headline(rec)
+    assert "Automated checks: passed" not in ag.card_words(None, rec, "passed")
+
+
+class BatchReviewer:
+    """Answers every ITEM its prompt lists MET (code evidence), except the numbers in `fail`;
+    `broken_pass` makes that pass (0-based) raise. Counts its passes."""
+
+    def __init__(self, fail=(), broken_pass=None):
+        self.fail, self.broken_pass, self.passes, self.sizes = set(fail), broken_pass, 0, []
+
+    def __call__(self, prompt):
+        import re
+
+        nums = [int(n) for n in re.findall(r"(?m)^ITEM (\d+) \[", prompt)]
+        self.sizes.append(len(nums))
+        self.passes += 1
+        if self.broken_pass == self.passes - 1:
+            raise RuntimeError("the engine fell over")
+        lines = [f"ITEM {n}: {'MISSING — absent' if n in self.fail else 'MET — a.go'}"
+                 for n in nums]
+        verdict = "NOT MET" if self.fail & set(nums) else "MET"
+        return {"summary": "\n".join(lines) + f"\nACCEPTANCE: {verdict}", "cost_usd_micros": 1}
+
+
+def _sixty_items_across_four_slices():
+    builds = [{"id": f"crun_s{k}", "spec": {"acceptance_criteria": [
+        f"slice {k} criterion {i}" for i in range(15)]}} for k in range(1, 5)]
+    return ag.acceptance_items(ag.union_spec(builds))
+
+
+def test_sixty_items_across_four_slices_are_all_judged_in_passes(tmp_path):
+    (tmp_path / "a.go").write_text("package a\n")
+    items = _sixty_items_across_four_slices()
+    assert len(items) == 60 and [i["n"] for i in items] == list(range(1, 61))
+    ask = BatchReviewer()
+    rec, cost = ag.run_check(items, ask=ask, title="t", stack={}, root=tmp_path)
+    assert ask.sizes == [ag.MAX_ITEMS, 20] and cost == 2
+    assert rec["verdict"] == "met" and rec["counts"]["met"] == 60 and ag.passed(rec)
+    assert ag.card_words(None, rec, "passed") == "Automated checks: passed"
+
+
+def test_one_unmet_item_in_the_last_pass_fails_the_sixty(tmp_path):
+    (tmp_path / "a.go").write_text("package a\n")
+    rec, _ = ag.run_check(_sixty_items_across_four_slices(), ask=BatchReviewer(fail={55}),
+                          title="t", stack={}, root=tmp_path)
+    assert rec["verdict"] == "not_met" and rec["missing"] == [55]
+
+
+def test_a_pass_that_cannot_run_leaves_its_items_unjudged_never_met(tmp_path):
+    (tmp_path / "a.go").write_text("package a\n")
+    rec, _ = ag.run_check(_sixty_items_across_four_slices(), ask=BatchReviewer(broken_pass=1),
+                          title="t", stack={}, root=tmp_path)
+    assert rec["verdict"] == "not_run" and len(rec["unjudged"]) == 20 and not ag.passed(rec)
+    words = ag.card_words(None, rec, "passed")
+    assert "Automated checks: passed" not in words and "20 not judged" in words
+
+
+def test_only_the_first_forty_judged_is_never_met(tmp_path):
+    """The reviewer's case: 4 slices x 15 criteria, only 40 judged — not met, not passed."""
+    (tmp_path / "a.go").write_text("package a\n")
+    items = _sixty_items_across_four_slices()
+    rec = ag.judge(items, _all_met(ag.MAX_ITEMS, "a.go"), {}, root=tmp_path)
+    assert rec["verdict"] == "not_run" and len(rec["unjudged"]) == 20
+    assert "Automated checks: passed" not in ag.card_words(None, rec, "passed")
 
 
 def test_fifteen_items_with_one_answered_is_never_met(tmp_path):

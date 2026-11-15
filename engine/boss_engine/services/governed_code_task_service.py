@@ -8731,19 +8731,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                                       source=_source), 0
                     set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
                                     run_id=run_id, stage=_acceptance_gate.SEAT)
-                    rr = consistency_agent.run_role(
-                        _acceptance_gate.acceptance_prompt(
-                            _items, title=title, stack=_stack,
-                            tree=_acceptance_gate.tree_listing(review_root)),
-                        review_root, read_only=True, model=consistency_model,
-                        max_turns=max_turns or int(getattr(
-                            settings, "code_agent_review_max_turns", 16) or 16)) or {}
-                    rec = _acceptance_gate.judge(_items, rr.get("summary", ""), _stack,
-                                                 root=review_root, source=_source,
-                                                 dropped=_dropped)
-                    rec["model"] = rr.get("model") or (rr.get("usage") or {}).get("model")
-                    rec["reply"] = (rr.get("summary") or "")[:6000]
-                    return rec, int(rr.get("cost_usd_micros") or 0)
+                    _turns = max_turns or int(getattr(
+                        settings, "code_agent_review_max_turns", 16) or 16)
+                    # EVERY ITEM IS JUDGED: one pass per MAX_ITEMS batch (run_check).
+                    return _acceptance_gate.run_check(
+                        _items, title=title, stack=_stack, root=review_root, source=_source,
+                        dropped=_dropped,
+                        ask=lambda prompt: consistency_agent.run_role(
+                            prompt, review_root, read_only=True, model=consistency_model,
+                            max_turns=_turns))
                 except Exception as exc:  # noqa: BLE001 — a check that could not run is not a pass
                     _log_caught(logger)
                     rec = _acceptance_gate.judge([], None, _stack, root=None, source=_source)

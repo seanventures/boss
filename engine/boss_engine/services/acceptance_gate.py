@@ -42,7 +42,10 @@ SEAT = "acceptance_check"
 KEY = "acceptance"
 #: The evidence key holding the gate's findings as FINDING lines (checks_failing.SEAT_OF_GATE).
 SUMMARY_KEY = "acceptance_summary"
+#: Items per reviewer pass: a longer list is judged in several passes (`run_check`), never cut.
 MAX_ITEMS = 40
+#: The most items one check holds a build to; beyond it the check is `not_run`, never `met`.
+MAX_TOTAL_ITEMS = 400
 MAX_ITEM_CHARS = 1000
 MAX_TREE_FILES = 600
 
@@ -151,7 +154,8 @@ def _spec_of(value: Any) -> dict:
 def acceptance_items(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
     """What the build is held to, numbered: the brief's must-haves, the PRD's tested-and-gating
     list, then the run's acceptance criteria — deduplicated, each whole up to MAX_ITEM_CHARS, at
-    most MAX_ITEMS (`items_dropped` says how many more there were). The existing-tests promise
+    most MAX_TOTAL_ITEMS (`items_dropped` says how many more there were; judged in passes of
+    MAX_ITEMS by `run_check`). The existing-tests promise
     is left to the regression gate, which measures it."""
     return _items_and_dropped(spec)[0]
 
@@ -194,7 +198,7 @@ def _items_and_dropped(spec: Mapping[str, Any]) -> tuple[list[dict[str, Any]], i
         if not key or key in seen:
             continue
         seen.add(key)
-        if len(items) >= MAX_ITEMS:
+        if len(items) >= MAX_TOTAL_ITEMS:
             dropped += 1
             continue
         items.append({"n": len(items) + 1, "text": item[:MAX_ITEM_CHARS], "source": source})
@@ -459,7 +463,7 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any) -> list[dict[s
 
 def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
           root: Any, source: Optional[Mapping[str, Any]] = None,
-          dropped: int = 0) -> dict[str, Any]:
+          dropped: int = 0, summary_line: Optional[str] = "") -> dict[str, Any]:
     """The gate's record. It FAILS CLOSED; verdict:
       met       EVERY item MET with evidence in the tree, every declared manifest present, and
                 the reviewer's own summary line says MET
@@ -476,6 +480,8 @@ def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
     judged = parse_acceptance(reply or "", items, root=root) if items else []
     m = list(_SUMMARY.finditer(str(reply or "")))
     summary = (" ".join(m[-1].group(1).upper().split()) if m else None)
+    if summary_line != "":
+        summary = summary_line      # several passes: run_check combined their summary lines
     missing = [i["n"] for i in judged if i["status"] == MISSING]
     partial = [i["n"] for i in judged if i["status"] == PARTIAL]
     unjudged = [i["n"] for i in judged if i["status"] == UNJUDGED]
@@ -489,6 +495,9 @@ def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
         verdict = "no_items"
     elif unjudged:
         verdict, why = "not_run", f"{len(unjudged)} of {len(items)} items were not answered"
+    elif dropped:
+        # Items nobody judged are not met: never a pass over a list that was cut.
+        verdict, why = "not_run", f"{dropped} items beyond {MAX_TOTAL_ITEMS} were not judged"
     elif summary != "MET":
         # A reviewer's slip, not the code's: re-ask the reviewer (HARNESS), never send the
         # coder to repair it. Still never a pass.
@@ -502,6 +511,50 @@ def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
             "stack": stack, "source": source, "items_dropped": int(dropped or 0),
             "counts": {s: sum(1 for i in judged if i["status"] == s)
                        for s in (MET, PARTIAL, MISSING, UNJUDGED)}}
+
+
+def batch_summary(replies: list[Optional[str]]) -> Optional[str]:
+    """The combined ACCEPTANCE line of several passes: MET only when every pass said MET; NOT
+    MET when any did; None when a pass gave none (or did not run)."""
+    lines = []
+    for reply in replies:
+        m = list(_SUMMARY.finditer(str(reply or "")))
+        lines.append(" ".join(m[-1].group(1).upper().split()) if m else None)
+    if any(x == "NOT MET" for x in lines):
+        return "NOT MET"
+    return "MET" if lines and all(x == "MET" for x in lines) else None
+
+
+def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, Any], root: Any,
+              source: Optional[Mapping[str, Any]] = None, dropped: int = 0
+              ) -> tuple[dict[str, Any], int]:
+    """Judge EVERY item: one reviewer pass per MAX_ITEMS batch (`ask(prompt) -> run_role
+    result`), the item numbers global across passes. A pass that fails leaves its items
+    unjudged, so the check is not_run — never met. Returns (record, cost in micros)."""
+    import logging
+
+    tree = tree_listing(root)
+    replies: list[Optional[str]] = []
+    cost = 0
+    model = None
+    for start in range(0, len(items), MAX_ITEMS):
+        batch = items[start:start + MAX_ITEMS]
+        try:
+            rr = ask(acceptance_prompt(batch, title=title, stack=stack, tree=tree)) or {}
+        except Exception as exc:  # noqa: BLE001 — this pass's items stay unjudged (not_run)
+            logging.getLogger(__name__).warning("acceptance pass failed (%s)",
+                                                type(exc).__name__)
+            replies.append(None)
+            continue
+        cost += int(rr.get("cost_usd_micros") or 0)
+        model = model or rr.get("model") or (rr.get("usage") or {}).get("model")
+        replies.append(str(rr.get("summary") or ""))
+    rec = judge(items, "\n".join(r or "" for r in replies), stack, root=root, source=source,
+                dropped=dropped, summary_line=batch_summary(replies))
+    rec["passes"] = len(replies)
+    rec["model"] = model
+    rec["reply"] = "\n".join(r or "" for r in replies)[:6000]
+    return rec, cost
 
 
 def passed(record: Optional[Mapping[str, Any]]) -> bool:
@@ -531,7 +584,7 @@ def findings_summary(record: Optional[Mapping[str, Any]]) -> str:
         lines.append(f"Note: {note}.")
     if record.get("items_dropped"):
         lines.append(f"Note: {record['items_dropped']} further items beyond the first "
-                     f"{MAX_ITEMS} were not checked.")
+                     f"{MAX_TOTAL_ITEMS} were not checked.")
     return "\n".join(lines)
 
 
@@ -556,7 +609,7 @@ def must_have_table(record: Optional[Mapping[str, Any]]) -> str:
         rows.append(f"| stack | {r['stack']} manifest ({' or '.join(r['manifests'])}) "
                     f"| {status} | {cell(path or 'not in the tree')} |")
     if record.get("items_dropped"):
-        rows.append(f"\n{record['items_dropped']} further items beyond the first {MAX_ITEMS} "
+        rows.append(f"\n{record['items_dropped']} further items beyond the first {MAX_TOTAL_ITEMS} "
                     "were not checked.")
     return "\n".join(rows)
 
@@ -576,7 +629,7 @@ def headline(record: Optional[Mapping[str, Any]]) -> str:
     if (record.get("stack") or {}).get("missing"):
         bits.append("required stack missing: " + ", ".join(record["stack"]["missing"]))
     if record.get("items_dropped"):
-        bits.append(f"{record['items_dropped']} not checked (over {MAX_ITEMS})")
+        bits.append(f"{record['items_dropped']} not checked (over {MAX_TOTAL_ITEMS})")
     return "Must-haves: " + ", ".join(bits)
 
 
@@ -788,7 +841,7 @@ def card_words(card: Optional[Mapping[str, Any]], acceptance: Optional[Mapping[s
 
 
 __all__ = [
-    "card_words", "evidence_paths", "item_key", "items_dropped", "lineage_build_rows",
+    "batch_summary", "card_words", "evidence_paths", "run_check", "item_key", "items_dropped", "lineage_build_rows",
     "merge_card_checks", "union_spec", "UNION_KEY",
     "GATE", "SEAT", "KEY", "SUMMARY_KEY", "acceptance_items", "acceptance_prompt",
     "brief_must_haves", "card_checks_failing", "findings_summary", "headline", "items_spec",
