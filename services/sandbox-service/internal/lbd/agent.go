@@ -38,6 +38,7 @@ type Config struct {
 	JoinTokenFile string
 
 	DesiredFile string
+	LeaseFile   string // lab: shared lease file (the lease rules without a control plane)
 	ID          string // lab: this director's id (default: the certificate's CN)
 	CertFile    string // lab: this director's certificate
 	KeyFile     string // lab
@@ -606,8 +607,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 }
 
 func (a *Agent) heartbeatOnce(ctx context.Context) {
-	states := ReadStates(a.cfg.RunDir)
-	masters := Masters(states)
+	masters := a.masters()
 	svc, rs := a.prog.Counts()
 	var conns int64
 	if st, err := a.be.Stats(); err == nil {
@@ -638,7 +638,7 @@ func (a *Agent) heartbeatOnce(ctx context.Context) {
 	a.mu.Lock()
 	a.leases = resp.Leases
 	a.mu.Unlock()
-	faults := TrackDecision(a.ID(), masters, resp.Leases)
+	faults := TrackDecision(a.ID(), a.groupIDs(), resp.Leases)
 	n := 0
 	for _, f := range faults {
 		if f {
@@ -660,17 +660,58 @@ func (a *Agent) heartbeatOnce(ctx context.Context) {
 	}
 }
 
-// labLeaseLoop (no control plane): the lease is always ours; track files
-// stay "ok" and keepalived decides alone.
+// masters are the groups keepalived reports MASTER — none when keepalived is
+// not running (a SIGKILLed keepalived never writes STOP; its stale MASTER
+// files must not keep renewing leases the peer needs).
+func (a *Agent) masters() []int {
+	if !a.cfg.NoKeepalived && !KeepalivedLive(a.cfg.KeepalivedPid) {
+		return nil
+	}
+	return Masters(ReadStates(a.cfg.RunDir))
+}
+
+// groupIDs are the VRRP groups of the current desired state.
+func (a *Agent) groupIDs() []int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.desired == nil {
+		return nil
+	}
+	out := make([]int, 0, len(a.desired.Groups))
+	for _, g := range a.desired.Groups {
+		out = append(out, g.Group)
+	}
+	return out
+}
+
+// labLeaseLoop (no control plane): with a lease file (--lease-file) the
+// same lease rules run against a shared file, so the lab exercises the
+// lease and split-brain path; without one every group is "ok" and
+// keepalived decides alone.
 func (a *Agent) labLeaseLoop(ctx context.Context) {
 	t := time.NewTicker(a.cfg.HeartbeatEvery)
 	defer t.Stop()
 	for {
-		masters := Masters(ReadStates(a.cfg.RunDir))
-		faults := map[int]bool{}
-		for _, g := range masters {
-			faults[g] = false
+		masters := a.masters()
+		var leases map[string]string
+		if a.cfg.LeaseFile != "" {
+			l, err := FileLeases{Path: a.cfg.LeaseFile}.Acquire(a.ID(), masters)
+			if err != nil {
+				a.logf("lease file: %v", err)
+			}
+			leases = l
 		}
+		a.mu.Lock()
+		a.leases = leases
+		a.mu.Unlock()
+		faults := TrackDecision(a.ID(), a.groupIDs(), leases)
+		n := 0
+		for _, f := range faults {
+			if f {
+				n++
+			}
+		}
+		a.metrics.Set("boss_lbd_lease_faults", float64(n))
 		_ = WriteTrack(a.cfg.RunDir, faults)
 		select {
 		case <-ctx.Done():

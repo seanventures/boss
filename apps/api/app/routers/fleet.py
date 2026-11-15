@@ -72,6 +72,7 @@ class VIPMemberBody(BaseModel):
     weight: int = Field(default=0, ge=0, le=65535)
     ports: list[int] = Field(default_factory=list)
     reason: str = ""
+    seq: Optional[int] = Field(default=None, ge=0)
 
 
 class VIPPoolBody(BaseModel):
@@ -432,13 +433,13 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
             raise
 
     def _vip_member(request: Request, vip: str, replica_id: str, method: str, vm_ip: Optional[str],
-                    weight: Optional[int], reason: str) -> dict:
+                    weight: Optional[int], reason: str, seq: Optional[int] = None) -> dict:
         host = _host(request)
         try:
             with begin(engine) as connection:
                 out = fleet_directors.vip_member(connection, host, vip=vip, replica_id=replica_id,
                                                  method=method, vm_ip=vm_ip, weight=weight,
-                                                 reason=reason)
+                                                 reason=reason, seq=seq)
         except Exception as error:  # noqa: BLE001
             _fleet_fail(error)
             raise
@@ -450,13 +451,14 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
                        request: Request) -> dict[str, Any]:
         """The host registers (weight > 0) or drains (weight 0) one of its replicas behind the
         VIP: the durable record of what it also pushed to the directors directly."""
-        return _vip_member(request, vip, replica_id, "PUT", body.vm_ip, body.weight, body.reason)
+        return _vip_member(request, vip, replica_id, "PUT", body.vm_ip, body.weight, body.reason,
+                           body.seq)
 
     @router.delete("/v1/vips/{vip}/members/{replica_id}")
     @permit(P.FLEET_HOST, scope=Scope.org())
     def vip_member_delete(vip: str, replica_id: str, request: Request, vm_ip: Optional[str] = None,
-                          reason: str = "") -> dict[str, Any]:
-        return _vip_member(request, vip, replica_id, "DELETE", vm_ip, 0, reason)
+                          reason: str = "", seq: Optional[int] = None) -> dict[str, Any]:
+        return _vip_member(request, vip, replica_id, "DELETE", vm_ip, 0, reason, seq)
 
     @router.put("/v1/hosts/{agent_host_id}/replicas")
     @permit(P.FLEET_HOST, scope=Scope.org())

@@ -93,14 +93,14 @@ done
 cd "$LAB/pki"
 openssl ecparam -name prime256v1 -genkey -noout -out fleet-ca.key 2>/dev/null
 openssl req -x509 -new -key fleet-ca.key -subj "/CN=lab fleet CA" -days 2 -out fleet-ca.pem 2>/dev/null
-mkcert() { # mkcert <name> <cn> <ip-or-empty>
+mkcert() { # mkcert <name> <cn> <ip-or-empty> [eku]   (directors: client+server auth; hosts: client auth only)
   openssl ecparam -name prime256v1 -genkey -noout -out $1.key 2>/dev/null
   openssl req -new -key $1.key -subj "/CN=$2" -out $1.csr 2>/dev/null
-  printf "basicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=clientAuth,serverAuth\n" > $1.ext
+  printf "basicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=${4:-clientAuth,serverAuth}\n" > $1.ext
   [ -n "$3" ] && printf "subjectAltName=IP:$3\n" >> $1.ext
   openssl x509 -req -in $1.csr -CA fleet-ca.pem -CAkey fleet-ca.key -CAcreateserial -days 1 -extfile $1.ext -out $1.crt 2>/dev/null
 }
-mkcert dirA dir_a 192.0.2.10; mkcert dirB dir_b 192.0.2.11; mkcert host hst_1 192.0.2.20
+mkcert dirA dir_a 192.0.2.10; mkcert dirB dir_b 192.0.2.11; mkcert host hst_1 192.0.2.20 clientAuth; mkcert host2 hst_2 "" clientAuth
 openssl ecparam -name prime256v1 -genkey -noout -out agent-ca.key 2>/dev/null
 openssl req -x509 -new -key agent-ca.key -subj "/CN=lab agent CA" -days 2 -out agent-ca.pem 2>/dev/null
 openssl ecparam -name prime256v1 -genkey -noout -out agent.key 2>/dev/null
@@ -162,7 +162,7 @@ start_lbd() { # start_lbd <ns> <letter> <id> <addr>
   ip netns exec $ns env BOSS_LBD_RUN_DIR="$LAB/$L/run" "$LBD" --desired-file "$LAB/desired/$L.json" --id $id --address $addr --iface eth0 \
     --cert "$LAB/pki/dir$L.crt" --key "$LAB/pki/dir$L.key" --ca "$LAB/pki/fleet-ca.pem" \
     --state-dir "$LAB/$L/state" --run-dir "$LAB/$L/run" --metrics-addr 127.0.0.1:9446 \
-    --keepalived-conf "$LAB/$L/ka/keepalived.conf" --keepalived-pid "$LAB/$L/ka/keepalived.pid" >"$LAB/$L/lbd.log" 2>&1 &
+    --lease-file "$LAB/leases.json" --keepalived-conf "$LAB/$L/ka/keepalived.conf" --keepalived-pid "$LAB/$L/ka/keepalived.pid" >"$LAB/$L/lbd.log" 2>&1 &
 }
 start_lbd p8a A dir_a 192.0.2.10; start_lbd p8b B dir_b 192.0.2.11
 sleep 2
@@ -235,6 +235,13 @@ $A ipvsadm -Ln | grep -q "10.200.4.13:443" && bad "T2b: deleted real server stil
 # A stranger (the agent CA's cert, not the fleet CA) is refused.
 rs=$($H "$LBD" push --to 192.0.2.10:7446 --cert "$LAB/pki/agent.crt" --key "$LAB/pki/agent.key" --ca "$LAB/pki/fleet-ca.pem" --vip $VIP --replica rep_1 --vm-ip 10.200.4.11 --weight 0 2>&1) || true
 echo "$rs" | grep -qi "error" && ok "T2b: a push with a non-fleet certificate is refused (mTLS)" || bad "stranger push accepted: $rs"
+rs=$($H "$LBD" push --to 192.0.2.10:7446 --director-id dir_a --cert "$LAB/pki/host2.crt" --key "$LAB/pki/host2.key" --ca "$LAB/pki/fleet-ca.pem" --vip $VIP --replica rep_1 --vm-ip 10.200.4.11 --weight 0 2>&1) || true
+w11=$($A ipvsadm -Ln | awk -v rs="10.200.4.11:443" '$2==rs {print $4}' | head -1 || true)
+echo "$rs" | grep -q "403" && [ "$w11" = 1 ] && ok "T2b: host hst_2 cannot withdraw hst_1's replica (403, weight still 1)" || bad "foreign withdraw: $rs w11=$w11"
+rs=$($H "$LBD" push --to 192.0.2.10:7446 --director-id dir_a --cert "$LAB/pki/dirB.crt" --key "$LAB/pki/dirB.key" --ca "$LAB/pki/fleet-ca.pem" --vip $VIP --replica rep_1 --vm-ip 10.200.4.11 --weight 0 2>&1) || true
+echo "$rs" | grep -q "403" && ok "T2b: a director certificate cannot push (403)" || bad "director-cert push: $rs"
+rs=$($H "$LBD" push --to 192.0.2.10:7446 --director-id dir_a --cert "$LAB/pki/host.crt" --key "$LAB/pki/host.key" --ca "$LAB/pki/fleet-ca.pem" --vip $VIP --replica rep_9 --vm-ip 10.200.4.99 --weight 5 2>&1) || true
+echo "$rs" | grep -q "403" && ! $A ipvsadm -Ln | grep -q 10.200.4.99 && ok "T2b: registering an unknown vm_ip is refused (no hijack)" || bad "unknown register: $rs"
 echo "server-side withdraw histogram (A):"; ip netns exec p8a curl -s http://127.0.0.1:9446/metrics | grep '^boss_lbd_withdraw_seconds' | grep -v bucket || true
 # restore v3 (register) so T13 has 2 live replicas (v1, v3)
 $H "$LBD" push --to 192.0.2.10:7446,192.0.2.11:7446 --director-id dir_a,dir_b --cert "$LAB/pki/host.crt" --key "$LAB/pki/host.key" --ca "$LAB/pki/fleet-ca.pem" \
@@ -254,16 +261,40 @@ echo "T13: director A /proc/net/ip_vs_stats (hex: conns pkts-in pkts-out bytes-i
 [ -n "$cps" ] && ok "T13: $cps new TLS connections/s through one director (client-bound, 1 netns client); $slab" || bad "T13: no s_time result"
 echo "director A /status: $(ip netns exec p8a curl -s http://127.0.0.1:9446/status)"
 st_a=$(ip netns exec p8a curl -s http://127.0.0.1:9446/status)
-echo "$st_a" | grep -q '"keepalived":{"0":"MASTER","1":"BACKUP"}' && ok "keepalived notify → boss-lbd state files: A is MASTER of group 0, BACKUP of group 1; track files written" || bad "keepalived state not reported: $st_a"
+echo "$st_a" | grep -q '"keepalived":{"0":"MASTER","1":"FAULT"}' && ok "keepalived notify → boss-lbd: A is MASTER of group 0 and FAULT for group 1 (B holds its lease), so A can never claim B's VIP" || bad "keepalived state not reported: $st_a"
 
-# ---- VRRP failover: kill A's keepalived → B takes group 0 within ~3 s
-kill $(cat "$LAB/A/ka/keepalived.pid") 2>/dev/null || true
+# ---- Director lease (lease file = the control plane's rules): steady state
+sleep 3
+leases=$(cat "$LAB/leases.json" 2>/dev/null)
+echo "leases: $leases"
+echo "$leases" | grep -q '"0":{"holder":"dir_a"' && echo "$leases" | grep -q '"1":{"holder":"dir_b"' && ok "lease: A holds group 0, B holds group 1" || bad "leases: $leases"
+[ "$(cat "$LAB/B/run/track/0" 2>/dev/null)" = fault ] && [ "$(cat "$LAB/A/run/track/0" 2>/dev/null)" = ok ] && ok "lease: B tracks group 0 as fault (A holds it); A ok" || bad "track files A0=$(cat "$LAB/A/run/track/0" 2>/dev/null) B0=$(cat "$LAB/B/run/track/0" 2>/dev/null)"
+
+# ---- Split brain: B stops hearing A's VRRP adverts for 12 s. Without the lease B would turn MASTER of
+# group 0 (two MASTERs); with it B stays FAULT and never claims the VIP, and does not flap.
+m0=$(grep -c "(boss_g0) Entering MASTER" "$LAB/B/keepalived.log" || true)
+$B nft add table inet splitbrain; $B nft add chain inet splitbrain in "{ type filter hook input priority -10; }"
+$B nft add rule inet splitbrain in ip saddr 192.0.2.10 ip protocol vrrp drop
+held=0
+for i in $(seq 1 24); do $B ip -4 addr show dev eth0 | grep -q "$VIP/32" && held=$((held+1)); sleep 0.5; done
+m1=$(grep -c "(boss_g0) Entering MASTER" "$LAB/B/keepalived.log" || true)
+$B nft delete table inet splitbrain
+a17=$($A ip -4 addr show dev eth0 | grep -c "$VIP/32" || true)
+[ "$held" = 0 ] && [ "$m1" = "$m0" ] && [ "$a17" = 1 ] && ok "split brain (VRRP A→B cut 12 s): B never became MASTER of group 0 nor held $VIP (0/24 samples); A kept it" || bad "split brain: B held $VIP in $held/24 samples, MASTER entries $m0→$m1, A=$a17 ($(grep boss_g0 "$LAB/B/keepalived.log" | tail -4))"
+r=$($C curl -s -m 3 --cacert "$LAB/pki/agent-ca.pem" "https://$VIP/" || echo FAIL)
+echo "$r" | grep -q '^v[13]$' && ok "during/after the split brain $VIP still served via A: $r" || bad "after split brain: $r"
+
+# ---- Director failover: kill A's keepalived (SIGKILL: no notify) → A's lbd sees it dead, releases the
+# lease; B's fault clears, B becomes MASTER. Bound: heartbeat 2 s + rise 2 s + VRRP master-down ≈ 3.6 s.
+kill -9 $(cat "$LAB/A/ka/keepalived.pid") 2>/dev/null || true
 t0=$(date +%s.%N); moved=""
-for i in $(seq 1 60); do $B ip -4 addr show dev eth0 | grep -q "$VIP/32" && { moved=$(echo "$(date +%s.%N) - $t0" | bc); break; }; sleep 0.1; done
-[ -n "$moved" ] && ok "VRRP failover: A's keepalived killed → B owns $VIP after ${moved}s" || bad "VRRP failover: B never took $VIP ($(tail -3 "$LAB/B/keepalived.log"))"
+for i in $(seq 1 200); do $B ip -4 addr show dev eth0 | grep -q "$VIP/32" && { moved=$(echo "$(date +%s.%N) - $t0" | bc); break; }; sleep 0.1; done
+$A ip -4 addr flush dev eth0 to $VIP/32 2>/dev/null || true   # SIGKILL left A's address behind; a dead node holds nothing
+[ -n "$moved" ] && ok "director failover with the lease: A's keepalived SIGKILLed → B owns $VIP after ${moved}s" || bad "failover: B never took $VIP ($(tail -3 "$LAB/B/keepalived.log"); leases $(cat "$LAB/leases.json"))"
 $C ip route replace $VIP/32 via 192.0.2.11 src 198.51.100.5
 r=$($C curl -s -m 3 --cacert "$LAB/pki/agent-ca.pem" "https://$VIP/" || echo FAIL)
 echo "$r" | grep -q '^v[13]$' && ok "after failover B serves $VIP: $r" || bad "after failover: $r"
+echo "leases after failover: $(cat "$LAB/leases.json")"
 
 echo "lbd-netlab: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

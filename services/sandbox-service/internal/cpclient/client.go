@@ -360,6 +360,9 @@ func (c *Client) VIPMember(ctx context.Context, method, vip, replica string, m h
 		if m.Reason != "" {
 			q.Set("reason", m.Reason)
 		}
+		if m.Seq > 0 {
+			q.Set("seq", strconv.FormatInt(m.Seq, 10))
+		}
 		_, err := c.do(ctx, method, path, q, nil, nil, true)
 		return err
 	}

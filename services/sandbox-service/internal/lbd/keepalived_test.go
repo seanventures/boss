@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func parse(s string) net.IP { return net.ParseIP(s).To4() }
@@ -59,15 +60,24 @@ func TestKeepalivedConfigIsVRRPOnly(t *testing.T) {
 	}
 }
 
-func TestTrackFaultsOnlyAMasterWhoseLeaseIsAnothers(t *testing.T) {
-	leases := map[string]string{"0": "dir_a", "1": "dir_b", "2": ""}
+func TestTrackFaultsWhileAnotherHoldsTheLeaseWhateverTheLocalState(t *testing.T) {
+	leases := map[string]string{"0": "dir_a", "1": "dir_b"}
 	f := TrackDecision("dir_a", []int{0, 1, 2}, leases)
 	if f[0] || !f[1] || f[2] {
 		t.Fatalf("decision %v", f)
 	}
-	// BACKUP of a group another holds: never a fault.
-	if TrackDecision("dir_a", []int{0}, leases)[1] {
-		t.Fatal("a BACKUP faulted")
+	// Split brain: B is MASTER of group 0, A holds the lease. B faults, and
+	// STAYS faulted once FAULT took its MASTER away (no flapping): the
+	// decision does not depend on the local state at all.
+	if !TrackDecision("dir_b", []int{0}, leases)[0] {
+		t.Fatal("split-brain MASTER not faulted")
+	}
+	if !TrackDecision("dir_b", nil, leases)[0] {
+		t.Fatal("fault cleared after FAULT dropped MASTER: it would flap")
+	}
+	// The holder dies: its lease lapses (absent from the live set) → ok.
+	if TrackDecision("dir_b", []int{0}, map[string]string{})[0] {
+		t.Fatal("fault kept without a live holder")
 	}
 	dir := t.TempDir()
 	if err := WriteTrack(dir, f); err != nil {
@@ -86,5 +96,27 @@ func TestTrackFaultsOnlyAMasterWhoseLeaseIsAnothers(t *testing.T) {
 	}
 	if ch, _ := WriteIfChanged(filepath.Join(dir, "k.conf"), "x"); ch {
 		t.Fatal("unchanged content reported as changed")
+	}
+}
+
+func TestFileLeasesFollowTheControlPlaneRules(t *testing.T) {
+	f := FileLeases{Path: filepath.Join(t.TempDir(), "leases.json"), TTL: 200 * time.Millisecond}
+	if l, _ := f.Acquire("dir_a", []int{0}); l["0"] != "dir_a" {
+		t.Fatalf("A: %v", l)
+	}
+	if l, _ := f.Acquire("dir_b", []int{0, 1}); l["0"] != "dir_a" || l["1"] != "dir_b" {
+		t.Fatalf("B took a live lease: %v", l)
+	}
+	// A is no longer MASTER of 0: its lease is released at once.
+	if l, _ := f.Acquire("dir_a", nil); l["0"] != "" {
+		t.Fatalf("released lease still held: %v", l)
+	}
+	if l, _ := f.Acquire("dir_b", []int{0, 1}); l["0"] != "dir_b" {
+		t.Fatalf("B did not take the free lease: %v", l)
+	}
+	// B dies (stops renewing): its leases lapse after the TTL.
+	time.Sleep(250 * time.Millisecond)
+	if l, _ := f.Acquire("dir_a", []int{0}); l["0"] != "dir_a" || l["1"] != "" {
+		t.Fatalf("expired leases: %v", l)
 	}
 }

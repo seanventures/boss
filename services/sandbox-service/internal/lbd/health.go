@@ -141,11 +141,11 @@ func (c *Checker) record(vip, vmIP, key string, err error) {
 	var perr error
 	switch act {
 	case "drain":
-		n, perr = c.Prog.Withdraw(vip, vmIP, nil, 0, false)
+		n, perr = c.Prog.SetHealth(vip, vmIP, false)
 	case "delete":
-		n, perr = c.Prog.Withdraw(vip, vmIP, nil, 0, true)
+		n, perr = c.Prog.SetHealth(vip, vmIP, true)
 	case "restore":
-		c.Prog.ClearOverride(vip, vmIP)
+		c.Prog.ClearHealth(vip, vmIP)
 		_, perr = c.Prog.Apply()
 	}
 	if c.Metrics != nil {

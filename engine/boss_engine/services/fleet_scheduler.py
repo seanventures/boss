@@ -165,8 +165,9 @@ def _reconcile(c: Any, *, is_frozen: bool, org_id: Optional[str]) -> dict:
                d.placement_state, d.vip, d.routing
           FROM agent_deployments d JOIN projects p ON p.id = d.project_id
           JOIN workspaces w ON w.id = p.workspace_id
-         WHERE (d.runtime = 'microvm' OR d.id IN (SELECT deployment_id FROM agent_replicas
-                                                  WHERE desired_state = 'running'))
+         WHERE (d.runtime = 'microvm' OR d.vip IS NOT NULL
+                OR d.id IN (SELECT deployment_id FROM agent_replicas
+                            WHERE desired_state = 'running'))
            AND (CAST(:o AS TEXT) IS NULL OR w.org_id = :o)"""), {"o": org_id}).mappings().all()]
     load: dict = {}
     for r in c.execute(text(
@@ -190,6 +191,11 @@ def _reconcile(c: Any, *, is_frozen: bool, org_id: Optional[str]) -> dict:
         live = dep["status"] == "live" and dep["runtime"] == "microvm"
         mode = dep["vm_mode"] or "replica"
         if not live or (mode == "per_run" and is_frozen):
+            # D8: a retired deployment, or one that left `microvm`, gives its VIP back.
+            if not live and dep.get("vip") is not None:
+                if fleet_directors.release_vip(c, deployment_id=dep["id"]):
+                    report["vips"].append({"deployment_id": dep["id"], "released": str(dep["vip"])})
+                    orgs_touched.add(dep["org_id"])
             for r in replicas:
                 stop(r, "not placed: " + ("per_run is off while microVM claims are frozen"
                                           if live else "deployment is not a live microvm one"))

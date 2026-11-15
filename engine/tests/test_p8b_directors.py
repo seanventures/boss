@@ -185,6 +185,11 @@ def test_the_director_lease_has_one_holder_per_group(eng, world):
         c.execute(text("UPDATE director_leases SET expires_at = now() - interval '1 second' "
                        "WHERE holder = :a AND vrrp_group = 0"), {"a": a.host_id})
     assert b.heartbeat(groups_master=[0, 1]).json()["leases"]["0"] == b.host_id
+    # B is no longer MASTER of group 0 (A took over, B's keepalived went BACKUP/FAULT): B's lease
+    # of group 0 is released at once — A does not wait out the TTL.
+    assert b.heartbeat(groups_master=[1]).json()["leases"].get("0") is None
+    assert a.heartbeat(groups_master=[0]).json()["leases"]["0"] == a.host_id
+    b.heartbeat(groups_master=[0, 1])  # restore for the row check below
     with eng.begin() as c:
         rows = c.execute(text("SELECT groups_master, keepalived_live, status FROM director_nodes "
                               "WHERE id = :b"), {"b": b.host_id}).mappings().one()
@@ -327,6 +332,23 @@ def test_the_host_records_a_withdraw_at_the_control_plane_and_wakes_directors(en
             "SELECT kind FROM host_events WHERE host_id = :h AND kind LIKE 'vip_member_%' "
             "ORDER BY id"), {"h": h1.host_id}).all()]
     assert kinds == ["vip_member_withdrawn", "vip_member_registered", "vip_member_withdrawn"]
+    # Latest decision wins: register (seq 20) then a late withdraw (seq 10) changes nothing.
+    r = h1.call("PUT", f"/v1/vips/{vip}/members/{rid}", json={"vm_ip": vm_ip, "weight": 3, "seq": 20})
+    assert r.status_code == 200 and r.json()["weight"] == 3
+    r = h1.call("PUT", f"/v1/vips/{vip}/members/{rid}", json={"vm_ip": vm_ip, "weight": 0, "seq": 10})
+    assert r.status_code == 200 and r.json()["stale"] is True
+    with eng.begin() as c:
+        assert c.execute(text("SELECT rs_weight FROM agent_replicas WHERE id = :r"),
+                         {"r": rid}).scalar() == 3
+    # D8: the deployment leaves microvm (or retires) → its VIP returns to the pool.
+    with eng.begin() as c:
+        c.execute(text("UPDATE agent_deployments SET status = 'retired' WHERE id = :d"),
+                  {"d": dep["id"]})
+    fleet_scheduler.reconcile(eng)
+    with eng.begin() as c:
+        assert c.execute(text("SELECT vip FROM agent_deployments WHERE id = :d"),
+                         {"d": dep["id"]}).scalar() is None
+    assert a.desired(since=0)["vips"] == []
 
 
 def test_grouping_is_deterministic_and_the_console_sees_directors_and_pools(eng, world):
@@ -381,3 +403,39 @@ def test_the_wire_shape_boss_lbd_decodes(eng, world):
     hb = a.heartbeat(groups_master=[0]).json()
     assert set(hb) >= {"director_id", "desired_generation", "leases", "renew", "heartbeat_seconds"}
     assert uuid.UUID is not None
+
+
+def test_vrrp_groups_are_stable_when_vips_are_added(eng, world):
+    """A VIP keeps its group (and so its MASTER side) whatever is allocated later."""
+    from boss_engine.services import fleet_directors, fleet_scheduler
+
+    org, pool = world["org"], world["pool"]
+    with eng.begin() as c:
+        fleet_directors.add_vip_pool(c, org_id=org, cidr=POOL)
+        fleet_directors.add_vip_pool(c, org_id=org, cidr="2001:db8:8b10::/120")  # v6: skipped
+    a = world["director"]()
+    a.enrol(join_token(eng, org, role="director"), address="192.0.2.10")
+    h1, h2 = world["host"](), world["host"]()
+    for h in (h1, h2):
+        h.enrol(join_token(eng, org, pool=pool))
+    first = deploy_agent(eng, world["project"], env="prod", replicas=2, pool=pool)
+    fleet_scheduler.reconcile(eng)
+    before = {g["group"]: g["vips"] for g in a.desired(since=0)["groups"]}
+    with eng.begin() as c:
+        vip1, g1 = c.execute(text("SELECT host(vip), vrrp_group FROM agent_deployments WHERE id = :d"),
+                             {"d": first["id"]}).one()
+        assert ":" not in vip1, "an IPv6 pool never feeds the IPv4 directors"
+        # A lower address appears later (hand-set): it must not take vip1's place in its group.
+        second = deploy_agent(eng, world["project"], env="prod", replicas=2, pool=pool)
+        c.execute(text("UPDATE agent_deployments SET vip = CAST('203.0.113.64' AS INET) WHERE id = :d"),
+                  {"d": second["id"]})
+        # allocate_vip on a deployment that already holds one answers what it holds.
+        assert fleet_directors.allocate_vip(c, org_id=org, deployment_id=second["id"]) == "203.0.113.64"
+    fleet_scheduler.reconcile(eng)
+    after = {g["group"]: g["vips"] for g in a.desired(since=0)["groups"]}
+    assert vip1 in after[g1] and after[g1][: len(before[g1])] != [] and before == {g1: [vip1]}
+    with eng.begin() as c:
+        assert c.execute(text("SELECT vrrp_group FROM agent_deployments WHERE id = :d"),
+                         {"d": first["id"]}).scalar() == g1
+        c.execute(text("DELETE FROM vip_pool WHERE org_id = :o AND cidr = CAST('2001:db8:8b10::/120' AS CIDR)"),
+                  {"o": org})

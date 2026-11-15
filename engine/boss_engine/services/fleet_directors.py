@@ -215,6 +215,11 @@ def heartbeat(connection: Any, director: fleet_ca.HostIdentity, body: dict) -> d
                SET holder = :me, expires_at = now() + make_interval(secs => :ttl)
              WHERE director_leases.holder = :me OR director_leases.expires_at < now()"""),
             {"o": org_id, "g": g, "me": director.host_id, "ttl": LEASE_SECONDS})
+    # No longer MASTER of a group: release its lease now, so the peer (held in FAULT while we
+    # hold it) may take the group without waiting out the TTL.
+    connection.execute(text(
+        "DELETE FROM director_leases WHERE org_id = :o AND holder = :me "
+        "AND NOT (vrrp_group = ANY(:m))"), {"o": org_id, "me": director.host_id, "m": masters})
     leases = {str(r[0]): str(r[1]) for r in connection.execute(text(
         "SELECT vrrp_group, holder FROM director_leases WHERE org_id = :o AND expires_at > now()"),
         {"o": org_id}).all()}
@@ -287,8 +292,23 @@ def desired(connection: Any, director_id: str) -> dict:
             entry["members"].append({"replica_id": r["replica_id"], "vm_ip": r["vm_ip"],
                                      "host_id": r["host_id"], "weight": int(r["rs_weight"]),
                                      "slots": int(r["slots"])})
-    groups = group_vips(vips.keys(), [d["id"] for d in directors])
-    group_of = {v: g["group"] for g in groups for v in g["vips"]}
+    # STABLE groups (review of PR #120): a VIP keeps the group it was given at allocation, so
+    # adding a VIP never moves another VIP's MASTER. A VIP without one (set by hand) is given the
+    # lowest group with room, once.
+    group_of: dict = {}
+    for r in connection.execute(text("""
+            SELECT host(d.vip), d.vrrp_group, d.id FROM agent_deployments d
+              JOIN projects p ON p.id = d.project_id JOIN workspaces w ON w.id = p.workspace_id
+             WHERE w.org_id = :o AND d.vip IS NOT NULL ORDER BY d.vip"""), {"o": org_id}).all():
+        if r[0] not in vips:
+            continue
+        group_of[r[0]] = int(r[1]) if r[1] is not None else assign_group(connection, org_id, r[2])
+    ids = [d["id"] for d in directors]
+    groups = []
+    for g in sorted(set(group_of.values())):
+        members = sorted(v for v, gg in group_of.items() if gg == g)
+        groups.append({"group": g, "vrid": VRID_BASE + g, "master": ids[g % len(ids)] if ids else "",
+                       "vips": members})
     out_vips = []
     for vip in sorted(vips):
         v = vips[vip]
@@ -364,7 +384,8 @@ def for_host_desired(connection: Any, org_id: str) -> tuple:
 # ── Host pushes: the durable record ───────────────────────────────────────────────────────────
 
 def vip_member(connection: Any, host: fleet_ca.HostIdentity, *, vip: str, replica_id: str,
-               method: str, vm_ip: Optional[str], weight: Optional[int], reason: str = "") -> dict:
+               method: str, vm_ip: Optional[str], weight: Optional[int], reason: str = "",
+               seq: Optional[int] = None) -> dict:
     """PUT/DELETE /v1/vips/{vip}/members/{replica}: the host's own replica only, whose
     deployment owns that VIP. PUT records the weight (0 = drained), DELETE weight 0; the serving
     state itself comes from /observed. Directors are woken either way."""
@@ -382,9 +403,13 @@ def vip_member(connection: Any, host: fleet_ca.HostIdentity, *, vip: str, replic
     if vm_ip and row["vm_ip"] and str(vm_ip) != str(row["vm_ip"]):
         raise DirectorError("vm_ip does not match the replica's.", status=409, code="vm_ip_mismatch")
     w = 0 if method == "DELETE" else max(0, int(weight or 0))
-    connection.execute(text(
-        "UPDATE agent_replicas SET rs_weight = :w, updated_at = now() WHERE id = :r"),
-        {"w": w, "r": replica_id})
+    # Latest decision wins (the host's sequence): an older push that arrives late changes nothing.
+    applied = connection.execute(text(
+        "UPDATE agent_replicas SET rs_weight = :w, rs_seq = GREATEST(rs_seq, :s), updated_at = now() "
+        "WHERE id = :r AND (:s = 0 OR :s >= rs_seq) RETURNING id"),
+        {"w": w, "r": replica_id, "s": int(seq or 0)}).first()
+    if applied is None:
+        return {"vip": vip, "replica_id": replica_id, "stale": True, "_wake": []}
     from .fleet import host_event
 
     host_event(connection, org_id=str(row["org_id"]), host_id=host.host_id,
@@ -439,15 +464,24 @@ def allocate_vip(connection: Any, *, org_id: str, deployment_id: str) -> Optiona
         {"o": org_id}).all()}
     for cidr in vip_pools(connection, org_id):
         net = ipaddress.ip_network(cidr)
+        if net.version != 4:
+            continue  # the IPVS directors (GRE, VRRP) are IPv4 only
         candidates = net.hosts() if net.prefixlen < 31 else iter(net)
         for address in candidates:
             if str(address) in used:
                 continue
-            connection.execute(text("""
+            done = connection.execute(text("""
                 UPDATE agent_deployments SET vip = CAST(:v AS INET),
                        vip_ports = COALESCE(vip_ports, CAST(:ports AS INTEGER[]))
-                 WHERE id = :d AND vip IS NULL"""),
-                {"v": str(address), "ports": DEFAULT_VIP_PORTS, "d": deployment_id})
+                 WHERE id = :d AND vip IS NULL RETURNING id"""),
+                {"v": str(address), "ports": DEFAULT_VIP_PORTS, "d": deployment_id}).first()
+            if done is None:
+                # It already has one (or it is gone): answer what it holds, never a phantom.
+                held = connection.execute(text(
+                    "SELECT host(vip) FROM agent_deployments WHERE id = :d"),
+                    {"d": deployment_id}).scalar()
+                return str(held) if held else None
+            assign_group(connection, org_id, deployment_id)
             from .fleet import host_event
 
             host_event(connection, org_id=org_id, host_id=None, kind="vip_allocated",
@@ -457,10 +491,35 @@ def allocate_vip(connection: Any, *, org_id: str, deployment_id: str) -> Optiona
     return None
 
 
+def assign_group(connection: Any, org_id: str, deployment_id: str) -> int:
+    """The lowest VRRP group with fewer than GROUP_SIZE VIPs (stable: never recomputed)."""
+    counts = {int(r[0]): int(r[1]) for r in connection.execute(text("""
+        SELECT d.vrrp_group, count(*) FROM agent_deployments d JOIN projects p ON p.id = d.project_id
+          JOIN workspaces w ON w.id = p.workspace_id
+         WHERE w.org_id = :o AND d.vip IS NOT NULL AND d.vrrp_group IS NOT NULL
+         GROUP BY d.vrrp_group"""), {"o": org_id}).all()}
+    group = next(g for g in range(MAX_GROUPS + 1) if counts.get(g, 0) < GROUP_SIZE)
+    connection.execute(text("UPDATE agent_deployments SET vrrp_group = :g WHERE id = :d"),
+                       {"g": group, "d": deployment_id})
+    return group
+
+
 def release_vip(connection: Any, *, deployment_id: str) -> Optional[str]:
+    """The VIP goes back to the pool (the deployment retired or left `microvm`)."""
     row = connection.execute(text(
-        "UPDATE agent_deployments SET vip = NULL WHERE id = :d AND vip IS NOT NULL "
-        "RETURNING host(vip)"), {"d": deployment_id}).first()
+        "UPDATE agent_deployments SET vip = NULL, vrrp_group = NULL WHERE id = :d "
+        "AND vip IS NOT NULL RETURNING host(vip)"), {"d": deployment_id}).first()
+    if row:
+        from .fleet import host_event
+
+        org = connection.execute(text(
+            "SELECT w.org_id FROM agent_deployments d JOIN projects p ON p.id = d.project_id "
+            "JOIN workspaces w ON w.id = p.workspace_id WHERE d.id = :d"),
+            {"d": deployment_id}).scalar()
+        if org:
+            host_event(connection, org_id=str(org), host_id=None, kind="vip_released",
+                       detail={"deployment_id": deployment_id, "vip": str(row[0])},
+                       actor="scheduler")
     return str(row[0]) if row else None
 
 
@@ -491,5 +550,5 @@ def list_directors(connection: Any, org_id: str) -> list:
 __all__ = ["DEFAULT_VIP_PORTS", "DirectorError", "GROUP_SIZE", "LEASE_SECONDS", "PUSH_PORT",
            "add_vip_pool", "allocate_vip", "bump", "desired", "enrol", "for_host_desired",
            "group_vips", "heartbeat", "list_directors", "list_vip_pools", "live_directors",
-           "mark_unreachable", "release_vip", "renew", "retire", "scheduler_for", "vip_member",
+           "mark_unreachable", "release_vip", "assign_group", "renew", "retire", "scheduler_for", "vip_member",
            "watch"]

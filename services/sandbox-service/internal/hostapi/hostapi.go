@@ -320,6 +320,11 @@ type VIPMember struct {
 	Ports  []int  `json:"ports,omitempty"`
 	HostID string `json:"host_id,omitempty"`
 	Reason string `json:"reason,omitempty"` // serving | unhealthy | process_exit | drain | stopped
+	// Seq orders a host's pushes for one member (P8b-10 review): the host
+	// takes it when it decides, the director and the control plane apply a
+	// push only if no newer one for that member was applied (latest wins).
+	// DELETE carries it as the "seq" query parameter.
+	Seq int64 `json:"seq,omitempty"`
 }
 
 // ---- Directors (boss-lbd, P8b-10; HOST_API.md §9) --------------------------

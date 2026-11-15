@@ -15206,6 +15206,10 @@ END $$;
 ALTER TABLE agent_hosts ADD COLUMN IF NOT EXISTS address INET;
 -- A join token is issued for one role: 'host' (boss-hostd) or 'director' (boss-lbd).
 ALTER TABLE agent_host_join_tokens ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'host';
+-- The newest host push applied per replica (the host's sequence): a late, older push is refused.
+ALTER TABLE agent_replicas ADD COLUMN IF NOT EXISTS rs_seq BIGINT NOT NULL DEFAULT 0;
+-- The VIP's VRRP group, fixed at allocation (stable: adding a VIP never moves another's MASTER).
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS vrrp_group INTEGER;
 -- ================================ end P8b-10 ==
 =======
 -- ================================ AMEX-G3 (BOSSAPP-1139): a non-zero exit fails the step ==

@@ -39,11 +39,47 @@ func (s *PushServer) Handler() http.Handler {
 	return mux
 }
 
-func peerID(r *http.Request) string {
-	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-		return ""
+// hostIdentity admits only an enrolled host's own certificate (review of
+// PR #120): issued directly by the fleet CA (never under a host's SVID
+// issuer), not a CA, client auth and NOT server auth (a director's carries
+// both), no VM SPIFFE id, and a CN the current desired state names as a
+// live host. It returns the host id, or a reason.
+func (s *PushServer) hostIdentity(r *http.Request) (string, string) {
+	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 {
+		return "", "a fleet client certificate is required"
 	}
-	return r.TLS.PeerCertificates[0].Subject.CommonName
+	chain := r.TLS.VerifiedChains[0]
+	if len(chain) != 2 {
+		return "", "the certificate must be issued directly by the fleet CA"
+	}
+	leaf := chain[0]
+	if leaf.IsCA {
+		return "", "a CA certificate cannot push"
+	}
+	client, server := false, false
+	for _, u := range leaf.ExtKeyUsage {
+		switch u {
+		case x509.ExtKeyUsageClientAuth:
+			client = true
+		case x509.ExtKeyUsageServerAuth:
+			server = true
+		case x509.ExtKeyUsageAny:
+			client, server = true, true
+		}
+	}
+	if !client || server {
+		return "", "only a host's client certificate may push (not a director's)"
+	}
+	for _, u := range leaf.URIs {
+		if strings.Contains(u.Path, "/vm/") {
+			return "", "a VM identity cannot push"
+		}
+	}
+	id := leaf.Subject.CommonName
+	if !s.Prog.HostKnown(id) {
+		return "", "not an enrolled host in this director's desired state"
+	}
+	return id, ""
 }
 
 func (s *PushServer) member(w http.ResponseWriter, r *http.Request) {
@@ -59,9 +95,12 @@ func (s *PushServer) member(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "vip_invalid", "vip must be an IPv4 address")
 		return
 	}
-	host := peerID(r)
+	host, why := s.hostIdentity(r)
 	if host == "" {
-		writeErr(w, http.StatusUnauthorized, "host_certificate_required", "a fleet client certificate is required")
+		if s.Metrics != nil {
+			s.Metrics.Inc("boss_lbd_push_refused_total", 1)
+		}
+		writeErr(w, http.StatusForbidden, "host_not_allowed", why)
 		return
 	}
 	var body hostapi.VIPMember
@@ -74,6 +113,7 @@ func (s *PushServer) member(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		body.VMIP = r.URL.Query().Get("vm_ip")
 		body.Reason = r.URL.Query().Get("reason")
+		body.Seq, _ = strconv.ParseInt(r.URL.Query().Get("seq"), 10, 64)
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method", "PUT or DELETE")
 		return
@@ -82,17 +122,31 @@ func (s *PushServer) member(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "vm_ip_invalid", "vm_ip must be IPv4")
 		return
 	}
+	// A host acts only on its own member: (vip, vm_ip) listed under its id.
+	if owner := s.Prog.MemberOwner(vip, body.VMIP); owner != host {
+		if s.Metrics != nil {
+			s.Metrics.Inc("boss_lbd_push_refused_total", 1)
+		}
+		writeErr(w, http.StatusForbidden, "member_not_this_hosts",
+			"this (vip, vm_ip) is not a member of this host in the desired state")
+		return
+	}
 	var n int
 	var err error
 	kind := "withdraw"
 	switch {
 	case r.Method == http.MethodDelete:
-		n, err = s.Prog.Withdraw(vip, body.VMIP, body.Ports, 0, true)
+		n, err = s.Prog.Withdraw(vip, body.VMIP, body.Ports, 0, true, body.Seq)
 	case body.Weight <= 0:
-		n, err = s.Prog.Withdraw(vip, body.VMIP, body.Ports, 0, false)
+		n, err = s.Prog.Withdraw(vip, body.VMIP, body.Ports, 0, false, body.Seq)
 	default:
 		kind = "register"
-		n, err = s.Prog.Register(vip, body.VMIP, body.Ports, body.Weight)
+		n, err = s.Prog.Register(vip, body.VMIP, body.Ports, body.Weight, body.Seq)
+	}
+	if errors.Is(err, ErrStale) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"applied": 0, "stale": true, "vip": vip, "replica_id": replica})
+		return
 	}
 	lat := time.Since(start)
 	if s.Metrics != nil {
@@ -222,6 +276,9 @@ func (p *Pusher) Push(ctx context.Context, directors []hostapi.DirectorEndpoint,
 				q := url.Values{"vm_ip": {m.VMIP}}
 				if m.Reason != "" {
 					q.Set("reason", m.Reason)
+				}
+				if m.Seq > 0 {
+					q.Set("seq", strconv.FormatInt(m.Seq, 10))
 				}
 				u.RawQuery = q.Encode()
 			} else {

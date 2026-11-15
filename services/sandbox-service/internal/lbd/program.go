@@ -9,6 +9,7 @@
 package lbd
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"sort"
@@ -40,9 +41,16 @@ type Programmer struct {
 
 	mu        sync.Mutex
 	desired   *hostapi.DirectorDesired
-	overrides map[string]override // "<vip>|<vm_ip>" → override
-	owned     map[string]bool     // service keys this director created or adopted
-	pools     []*net.IPNet
+	overrides map[string]override // "<vip>|<vm_ip>" → override (host pushes)
+	// health is the checker's verdict per member: present = down (true =
+	// deleted, false = weight 0). It never expires: a member the checks
+	// took out stays out until they pass again, whatever the feed says.
+	health map[string]bool
+	// lastSeq is the newest host push applied per member: an older push
+	// (withdraw and register racing on the network) is refused as stale.
+	lastSeq map[string]int64
+	owned   map[string]bool // service keys this director created or adopted
+	pools   []*net.IPNet
 }
 
 // NewProgrammer wraps a backend.
@@ -50,7 +58,8 @@ func NewProgrammer(be ipvs.Backend, logf func(string, ...any)) *Programmer {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	return &Programmer{be: be, logf: logf, overrides: map[string]override{}, owned: map[string]bool{}}
+	return &Programmer{be: be, logf: logf, overrides: map[string]override{}, owned: map[string]bool{},
+		health: map[string]bool{}, lastSeq: map[string]int64{}}
 }
 
 // Changes summarises one Apply.
@@ -101,6 +110,122 @@ func (p *Programmer) SetDesired(d *hostapi.DirectorDesired) {
 			delete(p.overrides, k)
 		}
 	}
+	for k := range p.health {
+		if !live[k] {
+			delete(p.health, k)
+		}
+	}
+}
+
+// Push errors.
+var (
+	ErrStale         = errors.New("stale push: a newer one for this member was already applied")
+	ErrUnknownMember = errors.New("no such member behind this VIP in the desired state")
+)
+
+// MemberOwner is the host id the desired state lists for (vip, vm_ip), ""
+// when the member is not listed.
+func (p *Programmer) MemberOwner(vip, vmIP string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.ownerLocked(vip, vmIP)
+}
+
+func (p *Programmer) ownerLocked(vip, vmIP string) string {
+	if p.desired == nil {
+		return ""
+	}
+	for _, v := range p.desired.VIPs {
+		if v.VIP != vip {
+			continue
+		}
+		for _, m := range v.Members {
+			if m.VMIP == vmIP {
+				return m.HostID
+			}
+		}
+	}
+	return ""
+}
+
+// HostKnown reports whether the desired state names this host (the control
+// plane lists enrolled, unrevoked hosts only).
+func (p *Programmer) HostKnown(id string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.desired == nil || id == "" {
+		return false
+	}
+	for _, h := range p.desired.Hosts {
+		if h.HostID == id {
+			return true
+		}
+	}
+	for _, v := range p.desired.VIPs {
+		for _, m := range v.Members {
+			if m.HostID == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// seqOK records seq for key unless an equal-or-newer one was applied (locked).
+// seq 0 (a push without a sequence) is always applied and records nothing.
+func (p *Programmer) seqOK(key string, seq int64) bool {
+	if seq <= 0 {
+		return true
+	}
+	if seq < p.lastSeq[key] {
+		return false
+	}
+	p.lastSeq[key] = seq
+	return true
+}
+
+// SetHealth takes a member out on the checker's verdict (weight 0, or
+// deleted) at once; Apply keeps it out until ClearHealth.
+func (p *Programmer) SetHealth(vip, vmIP string, deleted bool) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.health[memberKey(vip, vmIP)] = deleted
+	n := 0
+	var firstErr error
+	for _, port := range p.portsOf(vip) {
+		s := service(vip, port, "")
+		d := dest(vmIP, port, 0)
+		var err error
+		if deleted {
+			if p.hasDest(s, d) {
+				err = p.be.DelDestination(s, d)
+			}
+		} else if p.hasDest(s, d) {
+			err = p.be.UpdateDestination(s, d)
+		}
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		n++
+	}
+	return n, firstErr
+}
+
+// ClearHealth puts a member back under the feed (the checks pass again).
+func (p *Programmer) ClearHealth(vip, vmIP string) {
+	p.mu.Lock()
+	delete(p.health, memberKey(vip, vmIP))
+	p.mu.Unlock()
+}
+
+// HealthDown is the number of members the checker holds out.
+func (p *Programmer) HealthDown() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.health)
 }
 
 // Desired is the last desired state (nil before the first).
@@ -161,6 +286,12 @@ func (p *Programmer) Apply() (Changes, error) {
 						continue
 					}
 					w = o.weight
+				}
+				if deleted, down := p.health[memberKey(v.VIP, m.VMIP)]; down {
+					if deleted {
+						continue
+					}
+					w = 0
 				}
 				d := dest(m.VMIP, port, w)
 				ds[d.Key()] = d
@@ -273,11 +404,14 @@ func (p *Programmer) Apply() (Changes, error) {
 // with expire_nodest_conn=1 the kernel resets that server's connections so
 // clients reconnect elsewhere). It returns how many real servers changed.
 // Ports empty = every port the VIP serves.
-func (p *Programmer) Withdraw(vip, vmIP string, ports []int, weight int, remove bool) (int, error) {
+func (p *Programmer) Withdraw(vip, vmIP string, ports []int, weight int, remove bool, seq int64) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if net.ParseIP(vip).To4() == nil || net.ParseIP(vmIP).To4() == nil {
 		return 0, fmt.Errorf("vip %q / vm_ip %q: IPv4 required", vip, vmIP)
+	}
+	if !p.seqOK(memberKey(vip, vmIP), seq) {
+		return 0, ErrStale
 	}
 	if weight < 0 {
 		weight = 0
@@ -294,6 +428,9 @@ func (p *Programmer) Withdraw(vip, vmIP string, ports []int, weight int, remove 
 		var err error
 		if remove {
 			err = p.be.DelDestination(s, d)
+			if err != nil && !p.hasDest(s, d) {
+				err = nil // already gone: a delete is idempotent
+			}
 		} else {
 			err = p.be.UpdateDestination(s, d)
 			if err != nil && !p.hasDest(s, d) {
@@ -326,15 +463,29 @@ func (p *Programmer) hasDest(s ipvs.Service, d ipvs.Destination) bool {
 }
 
 // Register applies a host's registration push (a replica turned serving):
-// the member is added, or re-weighted, ahead of the desired feed. Unknown
-// VIPs (no service yet) are refused: the feed creates services.
-func (p *Programmer) Register(vip, vmIP string, ports []int, weight int) (int, error) {
+// the member is re-weighted, or re-added, ahead of the desired feed. Only a
+// member the desired state already lists behind that VIP is accepted (a
+// registration can never add a new address behind a VIP), and a member the
+// health checks hold out stays out.
+func (p *Programmer) Register(vip, vmIP string, ports []int, weight int, seq int64) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if net.ParseIP(vip).To4() == nil || net.ParseIP(vmIP).To4() == nil {
 		return 0, fmt.Errorf("vip %q / vm_ip %q: IPv4 required", vip, vmIP)
 	}
+	if p.ownerLocked(vip, vmIP) == "" {
+		return 0, ErrUnknownMember
+	}
+	if !p.seqOK(memberKey(vip, vmIP), seq) {
+		return 0, ErrStale
+	}
 	delete(p.overrides, memberKey(vip, vmIP))
+	if deleted, down := p.health[memberKey(vip, vmIP)]; down {
+		if deleted {
+			return 0, nil
+		}
+		weight = 0
+	}
 	if len(ports) == 0 {
 		ports = p.portsOf(vip)
 	}

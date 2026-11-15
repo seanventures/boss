@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
@@ -77,7 +78,7 @@ func (a *Agent) pusher() *lbd.Pusher {
 // pushMember sends one member call to every director and the control plane.
 // weight < 0 means DELETE. It returns once every director answered or timed
 // out (≤ 500 ms), so the caller's state machine is never blocked for long.
-func (a *Agent) pushMember(ctx context.Context, dv hostapi.DesiredVM, weight int, reason string) {
+func (a *Agent) pushMember(ctx context.Context, dv hostapi.DesiredVM, weight int, reason string, seq int64) {
 	t, ok := pushTargetOf(dv)
 	if !ok {
 		return
@@ -87,7 +88,7 @@ func (a *Agent) pushMember(ctx context.Context, dv hostapi.DesiredVM, weight int
 		method = http.MethodDelete
 		weight = 0
 	}
-	m := hostapi.VIPMember{VMIP: t.vmIP, Weight: weight, Ports: t.ports, HostID: a.HostID(), Reason: reason}
+	m := hostapi.VIPMember{VMIP: t.vmIP, Weight: weight, Ports: t.ports, HostID: a.HostID(), Reason: reason, Seq: seq}
 	start := time.Now()
 	eps := a.directors()
 	if p := a.pusher(); p != nil && len(eps) > 0 {
@@ -112,37 +113,92 @@ func (a *Agent) pushMember(ctx context.Context, dv hostapi.DesiredVM, weight int
 	}
 }
 
-// withdrawVM is the watchdog's step 1 (+2): weight 0 at once; on confirmed
-// death also delete. Runs in its own goroutine so the state machine never
-// waits on the network.
-func (a *Agent) withdrawVM(dv hostapi.DesiredVM, reason string, dead bool) {
-	if _, ok := pushTargetOf(dv); !ok {
+// Member pushes are serialized (review of PR #120): each decision takes a
+// sequence number at once (on the watchdog's path, so the order is the
+// order of decisions), then runs on that member's own lane; a lane skips a
+// decision a newer one has superseded, and the directors and the control
+// plane refuse an older sequence than one they already applied, so the
+// latest decision wins even if two pushes cross on the network.
+func (a *Agent) nextSeq() int64 {
+	for {
+		last := a.pushSeq.Load()
+		next := time.Now().UnixNano()
+		if next <= last {
+			next = last + 1
+		}
+		if a.pushSeq.CompareAndSwap(last, next) {
+			return next
+		}
+	}
+}
+
+type memberStep struct {
+	weight int // < 0 = DELETE
+	reason string
+}
+
+// enqueue runs steps for one member in order on its lane, unless a newer
+// decision for the member arrives first.
+func (a *Agent) enqueue(dv hostapi.DesiredVM, steps ...memberStep) {
+	t, ok := pushTargetOf(dv)
+	if !ok {
 		return
 	}
+	key := t.vip + "|" + t.vmIP
+	seqs := make([]int64, len(steps))
+	for i := range steps {
+		seqs[i] = a.nextSeq()
+	}
+	a.pushMu.Lock()
+	if a.lanes == nil {
+		a.lanes = map[string]*memberLane{}
+	}
+	lane := a.lanes[key]
+	if lane == nil {
+		lane = &memberLane{}
+		a.lanes[key] = lane
+	}
+	lane.latest = seqs[len(seqs)-1]
+	a.pushMu.Unlock()
 	go func() {
+		lane.mu.Lock()
+		defer lane.mu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		a.pushMember(ctx, dv, 0, reason)
-		if dead {
-			a.pushMember(ctx, dv, -1, reason)
+		for i, st := range steps {
+			a.pushMu.Lock()
+			superseded := lane.latest > seqs[len(seqs)-1]
+			a.pushMu.Unlock()
+			if superseded {
+				return // a newer decision for this member is queued
+			}
+			a.pushMember(ctx, dv, st.weight, st.reason, seqs[i])
 		}
 	}()
 }
 
-// registerVM pushes the replica's weight when it turns serving.
-func (a *Agent) registerVM(dv hostapi.DesiredVM) {
-	if _, ok := pushTargetOf(dv); !ok {
+type memberLane struct {
+	mu     sync.Mutex
+	latest int64 // guarded by Agent.pushMu
+}
+
+// withdrawVM is the watchdog's step 1 (+2): weight 0 at once; on confirmed
+// death also delete. Off the state machine's path, serialized per member.
+func (a *Agent) withdrawVM(dv hostapi.DesiredVM, reason string, dead bool) {
+	if dead {
+		a.enqueue(dv, memberStep{0, reason}, memberStep{-1, reason})
 		return
 	}
+	a.enqueue(dv, memberStep{0, reason})
+}
+
+// registerVM pushes the replica's weight when it turns serving.
+func (a *Agent) registerVM(dv hostapi.DesiredVM) {
 	w := dv.Weight
 	if w <= 0 {
 		w = 1
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		a.pushMember(ctx, dv, w, "serving")
-	}()
+	a.enqueue(dv, memberStep{w, "serving"})
 }
 
 // confirmedDeath: the process is gone or the control channel is silent.

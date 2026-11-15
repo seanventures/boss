@@ -110,6 +110,7 @@ func buildConfig(args []string) (lbd.Config, error) {
 	fs.StringVar(&cfg.KeepalivedConf, "keepalived-conf", env("BOSS_LBD_KEEPALIVED_CONF", "/etc/keepalived/keepalived.conf"), "keepalived config path")
 	fs.StringVar(&cfg.KeepalivedPid, "keepalived-pid", env("BOSS_LBD_KEEPALIVED_PID", "/run/keepalived/keepalived.pid"), "keepalived pid file")
 	fs.StringVar(&cfg.DesiredFile, "desired-file", env("BOSS_LBD_DESIRED_FILE", ""), "lab: desired state JSON")
+	fs.StringVar(&cfg.LeaseFile, "lease-file", env("BOSS_LBD_LEASE_FILE", ""), "lab: shared director-lease file")
 	fs.StringVar(&cfg.ID, "id", env("BOSS_LBD_ID", ""), "lab: director id")
 	fs.StringVar(&cfg.CertFile, "cert", env("BOSS_LBD_CERT", ""), "lab: certificate PEM")
 	fs.StringVar(&cfg.KeyFile, "key", env("BOSS_LBD_KEY", ""), "lab: key PEM")
@@ -187,6 +188,7 @@ func push(args []string) int {
 	replica := fs.String("replica", "", "replica id")
 	vmIP := fs.String("vm-ip", "", "real server address")
 	weight := fs.Int("weight", 0, "weight (PUT); 0 = drain")
+	seq := fs.Int64("seq", time.Now().UnixNano(), "push sequence (latest wins)")
 	del := fs.Bool("delete", false, "DELETE the member")
 	reason := fs.String("reason", "", "reason")
 	timeout := fs.Duration("timeout", 500*time.Millisecond, "per-director deadline")
@@ -227,7 +229,7 @@ func push(args []string) int {
 	if *del {
 		method = http.MethodDelete
 	}
-	res := p.Push(context.Background(), eps, method, *vip, *replica, hostapi.VIPMember{VMIP: *vmIP, Weight: *weight, Reason: *reason})
+	res := p.Push(context.Background(), eps, method, *vip, *replica, hostapi.VIPMember{VMIP: *vmIP, Weight: *weight, Reason: *reason, Seq: *seq})
 	rc := 0
 	for _, r := range res {
 		out := map[string]any{"director": r.Director, "latency_us": r.Latency.Microseconds()}

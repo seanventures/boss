@@ -45,6 +45,9 @@ func TestHealthCheckDrainsAfterTwoFailuresDeletesAfterFourAndRestores(t *testing
 	}
 	c.Tick(ctx)
 	c.Tick(ctx) // 4 failures: deleted
+	// The feed still lists it (the host believes it serves): it stays out.
+	prog.SetDesired(desired(2))
+	_, _ = prog.Apply()
 	if _, ok := be.Table()["tcp/203.0.113.17:443"]["10.200.8.3:443"]; ok {
 		t.Fatal("not deleted after four failures")
 	}

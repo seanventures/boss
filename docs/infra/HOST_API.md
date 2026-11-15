@@ -950,15 +950,18 @@ A director's certificate authenticates as the `sys_host` principal with credenti
   `vm_ip`), weight = `rs_weight`. A VIP with no serving member still appears (the service exists,
   with no real server).
 - `scheduler` is `rr`, or `wlc` once the members' `slots` differ.
-- `groups` is computed by the control plane (VIPs sorted, chunks of 50, group *i* MASTER on the
-  *i*-th director by id order modulo the pair), so both sides render the same keepalived
-  configuration. `vrid` = 1 + group.
+- `groups` is computed by the control plane (stored group per VIP, ≤ 50 per group, group *i*
+  MASTER on the *i*-th director by id order modulo the pair), so both sides render the same
+  keepalived configuration. `vrid` = 1 + group.
 - `hosts` is the static route list: `vm_prefix via address` (§5.1).
 - **Generation** moves when a replica enters or leaves `serving`, the scheduler changes a host's
   set, a VIP is allocated, a host's address changes, or a director enrols or retires.
-- **VIP allocation (D8):** the lowest free address of the org's `vip_pool` rows (`routing ipvs`)
-  is given to a production microVM deployment on its first placement; `vip_ports` defaults to
-  `[443]`. Without a pool the deployment serves internal callers only.
+- **VIP allocation (D8):** the lowest free address of the org's IPv4 `vip_pool` rows (`routing
+  ipvs`) is given to a production microVM deployment on its first placement; `vip_ports` defaults to
+  `[443]`. Without a pool the deployment serves internal callers only. The VIP returns to the pool
+  when the deployment retires or leaves `microvm`.
+- **Stable groups:** a VIP gets its VRRP group at allocation (`agent_deployments.vrrp_group`, the
+  lowest group with room) and keeps it; adding a VIP never moves another VIP's MASTER.
 
 What `boss-lbd` does with it: one IPVS virtual service per `(VIP, port)` (TCP, the scheduler,
 flags 0 = no persistence), real servers in **tunnel mode with tunnel type GRE**; services inside
@@ -981,10 +984,15 @@ as `master` **and** `backup` on both nodes (both carry traffic); sysctls `ip_for
 
 `director_leases(org_id, vrrp_group) → holder, expires_at` (5 s TTL). A heartbeat takes the lease
 of every group its keepalived reports MASTER when it is free, expired or already its own; it
-never takes another live director's. `boss-lbd` writes `track/<group>` = `fault` exactly when it
-is MASTER of a group whose lease another director holds; keepalived's `vrrp_script` (`boss-lbd
-track --group N`, every second, `fall 2`) then puts that instance in FAULT, dropping its VIPs.
-That ends a split brain within about two seconds. **A missing lease, an unreachable control
+never takes another live director's; and it **releases its own lease of every group it no longer
+reports MASTER** (a dead keepalived — pid gone — reports none). `boss-lbd` writes
+`track/<group>` = `fault` for **as long as another live director holds the group's lease,
+whatever keepalived's local state** (review of PR #120: tracking only while MASTER flapped under a
+real split brain); keepalived's `vrrp_script` (`boss-lbd track --group N`, every second, `fall 2`,
+`rise 2`) keeps that instance in FAULT, so the BACKUP side of each group sits in FAULT in steady
+state and can never claim the VIP. Failover: the holder's keepalived dies → its lease is released
+at the next heartbeat (≤ 2 s; or lapses in 5 s if the whole node died) → the peer's fault clears
+(rise 2 s) → VRRP master-down (≈ 3.6 s). Measured 5.1–5.7 s on boss-1 (the LLD's 3 s was VRRP alone). **A missing lease, an unreachable control
 plane or an expired peer lease never fault** (decision 30): the lease breaks ties, it does not
 take every VIP down with Postgres.
 
@@ -997,6 +1005,14 @@ PUT    /v1/vips/{vip}/members/{replica}   {"vm_ip": "10.200.4.7", "weight": 0|n,
 DELETE /v1/vips/{vip}/members/{replica}?vm_ip=10.200.4.7&reason=process_exit
 ```
 
+- **Who may push** (review of PR #120): only an enrolled host's own certificate — issued directly
+  by the fleet CA (never under a host's SVID issuer), not a CA, client auth and not server auth
+  (a director's has both), no VM SPIFFE id, and a CN the director's desired state names as a live
+  host — and only for a `(vip, vm_ip)` the desired state lists under that host. Anything else is
+  `403`. A registration can re-weight or re-add a listed member, never add an address.
+- **Order:** every push carries `seq` (taken when the host decides; DELETE: `?seq=`); pushes for one
+  member run on one lane on the host, and the director and the control plane (`rs_seq`) refuse an
+  older `seq` than one applied (`stale`), so the latest decision wins.
 - **To every director** in `director_push`, over mTLS on port 7446: the host presents its fleet
   client certificate, the director presents its fleet certificate and the host checks the leaf's
   CN is the expected director id. The director applies it to IPVS **before answering**
@@ -1015,7 +1031,9 @@ DELETE /v1/vips/{vip}/members/{replica}?vm_ip=10.200.4.7&reason=process_exit
 
 ### 9.5 Health checks
 
-1 s interval; 2 failures → weight 0; 4 → delete; 2 successes → restored. A check is a **TCP SYN
+1 s interval; 2 failures → weight 0; 4 → delete; 2 successes → restored. The verdict is a
+**health set** that never expires: a member the checks took out stays out, whatever the feed or a
+registration says, until the checks pass again. A check is a **TCP SYN
 inside GRE** to the member's `vm_ip` with the VIP as inner destination and the director's address
 as inner source, from a fixed source port per member; the VM's SYN-ACK returns direct (DSR) to
 the director; the prober then sends an RST through the same path, closing the VM's half-open
@@ -1033,8 +1051,8 @@ decapsulate to the VIP. Replies leave `eth0` with source = VIP (DSR).
 
 Two director namespaces (boss-lbd + keepalived 2.2.8, kernel 6.8, GRE tunnel mode), one host
 namespace with the exact `boss-hostd netpol-render` policy on three taps, three replica
-namespaces (VIP on lo, `bgre0`, a TLS server), one client. 17 checks, 3 consecutive green runs
-(2026-11-15):
+namespaces (VIP on lo, `bgre0`, a TLS server), one client. 24 checks green (2026-11-15, after the
+PR #120 review):
 
 | Check | Result |
 |---|---|
@@ -1042,7 +1060,8 @@ namespaces (VIP on lo, `bgre0`, a TLS server), one client. 17 checks, 3 consecut
 | T2 health | replica killed → drained after 2 failed 1 s checks (≈ 2 s), deleted 2 s later; a 40-connection client loop: **0 failures** after one retry |
 | T2 push | host → both directors over mTLS, weight 0 then DELETE: **2.0–3.7 ms** round trip per director (TLS handshake included); IPVS apply on the director ≤ **0.31 ms** (`boss_lbd_withdraw_seconds_max`); a non-fleet certificate refused |
 | T13 | **~1 600 new TLS connections/s** through one director from a single client (client-bound: `openssl s_time`; IPVS counted 8 471 conns, 0 outgoing packets); `ip_vs_conn` is merged into kmalloc on 6.8 (≈ 320 B per entry → ~300 MB per million connections, as §2.8 estimated) |
-| VRRP | group 0 MASTER on A, group 1 on B; keepalived states reach boss-lbd (`/status`); A's keepalived killed → B owns the VIP after **0.64 s** and serves it |
+| VRRP + lease | group 0 MASTER on A, group 1 on B; each side FAULT for the other's group (lease file = the CP's rules); **split brain** (A→B adverts cut 12 s): B never MASTER of group 0, never held the VIP; A's keepalived SIGKILLed → B owns the VIP after **5.1–5.7 s** and serves it |
+| Push auth | another host's replica, a director certificate, a non-fleet certificate, an unknown `vm_ip`: all `403`, IPVS unchanged |
 
 ## Decisions
 
@@ -1130,7 +1149,8 @@ Python control plane as it was built.
     included.** Two directors rendering keepalived from the same `groups` can never disagree about
     who is MASTER; VIPs are chunked by 50 in sorted order (VRID = 1 + group), alternating sides.
 30. **(P8b-10) The director lease breaks ties; it never takes VIPs down with the control plane.**
-    A MASTER faults only when another live director holds its group's lease. An unreachable control
+    A director faults a group while another live director holds its lease (whatever its own VRRP
+    state, so a split brain cannot flap). An unreachable control
     plane, an empty lease or an expired one leave keepalived's decision alone (LLD §3.14.4 said
     "cannot renew → FAULT"; that would remove every external VIP during a Postgres outage).
 31. **(P8b-10) Health checks are a TCP SYN inside GRE through the real data path**, from a fixed

@@ -1,11 +1,15 @@
 package lbd
 
 import (
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
 )
@@ -73,19 +77,25 @@ func Masters(states map[int]string) []int {
 	return out
 }
 
-// TrackDecision is the rule: fault iff MASTER and the lease is another's.
-func TrackDecision(selfID string, masters []int, leases map[string]string) map[int]bool {
-	isMaster := map[int]bool{}
-	for _, g := range masters {
-		isMaster[g] = true
-	}
+// TrackDecision is the rule (review of PR #120): a group is FAULT here for
+// as long as ANOTHER live director holds its lease, whatever keepalived's
+// local state. Tracking only while MASTER flapped under a real split brain:
+// FAULT → not MASTER → fault cleared → MASTER again (with GARPs) every few
+// seconds. `groups` are every group the desired state knows; a group with
+// no lease, or our own, is ok. Leases arrive already filtered to live ones
+// (unexpired), so a dead holder's lease lapses within its TTL and the fault
+// clears by itself.
+func TrackDecision(selfID string, groups []int, leases map[string]string) map[int]bool {
 	out := map[int]bool{}
+	for _, g := range groups {
+		out[g] = false
+	}
 	for gs, holder := range leases {
 		g, err := strconv.Atoi(gs)
 		if err != nil {
 			continue
 		}
-		out[g] = isMaster[g] && holder != "" && holder != selfID
+		out[g] = holder != "" && holder != selfID
 	}
 	return out
 }
@@ -118,4 +128,72 @@ func Track(stateDir string, group int) int {
 		return 1
 	}
 	return 0
+}
+
+// FileLeases is the lab's lease store (no control plane): the same rules as
+// fleet_directors.heartbeat — take a group's lease when it is free, expired
+// or ours; release our lease of a group we are no longer MASTER of — kept
+// in one JSON file under flock, shared by both directors' namespaces.
+type FileLeases struct {
+	Path string
+	TTL  time.Duration
+}
+
+type fileLease struct {
+	Holder  string `json:"holder"`
+	Expires int64  `json:"expires_unix_nano"`
+}
+
+// Acquire renews/takes the leases of masters and answers every live holder.
+func (f FileLeases) Acquire(self string, masters []int) (map[string]string, error) {
+	ttl := f.TTL
+	if ttl <= 0 {
+		ttl = 5 * time.Second
+	}
+	fd, err := os.OpenFile(f.Path, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	defer fd.Close()
+	if err := syscall.Flock(int(fd.Fd()), syscall.LOCK_EX); err != nil {
+		return nil, err
+	}
+	defer syscall.Flock(int(fd.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	raw, _ := io.ReadAll(fd)
+	table := map[string]fileLease{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &table)
+	}
+	now := time.Now().UnixNano()
+	mine := map[string]bool{}
+	for _, g := range masters {
+		k := strconv.Itoa(g)
+		mine[k] = true
+		cur, ok := table[k]
+		if !ok || cur.Holder == self || cur.Expires < now {
+			table[k] = fileLease{Holder: self, Expires: now + int64(ttl)}
+		}
+	}
+	for k, l := range table {
+		if l.Holder == self && !mine[k] {
+			delete(table, k) // no longer MASTER of it: let the peer take it now
+		}
+	}
+	out, _ := json.Marshal(table)
+	if _, err := fd.Seek(0, 0); err != nil {
+		return nil, err
+	}
+	if err := fd.Truncate(0); err != nil {
+		return nil, err
+	}
+	if _, err := fd.Write(out); err != nil {
+		return nil, err
+	}
+	live := map[string]string{}
+	for k, l := range table {
+		if l.Expires >= now {
+			live[k] = l.Holder
+		}
+	}
+	return live, nil
 }

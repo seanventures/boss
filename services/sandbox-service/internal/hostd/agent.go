@@ -186,9 +186,11 @@ type Agent struct {
 	hbCount int
 
 	// Director pushes (directors.go).
-	pushMu sync.Mutex
-	push   *lbd.Pusher
-	pushCA string
+	pushMu  sync.Mutex
+	push    *lbd.Pusher
+	pushCA  string
+	pushSeq atomic.Int64
+	lanes   map[string]*memberLane
 
 	// Warm pools (pool.go).
 	warm         map[string]*warmVM    // slot id → warm VM
