@@ -14,7 +14,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DotsThree } from "@phosphor-icons/react";
 
 import {
-  effectiveOf, governWrite, money, readNumber, rightsFor, type CapPreview as CapPreviewData, type Control, type Envelope,
+  effectiveOf, governWrite, money, readNumber, rightsFor, tip14, type CapPreview as CapPreviewData, type Control, type Envelope,
   type GovernView, type TokenPolicy, type WriteResult,
 } from "../../lib/govern";
 import { logHref } from "../../lib/log-url";
@@ -482,7 +482,7 @@ function TokenGuides({ view }: {
           stopped a call. The long explanation stays in the tooltip so the board stays
           within the six-word copy budget (activity-govern-copy-budget). */}
       <span className="gv-honesty" data-testid="gv-token-pointer"
-            title="To stop calls by volume, set per-class caps (project setting call_classes: deny a class, or cap its calls/tokens per day).">
+            title={tip14("Set per-class caps to stop calls by volume")}>
         Per-call figures guide alerts
       </span>
     </section>
