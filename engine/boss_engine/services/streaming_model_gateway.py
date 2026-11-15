@@ -742,18 +742,27 @@ def provider_for_project(connection: Any, settings: Any, project_id: str) -> str
 def routed_models(connection: Any, settings: Any, project_id: str) -> tuple[str, ...]:
     """THE RUN'S MODEL ALLOWLIST: every model name this project's routing names for any job
     (Setup › Repo and models: build, review, chat, decisions, hard, routine), so a handle can
-    call those and nothing else. Empty when the project names none (Auto, the CLI's own default
-    model): then any model of the provider is allowed — a name BOSS never chose cannot be pinned."""
+    call those and nothing else. Read from the project's own settings only (model_routing's
+    knobs) — never a credential-store or network lookup on the lease path. Empty when the
+    project names none (Auto, the CLI's own default model): then any model of the provider is
+    allowed — a name BOSS never chose cannot be pinned."""
     try:
-        from .model_routing import JOB_KNOBS, resolve_job
+        from .model_routing import JOB_KNOBS, _chosen, chat_model_knob
 
+        knobs: list[str] = []
+        for job, (_engine_knob, model_knob) in JOB_KNOBS.items():
+            if model_knob:
+                knobs.append(model_knob)
+            elif job == "chat":
+                knobs += [chat_model_knob("claude_code"), chat_model_knob("codex"),
+                          chat_model_knob("")]
         names: list[str] = []
-        for job in JOB_KNOBS:
+        for knob in dict.fromkeys(knobs):
             try:
-                model = resolve_job(connection, settings, project_id, job).model
-            except Exception:  # noqa: BLE001 — one job's knob unreadable: the others still count
+                model = _chosen(connection, project_id, knob)
+            except Exception:  # noqa: BLE001 — one knob unreadable: the others still count
                 continue
-            if model and str(model).strip() and str(model).lower() != "auto":
+            if model and str(model).strip() and str(model).strip().lower() != "auto":
                 names.append(str(model).strip())
         return tuple(dict.fromkeys(names))
     except Exception:  # noqa: BLE001

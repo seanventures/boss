@@ -25,7 +25,6 @@ import datetime as dt
 import json
 import tracemalloc
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -699,10 +698,11 @@ def test_a_handle_is_allow_listed_to_the_runs_routed_models(monkeypatch):
         def execute(self, *a, **k):
             raise RuntimeError("no database in this unit test")
 
-    resolutions = {"build": "claude-sonnet-4-5", "review": "claude-opus-4-1", "chat": None,
-                   "decisions": "claude-sonnet-4-5", "hard": "auto", "routine": ""}
-    monkeypatch.setattr(model_routing, "resolve_job",
-                        lambda c, s, p, job: SimpleNamespace(model=resolutions.get(job)))
+    knobs = {"code_agent_model": "claude-sonnet-4-5", "code_review_model": "claude-opus-4-1",
+             "claude_cli_model": None, "decision_model": "claude-sonnet-4-5",
+             "code_agent_strong_model": "auto", "code_agent_low_cost_model": ""}
+    # project settings only (no credential store, no network: this runs on the lease path)
+    monkeypatch.setattr(model_routing, "_chosen", lambda c, p, knob: knobs.get(knob))
     assert smg.routed_models(Conn(), None, "p_1") == ("claude-sonnet-4-5", "claude-opus-4-1")
     minted: dict = {}
 
