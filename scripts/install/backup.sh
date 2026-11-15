@@ -8,6 +8,8 @@ trap 'exit 143' TERM
 INSTALL_DIR="${BOSS_INSTALL_DIR:-}"
 BACKUP_ROOT="${BOSS_BACKUP_DIR:-$HOME/boss-backups}"
 LEAVE_STOPPED=0
+RETENTION=1
+RETENTION_DRY_RUN=0
 SESSION_KEYS_FILE=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 ARCHIVE_HELPER="$SCRIPT_DIR/backup_archive.py"
@@ -15,6 +17,7 @@ ARCHIVE_HELPER="$SCRIPT_DIR/backup_archive.py"
 usage() {
   cat <<'EOF'
 Usage: backup.sh [--dir INSTALL_DIR] [--backup-dir BACKUP_ROOT]
+                 [--no-retention] [--retention-dry-run]
 
 Creates a private backup of .env, BOSS and optional Infisical Postgres databases,
 the BOSS artifacts and identity-key volumes, and the local repositories volume (the bare git
@@ -24,6 +27,12 @@ database text and artifacts. Durable encrypted connection records are retained. 
 success or failure. If Postgres was stopped, it starts only for the snapshot
 and is stopped again before this command returns. Prints only the backup
 directory path on stdout.
+
+After a complete backup, older backups in BACKUP_ROOT are removed by the retention rule
+(storage hygiene layer 1): keep the newest BOSS_BACKUP_KEEP (10) and anything from the last
+BOSS_BACKUP_KEEP_DAYS (7) days, within BOSS_BACKUP_CAP_GB (20); oldest first; never the backup
+just taken. Set them in .env or the environment. --retention-dry-run only says what would go;
+--no-retention skips it. One line per removal, on stderr.
 EOF
 }
 while [[ $# -gt 0 ]]; do
@@ -31,6 +40,8 @@ while [[ $# -gt 0 ]]; do
     --dir) INSTALL_DIR="${2:?--dir needs a path}"; shift 2 ;;
     --leave-stopped) LEAVE_STOPPED=1; shift ;;
     --backup-dir) BACKUP_ROOT="${2:?--backup-dir needs a path}"; shift 2 ;;
+    --no-retention) RETENTION=0; shift ;;
+    --retention-dry-run) RETENTION_DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -280,6 +291,23 @@ PYMETA
 python3 "$ARCHIVE_HELPER" create "$BACKUP" "$BACKUP/.metadata.json" "$SESSION_KEYS_FILE"
 rm -f "$SESSION_KEYS_FILE" "$BACKUP/.metadata.json" "$BACKUP/.identity-state.json"
 SESSION_KEYS_FILE=""
+# RETENTION (storage hygiene layer 1, BOSSAPP-1146): this backup is complete, so older ones may
+# go. A setting comes from the environment, else from the install's .env, else the default.
+# Best effort: a retention problem is reported, never a reason to call the backup failed.
+env_or_dotenv() {
+  local value="${!1:-}"
+  [[ -n "$value" ]] || value="$(grep -m 1 "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+  printf '%s\n' "${value:-$2}"
+}
+if [[ "$RETENTION" -eq 1 ]]; then
+  retention_args=(--keep "$(env_or_dotenv BOSS_BACKUP_KEEP 10)"
+                  --keep-days "$(env_or_dotenv BOSS_BACKUP_KEEP_DAYS 7)"
+                  --cap-gb "$(env_or_dotenv BOSS_BACKUP_CAP_GB 20)"
+                  --protect "$BACKUP")
+  [[ "$RETENTION_DRY_RUN" -eq 0 ]] || retention_args+=(--dry-run)
+  python3 "$ARCHIVE_HELPER" retention "$BACKUP_ROOT" "${retention_args[@]}" </dev/null >&2 ||
+    echo 'backup retention: could not apply the retention rule; the new backup is complete and nothing was removed by it.' >&2
+fi
 if [[ "$LEAVE_STOPPED" -eq 1 ]]; then
   if [[ "$DB_STARTED_FOR_BACKUP" -eq 1 ]]; then "${COMPOSE[@]}" stop db </dev/null >&2; fi
 else

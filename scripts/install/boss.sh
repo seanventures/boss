@@ -85,9 +85,11 @@ Commands:
   uninstall [--purge] Stop BOSS and keep data. --purge also deletes data after a backup and
                       a typed confirmation, then removes the boss command the installer
                       put on PATH for this install. Also: --yes, --dry-run, --backup-dir PATH
-  prune [--dedicated] Free disk BOSS used: stopped previews, unused preview images, old BOSS
-                      image tags; build cache too above 75% disk on a BOSS-only host
-                      (--dedicated). Runs after every upgrade and update. Also: --dry-run
+  prune [--dedicated] Free disk BOSS used: stopped previews, unused preview images, BOSS image
+                      tags other than the release and its prev-<tag> rollback point; caps the
+                      build cache at BOSS_BUILD_CACHE_CAP_GB (10); above 75% disk on a BOSS-only
+                      host (--dedicated) drops cache older than 72h too. Runs after every
+                      upgrade and update. Also: --dry-run
   host-sample         macOS: post this Mac's swap and biggest memory users to BOSS's system
                       doctor, which cannot see past Docker Desktop's VM
   identity CMD        Named accounts, from the host shell:

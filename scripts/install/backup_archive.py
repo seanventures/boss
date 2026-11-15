@@ -248,7 +248,165 @@ def layout(config):
     return result
 
 
+# ---- retention (storage hygiene layer 1, BOSSAPP-1146) -------------------------------------
+#
+# Every upgrade writes a ~1 GB backup under BOSS_BACKUP_DIR and nothing ever removed one: an
+# operator's laptop held 358 of them (170 GB) after six weeks. The rule, applied after every
+# successful backup and on demand (`backup_archive.py retention DIR`):
+#
+#   keep the newest BOSS_BACKUP_KEEP (10) and anything from the last BOSS_BACKUP_KEEP_DAYS (7)
+#   days, within BOSS_BACKUP_CAP_GB (20) in total; the oldest go first; the backup just taken
+#   (and, failing that, the newest one) is never removed.
+#
+# Only directories BOSS's backup.sh named (`boss-<UTC stamp>-<pid>`) are candidates; anything
+# else in the directory (an operator's own copy, the legacy offline dumps) is never touched.
+BACKUP_NAME = re.compile(r'^boss-(\d{8}T\d{6}Z)-\d+$')
+RETENTION_DEFAULTS = {'keep': 10, 'keep_days': 7, 'cap_gb': 20.0}
+
+
+def _tree_bytes(path):
+    """Bytes under `path`, without following symlinks (a backup holds only regular files)."""
+    total = 0
+    stack = [path]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
+
+
+def _backup_time(path, match):
+    """The backup's moment from its name; the directory's mtime when the name cannot be read."""
+    import datetime as _dt
+    try:
+        return _dt.datetime.strptime(match[1], '%Y%m%dT%H%M%SZ').replace(tzinfo=_dt.timezone.utc)
+    except ValueError:
+        return _dt.datetime.fromtimestamp(path.stat().st_mtime, tz=_dt.timezone.utc)
+
+
+def list_backups(root):
+    """[{path, time, bytes}] for every backup directory under `root`, newest first."""
+    out = []
+    root = Path(root)
+    if not root.is_dir():
+        return out
+    for child in root.iterdir():
+        match = BACKUP_NAME.match(child.name)
+        if not match or child.is_symlink() or not child.is_dir():
+            continue
+        out.append({'path': child, 'time': _backup_time(child, match), 'bytes': _tree_bytes(child)})
+    out.sort(key=lambda b: b['time'], reverse=True)
+    return out
+
+
+def retention_plan(backups, *, keep, keep_days, cap_bytes, protect=None, now=None):
+    """Pure: which backups stay and which go, each with its reason. `backups` newest first.
+
+    Returns (kept, removed): lists of {path, time, bytes, reason}."""
+    import datetime as _dt
+    now = now or _dt.datetime.now(tz=_dt.timezone.utc)
+    keep = max(1, int(keep))
+    protect = Path(protect).resolve() if protect else None
+    horizon = now - _dt.timedelta(days=max(0, float(keep_days)))
+    kept, removed = [], []
+    for index, backup in enumerate(backups):
+        path = Path(backup['path'])
+        if protect is not None and path.resolve() == protect:
+            reason = 'the backup just taken'
+        elif index == 0:
+            reason = 'the newest backup'
+        elif index < keep:
+            reason = 'among the newest %d' % keep
+        elif backup['time'] >= horizon:
+            reason = 'less than %g days old' % float(keep_days)
+        else:
+            removed.append({**backup, 'reason': 'older than the newest %d and more than %g days old'
+                            % (keep, float(keep_days))})
+            continue
+        kept.append({**backup, 'reason': reason})
+    # THE CAP WINS over "keep N" and "keep N days": a cap the rules can exceed is not a cap.
+    # Oldest first, never the protected one (or the newest when nothing is protected).
+    if cap_bytes and cap_bytes > 0:
+        total = sum(b['bytes'] for b in kept)
+        for backup in reversed(kept[:]):
+            if total <= cap_bytes:
+                break
+            if backup['reason'] in ('the backup just taken', 'the newest backup'):
+                continue
+            kept.remove(backup)
+            total -= backup['bytes']
+            removed.append({**backup, 'reason': 'over the %.0f GB cap' % (cap_bytes / 1e9)})
+    removed.sort(key=lambda b: b['time'])
+    return kept, removed
+
+
+def _gb(n):
+    return '%.1f GB' % (n / 1e9)
+
+
+def retention_main(argv):
+    parser = argparse.ArgumentParser(
+        prog='backup_archive.py retention',
+        description='Remove old pre-upgrade backups: keep the newest N and the last D days, '
+                    'within a size cap. Logs one line per removal to stderr; the backup named '
+                    'by --protect is never removed.')
+    parser.add_argument('root', help='the backups directory (BOSS_BACKUP_DIR, ~/boss-backups)')
+    parser.add_argument('--keep', type=int, default=RETENTION_DEFAULTS['keep'])
+    parser.add_argument('--keep-days', type=float, default=RETENTION_DEFAULTS['keep_days'])
+    parser.add_argument('--cap-gb', type=float, default=RETENTION_DEFAULTS['cap_gb'])
+    parser.add_argument('--protect', default=None, help='the backup just taken')
+    parser.add_argument('--dry-run', action='store_true', help='say what would go; remove nothing')
+    args = parser.parse_args(argv)
+    if args.keep < 1:
+        parser.error('--keep must be at least 1 (BOSS_BACKUP_KEEP)')
+    if args.keep_days < 0 or args.cap_gb < 0:
+        parser.error('--keep-days and --cap-gb cannot be negative')
+    import datetime as _dt
+    import shutil
+
+    def log(line):
+        print('backup retention: ' + line, file=sys.stderr)
+
+    root = Path(args.root)
+    if not root.is_dir():
+        log('no backups directory at %s; nothing to do' % root)
+        return 0
+    backups = list_backups(root)
+    kept, removed = retention_plan(backups, keep=args.keep, keep_days=args.keep_days,
+                                   cap_bytes=args.cap_gb * 1e9, protect=args.protect)
+    now = _dt.datetime.now(tz=_dt.timezone.utc)
+    freed = 0
+    verb = 'would remove' if args.dry_run else 'removed'
+    for backup in removed:
+        age_days = (now - backup['time']).total_seconds() / 86400
+        if not args.dry_run:
+            try:
+                shutil.rmtree(backup['path'])
+            except OSError as exc:
+                log('could not remove %s: %s' % (backup['path'], exc.strerror or 'error'))
+                continue
+        freed += backup['bytes']
+        log('%s %s (%s, %.0f days old): %s' % (verb, backup['path'], _gb(backup['bytes']),
+                                                age_days, backup['reason']))
+    log('%s: kept %d (%s), %s %d (%s); rule: newest %d, last %g days, %.0f GB cap' % (
+        root, len(kept), _gb(sum(b['bytes'] for b in kept)), verb, len(removed), _gb(freed),
+        args.keep, args.keep_days, args.cap_gb))
+    return 0
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == 'retention':
+        sys.exit(retention_main(sys.argv[2:]))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['validate', 'create', 'layout', 'env', 'scan'])
     parser.add_argument('path', nargs='?')
