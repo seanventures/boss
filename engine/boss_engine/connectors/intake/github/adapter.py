@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import quote
 
@@ -42,6 +43,9 @@ API_BASE = "https://api.github.com"
 #: GitHub puts at most this many commits in a push payload; beyond it the list is truncated.
 PUSH_COMMIT_LIMIT = 20
 MAX_CHANGED_FILES = 300
+#: `owner/name` as GitHub spells it; anything else never reaches the compare URL.
+_FULL_NAME = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9_.-]{1,100}$")
+_SHA = re.compile(r"^[0-9a-f]{7,64}$")
 _FIELD_WHITELIST = {
     "issues": ("number", "title", "state", "html_url", "labels", "assignees", "milestone",
                "created_at", "updated_at", "closed_at", "author_association", "draft"),
@@ -239,7 +243,9 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
         if ev.type != "com.github.push" or ev.data.get("changed_files") is not None:
             return ev
         repo, before, after = ev.data.get("repository"), ev.data.get("before"), ev.data.get("after")
-        if not repo or not before or not after or str(before).strip("0") == "":
+        if (not repo or not _FULL_NAME.match(str(repo)) or not before or not after
+                or not _SHA.match(str(before)) or not _SHA.match(str(after))
+                or str(before).strip("0") == ""):
             ev.data["changed_files_source"] = "unavailable"
             return ev
         token = conn.secret("api_token")

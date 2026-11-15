@@ -4,6 +4,7 @@ down. T3 exactly-once under redelivery, T4 "the API died between INSERT and COMM
 one connection sheds beyond its hard cap and leaves the other connection untouched."""
 from __future__ import annotations
 
+import base64
 import json
 import random
 import time
@@ -37,11 +38,13 @@ def world():
     engine = pg_engine()
     pid = make_project(engine)
     event_intake.BUCKETS.reset()
+    event_intake.REFUSALS.reset()
     event_intake._BEFORE_COMMIT = None
     try:
         yield engine, pid
     finally:
         event_intake._BEFORE_COMMIT = None
+        event_intake.REFUSALS.reset()
         purge(engine, pid)
 
 
@@ -81,12 +84,21 @@ def test_a_webhook_connection_mints_its_secret_once_and_never_shows_it_again(wor
     with engine.begin() as c:
         rotated = event_intake.rotate_secret(c, project_id=pid, connection_id=out["id"], actor="ceo")
     assert rotated["secret"].startswith("whsec_") and rotated["secret"] != out["secret"]
-    # the old secret stops verifying at once; the new one verifies
-    req_old = standard_webhook_request(out["secret"], {"a": 1})
-    req_new = standard_webhook_request(rotated["secret"], {"a": 1})
+    assert rotated["secret_fields"] == ["signing_secret"]           # the previous ref is hidden
+    # the old secret keeps verifying for the rotation grace (a person re-points the sender),
+    # the new one verifies at once; after the grace only the new one does
     token = token_of(out["url_path"])
-    assert event_intake.receive(engine, "webhook", token, req_old)["http_status"] == 401
-    assert event_intake.receive(engine, "webhook", token, req_new)["http_status"] == 202
+    assert event_intake.receive(engine, "webhook", token,
+                                standard_webhook_request(out["secret"], {"a": 1}, msg_id="o1"))[
+        "http_status"] == 202
+    assert event_intake.receive(engine, "webhook", token,
+                                standard_webhook_request(rotated["secret"], {"a": 1}, msg_id="n1"))[
+        "http_status"] == 202
+    later = time.time() + event_intake.ROTATION_GRACE_SECONDS + 5
+    assert event_intake.receive(engine, "webhook", token, standard_webhook_request(
+        out["secret"], {"a": 1}, msg_id="o2", timestamp=int(later)), now=later)["http_status"] == 401
+    assert event_intake.receive(engine, "webhook", token, standard_webhook_request(
+        rotated["secret"], {"a": 1}, msg_id="n2", timestamp=int(later)), now=later)["http_status"] == 202
 
 
 def test_a_github_connection_needs_the_sources_secret_and_rejects_unknown_kinds(world):
@@ -195,22 +207,31 @@ def test_T4_a_crash_between_insert_and_commit_loses_nothing_and_duplicates_nothi
     assert all(r["duplicates"] == 0 for r in rows)             # a 503 was never a stored row
 
 
-def test_bad_signatures_are_401_counted_and_sampled_once_a_minute(world):
+def test_bad_signatures_are_401_counted_in_memory_and_flushed_with_one_sampled_row(world):
     engine, pid = world
     out = make_connection(engine, pid, "webhook")
     token = token_of(out["url_path"])
+    wrong = "whsec_" + base64.b64encode(b"w" * 32).decode()
     for n in range(5):
-        got = event_intake.receive(engine, "webhook", token,
-                                   standard_webhook_request("whsec_wrong", {"n": n}))
+        got = event_intake.receive(engine, "webhook", token, standard_webhook_request(wrong, {"n": n}))
         assert got["http_status"] == 401 and got["body"]["reason"] == "bad_signature"
     assert _rows(engine, out["id"]) == []
-    with engine.begin() as c:
-        row = event_intake.get_connection(c, out["id"])
-        samples = c.execute(text(
-            "SELECT count(*) FROM events WHERE project_id = :p AND event_type = 'intake.verify_refused'"),
-            {"p": pid}).scalar()
-    assert row["health"]["refusals"] == 5 and row["health"]["last_refusal"] == "bad_signature"
-    assert samples == 1
+
+    def health_and_samples():
+        with engine.begin() as c:
+            row = event_intake.get_connection(c, out["id"])
+            n = c.execute(text("SELECT count(*) FROM events WHERE project_id = :p AND event_type = "
+                               "'intake.verify_refused'"), {"p": pid}).scalar()
+        return row["health"], n
+
+    # the first refusal flushed (one UPDATE + one sampled event); the other four are in memory
+    health, samples = health_and_samples()
+    assert health["refusals"] == 1 and health["last_refusal"] == "bad_signature" and samples == 1
+    assert event_intake.REFUSALS.pending(out["id"]) == 4
+    assert event_intake.flush_refusals(engine, connection_id=out["id"]) == 0   # not due yet
+    assert event_intake.flush_refusals(engine, connection_id=out["id"], force=True) == 1
+    health, samples = health_and_samples()
+    assert health["refusals"] == 5 and samples == 2 and event_intake.REFUSALS.pending(out["id"]) == 0
     unsigned = RawRequest(method="POST", headers={"content-type": "application/json"}, body=b"{}")
     assert event_intake.receive(engine, "webhook", token, unsigned)["body"]["reason"] == "missing_signature"
 
@@ -285,6 +306,13 @@ def test_T8_a_storm_on_one_connection_is_shed_beyond_its_hard_cap_and_the_other_
     stormy_rows = _rows(engine, stormy["id"])
     assert len(stormy_rows) == 150                             # kept for replay, marked shed
     assert sum(1 for r in stormy_rows if r["status"] == "shed") == 90
+    assert all(r["raw"] is not None for r in stormy_rows)      # small bodies are kept
+    big = standard_webhook_request(s_sec, {"pad": "x" * (event_intake.SHED_RAW_BYTES + 100)},
+                                   msg_id="sbig")
+    got = event_intake.receive(engine, "webhook", s_tok, big, now=now + 2)
+    assert got["outcome"] == "shed"
+    big_row = event_row(engine, got["event_id"])
+    assert big_row["raw"] is None and big_row["raw_sha256"]     # shed + large: hash only
     assert all(r["status"] == "received" for r in _rows(engine, calm["id"]))
     assert max(calm_latencies) < 1.0                           # the calm connection is not delayed
     # the minute window rolls over: the stormy connection is admitted again
@@ -294,12 +322,13 @@ def test_T8_a_storm_on_one_connection_is_shed_beyond_its_hard_cap_and_the_other_
     assert later["outcome"] == "received"
     with engine.begin() as c:
         counts = event_intake.status_counts(c, pid)
-    assert counts["shed"] == 90 and counts["received"] == 60 + 15 + 1
+    assert counts["shed"] == 91 and counts["received"] == 60 + 15 + 1
 
 
 def test_when_the_database_is_down_the_answer_is_503_and_the_source_retries():
     dead = create_engine("postgresql+psycopg://nobody:nothing@127.0.0.1:1/nowhere", future=True)
-    got = event_intake.receive(dead, "webhook", "tok", standard_webhook_request("s", {"a": 1}))
+    secret = "whsec_" + base64.b64encode(b"d" * 32).decode()
+    got = event_intake.receive(dead, "webhook", "tok", standard_webhook_request(secret, {"a": 1}))
     assert got["http_status"] == 503 and got["outcome"] == "unavailable"
 
 

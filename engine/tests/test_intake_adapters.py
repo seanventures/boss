@@ -4,6 +4,8 @@ types, push with a lazily fetched changed-files list)."""
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import time
 
@@ -30,6 +32,7 @@ from ._intake_support import (
 )
 
 NOW = 1_763_100_000.0
+WHSEC = "whsec_" + base64.b64encode(b"k" * 32).decode()   # a Standard Webhooks secret
 
 
 def _conn(kind: str, secret_name: str, secret: str, **config) -> IntakeConnection:
@@ -52,6 +55,66 @@ def test_standard_webhooks_published_vector():
     body = b'{"test": 2432232314}'
     sig = wh.standard_webhooks_signature(secret, "msg_p5jXN8AQM9LWM0D4loKWxJek", "1614265330", body)
     assert sig == "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE="
+
+
+def _reference_standard_webhooks_sign(secret: str, msg_id: str, timestamp: str, body: bytes) -> str:
+    """The standardwebhooks reference library's algorithm, written out independently: strip the
+    optional `whsec_`, base64-decode the key, HMAC-SHA256 over `{id}.{timestamp}.{body}`,
+    base64 the digest, prefix `v1,`."""
+    key = base64.b64decode(secret.split("whsec_", 1)[-1])
+    signed = f"{msg_id}.{timestamp}.".encode() + body
+    return "v1," + base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest()).decode()
+
+
+def test_a_minted_secret_is_standard_webhooks_compatible_and_a_compliant_sender_verifies():
+    from boss_engine.services.event_intake import _mint
+
+    adapter = get_intake_adapter("webhook")
+    for _ in range(5):
+        secret = _mint("signing_secret")
+        assert secret.startswith("whsec_")
+        assert len(base64.b64decode(secret[len("whsec_"):], validate=True)) == 32
+        conn = _conn("webhook", "signing_secret", secret)
+        body = b'{"test": 2432232314}'
+        headers = {"webhook-id": "msg_1", "webhook-timestamp": str(int(NOW)),
+                   "webhook-signature": _reference_standard_webhooks_sign(secret, "msg_1",
+                                                                          str(int(NOW)), body)}
+        assert adapter.verify(conn, RawRequest(method="POST", headers=headers, body=body),
+                              NOW).scheme == "standard_webhooks"
+    # the published vector verifies end to end, with and without the prefix
+    secret = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
+    body = b'{"test": 2432232314}'
+    headers = {"webhook-id": "msg_p5jXN8AQM9LWM0D4loKWxJek", "webhook-timestamp": "1614265330",
+               "webhook-signature": "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE="}
+    req = RawRequest(method="POST", headers=headers, body=body)
+    assert adapter.verify(_conn("webhook", "signing_secret", secret), req, 1614265330.0).scheme \
+        == "standard_webhooks"
+    assert adapter.verify(_conn("webhook", "signing_secret", "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"),
+                          req, 1614265330.0).scheme == "standard_webhooks"
+    # a secret that is not base64 cannot be what a compliant sender signed with: not_configured
+    with pytest.raises(VerifyRefused, match="not_configured"):
+        adapter.verify(_conn("webhook", "signing_secret", "whsec_not base64!!"), req, 1614265330.0)
+    with pytest.raises(wh.SecretNotBase64):
+        wh.standard_webhooks_signature("whsec_not base64!!", "m", "1", b"")
+
+
+def test_the_previous_secret_verifies_only_inside_its_rotation_grace():
+    adapter = get_intake_adapter("webhook")
+    old, new = "whsec_" + base64.b64encode(b"o" * 32).decode(), "whsec_" + base64.b64encode(b"n" * 32).decode()
+    from datetime import datetime, timezone
+
+    until = datetime.fromtimestamp(NOW + 600, tz=timezone.utc).isoformat()
+    conn = IntakeConnection("icn_r", "p_1", "webhook", config={"signing_secret_previous_until": until},
+                            secret_resolver=lambda n: {"signing_secret": new,
+                                                       "signing_secret_previous": old}.get(n))
+    req_old = standard_webhook_request(old, {"a": 1}, timestamp=int(NOW))
+    req_new = standard_webhook_request(new, {"a": 1}, timestamp=int(NOW))
+    assert adapter.verify(conn, req_old, NOW).scheme == "standard_webhooks"
+    assert adapter.verify(conn, req_new, NOW).scheme == "standard_webhooks"
+    late = standard_webhook_request(old, {"a": 1}, timestamp=int(NOW) + 601)
+    with pytest.raises(VerifyRefused, match="bad_signature"):
+        adapter.verify(conn, late, NOW + 601)
+    assert adapter.verify(conn, boss_v1_request(old, {"a": 1}, timestamp=int(NOW)), NOW).scheme == "boss_v1"
 
 
 def test_webhook_verifies_standard_webhooks_and_boss_v1_and_nothing_else():
@@ -105,54 +168,55 @@ def test_webhook_tampered_body_and_missing_secret_are_refused():
         adapter.verify(unconfigured, req, NOW)
     v1 = boss_v1_request(secret, {"a": 1}, timestamp=int(NOW))
     with pytest.raises(VerifyRefused, match="bad_signature"):
-        adapter.verify(_conn("webhook", "signing_secret", "whsec_other"), v1, NOW)
+        adapter.verify(_conn("webhook", "signing_secret", "whsec_" + base64.b64encode(b"z" * 32).decode()),
+                       v1, NOW)
 
 
 def test_webhook_dedupe_key_prefers_the_senders_delivery_id_then_the_signed_body():
     adapter = get_intake_adapter("webhook")
-    conn = _conn("webhook", "signing_secret", "s")
-    req = standard_webhook_request("s", {"x": 1}, msg_id="msg_1", timestamp=int(NOW))
+    conn = _conn("webhook", "signing_secret", WHSEC)
+    req = standard_webhook_request(WHSEC, {"x": 1}, msg_id="msg_1", timestamp=int(NOW))
     assert adapter.dedupe_key(conn, req) == "webhook:msg_1"
-    v1 = boss_v1_request("s", {"x": 1}, delivery="d-9", timestamp=int(NOW))
+    v1 = boss_v1_request(WHSEC, {"x": 1}, delivery="d-9", timestamp=int(NOW))
     assert adapter.dedupe_key(conn, v1) == "webhook:d-9"
-    anon = boss_v1_request("s", {"x": 1}, timestamp=int(NOW))
+    anon = boss_v1_request(WHSEC, {"x": 1}, timestamp=int(NOW))
     k1 = adapter.dedupe_key(conn, anon)
     assert k1.startswith("webhook:") and len(k1) == len("webhook:") + 64
-    assert adapter.dedupe_key(conn, boss_v1_request("s", {"x": 1}, timestamp=int(NOW))) == k1
-    assert adapter.dedupe_key(conn, boss_v1_request("s", {"x": 2}, timestamp=int(NOW))) != k1
+    assert adapter.dedupe_key(conn, boss_v1_request(WHSEC, {"x": 1}, timestamp=int(NOW))) == k1
+    assert adapter.dedupe_key(conn, boss_v1_request(WHSEC, {"x": 2}, timestamp=int(NOW))) != k1
 
 
 def test_webhook_parse_carries_cloudevents_through_and_wraps_plain_json():
     adapter = get_intake_adapter("webhook")
-    conn = _conn("webhook", "signing_secret", "s", tenant="grafana")
+    conn = _conn("webhook", "signing_secret", WHSEC, tenant="grafana")
     ce = {"specversion": "1.0", "id": "A1", "source": "grafana://prod", "type": "Com.Grafana.Alert",
           "subject": "payments-api", "time": "2026-11-14T09:13:58Z", "data": {"title": "err > 2%"}}
-    req = standard_webhook_request("s", ce, msg_id="msg_ce", timestamp=int(NOW))
+    req = standard_webhook_request(WHSEC, ce, msg_id="msg_ce", timestamp=int(NOW))
     [ev] = adapter.parse(conn, _stored(req, adapter, conn))
     assert (ev.id, ev.source, ev.type, ev.subject) == ("A1", "grafana://prod", "com.grafana.alert",
                                                        "payments-api")
     assert ev.data == {"title": "err > 2%"} and ev.bossdedupe == "webhook:msg_ce"
     assert ev.bossconnection == conn.id and ev.bossactor.kind == "service"
     assert adapter.conversation_key(conn, ev) == "subject:payments-api"
-    plain = standard_webhook_request("s", {"status": "firing", "alerts": [1, 2]}, msg_id="msg_p",
+    plain = standard_webhook_request(WHSEC, {"status": "firing", "alerts": [1, 2]}, msg_id="msg_p",
                                      timestamp=int(NOW))
     [ev2] = adapter.parse(conn, _stored(plain, adapter, conn))
     assert ev2.type == "com.boss.webhook.received" and ev2.source == "webhook://grafana"
     assert ev2.id == "msg_p" and ev2.data["alerts"] == [1, 2] and ev2.subject is None
     assert ev2.time.startswith("2025") or ev2.time.startswith("2026")   # from webhook-timestamp
     assert adapter.conversation_key(conn, ev2) is None
-    with_causality = standard_webhook_request("s", {"boss": {"run_id": "r1", "hops": 2}},
+    with_causality = standard_webhook_request(WHSEC, {"boss": {"run_id": "r1", "hops": 2}},
                                               msg_id="msg_c", timestamp=int(NOW))
     [ev3] = adapter.parse(conn, _stored(with_causality, adapter, conn))
     assert ev3.bosscausality == {"run_id": "r1", "deployment_id": None, "hops": 2}
-    bad = standard_webhook_request("s", b"not json", msg_id="msg_b", timestamp=int(NOW))
+    bad = standard_webhook_request(WHSEC, b"not json", msg_id="msg_b", timestamp=int(NOW))
     with pytest.raises(ParseRefused):
         adapter.parse(conn, _stored(bad, adapter, conn))
 
 
 def test_webhook_cloudevents_abuse_protection_handshake():
     adapter = get_intake_adapter("webhook")
-    conn = _conn("webhook", "signing_secret", "s", allowed_origins="grafana.example, other.example")
+    conn = _conn("webhook", "signing_secret", WHSEC, allowed_origins="grafana.example, other.example")
     ok = adapter.handshake(conn, RawRequest(method="OPTIONS", headers={
         "webhook-request-origin": "grafana.example"}, body=b""))
     assert ok.status == 200 and ok.headers["WebHook-Allowed-Origin"] == "grafana.example"
@@ -276,6 +340,15 @@ def test_github_push_enrich_failures_leave_the_event_routable(monkeypatch):
     monkeypatch.setattr(gh, "TRANSPORT", boom)
     [ev] = adapter.parse(conn, _stored(req, adapter, conn))
     assert adapter.enrich(conn, ev).data["changed_files_error"] == "OSError"
+    # a repository name that is not owner/name, or an odd sha, never reaches the compare URL
+    for odd in ("../../evil", "owner/name/extra", "owner", "owner/na me"):
+        body = github_push(commits=25, repo=odd)
+        [ev] = adapter.parse(conn, _stored(github_request("s", "push", body), adapter, conn))
+        assert adapter.enrich(conn, ev).data["changed_files_source"] == "unavailable", odd
+    bad_sha = github_push(commits=25)
+    bad_sha["after"] = "HEAD; rm -rf"
+    [ev] = adapter.parse(conn, _stored(github_request("s", "push", bad_sha), adapter, conn))
+    assert adapter.enrich(conn, ev).data["changed_files_source"] == "unavailable"
     # a branch creation (before = 0...0) has nothing to compare against
     created = github_push(commits=25)
     created["before"] = "0" * 40

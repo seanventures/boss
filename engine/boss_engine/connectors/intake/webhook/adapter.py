@@ -53,16 +53,19 @@ MAX_DELIVERY_ID = 200
 _TYPE_OK = set("abcdefghijklmnopqrstuvwxyz0123456789._-")
 
 
+class SecretNotBase64(ValueError):
+    """A Standard Webhooks secret must be `whsec_` + standard base64 (the reference libraries
+    base64-decode the key; a secret they cannot decode never verifies)."""
+
+
 def _key_bytes(secret: str) -> bytes:
-    """Standard Webhooks: the key is the base64 payload after `whsec_`. A secret that is not
-    valid base64 (BOSS mints url-safe tokens) is used as its own bytes, which is what a sender
-    following the spec with that same string would do when its decoder is lenient — tests pin
-    both forms."""
+    """Standard Webhooks: the key is the strictly base64-decoded payload after `whsec_` (the
+    prefix is optional in the reference implementations)."""
     raw = secret[len(SECRET_PREFIX):] if secret.startswith(SECRET_PREFIX) else secret
     try:
         return base64.b64decode(raw + "=" * (-len(raw) % 4), validate=True)
-    except (binascii.Error, ValueError):
-        return raw.encode("utf-8")
+    except (binascii.Error, ValueError) as error:
+        raise SecretNotBase64(str(error)) from None
 
 
 def standard_webhooks_signature(secret: str, msg_id: str, timestamp: str, body: bytes) -> str:
@@ -93,31 +96,53 @@ class WebhookIntakeAdapter(IntakeAdapterBase):
 
     # -- PUSH -------------------------------------------------------------------------------------
 
+    def _secrets(self, conn: IntakeConnection, now: float) -> list[str]:
+        """The current signing secret, plus the previous one inside its rotation grace."""
+        out = [conn.secret("signing_secret") or ""]
+        until = str(conn.get("signing_secret_previous_until") or "")
+        if until:
+            try:
+                grace_ok = datetime.fromisoformat(until).timestamp() > now
+            except ValueError:
+                grace_ok = False
+            previous = conn.secret("signing_secret_previous") if grace_ok else None
+            if previous:
+                out.append(previous)
+        return [s for s in out if s]
+
     def verify(self, conn: IntakeConnection, req: RawRequest, now: float) -> Verified:
-        secret = conn.secret("signing_secret") or ""
         sw_sig = req.header(SW_SIGNATURE)
         boss_sig = req.header(BOSS_SIGNATURE)
         if not sw_sig and not boss_sig:
             raise VerifyRefused("missing_signature", provider=self.key)
-        if not secret:
+        secrets = self._secrets(conn, now)
+        if not secrets:
             raise VerifyRefused("not_configured", provider=self.key)
         if sw_sig:
             msg_id, stamp = req.header(SW_ID), req.header(SW_TIMESTAMP)
             if not msg_id or not stamp:
                 raise VerifyRefused("missing_signature", provider=self.key)
             sent = _window(stamp, now)
-            expected = standard_webhooks_signature(secret, msg_id, stamp, req.body)
+            expected = []
+            for secret in secrets:
+                try:
+                    expected.append(standard_webhooks_signature(secret, msg_id, stamp, req.body))
+                except SecretNotBase64:
+                    continue
+            if not expected:
+                raise VerifyRefused("not_configured", provider=self.key)
             for candidate in sw_sig.split():
-                if candidate.startswith("v1,") and hmac.compare_digest(candidate, expected):
+                if candidate.startswith("v1,") and any(
+                        hmac.compare_digest(candidate, e) for e in expected):
                     return Verified(scheme="standard_webhooks", timestamp=sent)
             raise VerifyRefused("bad_signature", provider=self.key)
         stamp = req.header(BOSS_TIMESTAMP)
         if not stamp:
             raise VerifyRefused("missing_signature", provider=self.key)
         sent = _window(stamp, now)
-        expected = boss_v1_signature(secret, stamp, req.body)
+        expected = [boss_v1_signature(secret, stamp, req.body) for secret in secrets]
         for candidate in (p.strip() for p in boss_sig.split(",")):
-            if candidate and hmac.compare_digest(candidate, expected):
+            if candidate and any(hmac.compare_digest(candidate, e) for e in expected):
                 return Verified(scheme="boss_v1", timestamp=sent)
         raise VerifyRefused("bad_signature", provider=self.key)
 
@@ -211,4 +236,5 @@ def now_seconds() -> int:
     return int(time.time())
 
 
-__all__ = ["WebhookIntakeAdapter", "boss_v1_signature", "standard_webhooks_signature"]
+__all__ = ["SecretNotBase64", "WebhookIntakeAdapter", "boss_v1_signature",
+           "standard_webhooks_signature"]

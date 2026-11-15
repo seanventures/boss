@@ -5,6 +5,10 @@ fires whatever comes back through `agent_triggers.fire`. P9a-2 replaces `route`'
 real router — the filter DSL over the envelope (LLD §5.2), addressing, thread keys (§5.4),
 identity (§6), per-entity rate guards and storm/digest mode (§7.3) — and keeps this signature.
 
+P9a-2 also owns the HTTP path that creates a route: `TriggerBody` in routers/agent_platform.py
+does not yet pass `connection_id` / `priority` to `agent_triggers.create`, so today an intake
+route is created from code (tests) only. Keep this module's names: another build sits on them.
+
 What P9a-1 ships is the trivial default: every live `agent_triggers` row of kind `intake` on the
 event's connection fires once, on the trigger's own thread, under the trigger's standing grant,
 with the envelope as the payload and `intake:<event id>` as the dedupe key (a replay that is not

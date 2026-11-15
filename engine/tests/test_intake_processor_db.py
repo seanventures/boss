@@ -293,6 +293,44 @@ def test_failures_retry_with_backoff_then_the_event_is_a_dead_letter(world, monk
     assert event_row(engine, event_id)["attempts"] == 1
 
 
+def test_an_event_never_overtakes_an_earlier_failed_event_of_its_conversation(world, monkeypatch):
+    engine, pid = world
+    dep = deploy_local_agent(engine, pid)
+    conn = make_connection(engine, pid, "webhook")
+    make_route(engine, pid, dep["id"], conn["id"])
+    first = _receive(engine, conn, {"subject": "INC1", "n": 1}, msg_id="o1")
+    broken = {"on": True}
+    real_route = intake_router.route
+
+    def flaky(*a, **kw):
+        if broken["on"]:
+            raise RuntimeError("downstream hiccup")
+        return real_route(*a, **kw)
+
+    monkeypatch.setattr(intake_router, "route", flaky)
+    event_intake.process_due(engine, _settings())                  # first fails, retrying
+    assert event_row(engine, first)["status"] == "failed"
+    broken["on"] = False
+    second = _receive(engine, conn, {"subject": "INC1", "n": 2}, msg_id="o2")
+    got = event_intake.process_due(engine, _settings())
+    assert got["received"] == 1                                    # second deferred, not fired
+    row = event_row(engine, second)
+    assert row["status"] == "received" and row["attempts"] == 0
+    assert row["outcome"][-1]["deferred_behind"] == first
+    assert row["next_attempt_at"] > event_row(engine, first)["next_attempt_at"]
+    assert runs_of(engine, pid) == []
+    with engine.begin() as c:                                      # first becomes due, then second
+        c.execute(text("UPDATE intake_events SET next_attempt_at = now() WHERE id = :i"), {"i": first})
+    event_intake.process_due(engine, _settings())
+    with engine.begin() as c:
+        c.execute(text("UPDATE intake_events SET next_attempt_at = now() WHERE id = :i"), {"i": second})
+    event_intake.process_due(engine, _settings())
+    runs = runs_of(engine, pid)
+    assert [r["status"] for r in (event_row(engine, first), event_row(engine, second))] == ["routed", "routed"]
+    assert len(runs) == 2
+    assert [o["run_id"] for o in event_row(engine, first)["outcome"] if o.get("run_id")] == [runs[0]["id"]]
+
+
 def test_a_body_the_adapter_cannot_parse_is_dead_at_once_never_retried(world):
     engine, pid = world
     conn = make_connection(engine, pid, "github", secrets={"webhook_secret": "gh-s"})
@@ -318,10 +356,13 @@ def test_two_processors_never_claim_one_row_and_a_lease_expires(world):
     assert all(r["status"] == "processing" and r["attempts"] == 1 for r in got_a + got_b)
     with engine.begin() as c:                                 # nothing left while leased
         assert event_intake.claim(c, limit=10) == []
-        c.execute(text("UPDATE intake_events SET lease_until = now() - interval '1 second', "
-                       "status = 'received' WHERE id = :i"), {"i": ids[0]})
-    with engine.begin() as c:                                 # an expired lease is claimable again
-        assert [r["id"] for r in event_intake.claim(c, limit=10)] == [ids[0]]
+        # processor A dies holding ids[0]: the row stays `processing` and its lease runs out
+        c.execute(text("UPDATE intake_events SET lease_until = now() - interval '1 second' "
+                       "WHERE id = :i"), {"i": ids[0]})
+    assert event_row(engine, ids[0])["status"] == "processing"
+    with engine.begin() as c:                                 # reclaimed by the next processor
+        [again] = event_intake.claim(c, limit=10, holder="C")
+    assert again["id"] == ids[0] and again["attempts"] == 2 and again["claimed_by"] == "C"
 
 
 def test_an_intake_route_needs_a_connection_of_its_own_project(world):

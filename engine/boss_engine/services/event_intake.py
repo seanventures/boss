@@ -90,6 +90,10 @@ DEAD_RETENTION_DAYS = 90
 REFUSAL_SAMPLE_SECONDS = 60
 #: Loop prevention, layer 2: an event that already hopped this many agents is dropped.
 MAX_HOPS = 3
+#: After a rotation the previous signing secret still verifies for this long.
+ROTATION_GRACE_SECONDS = 600
+#: A `shed` row keeps its raw body only up to this size (the hash always stays).
+SHED_RAW_BYTES = 16 * 1024
 #: The processor's safety tick when a NOTIFY is lost (§13).
 PROCESSOR_TICK_SECONDS = 2.0
 PROCESSOR_BATCH = 50
@@ -148,18 +152,20 @@ def _adapter(kind: str):
     return adapter
 
 
-def _secret_name(connection_id: str, field_name: str) -> str:
-    return f"intake_{connection_id}_{field_name}"
+def _secret_name(connection_id: str, field_name: str, version: int = 0) -> str:
+    """The backend key of one secret. A rotation writes a NEW name (`_v<n>`): put_secret on the
+    same name overwrites the value in place, which would end the previous secret's grace at once."""
+    return f"intake_{connection_id}_{field_name}" + (f"_v{version}" if version else "")
 
 
 def _store_secret(connection: Connection, project_id: str, connection_id: str, field_name: str,
-                  value: str, actor: str) -> str:
+                  value: str, actor: str, *, version: int = 0) -> str:
     from .secret_backends import default_secret_backend
     from .secrets_service import put_secret
 
     settings = _settings()
     stored = put_secret(connection, settings, project_id=project_id,
-                        name=_secret_name(connection_id, field_name), value=value,
+                        name=_secret_name(connection_id, field_name, version), value=value,
                         secret_kind="api_token", backend=default_secret_backend(settings),
                         actor=actor)
     return str(stored["secret_ref_id"])
@@ -174,8 +180,12 @@ def _limits(raw: Any) -> dict[str, int]:
 
 
 def _mint(field_name: str) -> str:
-    return "whsec_" + _secrets.token_urlsafe(32) if field_name.endswith("secret") \
-        else _secrets.token_urlsafe(32)
+    """A signing secret in the Standard Webhooks form — `whsec_` + base64 of 32 random bytes —
+    so a compliant sender library decodes it as the key (the BOSS v1 scheme uses the same string
+    as its key bytes); other secret fields are plain url-safe tokens."""
+    if field_name.endswith("secret"):
+        return "whsec_" + base64.b64encode(_secrets.token_bytes(32)).decode("ascii")
+    return _secrets.token_urlsafe(32)
 
 
 def create_connection(connection: Connection, *, project_id: str, kind: str, actor: str,
@@ -315,7 +325,7 @@ def describe_connection(connection: Connection, row: Mapping[str, Any], *,
         "icon": manifest.icon if manifest else row["kind"],
         "name": row.get("name") or "", "mode": row["mode"], "status": row["status"],
         "config": _json(row.get("config"), {}) or {},
-        "secret_fields": sorted(refs),        # names only
+        "secret_fields": sorted(k for k in refs if not k.endswith("_previous")),   # names only
         "url_path": inbound_path(str(row["kind"]), str(row["path_token"])),
         "limits": _limits(row.get("limits")), "health": health,
         "rules": rules, "created_by": row.get("created_by"),
@@ -412,12 +422,24 @@ def rotate_secret(connection: Connection, *, project_id: str, connection_id: str
         raise IntakeServiceError(f"{row['kind']} has no secret field {fname!r}.")
     value = _mint(fname)
     refs = dict(_json(row.get("secret_refs"), {}) or {})
-    refs[fname] = _store_secret(connection, project_id, connection_id, fname, value, actor)
+    cfg = dict(_json(row.get("config"), {}) or {})
+    # The old secret keeps verifying for a short grace (the sender is re-pointed by a person,
+    # not atomically); after `<field>_previous_until` only the new one does.
+    version = int(cfg.get(f"{fname}_version") or 0) + 1
+    if refs.get(fname):
+        refs[f"{fname}_previous"] = refs[fname]
+        cfg[f"{fname}_previous_until"] = (_now() + timedelta(seconds=ROTATION_GRACE_SECONDS)
+                                          ).isoformat()
+    cfg[f"{fname}_version"] = version
+    refs[fname] = _store_secret(connection, project_id, connection_id, fname, value, actor,
+                                version=version)
     connection.execute(text(
-        "UPDATE intake_connections SET secret_refs = CAST(:s AS JSONB), updated_at = now() "
-        "WHERE id = :id"), {"s": json.dumps(refs), "id": connection_id})
+        "UPDATE intake_connections SET secret_refs = CAST(:s AS JSONB), config = CAST(:c AS JSONB), "
+        "updated_at = now() WHERE id = :id"),
+        {"s": json.dumps(refs), "c": json.dumps(cfg, default=str), "id": connection_id})
     emit_event(connection, project_id, "intake.connection_secret_rotated", actor,
-               "intake_connection", connection_id, {"field": fname})
+               "intake_connection", connection_id,
+               {"field": fname, "grace_seconds": ROTATION_GRACE_SECONDS})
     out = describe_connection(connection, get_connection(connection, connection_id) or {})
     out.update({"secret": value, "secret_field": fname, "secret_shown_once": True,
                 "secrets_shown_once": {fname: value}})
@@ -526,7 +548,56 @@ class _Buckets:
 
 
 BUCKETS = _Buckets()
-_REFUSAL_SAMPLED_AT: dict[str, float] = {}
+
+
+class _Refusals:
+    """Bad signatures are counted in memory per connection and flushed to the row (one UPDATE
+    plus one sampled audit event) at most once a minute per connection, and on every processor
+    tick — never one write per refused request (an unauthenticated flood must not churn the
+    row or the WAL)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pending: dict[str, dict[str, Any]] = {}
+        self._flushed_at: dict[str, float] = {}
+
+    def count(self, row: Mapping[str, Any], reason: str, now: float) -> bool:
+        """Record one refusal; True when this connection is due a flush."""
+        with self._lock:
+            entry = self._pending.setdefault(str(row["id"]), {
+                "count": 0, "reason": reason, "project_id": row.get("project_id"),
+                "kind": row.get("kind")})
+            entry["count"] += 1
+            entry["reason"] = reason
+            entry["at"] = now
+            return self._flushed_at.get(str(row["id"]), 0.0) + REFUSAL_SAMPLE_SECONDS <= now
+
+    def pending(self, connection_id: str) -> int:
+        with self._lock:
+            return int((self._pending.get(connection_id) or {}).get("count") or 0)
+
+    def take(self, connection_id: Optional[str], now: float, *, force: bool = False
+             ) -> list[tuple[str, dict[str, Any]]]:
+        with self._lock:
+            ids = [connection_id] if connection_id else list(self._pending)
+            out = []
+            for cid in ids:
+                entry = self._pending.get(cid)
+                if not entry:
+                    continue
+                if not force and self._flushed_at.get(cid, 0.0) + REFUSAL_SAMPLE_SECONDS > now:
+                    continue
+                out.append((cid, self._pending.pop(cid)))
+                self._flushed_at[cid] = now
+            return out
+
+    def reset(self) -> None:
+        with self._lock:
+            self._pending.clear()
+            self._flushed_at.clear()
+
+
+REFUSALS = _Refusals()
 
 
 def _ack(adapter: Any, conn: Optional[IntakeConnection], req: RawRequest, outcome: str,
@@ -546,27 +617,43 @@ def _refuse(status: int, outcome: str, reason: str, **extra: Any) -> dict:
             "body": {"status": outcome, "reason": reason, **extra}, "headers": {}}
 
 
-def _count_refusal(engine: Any, row: Mapping[str, Any], reason: str, now: float) -> None:
-    """Every refusal is counted on the connection; at most one a minute becomes an event row
-    (the sampled audit), so bad signatures cannot fill the events table."""
-    try:
-        from ..db import begin
+def flush_refusals(engine: Any, *, connection_id: Optional[str] = None, now: Optional[float] = None,
+                   force: bool = False) -> int:
+    """Write the pending refusal counts: health.refusals += n, last reason, and ONE sampled
+    `intake.verify_refused` event per flush. Returns how many connections were flushed."""
+    from ..db import begin
 
-        sample = _REFUSAL_SAMPLED_AT.get(str(row["id"]), 0.0) + REFUSAL_SAMPLE_SECONDS <= now
+    now_s = time.time() if now is None else now
+    taken = REFUSALS.take(connection_id, now_s, force=force)
+    if not taken:
+        return 0
+    try:
         with begin(engine) as c:
-            c.execute(text("""
-                UPDATE intake_connections SET health = health || CAST(:h AS JSONB),
-                       updated_at = now() WHERE id = :id"""),
-                {"h": json.dumps({"refusals": int((_json(row.get("health"), {}) or {}).get(
-                    "refusals") or 0) + 1, "last_refusal": reason,
-                    "last_refusal_at": _now().isoformat()}), "id": row["id"]})
-            if sample and row.get("project_id"):
-                _REFUSAL_SAMPLED_AT[str(row["id"])] = now
-                emit_event(c, str(row["project_id"]), "intake.verify_refused", "intake",
-                           "intake_connection", str(row["id"]),
-                           {"reason": reason, "kind": row["kind"]})
+            for cid, entry in taken:
+                c.execute(text("""
+                    UPDATE intake_connections
+                       SET health = health || jsonb_build_object(
+                               'refusals', COALESCE((health->>'refusals')::int, 0) + :n,
+                               'last_refusal', CAST(:r AS TEXT),
+                               'last_refusal_at', CAST(:at AS TEXT)),
+                           updated_at = now()
+                     WHERE id = :id"""),
+                    {"n": int(entry["count"]), "r": entry["reason"],
+                     "at": datetime.fromtimestamp(entry.get("at") or now_s, tz=timezone.utc
+                                                  ).isoformat(), "id": cid})
+                if entry.get("project_id"):
+                    emit_event(c, str(entry["project_id"]), "intake.verify_refused", "intake",
+                               "intake_connection", cid,
+                               {"reason": entry["reason"], "kind": entry.get("kind"),
+                                "count": int(entry["count"])})
     except Exception:  # noqa: BLE001 — the refusal is the answer; the count is best effort
-        logger.debug("intake refusal not counted", exc_info=True)
+        logger.debug("intake refusals not flushed", exc_info=True)
+    return len(taken)
+
+
+def _count_refusal(engine: Any, row: Mapping[str, Any], reason: str, now: float) -> None:
+    if REFUSALS.count(row, reason, now):
+        flush_refusals(engine, connection_id=str(row["id"]), now=now)
 
 
 def _db_down(error: Exception) -> bool:
@@ -657,7 +744,8 @@ def receive(engine: Any, kind: str, path_token: str, request: RawRequest, *,
                 {"id": event_id, "c": row["id"], "p": row.get("project_id"), "dk": dedupe_key,
                  "sid": dedupe_key.split(":", 1)[-1][:200],
                  "st": ACK_SHED if shed else ACK_RECEIVED,
-                 "raw": request.body if len(request.body) <= MAX_RAW_BYTES else None,
+                 "raw": request.body if len(request.body) <= (SHED_RAW_BYTES if shed
+                                                             else MAX_RAW_BYTES) else None,
                  "sha": request.body_sha256(), "h": json.dumps(kept_headers(request.headers)),
                  "retry": int((retry or {}).get("num") or 0),
                  "tr": (lower_headers(request.headers).get("traceparent") or make_id("itr"))[:120],
@@ -708,10 +796,19 @@ def backoff_seconds(attempts: int) -> int:
 
 def claim(connection: Connection, *, limit: int = PROCESSOR_BATCH, holder: str = HOLDER,
           now: Optional[datetime] = None) -> list[dict]:
-    """Claim due rows: received or failed, due, not leased by a live processor, in live (not
-    archived) projects. SKIP LOCKED so two API processes never take one row; the lease outlives
-    a crash by LEASE_SECONDS. Round-robin across connections (one stormy source cannot starve
-    the others, NFR-7)."""
+    """Claim due rows: received or failed and due, or `processing` whose lease expired (its
+    processor died), in live (not archived) projects. SKIP LOCKED so two API processes never take
+    one row; a crashed processor's rows come back after LEASE_SECONDS (attempts counts the
+    retry). Round-robin across connections (one stormy source cannot starve the others, NFR-7).
+
+    ORDER. Within one claim, a connection's rows come in received order. ACROSS claims and
+    processors the only promise is serialisation: `process_one` holds a transaction-scoped
+    advisory lock on (connection, conversation_key) while it fires, so two events of one
+    conversation are never fired at the same time, and an event is DEFERRED behind an earlier
+    event of the same conversation that is still retrying (`failed`). Two events of one
+    conversation claimed by two processors in the same tick may fire in either order; strict
+    per-conversation order is the thread key (P9a-2): `thread_runs.admit` serialises runs on
+    the thread in admit order, and the agent sees every earlier turn in the thread's history."""
     from . import projects_archive
 
     now = now or _now()
@@ -720,8 +817,9 @@ def claim(connection: Connection, *, limit: int = PROCESSOR_BATCH, holder: str =
             SELECT id, row_number() OVER (PARTITION BY connection_id ORDER BY received_at, id) AS rn,
                    received_at
               FROM intake_events
-             WHERE status IN ('received', 'failed') AND next_attempt_at <= :now
-               AND (lease_until IS NULL OR lease_until < :now)
+             WHERE ((status IN ('received', 'failed') AND next_attempt_at <= :now
+                     AND (lease_until IS NULL OR lease_until < :now))
+                    OR (status = 'processing' AND lease_until < :now))
                AND {projects_archive.live_sql('intake_events.project_id')}),
         due AS (
             SELECT e.id FROM intake_events e JOIN ranked r ON r.id = e.id
@@ -863,10 +961,31 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
                                event_id, {"hops": hops, "connection_id": conn.id})
                     continue
                 if conversation:
-                    # Per-conversation order (§8.4): a second event of one conversation waits
-                    # until the first is fired, so admits happen in received order.
+                    # Per-conversation serialisation (§8.4): one conversation fires one event at
+                    # a time; see `claim` for exactly what is and is not promised about order.
                     c.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
                               {"k": f"{conn.id}:{conversation}"})
+                    earlier = c.execute(text("""
+                        SELECT id, next_attempt_at FROM intake_events
+                         WHERE connection_id = :c AND conversation_key = :k AND id <> :id
+                           AND status = 'failed' AND received_at < :at
+                         ORDER BY received_at LIMIT 1"""),
+                        {"c": conn.id, "k": conversation, "id": event_id,
+                         "at": row.get("received_at")}).mappings().first()
+                    if earlier is not None:
+                        # Never overtake an earlier event of the same conversation that is still
+                        # retrying: wait until after its next attempt.
+                        due = max(earlier["next_attempt_at"], now) + timedelta(seconds=1)
+                        history = [m for m in (_json(row.get("outcome"), []) or [])
+                                   if isinstance(m, dict) and "replay" in m]
+                        _finish(c, event_id, "received", now=now, next_attempt_at=due,
+                                envelope=parsed_envelope, fields=parsed_fields,
+                                outcome=history + [{"deferred_behind": earlier["id"],
+                                                    "until": due.isoformat()}])
+                        c.execute(text("UPDATE intake_events SET attempts = attempts - 1 "
+                                       "WHERE id = :id AND attempts > 0"), {"id": event_id})
+                        return {"id": event_id, "status": "received",
+                                "reason": f"deferred behind {earlier['id']}"}
                 fires = intake_router.route(c, conn, ev, row, replay_n=force_n)
                 caused_by = (ev.bosscausality or {}).get("deployment_id")
                 if caused_by:
@@ -961,7 +1080,7 @@ def process_due(engine: Any, settings: Any = None, *, limit: int = PROCESSOR_BAT
     with begin(engine) as c:
         rows = claim(c, limit=limit, holder=holder, now=now)
     out = {"claimed": len(rows), "routed": 0, "ignored": 0, "filtered": 0, "refused": 0,
-           "failed": 0, "dead": 0}
+           "failed": 0, "dead": 0, "received": 0}
     for row in rows:
         got = process_one(engine, settings, row, now=now)
         out[got["status"]] = out.get(got["status"], 0) + 1
@@ -1240,6 +1359,7 @@ def start(engine: Any, settings: Any) -> bool:
                 got = process_due(engine, settings)
                 while got["claimed"] >= PROCESSOR_BATCH and not _STOP.is_set():
                     got = process_due(engine, settings)
+                flush_refusals(engine)
                 if time.monotonic() - last_sweep > 60:
                     last_sweep = time.monotonic()
                     with begin(engine) as c:
@@ -1264,7 +1384,8 @@ def stop() -> None:
 
 __all__ = [
     "BACKOFF_SECONDS", "BUCKETS", "CONNECTION_STATUSES", "DEFAULT_LIMITS", "LEASE_SECONDS",
-    "MAX_ATTEMPTS", "MAX_HOPS", "PATH_PREFIX", "REPLAY_MODES", "SERVICE_KEY",
+    "MAX_ATTEMPTS", "MAX_HOPS", "PATH_PREFIX", "REFUSALS", "REPLAY_MODES", "ROTATION_GRACE_SECONDS",
+    "SERVICE_KEY", "SHED_RAW_BYTES", "flush_refusals",
     "IntakeServiceError", "backoff_seconds", "claim", "connection_by_token", "create_connection",
     "dead_letters", "delete_connection", "describe_connection", "get_connection", "get_event",
     "inbound_path", "list_connections", "list_events", "process_due", "process_one", "receive",
