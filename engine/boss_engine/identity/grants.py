@@ -169,7 +169,78 @@ def github_resources(grant: Optional[DelegationGrant]) -> Mapping[str, Any]:
     return res if isinstance(res, Mapping) else {}
 
 
+def local_resources(grant: Optional[DelegationGrant]) -> Mapping[str, Any]:
+    """`resources.local` (BOSSAPP-1163): the repositories BOSS keeps ON THIS MACHINE
+    (`local_<project>/<name>`, services/local_repo.py) the grant lets its agents work in. Not
+    GitHub access — nothing outside the install is reached — but the same canonical name a build's
+    `owner/repo` carries, so a grant minted for a project with local code covers its builds."""
+    if grant is None:
+        return {}
+    res = (grant.resources or {}).get("local") or {}
+    return res if isinstance(res, Mapping) else {}
+
+
+def is_local_repo(full_name: Any) -> bool:
+    from ..services.local_repo import is_local
+
+    return is_local(full_name)
+
+
+def split_repos(repos: Iterable[str]) -> tuple[list[str], list[str]]:
+    """(GitHub repositories, local repositories) — the two resource blocks a grant carries."""
+    github, local = [], []
+    for r in repos:
+        (local if is_local_repo(r) else github).append(r)
+    return github, local
+
+
+def grant_repos(grant: Optional[DelegationGrant]) -> frozenset[str]:
+    """Every repository the grant names, GitHub and local, lower-cased (GitHub names are
+    case-insensitive; a local name is written once by BOSS)."""
+    return frozenset(str(r).lower() for block in (github_resources(grant), local_resources(grant))
+                     for r in (block.get("repos") or ()))
+
+
 # ---- create ------------------------------------------------------------------------------------------
+
+def local_repo_registered(db: Any, project_id: str, full_name: str) -> bool:
+    """Is `full_name` a repository on this machine registered (an active local binding) to the
+    project? No bindings table, no registration."""
+    from sqlalchemy import text
+
+    if db is None or not db.execute(text("SELECT to_regclass('github_repository_bindings') IS NOT NULL")).scalar():
+        return False
+    return bool(db.execute(text(
+        "SELECT 1 FROM github_repository_bindings WHERE project_id = :p AND host = 'local' "
+        "AND COALESCE(status, 'active') = 'active' AND lower(full_name) = lower(:f) LIMIT 1"),
+        {"p": project_id, "f": full_name}).first())
+
+
+def _validate_local(resources: Mapping[str, Any], project_ids: Iterable[str] = (), *,
+                    db: Any = None) -> dict[str, Any]:
+    """`resources.local`: only repositories ON THIS MACHINE, each belonging to one of the grant's
+    own projects (`local_<project>/…`, local_repo.project_of) AND registered there — a grant for
+    project A never names project B's code, whatever a request or a workflow's input says."""
+    loc = resources.get("local")
+    if loc is None:
+        return {}
+    if not isinstance(loc, Mapping):
+        raise GrantRefused("bad_resources", 422)
+    repos = loc.get("repos") or []
+    if not isinstance(repos, list) or not all(isinstance(r, str) and REPO_PATTERN.match(r) and is_local_repo(r)
+                                              for r in repos):
+        raise GrantRefused("bad_repos", 422, {"resource": "local"})
+    from ..services.local_repo import project_of
+
+    projects = set(project_ids)
+    for repo in repos:
+        project = project_of(repo.split("/", 1)[0])
+        if project not in projects:
+            raise GrantRefused("repo_outside_projects", 403, {"repo": repo, "project": project})
+        if not local_repo_registered(db, project, repo):
+            raise GrantRefused("repo_not_registered", 403, {"repo": repo, "project": project})
+    return {"repos": sorted(set(repos))}
+
 
 def _validate_github(resources: Mapping[str, Any]) -> dict[str, Any]:
     gh = resources.get("github")
@@ -180,6 +251,10 @@ def _validate_github(resources: Mapping[str, Any]) -> dict[str, Any]:
     repos = gh.get("repos") or []
     if not isinstance(repos, list) or not all(isinstance(r, str) and REPO_PATTERN.match(r) for r in repos):
         raise GrantRefused("bad_repos", 422)
+    if any(is_local_repo(r) for r in repos):
+        # A repository on this machine is granted as `local`, with its project checked
+        # (_validate_local) — never smuggled in as GitHub access.
+        raise GrantRefused("bad_repos", 422, {"resource": "github", "reason": "local_repo_in_github"})
     out: dict[str, Any] = {"repos": sorted(set(repos))}
     for key, value in gh.items():
         if key in ("repos",):
@@ -246,13 +321,16 @@ def user_repo_access_refusal(org_id: str, person_id: str, gh: Mapping[str, Any],
     (or the guard is off on this install); else {"repo", "needs", "answer"} for the first repo
     it refuses — answer False (no link, or no access) or None (GitHub did not answer). The start
     door refuses both (check_user_repo_access); the workflow pre-check asks the same question."""
-    if not gh.get("repos") or not repo_guard_active(org_id, db=db):
+    # A repository on this machine is not on GitHub: the guard has nothing to ask about it (the
+    # project's Captain authority lists bound local repositories under `github` too).
+    repos = [r for r in (gh.get("repos") or ()) if not is_local_repo(r)]
+    if not repos or not repo_guard_active(org_id, db=db):
         return None
     from . import github_app
 
     need = repo_access_needed(gh)
     link = _github_link_version(db, person_id)
-    for repo in gh["repos"]:
+    for repo in repos:
         key = (person_id, repo, need, link)
         hit = _GUARD_CACHE.get(key)
         if use_cache and hit and time.monotonic() - hit[1] < GUARD_TTL_SECONDS:
@@ -366,6 +444,11 @@ def create_grant(ctx: AuthContext, request: GrantRequest, *, db: Any) -> Delegat
     if gh:
         resources["github"] = gh
         check_user_repo_access(person.org_id, person.id, gh, db=db)
+    loc = _validate_local(resources, request.project_ids, db=db)
+    if loc:
+        resources["local"] = loc
+    elif "local" in resources:
+        del resources["local"]
 
     # Expiry: default 30 d, max 90 d; "until revoked" only when policy allows it.
     now = _now()
@@ -640,7 +723,9 @@ def covers(g: DelegationGrant, *, agent_ids: Iterable[str], permissions: frozens
         return False
     if project_id and project_id not in g.project_ids:
         return False
-    if set(repos) - set(github_resources(g).get("repos") or ()):
+    # Every repository the work names — on GitHub or on this machine — in the grant's own blocks
+    # (BOSSAPP-1163: a local build's follow-up was refused by a grant minted with no repositories).
+    if {str(r).lower() for r in repos} - grant_repos(g):
         return False
     if g.task_run_id:
         if g.task_run_id.startswith(PENDING_PREFIX):

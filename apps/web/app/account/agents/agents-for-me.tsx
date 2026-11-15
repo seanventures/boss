@@ -7,7 +7,7 @@
  * permission no agent may hold. Plus your connections (GitHub) the vault keeps for you.
  */
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowsClockwise, Clock, GithubLogo, Plus, Prohibit, Robot, Warning } from "@phosphor-icons/react";
+import { ArrowsClockwise, Clock, GithubLogo, Laptop, Plus, Prohibit, Robot, Warning } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../../agent-avatar";
 import { IdentityError, errorSentence, idDelete, idGet, idPost, refusalSentence } from "../../../lib/identity/api";
@@ -145,6 +145,7 @@ export function AgentsForMe({ delegations: initial, agents, connections, untilRe
               {d.permissions.slice(0, 6).map((p) => <Perm key={p} p={p} sm />)}
               {d.permissions.length > 6 ? <span className="idn-chip">+{d.permissions.length - 6}</span> : null}
               {d.github ? <span className="idn-chip"><GithubLogo size={12} aria-hidden /> {d.github.repos[0]}{d.github.repos.length > 1 ? ` +${d.github.repos.length - 1}` : ""}{d.github.ref_rule ? `, ${d.github.ref_rule}` : ""}</span> : null}
+              {d.local?.repos.length ? <span className="idn-chip" data-testid="grant-local-chip"><Laptop size={12} aria-hidden /> <span data-copy="data">{d.local.repos[0]}{d.local.repos.length > 1 ? ` +${d.local.repos.length - 1}` : ""}</span>, {LOCAL_LABEL}</span> : null}
             </div>
           </article>
         ))}
@@ -239,19 +240,28 @@ type ProjectChoice = { id: string; name: string };
 export const GITHUB_NEEDS = { contents: "write", pull_requests: "write" } as const;
 /** Abilities whose agents push to GitHub, so the grant names repositories. */
 const GITHUB_ABILITIES = new Set(["build", "github"]);
+/** A repository BOSS keeps on this machine (a local-first project), as the sheet says it. */
+export const LOCAL_LABEL = "on this machine";
+
+/** One repository a project is bound to: on GitHub, or kept by BOSS on this machine. */
+export type RepoChoice = { full_name: string; local: boolean };
 
 /**
  * The grant body the sheet sends: project IDS (picked by name), and for an ability that pushes,
  * the picked repositories with the access they need as `github` (grants._validate_github). The
  * Projects field was free text split on spaces, so "NorthPeak Bank" posted ["NorthPeak","Bank"]
  * and the API refused it; it never named a repository, so a build it covered could not push.
+ * A project's repositories ON THIS MACHINE go as `local` (grants._validate_local, BOSSAPP-1163):
+ * listed only GitHub, a local-first project's grant named no repository, and the first build
+ * that asked for the local one was refused by it.
  */
 export function grantBody(input: { agents: string[]; permissions: Permission[]; projects: string[]; repos: string[];
-  pushes: boolean; days: number | null; purpose: string }) {
+  localRepos?: string[]; pushes: boolean; days: number | null; purpose: string }) {
   return {
     agents: input.agents, permissions: input.permissions, projects: input.projects, kind: "standing" as const,
     days: input.days, purpose: input.purpose,
     ...(input.pushes && input.repos.length ? { github: { repos: input.repos, ...GITHUB_NEEDS } } : {}),
+    ...(input.pushes && input.localRepos?.length ? { local: { repos: input.localRepos } } : {}),
   };
 }
 
@@ -266,8 +276,9 @@ function GrantSheet({ agents, untilRevokedAllowed, onClose, onDone }: {
   const [projects, setProjects] = useState<ProjectChoice[] | null>(null);
   const [projectsFailed, setProjectsFailed] = useState(false);
   const [chosen, setChosen] = useState<string[]>(projectId ? [projectId] : []);
-  // Each picked project's registered repositories; a repo is checked unless the person unticks it.
-  const [repos, setRepos] = useState<Record<string, string[] | "failed">>({});
+  // Each picked project's registered repositories (GitHub and on this machine); a repo is
+  // checked unless the person unticks it.
+  const [repos, setRepos] = useState<Record<string, RepoChoice[] | "failed">>({});
   const [unticked, setUnticked] = useState<string[]>([]);
   const [days, setDays] = useState<number | null>(30);
   const [purpose, setPurpose] = useState("");
@@ -293,8 +304,14 @@ function GrantSheet({ agents, untilRevokedAllowed, onClose, onDone }: {
     if (!pushes) return;
     let live = true;
     for (const id of chosen.filter((p) => !(p in repos))) {
-      idGet<{ repositories: { full_name?: string; archived?: boolean }[] }>(`/v1/projects/${encodeURIComponent(id)}/repositories`)
-        .then((r) => { if (live) setRepos((m) => ({ ...m, [id]: (r.repositories ?? []).flatMap((x) => (x.full_name && !x.archived ? [x.full_name] : [])) })); })
+      idGet<{ repositories: { full_name?: string; archived?: boolean; host?: string | null }[] }>(`/v1/projects/${encodeURIComponent(id)}/repositories`)
+        .then((r) => {
+          if (!live) return;
+          // `host: "local"` is a repository BOSS keeps on this machine (repo_registry.list_repositories).
+          const list = (r.repositories ?? []).flatMap((x): RepoChoice[] =>
+            (x.full_name && !x.archived ? [{ full_name: x.full_name, local: x.host === "local" }] : []));
+          setRepos((m) => ({ ...m, [id]: list }));
+        })
         .catch(() => { if (live) setRepos((m) => ({ ...m, [id]: "failed" })); });
     }
     return () => { live = false; };
@@ -304,8 +321,11 @@ function GrantSheet({ agents, untilRevokedAllowed, onClose, onDone }: {
   const permissions = useMemo(() => [...new Set(ABILITIES.filter((a) => abilities.includes(a.id)).flatMap((a) => a.permissions))].filter(usable),
     [abilities, held]); // eslint-disable-line react-hooks/exhaustive-deps
   const nameOf = (id: string) => projects?.find((p) => p.id === id)?.name ?? id;
-  const offered = [...new Set(chosen.flatMap((id) => (Array.isArray(repos[id]) ? repos[id] as string[] : [])))];
-  const selectedRepos = offered.filter((r) => !unticked.includes(r));
+  const offered = chosen.flatMap((id) => (Array.isArray(repos[id]) ? repos[id] as RepoChoice[] : []))
+    .filter((r, i, all) => all.findIndex((x) => x.full_name === r.full_name) === i);
+  const selected = offered.filter((r) => !unticked.includes(r.full_name));
+  const selectedRepos = selected.filter((r) => !r.local).map((r) => r.full_name);
+  const selectedLocal = selected.filter((r) => r.local).map((r) => r.full_name);
   const ready = picked.length > 0 && permissions.length > 0 && chosen.length > 0;
   const first = ABILITIES.find((a) => abilities.includes(a.id));
   const placeholder = `${first ? first.label : "Act for me"}${chosen.length ? ` in ${nameOf(chosen[0])}` : ""}`;
@@ -315,7 +335,8 @@ function GrantSheet({ agents, untilRevokedAllowed, onClose, onDone }: {
     setError(null);
     try {
       await guarded("Letting agents act for you.", () => idPost("/v1/identity/me/delegations", grantBody({
-        agents: picked, permissions, projects: chosen, repos: selectedRepos, pushes, days, purpose: purpose.trim() || placeholder,
+        agents: picked, permissions, projects: chosen, repos: selectedRepos, localRepos: selectedLocal, pushes, days,
+        purpose: purpose.trim() || placeholder,
       })));
       showToast("success", "Grant created");
       onDone();
@@ -386,10 +407,11 @@ function GrantSheet({ agents, untilRevokedAllowed, onClose, onDone }: {
             return (
               <div key={id} className="idn-repos" role="group" aria-labelledby="grant-repos-h">
                 {list.map((r) => (
-                  <label key={r} className="idn-check">
-                    <input type="checkbox" checked={!unticked.includes(r)} data-repo={r}
-                      onChange={(e) => setUnticked((xs) => (e.target.checked ? xs.filter((x) => x !== r) : [...xs, r]))} />
-                    <GithubLogo size={14} aria-hidden /> <span data-user-text>{r}</span>
+                  <label key={r.full_name} className="idn-check" data-local={r.local || undefined}>
+                    <input type="checkbox" checked={!unticked.includes(r.full_name)} data-repo={r.full_name}
+                      onChange={(e) => setUnticked((xs) => (e.target.checked ? xs.filter((x) => x !== r.full_name) : [...xs, r.full_name]))} />
+                    {r.local ? <Laptop size={14} aria-hidden /> : <GithubLogo size={14} aria-hidden />} <span data-user-text>{r.full_name}</span>
+                    {r.local ? <span className="idn-dim idn-small"> {LOCAL_LABEL}</span> : null}
                   </label>
                 ))}
               </div>
