@@ -507,6 +507,10 @@ def _build_deployed(connection: Any, settings: Any, run: dict) -> Any:
     row = V.get_version(connection, str(run["project_id"]), key, version)
     compiled = S.compile_spec(S.load_spec(_json(row["spec"], {})))
     parts = (PARTS_HOOK or _default_parts)(connection, settings, run, row)
+    # P9a-6: a run a chat conversation started also gets chat_reply / chat_status / chat_react.
+    from .chat_reply import with_chat_tools
+
+    parts = {**parts, "tools": with_chat_tools(parts["tools"], connection, settings, run)}
     fields = run_fields(compiled)
     steps = int(compiled.limits.max_steps or getattr(settings, "agent_max_steps", 20) or 20)
     sink = None

@@ -1241,15 +1241,20 @@ def _server_tools(connection: Any, settings: Any, run: dict) -> Any:
     from . import bots
     from .agent_loop import AgentStepToolSet
 
+    from .chat_reply import with_chat_tools
+
     fctx = dict(run.get("finalize_ctx") or {})
     if bots.PARTS_HOOK is not None:
         from ..agents import versions as V
 
         row = V.get_version(connection, str(run["project_id"]), str(fctx.get("agent_key")),
                             int(fctx.get("agent_version") or 0))
-        return bots.PARTS_HOOK(connection, settings, run, row)["tools"]
+        return with_chat_tools(bots.PARTS_HOOK(connection, settings, run, row)["tools"],
+                               connection, settings, run)
     bounded = {**run, "finalize_ctx": {**fctx, "agent_step": {"role_key": fctx.get("agent_key")}}}
-    return AgentStepToolSet(connection, settings, bounded, str(run["id"]))
+    # P9a-6: the reply tools run HERE too — the VM never holds the endpoint or the bot token.
+    return with_chat_tools(AgentStepToolSet(connection, settings, bounded, str(run["id"])),
+                           connection, settings, run)
 
 
 @contextlib.contextmanager
@@ -1301,15 +1306,23 @@ def tool_invoke(connection: Any, settings: Any, host_id: str, run_id: str, lease
     from ..kernel.types import ToolCall
     from .agent_loop import load_agent_run
 
+    from . import chat_reply
+
     fence(connection, settings, host_id, run_id, lease)
     run = load_agent_run(connection, run_id)
+    # The epoch this call was fenced at: a reply tool's outbox insert is refused if a newer
+    # epoch of the run has written (P9a-6, §8.7).
+    epoch_token = chat_reply.FENCE_EPOCH.set(int(lease.epoch))
     request = ToolCall(id=str(call.get("id") or ""), name=name,
                        arguments=call.get("arguments") if isinstance(call.get("arguments"),
                                                                      dict) else None,
                        raw_arguments=str(call.get("raw_arguments") or ""))
-    with _as_agent(connection, run):
-        result = _server_tools(connection, settings, run).invoke(
-            request, state=_state_for(connection, run), approved=approved)
+    try:
+        with _as_agent(connection, run):
+            result = _server_tools(connection, settings, run).invoke(
+                request, state=_state_for(connection, run), approved=approved)
+    finally:
+        chat_reply.FENCE_EPOCH.reset(epoch_token)
     return {"result": wire.result_out(result)}
 
 
