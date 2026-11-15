@@ -39,6 +39,8 @@ MAX_GROUPS = 255 - VRID_BASE
 DEFAULT_VIP_PORTS = [443]
 PUSH_PORT = 7446
 UNREACHABLE_SECONDS = 10
+#: AP-D11: an attestation older than this withdraws an isolation-required VIP's member.
+ISOLATION_HEARTBEAT_SECONDS = 10
 
 
 class DirectorError(ValueError):
@@ -281,20 +283,31 @@ def desired(connection: Any, director_id: str) -> dict:
     rows = connection.execute(text("""
         SELECT d.id AS deployment_id, host(d.vip) AS vip, d.vip_ports,
                r.id AS replica_id, host(r.vm_ip) AS vm_ip, r.host_id, r.rs_weight, r.slots,
-               r.observed_state
+               r.observed_state,
+               -- AP-D11 (P8b-11): a deployment exposed over A2A with write tools is served only
+               -- from replicas whose host attests now, holding a valid serving certificate,
+               -- untainted. A lapse withdraws the member on this generation.
+               (NOT d.isolation_required OR (
+                    h.isolation_ok AND h.last_heartbeat_at > now() - make_interval(secs => :age)
+                    AND NOT r.tainted
+                    AND EXISTS (SELECT 1 FROM agent_certs c WHERE c.kind = 'replica'
+                                 AND c.replica_id = r.id AND c.revoked_at IS NULL
+                                 AND c.not_after > now()))) AS isolation_holds
           FROM agent_deployments d
           JOIN projects p ON p.id = d.project_id
           JOIN workspaces w ON w.id = p.workspace_id
           LEFT JOIN agent_replicas r ON r.deployment_id = d.id AND r.desired_state = 'running'
                AND r.vm_mode = 'replica' AND r.vm_ip IS NOT NULL
+          LEFT JOIN agent_hosts h ON h.id = r.host_id
          WHERE w.org_id = :o AND d.vip IS NOT NULL AND d.status = 'live'
            AND d.runtime = 'microvm' AND d.routing = 'ipvs'
-         ORDER BY d.vip, r.id"""), {"o": org_id}).mappings().all()
+         ORDER BY d.vip, r.id"""), {"o": org_id, "age": ISOLATION_HEARTBEAT_SECONDS}
+    ).mappings().all()
     vips: dict = {}
     for r in rows:
         entry = vips.setdefault(r["vip"], {"vip": r["vip"], "ports": list(r["vip_ports"] or DEFAULT_VIP_PORTS),
                                            "deployment_id": r["deployment_id"], "members": []})
-        if r["replica_id"] and r["observed_state"] == "serving":
+        if r["replica_id"] and r["observed_state"] == "serving" and r["isolation_holds"]:
             entry["members"].append({"replica_id": r["replica_id"], "vm_ip": r["vm_ip"],
                                      "host_id": r["host_id"], "weight": int(r["rs_weight"]),
                                      "slots": int(r["slots"])})
