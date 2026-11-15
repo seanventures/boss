@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path"
@@ -64,6 +65,29 @@ func StripURLCredentials(s string) string {
 	return credentialInURL.ReplaceAllString(s, "$1")
 }
 
+// extraHeader matches an http.extraheader line (an Authorization header git
+// sends on every request) in any [http] section.
+var extraHeader = regexp.MustCompile(`(?im)^[ \t]*extraheader[ \t]*=.*(\r?\n|$)`)
+
+// ScrubGitConfig removes credentials from a git config: userinfo in URLs and
+// every http.extraheader line.
+func ScrubGitConfig(s string) string {
+	return extraHeader.ReplaceAllString(StripURLCredentials(s), "")
+}
+
+func underGitDir(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	if err != nil {
+		return false
+	}
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		if part == ".git" {
+			return true
+		}
+	}
+	return false
+}
+
 // ScrubRetained prepares a finished task's directory to be kept: the guest spec
 // copies are deleted (they carry the task's credentials) and every .git/config
 // in the retained tree has credentials removed from its remote URLs.
@@ -82,12 +106,12 @@ func ScrubRetained(taskDir string) {
 			_ = os.Remove(p)
 			return nil
 		}
-		if d.Name() == "config" && filepath.Base(filepath.Dir(p)) == ".git" {
+		if d.Name() == "config" && underGitDir(taskDir, p) {
 			raw, rerr := os.ReadFile(p)
 			if rerr != nil {
 				return nil
 			}
-			if clean := StripURLCredentials(string(raw)); clean != string(raw) {
+			if clean := ScrubGitConfig(string(raw)); clean != string(raw) {
 				_ = os.WriteFile(p, []byte(clean), FileMode)
 			}
 		}
@@ -95,14 +119,52 @@ func ScrubRetained(taskDir string) {
 	})
 }
 
+// ErrOutsideRoot: a path that resolves (through symlinks) outside its root.
+var ErrOutsideRoot = errors.New("path resolves outside the retained workspace")
+
+// ResolveWithin resolves every symlink in p and requires the result to stay
+// inside root (itself resolved). It returns the resolved path and its
+// slash-separated path relative to root ("" for root itself).
+func ResolveWithin(root, p string) (string, string, error) {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", "", err
+	}
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return "", "", err
+	}
+	rel, err := filepath.Rel(realRoot, real)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) ||
+		filepath.IsAbs(rel) {
+		return "", "", ErrOutsideRoot
+	}
+	if rel == "." {
+		rel = ""
+	}
+	return real, filepath.ToSlash(rel), nil
+}
+
 // IsSecretPath reports whether a retained-workspace path (slash-separated,
 // relative or absolute) names something the fs endpoint must never serve:
 // a guest spec, a git config, or anything named like a credentials file.
 func IsSecretPath(p string) bool {
 	clean := path.Clean("/" + strings.ReplaceAll(p, "\\", "/"))
-	base := strings.ToLower(path.Base(clean))
-	if base == "spec.json" || strings.Contains(base, "credentials") {
+	parts := strings.Split(strings.ToLower(strings.Trim(clean, "/")), "/")
+	base := parts[len(parts)-1]
+	if base == "spec.json" {
 		return true
 	}
-	return strings.HasSuffix(strings.ToLower(clean), "/.git/config")
+	inGit := false
+	for i, part := range parts {
+		// A credentials file, or anything under a credentials/ directory.
+		if strings.Contains(part, "credentials") {
+			return true
+		}
+		if part == ".git" && i < len(parts)-1 {
+			inGit = true
+		}
+	}
+	// .git/config, .git/modules/<m>/config, .git/worktrees/<w>/config, ...
+	return inGit && base == "config"
 }

@@ -183,6 +183,21 @@ def test_the_scrub_removes_any_userinfo_from_a_git_config(tmp_path, monkeypatch)
         '[remote "origin"]\n\turl = https://bitbucket.org/o/r.git\n'
 
 
+def test_the_scrub_covers_submodule_configs_and_extra_headers(tmp_path, monkeypatch):
+    guest = _guest(monkeypatch, tmp_path)
+    module = guest.WORK / ".git" / "modules" / "sub"
+    module.mkdir(parents=True)
+    dirty = (f'[remote "origin"]\n\turl = https://x-access-token:{TOKEN}@github.com/o/s.git\n'
+             f'[http "https://github.com/"]\n\textraheader = AUTHORIZATION: basic {TOKEN}\n')
+    (guest.WORK / ".git" / "config").write_text(dirty)
+    (module / "config").write_text(dirty)
+    guest._scrub_git_config()
+    for cfg in (guest.WORK / ".git" / "config", module / "config"):
+        text_ = cfg.read_text()
+        assert TOKEN not in text_ and "extraheader" not in text_.lower()
+        assert "https://github.com/o/s.git" in text_
+
+
 # ── P8pre-T3: the CLI credential path is audited ──────────────────────────────────────────
 
 class _Mem:
@@ -310,3 +325,42 @@ def test_an_out_of_scope_read_is_refused_and_logged(engine, project):
     rows = _events(engine, ref)
     assert [r["outcome"] for r in rows] == ["refused"]
     assert rows[0]["run_id"] == run and "another agent" in rows[0]["reason"]
+
+
+@needs_db
+def test_another_projects_reference_is_never_the_route_nor_a_refusal(engine, project):
+    """PR #104 review: a system read in project B never resolves (or is refused by) project A's
+    reference — an agent-scoped row in A used to fail B's strict Claude run. B reads by name,
+    and the read is still recorded."""
+    from boss_engine.services import claude_credential as cc
+    from boss_engine.services.harness_failures import run_scope
+
+    ref_a = _store_install_key(engine, project)
+    with engine.begin() as c:                       # A's key belongs to one of A's agents
+        c.execute(text("UPDATE secret_refs SET scope_type = 'agent', scope_id = 'deployer' "
+                       "WHERE id = :r"), {"r": ref_a})
+        other = f"p_p8pre_{uuid4().hex[:8]}"
+        c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) VALUES "
+                       "(:p, 'ws_p8pre', :p, :p)"), {"p": other})
+    run = f"crun_p8pre_{uuid4().hex[:6]}"
+    with run_scope(run), engine.begin() as c:
+        cred = cc.resolve_anthropic_api_key(_settings(), connection=c, project_id=other)
+    assert (cred.kind, cred.value) == (cc.KIND_STORED_KEY, KEY)   # read by name, not refused
+    assert _events(engine, ref_a) == []                           # A's reference untouched
+    from boss_engine.services.cli_harness import SUBSCRIPTION_SECRET_SCOPE
+    from boss_engine.services.secrets_service import ref_key_for
+
+    rows = [r for r in _events(engine, "store:" + ref_key_for(SUBSCRIPTION_SECRET_SCOPE,
+                                                              "ANTHROPIC_API_KEY"))
+            if r["run_id"] == run]
+    assert len(rows) == 1 and rows[0]["project_id"] == other
+
+
+def test_a_system_read_with_no_project_takes_no_reference_route():
+    from boss_engine.services.secret_backends import _system_ref_for
+
+    class _NoDb:
+        def begin_nested(self):
+            raise AssertionError("no query may run without a project")
+
+    assert _system_ref_for(_NoDb(), ["K"], None) is None

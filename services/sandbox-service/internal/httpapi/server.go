@@ -5,6 +5,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -252,7 +253,25 @@ func (s *Server) fs(w http.ResponseWriter, r *http.Request, id string) {
 			"this path may hold credentials and is not browsable")
 		return
 	}
-	hostPath := filepath.Join(job.TaskDir, filepath.FromSlash(rel))
+	requested := filepath.Join(job.TaskDir, filepath.FromSlash(rel))
+	// A symlink in the guest's repo must not reach outside the retained workspace
+	// (/proc/self/environ, another task's spec.json) nor onto a secret path under
+	// another name: resolve it, keep it under <TaskDir>/work, and check again.
+	hostPath, resolvedRel, err := backend.ResolveWithin(filepath.Join(job.TaskDir, "work"), requested)
+	if err != nil {
+		if errors.Is(err, backend.ErrOutsideRoot) {
+			writeErr(w, http.StatusForbidden, contract.ReasonSecretPath,
+				"this path leaves the retained workspace and is not browsable")
+			return
+		}
+		writeErr(w, http.StatusNotFound, contract.ReasonTaskMissing, "path not found in retained workspace")
+		return
+	}
+	if backend.IsSecretPath("work/" + resolvedRel) {
+		writeErr(w, http.StatusForbidden, contract.ReasonSecretPath,
+			"this path may hold credentials and is not browsable")
+		return
+	}
 	info, err := os.Stat(hostPath)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, contract.ReasonTaskMissing, "path not found in retained workspace")
@@ -266,7 +285,7 @@ func (s *Server) fs(w http.ResponseWriter, r *http.Request, id string) {
 		}
 		out := make([]map[string]any, 0, len(entries))
 		for _, e := range entries {
-			if !e.IsDir() && backend.IsSecretPath(rel+"/"+e.Name()) {
+			if backend.IsSecretPath(rel + "/" + e.Name()) {
 				continue
 			}
 			out = append(out, map[string]any{"name": e.Name(), "dir": e.IsDir()})

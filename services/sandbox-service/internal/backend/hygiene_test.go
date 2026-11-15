@@ -67,7 +67,15 @@ func TestScrubRetainedDropsSpecsAndCleansGitConfig(t *testing.T) {
 		}
 	}
 	cfg := "[remote \"origin\"]\n\turl = https://x-access-token:" + secret + "@github.com/o/r.git\n" +
-		"[remote \"bb\"]\n\turl = https://x-token-auth:" + secret + "@bitbucket.org/o/r.git\n"
+		"[remote \"bb\"]\n\turl = https://x-token-auth:" + secret + "@bitbucket.org/o/r.git\n" +
+		"[http \"https://github.com/\"]\n\textraheader = AUTHORIZATION: basic " + secret + "\n"
+	modDir := filepath.Join(gitDir, "modules", "sub")
+	if err := os.MkdirAll(modDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(modDir, "config"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -84,6 +92,13 @@ func TestScrubRetainedDropsSpecsAndCleansGitConfig(t *testing.T) {
 	if strings.Contains(string(raw), secret) || strings.Contains(string(raw), "@github.com") {
 		t.Fatal(".git/config still carries a credential")
 	}
+	sub, _ := os.ReadFile(filepath.Join(modDir, "config"))
+	if strings.Contains(string(sub), secret) || strings.Contains(strings.ToLower(string(sub)), "extraheader") {
+		t.Fatal(".git/modules/sub/config still carries a credential")
+	}
+	if strings.Contains(strings.ToLower(string(raw)), "extraheader") {
+		t.Fatal("http.extraheader survived the scrub")
+	}
 	if !strings.Contains(string(raw), "https://github.com/o/r.git") ||
 		!strings.Contains(string(raw), "https://bitbucket.org/o/r.git") {
 		t.Fatalf("remote URLs must survive, credential-free: %q", raw)
@@ -92,7 +107,9 @@ func TestScrubRetainedDropsSpecsAndCleansGitConfig(t *testing.T) {
 
 func TestIsSecretPathNamesTheThreeRefusedShapes(t *testing.T) {
 	for _, p := range []string{"work/spec.json", "/work/repo/.git/config", "work/repo/.git/../.git/config",
-		"work/repo/.credentials.json", "work/repo/aws_credentials", "work/repo/Credentials.txt"} {
+		"work/repo/.credentials.json", "work/repo/aws_credentials", "work/repo/Credentials.txt",
+		"work/repo/.git/modules/sub/config", "work/repo/.git/worktrees/w/config",
+		"work/repo/credentials/token", "work/repo/.aws/credentials"} {
 		if !IsSecretPath(p) {
 			t.Fatalf("%s must be refused", p)
 		}

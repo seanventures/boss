@@ -108,8 +108,12 @@ func (r *Runner) execute(ctx context.Context, id string, req backend.RunRequest)
 	}()
 	// Whatever the outcome, the task directory is made safe to keep before a
 	// failed or timed-out task is retained and browsable (P8-pre S1/S2): no
-	// spec copies, credential-free .git/config, every file owner-only. This
-	// runs before the terminal status lands, so no poll sees an unscrubbed tree.
+	// spec copies, credential-free .git/config, every file owner-only. For
+	// done, failed and timeout this runs before the runner lands the terminal
+	// status. A cancel is different: Cancel lands "cancelled" first and the
+	// scrub follows when the backend returns, so a poll can briefly see a
+	// cancelled task whose tree is not yet scrubbed (the fs endpoint still
+	// refuses the secret paths, and resolves symlinks, meanwhile).
 	scrubbed := false
 	scrub := func() {
 		if !scrubbed {

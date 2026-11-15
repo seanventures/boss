@@ -83,20 +83,30 @@ def _prepare_repo(spec):
 _URL_CREDENTIAL = re.compile(r"(?i)\b(https?://)[^/@\s\"']+@")
 
 
+_EXTRA_HEADER = re.compile(r"(?im)^[ \t]*extraheader[ \t]*=.*(\r?\n|$)")
+
+
 def _scrub_git_config(work=None):
-    """Remove any user:token@ from URLs in the repo's .git/config (P8-pre S2). Runs after
-    the clone and again before a task ends, so a retained workspace never keeps a token."""
-    cfg = Path(work if work is not None else WORK) / ".git" / "config"
-    try:
-        raw = cfg.read_text(encoding="utf-8")
-    except OSError:
+    """Remove credentials from every git config of the repo (P8-pre S2): user:token@ in URLs
+    and http.extraheader lines, in .git/config and .git/modules/*/config alike. Runs after the
+    clone and again before a task ends, so a retained workspace never keeps a token."""
+    git_dir = Path(work if work is not None else WORK) / ".git"
+    if not git_dir.is_dir():
         return
-    clean = _URL_CREDENTIAL.sub(r"\1", raw)
-    if clean != raw:
+    for cfg in [git_dir / "config", *git_dir.glob("modules/**/config"),
+                *git_dir.glob("worktrees/*/config")]:
+        if cfg.is_symlink() or not cfg.is_file():
+            continue
         try:
-            cfg.write_text(clean, encoding="utf-8")
+            raw = cfg.read_text(encoding="utf-8")
         except OSError:
-            pass
+            continue
+        clean = _EXTRA_HEADER.sub("", _URL_CREDENTIAL.sub(r"\1", raw))
+        if clean != raw:
+            try:
+                cfg.write_text(clean, encoding="utf-8")
+            except OSError:
+                pass
 
 
 def _forget_spec():

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +18,9 @@ import (
 )
 
 const leakedToken = "ghs_TESTONLYTOKENxxxxxxxxxxxxxxxxxxxxxxxx"
+
+// Set by the test before submit: a file outside any task, and another task's spec.
+var outsideFile, otherTaskSpec string
 
 // leakyBackend leaves behind what a careless guest run would: world-readable
 // files, a spec copy, a token in .git/config and a credentials file, then
@@ -39,6 +43,12 @@ func (leakyBackend) Run(_ context.Context, r backend.RunRequest) error {
 	_ = os.WriteFile(filepath.Join(repo, ".credentials.json"), []byte(leakedToken), 0o644)
 	_ = os.WriteFile(filepath.Join(repo, "README.md"), []byte("hi"), 0o644)
 	_ = os.WriteFile(filepath.Join(repo, "spec.json"), []byte(leakedToken), 0o644)
+	// Symlinks a guest could plant to reach past the fs endpoint's path checks.
+	_ = os.Symlink("/proc/self/environ", filepath.Join(repo, "env"))
+	_ = os.Symlink(outsideFile, filepath.Join(repo, "outside"))
+	_ = os.Symlink(otherTaskSpec, filepath.Join(repo, "other-spec"))
+	_ = os.Symlink(".git/config", filepath.Join(repo, "innocent.txt"))
+	_ = os.Symlink("/etc", filepath.Join(repo, "etcdir"))
 	return os.WriteFile(r.ResultPath, []byte(`{"status":"error","error":"tests failed"}`), 0o644)
 }
 
@@ -50,6 +60,13 @@ func TestFailedTaskIsRetainedScrubbedAndOwnerOnly(t *testing.T) {
 	b := leakyBackend{}
 	store.ConfigureBackend(b.Name(), b.Check)
 	root := t.TempDir()
+	outside := t.TempDir()
+	outsideFile = filepath.Join(outside, "host-secret.txt")
+	_ = os.WriteFile(outsideFile, []byte(leakedToken), 0o600)
+	otherTask := filepath.Join(root, "task-other")
+	_ = os.MkdirAll(otherTask, 0o700)
+	otherTaskSpec = filepath.Join(otherTask, "spec.json")
+	_ = os.WriteFile(otherTaskSpec, []byte(leakedToken), 0o600)
 	srv := NewWithRunner(store, "tok", run.New(store, b, root))
 
 	body, _ := json.Marshal(map[string]any{
@@ -75,6 +92,9 @@ func TestFailedTaskIsRetainedScrubbedAndOwnerOnly(t *testing.T) {
 	_ = filepath.Walk(jb.TaskDir, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			t.Fatal(err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil // a link's own mode means nothing; what it reaches is refused below
 		}
 		limit := os.FileMode(0o600)
 		if info.IsDir() {
@@ -107,6 +127,25 @@ func TestFailedTaskIsRetainedScrubbedAndOwnerOnly(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&e)
 		if e.Reason != contract.ReasonSecretPath {
 			t.Fatalf("fs %s reason=%q", p, e.Reason)
+		}
+	}
+	// HIGH (review): a symlink must not escape the workspace nor rename a secret path.
+	for _, p := range []string{"/work/repo/env", "/work/repo/outside", "/work/repo/other-spec",
+		"/work/repo/innocent.txt", "/work/repo/etcdir/hosts"} {
+		r := doJSON(t, srv, http.MethodGet, "/v1/sandbox/tasks/"+submitted.SandboxTaskID+"/fs?path="+p, nil, "tok")
+		if r.StatusCode != http.StatusForbidden && r.StatusCode != http.StatusNotFound {
+			t.Fatalf("fs %s status=%d, want refused", p, r.StatusCode)
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if strings.Contains(fmt.Sprint(body), leakedToken) || body["content"] != nil {
+			t.Fatalf("fs %s served content through a symlink", p)
+		}
+	}
+	for _, p := range []string{"/work/repo/outside", "/work/repo/other-spec", "/work/repo/innocent.txt"} {
+		r := doJSON(t, srv, http.MethodGet, "/v1/sandbox/tasks/"+submitted.SandboxTaskID+"/fs?path="+p, nil, "tok")
+		if r.StatusCode != http.StatusForbidden {
+			t.Fatalf("fs %s status=%d, want 403", p, r.StatusCode)
 		}
 	}
 	r := doJSON(t, srv, http.MethodGet, "/v1/sandbox/tasks/"+submitted.SandboxTaskID+"/fs?path=/work/repo", nil, "tok")

@@ -1246,8 +1246,9 @@ def resolve_system_ref(settings: Settings, keys, *, connection=None,
     the Claude login, the Anthropic key, a harness token).
 
     Those reads called `store.get` directly, so "which run read the Anthropic key" had no
-    answer in secret_access_events and no scope check applied. Now a usable reference row
-    stored under one of `keys` resolves through `resolve_secret_ref` itself — status and
+    answer in secret_access_events and no scope check applied. Now a usable reference row of
+    THIS project (or shared with it by its org or workspace) stored under one of `keys`
+    resolves through `resolve_secret_ref` itself — status and
     subject-scope checks (a user- or agent-scoped reference is REFUSED for any other subject,
     and the refusal is logged), one access row naming the run, the run's redaction — with the
     principal recorded as SYSTEM_PRINCIPAL. A value with no reference row is read by name by
@@ -1265,7 +1266,9 @@ def resolve_system_ref(settings: Settings, keys, *, connection=None,
         if not ref_id:
             return None
         try:
-            value = resolve_secret_ref(conn, ref_id, settings, principal=SYSTEM_PRINCIPAL)
+            # project_id: resolve_secret_ref's own cross-project rule applies too.
+            value = resolve_secret_ref(conn, ref_id, settings, project_id=project_id,
+                                       principal=SYSTEM_PRINCIPAL)
         except SecretNotFound:
             return None                 # the reference's store lost it: read by name
         return (value or "").strip() or None
@@ -1292,14 +1295,32 @@ def record_system_read(settings: Settings, key: str, *, connection=None,
 
 
 def _system_ref_for(connection, keys: list, project_id: Optional[str]) -> Optional[str]:
-    """The newest usable reference row stored under one of `keys` (this project's first)."""
+    """The reference row a system read of `keys` resolves through, for ONE project.
+
+    Only the run's own project's rows and the rows its org or workspace shares with it are
+    candidates — never another project's (PR #104 review). A shared or project row wins; a
+    person- or agent-scoped row of this project is taken only when nothing else is stored, so
+    that resolve_secret_ref refuses it (and logs the refusal) for any other subject instead of
+    the value being read by name past its scope. With no project, there is no reference route:
+    the caller reads by name and records `store:<key>`."""
+    if not project_id:
+        return None
     try:
         with connection.begin_nested():
             row = connection.execute(sql(
-                "SELECT id FROM secret_refs WHERE ref_key = ANY(:keys) "
-                "AND status IN ('active', 'rotating', 'rotation_due') "
-                "ORDER BY (project_id = :p) DESC, updated_at DESC NULLS LAST, id LIMIT 1"),
-                {"keys": list(keys), "p": project_id or ""}).first()
+                "SELECT sr.id FROM secret_refs sr "
+                "LEFT JOIN projects p ON p.id = :p "
+                "LEFT JOIN workspaces w ON w.id = p.workspace_id "
+                "WHERE sr.ref_key = ANY(:keys) "
+                "AND sr.status IN ('active', 'rotating', 'rotation_due') "
+                "AND ((sr.project_id = :p) "
+                "     OR (sr.scope_type = 'workspace' AND sr.scope_id = p.workspace_id) "
+                "     OR (sr.scope_type = 'org' AND sr.scope_id = w.org_id)) "
+                "AND (COALESCE(sr.scope_type, 'project') NOT IN ('user', 'agent') "
+                "     OR sr.project_id = :p) "
+                "ORDER BY (COALESCE(sr.scope_type, 'project') IN ('user', 'agent')), "
+                "(sr.project_id = :p) DESC, sr.updated_at DESC NULLS LAST, sr.id LIMIT 1"),
+                {"keys": list(keys), "p": project_id}).first()
     except Exception:  # noqa: BLE001 — a schema without the table: no reference, read by name
         return None
     return str(row[0]) if row else None
