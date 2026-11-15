@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 
 DISPATCHABLE_EVENT_TYPES = frozenset(
     {
+        # The Infra Agent's signals (BOSSAPP-1157): an event trigger on a deployment may
+        # subscribe to storage pressure the way the LLD's `triggers.event` describes.
+        "storage.pressure",
+        "storage.incident.opened",
+        "storage.incident.escalated",
+        "storage.incident.resolved",
         "code_task.pr_opened",
         "code_task.completed",
         "code_task.completed_no_pr",

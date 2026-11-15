@@ -221,3 +221,11 @@ type HostJob = { id: string; host_id: string; verb: "du"|"prune_build_cache"|"re
 ```
 `POST /v1/host-jobs/{id}/result` body `{ "ok": boolean, "dry_run": boolean, "items": string[], "bytes": number, "error"?: string, "plan_hash": string }` → `{ "recorded": true }`.
 `GET /v1/host-jobs/public-key` → `{ "key_id": string, "algorithm": "Ed25519", "public_key": "<base64 raw 32 bytes>" }`.
+
+## 11. P8 KVM hosts: `boss-hostd` `storage` verbs (documented, not built)
+
+On microVM hosts the Fleet doctor runs the same storage duty through `boss-hostd` instead of `boss steward` (LLD §7.3). The daemon already posts `DiskUsedPct` in its 2 s heartbeat; this adds to `Pressure`: `images_gb`, `snapshots_gb`, `setup_cache_gb`, `logs_gb`. Jobs arrive over the existing mTLS control channel as the same `HostJob` shape (§10) with these verbs: `du`, `prune_build_cache`, `remove_images`, `remove_orphan_volumes`, `cap_logs`, `remove_vm_snapshots` (`{older_than_hours, keep_newest}`), `prune_setup_cache` (`{cap_gb}`). The label gate is `boss.kind` + `boss.retain_until` (hostd labels every VM image, snapshot and cache entry it makes), enforced in Go on the host exactly as the steward enforces it in Python; the signature is the host's mTLS identity plus the same Ed25519 job signature. Results post to `POST /v1/host-jobs/{id}/result`. Host protection already cordons at 85 % disk; the Infra Agent's incident drives the Fleet doctor's storage steps on those hosts. Implementation lands with P8 (`services/sandbox-service/internal/hostd`), not in this PR.
+
+## 12. What the Layer 1 scripts own (not duplicated here)
+
+`scripts/install/backup.sh` retention (keep 10 / 7 d / 20 GB after each backup), `prune.sh` image retention + `builder prune --keep-storage`, compose `logging:` caps, Postgres guardrails and the build disk floor live on `feat/storage-layer1`. The executor's host verbs act on the same rules at incident time (and `remove_backups` only through the tier-3 card until a rule is approved); `storage_rules.DEFAULT_RULES` mirrors their defaults so the Storage card and the scripts say the same numbers. Coordinator note: `backup.sh` writes no manifest naming the install yet; the steward's backup gate therefore relies on BACKUP_ROOT + the `boss-backup-*` name (a manifest, when present, is honoured and a foreign one refuses the item).

@@ -651,6 +651,12 @@ def tick(connection: Connection, *, now: Optional[datetime] = None, limit: int =
     trigger fires only when the hook says it is due (a focused agent's own due rule)."""
     current = now or _now()
     fired, skipped = [], []
+    # THE INSTALL-WIDE WORK HOLD (Infra Agent, BOSSAPP-1157): due triggers are not fired and
+    # next_fire_at is NOT advanced, so nothing is lost — they fire on the first tick after release.
+    from . import work_hold
+
+    if work_hold.active(connection, "agent.trigger"):
+        return {"fired": [], "skipped": [{"reason": "infra_hold"}], "held": True}
     for trigger in due(connection, now=current, limit=limit, project_id=project_id):
         source = _source_of(trigger.get("legacy_ref"))
         if source and source not in (sources or set()):

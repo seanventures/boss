@@ -90,6 +90,20 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
         _log.warning("system doctor not started", exc_info=True)
         started["system_doctor"] = False
     try:
+        # The storage watch (Infra Agent, BOSSAPP-1157): host readings → forecast → one incident
+        # per host; the deterministic cleanup executor advances on its tick; the install-wide
+        # work hold auto-releases when stuck. Layer 1 runs whether or not the agent is up.
+        from . import storage_watch
+
+        if getattr(settings, "storage_watch_enabled", True):
+            storage_watch.start(engine, settings)
+            started["storage_watch"] = True
+        else:
+            started["storage_watch"] = False
+    except Exception:  # noqa: BLE001
+        _log.warning("storage watch not started", exc_info=True)
+        started["storage_watch"] = False
+    try:
         # Scheduled self-backups (BOSSAPP-838): every API process starts it; the DB lease lets
         # exactly one of them back up.
         from . import backup_scheduler

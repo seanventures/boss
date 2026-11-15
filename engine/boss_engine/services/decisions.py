@@ -1116,6 +1116,20 @@ class DecisionService:
             agent_deployments.on_promotion_answered(connection, row, verdict="approve",
                                                     actor=actor)
             return
+        if action == "storage_delete":
+            # THE INFRA AGENT'S TIER-3 CARD (BOSSAPP-1157, storage_cleanup): approving runs
+            # exactly the dry run's plan_hash (or re-plans a stale one) and, when the rule box
+            # was ticked, writes the retention rule so next time it is automatic.
+            from . import storage_cleanup
+
+            storage_cleanup.on_delete_decision(connection, connection.engine, row, verdict="approve",
+                                               actor=actor)
+            return
+        if action == "storage_rule":
+            from . import storage_incidents
+
+            storage_incidents.on_rule_decision(connection, row, verdict="approve", actor=actor)
+            return
         if action == "resume_interrupt":
             # A KERNEL RUN'S INTERRUPT ANSWERED (AP-P2, services/interrupts.py): the run resumes
             # once EVERY interrupt it waits on is answered — one decision batch, matched by id.
@@ -1652,6 +1666,13 @@ class DecisionService:
             # a promotion is re-asked by promoting again).
             agent_deployments.on_promotion_answered(connection, row, verdict="reject",
                                                     actor=actor)
+            return
+        if recommendation_action == "storage_delete" and action == "reject":
+            # "Not now" (BOSSAPP-1157): the step is re-asked in an hour or on a further fall.
+            from . import storage_cleanup
+
+            storage_cleanup.on_delete_decision(connection, connection.engine, row, verdict="reject",
+                                               actor=actor)
             return
         if recommendation_action == interrupts.ACTION and action == "reject":
             # Declined: the call does not run; the run resumes (with the batch) told so. (Like a

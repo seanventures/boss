@@ -5821,6 +5821,12 @@ def claim_step(
 
     if work_holds.run_is_held(connection, run_id, mode="pause"):
         return None
+    # THE INSTALL-WIDE WORK HOLD (Infra Agent, BOSSAPP-1157): a global pause every run obeys;
+    # the step stays ready and is claimed on the first poll after release.
+    from . import work_hold
+
+    if work_hold.active(connection, "workflow.step"):
+        return None
     # Attempts past their step's timeout end first, so one is failed (and maybe retried, or
     # sent down its error path) rather than reclaimed below as a mere lapsed lease.
     if _time_out_overdue_steps(connection, run_id):

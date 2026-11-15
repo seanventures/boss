@@ -90,6 +90,8 @@ Commands:
                       (--dedicated). Runs after every upgrade and update. Also: --dry-run
   host-sample         macOS: post this Mac's swap and biggest memory users to BOSS's system
                       doctor, which cannot see past Docker Desktop's VM
+  steward CMD         The Infra Agent's host helper (pull-only; storage readings + signed, typed
+                      cleanup jobs with a label gate): install | uninstall | status | run
   identity CMD        Named accounts, from the host shell:
                         setup-link            a new one-hour link to claim this BOSS (no Owner yet)
                         claim-status          claimed or not, and when the shared password stops
@@ -382,6 +384,14 @@ post_deploy_prune() {
 # swap and the biggest memory users, posted to the system doctor so its card can say "most of
 # it is not BOSS" with numbers. macOS only; nothing is posted elsewhere. Run it on a schedule
 # (e.g. every 5 min from launchd) to keep the reading fresh; it expires after 10 minutes.
+# THE INFRA AGENT'S HOST HELPER (BOSSAPP-1157): the API cannot see this machine's disk or reach
+# Docker; `boss steward` runs here every 30 s, posts a reading and pulls at most one signed, typed
+# job, applying the label gate itself (scripts/install/steward.sh, steward.py).
+cmd_steward() {
+  need_install
+  BOSS_INSTALL_DIR="$INSTALL_DIR" bash "$INSTALL_DIR/scripts/install/steward.sh" "$@"
+}
+
 cmd_host_sample() {
   need_install
   [[ "$(uname -s)" == Darwin ]] || die "host-sample reads macOS memory; on Linux BOSS measures the machine itself."
@@ -1664,6 +1674,7 @@ case "$COMMAND" in
   uninstall) cmd_uninstall "$@" ;;
   prune) cmd_prune "$@" ;;
   host-sample) cmd_host_sample "$@" ;;
+  steward) cmd_steward "$@" ;;
   toolchains) cmd_toolchains "$@" ;;
   self-fix) cmd_self_fix "$@" ;;
   version|--version) cmd_version ;;

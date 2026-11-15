@@ -628,6 +628,11 @@ class JobLeaseService:
         from . import owned_process
         if owned_process.draining():
             return None
+        # THE INSTALL-WIDE WORK HOLD (Infra Agent, BOSSAPP-1157; work_hold.py): while a storage
+        # incident is being cleaned, no non-exempt job is leased. Read once per claim (cached).
+        from . import work_hold
+
+        infra_hold = work_hold.state(connection) if work_hold.active(connection) else None
 
         lease_token = f"lease_{uuid4().hex}"
         lease_token_hash = self._hash_token(lease_token)
@@ -707,6 +712,12 @@ class JobLeaseService:
             mode="pause")
         for candidate in candidates:
             if candidate.get("work_item_id") in held:
+                continue
+            if infra_hold is not None and not work_hold.exempt_job(connection, candidate, infra_hold):
+                # Left queued, stamped "paused by Infra Agent" (no attempt spent): the console
+                # says why, and release sets run_after = now() oldest first.
+                if candidate["status"] not in {"leased", "running"}:
+                    work_hold.stamp_queued_job(connection, candidate["id"], infra_hold)
                 continue
             payload = candidate["payload"] or {}
             # AN IRREVERSIBLE EFFECT WHOSE HOLDER DIED IS NEVER RE-RUN BLIND (BOSSAPP-986).

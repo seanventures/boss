@@ -253,6 +253,15 @@ def admit_job(connection: Any, kind: str, *, cap: Optional[Capacity] = None) -> 
     profile_kind = profile_for_job(kind)
     if profile_kind is None:
         return Decision(admitted=True, reason="light work is never held back")
+    # THE INSTALL-WIDE WORK HOLD (Infra Agent, BOSSAPP-1157): a heavy job waits while storage is
+    # cleaned, with its own code so the console says "paused by Infra Agent", not "no room".
+    from . import work_hold
+
+    if work_hold.active(connection, kind):
+        incident = work_hold.state(connection).get("incident_id")
+        return Decision(admitted=False, code="infra_hold",
+                        reason=f"paused by the Infra Agent while storage is cleaned ({incident})",
+                        shortfall="storage is being cleaned")
     cap = cap or sample()
     # One heavy admission at a time across lease slots: the in-flight count and free memory
     # are read, then the lease commits; without this two slots admit against the same memory.

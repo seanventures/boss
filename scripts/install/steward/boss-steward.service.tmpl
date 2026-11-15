@@ -1,0 +1,9 @@
+[Unit]
+Description=boss steward: the Infra Agent's host helper (pull-only, typed jobs, label gate)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=@PYTHON@ -I @HELPER@ --install-dir @INSTALL_DIR@
+Nice=10
+IOSchedulingClass=idle

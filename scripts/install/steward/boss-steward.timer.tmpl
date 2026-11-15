@@ -1,0 +1,10 @@
+[Unit]
+Description=Run boss steward every @INTERVAL@ seconds
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=@INTERVAL@
+AccuracySec=5
+
+[Install]
+WantedBy=timers.target

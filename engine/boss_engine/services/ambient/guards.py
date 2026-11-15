@@ -105,6 +105,13 @@ def admit_start(connection: Connection, *, project_id: str,
     if stopped["stopped"]:
         return _refuse(connection, project_id, "stopped",
                        f"ambient work is stopped ({stopped['scope']})")
+    # THE INSTALL-WIDE WORK HOLD (Infra Agent, BOSSAPP-1157): the same wire shape as the stop.
+    from .. import work_hold
+
+    if work_hold.active(connection, "ambient.start"):
+        return _refuse(connection, project_id, "infra_hold",
+                       "paused by the Infra Agent while storage is cleaned",
+                       incident_id=work_hold.state(connection).get("incident_id"))
     breaker = check_breaker(connection, project_id)
     if breaker["tripped"]:
         return _refuse(connection, project_id, "breaker", breaker["reason"])

@@ -40,6 +40,12 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 
 from sqlalchemy import text
 
+
+def _json_dumps(value: Any) -> str:
+    import json
+
+    return json.dumps(value, default=str)
+
 _log = logging.getLogger("boss.backup_scheduler")
 
 LEASE_NAME = "backup_scheduler"
@@ -244,9 +250,16 @@ def run_backup(engine: Any, settings: Any = None, *, now: Optional[datetime] = N
     folder = Path(getattr(settings, "backup_dir", "/var/lib/boss/backups"))
     final = folder / f"boss-{backup_id}.dump"
     with engine.begin() as c:
-        c.execute(text("INSERT INTO backups (id, kind, path, started_at, status) "
-                       "VALUES (:i, :k, :p, :t, 'running')"),
-                  {"i": backup_id, "k": kind, "p": str(final), "t": now})
+        # ST-6 LABELS (BOSSAPP-1151): every backup BOSS writes says who made it, what kind it is
+        # and how long to keep it, so the Infra Agent's cleanup touches labelled things only.
+        c.execute(text("INSERT INTO backups (id, kind, path, started_at, status, label, retain_until) "
+                       "VALUES (:i, :k, :p, :t, 'running', CAST(:l AS JSONB), "
+                       ":t + make_interval(days => :keep))"),
+                  {"i": backup_id, "k": kind, "p": str(final), "t": now,
+                   "l": _json_dumps({"boss.owner": "backup_scheduler", "boss.kind": f"backup.{kind}",
+                                     "boss.install_id": os.environ.get("BOSS_INSTALL_ID", ""),
+                                     "boss.ttl_days": int(getattr(settings, "backup_keep_daily", 7) or 7)}),
+                   "keep": int(getattr(settings, "backup_keep_daily", 7) or 7)})
     row: dict[str, Any] = {"id": backup_id, "kind": kind, "path": str(final), "status": "failed",
                            "bytes": None, "checksum": None, "object_key": None,
                            "verified_at": None, "error": None}
