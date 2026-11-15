@@ -71,6 +71,9 @@ MAX_IDENTIFIER = 63
 #: up to 6 API shards; three is the number that actually ran out on the bench server.
 DEFAULT_CONCURRENT_RUNS = 3
 
+#: Seconds a test session's start-up sweep and preflight wait for the server.
+SESSION_CONNECT_TIMEOUT = 2
+
 
 # ---------------------------------------------------------------------------------------------
 # names
@@ -208,8 +211,38 @@ HOW_TO_FIX = (
 )
 
 
+#: Set to 1 on a machine whose loopback BOSS_POSTGRES_PORT is NOT a BOSS install (a bare CI
+#: Postgres, say). Typed on purpose; nothing sets it by accident.
+NOT_AN_INSTALL = "BOSS_TEST_LOOPBACK_IS_NOT_AN_INSTALL"
+
+
+def _install_postgres_port(environ) -> int:
+    """The loopback port the install publishes its database on: BOSS_POSTGRES_PORT from the
+    environment, else from the install's .env (BOSS_INSTALL_DIR, default ~/boss), else 5432."""
+    value = (environ.get("BOSS_POSTGRES_PORT") or "").strip()
+    if not value:
+        install = environ.get("BOSS_INSTALL_DIR") or os.path.join(os.path.expanduser("~"), "boss")
+        try:
+            with open(os.path.join(install, ".env"), encoding="utf-8") as handle:
+                for line in handle:
+                    if line.startswith("BOSS_POSTGRES_PORT="):
+                        value = line.split("=", 1)[1].strip().strip("'\"")
+        except OSError:
+            pass
+    try:
+        return int(value) if value else 5432
+    except ValueError:
+        return 5432
+
+
 def live_server_urls(environ=os.environ) -> List[str]:
+    """Every server that counts as the live install's. The laptop's live Postgres usually has
+    NO variable naming it (the developer's shell sets neither BOSS_DATABASE_URL nor a live
+    DATABASE_URL), so the install's published loopback port counts too: localhost on
+    BOSS_POSTGRES_PORT (default 5432)."""
     found: List[str] = []
+    if environ.get(NOT_AN_INSTALL, "").strip().lower() not in ("1", "true", "yes"):
+        found.append(f"postgresql://localhost:{_install_postgres_port(environ)}/boss")
     for var in LIVE_URL_VARIABLES:
         url = environ.get(var, "").strip()
         if not url or "://" not in url:
@@ -389,10 +422,10 @@ class SweepReport:
         return out
 
 
-def _connect(dsn: str):
+def _connect(dsn: str, timeout: int = 10):
     import psycopg  # the one import that needs a database; late, so the rules above load anywhere
 
-    return psycopg.connect(dsn, autocommit=True, connect_timeout=10)
+    return psycopg.connect(dsn, autocommit=True, connect_timeout=timeout)
 
 
 def _executor(connection) -> Callable[[str], Optional[list]]:
@@ -437,8 +470,17 @@ def _schema_in_use(execute: Callable[[str], Optional[list]], schema: str) -> boo
     return int(rows[0][0] or 0) > 0
 
 
+def _database_in_use(execute: Callable[[str], Optional[list]], name: str) -> bool:
+    """True when any other backend is connected to database `name`."""
+    rows = execute(
+        "SELECT count(*) FROM pg_stat_activity "
+        f"WHERE datname = {_literal(name)} AND pid <> pg_backend_pid()") or [[0]]
+    return int(rows[0][0] or 0) > 0
+
+
 def sweep(url: str, *, ttl_hours: float = DEFAULT_TTL_HOURS, dry_run: bool = True,
-          include_unstamped: bool = False, now: Optional[datetime] = None) -> SweepReport:
+          include_unstamped: bool = False, now: Optional[datetime] = None,
+          connect_timeout: int = 10) -> SweepReport:
     """Drop expired `boss_scratch_*_<stamp>` databases on `url`'s server and expired
     `boss_test_*_<stamp>` schemas inside `url`'s database. Nothing else, ever.
 
@@ -449,7 +491,7 @@ def sweep(url: str, *, ttl_hours: float = DEFAULT_TTL_HOURS, dry_run: bool = Tru
     report = SweepReport(dry_run=dry_run)
     dsn = psycopg_dsn(url)
     own = database_name(url)
-    with _connect(dsn) as connection:
+    with _connect(dsn, connect_timeout) as connection:
         execute = _executor(connection)
         execute("SET lock_timeout = '20s'")
         schema_rows = execute("SELECT nspname FROM pg_namespace WHERE nspname LIKE 'boss\\_%'") or []
@@ -473,10 +515,15 @@ def sweep(url: str, *, ttl_hours: float = DEFAULT_TTL_HOURS, dry_run: bool = Tru
             if name == own:
                 report.kept.append((name, "the database this sweep is connected to"))
                 continue
+            if _database_in_use(execute, name):
+                report.kept.append((name, "another session is connected to it (a test still running)"))
+                continue
             report.databases.append(name)
             if not dry_run:
                 try:
-                    execute(f"DROP DATABASE IF EXISTS {_quote(name)} WITH (FORCE)")
+                    # Never forced: a session that connected since the check makes the drop
+                    # fail and the database stays for the next sweep; nobody's run is killed.
+                    execute(f"DROP DATABASE IF EXISTS {_quote(name)}")
                 except Exception as exc:  # noqa: BLE001
                     report.failures.append((name, f"{type(exc).__name__}: {str(exc).strip()[:160]}"))
     return report
@@ -487,7 +534,9 @@ def sweep_quietly(url: str, *, ttl_hours: float = DEFAULT_TTL_HOURS) -> Optional
     if not url or "://" not in url:
         return None
     try:
-        return sweep(url, ttl_hours=ttl_hours, dry_run=False, include_unstamped=False)
+        # 2 s: a session start must not hang on an unreachable server (the suite skips anyway).
+        return sweep(url, ttl_hours=ttl_hours, dry_run=False, include_unstamped=False,
+                     connect_timeout=SESSION_CONNECT_TIMEOUT)
     except Exception:  # noqa: BLE001 — an unreachable server is the suite's own skip, not ours
         return None
 
@@ -504,7 +553,7 @@ def session_start(url: str, *, concurrent_runs: Optional[int] = None) -> List[st
         lines.append("[test-db sweep] " + "; ".join(report.lines()[:4]))
     runs = concurrent_runs or int(os.environ.get("TEST_TIER_SHARDS") or DEFAULT_CONCURRENT_RUNS)
     try:
-        with _connect(psycopg_dsn(url)) as connection:
+        with _connect(psycopg_dsn(url), SESSION_CONNECT_TIMEOUT) as connection:
             headroom = lock_preflight(_executor(connection), concurrent_runs=runs)
     except Exception:  # noqa: BLE001
         return lines

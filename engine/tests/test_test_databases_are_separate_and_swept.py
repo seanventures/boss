@@ -119,6 +119,45 @@ class TestTheLiveServerIsNotATestServer:
         with pytest.raises(td.LiveServerRefused):
             td.guard_test_url(environ)
 
+    def test_the_laptops_live_postgres_is_refused_with_no_variable_naming_it(self, tmp_path):
+        """The developer's shell sets neither BOSS_DATABASE_URL nor a live DATABASE_URL; the
+        install's published loopback port is what makes localhost:5432 the live server."""
+        environ = {"BOSS_INSTALL_DIR": str(tmp_path),
+                   "BOSS_TEST_DATABASE_URL": "postgresql+psycopg://boss:s3cret@localhost:5432/boss_lf_dev"}
+        with pytest.raises(td.LiveServerRefused) as caught:
+            td.guard_test_url(environ)
+        assert "s3cret" not in str(caught.value)
+        environ["BOSS_TEST_DATABASE_URL"] = "postgresql+psycopg://boss:s3cret@127.0.0.1:5432/boss_test_bench"
+        assert td.guard_test_url(environ)
+        environ["BOSS_TEST_DATABASE_URL"] = "postgresql+psycopg://boss:s3cret@localhost:55700/boss_lf_dev"
+        assert td.guard_test_url(environ), "the test server on 55700 is not the install"
+
+    def test_the_install_port_comes_from_its_env_file(self, tmp_path):
+        (tmp_path / ".env").write_text("BOSS_POSTGRES_PORT=5544\n")
+        environ = {"BOSS_INSTALL_DIR": str(tmp_path),
+                   "BOSS_TEST_DATABASE_URL": "postgresql+psycopg://boss:p@localhost:5544/boss_dev"}
+        with pytest.raises(td.LiveServerRefused):
+            td.guard_test_url(environ)
+        environ["BOSS_TEST_DATABASE_URL"] = "postgresql+psycopg://boss:p@localhost:5432/boss_dev"
+        assert td.guard_test_url(environ)
+        environ["BOSS_POSTGRES_PORT"] = "5432"
+        with pytest.raises(td.LiveServerRefused):
+            td.guard_test_url(environ)
+
+    def test_a_bare_ci_postgres_can_say_it_is_not_an_install(self, tmp_path):
+        environ = {"BOSS_INSTALL_DIR": str(tmp_path), td.NOT_AN_INSTALL: "1",
+                   "BOSS_TEST_DATABASE_URL": "postgresql+psycopg://boss:p@localhost:5432/boss_dev"}
+        assert td.guard_test_url(environ)
+
+    def test_the_api_suites_guard_is_reachable(self, tmp_path):
+        """db_guard lets `ci_x` through; this guard must not, on the install's loopback port."""
+        from apps.api.tests.db_guard import assert_safe_to_wipe
+
+        url = "postgresql+psycopg://boss:p@localhost:5432/ci_x"
+        assert assert_safe_to_wipe(url) == url
+        with pytest.raises(td.LiveServerRefused):
+            td.guard_test_url({"BOSS_INSTALL_DIR": str(tmp_path), "DATABASE_URL": url}, variable="DATABASE_URL")
+
     def test_no_test_url_is_nothing_to_guard(self):
         assert td.guard_test_url({"DATABASE_URL": LIVE}) is None
 
@@ -304,6 +343,36 @@ class TestTheSweeperOnAServer:
             assert busy in _schemas(scratch)
         finally:
             holder.close()
+
+    def test_a_database_someone_is_connected_to_is_kept(self, scratch):
+        import psycopg
+
+        busy = td.scratch_database_name("st7busy", datetime.now(timezone.utc) - timedelta(hours=30))
+        admin = td.with_database(scratch, "postgres")
+        _run(admin, f'CREATE DATABASE "{busy}"')
+        holder = psycopg.connect(td.psycopg_dsn(td.with_database(scratch, busy)))
+        try:
+            dry = td.sweep(scratch, dry_run=True)
+            real = td.sweep(scratch, dry_run=False)
+            assert busy not in dry.databases and busy not in real.databases
+            assert any(name == busy and "connected" in why for name, why in real.kept)
+            assert not holder.closed and holder.execute("SELECT 1").fetchone() == (1,), "never killed"
+            assert busy in {r[0] for r in _run(admin, "SELECT datname FROM pg_database")}
+        finally:
+            holder.close()
+            _run(admin, f'DROP DATABASE IF EXISTS "{busy}" WITH (FORCE)')
+
+    def test_the_sweeper_never_forces_a_drop(self):
+        import inspect
+
+        assert "WITH (FORCE)" not in inspect.getsource(td.sweep)
+
+    def test_the_session_start_waits_two_seconds_at_most(self):
+        import time
+
+        start = time.monotonic()
+        assert td.session_start("postgresql+psycopg://u:p@10.255.255.1:5432/boss_test") == []
+        assert time.monotonic() - start < 8   # sweep + preflight, 2 s each, plus slack
 
     def test_a_drop_in_batches_takes_the_whole_schema_a_few_tables_at_a_time(self, scratch):
         schema = td.test_schema_name("batched")

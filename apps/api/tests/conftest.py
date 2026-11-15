@@ -38,9 +38,10 @@ from boss_engine.dev.test_databases import guard_test_url, session_start  # noqa
 _BASE_DATABASE_URL = os.environ.get("DATABASE_URL", "")
 if _BASE_DATABASE_URL:
     _assert_safe_to_wipe(_BASE_DATABASE_URL)
-    # AND NOT INSIDE THE LIVE INSTALL'S SERVER (BOSSAPP-1152): on the server BOSS_DATABASE_URL
-    # names, a test database must say so by name (boss_test*, boss_scratch*). The separate test
-    # Postgres is the `db-test` compose service; the refusal says how to start it.
+    # AND NOT INSIDE THE LIVE INSTALL'S SERVER (BOSSAPP-1152). db_guard accepts any name with
+    # "test"/"ci"/"tmp" in it; on the install's server (its loopback BOSS_POSTGRES_PORT, or
+    # BOSS_DATABASE_URL) only boss_test*/boss_scratch* is allowed, so e.g. localhost:5432/ci_x is
+    # refused here. The separate test Postgres is `db-test`; the refusal says how to start it.
     guard_test_url(variable="DATABASE_URL")
     _TEST_SCHEMA = confine_to_private_schema(_BASE_DATABASE_URL)
 else:
