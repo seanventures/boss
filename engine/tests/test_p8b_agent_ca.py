@@ -200,6 +200,11 @@ def test_the_image_must_be_signed_or_active_and_never_revoked(fleet):
                       {"d": digest})
         _, unsigned = fleet.cert()
         assert unsigned.json()["detail"]["error"] == "image_unsigned"
+        with fleet.eng.begin() as c:   # `active` alone is not enough: issuance needs SIGNED
+            c.execute(text("UPDATE vm_images SET status = 'active' WHERE digest = :d"),
+                      {"d": digest})
+        _, active_unsigned = fleet.cert()
+        assert active_unsigned.json()["detail"]["error"] == "image_unsigned"
         with fleet.eng.begin() as c:
             c.execute(text("UPDATE vm_images SET signature = 'cosign:sig' WHERE digest = :d"),
                       {"d": digest})
@@ -229,8 +234,11 @@ def test_renewal_keeps_the_old_cert_valid_and_revocation_is_listed(fleet):
         assert set(live) == {a["serial"], b["serial"]}, "the old one serves until it expires"
         assert agent_ca.replicas_with_valid_cert(c, [fleet.replica_id]) == {fleet.replica_id}
         assert agent_ca.revoke(c, serial=a["serial"], reason="test") == [a["serial"]]
+    with fleet.eng.begin() as c:
+        mine = agent_ca.trust_document(c, fleet.org)["revoked"]
+    assert a["serial"] in mine and b["serial"] not in mine, "revocation is listed per org"
     doc = fleet.client.get("/v1/pki/agent-ca").json()
-    assert a["serial"] in doc["revoked"] and b["serial"] not in doc["revoked"]
+    assert "revoked" not in doc, "the public bundle names no org's serials"
     assert "BEGIN CERTIFICATE" in doc["serving_bundle_pem"] and doc["root_sha256"]
     assert doc["options"]["acme"].startswith("documented")
     # revoking the HOST revokes every certificate it holds, replicas' included; no renewal after
@@ -305,3 +313,44 @@ def test_the_agent_ca_is_separate_from_the_fleet_ca_and_stable(fleet):
     assert one.serving.cert.issuer == one.root.cert.subject
     assert one.caller.cert.issuer == one.root.cert.subject
     assert one.serving.cert.subject != one.caller.cert.subject
+
+
+def test_the_public_bundle_never_creates_the_ca(eng, monkeypatch):
+    from boss_engine.services import agent_ca
+
+    calls: list = []
+    monkeypatch.setattr(agent_ca, "ensure_ca", lambda c: calls.append(1))
+    with eng.begin() as c:
+        agent_ca.public_bundle(c)
+        agent_ca.published_anchor(c)
+    assert calls == []
+
+
+def test_names_are_confined_unique_and_never_collide(fleet):
+    from cryptography import x509
+
+    from boss_engine.services import agent_ca
+
+    assert agent_ca._label("a_b") != agent_ca._label("a-b")
+    assert agent_ca._label("Bot") != agent_ca._label("bot") and agent_ca._label("bot") == "bot"
+    assert len(agent_ca._label("x" * 80)) <= 63
+    dom = agent_ca.agent_domain()
+    assert agent_ca.agent_dns_name({"hostname": "evil.example.com", "agent_key": "k",
+                                    "project_id": "p"}).endswith("." + dom)
+    assert agent_ca.agent_dns_name({"hostname": f"pay.{dom}"}) == f"pay.{dom}"
+    with fleet.eng.begin() as c:
+        ca = agent_ca.ensure_ca(c)
+    for inter, kind in ((ca.serving, "serving"), (ca.caller, "caller")):
+        nc = inter.cert.extensions.get_extension_for_class(x509.NameConstraints)
+        assert nc.critical and list(nc.value.permitted_subtrees) == agent_ca._permitted(kind)
+    # uniqueness: a name another deployment holds is refused
+    with fleet.eng.begin() as c:
+        c.execute(text("UPDATE agent_deployments SET hostname = :h WHERE id = :d"),
+                  {"h": f"pay.{dom}", "d": fleet.dep["id"]})
+    _, first = fleet.cert()
+    assert first.status_code == 200, first.text
+    with fleet.eng.begin() as c:
+        c.execute(text("UPDATE agent_certs SET deployment_id = 'dep_someone_else' "
+                       "WHERE serial = :s"), {"s": first.json()["serial"]})
+    _, clash = fleet.cert()
+    assert clash.status_code == 409 and clash.json()["detail"]["error"] == "dns_name_taken"

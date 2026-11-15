@@ -51,6 +51,11 @@ HANDSHAKE_SECONDS = 10.0
 HEADER_SECONDS = 30.0
 TRUST_TTL_SECONDS = 300.0
 JWT_SKEW_SECONDS = 60
+#: An unknown `kid` re-fetches the trust document at most this often (a stream of forged kids
+#: never turns into a stream of run-plane calls).
+UNKNOWN_KID_REFRESH_SECONDS = 30.0
+#: How often the listener retries / re-reads the caller bundle for mTLS.
+CALLER_BUNDLE_SECONDS = 30.0
 
 
 class CallerRefused(Exception):
@@ -166,6 +171,7 @@ class TrustCache:
         self.client, self.ttl = client, ttl
         self._doc: Optional[dict] = None
         self._at = 0.0
+        self._kid_refresh_at = -UNKNOWN_KID_REFRESH_SECONDS
         self._lock = threading.Lock()
 
     def doc(self, *, refresh: bool = False) -> dict:
@@ -182,6 +188,12 @@ class TrustCache:
         from ..identity import jwks
 
         for refresh in (False, True):
+            if refresh:
+                # An unknown kid may be a key BOSS just rotated in: re-fetch, but rate-limited.
+                with self._lock:
+                    if time.monotonic() - self._kid_refresh_at < UNKNOWN_KID_REFRESH_SECONDS:
+                        return None
+                    self._kid_refresh_at = time.monotonic()
             for jwk in (self.doc(refresh=refresh).get("jwks") or {}).get("keys") or []:
                 if jwk.get("kid") == kid:
                     try:
@@ -216,9 +228,20 @@ class TrustCache:
             key.verify(unverified.signature, unverified.signing_input)
         except Exception as exc:  # noqa: BLE001 — InvalidSignature
             raise CallerRefused("invalid_credentials") from exc
-        exp = unverified.claims.get("exp")
-        if not isinstance(exp, (int, float)) or exp + JWT_SKEW_SECONDS < time.time():
+        claims, now = unverified.claims, time.time()
+        exp = claims.get("exp")
+        if not isinstance(exp, (int, float)) or exp + JWT_SKEW_SECONDS < now:
             raise CallerRefused("token_expired")
+        nbf = claims.get("nbf")
+        if nbf is not None and (not isinstance(nbf, (int, float)) or nbf - JWT_SKEW_SECONDS > now):
+            raise CallerRefused("token_not_yet_valid")
+        doc = self.doc()
+        if not doc.get("issuer") or claims.get("iss") != doc["issuer"]:
+            raise CallerRefused("invalid_credentials")
+        aud = claims.get("aud")
+        auds = {aud} if isinstance(aud, str) else set(aud) if isinstance(aud, list) else set()
+        if not auds & set(doc.get("audiences") or []):
+            raise CallerRefused("invalid_credentials")
 
     def check_client_cert(self, der: bytes) -> str:
         """The handshake verified the chain; here: not revoked. Returns the PEM to forward."""
@@ -283,7 +306,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         path, _, qs = self.path.partition("?")
         from urllib.parse import parse_qsl
 
-        length = int(self.headers.get("Content-Length") or 0)
+        raw_length = (self.headers.get("Content-Length") or "0").strip()
+        if not raw_length.isdigit():   # negative, signed, or not a number: never read to EOF
+            self.close_connection = True
+            return self._refuse(400, "bad_content_length")
+        length = int(raw_length)
         if length > MAX_BODY_BYTES:
             self.close_connection = True
             return self._refuse(413, "body_too_large")
@@ -345,7 +372,37 @@ class AgentListener(socketserver.ThreadingMixIn, http.server.HTTPServer):
             log.warning("no caller bundle yet (mTLS off until it arrives): %s", exc)
             bundle = ""
         self.ssl_context = identity.server_context(caller_bundle_pem=bundle)
+        self.caller_bundle = bundle
+        self._closed = threading.Event()
         super().__init__(address, _Handler)
+        threading.Thread(target=self._caller_bundle_loop, daemon=True,
+                         name="caller-bundle").start()
+
+    def reload_caller_bundle(self) -> bool:
+        """Fetch the caller bundle and load it into the LIVE context (new handshakes verify
+        against it). True when it changed. A failed fetch leaves the current one in place."""
+        try:
+            bundle = self.trust.doc(refresh=True).get("caller_bundle_pem") or ""
+        except Exception as exc:  # noqa: BLE001 — retried by the loop
+            log.warning("caller bundle fetch failed (retrying): %s", exc)
+            return False
+        if not bundle or bundle == self.caller_bundle:
+            return False
+        self.ssl_context.load_verify_locations(cadata=bundle)
+        self.ssl_context.verify_mode = ssl.CERT_OPTIONAL
+        self.caller_bundle = bundle
+        log.info("caller bundle loaded: mTLS on")
+        return True
+
+    def _caller_bundle_loop(self) -> None:
+        # Retry quickly while mTLS is off; afterwards re-read now and then (a new caller
+        # intermediate is added; the old one stays trusted until its callers' certs expire).
+        while not self._closed.wait(5.0 if not self.caller_bundle else CALLER_BUNDLE_SECONDS):
+            self.reload_caller_bundle()
+
+    def server_close(self) -> None:
+        self._closed.set()
+        super().server_close()
 
     def server_bind(self) -> None:
         if hasattr(socket, "TCP_DEFER_ACCEPT"):

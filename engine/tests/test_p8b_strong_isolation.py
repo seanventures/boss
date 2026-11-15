@@ -36,7 +36,7 @@ GOOD_FACTS = {"kvm_live": True, "firecracker_live": True, "jailer_on": True,
 
 def _facts(**over):
     dep = {"id": "dep_1", "runtime": "microvm", "status": "live", "vm_mode": "replica",
-           "expose": {"a2a": True}, "image_digest": "sha256:img"}
+           "expose": {"a2a": True}, "image_digest": "sha256:img", "strict_secrets": True}
     host = {"backend": "firecracker", "status": "ready", "revoked_at": None, "facts": {},
             "heartbeat_age": 1.0, **GOOD_FACTS}
     replica = {"id": "rep_1", "host_id": "h1", "vm_mode": "replica",
@@ -67,6 +67,8 @@ def test_all_facts_hold_then_strong_isolation_holds():
     ({"dep__vm_mode": None}, "vm_mode is unset"),
     ({"dep__expose": {"a2a": True, "public": True}}, "per_run"),
     ({"replicas": []}, "no serving replica"),
+    ({"dep__strict_secrets": False}, "strict secrets"),
+    ({"replica__vm_mode": "per_run"}, "vm_mode per_run is not the deployment's replica"),
     ({"host__heartbeat_age": 10.0}, "heartbeat"),
     ({"host__heartbeat_age": None}, "heartbeat"),
     ({"host__backend": "process"}, "not a microVM"),
@@ -93,7 +95,8 @@ def test_any_single_fact_failing_makes_it_false_and_says_why(flip, why):
 
 
 def test_per_run_meets_d5_for_public_callers_and_cordoned_hosts_still_attest():
-    assert _facts(dep__vm_mode="per_run", dep__expose={"a2a": True, "public": True}).ok
+    assert _facts(dep__vm_mode="per_run", replica__vm_mode="per_run",
+                  dep__expose={"a2a": True, "public": True}).ok
     assert _facts(host__status="cordoned").ok
 
 

@@ -7,8 +7,9 @@ the moment of the request — there is no flag, setting or override:
 
   1. runtime == 'microvm', the deployment is live, and BOSS_MICROVM_CLAIMS_FROZEN is off (the
      kill switch, §3.17.4);
-  2. vm_mode meets D5: a replica or per_run VM; and a deployment open to PUBLIC (unauthenticated)
-     callers hands each run to a `per_run` VM (expose.public ⇒ per_run);
+  2. vm_mode meets D5: a replica or per_run VM — and every serving replica runs in that mode;
+     a deployment open to PUBLIC (unauthenticated) callers hands each run to a `per_run` VM
+     (expose.public ⇒ per_run); the deployment itself requires strict secrets (D21);
   3. there is at least one serving replica, and EVERY serving replica's host attests from a
      heartbeat under 10 s old: the Firecracker backend with firecracker_live (and kvm_live),
      jailer_on, seccomp_default, strict_secrets (D21), net_policy_ok (inbound-only tap / no NIC),
@@ -88,6 +89,8 @@ def evaluate(deployment: Mapping[str, Any], replicas: list, hosts: Mapping[str, 
         why.append("vm_mode is unset")
     elif expose.get("public") and mode != "per_run":
         why.append("public callers need per_run VMs (D5)")
+    if not deployment.get("strict_secrets"):
+        why.append("the deployment does not require strict secrets (D21)")
     if not replicas:
         why.append("no serving replica")
 
@@ -104,6 +107,8 @@ def evaluate(deployment: Mapping[str, Any], replicas: list, hosts: Mapping[str, 
         if age is None or age >= MAX_HEARTBEAT_AGE_SECONDS:
             why.append(f"{rid}: host heartbeat is older than {MAX_HEARTBEAT_AGE_SECONDS} s")
         why.extend(f"{rid}: {w}" for w in host_attests(host))
+        if r.get("vm_mode") != mode:
+            why.append(f"{rid}: vm_mode {r.get('vm_mode')} is not the deployment's {mode}")
         if r.get("image_digest") and not image_ok(r.get("image_digest")):
             why.append(f"{rid}: image is not signed and active")
         if rid not in certified:
@@ -115,11 +120,12 @@ def evaluate(deployment: Mapping[str, Any], replicas: list, hosts: Mapping[str, 
 
 def _deployment(connection: Any, deployment: Any) -> Optional[dict]:
     if isinstance(deployment, Mapping) and deployment.get("id") and "runtime" in deployment \
-            and "image_digest" in deployment:
+            and "image_digest" in deployment and "strict_secrets" in deployment:
         return dict(deployment)
     dep_id = deployment.get("id") if isinstance(deployment, Mapping) else deployment
     row = connection.execute(text(
-        "SELECT id, runtime, status, vm_mode, expose, image_digest FROM agent_deployments "
+        "SELECT id, runtime, status, vm_mode, expose, image_digest, strict_secrets "
+        "FROM agent_deployments "
         "WHERE id = :d"), {"d": str(dep_id or "")}).mappings().first()
     return dict(row) if row else None
 

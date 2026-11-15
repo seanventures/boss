@@ -123,7 +123,7 @@ def _unseal(sealed: str) -> bytes:
 
 
 def _ca_cert(name: str, key: Any, *, issuer: Any, issuer_key: Any, days: int,
-             path_length: int) -> Any:
+             path_length: int, permitted: Optional[list] = None) -> Any:
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes
     from cryptography.x509.oid import NameOID
@@ -149,6 +149,10 @@ def _ca_cert(name: str, key: Any, *, issuer: Any, issuer_key: Any, days: int,
         builder = builder.add_extension(
             x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer_key.public_key()),
             critical=False)
+    if permitted:
+        builder = builder.add_extension(
+            x509.NameConstraints(permitted_subtrees=permitted, excluded_subtrees=None),
+            critical=True)
     return builder.sign(issuer_key if issuer_key is not None else key, hashes.SHA256())
 
 
@@ -180,6 +184,14 @@ def ensure_ca(connection: Any) -> AgentCA:
     from cryptography.hazmat.primitives.asymmetric import ec
 
     rows = {r["kind"]: r for r in connection.execute(_LIVE).mappings().all()}
+    stale = [r["id"] for k, r in rows.items() if k != "root" and not _constrained(r, k)]
+    if stale:
+        # An intermediate without the current name constraints (made before they existed, or
+        # for another agent domain) is retired and re-made under the same root.
+        connection.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _LOCK_KEY})
+        connection.execute(text("UPDATE agent_ca SET retired_at = now() WHERE id = ANY(:i) "
+                                "AND retired_at IS NULL"), {"i": stale})
+        rows = {r["kind"]: r for r in connection.execute(_LIVE).mappings().all()}
     if len(rows) < 3:
         connection.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _LOCK_KEY})
         rows = {r["kind"]: r for r in connection.execute(_LIVE).mappings().all()}
@@ -197,7 +209,7 @@ def ensure_ca(connection: Any) -> AgentCA:
                 key = ec.generate_private_key(ec.SECP256R1())
                 cert = _ca_cert(f"BOSS agent {label} CA ({fleet_ca.trust_domain()})", key,
                                 issuer=root_cert, issuer_key=root_key, days=INTERMEDIATE_DAYS,
-                                path_length=0)
+                                path_length=0, permitted=_permitted(kind))
                 _store(connection, kind, cert, key)
         rows = {r["kind"]: r for r in connection.execute(_LIVE).mappings().all()}
     cache_key = tuple(sorted((k, r["id"]) for k, r in rows.items()))
@@ -222,6 +234,29 @@ def ensure_ca(connection: Any) -> AgentCA:
         return ca
 
 
+def _permitted(kind: str) -> list:
+    """NameConstraints of an intermediate: serving certificates name only `*.agents.<domain>`
+    (and the install's SPIFFE trust domain); caller certificates only the trust domain. IP SANs
+    (the VIP) are left unconstrained: VIPs come from the org's pools."""
+    from cryptography import x509
+
+    uri = x509.UniformResourceIdentifier(fleet_ca.trust_domain())
+    if kind == "serving":
+        return [x509.DNSName(agent_domain()), uri]
+    return [uri]
+
+
+def _constrained(row: Any, kind: str) -> bool:
+    from cryptography import x509
+
+    cert = x509.load_pem_x509_certificate(str(row["cert_pem"]).encode("ascii"))
+    try:
+        found = cert.extensions.get_extension_for_class(x509.NameConstraints).value
+    except x509.ExtensionNotFound:
+        return False
+    return list(found.permitted_subtrees or []) == _permitted(kind)
+
+
 def reset_cache() -> None:
     with _CACHE_LOCK:
         _CACHE.clear()
@@ -230,8 +265,14 @@ def reset_cache() -> None:
 # ── Names ───────────────────────────────────────────────────────────────────────────────────
 
 def _label(value: Any) -> str:
-    out = re.sub(r"[^a-z0-9-]+", "-", str(value or "").lower()).strip("-")
-    return (out[:63].rstrip("-")) or "x"
+    """One DNS label. A value that is already a clean label is kept; anything that had to be
+    changed (case, `_`, length…) gets a hash of the ORIGINAL, so two values never share a label."""
+    raw = str(value or "")
+    out = re.sub(r"[^a-z0-9-]+", "-", raw.lower()).strip("-")
+    if out == raw and 0 < len(out) <= 63:
+        return out
+    tag = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
+    return f"{out[:54].rstrip('-') or 'x'}-{tag}"
 
 
 def agent_domain() -> str:
@@ -241,9 +282,13 @@ def agent_domain() -> str:
 
 
 def agent_dns_name(deployment: dict) -> str:
-    """`<agent>.<project>.agents.<domain>` (§3.17.2), or the deployment's own hostname."""
+    """`<agent>.<project>.agents.<domain>` (§3.17.2), or the deployment's own hostname when it
+    is a name UNDER `agents.<domain>` (the serving intermediate's NameConstraints refuse any
+    other). Uniqueness across deployments is enforced at issuance (`dns_name_taken`)."""
     named = str(deployment.get("hostname") or "").strip().strip(".").lower()
-    if named and re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", named):
+    if (named and named.endswith("." + agent_domain())
+            and re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", named)
+            and all(0 < len(p) <= 63 for p in named.split("."))):
         return named
     return f"{_label(deployment.get('agent_key'))}.{_label(deployment.get('project_id'))}." \
            f"{agent_domain()}"
@@ -274,7 +319,8 @@ def host_attests_for_serving(row: Any) -> Optional[str]:
 
 
 def image_refusal(connection: Any, digest: Optional[str], *, backend: str) -> Optional[str]:
-    """The image must be signed or active, and never revoked (§3.5)."""
+    """The image must be SIGNED (a signature recorded at the image pipeline) and never revoked
+    (§3.5): `active` alone does not certify an agent."""
     if not digest:
         return None if backend == "process" else "image_unpinned"
     row = connection.execute(text(
@@ -284,7 +330,7 @@ def image_refusal(connection: Any, digest: Optional[str], *, backend: str) -> Op
         return "image_unknown"
     if row["status"] == "revoked":
         return "image_revoked"
-    if row["status"] != "active" and not row["signature"]:
+    if not row["signature"]:
         return "image_unsigned"
     return None
 
@@ -325,6 +371,13 @@ def issue_replica_cert(connection: Any, *, host_id: str, replica_id: str, csr_pe
         raise AgentCAError(exc.code, exc.status) from exc
     ca = ensure_ca(connection)
     dns = agent_dns_name(dict(dep))
+    taken = connection.execute(text(
+        "SELECT 1 FROM agent_certs WHERE kind = 'replica' AND :n = ANY(dns_names) "
+        "AND deployment_id <> :d AND revoked_at IS NULL AND not_after > now() LIMIT 1"),
+        {"n": dns, "d": dep["id"]}).first()
+    if taken:
+        raise AgentCAError("dns_name_taken", 409,
+                           f"{dns} is another deployment's agent name; set a unique hostname")
     ips = [dep["vip"]] if dep["vip"] else []
     now = _now()
     not_after = now + _dt.timedelta(hours=REPLICA_CERT_HOURS)
@@ -436,6 +489,27 @@ def revoked_serials(connection: Any, org_id: Optional[str] = None) -> list:
         "SELECT serial FROM agent_certs WHERE kind IN ('replica', 'caller') "
         "AND revoked_at IS NOT NULL AND not_after > now() "
         "AND (CAST(:o AS TEXT) IS NULL OR org_id = :o) ORDER BY serial"), {"o": org_id}).all()]
+
+
+def public_bundle(connection: Any) -> Optional[dict]:
+    """`GET /v1/pki/agent-ca` (public): the CA certificates only — no revoked serials (they are
+    per org) — and it NEVER creates the CA (that happens on the first authenticated issuance).
+    None until the CA exists."""
+    if not connection.execute(text("SELECT to_regclass('agent_ca')")).scalar():
+        return None
+    rows = {r["kind"]: str(r["cert_pem"]) for r in connection.execute(text(
+        "SELECT kind, cert_pem FROM agent_ca WHERE retired_at IS NULL")).mappings().all()}
+    if len(rows) < 3:
+        return None
+    from cryptography import x509
+
+    root = x509.load_pem_x509_certificate(rows["root"].encode("ascii"))
+    return {"serving_bundle_pem": rows["serving"] + rows["root"],
+            "caller_bundle_pem": rows["caller"] + rows["root"], "root_pem": rows["root"],
+            "root_sha256": fleet_ca.fingerprint_of(root), "dns_suffix": agent_domain(),
+            "replica_cert_hours": REPLICA_CERT_HOURS,
+            "options": {"acme": "documented, not built (D7)",
+                        "customer_ca": "documented, not built (D7: BOSS as a sub-CA)"}}
 
 
 def trust_document(connection: Any, org_id: Optional[str] = None) -> dict:
@@ -587,6 +661,7 @@ def caller_context(connection: Any, cert_pem: str) -> Any:
 
 
 __all__ = ["AgentCA", "AgentCAError", "ATTESTATION_MAX_AGE_SECONDS", "CALLER_SCOPES",
+           "public_bundle",
            "REPLICA_CERT_HOURS", "agent_dns_name", "published_anchor", "caller_context", "ensure_ca",
            "host_attests_for_serving", "image_refusal", "issue_caller_cert",
            "issue_replica_cert", "renew_after", "replicas_with_valid_cert", "reset_cache",

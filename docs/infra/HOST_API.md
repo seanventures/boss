@@ -1213,7 +1213,7 @@ the second PR #120 review):
 - **Issuance** (`POST /v1/run-plane/replica/cert {csr_pem}`): BOSS checks the replica is desired
   (on this host, wanted running, live microvm deployment), the host attests for serving (ready,
   not revoked, heartbeat < 10 s, and on Firecracker `kvm_live` + `firecracker_live`), and the
-  image is signed or active and not revoked (a Firecracker replica must pin one). Answer:
+  image is signed and not revoked (a Firecracker replica must pin one). Answer:
   `{certificate_pem, chain_pem, serial, not_after, renew_after, dns_names, ip_addresses, renews}`.
 - **The certificate:** 24 h, `serverAuth`, SAN DNS `<agent>.<project>.agents.<domain>`
   (`BOSS_AGENT_DNS_DOMAIN`, default the trust domain; or the deployment's `hostname`), the VIP as
@@ -1221,7 +1221,12 @@ the second PR #120 review):
   key**; the previous certificate stays valid until it expires (no dropped connections).
 - **Revocation:** short life + immediate withdraw. Revoking a host revokes its replicas'
   certificates; `POST /v1/fleet/agent-certs/{serial}/revoke` revokes one; unexpired revoked
-  serials are listed at `GET /v1/pki/agent-ca` (public: both bundles, the root's SHA-256).
+  serials are listed per org in the replica's (authenticated) trust document. `GET
+  /v1/pki/agent-ca` (public) serves only the bundles and the root's SHA-256, and never creates
+  the CA: the first authenticated issuance does. Intermediates carry NameConstraints (serving:
+  `agents.<domain>` + the trust domain; caller: the trust domain); a hostname outside
+  `agents.<domain>` is ignored, and a name another deployment holds is refused
+  (`dns_name_taken`).
 - **Published to callers:** the signed A2A card of a microvm agent names the CA
   (`bossAgentCa: {url, root_sha256}`, an `mtlsSecurityScheme`, and the `https://<dns>/a2a`
   interface); `/v1/agents/{id}/jwks` carries `boss_agent_ca`.
@@ -1236,8 +1241,10 @@ the second PR #120 review):
 
 - `boss-runtime --listen VIP:443`: TLS 1.2+ ends in the VM. mTLS is **optional**
   (`CERT_OPTIONAL` against the caller bundle); a bearer is verified **locally** (a BOSS key's
-  checksum; a JWT's EdDSA signature against the cached JWKS, unexpired). No credential, or one
-  that fails, is `401` before BOSS is asked.
+  checksum; a JWT's EdDSA signature against the cached JWKS, `exp`/`nbf`, `iss` and `aud` from
+  the trust document; an unknown `kid` re-fetches at most every 30 s). No credential, or one that
+  fails, is `401` before BOSS is asked; a negative or non-numeric Content-Length is `400`. The
+  caller bundle is retried until it loads and re-read every 30 s.
 - **Authorisation is never local:** every request calls `POST /v1/run-plane/admit` with
   `{caller: <Authorization>, client_cert: <PEM>, op, surface}`; `op` is `invoke` (admit + lease
   to this replica), `thread`, `read`, `cancel` or `answer`. BOSS authenticates the forwarded
@@ -1254,7 +1261,8 @@ the second PR #120 review):
 ### 10.3 AP-D11: `strong_isolation(deployment)` (`services/strong_isolation.py`)
 
 True only when **all** hold, read at request time, with no flag: `runtime: microvm`, live, not
-frozen (`BOSS_MICROVM_CLAIMS_FROZEN`); `vm_mode` set, and `per_run` when `expose.public` (D5); at
+frozen (`BOSS_MICROVM_CLAIMS_FROZEN`), `strict_secrets` (D21); `vm_mode` set, every serving
+replica in that mode, and `per_run` when `expose.public` (D5); at
 least one serving replica, and every serving replica's host on Firecracker with `kvm_live`,
 `firecracker_live`, `jailer_on`, `seccomp_default`, `strict_secrets`, `net_policy_ok`, no
 `facts.fallback_tap` (D15), a heartbeat under 10 s old; the image pinned, signed and active; each

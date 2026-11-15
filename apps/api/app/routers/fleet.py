@@ -689,12 +689,17 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
     @router.get("/v1/pki/agent-ca")
     @public(reason=PublicReason.JWKS)
     def agent_ca_bundle() -> JSONResponse:
-        """The BOSS agent CA (D7): the serving bundle callers pin to reach an agent's VIP, the
-        caller bundle, and the unexpired revoked serials. Public, like a JWKS."""
+        """The BOSS agent CA (D7): the serving bundle callers pin to reach an agent's VIP and the
+        caller bundle. Public, like a JWKS. It never creates the CA (the first authenticated
+        issuance does) and lists no revoked serials (those are per org, in the replica's
+        authenticated trust document). 404 until the CA exists."""
         from boss_engine.services import agent_ca
 
         with begin(engine) as connection:
-            doc = agent_ca.trust_document(connection)
+            doc = agent_ca.public_bundle(connection)
+        if doc is None:
+            raise HTTPException(status_code=404, detail={
+                "error": "not_found", "message": "no agent CA yet (made at first issuance)"})
         return JSONResponse(doc, headers={"Cache-Control": "public, max-age=300"})
 
     @router.post("/v1/pki/caller-certs", status_code=201)

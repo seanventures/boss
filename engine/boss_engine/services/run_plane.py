@@ -858,7 +858,11 @@ def replica_trust(connection: Any, host_id: str, replica_id: str, *,
                 card = a2a_server.agent_card(connection, agent, base_url=base_url)
         except Exception:  # noqa: BLE001 — the card is optional; A2A is refused at admit anyway
             log.warning("trust: no A2A card for replica %s", replica_id, exc_info=True)
+    from ..identity import delegation, tokens
+
     return {"jwks": signing_keys.jwks_document(db=connection),
+            # what a bearer JWT must say to be accepted locally (the PDP still decides at admit)
+            "issuer": tokens.issuer(), "audiences": [delegation.AUD_API],
             "caller_bundle_pem": doc["caller_bundle_pem"],
             "serving_bundle_pem": doc["serving_bundle_pem"], "revoked": doc["revoked"],
             "agent": {"agent_id": agent["agent_id"], "agent_key": replica["agent_key"],

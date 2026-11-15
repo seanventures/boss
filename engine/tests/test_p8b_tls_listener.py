@@ -458,3 +458,95 @@ def test_the_same_handlers_serve_in_process(agent):
     for task in (shared, api):
         task["status"]["message"].pop("messageId")  # fresh per rendering
     assert shared == api
+
+
+# ── review fixes: Content-Length, JWT claims, the kid refresh limit, the caller bundle ───────
+
+def test_a_negative_or_bogus_content_length_is_400_before_anything_is_read(agent):
+    port = agent.listener.server_address[1]
+    context = ssl.create_default_context(cafile=agent.cacert)
+    for value in ("-1", "abc", "+5"):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as raw:
+            with context.wrap_socket(raw, server_hostname="127.0.0.1") as tls:
+                tls.sendall(f"POST /threads HTTP/1.1\r\nHost: x\r\nContent-Length: {value}\r\n"
+                            f"Authorization: Bearer {agent.invoker_key}\r\n\r\n".encode())
+                head = tls.recv(200).decode()
+        assert head.startswith("HTTP/1.1 400"), head
+
+
+class _FakeTrustClient:
+    def __init__(self, doc):
+        self.doc, self.calls = doc, 0
+
+    def trust(self):
+        self.calls += 1
+        return self.doc
+
+
+def _jwt(key, kid: str, **claims) -> str:
+    from boss_engine.identity import jwks
+
+    return jwks.sign({"alg": "EdDSA", "typ": "boss-run+jwt", "kid": kid}, claims, key)
+
+
+def test_local_jwt_checks_cover_iss_aud_nbf_and_unknown_kids_are_rate_limited():
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from boss_engine.identity import jwks
+    from boss_engine.runtime.listener import CallerRefused, TrustCache
+
+    key = Ed25519PrivateKey.generate()
+    doc = {"jwks": {"keys": [jwks.public_jwk(key.public_key(), kid="k1")]},
+           "issuer": "https://boss.example", "audiences": ["boss:api"]}
+    client = _FakeTrustClient(doc)
+    trust = TrustCache(client)
+    now = int(time.time())
+    good = dict(iss="https://boss.example", aud="boss:api", exp=now + 60, nbf=now - 5)
+    trust.verify_bearer(_jwt(key, "k1", **good))
+    for bad in ({"iss": "https://evil"}, {"aud": "boss:mcp"}, {"nbf": now + 600},
+                {"exp": now - 600}, {"aud": ["boss:egress"]}):
+        with pytest.raises(CallerRefused):
+            trust.verify_bearer(_jwt(key, "k1", **{**good, **bad}))
+    before = client.calls
+    for _ in range(20):
+        with pytest.raises(CallerRefused):
+            trust.verify_bearer(_jwt(key, f"forged-{uuid.uuid4().hex[:6]}", **good))
+    assert client.calls - before <= 1, "an unknown kid re-fetches at most once per window"
+
+
+def test_the_caller_bundle_is_retried_and_loaded_into_the_live_context():
+    from boss_engine.runtime.listener import AgentListener, ServingIdentity
+
+    class Trust:
+        def __init__(self):
+            self.n = 0
+
+        def doc(self, refresh=False):
+            self.n += 1
+            if self.n == 1:
+                raise ConnectionError("run plane not reachable yet")
+            return {"caller_bundle_pem": BUNDLE}
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    import datetime as dt
+
+    k = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "caller CA")])
+    now = dt.datetime.now(dt.timezone.utc)
+    BUNDLE = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+              .public_key(k.public_key()).serial_number(3).not_valid_before(now)
+              .not_valid_after(now + dt.timedelta(days=1))
+              .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+              .sign(k, hashes.SHA256())).public_bytes(serialization.Encoding.PEM).decode()
+    listener = AgentListener(("127.0.0.1", 0), backend=None, trust=Trust(),
+                             identity=ServingIdentity(None))
+    try:
+        assert listener.caller_bundle == "" and listener.ssl_context.verify_mode == ssl.CERT_NONE
+        assert listener.reload_caller_bundle() is True
+        assert listener.ssl_context.verify_mode == ssl.CERT_OPTIONAL
+        assert listener.reload_caller_bundle() is False, "unchanged: nothing reloaded"
+    finally:
+        listener.server_close()
