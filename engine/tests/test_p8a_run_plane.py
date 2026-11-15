@@ -1072,8 +1072,9 @@ def test_fifty_replicas_on_one_host_keep_exactly_one_outstanding_poll(plane):
     from boss_engine.services import fleet_scheduler
 
     with plane.eng.begin() as c:
-        c.execute(text("UPDATE agent_deployments SET replicas = 50 WHERE id = :d"),
-                  {"d": plane.dep["id"]})
+        # The operator scales it (set_runtime would mark it `pending`: not a re-placement).
+        c.execute(text("UPDATE agent_deployments SET replicas = 50, placement_state = 'pending' "
+                       "WHERE id = :d"), {"d": plane.dep["id"]})
     fleet_scheduler.reconcile(plane.eng)
     in_flight = {"now": 0, "max": 0, "polls": 0}
     lock = threading.Lock()
