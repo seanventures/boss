@@ -68,6 +68,13 @@ def fence_problem(settings: Any) -> Optional[str]:
         return ("this deployment is marked untrusted (BOSS_DEPLOYMENT_TRUST=untrusted): an "
                 "authored command runs only under strong isolation — set "
                 "BOSS_GOVERNED_SANDBOX_PROVIDER to a microVM substrate.")
+    network = (os.environ.get(sandbox_identity.NETWORK_ENV) or "enforce").strip().lower()
+    if network == "off":
+        # network_fenced() answers True for `off` (the operator accepted an unfenced network for
+        # builds). A skill's command is not a build: without the fence there is no fence.
+        return ("the sandbox network fence is switched off (BOSS_SANDBOX_NETWORK=off), so an "
+                "authored command could reach this container's networks. Set it to enforce, or "
+                "use a microVM substrate.")
     if sandbox_identity.mode() == "off":
         return ("the worker's sandbox fence is switched off (BOSS_SANDBOX_ISOLATION=off), so "
                 "there is nowhere fenced to run an authored command. Set it to required (the "
@@ -113,11 +120,65 @@ def file_bytes(value: Any) -> bytes:
     return data
 
 
-def _cap(data: bytes, cap: Optional[int] = None) -> tuple[str, bool]:
-    cap = OUTPUT_CAP if cap is None else int(cap)
-    truncated = len(data) > cap
-    kept = data[-cap:] if truncated else data
-    return kept.decode("utf-8", "replace"), truncated
+class _Tail:
+    """A stream read as it arrives, keeping only its last `cap` bytes: a command that prints a
+    gigabyte costs the worker `cap` bytes of memory, never the gigabyte."""
+
+    def __init__(self, stream: Any, cap: int):
+        import threading
+
+        self.cap = max(1, int(cap))
+        self.buf = bytearray()
+        self.total = 0
+        self._stream = stream
+        self._thread = threading.Thread(target=self._pump, daemon=True)
+        self._thread.start()
+
+    def _pump(self) -> None:
+        try:
+            while True:
+                chunk = self._stream.read1(65536) if hasattr(self._stream, "read1") \
+                    else self._stream.read(65536)
+                if not chunk:
+                    return
+                self.total += len(chunk)
+                self.buf += chunk
+                if len(self.buf) > self.cap:
+                    del self.buf[:len(self.buf) - self.cap]
+        except (OSError, ValueError):
+            return
+
+    def finish(self, timeout: float = 5.0) -> tuple[str, bool]:
+        self._thread.join(timeout)
+        return bytes(self.buf).decode("utf-8", "replace"), self.total > self.cap
+
+
+#: Environment names a skill's command may see. A command needs a PATH and a locale; it never
+#: needs a model login, an OAuth token or a provider key, so nothing else is passed — the
+#: sandbox adds its own HOME/TMPDIR and the egress proxy (sandbox_identity.env).
+SKILL_ENV_ALLOW: frozenset[str] = frozenset({
+    "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
+})
+#: Name markers that are never passed to a skill, even when the sandbox would add them.
+MODEL_ENV_MARKERS: tuple[str, ...] = (
+    "CLAUDE", "ANTHROPIC", "OPENAI", "CODEX", "GROK", "XAI_", "GEMINI", "GOOGLE_API",
+    "AZURE_OPENAI", "MISTRAL", "COHERE", "OAUTH", "TOKEN", "SECRET", "PASSWORD", "API_KEY",
+    "CREDENTIAL", "DATABASE_URL",
+)
+
+
+def skill_environment(source: Optional[Mapping[str, str]] = None) -> dict[str, str]:
+    """The credential-free environment a skill's command starts from."""
+    source = os.environ if source is None else source
+    return {k: v for k, v in source.items()
+            if k in SKILL_ENV_ALLOW and not any(m in k.upper() for m in MODEL_ENV_MARKERS)}
+
+
+def strip_model_env(env: Mapping[str, str]) -> dict[str, str]:
+    """`env` without anything model- or credential-shaped (what sandbox_identity.env adds for a
+    coding CLI's config directories included)."""
+    return {k: v for k, v in env.items() if not any(m in k.upper() for m in MODEL_ENV_MARKERS)}
 
 
 class LocalFencedSandbox:
@@ -139,7 +200,9 @@ class LocalFencedSandbox:
         self.project_id = project_id
         self._owned_process = owned_process
         self._identity_module = sandbox_identity
-        self.identity = sandbox_identity.acquire(self.owner_id, what="skill")
+        # CREDENTIAL-FREE: a skill's command gets no copy of the operator's Claude, Codex or
+        # Grok login (seed_logins=False) and no model variable in its environment (run()).
+        self.identity = sandbox_identity.acquire(self.owner_id, what="skill", seed_logins=False)
         if self.identity is None:
             # `auto` with no helper: acquire says so loudly and returns None. That is an
             # unfenced run — exactly what this provider exists not to do.
@@ -167,22 +230,26 @@ class LocalFencedSandbox:
         timeout = max(1, int(timeout or 300))
         timed_out = False
         with self._owned_process.owner_scope(OWNER_KIND, self.owner_id, project_id=self.project_id):
+            proc = self._owned_process.popen(
+                ["/bin/sh", "-c", command], cwd=str(self.workdir), stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=skill_environment(),
+                refuse_when_stopped=False)
+            # The sandbox adds its own variables (HOME, proxies); its identity is credential-free,
+            # so the coding CLIs' config dirs and any model-shaped name are withheld too.
+            out, err = _Tail(proc.stdout, OUTPUT_CAP), _Tail(proc.stderr, OUTPUT_CAP)
             try:
-                proc = self._owned_process.run(
-                    ["/bin/sh", "-c", command], cwd=str(self.workdir), capture_output=True,
-                    timeout=timeout, env=None)
-                code, out, err = proc.returncode, proc.stdout or b"", proc.stderr or b""
-            except subprocess.TimeoutExpired as exc:
+                code = proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
                 timed_out = True
+                proc.end(reason="timeout", grace=0)
                 code = 124
-                out = exc.stdout or b""
-                err = (exc.stderr or b"") + f"\nboss: command timed out after {timeout}s".encode()
-        if isinstance(out, str):
-            out = out.encode("utf-8", "replace")
-        if isinstance(err, str):
-            err = err.encode("utf-8", "replace")
-        stdout, cut_out = _cap(out)
-        stderr, cut_err = _cap(err)
+            finally:
+                if not proc._ended:
+                    proc.end(reason=f"exit:{proc.returncode}", grace=2.0)
+        stdout, cut_out = out.finish()
+        stderr, cut_err = err.finish()
+        if timed_out:
+            stderr += f"\nboss: command timed out after {timeout}s"
         return SimpleNamespace(exit_code=code, stdout=stdout, stderr=stderr, timed_out=timed_out,
                                truncated=cut_out or cut_err, workdir=str(self.workdir))
 
@@ -200,20 +267,69 @@ class LocalFencedSandbox:
                 rel = safe_relative_path(rel)
             except ValueError:
                 continue
-            path = self.workdir / rel
-            if not path.is_file():
-                continue
-            try:
-                size = path.stat().st_size
-                if size > PRODUCED_CAP:
-                    log.warning("produced output %s is %d bytes; capped, not kept", rel, size)
-                    continue
-                data = path.read_bytes()
-            except OSError:
+            data = self._read_produced(rel)
+            if data is None:
                 continue
             found[name] = {"path": rel, "size": len(data),
                            "sha256": hashlib.sha256(data).hexdigest(), "bytes": data}
         return found
+
+    def _expected_owner(self) -> int:
+        """The uid a produced file must belong to: the pool uid the command ran as."""
+        return int(self.identity.uid)
+
+    def _read_produced(self, rel: str) -> Optional[bytes]:
+        """One produced file's bytes, or None — read the way the command cannot trick.
+
+        The command chose what is at `rel`. A symlink (`ln -s /proc/self/environ out.yaml`), a
+        symlinked directory on the way, a hard link to someone else's file, a FIFO: each would
+        make BOSS, reading as its own uid, copy a file the command could never read into a
+        project artifact. So every component is opened relative to the last with O_NOFOLLOW,
+        the leaf must be a regular file owned by the pool uid with one link, and it is read up
+        to the cap from that descriptor."""
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        directory = getattr(os, "O_DIRECTORY", 0)
+        if not nofollow:
+            return None                                   # no safe way to read it here
+        parts = rel.split("/")
+        fds: list[int] = []
+        try:
+            fd = os.open(str(self.workdir), os.O_RDONLY | directory | nofollow)
+            fds.append(fd)
+            for part in parts[:-1]:
+                fd = os.open(part, os.O_RDONLY | directory | nofollow, dir_fd=fd)
+                fds.append(fd)
+            leaf = os.open(parts[-1], os.O_RDONLY | nofollow | getattr(os, "O_NONBLOCK", 0),
+                           dir_fd=fd)
+            fds.append(leaf)
+            st = os.fstat(leaf)
+            import stat as _stat
+
+            if not _stat.S_ISREG(st.st_mode):
+                log.warning("produced output %s is not a regular file; not kept", rel)
+                return None
+            if st.st_uid != self._expected_owner() or st.st_nlink != 1:
+                log.warning("produced output %s is not the command's own file; not kept", rel)
+                return None
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = os.read(leaf, 65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > PRODUCED_CAP:
+                    log.warning("produced output %s is over %d bytes; not kept", rel, PRODUCED_CAP)
+                    return None
+                chunks.append(chunk)
+            return b"".join(chunks)
+        except OSError:
+            # ELOOP: a symlink where a file or directory was expected; ENOENT: not written.
+            return None
+        finally:
+            for fd in reversed(fds):
+                with contextlib.suppress(OSError):
+                    os.close(fd)
 
     def teardown(self) -> None:
         with contextlib.suppress(Exception):

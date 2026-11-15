@@ -133,6 +133,9 @@ class SandboxIdentity:
     uid: int
     run_dir: Path
     _lock_fd: Optional[int] = field(default=None, repr=False)
+    #: A workload that must hold no model credential (an authored skill's command, AMEX-G2):
+    #: no CLI login was seeded into its HOME, and env() withholds every model-shaped name.
+    credential_free: bool = False
 
     @property
     def home(self) -> Path:
@@ -188,6 +191,10 @@ class SandboxIdentity:
                 out[name] = f"{home}/.{name.split('_')[0].lower()}"
         # The checkout is BOSS's (it cloned it); the run's uid works in it. Git refuses a repo
         # another uid owns unless told it is safe — and it is, inside this run's directory.
+        if self.credential_free:
+            from .local_fenced import strip_model_env
+
+            out = strip_model_env(out)
         n = int(out.get("GIT_CONFIG_COUNT") or 0)
         out[f"GIT_CONFIG_KEY_{n}"] = "safe.directory"
         out[f"GIT_CONFIG_VALUE_{n}"] = "*"
@@ -289,7 +296,7 @@ def bind(owner_id: str, *, project_id: Optional[str] = None) -> Iterator[Optiona
 
 
 def acquire(owner_id: str, *, project_id: Optional[str] = None,
-            what: str = "run") -> Optional[SandboxIdentity]:
+            what: str = "run", seed_logins: bool = True) -> Optional[SandboxIdentity]:
     """`bind` for a workload that outlives the call that starts it (an app PREVIEW): the uid and
     directory are held until `release(owner_id)`. Same rules: None when isolation is off (or
     `auto` with no helper, logged loudly); SandboxUnavailable when it is `required` and
@@ -309,7 +316,8 @@ def acquire(owner_id: str, *, project_id: Optional[str] = None,
         return existing
     key = owner_key(owner_id)
     uid, lock_fd = _lease_uid(key)
-    ident = SandboxIdentity(key=key, uid=uid, run_dir=run_root() / key, _lock_fd=lock_fd)
+    ident = SandboxIdentity(key=key, uid=uid, run_dir=run_root() / key, _lock_fd=lock_fd,
+                            credential_free=not seed_logins)
     try:
         ident.killall()                                  # nothing of a previous lease survives
         if ident.run_dir.exists():
@@ -322,7 +330,8 @@ def acquire(owner_id: str, *, project_id: Optional[str] = None,
                 os.chmod(sub, 0o2777)
         finally:
             os.umask(old)
-        _seed_cli_logins(ident)
+        if seed_logins:
+            _seed_cli_logins(ident)
         _seed_toolchains(ident, project_id)
         ident._helper("adopt", str(uid), str(ident.run_dir))
     except BaseException:

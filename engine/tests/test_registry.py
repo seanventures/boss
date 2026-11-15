@@ -588,9 +588,10 @@ _SAFE_WRITES = [
     # Creating a DESTINATION, not shipping to one. It writes a row that can be retired, and an
     # app that already has a target for the environment adopts it rather than growing a second.
     "create_deployment_target", "deploy_app", "kg_propose_fact", "link_run_origin", "mandate_standard", "merge_apps",
-    # Configuration deploys (AMEX-G4): a target row, a PLANNED deployment (a person or the policy
-    # approves it; the previous file versions are kept for rollback), and a promotion of the same.
-    "create_config_target", "deploy_config", "promote_config",
+    # Configuration deploys (AMEX-G4): a PLANNED deployment (a person or the policy approves it;
+    # the previous file versions are kept for rollback), and a promotion of the same.
+    # (create_config_target is grants_authority: it gives BOSS a directory to write.)
+    "deploy_config", "promote_config",
     # A PROPOSED RULE IS NOT A RULE (BOSSAPP-768). kg_propose_rule writes one `inferred`, proposed
     # rule: untrusted, never given to an agent, until a person approves it in Rules review.
     "kg_propose_rule",
@@ -650,6 +651,8 @@ def test_the_tools_that_are_never_pressed_by_the_model():
         "cancel_job",         # the one that caused this
         # the captain's powers that APPLY moves a person has not seen one by one (BOSSAPP-759)
         "captain_drive", "captain_overwatch", "captain_theater",
+        # gives BOSS a directory to write configuration into, and maybe a reload to run (AMEX-G4)
+        "create_config_target",
         "decide",             # approves a gate; an agent that approves its own gates is ungated
         "delete_project",     # deletes a project and everything it holds (Deleting data)
         "delete_workflow",    # removes a path a person authored

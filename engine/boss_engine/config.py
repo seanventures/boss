@@ -1701,7 +1701,7 @@ class Settings(BaseSettings):
     #             sandbox-service; the control plane commits each stage's diff to the
     #             work branch (git is the state carrier) and keeps ALL judgment —
     #             design, review panel, gates, Decision, PR — host-side.
-    #   local_fenced = the default for a `runtime: local` install (AMEX-G2, BOSSAPP-1138): the
+    #   local_fenced = OPT-IN for a `runtime: local` install (AMEX-G2, BOSSAPP-1138): the
     #             build stages run exactly as `local`, and an authored `sandboxed_command`
     #             skill runs in the worker's own per-run fence (sandbox_identity: a pool uid,
     #             deny-by-default egress except the loopback relays, a per-run directory).
@@ -1709,8 +1709,15 @@ class Settings(BaseSettings):
     #             separate kernel: every surface labels it non-strong and it never satisfies
     #             a2a_server.strong_isolation() (AP-D11). `local` keeps refusing such skills.
     governed_sandbox_provider: str = Field(
-        default="local_fenced", alias="BOSS_GOVERNED_SANDBOX_PROVIDER"
+        default="local", alias="BOSS_GOVERNED_SANDBOX_PROVIDER"
     )
+    # CONFIG DEPLOYS (config_deploy, AMEX-G4): the directory roots a config_dir target may write
+    # under, comma-separated absolute paths. Empty (the default): no config target can be made.
+    config_deploy_roots: str = Field(default="", alias="BOSS_CONFIG_DEPLOY_ROOTS")
+    # The exact reload commands a config_dir target may run after writing its files, one per
+    # line (or a JSON list). A command not listed here is refused; a reload is always set by a
+    # person.
+    config_reload_commands: str = Field(default="", alias="BOSS_CONFIG_RELOAD_COMMANDS")
     # What this install runs for whom. `trusted` (the default): the operator's own projects on
     # their own machine. `untrusted`: code or configuration BOSS did not author, for tenants the
     # operator does not vouch for — a command then runs ONLY under strong isolation (a microVM),

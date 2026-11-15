@@ -3075,7 +3075,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                                                         "answer (default 200)"}},
              required=["app_name", "directory", "health_url"]),
         kind="write",
-        reversibility="safe", permission="deployment_target:manage",
+        reversibility="grants_authority", permission="deployment_target:manage",
         exposure=Exposure(tags=("deploy", "config")))
     def create_config_target(ctx, *, project_id, actor, args):
         from ..services.config_deploy import ConfigDeployError, create_config_target as _create

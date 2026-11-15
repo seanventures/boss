@@ -2,6 +2,17 @@
 
 A deploy in BOSS ships a built app to a host. Some systems are changed by **configuration alone**: an API gateway that hot-reloads `tenants/<tenant>.yaml`, a feature-flag file, a routing table. `Deploy config` ships files, not an app, with the same governance as a deploy: a ChangeSet, a budget reservation (zero), a person's approval or the environment's policy, a receipt, and a rollback.
 
+## Turning it on
+
+Configuration goes only where the operator says it may. In `.env`:
+
+```
+BOSS_CONFIG_DEPLOY_ROOTS=/srv/northgate              # comma-separated; a target's directory must sit beneath one
+BOSS_CONFIG_RELOAD_COMMANDS=kill -HUP $(cat gateway.pid)   # one per line (or a JSON list); exact matches only
+```
+
+With no roots set, no config target can be made. A target outside the roots is refused when it is created, when a deployment is planned and again on the machine, against the directory's resolved path (a symlink cannot walk it out). A reload command must be one of the listed commands, and a target with any reload (command or URL) is created by a person, never an agent.
+
 ## The target
 
 A `config_dir` deployment target is a directory on a host, plus how it is reloaded and how it is checked:
@@ -21,8 +32,8 @@ create_config_target  app_name="Northgate Gateway"  environment=staging
 
 1. The files are stored as one **bundle** artifact: every byte and every sha256. The ChangeSet and the approval card list the file names and hashes.
 2. Staging runs without asking when a person set its policy so (Infra › Deploys › Rules, *Deploy without asking*); otherwise, and always for production unless set otherwise, a decision waits in Approvals. Dual control is honoured.
-3. On apply, the previous version of every file is kept under `<directory>/.boss-versions/<run>`, each file is written to a temporary name and renamed into place, the reload runs, and the health URL is probed for up to 30 seconds. A failed reload or health check **restores the kept versions and reloads again**; the run says `rolled_back`.
+3. On apply, the previous version of every file is kept beside the directory, under `<parent>/.boss-versions/<directory name>/<run>` (never inside the watched directory), each file is written to a temporary name and renamed into place, the reload runs, and the health URL is probed for up to 30 seconds. A failed reload or health check **restores the kept versions and reloads again**; the run says `rolled_back`.
 
-`promote_config` plans the **same bundle** — the exact bytes staging passed, by sha256 — to the production target, under production's rules. It refuses a source deployment that did not succeed.
+`promote_config` plans the **same bundle** — the exact bytes staging passed, checked against that deployment's sha256 — to the production target. A promotion to production always waits for a person in Approvals, whatever production's policy says. It refuses a source deployment that did not succeed.
 
 In a workflow the two are the `Deploy config` and `Promote config` steps (captain: the deployment manager). Wire `Deploy config`'s `produced_artifacts` from the CLI step that validated or fixed the file; the step waits on the deployment run like `Deploy` does, so a failed health check fails the step.

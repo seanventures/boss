@@ -38,6 +38,7 @@ import hashlib
 import json
 import logging
 import os
+import posixpath
 import secrets as _secrets
 import shlex
 import subprocess
@@ -99,6 +100,67 @@ class ConfigTarget:
     health_url: Optional[str]
     health_expected: int = 200
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+
+
+def deploy_roots(settings: Any) -> list[str]:
+    """BOSS_CONFIG_DEPLOY_ROOTS: the only directory trees a config target may write under."""
+    raw = str(getattr(settings, "config_deploy_roots", "") or "")
+    roots = []
+    for part in raw.replace("\n", ",").split(","):
+        part = part.strip()
+        if part.startswith("/"):
+            roots.append(posixpath.normpath(part))
+    return roots
+
+
+def reload_commands(settings: Any) -> list[str]:
+    """BOSS_CONFIG_RELOAD_COMMANDS: the exact reload commands a target may run (one per line,
+    or a JSON list)."""
+    raw = str(getattr(settings, "config_reload_commands", "") or "").strip()
+    if not raw:
+        return []
+    if raw.startswith("["):
+        try:
+            return [str(c).strip() for c in json.loads(raw) if str(c).strip()]
+        except ValueError:
+            return []
+    return [line.strip() for line in raw.splitlines() if line.strip()]
+
+
+def root_problem(settings: Any, directory: str) -> Optional[str]:
+    """Why `directory` may not be written, or None: it must sit strictly under an allowed root,
+    with no `..` (checked again on the machine against the resolved path, preflight)."""
+    roots = deploy_roots(settings)
+    if not roots:
+        return ("no config deploy roots are configured (BOSS_CONFIG_DEPLOY_ROOTS), so BOSS writes "
+                "configuration nowhere. Set it to the directory trees configuration may go to.")
+    raw = str(directory or "")
+    norm = posixpath.normpath(raw)
+    if not raw.startswith("/") or ".." in raw.split("/") or norm in ("/",):
+        return f"{raw!r} is not an absolute, normalised path."
+    # A root as written and as this machine resolves it (/var → /private/var): the preflight
+    # compares the directory's RESOLVED path, so a symlink cannot walk it out of a root.
+    for root in {*roots, *(os.path.realpath(r) for r in roots)}:
+        if norm != root and norm.startswith(root.rstrip("/") + "/"):
+            return None
+    return (f"{norm} is outside the allowed config deploy roots ({', '.join(roots)}). "
+            "Choose a directory beneath one of them, or ask the operator to add a root.")
+
+
+def reload_problem(settings: Any, command: Optional[str]) -> Optional[str]:
+    if not command:
+        return None
+    if command.strip() not in reload_commands(settings):
+        return (f"the reload command {command.strip()[:80]!r} is not in the operator's allowlist "
+                "(BOSS_CONFIG_RELOAD_COMMANDS). Use a listed command, a reload_url, or none.")
+    return None
+
+
+def versions_root(directory: str) -> str:
+    """Where previous versions live: BESIDE the watched directory, never in it (a gateway that
+    loads every *.yaml under its directory must not load last week's tenant file)."""
+    norm = posixpath.normpath(directory)
+    return f"{posixpath.dirname(norm)}/{VERSIONS_DIR}/{posixpath.basename(norm)}"
 
 
 def is_config_target(target: Any) -> bool:
@@ -188,6 +250,17 @@ def create_config_target(connection: Connection, settings: Settings, *, project_
     for url, what in ((health_url, "health_url"), (reload_url, "reload_url")):
         if url and not str(url).startswith(("http://", "https://")):
             raise ConfigDeployError(f"{what} must be an http(s) URL.", f"Got {str(url)[:80]!r}.")
+    directory = posixpath.normpath(directory)
+    problem = root_problem(settings, directory) or reload_problem(settings, reload_command)
+    if problem:
+        raise ConfigDeployError(problem)
+    if reload_command or reload_url:
+        from .agent_identity import is_person
+
+        if not is_person(actor, connection, project_id):
+            raise ConfigDeployError(
+                "A reload runs something on the target after every deploy, so a person sets it.",
+                "Ask a person to create this target, or create it without a reload.")
     transport = "ssh" if host_id else "local"
     if host_id:
         from .deployment_fleet import get_host, host_usable_by
@@ -214,7 +287,7 @@ def create_config_target(connection: Connection, settings: Settings, *, project_
         secret_refs=[],
         health_checks=[{"url": str(health_url), "expected_status": int(health_expected_status or 200)}],
         rollback_points=[{"step": f"Restore the previous file versions kept under "
-                                  f"{directory}/{VERSIONS_DIR}/<run> and reload."}],
+                                  f"{versions_root(directory)}/<run> and reload."}],
         actor=actor)
     connection.execute(
         text("UPDATE deployment_targets SET host_id = :h, status = 'active', updated_at = now() "
@@ -383,7 +456,13 @@ def _policy_problem(connection: Connection, project_id: str, target: ConfigTarge
     return None
 
 
-def plan_problem(connection: Connection, project_id: str, target: ConfigTarget) -> Optional[dict[str, str]]:
+def plan_problem(connection: Connection, project_id: str, target: ConfigTarget,
+                 settings: Any = None) -> Optional[dict[str, str]]:
+    if settings is not None:
+        why = root_problem(settings, target.directory) or reload_problem(settings, target.reload_command)
+        if why:
+            return {"headline": why, "action": "Recreate the target within the operator's rules.",
+                    "reason": "config_target_not_allowed"}
     if str(target.raw.get("status") or "active") == "retired":
         return {"headline": f"{target.app_name}'s {target.environment} config target is retired.",
                 "action": "Create a new target.", "reason": "target_retired"}
@@ -423,7 +502,7 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
     from .resource_plane import _SURFACE_LEASE_SECONDS
 
     cfg = read_target(target)
-    problem = plan_problem(connection, project_id, cfg)
+    problem = plan_problem(connection, project_id, cfg, rp.settings)
     if problem:
         return governed.refuse_plan(connection, project_id=project_id, target=target, actor=actor,
                                     headline=problem["headline"], action=problem["action"],
@@ -477,7 +556,7 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
         "host": where, "files": manifest, "bundle_sha256": release,
         "bundle_artifact_id": bundle_artifact_id, "reload": reload,
         "health": {"url": cfg.health_url, "expected_status": cfg.health_expected},
-        "previous_versions": f"{cfg.directory}/{VERSIONS_DIR}/{deployment_run_id}",
+        "previous_versions": f"{versions_root(cfg.directory)}/{deployment_run_id}",
         "rollback_to": ({"deployment_run_id": previous["id"], "bundle_sha256": previous.get("commit_ref")}
                         if previous else None),
         "promoted_from": promoted_from, "surface_ownership": ownership_guard,
@@ -660,15 +739,25 @@ def promote(engine: Any, settings: Settings, *, project_id: str, actor: str,
             packet = _loads(src["release_packet"], {}) or {}
             artifact_id = str(packet.get("bundle_artifact_id") or src.get("release_artifact_id") or "")
             bundle = load_bundle(c, project_id, artifact_id)
+            if bundle_sha256(bundle) != str(src.get("commit_ref") or ""):
+                raise ConfigDeployError(
+                    "The stored bundle is not the one that deployment shipped.",
+                    "Deploy the files to the lower environment again, then promote.")
             target = find_target(c, project_id, target_id=target_id,
                                  app_name=app_name or src["app_name"], environment=environment)
             if str(target["id"]) == str(src["deployment_target_id"]):
                 raise ConfigDeployError("That is the target the files are already on.",
                                         "Promote to the next environment's target.")
+            from ..identity.object_rules import is_production_environment
+
+            # PRODUCTION IS A PERSON'S ANSWER: no environment policy and no gate passed in by a
+            # step answers a promotion to production; a person approves this very deployment.
+            to_production = is_production_environment(str(target.get("environment") or ""))
             run = plan_config_deployment(
                 rp, c, project_id=project_id, target=target, files=bundle,
                 bundle_artifact_id=artifact_id, actor=actor,
-                approval_decision_id=approval_decision_id, person_required=person_required,
+                approval_decision_id=None if to_production else approval_decision_id,
+                person_required=person_required or to_production,
                 promoted_from=str(src["id"]), trigger="promotion", workflow_run_id=workflow_run_id)
             return {**_planned(run), "promoted_from": str(src["id"])}
     except ConfigDeployError as exc:
@@ -735,7 +824,8 @@ def preflight_script(directory: str) -> str:
     d = _q(directory)
     return (f'D={d}; [ -d "$D" ] || {{ echo "BOSS_NO_DIR $D"; exit 3; }}; '
             f'[ -w "$D" ] || {{ echo "BOSS_NOT_WRITABLE $D"; exit 4; }}; '
-            f'command -v base64 >/dev/null 2>&1 || {{ echo BOSS_NO_BASE64; exit 5; }}; echo BOSS_DIR_OK')
+            f'command -v base64 >/dev/null 2>&1 || {{ echo BOSS_NO_BASE64; exit 5; }}; '
+            f'echo "BOSS_REAL $(cd "$D" && pwd -P)"; echo BOSS_DIR_OK')
 
 
 def keep_script(directory: str, versions: str, paths: list[str]) -> str:
@@ -766,7 +856,7 @@ def restore_script(directory: str, versions: str, kept: list[str], absent: list[
 
 
 def prune_script(directory: str, keep: int = KEEP_VERSIONS) -> str:
-    return (f'D={_q(directory)}/{VERSIONS_DIR}; [ -d "$D" ] || exit 0; '
+    return (f'D={_q(versions_root(directory))}; [ -d "$D" ] || exit 0; '
             f'ls -1dt "$D"/*/ 2>/dev/null | tail -n +{keep + 1} | while read -r old; do rm -rf "$old"; done; true')
 
 
@@ -836,6 +926,9 @@ def apply_config(engine: Any, settings: Settings, *, row: dict, governance: dict
         if not trow:
             return {"status": "failed", "reason": "the deployment target no longer exists"}
         cfg = read_target(dict(trow))
+        refused = root_problem(settings, cfg.directory) or reload_problem(settings, cfg.reload_command)
+        if refused:
+            return {"status": "blocked", "reason": refused}
         packet = _loads(row.get("release_packet"), {}) or {}
         project_id = row.get("project_id") or trow["project_id"]
         try:
@@ -843,7 +936,7 @@ def apply_config(engine: Any, settings: Settings, *, row: dict, governance: dict
             sh = shell or shell_for(c, settings, cfg, changeset_id=str(row["changeset_id"]))
         except ConfigDeployError as exc:
             return {"status": "blocked", "reason": str(exc)}
-    versions = f"{cfg.directory}/{VERSIONS_DIR}/{run_id}"
+    versions = f"{versions_root(cfg.directory)}/{run_id}"
     paths = [str(f["path"]) for f in files]
     rec = StepRecorder(engine, run_id)
     kept: list[str] = []
@@ -895,6 +988,14 @@ def apply_config(engine: Any, settings: Settings, *, row: dict, governance: dict
                 reason = {3: "the directory does not exist", 4: "the directory is not writable",
                           5: "the host has no base64"}.get(pre.code, (pre.stderr or pre.stdout).strip()[:200])
                 h.failed(f"{cfg.directory}: {reason}")
+            if pre.ok:
+                real = next((line[len("BOSS_REAL "):].strip() for line in pre.stdout.splitlines()
+                             if line.startswith("BOSS_REAL ")), "")
+                outside = root_problem(settings, real) if real else "the directory could not be resolved"
+                if outside:
+                    reason = f"resolved to {real or '?'}: {outside}"
+                    h.failed(reason)
+                    pre = ShellResult(6, pre.stdout, reason)
         if not pre.ok:
             rec.finish()
             return {"status": "blocked", "reason": f"{cfg.directory}: {reason}"}
@@ -953,7 +1054,7 @@ def apply_config(engine: Any, settings: Settings, *, row: dict, governance: dict
                                                            ", but not all of them: check the directory."))}
         with rec.step("prune", label="Tidy old versions") as h:
             pruned = sh.run(prune_script(cfg.directory), timeout=30, write=True)
-            say(h, f"kept the last {KEEP_VERSIONS} runs' versions under {cfg.directory}/{VERSIONS_DIR}"
+            say(h, f"kept the last {KEEP_VERSIONS} runs' versions under {versions_root(cfg.directory)}"
                    + ("" if pruned.ok else f" (prune said: {pruned.stderr.strip()[-200:]})"))
         rec.finish()
         where = cfg.raw.get("target_ref") or cfg.directory
