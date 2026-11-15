@@ -15490,3 +15490,32 @@ ALTER TABLE identity_egress_credentials ADD COLUMN IF NOT EXISTS deployment_id T
 ALTER TABLE identity_egress_credentials ADD COLUMN IF NOT EXISTS revoked_reason TEXT;
 CREATE INDEX IF NOT EXISTS idx_identity_egress_credentials_run ON identity_egress_credentials (run_id);
 -- ================================ end P8b-5 ==
+
+-- ================================ AA-A: the acceptance contract (BOSSAPP-1214, epic BOSSAPP-1213) ==
+-- boss-acceptance-agent-lld.md §2. One frozen list of what was asked per build lineage, word for
+-- word (services/acceptance/contract.py): the ticket's acceptance criteria, the brief's must-haves,
+-- the PRD's tested-and-gating list, opted-in templates and items a person adds. Version 1 is
+-- written the first time a lineage is checked and never rewritten; a change (the ticket's criteria
+-- changed, a person revised it) is a new version that supersedes the last, with its reason.
+-- `lineage_root_run_id` is the ORIGINAL build's lineage root (acceptance_gate.items_spec's); it is
+-- not a foreign key because a web-app lineage's root id has no code_task_runs row. `digest` is the
+-- items' words' hash; `reason` says why a version exists ("PROJ-142 changed: 2 items added").
+CREATE TABLE IF NOT EXISTS acceptance_contracts (
+  id                  TEXT PRIMARY KEY,
+  project_id          TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  lineage_root_run_id TEXT NOT NULL,
+  workflow_run_id     TEXT,
+  version             INT  NOT NULL DEFAULT 1 CHECK (version >= 1),
+  supersedes_id       TEXT REFERENCES acceptance_contracts(id) ON DELETE SET NULL,
+  sources             JSONB NOT NULL DEFAULT '[]'::jsonb,
+  items               JSONB NOT NULL DEFAULT '[]'::jsonb,
+  items_dropped       INT  NOT NULL DEFAULT 0,
+  reason              TEXT NOT NULL DEFAULT '',
+  digest              TEXT NOT NULL DEFAULT '',
+  frozen_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_by          TEXT NOT NULL DEFAULT 'boss',
+  UNIQUE (project_id, lineage_root_run_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_acceptance_contracts_lineage
+  ON acceptance_contracts (lineage_root_run_id, version DESC);
+-- ================================ end AA-A ==

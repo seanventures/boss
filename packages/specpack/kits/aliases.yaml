@@ -19,3 +19,7 @@ aliases:
   deployment.plan: deployment.run.plan
   health.check: deployment.health.check
   task.create: work_tracker.issue.ensure
+  # The Acceptance Agent's skills by the names its design uses (boss-acceptance-agent-lld.md §4.1).
+  acceptance-verification: acceptance.verification
+  findings-triage: acceptance.findings_triage
+  acceptance_sandbox: acceptance.sandbox
