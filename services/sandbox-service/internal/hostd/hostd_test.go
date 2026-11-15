@@ -117,6 +117,10 @@ func (h *harness) start(cfg Config) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	h.agent, h.cancel, h.done = a, cancel, make(chan struct{})
+	done := h.done
+	// On any exit (a t.Fatal included) stop the agent BEFORE the VM cleanup,
+	// or its reconciler would restart what the cleanup kills.
+	h.t.Cleanup(func() { cancel(); <-done })
 	go func() {
 		defer close(h.done)
 		if err := a.Run(ctx); err != nil && ctx.Err() == nil {
