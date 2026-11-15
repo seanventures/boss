@@ -21,7 +21,7 @@ import type { TemplateCard } from "../../lib/templates";
 import type { StackAdapter } from "../../lib/templates";
 import { workflowInputFields, type WorkflowInputField } from "../../lib/workflow-inputs";
 import { WIZARD_COLLECTS } from "../workflow-readiness-ui";
-import { hostPort, repoCheckFix, type Candidate, type Host, type Kind, type Pick, type Preview, type RepoCheck, type Where, type Workflow } from "../../lib/add-project";
+import { hostPort, ownerChip, ownerFixLines, repoCheckFix, type Candidate, type Host, type Kind, type OwnerCredential, type Pick, type Preview, type RepoCheck, type Where, type Workflow } from "../../lib/add-project";
 import type { RegistryRepo } from "../../lib/multirepo";
 
 export type BoxKey = "captain" | "stack" | "connectors" | "workflow" | "code" | "staging" | "tell" | "more";
@@ -196,7 +196,7 @@ export function StepStrip({ w, testid = "ap-strip" }: { w: Workflow | null; test
   );
 }
 
-export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks, workflow, registry, repoLabel, codeName = "", live, accountLogin, accounts = [], homeHref, inUse, newRepo, codeWhere = null }: {
+export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks, workflow, registry, repoLabel, codeName = "", live, accountLogin, accounts = [], owners = null, homeHref, inUse, newRepo, codeWhere = null }: {
   kind: Kind; preview: Preview | null; plan: PlanState; set: (patch: Partial<PlanState>) => void;
   cards: TemplateCard[] | null; adapters: StackAdapter[]; helmPicks: { stack: Pick | null; connectors: Pick[]; workflow: Pick | null };
   workflow: Workflow | null; registry: RegistryRepo[]; repoLabel: { v: string; s: string };
@@ -205,6 +205,8 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
   live: boolean; accountLogin: string;
   /** The GitHub accounts BOSS reaches (the new repo's owner picker). */
   accounts?: string[];
+  /** Each account with the credential that creates there, or its fixes (BOSSAPP-1160). */
+  owners?: OwnerCredential[] | null;
   homeHref: (p: Record<string, string>) => string;
   /** A repo already in a project (the Code box's list): open it, add work to it, or share it. */
   inUse: InUseActions;
@@ -461,7 +463,7 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
                   {plan.where === "local" ? (
                     <p className="npx-faint npx-small" data-testid="ap-where-local-note">Works offline. Changes are reviewed and merged here; Publish to GitHub moves it whole, history included.</p>
                   ) : plan.where === "github_new" ? (
-                    <NewRepoForm plan={plan} set={set} accounts={accounts} newRepo={newRepo} homeHref={homeHref} />
+                    <NewRepoForm plan={plan} set={set} accounts={accounts} owners={owners} newRepo={newRepo} homeHref={homeHref} />
                   ) : null}
                   {plan.where === "repo" ? (<>
                   <div className="npx-seg" role="tablist" aria-label="Repos">
@@ -601,13 +603,15 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
 
 /** The new GitHub repo: owner, name (from the brief, editable), private; the engine's answer to
  *  "can BOSS make it?" with its one fix; and the line that makes the person's decision explicit. */
-function NewRepoForm({ plan, set, accounts, newRepo, homeHref }: {
-  plan: PlanState; set: (p: Partial<PlanState>) => void; accounts: string[];
+function NewRepoForm({ plan, set, accounts, owners = null, newRepo, homeHref }: {
+  plan: PlanState; set: (p: Partial<PlanState>) => void; accounts: string[]; owners?: OwnerCredential[] | null;
   newRepo?: { name: string; check: RepoCheck | null; checking: boolean }; homeHref: (p: Record<string, string>) => string;
 }) {
   const check = newRepo?.check ?? null;
   const fix = repoCheckFix(check);
   const owner = plan.newRepo.owner;
+  const chip = ownerChip(owners, owner);
+  const fixes = ownerFixLines(owners);
   if (!accounts.length) {
     return <p className="npx-faint npx-small" data-testid="ap-newrepo-noaccount">No GitHub account yet · <a className="npx-link" href={homeHref({ area: "setup", focus: "repository" })}>Connect one in Repo and models ›</a></p>;
   }
@@ -618,6 +622,7 @@ function NewRepoForm({ plan, set, accounts, newRepo, homeHref }: {
           <select className="npx-input" data-testid="ap-newrepo-owner" value={owner} onChange={(e) => set({ newRepo: { ...plan.newRepo, owner: e.target.value } })}>
             {accounts.map((a) => <option key={a} value={a}>{a}</option>)}
           </select></label>
+        {chip ? <span className="npx-tag npx-newrepo-via" data-testid="ap-newrepo-via" title="The credential BOSS creates the repository with (Repo and models)"><GithubLogo size={10} aria-hidden />{chip}</span> : null}
         <span className="npx-newrepo-slash" aria-hidden>/</span>
         <label className="npx-field npx-newrepo-name"><span>Repo name</span>
           <input className="npx-input npx-mono" data-testid="ap-newrepo-name" maxLength={100} spellCheck={false} value={plan.newRepo.name || newRepo?.name || ""}
@@ -635,6 +640,11 @@ function NewRepoForm({ plan, set, accounts, newRepo, homeHref }: {
                          {...(fix.external ? { target: "_blank", rel: "noreferrer" } : {})}>{fix.label} ›</a></> : null}</>
           : null}
       </p>
+      {fixes.length ? (
+        <ul className="npx-newrepo-fixes" data-testid="ap-newrepo-owner-fixes">
+          {fixes.map((f) => <li key={f.login}><span className="npx-mono">{f.login}</span>: {f.fix}</li>)}
+        </ul>
+      ) : null}
       <p className="npx-faint npx-small" data-testid="ap-newrepo-decision"><Hand size={11} aria-hidden /> Making a repo in <b>{owner || "GitHub"}</b> is your decision: it happens when you press Create.</p>
     </div>
   );

@@ -589,6 +589,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["projects/{}/github-changes/{}/{}/{}/tree", "code_task:read"],
   ["projects/{}/github-changes/{}/{}/{}/viewed", "code_task:read"],
   ["projects/{}/github-repository/check", "repository:read"],
+  ["projects/{}/github-repository/owners", "repository:read"],
   ["projects/{}/health", "project:read"],
   ["projects/{}/history", "code_task:read"],
   ["projects/{}/history/{}", "code_task:read"],

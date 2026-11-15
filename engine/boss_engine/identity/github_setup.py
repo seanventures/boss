@@ -15,16 +15,19 @@ connection in one click; after that, under enforce, the environment variable is 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import threading
 import time
 from contextvars import ContextVar
 from dataclasses import replace
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from . import audit, github_app, github_urls, jwks, vault
 from .github_urls import WEB_BASE_ENV  # noqa: F401 — re-exported: callers read it here
+
+log = logging.getLogger(__name__)
 MIGRATED_NAME = "Moved from BOSS_GITHUB_TOKEN"
 ORG_TOKEN_NAME = "Fine-grained token (org)"
 REPO_PREFIX = "repo:"
@@ -744,27 +747,55 @@ def control_plane_token(db: Any, owner: str, repo: str) -> Optional[str]:
     return None
 
 
-def installation_token_all(db: Any, installation_id: Optional[str] = None) -> str:
+def installation_token_all(db: Any, installation_id: Optional[str] = None, *,
+                           permissions: Optional[Mapping[str, str]] = None) -> str:
     """A 1-hour installation token for every repo the Setup-created App is installed on, with the
     control plane's permissions. Backs Setup › Repo's "GitHub App" connection (secret ref
     `identity_github:app`); the worker uses it, a build's sandbox never does. `installation_id`:
     one of the App's other installations (another account, Add a GitHub account) instead of the
-    default one."""
+    default one. `permissions`: another fixed set instead of the control plane's (repo_creation
+    mints `administration: write` to make a repository; BOSSAPP-1160) — GitHub refuses a set the
+    installation never accepted, and that refusal is the answer."""
     cfg = app_config(db)
     if cfg["source"] != "setup" or not app_ready(db):
         raise GitHubSetupError("app_not_connected", 409)
     inst = str(installation_id or cfg["installation_id"])
+    perms = dict(permissions if permissions is not None else CONTROL_PLANE_PERMISSIONS)
     resp = github_app._call("POST", f"/app/installations/{inst}/access_tokens",  # noqa: SLF001
-                            token=github_app.app_jwt(db), body={"permissions": dict(CONTROL_PLANE_PERMISSIONS)})
+                            token=github_app.app_jwt(db), body={"permissions": perms})
     if resp.status not in (200, 201):
         raise GitHubSetupError("mint_failed", 502, status=resp.status)
     token = str((resp.json() or {})["token"])
     from datetime import datetime, timedelta, timezone
 
     _account_for(github_app.InstallationToken(token=token, expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
-                                              repositories=(), permissions=dict(CONTROL_PLANE_PERMISSIONS),
+                                              repositories=(), permissions=perms,
                                               kind=github_app.CONTROL_PLANE_KIND))
     return token
+
+
+def installation_permissions(db: Any, installation_id: Optional[str] = None) -> Optional[dict[str, str]]:
+    """What GitHub says one installation of the Setup-created App ACCEPTED ({permission: level}),
+    from GET /app/installations/{id}; None when GitHub did not answer. The default installation's
+    last verified answer stands in when GitHub is unreachable (verify keeps it on the row)."""
+    cfg = app_config(db)
+    if cfg.get("source") != "setup" or not cfg.get("app_id"):
+        return None
+    inst = str(installation_id or cfg.get("installation_id") or "")
+    if not inst:
+        return None
+    try:
+        resp = github_app._call("GET", f"/app/installations/{inst}", token=github_app.app_jwt(db))  # noqa: SLF001
+        if resp.status == 200:
+            return {str(k): str(v) for k, v in (dict((resp.json() or {}).get("permissions") or {})).items()}
+    except Exception:  # noqa: BLE001 — no key, no network: the cached answer below
+        log.debug("installation permissions: GitHub did not answer", exc_info=True)
+    if inst == str(cfg.get("installation_id") or ""):
+        cached = _verified(cfg) or {}
+        perms = cached.get("permissions")
+        if isinstance(perms, list) and perms:
+            return {str(p.get("name")): str(p.get("granted") or "none") for p in perms if isinstance(p, dict)}
+    return None
 
 
 def installation_repositories(db: Any, installation_id: Optional[str] = None) -> list[dict[str, Any]]:
@@ -897,6 +928,11 @@ def verify(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:
             state, fix = "waiting", page["installation"]           # accept on the installation
         perms.append({"name": name, "wanted": want, "granted": has, "state": state, "fix_url": fix})
     out["permissions"] = perms if granted or out["state"] == "ok" else []
+    # WHAT EACH FLOW CAN DO (BOSSAPP-1160): builds (contents, pull requests) and making
+    # repositories (administration; never in a personal account). Said here, kept on the row, so
+    # Repo and models shows "can create repos: no (missing: administration)" instead of green.
+    out["flows"] = flow_abilities(granted, account_type=cfg.get("account_type"), links=page,
+                                  account_login=cfg.get("account_login"), known=bool(granted) or out["state"] == "ok")
     repos: list[dict[str, Any]] = []
     if out["state"] == "ok":
         try:
@@ -946,6 +982,41 @@ def mode(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:
             "env_token": {"present": env_token, "read_by_builds": read_by_builds}}
 
 
+def flow_abilities(granted: Mapping[str, str], *, account_type: Optional[str], links: Mapping[str, Any],
+                   account_login: Optional[str] = None, known: bool = True) -> dict[str, dict[str, Any]]:
+    """Per GitHub flow (services/repo_creation.FLOW_PERMISSIONS): {ok, missing, words, fix_url}.
+    `ok` is None when GitHub has not said what was granted yet."""
+    from ..services.repo_creation import FLOW_PERMISSIONS, _covers
+
+    out: dict[str, dict[str, Any]] = {}
+    who = f"@{account_login}" if account_login else "this account"
+    for flow, needed in FLOW_PERMISSIONS.items():
+        missing = _covers(dict(granted), needed) if known else sorted(needed)
+        entry: dict[str, Any] = {"ok": (not missing) if known else None, "missing": missing, "words": "", "fix_url": None}
+        if flow == "create_repository" and account_type == "User":
+            entry.update(ok=False, missing=[],
+                         words=(f"A GitHub App cannot create repositories in a personal account ({who}): add a "
+                                f"personal access token with the repo scope for {who.lstrip('@')} in Repo and models."),
+                         fix_url=None)
+        elif not known:
+            entry["words"] = "Not checked with GitHub yet."
+        elif missing:
+            names = ", ".join(PERMISSION_WORDS.get(m, m) for m in missing)
+            entry["words"] = (f"Can create repos: no (missing: {', '.join(missing)}). Grant {names}: Read and write "
+                              f"to the App on GitHub, then accept it on the installation.")
+            entry["fix_url"] = links.get("permissions")
+        else:
+            entry["words"] = "Can create repos: yes." if flow == "create_repository" else "Builds can push and open pull requests."
+        out[flow] = entry
+    return out
+
+
+#: GitHub's own names for the permissions, as the console says them (github-access-row).
+PERMISSION_WORDS = {"administration": "Administration", "contents": "Contents", "pull_requests": "Pull requests",
+                    "workflows": "Workflows", "checks": "Checks", "statuses": "Commit statuses", "metadata": "Metadata",
+                    "issues": "Issues", "actions": "Actions"}
+
+
 def _verified(cfg: dict[str, Any]) -> Optional[dict[str, Any]]:
     raw = cfg.get("verified")
     if isinstance(raw, str):
@@ -966,6 +1037,11 @@ def _verdict(active: str, account: Optional[str], env_read: bool,
     if active == "app" and verified and verified.get("ok") is False and verified.get("state") == "ok":
         return {"tone": "amber", "label": "GitHub App · needs you",
                 "tip": "GitHub has not granted everything builds need. See below."}
+    create = ((verified or {}).get("flows") or {}).get("create_repository") if active == "app" else None
+    if active == "app" and create and create.get("ok") is False:
+        # Builds work; making repositories does not (BOSSAPP-1160). Amber, with the exact fix.
+        return {"tone": "amber", "label": "GitHub App · can't create repos" + (f" · @{account}" if account else ""),
+                "tip": create.get("words") or "Grant Administration: Read and write to the App."}
     if active == "app":
         return {"tone": "green", "label": "GitHub App" + (f" · @{account}" if account else ""),
                 "tip": "Each build gets a short-lived token for its own repos."}

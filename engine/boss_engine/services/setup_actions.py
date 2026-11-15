@@ -728,6 +728,9 @@ def check_repository(connection: Connection, settings: Any, project_id: str,
              "updated_at = now() WHERE id = :c"),
         {"ok": ok, "transient": transient, "exp": parse_time(found.get("expires_at")),
          "c": row["connection_id"]})
+    if token and not transient:
+        found["flows"] = record_flow_permissions(connection, row["connection_id"], token,
+                                                 api_base=row["api_base_url"] or _api_base(settings), http=http)
     if receipt_id:
         receipts = ReceiptService()
         summary = {"state": found["state"],
@@ -1730,6 +1733,42 @@ def run_checks(connection: Connection, settings: Any, project_id: str, target: s
         else:
             check_model(connection, settings, project_id, item, actor=actor, http=model_http,
                         prove_with=prove_with)
+
+
+def record_flow_permissions(connection: Connection, connection_id: str, token: str, *, api_base: str,
+                            http: Optional[Http] = None) -> dict[str, Any]:
+    """WHAT THE TOKEN CAN DO BEYOND ONE REPOSITORY (BOSSAPP-1160): a personal access token's
+    scopes, from GitHub's own header, as flow permissions (contents, pull_requests,
+    administration) on the connection's granted_permissions / missing_permissions — so Repo and
+    models says "can create repos: no (missing: administration)" and the new-repo picker knows
+    which account a repository can be made in. The App's own permissions are verified by
+    github_setup.verify. Never includes the token; never raises."""
+    from .repo_creation import pat_abilities
+
+    try:
+        got = pat_abilities(token, api_base=api_base, http=http)
+    except Exception:  # noqa: BLE001 — the repository checks stand on their own
+        return {}
+    if not got.get("ok"):
+        return got
+    if got.get("can_create") is None:
+        return got                      # GitHub said nothing about scopes: nothing recorded
+    flow_names = {"contents", "pull_requests", "administration"}
+    try:
+        row = connection.execute(
+            text("SELECT granted_permissions, missing_permissions FROM github_connections WHERE id = :c"),
+            {"c": connection_id}).mappings().first()
+        granted = {str(x) for x in ((row or {}).get("granted_permissions") or [])} - flow_names
+        missing = {str(x) for x in ((row or {}).get("missing_permissions") or [])} - flow_names
+        granted |= set(got.get("granted") or [])
+        missing |= set(got.get("missing") or [])
+        connection.execute(
+            text("UPDATE github_connections SET granted_permissions = CAST(:g AS JSONB), "
+                 "missing_permissions = CAST(:m AS JSONB), updated_at = now() WHERE id = :c"),
+            {"g": json.dumps(sorted(granted)), "m": json.dumps(sorted(missing)), "c": connection_id})
+    except Exception:  # noqa: BLE001 — an older schema without the columns
+        pass
+    return got
 
 
 def _verify_github_app(connection: Connection) -> None:

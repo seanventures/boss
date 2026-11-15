@@ -274,6 +274,8 @@ export type GitHubAccount = {
   /** Server-decided: green Connected, amber expiring, red Broken (action says the fix). */
   pill: Pill;
   created_at?: string | null;
+  /** Can this account's credential make repositories? null until a test said (BOSSAPP-1160). */
+  can_create_repos?: { ok: boolean | null; missing: string[]; words: string; fix_url?: string | null } | null;
 };
 
 export type SetupRepository = {
