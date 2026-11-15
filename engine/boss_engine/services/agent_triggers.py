@@ -716,21 +716,32 @@ def rotate_secret(connection: Connection, *, project_id: str, trigger_id: str,
 
 # ── Firing ─────────────────────────────────────────────────────────────────────────────────────
 
+#: The directory MAPPING a trigger payload may carry (who a sender is in BOSS, who acted for
+#: whom), dropped by exact key before the payload lands in the run's thread (BOSSAPP-1199).
+_MAPPING_KEYS = frozenset({"principal_id", "on_behalf_of", "bossactor", "person_actor", "acting"})
+
+
+def _drop_mapping(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {k: _drop_mapping(v) for k, v in value.items() if k not in _MAPPING_KEYS}
+    if isinstance(value, list):
+        return [_drop_mapping(v) for v in value]
+    return value
+
+
 def _agent_safe(trigger: Mapping[str, Any], payload: Optional[Mapping[str, Any]]
                 ) -> Optional[dict]:
-    """THE PAYLOAD AS THE RUN MAY CARRY IT (BOSSAPP-1199): whatever a trigger hands its run lands
-    in the run's first message ("What arrived") and its finalize_ctx, both readable by anyone
-    who may invoke the agent. So every BOSS-sourced payload (intake routes, the event sink, the
-    digest) passes `event_intake.redact_people`: no principal, no who-acted-for-whom, no email.
-    Who the run acts for is structured run context (`acting`), never text. A signed webhook's
-    body is the sender's own message to this agent, not BOSS directory data: it stays whole."""
+    """THE PAYLOAD AS THE RUN CARRIES IT (BOSSAPP-1199): whatever a trigger hands its run lands
+    in the run's first message ("What arrived") and its finalize_ctx. Content stays intact (an
+    email in an alert, a repo URL, `principal_amount`: the agent needs them); only the exact
+    directory-mapping keys (`_MAPPING_KEYS`) are dropped from a BOSS-sourced payload. Who the run
+    acts for is structured run context (`acting`), never text. A signed webhook's body is the
+    sender's own message to this agent: it stays whole."""
     if not payload:
         return None
     if trigger.get("kind") == "webhook":
         return dict(payload)
-    from .event_intake import redact_people
-
-    return redact_people(dict(payload))
+    return _drop_mapping(dict(payload))
 
 
 def _message(trigger: Mapping[str, Any], extra: Optional[Mapping[str, Any]]) -> str:

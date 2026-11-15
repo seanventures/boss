@@ -180,14 +180,12 @@ def event_text(event: IntakeEvent) -> str:
 def agent_payload(conn: IntakeConnection, event: IntakeEvent, event_id: str, *,
                   chat: bool, who: str = "") -> dict[str, Any]:
     """WHAT THE AGENT'S RUN CARRIES from an intake event (its first message, `finalize_ctx`'s
-    `payload`), BOSSAPP-1199: only what the agent needs — the event id, kind, the words, the
-    channel, the acting person's display name, the screen verdict, and (for a record event, not
-    a chat turn) the record's fields. Never the envelope: the chat user's email, external ids
-    and the BOSS principal behind them stay off anything an `agent:invoke` holder can read in
-    the thread or the run. Who the run acts for travels as structured run context (`acting`,
-    the fire's `subject`), not as text. Every value passes `event_intake.redact_people`."""
-    from . import event_intake
-
+    `payload`), BOSSAPP-1199: the event id, kind, the words, the channel, the sender's display
+    name, the screen verdict and (for a record event, not a chat turn) the record's own fields,
+    INTACT — an email or a URL in a ticket is content the agent needs. What it never carries is
+    the directory MAPPING: no envelope, no `bossactor` (the chat user's email and ids), no
+    resolved subject or principal. Who the run acts for is structured run context (`acting`,
+    the fire's `subject`), never text in the thread."""
     data = event.data or {}
     out: dict[str, Any] = {"event_id": event_id, "source": conn.kind, "type": event.type,
                            "subject": event.subject, "text": event_text(event),
@@ -197,7 +195,7 @@ def agent_payload(conn: IntakeConnection, event: IntakeEvent, event_id: str, *,
         out["bossscreen"] = {"verdict": event.bossscreen.get("verdict")}
     if not chat:
         out["data"] = data
-    return event_intake.redact_people({k: v for k, v in out.items() if v not in (None, "")})
+    return {k: v for k, v in out.items() if v not in (None, "")}
 
 
 def _addressed(envelope: Mapping[str, Any]) -> bool:
@@ -225,11 +223,7 @@ def chat_messages(route: Mapping[str, Any], conn: IntakeConnection, event: Intak
     if not words:
         return None
     cfg = _json(route.get("config"), {}) or {}
-    from . import event_intake
-
-    # A display name only: never an address (a directory may hand one back as the display).
-    who = event_intake.redact_people(subject.display or subject.external_id
-                                     or event.bossactor.display or "") or "a person"
+    who = subject.display or subject.external_id or event.bossactor.display or "a person"
     lines = [f"This conversation comes from {conn.kind} ({conn.name or conn.id}), route "
              f"{route.get('name') or route['id']}; thread {thread_key or 'the route thread'}.",
              f"You are talking with {who}" + (" (a linked BOSS user; you act for them)."

@@ -103,6 +103,12 @@ export function StreamTab() {
         <section aria-labelledby="ev-list-h" className="ev-form">
           <h2 id="ev-list-h" className="ev-sec-title">Events</h2>
           <ReadState read={read} what="Events" onRetry={() => setTick((x) => x + 1)} testId="ev-stream" />
+          {list?.search_truncated ? (
+            <span className="ev-faint" data-testid="ev-search-truncated"
+                  title="Without “View people” a search checks each event with people's emails and BOSS accounts hidden, so it stops after the newest ones. Narrow the period or source to reach older events.">
+              Searched the newest {(list.search_limit || 5000).toLocaleString("en-US")} events
+            </span>
+          ) : null}
           {list && !items.length ? (
             <Empty icon={<Tray size={30} aria-hidden />} title={status.length || query || source ? "Nothing matches" : "No events yet"}
                    line={status.length || query || source ? "Clear a chip or the search." : "Events show up here the moment a source sends one."} testId="ev-stream-empty" />

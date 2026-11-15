@@ -170,8 +170,12 @@ export const parseCounts = (v: unknown): Counts => {
   const x = o(v);
   return Object.fromEntries([...EVENT_STATUSES, "total"].map((k) => [k, n(x[k])])) as Counts;
 };
-export type EventList = { events: EventSummary[]; counts: Counts };
-export const parseEventList = (v: unknown): EventList => ({ events: a(o(v).events).map(parseEvent).filter((e) => e.id), counts: parseCounts(o(v).counts) });
+export type EventList = { events: EventSummary[]; counts: Counts;
+  /** A search without View people re-checks events one by one and stops after `search_limit` of
+   *  the newest; true when it stopped there with older events unread (BOSSAPP-1199). */
+  search_truncated: boolean; search_limit: number };
+export const parseEventList = (v: unknown): EventList => ({ events: a(o(v).events).map(parseEvent).filter((e) => e.id), counts: parseCounts(o(v).counts),
+  search_truncated: o(v).search_truncated === true, search_limit: n(o(v).search_limit) });
 
 export type Subject = { mode: string; kind: string; principal_id: string; method: string; display: string; reason: string; read_only: boolean };
 export type Outcome = {

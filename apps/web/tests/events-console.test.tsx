@@ -372,6 +372,18 @@ describe("E5 Stream", () => {
     at("/?area=setup&events=stream&ev=iev_2");
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
+  it("a redacted search that stopped at its cap says so; a full one says nothing (BOSSAPP-1199)", async () => {
+    api((url) => (url.startsWith("/v1/intake/events?") ? json({ ...EVENTS, search_truncated: true, search_limit: 5000, scanned: 5000 }) : undefined));
+    await mount(<EventsHome projectId={PID} place={place("stream")} />);
+    const note = $('[data-testid="ev-search-truncated"]');
+    expect(note?.textContent).toBe("Searched the newest 5,000 events");
+    expect(note?.getAttribute("title")).toContain("Narrow the period or source");
+    expect(note?.className).toBe("ev-faint");
+    unmount();
+    api();
+    await mount(<EventsHome projectId={PID} place={place("stream")} />);
+    expect($('[data-testid="ev-search-truncated"]')).toBeNull();
+  });
 });
 
 describe("E5 Stream · who the chat user is in BOSS (BOSSAPP-1196)", () => {

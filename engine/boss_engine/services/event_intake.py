@@ -958,7 +958,7 @@ def backoff_seconds(attempts: int) -> int:
 
 
 def claim(connection: Connection, *, limit: int = PROCESSOR_BATCH, holder: str = HOLDER,
-          now: Optional[datetime] = None) -> list[dict]:
+          now: Optional[datetime] = None, project_id: Optional[str] = None) -> list[dict]:
     """Claim due rows: received or failed and due, or `processing` whose lease expired (its
     processor died), in live (not archived) projects. SKIP LOCKED so two API processes never take
     one row; a crashed processor's rows come back after LEASE_SECONDS (attempts counts the
@@ -971,7 +971,8 @@ def claim(connection: Connection, *, limit: int = PROCESSOR_BATCH, holder: str =
     event of the same conversation that is still retrying (`failed`). Two events of one
     conversation claimed by two processors in the same tick may fire in either order; strict
     per-conversation order is the thread key (P9a-2): `thread_runs.admit` serialises runs on
-    the thread in admit order, and the agent sees every earlier turn in the thread's history."""
+    the thread in admit order, and the agent sees every earlier turn in the thread's history.
+    `project_id` limits the claim to one project (tests on a shared database)."""
     from . import projects_archive
 
     now = now or _now()
@@ -983,6 +984,7 @@ def claim(connection: Connection, *, limit: int = PROCESSOR_BATCH, holder: str =
              WHERE ((status IN ('received', 'failed') AND next_attempt_at <= :now
                      AND (lease_until IS NULL OR lease_until < :now))
                     OR (status = 'processing' AND lease_until < :now))
+               AND (CAST(:p AS TEXT) IS NULL OR project_id = CAST(:p AS TEXT))
                AND {projects_archive.live_sql('intake_events.project_id')}),
         due AS (
             SELECT e.id FROM intake_events e JOIN ranked r ON r.id = e.id
@@ -994,7 +996,7 @@ def claim(connection: Connection, *, limit: int = PROCESSOR_BATCH, holder: str =
           FROM due WHERE e.id = due.id
         RETURNING e.*"""),
         {"now": now, "lease": now + timedelta(seconds=LEASE_SECONDS), "who": holder[:80],
-         "n": int(limit)}).mappings().all()
+         "n": int(limit), "p": project_id}).mappings().all()
     # RETURNING does not keep the CTE's ORDER BY (an UPDATE … FROM answers in join order), so
     # the batch is put back in the order the query chose: round-robin rank across connections,
     # then received order within one. The processor walks the list as it is (P9a-2 T5).
@@ -1296,14 +1298,16 @@ def _dead(connection: Connection, row: Mapping[str, Any], reason: str, *, now: d
 
 
 def process_due(engine: Any, settings: Any = None, *, limit: int = PROCESSOR_BATCH,
-                holder: str = HOLDER, now: Optional[datetime] = None) -> dict:
-    """One pass: claim what is due, process each row in its own transaction."""
+                holder: str = HOLDER, now: Optional[datetime] = None,
+                project_id: Optional[str] = None) -> dict:
+    """One pass: claim what is due (in `project_id` only, when given), process each row in its
+    own transaction."""
     from ..db import begin
 
     settings = settings or _settings()
     now = now or _now()
     with begin(engine) as c:
-        rows = claim(c, limit=limit, holder=holder, now=now)
+        rows = claim(c, limit=limit, holder=holder, now=now, project_id=project_id)
     out = {"claimed": len(rows), "routed": 0, "ignored": 0, "filtered": 0, "refused": 0,
            "failed": 0, "dead": 0, "received": 0, "deferred": 0, "digest": 0}
     for row in rows:
@@ -1528,18 +1532,26 @@ _EVENT_COLUMNS = ("id, connection_id, project_id, dedupe_key, source_event_id, t
 
 # ── who a chat user is in BOSS: one redaction for every intake read (BOSSAPP-1196) ──────────
 
-#: A key whose value ties a chat identity to a BOSS person, or is directory data: the
-#: principal (`principal_id`, `principalId`, `principal`), who acted for whom (`person_actor`,
-#: `on_behalf_of`/`onBehalfOf`, `acting`), and any address (`*email*`, `mail`, `upn`,
-#: `userPrincipalName`). Keys are normalised (camelCase and dashes → snake_case) first.
-_PERSON_KEYS = frozenset({"person_actor", "on_behalf_of", "acting", "user_principal_name"})
-_PERSON_KEY_PARTS = frozenset({"mail", "upn", "principal"})
+#: A key whose value ties a chat identity to a BOSS person, or is an address: WHOLE keys after
+#: normalising (camelCase and dashes → snake_case), never a part of one — `principal_amount`,
+#: `mail_server` and `email_template` are content and stay. The principal (`principal`,
+#: `principal_id`, `*_principal_id`), who acted for whom (`person_actor`, `on_behalf_of`,
+#: `acting`), and an address (`email`, `emails`, `email_address`, `*_email`, `*_emails`,
+#: `*_email_address`, `mail`, `*_mail`, `upn`, `*_upn`, `user_principal_name`).
+_PERSON_KEYS = frozenset({"principal", "principal_id", "person_actor", "on_behalf_of", "acting",
+                          "email", "emails", "email_address", "email_addresses", "mail", "upn",
+                          "user_principal_name"})
+_PERSON_KEY_SUFFIXES = ("_principal_id", "_email", "_emails", "_email_address", "_mail", "_upn")
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 _ADDRESS = (r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9\-]{1,63}(?:\.[A-Za-z0-9\-]{1,63})*"
             r"\.[A-Za-z]{2,63}")
-#: An email address anywhere in a string value, whatever its key, with its wrapping (`<a@b>`,
-#: Slack's `<mailto:a@b|a@b>`).
-_EMAIL_IN_TEXT = re.compile(rf"<?(?:mailto:)?{_ADDRESS}(?:\|{_ADDRESS})?>?")
+#: An email address in a string value, with its wrapping (`<a@b>`, Slack's
+#: `<mailto:a@b|a@b>`). Not a URL's userinfo or an scp-style remote: the local part may not
+#: follow `/`, `:` or a word character (`https://token@github.com/…`), and the host may not be
+#: followed by `/`, `:<path>` or more host (`git@github.com:o/r.git`).
+_EMAIL_IN_TEXT = re.compile(
+    rf"(?:<?mailto:|<|(?<![\w/:.%+\-@])){_ADDRESS}(?:\|{_ADDRESS})?>?"
+    r"(?![\w\-@/]|[.:][\w/])")
 
 
 def _snake(key: Any) -> str:
@@ -1548,7 +1560,7 @@ def _snake(key: Any) -> str:
 
 def _person_key(key: Any) -> bool:
     k = _snake(key)
-    return k in _PERSON_KEYS or "email" in k or bool(_PERSON_KEY_PARTS & set(k.split("_")))
+    return k in _PERSON_KEYS or k.endswith(_PERSON_KEY_SUFFIXES)
 
 
 def _scrub_text(value: str) -> Optional[str]:
@@ -1563,9 +1575,9 @@ def redact_people(value: Any) -> Any:
     """A copy of `value` with every person-linking field (`_person_key`) set to None and every
     email address in any string value cut out, at any depth: dicts, lists, the envelope, the
     raw body, each outcome's subject. What a caller without `user:read` gets from every intake
-    read (events, one event, dead letters, the route preview, the stream search) and what an
-    agent's run gets from any trigger payload. Nothing else changes: the chat user's own id and
-    display stay."""
+    read (events, one event, dead letters, the route preview, the stream search). A READ VIEW
+    only: what an agent receives is never passed through it (agent_triggers._agent_safe).
+    Nothing else changes: the chat user's own id and display stay, URLs stay whole."""
     if isinstance(value, Mapping):
         return {k: (None if _person_key(k) and v is not None else redact_people(v))
                 for k, v in value.items()}
@@ -1666,25 +1678,32 @@ def list_events(connection: Connection, project_id: str, *, status: Optional[str
         params["q"] = f"%{str(q)[:200]}%"
     sql = (f"SELECT {_EVENT_COLUMNS} FROM intake_events WHERE {' AND '.join(where)} "
            "{after} ORDER BY received_at DESC, id DESC LIMIT :n")
+    search: dict[str, Any] = {}
     if not q or reveal is True:
         rows = connection.execute(text(sql.format(after="")), params).mappings().all()
     else:
         needle = str(q)[:200].casefold()
-        rows, scanned, after = [], 0, ""
+        rows, scanned, after, exhausted = [], 0, "", False
         while len(rows) < params["n"] and scanned < _SEARCH_SCAN_MAX:
             page = connection.execute(text(sql.format(after=after)), params).mappings().all()
             scanned += len(page)
             rows.extend(r for r in page if needle in _searchable(r))
             if len(page) < params["n"]:
+                exhausted = True
                 break
             last = page[-1]
             after = "AND (received_at, id) < (:after_at, :after_id)"
             params.update({"after_at": last["received_at"], "after_id": last["id"]})
         rows = rows[:params["n"]]
+        # Said, never silent: the scan stopped at its cap with candidates left unread.
+        search = {"scanned": scanned,
+                  "search_truncated": not exhausted and len(rows) < params["n"]
+                  and scanned >= _SEARCH_SCAN_MAX,
+                  "search_limit": _SEARCH_SCAN_MAX}
     conns = _connections_of(connection, project_id)
     return _redacted({"events": [_summary(dict(r), conns) for r in rows],
                       "counts": status_counts(connection, project_id,
-                                              since_hours=since_hours or 24)}, reveal)
+                                              since_hours=since_hours or 24), **search}, reveal)
 
 
 def status_counts(connection: Connection, project_id: str, *, since_hours: int = 24) -> dict:

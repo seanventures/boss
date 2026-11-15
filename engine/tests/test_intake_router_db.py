@@ -50,10 +50,16 @@ from ._intake_support import (
 )
 
 
+#: The test's own project: `_process` claims only its events (another suite on the shared bench
+#: database must neither take ours nor have its events processed here).
+_SCOPE: dict = {"project_id": None}
+
+
 @pytest.fixture()
 def world():
     engine = pg_engine()
     pid = make_project(engine)
+    _SCOPE["project_id"] = pid
     event_intake.BUCKETS.reset()
     intake_guards.reset_for_tests()
     scoped_budgets.reset_for_tests()
@@ -77,7 +83,7 @@ def _receive(engine, out: dict, body: dict, **kw) -> str:
 
 
 def _process(engine) -> dict:
-    return event_intake.process_due(engine, _settings())
+    return event_intake.process_due(engine, _settings(), project_id=_SCOPE["project_id"])
 
 
 def _fires(engine, trigger_id: str) -> list[dict]:
@@ -383,56 +389,72 @@ def test_t7_a_linked_person_is_the_runs_subject_or_waits_for_a_grant_under_enfor
         assert fctx["on_behalf_of"] == person if "on_behalf_of" in fctx else True
 
 
-def test_an_intake_run_carries_what_the_agent_needs_and_no_person_behind_it(world):
-    """BOSSAPP-1199: the run's first message and its context are readable by anyone holding
-    agent:invoke (an Operator: GET /v1/threads/{id}/history, /runs/{id}); they carry the words,
-    the channel, the sender's display name and the event id, never the chat user's email or a
-    BOSS principal, whatever the field is called."""
+#: Content an agent needs intact (the review of #133): emails in alerts and commits, repo URLs
+#: with userinfo, and keys that only look like person keys.
+CONTENT = {
+    "note": "Customer jane@acme.com cannot log in",
+    "commit": {"author": {"name": "Jane", "email": "jane@acme.com"}},
+    "remote": "git@github.com:o/r.git", "clone": "https://x-access-token@github.com/o/r",
+    "loan": {"principal_amount": 250000, "principal_currency": "USD"},
+    "mail_server": "smtp.acme.com", "email_template": "welcome_v2",
+    "bounce": {"recipient": "jane@acme.com", "reason": "mailbox full"},
+}
+
+
+def test_an_intake_run_carries_the_content_intact_and_never_the_mapping(world):
+    """BOSSAPP-1199: the run's first message and its context (readable by an agent:invoke holder
+    through /v1/threads/{id}/history and /runs/{id}) carry the words, the channel, the sender's
+    display name, the event id and the record's own content INTACT; never the envelope, the
+    chat user's `bossactor`, or the resolved subject / principal (structured run context)."""
     from boss_engine.services import agent_protocol
 
     engine, pid = world
     dep = deploy_local_agent(engine, pid)
     conn = make_connection(engine, pid, "webhook")
     route = make_route(engine, pid, dep["id"], conn["id"], name="ops")
-    email, upn, principal = "priya.raman@northpeak.test", "p.raman@corp.test", "usr_hidden_1199"
-    ev = _receive(engine, conn, _person_event(
-        text_="why did the payments job fail?", email=email,
-        onBehalfOf={"principalId": principal, "userPrincipalName": upn},
-        note=f"cc {email}", mail=email))
+    ev = _receive(engine, conn, {"type": "com.acme.alert", "subject": "INC1",
+                                 "text": "why did the payments job fail?", "channel": "C9",
+                                 "actor": {"kind": "user", "id": "U_PRIYA", "display": "Priya"},
+                                 **CONTENT})
     _process(engine)
     [run] = runs_of(engine, pid)
     assert run["trigger_id"] == route["id"]
     with engine.begin() as c:
-        stored = c.execute(text("SELECT input, messages, finalize_ctx FROM agent_runs WHERE id = :r"),
+        stored = c.execute(text("SELECT input, finalize_ctx FROM agent_runs WHERE id = :r"),
                            {"r": run["id"]}).mappings().one()
         history = agent_protocol.thread_history(c, pid, run["thread_id"])
         one = agent_protocol.get_run(c, pid, run["id"], run["thread_id"])
-    seen = json.dumps([dict(stored), history, one], default=str)
-    for secret in (email, upn, principal, "northpeak.test"):
-        assert secret not in seen, f"{secret} reached the run"
     fctx = stored["finalize_ctx"] if isinstance(stored["finalize_ctx"], dict) \
         else json.loads(stored["finalize_ctx"])
     payload = fctx["payload"]
     assert payload["event_id"] == ev and payload["text"] == "why did the payments job fail?"
-    assert payload["channel"] == "D1" and payload["from"] == "Priya"
-    assert "bossactor" not in payload, "the envelope is never the agent's payload"
+    assert payload["channel"] == "C9" and payload["from"] == "Priya"
+    assert {k: payload["data"][k] for k in CONTENT} == CONTENT, "content reaches the agent intact"
+    for key in ("bossactor", "subject_audit", "principal_id", "on_behalf_of", "acting",
+                "specversion", "bossconnection"):
+        assert key not in payload, key
     inp = stored["input"] if isinstance(stored["input"], list) else json.loads(stored["input"])
     first = inp[-1]["content"]
-    assert "why did the payments job fail?" in first and ev in first and "Priya" in first
+    assert "Customer jane@acme.com cannot log in" in first and "git@github.com:o/r.git" in first
+    assert ev in first and "Priya" in first
+    assert '"bossactor"' not in first and '"principal_id"' not in first
+    # The structured context keeps who the run acts for; the read routes never return it.
+    assert "subject" in fctx
+    assert "principal_id" not in json.dumps([history, one], default=str)
 
 
-def test_every_boss_sourced_trigger_payload_is_scrubbed_but_a_signed_webhook_is_its_own(world):
-    """The event sink and the digest write their payload into the run the same way as a route:
-    one scrub (`agent_triggers._agent_safe`) for every BOSS-sourced kind."""
-    raw = {"entity_id": "x", "actorEmail": "a@b.test", "principal_id": "usr_1",
-           "note": "ask a@b.test", "nested": [{"UPN": "u@corp.test"}]}
+def test_a_trigger_payload_drops_only_the_mapping_keys_and_a_webhook_is_its_own(world):
+    """Every BOSS-sourced kind (event sink, digest, intake, clocked) drops only the exact mapping
+    keys; content (emails, URLs, `principal_amount`) is the agent's to read."""
+    raw = {"entity_id": "x", "principal_id": "usr_1", "on_behalf_of": "usr_2",
+           "bossactor": {"email": "p@corp.test"}, "person_actor": "usr_1", "acting": "usr_1",
+           "nested": [{"principal_id": "usr_3", "ok": 1}], **CONTENT}
     for kind in ("event", "intake", "cron", "monitor"):
         got = agent_triggers._agent_safe({"kind": kind}, raw)
-        assert "@" not in json.dumps(got) and "usr_1" not in json.dumps(got), kind
-        assert got["entity_id"] == "x" and got["note"] == "ask "
+        assert got == {"entity_id": "x", "nested": [{"ok": 1}], **CONTENT}, kind
     msg = agent_triggers._message({"kind": "event", "input": {}, "config": {}},
                                   agent_triggers._agent_safe({"kind": "event"}, raw))
-    assert "What arrived" in msg and "@" not in msg and "usr_1" not in msg
+    assert "What arrived" in msg and "jane@acme.com" in msg and "usr_1" not in msg
     assert agent_triggers._agent_safe({"kind": "webhook"}, raw) == raw
     assert agent_triggers._agent_safe({"kind": "event"}, None) is None
 
