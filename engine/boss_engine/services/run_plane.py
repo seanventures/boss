@@ -721,26 +721,98 @@ def hand_back(connection: Any, settings: Any, host_id: str, run_id: str,
     return {"handed_back": True, "run_id": run_id}
 
 
-def admit(connection: Any, settings: Any, host_id: str, replica_id: str, *, caller: str,
-          input: Any, thread_id: Optional[str] = None, double_text: Optional[str] = None,
-          traceparent: Optional[str] = None, ttl: Any = None) -> dict:
-    """AN EXTERNAL CALL LANDED ON A REPLICA (§3.13.2): authenticate the caller's forwarded
-    credential, decide `agent:invoke` with the PDP, admit the run (thread_runs.admit: run + job)
-    AND lease it to this replica — one transaction. A busy thread answers `pending` with the
-    replica that holds the active run (`held_by`), per the thread's double-text policy."""
-    from ..identity import authn, authz
-    from ..identity.scope import ResolvedScope
+#: What a replica's listener may ask at admit (§3.13.2). Every op re-runs the PDP.
+ADMIT_OPS = ("invoke", "thread", "read", "cancel", "answer")
+SURFACES = ("agent_protocol", "a2a")
 
-    replica = replica_for(connection, host_id, replica_id)
-    project_id = str(replica["project_id"])
-    try:
-        ctx = authn.authenticate(authn.RequestCredentials(
-            method="POST", path=f"/v1/agents/{replica['agent_key']}/runs",
-            headers={"authorization": str(caller or "")}, cookies={}), db=connection)
-    except authn.AuthnError as exc:
-        raise RunPlaneError("caller_unauthenticated", 401, exc.code) from exc
+
+def caller_context(connection: Any, replica: dict, *, caller: Optional[str],
+                   client_cert: Optional[str]) -> Any:
+    """THE CALLER, from the credential the replica's listener FORWARDED (§3.17.3): a bearer
+    (`boss_sak_`/`boss_pat_` key, or a JWT the identity layer verifies) and/or an mTLS client
+    certificate issued by the agent CA's caller intermediate (services/agent_ca). Both present:
+    both must hold and name the same principal. The replica's own word is never a credential."""
+    from ..identity import authn
+    from . import agent_ca
+
+    ctx = None
+    if caller:
+        try:
+            ctx = authn.authenticate(authn.RequestCredentials(
+                method="POST", path=f"/v1/agents/{replica['agent_key']}/runs",
+                headers={"authorization": str(caller)}, cookies={}), db=connection)
+        except authn.AuthnError as exc:
+            raise RunPlaneError("caller_unauthenticated", 401, exc.code) from exc
+    cert_ctx = None
+    if client_cert:
+        try:
+            cert_ctx = agent_ca.caller_context(connection, client_cert)
+        except agent_ca.AgentCAError as exc:
+            raise RunPlaneError("caller_unauthenticated", 401, exc.code) from exc
+    if ctx is not None and cert_ctx is not None and ctx.principal.id != cert_ctx.principal.id:
+        raise RunPlaneError("caller_unauthenticated", 401,
+                            "the client certificate and the token name different callers")
+    ctx = ctx or cert_ctx
     if ctx is None:
         raise RunPlaneError("caller_unauthenticated", 401, "the caller presented no credential")
+    return ctx
+
+
+def _agent_of(connection: Any, replica: dict) -> dict:
+    from . import agent_deployments
+
+    role = connection.execute(text(
+        "SELECT agent_id, display_name FROM roles WHERE project_id = :p AND role_key = :r"),
+        {"p": replica["project_id"], "r": replica["agent_key"]}).mappings().first() or {}
+    dep = agent_deployments.by_id(connection, replica["deployment_id"]) or {}
+    return {"agent_id": role.get("agent_id"), "project_id": str(replica["project_id"]),
+            "agent_key": replica["agent_key"], "deployment": dep,
+            "name": dep.get("display_name") or role.get("display_name") or replica["agent_key"]}
+
+
+def a2a_gate(connection: Any, replica: dict) -> dict:
+    """A2A on a replica: the same D11 check as the in-process endpoint, on EVERY request — an
+    attestation that lapsed closes a write-capable agent's endpoint here (AP-D11)."""
+    from . import a2a_server
+
+    agent = _agent_of(connection, replica)
+    if agent["deployment"].get("environment") != "prod" or not agent["agent_id"]:
+        raise RunPlaneError("a2a_closed", 404, "A2A serves an agent's prod deployment only")
+    why = a2a_server.exposure_refusal(connection, agent)
+    if why:
+        raise RunPlaneError("a2a_closed", 404, why)
+    return agent
+
+
+def admit(connection: Any, settings: Any, host_id: str, replica_id: str, *,
+          caller: Optional[str], input: Any = None, thread_id: Optional[str] = None,
+          double_text: Optional[str] = None, traceparent: Optional[str] = None, ttl: Any = None,
+          op: str = "invoke", run_id: Optional[str] = None, client_cert: Optional[str] = None,
+          surface: str = "agent_protocol", answers: Optional[list] = None,
+          metadata: Optional[dict] = None) -> dict:
+    """AN EXTERNAL CALL LANDED ON A REPLICA (§3.13.2): authenticate the caller's forwarded
+    credential, decide `agent:invoke` with the PDP — EVERY op, every request: authorisation is
+    never the VM's — then:
+
+      invoke   admit the run (thread_runs.admit: run + job) AND lease it to this replica, one
+               transaction. A busy thread answers `pending` with the replica that holds the
+               active run (`held_by`), per the thread's double-text policy.
+      thread   create a thread for this agent
+      read     the run's view (protocols/agent_serving: run, open decisions, inputs)
+      cancel   cancel the run
+      answer   in-band answers to the run's open interrupts, as the caller (A2A)
+
+    `surface: a2a` also runs the D11 exposure check (a2a_gate)."""
+    from ..identity import authz
+    from ..identity.scope import ResolvedScope
+
+    if op not in ADMIT_OPS:
+        raise RunPlaneError("bad_op", 400, f"op is one of {', '.join(ADMIT_OPS)}")
+    if surface not in SURFACES:
+        raise RunPlaneError("bad_surface", 400, f"surface is one of {', '.join(SURFACES)}")
+    replica = replica_for(connection, host_id, replica_id)
+    project_id = str(replica["project_id"])
+    ctx = caller_context(connection, replica, caller=caller, client_cert=client_cert)
     org = connection.execute(text(
         "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
         "WHERE p.id = :p"), {"p": project_id}).scalar()
@@ -749,25 +821,99 @@ def admit(connection: Any, settings: Any, host_id: str, replica_id: str, *, call
     if not decision.allowed:
         raise RunPlaneError("caller_forbidden", 403,
                             f"the caller may not run this agent ({decision.reason})")
+    if surface == "a2a":
+        a2a_gate(connection, replica)
     actor = ctx.principal.id
     from ..identity import lineage
 
     # The run is the CALLER's (the job it enqueues acts on their behalf), never the host's.
     with lineage.acting(ctx):
-        return _admit_as_caller(connection, settings, replica, ctx=ctx, actor=actor,
-                                project_id=project_id, input=input, thread_id=thread_id,
-                                double_text=double_text, traceparent=traceparent, ttl=ttl)
+        if op == "invoke":
+            return _admit_as_caller(connection, settings, replica, ctx=ctx, actor=actor,
+                                    project_id=project_id, input=input, thread_id=thread_id,
+                                    double_text=double_text, traceparent=traceparent, ttl=ttl,
+                                    surface=surface)
+        return _admit_other(connection, replica, ctx=ctx, actor=actor, op=op, run_id=run_id,
+                            answers=answers, metadata=metadata)
+
+
+def replica_trust(connection: Any, host_id: str, replica_id: str, *,
+                  base_url: str = "") -> dict:
+    """What a replica's listener verifies callers against, cached in the VM (§3.17.3): BOSS's
+    token JWKS, the agent CA's caller bundle (client certificates) and serving bundle, the
+    revoked serials, and the agent's signed A2A card when A2A is open for it. Nothing secret."""
+    from ..identity import signing_keys
+    from . import a2a_server, agent_ca
+
+    replica = replica_for(connection, host_id, replica_id)
+    org = connection.execute(text(
+        "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE p.id = :p"), {"p": replica["project_id"]}).scalar()
+    doc = agent_ca.trust_document(connection, str(org) if org else None)
+    agent = _agent_of(connection, replica)
+    card = None
+    if agent["agent_id"] and agent["deployment"].get("environment") == "prod":
+        try:
+            if not a2a_server.exposure_refusal(connection, agent):
+                card = a2a_server.agent_card(connection, agent, base_url=base_url)
+        except Exception:  # noqa: BLE001 — the card is optional; A2A is refused at admit anyway
+            log.warning("trust: no A2A card for replica %s", replica_id, exc_info=True)
+    from ..identity import delegation, tokens
+
+    return {"jwks": signing_keys.jwks_document(db=connection),
+            # what a bearer JWT must say to be accepted locally (the PDP still decides at admit)
+            "issuer": tokens.issuer(), "audiences": [delegation.AUD_API],
+            "caller_bundle_pem": doc["caller_bundle_pem"],
+            "serving_bundle_pem": doc["serving_bundle_pem"], "revoked": doc["revoked"],
+            "agent": {"agent_id": agent["agent_id"], "agent_key": replica["agent_key"],
+                      "project_id": str(replica["project_id"]),
+                      "deployment_id": replica["deployment_id"]},
+            "card": card, "ttl_seconds": 300}
+
+
+def _admit_other(connection: Any, replica: dict, *, ctx: Any, actor: str, op: str,
+                 run_id: Optional[str], answers: Optional[list],
+                 metadata: Optional[dict]) -> dict:
+    from ..protocols.agent_serving import ServingError
+    from . import a2a_server, agent_protocol
+
+    agent = {"project_id": str(replica["project_id"]), "agent_key": replica["agent_key"]}
+    if op == "thread":
+        return {"thread": agent_protocol.create_thread(
+            connection, project_id=agent["project_id"], agent_key=agent["agent_key"],
+            actor=actor, environment=replica["environment"],
+            metadata=metadata if isinstance(metadata, dict) else None)}
+    try:
+        if op == "read":
+            return {"view": a2a_server.view_for_run(connection, agent, str(run_id or ""))}
+        if op == "cancel":
+            a2a_server.view_for_run(connection, agent, str(run_id or ""))
+            return {"run": agent_protocol.cancel_run(connection, project_id=agent["project_id"],
+                                                     run_id=str(run_id), actor=actor)}
+        a2a_server.answer_in_band(connection, agent, str(run_id or ""), list(answers or []),
+                                  auth=ctx)
+        return {"answered": True}
+    except ServingError as exc:
+        raise RunPlaneError(exc.code, exc.status, exc.message) from exc
+    except a2a_server.A2AError as exc:
+        raise RunPlaneError("refused", 409 if exc.code == a2a_server.ANSWER_REFUSED else 422,
+                            exc.message, a2a=exc.error()) from exc
+    except agent_protocol.ProtocolError as exc:
+        raise RunPlaneError("refused", exc.status, str(exc)) from exc
 
 
 def _admit_as_caller(connection: Any, settings: Any, replica: dict, *, ctx: Any, actor: str,
                      project_id: str, input: Any, thread_id: Optional[str],
-                     double_text: Optional[str], traceparent: Optional[str], ttl: Any) -> dict:
+                     double_text: Optional[str], traceparent: Optional[str], ttl: Any,
+                     surface: str = "agent_protocol") -> dict:
     from . import agent_protocol
 
     replica_id = str(replica["id"])
     try:
         if thread_id:
-            agent_protocol.get_thread(connection, project_id, thread_id)
+            thread = agent_protocol.get_thread(connection, project_id, thread_id)
+            if thread.get("agent_key") not in (None, replica["agent_key"]):
+                raise RunPlaneError("not_found", 404, "that thread is another agent's")
         else:
             thread_id = agent_protocol.create_thread(
                 connection, project_id=project_id, agent_key=replica["agent_key"], actor=actor,
@@ -775,7 +921,8 @@ def _admit_as_caller(connection: Any, settings: Any, replica: dict, *, ctx: Any,
             )["thread_id"]
         run = agent_protocol.start_run(connection, project_id=project_id, thread_id=thread_id,
                                        actor=actor, input=input, double_text=double_text,
-                                       traceparent=traceparent, trigger="api")
+                                       traceparent=traceparent,
+                                       trigger="a2a" if surface == "a2a" else "api")
     except agent_protocol.ProtocolError as exc:
         raise RunPlaneError("refused", exc.status, str(exc)) from exc
     row = connection.execute(text(

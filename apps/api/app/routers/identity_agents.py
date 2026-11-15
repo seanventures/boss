@@ -243,6 +243,13 @@ def build_identity_agents_router() -> APIRouter:
             return JSONResponse({"error": "not_found"}, status_code=404)
         with _engine().begin() as db:
             doc = agent_keys.jwks_for_agent(db, agent_id)
+            if doc is not None:
+                # P8b-9: the agent CA callers pin to reach this agent's VIP (§3.17.2).
+                from boss_engine.services import agent_ca
+
+                anchor = agent_ca.published_anchor(db)
+                if anchor:
+                    doc = {**doc, "boss_agent_ca": anchor}
         if doc is None:
             return JSONResponse({"error": "not_found"}, status_code=404)
         return JSONResponse(doc, headers={"Cache-Control": "public, max-age=300"})

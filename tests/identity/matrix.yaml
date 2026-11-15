@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2284 operations.
+# 2289 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -856,6 +856,7 @@
 "POST /v1/finops/initiative-budget": ["permit budget:manage @ project(body=project_id)", "OA"]
 "POST /v1/finops/reconcile-commitments": ["permit budget:manage @ project(body=project_id)", "OA"]
 "GET /v1/finops/summary": ["permit budget:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/fleet/agent-certs/{serial}/revoke": ["permit fleet:manage @ org", "OA"]
 "GET /v1/fleet/directors": ["permit fleet:read @ org", "OAPVU"]
 "POST /v1/fleet/directors/{director_id}/retire": ["permit fleet:manage @ org", "OA"]
 "GET /v1/fleet/hosts": ["permit fleet:read @ org", "OAPVU"]
@@ -1560,6 +1561,8 @@
 "GET /v1/pipeline-profiles": ["permit pipeline:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/pipeline-profiles": ["permit pipeline:manage @ project(body=project_id)", "OA"]
 "POST /v1/pipeline-profiles/default": ["permit pipeline:manage @ project(body=project_id)", "OA"]
+"GET /v1/pki/agent-ca": ["public:jwks", "OAPVU"]
+"POST /v1/pki/caller-certs": ["permit service_account_key:manage @ org", "OA"]
 "GET /v1/plans": ["permit work_item:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/plans": ["permit work_item:manage @ project(body=project_id) +confine(body.task_id->task,body.artifact_id->artifact)", "OAP"]
 "POST /v1/plans/{plan_id}/dispatch": ["permit work_item:manage @ project(body=project_id) +confine(path.plan_id->plan)", "OAP"]
@@ -1836,6 +1839,8 @@
 "POST /v1/router/rationale": ["permit system:operate @ project(body=project_id)", "OA"]
 "POST /v1/run-plane/admit": ["permit fleet:host @ org", "-"]
 "POST /v1/run-plane/hosts/next": ["permit fleet:host @ org", "-"]
+"POST /v1/run-plane/replica/cert": ["permit fleet:host @ org", "-"]
+"GET /v1/run-plane/replica/trust": ["permit fleet:host @ org", "-"]
 "GET /v1/run-plane/runs/{run_id}": ["permit fleet:host @ org", "-"]
 "POST /v1/run-plane/runs/{run_id}/budget/reserve": ["permit fleet:host @ org", "-"]
 "POST /v1/run-plane/runs/{run_id}/budget/settle": ["permit fleet:host @ org", "-"]
