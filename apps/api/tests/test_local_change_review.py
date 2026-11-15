@@ -553,3 +553,66 @@ def test_the_host_tools_key_never_signs_a_persons_comment(client, engine, world,
                                         principal_id="sva_host_tools", system_note=True)
         assert note["author_kind"] == "agent"
         assert local_review.summary(db, local_review.change_row(db, pid, 1)["id"])["human_open"] == 0
+
+
+def test_a_pushed_review_that_needs_consent_is_kept_for_the_sheet(client, world, engine,
+                                                                  repo_root, monkeypatch):
+    """BOSSAPP-1012: a push that cannot queue the review (consent) keeps the request on the
+    change, and asking again answers the flat 409 the consent sheet reads — not a lost event."""
+    from boss_engine.identity import consent
+    from boss_engine.identity.consent import ConsentRequired
+    from boss_engine.services import local_git_hooks
+
+    pid, _bound, _bare, _branch, _pr, _r = _project_with_change(engine, world)
+    repo = f"local_{pid}/desk"
+    body = {
+        "error": "consent_required",
+        "task": "Review change #1: Add an SLA timer",
+        "task_run_id": "pending:Review1",
+        "agents": [{"id": "agt_forge", "name": "Software Engineer", "role_key": "forge"}],
+        "permissions": ["code_task:read", "code_task:steer", "repository:read"],
+        "projects": [pid],
+        "github": None,
+        "local": {"repo": repo, "repos": [repo], "summary": "on this machine"},
+        "durations": [{"kind": "task", "label": "For this build only", "days": None},
+                      {"kind": "standing", "label": "For 30 days", "days": 30}],
+        "max_days": 90,
+    }
+    def _need_consent(**_kw: object) -> None:
+        raise ConsentRequired(body)
+
+    monkeypatch.setattr(consent, "require_authority", _need_consent)
+    with engine.begin() as db:
+        row = local_review.change_row(db, pid, 1)
+        queued = local_git_hooks.queue_review_of(db, get_settings(), change=row, pusher="ada",
+                                                 jobs=object())
+    assert queued is None
+    with engine.connect() as db:
+        saved = db.execute(text(
+            "SELECT review_consent, run_id FROM local_change_sets WHERE project_id = :p AND number = 1"),
+            {"p": pid}).mappings().one()
+        why = db.execute(text(
+            "SELECT data FROM events WHERE project_id = :p AND event_type = 'local_repo.review_not_queued'"),
+            {"p": pid}).scalars().all()
+    assert saved["run_id"] is None
+    assert saved["review_consent"]["error"] == "consent_required"
+    assert saved["review_consent"]["task_run_id"] == "pending:Review1"
+    assert saved["review_consent"]["local"]["summary"] == "on this machine"
+    assert why and "ConsentRequired" in why[-1]["reason"]
+    with _owner(world):
+        view = client.get(f"/v1/projects/{pid}/local-changes/1")
+        asked = client.post(f"/v1/projects/{pid}/local-changes/1/review")
+    assert view.status_code == 200, view.text
+    assert view.json()["review_consent"]["error"] == "consent_required"
+    assert view.json()["review_consent"]["task"] == body["task"]
+    assert asked.status_code == 409, asked.text
+    assert asked.json()["error"] == "consent_required"
+    assert asked.json()["task_run_id"] == "pending:Review1"
+    assert "detail" not in asked.json()
+    monkeypatch.setattr(consent, "require_authority", lambda **_kw: None)
+    with _owner(world):
+        started = client.post(f"/v1/projects/{pid}/local-changes/1/review")
+        again = client.get(f"/v1/projects/{pid}/local-changes/1")
+    assert started.status_code == 200, started.text
+    assert started.json()["run_id"]
+    assert again.json()["review_consent"] is None

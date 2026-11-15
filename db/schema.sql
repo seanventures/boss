@@ -11791,6 +11791,9 @@ CREATE TABLE IF NOT EXISTS local_working_copies (
 );
 -- A change set opened by a push names who pushed it (`pushed` label; author = the pusher).
 ALTER TABLE local_change_sets ADD COLUMN IF NOT EXISTS author TEXT;
+-- A pushed change whose review could not start because it needs consent (BOSSAPP-1012).
+-- The flat 409 body, so the change page opens the same consent sheet. Cleared once queued.
+ALTER TABLE local_change_sets ADD COLUMN IF NOT EXISTS review_consent JSONB;
 
 -- PUSH PENDING (BOSSAPP-922): a GitHub project's branch whose commits landed in the local mirror
 -- while GitHub was down. The worker's push-pending job pushes it and opens the pull request when

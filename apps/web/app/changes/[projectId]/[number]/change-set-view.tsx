@@ -25,6 +25,7 @@ import { ConsentHost } from "../../../../components/identity/consent-sheet";
 import { CanButton, IdentityProvider, useGuardedCall, useIdentity } from "../../../../components/identity/identity-provider";
 import type { MePermissionsResponse, MeResponse } from "../../../../lib/identity/contract";
 import { idGet, idPost, refusalSentence } from "../../../../lib/identity/api";
+import { askConsent } from "../../../../lib/identity/consent";
 import { parseChangeSet, type ChangeSet } from "../../../../lib/repo-links";
 import { commentsByLine, parseUnifiedDiff } from "../../../../lib/diff-view";
 import {
@@ -230,6 +231,7 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
       {!cs && !error ? <div className="cs-loading" role="status" aria-label={`Loading change #${number}`}><i /><i /><i /></div> : null}
       {cs ? (
         <>
+          <PushedReviewConsent cs={cs} at={at} reread={read} />
           <header className="cs-head gr-hd">
             <div className="gr-hd-1">
               <h1 data-testid="change-set-title">{cs.title || `${word} #${cs.number}`} <span className="cs-faint">#{cs.number}</span></h1>
@@ -398,6 +400,8 @@ export function Decide({ cs, projectId, number, reread, at, compact = false }: {
   if (compact) {
     return (
       <span className="gr-decide">
+        {cs.state === "open" && !d && cs.labels.includes("pushed") && cs.source === "local"
+          ? <RunReview cs={cs} at={where} reread={reread} /> : null}
         {cs.state === "open" && !merging ? <RequestChanges cs={cs} at={where} reread={reread} compact /> : null}
         {button}
         {said ? <span className="cs-error" role="alert">{said}</span> : null}
@@ -480,6 +484,31 @@ function RequestChanges({ cs, at, reread, compact = false }: { cs: ChangeSet; at
       {said && !open ? <span className="cs-error" role="alert">{said}</span> : null}
     </span>
   );
+}
+
+/** A pushed change whose review is waiting on consent: the page opens the same sheet a direct
+ *  change and a BOSS-built change open (BOSSAPP-1012). One ask per request; dismissing leaves
+ *  Run the review in the header. */
+export function PushedReviewConsent({ cs, at, reread }: {
+  cs: ChangeSet; at: ChangeAt; reread: () => Promise<ChangeSet>;
+}) {
+  const asked = useRef<string | null>(null);
+  useEffect(() => {
+    const req = cs.review_consent;
+    if (!req || cs.state !== "open" || cs.decision || cs.source !== "local" || cs.run_id) return undefined;
+    const key = req.task_run_id || req.task;
+    if (asked.current === key) return undefined;
+    asked.current = key;
+    let live = true;
+    void (async () => {
+      const grant = await askConsent(req);
+      if (!live || !grant) return;
+      try { await runReview(at); } catch { /* Run the review stays in the header */ }
+      if (live) await reread().catch(() => null);
+    })();
+    return () => { live = false; };
+  }, [cs.review_consent, cs.state, cs.decision, cs.source, cs.run_id, at, reread]);
+  return null;
 }
 
 /** A pushed change whose review did not start with the push (consent, budget): start it now. */

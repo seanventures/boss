@@ -10,6 +10,7 @@
 
 import { repoUrl } from "./github-urls";
 import { parseCiHold, type CiHold } from "./ci-hold";
+import { consentFromBody, type ConsentRequest } from "./identity/consent";
 import { parseSummary, parseThreads, parseWhere, type CommentSummary, type Thread, type Where } from "./local-review-data";
 import { githubChangePath, parseGithubPr } from "./change-review";
 
@@ -153,6 +154,8 @@ export type ChangeSet = {
   source: "local" | "github"; base_sha: string | null; author: string | null;
   clone: { url: string; branch: string | null; web_url: string; fetch: string } | null;
   stale: boolean; fetched_at: string | null; queued: number;
+  /** A pushed review that could not start (BOSSAPP-1012): the consent sheet's request. */
+  review_consent: ConsentRequest | null;
 };
 
 export function changeSetPath(projectId: string, number: number | string): string {
@@ -198,6 +201,7 @@ export function parseChangeSet(raw: unknown): ChangeSet {
     clone: r.clone && typeof r.clone === "object" ? (() => { const c = r.clone as Record<string, unknown>;
       return { url: str(c.url), branch: str(c.branch) || null, web_url: str(c.web_url), fetch: str(c.fetch) }; })() : null,
     stale: r.stale === true, fetched_at: str(r.fetched_at) || null, queued: num(r.queued),
+    review_consent: consentFromBody(r.review_consent),
   };
 }
 

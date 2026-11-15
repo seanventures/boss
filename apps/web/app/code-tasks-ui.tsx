@@ -18,6 +18,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import type { CodeTaskRun, PreviewRec, QaBenchmarkApp } from "@boss/api-client";
 import { callAction } from "../lib/call-action";
+import { withConsentResult } from "../lib/identity/consent";
 import { GatedButton } from "../components/gated";
 import { useConsoleLive } from "../lib/console-live";
 import { openPlan } from "../lib/converse-doors";
@@ -128,7 +129,7 @@ function DirectChangeSheet({ projectId, actor, owner, repo, onClose, onStarted }
     setBusy(true);
     setError("");
     try {
-      const res = await callAction(startDirectChangeAction, undefined, "code_task:create")(form);
+      const res = await withConsentResult(() => callAction(startDirectChangeAction, undefined, "code_task:create")(form));
       if (res.ok) {
         showToast("success", "Build started");
         notifyChanged("code_tasks");

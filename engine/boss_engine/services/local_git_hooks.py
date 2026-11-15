@@ -176,13 +176,17 @@ def queue_review_of(c: Any, settings: Any, *, change: Mapping[str, Any], pusher:
                               "requested_by": pusher},
                 jobs=jobs)
         c.execute(text(
-            "UPDATE local_change_sets SET run_id = :r, updated_at = now() WHERE id = :i"),
+            "UPDATE local_change_sets SET run_id = :r, review_consent = NULL, updated_at = now() "
+            "WHERE id = :i"),
             {"r": run_id, "i": change["id"]})
         emit_event(c, change["project_id"], "local_repo.review_queued", pusher,
                    "local_change_set", change["id"], {"number": int(change["number"]),
                                                      "run_id": run_id})
         return run_id
     except Exception as error:  # noqa: BLE001 — the change set stands; the review waits for a press
+        # The push cannot show a sheet. Keep a consent request on the change (its own row, so
+        # the page opens the same sheet); any other refusal clears one that no longer applies.
+        _remember_review_consent(c, change, error)
         if raise_refusals:
             raise
         emit_event(c, change["project_id"], "local_repo.review_not_queued", pusher,
@@ -190,6 +194,24 @@ def queue_review_of(c: Any, settings: Any, *, change: Mapping[str, Any], pusher:
                    {"number": int(change["number"]),
                     "reason": f"{type(error).__name__}: {str(error)[:300]}"})
         return None
+
+
+def _remember_review_consent(c: Any, change: Mapping[str, Any], error: BaseException) -> None:
+    """Persist a ConsentRequired body on the change; clear it for any other refusal."""
+    from sqlalchemy import text
+
+    from ..identity.consent import ConsentRequired
+
+    body = getattr(error, "body", None) if isinstance(error, ConsentRequired) else None
+    if isinstance(body, dict) and body.get("error") == "consent_required":
+        c.execute(text(
+            "UPDATE local_change_sets SET review_consent = CAST(:b AS JSONB), updated_at = now() "
+            "WHERE id = :i"),
+            {"b": json.dumps(body, default=str), "i": change["id"]})
+        return
+    c.execute(text(
+        "UPDATE local_change_sets SET review_consent = NULL, updated_at = now() WHERE id = :i"),
+        {"i": change["id"]})
 
 
 def post_receive(lines: Iterable[str], env: Mapping[str, str], *, settings: Any = None,

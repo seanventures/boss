@@ -77,6 +77,19 @@ def _iso(v: Any) -> Any:
     return v.isoformat() if hasattr(v, "isoformat") else v
 
 
+def _review_consent(row: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """The consent request a pushed review could not start without (BOSSAPP-1012), or None."""
+    raw = row.get("review_consent")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(raw, dict) and raw.get("error") == "consent_required":
+        return dict(raw)
+    return None
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -266,7 +279,8 @@ class LocalSource:
             "merged_by": row["merged_by"], "merged_at": _iso(row["merged_at"]),
             "pending_push": bool(row["pending_push"]), "github_pr_url": row["github_pr_url"],
             "created_at": _iso(row["created_at"]), "updated_at": _iso(row["updated_at"]),
-            "body": row["body"], "author": row.get("author"), "stale": False}
+            "body": row["body"], "author": row.get("author"), "stale": False,
+            "review_consent": _review_consent(row)}
         try:
             view["files"] = adapter.pull_request_files(row["number"])
             view["diff"] = adapter.get_pull_request_diff(row["number"])[:400_000]

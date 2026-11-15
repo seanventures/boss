@@ -10,8 +10,19 @@ import { revalidatePath } from "next/cache";
 
 import { client, PROJECT_ID, resolveProjectId } from "../../lib/client";
 import { declareAction } from "../../lib/identity/guarded-action";
+import { consentOfThrown } from "../../lib/server-action";
 
-export type FloorResult = { ok: boolean; error?: string; runId?: string; attempt?: number; url?: string; workflowRunId?: string };
+export type FloorResult = {
+  ok: boolean; error?: string; data?: { consent?: unknown };
+  runId?: string; attempt?: number; url?: string; workflowRunId?: string;
+};
+
+/** A 409 consent_required is the consent sheet's request, never the raw word (BOSSAPP-1012). */
+function consentAnswer(e: unknown): FloorResult | null {
+  const consent = consentOfThrown(e);
+  if (!consent) return null;
+  return { ok: false, error: "Needs your consent", data: { consent } };
+}
 
 function said(e: unknown): string {
   if (e instanceof BossApiError) return e.message || `The API answered ${e.status}.`;
@@ -78,7 +89,7 @@ export async function startDirectChangeAction(form: FormData): Promise<FloorResu
     revalidatePath("/");
     return { ok: true, runId: res?.run_id, workflowRunId: res?.workflow_run_id ?? undefined };
   } catch (e) {
-    return { ok: false, error: said(e) };
+    return consentAnswer(e) ?? { ok: false, error: said(e) };
   }
 }
 
