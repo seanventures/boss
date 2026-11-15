@@ -385,14 +385,16 @@ def test_mtls_at_a_trusted_terminator_authenticates_the_host_and_nothing_else_do
     assert refused.value.code == "forwarded_certificate_not_ours"
 
 
-def test_the_pull_loop_serves_a_replicas_runs_until_none_are_left(eng, world, tmp_path):
-    """boss-runtime's loop (process backend): next → drive → settle, `slots` at a time."""
+def test_the_work_inbox_takes_runs_from_the_host_only_while_it_has_a_slot(eng, world,
+                                                                          tmp_path):
+    """boss-runtime in a VM has NO pull loop (§3.13.0): the host's one poll claims, and the
+    runs are handed to the VM's work inbox (a Unix socket on the process backend, one JSON line
+    each way); the inbox reports its slots to the host's ping and refuses beyond them."""
     from boss_engine import kernel
     from boss_engine.kernel.scripted import Say, ScriptedEngine
     from boss_engine.kernel.toolset import FunctionToolSet
     from boss_engine.runtime import runner as rt
-    from boss_engine.runtime.client import HttpTransport, RunPlaneClient
-    from boss_engine.runtime.loop import serve
+    from boss_engine.runtime.inbox import Inbox, send
     from boss_engine.services import agent_deployments, fleet_scheduler, thread_runs
 
     from ._durable_support import policies
@@ -401,32 +403,59 @@ def test_the_pull_loop_serves_a_replicas_runs_until_none_are_left(eng, world, tm
     host.enrol(join_token(eng, world["org"], pool=world["pool"]))
     dep = deploy_agent(eng, world["project"], replicas=1, pool=world["pool"])
     fleet_scheduler.reconcile(eng)
+    replica = host.serve_all(slots=2)[0]
     with eng.begin() as c:
-        replica = c.execute(text("SELECT id FROM agent_replicas WHERE deployment_id = :d"),
-                            {"d": dep["id"]}).scalar()
+        c.execute(text("UPDATE agent_replicas SET slots = 3 WHERE id = :r"), {"r": replica})
         runs = []
-        for n in range(5):
+        for n in range(3):
             tid = thread_runs.ensure_thread(c, project_id=world["project"], actor="ceo",
                                             agent_id=dep["agent_key"])
             runs.append(agent_deployments.admit_run(
                 c, dep, thread_id=tid, messages=[{"role": "user", "content": f"hi {n}"}],
-                trigger="api", extra={"runner": "loop_p8"})["run_id"])
-    rt.RUNNERS["loop_p8"] = lambda package, handle: kernel.RunSpec(
-        engine=ScriptedEngine([Say("hello")]), tools=FunctionToolSet([]), policies=policies(),
-        project_id="",
-        system="agent", messages=[m for m in package["run"]["messages"]
-                                  if m.get("role") != "system"])
+                trigger="api", extra={"runner": "inbox_p8"})["run_id"])
+    release = threading.Event()
+
+    def build(package, handle):
+        release.wait(10)
+        return kernel.RunSpec(engine=ScriptedEngine([Say("hello")]), tools=FunctionToolSet([]),
+                              policies=policies(), project_id="", system="agent",
+                              messages=[m for m in package["run"]["messages"]
+                                        if m.get("role") != "system"])
+
+    rt.RUNNERS["inbox_p8"] = build
+    done: list = []
+    inbox = Inbox(host.gateway(replica).assigned, total_slots=2, on_result=done.append)
+    stop = threading.Event()
+    import shutil
+
+    from ._fleet_support import short_socket_dir
+
+    sockdir = short_socket_dir()
+    sock = sockdir + "/inbox.sock"
+    inbox.serve_unix(sock, stop)
     try:
-        done: list = []
-        client = RunPlaneClient(HttpTransport(world["client"], signer=host.signer()), replica)
-        driven = serve(client, slots=2, poll_seconds=0.05, once=True, on_result=done.append)
+        assert send(sock, {"op": "ping"}) == {"ok": True, "busy_slots": 0, "total_slots": 2}
+        work = host.claim()
+        assert len(work) == 3, "BOSS's own slot count (3) decides the claim"
+        answers = [send(sock, {"op": "run", **{k: w[k] for k in
+                                             ("run_id", "job_id", "replica_id", "epoch")}})
+                   for w in work]
+        assert answers[:2] == [{"ok": True}, {"ok": True}]
+        assert answers[2] == {"ok": False, "reason": "no_free_slot"}, "only with a free slot"
+        assert send(sock, {"op": "ping"})["busy_slots"] == 2
+        assert send(sock, {"op": "run", "run_id": "x"}) == {"ok": False, "reason": "bad_request"}
+        refused = host.gateway(replica).assigned(work[2])
+        assert refused.hand_back()["handed_back"] is True
+        release.set()
+        inbox.join(20)
     finally:
-        rt.RUNNERS.pop("loop_p8", None)
-    assert driven == 5 and sorted(d["run_id"] for d in done) == sorted(runs)
-    with eng.begin() as c:
-        statuses = {r[0] for r in c.execute(text(
-            "SELECT status FROM agent_runs WHERE id = ANY(:r)"), {"r": runs}).all()}
-    assert statuses == {"completed"}
+        stop.set()
+        rt.RUNNERS.pop("inbox_p8", None)
+        shutil.rmtree(sockdir, ignore_errors=True)
+    assert sorted(d["run_id"] for d in done) == sorted(w["run_id"] for w in work[:2])
+    assert all(d["status"] == "completed" for d in done), done
+    again = host.claim()
+    assert [w["run_id"] for w in again] == [work[2]["run_id"]] and again[0]["epoch"] == 2
 
 
 def test_the_wire_shapes_boss_hostd_decodes_and_its_event_and_sweep(eng, world):

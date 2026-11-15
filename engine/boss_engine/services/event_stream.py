@@ -265,6 +265,21 @@ class Subscription:
         return self.pop()
 
 
+class CallbackSubscription:
+    """A subscriber that is a function, not a connection: called on the listener thread for
+    each matching notification (or RESYNC). It must be quick and never raise (P8a: the run
+    plane's host waiters, run_plane._HostWaiters)."""
+
+    def __init__(self, interest: Interest, callback: Callable[[dict], None]):
+        self.interest, self.callback = interest, callback
+
+    def offer(self, note: dict) -> None:
+        try:
+            self.callback(note)
+        except Exception:  # noqa: BLE001 — one subscriber never breaks the hub
+            log.debug("event callback failed", exc_info=True)
+
+
 class Hub:
     def __init__(self) -> None:
         self._subs: set[Subscription] = set()
@@ -275,6 +290,12 @@ class Hub:
         sub = Subscription(interest, loop, maxlen)
         with self._lock:
             self._subs.add(sub)
+        return sub
+
+    def listen(self, interest: Interest, callback: Callable[[dict], None]) -> Any:
+        sub = CallbackSubscription(interest, callback)
+        with self._lock:
+            self._subs.add(sub)  # type: ignore[arg-type]
         return sub
 
     def unsubscribe(self, sub: Subscription) -> None:

@@ -12987,7 +12987,11 @@ LANGUAGE plpgsql AS $$
 BEGIN
   PERFORM pg_notify('boss_events', json_build_object(
     'id', NEW.id, 'project_id', NEW.project_id, 'event_type', NEW.event_type,
-    'entity_type', NEW.entity_type, 'entity_id', NEW.entity_id)::text);
+    'entity_type', NEW.entity_type, 'entity_id', NEW.entity_id,
+    -- P8a: an agent run's deployment, so a host's hosts/next wakes only for its own runs
+    -- (boss-agent-hosts-lld.md §3.13.0) without reading the row.
+    'deployment_id', CASE WHEN NEW.event_type IN ('agent.run_admitted', 'agent.run_queued')
+                          THEN NEW.data->>'deployment_id' END)::text);
   RETURN NULL;
 END $$;
 DO $$ BEGIN
@@ -14809,4 +14813,12 @@ CREATE TABLE IF NOT EXISTS host_events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_host_events_host ON host_events (host_id, created_at DESC);
+-- The generation of the host's replica-state map BOSS last stored (§3.13.0 REVISION): a poll
+-- whose state_gen differs is answered {resync:true}, and the host PUTs its full map once.
+ALTER TABLE agent_hosts ADD COLUMN IF NOT EXISTS replica_state_gen BIGINT NOT NULL DEFAULT 0;
+-- WHERE A JOB MAY BE CLAIMED (boss-eventing-lld.md §8.2): NULL = a local worker's (as before);
+-- 'deployment:<id>' = only that microvm deployment's hosts, through POST /v1/run-plane/hosts/next.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS target TEXT;
+CREATE INDEX IF NOT EXISTS idx_jobs_target_claimable ON jobs (target, priority, created_at)
+  WHERE target IS NOT NULL AND status IN ('queued', 'failed_retryable', 'leased', 'running');
 -- ================================ end P8a ==

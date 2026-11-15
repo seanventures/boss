@@ -670,6 +670,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["roles/{}/autonomy/score", "autonomy:read"],
   ["roles/{}/governance", "autonomy:read"],
   ["router/logs", "model_provider:read"],
+  ["run-plane/runs/{}", "fleet:host"],
   ["run-plane/runs/{}/checkpoint-writes", "fleet:host"],
   ["run-plane/runs/{}/checkpoints", "fleet:host"],
   ["run-plane/runs/{}/interrupts/answers", "fleet:host"],

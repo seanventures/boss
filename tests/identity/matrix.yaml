@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2233 operations.
+# 2235 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -952,6 +952,7 @@
 "POST /v1/hosts/{agent_host_id}/heartbeat": ["permit fleet:host @ org", "-"]
 "POST /v1/hosts/{agent_host_id}/observed": ["permit fleet:host @ org", "-"]
 "POST /v1/hosts/{agent_host_id}/renew": ["permit fleet:host @ org", "-"]
+"PUT /v1/hosts/{agent_host_id}/replicas": ["permit fleet:host @ org", "-"]
 "POST /v1/iac/detect": ["permit infra:read @ org", "OAPVU"]
 "POST /v1/iac/plan": ["permit infra:provision @ org", "OA"]
 "POST /v1/iac/verify": ["permit infra:provision @ org", "OA"]
@@ -1787,7 +1788,8 @@
 "POST /v1/router/preview": ["permit model_provider:manage @ project(body=project_id)", "OA"]
 "POST /v1/router/rationale": ["permit system:operate @ project(body=project_id)", "OA"]
 "POST /v1/run-plane/admit": ["permit fleet:host @ org", "-"]
-"POST /v1/run-plane/next": ["permit fleet:host @ org", "-"]
+"POST /v1/run-plane/hosts/next": ["permit fleet:host @ org", "-"]
+"GET /v1/run-plane/runs/{run_id}": ["permit fleet:host @ org", "-"]
 "POST /v1/run-plane/runs/{run_id}/budget/reserve": ["permit fleet:host @ org", "-"]
 "POST /v1/run-plane/runs/{run_id}/budget/settle": ["permit fleet:host @ org", "-"]
 "GET /v1/run-plane/runs/{run_id}/checkpoint-writes": ["permit fleet:host @ org", "-"]

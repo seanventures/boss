@@ -84,10 +84,29 @@ class Plane:
         self.host = self.new_host()
         fleet_scheduler.reconcile(eng)
         self.replica_id = self.replica_on(self.host)
-        self.rp = RunPlaneClient(HttpTransport(self.client, signer=self.host.signer()),
-                                 self.replica_id)
+        with eng.begin() as c:  # one slot: each claim takes exactly one run
+            c.execute(text("UPDATE agent_replicas SET slots = 1 WHERE deployment_id = :d"),
+                      {"d": self.dep["id"]})
+        self.host.serve_all()
+        #: the replica's run plane through its host's guest gateway (run tokens from host memory)
+        self.rp = self.host.gateway(self.replica_id)
+        #: the same, signed as the host but carrying whatever lease a test names (fencing tests)
+        self.rp_direct = RunPlaneClient(HttpTransport(self.client, signer=self.host.signer()),
+                                        self.replica_id)
         self.rt_runners = rt.RUNNERS
         self.local_runners = agent_run_worker.RUNNERS
+
+    def take(self, host: "FakeHost" = None):
+        """What boss-hostd does: ONE hosts/next for the host, then the run handed to its VM,
+        which fetches the run package. (handle, package, work), or None when nothing is queued.
+        The replica has one slot here, so each claim takes one run."""
+        host = host or self.host
+        runs = host.claim()
+        if not runs:
+            return None
+        work = runs[0]
+        handle = host.gateway(work["replica_id"]).assigned(work)
+        return handle, handle.package(), work
 
     def new_host(self) -> FakeHost:
         host = FakeHost(self.client)
@@ -184,9 +203,10 @@ class Transport:
             return agent_run_worker.execute(self.plane.eng, get_settings(), kind=job["kind"],
                                             job_id=job["id"], run_id=run_id, worker_id=worker,
                                             lease_token=leased["lease_token"], drain=drain)
-        package = self.plane.rp.next()
-        assert package is not None and package["run"]["id"] == run_id, package
-        return rt.drive(self.plane.rp.run(package), package, drain=drain)
+        taken = self.plane.take()
+        assert taken is not None and taken[1]["run"]["id"] == run_id, taken
+        handle, package, _ = taken
+        return rt.drive(handle, package, drain=drain)
 
 
 @pytest.fixture(params=TRANSPORTS)
@@ -487,9 +507,9 @@ def test_a_deployed_agents_boss_state_tool_runs_on_the_control_plane(plane, tmp_
         run = agent_protocol.start_run(c, project_id=plane.project,
                                        thread_id=thread["thread_id"], actor="ceo",
                                        input="balance?")
-    package = plane.rp.next()
+    handle, package, _ = plane.take()
     assert package["agent"]["version"] == 1 and package["agent"]["spec"]["kind"] == "Agent"
-    handle = plane.rp.run(package)
+    assert "run_token" not in package["lease"], "the guest never holds the run token"
     tools = handle.call("GET", "tools")["tools"]
     assert [t["name"] for t in tools] == ["read_balance"]
     out = rt.drive(handle, package)
@@ -511,8 +531,8 @@ def test_a_vm_without_a_model_engine_refuses_a_deployed_run_in_words(plane):
                                               environment="dev")
         run = agent_protocol.start_run(c, project_id=plane.project,
                                        thread_id=thread["thread_id"], actor="ceo", input="hi")
-    package = plane.rp.next()
-    out = rt.drive(plane.rp.run(package), package)
+    handle, package, _ = plane.take()
+    out = rt.drive(handle, package)
     assert out["status"] == "failed"
     error = _row(plane.eng, "SELECT error FROM agent_runs WHERE id = :r", r=run["run_id"])["error"]
     assert "model gateway" in error
@@ -538,14 +558,12 @@ def test_a_stale_epoch_is_refused_409_fenced_on_every_run_plane_call(plane):
     from boss_engine.kernel.types import Event, now
 
     admitted = _admit_microvm(plane)
-    first = plane.rp.next()
-    stale = plane.rp.run(first)
+    stale = plane.rp_direct.assigned(plane.take()[2])
     assert stale.lease.fence_epoch == 1
     with plane.eng.begin() as c:  # its holder goes silent: the lease expires
         c.execute(text("UPDATE jobs SET lease_expires_at = now() - interval '1 second' "
                        "WHERE id = :j"), {"j": admitted["job_id"]})
-    second = plane.rp.next()
-    fresh = plane.rp.run(second)
+    fresh = plane.rp_direct.assigned(plane.take()[2])
     assert fresh.lease.fence_epoch == 2 and fresh.lease.job_id == stale.lease.job_id
 
     run_id = admitted["run_id"]
@@ -608,11 +626,14 @@ def test_a_host_acts_only_for_its_own_replicas(plane):
     intruder = plane.new_host()
     other = RunPlaneClient(HttpTransport(plane.client, signer=intruder.signer()),
                            plane.replica_id)
+    intruder.vms = dict(plane.host.vms)  # it claims to hold the other host's replica
+    intruder.state_gen = 7  # a generation BOSS has not stored: the poll asks for the full map
     with pytest.raises(RunPlaneHTTPError) as refused:
-        other.next()
+        intruder.claim()  # the resync's PUT of that map is refused
     assert refused.value.status == 403 and refused.value.code == "replica_not_on_host"
-    package = plane.rp.next()
-    stolen = other.run(package)
+    intruder.vms = {}
+    assert intruder.claim() == [] and intruder.resyncs == 2, "a host claims nothing for a deployment it does not host"
+    stolen = other.assigned(plane.take()[2])
     with pytest.raises(RunPlaneHTTPError) as also:
         stolen.call("GET", "checkpoints")
     assert also.value.status == 403, "a lease is no use from another host"
@@ -677,7 +698,9 @@ def test_a_killed_runtime_reruns_only_the_unfinished_calls_and_parks_the_irrever
     key_path.chmod(0o600)
     cert_path.write_text(plane.host.cert_pem)
     admitted = _admit_microvm(plane, runner="crash_p8")
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(ROOT / "engine"), str(ROOT)])}
+    work = plane.host.claim()[0]  # the host's one poll; it hands the run to the VM
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(ROOT / "engine"), str(ROOT)]),
+           "P8A_WORK": json.dumps(work)}
     child = subprocess.Popen([sys.executable, str(HERE / "_runtime_crash_child.py"), server,
                               plane.replica_id, str(key_path), str(cert_path), str(ledger)],
                              env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -710,9 +733,9 @@ def test_a_killed_runtime_reruns_only_the_unfinished_calls_and_parks_the_irrever
                               sink=RemoteSink(handle), parallel_interrupts=True)
 
     plane.monkeypatch.setitem(rt.RUNNERS, "crash_p8", build)
-    package = plane.rp.next()
+    handle, package, _ = plane.take()
     assert package["lease"]["fence_epoch"] == 2, "a reclaim is a new epoch"
-    out = rt.drive(plane.rp.run(package), package)
+    out = rt.drive(handle, package)
     assert out["status"] == "unknown_outcome" and out["job_deferred"], out
     assert count(ledger, "read_a") == 1, "a finished call is REPLAYED, never re-run"
     assert count(ledger, "charge_card") == 1, "an irreversible call is never fired twice"
@@ -725,7 +748,7 @@ def test_a_killed_runtime_reruns_only_the_unfinished_calls_and_parks_the_irrever
                "AS held FROM jobs WHERE id = :j", j=admitted["job_id"])
     assert job["code"] == "unknown_outcome" and job["lease_owner"] is None and job["held"], \
         "the job parks for a person, never blind-retried"
-    assert plane.rp.next() is None, "and no replica takes it while it is parked"
+    assert plane.take() is None, "and no replica takes it while it is parked"
 
     # The dead executor's lease (epoch 1) can write nothing, ever again.
     from boss_engine.runtime.client import HttpTransport, Lease, RunHandle
@@ -781,7 +804,7 @@ def test_run_plane_call_latency_p95_is_within_5ms_excluding_queueing(plane, caps
     import uvicorn
 
     from boss_engine.kernel.state import RunState
-    from boss_engine.runtime.client import HttpTransport, RunPlaneClient
+    from boss_engine.runtime.client import HostWorkClient, HttpTransport, RunPlaneClient
     from boss_engine.runtime.remote import RemoteCheckpointStore
     from boss_engine.services import agent_deployments, thread_runs
 
@@ -805,16 +828,19 @@ def test_run_plane_call_latency_p95_is_within_5ms_excluding_queueing(plane, caps
                                             messages=[{"role": "user", "content": "x"}],
                                             trigger="api", extra={"runner": "bench_p8"})
         with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=30) as http:
-            rp = RunPlaneClient(HttpTransport(http, signer=plane.host.signer()),
-                                plane.replica_id)
-            packages = [rp.next() for _ in range(200)]
-            assert all(packages), "200 runs leased at once"
+            transport = HttpTransport(http, signer=plane.host.signer())
+            rp = RunPlaneClient(transport, plane.replica_id)
+            with plane.eng.begin() as c:
+                c.execute(text("UPDATE agent_replicas SET slots = 200 WHERE id = :r"),
+                          {"r": plane.replica_id})
+            packages = HostWorkClient(transport).next(state_gen=plane.host.state_gen)["runs"]
+            assert len(packages) == 200, "200 runs leased at once, by ONE host request"
 
             def steps(package, n: int = 5):
-                handle = rp.run(package)
+                handle = rp.assigned(package)
                 store = RemoteCheckpointStore(handle)
-                state = RunState(run_id=package["run"]["id"], project_id=plane.project,
-                                 lineage_id=package["run"]["id"], system=[],
+                state = RunState(run_id=package["run_id"], project_id=plane.project,
+                                 lineage_id=package["run_id"], system=[],
                                  messages=[{"role": "user", "content": "x" * 400}])
                 for step in range(n):
                     state.step = step + 1
@@ -881,8 +907,7 @@ def test_the_one_statement_fence_answers_exactly_as_require_active_lease(plane):
     from boss_engine.services import run_plane
 
     admitted = _admit_microvm(plane)
-    package = plane.rp.next()
-    live = plane.rp.run(package).lease
+    live = plane.rp_direct.assigned(plane.take()[2]).lease
     ref = run_plane.LeaseRef(live.replica_id, live.job_id, live.run_token, live.fence_epoch)
     run_id = admitted["run_id"]
 
@@ -947,11 +972,159 @@ def test_the_fast_checkpoint_write_keeps_the_mirror_and_the_row_in_step():
 def test_the_replica_is_the_hosts_word_never_the_guests(plane):
     """boss-hostd's gateway sets X-Boss-Replica from the VM's socket; a body naming another
     replica (a guest speaking for its neighbour) is refused."""
-    _admit_microvm(plane)
-    path = "/v1/run-plane/next"
+    path = "/v1/run-plane/admit"
     missing = plane.client.post(path, json={}, headers=plane.host.headers("POST", path))
     assert missing.status_code == 400
     assert missing.json()["detail"]["error"] == "replica_header_required"
     lying = plane.client.post(path, json={"replica_id": "rep_my_neighbour"}, headers={
         **plane.host.headers("POST", path), "X-Boss-Replica": plane.replica_id})
     assert lying.status_code == 403 and lying.json()["detail"]["error"] == "replica_mismatch"
+
+
+# ════ §3.13.0: ONE long-poll per host; BOSS keeps the replica model ═══════════════════════════
+
+def test_the_steady_poll_carries_no_replica_list_and_a_stale_state_gen_resyncs_once(plane):
+    """REVISION (operator): the body is {wait_ms, state_gen}; a mismatch → {resync:true} →
+    ONE PUT of the full map → the generation is stored and the next poll claims."""
+    from apps.api.app.routers.fleet import HostsNextBody
+
+    assert set(HostsNextBody.model_fields) == {"wait_ms", "state_gen", "ttl"}, \
+        "the poll has no field for a replica list"
+    admitted = _admit_microvm(plane)
+    runs = plane.host.claim()
+    assert [r["run_id"] for r in runs] == [admitted["run_id"]] and plane.host.resyncs == 0
+    assert all(set(p) == {"wait_ms", "state_gen"} for p in plane.host.polls)
+
+    plane.host.state_gen += 1  # a change the host never pushed (a lost /observed)
+    _admit_microvm(plane)
+    with plane.eng.begin() as c:  # the first run settles: a slot frees
+        c.execute(text("UPDATE jobs SET status = 'succeeded' WHERE id = :j"),
+                  {"j": admitted["job_id"]})
+    assert len(plane.host.claim()) == 1 and plane.host.resyncs == 1, "exactly one resync"
+    with plane.eng.begin() as c:
+        stored = c.execute(text("SELECT replica_state_gen FROM agent_hosts WHERE id = :h"),
+                           {"h": plane.host.host_id}).scalar()
+    assert stored == plane.host.state_gen
+    plane.host.claim()
+    assert plane.host.resyncs == 1, "no full map once the generation matches"
+
+
+def test_a_refused_delivery_is_handed_back_and_reassigned_within_3s(plane, tmp_path):
+    """P8a-T7 + the hand-back: the VM refuses (its inbox answers no), the host hands the run
+    back, BOSS re-queues it and the other host's replica claims it at epoch + 1; the old
+    epoch's writes are fenced."""
+    from boss_engine.runtime.client import Fenced
+    from boss_engine.runtime.inbox import Inbox, send
+    from boss_engine.services import fleet_scheduler
+
+    with plane.eng.begin() as c:
+        c.execute(text("UPDATE agent_deployments SET replicas = 2 WHERE id = :d"),
+                  {"d": plane.dep["id"]})
+    second = plane.new_host()
+    fleet_scheduler.reconcile(plane.eng)
+    second.serve_all(slots=1)
+    admitted = _admit_microvm(plane)
+    work = plane.host.claim()[0]
+    assert work["replica_id"] == plane.replica_id and work["epoch"] == 1
+
+    refusing = Inbox(lambda w: None, total_slots=1)
+    refusing.drain.set()
+    stop = threading.Event()
+    import shutil
+
+    from ._fleet_support import short_socket_dir
+
+    sockdir = short_socket_dir()
+    sock = sockdir + "/w.sock"
+    refusing.serve_unix(sock, stop)
+    try:
+        answer = send(sock, {"op": "run", **{k: work[k] for k in
+                                            ("run_id", "job_id", "replica_id", "epoch")}})
+    finally:
+        stop.set()
+        shutil.rmtree(sockdir, ignore_errors=True)
+    assert answer == {"ok": False, "reason": "draining"}
+    old = plane.host.gateway(plane.replica_id).assigned(work)
+    started = time.monotonic()
+    assert old.hand_back()["handed_back"] is True
+    # The replica that refused is draining: the host pushes that (state_gen bumps).
+    plane.host.vms[plane.replica_id]["state"] = "draining"
+    plane.host.state_gen += 1
+    assert plane.host.call("POST", f"/v1/hosts/{plane.host.host_id}/observed", json={
+        "replicas": [plane.host.vms[plane.replica_id]],
+        "state_gen": plane.host.state_gen}).status_code == 200
+    again = second.claim(wait_ms=3000)
+    took = time.monotonic() - started
+    assert [r["run_id"] for r in again] == [admitted["run_id"]] and took < 3.0, took
+    assert again[0]["epoch"] == 2 and again[0]["replica_id"] != plane.replica_id
+    with pytest.raises(Fenced):
+        plane.rp_direct.assigned(work).call("GET", "checkpoints")
+    job = _row(plane.eng, "SELECT attempt FROM jobs WHERE id = :j", j=admitted["job_id"])
+    assert job["attempt"] == 1, "a hand-back spends no attempt"
+
+
+def test_fifty_replicas_on_one_host_keep_exactly_one_outstanding_poll(plane):
+    """P8a-T6, against a fake host: 50 replicas, one poll in flight at a time, the runs spread
+    over the replicas by free slots — and a waiting poll wakes on an admission."""
+    from fastapi import FastAPI
+
+    from apps.api.app.routers.fleet import build_fleet_router
+    from boss_engine.services import fleet_scheduler
+
+    with plane.eng.begin() as c:
+        c.execute(text("UPDATE agent_deployments SET replicas = 50 WHERE id = :d"),
+                  {"d": plane.dep["id"]})
+    fleet_scheduler.reconcile(plane.eng)
+    in_flight = {"now": 0, "max": 0, "polls": 0}
+    lock = threading.Lock()
+
+    class Counting:
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            counted = scope["type"] == "http" and scope["path"] == "/v1/run-plane/hosts/next"
+            if counted:
+                with lock:
+                    in_flight["now"] += 1
+                    in_flight["polls"] += 1
+                    in_flight["max"] = max(in_flight["max"], in_flight["now"])
+            try:
+                return await self.app(scope, receive, send)
+            finally:
+                if counted:
+                    with lock:
+                        in_flight["now"] -= 1
+
+    app = FastAPI()
+    app.include_router(build_fleet_router(engine=plane.eng))
+    host = plane.host
+    host.client = TestClient(Counting(app))
+    assert len(host.serve_all(slots=1)) == 50
+    claimed: list = []
+    stop = threading.Event()
+
+    def host_loop():  # boss-hostd's one work loop: poll, hand out, poll again
+        while not stop.is_set():
+            claimed.extend(host.claim(wait_ms=1000))
+
+    loop = threading.Thread(target=host_loop, daemon=True)
+    loop.start()
+    time.sleep(0.5)
+    started = time.monotonic()
+    first = _admit_microvm(plane)
+    while not any(r["run_id"] == first["run_id"] for r in claimed):
+        assert time.monotonic() - started < 3, "the waiting poll woke on the admission"
+        time.sleep(0.02)
+    for _ in range(19):
+        _admit_microvm(plane)
+    deadline = time.monotonic() + 15
+    while len(claimed) < 20 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    stop.set()
+    loop.join(5)
+    assert len(claimed) == 20
+    assert in_flight["max"] == 1, "one outstanding poll for 50 replicas"
+    assert len({r["replica_id"] for r in claimed}) == 20, \
+        "each run to a replica with a free slot (most free first)"
+    assert all(set(p) == {"wait_ms", "state_gen"} for p in host.polls), "no replica list, ever"

@@ -337,7 +337,50 @@ def heartbeat(connection: Any, host: fleet_ca.HostIdentity, body: dict) -> dict:
             "heartbeat_seconds": HEARTBEAT_SECONDS}
 
 
+def _not_mine(connection: Any, host_id: str, replicas: Iterable[dict]) -> None:
+    """A host speaks only for its own replicas (P8a-T8): one it does not hold is refused 403."""
+    ids = sorted({str(r.get("replica_id")) for r in replicas or ()
+                  if isinstance(r, dict) and r.get("replica_id")})
+    if not ids:
+        return
+    mine = {r[0] for r in connection.execute(text(
+        "SELECT id FROM agent_replicas WHERE id = ANY(:ids) AND host_id = :h"),
+        {"ids": ids, "h": host_id}).all()}
+    foreign = [i for i in ids if i not in mine]
+    if foreign:
+        raise FleetError(f"replica {foreign[0]} is not placed on this host.", status=403,
+                         code="replica_not_on_host")
+
+
+def _store_gen(connection: Any, host_id: str, state_gen: Any) -> None:
+    if state_gen is not None:
+        connection.execute(text(
+            "UPDATE agent_hosts SET replica_state_gen = :g WHERE id = :h"),
+            {"g": int(state_gen), "h": host_id})
+
+
+def put_replicas(connection: Any, host: fleet_ca.HostIdentity, *, state_gen: int,
+                 replicas: list) -> dict:
+    """PUT /v1/hosts/{id}/replicas: the host's FULL replica map (after a {resync: true}). Every
+    listed replica's state is stored; a replica of this host it no longer lists is `gone`; the
+    generation is stored, so the next poll claims (§3.13.0 REVISION)."""
+    _not_mine(connection, host.host_id, replicas)
+    seen = _observe(connection, host.host_id, replicas)
+    listed = [str(r.get("replica_id")) for r in replicas
+              if isinstance(r, dict) and r.get("replica_id")]
+    connection.execute(text(
+        "UPDATE agent_replicas SET observed_state = 'gone', updated_at = now() "
+        "WHERE host_id = :h AND observed_state <> 'gone' AND NOT (id = ANY(:seen))"),
+        {"h": host.host_id, "seen": listed})
+    _store_gen(connection, host.host_id, state_gen)
+    return {"host_id": host.host_id, "replicas_seen": seen, "state_gen": int(state_gen)}
+
+
 def observed(connection: Any, host: fleet_ca.HostIdentity, body: dict) -> dict:
+    """Replica state changes, pushed by the host on every change (watchdog transitions too),
+    with the host's bumped state_gen (§3.13.0 REVISION)."""
+    _not_mine(connection, host.host_id, body.get("replicas") or ())
+    _store_gen(connection, host.host_id, body.get("state_gen"))
     seen = _observe(connection, host.host_id, body.get("replicas") or ())
     if body.get("observed_generation") is not None:
         connection.execute(text(
@@ -546,4 +589,4 @@ def get_host(connection: Any, org_id: str, host_id: str) -> Optional[dict]:
 __all__ = ["ATTESTATION", "FleetError", "HEARTBEAT_SECONDS", "JOIN_TOKEN_PREFIX", "ROUTES",
            "UNREACHABLE_SECONDS", "desired", "endpoints", "enrol", "get_host", "heartbeat",
            "host_event", "host_events_ingest", "ingest_guest_calls", "issue_join_token", "list_hosts", "observed",
-           "renew", "revoke", "revoke_join_token", "set_cordon", "watch"]
+           "put_replicas", "renew", "revoke", "revoke_join_token", "set_cordon", "watch"]

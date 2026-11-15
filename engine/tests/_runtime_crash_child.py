@@ -1,14 +1,17 @@
 """The boss-runtime process the P8a crash test kills with SIGKILL (test_p8a_run_plane.py, (a)).
 
-Usage: python _runtime_crash_child.py <run plane url> <replica id> <host key pem> <host cert pem>
-                                      <ledger path>
+Usage: P8A_WORK='{"run_id",…,"run_token"}' python _runtime_crash_child.py <run plane url>
+           <replica id> <host key pem> <host cert pem> <ledger path>
 
-A replica's runtime on the process backend: it takes the deployment's next run through the run
-plane (signing as its host, as boss-hostd would), drives the three-tool batch on the kernel with a
-RemoteCheckpointStore, and hangs inside charge_card so the parent kills it mid-batch.
+A replica's runtime on the process backend: the parent (the host) claimed the run with its one
+hosts/next and hands it over (P8A_WORK, as the work inbox would, plus the run token the host's
+gateway would attach); the child drives the three-tool batch on the kernel with a
+RemoteCheckpointStore, signing as its host, and hangs inside charge_card so the parent kills it.
 """
 from __future__ import annotations
 
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -41,9 +44,8 @@ def main() -> int:
     with httpx.Client(base_url=url, timeout=30.0) as http:
         client = RunPlaneClient(HttpTransport(http, signer=HostSigner(
             key, Path(cert_path).read_text())), replica)
-        package = client.next()
-        assert package is not None, "nothing to run"
-        runner.drive(client.run(package), package)
+        handle = client.assigned(json.loads(os.environ["P8A_WORK"]))
+        runner.drive(handle, handle.package())
     return 0
 
 

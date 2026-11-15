@@ -149,7 +149,9 @@ def admit(connection: Connection, *, project_id: str, thread_id: str, messages: 
                         enqueue_job=enqueue_job)
     emit_event(connection, project_id, "agent.run_admitted", "boss", "agent_run", run_id,
                {"thread_id": thread_id, "policy": chosen, "busy": busy, "job_id": job_id,
-                "trigger": trigger})
+                "trigger": trigger,
+                # P8a: wakes only the hosts of this deployment (run_plane.claim_for_host).
+                "deployment_id": (finalize_ctx or {}).get("deployment_id")})
     if busy and chosen in (INTERRUPT, ROLLBACK):
         # An active run with no worker on it (waiting on a person, or queued) stopped at once:
         # the thread is free now.
@@ -270,8 +272,17 @@ def release(connection: Connection, thread_id: str) -> Optional[str]:
             "UPDATE agent_threads SET active_run_id = NULL, updated_at = now() WHERE id = :t "
             "AND active_run_id IS NOT NULL"), {"t": thread_id})
         return None
-    return _start(connection, thread_id, nxt["id"], nxt["project_id"], nxt["task_id"],
-                  priority=JOB_PRIORITY_REQUESTED, enqueue_job=enqueue_job)
+    job_id = _start(connection, thread_id, nxt["id"], nxt["project_id"], nxt["task_id"],
+                    priority=JOB_PRIORITY_REQUESTED, enqueue_job=enqueue_job)
+    deployment = connection.execute(text(
+        "SELECT finalize_ctx->>'deployment_id' FROM agent_runs WHERE id = :r"),
+        {"r": nxt["id"]}).scalar()
+    if deployment:
+        # A queued run now has its job: its deployment's waiting hosts are woken (P8a).
+        emit_event(connection, nxt["project_id"], "agent.run_queued", "boss", "agent_run",
+                   nxt["id"], {"thread_id": thread_id, "job_id": job_id,
+                               "deployment_id": deployment})
+    return job_id
 
 
 def thread_history(connection: Connection, thread_id: str, *, before_run: str) -> list:

@@ -4,10 +4,13 @@ boss-agent-hosts-lld.md §3.2, §3.13.3). ONE router for the phase.
   HOSTS (boss-hostd → control plane; authenticated as the host, `fleet:host`, system only)
       POST /v1/hosts/enrol                               public: a one-time join token + CSR
       POST /v1/hosts/{agent_host_id}/renew | /heartbeat | /observed | /guest-calls | /events
+      PUT  /v1/hosts/{agent_host_id}/replicas               the full replica map, after a resync
       GET  /v1/hosts/{agent_host_id}/desired?since=&wait=  level-based watch (long-poll)
   RUN PLANE (boss-hostd on a VM's behalf; `fleet:host`; every run call fenced)
-      POST /v1/run-plane/next | /admit
-      POST /v1/run-plane/runs/{run_id}/lease                heartbeat | settle | fail
+      POST /v1/run-plane/hosts/next                         ONE long-poll per host (§3.13.0)
+      POST /v1/run-plane/admit
+      GET  /v1/run-plane/runs/{run_id}                      the run package (never its token)
+      POST /v1/run-plane/runs/{run_id}/lease                heartbeat | settle | fail | hand_back
       GET/PUT /v1/run-plane/runs/{run_id}/checkpoints, …/checkpoint-writes
       POST …/interrupts, GET …/interrupts/answers
       POST …/budget/reserve | …/budget/settle | …/ledger | …/ledger/seq | …/spans | …/events
@@ -64,6 +67,7 @@ class HeartbeatBody(BaseModel):
 class ObservedBody(BaseModel):
     replicas: list[dict[str, Any]] = Field(default_factory=list)
     observed_generation: Optional[int] = None
+    state_gen: Optional[int] = None
 
 
 class GuestCallsBody(BaseModel):
@@ -74,9 +78,16 @@ class HostEventsBody(BaseModel):
     events: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class NextBody(BaseModel):
-    replica_id: Optional[str] = None
+class HostsNextBody(BaseModel):
+    """The whole poll: no replica list (BOSS keeps its own model, §3.13.0 REVISION)."""
+    wait_ms: int = Field(default=0, ge=0, le=30000)
+    state_gen: Optional[int] = None
     ttl: Optional[int] = None
+
+
+class ReplicaMapBody(BaseModel):
+    state_gen: int = Field(ge=0)
+    replicas: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AdmitBody(BaseModel):
@@ -90,7 +101,8 @@ class AdmitBody(BaseModel):
 
 
 class LeaseBody(BaseModel):
-    action: str
+    action: str = ""
+    hand_back: bool = False
     ttl: Optional[int] = None
     outcome: dict[str, Any] = Field(default_factory=dict)
     error: str = ""
@@ -311,9 +323,33 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
     @router.post("/v1/hosts/{agent_host_id}/observed")
     @permit(P.FLEET_HOST, scope=Scope.org())
     def observed(agent_host_id: str, body: ObservedBody, request: Request) -> dict[str, Any]:
+        """Every replica state change, pushed at once, with the host's new state_gen."""
         host = _host(request, agent_host_id)
-        with begin(engine) as connection:
-            return _fleet.observed(connection, host, body.model_dump())
+        try:
+            with begin(engine) as connection:
+                out = _fleet.observed(connection, host, body.model_dump())
+        except Exception as error:  # noqa: BLE001
+            _fleet_fail(error)
+            raise
+        run_plane.wake_host(host.host_id)
+        return out
+
+    @router.put("/v1/hosts/{agent_host_id}/replicas")
+    @permit(P.FLEET_HOST, scope=Scope.org())
+    def put_replicas(agent_host_id: str, body: ReplicaMapBody,
+                     request: Request) -> dict[str, Any]:
+        """The host's FULL replica map, sent once after a {resync: true}: BOSS stores it and the
+        generation; a full map is never sent otherwise."""
+        host = _host(request, agent_host_id)
+        try:
+            with begin(engine) as connection:
+                out = _fleet.put_replicas(connection, host, state_gen=body.state_gen,
+                                          replicas=body.replicas)
+        except Exception as error:  # noqa: BLE001
+            _fleet_fail(error)
+            raise
+        run_plane.wake_host(host.host_id)
+        return out
 
     @router.post("/v1/hosts/{agent_host_id}/guest-calls")
     @permit(P.FLEET_HOST, scope=Scope.org())
@@ -355,20 +391,32 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
                 "message": "a guest cannot speak for another replica"})
         return replica
 
-    @router.post("/v1/run-plane/next")
+    @router.post("/v1/run-plane/hosts/next")
     @permit(P.FLEET_HOST, scope=Scope.org())
-    def rp_next(body: NextBody, request: Request,
-                x_boss_replica: Optional[str] = Header(default=None)) -> dict[str, Any]:
-        """The replica's next admitted run, leased to it (or null)."""
+    def rp_hosts_next(body: HostsNextBody, request: Request) -> dict[str, Any]:
+        """ONE outstanding work request per HOST (§3.13.0): {wait_ms, state_gen}, no replica
+        list. A stale state_gen → {resync: true} (PUT …/replicas once). Otherwise runs for the
+        host's serving replicas (BOSS's own slot count), each leased to one replica at epoch + 1
+        — or a wait on the hub (≤ wait_ms) for this host's deployments, then a second claim."""
         host = _host(request)
-        replica = _replica(x_boss_replica, body.replica_id)
         try:
-            with begin(engine) as connection:
-                return {"run_package": run_plane.next_run(connection, _settings(), host.host_id,
-                                                          replica, ttl=body.ttl)}
+            return run_plane.host_next(engine, _settings(), host.host_id,
+                                       state_gen=body.state_gen, wait_ms=body.wait_ms,
+                                       ttl=body.ttl)
         except Exception as error:  # noqa: BLE001
             _fleet_fail(error)
             raise
+
+    @router.get("/v1/run-plane/runs/{run_id}")
+    @permit(P.FLEET_HOST, scope=Scope.org())
+    def rp_run_package(run_id: str, request: Request,
+                       x_boss_replica: Optional[str] = Header(default=None),
+                       x_boss_job: Optional[str] = Header(default=None),
+                       x_boss_run_token: Optional[str] = Header(default=None),
+                       x_boss_fence_epoch: Optional[str] = Header(default=None)) -> dict[str, Any]:
+        """The run the VM just accepted: what it drives the kernel from (never its token)."""
+        lease = _lease(x_boss_replica, x_boss_job, x_boss_run_token, x_boss_fence_epoch)
+        return _run_call(request, run_id, lease, run_plane.run_package)
 
     @router.post("/v1/run-plane/admit")
     @permit(P.FLEET_HOST, scope=Scope.org())
@@ -396,17 +444,23 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
                  x_boss_run_token: Optional[str] = Header(default=None),
                  x_boss_fence_epoch: Optional[str] = Header(default=None)) -> dict[str, Any]:
         lease = _lease(x_boss_replica, x_boss_job, x_boss_run_token, x_boss_fence_epoch)
+        if body.hand_back or body.action == "hand_back":
+            # The VM refused the run or died before accepting it: re-queued now, epoch + 1 next.
+            out = _run_call(request, run_id, lease, run_plane.hand_back)
+            run_plane.wake_host(_host(request).host_id)
+            return out
         if body.action == "heartbeat":
             return _run_call(request, run_id, lease, run_plane.heartbeat, ttl=body.ttl,
                              one_statement=True)
-        if body.action in ("settle", "hand_back"):
-            outcome = body.outcome if body.action == "settle" else {"status": "drained"}
-            out = _run_call(request, run_id, lease, run_plane.settle, outcome=outcome)
+        if body.action == "settle":
+            out = _run_call(request, run_id, lease, run_plane.settle, outcome=body.outcome)
             run_plane.after_commit(engine, run_id)
+            run_plane.wake_host(_host(request).host_id)
             return out
         if body.action == "fail":
             out = _run_call(request, run_id, lease, run_plane.fail, error=body.error)
             run_plane.after_commit(engine, run_id)
+            run_plane.wake_host(_host(request).host_id)
             return out
         raise HTTPException(status_code=400, detail={
             "error": "bad_action", "message": "action is heartbeat, settle, hand_back or fail"})

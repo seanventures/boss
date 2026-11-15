@@ -4,9 +4,9 @@
   "canonical_key": "method + path",
   "request_body_type_enforcement_note": "pass_through_documented fields appear in OpenAPI but SkipValidation preserves the handler's existing input coercion and error statuses; runtime_validated_input_schema is a legacy schema-presence flag",
   "edition": "community",
-  "operation_count": 2227,
+  "operation_count": 2229,
   "counts": {
-    "api_policy_gated": 1907,
+    "api_policy_gated": 1909,
     "excluded": 127,
     "human_confirmation_gated": 78,
     "operator_only_unavailable": 115
@@ -17005,6 +17005,24 @@
       "read_only_available": false
     },
     {
+      "method": "PUT",
+      "path": "/v1/hosts/{agent_host_id}/replicas",
+      "alias": "put_v1_hosts_agent_host_id_replicas_d687399f",
+      "domain": "other",
+      "summary": "Put Replicas",
+      "mcp_status": "api_policy_gated",
+      "reason": null,
+      "input_schema_quality": "typed_json_body",
+      "mounted_input_schema_quality": "typed_json_body",
+      "request_body_type_enforcement": "pydantic_fields",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": false
+    },
+    {
       "method": "POST",
       "path": "/v1/iac/detect",
       "alias": "post_v1_iac_detect_b0777560",
@@ -32000,10 +32018,10 @@
     },
     {
       "method": "POST",
-      "path": "/v1/run-plane/next",
-      "alias": "post_v1_run_plane_next_479fb330",
+      "path": "/v1/run-plane/hosts/next",
+      "alias": "post_v1_run_plane_hosts_next_a6e46d82",
       "domain": "other",
-      "summary": "Rp Next",
+      "summary": "Rp Hosts Next",
       "mcp_status": "api_policy_gated",
       "reason": null,
       "input_schema_quality": "typed_json_body",
@@ -32015,6 +32033,24 @@
       "domain_scoped_direct_tool": true,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": false
+    },
+    {
+      "method": "GET",
+      "path": "/v1/run-plane/runs/{run_id}",
+      "alias": "get_v1_run_plane_runs_run_id_cacdba40",
+      "domain": "other",
+      "summary": "Rp Run Package",
+      "mcp_status": "api_policy_gated",
+      "reason": null,
+      "input_schema_quality": "parameters_only",
+      "mounted_input_schema_quality": "parameters_only",
+      "request_body_type_enforcement": "no_json_body",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": true
     },
     {
       "method": "POST",

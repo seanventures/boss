@@ -223,6 +223,11 @@ def enqueue_job(
         # admitted on a `runtime: microvm` deployment — its first job, a resume after a person
         # answered, a retry — carries the run's placement, so no local worker ever claims it.
         payload = {**(payload or {}), **_run_placement(connection, str(payload["run_id"]))}
+    # WHERE IT MAY BE CLAIMED (boss-eventing-lld.md §8.2): 'deployment:<id>' only by that
+    # deployment's hosts (run_plane.claim_for_host); NULL (local) by local workers.
+    target = (f"deployment:{payload['deployment_id']}"
+              if (payload or {}).get("runtime") == "microvm" and payload.get("deployment_id")
+              else None)
     job_payload, identity_columns = _identity_lineage.stamp_job_row(payload, on_behalf_of, kind=kind)
     boundary = resolve_job_data_boundary(
         connection, task_id, job_payload, data_boundary
@@ -266,7 +271,7 @@ def enqueue_job(
                 allocation_id, kind, priority, priority_score, workload_class,
                 resource_units, status, payload, data_boundary, max_attempts,
                 attempt, run_after, dedupe_key, on_behalf_of, grant_id, chain, on_behalf_system,
-                role_key
+                role_key, target
             )
             VALUES (
                 :id, :project_id, :task_id, :work_item_id, :tracker_binding_id,
@@ -274,7 +279,7 @@ def enqueue_job(
                 :workload_class, :resource_units, 'queued',
                 CAST(:payload AS JSONB), :data_boundary, :max_attempts,
                 0, :run_after, :dedupe_key, :on_behalf_of, :grant_id, CAST(:chain AS JSONB), :on_behalf_system,
-                :role_key
+                :role_key, :target
             )
             ON CONFLICT (project_id, dedupe_key)
               WHERE dedupe_key IS NOT NULL
@@ -304,6 +309,7 @@ def enqueue_job(
             "dedupe_key": dedupe_key,
             **identity_columns,
             "role_key": (str(role_key or (payload or {}).get("role_key") or "").strip() or None),
+            "target": target,
         },
     ).mappings().first()
     created = row is not None
@@ -644,9 +650,9 @@ class JobLeaseService:
             WHERE kind IN :capabilities
               AND """ + projects_archive.live_sql("jobs.project_id") + """
               -- A RUN OF A `runtime: microvm` DEPLOYMENT IS NEVER A LOCAL WORKER'S (P8a): its
-              -- replicas take it through the run plane (services/run_plane.next_run).
-              AND NOT (kind IN ('agent.run', 'agent.resume')
-                       AND COALESCE(payload->>'runtime', 'local') = 'microvm')
+              -- job's target is 'deployment:<id>', claimed only by that deployment's hosts
+              -- through the run plane (services/run_plane.claim_for_host).
+              AND target IS NULL
               AND (
                 (run_after <= :now_utc
                  AND (

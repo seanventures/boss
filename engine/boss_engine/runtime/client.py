@@ -83,11 +83,31 @@ class Lease:
     fence_epoch: int
 
     def headers(self) -> dict:
-        return {"X-Boss-Replica": self.replica_id, "X-Boss-Job": self.job_id,
-                "X-Boss-Run-Token": self.run_token, "X-Boss-Fence-Epoch": str(self.fence_epoch)}
+        out = {"X-Boss-Replica": self.replica_id, "X-Boss-Job": self.job_id,
+               "X-Boss-Fence-Epoch": str(self.fence_epoch)}
+        if self.run_token:  # in a VM the host attaches it; the guest never holds one
+            out["X-Boss-Run-Token"] = self.run_token
+        return out
 
     def __repr__(self) -> str:  # never print the run token
         return f"Lease(replica={self.replica_id}, job={self.job_id}, epoch={self.fence_epoch})"
+
+
+class HostWorkClient:
+    """boss-hostd's ONE work request for the whole host (§3.13.0), in Python: the fake host of
+    the tests and the reference for the Go side (docs/infra/HOST_API.md §2.8)."""
+
+    def __init__(self, transport: "HttpTransport"):
+        self.transport = transport
+
+    def next(self, *, state_gen: int, wait_ms: int = 0, ttl: Optional[int] = None) -> dict:
+        """{"runs": [...]} or {"resync": true}. The body is never a replica list."""
+        return self.transport.request("POST", f"{PREFIX}/hosts/next", json={
+            "wait_ms": wait_ms, "state_gen": state_gen, "ttl": ttl})
+
+    def put_replicas(self, host_id: str, *, state_gen: int, replicas: list) -> dict:
+        return self.transport.request("PUT", f"/v1/hosts/{host_id}/replicas", json={
+            "state_gen": state_gen, "replicas": replicas})
 
 
 class RunPlaneClient:
@@ -99,22 +119,25 @@ class RunPlaneClient:
         # on; on the process backend the runtime stands in for the host and says it itself.
         return {"X-Boss-Replica": self.replica_id}
 
-    def next(self, *, ttl: Optional[int] = None) -> Optional[dict]:
-        out = self.transport.request("POST", f"{PREFIX}/next", json={"ttl": ttl},
-                                     headers=self._replica())
-        return out.get("run_package")
-
     def admit(self, *, caller: str, input: Any, thread_id: Optional[str] = None,
               double_text: Optional[str] = None, ttl: Optional[int] = None) -> dict:
         return self.transport.request("POST", f"{PREFIX}/admit", json={
             "caller": caller, "input": input, "thread_id": thread_id,
             "double_text": double_text, "ttl": ttl}, headers=self._replica())
 
+    def assigned(self, work: dict) -> "RunHandle":
+        """The handle for a run the host handed this VM over the work inbox: {run_id, job_id,
+        replica_id, epoch}. No run token: the host attaches it to every call."""
+        return RunHandle(self.transport, str(work["run_id"]),
+                         Lease(str(work.get("replica_id") or self.replica_id),
+                               str(work["job_id"]), str(work.get("run_token") or ""),
+                               int(work["epoch"])))
+
     def run(self, package: dict) -> "RunHandle":
         lease = package["lease"]
         return RunHandle(self.transport, str(package["run"]["id"]),
                          Lease(str(lease["replica_id"]), str(lease["job_id"]),
-                               str(lease["run_token"]), int(lease["fence_epoch"])))
+                               str(lease.get("run_token") or ""), int(lease["fence_epoch"])))
 
 
 class RunHandle:
@@ -147,9 +170,17 @@ class RunHandle:
     def fail(self, error: str) -> dict:
         return self.call("POST", "lease", json={"action": "fail", "error": error})
 
+    def package(self) -> dict:
+        """The run this VM was handed: what it drives the kernel from (GET /runs/{run})."""
+        return self.transport.request("GET", f"{PREFIX}/runs/{self.run_id}",
+                                      headers=self.lease.headers())
+
+    def hand_back(self) -> dict:
+        return self.call("POST", "lease", json={"hand_back": True})
+
     def answers(self) -> dict:
         return self.call("GET", "interrupts/answers").get("answers") or {}
 
 
-__all__ = ["Fenced", "HostSigner", "HttpTransport", "Lease", "PREFIX", "RunHandle",
+__all__ = ["Fenced", "HostSigner", "HostWorkClient", "HttpTransport", "Lease", "PREFIX", "RunHandle",
            "RunPlaneClient", "RunPlaneHTTPError"]

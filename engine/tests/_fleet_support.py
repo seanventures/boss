@@ -49,6 +49,11 @@ class FakeHost:
         self.cert_pem: Optional[str] = None
         self.enrolment: dict = {}
         self.generation = 0
+        self.vms: dict = {}
+        self.tokens: dict = {}  # run id -> run token: host memory only
+        self.state_gen = 0
+        self.resyncs = 0
+        self.polls: list = []
 
     def enrol(self, join_token: str, *, svid: bool = True, facts: Optional[dict] = None,
               expect: int = 201) -> dict:
@@ -99,12 +104,74 @@ class FakeHost:
 
         return HostSigner(self.key, self.cert_pem)
 
+    # ── what boss-hostd does for its VMs (docs/infra/HOST_API.md §2.8, §4) ─────────────────
+
+    def serve_all(self, *, slots: int = 4) -> list:
+        """Take the whole desired state and push every running VM as `serving` through
+        /observed with a bumped state_gen — what a healthy host does on every change."""
+        vms = [v for v in self.desired(since=0)["vms"] if v["state"] == "running"]
+        self.vms = {v["replica_id"]: {"replica_id": v["replica_id"], "vm_id": v["vm_id"],
+                                      "deployment_id": v["deployment_id"], "state": "serving",
+                                      "busy": 0, "slots": slots} for v in vms}
+        self.state_gen += 1
+        out = self.call("POST", f"/v1/hosts/{self.host_id}/observed", json={
+            "replicas": list(self.vms.values()), "state_gen": self.state_gen})
+        assert out.status_code == 200, out.text
+        return list(self.vms)
+
+    def claim(self, *, wait_ms: int = 0, ttl: Optional[int] = None) -> list:
+        """THE host's one work request — `{wait_ms, state_gen}`, never a replica list. A
+        {resync: true} answer is met with ONE PUT of the full map, then the poll again. The run
+        tokens stay here (host memory), never in the guest."""
+        from boss_engine.runtime.client import HostWorkClient, HttpTransport
+
+        work = HostWorkClient(HttpTransport(self.client, signer=self.signer()))
+        for _ in range(2):
+            out = work.next(state_gen=self.state_gen, wait_ms=wait_ms, ttl=ttl)
+            self.polls.append({"wait_ms": wait_ms, "state_gen": self.state_gen})
+            if not out.get("resync"):
+                break
+            self.resyncs += 1
+            work.put_replicas(self.host_id, state_gen=self.state_gen,
+                              replicas=list(self.vms.values()))
+        runs = list(out.get("runs") or [])
+        for item in runs:
+            self.tokens[item["run_id"]] = item["run_token"]
+        return runs
+
+    def gateway(self, replica_id: str):
+        """The replica's view of the run plane through this host's guest gateway: signed as the
+        host, X-Boss-Replica set from the 'socket', the run token attached from host memory."""
+        from boss_engine.runtime.client import HttpTransport, RunPlaneClient
+
+        host = self
+
+        class Gateway(HttpTransport):
+            def request(self, method, path, *, json=None, params=None, headers=None):
+                sent = {k: v for k, v in (headers or {}).items()
+                        if k.lower() not in ("x-boss-replica", "x-boss-run-token")}
+                sent["X-Boss-Replica"] = replica_id
+                parts = path.split("/")
+                if len(parts) > 4 and parts[3] == "runs" and parts[4] in host.tokens:
+                    sent["X-Boss-Run-Token"] = host.tokens[parts[4]]
+                return super().request(method, path, json=json, params=params, headers=sent)
+
+        return RunPlaneClient(Gateway(self.client, signer=self.signer()), replica_id)
+
 
 def org_of(engine, project_id: str) -> str:
     with engine.begin() as c:
         return str(c.execute(text(
             "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
             "WHERE p.id = :p"), {"p": project_id}).scalar())
+
+
+def short_socket_dir():
+    """A short directory for Unix sockets (macOS caps the path at 104 bytes; pytest's tmp_path
+    is longer). The caller removes it."""
+    import tempfile
+
+    return tempfile.mkdtemp(prefix="p8a", dir="/tmp")
 
 
 def own_pool() -> str:
