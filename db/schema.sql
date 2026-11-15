@@ -15252,8 +15252,8 @@ ALTER TABLE agent_replicas ADD COLUMN IF NOT EXISTS rs_seq BIGINT NOT NULL DEFAU
 -- The VIP's VRRP group, fixed at allocation (stable: adding a VIP never moves another's MASTER).
 ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS vrrp_group INTEGER;
 -- ================================ end P8b-10 ==
-=======
--- =====================================================================================-- P8b-6/7: THE MCP/TOOL GATEWAY HANDLES AND HOST-HELD TOKENS (BOSSAPP-1073, BOSSAPP-1074;
+-- =====================================================================================
+-- P8b-6/7: THE MCP/TOOL GATEWAY HANDLES AND HOST-HELD TOKENS (BOSSAPP-1073, BOSSAPP-1074;
 -- boss-agent-hosts-lld.md §3.10, §3.12.2). The `boss_mcpgw_` placeholder a guest holds instead of
 -- any MCP upstream credential, redeemed only at the control plane's /mcp/<server> route through
 -- boss-hostd. Stored HASHED, bound to (run, fence_epoch, vm_id), ≤ the run's life, revoked at run
