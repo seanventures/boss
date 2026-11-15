@@ -208,6 +208,7 @@ def create_connection(connection: Connection, *, project_id: str, kind: str, act
     cfg: dict[str, Any] = {}
     given_secrets = {k: str(v) for k, v in dict(secrets or {}).items() if v not in (None, "")}
     secret_fields = {f["name"] for f in manifest.auth_fields if f.get("secret")}
+    _refuse_attestation(config)
     for key, value in dict(config or {}).items():
         if key in secret_fields:
             given_secrets.setdefault(key, str(value))      # a secret typed into config is a secret
@@ -355,6 +356,7 @@ def update_connection(connection: Connection, *, project_id: str, connection_id:
     secret_fields = {f["name"] for f in adapter.manifest.auth_fields if f.get("secret")}
     cfg = dict(_json(row.get("config"), {}) or {})
     given_secrets = {k: str(v) for k, v in dict(secrets or {}).items() if v not in (None, "")}
+    _refuse_attestation(config)
     if config is not None:
         for key, value in dict(config).items():
             if key in secret_fields:
@@ -378,6 +380,79 @@ def update_connection(connection: Connection, *, project_id: str, connection_id:
          "id": connection_id})
     emit_event(connection, project_id, "intake.connection_updated", actor, "intake_connection",
                connection_id, {"kind": row["kind"], "secret_fields_rotated": sorted(given_secrets)})
+    return describe_connection(connection, get_connection(connection, connection_id) or {})
+
+
+#: The config key the SSO attestation lives under: written ONLY by `set_sso_attestation` (an
+#: identity-provider admin, server-stamped), never by a connection create/update.
+ATTESTATION_KEY = "sso_attested"
+
+
+def _refuse_attestation(config: Optional[Mapping[str, Any]]) -> None:
+    if config and ATTESTATION_KEY in dict(config):
+        raise IntakeServiceError(
+            "SSO attestation is set by an identity-provider admin with "
+            "PUT /v1/intake/connections/{id}/sso-attestation, not in the connection's config.",
+            code="attestation_not_in_config")
+
+
+def _org_of(connection: Connection, project_id: str) -> Optional[str]:
+    return connection.execute(text(
+        "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE p.id = :p"), {"p": project_id}).scalar()
+
+
+def set_sso_attestation(connection: Connection, *, project_id: str, connection_id: str,
+                        actor: str, identity_provider_id: str,
+                        domains: Optional[list] = None) -> dict:
+    """An org admin states that this source's workspace signs people in through BOSS's IdP
+    `identity_provider_id` (§6.3): chat users whose email is in `domains` may be auto-linked.
+    The provider must be an ACTIVE provider of the connection's org, and every domain one of
+    ITS verified domains (default: all of them). Who attested and when are stamped here."""
+    row = get_connection(connection, connection_id, project_id=project_id, lock=True)
+    if row is None:
+        raise IntakeServiceError("no such connection in this project.", status=404, code="not_found")
+    org = _org_of(connection, project_id)
+    idp = connection.execute(text(
+        "SELECT id, name, domains, status FROM identity_providers WHERE id = :i AND org_id = :o"),
+        {"i": identity_provider_id, "o": org}).mappings().first()
+    if idp is None or idp["status"] != "active":
+        raise IntakeServiceError("no active identity provider with that id in this org.",
+                                 status=404, code="unknown_idp")
+    verified = sorted({str(d).lower().lstrip("@") for d in (idp["domains"] or []) if str(d).strip()})
+    if not verified:
+        raise IntakeServiceError("that identity provider has no verified domains.",
+                                 code="idp_has_no_domains")
+    wanted = sorted({str(d).lower().lstrip("@").strip() for d in (domains or verified)
+                     if str(d).strip()})
+    outside = [d for d in wanted if d not in verified]
+    if outside or not wanted:
+        raise IntakeServiceError(f"not a verified domain of {idp['name']}: "
+                                 f"{', '.join(outside) or '(none given)'}.", code="domain_not_verified")
+    cfg = dict(_json(row.get("config"), {}) or {})
+    cfg[ATTESTATION_KEY] = {"idp": idp["id"], "idp_name": idp["name"], "domains": wanted,
+                            "attested_by": actor, "attested_at": _now().isoformat()}
+    connection.execute(text("UPDATE intake_connections SET config = CAST(:c AS JSONB), "
+                            "updated_at = now() WHERE id = :id"),
+                       {"c": json.dumps(cfg, default=str), "id": connection_id})
+    emit_event(connection, project_id, "intake.connection_sso_attested", actor,
+               "intake_connection", connection_id, {"idp": idp["id"], "domains": wanted})
+    return describe_connection(connection, get_connection(connection, connection_id) or {})
+
+
+def clear_sso_attestation(connection: Connection, *, project_id: str, connection_id: str,
+                          actor: str) -> dict:
+    row = get_connection(connection, connection_id, project_id=project_id, lock=True)
+    if row is None:
+        raise IntakeServiceError("no such connection in this project.", status=404, code="not_found")
+    cfg = dict(_json(row.get("config"), {}) or {})
+    had = cfg.pop(ATTESTATION_KEY, None)
+    connection.execute(text("UPDATE intake_connections SET config = CAST(:c AS JSONB), "
+                            "updated_at = now() WHERE id = :id"),
+                       {"c": json.dumps(cfg, default=str), "id": connection_id})
+    if had:
+        emit_event(connection, project_id, "intake.connection_sso_attestation_removed", actor,
+                   "intake_connection", connection_id, {})
     return describe_connection(connection, get_connection(connection, connection_id) or {})
 
 
@@ -1396,6 +1471,12 @@ def start(engine: Any, settings: Any) -> bool:
                 while got["claimed"] >= PROCESSOR_BATCH and not _STOP.is_set():
                     got = process_due(engine, settings)
                 flush_refusals(engine)
+                try:
+                    from . import intake_guards
+
+                    intake_guards.sweep_digests(engine)
+                except Exception:  # noqa: BLE001 — the next tick tries again
+                    logger.debug("intake digest sweep failed", exc_info=True)
                 if time.monotonic() - last_sweep > 60:
                     last_sweep = time.monotonic()
                     with begin(engine) as c:
@@ -1422,7 +1503,8 @@ __all__ = [
     "BACKOFF_SECONDS", "BUCKETS", "CONNECTION_STATUSES", "DEFAULT_LIMITS", "LEASE_SECONDS",
     "MAX_ATTEMPTS", "MAX_HOPS", "PATH_PREFIX", "REFUSALS", "REPLAY_MODES", "ROTATION_GRACE_SECONDS",
     "SERVICE_KEY", "SHED_RAW_BYTES", "flush_refusals",
-    "IntakeServiceError", "backoff_seconds", "claim", "connection_by_token", "create_connection",
+    "ATTESTATION_KEY", "IntakeServiceError", "backoff_seconds", "clear_sso_attestation",
+    "set_sso_attestation", "claim", "connection_by_token", "create_connection",
     "dead_letters", "delete_connection", "describe_connection", "get_connection", "get_event",
     "inbound_path", "list_connections", "list_events", "process_due", "process_one", "receive",
     "replay", "rotate_secret", "set_connection_status", "start", "status_counts", "stop",

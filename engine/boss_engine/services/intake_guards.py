@@ -243,9 +243,11 @@ def digest_due(connection: Connection, route: Mapping[str, Any], *, now: Optiona
 
 def digest_fired(connection: Connection, trigger_id: str, *, now: Optional[datetime] = None
                  ) -> None:
+    # The DATABASE clock of this transaction — the same instant its fires rows carry — so the
+    # next digest counts exactly the events held after this run (never this run's own event).
     connection.execute(text(
-        "UPDATE agent_triggers SET digest_last_at = :n, updated_at = now() WHERE id = :t"),
-        {"n": now or _now(), "t": trigger_id})
+        "UPDATE agent_triggers SET digest_last_at = now(), updated_at = now() WHERE id = :t"),
+        {"t": trigger_id})
 
 
 def digest_summary(connection: Connection, route: Mapping[str, Any], *,
@@ -280,6 +282,55 @@ def digest_summary(connection: Connection, route: Mapping[str, Any], *,
             "since": (since or now).isoformat(), "until": now.isoformat(),
             "types": types, "subjects": dict(sorted(subjects.items(), key=lambda kv: -kv[1])[:20]),
             "sample": items[:sample]}
+
+
+def sweep_digests(engine: Any, *, now: Optional[datetime] = None) -> list[dict]:
+    """THE DIGEST TAIL (§7.3). A digest run fires when an event arrives and five minutes passed
+    since the last one, so events held in the last window before the storm ends — or before it
+    goes quiet — would get no run. Every processor tick: for each route still marked in digest
+    mode, fire the coalesced run for what is held since its last digest run once the window is
+    over (or digest mode ended), and clear the mode when it has ended. One query when no route
+    is in digest mode."""
+    from ..db import begin
+    from . import agent_triggers
+
+    now = now or _now()
+    with begin(engine) as c:
+        routes = [dict(r) for r in c.execute(text(
+            "SELECT * FROM agent_triggers WHERE kind = 'intake' AND digest_until IS NOT NULL "
+            "ORDER BY id")).mappings().all()]
+    fired: list[dict] = []
+    for route in routes:
+        until = route["digest_until"]
+        until = until if until.tzinfo else until.replace(tzinfo=timezone.utc)
+        ended = until <= now
+        if not ended and not digest_due(None, route, now=now):
+            continue
+        with begin(engine) as c:
+            locked = c.execute(text(
+                "SELECT digest_until, digest_last_at FROM agent_triggers WHERE id = :t "
+                "FOR UPDATE SKIP LOCKED"), {"t": route["id"]}).mappings().first()
+            if locked is None or locked["digest_until"] is None:
+                continue
+            route.update(dict(locked))
+            if not ended and not digest_due(c, route, now=now):
+                continue
+            summary = digest_summary(c, route, since=route.get("digest_last_at"), now=now)
+            if summary["count"]:
+                with c.begin_nested():
+                    got = agent_triggers.fire(
+                        c, str(route["id"]), actor="intake", payload=summary,
+                        dedupe_key=f"intake:digest:{route['id']}:{int(now.timestamp() // 300)}",
+                        finalize_extra={"digest": True, "route_reason": "digest run (tail)"})
+                fired.append({"trigger_id": route["id"], **got, "count": summary["count"]})
+                digest_fired(c, str(route["id"]), now=now)
+            if ended:
+                c.execute(text("UPDATE agent_triggers SET digest_until = NULL, "
+                               "digest_last_at = NULL, updated_at = now() WHERE id = :t"),
+                          {"t": route["id"]})
+                emit_event(c, str(route["project_id"]), "intake.storm_digest_ended", "intake",
+                           "agent_trigger", str(route["id"]), {"tail_events": summary["count"]})
+    return fired
 
 
 # ---------------------------------------------------------------------------------------------
@@ -536,5 +587,5 @@ __all__ = ["ALERT_SECONDS", "CHAT_PER_ENTITY", "DIGEST_MINUTES", "DIGEST_RUN_EVE
            "QUIET_MODES", "RECORD_PER_ENTITY", "STORM_PER_MIN", "TRIAGE_DEFAULTS", "Deferred",
            "Refused", "budget_refusal", "digest_due", "digest_fired", "digest_summary",
            "normalise_triage", "pause_for_budget", "quiet_guard", "rate_guard",
-           "reset_for_tests", "route_limits", "storm_check", "triage", "triage_daily_spent_usd",
+           "reset_for_tests", "route_limits", "storm_check", "sweep_digests", "triage", "triage_daily_spent_usd",
            "triage_spec"]

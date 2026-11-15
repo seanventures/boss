@@ -18,6 +18,9 @@ websockets==15.0.1
 reportlab==4.5.1
 markdown==3.9
 redis==5.2.1
+# Event-intake route filters (`matches`): a 2 ms timeout per match, never Python `re`
+# backtracking on text an outsider wrote (services/intake_filters.py).
+regex==2026.4.4
 # playwright is only needed by the visual/design screenshot path; install
 # separately if you enable those gates:  pip install playwright==1.60.0
 pypdf==5.9.0

@@ -10,8 +10,8 @@ A run has a SUBJECT (the person it acts for) and an ACTOR (the agent). The route
   owner             the route owner's standing grant, re-checked at every firing by
                     agent_triggers.fire (service events: alerts, generic webhooks — the ONLY
                     mode a generic webhook may use: `subject_hint` is data, never identity)
-  owner_readonly    the owner's grant with write-class tools dropped (unknown senders may ask
-                    read-only questions; opt-in)
+  (owner_readonly — the owner's grant with write tools dropped — is NOT offered until the
+   kernel filters tools by it; a label alone would run unknown senders with full write rights)
 
 HOW A PERSON IS FOUND, per source (§6.2):
   * a chat source (the connection owns a chat endpoint): a verified `chat_identity_links` row
@@ -47,7 +47,7 @@ from .core import emit_event, make_id
 
 logger = logging.getLogger("boss.intake.identity")
 
-MODES = ("person", "person_or_owner", "owner", "owner_readonly")
+MODES = ("person", "person_or_owner", "owner")
 #: Sources whose events are conversations with a person (default identity mode `person`).
 CHAT_KINDS = ("slack", "teams")
 #: Sources whose events people cause but that are not conversations.
@@ -101,7 +101,7 @@ def allowed_modes(kind: str) -> tuple[str, ...]:
     """What a route on a source of `kind` may ask for. A generic webhook carries no identity, so
     only the owner modes (§6.2 'Generic webhook: owner only')."""
     if kind == "webhook":
-        return ("owner", "owner_readonly")
+        return ("owner",)
     return MODES
 
 
@@ -122,6 +122,20 @@ def is_guest(conn: IntakeConnection, event: IntakeEvent) -> bool:
     own_tenant = conn.get("tenant_id")
     if tenant and own_tenant and str(tenant) != str(own_tenant):
         return True
+    return False
+
+
+def home_known(conn: IntakeConnection, event: IntakeEvent) -> bool:
+    """FAIL CLOSED: the sender's workspace (Slack team) or tenant (Teams) is KNOWN on both sides
+    and equal. Without it a guest check proves nothing, so there is no auto-link."""
+    data = event.data or {}
+    team, own_team = data.get("user_team_id") or data.get("team_id"), conn.get("team_id")
+    if team and own_team:
+        return str(team) == str(own_team)
+    tenant = data.get("tenant_id") or data.get("tenantId")
+    own_tenant = conn.get("tenant_id")
+    if tenant and own_tenant:
+        return str(tenant) == str(own_tenant)
     return False
 
 
@@ -189,9 +203,24 @@ def _auto_link(connection: Connection, endpoint: Optional[Mapping[str, Any]],
         return None, None, "no_attestation" if attested is None else "no_email"
     if is_guest(conn, event):
         return None, None, "guest_never_auto_linked"
+    if not home_known(conn, event):
+        return None, None, "workspace_unknown"
     domain = email.rsplit("@", 1)[-1]
     if domain not in attested["domains"]:
         return None, None, "domain_not_attested"
+    # The attestation holds only while its IdP is still an active provider with that domain.
+    idp = connection.execute(text(
+        "SELECT domains, status FROM identity_providers WHERE id = :i"),
+        {"i": str(attested.get("idp") or "")}).mappings().first()
+    if idp is None or idp["status"] != "active" or domain not in {
+            str(d).lower().lstrip("@") for d in (idp["domains"] or [])}:
+        return None, None, "attestation_lapsed"
+    if endpoint is not None and event.bossactor.external_id and connection.execute(text(
+            "SELECT 1 FROM chat_identity_links WHERE endpoint_id = :e AND external_user_id = :u "
+            "AND revoked_at IS NOT NULL LIMIT 1"),
+            {"e": endpoint["id"], "u": event.bossactor.external_id}).scalar():
+        # A person (or an admin) revoked this chat user's link: never silently re-linked.
+        return None, None, "link_revoked"
     user = by_email(connection, email)
     if user is None or user.status != "active" or not user.email_verified_at:
         return None, None, "no_active_verified_user"
@@ -233,8 +262,10 @@ def _person_actor(user: Any) -> str:
     return str(ids[0]) if ids else str(user.principal_id)
 
 
-def _github_person(connection: Connection, event: IntakeEvent) -> Optional[str]:
-    """The sender's own GitHub sign-in (issuer github, subject = numeric id) → principal."""
+def _github_person(connection: Connection, event: IntakeEvent, org_id: Optional[str]
+                   ) -> Optional[str]:
+    """The sender's own GitHub sign-in (issuer github, subject = numeric id) → principal, in
+    the connection's org only."""
     if event.bossactor.kind != "user" or not event.bossactor.external_id:
         return None
     sender_id = str((event.data or {}).get("sender_id") or
@@ -246,8 +277,8 @@ def _github_person(connection: Connection, event: IntakeEvent) -> Optional[str]:
           JOIN identity_principals p ON p.id = i.principal_id
          WHERE lower(i.issuer) IN ('github', 'https://github.com')
            AND (i.subject = :sid OR lower(i.subject) = lower(:login))
-           AND p.status = 'active' LIMIT 1"""),
-        {"sid": sender_id or "-", "login": login}).scalar()
+           AND p.status = 'active' AND p.org_id = :org LIMIT 1"""),
+        {"sid": sender_id or "-", "login": login, "org": org_id or "-"}).scalar()
     return str(row) if row else None
 
 
@@ -266,7 +297,10 @@ def find_person(connection: Connection, connection_row: Mapping[str, Any], conn:
         if reason == "link_principal_inactive":
             return None, None, "", reason
     if conn.kind == "github":
-        principal = _github_person(connection, event)
+        org = connection.execute(text(
+            "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+            "WHERE p.id = :p"), {"p": conn.project_id}).scalar()
+        principal = _github_person(connection, event, org)
         if principal:
             return principal, None, "github", "github sign-in"
     principal, link_id, method = _auto_link(connection, endpoint, connection_row, conn, event)
@@ -384,8 +418,8 @@ def resolve(connection: Connection, settings: Any, *, connection_row: Mapping[st
     if mode not in MODES:
         mode = default_mode(conn.kind)
     project_id = str(route["project_id"])
-    if mode in ("owner", "owner_readonly"):
-        return Subject(mode=mode, kind="owner", read_only=mode == "owner_readonly",
+    if mode == "owner":
+        return Subject(mode=mode, kind="owner",
                        external_id=event.bossactor.external_id, display=event.bossactor.display,
                        reason="the route owner's standing grant")
     principal, link_id, method, reason = find_person(connection, connection_row, conn, event)
@@ -396,7 +430,8 @@ def resolve(connection: Connection, settings: Any, *, connection_row: Mapping[st
                            reason=f"no linked person ({reason}); the owner's grant, the actor "
                                   "named as data")
         prompted = reason in ("unlinked", "no_attestation", "no_email", "domain_not_attested",
-                              "no_active_verified_user", "guest_never_auto_linked") and \
+                              "no_active_verified_user", "guest_never_auto_linked",
+                              "workspace_unknown", "attestation_lapsed", "link_revoked") and \
             prompt_link(connection, settings, connection_row, event, now=now)
         return Subject(mode=mode, kind="none", external_id=event.bossactor.external_id,
                        display=event.bossactor.display, reason=f"unlinked ({reason})",

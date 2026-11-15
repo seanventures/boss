@@ -1263,16 +1263,29 @@ def poll_wait_ms(settings: Any) -> int:
     return max(0, min(wait, interval_ms, 25000))
 
 
+def _poll_takes_wait_ms(client: Any) -> bool:
+    import inspect
+
+    try:
+        params = inspect.signature(client.poll).parameters
+    except (TypeError, ValueError):
+        return False
+    return "wait_ms" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD
+                                       for p in params.values())
+
+
 def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bool:
     _tick_ai_sre_overwatch(settings)
-    try:
+    # Decided from the client's SIGNATURE, never by catching a TypeError from the call: a
+    # TypeError raised after the API leased a job would re-poll and lease a second one.
+    if _poll_takes_wait_ms(client):
         job = client.poll(
             settings.worker_id,
             capabilities(),
             settings.lease_ttl_seconds,
             wait_ms=poll_wait_ms(settings),
         )
-    except TypeError:
+    else:
         # A test double or an older client without `wait_ms`: the plain poll.
         job = client.poll(settings.worker_id, capabilities(), settings.lease_ttl_seconds)
     if not job:

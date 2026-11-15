@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -382,44 +383,107 @@ def test_t7_a_linked_person_is_the_runs_subject_or_waits_for_a_grant_under_enfor
         assert fctx["on_behalf_of"] == person if "on_behalf_of" in fctx else True
 
 
+def _idp(engine, domains: list[str], *, status: str = "active") -> str:
+    idp_id = f"idp_{uuid.uuid4().hex[:10]}"
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO identity_providers (id, org_id, protocol, name, domains, status) "
+                       "VALUES (:i, 'org_intake', 'oidc', 'Okta', :d, :s)"),
+                  {"i": idp_id, "d": domains, "s": status})
+    return idp_id
+
+
+def test_sso_attestation_is_an_admin_act_against_the_orgs_verified_idp_domains(world):
+    engine, pid = world
+    conn = make_connection(engine, pid, "webhook")
+    idp = _idp(engine, [f"acme-{pid}.test"])
+    try:
+        with engine.begin() as c:
+            for bad in ({"sso_attested": {"idp": idp, "domains": ["x.test"],
+                                          "attested_by": "someone", "attested_at": "2020-01-01"}},):
+                with pytest.raises(event_intake.IntakeServiceError, match="attestation"):
+                    event_intake.update_connection(c, project_id=pid, connection_id=conn["id"],
+                                                   actor="ceo", config=bad)
+            with pytest.raises(event_intake.IntakeServiceError, match="verified domain"):
+                event_intake.set_sso_attestation(c, project_id=pid, connection_id=conn["id"],
+                                                 actor="ceo", identity_provider_id=idp,
+                                                 domains=["evil.test"])
+            with pytest.raises(event_intake.IntakeServiceError, match="identity provider"):
+                event_intake.set_sso_attestation(c, project_id=pid, connection_id=conn["id"],
+                                                 actor="ceo", identity_provider_id="idp_nope")
+        with pytest.raises(event_intake.IntakeServiceError, match="attestation"):
+            make_connection(engine, pid, "webhook", config={"sso_attested": {"idp": idp}})
+        with engine.begin() as c:
+            out = event_intake.set_sso_attestation(c, project_id=pid, connection_id=conn["id"],
+                                                   actor="ceo", identity_provider_id=idp)
+        att = out["config"]["sso_attested"]
+        assert att["idp"] == idp and att["domains"] == [f"acme-{pid}.test"]
+        assert att["attested_by"] == "ceo" and att["attested_at"]
+        with engine.begin() as c:
+            cleared = event_intake.clear_sso_attestation(c, project_id=pid, connection_id=conn["id"],
+                                                         actor="ceo")
+        assert "sso_attested" not in cleared["config"]
+    finally:
+        with engine.begin() as c:
+            c.execute(text("DELETE FROM identity_providers WHERE id = :i"), {"i": idp})
+
+
 def test_t7_sso_attested_email_auto_links_but_never_a_guest(world):
     engine, pid = world
     dep = deploy_local_agent(engine, pid)
     conn = make_connection(engine, pid, "webhook")
-    endpoint = attach_chat_endpoint(engine, pid, conn["id"])
+    endpoint = attach_chat_endpoint(engine, pid, conn["id"])        # team T0TEST
     person = make_person(engine, f"sam+{pid}@acme.test", name="Sam")
-    with engine.begin() as c:
-        event_intake.update_connection(c, project_id=pid, connection_id=conn["id"], actor="ceo",
-                                       config={"sso_attested": {"idp": "okta", "attested_by": "ceo",
-                                                               "domains": ["acme.test"]}})
-    route = make_route(engine, pid, dep["id"], conn["id"], name="dm")
-    _set_identity_mode(engine, route["id"], "person")
-    # a guest with the org's email domain: never auto-linked
-    guest = _receive(engine, conn, _person_event(user="U_GUEST", email=f"sam+{pid}@acme.test",
-                                                 is_restricted=True))
-    # another workspace's user: never auto-linked
-    foreign = _receive(engine, conn, _person_event(user="U_FOREIGN", email=f"sam+{pid}@acme.test",
-                                                   team_id="T_OTHER"))
-    # an unverified domain: no link
-    other = _receive(engine, conn, _person_event(user="U_OTHER", email="sam@other.test"))
-    # the real member: linked by the attestation
-    member = _receive(engine, conn, _person_event(user="U_SAM", email=f"SAM+{pid}@ACME.test"))
-    _process(engine)
-    for ev in (guest, foreign, other):
-        assert event_row(engine, ev)["status"] == "refused", ev
-    with engine.begin() as c:
-        links = {r[0]: dict(method=r[1], principal=r[2], email=r[3]) for r in c.execute(text(
-            "SELECT external_user_id, method, principal_id, external_email FROM chat_identity_links "
-            "WHERE endpoint_id = :e AND verified_at IS NOT NULL AND revoked_at IS NULL"),
-            {"e": endpoint}).all()}
-    assert set(links) == {"U_SAM"}
-    assert links["U_SAM"]["method"] == "sso_email" and links["U_SAM"]["principal"] == person
-    assert links["U_SAM"]["email"] == f"sam+{pid}@acme.test"
-    row = event_row(engine, member)
-    assert row["status"] in ("routed", "failed")      # a run, or the grant wait under enforce
-    assert row["principal_id"] == person or _enforced()
-    confirmed = _events_of(engine, pid, "chat.link_confirmed")
-    assert confirmed and confirmed[-1]["data"]["method"] == "sso_email"
+    idp = _idp(engine, ["acme.test"])
+    try:
+        with engine.begin() as c:
+            event_intake.set_sso_attestation(c, project_id=pid, connection_id=conn["id"],
+                                              actor="ceo", identity_provider_id=idp)
+        route = make_route(engine, pid, dep["id"], conn["id"], name="dm")
+        _set_identity_mode(engine, route["id"], "person")
+        email = f"sam+{pid}@acme.test"
+        # a guest with the org's email domain: never auto-linked
+        guest = _receive(engine, conn, _person_event(user="U_GUEST", email=email,
+                                                     is_restricted=True, team_id="T0TEST"))
+        # another workspace's user: never auto-linked
+        foreign = _receive(engine, conn, _person_event(user="U_FOREIGN", email=email,
+                                                       team_id="T_OTHER"))
+        # no workspace on the event: fail closed
+        unknown = _receive(engine, conn, _person_event(user="U_NOTEAM", email=email))
+        # an unverified domain: no link
+        other = _receive(engine, conn, _person_event(user="U_OTHER", email="sam@other.test",
+                                                     team_id="T0TEST"))
+        # the real member: linked by the attestation
+        member = _receive(engine, conn, _person_event(user="U_SAM", email=f"SAM+{pid}@ACME.test",
+                                                      team_id="T0TEST"))
+        _process(engine)
+        for ev in (guest, foreign, unknown, other):
+            assert event_row(engine, ev)["status"] == "refused", ev
+        assert "workspace_unknown" in str(event_row(engine, unknown)["outcome"])
+        with engine.begin() as c:
+            links = {r[0]: dict(method=r[1], principal=r[2], email=r[3]) for r in c.execute(text(
+                "SELECT external_user_id, method, principal_id, external_email FROM "
+                "chat_identity_links WHERE endpoint_id = :e AND verified_at IS NOT NULL "
+                "AND revoked_at IS NULL"), {"e": endpoint}).all()}
+        assert set(links) == {"U_SAM"}
+        assert links["U_SAM"]["method"] == "sso_email" and links["U_SAM"]["principal"] == person
+        assert links["U_SAM"]["email"] == f"sam+{pid}@acme.test"
+        row = event_row(engine, member)
+        assert row["status"] in ("routed", "failed")      # a run, or the grant wait under enforce
+        assert row["principal_id"] == person or _enforced()
+        confirmed = _events_of(engine, pid, "chat.link_confirmed")
+        assert confirmed and confirmed[-1]["data"]["method"] == "sso_email"
+        # the person revokes the auto-link: the attestation never silently re-links them
+        with engine.begin() as c:
+            c.execute(text("UPDATE chat_identity_links SET revoked_at = now() WHERE endpoint_id = :e "
+                           "AND external_user_id = 'U_SAM'"), {"e": endpoint})
+        again = _receive(engine, conn, _person_event(user="U_SAM", email=email, team_id="T0TEST",
+                                                     text_="again"))
+        _process(engine)
+        row = event_row(engine, again)
+        assert row["status"] == "refused" and "link_revoked" in str(row["outcome"])
+    finally:
+        with engine.begin() as c:
+            c.execute(text("DELETE FROM identity_providers WHERE id = :i"), {"i": idp})
 
 
 def test_t7_a_revoked_link_is_refused_on_the_next_message(world):
@@ -445,7 +509,7 @@ def test_t7_a_revoked_link_is_refused_on_the_next_message(world):
     assert any("unlinked" in str(o.get("reason")) for o in row["outcome"])
 
 
-def test_person_or_owner_falls_back_to_the_owner_and_owner_readonly_marks_the_run(world):
+def test_person_or_owner_falls_back_to_the_owner(world):
     engine, pid = world
     dep = deploy_local_agent(engine, pid)
     conn = make_connection(engine, pid, "webhook")
@@ -458,18 +522,28 @@ def test_person_or_owner_falls_back_to_the_owner_and_owner_readonly_marks_the_ru
     assert row["status"] == "routed"
     assert row["outcome"][0]["subject"]["kind"] == "owner"
     assert "actor named as data" in row["outcome"][0]["subject"]["reason"]
-    ro = make_route(engine, pid, dep["id"], conn["id"], name="ro", identity_mode="owner_readonly",
-                    priority=1, config={"match": {"field": "data.ro", "op": "eq", "value": True}})
-    ev2 = _receive(engine, conn, _person_event(user="U_NOBODY", text_="read only?", ro=True))
-    _process(engine)
-    runs = runs_of(engine, pid)
-    assert [r["trigger_id"] for r in runs][-1] == ro["id"]
+    with pytest.raises(agent_triggers.TriggerError, match="identity_mode"):
+        make_route(engine, pid, dep["id"], conn["id"], identity_mode="owner_readonly")
+
+
+def test_an_owner_route_rechecks_the_owners_grant_and_pauses_when_it_ended(world):
+    """The owner path goes through agent_triggers._authority on EVERY firing (not a None acting):
+    a grant that no longer exists → refused, and the route pauses with "Renew authority"."""
+    engine, pid = world
+    dep = deploy_local_agent(engine, pid)
+    conn = make_connection(engine, pid, "webhook")
+    route = make_route(engine, pid, dep["id"], conn["id"], name="alerts")
     with engine.begin() as c:
-        fctx = c.execute(text("SELECT finalize_ctx FROM agent_runs WHERE id = :r"),
-                         {"r": runs[-1]["id"]}).scalar()
-    fctx = fctx if isinstance(fctx, dict) else json.loads(fctx)
-    assert fctx["read_only_tools"] is True and fctx["subject"]["read_only"] is True
-    assert event_row(engine, ev2)["status"] == "routed"
+        c.execute(text("UPDATE agent_triggers SET on_behalf_of = 'usr_gone', grant_id = 'dlg_gone' "
+                       "WHERE id = :t"), {"t": route["id"]})
+    ev = _receive(engine, conn, {"type": "com.acme.alert", "subject": "s1"})
+    _process(engine)
+    row = event_row(engine, ev)
+    assert row["status"] == "refused"
+    assert "Renew authority" in row["outcome"][0]["reason"]
+    trig = _trigger(engine, route["id"])
+    assert trig["status"] == "paused" and trig["paused_reason"].startswith("Renew authority")
+    assert runs_of(engine, pid) == []
 
 
 # ═══ guards ═══════════════════════════════════════════════════════════════════════════════════
@@ -506,6 +580,18 @@ def test_storm_switches_the_route_to_digest_mode_with_one_coalesced_run_per_five
     got = _process(engine)
     assert got["digest"] == 2 and len(runs_of(engine, pid)) == 6
     assert event_row(engine, _last_event(engine, pid))["status"] == "digest"
+    # THE TAIL: nothing else arrives; the sweep gives the held events their run once the
+    # 5-minute window passes, and clears digest mode once it has ended
+    assert intake_guards.sweep_digests(engine) == []                    # window not over yet
+    later = datetime.now(timezone.utc) + timedelta(minutes=16)
+    tail = intake_guards.sweep_digests(engine, now=later)
+    # held after the first digest run: 2 of the first burst + the 2 that came in digest mode
+    assert len(tail) == 1 and tail[0]["outcome"] == "admitted" and tail[0]["count"] == 4
+    assert len(runs_of(engine, pid)) == 7
+    trig = _trigger(engine, route["id"])
+    assert trig["digest_until"] is None and trig["digest_last_at"] is None
+    assert _events_of(engine, pid, "intake.storm_digest_ended")
+    assert intake_guards.sweep_digests(engine, now=later) == [], "fired once"
 
 
 def test_the_per_entity_rate_limit_defers_the_next_message_on_a_busy_thread(world):
@@ -533,7 +619,10 @@ def test_quiet_hours_defer_a_record_route_and_a_chat_route_answers_by_default(wo
     engine, pid = world
     dep = deploy_local_agent(engine, pid)
     conn = make_connection(engine, pid, "webhook")
-    quiet = {"start": "00:00", "end": "23:59:59", "timezone": "UTC"}
+    now = datetime.now(timezone.utc)
+    # a window around NOW (never the edge of a day): one hour back to one hour ahead
+    quiet = {"start": (now - timedelta(hours=1)).strftime("%H:%M"),
+             "end": (now + timedelta(hours=1)).strftime("%H:%M"), "timezone": "UTC"}
     deferring = make_route(engine, pid, dep["id"], conn["id"], name="night", priority=1,
                            quiet_hours={**quiet, "mode": "defer"},
                            config={"match": {"field": "data.q", "op": "eq", "value": "defer"}})
@@ -656,7 +745,7 @@ def test_route_columns_describe_and_update(world):
     conn = make_connection(engine, pid, "webhook")
     route = make_route(engine, pid, dep["id"], conn["id"], name="r", priority=7,
                        limits={"per_entity": 3})
-    assert route["identity_mode"] == "owner" and route["identity_modes"] == ["owner", "owner_readonly"]
+    assert route["identity_mode"] == "owner" and route["identity_modes"] == ["owner"]
     assert route["priority"] == 7 and route["limits"] == {"per_entity": 3}
     assert route["source_kind"] == "webhook" and route["digest_mode"] is False
     with engine.begin() as c:
@@ -679,5 +768,5 @@ def test_identity_default_modes_and_guest_rules():
     assert intake_identity.default_mode("slack") == "person"
     assert intake_identity.default_mode("github") == "person_or_owner"
     assert intake_identity.default_mode("webhook") == "owner"
-    assert intake_identity.allowed_modes("webhook") == ("owner", "owner_readonly")
+    assert intake_identity.allowed_modes("webhook") == ("owner",)
     assert intake_identity.allowed_modes("slack") == intake_identity.MODES

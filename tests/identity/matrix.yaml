@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2269 operations.
+# 2271 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -218,7 +218,7 @@
 "POST /v1/agents/{role_key}/threads": ["permit agent:invoke @ project(body=project_id)", "OAP"]
 "GET /v1/agents/{role_key}/triggers": ["permit agent:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/agents/{role_key}/triggers": ["permit agent:deploy @ project(body=project_id)", "OA"]
-"POST /v1/agents/{role_key}/triggers/preview-match": ["permit agent:read @ project(body=project_id)", "OAPVU"]
+"POST /v1/agents/{role_key}/triggers/preview-match": ["permit integration:read @ project(body=project_id)", "OAPVU"]
 "GET /v1/agents/{role_key}/versions/{version}/instructions": ["permit agent:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/ai-sre/ask": ["permit reliability:read @ project(body=project_id)", "OAPVU"]
 "GET /v1/ai-sre/bench": ["permit reliability:read @ org", "OAPVU"]
@@ -1211,6 +1211,8 @@
 "POST /v1/intake/connections/{connection_id}/pause": ["permit integration:manage @ intake_connection(path=connection_id)", "OA"]
 "POST /v1/intake/connections/{connection_id}/resume": ["permit integration:manage @ intake_connection(path=connection_id)", "OA"]
 "POST /v1/intake/connections/{connection_id}/rotate-secret": ["permit integration:manage @ intake_connection(path=connection_id)", "OA"]
+"DELETE /v1/intake/connections/{connection_id}/sso-attestation": ["permit identity_provider:manage @ org", "O"]
+"PUT /v1/intake/connections/{connection_id}/sso-attestation": ["permit identity_provider:manage @ org", "O"]
 "POST /v1/intake/connections/{connection_id}/test": ["permit integration:manage @ intake_connection(path=connection_id)", "OA"]
 "GET /v1/intake/dead-letters": ["permit integration:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/intake/events": ["permit integration:read @ project(query=project_id)", "OAPVU"]

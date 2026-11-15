@@ -80,6 +80,10 @@ class Fire:
     policy: Optional[str] = None           # the thread's double-text policy for THIS admission
     messages: Optional[list] = None        # a chat turn: [system preamble, the person's words]
     record: bool = True                    # a pre-decided outcome also writes a fires row
+    #: True (default): the run acts on the ROUTE OWNER's standing grant, which
+    #: agent_triggers.fire re-checks now and pauses the route on AuthorityLost. False: `acting`
+    #: is the resolved person's (identity mode `person` / `person_or_owner` with a link).
+    owner_grant: bool = True
 
 
 def _now() -> datetime:
@@ -205,8 +209,6 @@ def chat_messages(route: Mapping[str, Any], conn: IntakeConnection, event: Intak
                                               if subject.kind == "person" else
                                               " (not a linked BOSS user; you act under the "
                                               "route owner's authority).")]
-    if subject.read_only:
-        lines.append("Answer as a READ-ONLY assistant: do not change anything.")
     if cfg.get("goal"):
         lines.append(str(cfg["goal"]))
     if event.untrusted:
@@ -388,8 +390,6 @@ def route(connection: Connection, conn: IntakeConnection, event: IntakeEvent,
             if fanout == "first_match":
                 break
             continue
-        if subject.read_only:
-            extra["read_only_tools"] = True
         # The thread (§5.4).
         tcfg = _json(target.get("config"), {}) or {}
         double_text = str(tcfg.get("double_text") or "enqueue")
@@ -440,7 +440,8 @@ def route(connection: Connection, conn: IntakeConnection, event: IntakeEvent,
         messages = chat_messages(target, conn, event, thread_key, subject) if chat else None
         fires.append(Fire(trigger_id=str(target["id"]), dedupe_key=dedupe, payload=envelope,
                           thread_id=thread_id, acting=subject.acting, reason=reason, extra=extra,
-                          policy=double_text if thread_id else None, messages=messages))
+                          policy=double_text if thread_id else None, messages=messages,
+                          owner_grant=subject.kind != "person"))
         if fanout == "first_match":
             break
     return fires
@@ -503,10 +504,11 @@ def fire_all(connection: Connection, fires: list[Fire], *, actor: str = "intake"
             continue
         try:
             with connection.begin_nested():
-                got = agent_triggers.fire(connection, f.trigger_id, actor=actor, payload=f.payload,
-                                          dedupe_key=f.dedupe_key, finalize_extra=f.extra,
-                                          thread_id=f.thread_id, acting=f.acting,
-                                          policy=f.policy, messages=f.messages)
+                got = agent_triggers.fire(
+                    connection, f.trigger_id, actor=actor, payload=f.payload,
+                    dedupe_key=f.dedupe_key, finalize_extra=f.extra, thread_id=f.thread_id,
+                    acting=agent_triggers._OWNER if f.owner_grant else f.acting,  # noqa: SLF001
+                    policy=f.policy, messages=f.messages)
         except Exception as error:  # noqa: BLE001 — recorded, the event retries
             got = {"outcome": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
         entry = {"trigger_id": f.trigger_id, "fire_outcome": got.get("outcome"),
