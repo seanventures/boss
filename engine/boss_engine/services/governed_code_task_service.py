@@ -1079,6 +1079,16 @@ class StackUnsupportedError(RuntimeError):
     sandbox is provisioned, so the refusal costs nothing."""
 
 
+def stop_if_the_gate_needs_a_person(plan) -> None:
+    """A gate plan no code change can make run (GatePlan.needs_human: a go.mod tree while Go is
+    off, a Java build without Java, a language BOSS cannot build) stops the build here, as
+    needs_human / stack_unsupported, with the plan's own words — which toolchain and how to turn
+    it on (`boss toolchains enable go`, then `boss update`). Never a repair round: none of them
+    can install a toolchain, so each one is money spent on a gate that cannot pass."""
+    if getattr(plan, "needs_human", False):
+        raise StackUnsupportedError(plan.error or plan.description)
+
+
 def _stack_context(engine, run: dict, title: str, instructions: str) -> dict:
     """What the build is meant to be, before any file exists (services.stacks): the applied
     template's stack and test command, the full-stack layout the brief or the approved
@@ -6033,6 +6043,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _gate_plan0 = verification_target.resolve_gate_plan(
                     spec, title, root, app_id=_app_id, changed=list(_seeded_paths),
                     pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app)
+        # A GATE ONLY A PERSON CAN UNBLOCK stops the build before any service, agent or repair
+        # round is paid for (the toolchain it needs is off on this install).
+        stop_if_the_gate_needs_a_person(_gate_plan0)
         # BUILD SERVICES (build_services): the run's own throwaway Postgres when the repo
         # declares `services: [postgres]` or the project's setting asks for it. Provisioned
         # before any agent, so the agents and every verify command see DATABASE_URL; a run that
@@ -6408,6 +6421,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             plan = verification_target.resolve_gate_plan(
                 spec, title, root, app_id=_app_id, changed=_changed_paths(),
                 pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app)
+            # The tree turned into a stack this install cannot gate (an agent wrote a go.mod
+            # while Go is off): a person's to fix, so no further repair round runs on it.
+            stop_if_the_gate_needs_a_person(plan)
             _last_stack_plan[0] = plan.stack if plan.source == "stack" else None
             cwd = plan.cwd
             try:
