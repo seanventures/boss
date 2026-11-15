@@ -774,6 +774,8 @@ class JobLeaseService:
                     if verdict is not None and not verdict.admitted:
                         self._defer_for_host_capacity(connection, candidate, verdict)
                         continue
+                    if verdict is not None:
+                        self._note_disk_recovered(connection, candidate, verdict)
             allocated, allocation_reason = (
                 self.work_orchestration.reserve_job_slot(
                     connection,
@@ -2590,7 +2592,16 @@ class JobLeaseService:
                 previous = json.loads(previous)
             except ValueError:
                 previous = {}
-        message = f"Queued: waiting for room on this machine ({verdict.shortfall})."
+        disk_low = bool(getattr(verdict, "disk_low", False))
+        if disk_low:
+            # THE DISK, NOT THE BUILD, IS THE PROBLEM (BOSSAPP-1150): say so on the run, and
+            # that BOSS resumes by itself; `boss prune` and the backups directory are where
+            # the space usually is.
+            message = (f"Queued: {verdict.shortfall}. BOSS resumes on its own once space is "
+                       "back; free some (boss prune; old backups) to resume sooner.")
+        else:
+            message = f"Queued: waiting for room on this machine ({verdict.shortfall})."
+        capacity = verdict.capacity or {}
         connection.execute(
             text(
                 """
@@ -2607,6 +2618,7 @@ class JobLeaseService:
                     "code": "host_capacity", "deferred_reason": "host_capacity",
                     "message": message, "shortfall": verdict.shortfall,
                     "slots": verdict.slots, "in_flight": verdict.in_flight,
+                    "disk_low": disk_low,
                 }),
             },
         )
@@ -2615,7 +2627,35 @@ class JobLeaseService:
                        "admission", "job", candidate["id"],
                        {"kind": candidate["kind"], "shortfall": verdict.shortfall,
                         "slots": verdict.slots, "in_flight": verdict.in_flight,
-                        "level": verdict.level})
+                        "level": verdict.level, "disk_low": disk_low})
+        if disk_low and not (previous or {}).get("disk_low"):
+            # Once per episode: the first poll that finds the disk below the floor.
+            emit_event(connection, candidate["project_id"], "host.disk_low",
+                       "admission", "job", candidate["id"],
+                       {"kind": candidate["kind"], "reason": verdict.shortfall,
+                        "free_gb": capacity.get("disk_free_gb"),
+                        "used_pct": capacity.get("disk_used_pct"),
+                        "floor_gb": _disk_floor_gb(), "resumes": "automatically"})
+
+    def _note_disk_recovered(self, connection: Connection, candidate, verdict) -> None:
+        """A job held for low disk is about to be leased: the disk is back above the floor.
+        Recorded once, on the job that waited, so the episode has an end as well as a start."""
+        previous = candidate.get("last_error") or {}
+        if isinstance(previous, str):
+            try:
+                previous = json.loads(previous)
+            except ValueError:
+                previous = {}
+        if not (isinstance(previous, dict) and previous.get("disk_low")):
+            return
+        capacity = getattr(verdict, "capacity", None) or {}
+        try:
+            emit_event(connection, candidate["project_id"], "host.disk_recovered",
+                       "admission", "job", candidate["id"],
+                       {"kind": candidate["kind"], "free_gb": capacity.get("disk_free_gb"),
+                        "floor_gb": _disk_floor_gb()})
+        except Exception:  # noqa: BLE001 — a note, never a reason to hold the lease
+            pass
 
     def _hash_token(self, token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -3084,3 +3124,10 @@ def _key_words(value):
     from .decision_words import key_words
 
     return key_words(value)
+
+
+def _disk_floor_gb() -> float:
+    """The build disk floor the admission gate applied (BOSS_BUILD_DISK_FLOOR_GB)."""
+    from .admission import build_disk_floor_gb
+
+    return build_disk_floor_gb()
