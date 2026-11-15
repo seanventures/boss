@@ -273,12 +273,14 @@ def update_ticket_system(connection_id: str,
                              "Any of: mappings [{external_project, boss_project_id, default}], "
                              "write_back {comment, transition, link_pr}, status_map {todo, "
                              "doing, review, done}, pickup {label, mode: ask|auto_start}, "
-                             "inbound {mode: webhook|poll|off, poll_minutes}. Merged with what "
+                             "inbound {mode: webhook|poll|off, poll_minutes}, oauth_app "
+                             "{client_id, client_secret} (write-only secret). Merged with what "
                              "is stored."))) -> dict:
     """Change settings. Only what is named changes. A mapping onto another BOSS project needs
     integration:manage there too, and gives that project a mirror of this connection."""
     body = dict(payload or {})
     actor_claim = body.pop("actor", None)
+    oauth_app = body.pop("oauth_app", None)
     settings = _settings()
     with begin(_engine()) as connection:
         row = _row(connection, connection_id)
@@ -290,6 +292,11 @@ def update_ticket_system(connection_id: str,
                             "Change its settings there.", status=409,
                 managed_from=str(home_id)), row)
         try:
+            if oauth_app is not None:
+                # Settings › Client ID / Client secret (setup guide Part 2): the connection's own
+                # OAuth app for "Connect with Atlassian". The secret goes to the secret backend.
+                intake.set_oauth_app(connection, settings, row, oauth_app, actor=actor)
+                row = intake.get_row(connection, connection_id)
             merged = intake.merge_settings(row["configuration"], body)
             for mapping in merged.get("mappings") or []:
                 if mapping["boss_project_id"] != row["project_id"]:
@@ -304,7 +311,8 @@ def update_ticket_system(connection_id: str,
         from boss_engine.services.core import emit_event
 
         emit_event(connection, row["project_id"], "ticket_system.settings_changed", actor,
-                   "work_tracker_provider", connection_id, {"changed": sorted(body)})
+                   "work_tracker_provider", connection_id,
+                   {"changed": sorted(body) + (["oauth_app"] if oauth_app is not None else [])})
         return {"connection": intake.serialize(connection, intake.get_row(connection,
                                                                           connection_id)),
                 "mirrors": mirrors}

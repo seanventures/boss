@@ -301,7 +301,13 @@ def get_engine(settings: Optional[Settings] = None, *,
     # pool holding a connection until the garbage collector found it. Postgres-backed engines
     # are cached per (url, idle-transaction limit); an in-memory SQLite URL is not, because
     # each of those IS a separate database and tests rely on that.
-    key = (url, int(idle_in_transaction_seconds or 0))
+    # STATEMENT TIME LIMIT (storage hygiene layer 1, BOSSAPP-1149). A process-wide setting: the
+    # community compose gives it to the worker (BOSS_WORKER_DB_STATEMENT_TIMEOUT_SECONDS, 30 min)
+    # and not to the API, whose startup runs the schema migrations and index rebuilds that may
+    # legitimately take long. A backstop against a runaway background query, which the
+    # temp_file_limit on the server alone cannot stop; 0 (the default) sets no limit.
+    statement_timeout_seconds = _env_int("BOSS_DB_STATEMENT_TIMEOUT_SECONDS", 0)
+    key = (url, int(idle_in_transaction_seconds or 0), statement_timeout_seconds)
     cacheable = url.startswith("postgres")
     if cacheable:
         with _ENGINES_LOCK:
@@ -313,16 +319,17 @@ def get_engine(settings: Optional[Settings] = None, *,
         kwargs["pool_size"] = _env_int("BOSS_DB_POOL_SIZE", 5)
         kwargs["max_overflow"] = _env_int("BOSS_DB_MAX_OVERFLOW", 10)
     engine = create_engine(url, **kwargs)
-    if idle_in_transaction_seconds:
+    session_limits = connection_limits_sql(idle_in_transaction_seconds,
+                                           statement_timeout_seconds if cacheable else 0)
+    if session_limits:
         from sqlalchemy import event
 
-        milliseconds = int(idle_in_transaction_seconds) * 1000
-
         @event.listens_for(engine, "connect")
-        def _limit_idle_transactions(dbapi_connection, _record):  # noqa: ANN001
+        def _limit_sessions(dbapi_connection, _record):  # noqa: ANN001
             cursor = dbapi_connection.cursor()
             try:
-                cursor.execute(f"SET idle_in_transaction_session_timeout = {milliseconds}")
+                for statement in session_limits:
+                    cursor.execute(statement)
             finally:
                 cursor.close()
             dbapi_connection.commit()
@@ -331,6 +338,17 @@ def get_engine(settings: Optional[Settings] = None, *,
         with _ENGINES_LOCK:
             engine = _ENGINES.setdefault(key, engine)
     return engine
+
+
+def connection_limits_sql(idle_in_transaction_seconds: Optional[int],
+                          statement_timeout_seconds: Optional[int]) -> list[str]:
+    """Pure: the `SET` statements a new Postgres session gets. Empty when neither limit is on."""
+    out: list[str] = []
+    if idle_in_transaction_seconds and int(idle_in_transaction_seconds) > 0:
+        out.append(f"SET idle_in_transaction_session_timeout = {int(idle_in_transaction_seconds) * 1000}")
+    if statement_timeout_seconds and int(statement_timeout_seconds) > 0:
+        out.append(f"SET statement_timeout = {int(statement_timeout_seconds) * 1000}")
+    return out
 
 
 _ENGINES: dict = {}

@@ -548,16 +548,17 @@ def create_github_repository(project_id: str, request: Request, payload: CreateR
     _people_only(request, "Creating a GitHub repository")
     with begin(_engine) as connection:
         _require(connection, project_id)
-        reach = local_publish.default_reach(connection, _settings, project_id, actor=_actor(request))
+        reach = local_publish.default_reach(connection, _settings, project_id, actor=_actor(request),
+                                            owner=payload.owner.strip(), repo=payload.repo.strip())
     if not reach.create_token:
-        return JSONResponse({"ok": False, "reason": "no_github_credential", "words":
-                             "BOSS has no GitHub credential that can create repositories: connect "
-                             "the GitHub App with Administration: Read and write."}, status_code=409)
+        return JSONResponse({"ok": False, "reason": "no_github_credential",
+                             "words": reach.create_words or local_publish.NO_CREDENTIAL_WORDS},
+                            status_code=409)
     made = local_publish.create_repository(owner=payload.owner, name=payload.repo,
                                            private=payload.private, token=reach.create_token,
                                            api_base_url=reach.api_base_url,
                                            token_kind=reach.create_token_kind)
-    return JSONResponse(made.as_dict(), status_code=200 if made.ok else 409)
+    return JSONResponse({**made.as_dict(), "via": reach.create_label or None}, status_code=200 if made.ok else 409)
 
 
 @router.get("/v1/projects/{project_id}/github-repository/check")
@@ -571,11 +572,28 @@ def check_github_repository(project_id: str, request: Request, owner: str, repo:
     with begin(_engine) as connection:
         _require(connection, project_id)
         reach = local_publish.default_reach(connection, _settings, project_id, actor=_actor(request),
-                                            owner=owner, repo=repo)
+                                            owner=owner.strip(), repo=repo.strip())
     return local_publish.check_repository(
         owner=owner.strip(), name=repo.strip(), token=reach.create_token,
         purpose="existing" if purpose == "existing" else "create",
-        api_base_url=reach.api_base_url, token_kind=reach.create_token_kind)
+        api_base_url=reach.api_base_url, token_kind=reach.create_token_kind,
+        credential_words=reach.create_words, via=reach.create_label)
+
+
+@router.get("/v1/projects/{project_id}/github-repository/owners")
+@permit(P.REPOSITORY_READ, scope=Scope.project(path="project_id"))
+def github_repository_owners(project_id: str, owners: Optional[str] = None) -> dict[str, Any]:
+    """The GitHub accounts a new repository can be made in, each with the credential that will
+    create it ("will create as …") or the exact fix per owner (BOSSAPP-1160). Reads only; mints
+    nothing. `owners`: comma-separated logins the sheet already shows (the registry's), kept in
+    the answer even when BOSS holds no credential for them."""
+    from boss_engine.services import repo_creation
+
+    given = [o.strip() for o in str(owners or "").split(",") if o.strip()][:50]
+    with begin(_engine) as connection:
+        _require(connection, project_id)
+        return {"project_id": project_id,
+                "owners": repo_creation.creating_owners(connection, _settings, project_id, given)}
 
 
 @router.get("/v1/projects/{project_id}/local-folders")

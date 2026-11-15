@@ -109,6 +109,39 @@ def _status(repos: list[dict[str, Any]], *, connection_status: Optional[str], ex
     return _pill("no_repos", "grey", "No repos yet", "Add a repo that BOSS may work on.")
 
 
+def _creates(granted: Any, missing: Any, login: Optional[str]) -> dict[str, Any]:
+    """A token connection's "can create repos" line (BOSSAPP-1160): {ok, missing, words}."""
+    from .github_connections import can_create_repos
+
+    got = can_create_repos(granted, missing)
+    who = login or "its account"
+    if got["ok"] is True:
+        words = f"Can create repos in {who}: yes."
+    elif got["ok"] is False:
+        words = (f"Can create repos: no (missing: {', '.join(got['missing'])}). Replace the token with one "
+                 "holding the repo scope.")
+    else:
+        words = "Can create repos: not checked yet (press Test all)."
+    return {**got, "words": words}
+
+
+def _flow_creates(flows: Any) -> dict[str, Any]:
+    """The App row's "can create repos" line, from what verify recorded."""
+    entry = (flows or {}).get("create_repository") if isinstance(flows, dict) else None
+    if not isinstance(entry, dict):
+        return {"ok": None, "missing": [], "words": "Can create repos: not checked yet (press Test all)."}
+    return {"ok": entry.get("ok"), "missing": list(entry.get("missing") or []),
+            "words": str(entry.get("words") or ""), "fix_url": entry.get("fix_url"),
+            "reason": str(entry.get("reason") or "")}
+
+
+def _org_app_creates(connection: Connection) -> dict[str, Any]:
+    from ..identity import github_setup
+
+    cfg = _safely(connection, lambda: github_setup.app_config(connection), None) or {}
+    return _flow_creates((github_setup._verified(cfg) or {}).get("flows"))  # noqa: SLF001
+
+
 def _owners_personal(login: Optional[str], repos: list[dict[str, Any]]) -> Optional[bool]:
     if not login or not repos:
         return None
@@ -119,7 +152,7 @@ def _owners_personal(login: Optional[str], repos: list[dict[str, Any]]) -> Optio
 def _project_connections(connection: Connection, project_id: str) -> list[dict[str, Any]]:
     rows = connection.execute(
         text("SELECT id, connection_label, auth_method, credential_ref, account_login, status, "
-             "       last_test_status, expires_at, created_at "
+             "       last_test_status, expires_at, created_at, granted_permissions, missing_permissions "
              "  FROM github_connections "
              " WHERE project_id = :p AND status NOT IN ('disabled', 'revoked') "
              " ORDER BY created_at, id"), {"p": project_id}).mappings().all()
@@ -178,6 +211,10 @@ def build(connection: Connection, settings: Any, project_id: str, repository: di
             "repo_count": len(mine), "expires_at": _iso(row.get("expires_at")),
             "pill": _status(mine, connection_status=row.get("status"), expires=expires, now=now, kind=kind),
             "created_at": _iso(row.get("created_at")),
+            # BOSSAPP-1160: can this account's credential make repositories? From the recorded
+            # flow permissions (Test all); the App row's comes from what GitHub granted (verify).
+            "can_create_repos": (_org_app_creates(connection) if kind == "org_app"
+                                 else _creates(row.get("granted_permissions"), row.get("missing_permissions"), login)),
         })
 
     install = repos_by_conn.get("install") or []
@@ -225,9 +262,10 @@ def _org_accounts(connection: Connection, org_id: str, *, logins: set[str], has_
                 "pill": (_pill("connected", "green", "Connected", verdict.get("tip") or "")
                          if tone == "green" else
                          _pill("broken" if tone == "red" else "needs_you", tone,
-                               "Broken" if tone == "red" else "Needs you", verdict.get("tip") or "",
-                               "fix_link")),
+                               "Broken" if tone == "red" else verdict.get("label") or "Needs you",
+                               verdict.get("tip") or "", "fix_link")),
                 "created_at": None,
+                "can_create_repos": _flow_creates((app.get("verified") or {}).get("flows")),
             })
     for tok in (mode or {}).get("tokens") or []:
         login = str(tok.get("login") or "")

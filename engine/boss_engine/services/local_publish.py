@@ -130,11 +130,13 @@ def create_repository(*, owner: str, name: str, private: bool = True, token: str
         if made.status_code == 422 and "already exists" in said.lower():
             return CreateRepoResult(True, full, exists=True, words=f"{full} already exists on GitHub.")
         if made.status_code in (401, 403, 404):
+            lacks = (f"the access token for {owner} needs the repo scope (and, for an organisation, "
+                     f"its user must be a member of {owner})" if token_kind == "user" else
+                     "the GitHub App needs the 'Administration: Read and write' permission on "
+                     f"{owner} (GitHub › Settings › GitHub Apps › BOSS › Permissions)")
             return CreateRepoResult(
                 False, full, reason="no_admin_permission",
-                words=(f"GitHub refused to create {full}: the GitHub App needs the "
-                       "'Administration: Read and write' permission on "
-                       f"{owner} (GitHub › Settings › GitHub Apps › BOSS › Permissions), or create "
+                words=(f"GitHub refused to create {full}: {lacks}, or create "
                        "the repository on GitHub and publish to it as an existing one."),
                 details={"status": made.status_code, "github": said[:200]})
         return CreateRepoResult(False, full, reason="failed",
@@ -148,26 +150,34 @@ def create_repository(*, owner: str, name: str, private: bool = True, token: str
             own.close()
 
 
+#: Said when nothing resolved a credential and the caller gave no better words (repo_creation
+#: names the missing permission per credential; this is the no-credential-at-all fallback).
+NO_CREDENTIAL_WORDS = ("BOSS has no GitHub credential that can create repositories: connect the "
+                       "GitHub App with Administration: Read and write.")
+
+
 def check_repository(*, owner: str, name: str, token: Optional[str], purpose: str = "create",
                      api_base_url: str = "https://api.github.com", token_kind: str = "app",
-                     client: Optional[httpx.Client] = None) -> dict[str, Any]:
+                     client: Optional[httpx.Client] = None, credential_words: str = "",
+                     via: str = "") -> dict[str, Any]:
     """BEFORE A PERSON PRESSES CREATE (BOSSAPP-917/921's sheets): can BOSS make `owner/name` (or,
     `purpose="existing"`, publish into it)? Reads only — the same answers create_repository
     gives, in the same words, so the sheet says them while the person is still choosing.
 
-    {ok, reason, words, exists, owner_type}; reason "" | no_github_credential | not_allowed |
-    personal_account | exists | not_found | failed."""
+    {ok, reason, words, exists, owner_type, via}; reason "" | no_github_credential | not_allowed |
+    personal_account | exists | not_found | failed. `credential_words`: the resolver's precise
+    reason when there is no token (which credential lacks what; BOSSAPP-1160); `via`: the label
+    of the credential that will create ("will create as …")."""
     full = f"{owner}/{name}"
     out: dict[str, Any] = {"ok": False, "full_name": full, "reason": "", "words": "",
-                           "exists": False, "owner_type": None}
+                           "exists": False, "owner_type": None, "via": via or None}
     if not _OWNER.match(owner or "") or not _NAME.match(name or ""):
         return {**out, "reason": "not_allowed",
                 "words": "A GitHub owner is letters, digits and hyphens; a repository name is "
                          "letters, digits, '.', '_' and '-'."}
     if not token:
         return {**out, "reason": "no_github_credential",
-                "words": "BOSS has no GitHub credential that can create repositories: connect the "
-                         "GitHub App with Administration: Read and write."}
+                "words": credential_words or NO_CREDENTIAL_WORDS}
     base = api_base_url.rstrip("/")
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "boss-publish"}
@@ -200,7 +210,7 @@ def check_repository(*, owner: str, name: str, token: Optional[str], purpose: st
                               f"repositories in one. Create {full} on GitHub (empty: no README, no "
                               ".gitignore), then publish to it as an existing repository.")}
         return {**out, "ok": True,
-                "words": f"{full} is free on GitHub."}
+                "words": f"{full} is free on GitHub." + (f" BOSS will create it as {via}." if via else "")}
     except httpx.HTTPError as error:
         return {**out, "reason": "failed", "words": f"GitHub did not answer ({type(error).__name__}); try again."}
     finally:
@@ -221,12 +231,22 @@ class GitHubReach:
     create_token_kind: str
     api_base_url: str
     connection_id: Optional[str]
+    #: Which credential creates the repository ("boss-localhost App", "paramg (access token, …)")
+    #: and, when none can, the resolver's precise reason (BOSSAPP-1160).
+    create_label: str = ""
+    create_words: str = ""
+    create_reason: str = ""
 
 
 def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Optional[str] = None,
                   actor: str = "operator", owner: str = "", repo: str = "") -> GitHubReach:
+    """How BOSS reaches GitHub for this project. The repository-CREATING credential comes from
+    the one resolver (repo_creation.repo_creation_credential): the Identity-registered App's
+    installation on `owner` when it holds administration, the environment App, a project
+    connection's token for its own account, the install token — in that order, with the reason."""
     from .github_adapter import GitHubAdapter
     from .github_connections import github_token_for
+    from .repo_creation import repo_creation_credential
     from .repo_host import git_access
 
     def token(o: str, r: str) -> str:
@@ -235,18 +255,14 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
     def adapter(o: str, r: str) -> Any:
         return GitHubAdapter(settings, owner=o, repo=r, token=token(o, r) or None)
 
-    create_token, kind = None, "app"
-    try:
-        from .github_app_adapter import GitHubAppAdapter
-
-        app = GitHubAppAdapter(settings)
-        if app.configured:
-            create_token = app.installation_token(permissions={"administration": "write",
-                                                               "contents": "write"}).token
-    except Exception:  # noqa: BLE001 — no App, or not granted: a person's own token may do
-        create_token = None
-    if not create_token and getattr(settings, "github_token", ""):
-        create_token, kind = str(settings.github_token), "user"
+    create_token, kind, label, words, reason = None, "app", "", "", ""
+    if owner:
+        try:
+            got = repo_creation_credential(c, settings, owner, project_id=project_id)
+            create_token, kind, label, words, reason = got.token, got.token_kind, got.label, got.words, got.reason
+        except Exception:  # noqa: BLE001 — said at the repository step
+            log.debug("repo creation: the credential resolver failed", exc_info=True)
+            create_token, reason, words = None, "no_github_credential", NO_CREDENTIAL_WORDS
     conn_id = connection_id
     if conn_id is None:
         try:
@@ -260,7 +276,7 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
                        create_token=create_token, create_token_kind=kind,
                        api_base_url=str(getattr(settings, "github_api_base_url", "")
                                         or "https://api.github.com"),
-                       connection_id=conn_id)
+                       connection_id=conn_id, create_label=label, create_words=words, create_reason=reason)
 
 
 # ── publish ──────────────────────────────────────────────────────────────────────────────────
@@ -320,9 +336,11 @@ def publish(c: Any, settings: Any, project_id: str, *, owner: str, repo: str,
         if create:
             if not reach.create_token:
                 raise PublishError(
-                    "BOSS has no GitHub credential that can create repositories. Connect the GitHub "
-                    "App (with Administration: Read and write) or create the repository on GitHub "
-                    "and publish to it as an existing one.", 409, "no_github_credential", "repository")
+                    (reach.create_words or
+                     "BOSS has no GitHub credential that can create repositories. Connect the GitHub "
+                     "App (with Administration: Read and write)") +
+                    " Or create the repository on GitHub and publish to it as an existing one.",
+                    409, "no_github_credential", "repository")
             made = create_repository(owner=owner, name=repo, private=private,
                                      token=reach.create_token, api_base_url=reach.api_base_url,
                                      token_kind=reach.create_token_kind)
@@ -470,5 +488,5 @@ def publish(c: Any, settings: Any, project_id: str, *, owner: str, repo: str,
             "words": f"Published to {target}." if steps else f"Already published to {target}."}
 
 
-__all__ = ["CreateRepoResult", "GitHubReach", "PublishError", "check_repository", "create_repository",
-           "default_reach", "publish"]
+__all__ = ["CreateRepoResult", "GitHubReach", "NO_CREDENTIAL_WORDS", "PublishError", "check_repository",
+           "create_repository", "default_reach", "publish"]

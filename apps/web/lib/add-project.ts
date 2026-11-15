@@ -207,7 +207,45 @@ export type LocalFolder = { path: string; name: string; git: boolean; github: st
   /** Read the way a server's folder is: its top-level names, stack and build words. */
   top?: string[]; stack?: string[]; build?: string | null };
 export type LocalFolders = { configured: boolean; root?: string; items: LocalFolder[]; words?: string };
-export type RepoCheck = { ok: boolean; full_name: string; reason: string; words: string; exists: boolean; owner_type: string | null };
+export type RepoCheck = { ok: boolean; full_name: string; reason: string; words: string; exists: boolean; owner_type: string | null;
+  /** The credential that will create it ("boss-localhost App", "paramg (access token, Acme Shop)"); BOSSAPP-1160. */
+  via?: string | null };
+
+/** One GitHub account a new repo could be made in, with the credential that creates there — or
+ *  the exact fixes when none can (GET /v1/projects/{id}/github-repository/owners; BOSSAPP-1160). */
+export type OwnerCredential = {
+  login: string; type: string | null;
+  /** true: a credential creates there; false: none can (see `fixes`). */
+  can_create: boolean;
+  /** GitHub confirmed the permission before any attempt (an installation's grants, a classic token's scopes). */
+  verified: boolean;
+  /** "will create as <via>". */
+  via: string | null; via_kind: string | null;
+  words: string; fixes: string[];
+};
+
+/** The owners the picker lists: those with a creating credential. When none has one, every
+ *  known owner stays listed so the check can say, per owner, exactly what is missing. */
+export function creatingOwners(owners: OwnerCredential[] | null, fallback: string[] = []): string[] {
+  const able = (owners ?? []).filter((o) => o.can_create).map((o) => o.login);
+  if (able.length) return able;
+  const known = (owners ?? []).map((o) => o.login);
+  return [...new Set([...known, ...fallback])];
+}
+
+/** The chip beside the picked owner: "will create as …" (verified), "will try as …" (GitHub decides
+ *  at the attempt), or null when nothing can create there. */
+export function ownerChip(owners: OwnerCredential[] | null, owner: string): string | null {
+  const o = (owners ?? []).find((c) => c.login.toLowerCase() === owner.toLowerCase());
+  if (!o || !o.can_create || !o.via) return null;
+  return `${o.verified ? "will create as" : "will try as"} ${o.via}`;
+}
+
+/** When no owner has a creating credential: one line per owner naming its exact fix. */
+export function ownerFixLines(owners: OwnerCredential[] | null): { login: string; fix: string }[] {
+  if (!owners?.length || owners.some((o) => o.can_create)) return [];
+  return owners.map((o) => ({ login: o.login, fix: o.fixes[0] ?? o.words }));
+}
 
 /** The one fix for a GitHub refusal: Repo and models for a missing credential or permission;
  *  GitHub's own new-repository page for a personal account (an App cannot create there). */
@@ -243,6 +281,10 @@ export const addProjectApi = {
   /** Can BOSS make owner/repo on GitHub (or publish into it)? Reads only: the engine's words. */
   checkRepo: (projectId: string, owner: string, repo: string, purpose: "create" | "existing" = "create", signal?: AbortSignal) =>
     idGet<RepoCheck>(`/v1/projects/${enc(projectId)}/github-repository/check?owner=${enc(owner)}&repo=${enc(repo)}&purpose=${purpose}`, { signal }),
+  /** Which GitHub accounts a new repo can be made in, and by which credential (BOSSAPP-1160). Reads only. */
+  repoOwners: (projectId: string, known: string[] = [], signal?: AbortSignal) =>
+    idGet<{ project_id: string; owners: OwnerCredential[] }>(
+      `/v1/projects/${enc(projectId)}/github-repository/owners${known.length ? `?owners=${enc(known.join(","))}` : ""}`, { signal }),
   /** Create and start. A refusal comes back as {step, message, …} (never thrown), so the sheet
    *  can say it inline; a step-up or consent is the caller's (useGuardedCall / withConsent). */
   create: async (body: CreateBody, onKept?: (projectId: string) => void): Promise<{ ok: true; data: CreateResult } | { ok: false; refusal: CreateRefusal; status: number }> => {

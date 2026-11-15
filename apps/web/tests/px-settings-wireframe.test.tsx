@@ -110,8 +110,10 @@ describe("Settings (screen 13) on the engine's answer", () => {
   it("13-01: the seven sections in the wireframe's order, each a nav button", async () => {
     engine();
     await open();
+    // The seven sections, then the Ticket system card below them (BOSSAPP-1047), which was only
+    // reachable by scrolling past everything (console walk, 2026-11-14).
     expect($$(".px-set-nav button").map((b) => b.textContent)).toEqual(
-      ["Demo logins", "Deploy values", "Targets & hosts", "Captain & squad", "Autonomy & budget", "Code", "Notifications"]);
+      ["Demo logins", "Deploy values", "Targets & hosts", "Captain & squad", "Autonomy & budget", "Code", "Notifications", "Ticket system"]);
   });
 
   it("13-02…13-06: demo logins switch environment, Admin first, the users' source, Rotate posts that environment", async () => {

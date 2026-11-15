@@ -199,6 +199,8 @@ export type WorkItem = {
   /** An imported ticket not started yet (`origin: "ticket_import"`): its work item, the epic's
    *  work item it sits under, and the ticket's type (epic | story | task | bug | other). */
   work_item_id?: string; parent_work_item_id?: string | null; ticket_type?: string;
+  /** The FULL title (`label` is a short name of a few words): a ticket's own title is shown whole. */
+  title?: string;
 };
 export type WorkTicket = {
   provider: string; key: string; url: string; status: string; status_category: string; sync_status: string; connection_id: string;
@@ -543,6 +545,7 @@ export const parseWorkItem = (v: unknown): WorkItem => {
     ticket: parseWorkTicket(x.ticket),
     ...(s(x.work_item_id) ? { work_item_id: s(x.work_item_id) } : {}),
     ...(x.origin === "ticket_import" ? { parent_work_item_id: s(x.parent_work_item_id) || null, ticket_type: s(x.ticket_type, "other") } : {}),
+    ...(s(x.title) ? { title: s(x.title) } : {}),
   };
 };
 const parseWorkTicket = (v: unknown): WorkTicket | null => {

@@ -18,11 +18,12 @@ import { ArrowRight, DownloadSimple, Kanban } from "@phosphor-icons/react";
 import { GatedButton, useGate } from "../../components/gated";
 import { writePxUrl, type WorkItem } from "../../lib/project-experience";
 import {
-  TYPE_WORDS, codeWords, importAndStart, readConnections, readWaiting, startFromTicket, syncWords, workflowFor, workflowWords,
+  TYPE_WORDS, codeWords, importAndStart, readConnections, readWaiting, refusalReadiness, startFromTicket, syncWords, workflowFor, workflowWords,
   type Connection, type Read, type Ticket, type TypedError,
 } from "../../lib/tickets";
 import { ProviderMono, TicketChip, TkEmpty, TkReadState, TkTag, WorkflowPick } from "../tickets/ticket-parts";
 import type { PxCtx } from "./project-page";
+import { StartRefusal, type PendingRefusal, type Readiness } from "../workflow-readiness-ui";
 import "../tickets/ticket-import.css";
 
 // ── the `tickets` URL param (tickets=import opens T8) ──────────────────────────────────────────
@@ -117,12 +118,21 @@ export function ImportAction({ ctx, conns }: { ctx: PxCtx; conns: Connection[] }
   );
 }
 
+// ── a ticket start the project is not ready for ─────────────────────────────────────────────
+/** A refused ticket start (409 with the project's checklist, e.g. no repo or no deploy target),
+ *  drawn by THE one refusal every start door shares (StartRefusal): the list, each fix, and
+ *  "Start anyway" with exactly the keys ticked. Before, a ticket's Start printed the API's long
+ *  sentence with no way to start anyway (console walk, 2026-11-14). */
+const heldFor = (key: string, message: string | null, readiness: Readiness, again: (anyway: string[]) => Promise<void>): PendingRefusal =>
+  ({ label: `Start ${key}`, message: message !== null && message !== "" ? message : `${key} can't start here yet.`, readiness, retry: again });
+
 // ── T5: Waiting for BOSS ─────────────────────────────────────────────────────────────────────
 export function WaitingSection({ ctx, conns }: { ctx: PxCtx; conns: Connection[] }) {
   const pid = ctx.projectId;
   const [read, setRead] = useState<Read<{ tickets: Ticket[]; errors: TypedError[] }> | null>(null);
   const [busy, setBusy] = useState("");
   const [said, setSaid] = useState<{ text: string; tone: "red" | "green" } | null>(null);
+  const [held, setHeld] = useState<PendingRefusal | null>(null);
   const startGate = useGate("workflow_run:start", pid);
   const load = useCallback(() => { if (!ctx.demo) void readWaiting(pid).then(setRead); }, [pid, ctx.demo]);
   useEffect(() => { load(); }, [load]);
@@ -136,12 +146,14 @@ export function WaitingSection({ ctx, conns }: { ctx: PxCtx; conns: Connection[]
   if (!tickets.length && !errors.length) return null;
   const c = live[0];
   const mapped = c.settings.mappings.filter((m) => m.boss_project_id === pid).map((m) => m.external_project);
-  const start = async (t: Ticket) => {
+  const start = async (t: Ticket, anyway: string[] = []) => {
     if (!startGate.allowed) return;
     setBusy(t.key); setSaid(null);
     try {
-      const r = await importAndStart(pid, t, workflowFor(t.type));
+      const r = await importAndStart(pid, t, workflowFor(t.type), anyway);
+      if (!r.ok && r.readiness) { setHeld(heldFor(t.key, r.error, r.readiness, (more) => start(t, more))); return; }
       if (!r.ok) { setSaid({ text: r.error ?? `${t.key} did not start.`, tone: "red" }); return; }
+      setHeld(null);
       setSaid({ text: `Started ${t.key} as ${workflowWords(workflowFor(t.type)).toLowerCase()}.${r.note ? ` ${r.note}` : ""}`, tone: "green" });
       load(); ctx.refreshWork();
     } finally { setBusy(""); }
@@ -174,17 +186,20 @@ export function WaitingSection({ ctx, conns }: { ctx: PxCtx; conns: Connection[]
           </li>
         ))}
       </ul>
+      {held ? <StartRefusal refusal={held} projectId={pid} busy={busy !== ""} onDismiss={() => setHeld(null)} /> : null}
       {said ? <p className={said.tone === "red" ? "tk-error" : "tk-ok"} role={said.tone === "red" ? "alert" : "status"} data-testid="tk-waiting-said">{said.text}</p> : null}
     </section>
   );
 }
 
 // ── T9: imported tickets, ready to start (from the work list: origin "ticket_import") ─────────
-/** "LEND-142 Second reviewer…" → "Second reviewer…" (the import titles an item "KEY title"). */
-const titleOf = (w: WorkItem) => {
+/** "LEND-142 Second reviewer: one per loan" → "Second reviewer: one per loan" (the import titles
+ *  an item "KEY title"). The ticket's FULL title, not the list's short `label`: the short name
+ *  cut "BOSS walk: ticket import epic" to "BOSS walk", so every ticket of an epic read alike. */
+export const titleOf = (w: WorkItem) => {
   const key = w.ticket?.key ?? "";
-  const t = w.label || "";
-  return key && t.startsWith(key) ? t.slice(key.length).trim() : t;
+  const t = (w.title ?? "").trim() !== "" ? (w.title ?? "") : w.label;
+  return key !== "" && t.startsWith(key) ? t.slice(key.length).trim() : t;
 };
 export const readyTickets = (items: WorkItem[]) => items.filter((w) => w.origin === "ticket_import" && w.work_item_id);
 
@@ -193,6 +208,7 @@ export function ImportedSection({ ctx }: { ctx: PxCtx }) {
   const [busy, setBusy] = useState("");
   const [said, setSaid] = useState<{ text: string; tone: "red" | "green" } | null>(null);
   const [picks, setPicks] = useState<Record<string, string>>({});
+  const [held, setHeld] = useState<PendingRefusal | null>(null);
   const startGate = useGate("workflow_run:start", pid);
   const rows = readyTickets(ctx.work?.items ?? []);
   if (!rows.length) return said ? <p className={said.tone === "red" ? "tk-error" : "tk-ok"} role="status" data-testid="tk-imported-said">{said.text}</p> : null;
@@ -201,12 +217,15 @@ export function ImportedSection({ ctx }: { ctx: PxCtx }) {
   const epics = rows.filter((w) => w.ticket_type === "epic" || rows.some((c) => c.parent_work_item_id === w.work_item_id));
   const epicIds = new Set(epics.map((e) => e.work_item_id));
   const singles = rows.filter((w) => !epicIds.has(w.work_item_id) && !(w.parent_work_item_id && ids.has(w.parent_work_item_id)));
-  const start = async (workItemId: string, key: string, workflow: string) => {
+  const start = async (workItemId: string, key: string, workflow: string, anyway: string[] = []) => {
     if (!startGate.allowed) return;
     setBusy(workItemId); setSaid(null);
     try {
-      const r = await startFromTicket(workItemId, { project_id: pid, workflow_key: workflow });
+      const r = await startFromTicket(workItemId, { project_id: pid, workflow_key: workflow, ...(anyway.length ? { start_anyway: anyway } : {}) });
+      const readiness = r.ok ? null : refusalReadiness(r.refusal);
+      if (readiness) { setHeld(heldFor(key, r.error, readiness, (more) => start(workItemId, key, workflow, more))); return; }
       if (!r.ok) { setSaid({ text: r.error ?? `${key} did not start.`, tone: "red" }); return; }
+      setHeld(null);
       const note = typeof (r.body as Record<string, unknown> | null)?.note === "string" ? ` ${(r.body as Record<string, string>).note}` : "";
       setSaid({ text: `Started ${key} as ${workflowWords(workflow).toLowerCase()}.${note}`, tone: "green" });
       ctx.refreshWork();
@@ -258,6 +277,7 @@ export function ImportedSection({ ctx }: { ctx: PxCtx }) {
           );
         })}
       </div>
+      {held ? <StartRefusal refusal={held} projectId={pid} busy={busy !== ""} onDismiss={() => setHeld(null)} /> : null}
       {said ? <p className={said.tone === "red" ? "tk-error" : "tk-ok"} role={said.tone === "red" ? "alert" : "status"} data-testid="tk-imported-said">{said.text}</p> : null}
     </section>
   );
@@ -279,7 +299,7 @@ export function TicketWorkBand({ ctx, conns }: { ctx: PxCtx; conns: Read<Connect
 export function NoTicketSystem({ testid = "tk-none" }: { testid?: string }) {
   return (
     <TkEmpty title="No ticket system connected" line="Connect Jira, Plane, GitHub Issues or another once; then import epics and tickets here." testid={testid}>
-      <a className="tk-btn" href="?area=setup&focus=ticket_systems" data-testid={`${testid}-setup`}><Kanban size={13} aria-hidden /> Open Setup › Ticket systems</a>
+      <a className="tk-btn" href="?area=setup&focus=ticket_systems" data-testid={`${testid}-setup`}><Kanban size={13} aria-hidden /> Open Repo and models › Ticket systems</a>
     </TkEmpty>
   );
 }

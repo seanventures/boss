@@ -51,7 +51,7 @@ BOSS signs people in with any OIDC or SAML provider: Keycloak, Okta, Microsoft E
 
 The provider then shows as a button on the sign-in page.
 
-API: `POST /v1/identity/providers`, `PATCH /v1/identity/providers/{id}`, `POST /v1/identity/providers/{id}/test`.
+API: `POST /v1/identity/providers`, `PATCH /v1/identity/providers/{id}`, `POST /v1/identity/providers/{id}/test`, and `POST /v1/identity/providers/test` (the Add form's **Test**: a dry run against the issuer with the unsaved values; nothing is stored and no secret is sent).
 
 ### Add a SAML provider
 
