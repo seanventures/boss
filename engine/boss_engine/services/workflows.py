@@ -879,6 +879,12 @@ def normalise_workflow_spec(
             # this pass only confirms the shape.
             if not str(binding.get("custom_step") or "").strip():
                 bad("binding", f"step '{step_id}' does not say which custom step it runs.")
+            if binding.get("capability"):
+                # ONE THING RUNS A STEP. A custom step that also names a capability would run
+                # the custom step while everything that reads the template — the promotion's
+                # "this run's config_deploy step" — believed the capability (review of #125).
+                bad("binding", f"step '{step_id}' names both a custom step and a capability; "
+                               "a step runs one of them.")
             # A CUSTOM STEP MAY NAME AN AGENT TOO, and until now only the built-in capabilities
             # had their captain checked — so a typo in a role on a customer's step published
             # cleanly and was denied at run time, twenty minutes into a workflow, as

@@ -446,3 +446,26 @@ def test_a_cli_changed_while_it_ran_is_refused(fence, monkeypatch, tmp_path):
     with pytest.raises(skill_executors.SandboxIsolationUnavailable, match="changed while"):
         _run_gwlint(monkeypatch, _settings(local_fenced_binaries=str(root)), [str(tree)],
                     command=f"echo '# swapped' >> {cli}")
+
+
+def test_symlinks_must_stay_in_the_tree_and_only_hashed_dirs_go_on_path(fence, monkeypatch,
+                                                                       tmp_path):
+    root, tree = _gwlint_tree(tmp_path)
+    settings = _settings(local_fenced_binaries=str(root))
+    # npm's .bin links stay inside the tree: allowed, and their targets are hashed.
+    (tree / "node_modules" / ".bin").mkdir(parents=True)
+    (tree / "node_modules" / ".bin" / "gw").symlink_to(tree / "bin" / "gwlint")
+    assert _run_gwlint(monkeypatch, settings, [str(tree)])["exit_code"] == 0
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "evil").write_text("#!/bin/sh\necho evil\n")
+    (tree / "node_modules" / ".bin" / "evil").symlink_to(outside / "evil")
+    with pytest.raises(skill_executors.SandboxIsolationUnavailable, match="links outside"):
+        _run_gwlint(monkeypatch, settings, [str(tree)])
+    (tree / "node_modules" / ".bin" / "evil").unlink()
+    # A declared FILE's directory is not put on PATH: only the file itself was checked.
+    (tree / "bin" / "other").write_text("#!/bin/sh\necho other\n")
+    (tree / "bin" / "other").chmod(0o755)
+    out = _run_gwlint(monkeypatch, settings, [str(tree / "bin" / "gwlint")],
+                      command="other 2>&1; echo rc=$?")
+    assert "rc=127" in out["log_tail"], out["log_tail"]

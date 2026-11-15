@@ -256,6 +256,13 @@ def _exchange(url: str, method: str, headers: Mapping[str, str], body: Optional[
                           + (f" ({type(last).__name__})" if last else ""))
 
 
+def _credential_header(name: str) -> bool:
+    lowered = str(name).lower()
+    return lowered in ("authorization", "proxy-authorization", "cookie") or any(
+        word in lowered for word in ("token", "secret", "api-key", "apikey", "auth", "session",
+                                     "password"))
+
+
 def _send(case: dict[str, Any], timeout_s: float,
           allowed_private: frozenset[str] = frozenset(),
           project_only: bool = False,
@@ -293,6 +300,10 @@ def _send(case: dict[str, Any], timeout_s: float,
         location = answer_headers.get("location")
         if status in (301, 302, 303, 307, 308) and location and hop < MAX_REDIRECTS:
             url = urllib.parse.urljoin(url, location)
+            if origin_of(url) != first:
+                # CREDENTIALS STAY WITH THEIR ORIGIN: a redirect elsewhere never carries the
+                # case's token, cookie or key (review of #125).
+                headers = {k: v for k, v in headers.items() if not _credential_header(k)}
             if status in (301, 302, 303) and method not in ("GET", "HEAD"):
                 method, body = "GET", None
                 headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}

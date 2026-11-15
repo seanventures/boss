@@ -130,17 +130,33 @@ def _tree_digest(root: str) -> tuple[str, Optional[str]]:
     digest = hashlib.sha256()
     files = 0
     total = 0
+    real_root = os.path.realpath(root)
+
+    def link_problem(full: str) -> Optional[str]:
+        # A SYMLINK MUST STAY IN THE TREE (npm's node_modules/.bin are links): its target is
+        # then hashed where it lives. One that leaves the tree would run unhashed bytes.
+        target = os.path.realpath(full)
+        if target != real_root and not target.startswith(real_root.rstrip("/") + "/"):
+            return f"{full} links outside {root} (to {target})"
+        return None
+
     for here, dirs, names in os.walk(root, followlinks=False):
         dirs.sort()
         for name in sorted(dirs):
             full = os.path.join(here, name)
-            problem = _writable_problem(full, os.lstat(full))
+            problem = (link_problem(full) if os.path.islink(full) else None) or \
+                _writable_problem(full, os.lstat(full))
             if problem:
                 return "", problem
+            if os.path.islink(full):
+                digest.update(b"dirlink:" + os.path.relpath(full, root).encode(
+                    "utf-8", "surrogateescape") + b"->" + os.readlink(full).encode(
+                    "utf-8", "surrogateescape") + b"\0")
         for name in sorted(names):
             full = os.path.join(here, name)
             st = os.lstat(full)
-            problem = _writable_problem(full, st)
+            problem = (link_problem(full) if os.path.islink(full) else None) or \
+                _writable_problem(full, st)
             if problem:
                 return "", problem
             files += 1

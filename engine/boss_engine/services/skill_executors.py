@@ -827,8 +827,10 @@ def execute_sandboxed_command(
         except LocalFenceUnavailable as exc:
             raise SandboxIsolationUnavailable(
                 f"{skill_key} runs a command and cannot be executed here: {exc}") from exc
-        path_prefix = [entry["path"] if entry["kind"] == "directory"
-                       else os.path.dirname(entry["path"]) for entry in local]
+        # ON PATH ONLY WHAT WAS CHECKED AND HASHED: a declared directory and its own bin/
+        # (inside the hashed tree). A declared FILE's directory is not put on PATH — it may
+        # hold other, unchecked tools; the command names the file by its path.
+        path_prefix = [entry["path"] for entry in local if entry["kind"] == "directory"]
         path_prefix += [p + "/bin" for p in path_prefix if os.path.isdir(p + "/bin")]
         try:
             fenced = LocalFencedSandbox(context.settings, task_id=task_id, files=files,

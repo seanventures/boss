@@ -370,3 +370,14 @@ def test_every_tail_is_redacted_on_failure_and_on_success(eng, project, monkeypa
     assert validate["status"] == ("failed" if fail_on_exit else "succeeded")
     for field in ("log_tail", "stderr_tail", "trace_tail"):
         assert secret not in validate["output"][field], field
+
+
+
+def test_a_step_cannot_name_both_a_custom_step_and_a_capability():
+    """Review of #125: the runner runs the custom step while a reader of the template believed
+    the capability (a forged "config_deploy" staging step)."""
+    _, problems = workflows.normalise_workflow_spec({"entry_step": "s", "steps": [
+        {"id": "s", "kind": "capability",
+         "binding": {"custom_step": "step_relay", "capability": "config_deploy"}}]},
+        check_agents=False)
+    assert any("both a custom step and a capability" in str(p) for p in problems), problems

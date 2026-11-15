@@ -4207,8 +4207,9 @@ def _bound_promotion(connection: Connection, context: dict[str, Any], inputs: di
     produced = context.get("steps") or {}
     staged: dict[str, str] = {}
     for sid, template in workflows._step_map(spec).items():
-        if template.get("kind") != "capability" or \
-                (template.get("binding") or {}).get("capability") != "config_deploy":
+        binding = template.get("binding") or {}
+        if template.get("kind") != "capability" or binding.get("custom_step") or \
+                binding.get("capability") != "config_deploy":
             continue
         output = produced.get(sid)
         if not isinstance(output, dict) or output.get("step_status") == "failed":

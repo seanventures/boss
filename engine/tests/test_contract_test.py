@@ -52,6 +52,16 @@ class Gateway(http.server.BaseHTTPRequestHandler):
             self.send_response(302)
             self.send_header("Location", "http://169.254.169.254/latest/meta-data/")
             self.end_headers()
+        elif self.path.startswith("/to-other-origin"):
+            self.send_response(302)
+            self.send_header("Location", f"http://localhost:{self.server.server_port}/echo")
+            self.end_headers()
+        elif self.path.startswith("/to-same-origin"):
+            self.send_response(302)
+            self.send_header("Location", "/echo")
+            self.end_headers()
+        elif self.path.startswith("/echo"):
+            self._send(200, json.dumps({k.lower(): v for k, v in self.headers.items()}).encode())
         elif self.path.startswith("/to-health"):
             self.send_response(302)
             self.send_header("Location", "/healthz")
@@ -389,3 +399,18 @@ def test_the_capability_is_catalogued_and_judged():
     assert outcomes.judge("contract_test", {"ok": True}, {}).outcome == outcomes.FAILED
     assert outcomes.judge("contract_test", {"ok": True, "total": 0, "failed": 0},
                           {}).outcome == outcomes.FAILED
+
+
+def test_credentials_do_not_follow_a_redirect_to_another_origin(gateway):
+    """Review of #125: a case's token, cookie or key stays with the origin it was written for."""
+    secret = {"Authorization": "Bearer good", "Cookie": "s=1", "X-Api-Key": "k",
+              "X-Trace": "keep"}
+    allowed = frozenset({"127.0.0.1", "localhost"})
+    out = ct.run_cases([{"url": gateway + "/to-other-origin", "headers": secret}],
+                       allowed_private=allowed)
+    seen = json.loads(out["cases"][0]["body_excerpt"])
+    assert "authorization" not in seen and "cookie" not in seen and "x-api-key" not in seen
+    assert seen["x-trace"] == "keep"
+    out = ct.run_cases([{"url": gateway + "/to-same-origin", "headers": secret}],
+                       allowed_private=allowed)
+    assert json.loads(out["cases"][0]["body_excerpt"])["authorization"] == "Bearer good"
