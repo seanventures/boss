@@ -13,7 +13,8 @@ Node prototype of a Go API gateway — and what a person's acceptance check foun
                    positive control
 
 `score` is the rule the replay (AA-G) is held to: a point is CAUGHT when any contract item it
-concerns is not met, a FALSE MET when every one of them reads met. No customer branding is in any
+concerns is not met, a FALSE MET when every one of them reads met; RC-9 (the shipped configs fail
+gwlint) is in no contract item, so it is caught only by a FINDING line naming it. No customer branding is in any
 of these files; test_acceptance_northgate_fixture.py checks it.
 """
 from __future__ import annotations
@@ -23,7 +24,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 import yaml
 
@@ -36,7 +37,7 @@ NORTHGATE = FIXTURES / "northgate_v1"
 class Point:
     id: str
     key: str
-    kind: str                      # gap | keep
+    kind: str                      # gap (a contract item) | finding (beyond the contract) | keep
     title: str
     required: bool
     contract_items: tuple[str, ...]
@@ -61,7 +62,8 @@ class NorthgateV1:
 
     @property
     def gaps(self) -> list[Point]:
-        return [p for p in self.points if p.kind == "gap"]
+        """Every point the replay must flag: contract gaps and catches beyond the contract."""
+        return [p for p in self.points if p.kind in ("gap", "finding")]
 
     @property
     def required_catches(self) -> list[str]:
@@ -100,12 +102,19 @@ class NorthgateV1:
             raise RuntimeError(f"the bundle's tree {got} is not {tree['source_commit']}'s")
         return dest
 
-    def score(self, statuses: Mapping[str, str]) -> dict[str, Any]:
-        """How a verdict ({contract item id: met|partial|missing|human|unjudged}) fares against
-        the person's check: which gaps it caught, which required catches it missed, and which
-        gaps it called met (false MET — never allowed)."""
+    def score(self, statuses: Mapping[str, str], findings: Iterable[str] = ()) -> dict[str, Any]:
+        """How a verdict fares against the person's check. `statuses` is {contract item id:
+        met|partial|missing|human|unjudged}; `findings` the point keys its FINDING lines named
+        (for a catch no contract item states, kind `finding`). A contract gap is CAUGHT when any
+        item it concerns is not met, a FALSE MET when every one reads met; a finding is caught
+        only when named."""
+        named = set(findings or ())
         caught, false_met = [], []
         for p in self.gaps:
+            if p.kind == "finding":
+                if p.key in named:
+                    caught.append(p.id)
+                continue
             seen = [str(statuses.get(i) or "unjudged") for i in p.contract_items]
             if seen and all(s == "met" for s in seen):
                 false_met.append(p.id)

@@ -32,11 +32,14 @@ permissions:
   abilities: [read_repo, tests_ci]
   recommended_abilities: []
   # Never the author, the shipper or the filer of what it judges (BOSS files from its verdict).
-  forbidden_skills: [code.edit, coding_pipeline.implement, github.create_pr_sandbox,
+  # Every name is a shipped skill (test_acceptance_agent_role checks it).
+  forbidden_skills: [code.write_and_run, coding_pipeline.implement, coding_pipeline.write_tests,
+                     software_factory.codex_pr_proposal, github.create_pr_sandbox,
                      github.create_pr_real, github.merge_pr_real, deployment.run.plan,
-                     ssh_host.workload.deploy, work_tracker.issue.ensure,
-                     work_tracker.issue.update, tracker.issues.create, tickets.write,
-                     provider.write.direct, provider.secret.read_raw]
+                     deployment.target.register, ssh_host.workload.deploy,
+                     cloudflare.pages.deploy, cloudflare.worker.deploy, digitalocean.app.deploy,
+                     work_tracker.issue.ensure, work_tracker.issue.update, tracker.issues.create,
+                     tickets.write]
   mcp_servers: []
 output_contracts: [acceptance_reply_v1]
 autonomy:

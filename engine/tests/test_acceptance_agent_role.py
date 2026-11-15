@@ -43,7 +43,7 @@ def test_its_grants_read_the_tree_run_in_the_sandbox_and_never_push_merge_deploy
     assert set(OWN) <= set(perms["allowed_skills"])
     assert "repo.read" in perms["allowed_skills"] and "repo.read" in ab.BASELINE_SKILLS
     forbidden = set(perms["forbidden_skills"])
-    for never in ("code.edit", "github.create_pr_real", "github.merge_pr_real",
+    for never in ("code.write_and_run", "github.create_pr_real", "github.merge_pr_real",
                   "deployment.run.plan", "work_tracker.issue.ensure", "tickets.write"):
         assert never in forbidden, never
     assert not forbidden & set(perms["allowed_skills"])
@@ -95,10 +95,44 @@ def test_it_installs_on_boot_with_the_core_cast_and_is_a_registered_agent():
     assert "acceptance_agent" in REGISTERED_ROLES and "acceptance_agent" in CANONICAL_ROLE_KEYS
 
 
-def test_its_passport_is_a_reviewers():
+def test_its_passport_reads_and_never_steers_or_writes_a_pull_request():
+    """Its own preset, `acceptor` (PR #139, F4): a reviewer's reads without its writes — no
+    code_task:steer, no meeting:convene, read-only GitHub."""
     from boss_engine.identity import passports
+    from boss_engine.identity.permissions_gen import PASSPORT_PRESETS
 
-    assert passports.preset_for_role("Assay") == "reviewer"
+    assert passports.preset_for_role("Assay") == "acceptor"
+    preset = PASSPORT_PRESETS["acceptor"]
+    perms = set(preset.permissions)
+    assert {"repository:read", "github:read", "code_task:read", "preview:read",
+            "integration:read", "sandbox:read"} <= perms
+    for never in ("code_task:steer", "code_task:create", "code_task:retry", "github:sync",
+                  "work_tracker:write", "deployment:create", "meeting:convene",
+                  "security_scan:run", "secret:lease", "preview:manage"):
+        assert never not in perms, never
+    writes = [p for p in perms if not p.endswith(":read") and p not in ("skill:invoke",
+                                                                          "spend:reserve")]
+    assert writes == [], writes
+    github = dict(preset.external_ceiling).get("github") or {}
+    assert github.get("pull_requests") == "read" and github.get("contents") == "read"
+    assert not any(v == "write" for v in github.values()) and "push_refs" not in github
+
+
+def test_every_forbidden_skill_names_a_shipped_skill():
+    """A forbidden name that is no skill forbids nothing (PR #139, F5)."""
+    import glob
+
+    shipped = {s["id"] for path in glob.glob(str(SPECPACK / "skills" / "*.yaml"))
+               for s in (yaml.safe_load(pathlib.Path(path).read_text()) or {}).get("skills") or []}
+    aliases = yaml.safe_load((SPECPACK / "kits" / "aliases.yaml").read_text())["aliases"]
+    forbidden = ROLE["permissions"]["forbidden_skills"]
+    assert [f for f in forbidden if f not in shipped and f not in aliases] == []
+    for write in ("code.write_and_run", "coding_pipeline.implement", "coding_pipeline.write_tests",
+                  "software_factory.codex_pr_proposal", "github.create_pr_real",
+                  "github.merge_pr_real", "cloudflare.pages.deploy", "cloudflare.worker.deploy",
+                  "digitalocean.app.deploy", "deployment.target.register",
+                  "ssh_host.workload.deploy", "tickets.write"):
+        assert write in forbidden, write
 
 
 @needs_db

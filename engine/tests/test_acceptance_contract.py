@@ -196,9 +196,20 @@ def test_a_ticket_change_is_a_new_version_that_keeps_every_id(eng, project, ng, 
         ag.items_spec(c, run_id=follow, fctx={"is_followup": True, "root_run_id": root},
                       own_spec={"instructions": "Fix"})
         assert [v["version"] for v in ac.versions(c, root_run_id=root)] == [1, 2]
+        # Only a PERSON revises; BOSS, an agent or a job is refused, and nothing is written.
+        for who in ("boss", "acceptance_agent", "agt_assay", "sva_ci", ""):
+            with pytest.raises(ac.ContractRevisionRefused):
+                ac.revise(c, v2["id"], removed=["AC-2"], reason="x", actor=who)
+        # `removed` names item IDS; an item's words never match (they could name another item).
+        with pytest.raises(ValueError):
+            ac.revise(c, v2["id"], removed=[v2["items"][1]["text"]], reason="x",
+                      actor="usr_test_person")
+        assert [v["version"] for v in ac.versions(c, root_run_id=root)] == [1, 2]
         v3 = ac.revise(c, v2["id"], added=["Operator: the demo runs offline"], removed=["AC-2"],
-                       reason="operator note", actor="person_1")
-        assert v3["version"] == 3 and v3["created_by"] == "person_1"
+                       reason="operator note", actor="usr_test_person")
+        assert v3["version"] == 3 and v3["created_by"] == "usr_test_person"
+        assert v3["items"][-1]["sources"] == [{"source": "operator", "source_kind": "operator",
+                                                "source_ref": "usr_test_person"}]
         assert [i["id"] for i in v3["items"]][-1] == "AC-29"
         assert "AC-2" not in {i["id"] for i in v3["items"]}
         assert c.execute(text(
@@ -234,6 +245,63 @@ def test_a_run_with_no_ticket_is_judged_on_exactly_the_items_it_was_before(eng, 
             spec, source = ag.items_spec(c, run_id=root, fctx={}, own_spec=ng.spec())
         assert _texts(spec) == _texts(ng.spec())
         assert source["contract"]["items"] == 23
+    finally:
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM acceptance_contracts WHERE lineage_root_run_id = :r"),
+                      {"r": root})
+            c.execute(text("DELETE FROM code_task_runs WHERE id = :r"), {"r": root})
+
+
+def test_a_ticket_dropping_a_criterion_never_removes_what_the_brief_also_asked(eng, project):
+    """THE REVIEWER'S REPRO (PR #139, F1): "Written in Go" is both a brief must-have and a ticket
+    criterion; deduplicated, it was labelled with its first source (the ticket), so the ticket
+    dropping it removed the brief's must-have. An item keeps every source, and leaves only when
+    the ticket was its ONLY source."""
+    from sqlalchemy import text
+
+    ticket = {"provider": "jira", "key": "NG-2", "id": "NG-2", "title": "Gateway",
+              "acceptance_criteria": ["Written in Go", "Rate limits answer 429"]}
+    spec = {"instructions": "Must-haves:\n- Written in Go\n- A YAML rulebook of 20 rules\n"}
+    with eng.begin() as c:
+        root = _run(c, project, spec=spec, fctx={"ticket": ticket})
+    try:
+        with eng.begin() as c:
+            ag.items_spec(c, run_id=root, fctx={"ticket": ticket}, own_spec=spec)
+            v1 = ac.latest(c, root_run_id=root)
+        go = next(i for i in v1["items"] if i["text"] == "Written in Go")
+        assert go["source"] == "ticket"                                   # the first source...
+        assert [x["source"] for x in go["sources"]] == ["ticket", "must_have"]  # ...not the only
+        assert len(v1["items"]) == 3
+        # The ticket drops "Written in Go" (and its 429 line), adds one.
+        changed = {**ticket, "acceptance_criteria": ["Hot reload rejects a config without auth"]}
+        with eng.begin() as c:
+            c.execute(text("UPDATE code_task_runs SET finalize_ctx = CAST(:f AS JSONB) "
+                           "WHERE id = :i"), {"f": json.dumps({"ticket": changed}), "i": root})
+        with eng.begin() as c:
+            spec2, _ = ag.items_spec(c, run_id=root, fctx={"ticket": changed}, own_spec=spec)
+            v2 = ac.latest(c, root_run_id=root)
+        assert v2["version"] == 2
+        still = next(i for i in v2["items"] if i["text"] == "Written in Go")
+        assert still["id"] == go["id"]                                    # same item, same id
+        assert [x["source"] for x in still["sources"]] == ["must_have"]
+        assert still["source"] == "must_have" and still["source_kind"] == "brief"
+        texts = [i["text"] for i in v2["items"]]
+        assert "Rate limits answer 429" not in texts                      # ticket-only: leaves
+        assert "Hot reload rejects a config without auth" in texts
+        assert "Written in Go" in _texts(spec2)
+        assert v2["reason"] == "NG-2 changed: 1 item added, 1 removed, 1 re-sourced"
+        # And back: the ticket lists it again, it gains the ticket as a source — no new item.
+        again = {**ticket, "acceptance_criteria": ["Written in Go",
+                                                   "Hot reload rejects a config without auth"]}
+        with eng.begin() as c:
+            c.execute(text("UPDATE code_task_runs SET finalize_ctx = CAST(:f AS JSONB) "
+                           "WHERE id = :i"), {"f": json.dumps({"ticket": again}), "i": root})
+        with eng.begin() as c:
+            ag.items_spec(c, run_id=root, fctx={"ticket": again}, own_spec=spec)
+            v3 = ac.latest(c, root_run_id=root)
+        back = next(i for i in v3["items"] if i["text"] == "Written in Go")
+        assert back["id"] == go["id"] and len(v3["items"]) == len(v2["items"])
+        assert {x["source"] for x in back["sources"]} == {"must_have", "ticket"}
     finally:
         with eng.begin() as c:
             c.execute(text("DELETE FROM acceptance_contracts WHERE lineage_root_run_id = :r"),

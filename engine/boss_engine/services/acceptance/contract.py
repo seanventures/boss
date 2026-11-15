@@ -313,24 +313,49 @@ def gather_sources(spec: Mapping[str, Any], *, ticket: Optional[Mapping[str, Any
     return out
 
 
+def _src(source: str, kind: str, ref: str) -> dict[str, str]:
+    return {"source": source, "source_kind": kind, "source_ref": ref}
+
+
 def build_items(sources: Iterable[Mapping[str, Any]], *, start: int = 1) -> list[dict[str, Any]]:
     """Numbered items AC-<start>.. from the sources, in order, deduplicated by their words. No
-    cap on count or length (the gate applies its own when it reads them)."""
-    seen: set[str] = set()
+    cap on count or length (the gate applies its own when it reads them).
+
+    A deduplicated item keeps EVERY source that asked for it (`sources`): "Written in Go" that
+    is both a brief must-have and a ticket criterion is one item with two sources, so a ticket
+    that later drops it leaves the brief's must-have standing (revise_from_ticket). `source`,
+    `source_kind` and `source_ref` name the first one, the gate's label."""
+    by_key: dict[str, dict[str, Any]] = {}
     items: list[dict[str, Any]] = []
     for s in sources:
+        kind, ref = str(s.get("kind") or ""), str(s.get("ref") or "")
         for it in s.get("items") or []:
             key = _key(it.get("text"))
-            if not key or key in seen:
+            if not key:
                 continue
-            seen.add(key)
+            origin = _src(str(it.get("source") or kind or "criterion"), kind, ref)
+            if key in by_key:
+                held = by_key[key]["sources"]
+                if origin not in held:
+                    held.append(origin)
+                continue
             n = start + len(items)
-            items.append({"id": f"AC-{n}", "n": n, "text": _verbatim(it["text"]),
-                          "source": str(it.get("source") or s.get("kind") or "criterion"),
-                          "source_kind": str(s.get("kind") or ""),
-                          "source_ref": str(s.get("ref") or ""),
-                          "priority": "must", "check_hint": None})
+            item = {"id": f"AC-{n}", "n": n, "text": _verbatim(it["text"]), **origin,
+                    "sources": [origin], "priority": "must", "check_hint": None}
+            by_key[key] = item
+            items.append(item)
     return items
+
+
+def item_sources(item: Mapping[str, Any]) -> list[dict[str, str]]:
+    """Every source of an item (an item written before `sources` existed has its one)."""
+    listed = [dict(x) for x in item.get("sources") or [] if isinstance(x, Mapping)]
+    return listed or [_src(str(item.get("source") or "criterion"),
+                           str(item.get("source_kind") or ""), str(item.get("source_ref") or ""))]
+
+
+def _from_ticket(item: Mapping[str, Any]) -> bool:
+    return any(x.get("source") == "ticket" for x in item_sources(item))
 
 
 def check_hint(item: Mapping[str, Any], *, runnable: bool) -> str:
@@ -465,48 +490,57 @@ def _next_number(connection: Any, root_run_id: str) -> int:
     return best + 1
 
 
-def revise(connection: Any, contract_id: str, *, added: Iterable[Any] = (),
-           removed: Iterable[str] = (), reason: str, actor: str,
-           source_update: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
-    """A NEW VERSION of the contract (supersedes_id = the one revised): `removed` item ids (or
-    their words) leave, `added` items ({text, source, source_ref} or words) join with new ids.
-    Every kept item keeps its id. Nothing to change returns the contract as it is."""
+class ContractRevisionRefused(PermissionError):
+    """A revision a person may not make here (or that was not made by a person)."""
+
+
+#: The catalogue permission a person needs to change what a lineage is held to: deciding what
+#: the work must deliver is managing the work.
+REVISE_PERMISSION = "work_item:manage"
+
+
+def _person(actor: Any) -> Optional[str]:
+    actor = str(actor or "").strip()
+    return actor if actor.startswith("usr_") else None
+
+
+def _may_revise(project_id: str, actor: str) -> None:
+    """PERSON-ONLY. An agent, a job or 'boss' never revises a contract through `revise` (BOSS's
+    own change — the ticket's criteria — goes through revise_from_ticket, audited as such).
+    Under an enforced request the PDP decides on the request's principal, who must be `actor`
+    and hold REVISE_PERMISSION at the project."""
+    who = _person(actor)
+    if who is None:
+        raise ContractRevisionRefused("only a person may revise an acceptance contract")
+    from ...identity import lineage, viewer
+
+    allowed = viewer.decide(project_id, REVISE_PERMISSION)
+    if allowed is None:
+        return                      # no guard enforced this call (a script, a test): person id only
+    principal = getattr(lineage.current_context(), "principal", None)
+    if (not allowed or principal is None or not principal.is_person
+            or str(principal.id) != who):
+        raise ContractRevisionRefused(
+            f"revising an acceptance contract needs {REVISE_PERMISSION} at this project")
+
+
+def _newest(connection: Any, contract_id: str) -> dict[str, Any]:
     cur = get(connection, contract_id)
     if cur is None:
         raise ValueError(f"no acceptance contract {contract_id}")
     newest = latest(connection, root_run_id=cur["lineage_root_run_id"],
                     project_id=cur["project_id"])
-    if newest is not None and newest["id"] != cur["id"]:
-        cur = newest                    # always revise the newest: versions form one line
-    gone = {str(r) for r in removed or ()}
-    gone_keys = {_key(r) for r in gone}
-    kept = [i for i in cur["items"] if i["id"] not in gone and _key(i["text"]) not in gone_keys]
-    have = {_key(i["text"]) for i in kept}
-    n = _next_number(connection, cur["lineage_root_run_id"])
-    joined: list[dict[str, Any]] = []
-    for a in added or ():
-        a = {"text": a} if isinstance(a, str) else dict(a)
-        words = _verbatim(a.get("text"))
-        if not _key(words) or _key(words) in have:
-            continue
-        have.add(_key(words))
-        source = str(a.get("source") or "operator")
-        joined.append({"id": f"AC-{n}", "n": n, "text": words, "source": source,
-                       "source_kind": SOURCE_KIND.get(source, source),
-                       "source_ref": str(a.get("source_ref") or ""), "priority": "must",
-                       "check_hint": None})
-        n += 1
-    if not joined and len(kept) == len(cur["items"]):
-        return cur
-    sources = list(cur["sources"])
-    if source_update:
-        sources = [s for s in sources if s.get("kind") != source_update.get("kind")]
-        sources.insert(0 if source_update.get("kind") == "ticket" else len(sources),
-                       dict(source_update))
-    version = cur["version"] + 1
+    return newest if newest is not None else cur          # versions form one line
+
+
+def _new_version(connection: Any, cur: Mapping[str, Any], items: list[dict[str, Any]], *,
+                 reason: str, actor: str, sources: Optional[list] = None,
+                 added: Iterable[str] = (), removed: Iterable[str] = (),
+                 retagged: Iterable[str] = ()) -> dict[str, Any]:
+    version = int(cur["version"]) + 1
     _insert(connection, project_id=cur["project_id"], root_run_id=cur["lineage_root_run_id"],
-            version=version, sources=sources, items=kept + joined,
-            workflow_run_id=cur.get("workflow_run_id"), supersedes_id=cur["id"],
+            version=version, sources=list(sources if sources is not None else cur["sources"]),
+            items=items, workflow_run_id=cur.get("workflow_run_id"), supersedes_id=cur["id"],
             reason=str(reason or "").strip() or "revised", actor=actor)
     found = latest(connection, root_run_id=cur["lineage_root_run_id"],
                    project_id=cur["project_id"])
@@ -516,39 +550,103 @@ def revise(connection: Any, contract_id: str, *, added: Iterable[Any] = (),
     emit_event(connection, cur["project_id"], "acceptance.contract_revised", actor,
                "acceptance_contract", found["id"],
                {"lineage_root_run_id": cur["lineage_root_run_id"], "version": found["version"],
-                "supersedes_id": cur["id"], "reason": found["reason"],
-                "added": [i["id"] for i in joined],
-                "removed": [i["id"] for i in cur["items"] if i not in kept]})
+                "supersedes_id": cur["id"], "reason": found["reason"], "by": actor,
+                "added": list(added), "removed": list(removed), "retagged": list(retagged)})
     return found
+
+
+def revise(connection: Any, contract_id: str, *, added: Iterable[Any] = (),
+           removed: Iterable[str] = (), reason: str, actor: str) -> dict[str, Any]:
+    """A PERSON's new version of the contract (supersedes_id = the newest): `removed` names item
+    IDS (AC-n; words never match), `added` items ({text, source_ref} or words) join with new ids,
+    attributed to the operator. Every kept item keeps its id. Refused unless `actor` is a person
+    allowed to (`_may_revise`). Nothing to change returns the contract as it is."""
+    cur = _newest(connection, contract_id)
+    _may_revise(cur["project_id"], actor)
+    gone = {str(r).strip() for r in removed or ()}
+    unknown = gone - {i["id"] for i in cur["items"]}
+    if unknown:
+        raise ValueError(f"no such items in contract v{cur['version']}: {sorted(unknown)}")
+    kept = [i for i in cur["items"] if i["id"] not in gone]
+    have = {_key(i["text"]) for i in kept}
+    n = _next_number(connection, cur["lineage_root_run_id"])
+    joined: list[dict[str, Any]] = []
+    for a in added or ():
+        a = {"text": a} if isinstance(a, str) else dict(a)
+        words = _verbatim(a.get("text"))
+        if not _key(words) or _key(words) in have:
+            continue
+        have.add(_key(words))
+        origin = _src("operator", "operator", str(a.get("source_ref") or actor))
+        joined.append({"id": f"AC-{n}", "n": n, "text": words, **origin, "sources": [origin],
+                       "priority": "must", "check_hint": None})
+        n += 1
+    if not joined and not gone:
+        return cur
+    return _new_version(connection, cur, kept + joined, reason=reason, actor=actor,
+                        added=[i["id"] for i in joined], removed=sorted(gone))
 
 
 def revise_from_ticket(connection: Any, contract: Mapping[str, Any],
                        ticket: Optional[Mapping[str, Any]], *,
                        actor: str = "boss") -> dict[str, Any]:
-    """The contract with the ticket's CURRENT acceptance criteria: a new version when they differ
-    from the ticket items it holds (added ones join with new ids, dropped ones leave), else the
-    contract unchanged. The run's ticket snapshot is what changes when a person includes a
-    mid-run change, so reading it here is how that decision reaches the contract."""
+    """The contract with the ticket's CURRENT acceptance criteria — BOSS's own revision, made
+    because the run's ticket snapshot changed (a person chose "Include it" on the mid-run change
+    card, ticket_sync.on_card_answered) and recorded as `acceptance.contract_revised` by BOSS.
+
+    A criterion the ticket dropped loses its ticket source; the ITEM leaves only when the ticket
+    was its only source (a brief must-have the ticket also listed stays, with its id). A new
+    criterion that another source already asks for gains the ticket as a source; otherwise it
+    joins with a new id. Unchanged criteria: the contract as it is."""
     now = ticket_items(ticket)
     if not ticket or not now:
         return dict(contract)
-    held = [i for i in contract["items"] if i.get("source") == "ticket"]
-    held_keys = {_key(i["text"]) for i in held}
-    now_keys = {_key(w) for w in now}
-    if held_keys == now_keys:
-        return dict(contract)
+    cur = _newest(connection, contract["id"])
     ref = _ticket_ref(ticket)
-    added = [{"text": w, "source": "ticket", "source_ref": ref} for w in now
-             if _key(w) not in held_keys]
-    removed = [i["id"] for i in held if _key(i["text"]) not in now_keys]
+    now_keys = {_key(w) for w in now}
+    held_keys = {_key(i["text"]) for i in cur["items"] if _from_ticket(i)}
+    if held_keys == now_keys:
+        return cur
+    origin = _src("ticket", "ticket", ref)
+    items: list[dict[str, Any]] = []
+    removed, retagged = [], []
+    for i in cur["items"]:
+        i = dict(i)
+        srcs = item_sources(i)
+        k = _key(i["text"])
+        if _from_ticket(i) and k not in now_keys:
+            rest = [x for x in srcs if x.get("source") != "ticket"]
+            if not rest:
+                removed.append(i["id"])
+                continue
+            i.update(sources=rest, **rest[0])
+            retagged.append(i["id"])
+        elif not _from_ticket(i) and k in now_keys:
+            i["sources"] = [*srcs, origin]
+            retagged.append(i["id"])
+        items.append(i)
+    have = {_key(i["text"]) for i in items}
+    n = _next_number(connection, cur["lineage_root_run_id"])
+    added = []
+    for w in now:
+        if _key(w) in have:
+            continue
+        have.add(_key(w))
+        items.append({"id": f"AC-{n}", "n": n, "text": _verbatim(w), **origin,
+                      "sources": [origin], "priority": "must", "check_hint": None})
+        added.append(f"AC-{n}")
+        n += 1
     n_add, n_rm = len(added), len(removed)
     words = ", ".join(x for x in (f"{n_add} item{'s' * (n_add != 1)} added" if n_add else "",
-                                  f"{n_rm} removed" if n_rm else "") if x)
+                                  f"{n_rm} removed" if n_rm else "",
+                                  f"{len(retagged)} re-sourced" if retagged else "") if x)
     source = {"kind": "ticket", "ref": ref, "url": ticket.get("url"),
               "provider": ticket.get("provider"), "updated_at": ticket.get("updated_at"),
               "digest": _digest(now), "count": len(now)}
-    return revise(connection, contract["id"], added=added, removed=removed,
-                  reason=f"{ref} changed: {words}", actor=actor, source_update=source)
+    sources = [x for x in cur["sources"] if x.get("kind") != "ticket"]
+    sources.insert(0, source)
+    return _new_version(connection, cur, items, reason=f"{ref} changed: {words}", actor=actor,
+                        sources=sources, added=added, removed=removed, retagged=retagged)
 
 
 # ---------------------------------------------------------------------------------------------

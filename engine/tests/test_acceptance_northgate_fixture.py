@@ -56,6 +56,11 @@ def test_the_fixture_loads_and_lists_its_expected_catches(ng):
     assert "make run-staging" in required["make_run_staging"].human_text
     # Eleven gaps and one "keep" list: 11 of 12 is every gap.
     assert len(ng.gaps) == 11 and [p.id for p in ng.points if p.kind == "keep"] == ["RC-12"]
+    # RC-9 (the shipped tenant configs fail gwlint) is in no contract item: a catch beyond the
+    # contract, made by a FINDING line. Every other gap names the contract items it concerns.
+    beyond = [p for p in ng.points if p.kind == "finding"]
+    assert [p.id for p in beyond] == ["RC-9"] and beyond[0].contract_items == ()
+    assert all(p.contract_items for p in ng.points if p.kind == "gap")
 
 
 def test_no_customer_branding_anywhere_in_the_fixture(ng, tree):
@@ -122,17 +127,20 @@ def test_the_scoring_rule_means_what_it_says(ng):
     every_ac = {f"AC-{n}" for n in range(1, 24)}
     # A verdict that finds every gap passes; one that calls a gap met never does.
     all_missing = {i: "missing" for i in every_ac}
-    score = ng.score(all_missing)
+    score = ng.score(all_missing, findings={"shipped_configs_pass"})
     assert score["passes"] and len(score["caught"]) == 11 and not score["false_met"]
+    # Without the finding beyond the contract it is 10 of 12: still short of the threshold of 11.
+    score = ng.score(all_missing)
+    assert len(score["caught"]) == 10 and "RC-9" not in score["caught"] and not score["passes"]
     all_met = {i: "met" for i in every_ac}
     score = ng.score(all_met)
-    assert not score["passes"] and len(score["false_met"]) == 11
+    assert not score["passes"] and len(score["false_met"]) == 10       # RC-9 is not an item
     assert set(score["missed_required"]) == set(ng.required_catches)
     # Missing one REQUIRED catch fails even with 10 others caught... and calling it met is a
     # false MET on top.
     lang = next(p for p in ng.points if p.key == "language")
     almost = {**all_missing, **{i: "met" for i in lang.contract_items}}
-    score = ng.score(almost)
+    score = ng.score(almost, findings={"shipped_configs_pass"})
     assert "language" in score["missed_required"] and lang.id in score["false_met"]
     assert not score["passes"]
     # Unjudged is never met: a check that stopped at its budget still "catches" nothing falsely.

@@ -156,14 +156,21 @@ points:
       pattern: yaml\.dump\(
 - id: RC-9
   key: shipped_configs_pass
-  kind: gap
+  # NO CONTRACT ITEM states it (AC-15 is the good EXAMPLE passing, not the shipped configs): a
+  # catch beyond the contract, counted when the verdict's FINDING lines name it (score(findings=)).
+  kind: finding
   title: Shipped tenant configs do not pass gwlint
   required: false
-  contract_items:
-  - AC-15
+  contract_items: []
   human_text: Every shipped config/*/tenants/*.yaml passes gwlint (https mock upstreams or a documented
     rule-sanctioned staging exception).
-  facts: []
+  facts:
+  - file_has:
+      path: config/tenants/lumen-pay.yaml
+      pattern: 'url: http://'
+  - file_has:
+      path: gwlint/src/rules.js
+      pattern: SEC-UPSTREAM-002
 - id: RC-10
   key: demo_from_host
   kind: gap
