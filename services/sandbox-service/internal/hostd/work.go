@@ -102,6 +102,7 @@ func (a *Agent) deliver(ctx context.Context, run hostapi.Assignment) (handedBack
 	}
 	a.correctDrift(run.ReplicaID, reason)
 	a.gw.Runs.Delete(run.RunID)
+	a.gw.UnbindRun(run.RunID)
 	a.logf("run %s → replica %s refused (%s): handing back", run.RunID, run.ReplicaID, reason)
 	a.event(a.vmOfReplica(run.ReplicaID), "handed_back", "", "",
 		map[string]string{"run_id": run.RunID, "replica_id": run.ReplicaID, "reason": reason})
@@ -183,31 +184,51 @@ func (a *Agent) tryDeliver(run hostapi.Assignment) string {
 		return "inbox_unreachable"
 	}
 	defer c.Close()
-	// The run token stays with the host (gateway run map); the VM gets ids only.
+	// The run token stays with the host (gateway run map); the VM gets ids and
+	// its placeholders only. The handles are bound to (run, epoch, THIS VM)
+	// before the VM can present one (P8b S10/S12), and the run's delegated
+	// tokens are minted for a key this host generates and never writes (S13).
 	a.gw.Runs.Put(run.RunID, gateway.RunLease{ReplicaID: run.ReplicaID, JobID: run.JobID,
 		Token: run.RunToken, Epoch: run.Epoch})
-	w := guest.Work{Op: "run", RunID: run.RunID, JobID: run.JobID, ReplicaID: run.ReplicaID, Epoch: run.Epoch}
+	st.mu.Lock()
+	vmID, depID := st.id, st.spec.DeploymentID
+	st.mu.Unlock()
+	a.gw.BindRun(vmID, run.ReplicaID, depID, run.RunID, run.Epoch, run.Handles)
+	if a.gw.Keys != nil {
+		go func() {
+			// Bounded: a control plane that hangs must not pin a goroutine per run.
+			kctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			_ = a.gw.Keys.Ensure(kctx, run)
+		}()
+	}
+	w := guest.Work{Op: "run", RunID: run.RunID, JobID: run.JobID, ReplicaID: run.ReplicaID, Epoch: run.Epoch,
+		Handles: run.Handles}
 	raw, _ := json.Marshal(w)
 	if _, err := c.Write(append(raw, '\n')); err != nil {
 		release()
 		a.gw.Runs.Delete(run.RunID)
+		a.gw.UnbindRun(run.RunID)
 		return "inbox_write_failed"
 	}
 	line, err := bufio.NewReader(c).ReadBytes('\n')
 	if err != nil {
 		release()
 		a.gw.Runs.Delete(run.RunID)
+		a.gw.UnbindRun(run.RunID)
 		return "inbox_no_answer"
 	}
 	var reply guest.InboxReply
 	if json.Unmarshal(line, &reply) != nil {
 		release()
 		a.gw.Runs.Delete(run.RunID)
+		a.gw.UnbindRun(run.RunID)
 		return "inbox_bad_answer"
 	}
 	if !reply.OK {
 		release()
 		a.gw.Runs.Delete(run.RunID)
+		a.gw.UnbindRun(run.RunID)
 		if reply.Reason == "" {
 			reply.Reason = "refused"
 		}

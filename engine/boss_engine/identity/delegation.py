@@ -30,8 +30,15 @@ ALG = "EdDSA"                                  # Ed25519; `none` and HS* are alw
 AUD_API = "boss:api"
 AUD_MCP = "boss:mcp"
 AUD_EGRESS = "boss:egress"
+#: P8b S13 (BOSSAPP-1074): one audience per destination a microVM run reaches through boss-hostd.
+#: The host exchanges a token for EACH of these and attaches only that one to that destination
+#: (RFC 8707 resource indicators); a token for one is refused by every other (`bad_aud`).
+AUD_MODEL = "boss:model"                       # the central streaming model gateway
+AUD_RUN_PLANE = "boss:run_plane"               # the run plane (leases, checkpoints, tools)
 AUD_TOKEN = "boss:token"                       # actor assertions are only for the token endpoint
-RUN_AUDIENCES = frozenset({AUD_API, AUD_MCP, AUD_EGRESS})
+RUN_AUDIENCES = frozenset({AUD_API, AUD_MCP, AUD_EGRESS, AUD_MODEL, AUD_RUN_PLANE})
+#: What boss-hostd asks for per run (identity/runs.start_run(dpop_jkt=…), run_plane.host_tokens).
+HOST_AUDIENCES = (AUD_MODEL, AUD_MCP, AUD_EGRESS, AUD_RUN_PLANE)
 
 RUN_TOKEN_TTL_SECONDS = 300
 ACTOR_ASSERTION_TTL_SECONDS = 60

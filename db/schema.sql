@@ -8408,7 +8408,8 @@ CREATE TABLE IF NOT EXISTS identity_run_credentials (
   mode                 TEXT NOT NULL CHECK (mode IN ('obo','autonomous')),
   chain                JSONB NOT NULL,                   -- ["agt_atlas#run_8811","agt_forge#run_8812"]
   depth                INT NOT NULL,
-  aud                  TEXT NOT NULL CHECK (aud IN ('boss:api','boss:mcp','boss:egress','boss:token')),
+  aud                  TEXT NOT NULL CHECK (aud IN ('boss:api','boss:mcp','boss:egress','boss:token',
+                                                 'boss:model','boss:run_plane')),  -- P8b S13: per-destination
   scope_hash           TEXT NOT NULL,
   cnf_jkt              TEXT NOT NULL,
   issued_at            TIMESTAMPTZ NOT NULL,
@@ -15145,3 +15146,38 @@ CREATE INDEX IF NOT EXISTS idx_model_gateway_handles_run ON model_gateway_handle
 -- within one request, §3.8 step 2); jobs are found by the run id in their payload.
 CREATE INDEX IF NOT EXISTS idx_jobs_payload_run_id ON jobs ((payload->>'run_id'));
 -- ================================ end P8b ==
+
+-- =====================================================================================-- P8b-6/7: THE MCP/TOOL GATEWAY HANDLES AND HOST-HELD TOKENS (BOSSAPP-1073, BOSSAPP-1074;
+-- boss-agent-hosts-lld.md §3.10, §3.12.2). The `boss_mcpgw_` placeholder a guest holds instead of
+-- any MCP upstream credential, redeemed only at the control plane's /mcp/<server> route through
+-- boss-hostd. Stored HASHED, bound to (run, fence_epoch, vm_id), ≤ the run's life, revoked at run
+-- end or on a replay. `servers` is the run's tool allowlist: {cli_name: {server_id, granted_tools}}
+-- from the agent's grant (agents.held_mcp_servers) — a server or tool outside it is 403 at the
+-- gateway. The row never holds an upstream token: those are read at call time through
+-- connection_credentials (refresh included) and never shown to the guest.
+CREATE TABLE IF NOT EXISTS mcp_gateway_handles (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  org_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  fence_epoch BIGINT NOT NULL DEFAULT 0,
+  vm_id TEXT,
+  deployment_id TEXT,
+  role_key TEXT,
+  servers JSONB NOT NULL DEFAULT '{}'::jsonb,
+  requests BIGINT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  revoked_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_gateway_handles_run ON mcp_gateway_handles (run_id);
+-- Per-destination audiences (S13, RFC 8707): a run token names exactly one of these, and the
+-- model gateway, MCP gateway, egress and run plane each accept only their own.
+DO $$ BEGIN
+  ALTER TABLE identity_run_credentials DROP CONSTRAINT IF EXISTS identity_run_credentials_aud_check;
+  ALTER TABLE identity_run_credentials ADD CONSTRAINT identity_run_credentials_aud_check
+    CHECK (aud IN ('boss:api', 'boss:mcp', 'boss:egress', 'boss:token', 'boss:model', 'boss:run_plane'));
+END $$;
+-- ================================ end P8b-6/7 ==

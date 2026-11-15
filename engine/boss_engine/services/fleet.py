@@ -200,7 +200,16 @@ def endpoints(host_id: str) -> dict:
             "renew": f"/v1/hosts/{host_id}/renew", "run_plane": "/v1/run-plane",
             # The central streaming model gateway boss-hostd forwards the guest's model calls
             # to (P8b S10; HOST_API.md §4.6). Absent → the host answers 503 gateway_unconfigured.
-            "model_gateway": _model_gateway_url()}
+            "model_gateway": _model_gateway_url(),
+            # The MCP/tool gateway lives on the control plane (P8b S12; HOST_API.md §4.7): the
+            # guest's /mcp/<server> is forwarded here, relative to the control-plane URL.
+            "mcp_gateway": _mcp_gateway_route()}
+
+
+def _mcp_gateway_route() -> str:
+    from .mcp_gateway import HOST_ROUTE
+
+    return HOST_ROUTE
 
 
 def _model_gateway_url() -> str:

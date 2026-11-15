@@ -280,6 +280,21 @@ func (c *Client) HandBack(ctx context.Context, a hostapi.Assignment) error {
 		hostapi.LeaseAction{HandBack: true, Action: "hand_back"})
 }
 
+// RunTokens asks for the run's delegated, per-destination tokens bound to the
+// host's per-run DPoP key (P8b S13; HOST_API.md §4.8). The lease headers fence
+// the call like any other run call; the answer is kept in memory only.
+func (c *Client) RunTokens(ctx context.Context, a hostapi.Assignment, req hostapi.RunTokensRequest) (*hostapi.RunTokensResponse, error) {
+	var out hostapi.RunTokensResponse
+	_, err := c.request(ctx, http.MethodPost, fmt.Sprintf(hostapi.PathRunTokens, url.PathEscape(a.RunID)), nil,
+		map[string]string{"X-Boss-Replica": a.ReplicaID, "X-Boss-Job": a.JobID,
+			"X-Boss-Run-Token": a.RunToken, "X-Boss-Fence-Epoch": strconv.FormatInt(a.Epoch, 10)},
+		req, &out, true)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Observed pushes replica states at once (on a state change).
 func (c *Client) Observed(ctx context.Context, hostID string, req hostapi.ObservedRequest) error {
 	_, err := c.do(ctx, http.MethodPost, fmt.Sprintf(hostapi.PathObserved, hostID), nil, req, nil, true)

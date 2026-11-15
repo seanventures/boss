@@ -29,6 +29,7 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -107,6 +108,14 @@ class LeaseBody(BaseModel):
     ttl: Optional[int] = None
     outcome: dict[str, Any] = Field(default_factory=dict)
     error: str = ""
+
+
+class RunTokensBody(BaseModel):
+    """S13: the host's DPoP key thumbprint for this run and the destinations it wants tokens
+    for (HOST_API.md §4.8). Never a key, never a token: both go the other way."""
+    jkt: str = Field(min_length=16, max_length=128)
+    audiences: Optional[list[str]] = None
+    scope: Optional[list[str]] = None
 
 
 class RowBody(BaseModel):
@@ -474,6 +483,21 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
         raise HTTPException(status_code=400, detail={
             "error": "bad_action", "message": "action is heartbeat, settle, hand_back or fail"})
 
+    @router.post("/v1/run-plane/runs/{run_id}/tokens")
+    @permit(P.FLEET_HOST, scope=Scope.org())
+    def rp_run_tokens(run_id: str, body: RunTokensBody, request: Request,
+                      x_boss_replica: Optional[str] = Header(default=None),
+                      x_boss_job: Optional[str] = Header(default=None),
+                      x_boss_run_token: Optional[str] = Header(default=None),
+                      x_boss_fence_epoch: Optional[str] = Header(default=None)) -> dict[str, Any]:
+        """S13 (BOSSAPP-1074): the run's delegated, per-destination, DPoP-bound tokens for the
+        HOST's key (body.jkt). Fenced like every run call; the host keeps the answer in memory
+        and attaches one token (plus a proof) per forward. Called again with a new jkt, it is
+        the host's rotation at two thirds of the TTL."""
+        lease = _lease(x_boss_replica, x_boss_job, x_boss_run_token, x_boss_fence_epoch)
+        return _run_call(request, run_id, lease, run_plane.host_tokens, jkt=body.jkt,
+                         audiences=body.audiences, scope=body.scope)
+
 
     @router.get("/v1/run-plane/runs/{run_id}/checkpoints")
     @permit(P.FLEET_HOST, scope=Scope.org())
@@ -738,6 +762,178 @@ def build_fleet_router(*, engine, require_write_actor: Optional[Callable[..., st
             out["placement_state"] = (agent_deployments.by_id(connection, out["id"]) or {}).get(
                 "placement_state")
         return out
+
+
+    # ── the MCP/tool gateway, host-facing (P8b S12; HOST_API.md §4.7) ─────────────────────
+
+    from boss_engine.services import mcp_gateway as _mcpgw
+
+    _MAX_MCP_BODY = 8 * 1024 * 1024
+
+    def _mcp_refusal(status: int, reason: str, message: str = "") -> Response:
+        body = {"jsonrpc": "2.0", "id": None, "error": {
+            "code": -32001, "message": f"boss mcp gateway: {message or reason}", "data": {
+                "reason": reason}}}
+        return JSONResponse(status_code=status, content=body, headers={"connection": "close"})
+
+    @router.post("/mcp/{server}")
+    @permit(P.FLEET_HOST, scope=Scope.org())
+    async def mcp_gateway_rpc(server: str, request: Request) -> Response:
+        """A guest's MCP call, forwarded by its boss-hostd (HOST_API.md §4.7): the host's
+        BossHost proof authenticates; `X-Boss-Handle` is the guest's `boss_mcpgw_` handle moved
+        out of its credential header; `X-Boss-Vm/Run/Fence-Epoch/Deployment` are the host's
+        word, which the handle's row must agree with. The run's allowlist, the policy engine,
+        parking and receipts are the loopback gateway's own (mcp_gateway.McpGateway.handle).
+        A `tools/call` the client accepts as SSE streams keepalives while a person decides."""
+        import json as _json
+        import time as _time
+
+        started = _time.monotonic()
+        host = await run_in_threadpool(_host, request)
+        gateway = _mcpgw.get()
+        lane = gateway.host_lane
+        headers = {k.lower(): v for k, v in request.headers.items()}
+        try:
+            caller = _mcpgw.HostCaller.from_headers(headers, host_id=host.host_id,
+                                                    org_id=host.org_id or None)
+        except _mcpgw.Refused as exc:
+            return _mcp_refusal(exc.status, exc.reason, str(exc))
+        raw = _mcpgw.presented_handle(headers)
+        fp = _mcpgw.fingerprint(raw) if raw else None
+        server_key = server.strip("/") or _mcpgw.RUN_SERVER
+        url = str(request.url).split("?", 1)[0]
+
+        def refuse(status: int, reason: str, message: str = "", grant: Any = None) -> Response:
+            lane.record(caller, grant, server_key=server_key, rpc_method="", status=status,
+                        verdict="deny", rejected_by=reason, started=started, handle_fp=fp)
+            return _mcp_refusal(status, reason, message)
+
+        def _resolve() -> Any:
+            # A refusal still COMMITS what it wrote: a replay's revocation and its
+            # host_events row, a spent DPoP jti. Raising out of the transaction would undo them.
+            refused: Optional[_mcpgw.Refused] = None
+            grant = None
+            with begin(engine) as connection:
+                try:
+                    grant = lane.resolve(connection, caller, raw)
+                    lane.check_delegation(connection, headers, run_id=grant.run_id or "",
+                                          method="POST", url=url)
+                except _mcpgw.Refused as exc:
+                    refused = exc
+            if refused is not None:
+                raise refused
+            return grant
+
+        try:
+            grant = await run_in_threadpool(_resolve)
+        except _mcpgw.Refused as exc:
+            return refuse(exc.status, exc.reason, str(exc))
+        if server_key != _mcpgw.RUN_SERVER and server_key not in grant.servers:
+            # Outside the run's allowlist: refused before any upstream lookup (403, typed).
+            lane.record(caller, grant, server_key=server_key, rpc_method="", status=403,
+                        verdict="deny", rejected_by="server_not_granted", started=started,
+                        handle_fp=fp)
+            return JSONResponse(status_code=403, content=_mcpgw._rpc_result(None, _mcpgw.tool_error(
+                "denied_by_policy", f"no server '{server_key}' on this run: it is not in the "
+                "agent's grant", server=server_key)), headers={"connection": "close"})
+        raw_body = await request.body()
+        if len(raw_body) > _MAX_MCP_BODY:
+            return refuse(413, "body_too_large", grant=grant)
+        try:
+            message = _json.loads(raw_body or b"null")
+        except ValueError:
+            return JSONResponse(status_code=400, content=_mcpgw._rpc_error(None, -32700,
+                                                                            "parse error"))
+        rpc_method = str(message.get("method") or "") if isinstance(message, dict) else "batch"
+
+        def done(status: int, verdict: str = "allow", rejected: Optional[str] = None,
+                 size: int = 0) -> None:
+            lane.record(caller, grant, server_key=server_key, rpc_method=rpc_method,
+                        status=status, verdict=verdict, rejected_by=rejected, started=started,
+                        handle_fp=fp, bytes_in=len(raw_body), bytes_out=size)
+
+        if isinstance(message, list):
+            answers = await run_in_threadpool(lambda: [
+                a for a in (gateway.handle(grant, server_key, m) for m in message[:50]
+                            if isinstance(m, dict)) if a is not None])
+            if not answers:
+                done(202)
+                return Response(status_code=202)
+            out = _json.dumps(answers).encode()
+            done(200, size=len(out))
+            return Response(out, media_type="application/json")
+        if not isinstance(message, dict):
+            done(400, "deny", "invalid_request")
+            return JSONResponse(status_code=400, content=_mcpgw._rpc_error(None, -32600,
+                                                                            "invalid request"))
+        if "id" not in message:
+            await run_in_threadpool(gateway.handle, grant, server_key, message)
+            done(202)
+            return Response(status_code=202)
+        streams = "text/event-stream" in (headers.get("accept") or "")
+        if rpc_method == "tools/call" and streams:
+            # A CALL THAT MAY PARK is answered as a stream: keepalives while a person decides,
+            # then the one result event. The handler runs in a worker thread; the response
+            # drains its queue, and a client that hangs up stops the keepalives.
+            sink = _mcpgw.QueueSink()
+
+            def work() -> None:
+                try:
+                    answer = gateway.handle(grant, server_key, message, sink)
+                except Exception as exc:  # noqa: BLE001
+                    import logging
+
+                    logging.getLogger("boss.mcp_gateway").warning(
+                        "mcp gateway call failed: %s", type(exc).__name__, exc_info=True)
+                    answer = _mcpgw._rpc_error(message.get("id"), -32603, "internal error")
+                sink.finish(answer)
+
+            import threading
+
+            threading.Thread(target=work, daemon=True, name="boss-mcp-gateway-host").start()
+
+            async def relay():
+                import anyio
+
+                sent = 0
+                try:
+                    while True:
+                        chunk = await anyio.to_thread.run_sync(sink.q.get)
+                        if chunk is None:
+                            break
+                        sent += len(chunk)
+                        yield chunk
+                finally:
+                    sink.gone.set()
+                    done(200, size=sent)
+
+            return StreamingResponse(relay(), media_type="text/event-stream",
+                                     headers={"cache-control": "no-cache", "connection": "close"})
+        try:
+            answer = await run_in_threadpool(gateway.handle, grant, server_key, message, None)
+        except Exception as exc:  # noqa: BLE001
+            import logging
+
+            logging.getLogger("boss.mcp_gateway").warning("mcp gateway request failed: %s",
+                                                           type(exc).__name__, exc_info=True)
+            answer = _mcpgw._rpc_error(message.get("id"), -32603, "internal error")
+        out = _json.dumps(answer).encode()
+        done(200, size=len(out))
+        return Response(out, media_type="application/json")
+
+    @router.get("/mcp/{server}")
+    @permit(P.FLEET_HOST, scope=Scope.org())
+    def mcp_gateway_get(server: str, request: Request) -> Response:
+        """No server-initiated stream: every answer rides the POST that asked for it."""
+        _host(request)
+        return Response(status_code=405, headers={"allow": "POST"})
+
+    @router.delete("/mcp/{server}")
+    @permit(P.FLEET_HOST, scope=Scope.org())
+    def mcp_gateway_delete(server: str, request: Request) -> Response:
+        """Sessions are not kept here; there is nothing to end."""
+        _host(request)
+        return Response(status_code=405, headers={"allow": "POST"})
 
     return router
 

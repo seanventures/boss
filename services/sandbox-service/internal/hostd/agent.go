@@ -438,6 +438,10 @@ func (a *Agent) Run(ctx context.Context) error {
 		}}
 	a.gw.Audit = a.calls.Add
 	a.gw.Event = a.events.Add
+	// P8b S13: per-run DPoP keys and delegated tokens live here, in memory,
+	// rotated at two thirds of their TTL; the VM never sees either.
+	a.gw.Keys = &gateway.RunKeys{Mint: a.client.RunTokens, Log: a.logf}
+	go a.gw.Keys.RotateLoop(ctx, 5*time.Second)
 
 	a.touchCP() // the headless window starts now if the control plane never answers
 	if err := a.adoptRunning(ctx); err != nil {

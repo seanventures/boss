@@ -391,6 +391,13 @@ Answers (always `200`):
   bumps `state_gen` and pushes its real map, so BOSS stops assigning there. A refused delivery
   releases the host's local slot reservation.
 
+**`runs[].handles` (P8b S10/S12).** Each assignment also carries the GUEST's placeholders for
+that run — `mdl` (`boss_mdl_…`), `mcpgw` (`boss_mcpgw_…`) and, for the MCP gateway, `mcp_servers`,
+a `{name: guest URL}` object the host passes through untouched. The host binds every string
+handle to `(run, epoch, the VM it delivers to)` in its gateway (`BindRun`) before the VM can
+present one, hands them to the VM in the work line (§4.5), and never writes them. They are
+unbound when the lease ends or the run is handed back.
+
 ### 2.9 The full replica map, after a resync (1.1)
 
 ```
@@ -584,7 +591,7 @@ to the same vsock port.
 |---|---|---|---|
 | 7101 | model | `POST /anthropic/v1/messages`, `/openai/v1/chat/completions`, `/openai/v1/responses` | `endpoints.model_gateway` — the central streaming model gateway (§4.6) |
 | 7102 | git / api | `GET,POST /git/…`; `GET,POST,PATCH,PUT /api/…` | `endpoints.egress` (P8b) |
-| 7103 | mcp | `GET,POST,DELETE /mcp/…` | `endpoints.mcp_gateway` (P8b) |
+| 7103 | mcp | `POST /mcp/<server>` (GET and DELETE refused: no server-initiated stream, no session) | `endpoints.mcp_gateway` — the control plane's own `/mcp` route (§4.7) |
 | 7104 | run_plane | `/v1/run-plane/next` and `/v1/run-plane/hosts/…` **denied** (VMs never poll for work); any other `/v1/run-plane/…` | `endpoints.run_plane` (the control plane) |
 | 7105 | connect | denied until P8b | — |
 | 7105 (guest side) | **work inbox** (host-initiated, 1.1) | the host connects to the **guest's** port 7105; §4.5 | — |
@@ -606,6 +613,7 @@ to the same vsock port.
      `Private-Token`, `X-Amz-Security-Token`;
    - `Forwarded`, `X-Forwarded-*`, `X-Real-Ip`;
    - every `X-Boss-*` and `Boss-*`;
+   - `DPoP` (a guest-made proof never stands in for the host's, §4.8);
    - every request **trailer** (they could smuggle a header past the strip).
    On the run-plane route only, the lease headers `X-Boss-Job`, `X-Boss-Run-Token` and
    `X-Boss-Fence-Epoch` pass through. They are data the control plane checks against Postgres.
@@ -708,6 +716,97 @@ streams (`converse-stream`, `invoke-with-response-stream`) are accounted from th
 and models, every job); a project on Auto names none, so any model of the provider is allowed. In strict mode the
 model hosts leave boss-egress's CONNECT allowlist (`BOSS_EGRESS_STRICT_SECRETS=1`), so the
 injecting route is the only path to a model.
+
+### 4.7 The MCP route: what boss-hostd sends to the MCP/tool gateway (P8b S12, BOSSAPP-1073)
+
+The MCP/tool gateway is the control plane itself: `POST /mcp/<server>` on the API
+(`boss_engine.services.mcp_gateway`, host lane), which is why `endpoints.mcp_gateway` is the
+relative path `/mcp`. It needs the policy engine, the decisions queue (a tool set to Ask parks the
+call until a person answers in Approvals) and the registry's receipts, and all of those live
+there. The guest's MCP clients point at `127.0.0.1:7103/mcp/<server>` (contract v1.1
+`mcp.servers`) with `handles.mcpgw` as their bearer; **the MCP rule carries `HostProof: true` and
+`Audience: boss:mcp`**, so on every MCP forward the Go gateway sends exactly what it sends on a
+model forward (§4.6): `Authorization: BossHost <proof>` over the gateway path (`/mcp/<server>`),
+the handle **moved** into `X-Boss-Handle`, the host's word in `X-Boss-Vm`, `X-Boss-Run`,
+`X-Boss-Fence-Epoch`, `X-Boss-Deployment`, the `Boss-Run-Assertion`, and `traceparent`. Every
+guest credential, cookie, forwarding, `X-Boss-*` and **`DPoP`** header is stripped first: a
+guest-made proof never stands in for the host's.
+
+**What the control plane does with it:**
+
+| Check | Answer |
+|---|---|
+| The handle's row (`mcp_gateway_handles`, hashed) | `401 no_handle \| unknown_handle \| handle_revoked \| handle_expired` |
+| Its binding against the host's word | another org, VM or run → **replay**: the row is revoked, a `host_events(handle_replay, actor=mcp_gateway)` row is written, `401 handle_replay`; a code task's unbound handle is bound to the first VM that redeems it |
+| Its epoch | not the handle's, or not the run's current one in Postgres → `409 fenced` within that one request |
+| `<server>` against the row's `servers` (the agent's MCP grant, agents.held_mcp_servers) | not on it → `403`, a typed `boss.denied_by_policy` result; `boss_run` (the run's own tools) is always on |
+| The tool, per call | `tool_policy_verdict`: the grant's tool list, the registry's Allow/Ask/Off, the ordered policy engine — exactly the loopback gateway's decision; an Ask parks the call (SSE keepalives when the client sent `Accept: text/event-stream`) |
+| S13 (§4.8) | `X-Boss-Delegation` + `DPoP`, when present, must verify for **aud `boss:mcp`** and name this run: `401 run_token_<reason>` (`run_token_bad_aud` for a model-gateway, egress or run-plane token; `run_token_dpop_key_mismatch` for a proof from another key; `run_token_mismatch` for another run); with `BOSS_HOST_TOKENS_REQUIRED=1`, absent → `401 run_token_required` |
+
+Refusals are JSON-RPC errors (`{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"boss
+mcp gateway: <reason>","data":{"reason":"<reason>"}}}`), relayed unchanged. `GET` and `DELETE` are
+`405` (the host refuses them without a forward).
+
+**No passthrough.** Nothing the guest sent reaches an upstream MCP server: the upstream sign-in is
+read at call time through `connection_credentials` (shared / per-user / per-agent OAuth, obtained
+with RFC 8707 `resource` = that server, refreshed when due) and goes on the upstream call only;
+`mcp_client` applies `tokens.refuse_passthrough` — the first-party-audience guard — to every
+upstream header set, so a BOSS session, key, run token, DPoP proof or egress credential is never
+sent to a third-party server. A tool failure's text passes the run redactor before the guest sees
+it. **STDIO servers** that need secrets never run in the guest: `stdio://` servers run under
+`mcp_stdio_supervisor` beside the gateway; the guest sees only `/mcp/<server>`.
+
+**Token exchange upstream.** Where an upstream supports exchanging the person's token for a
+tool-scoped one (Entra, Google, AgentCore 3LO), that exchange belongs here, never in the guest.
+None of the built-in upstreams is exchanged yet: the per-user OAuth token minted for `resource` =
+the server is the tool-scoped token today.
+
+**Audit.** One `guest_calls` row per call: `route = mcp`, `rule_id = mcp-<server>`,
+`path_template = /mcp/<server>/<jsonrpc method>`, `rejected_by = mcp_gateway:<reason>` on a
+refusal, the handle's fingerprint, never the handle, a body or an argument; batched off the
+request path (the model gateway's writer).
+
+**Handles.** Minted with the run's lease (`run_plane._guest_handles`): `handles.mcpgw` bound to
+`(run, epoch, the replica's VM)` with the deployment agent's MCP grant as `servers`, plus
+`handles.mcp_servers` (`{name: http://127.0.0.1:7103/mcp/<name>}`, `boss_run` included). Revoked
+with the lease (settle, fail), and on a replay.
+
+### 4.8 Host-held, per-destination run tokens (P8b S13, BOSSAPP-1074)
+
+**The shim is boss-hostd.** A DPoP key inside a VM that runs model-written code protects nothing,
+so the host generates an **Ed25519 key pair per run, in memory, never written**, and asks the
+control plane for the run's tokens bound to its thumbprint:
+
+```
+POST /v1/run-plane/runs/{run_id}/tokens        (host-authenticated; the lease headers of §4.5)
+{"jkt": "<RFC 7638 thumbprint>", "audiences": ["boss:model","boss:mcp","boss:egress","boss:run_plane"]}
+
+200 {"run_id", "jkt", "expires_in": 300, "rotate_after_seconds": 200,
+     "tokens": {"boss:model": {"access_token", "token_type": "DPoP", "expires_in", "jti"}, …}}
+```
+
+- Fenced like every run call (`409 fenced` on a stale lease). `boss:api` is never issued to a
+  host (`400 bad_audience`). The control plane mints through `identity.runs.start_run(...,
+  dpop_jkt=…)`: the run's subject is the person the job was enqueued for (OBO, their grant) or
+  the deployment's agent itself (autonomous), the actor is the agent's Passport
+  (`roles.agent_id` for the deployment's agent key; `409 no_agent_passport` without one), the
+  scope `agent:invoke` narrowed live. BOSS keeps a host-held Shim with **no private key** for it.
+- **One token per destination (RFC 8707).** Every forward carries the token for THAT audience
+  in `X-Boss-Delegation` and a fresh **`DPoP`** proof (RFC 9449: `htm`, `htu` = the forwarded
+  URL, `ath`, `jti`, `iat`) signed by the run's key. The model gateway verifies `boss:model`, the
+  MCP gateway `boss:mcp`, the run plane `boss:run_plane`, egress `boss:egress`; each refuses the
+  others (`bad_aud`), a proof from another key (`dpop_key_mismatch`), a replayed proof
+  (`dpop_replay`) and a token for another run. Rule order in `routes.go` names the audience per
+  route (`Rule.Audience`).
+- **Rotation at two thirds of the TTL.** The host generates a NEW key and calls the endpoint
+  again; the previous tokens are not revoked (the run's end revokes them all), so a forward that
+  already captured its `(token, key)` pair completes, and a new token never pairs with the old
+  key. The guest's handles never change, so a rotation is invisible to the agent.
+- **Until every host sends them**, a forward without `X-Boss-Delegation` is accepted on the host
+  proof alone; `BOSS_HOST_TOKENS_REQUIRED=1` on the control plane refuses it (`401
+  run_token_required`). The local lane is unchanged: the API process is its own shim.
+- At the run's end (`settle`, `fail`, hand back) the host forgets the key and tokens
+  (`UnbindRun`), and the control plane revokes the run's tokens with its handles.
 
 ## 5. Networking (LLD §3.7)
 
@@ -980,9 +1079,8 @@ Python control plane as it was built.
   should land in `host_events`. Without it the states still arrive through heartbeat and observed.
 - **P8b:**
   - send `directors`;
-  - send per-run `runs[].handles`;
   - send `fences` and `revocations` in desired state.
-  The host already enforces them.
+  The host already enforces them. (Per-run handles arrive with the claimed run, §2.8 — done.)
 
 ## Left for later P8b tickets
 
@@ -992,6 +1090,6 @@ Python control plane as it was built.
 - The VIP on `tunl0` in the guest.
 - Director registration and withdraw (weight 0), with IPVS `--tun-type gre` (§5.1).
 - The TLS self-check before `serving`.
-- The egress and MCP gateway routes (the model gateway is live: §4.6, with the model rules
-  already carrying `HostProof` and `X-Boss-Handle`); the gateways' mTLS listeners.
-- Per-run DPoP-bound tokens held by the host.
+- The egress gateway route (the model and MCP gateways are live: §4.6, §4.7); the gateways'
+  mTLS listeners; egress verifying the `boss:egress` delegation token (§4.8).
+- Upstream token exchange for tool-scoped MCP tokens where a provider supports it (§4.7).

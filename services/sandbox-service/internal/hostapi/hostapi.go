@@ -28,7 +28,29 @@ const (
 	PathReplicas   = "/v1/hosts/%s/replicas"
 	PathHostsNext  = "/v1/run-plane/hosts/next"
 	PathRunLease   = "/v1/run-plane/runs/%s/lease"
+	// PathRunTokens (P8b S13): the run's delegated, per-destination tokens
+	// for the HOST's DPoP key (HOST_API.md §4.8).
+	PathRunTokens = "/v1/run-plane/runs/%s/tokens"
 )
+
+// Headers the gateway sets on a forward to a central gateway (P8b S13,
+// HOST_API.md §4.8): the run's delegated token for THAT destination and the
+// DPoP proof the host's per-run key signed for this very request.
+const (
+	HeaderDelegation = "X-Boss-Delegation"
+	HeaderDPoP       = "DPoP"
+)
+
+// Per-destination token audiences (RFC 8707; engine identity/delegation.py).
+const (
+	AudModel    = "boss:model"
+	AudMCP      = "boss:mcp"
+	AudEgress   = "boss:egress"
+	AudRunPlane = "boss:run_plane"
+)
+
+// HostAudiences is what the host asks for per run, in table order.
+var HostAudiences = []string{AudModel, AudMCP, AudEgress, AudRunPlane}
 
 // The host proof: every call after enrolment carries
 // "Authorization: BossHost <compact JWS>" signed by the host certificate's key
@@ -238,6 +260,47 @@ type Assignment struct {
 	RunToken       string `json:"run_token,omitempty"`
 	Kind           string `json:"kind,omitempty"`
 	LeaseExpiresAt string `json:"lease_expires_at,omitempty"`
+	// Handles are the GUEST's placeholders for this run (P8b S10/S12): "mdl"
+	// (boss_mdl_…), "mcpgw" (boss_mcpgw_…), …, plus "mcp_servers", a JSON
+	// object of {name: guest URL} the host passes through untouched. The host
+	// binds each handle to (run, epoch, this VM) in the gateway and hands them
+	// to the VM with the work item; it never writes them.
+	Handles map[string]any `json:"handles,omitempty"`
+}
+
+// Handle returns the string handle of one kind ("" when absent).
+func (a Assignment) Handle(kind string) string {
+	if a.Handles == nil {
+		return ""
+	}
+	s, _ := a.Handles[kind].(string)
+	return s
+}
+
+// RunTokensRequest: POST /v1/run-plane/runs/{run}/tokens with the lease
+// headers (P8b S13). The jkt is the RFC 7638 thumbprint of the Ed25519 key
+// boss-hostd generated for this run; the key itself never leaves the host.
+type RunTokensRequest struct {
+	JKT       string   `json:"jkt"`
+	Audiences []string `json:"audiences,omitempty"`
+}
+
+// IssuedToken is one delegated token: usable only with a DPoP proof signed
+// by the key whose thumbprint it was minted for, only at its audience.
+type IssuedToken struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type,omitempty"`
+	ExpiresIn   int    `json:"expires_in"`
+	JTI         string `json:"jti,omitempty"`
+}
+
+// RunTokensResponse: one token per audience, and when to rotate.
+type RunTokensResponse struct {
+	RunID              string                 `json:"run_id"`
+	JKT                string                 `json:"jkt"`
+	Tokens             map[string]IssuedToken `json:"tokens"`
+	ExpiresIn          int                    `json:"expires_in"`
+	RotateAfterSeconds int                    `json:"rotate_after_seconds"`
 }
 
 // ReplicaMap: PUT /v1/hosts/{id}/replicas — the full map, only on resync.

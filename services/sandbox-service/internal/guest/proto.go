@@ -108,6 +108,9 @@ type Work struct {
 	JobID     string `json:"job_id,omitempty"`
 	ReplicaID string `json:"replica_id,omitempty"`
 	Epoch     int64  `json:"epoch,omitempty"`
+	// Handles are the run's placeholders ("mdl", "mcpgw", …, worthless off
+	// this VM) and "mcp_servers" ({name: loopback URL}); never a token (P8b).
+	Handles map[string]any `json:"handles,omitempty"`
 }
 
 // InboxReply answers a Work line. Refusal reasons: no_free_slot, draining,

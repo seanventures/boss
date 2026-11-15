@@ -901,8 +901,24 @@ def refuse_passthrough(headers: Mapping[str, str]) -> dict[str, str]:
 
 def verify_for_mcp(token: str, *, dpop_proof: Optional[str], htm: str, htu: str, db: Any) -> RunTokenClaims:
     """BOSS as an MCP server accepts only tokens minted FOR it (aud boss:mcp: the resource
-    indicator, RFC 8707). An API or egress token is refused here, and vice versa."""
+    indicator, RFC 8707). An API, model-gateway, run-plane or egress token is refused here, and
+    vice versa."""
     return verify_run_token(token, audience=AUD_MCP, dpop_proof=dpop_proof, htm=htm, htu=htu, db=db)
+
+
+def verify_for_model(token: str, *, dpop_proof: Optional[str], htm: str, htu: str, db: Any) -> RunTokenClaims:
+    """The central model gateway accepts only tokens minted FOR it (aud boss:model, P8b S13):
+    the MCP gateway's, egress's, the run plane's and the API's tokens are refused (`bad_aud`)."""
+    from .delegation import AUD_MODEL
+
+    return verify_run_token(token, audience=AUD_MODEL, dpop_proof=dpop_proof, htm=htm, htu=htu, db=db)
+
+
+def verify_for_run_plane(token: str, *, dpop_proof: Optional[str], htm: str, htu: str, db: Any) -> RunTokenClaims:
+    """The run plane accepts only tokens minted FOR it (aud boss:run_plane, P8b S13)."""
+    from .delegation import AUD_RUN_PLANE
+
+    return verify_run_token(token, audience=AUD_RUN_PLANE, dpop_proof=dpop_proof, htm=htm, htu=htu, db=db)
 
 
 __all__ = ["TokenError", "mint_run_token", "verify_run_token", "exchange_token", "renew_run_token",
