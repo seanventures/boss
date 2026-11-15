@@ -452,14 +452,20 @@ def test_an_intake_run_carries_the_content_intact_and_never_the_mapping(world):
 
 
 def test_a_trigger_payload_drops_only_the_mapping_keys_and_a_webhook_is_its_own(world):
-    """Every BOSS-sourced kind (event sink, digest, intake, clocked) drops only the exact mapping
-    keys; content (emails, URLs, `principal_amount`) is the agent's to read."""
+    """Every BOSS-sourced kind (event sink, digest, intake, clocked) drops only the mapping
+    keys, spelled as the read view spells them (snake_case or camelCase, one normaliser);
+    content (emails, URLs, `principal_amount`) is the agent's to read."""
     raw = {"entity_id": "x", "principal_id": "usr_1", "on_behalf_of": "usr_2",
            "bossactor": {"email": "p@corp.test"}, "person_actor": "usr_1", "acting": "usr_1",
            "nested": [{"principal_id": "usr_3", "ok": 1}], **CONTENT}
+    camel = {"entity_id": "x", "principalId": "usr_1", "onBehalfOf": "usr_2",
+             "personActor": "usr_1", "acting": "usr_1",
+             "nested": [{"principalId": "usr_3", "principal_amount": 1}], **CONTENT}
     for kind in ("event", "intake", "cron", "monitor"):
         got = agent_triggers._agent_safe({"kind": kind}, raw)
         assert got == {"entity_id": "x", "nested": [{"ok": 1}], **CONTENT}, kind
+        spelled = agent_triggers._agent_safe({"kind": kind}, camel)
+        assert spelled == {"entity_id": "x", "nested": [{"principal_amount": 1}], **CONTENT}, kind
     msg = agent_triggers._message({"kind": "event", "input": {}, "config": {}},
                                   agent_triggers._agent_safe({"kind": "event"}, raw))
     assert "What arrived" in msg and "jane@acme.com" in msg and "usr_1" not in msg

@@ -61,10 +61,16 @@ from ._intake_support import (
 )
 
 
+#: `_process` claims only this project (another suite on the shared database must neither
+#: take these events nor have its own events processed here).
+_SCOPE: dict = {"project_id": None}
+
+
 @pytest.fixture()
 def world(monkeypatch):
     engine = pg_engine()
     pid = make_project(engine)
+    _SCOPE["project_id"] = pid
     event_intake.BUCKETS.reset()
     chat_reply.BUCKETS.reset()
     intake_guards.reset_for_tests()
@@ -91,12 +97,18 @@ def _receive(engine, slack: dict, event: dict, *, event_id=None, retry: int = 0)
 
 
 def _process(engine) -> dict:
-    return event_intake.process_due(engine, _settings())
+    return event_intake.process_due(engine, _settings(), project_id=_SCOPE["project_id"])
 
 
 def _deliver(engine, *, at: float = 0.0) -> dict:
+    # The outbox stamps next_attempt_at from the database clock. The host clock trails it
+    # here, so a row queued a moment ago is not due yet unless `now` is that same clock.
+    with engine.begin() as c:
+        stamped = c.execute(text("SELECT clock_timestamp()")).scalar()
+    if stamped.tzinfo is None:
+        stamped = stamped.replace(tzinfo=timezone.utc)
     return notify.deliver_chat_due(engine, _settings(),
-                                   now=datetime.now(timezone.utc) + timedelta(seconds=at))
+                                   now=stamped + timedelta(seconds=at))
 
 
 def _flush(engine) -> None:
