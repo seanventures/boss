@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2268 operations.
+# 2277 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -729,6 +729,9 @@
 "POST /v1/diag/sandbox-echo": ["permit sandbox:exec @ org", "OA"]
 "GET /v1/diag/sandbox-roundtrip": ["permit system:operate @ org +writes_on_get", "OA"]
 "POST /v1/diag/sandbox-roundtrip/load": ["permit system:operate @ org +writes_on_get", "OA"]
+"GET /v1/directors/{director_id}/desired": ["permit fleet:host @ org", "-"]
+"POST /v1/directors/{director_id}/heartbeat": ["permit fleet:host @ org", "-"]
+"POST /v1/directors/{director_id}/renew": ["permit fleet:host @ org", "-"]
 "GET /v1/discoveries": ["permit discovery:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/discoveries": ["permit discovery:create @ org", "OAP"]
 "GET /v1/discoveries/{run_id}": ["permit discovery:read @ discovery_run(path=run_id)", "OAPVU"]
@@ -849,6 +852,8 @@
 "POST /v1/finops/initiative-budget": ["permit budget:manage @ project(body=project_id)", "OA"]
 "POST /v1/finops/reconcile-commitments": ["permit budget:manage @ project(body=project_id)", "OA"]
 "GET /v1/finops/summary": ["permit budget:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/fleet/directors": ["permit fleet:read @ org", "OAPVU"]
+"POST /v1/fleet/directors/{director_id}/retire": ["permit fleet:manage @ org", "OA"]
 "GET /v1/fleet/hosts": ["permit fleet:read @ org", "OAPVU"]
 "GET /v1/fleet/hosts/{agent_host_id}": ["permit fleet:read @ org", "OAPVU"]
 "POST /v1/fleet/hosts/{agent_host_id}/cordon": ["permit fleet:manage @ org", "OA"]
@@ -857,6 +862,8 @@
 "POST /v1/fleet/join-tokens": ["permit fleet:manage @ org", "OA"]
 "DELETE /v1/fleet/join-tokens/{token_id}": ["permit fleet:manage @ org", "OA"]
 "POST /v1/fleet/reconcile": ["permit fleet:manage @ org", "OA"]
+"GET /v1/fleet/vip-pools": ["permit fleet:read @ org", "OAPVU"]
+"POST /v1/fleet/vip-pools": ["permit fleet:manage @ org", "OA"]
 "GET /v1/focused-agents": ["permit autopilot:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/focused-agents": ["permit autopilot:configure @ project(body=project_id)", "OA"]
 "POST /v1/focused-agents/tick-all": ["permit autopilot:operate @ project(body=project_id)", "OAP"]
@@ -2137,6 +2144,8 @@
 "POST /v1/verifier-debate/run": ["permit assurance:read @ org", "OAPVU"]
 "POST /v1/verifier-meta-eval": ["permit assurance:run @ org", "OAP"]
 "POST /v1/verifier-ratchet/capture": ["permit assurance:run @ code_task(body=run_id)", "OAP"]
+"DELETE /v1/vips/{vip}/members/{replica_id}": ["permit fleet:host @ org", "-"]
+"PUT /v1/vips/{vip}/members/{replica_id}": ["permit fleet:host @ org", "-"]
 "POST /v1/visual-gate": ["permit assurance:read @ org", "OAPVU"]
 "POST /v1/web-app": ["permit code_task:create @ project(body=project_id)", "OAP"]
 "GET /v1/webhook-deliveries": ["permit integration:read @ project(query=project_id)", "OAPVU"]

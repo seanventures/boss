@@ -316,3 +316,53 @@ func (c *Client) PostEvents(ctx context.Context, hostID string, events []hostapi
 	}
 	return err
 }
+
+// ---- Directors (boss-lbd, P8b-10) -----------------------------------------
+
+// DirectorHeartbeat: POST /v1/directors/{id}/heartbeat.
+func (c *Client) DirectorHeartbeat(ctx context.Context, id string, req hostapi.DirectorHeartbeatRequest) (*hostapi.DirectorHeartbeatResponse, error) {
+	var out hostapi.DirectorHeartbeatResponse
+	if _, err := c.do(ctx, http.MethodPost, fmt.Sprintf(hostapi.PathDirectorHeartbeat, id), nil, req, &out, true); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DirectorDesired long-polls the director's desired state; (nil, nil) when
+// the wait elapsed with no change.
+func (c *Client) DirectorDesired(ctx context.Context, id string, since int64, wait time.Duration) (*hostapi.DirectorDesired, error) {
+	q := url.Values{"since": {strconv.FormatInt(since, 10)}, "wait": {strconv.Itoa(int(wait / time.Second))}}
+	var out hostapi.DirectorDesired
+	if _, err := c.do(ctx, http.MethodGet, fmt.Sprintf(hostapi.PathDirectorDesired, id), q, nil, &out, true); err != nil {
+		return nil, err
+	}
+	if !out.Changed {
+		return nil, nil
+	}
+	return &out, nil
+}
+
+// DirectorRenew: POST /v1/directors/{id}/renew.
+func (c *Client) DirectorRenew(ctx context.Context, id string, req hostapi.RenewRequest) (*hostapi.EnrolResponse, error) {
+	var out hostapi.EnrolResponse
+	if _, err := c.do(ctx, http.MethodPost, fmt.Sprintf(hostapi.PathDirectorRenew, id), nil, req, &out, true); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// VIPMember is the host's durable record of a registration or withdraw at
+// the control plane: PUT (weight) or DELETE (vm_ip in the query).
+func (c *Client) VIPMember(ctx context.Context, method, vip, replica string, m hostapi.VIPMember) error {
+	path := fmt.Sprintf(hostapi.PathVIPMember, vip, url.PathEscape(replica))
+	if method == http.MethodDelete {
+		q := url.Values{"vm_ip": {m.VMIP}}
+		if m.Reason != "" {
+			q.Set("reason", m.Reason)
+		}
+		_, err := c.do(ctx, method, path, q, nil, nil, true)
+		return err
+	}
+	_, err := c.do(ctx, method, path, nil, m, nil, true)
+	return err
+}

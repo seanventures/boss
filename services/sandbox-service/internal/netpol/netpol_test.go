@@ -40,9 +40,17 @@ func TestRenderVMIsInboundOnly(t *testing.T) {
 			t.Fatalf("missing %q in:\n%s", m, s)
 		}
 	}
-	// internal nets are dropped BEFORE any reply accept.
-	if strings.Index(s, "@internal_nets") > strings.Index(s, "accept") {
-		t.Fatal("the internal-net drop must precede the reply accepts")
+	// internal nets are dropped BEFORE any reply accept, except the directors' own
+	// health-check reply (to @directors, on a flow the director opened).
+	drop := strings.Index(s, "@internal_nets")
+	for i, line := range strings.Split(s, "\n") {
+		_ = i
+		if strings.Contains(line, "accept") && strings.Index(s, line) < drop && !strings.Contains(line, "ip daddr @directors") {
+			t.Fatalf("an accept precedes the internal-net drop: %s", line)
+		}
+	}
+	if !strings.Contains(s, "ip daddr @directors tcp flags & (syn|ack) != syn "+tuple+" @flows_"+tap+" counter name reply_"+tap+" accept") {
+		t.Fatal("the directors' health-check reply rule is missing")
 	}
 	v.VIP = ""
 	if strings.Contains(RenderVM(v), "accept") {

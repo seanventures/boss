@@ -492,6 +492,12 @@ func (a *Agent) stopVM(ctx context.Context, id, why string) {
 	}
 	st.mu.Lock()
 	vm, tap, prev := st.vm, st.tap, st.state
+	spec := st.spec
+	st.mu.Unlock()
+	if prev == hostapi.StateServing || prev == hostapi.StateDraining || prev == hostapi.StateUnhealthy {
+		a.withdrawVM(spec, "stopped: "+why, true) // directors: weight 0, then delete
+	}
+	st.mu.Lock()
 	tomb := hostapi.ReplicaStatus{ReplicaID: st.spec.ReplicaID, VMID: id, DeploymentID: st.spec.DeploymentID,
 		Mode: st.spec.Mode, State: hostapi.StateStopped, Reason: why, VsockPingAgeMS: -1}
 	st.mu.Unlock()
@@ -525,10 +531,16 @@ func (a *Agent) handleUnhealthy(ctx context.Context, id string) {
 	}
 	st.cancelWatch()
 	if a.gw != nil {
-		a.gw.Detach(id) // withdraw first (P8b: weight 0 at the directors)
+		a.gw.Detach(id)
 	}
 	st.mu.Lock()
 	vm, reason, dv := st.vm, st.reason, st.spec
+	st.mu.Unlock()
+	// Withdraw first (P8b-10): weight 0 at every director at once; on a
+	// confirmed death (process gone, pings silent) the real server is also
+	// deleted so its connections are reset and clients reconnect elsewhere.
+	a.withdrawVM(dv, reason, confirmedDeath(reason))
+	st.mu.Lock()
 	if st.crashloops > 0 {
 		// The replacement after a crashloop failed too: quarantine. Nothing
 		// restarts it until its spec changes or it leaves desired state.
@@ -636,6 +648,9 @@ func (a *Agent) watchdog(ctx context.Context, st *vmState, vm *vmm.VM) {
 			}
 			prev := st.setState(to, "")
 			a.event(st.id, "vm_state", prev, to, nil)
+			if to == hostapi.StateServing {
+				a.registerVM(st.spec) // directors: this real server takes traffic now
+			}
 		}
 		if ok {
 			st.mu.Lock()

@@ -25,6 +25,7 @@
 //	BOSS_HOSTD_STRICT_SECRETS    default true
 //	BOSS_HOSTD_HEADLESS_MAX_SECONDS  default 86400: control plane unreachable this long → stop serving
 //	BOSS_MICROVM_CLAIMS_FROZEN   default true: gates per_run VMs (replicas are on)
+//	BOSS_HOSTD_ADDRESS           this host's IPv4 for the directors' vm_prefix route (default: detected)
 //
 // P8b (snapshots, warm pools, jailer; docs/infra/HOST_API.md §3.4, §8):
 //
@@ -156,6 +157,7 @@ func buildAgent() (*hostd.Agent, error) {
 		HeadlessMax:    time.Duration(legacy.EnvInt("BOSS_HOSTD_HEADLESS_MAX_SECONDS", 24*3600)) * time.Second,
 		Hostname:       host,
 		Pool:           env("BOSS_HOSTD_POOL", "default"),
+		Address:        env("BOSS_HOSTD_ADDRESS", ""),
 		Manager:        mgr,
 		Net:            nm,
 		ClaimsFrozen:   legacy.EnvBool("BOSS_MICROVM_CLAIMS_FROZEN", true),

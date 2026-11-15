@@ -536,7 +536,9 @@ class _HostWaiters:
             return
         with engine.connect() as c:
             gens = {r[0]: int(r[1]) for r in c.execute(text(
-                "SELECT id, desired_generation FROM agent_hosts WHERE id = ANY(:h)"),
+                "SELECT id, desired_generation FROM agent_hosts WHERE id = ANY(:h) "
+                "UNION ALL "
+                "SELECT id, desired_generation FROM director_nodes WHERE id = ANY(:h)"),
                 {"h": sorted({w.host_id for w in waiting})}).all()}
         for waiter in waiting:
             if gens.get(waiter.host_id, 0) > waiter.since:

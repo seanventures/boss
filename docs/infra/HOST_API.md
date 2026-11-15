@@ -15,6 +15,18 @@ Where the LLD left a choice open, this document records the choice. Every choice
 
 **Contract version:** `1.1`. Changes are additive, and each side ignores fields it does not know.
 
+**1.1 (P8b-10, `p8/b-lbd`, BOSSAPP-1077): the IPVS directors.** `boss-lbd` (Go, `cmd/boss-lbd`,
+`internal/lbd`) enrols through the host enrol path with a join token issued for `role:
+director`, long-polls **its own desired state** (§9.2: every VIP with its SERVING real servers,
+the route per host, the VRRP grouping the control plane decides), programs IPVS over generic
+netlink in **GRE tunnel mode** (`IPVS_DEST_ATTR_TUN_TYPE = GRE`, decision 8), renders
+keepalived's **VRRP-only** configuration, runs the IPVS connection sync daemons, holds the
+**director lease** per VRRP group through its heartbeat (§9.3), health-checks every real server
+through the real data path (§9.5) and accepts **direct withdraw pushes from hosts over mTLS**
+(§9.4). Hosts report their `address` and push `PUT/DELETE /v1/vips/{vip}/members/{replica}` to
+every director in `director_push` and to the control plane. The guest puts the VIP on `lo` and
+decapsulates GRE on `bgre0` (§9.6). Measured on boss-1 (netns lab): §9.7.
+
 **1.1 (control plane, `p8/a-runplane`, operator decisions 2026-11-14, LLD §3.13.0 and its
 REVISION):** work reaches replicas through **ONE long-poll per host**, `POST
 /v1/run-plane/hosts/next` (§2.8), whose body carries **no replica list** — BOSS keeps its own
@@ -196,6 +208,11 @@ Fresh keys every time.
   control plane sees why) and the replica shapes' surge spares (§3.4). `capacity.used_vms` counts
   warm VMs too.
 
+**`address` (P8b-10):** the host's reachable IPv4, in the heartbeat and the enrol body
+(`BOSS_HOSTD_ADDRESS`, default: the source address toward the control plane). The directors route
+the host's `vm_prefix` through it (one static route per host, §5.1). A change bumps every
+director's desired generation.
+
 **Replica entries:**
 
 - A desired VM that the host refuses still appears, with `state: "refused"` and a named
@@ -284,7 +301,8 @@ The response is always `200`.
 
 **Extensions the host honours when present.** The Python side omits them in P8a:
 
-- `directors: ["192.0.2.10"]`: the IPv4 addresses allowed to send GRE-encapsulated caller traffic to replicas (P8b).
+- `directors: ["192.0.2.10"]`: the IPv4 addresses allowed to send GRE-encapsulated caller traffic to replicas (P8b). **Sent since P8b-10:** the live directors' addresses.
+- `director_push: [{"id": "dir_…", "address": "192.0.2.10", "port": 7446}]` (P8b-10): where the host pushes real-server registrations and withdraws directly (§9.4), besides the control plane.
 - `claims_frozen: true`: ORed with the host's own `BOSS_MICROVM_CLAIMS_FROZEN` for `per_run`.
 - Per VM:
   - `replica_handle`;
@@ -742,7 +760,10 @@ the exact 4-tuple of every caller flow.
   Everything else is dropped (`indrop_`).
 - **OUT** (`out_<tap>`):
   - `→ 169.254.169.254` is dropped (`meta_`);
-  - `→ @internal_nets` is dropped (`orig_`), before any accept;
+  - **the directors' health-check reply** (P8b-10, §9.5): from the VIP, sport ∈ `vip_ports`, to
+    `@directors`, non-SYN, on a flow that director opened (`flows_`) is accepted (`reply_`) — the
+    one reply shape allowed toward an internal address, because directors sit on the infra network;
+  - `→ @internal_nets` is dropped (`orig_`), before every other accept;
   - from the VIP, sport ∈ `vip_ports`, on a learned flow: **RST** deletes the flow and is
     accepted; **FIN** moves the flow to `closing_<tap>` (30 s) and is accepted; any other non-SYN
     packet on a flow in `flows_` or `closing_` is accepted (`reply_`);
@@ -887,6 +908,142 @@ reached over vsock. P8a-T4 re-run jailed (20 replicas in namespaces + 1 `per_run
 of the cold-booted template and of a restored replica were each dropped and counted on their own
 tap only (`orig=2 meta=1` on vm_01 and on vm_02, every other tap 0, both jailed and unjailed)..
 
+## 9. The IPVS directors: boss-lbd (P8b-10, LLD §3.14.2, §3.14.4)
+
+```
+ client ──► VIP:443 (MASTER director, VRRP) ── IPVS rr/wlc, persistence off ──► GRE(outer dst = vm_ip) ──► host route ──► tap ──► VM
+ VM: VIP on lo, bgre0 decaps, TLS ends in the VM, reply src = VIP straight to the client (bypasses the director)
+```
+
+Two small Linux nodes (A and B) run `boss-lbd` + `keepalived`. Both carry traffic: the control
+plane groups VIPs (≤ 50 per VRRP instance) and makes A MASTER of the even groups and B of the odd
+ones. Nothing here decides ownership of a run: a director fault resets connections at worst
+(LLD §2.8).
+
+### 9.1 Enrol, heartbeat, renew
+
+| Call | Path | Auth | Notes |
+|---|---|---|---|
+| Enrol | `POST /v1/hosts/enrol` with `role: "director"`, `address` | a join token issued with `role: director` (`POST /v1/fleet/join-tokens {"role": "director"}`) | `201`: `host_id` = the director id (`dir_…`), a 24 h certificate with **client and server auth** and an IP SAN of `address`, the fleet CA. A host token on a director (or the reverse) is `400 join_token_role`. |
+| Heartbeat | `POST /v1/directors/{id}/heartbeat` | BossHost proof (director certificate) | Every 2 s (§9.3). |
+| Desired | `GET /v1/directors/{id}/desired?since=&wait=` | BossHost | Level-based long-poll, like the host's. |
+| Renew | `POST /v1/directors/{id}/renew` | BossHost | Same shape as a host renewal; no SVID. |
+| Console | `GET /v1/fleet/directors`, `POST /v1/fleet/directors/{id}/retire`, `GET/POST /v1/fleet/vip-pools` | `fleet:read` / `fleet:manage` | A retired director's calls are refused; the peer takes every group. |
+
+A director's certificate authenticates as the `sys_host` principal with credential kind
+`director_cert`: host routes refuse it (`401 director_credential_required` the other way round).
+
+### 9.2 Desired state (director)
+
+```json
+{"changed": true, "director_id": "dir_…", "generation": 12, "status": "ready",
+ "self": {"id": "dir_a", "address": "192.0.2.10", "side": "A", "port": 7446},
+ "peer": {"id": "dir_b", "address": "192.0.2.11", "side": "B", "port": 7446},
+ "directors": [ …both… ], "vip_pools": ["203.0.113.0/26"],
+ "vips": [{"vip": "203.0.113.17", "ports": [443], "scheduler": "rr", "deployment_id": "…", "group": 0,
+           "members": [{"replica_id": "rep_…", "vm_ip": "10.200.4.7", "host_id": "hst_…", "weight": 1, "slots": 4}]}],
+ "groups": [{"group": 0, "vrid": 1, "master": "dir_a", "vips": ["203.0.113.17"]}],
+ "hosts": [{"host_id": "hst_…", "address": "198.51.100.1", "vm_prefix": "10.200.4.0/23"}]}
+```
+
+- **Members are serving replicas only** (`agent_replicas.observed_state = 'serving'`, with a
+  `vm_ip`), weight = `rs_weight`. A VIP with no serving member still appears (the service exists,
+  with no real server).
+- `scheduler` is `rr`, or `wlc` once the members' `slots` differ.
+- `groups` is computed by the control plane (VIPs sorted, chunks of 50, group *i* MASTER on the
+  *i*-th director by id order modulo the pair), so both sides render the same keepalived
+  configuration. `vrid` = 1 + group.
+- `hosts` is the static route list: `vm_prefix via address` (§5.1).
+- **Generation** moves when a replica enters or leaves `serving`, the scheduler changes a host's
+  set, a VIP is allocated, a host's address changes, or a director enrols or retires.
+- **VIP allocation (D8):** the lowest free address of the org's `vip_pool` rows (`routing ipvs`)
+  is given to a production microVM deployment on its first placement; `vip_ports` defaults to
+  `[443]`. Without a pool the deployment serves internal callers only.
+
+What `boss-lbd` does with it: one IPVS virtual service per `(VIP, port)` (TCP, the scheduler,
+flags 0 = no persistence), real servers in **tunnel mode with tunnel type GRE**; services inside
+`vip_pools` that are no longer desired are removed, services outside the pools are never touched;
+the routes; `keepalived.conf` (VRRP only, `nopreempt`, unicast to the peer, `priority 150` on the
+MASTER side, `virtual_ipaddress_excluded` for the rest of a group, a `track_script` and `notify_*`
+per group) is written and keepalived is sent `SIGHUP` when it changed; the IPVS sync daemons run
+as `master` **and** `backup` on both nodes (both carry traffic); sysctls `ip_forward=1`,
+`vs.expire_nodest_conn=1`, `vs.conntrack=0`, `rp_filter=0`, `accept_local=1`.
+
+### 9.3 Heartbeat and the director lease
+
+```json
+→ {"address": "192.0.2.10", "groups_master": [0, 2], "keepalived_live": true,
+   "ipvs": {"services": 4, "dests": 11, "conns": 812, "sync_state": "master+backup"},
+   "observed_generation": 12, "contract_version": "1.1"}
+← {"director_id": "dir_a", "desired_generation": 12, "leases": {"0": "dir_a", "1": "dir_b", "2": "dir_a"},
+   "renew": false, "heartbeat_seconds": 2}
+```
+
+`director_leases(org_id, vrrp_group) → holder, expires_at` (5 s TTL). A heartbeat takes the lease
+of every group its keepalived reports MASTER when it is free, expired or already its own; it
+never takes another live director's. `boss-lbd` writes `track/<group>` = `fault` exactly when it
+is MASTER of a group whose lease another director holds; keepalived's `vrrp_script` (`boss-lbd
+track --group N`, every second, `fall 2`) then puts that instance in FAULT, dropping its VIPs.
+That ends a split brain within about two seconds. **A missing lease, an unreachable control
+plane or an expired peer lease never fault** (decision 30): the lease breaks ties, it does not
+take every VIP down with Postgres.
+
+A director silent for 10 s is marked `unreachable` by the scheduler pass; its leases lapse.
+
+### 9.4 Real-server pushes from hosts
+
+```
+PUT    /v1/vips/{vip}/members/{replica}   {"vm_ip": "10.200.4.7", "weight": 0|n, "ports": [443], "host_id": "hst_…", "reason": "process_exit"}
+DELETE /v1/vips/{vip}/members/{replica}?vm_ip=10.200.4.7&reason=process_exit
+```
+
+- **To every director** in `director_push`, over mTLS on port 7446: the host presents its fleet
+  client certificate, the director presents its fleet certificate and the host checks the leaf's
+  CN is the expected director id. The director applies it to IPVS **before answering**
+  (`{"applied": n, "latency_us": …}`) and records `boss_lbd_withdraw_seconds`. Weight 0 =
+  drain (existing connections finish); DELETE = confirmed death (with `expire_nodest_conn=1`
+  that VM's connections are reset and clients reconnect elsewhere). A push holds for 30 s
+  against a stale desired feed; a feed that no longer lists the member, or a later registration,
+  clears it. A registration (weight > 0) ahead of the feed is accepted when the VIP's service
+  exists.
+- **To the control plane**, the durable record: the host's own replica only
+  (`403 replica_not_on_host`), whose deployment owns the VIP (`409 vip_mismatch`); it sets
+  `rs_weight` (0 on withdraw/DELETE) and wakes the directors.
+- **When:** the watchdog pushes weight 0 the moment a VM turns unhealthy, and DELETE on a
+  confirmed death (process exit, three missed pings) or a stop; a replica that turns `serving`
+  is registered with its weight. Both run off the watchdog's path (≤ 500 ms per director).
+
+### 9.5 Health checks
+
+1 s interval; 2 failures → weight 0; 4 → delete; 2 successes → restored. A check is a **TCP SYN
+inside GRE** to the member's `vm_ip` with the VIP as inner destination and the director's address
+as inner source, from a fixed source port per member; the VM's SYN-ACK returns direct (DSR) to
+the director; the prober then sends an RST through the same path, closing the VM's half-open
+connection. It passes only when GRE is accepted by the host policy, decapsulated in the guest, the
+VIP is held there and the listener is up — the exact data path. (A TLS-handshake check needs a
+per-member tunnel device on the director; left for a later ticket, decision 31.)
+
+### 9.6 The guest
+
+`ReplicaNetSetup` puts the VIP on `lo` (/32; `arp_ignore=1`, `arp_announce=2` already) and adds
+`bgre0` (`mode gre local vm_ip`, no fixed remote, `rp_filter=0`), so either director's packets
+decapsulate to the VIP. Replies leave `eth0` with source = VIP (DSR).
+
+### 9.7 Measured on boss-1 (netns lab, `scripts/sandbox/lbd-netlab.sh`)
+
+Two director namespaces (boss-lbd + keepalived 2.2.8, kernel 6.8, GRE tunnel mode), one host
+namespace with the exact `boss-hostd netpol-render` policy on three taps, three replica
+namespaces (VIP on lo, `bgre0`, a TLS server), one client. 17 checks, 3 consecutive green runs
+(2026-11-15):
+
+| Check | Result |
+|---|---|
+| T1 | 6 TLS connections to the VIP → `v3 v2 v1 v3 v2 v1` (rr over 3 replicas); the director saw 54 GRE packets out and **0** reply packets from the VIP (DSR) |
+| T2 health | replica killed → drained after 2 failed 1 s checks (≈ 2 s), deleted 2 s later; a 40-connection client loop: **0 failures** after one retry |
+| T2 push | host → both directors over mTLS, weight 0 then DELETE: **2.0–3.7 ms** round trip per director (TLS handshake included); IPVS apply on the director ≤ **0.31 ms** (`boss_lbd_withdraw_seconds_max`); a non-fleet certificate refused |
+| T13 | **~1 600 new TLS connections/s** through one director from a single client (client-bound: `openssl s_time`; IPVS counted 8 471 conns, 0 outgoing packets); `ip_vs_conn` is merged into kmalloc on 6.8 (≈ 320 B per entry → ~300 MB per million connections, as §2.8 estimated) |
+| VRRP | group 0 MASTER on A, group 1 on B; keepalived states reach boss-lbd (`/status`); A's keepalived killed → B owns the VIP after **0.64 s** and serves it |
+
 ## Decisions
 
 These are the choices made where the LLD was open or silent. Items 1–5 align the Go host with the
@@ -969,6 +1126,21 @@ Python control plane as it was built.
 28. **(P8b review) Replica snapshots only under the jailer.** Firecracker 1.10 restores the
     snapshot's `host_dev_name`; without the jailer's uniform `tap0` a clone would open the template's
     tap. `network_overrides` (Firecracker 1.12+) can lift this later.
+29. **(P8b-10) The directors' desired state is computed by the control plane, VRRP grouping
+    included.** Two directors rendering keepalived from the same `groups` can never disagree about
+    who is MASTER; VIPs are chunked by 50 in sorted order (VRID = 1 + group), alternating sides.
+30. **(P8b-10) The director lease breaks ties; it never takes VIPs down with the control plane.**
+    A MASTER faults only when another live director holds its group's lease. An unreachable control
+    plane, an empty lease or an expired one leave keepalived's decision alone (LLD §3.14.4 said
+    "cannot renew → FAULT"; that would remove every external VIP during a Postgres outage).
+31. **(P8b-10) Health checks are a TCP SYN inside GRE through the real data path**, from a fixed
+    source port per member, closed by an RST; the host policy admits exactly that reply toward a
+    director (§5.1). IPIP is not used anywhere; `moby/ipvs` v1.1.0 cannot set a tunnel type, so
+    `internal/lbd/ipvs` speaks the IPVS genetlink family directly. A TLS-handshake check is a
+    later ticket.
+32. **(P8b-10) A pushed withdraw outranks the desired feed for 30 s.** The feed drops the member
+    within ~100 ms through `/observed`; the override is the safety net against a stale feed
+    re-adding a dead real server, and a registration or a feed without the member clears it.
 27. **(P8b review) No MMDS yet.** Removed until a guest consumer and the in-guest root-only rule
     exist; the vsock bootstrap carries the same data, and the tap keeps counting metadata attempts.
 
@@ -979,7 +1151,7 @@ Python control plane as it was built.
 - **Events (optional):** add `POST /v1/hosts/{id}/events` if crashloop and handle-replay detail
   should land in `host_events`. Without it the states still arrive through heartbeat and observed.
 - **P8b:**
-  - send `directors`;
+  - ~~send `directors`~~ (done, P8b-10: `directors` and `director_push`);
   - send per-run `runs[].handles`;
   - send `fences` and `revocations` in desired state.
   The host already enforces them.
@@ -989,8 +1161,10 @@ Python control plane as it was built.
 - Signed images (two flavours) and the image roll with a canary snapshot.
 - MMDS V2 (non-secret) for replicas, with the in-guest `meta skuid != 0 drop` rule (decision 27).
 - The per-repository setup cache (S22).
-- The VIP on `tunl0` in the guest.
-- Director registration and withdraw (weight 0), with IPVS `--tun-type gre` (§5.1).
+- ~~The VIP on `tunl0` in the guest~~ (done, P8b-10: VIP on `lo`, GRE decap on `bgre0`, §9.6).
+- ~~Director registration and withdraw (weight 0), with IPVS `--tun-type gre`~~ (done, P8b-10, §9.4).
+- A TLS-handshake health check on the directors (decision 31); director metrics into Prometheus
+  scraping (today: `127.0.0.1:9446/metrics` on each director).
 - The TLS self-check before `serving`.
 - The egress and MCP gateway routes (the model gateway is live: §4.6, with the model rules
   already carrying `HostProof` and `X-Boss-Handle`); the gateways' mTLS listeners.

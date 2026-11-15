@@ -118,7 +118,7 @@ def reconcile(engine: Any, settings: Any = None, *, org_id: Optional[str] = None
     # process; one in another process sees it at its next generation sweep).
     from .run_plane import wake_desired
 
-    wake_desired([b["host_id"] for b in report["bumped"]])
+    wake_desired([b["host_id"] for b in report["bumped"]] + list(report.get("directors") or []))
     return report
 
 
@@ -133,8 +133,14 @@ def maybe_reconcile(engine: Any, settings: Any = None, *, every: float = 2.0) ->
 
 def _reconcile(c: Any, *, is_frozen: bool, org_id: Optional[str]) -> dict:
     report: dict = {"placed": [], "stopped": [], "degraded": [], "unreachable": [],
-                    "bumped": []}
+                    "bumped": [], "vips": [], "directors": []}
     changed: dict = {}  # host id -> the replica rows this pass changed there
+    orgs_touched: set = set()  # orgs whose directors must see a new generation (P8b-10)
+    from . import fleet_directors
+
+    # 0. Directors that stopped beating (their leases lapse on their own).
+    for did in fleet_directors.mark_unreachable(c, org_id):
+        report["unreachable"].append(did)
 
     def touch(host_id: str, replica_id: str) -> None:
         changed.setdefault(host_id, set()).add(replica_id)
@@ -156,7 +162,7 @@ def _reconcile(c: Any, *, is_frozen: bool, org_id: Optional[str]) -> dict:
     deps = [dict(r) for r in c.execute(text("""
         SELECT d.id, d.project_id, d.agent_key, d.environment, d.version, d.status, d.runtime,
                d.vm_mode, d.replicas, d.placement, d.image_digest, d.resources, w.org_id,
-               d.placement_state
+               d.placement_state, d.vip, d.routing
           FROM agent_deployments d JOIN projects p ON p.id = d.project_id
           JOIN workspaces w ON w.id = p.workspace_id
          WHERE (d.runtime = 'microvm' OR d.id IN (SELECT deployment_id FROM agent_replicas
@@ -171,13 +177,14 @@ def _reconcile(c: Any, *, is_frozen: bool, org_id: Optional[str]) -> dict:
     def stop(replica: dict, why: str) -> None:
         c.execute(text("UPDATE agent_replicas SET desired_state = 'stopped', updated_at = now() "
                        "WHERE id = :r"), {"r": replica["id"]})
+        orgs_touched.add(replica.get("org_id") or "")
         load[replica["host_id"]] = max(0, load.get(replica["host_id"], 1) - 1)
         touch(replica["host_id"], replica["id"])
         report["stopped"].append({"replica_id": replica["id"], "why": why})
 
     for dep in deps:
         replicas = [dict(r) for r in c.execute(text(
-            "SELECT id, host_id, agent_version FROM agent_replicas WHERE deployment_id = :d "
+            "SELECT id, host_id, agent_version, org_id FROM agent_replicas WHERE deployment_id = :d "
             "AND desired_state = 'running' ORDER BY created_at"), {"d": dep["id"]}
         ).mappings().all()]
         live = dep["status"] == "live" and dep["runtime"] == "microvm"
@@ -197,6 +204,13 @@ def _reconcile(c: Any, *, is_frozen: bool, org_id: Optional[str]) -> dict:
             continue
         prod = dep["environment"] == "prod"
         wanted = max(0, int(dep["replicas"] or 0))
+        # D8: one VIP per production agent, allocated on its first placement (P8b-10). Without
+        # a pool the deployment serves internal callers only.
+        if prod and dep.get("vip") is None and dep.get("routing", "ipvs") == "ipvs":
+            vip = fleet_directors.allocate_vip(c, org_id=dep["org_id"], deployment_id=dep["id"])
+            if vip:
+                report["vips"].append({"deployment_id": dep["id"], "vip": vip})
+                orgs_touched.add(dep["org_id"])
         # 2. Replicas on hosts that can no longer hold them.
         kept = []
         for r in replicas:
@@ -248,8 +262,10 @@ def _reconcile(c: Any, *, is_frozen: bool, org_id: Optional[str]) -> dict:
                  "h": host["id"], "vm": f"vm_{uuid.uuid4().hex[:16]}", "ip": _vm_ip(c, host),
                  "img": dep["image_digest"], "v": dep["version"],
                  "slots": int((_json(dep["resources"], {}) or {}).get("slots") or DEFAULT_SLOTS)})
-            kept.append({"id": rid, "host_id": host["id"], "agent_version": dep["version"]})
+            kept.append({"id": rid, "host_id": host["id"], "agent_version": dep["version"],
+                         "org_id": dep["org_id"]})
             holding.add(host["id"])
+            orgs_touched.add(dep["org_id"])
             load[host["id"]] = load.get(host["id"], 0) + 1
             touch(host["id"], rid)
             report["placed"].append({"replica_id": rid, "host_id": host["id"],
@@ -274,6 +290,9 @@ def _reconcile(c: Any, *, is_frozen: bool, org_id: Optional[str]) -> dict:
         c.execute(text("UPDATE agent_replicas SET generation = :g WHERE id = ANY(:r)"),
                   {"g": gen, "r": sorted(changed[host_id])})
         report["bumped"].append({"host_id": host_id, "generation": int(gen or 0)})
+    # 7. The directors of every org whose serving sets or VIPs may have moved.
+    for org in sorted(o for o in orgs_touched if o):
+        report["directors"].extend(fleet_directors.bump(c, org))
     return report
 
 

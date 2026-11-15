@@ -325,10 +325,15 @@ def _from_host(creds: RequestCredentials, db: Any, ip: Optional[str],
             return None
     except fleet_ca.FleetAuthError as exc:
         raise AuthnError(exc.code, exc.status) from exc
+    director = getattr(host, "role", "host") == "director"
     principal = Principal(HOST_PRINCIPAL, PrincipalKind.SYSTEM, host.org_id,
-                          PrincipalStatus.ACTIVE, f"Agent host {host.host_id}")
+                          PrincipalStatus.ACTIVE,
+                          f"{'IPVS director' if director else 'Agent host'} {host.host_id}")
+    # A director (boss-lbd, P8b-10) is the same system principal with its own credential
+    # kind, so the fleet router can hold hosts and directors to their own routes.
     return AuthContext(principal=principal, method=AuthMethod.SYSTEM,
-                       credential=CredentialRef(id=host.host_id, kind="host_cert",
+                       credential=CredentialRef(id=host.host_id,
+                                                kind="director_cert" if director else "host_cert",
                                                 principal_id=HOST_PRINCIPAL,
                                                 scopes=frozenset({"fleet:host"})),
                        ip=ip, user_agent=ua, request_id=creds.request_id)

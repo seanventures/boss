@@ -87,23 +87,27 @@ def host_event(connection: Any, *, org_id: str, host_id: Optional[str], kind: st
 # ── Join tokens (console) ───────────────────────────────────────────────────────────────────
 
 def issue_join_token(connection: Any, *, org_id: str, actor: str, pool: str = "default",
-                     labels: Optional[dict] = None, hours: int = JOIN_TOKEN_HOURS) -> dict:
-    """A one-time join token. The token itself is in this answer once and never again."""
+                     labels: Optional[dict] = None, hours: int = JOIN_TOKEN_HOURS,
+                     role: str = "host") -> dict:
+    """A one-time join token, for one role: `host` (boss-hostd) or `director` (boss-lbd,
+    P8b-10). The token itself is in this answer once and never again."""
     if not 1 <= int(hours) <= 168:
         raise FleetError("a join token lives between 1 and 168 hours.")
+    if role not in ("host", "director"):
+        raise FleetError("a join token is for a host or a director.")
     token = JOIN_TOKEN_PREFIX + secrets.token_urlsafe(32)
     tid = make_id("hjt")
     expires = _now() + timedelta(hours=int(hours))
     connection.execute(text("""
         INSERT INTO agent_host_join_tokens (id, org_id, token_hash, pool, labels, expires_at,
-                                            created_by)
-        VALUES (:i, :o, :h, :p, CAST(:l AS JSONB), :e, :a)"""),
+                                            created_by, role)
+        VALUES (:i, :o, :h, :p, CAST(:l AS JSONB), :e, :a, :r)"""),
         {"i": tid, "o": org_id, "h": _hash(token), "p": pool or "default",
-         "l": json.dumps(labels or {}), "e": expires, "a": actor})
+         "l": json.dumps(labels or {}), "e": expires, "a": actor, "r": role})
     host_event(connection, org_id=org_id, host_id=None, kind="join_token_issued",
-               detail={"join_token_id": tid, "pool": pool}, actor=actor)
+               detail={"join_token_id": tid, "pool": pool, "role": role}, actor=actor)
     return {"id": tid, "token": token, "pool": pool or "default", "labels": labels or {},
-            "expires_at": expires.isoformat()}
+            "expires_at": expires.isoformat(), "role": role}
 
 
 def revoke_join_token(connection: Any, *, org_id: str, token_id: str, actor: str) -> bool:
@@ -140,30 +144,44 @@ def _allocate_prefix(connection: Any, org_id: str) -> str:
 
 def enrol(connection: Any, *, join_token: str, csr_pem: str, svid_csr_pem: Optional[str] = None,
           hostname: str = "", backend: str = "firecracker", facts: Optional[dict] = None,
-          capacity: Optional[dict] = None, labels: Optional[dict] = None) -> dict:
+          capacity: Optional[dict] = None, labels: Optional[dict] = None, role: str = "host",
+          address: Optional[str] = None) -> dict:
     """Spend a join token: a host row, its 24 h certificate (and SVID intermediate) and its VM
-    address block. A token that is unknown, spent, revoked or expired is refused identically."""
+    address block. A token that is unknown, spent, revoked or expired is refused identically.
+    A token issued for `role: director` enrols a boss-lbd director instead (P8b-10)."""
     if backend not in ("firecracker", "process"):
         raise FleetError("backend must be firecracker or process.")
     row = connection.execute(text("""
-        SELECT id, org_id, pool, labels, expires_at, used_at, revoked_at
+        SELECT id, org_id, pool, labels, expires_at, used_at, revoked_at, role
           FROM agent_host_join_tokens WHERE token_hash = :h FOR UPDATE"""),
         {"h": _hash(str(join_token or ""))}).mappings().first()
     if (row is None or row["used_at"] is not None or row["revoked_at"] is not None
             or row["expires_at"] <= _now()):
         raise FleetError("that join token is not valid.", status=401, code="join_token_invalid")
+    if (role or "host") != (row["role"] or "host"):
+        raise FleetError(f"this join token enrols a {row['role']}, not a {role}.", status=400,
+                         code="join_token_role")
+    if row["role"] == "director":
+        from . import fleet_directors
+
+        try:
+            return fleet_directors.enrol(connection, token=dict(row), csr_pem=csr_pem,
+                                         hostname=hostname, address=address, labels=labels)
+        except fleet_directors.DirectorError as exc:
+            raise FleetError(str(exc), status=exc.status, code=exc.code) from exc
     org_id = str(row["org_id"])
     host_id = make_id("hst")
     prefix = _allocate_prefix(connection, org_id)
     merged = {**_json(row["labels"], {}), **(labels or {})}
     connection.execute(text("""
         INSERT INTO agent_hosts (id, org_id, pool, hostname, labels, backend, vm_prefix,
-                                 capacity, facts, status, last_heartbeat_at)
+                                 capacity, facts, status, last_heartbeat_at, address)
         VALUES (:i, :o, :p, :hn, CAST(:l AS JSONB), :b, CAST(:vp AS CIDR),
-                CAST(:c AS JSONB), CAST(:f AS JSONB), 'ready', now())"""),
+                CAST(:c AS JSONB), CAST(:f AS JSONB), 'ready', now(), CAST(:addr AS INET))"""),
         {"i": host_id, "o": org_id, "p": row["pool"], "hn": hostname[:200],
          "l": json.dumps(merged), "b": backend, "vp": prefix,
-         "c": json.dumps(capacity or {}), "f": json.dumps(facts or {})})
+         "c": json.dumps(capacity or {}), "f": json.dumps(facts or {}),
+         "addr": _ipv4_or_none(address)})
     try:
         issued = fleet_ca.issue_host_cert(connection, org_id=org_id, host_id=host_id,
                                           csr_pem=csr_pem)
@@ -182,6 +200,10 @@ def enrol(connection: Any, *, join_token: str, csr_pem: str, svid_csr_pem: Optio
     host_event(connection, org_id=org_id, host_id=host_id, kind="enrolled",
                detail={"backend": backend, "pool": row["pool"], "vm_prefix": prefix,
                        "join_token_id": row["id"]}, actor="host")
+    # The directors route this host's block through its address (P8b-10).
+    from . import fleet_directors
+
+    fleet_directors.bump(connection, org_id)
     return {"host_id": host_id, "org_id": org_id, "certificate_pem": issued.cert_pem,
             "certificate_not_after": issued.not_after.isoformat(),
             "renew_after": fleet_ca.renew_after(issued).isoformat(),
@@ -284,8 +306,33 @@ def _apply_facts(connection: Any, host_id: str, facts: dict) -> None:
                        {**sets, "i": host_id})
 
 
+def _ipv4_or_none(value: Any) -> Optional[str]:
+    if not value:
+        return None
+    try:
+        ip = ipaddress.ip_address(str(value))
+    except ValueError:
+        return None
+    return str(ip) if ip.version == 4 else None
+
+
+#: Directors to wake after this transaction commits (collected per connection by _observe and
+#: friends, taken by the service's return value, woken by the router).
+_WAKE_KEY = "boss.fleet.wake_directors"
+
+
+def _note_wake(connection: Any, ids: Iterable[str]) -> None:
+    info = connection.info.setdefault(_WAKE_KEY, set())
+    info.update(ids)
+
+
+def _take_wake(connection: Any) -> list:
+    return sorted(connection.info.pop(_WAKE_KEY, set()))
+
+
 def _observe(connection: Any, host_id: str, replicas: Iterable[dict]) -> int:
     seen = 0
+    flipped = False
     for item in replicas or ():
         if not isinstance(item, dict) or not item.get("replica_id"):
             continue
@@ -296,15 +343,30 @@ def _observe(connection: Any, host_id: str, replicas: Iterable[dict]) -> int:
             except ValueError:
                 vm_ip = None
         updated = connection.execute(text("""
-            UPDATE agent_replicas SET observed_state = :s, vm_ip = COALESCE(CAST(:ip AS INET), vm_ip),
+            UPDATE agent_replicas r SET observed_state = :s, vm_ip = COALESCE(CAST(:ip AS INET), vm_ip),
                    busy = :busy, restarts = GREATEST(restarts, :restarts), last_seen_at = now(),
                    updated_at = now()
-             WHERE id = :r AND host_id = :h RETURNING id"""),
+              FROM (SELECT id, observed_state AS prev, vm_ip AS prev_ip FROM agent_replicas
+                     WHERE id = :r) p
+             WHERE r.id = p.id AND r.host_id = :h
+            RETURNING r.id, p.prev, (host(p.prev_ip) IS DISTINCT FROM host(r.vm_ip)) AS ip_changed"""),
             {"s": str(item.get("state") or "unknown")[:40], "ip": vm_ip,
              "busy": max(0, int(item.get("busy") or 0)),
              "restarts": max(0, int(item.get("restarts") or 0)),
              "r": str(item["replica_id"]), "h": host_id}).first()
         seen += 1 if updated else 0
+        if updated:
+            now_serving = str(item.get("state") or "") == "serving"
+            # A real server joins or leaves the directors' feed (P8b-10).
+            if (updated[1] == "serving") != now_serving or (now_serving and updated[2]):
+                flipped = True
+    if flipped:
+        from . import fleet_directors
+
+        org = connection.execute(text("SELECT org_id FROM agent_hosts WHERE id = :h"),
+                                 {"h": host_id}).scalar()
+        if org:
+            _note_wake(connection, fleet_directors.bump(connection, str(org)))
     return seen
 
 
@@ -320,17 +382,25 @@ def heartbeat(connection: Any, host: fleet_ca.HostIdentity, body: dict) -> dict:
                pressure = COALESCE(CAST(:pr AS JSONB), pressure),
                facts = facts || CAST(:f AS JSONB),
                bgp_state = COALESCE(:bgp, bgp_state),
+               address = COALESCE(CAST(:addr AS INET), address),
                observed_generation = GREATEST(observed_generation, :og)
          WHERE id = :i AND revoked_at IS NULL
-        RETURNING desired_generation, cert_not_after, status"""),
+        RETURNING desired_generation, cert_not_after, status, org_id,
+                  (CAST(:addr AS INET) IS NOT NULL AND address IS DISTINCT FROM
+                   (SELECT address FROM agent_hosts WHERE id = :i)) AS address_changed"""),
         {"cap": json.dumps(body["capacity"]) if isinstance(body.get("capacity"), dict) else None,
          "alloc": json.dumps(body["allocatable"]) if isinstance(body.get("allocatable"),
                                                                 dict) else None,
          "pr": json.dumps(body["pressure"]) if isinstance(body.get("pressure"), dict) else None,
          "f": json.dumps(facts), "bgp": body.get("bgp_state"),
+         "addr": _ipv4_or_none(body.get("address")),
          "og": int(body.get("observed_generation") or 0), "i": host.host_id}).mappings().first()
     if row is None:
         raise FleetError("this host is revoked.", status=403, code="host_revoked")
+    if row["address_changed"]:
+        from . import fleet_directors
+
+        _note_wake(connection, fleet_directors.bump(connection, str(row["org_id"])))
     _apply_facts(connection, host.host_id, facts)
     seen = _observe(connection, host.host_id, body.get("replicas") or ())
     if isinstance(body.get("replicas"), list):
@@ -346,7 +416,7 @@ def heartbeat(connection: Any, host: fleet_ca.HostIdentity, body: dict) -> dict:
         hours=fleet_ca.HOST_CERT_HOURS * (1 - fleet_ca.RENEW_FRACTION)))
     return {"host_id": host.host_id, "desired_generation": int(row["desired_generation"]),
             "status": row["status"], "replicas_seen": seen, "renew": renew_due,
-            "heartbeat_seconds": HEARTBEAT_SECONDS}
+            "heartbeat_seconds": HEARTBEAT_SECONDS, "_wake": _take_wake(connection)}
 
 
 def _not_mine(connection: Any, host_id: str, replicas: Iterable[dict]) -> None:
@@ -399,7 +469,8 @@ def put_replicas(connection: Any, host: fleet_ca.HostIdentity, *, state_gen: int
         "WHERE host_id = :h AND observed_state <> 'gone' AND NOT (id = ANY(:seen))"),
         {"h": host.host_id, "seen": listed})
     _store_gen(connection, host.host_id, state_gen)
-    return {"host_id": host.host_id, "replicas_seen": seen, "state_gen": int(state_gen)}
+    return {"host_id": host.host_id, "replicas_seen": seen, "state_gen": int(state_gen),
+            "_wake": _take_wake(connection)}
 
 
 def observed(connection: Any, host: fleet_ca.HostIdentity, body: dict) -> dict:
@@ -413,7 +484,7 @@ def observed(connection: Any, host: fleet_ca.HostIdentity, body: dict) -> dict:
             "UPDATE agent_hosts SET observed_generation = GREATEST(observed_generation, :g) "
             "WHERE id = :i"), {"g": int(body["observed_generation"]), "i": host.host_id})
     return {"host_id": host.host_id, "replicas_seen": seen,
-            **({} if in_step else {"resync": True})}
+            **({} if in_step else {"resync": True}), "_wake": _take_wake(connection)}
 
 
 #: The kinds boss-hostd reports (HOST_API.md §2.7), recorded as host_events rows.
@@ -485,10 +556,16 @@ def desired(connection: Any, host_id: str) -> dict:
             "spiffe_id": fleet_ca.vm_spiffe_id(host_id, r["vm_id"]),
             "generation": int(r["generation"])} for r in rows]
     serving = host["revoked_at"] is None and host["status"] not in ("retired",)
+    from . import fleet_directors
+
+    directors, push = fleet_directors.for_host_desired(connection, str(host["org_id"]))
     return {"host_id": host_id, "generation": int(host["desired_generation"]),
             "status": host["status"], "vm_prefix": str(host["vm_prefix"] or ""),
             "vms": vms if serving else [{**v, "state": "stopped"} for v in vms],
-            "pools": [], "endpoints": endpoints(host_id), "fences": [], "revocations": []}
+            "pools": [], "endpoints": endpoints(host_id), "fences": [], "revocations": [],
+            # P8b-10: the directors' addresses (GRE sources the tap policy accepts) and their
+            # mTLS withdraw-push listeners.
+            "directors": directors, "director_push": push}
 
 
 async def watch(engine: Any, host_id: str, *, since: int, wait: float = 0.0) -> dict:
@@ -597,7 +674,7 @@ _HOST_COLUMNS = ("id, org_id, pool, hostname, labels, backend, status, vm_prefix
                  "firecracker_live, jailer_on, seccomp_default, smt_off, ksm_off, swap_off, "
                  "strict_secrets, net_policy_ok, capacity, allocatable, pressure, "
                  "last_heartbeat_at, desired_generation, observed_generation, cert_not_after, "
-                 "enrolled_at, revoked_at")
+                 "enrolled_at, revoked_at, host(address) AS address")
 
 
 def _host_out(row: Any) -> dict:
@@ -607,6 +684,7 @@ def _host_out(row: Any) -> dict:
     for k in ("last_heartbeat_at", "cert_not_after", "enrolled_at", "revoked_at"):
         out[k] = out[k].isoformat() if out.get(k) else None
     out["vm_prefix"] = str(out["vm_prefix"]) if out.get("vm_prefix") is not None else None
+    out["address"] = str(out["address"]) if out.get("address") else None
     return out
 
 
