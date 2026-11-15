@@ -135,6 +135,12 @@ def test_no_ctid_delete_on_a_partitioned_table():
     assert not offenders, offenders
 
 
+def test_a_parent_index_keeps_whitespace_inside_literals():
+    fts = ("CREATE INDEX idx_events_fts ON public.events USING gin (to_tsvector('english'::regconfig, "
+           "translate(COALESCE(event_type, ''::text), '._-'::text, '   '::text)))")
+    assert "'   '::text" in tr._parent_index_sql("idx_events_fts", fts)
+
+
 def test_the_cutover_month_is_always_at_least_two_days_away():
     assert tr._cutover(datetime(2026, 11, 14, tzinfo=timezone.utc)) == datetime(2026, 12, 1, tzinfo=timezone.utc)
     assert tr._cutover(datetime(2026, 11, 30, 12, tzinfo=timezone.utc)) == datetime(2027, 1, 1, tzinfo=timezone.utc)
@@ -144,7 +150,7 @@ def test_the_cutover_month_is_always_at_least_two_days_away():
 def test_a_parent_index_keeps_the_declared_name_and_shape():
     got = tr._parent_index_sql("idx_events_type", "CREATE INDEX idx_events_type ON public.events USING btree "
                                                   "(project_id, event_type, created_at DESC)")
-    assert got == ('CREATE INDEX IF NOT EXISTS "idx_events_type" ON events USING btree '
+    assert got == ('CREATE INDEX IF NOT EXISTS "idx_events_type" ON ONLY events USING btree '
                    "(project_id, event_type, created_at DESC)")
 
 
@@ -331,6 +337,13 @@ def test_events_convert_online_twice_and_keep_everything(db):
             "SELECT indexname FROM pg_indexes WHERE tablename = 'events'")).all()}
         assert {"events_pkey", "idx_events_project_created", "idx_events_type", "idx_events_entity",
                 "idx_events_fts", "idx_events_created_id"} <= names
+        # Every legacy index was ATTACHED (none rebuilt beside it), and the full-text one keeps
+        # its exact definition.
+        assert "'   '::text" in c.execute(text("SELECT pg_get_indexdef('idx_events_fts'::regclass)")).scalar()
+        legacy_idx = c.execute(text("SELECT count(*) FROM pg_index WHERE indrelid = 'events_legacy'::regclass")).scalar()
+        attached = c.execute(text("SELECT count(*) FROM pg_inherits i JOIN pg_index x ON x.indexrelid = i.inhrelid "
+                                  "WHERE x.indrelid = 'events_legacy'::regclass")).scalar()
+        assert legacy_idx == attached == 6
         assert c.execute(text("SELECT count(*) FROM pg_trigger WHERE tgrelid = 'events'::regclass "
                               "AND tgname = 'events_notify_boss_events'")).scalar() == 1
         assert c.execute(text("SELECT count(*) FROM pg_constraint WHERE contype = 'f' "

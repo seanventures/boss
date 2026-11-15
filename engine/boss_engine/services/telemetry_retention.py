@@ -550,9 +550,13 @@ def _swap(c: Any, *, cutover: datetime, now: datetime) -> None:
     # attached as the partition's piece of the primary key: no build.
     c.execute(text(f'ALTER TABLE events ATTACH PARTITION "{LEGACY}" '
                    f"FOR VALUES FROM (MINVALUE) TO ('{cutover.isoformat()}')"))
-    # Same names, same definitions on the parent: the legacy indexes match and are attached.
+    # Same names, same definitions on the parent, made ON ONLY the parent (no recursion, no
+    # build) and the legacy index ATTACHED to each. A plain CREATE INDEX on the parent rebuilt the
+    # GIN full-text index under the lock (5.9 s on a 1 GB table); an index that does not match
+    # now fails the swap (rolled back, retried next pass) instead of building silently.
     for name, idef in indexes:
         c.execute(text(_parent_index_sql(str(name), str(idef))))
+        c.execute(text(f'ALTER INDEX "{name}" ATTACH PARTITION "{_legacy_index_name(str(name))}"'))
     for name, cdef in own_fks:
         c.execute(text(f'ALTER TABLE events ADD CONSTRAINT "{name}" {cdef}'))
     for _name, tdef in triggers:
@@ -571,10 +575,12 @@ def _legacy_index_name(name: str) -> str:
 def _parent_index_sql(name: str, indexdef: str) -> str:
     """`CREATE INDEX <legacy name> ON public.events_legacy USING …` (as read before the
     rename, so it still names `events`) → the same index, original name, on the parent."""
-    m = re.match(r"^CREATE (UNIQUE )?INDEX \S+ ON (?:ONLY )?\S+ (USING .*)$", " ".join(indexdef.split()), re.S)
+    # Never normalise whitespace: it sits inside string literals too (translate(…, '._-', '   ')
+    # collapsed to ' ' built a DIFFERENT index, which could not be attached).
+    m = re.match(r"^CREATE (UNIQUE )?INDEX \S+ ON (?:ONLY )?\S+ (USING .*)$", indexdef.strip(), re.S)
     if not m:
         raise ValueError(f"unexpected index definition: {indexdef[:120]}")
-    return f'CREATE {m.group(1) or ""}INDEX IF NOT EXISTS "{name}" ON events {m.group(2)}'
+    return f'CREATE {m.group(1) or ""}INDEX IF NOT EXISTS "{name}" ON ONLY events {m.group(2)}'
 
 
 def _make_months(c: Any, *, start: datetime, until: datetime) -> list[str]:
