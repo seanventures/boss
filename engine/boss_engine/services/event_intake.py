@@ -13,8 +13,11 @@ database itself is down, the one case the source's retry is allowed to carry dur
 THE PROCESSOR (`process_due`) is a competing consumer: claim with `FOR UPDATE SKIP LOCKED` and a
 60 s lease, parse in full, screen the outsider's text for prompt injection, drop our own bot's
 echoes (loop layer 1) and anything that already hopped three times (layer 2), serialise events of
-one conversation with an advisory lock, then hand the event to the ROUTER SEAM
-(services/intake_router.route — P9a-2) and fire what it returns through `agent_triggers.fire`.
+one conversation with an advisory lock, then hand the event to the ROUTER
+(services/intake_router.route: filters, addressing, identity, thread keys, guards — P9a-2) and
+fire what it returns through `agent_triggers.fire`. A route that DEFERS the event (a rate limit,
+quiet hours, a person without a grant yet) parks it `failed` with `next_attempt_at` and no
+attempt counted; digest mode records it `digest`.
 A failure retries with backoff (1 s … 2 h, 8 attempts) and then parks the event `dead` with its
 reason; a person replays it (`replay`): `reprocess` fires only routes that have not admitted a run
 for this event (the fires table's dedupe key), `force` with a typed reason runs it again.
@@ -205,6 +208,7 @@ def create_connection(connection: Connection, *, project_id: str, kind: str, act
     cfg: dict[str, Any] = {}
     given_secrets = {k: str(v) for k, v in dict(secrets or {}).items() if v not in (None, "")}
     secret_fields = {f["name"] for f in manifest.auth_fields if f.get("secret")}
+    _refuse_attestation(config)
     for key, value in dict(config or {}).items():
         if key in secret_fields:
             given_secrets.setdefault(key, str(value))      # a secret typed into config is a secret
@@ -352,6 +356,7 @@ def update_connection(connection: Connection, *, project_id: str, connection_id:
     secret_fields = {f["name"] for f in adapter.manifest.auth_fields if f.get("secret")}
     cfg = dict(_json(row.get("config"), {}) or {})
     given_secrets = {k: str(v) for k, v in dict(secrets or {}).items() if v not in (None, "")}
+    _refuse_attestation(config)
     if config is not None:
         for key, value in dict(config).items():
             if key in secret_fields:
@@ -375,6 +380,79 @@ def update_connection(connection: Connection, *, project_id: str, connection_id:
          "id": connection_id})
     emit_event(connection, project_id, "intake.connection_updated", actor, "intake_connection",
                connection_id, {"kind": row["kind"], "secret_fields_rotated": sorted(given_secrets)})
+    return describe_connection(connection, get_connection(connection, connection_id) or {})
+
+
+#: The config key the SSO attestation lives under: written ONLY by `set_sso_attestation` (an
+#: identity-provider admin, server-stamped), never by a connection create/update.
+ATTESTATION_KEY = "sso_attested"
+
+
+def _refuse_attestation(config: Optional[Mapping[str, Any]]) -> None:
+    if config and ATTESTATION_KEY in dict(config):
+        raise IntakeServiceError(
+            "SSO attestation is set by an identity-provider admin with "
+            "PUT /v1/intake/connections/{id}/sso-attestation, not in the connection's config.",
+            code="attestation_not_in_config")
+
+
+def _org_of(connection: Connection, project_id: str) -> Optional[str]:
+    return connection.execute(text(
+        "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE p.id = :p"), {"p": project_id}).scalar()
+
+
+def set_sso_attestation(connection: Connection, *, project_id: str, connection_id: str,
+                        actor: str, identity_provider_id: str,
+                        domains: Optional[list] = None) -> dict:
+    """An org admin states that this source's workspace signs people in through BOSS's IdP
+    `identity_provider_id` (§6.3): chat users whose email is in `domains` may be auto-linked.
+    The provider must be an ACTIVE provider of the connection's org, and every domain one of
+    ITS verified domains (default: all of them). Who attested and when are stamped here."""
+    row = get_connection(connection, connection_id, project_id=project_id, lock=True)
+    if row is None:
+        raise IntakeServiceError("no such connection in this project.", status=404, code="not_found")
+    org = _org_of(connection, project_id)
+    idp = connection.execute(text(
+        "SELECT id, name, domains, status FROM identity_providers WHERE id = :i AND org_id = :o"),
+        {"i": identity_provider_id, "o": org}).mappings().first()
+    if idp is None or idp["status"] != "active":
+        raise IntakeServiceError("no active identity provider with that id in this org.",
+                                 status=404, code="unknown_idp")
+    verified = sorted({str(d).lower().lstrip("@") for d in (idp["domains"] or []) if str(d).strip()})
+    if not verified:
+        raise IntakeServiceError("that identity provider has no verified domains.",
+                                 code="idp_has_no_domains")
+    wanted = sorted({str(d).lower().lstrip("@").strip() for d in (domains or verified)
+                     if str(d).strip()})
+    outside = [d for d in wanted if d not in verified]
+    if outside or not wanted:
+        raise IntakeServiceError(f"not a verified domain of {idp['name']}: "
+                                 f"{', '.join(outside) or '(none given)'}.", code="domain_not_verified")
+    cfg = dict(_json(row.get("config"), {}) or {})
+    cfg[ATTESTATION_KEY] = {"idp": idp["id"], "idp_name": idp["name"], "domains": wanted,
+                            "attested_by": actor, "attested_at": _now().isoformat()}
+    connection.execute(text("UPDATE intake_connections SET config = CAST(:c AS JSONB), "
+                            "updated_at = now() WHERE id = :id"),
+                       {"c": json.dumps(cfg, default=str), "id": connection_id})
+    emit_event(connection, project_id, "intake.connection_sso_attested", actor,
+               "intake_connection", connection_id, {"idp": idp["id"], "domains": wanted})
+    return describe_connection(connection, get_connection(connection, connection_id) or {})
+
+
+def clear_sso_attestation(connection: Connection, *, project_id: str, connection_id: str,
+                          actor: str) -> dict:
+    row = get_connection(connection, connection_id, project_id=project_id, lock=True)
+    if row is None:
+        raise IntakeServiceError("no such connection in this project.", status=404, code="not_found")
+    cfg = dict(_json(row.get("config"), {}) or {})
+    had = cfg.pop(ATTESTATION_KEY, None)
+    connection.execute(text("UPDATE intake_connections SET config = CAST(:c AS JSONB), "
+                            "updated_at = now() WHERE id = :id"),
+                       {"c": json.dumps(cfg, default=str), "id": connection_id})
+    if had:
+        emit_event(connection, project_id, "intake.connection_sso_attestation_removed", actor,
+                   "intake_connection", connection_id, {})
     return describe_connection(connection, get_connection(connection, connection_id) or {})
 
 
@@ -832,7 +910,16 @@ def claim(connection: Connection, *, limit: int = PROCESSOR_BATCH, holder: str =
         RETURNING e.*"""),
         {"now": now, "lease": now + timedelta(seconds=LEASE_SECONDS), "who": holder[:80],
          "n": int(limit)}).mappings().all()
-    return [dict(r) for r in rows]
+    # RETURNING does not keep the CTE's ORDER BY (an UPDATE … FROM answers in join order), so
+    # the batch is put back in the order the query chose: round-robin rank across connections,
+    # then received order within one. The processor walks the list as it is (P9a-2 T5).
+    out = sorted((dict(r) for r in rows), key=lambda r: (r["received_at"], r["id"]))
+    rank: dict[str, int] = {}
+    for r in out:
+        rank[r["connection_id"]] = rank.get(r["connection_id"], 0) + 1
+        r["_rn"] = rank[r["connection_id"]]
+    out.sort(key=lambda r: (r.pop("_rn"), r["received_at"], r["id"]))
+    return out
 
 
 def _finish(connection: Connection, event_id: str, status: str, *, envelope: Any = None,
@@ -854,6 +941,7 @@ def _finish(connection: Connection, event_id: str, status: str, *, envelope: Any
                conversation_key = COALESCE(:ck, conversation_key),
                actor_kind = COALESCE(:ak, actor_kind),
                actor_external_id = COALESCE(:ax, actor_external_id),
+               principal_id = COALESCE(:pid, principal_id),
                screen = COALESCE(CAST(:screen AS JSONB), screen),
                event_time = COALESCE(:et, event_time),
                expires_at = CASE WHEN :s IN ('dead', 'refused')
@@ -866,6 +954,7 @@ def _finish(connection: Connection, event_id: str, status: str, *, envelope: Any
          "out": json.dumps(outcome, default=str) if outcome is not None else "[]",
          "type": f.get("type"), "subject": f.get("subject"), "ck": f.get("conversation_key"),
          "ak": f.get("actor_kind"), "ax": f.get("actor_external_id"),
+         "pid": f.get("principal_id"),
          "screen": json.dumps(f["screen"], default=str) if f.get("screen") is not None else None,
          "et": f.get("event_time"), "dead_days": DEAD_RETENTION_DAYS, "id": event_id})
 
@@ -986,7 +1075,8 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
                                        "WHERE id = :id AND attempts > 0"), {"id": event_id})
                         return {"id": event_id, "status": "received",
                                 "reason": f"deferred behind {earlier['id']}"}
-                fires = intake_router.route(c, conn, ev, row, replay_n=force_n)
+                fires = intake_router.route(c, conn, ev, row, replay_n=force_n,
+                                            settings=settings, now=now)
                 caused_by = (ev.bosscausality or {}).get("deployment_id")
                 if caused_by:
                     kept = []
@@ -1006,15 +1096,6 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
             if "failed" in words:
                 raise RuntimeError("; ".join(str(o.get("reason")) for o in all_outcomes
                                              if o.get("fire_outcome") == "failed")[:500])
-            if words & {"admitted", "duplicate", "skipped"}:
-                status = "routed"
-            elif words and words <= {"refused"}:
-                status = "refused"
-            elif words or filtered_reason:
-                status = "filtered"
-            else:
-                status = "ignored"
-                all_outcomes.append({"reason": "no route on this connection"})
             fields: dict[str, Any] = {}
             envelope = None
             if primary is not None:
@@ -1022,14 +1103,44 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
                 envelope = primary.to_dict()
                 if len(events) > 1:
                     envelope["bossbatch"] = {"count": len(events), "ids": [e.id for e in events]}
+            fields["principal_id"] = next((str(o["subject"]["principal_id"]) for o in all_outcomes
+                                           if isinstance(o.get("subject"), dict)
+                                           and o["subject"].get("principal_id")), None)
+            # Replay markers (who replayed, why) stay on the row ahead of this pass's outcomes.
+            history = [m for m in (_json(row.get("outcome"), []) or [])
+                       if isinstance(m, dict) and "replay" in m]
+            # DEFERRED (P9a-2, §6.1/§7): a guard or a missing grant holds the event until
+            # `until`; it comes back through the inbox and the routes that already admitted a run
+            # dedupe to `duplicate`. The attempt is not counted (a deferral is not a failure).
+            held = [o for o in all_outcomes if o.get("fire_outcome") == "deferred"
+                    and not o.get("digest") and o.get("until")]
+            if held:
+                until = min(_event_time(o["until"]) or now for o in held)
+                _finish(c, event_id, "failed", envelope=envelope, outcome=history + all_outcomes,
+                        now=now, fields=fields,
+                        error="deferred: " + "; ".join(str(o.get("reason")) for o in held)[:800],
+                        next_attempt_at=max(until, now + timedelta(seconds=1)))
+                c.execute(text("UPDATE intake_events SET attempts = GREATEST(attempts - 1, 0) "
+                               "WHERE id = :id"), {"id": event_id})
+                return {"id": event_id, "status": "deferred", "outcome": all_outcomes,
+                        "until": until.isoformat()}
+            digest = any(o.get("digest") for o in all_outcomes)
+            if words & {"admitted", "duplicate", "skipped"} and not digest:
+                status = "routed"
+            elif digest:
+                status = "digest"
+            elif words and words <= {"refused"}:
+                status = "refused"
+            elif words or filtered_reason:
+                status = "filtered"
+            else:
+                status = "ignored"
+                all_outcomes.append({"reason": "no route on this connection"})
             if status == "routed":
                 emit_event(c, conn.project_id, "intake.event_routed", "intake", "intake_event",
                            event_id, {"connection_id": conn.id, "type": fields.get("type"),
                                       "runs": [o.get("run_id") for o in all_outcomes
                                                if o.get("run_id")]})
-            # Replay markers (who replayed, why) stay on the row ahead of this pass's outcomes.
-            history = [m for m in (_json(row.get("outcome"), []) or [])
-                       if isinstance(m, dict) and "replay" in m]
             _finish(c, event_id, status, envelope=envelope, outcome=history + all_outcomes,
                     now=now, fields=fields)
             return {"id": event_id, "status": status, "outcome": all_outcomes}
@@ -1080,7 +1191,7 @@ def process_due(engine: Any, settings: Any = None, *, limit: int = PROCESSOR_BAT
     with begin(engine) as c:
         rows = claim(c, limit=limit, holder=holder, now=now)
     out = {"claimed": len(rows), "routed": 0, "ignored": 0, "filtered": 0, "refused": 0,
-           "failed": 0, "dead": 0, "received": 0}
+           "failed": 0, "dead": 0, "received": 0, "deferred": 0, "digest": 0}
     for row in rows:
         got = process_one(engine, settings, row, now=now)
         out[got["status"]] = out.get(got["status"], 0) + 1
@@ -1360,6 +1471,12 @@ def start(engine: Any, settings: Any) -> bool:
                 while got["claimed"] >= PROCESSOR_BATCH and not _STOP.is_set():
                     got = process_due(engine, settings)
                 flush_refusals(engine)
+                try:
+                    from . import intake_guards
+
+                    intake_guards.sweep_digests(engine)
+                except Exception:  # noqa: BLE001 — the next tick tries again
+                    logger.debug("intake digest sweep failed", exc_info=True)
                 if time.monotonic() - last_sweep > 60:
                     last_sweep = time.monotonic()
                     with begin(engine) as c:
@@ -1386,7 +1503,8 @@ __all__ = [
     "BACKOFF_SECONDS", "BUCKETS", "CONNECTION_STATUSES", "DEFAULT_LIMITS", "LEASE_SECONDS",
     "MAX_ATTEMPTS", "MAX_HOPS", "PATH_PREFIX", "REFUSALS", "REPLAY_MODES", "ROTATION_GRACE_SECONDS",
     "SERVICE_KEY", "SHED_RAW_BYTES", "flush_refusals",
-    "IntakeServiceError", "backoff_seconds", "claim", "connection_by_token", "create_connection",
+    "ATTESTATION_KEY", "IntakeServiceError", "backoff_seconds", "clear_sso_attestation",
+    "set_sso_attestation", "claim", "connection_by_token", "create_connection",
     "dead_letters", "delete_connection", "describe_connection", "get_connection", "get_event",
     "inbound_path", "list_connections", "list_events", "process_due", "process_one", "receive",
     "replay", "rotate_secret", "set_connection_status", "start", "status_counts", "stop",

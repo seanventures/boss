@@ -15115,6 +15115,46 @@ DO $$ BEGIN
 END $$;
 CREATE INDEX IF NOT EXISTS idx_agent_trigger_fires_intake_event
   ON agent_trigger_fires (intake_event_id) WHERE intake_event_id IS NOT NULL;
+
+-- ── P9a-2 (BOSSAPP-1094): the router's state ─────────────────────────────────────────────────
+-- STORM → DIGEST MODE (boss-eventing-lld.md §7.3): while `digest_until` is ahead, a route's events
+-- are recorded and coalesced into one run per five minutes (`digest_last_at` stamps the last).
+ALTER TABLE agent_triggers ADD COLUMN IF NOT EXISTS digest_until TIMESTAMPTZ;
+ALTER TABLE agent_triggers ADD COLUMN IF NOT EXISTS digest_last_at TIMESTAMPTZ;
+-- HOW A CHAT USER WAS LINKED (§6.3): code (the one-time code), sso_email (auto-link under an
+-- admin's SSO attestation; `attested_by` names the admin), admin, aad_oid (Teams/Entra, P9b).
+ALTER TABLE chat_identity_links ADD COLUMN IF NOT EXISTS method TEXT NOT NULL DEFAULT 'code';
+ALTER TABLE chat_identity_links ADD COLUMN IF NOT EXISTS external_email TEXT;
+ALTER TABLE chat_identity_links ADD COLUMN IF NOT EXISTS idp_subject TEXT;
+ALTER TABLE chat_identity_links ADD COLUMN IF NOT EXISTS attested_by TEXT;
+-- SCOPED BUDGETS gain `trigger` (one route) and `deployment` (one deployed agent) (§7.4).
+DO $$ BEGIN
+  ALTER TABLE scoped_budget_policies DROP CONSTRAINT IF EXISTS scoped_budget_policies_scope_type_check;
+  ALTER TABLE scoped_budget_policies ADD CONSTRAINT scoped_budget_policies_scope_type_check
+    CHECK (scope_type IN ('org', 'project', 'role', 'workflow', 'trigger', 'deployment'));
+END $$;
+-- THE LOCAL WORKER'S WAKE (§8.2, P9a-5): a long-polling /v1/worker/poll waits on an in-memory
+-- hub fed by this channel, so a queued job is claimed within milliseconds of its commit and an
+-- idle worker costs Postgres nothing. The payload is the job's identity only (kind, target,
+-- project); the claim itself still runs through jobs.claim_job.
+CREATE OR REPLACE FUNCTION boss_jobs_notify() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.status IN ('queued', 'failed_retryable')
+     AND (TG_OP = 'INSERT' OR OLD.status IS DISTINCT FROM NEW.status) THEN
+    PERFORM pg_notify('boss_jobs', json_build_object(
+      'event_type', 'job.enqueued', 'id', NEW.id, 'kind', NEW.kind, 'target', NEW.target,
+      'project_id', NEW.project_id)::text);
+  END IF;
+  RETURN NULL;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'jobs_notify_boss_jobs'
+                 AND tgrelid = 'jobs'::regclass) THEN
+    CREATE TRIGGER jobs_notify_boss_jobs AFTER INSERT OR UPDATE OF status ON jobs
+      FOR EACH ROW EXECUTE FUNCTION boss_jobs_notify();
+  END IF;
+END $$;
 -- ================================ end P9a ==
 
 -- ================================ P8b: contract v1.1 and the model gateway (BOSSAPP-1070/1071) ==

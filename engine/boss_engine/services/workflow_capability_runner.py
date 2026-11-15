@@ -5031,6 +5031,10 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     # on the deployment run, like a build waits on its code task.
     "deploy": ("deployment", ("deployment_id", "deployment_run_id", "id")),
     "redeploy": ("deployment", ("deployment_id", "deployment_run_id", "id")),
+    # A CONFIG deployment (config_deploy, AMEX-G4) is a deployment run too: planned is not
+    # shipped, and promoted is not live until production's health check passed.
+    "config_deploy": ("deployment", ("deployment_id", "deployment_run_id", "id")),
+    "promote_config": ("deployment", ("deployment_id", "deployment_run_id", "id")),
     # RETRIED IS NOT REBUILT. `retry_code_task` answers `{"status": "retried", "result":
     # {"run_id": <the new attempt>}}` the moment the attempt is queued; the step waits on that
     # attempt as `build` waits on the first.

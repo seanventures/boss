@@ -19,6 +19,7 @@ import warnings
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "docs/operations/mcp-api-capability-matrix.private.json"
 COMMUNITY_OUTPUT = ROOT / "docs/community/mcp-api-capability-matrix.json"
+DUMP_MARKER = "--- boss mcp parity dump ---"
 
 
 def mounted_rows(edition: str) -> list[dict]:
@@ -117,7 +118,10 @@ def _read_edition(edition: str) -> list[dict]:
         [sys.executable, str(Path(__file__).resolve()), "--dump-edition", edition],
         cwd=ROOT, capture_output=True, text=True, check=True,
     )
-    return json.loads(result.stdout)
+    _before, marker, dump = result.stdout.partition(DUMP_MARKER + "\n")
+    if not marker:
+        raise SystemExit(f"--dump-edition {edition} printed no {DUMP_MARKER} line")
+    return json.loads(dump)
 
 
 def build_matrix() -> dict:
@@ -189,7 +193,11 @@ def main() -> int:
                         help="Write only the Community matrix (a tree without the paid source)")
     args = parser.parse_args()
     if args.dump_edition:
-        print(json.dumps(mounted_rows(args.dump_edition), separators=(",", ":")))
+        rows = mounted_rows(args.dump_edition)
+        # A marker line: the app's import may print lines of its own (identity's route
+        # coverage) before the dump, and the reader takes only what follows the marker.
+        print(DUMP_MARKER)
+        print(json.dumps(rows, separators=(",", ":")))
         return 0
     if args.check_community:
         if not args.community_output.is_file():

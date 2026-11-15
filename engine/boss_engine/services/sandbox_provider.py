@@ -681,8 +681,9 @@ def make_governed_sandbox_provider(
                 status_code=422,
                 code="environment_required",
             )
-        # 'local' and 'microvm' knobs both keep today's granular provider; the
-        # micro-VM lane is selected by _resolve_use_microvm, not here.
+        # 'local', 'local_fenced' and 'microvm' knobs all keep today's granular provider;
+        # the micro-VM lane is selected by _resolve_use_microvm, not here, and 'local_fenced'
+        # only changes where an authored skill command runs (skill_executors).
         return LocalSubprocessProvider(settings)
     driver = str(row.get("driver") or "local").lower()
     if driver in ("local", "microvm"):

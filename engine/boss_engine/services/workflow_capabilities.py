@@ -762,6 +762,47 @@ CAPABILITIES: dict[str, Capability] = {
             is_async=True,
         ),
         _cap(
+            key="config_deploy",
+            family="deploy",
+            # CONFIGURATION, NOT A BUILT APP (AMEX-G4, BOSSAPP-1140): the validated tenant YAML
+            # into the gateway's config directory. Same hands as a deploy: a ChangeSet, the
+            # environment's policy or a person, a receipt, previous versions kept for rollback.
+            captain="deployment_manager",
+            label="Deploy config",
+            summary="Put validated configuration files in a config directory, reload, check "
+                    "health, keep the previous versions for rollback.",
+            tool="deploy_config",
+            risk_tier=2,
+            # WHAT ships: `files` (path → content or artifact id) or the previous CLI step's
+            # `produced_artifacts` (wired with from_step). WHERE: a config_dir target, by id or by
+            # app_name + environment (staging unless said otherwise).
+            optional_inputs=("files", "produced_artifacts", "target_id", "app_name",
+                             "environment"),
+            produces=("deployment_id", "deployed_url", "bundle_sha256"),
+            requires_project=("deployment_target",),
+            typical_minutes=3,
+            is_async=True,
+        ),
+        _cap(
+            key="promote_config",
+            family="deploy",
+            # THE SAME BYTES, ONE ENVIRONMENT UP: the bundle staging passed on, by sha256, to the
+            # production config target. Production's policy asks a person unless a person set
+            # it otherwise; dual control is honoured.
+            captain="deployment_manager",
+            label="Promote config",
+            summary="Copy the exact configuration that passed in staging to production, under "
+                    "production's approval rules.",
+            tool="promote_config",
+            risk_tier=3,
+            optional_inputs=("deployment_id", "app_name", "from_environment", "environment",
+                             "target_id"),
+            produces=("deployment_id", "deployed_url", "bundle_sha256"),
+            requires_project=("deployment_target",),
+            typical_minutes=3,
+            is_async=True,
+        ),
+        _cap(
             key="retry_build",
             # same hands as the build
             captain="engineering_captain",
