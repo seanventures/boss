@@ -269,6 +269,17 @@ def _default_project_exists_for_the_suite():
         engine.dispose()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _observability_targets_do_not_outlive_the_session():
+    """Observability seeds write deployment_targets on BOSS_TEST_DATABASE_URL and used to
+    leave them there for the next suite (BOSSAPP-973). Drop only ids added after the first
+    `pg_engine()` in this process, once every test — including a module-scoped seed — is done."""
+    yield
+    from ._obs_seed import drop_targets_added_after_snapshot
+
+    drop_targets_added_after_snapshot()
+
+
 @pytest.fixture(autouse=True)
 def _fresh_model_router():
     """The model router caches snapshots and classifications per process (model_router.store,
