@@ -11413,6 +11413,10 @@ def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
         require_project_actor(
             connection, run_row["project_id"], actor, "task_create"
         )
+        # A PERSON'S RETRY IS THEIR "PROCEED" past the infra circuit breaker, as a note is.
+        from boss_engine.services.agent_identity import is_person
+
+        by_person = is_person(actor, connection, run_row["project_id"])
     from .services.code_task_service import RetryRefused, retry_code_task
     try:
         rr = p.get("repair_retries")
@@ -11426,6 +11430,7 @@ def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
             fix_note=p.get("fix_note", ""),
             profile=(p.get("profile") or None),
             repair_retries=(int(rr) if isinstance(rr, int) else None),
+            by_person=by_person,
         )
     except RetryRefused as exc:
         # Not "not found": the run exists and is finished. 409 with what to do instead.

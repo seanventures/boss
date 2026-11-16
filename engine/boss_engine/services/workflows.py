@@ -6989,6 +6989,9 @@ def fail_step(
     #: record of what happened was one sentence — which, on the deploy gate that prompted this,
     #: read "the capability reported failure without a reason". Evidence outlives the summary.
     output: Optional[dict[str, Any]] = None,
+    #: The exception behind `error`, when the caller holds one: what is classified, logged and
+    #: recorded (type, message, stack) when the error is rewritten into a sentence for a person.
+    exception: Optional[BaseException] = None,
 ) -> dict[str, Any]:
     row = connection.execute(
         text(
@@ -7003,23 +7006,30 @@ def fail_step(
         raise WorkflowNotFoundError("Workflow step run not found.")
     if row["status"] not in {"leased", "running"} or row["lease_owner"] != worker_id:
         raise WorkflowLeaseError("Workflow step is not leased by this worker.")
+    original = error
+    cause: object = exception if exception is not None else error
     error, retryable = retryable_failure(error, retryable)
     # A FAILURE NO RETRY CAN FIX, SAID AS ITS FIX — whichever kind of step raised it. Here,
     # where every step failure is recorded, so no step path can miss it (model_failures).
-    from .model_failures import settled_failure
+    from .model_failures import explain, is_storage_failure, log_failure, settled_failure
 
     explained = settled_failure(error)
     if explained is not None:
         error, retryable = explained, False
     # BOSS'S OWN DATABASE FAILING IS SAID AS THAT, NOT AS ITS SQL. A step's last_error is what
-    # the run screen shows; the database's diagnostics go to the step's output and the log.
-    from .model_failures import explain, is_storage_failure
-
-    if is_storage_failure(error):
-        said = explain(error)
-        logger.warning("workflow step %s failed on the database: %s", step_run_id, error)
-        output = {**(output or {}), "error_detail": said["detail"]}
+    # the run screen shows; the failure itself (type, message, stack — redacted) is logged and
+    # kept on the step's output and its dead letter, so the sentence never hides the cause.
+    # Classified on the EXCEPTION when the caller has one: a refusal whose words merely quote
+    # an old database error is not BOSS's database failing (model_failures.is_storage_failure).
+    if is_storage_failure(cause):
+        record = log_failure(cause, where=f"workflow step {step_run_id} failed on the database")
+        said = explain(cause)
+        output = {**(output or {}), "error_detail": said["detail"], "error_record": record}
         error = f"{said['headline']} {said['action']}"
+    elif error != original:
+        # ANY FAILURE REWRITTEN FOR A PERSON keeps what it was rewritten from.
+        record = log_failure(cause, where=f"workflow step {step_run_id} failed", said=error)
+        output = {**(output or {}), "error_record": record}
     return _fail_attempt(connection, project_id=project_id, row=row, error=error,
                          retryable=retryable, retry_delay_seconds=retry_delay_seconds,
                          output=output)
@@ -7137,7 +7147,10 @@ def _fail_attempt(
                 "source_id": row["id"],
                 "reason": error,
                 "payload": json.dumps(
-                    {"workflow_run_id": row["workflow_run_id"], "step_id": row["step_id"]}
+                    {"workflow_run_id": row["workflow_run_id"], "step_id": row["step_id"],
+                     # The failure behind the sentence in `reason` (fail_step), for operators.
+                     **({"error": (output or {})["error_record"]}
+                        if isinstance((output or {}).get("error_record"), dict) else {})}
                 ),
             },
         )

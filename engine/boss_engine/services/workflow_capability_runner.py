@@ -4345,12 +4345,21 @@ def _retried_build(
                 raise CapabilityExecutionError(str(
                     refused.get("error") or refused.get("message")
                     or f"'{tool_name}' was refused for this run's authority."))
+            # A PERSON'S RETRY IS THEIR "PROCEED" (retry_code_task(by_person=True)): the step's
+            # Retry was pressed by `retried_by`; an agent's or BOSS's own retry is not.
+            from .agent_identity import is_person
+
+            by_person = is_person(str(output.get("retried_by") or ""), connection, project_id)
             try:
                 result = cts.retry_code_task(
                     ctx.engine, getattr(ctx, "settings", None) or get_settings(), ctx.jobs,
-                    previous, fix_note=note)
+                    previous, fix_note=note, by_person=by_person)
             except ValueError as error:
-                raise CapabilityExecutionError(
+                # SAID ONCE, IN ITS OWN WORDS. A refused resume (the circuit breaker, a finished
+                # build, a second owner of the branch) gives the same answer on every attempt:
+                # retried three times in a second it was dead-lettered — and, because the
+                # breaker quotes the build's last error, said as a database failure.
+                raise SettledCapabilityError(
                     f"could not resume the previous build {previous}: {error}") from error
         emit_event(connection, project_id, "workflow.build_resumed", "boss", "workflow_run",
                    run_id, {"step_id": step_id, "from_code_task_run_id": previous,
@@ -8206,6 +8215,7 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
                     # log_tail, AMEX-G3), when the error carries it. None keeps the old path.
                     output=(getattr(error, "output", None)
                             if isinstance(getattr(error, "output", None), dict) else None),
+                    exception=error,
                 )
                 if isinstance(error, StaleApprovalError):
                     # The approval covered other content, so it no longer releases this
@@ -8241,6 +8251,7 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
                 worker_id=worker_id,
                 error=f"{type(error).__name__}: {error}"[:500],
                 retryable=True,
+                exception=error,
             )
             performed.append({
                 "run_id": run_id, "step_id": claimed["step_id"],
