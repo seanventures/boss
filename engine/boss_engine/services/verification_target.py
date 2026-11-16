@@ -875,6 +875,46 @@ def required_stack_dir(app_dir: Path | str, required: str) -> Path:
     return base / best[1] if best is not None else base
 
 
+def checkout_problem(root: Path | str, *, branch: str = "", owner: str = "",
+                     repo: str = "") -> str | None:
+    """Why a continuation's workspace is not its lineage's CHECKOUT, or None (BOSSAPP-1324):
+    a different repository (its remote names another owner/repo), or not the lineage branch's
+    head (the branch's remote head is not in its history). Never the stack, never an empty or
+    small tree: a follow-up that rewrites Node into Go, a retry of an empty first build, an empty
+    slice branch and a polyglot repo all build on exactly what the branch holds (PR #164 E2).
+    None when git cannot say (no checkout, no remote ref): nothing to prove wrong."""
+    import subprocess
+
+    base = Path(root)
+
+    def git(*args: str) -> str | None:
+        try:
+            got = subprocess.run(["git", "-C", str(base), *args], capture_output=True, text=True,
+                                 timeout=20)
+        except Exception:  # noqa: BLE001
+            return None
+        return got.stdout.strip() if got.returncode == 0 else None
+
+    if git("rev-parse", "--is-inside-work-tree") != "true":
+        return None
+    url = git("remote", "get-url", "origin") or ""
+    if url and owner and repo:
+        import re as _re
+
+        m = _re.search(r"[/:]([^/:]+)/([^/]+?)(?:\.git)?/?$", url)
+        if m and (m.group(1).lower(), m.group(2).lower()) != (owner.lower(), repo.lower()):
+            return (f"the workspace is a checkout of {m.group(1)}/{m.group(2)}, not this "
+                    f"lineage's {owner}/{repo}. BOSS stopped before planning on another "
+                    "repository.")
+    if branch:
+        ref = f"refs/remotes/origin/{branch}"
+        if git("rev-parse", "--verify", "--quiet", ref):
+            if git("merge-base", "--is-ancestor", ref, "HEAD") is None:
+                return (f"the workspace is not on {branch}: its history does not hold the "
+                        "branch's head. BOSS stopped before planning on another branch.")
+    return None
+
+
 def _required_toolchain_plan(required: str, app_dir: Path) -> GatePlan:
     """The Go or Java gate for an app whose brief requires it (required_app_stack), in its
     folder. A package.json, a Vite config or a Playwright harness beside it never makes it npm;
