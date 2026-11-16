@@ -163,6 +163,12 @@ def request(engine: Any, settings: Any, jobs: Any, run_id: str, *, project_id: s
         raise
     new_id = str(started.get("run_id") or "")
     with begin(engine) as c:
+        # A newer re-check makes every earlier Fix card of this PR a stale snapshot.
+        from .run_decisions import withdraw_fix_cards
+
+        withdraw_fix_cards(c, project_id, str(run.get("pull_request_url") or ""),
+                           note=f"Superseded: a newer re-check ({new_id or 'queued'}) of this "
+                                "change decides what is left to fix.")
         emit_event(c, project_id, "code_task.recheck_requested", actor, "code_task_run",
                    new_id or run_id, {"recheck_of": run_id, "estimate_usd": cost["usd"],
                                       "gates": list(GATES)})
@@ -264,6 +270,8 @@ def raise_fix_card(engine: Any, *, run_id: str, project_id: str, task_id: Option
             {"p": project_id, "a": FIX_ACTION, "r": run_id}).scalar()
         if open_card:
             return str(open_card)
+        pr_url = c.execute(text("SELECT pull_request_url FROM code_task_runs WHERE id = :i"),
+                           {"i": run_id}).scalar()
         cost = fix_estimate(c, project_id, parent_root)
         what = (f"its checks fail ({headline(checks_failing)})" if checks_failing
                 else f"{len(items)} finding{'s' if len(items) != 1 else ''} to fix")
@@ -271,6 +279,8 @@ def raise_fix_card(engine: Any, *, run_id: str, project_id: str, task_id: Option
             c, project_id, task_id,
             f"Fix these (about ${cost['usd']:.2f}): the re-check of “{str(title)[:70]}” says {what}",
             {"action": FIX_ACTION, "run_id": run_id, "estimate": cost,
+             # THE PR IT IS ABOUT (BOSSAPP-1328): a newer build's card withdraws it.
+             "pull_request_url": pr_url,
              "findings": items[:40], "checks_failing": dict(checks_failing or {}) or None,
              "followup": {"spec": dict(spec or {}), "base_branch": base_branch,
                           "parent_title": title, "parent_root": parent_root,
@@ -281,31 +291,71 @@ def raise_fix_card(engine: Any, *, run_id: str, project_id: str, task_id: Option
             "a re-check never starts a build on its own", risk_tier=1)
         c.execute(text("UPDATE decisions SET deadline_at = NULL WHERE id = :d"),
                   {"d": decision_id})
+        if pr_url:
+            # One Fix card per PR: an older re-check's card speaks for a stale check.
+            from .run_decisions import withdraw_superseded_merge_cards
+
+            withdraw_superseded_merge_cards(c, project_id, str(pr_url), str(decision_id),
+                                            run_id=run_id, actions=(FIX_ACTION,))
         emit_event(c, project_id, "code_task.recheck_fix_card", "boss", "code_task_run",
                    run_id, {"decision_id": decision_id, "items": len(items),
                             "estimate_usd": cost["usd"]})
     return str(decision_id)
 
 
-def may_start_fix(connection: Any, project_id: str) -> bool:
-    """Inside an enforced request: does the caller hold code_task:steer on the project? Outside
-    one (the host shell, a test) the in-process caller is trusted, as everywhere else."""
+def may_start_fix(connection: Any, project_id: str, actor: Optional[str] = None) -> bool:
+    """Whether `actor` may start the paid fix: a PERSON (BOSSAPP-1328 — never an agent, a worker
+    or a system actor, inside a request or not) who, inside an enforced request, is a user
+    principal holding code_task:steer on the project."""
     from sqlalchemy import text
 
     from ..identity import authz, lineage
     from ..identity.permissions_gen import P
     from ..identity.scope import ResolvedScope
+    from .agent_identity import is_person
 
+    if not is_person(actor, connection, project_id):
+        return False
     if not lineage.request_enforced():
         return True
     ctx = lineage.current_context()
     org_id = connection.execute(text(
         "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
         "WHERE p.id = :p"), {"p": project_id}).scalar()
-    if ctx is None or not org_id or ctx.principal.org_id != org_id:
+    if (ctx is None or not org_id or ctx.principal.org_id != org_id
+            or not ctx.principal.is_person):
         return False
     return authz.check(ctx, P.CODE_TASK_STEER, ResolvedScope.in_project(org_id, project_id),
                        db=connection).allowed
+
+
+def fix_refusal(connection: Any, rec: Mapping[str, Any], project_id: str) -> Optional[str]:
+    """Why a Fix card must not start anything now, or None (BOSSAPP-1328):
+      * a newer build of the change exists (a re-check, a retry, a follow-up): the card is a
+        stale snapshot, and that build's own checks decide;
+      * nothing it listed is still open in the ledger (fixed since): there is nothing to fix."""
+    from sqlalchemy import text
+
+    from .acceptance import ledger as _ledger
+
+    run_id = str(rec.get("run_id") or "")
+    root = str((rec.get("followup") or {}).get("parent_root") or run_id)
+    newer = connection.execute(text(
+        "SELECT r.id FROM code_task_runs r, code_task_runs me WHERE me.id = :me "
+        "AND r.project_id = :p AND r.id <> :me AND r.created_at > me.created_at "
+        "AND (r.id = :root OR r.finalize_ctx->>'root_run_id' = :root) "
+        "ORDER BY r.created_at DESC LIMIT 1"),
+        {"me": run_id, "p": project_id, "root": root}).scalar()
+    if newer:
+        return (f"A newer build of this change ({newer}) exists; its own checks decide what is "
+                "left to fix. Nothing was started.")
+    lin = _ledger.lineage_of(connection, run_id)
+    rows = _ledger.open_for(connection, project_id=project_id,
+                            lineage=(lin or {}).get("lineage") or root, include_held=False)
+    if not rows:
+        return ("Nothing is open: the findings this card listed were fixed since. Nothing "
+                "was started.")
+    return None
 
 
 def start_fix(engine: Any, settings: Any, jobs: Any, rec: Mapping[str, Any], *,
@@ -314,11 +364,20 @@ def start_fix(engine: Any, settings: Any, jobs: Any, rec: Mapping[str, Any], *,
     change's branch, like any checks-failing follow-up. Returns its run id."""
     from .governed_code_task_service import _spawn_deferred_findings_task
 
+    from ..db import begin
+
+    with begin(engine) as c:
+        why = fix_refusal(c, rec, project_id)
+    if why:
+        raise RecheckRefused(why)
     f = dict(rec.get("followup") or {})
+    # THE LEDGER'S OPEN ROWS NOW, NEVER THE CARD'S SNAPSHOT (BOSSAPP-1328): handing the snapshot
+    # back to the ledger reopened rows fixed since as "regressions". No findings are observed
+    # here; the follow-up is built from what is open (governed._ledger_followup).
     return _spawn_deferred_findings_task(
         engine, settings, jobs, project_id=project_id, task_id=task_id,
         spec=dict(f.get("spec") or {}), base_branch=str(f.get("base_branch") or ""),
-        findings=list(rec.get("findings") or []), parent_run_id=str(rec.get("run_id") or ""),
+        findings=[], parent_run_id=str(rec.get("run_id") or ""),
         parent_title=str(f.get("parent_title") or ""),
         parent_root=str(f.get("parent_root") or "") or None,
         parent_origin=f.get("parent_origin"),
@@ -329,4 +388,4 @@ def start_fix(engine: Any, settings: Any, jobs: Any, rec: Mapping[str, Any], *,
 __all__ = ["CHECK_STAGES", "GATES", "KEY", "NOTE", "NoWriteAgent", "OF_KEY", "RecheckRefused",
            "WRITING_STAGES", "estimate", "is_recheck", "preview", "refusal", "request",
            "FIX_ACTION", "PUSH_HOLD", "fix_estimate", "may_start_fix", "push_hold_reason",
-           "raise_fix_card", "seed_acceptance", "start_fix"]
+           "raise_fix_card", "seed_acceptance", "start_fix", "fix_refusal"]

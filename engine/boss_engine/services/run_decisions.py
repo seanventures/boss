@@ -376,9 +376,15 @@ def normalize_pr_url(url: Optional[str]) -> str:
     return u.lower()
 
 
+#: The cards about one pull request that a newer one supersedes: its merge card, and a
+#: re-check's "Fix these" card (change_recheck.FIX_ACTION).
+PR_CARD_ACTIONS = ("review_pull_request", "start_recheck_followup")
+
+
 def withdraw_superseded_merge_cards(connection, project_id: str, pull_request_url: str,
                                     new_decision_id: str, *, run_id: Optional[str] = None,
-                                    actor: str = "boss") -> list[str]:
+                                    actor: str = "boss",
+                                    actions: tuple = PR_CARD_ACTIONS) -> list[str]:
     """A NEWER BUILD'S MERGE CARD SUPERSEDES EVERY OLDER ONE FOR THAT PULL REQUEST (BOSSAPP-1320).
 
     Keyed on the card itself (its `pull_request_url`), not on the run that happens to point at
@@ -393,14 +399,45 @@ def withdraw_superseded_merge_cards(connection, project_id: str, pull_request_ur
     rows = connection.execute(
         text("SELECT id, recommendation->>'pull_request_url' AS u FROM decisions "
              "WHERE project_id = :p AND id <> :d "
-             "AND recommendation->>'action' = 'review_pull_request' AND status IN :open "
+             # A re-check's Fix card (change_recheck) is about the same PR: a newer build's
+             # card withdraws it too, so a stale snapshot never starts a paid follow-up.
+             "AND recommendation->>'action' IN :actions AND status IN :open "
              # Only OLDER cards: a sweep from an earlier build never withdraws a newer one.
              "AND created_at <= (SELECT created_at FROM decisions WHERE id = :d) "
-             "ORDER BY created_at").bindparams(bindparam("open", expanding=True)),
-        {"p": project_id, "d": new_decision_id, "open": list(UNANSWERED)}).mappings().all()
+             "ORDER BY created_at").bindparams(bindparam("open", expanding=True),
+                                               bindparam("actions", expanding=True)),
+        {"p": project_id, "d": new_decision_id, "open": list(UNANSWERED),
+         "actions": list(actions)}).mappings().all()
     # The SAME pull request however its URL was written (a trailing slash, http, `.git`, the
     # owner's or repo's case): one PR, one live merge card.
     older = [r["id"] for r in rows if r["u"] and normalize_pr_url(r["u"]) == want]
+    return _withdraw_superseded(connection, project_id, older, pull_request_url,
+                                new_decision_id, run_id=run_id, actor=actor)
+
+
+def withdraw_fix_cards(connection, project_id: str, pull_request_url: str, *, note: str,
+                       actor: str = "boss") -> list[str]:
+    """Every open "Fix these" card of a pull request (change_recheck), withdrawn with `note`:
+    a newer re-check or build of the change makes its snapshot stale (BOSSAPP-1328)."""
+    if not pull_request_url:
+        return []
+    want = normalize_pr_url(pull_request_url)
+    rows = connection.execute(
+        text("SELECT id, recommendation->>'pull_request_url' AS u FROM decisions "
+             "WHERE project_id = :p AND recommendation->>'action' = 'start_recheck_followup' "
+             "AND status IN :open").bindparams(bindparam("open", expanding=True)),
+        {"p": project_id, "open": list(UNANSWERED)}).mappings().all()
+    out: list[str] = []
+    for r in rows:
+        if r["u"] and normalize_pr_url(r["u"]) == want and _withdraw_with_note(
+                connection, str(r["id"]), project_id, note, actor=actor,
+                why={"pull_request_url": pull_request_url}):
+            out.append(str(r["id"]))
+    return out
+
+
+def _withdraw_superseded(connection, project_id: str, older: list, pull_request_url: str,
+                         new_decision_id: str, *, run_id: Optional[str], actor: str) -> list[str]:
     out: list[str] = []
     for decision_id in older:
         note = (f"Superseded by {new_decision_id}"
