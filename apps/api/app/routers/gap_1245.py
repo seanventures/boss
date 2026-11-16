@@ -11,6 +11,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from boss_engine.identity import P, Scope, permit
 from boss_engine.services.named_draft import (
     NamedDraftError,
     open_named_draft,
@@ -40,6 +41,7 @@ def _error(exc: NamedDraftError) -> JSONResponse:
 
 
 @router.post("/open")
+@permit(P.PREVIEW_MANAGE, scope=Scope.project(body="project_id"))
 def open_draft(body: OpenDraftBody) -> dict[str, Any]:
     try:
         press = press_for(body.app_id, body.published_url, body.commits)
@@ -49,6 +51,7 @@ def open_draft(body: OpenDraftBody) -> dict[str, Any]:
 
 
 @router.post("/chat")
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(body="project_id"))
 def draft_chat(body: DraftChatBody) -> dict[str, Any]:
     press = peek_press(body.app_id)
     if press is None:

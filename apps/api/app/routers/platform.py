@@ -514,10 +514,11 @@ def mount_platform_routers(app: FastAPI) -> None:
     app.include_router(ticket_systems_router)
 
     # Swarm gap routers. Every include already above stays, including factory_launch_router.
-    # 1241, 1244, 1245 and 1260 are not included: their handlers declare no access, and boot
-    # coverage fails closed on an undeclared route.
+    from .gap_1241 import router as gap_1241_router
     from .gap_1242 import router as gap_1242_router
     from .gap_1243 import router as gap_1243_router
+    from .gap_1244 import router as gap_1244_router
+    from .gap_1245 import router as gap_1245_router
     from .gap_1246 import router as gap_1246_router
     from .gap_1248 import router as gap_1248_router
     from .gap_1249 import router as gap_1249_router
@@ -531,6 +532,7 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .gap_1257 import router as gap_1257_router
     from .gap_1258 import router as gap_1258_router
     from .gap_1259 import router as gap_1259_router
+    from .gap_1260 import router as gap_1260_router
     from .gap_1261 import router as gap_1261_router
     from .gap_1262 import router as gap_1262_router
     from .gap_1263 import router as gap_1263_router
@@ -546,8 +548,11 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .gap_task_voice import router as gap_task_voice_router
     from .gap_trace_export import router as gap_trace_export_router
 
+    app.include_router(gap_1241_router)
     app.include_router(gap_1242_router)
     app.include_router(gap_1243_router)
+    app.include_router(gap_1244_router)
+    app.include_router(gap_1245_router)
     app.include_router(gap_1246_router)
     app.include_router(gap_1248_router)
     app.include_router(gap_1249_router)
@@ -561,6 +566,7 @@ def mount_platform_routers(app: FastAPI) -> None:
     app.include_router(gap_1257_router)
     app.include_router(gap_1258_router)
     app.include_router(gap_1259_router)
+    app.include_router(gap_1260_router)
     app.include_router(gap_1261_router)
     app.include_router(gap_1262_router)
     app.include_router(gap_1263_router)

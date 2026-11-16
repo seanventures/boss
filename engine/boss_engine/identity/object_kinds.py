@@ -460,6 +460,9 @@ NON_OBJECT_IDS: dict[str, str] = {
     # A ticket-system mapping's TARGET project (BOSSAPP-1047): another project by design; the
     # handler checks integration:manage AT that project before it maps anything onto it.
     "boss_project_id": "a mapping's target project, checked by the handler at that project",
+    # A builder-plan approval names who approved (BOSSAPP-1244). The handler checks the typed
+    # name; it is not a row in a project.
+    "person_id": "a name typed to approve a builder plan, not a project-owned row",
     **{n: _PLANNING for n in ("cycle_id", "initiative_id")},
 }
 

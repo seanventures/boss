@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2401 operations.
+# 2411 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -420,7 +420,15 @@
 "POST /v1/budget/reserve": ["permit spend:reserve @ project(body=project_id)", "-"]
 "POST /v1/budget/set_intensity": ["permit budget:manage @ project(body=scope_id)", "OA"]
 "GET /v1/budget/status": ["permit budget:read @ project(query=scope_id)", "OAPVU"]
+"GET /v1/builder/emulator-frame": ["permit preview:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/builder/live-frame": ["permit preview:read @ project(body=project_id)", "OAPVU"]
+"POST /v1/builder/live-frame/publish": ["permit preview:manage @ project(body=project_id)", "OAP"]
 "POST /v1/builder/personal-data": ["authenticated", "OAPVU"]
+"POST /v1/builder/store-uploads": ["permit preview:manage @ project(body=project_id)", "OAP"]
+"POST /v1/builder/threads": ["permit assistant:chat @ project(body=project_id)", "OAP"]
+"GET /v1/builder/threads/{thread_id}": ["permit project:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/builder/threads/{thread_id}/approvals": ["permit assistant:chat @ project(body=project_id)", "OAP"]
+"POST /v1/builder/threads/{thread_id}/turns": ["permit assistant:chat @ project(body=project_id)", "OAP"]
 "POST /v1/builder/turns": ["permit budget:manage @ project(body=project_id)", "OA"]
 "GET /v1/builder/turns/{turn_id}": ["permit budget:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/builder/turns/{turn_id}/credit": ["permit budget:manage @ project(body=project_id)", "OA"]
@@ -1521,6 +1529,8 @@
 "GET /v1/multi-cloud/skills": ["permit infra:read @ org", "OAPVU"]
 "POST /v1/multi-cloud/skills/describe": ["permit infra:read @ org", "OAPVU"]
 "POST /v1/mutation-gate": ["permit host:exec @ org", "OA"]
+"POST /v1/named-drafts/chat": ["permit assistant:chat @ project(body=project_id)", "OAP"]
+"POST /v1/named-drafts/open": ["permit preview:manage @ project(body=project_id)", "OAP"]
 "GET /v1/notification-policies": ["permit observability:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/notification-policies": ["permit observability:manage @ project(body=project_id)", "OA"]
 "POST /v1/notification-policies/preview": ["permit observability:read @ project(body=project_id)", "OAPVU"]

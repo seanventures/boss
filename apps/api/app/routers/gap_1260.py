@@ -6,6 +6,7 @@ import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from boss_engine.identity import P, Scope, permit
 from boss_engine.services.store_upload import (
     MemoryReceiptBook,
     StoreUploadError,
@@ -31,6 +32,7 @@ class StoreUploadIn(BaseModel):
 
 
 @router.get("/v1/builder/emulator-frame")
+@permit(P.PREVIEW_READ, scope=Scope.project(query="project_id"))
 def read_emulator_frame(platform: str = "ios", index: int = 1) -> dict:
     """One local preview frame. Nothing here opens a simulator."""
     try:
@@ -40,6 +42,7 @@ def read_emulator_frame(platform: str = "ios", index: int = 1) -> dict:
 
 
 @router.post("/v1/builder/store-uploads", status_code=201)
+@permit(P.PREVIEW_MANAGE, scope=Scope.project(body="project_id"))
 def create_store_upload(body: StoreUploadIn) -> dict:
     try:
         return upload_signed_build(

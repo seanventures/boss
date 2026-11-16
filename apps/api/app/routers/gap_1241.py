@@ -10,6 +10,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from boss_engine.identity import P, Scope, permit
 from boss_engine.services.builder_live_frame import live_frame, publish
 from boss_engine.services.builder_live_frame import reset_publishes as clear_publishes
 
@@ -38,6 +39,7 @@ def _payload(body: BuildBody) -> dict[str, Any]:
 
 
 @router.post("")
+@permit(P.PREVIEW_READ, scope=Scope.project(body="project_id"), readonly_post=True)
 def show_frame(body: BuildBody) -> Any:
     try:
         return live_frame(_payload(body))
@@ -49,6 +51,7 @@ def show_frame(body: BuildBody) -> Any:
 
 
 @router.post("/publish")
+@permit(P.PREVIEW_MANAGE, scope=Scope.project(body="project_id"))
 def publish_frame(body: BuildBody) -> Any:
     try:
         return publish(_payload(body), publish_to=body.publish_to)
