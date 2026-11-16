@@ -243,7 +243,7 @@ describe("the forms say what is wrong before anything is sent", () => {
     expect(targetFormProblem({ ...ok, name: "Boss App" })).toMatch(/lowercase/);
     expect(targetFormProblem({ ...ok, publicUrl: "boss.example.com" })).toMatch(/http/);
     expect(targetFormProblem({ ...ok, manifestPath: "../etc/passwd" })).toMatch(/inside the repository/);
-    expect(targetFormProblem({ ...ok, repository: "" })).toMatch(/Repo and model/);
+    expect(targetFormProblem({ ...ok, repository: "" })).toMatch(/Setup/);
   });
   it("deploy form", () => {
     expect(deployFormProblem({ repository: "o/r", ref: "main", targetId: "t" })).toBeNull();

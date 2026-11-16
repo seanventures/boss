@@ -1172,7 +1172,7 @@ categories:
     permissions:
       - key: setup:read
         title: "View setup"
-        description: "See the Repo and models checklist."
+        description: "See the Setup checklist."
         roles: [owner, admin, operator, viewer, auditor]
         scope: project
         flags: []

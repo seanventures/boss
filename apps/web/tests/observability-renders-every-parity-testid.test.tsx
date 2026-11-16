@@ -2,7 +2,7 @@
 /**
  * Every Observability row of the parity table (lib/infra-obs-parity.ts) renders: open the area at
  * the row's URL with the shared wire fixtures, press what the row says, and the testid is there.
- * Repo and models' `setup` rows too (Capacity, moved from System Configuration).
+ * Setup's `setup` rows too (Capacity, moved from System Configuration).
  * This is the S4 half of the lead's parity test, so a stream break shows up here first.
  */
 import React from "react";
@@ -40,7 +40,7 @@ describe("Observability renders every parity testid", () => {
   }
 });
 
-describe("Repo and models renders every setup parity testid", () => {
+describe("Setup renders every setup parity testid", () => {
   for (const row of PARITY.filter((r) => r.check.kind === "testid" && r.check.surface === "setup")) {
     const c = row.check as { url: string; testid: string };
     it(`${row.id} · ${c.testid}`, async () => {

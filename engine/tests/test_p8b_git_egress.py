@@ -53,6 +53,30 @@ def test_the_bitbucket_rest_surface(method, path, body, reason):
         assert decision.reason == reason
 
 
+def test_bitbucket_api_reads_are_an_allow_list():
+    """BOSSAPP-1176: a read on the list works; a write, and a call the list does not name, do not."""
+    read = rules.check_bitbucket_api(
+        "GET", "/2.0/repositories/ws/app/src/README.md",
+        perms={"contents": "read"}, repos=["ws/app"], push_pattern=PATTERN)
+    assert read.allowed and read.need == ("contents", "read"), read
+    head = rules.check_bitbucket_api(
+        "HEAD", "/2.0/repositories/ws/app/refs/branches/main",
+        perms={"contents": "read"}, repos=["ws/app"], push_pattern=PATTERN)
+    assert head.allowed, head
+    write = rules.check_bitbucket_api(
+        "POST", "/2.0/repositories/ws/app/src", perms=PERMS, repos=["ws/app"],
+        body={"README.md": "x"}, push_pattern=PATTERN)
+    assert not write.allowed and write.reason == "not_in_rule_table", write
+    unlisted = rules.check_bitbucket_api(
+        "GET", "/2.0/repositories/ws/app/downloads", perms=PERMS, repos=["ws/app"],
+        push_pattern=PATTERN)
+    assert not unlisted.allowed and unlisted.reason == "not_in_rule_table", unlisted
+    # The old block-list let this through: it is not an admin endpoint, and it is not a read.
+    assert rules.check_bitbucket_api(
+        "GET", "/2.0/repositories/ws/app/issues", perms=PERMS, repos=["ws/app"],
+        push_pattern=PATTERN).reason == "not_in_rule_table"
+
+
 def test_read_only_runs_cannot_write_bitbucket():
     decision = rules.check_bitbucket_api(
         "POST", "/2.0/repositories/ws/app/pullrequests", perms={"contents": "read"},
@@ -255,6 +279,41 @@ def test_a_bitbucket_repo_is_stored_normalised_and_allowed_at_egress(bb_registry
     decision = rules.check_bitbucket_api("GET", "/2.0/repositories/ws/app", perms=PERMS, repos=scope,
                                          push_pattern=PATTERN)
     assert decision.allowed, decision
+
+
+# Keys the process actually reads. api verifies the webhook; egress injects the credential and
+# honours a non-default git/API host. worker builds with the same credential and registry.
+_BITBUCKET_COMPOSE = {
+    "api": (
+        "BOSS_BITBUCKET_TOKEN", "BOSS_BITBUCKET_USERNAME", "BOSS_BITBUCKET_APP_PASSWORD",
+        "BOSS_BITBUCKET_WEBHOOK_SECRET", "BOSS_TARGET_BITBUCKET_WORKSPACE",
+        "BOSS_TARGET_BITBUCKET_REPO", "BOSS_BITBUCKET_REPOS",
+    ),
+    "worker": (
+        "BOSS_BITBUCKET_TOKEN", "BOSS_BITBUCKET_USERNAME", "BOSS_BITBUCKET_APP_PASSWORD",
+        "BOSS_TARGET_BITBUCKET_WORKSPACE", "BOSS_TARGET_BITBUCKET_REPO", "BOSS_BITBUCKET_REPOS",
+    ),
+    "egress": (
+        "BOSS_BITBUCKET_TOKEN", "BOSS_BITBUCKET_USERNAME", "BOSS_BITBUCKET_APP_PASSWORD",
+        "BOSS_BITBUCKET_GIT_URL", "BOSS_BITBUCKET_API_URL", "BOSS_TARGET_BITBUCKET_WORKSPACE",
+        "BOSS_TARGET_BITBUCKET_REPO", "BOSS_BITBUCKET_REPOS",
+    ),
+}
+
+
+def test_compose_passes_bitbucket_env_to_api_worker_and_egress():
+    """BOSSAPP-1184: without these, repo_scope fails closed and egress has no credential."""
+    yaml = pytest.importorskip("yaml")
+    compose = yaml.safe_load((ROOT / "scripts/install/community-compose.yml").read_text())
+    missing = [f"{service} drops {name}"
+               for service, names in _BITBUCKET_COMPOSE.items()
+               for name in names
+               if name not in compose["services"][service]["environment"]]
+    assert not missing, "\n".join(missing)
+    # An unset .env must not override the real default with a nested expansion.
+    egress = compose["services"]["egress"]["environment"]
+    assert egress["BOSS_BITBUCKET_GIT_URL"] == "${BOSS_BITBUCKET_GIT_URL:-}"
+    assert egress["BOSS_BITBUCKET_TOKEN"] == "${BOSS_BITBUCKET_TOKEN:-}"
 
 
 def test_egress_allows_a_bitbucket_repo_the_token_named_with_dot_git(bb_registry):

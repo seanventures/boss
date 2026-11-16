@@ -36,6 +36,7 @@ org and key), so the answer is "found in <site>, maps to <BOSS project>", "not f
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -154,13 +155,151 @@ def _reads(row: dict[str, Any]) -> bool:
                 and not row["configuration"].get("ticket_system"))
 
 
-def not_shared_error(db: Connection, row: dict[str, Any]) -> intake.TicketApiError:
-    home = project_name(db, str(row["project_id"]))
+def _project_owner_names(db: Connection, project_id: str, limit: int) -> list[str]:
+    return [str(n) for n in db.execute(text(
+        "SELECT p.display_name FROM identity_role_bindings b JOIN identity_principals p "
+        "ON p.id = b.subject_id WHERE b.subject_type = 'principal' AND b.role_id = 'arl_owner' "
+        "AND b.scope_type = 'project' AND b.scope_id = :p AND p.kind = 'user' "
+        "AND p.status = 'active' AND NOT p.network_bound "
+        "AND p.id NOT IN ('usr_legacy_shared', 'usr_network_operator') "
+        "ORDER BY b.granted_at, p.display_name LIMIT :n"),
+        {"p": project_id, "n": limit}).scalars().all() if n]
+
+
+def org_owner_names(db: Connection, project_id: str, *, limit: int = 3) -> list[str]:
+    """The org's Owners (display names), for "Ask an org owner to share it"."""
+    org = org_of(db, project_id)
+    if org is None:
+        return []
+    from ..identity.bindings import OWNER_ROLE_ID
+
+    return [str(n) for n in db.execute(text(
+        "SELECT DISTINCT p.display_name FROM identity_role_bindings b "
+        "JOIN identity_principals p ON p.id = b.subject_id WHERE b.org_id = :o "
+        "AND b.role_id = :owner AND b.scope_type = 'org' AND b.subject_type = 'principal' "
+        "AND (b.expires_at IS NULL OR b.expires_at > now()) AND p.kind = 'user' "
+        "AND p.status = 'active' AND NOT p.network_bound "
+        "AND p.id NOT IN ('usr_legacy_shared', 'usr_network_operator') "
+        "ORDER BY p.display_name LIMIT :n"),
+        {"o": org, "owner": OWNER_ROLE_ID, "n": limit}).scalars().all() if n]
+
+
+def owner_names(db: Connection, project_id: str, *, limit: int = 3) -> list[str]:
+    """Who to ask about a connection homed in ``project_id``: the people who hold Owner on that
+    project, else the org's Owners. Display names only (never an email or an id)."""
+    return _project_owner_names(db, project_id, limit) or org_owner_names(db, project_id,
+                                                                            limit=limit)
+
+
+#: How a project the caller may not read is named (never its name or id).
+ANOTHER_PROJECT = "another project"
+
+
+def may_see_project(project_id: str, *, person_id: Optional[str] = None, db: Any = None) -> bool:
+    """WHAT A TICKET SYSTEM SAYS ABOUT ITS HOME (PR #140 review): ticket systems are an org-wide
+    setting, but a project the caller cannot read (project:read) stays hidden, as /v1/projects
+    hides it. ``person_id``: answer for THAT person (an agent's tool acting for them, so the agent
+    never tells a person names the console hides). Otherwise the request's principal; not
+    enforced (legacy mode, no request): visible, as the rest of that mode."""
+    if person_id and db is not None:
+        try:
+            from ..identity import authz
+            from ..identity.scope import ResolvedScope
+            from ..identity.users import load_principal
+
+            person = load_principal(db, person_id)
+            if person is not None:
+                held = authz.effective_permissions(
+                    person, ResolvedScope.in_project(person.org_id, project_id), db=db).permissions
+                return "project:read" in held
+            # Not a person this install's identity knows (legacy actor): as for any caller.
+        except Exception:  # noqa: BLE001 — cannot tell: hidden, never shown
+            return False
+    from ..identity import viewer
+
+    said = viewer.may(project_id, "project:read")
+    return True if said is None else bool(said)
+
+
+def home_view(db: Connection, project_id: str, *, person_id: Optional[str] = None) -> dict[str, Any]:
+    """A connection's home project as the console names it, with whom to ask about it — or,
+    for a project the caller cannot read, "another project" and the org's Owners."""
+    if may_see_project(project_id, person_id=person_id, db=db):
+        return {"id": project_id, "name": project_name(db, project_id),
+                "owners": owner_names(db, project_id)}
+    return {"id": "", "name": ANOTHER_PROJECT, "owners": org_owner_names(db, project_id),
+            "hidden": True}
+
+
+def not_shared_error(db: Connection, row: dict[str, Any], *, person_id: Optional[str] = None
+                     ) -> intake.TicketApiError:
+    label = intake.label_of(row)
+    home = home_view(db, str(row["project_id"]), person_id=person_id)
+    if home.get("hidden"):
+        return intake.TicketApiError(
+            "not_shared", f"The {label} connection was added in another project and is not "
+                          "shared with this project. An org owner can share it with the whole "
+                          "org in Setup › Ticket systems.",
+            status=403, home_project="", home_project_name=ANOTHER_PROJECT,
+            connection_id=str(row["id"]), label=label, owners=home["owners"])
     return intake.TicketApiError(
-        "not_shared", f"The {intake.label_of(row)} connection was added in {home} and is not "
+        "not_shared", f"The {label} connection was added in {home['name']} and is not "
                       "shared with this project. A person who manages integrations there can "
                       "turn on \"Share with the whole org\" in Setup › Ticket systems.",
-        status=403, home_project=str(row["project_id"]))
+        status=403, home_project=str(row["project_id"]), home_project_name=home["name"],
+        connection_id=str(row["id"]), label=label, owners=home["owners"])
+
+
+def org_connections(db: Connection, project_id: str) -> list[dict[str, Any]]:
+    """EVERY ticket-system connection of ``project_id``'s org, whatever project it was added
+    from (Setup › Ticket systems › All): the HOME rows (connected, or disconnected there), never
+    a mirror. Each carries ``usable_here`` (its own, or shared with the org, or mirrored into
+    ``project_id``) so the console can filter to the project. Never a token."""
+    org = org_of(db, project_id)
+    if org is None:
+        return []
+    found = db.execute(text(
+        "SELECT t.id, t.project_id, t.provider_key, t.display_name, t.status, t.is_default, "
+        "t.configuration, t.updated_at FROM work_tracker_providers t "
+        "JOIN projects p ON p.id = t.project_id JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE w.org_id = :o AND p.archived_at IS NULL AND t.status IN ('active', 'disconnected') "
+        "AND COALESCE(t.configuration->>'ticket_system', '') = 'true' "
+        "AND COALESCE(t.configuration->>'mirror_of', '') = '' "
+        "ORDER BY t.updated_at DESC"), {"o": org}).mappings().all()
+    mirrored = {str(m) for m in db.execute(text(
+        "SELECT configuration->>'mirror_of' FROM work_tracker_providers WHERE project_id = :p "
+        "AND status = 'active' AND COALESCE(configuration->>'mirror_of', '') <> ''"),
+        {"p": project_id}).scalars().all()}
+    out = []
+    for raw in found:
+        if REGISTRY.get(str(raw["provider_key"])) is None:
+            continue
+        row = dict(raw)
+        row["configuration"] = intake._config(raw)
+        if row["status"] == "active" and not intake.is_connected(row):
+            continue
+        out.append({**row, "shared": is_shared(row),
+                    "usable_here": str(row["project_id"]) == project_id
+                    or str(row["id"]) in mirrored
+                    or (is_shared(row) and row["status"] == "active")})
+    return out
+
+
+def unshared_ref(db: Connection, project_id: str, said: str) -> Optional[dict[str, Any]]:
+    """The first ticket key in ``said`` that only a connection NOT shared with this project
+    knows (its project keys), as that connection's ``not_shared`` refusal with the key as
+    ``ref``. Nothing is read from the ticket system: the key's prefix is matched locally."""
+    hidden = [r for r in unshared_rows(db, project_id) if _reads(r)]
+    if not hidden:
+        return None
+    for token in dict.fromkeys(_KEY_IN_TEXT.findall(str(said or "")[:20_000])):
+        owners = _recognised(db, hidden, token, person_id=None)
+        if owners:
+            return {"ref": token, **not_shared_error(db, owners[0][0]).body()}
+    return None
+
+
+_KEY_IN_TEXT = re.compile(r"\b[A-Z][A-Z0-9_]{1,9}-\d+\b")
 
 
 def reachable_row(db: Connection, project_id: str, connection_id: str) -> dict[str, Any]:
@@ -239,6 +378,15 @@ def mapped_project(db: Connection, row: dict[str, Any], key: str) -> dict[str, A
     if not target:
         target = describe(db, row)["home_project"]
     return {"project_id": target, "name": project_name(db, target), "by": how}
+
+
+def visible_maps_to(maps_to: dict[str, Any], *, person_id: Optional[str] = None,
+                    db: Any = None) -> dict[str, Any]:
+    """``maps_to`` for a person: a BOSS project they cannot read is "another project"."""
+    if maps_to.get("project_id") and not may_see_project(str(maps_to["project_id"]),
+                                                         person_id=person_id, db=db):
+        return {**maps_to, "project_id": "", "name": ANOTHER_PROJECT}
+    return maps_to
 
 
 def _key_shaped(ref: str) -> bool:
@@ -395,7 +543,7 @@ def lookup(db: Connection, project_id: str, ref: str, *, person_id: Optional[str
                   and (not wanted or str(r["provider_key"]) == wanted)]
         if _recognised(db, hidden, said, person_id=None):
             row = _recognised(db, hidden, said, person_id=None)[0][0]
-            error = not_shared_error(db, row)
+            error = not_shared_error(db, row, person_id=person_id)
             return {"ok": False, **error.body()}
         if not rows:
             if cid or wanted:
@@ -403,7 +551,7 @@ def lookup(db: Connection, project_id: str, ref: str, *, person_id: Optional[str
                         "message": f"No connected ticket system {cid or wanted} is reachable "
                                    "from this project."}
             if hidden:
-                return {"ok": False, **not_shared_error(db, hidden[0]).body()}
+                return {"ok": False, **not_shared_error(db, hidden[0], person_id=person_id).body()}
             return not_connected(project_id)
         if find_urls(said) or not _key_shaped(said):
             sites = ", ".join(sorted({f"{site_of(r) or intake.label_of(r)} "
@@ -436,7 +584,8 @@ def lookup(db: Connection, project_id: str, ref: str, *, person_id: Optional[str
         view["connection_id"] = str(row["id"])
         view["in_boss"] = intake.mark([ticket], intake.in_boss_map(
             db, intake.family_ids(db, row)))[0]["in_boss"]
-        maps_to = mapped_project(db, row, ticket.key or tref.label())
+        maps_to = visible_maps_to(mapped_project(db, row, ticket.key or tref.label()),
+                                  person_id=person_id, db=db)
         return {"ok": True, "ticket": view, "connection": where, "maps_to": maps_to,
                 "this_project": project_id,
                 "in_this_project": maps_to["project_id"] == project_id,

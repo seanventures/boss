@@ -236,9 +236,9 @@ describe("needs you", () => {
     expect($$('[data-testid="cc-need"]')[0].textContent).toContain("Budget refused new work");
   });
 
-  it("a setup gap links to its row in Repo and models", async () => {
+  it("a setup gap links to its row in Setup", async () => {
     const gap = { id: "ready:github", kind: "readiness", title: "Connect a repository", detail: "",
-                  fix: { area: "setup", label: "Fix in Repo and models", focus: "repository" }, actions: [], answers: [],
+                  fix: { area: "setup", label: "Fix in Setup", focus: "repository" }, actions: [], answers: [],
                   decide_inline: false, at: null };
     await mount(page(V(view({ attention: [gap] }))));
     expect(tid("cc-need-fix")?.getAttribute("href")).toContain("focus=repository");

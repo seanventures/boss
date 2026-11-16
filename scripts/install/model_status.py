@@ -2,7 +2,7 @@
 """What this install can use as a model: one row per source, with the command that fixes it.
 
 `boss connect --summary` and the installer's summary card print these rows. They come from
-BOSS's own answer, GET /v1/setup — the view Repo and models renders — so the CLI says exactly
+BOSS's own answer, GET /v1/setup — the view Setup renders — so the CLI says exactly
 what the console says:
 
 - every model BOSS holds (a console-stored key, a key from the install's .env, a subscription,
@@ -269,7 +269,7 @@ def view_rows(view: dict, env_file: Path, found: dict[str, bool]) -> list[tuple[
         out.append(("Default", "none. Model calls fail closed until one is connected: "
                                "boss connect"))
     else:
-        out.append(("Default", "nothing resolves for Build. Choose one in Repo and models, "
+        out.append(("Default", "nothing resolves for Build. Choose one in Setup, "
                                "Who does what"))
     others = [_job_text(j) for j in jobs if j.get("job") != "build"]
     if others:
@@ -312,7 +312,7 @@ def fallback_rows(api_url: str, api_key: str, env_file: Path,
             out.append((label, str(pill.get("label") or pill.get("state"))))
         elif item is not None and item.get("connection_status") == "connected":
             out.append((label, "connected (recorded; its last proof is not known here — "
-                               "see Repo and models)"))
+                               "see Setup)"))
         elif found.get(found_key):
             out.append((label, f"found, not connected: boss connect {name}"))
         else:

@@ -4,7 +4,7 @@
 // misspelt permission anywhere in apps/web is a type error.
 
 export const CATALOGUE_VERSION = 1 as const;
-export const CATALOGUE_FINGERPRINT = "d84a72d27b311d74";
+export const CATALOGUE_FINGERPRINT = "c04484e071ceb3a7";
 
 export const PERMISSIONS = [
   "directory:read",
@@ -393,7 +393,7 @@ export const PERMISSION_META: Readonly<Record<Permission, PermissionMeta>> = {
   "changeset:approve": { key: "changeset:approve", title: "Approve infra changesets", description: "Approve and apply an infrastructure changeset.", category: "Deploy and infra", roles: ["owner", "admin"], scope: "project", stepUp: true, delegable: false, critical: true, systemOnly: false },
   "cicd:read": { key: "cicd:read", title: "View CI/CD", description: "See CI/CD catalogue and status.", category: "Deploy and infra", roles: ["owner", "admin", "operator", "viewer", "auditor"], scope: "project", stepUp: false, delegable: false, critical: false, systemOnly: false },
   "cicd:manage": { key: "cicd:manage", title: "Manage CI/CD", description: "Generate, validate and run CI/CD pipelines.", category: "Deploy and infra", roles: ["owner", "admin", "operator"], scope: "project", stepUp: false, delegable: false, critical: false, systemOnly: false },
-  "setup:read": { key: "setup:read", title: "View setup", description: "See the Repo and models checklist.", category: "Models, spend and policy", roles: ["owner", "admin", "operator", "viewer", "auditor"], scope: "project", stepUp: false, delegable: false, critical: false, systemOnly: false },
+  "setup:read": { key: "setup:read", title: "View setup", description: "See the Setup checklist.", category: "Models, spend and policy", roles: ["owner", "admin", "operator", "viewer", "auditor"], scope: "project", stepUp: false, delegable: false, critical: false, systemOnly: false },
   "setup:manage": { key: "setup:manage", title: "Manage setup", description: "Choose the repo, models and coding agents during setup.", category: "Models, spend and policy", roles: ["owner", "admin"], scope: "project", stepUp: true, delegable: false, critical: false, systemOnly: false },
   "setup:check": { key: "setup:check", title: "Check setup", description: "Re-check GitHub access and ask each model one tiny question.", category: "Models, spend and policy", roles: ["owner", "admin", "operator"], scope: "project", stepUp: false, delegable: false, critical: false, systemOnly: false },
   "model_provider:read": { key: "model_provider:read", title: "View model providers", description: "See model sources, providers, usage, health and SLOs.", category: "Models, spend and policy", roles: ["owner", "admin", "operator", "viewer", "auditor"], scope: "project", stepUp: false, delegable: true, critical: false, systemOnly: false },

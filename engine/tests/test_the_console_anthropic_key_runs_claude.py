@@ -1,7 +1,7 @@
 """The Anthropic API key stored in the console runs every `claude` BOSS starts (BOSSAPP-530).
 
 The operator wants to disconnect the Claude subscription and run on API credits, set up only in
-the console (Repo and models -> Anthropic API -> Store credential). One resolution decides which
+the console (Setup -> Anthropic API -> Store credential). One resolution decides which
 credential a `claude` child gets and who pays (claude_credential): the subscription's login, else
 the stored key, else ANTHROPIC_API_KEY — or the key first when the operator says so. These pin
 the order, where the key goes (the CLI child only), and that a call on it is booked as money.

@@ -249,9 +249,40 @@ def skill_markdown(skill: dict[str, Any]) -> str:
             f"# {label}\n\n{str(skill.get('knowledge') or '').strip()}\n")
 
 
+#: Same cap as a sourced skill's sibling files (skill_sources.MAX_SUPPORT_FILE_BYTES).
+_SUPPORT_FILE_BYTES = 50_000
+
+
+def _write_support_files(directory: str, files: Any) -> None:
+    """Files that arrived with the skill (a folder import's scripts and references), under
+    `directory` only. A path that climbs out, or a file that is not text, is skipped."""
+    if not isinstance(files, dict):
+        return
+    root = os.path.realpath(directory)
+    for rel, body in files.items():
+        if not isinstance(body, str) or "\x00" in body:
+            continue
+        if len(body.encode("utf-8")) > _SUPPORT_FILE_BYTES:
+            continue
+        parts = [p for p in str(rel).replace("\\", "/").split("/") if p not in ("", ".")]
+        if not parts or any(p == ".." or p.startswith(".") for p in parts):
+            continue
+        if len(parts) == 1 and parts[0].upper() == "SKILL.MD":
+            continue
+        dest = os.path.realpath(os.path.join(root, *parts))
+        if not dest.startswith(root + os.sep):
+            continue
+        os.makedirs(os.path.dirname(dest), mode=0o755, exist_ok=True)
+        with open(dest, "w", encoding="utf-8") as handle:
+            handle.write(body)
+        os.chmod(dest, 0o644)
+
+
 def write_skills_bundle(skills: list[dict[str, Any]]) -> str:
     """A fresh directory holding `<skill_key>/SKILL.md` per skill; "" when there are none.
-    World-readable (a skill is instructions, not a secret) so a sandboxed run's uid reads it."""
+    World-readable (a skill is instructions, not a secret) so a sandboxed run's uid reads it.
+    Sibling files on the skill (a Codex or Claude folder) are written beside that SKILL.md, so
+    every harness that already receives the bundle receives the folder."""
     usable = [s for s in skills if str(s.get("knowledge") or "").strip() and s.get("skill_key")]
     if not usable:
         return ""
@@ -264,6 +295,7 @@ def write_skills_bundle(skills: list[dict[str, Any]]) -> str:
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(skill_markdown(skill))
         os.chmod(path, 0o644)
+        _write_support_files(os.path.join(directory, name), skill.get("files"))
     return directory
 
 
@@ -277,15 +309,24 @@ def _with_skills(mcp: HarnessMcp, connection: Connection, project_id: str,
         from sqlalchemy import text as _text
 
         from .skill_catalogue import entries as catalogue_entries
+        from .skill_versions import current as current_version
 
         with connection.begin_nested():
             held = {str(r["skill_id"]) for r in connection.execute(_text(
                 "SELECT skill_id FROM role_skills WHERE project_id = :p AND role_key = :r"),
                 {"p": project_id, "r": role}).mappings().all()}
             catalogue = catalogue_entries(connection, project_id) if held else {}
+            # The version the catalogue's knowledge belongs to. Its files are the folder
+            # (scripts, references) a sourced skill was imported with.
+            files_of = {}
+            for skill_id in sorted(held):
+                version = current_version(connection, project_id, skill_id)
+                if version:
+                    files_of[skill_id] = version.get("files") or {}
         rows = [
             {"skill_key": skill_id, "label": entry["label"], "summary": entry["summary"],
-             "knowledge": str((entry.get("spec") or {}).get("knowledge") or "")}
+             "knowledge": str((entry.get("spec") or {}).get("knowledge") or ""),
+             "files": files_of.get(skill_id) or {}}
             for skill_id, entry in sorted(catalogue.items())
             if skill_id in held and entry["source"] == "authored" and entry["enabled"]
         ]

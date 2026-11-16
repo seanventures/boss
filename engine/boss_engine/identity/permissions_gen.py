@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "d84a72d27b311d74"
+CATALOGUE_FINGERPRINT = "c04484e071ceb3a7"
 
 
 class Permission(StrEnum):
@@ -382,7 +382,7 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "changeset:approve": PermissionMeta(key="changeset:approve", title="Approve infra changesets", description="Approve and apply an infrastructure changeset.", category="Deploy and infra", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "cicd:read": PermissionMeta(key="cicd:read", title="View CI/CD", description="See CI/CD catalogue and status.", category="Deploy and infra", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "cicd:manage": PermissionMeta(key="cicd:manage", title="Manage CI/CD", description="Generate, validate and run CI/CD pipelines.", category="Deploy and infra", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
-    "setup:read": PermissionMeta(key="setup:read", title="View setup", description="See the Repo and models checklist.", category="Models, spend and policy", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
+    "setup:read": PermissionMeta(key="setup:read", title="View setup", description="See the Setup checklist.", category="Models, spend and policy", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "setup:manage": PermissionMeta(key="setup:manage", title="Manage setup", description="Choose the repo, models and coding agents during setup.", category="Models, spend and policy", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "setup:check": PermissionMeta(key="setup:check", title="Check setup", description="Re-check GitHub access and ask each model one tiny question.", category="Models, spend and policy", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "model_provider:read": PermissionMeta(key="model_provider:read", title="View model providers", description="See model sources, providers, usage, health and SLOs.", category="Models, spend and policy", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),

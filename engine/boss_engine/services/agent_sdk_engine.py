@@ -71,7 +71,7 @@ class NoAnthropicKey(RuntimeError):
 
 NO_KEY_MESSAGE = (
     "The Claude Agent SDK engine runs on an Anthropic API key, and none is stored. "
-    "Store one in Repo and models -> Anthropic API, or pick another engine.")
+    "Store one in Setup -> Anthropic API, or pick another engine.")
 
 
 def sdk_available() -> bool:

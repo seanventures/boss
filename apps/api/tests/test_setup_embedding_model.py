@@ -1,6 +1,6 @@
 """Setup › Embedding model over HTTP (operator decision 2026-10-22).
 
-Save, check and remove answer with the Repo and models view; the view carries the slot without
+Save, check and remove answer with the Setup view; the view carries the slot without
 its key; a model without embeddings is stored with its failed check, not refused; meaning-based
 search is then off and the knowledge status says why. The scripted engine plays the model.
 """

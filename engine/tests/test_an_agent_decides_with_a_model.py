@@ -54,7 +54,7 @@ def test_no_model_means_no_action_and_an_honest_status():
 
     got = _decide(Down())
     assert got.status == ad.NO_MODEL and not got.decided
-    assert "Repo and models" in ad.NO_MODEL_REPLY
+    assert "Setup" in ad.NO_MODEL_REPLY
 
 
 def test_out_of_credit_says_so_up_front_not_just_no_model_is_answering():

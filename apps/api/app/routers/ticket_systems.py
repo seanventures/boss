@@ -102,7 +102,26 @@ def _engine():
 
 def _refuse(error: BaseException, row: Any = None) -> HTTPException:
     typed = intake.explain(error, label=intake.label_of(row) if row else "the ticket system")
-    return HTTPException(status_code=typed.status, detail=typed.body())
+    return HTTPException(status_code=typed.status, detail=_with_can_manage(typed.body()))
+
+
+def _may_manage(project_id: str) -> bool:
+    """May the caller manage integrations in ``project_id`` (a connection's home)? Decides
+    whether the console offers "Share it" or "Ask an owner". Not enforced (legacy mode): yes,
+    as the manage routes themselves would allow it."""
+    from boss_engine.identity import viewer
+
+    said = viewer.may(project_id, P.INTEGRATION_MANAGE.value)
+    return True if said is None else bool(said)
+
+
+def _with_can_manage(body: dict) -> dict:
+    """A ``not_shared`` refusal says whether the caller may share it themselves."""
+    if body.get("error") == "not_shared":
+        # A home the caller cannot read is unnamed (""): they cannot manage it either.
+        home = str(body.get("home_project") or "")
+        body["can_manage"] = bool(home) and _may_manage(home)
+    return body
 
 
 def _person() -> Optional[str]:
@@ -173,8 +192,37 @@ def list_ticket_systems(project_id: str,
     org, marked ``reach: "org"`` with its ``home_project`` — connected once, usable everywhere."""
     with begin(_engine()) as connection:
         _reader(connection, project_id)
-        return {"project_id": project_id, "scope": scope,
-                "connections": intake.list_connections(connection, project_id, scope=scope)}
+        listed = intake.list_connections(connection, project_id, scope=scope)
+        name = reach.project_name(connection, project_id)
+    for view in listed:
+        home = (view.get("home_project") or {}).get("id") if view.get("home_project") \
+            else view.get("project_id")
+        view["can_manage"] = _may_manage(str(home)) if home else False
+    return {"project_id": project_id, "project_name": name, "scope": scope, "connections": listed}
+
+
+@router.get("/v1/ticket-systems/org")
+@permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
+def list_org_ticket_systems(project_id: str) -> dict:
+    """Setup › Ticket systems › All (operator, 2026-11-15: "show the jira irrespective of the
+    project … this is the global setting"): EVERY ticket-system connection of the org of
+    ``project_id``, whatever project it was added from — provider, site, the account BOSS acts as
+    (whose token), shared or not, mappings, status, its home project and that project's owners —
+    each with ``usable_here`` (for the project filter) and ``can_manage`` (integration:manage at
+    its home: share, settings, test, disconnect). Anyone who may read this project's ticket
+    systems may see the org's list; never a token, and the token's last4, fingerprint and OAuth
+    app only to those who manage the connection. A home project the caller cannot read stays
+    hidden: "another project", the org's Owners, no account, no mappings onto it, no counts
+    (ticket_intake.org_view)."""
+    with begin(_engine()) as connection:
+        _reader(connection, project_id)
+        listed = intake.list_org_connections(connection, project_id)
+    for view in listed:
+        view["can_manage"] = bool(view["project_id"]) and _may_manage(str(view["project_id"]))
+        if not view["can_manage"]:
+            for secretish in ("last4", "fingerprint", "oauth_app"):
+                view[secretish] = None
+    return {"project_id": project_id, "connections": listed}
 
 
 @router.post("/v1/ticket-systems", status_code=201)
@@ -307,8 +355,20 @@ def update_ticket_system(connection_id: str,
                 intake.set_oauth_app(connection, settings, row, oauth_app, actor=actor)
                 row = intake.get_row(connection, connection_id)
             merged = intake.merge_settings(row["configuration"], body)
+            if "mappings" in body:
+                # Never drop a mapping the caller could not see, and leave none without the
+                # right to manage the project it leaves (the Settings drawer saves the whole list).
+                merged["mappings"] = intake.guard_mappings(
+                    intake._stored_settings(row["configuration"]).get("mappings") or [],
+                    merged.get("mappings") or [], may_see=reach.may_see_project,
+                    may_manage=lambda p: _also("integration:manage", p, "ticket_mapping"))
+            stored = {(str(m.get("external_project") or "").upper(), str(m.get("boss_project_id") or ""))
+                      for m in intake._stored_settings(row["configuration"]).get("mappings") or []}
             for mapping in merged.get("mappings") or []:
-                if mapping["boss_project_id"] != row["project_id"]:
+                # A NEW mapping onto another project needs integration:manage there; one that
+                # was already stored (kept as it was) does not.
+                if mapping["boss_project_id"] != row["project_id"] and \
+                        (mapping["external_project"].upper(), mapping["boss_project_id"]) not in stored:
                     _also("integration:manage", mapping["boss_project_id"], "ticket_mapping")
             intake.update_settings_row(connection, connection_id, merged)
             row = intake.get_row(connection, connection_id)
@@ -431,10 +491,11 @@ def resolve_tickets(project_id: str, text: str = Query(..., max_length=20_000)) 
     with begin(_engine()) as connection:
         _reader(connection, project_id)
         try:
-            return {"project_id": project_id,
-                    **intake.resolve_text(connection, project_id, text, person_id=_person())}
+            resolved = intake.resolve_text(connection, project_id, text, person_id=_person())
         except intake.TicketApiError as error:
             raise _refuse(error) from None
+    resolved["errors"] = [_with_can_manage(dict(e)) for e in resolved.get("errors") or []]
+    return {"project_id": project_id, **resolved}
 
 
 # ---- §3 import and start --------------------------------------------------------------------

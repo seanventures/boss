@@ -90,7 +90,7 @@ def test_the_event_records_which_credential_was_replaced():
 
 def test_the_agent_can_rerun_the_check_itself():
     """The exact instruction it used to give: "open BOSS's GitHub view, select the repository,
-    and click Test access". It runs Repo and models' own three probes instead."""
+    and click Test access". It runs Setup's own three probes instead."""
     assert _tool("test_github_access").kind == "write"
     assert "test_github_access" in build_discuss_read_registry().names()
     source = inspect.getsource(_tool("test_github_access").handler)

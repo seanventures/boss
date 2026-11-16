@@ -1,4 +1,4 @@
-"""Every Claude choice in Repo and models says what it bills, and the order is the operator's.
+"""Every Claude choice in Setup says what it bills, and the order is the operator's.
 
 Observed on boss-1, 2026-11-03: the Claude subscription and the Anthropic API key both map to the
 claude_code engine, and the job menus keep one entry per engine — so they showed a single

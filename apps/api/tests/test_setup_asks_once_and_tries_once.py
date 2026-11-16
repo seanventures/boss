@@ -1,4 +1,4 @@
-"""Two Repo and models journeys at the API: the database fallback is asked once, before
+"""Two Setup journeys at the API: the database fallback is asked once, before
 anything is stored, and Try it turns one sentence into a governed build on the default repo."""
 from sqlalchemy import text
 

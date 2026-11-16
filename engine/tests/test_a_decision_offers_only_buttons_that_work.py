@@ -92,7 +92,7 @@ def test_a_factory_build_out_of_model_capacity_is_a_notice_pointing_at_repo_and_
     assert da.kind_of(card) == "refusal"
     assert [a["label"] for a in da.allowed_actions(card)] == ["Dismiss"]
     assert da.guidance(card)["area"] == "setup"
-    assert "Repo and model" in da.guidance(card)["what_to_do"]
+    assert "Setup" in da.guidance(card)["what_to_do"]
 
 
 def test_a_refusal_is_recognised_by_its_reason_when_the_action_is_something_else():
@@ -164,7 +164,7 @@ def test_the_budget_governors_own_refusal_shape_is_a_refusal_too():
 def test_approving_a_refusal_is_refused_and_says_what_to_do_instead():
     with pytest.raises(da.DecisionActionNotAllowed) as refused:
         da.require_allowed(SAMPLES["refusal"], "approve")
-    assert "Repo and model" in str(refused.value)
+    assert "Setup" in str(refused.value)
     assert "Dismiss" in str(refused.value)
 
 

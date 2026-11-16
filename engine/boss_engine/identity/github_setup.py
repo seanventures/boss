@@ -930,7 +930,7 @@ def verify(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:
     out["permissions"] = perms if granted or out["state"] == "ok" else []
     # WHAT EACH FLOW CAN DO (BOSSAPP-1160): builds (contents, pull requests) and making
     # repositories (administration; never in a personal account). Said here, kept on the row, so
-    # Repo and models shows "can create repos: no (missing: administration)" instead of green.
+    # Setup shows "can create repos: no (missing: administration)" instead of green.
     out["flows"] = flow_abilities(granted, account_type=cfg.get("account_type"), links=page,
                                   account_login=cfg.get("account_login"), known=bool(granted) or out["state"] == "ok")
     repos: list[dict[str, Any]] = []
@@ -998,7 +998,7 @@ def flow_abilities(granted: Mapping[str, str], *, account_type: Optional[str], l
             # GitHub's own rule, nothing to grant: said for information, never as a gap.
             entry.update(ok=False, missing=[], reason="personal_account",
                          words=(f"Creates repos: not for personal accounts ({who}; GitHub has no App endpoint for it). "
-                                f"A personal access token with the repo scope for {who.lstrip('@')} does, in Repo and models."),
+                                f"A personal access token with the repo scope for {who.lstrip('@')} does, in Setup."),
                          fix_url=None)
         elif not known:
             entry["words"] = "Not checked with GitHub yet."

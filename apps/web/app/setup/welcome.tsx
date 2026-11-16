@@ -78,7 +78,7 @@ function LastRun({ run }: { run: NonNullable<SetupView["try"]["last_run"]> }) {
   );
 }
 
-/** Into Repo and models on one row (`focus=`), in place: Get started → Setup → back. */
+/** Into Setup on one row (`focus=`), in place: Get started → Setup → back. */
 function SetupLink({ focus, className, testid, children }: {
   focus: "repository" | "models"; className: string; testid: string; children: React.ReactNode;
 }) {
@@ -123,7 +123,7 @@ export function Welcome({ onSetup }: { onSetup: () => void }) {
         </div>
         <span className="su-spacer" />
         <a className="su-link" href="/?area=setup" data-testid="su-welcome-setup"
-           onClick={(e) => { e.preventDefault(); onSetup(); }}>Repo and models</a>
+           onClick={(e) => { e.preventDefault(); onSetup(); }}>Setup</a>
       </header>
 
       <ol className="su-wl-steps">

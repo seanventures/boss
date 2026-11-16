@@ -12,7 +12,7 @@
  * project page — which also has the project menu — never shows two.
  *
  * It opens whatever is connected: with no GitHub account or model yet, the sheet still opens and
- * says so inside (contract §15: a read-only status linking to Repo and models, no picker).
+ * says so inside (contract §15: a read-only status linking to Setup, no picker).
  */
 import React, { useEffect, useState, useSyncExternalStore } from "react";
 

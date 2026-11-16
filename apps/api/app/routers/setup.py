@@ -1,4 +1,4 @@
-"""Repo and models: one view, one checks endpoint, one connect per object.
+"""Setup: one view, one checks endpoint, one connect per object.
 
 `GET /v1/setup` renders `setup_view.build` — no network, no decryption. Every mutation returns
 the same view, so the console replaces its state instead of judging anything itself. Probes and
@@ -99,7 +99,7 @@ def build_setup_router(
     @router.get("/v1/setup", response_model=SetupView, response_model_by_alias=True)
     @permit(P.SETUP_READ, scope=Scope.project(query="project_id"))
     def get_setup(project_id: str) -> dict[str, Any]:
-        """Repo and models, decided once on the server. Never touches the network."""
+        """Setup, decided once on the server. Never touches the network."""
         with begin(engine) as connection:
             require_read(connection, project_id)
             return view(connection, project_id)

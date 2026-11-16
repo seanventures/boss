@@ -50,7 +50,7 @@ export const AREA_IDS = [
   "org",
   "skills",
   "setup",
-  // Get started (BOSSAPP-808): the 3-step Welcome, its own place beside Repo and models.
+  // Get started (BOSSAPP-808): the 3-step Welcome, its own place beside Setup.
   "welcome",
   "enterprise",
 ] as const;

@@ -1,5 +1,5 @@
 /**
- * First sign-in lands on Repo and models while setup is not ready, and the rail badge counts
+ * First sign-in lands on Setup while setup is not ready, and the rail badge counts
  * what is unfinished or failing — both from the same GET /v1/setup the board renders.
  */
 import { describe, expect, it } from "vitest";
@@ -15,7 +15,7 @@ describe("landing", () => {
     expect(landingArea("", summarize(repoDone()))).toBe("projects");
   });
 
-  it("an older summary without get_started still opens Repo and models", () => {
+  it("an older summary without get_started still opens Setup", () => {
     const { get_started: _drop, ...older } = summarize(firstRun());
     expect(landingArea(undefined, older)).toBe("setup");
   });
@@ -46,15 +46,15 @@ describe("the rail badge", () => {
     expect(summarize(board()).badge).toBeNull();
   });
 
-  it("is the shell's, on the Repo and models entry", () => {
+  it("is the shell's, on the Setup entry", () => {
     const SHELL = codeOnly("app/ConsoleShell.tsx");
     expect(SHELL).toContain('if (id === "setup" && setupBadge && setupBadge.count > 0)');
     expect(SHELL).toContain("window.addEventListener(SETUP_BADGE_EVENT, onBadge)");
-    expect(SHELL).toContain('sub: "Where BOSS writes code and what it thinks with"');
+    expect(SHELL).toContain('sub: "Repos, models and ticket systems"');
   });
 });
 
-describe("a render never waits on Repo and models", () => {
+describe("a render never waits on Setup", () => {
   it("gives up on a hung summary within its time box", async () => {
     const { fetchSetupSummary, SUMMARY_TIMEOUT_MS } = await import("../lib/setup-server");
     const original = globalThis.fetch;

@@ -1522,7 +1522,7 @@ h1, h2, h3, h4, h5, h6 {
   align-items: center;
   justify-content: center;
 }
-/* Repo and models: amber while setup is unfinished, red while a check is failing. */
+/* Setup: amber while setup is unfinished, red while a check is failing. */
 .bx-nav-badge[data-tone="amber"] { background: var(--amber); color: var(--boss-c-1a1205); }
 .bx-nav-badge[data-tone="red"] { background: var(--red); color: var(--boss-c-fff); }
 
@@ -3710,7 +3710,7 @@ select.input:focus {
 .fk-form {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(8.94737rem, 1fr));
   gap: 10px 12px;
   align-items: end;
   width: 100%;

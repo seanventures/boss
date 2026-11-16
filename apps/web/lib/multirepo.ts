@@ -2,7 +2,7 @@
  * MULTI-REPO APPS, as the console reads and writes them (apps/api/app/routes_multirepo.py;
  * docs/product/MULTIREPO.md). Every type and call of the four multi-repo screens lives here:
  *
- *   Repo and models › Repositories   the org's registry: what BOSS may use (repository:register)
+ *   Setup › Repositories   the org's registry: what BOSS may use (repository:register)
  *   Factory › Repositories           the project's repositories and its repo mode (repository:manage)
  *   Factory › Apps › app › Components the app's components, in build order (repository:manage)
  *   New project › Where the code lives / the consent sheet's multi-repo layout

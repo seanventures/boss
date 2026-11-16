@@ -5,7 +5,7 @@ create repositories" on an install that held three: the GitHub App registered th
 models (installed on @paramg), and two project connections with personal access tokens
 (@paramg, @paramg-kaapppu). `local_publish.default_reach` read only the ENVIRONMENT-configured
 App (`BOSS_GITHUB_APP_*`) and the install-wide `BOSS_GITHUB_TOKEN` — the two credentials a
-wizard-connected install never has. And Repo and models called the App "Connected" although it
+wizard-connected install never has. And Setup called the App "Connected" although it
 was never granted `administration`, the permission that creates repositories.
 
 This module is the one answer to "which credential makes `owner/name`, and why":
@@ -189,19 +189,19 @@ def _identity_app_candidates(db: Any, owner: str) -> list[Candidate]:
         where = ", ".join(sorted(r.get("account_login") or "" for r in installs.values() if r.get("account_login"))) or "no account"
         return [Candidate("identity_app", name, "app", False, account_login="",
                           words=f"the {name} is installed on {where}, not on {owner}",
-                          fix=f"Install the {name} on {owner} (Repo and models › Add GitHub account)")]
+                          fix=f"Install the {name} on {owner} (Setup › Add GitHub account)")]
     inst = str(row.get("installation_id") or "")
     kind = str(row.get("account_type") or "")
     if kind == "User":
         return [Candidate("identity_app", name, "app", False, account_login=owner, account_type=kind,
                           words="a GitHub App cannot create repositories in a personal account",
-                          fix=f"Add a personal access token with the repo scope for {owner} (Repo and models)")]
+                          fix=f"Add a personal access token with the repo scope for {owner} (Setup)")]
     granted = github_setup.installation_permissions(db, inst)
     if kind != "Organization":
         # The account's kind is not recorded (an older row): GitHub decides at the attempt.
         return [Candidate("identity_app", name, "app", None, account_login=owner, account_type=kind,
                           words="whether this installation's account is an organisation is not recorded yet; "
-                                "GitHub decides at the attempt (press Check again in Repo and models)",
+                                "GitHub decides at the attempt (press Check again in Setup)",
                           mint=lambda: _mint_app(db, inst))]
     if granted is None:
         return [Candidate("identity_app", name, "app", None, account_login=owner, account_type=kind,
@@ -252,7 +252,7 @@ def _env_app_candidates(settings: Any, owner: str, owner_type: str = "") -> list
         if account["type"] == "User":
             return [Candidate("env_app", label, "app", False, account_login=owner, account_type="User",
                               words="a GitHub App cannot create repositories in a personal account",
-                              fix=f"Add a personal access token with the repo scope for {owner} (Repo and models)")]
+                              fix=f"Add a personal access token with the repo scope for {owner} (Setup)")]
 
     def mint() -> Optional[str]:
         try:
@@ -333,7 +333,7 @@ def _connection_candidates(db: Any, settings: Any, owner: str, project_id: Optio
         elif row.get("last_test_status"):
             can, words = None, "a fine-grained token: GitHub tells at the attempt whether it may create repositories"
         else:
-            can, words = None, "its token's scopes are not checked yet: press Test all in Repo and models"
+            can, words = None, "its token's scopes are not checked yet: press Test all in Setup"
         if not same:
             # An organisation owner: only a member's token creates there, and the organisation may
             # forbid personal tokens — never 'verified', whatever the scopes say.
@@ -347,7 +347,7 @@ def _connection_candidates(db: Any, settings: Any, owner: str, project_id: Optio
             if can is not False:
                 can = None
         out.append(Candidate("connection", label, "user", can, words=words,
-                             fix=(f"Replace the token for {login} with one holding the repo scope (Repo and models)"
+                             fix=(f"Replace the token for {login} with one holding the repo scope (Setup)"
                                   if can is False else ""),
                              missing=["administration"] if can is False else [], account_login=login,
                              account_type="User", connection_id=str(row["id"]), project_id=str(row["project_id"]),
@@ -382,7 +382,7 @@ def candidates(db: Any, settings: Any, owner: str, *, project_id: Optional[str] 
 
 _NO_CREDENTIAL = ("BOSS has no GitHub credential that can create repositories in {owner}: connect a GitHub "
                   "App with Administration: Read and write (for an organisation), or add a personal access "
-                  "token with the repo scope for {owner}, in Repo and models.")
+                  "token with the repo scope for {owner}, in Setup.")
 
 
 def repo_creation_credential(db: Any, settings: Any, owner: str, *, project_id: Optional[str] = None,

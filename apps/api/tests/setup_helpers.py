@@ -1,4 +1,4 @@
-"""Shared by the Repo and models API tests: auth, and the fake GitHub and model providers."""
+"""Shared by the Setup API tests: auth, and the fake GitHub and model providers."""
 from __future__ import annotations
 
 import importlib.util

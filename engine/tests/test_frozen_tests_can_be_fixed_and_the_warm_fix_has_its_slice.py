@@ -56,6 +56,21 @@ def test_qa_gets_its_turn_before_the_tests_are_frozen():
     assert "TEST files" in prompt and "frozen" in prompt and "suppressions" in prompt
 
 
+def test_the_test_arbiter_has_a_tree_when_implement_tests_fail():
+    """BOSSAPP-967: the arbiter runs while implement tests are failing, before the review
+    clone exists. `review_root` has to already be the implement tree, or that call raises
+    NameError and the arbiter never fails closed (CODE_WRONG leaves the oracle alone)."""
+    src = inspect.getsource(g._run_governed_code_task)
+    defined = src.index("def _arbitrate_tests")
+    assert src.index("review_root = root") < defined, \
+        "review_root was still unbound when implement tests failed"
+    call = src.index("review_root, read_only=True, model=m_arb")
+    assert defined < call < src.index("return ruling", defined)
+    # An unparseable ruling is code_wrong: the oracle is not amended on a non-ruling.
+    assert g._parse_arbiter("the tests look fine") == ("code_wrong", "")
+    assert g._parse_arbiter("ARBITER: CODE_WRONG — fix the implementation.")[0] == "code_wrong"
+
+
 def test_the_arbiter_runs_before_the_same_model_warm_fix():
     src = inspect.getsource(g._run_governed_code_task)
     loop = src[src.index("for attempt in range(max_repair + 2):"):src.index(

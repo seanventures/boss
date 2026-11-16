@@ -368,7 +368,7 @@ def test_a_repository_refusal_rolls_back_the_project(client, world, engine):
         r = client.post("/v1/add-project", json={"context_project_id": world.project_a,
                                                  "kind": "repo", "name": name, "repo_ids": [rid]})
     assert r.status_code == 409, r.text
-    assert r.json()["step"] == "repository" and "Repo and models" in r.json()["message"]
+    assert r.json()["step"] == "repository" and "Setup" in r.json()["message"]
     assert not _exists(engine, name)
 
 

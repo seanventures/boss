@@ -356,7 +356,7 @@ def seed(db, project_id: str, *, now: datetime | None = None, connection_id: str
             "'acme', 'helpdesk-ai-demo', :r, 'primary', 'main', CAST(:k AS JSONB), now(), 'seed')"),
             {"i": binding, "p": project_id, "c": connection_id, "r": REPO,
              "k": json.dumps({"read": ok, "write": ok, "pull_requests": ok, "state": "working"})})
-    # THE MODEL the onboarding agent found connected ("Claude connected"), as Repo and models
+    # THE MODEL the onboarding agent found connected ("Claude connected"), as Setup
     # stores a working subscription: the project's Ready card reads it LIVE (round 3, 10-20).
     db.execute(text(
         "INSERT INTO entitlement_sources (id, project_id, provider, source_id, source_kind, "

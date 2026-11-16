@@ -571,16 +571,16 @@ def build_status(api_url: str, project_id: str, *, health: Any, me: Any, project
         elif isinstance(embedding, dict) and embedding.get("configured"):
             check("embedding", "Embedding model", False,
                   str(embedding.get("reason") or "set, but knowledge search is off"),
-                  "Console: Setup › Repo and models › Embedding model.")
+                  "Console: Setup › Embedding model.")
         else:
             check("embedding", "Embedding model", False, "not set; knowledge search is off",
-                  "Console: Setup › Repo and models › Embedding model.")
+                  "Console: Setup › Embedding model.")
 
         repository = setup.get("repository") if isinstance(setup.get("repository"), dict) else {}
         repos = [r for r in repository.get("repos") or [] if isinstance(r, dict)]
         default = next((r for r in repos if r.get("default")), repos[0] if repos else None)
         connection = repository.get("connection") if isinstance(repository.get("connection"), dict) else None
-        github_fix = "Console: Setup › Repo and models › Repository (or `boss connect`)."
+        github_fix = "Console: Setup › Repository (or `boss connect`)."
         if default and (default.get("pill") or {}).get("tone") == "green":
             check("github", "GitHub access", True, str(default.get("full_name")))
         elif default:
@@ -1794,7 +1794,7 @@ class MetatronClient:
         }
 
     def models(self) -> Any:
-        """The chat job's model and the choices Setup offers for it (Repo and models)."""
+        """The chat job's model and the choices Setup offers for it (Setup)."""
         setup = self._setup()
         if isinstance(setup, dict) and setup.get("__http_error__"):
             return setup

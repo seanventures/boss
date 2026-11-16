@@ -999,7 +999,7 @@ class EntitlementBrokerService:
         A connection proof's temporary proof-<hash> source is retired (inactive) once its one
         paid call is done (connection_spend._retire_candidate). It is kept for the audit trail
         but is not a source anybody connected: it is left out unless a caller looks one up by
-        id (get_source), so Repo and models never offers Replace key or Disconnect on it.
+        id (get_source), so Setup never offers Replace key or Disconnect on it.
         """
         declared_boss_sources = {
             source_id

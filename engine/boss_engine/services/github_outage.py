@@ -309,7 +309,11 @@ def _push_branch(git_dir: Any, branch: str, access: Any) -> None:
 
 
 def _point_at_github(c: Any, row: Mapping[str, Any], url: str, number: int) -> None:
-    """The run, its change set and its review decision now name the real pull request."""
+    """The run, its change set and its review decision now name the real pull request.
+
+    Safe only because the push and GitHub's pull request happen BEFORE this transaction locks
+    the change set's row (local_repo_host.writes_on): nothing may write that row from a second
+    connection while `c` holds it."""
     from .local_repo_host import change_set_url
 
     old_url = None

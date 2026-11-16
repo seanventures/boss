@@ -108,7 +108,7 @@ describe("Knowledge Graph › Setup", () => {
     // ① is open: the allowed repositories to add, and where to allow more.
     const pick = $('[data-testid="kg-import-pick"]') as HTMLSelectElement;
     expect([...pick.options].map((o) => o.textContent)).toEqual(["Choose a repository…", "acme/fineract, Java"]);
-    expect($('[data-testid="kg-import-registry"]')?.textContent).toBe("Repo and models");
+    expect($('[data-testid="kg-import-registry"]')?.textContent).toBe("Setup");
     expect($('[data-testid="kg-import"]')?.textContent).toContain("2 more there are not allowed yet");
     expect(($('[data-testid="kg-setup-open-graph"]') as HTMLButtonElement).disabled).toBe(true);
     expect(setupOpens(setupFx())).toBe(true);

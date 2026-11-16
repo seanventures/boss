@@ -1,6 +1,6 @@
 """Connecting models and coding agents: the credential stores, the proofs, the provider list.
 
-Repo and models' state lives in `setup_view` (one server-assembled view, no network) and its
+Setup's state lives in `setup_view` (one server-assembled view, no network) and its
 actions in `setup_actions` (one connect per object, one checks endpoint). This module keeps
 what both build on: the provider catalogue, which engines a project has connected
 (`connected_engines`), storing a subscription's credential, and `governed_proof` — one real
@@ -238,7 +238,7 @@ def connected_engines(
     by_entitlement.setdefault("anthropic_api", "claude_code")
     # What the API-key route records, `setup-<provider>`, mapped to the lane that spends it.
     # openai and "anything OpenAI-compatible" are both the engine-owned native agent; a local
-    # model connected in Repo and models is `setup-ollama` or `setup-vllm`.
+    # model connected in Setup is `setup-ollama` or `setup-vllm`.
     by_api_provider = {"openai": "native", "custom": "native", "anthropic": "claude_code",
                        "openrouter": "openrouter", "groq": "groq", "deepseek": "deepseek",
                        "gemini": "gemini", "xai": "xai", "azure": "azure",
@@ -408,7 +408,7 @@ _API_SOURCE = re.compile(r"^setup-([a-z_]+?)(?:-(\d+))?$")
 
 
 def api_source_provider(source_id: str) -> Optional[str]:
-    """The provider of a key or local connection made in Repo and models, else None."""
+    """The provider of a key or local connection made in Setup, else None."""
     found = _API_SOURCE.match(str(source_id or ""))
     return found.group(1) if found else None
 
@@ -466,7 +466,7 @@ def build_engine_for(
 ) -> str:
     """Which harness WRITES THE CODE: `model_routing.resolve_job(..., "build")`.
 
-    A thin wrapper since Repo and models gained one resolver for every job. The project's
+    A thin wrapper since Setup gained one resolver for every job. The project's
     choice still comes first; an install with nothing connected keeps the engine it is
     configured with, so the build fails where it always did, naming that engine.
     """
@@ -576,8 +576,8 @@ def with_recorded_connections(
             name = CONNECT_NAME.get(str(agent.get("name") or ""))
             agent["next_step"] = (
                 f"{pill['label']}: sign in inside BOSS with `boss connect {name}` (or press "
-                "Sign in in Repo and models), then Test" if name else
-                f"{pill['label']}: fix it in Repo and models, then Test")
+                "Sign in in Setup), then Test" if name else
+                f"{pill['label']}: fix it in Setup, then Test")
     return agents
 
 
@@ -1120,7 +1120,7 @@ def connected_basics(connection: Connection, settings: Settings, project_id: str
                      ) -> dict[str, Any]:
     """Whether this project has a usable repository and model — read, never probed.
 
-    Every workflow Start asks this, so it reads the same rows Repo and models renders
+    Every workflow Start asks this, so it reads the same rows Setup renders
     (`setup_view.build_basics`) and the page's pills and Start's refusal cannot disagree.
     """
     from . import setup_view

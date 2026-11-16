@@ -2,7 +2,7 @@
 
 The database image always has pgvector, so a stored embedding is searched through the HNSW
 index (``PostgresKnowledgeStore.sync_vector_index``). The embedding model is its own slot,
-Setup › Repo and models › Embedding model, one per org (embedding_slot.py):
+Setup › Embedding model, one per org (embedding_slot.py):
 ``configured_embedder`` answers with that slot's
 governed embedder when its check passed, or None and the reason in words, and retrieval then runs
 on full text and the graph and says so in status.

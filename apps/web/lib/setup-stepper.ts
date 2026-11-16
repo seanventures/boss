@@ -1,5 +1,5 @@
 /**
- * Repo and models' layout decisions, as pure functions of the server's view.
+ * Setup's layout decisions, as pure functions of the server's view.
  *
  * While setup is unfinished the board runs as a stepper — 1 Repository, 2 Model, 3 Try it —
  * with only the current row open; after the first pull request it is a board with no numbers.
@@ -47,7 +47,7 @@ export type SetupParams = { focus: RowKey | null; add: string | null; source: st
 
 const ROWS: RowKey[] = ["github", "repository", "models", "capacity", "jobs", "budget", "try",
                         "advanced", "github_app", "repositories", "ci", "build_database", "build_speed",
-                        "toolchains", "public_url", "embedding_model", "ticket_systems"];
+                        "toolchains", "public_url", "embedding_model", "ticket_systems", "events"];
 
 /** Rows folded under Advanced: a deep link to one opens the fold first. */
 export const ADVANCED_ROWS: readonly RowKey[] = ["advanced", "github_app", "repositories", "ci", "build_database",

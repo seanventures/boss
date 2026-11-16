@@ -146,7 +146,7 @@ def test_systems_tones_come_from_their_sources():
                 )["deploys"]["tone"] == "red"
     assert dots(probe={**PROBE, "deploy": {"status": "running", "created_at": NOW, "finished_at": None}}
                 )["deploys"]["tone"] == "amber"
-    # Repo and models unreadable: Unknown, never a confident green.
+    # Setup unreadable: Unknown, never a confident green.
     assert dots(basics=None)["models"]["state"] == "Unknown"
 
 

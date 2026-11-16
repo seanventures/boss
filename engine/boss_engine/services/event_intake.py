@@ -973,6 +973,18 @@ def backoff_seconds(attempts: int) -> int:
     return BACKOFF_SECONDS[min(max(attempts, 1), len(BACKOFF_SECONDS)) - 1]
 
 
+def _due_now(connection: Connection, now: Optional[datetime]) -> datetime:
+    """The clock `next_attempt_at` is stamped with. Inserts use `DEFAULT now()` (the database
+    clock). A host clock that trails the database leaves a row inserted a moment ago not yet
+    due, so a pass that does not name `now` reads the database clock."""
+    if now is not None:
+        return now
+    stamped = connection.execute(text("SELECT clock_timestamp()")).scalar()
+    if stamped.tzinfo is None:
+        stamped = stamped.replace(tzinfo=timezone.utc)
+    return stamped
+
+
 def claim(connection: Connection, *, limit: int = PROCESSOR_BATCH, holder: str = HOLDER,
           now: Optional[datetime] = None, project_id: Optional[str] = None) -> list[dict]:
     """Claim due rows: received or failed and due, or `processing` whose lease expired (its
@@ -991,7 +1003,7 @@ def claim(connection: Connection, *, limit: int = PROCESSOR_BATCH, holder: str =
     `project_id` limits the claim to one project (tests on a shared database)."""
     from . import projects_archive
 
-    now = now or _now()
+    now = _due_now(connection, now)
     rows = connection.execute(text(f"""
         WITH ranked AS (
             SELECT id, row_number() OVER (PARTITION BY connection_id ORDER BY received_at, id) AS rn,
@@ -1321,8 +1333,9 @@ def process_due(engine: Any, settings: Any = None, *, limit: int = PROCESSOR_BAT
     from ..db import begin
 
     settings = settings or _settings()
-    now = now or _now()
     with begin(engine) as c:
+        # One clock for the claim and for the backoff written on the rows it takes.
+        now = _due_now(c, now)
         rows = claim(c, limit=limit, holder=holder, now=now, project_id=project_id)
     out = {"claimed": len(rows), "routed": 0, "ignored": 0, "filtered": 0, "refused": 0,
            "failed": 0, "dead": 0, "received": 0, "deferred": 0, "digest": 0}

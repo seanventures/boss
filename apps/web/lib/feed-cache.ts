@@ -143,7 +143,7 @@ async function store(response: Response): Promise<Stored> {
 }
 
 /** Control-plane reads that are never reused: state a write changes and the operator watches
- *  for (Repo and models re-reads after Replace token, a check or a Try it run). */
+ *  for (Setup re-reads after Replace token, a check or a Try it run). */
 const NEVER_REUSED = ["/v1/setup"];
 
 /** Never kept for a person, even under a proof: the reads that ARE the proof (who is signed in,

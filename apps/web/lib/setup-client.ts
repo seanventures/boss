@@ -1,5 +1,5 @@
 /**
- * Repo and models' one way to the API. Every mutation answers with the whole `SetupView`, and
+ * Setup's one way to the API. Every mutation answers with the whole `SetupView`, and
  * the board REPLACES its state with it — nothing is patched or judged in the browser.
  *
  * One press, one effect: each write goes through `apiWrite` with a press scope, so a double

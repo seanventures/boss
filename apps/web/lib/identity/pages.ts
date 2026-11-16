@@ -91,7 +91,7 @@ export const CONSOLE_PAGES: readonly IdentityPage[] = [
   { path: "/v2/boss", label: "Workflows", tip: "Delivery workflows", access: area("delivery_workflows") },
   { path: "/v2/timeline", label: "Receipts", tip: "What happened, with evidence", access: area("activity") },
   { path: "/v2/infra", label: "Infra & Models", tip: "Hosts, deploys and models", access: area("delivery") },
-  { path: "/v2/settings", label: "Settings", tip: "Repo and models", access: area("setup") },
+  { path: "/v2/settings", label: "Settings", tip: "Setup", access: area("setup") },
   { path: "/github-app", label: "GitHub App", tip: "Hands the App's manifest to GitHub", access: area("setup") },
   { path: "/changes/[id]/[id]", label: "Change", tip: "A change reviewed like a pull request: local, or a GitHub PR of the project", access: area("code_tasks") },
   { path: "/changes/github/[id]/[id]/[id]", label: "Change", tip: "A GitHub pull request, opened in its BOSS project", access: area("code_tasks") },

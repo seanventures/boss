@@ -1,5 +1,5 @@
 /**
- * Repo and models, as the page server reads it: the landing rule and the rail badge.
+ * Setup, as the page server reads it: the landing rule and the rail badge.
  *
  * One GET /v1/setup per render (no network behind it on the API side). Any failure answers
  * "nothing to say" — the console never blocks its own render on the setup summary.
@@ -10,7 +10,7 @@ import type { SetupView } from "./setup-types";
 
 export { summarize, type SetupSummary };
 
-/** The most a page render waits for Repo and models' summary. */
+/** The most a page render waits for Setup's summary. */
 export const SUMMARY_TIMEOUT_MS = 1500;
 
 export async function fetchSetupSummary(projectId: string): Promise<SetupSummary | null> {
@@ -28,7 +28,7 @@ export async function fetchSetupSummary(projectId: string): Promise<SetupSummary
 }
 
 /** Where a sign-in with no `area` lands: Get started (the Welcome) while GitHub, a model or a
- *  first PR is missing (BOSSAPP-808); else Repo and models while setup is not ready. */
+ *  first PR is missing (BOSSAPP-808); else Setup while setup is not ready. */
 export function landingArea(requestedArea: string | undefined, summary: SetupSummary | null): string | null {
   if (requestedArea && requestedArea.trim()) return null;
   // GET STARTED IS PROJECTS' FIRST RUN NOW (BOSSAPP-914): the 3 steps, then the first project.

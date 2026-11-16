@@ -84,7 +84,7 @@ class ClaudeSignInNeeded(RuntimeError):
 
 
 def sign_in_words(reason: str) -> str:
-    return ("Claude sign-in needed: " + reason + ". Sign in again in Repo and models "
+    return ("Claude sign-in needed: " + reason + ". Sign in again in Setup "
             "(Claude Code, Sign in) or run `boss connect claude`.")
 
 

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * Repo and models › Repositories (multi-repo screen 1, app/multirepo/registry.tsx), against the
+ * Setup › Repositories (multi-repo screen 1, app/multirepo/registry.tsx), against the
  * API's real shapes at the fetch boundary:
  *   - draws the mockup: GitHub App, acme, nine repositories, Read · Write · PRs checks, Working /
  *     Read only / Not allowed / Archived, the read-only note, "Save, 4 allowed";
@@ -33,7 +33,7 @@ function api(reg: Registry = registryFixture()) {
 const rows = () => $$('[data-testid^="mr-reg-row-"]');
 const mount = (role: Parameters<typeof mountAs>[1] = "owner") => mountAs(<RepositoryRegistry projectId="p1" />, role);
 
-describe("Repo and models › Repositories", () => {
+describe("Setup › Repositories", () => {
   it("draws the registry as the mockup does", async () => {
     const calls = api();
     await mount();

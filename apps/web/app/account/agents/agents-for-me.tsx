@@ -24,7 +24,7 @@ import { ConsentSheet } from "../../../components/identity/consent-sheet";
 import type { ConsentRequest } from "../../../lib/identity/consent";
 
 /** ONE SURFACE PER JOB: with "Sign in with GitHub" offered (the published BOSS app), connecting
- *  or reconnecting your GitHub here goes to that one sign-in in Repo and models. */
+ *  or reconnecting your GitHub here goes to that one sign-in in Setup. */
 export const SIGNIN_HREF = "/?area=setup&focus=github";
 
 /** Plain-English abilities, each a set of delegable permissions (§7.3 "abilities"). */

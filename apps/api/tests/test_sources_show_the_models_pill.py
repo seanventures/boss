@@ -1,6 +1,6 @@
 """GET /v1/entitlements/sources carries the Models row's own pill (BOSSAPP-769, P0-3).
 
-The live bug: Codex's last proof was refused 401. Repo and models' Models row said Login
+The live bug: Codex's last proof was refused 401. Setup's Models row said Login
 expired while the Sources list on the same page said Active · Available, and
 GET /v1/setup/coding-agents called it connected. Every row of the sources list now carries
 `pill` — the same pill the Models row shows, from `setup_view.source_state` — and the

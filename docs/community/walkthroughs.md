@@ -69,7 +69,7 @@ Single sign-on against an identity provider you run can be set up later: see [Si
 
 ![Actual installed Command Center showing repository and model setup actions.](assets/screenshots/home-28d75d69.jpg){ .boss-walk-shot }
 
-This unedited capture shows a new named Owner's Home on a fresh disposable install using the qualified RC8 API and web images. It does not show a completed live-provider task. **Fix in Repo and models** opens the missing repository setup; the model setup hold is also visible.
+This unedited capture shows a new named Owner's Home on a fresh disposable install using the qualified RC8 API and web images. It does not show a completed live-provider task. **Fix in Setup** opens the missing repository setup; the model setup hold is also visible.
 
 ![Actual RC8 local Help drawer on a phone-sized viewport.](assets/screenshots/help-rc8.png){ .boss-walk-shot }
 

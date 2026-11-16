@@ -1053,7 +1053,7 @@ class ClaudeCodeAgent:
             if not token:
                 raise CliHarnessUnavailable(
                     f"the pool account {member.label!r} has no stored login. Replace its login "
-                    "in Repo and models, or remove it from the pool.")
+                    "in Setup, or remove it from the pool.")
             env.pop(STORED_KEY_NAME, None)
             env[TOKEN_NAME] = token
             self._billing = BILLING_SUBSCRIPTION
@@ -2864,7 +2864,7 @@ def _register_builtin_harnesses() -> None:
     # Unverified until a governed task completes on it: Auto never picks it, an operator does.
     register_harness(
         _SDK_ENGINE, build_agent, kind="sdk", verified=False,
-        requires=("an Anthropic API key (Repo and models -> Anthropic API, or ANTHROPIC_API_KEY)",
+        requires=("an Anthropic API key (Setup -> Anthropic API, or ANTHROPIC_API_KEY)",
                   f"the {SDK_PACKAGE} Python package"),
         description="Claude Agent SDK on an Anthropic API key (metered Agent SDK usage): "
                     "Claude Code's tools and sessions, scoped to the sandbox working tree.",

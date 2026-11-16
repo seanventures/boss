@@ -89,4 +89,4 @@ def test_approving_a_refusal_is_refused_with_what_to_do(engine, client):
     response = client.post("/v1/decisions/dec_cc_cap/approve",
                            json={"actor": "ceo", "note": "ok"})
     assert response.status_code == 409
-    assert "Repo and model" in response.json()["detail"]
+    assert "Setup" in response.json()["detail"]

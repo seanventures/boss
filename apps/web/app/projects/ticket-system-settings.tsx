@@ -37,7 +37,7 @@ export function TicketSystemCard({ projectId }: { projectId: string }) {
         <h2 id="px-set-tickets">Ticket system</h2>
         <span className="px-spacer" />
         <a className="px-more px-linkbtn" href={ticketSetupHref(projectId)} data-testid="px-set-tickets-manage"
-           title="Sign-in, write-back, the new-ticket rule and webhooks live in Repo and models">Manage in Repo and models › Ticket systems <ArrowSquareOut size={11} aria-hidden /></a>
+           title="Sign-in, write-back, the new-ticket rule and webhooks live in Setup">Manage in Setup › Ticket systems <ArrowSquareOut size={11} aria-hidden /></a>
       </div>
       {!read || !read.ok ? <TkReadState read={read} what="Ticket systems" onRetry={load} testid="px-set-tickets" />
         : !list.length ? (

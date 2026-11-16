@@ -182,7 +182,8 @@ def build_skill_supply_router(
             return {"consents": change_consent.pending(connection, project_id, "skill",
                                                        skill_key)}
 
-    # ── 841: sources ──────────────────────────────────────────────────────────────────────────
+    # ── 841: sources. Codex and Claude folders (840) use these same routes; the fetcher reads
+    # the operator's global skill directory instead of the network.
 
     @router.get("/v1/skill-sources")
     @permit(P.SKILL_READ, scope=Scope.project(query="project_id"))

@@ -20,7 +20,7 @@
       "source_commit": "28d75d69",
       "kind": "actual installed console capture",
       "environment": "fresh seeded disposable RC9 baseline with the qualified RC8 API and web images",
-      "observed": "named Owner Repo and models; no GitHub connection or model session; setup pending",
+      "observed": "named Owner Setup; no GitHub connection or model session; setup pending",
       "limitations": [
         "catalog entries are not active provider connections",
         "no live provider result",

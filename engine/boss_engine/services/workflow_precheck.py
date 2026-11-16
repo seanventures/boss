@@ -707,7 +707,7 @@ def check_github(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
         # Readiness owns "no repository" (its `repository` need, which start_anyway accepts).
         return result("github.access", "fixable",
                       f"no repository binding{' for ' + repo if repo else ''} in this project",
-                      action="Connect the repository in Repo and models.")
+                      action="Connect the repository in Setup.")
     from .local_repo import exists as _local_exists, is_local as _is_local
 
     if binding.get("host") == "local" or _is_local(binding.get("full_name")):
@@ -751,7 +751,7 @@ def check_github(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
             live = f"; live read: {status or body}"
             if status in (401, 403, 404):
                 return result("github.access", "will_fail", recorded + live,
-                              action="Reconnect the repository in Repo and models "
+                              action="Reconnect the repository in Setup "
                                      "(test_github_access re-runs the probes).")
     if not all(probes.values()):
         return result("github.access", "will_fail", recorded + live,
@@ -1176,7 +1176,7 @@ def _step_routes(ctx: Context, step: Mapping[str, Any]) -> Optional[list]:
 
 def _route_lines(step_id: str, routes: Sequence[Any]) -> list[str]:
     """`<step>: implement, write_tests → claude_agent_sdk / claude-sonnet-5 via setup-anthropic
-    (pinned in Repo and models)` — stages that share a route on one line."""
+    (pinned in Setup)` — stages that share a route on one line."""
     grouped: dict[tuple, list[str]] = {}
     for r in routes:
         grouped.setdefault((r.engine, r.model, r.source_id, r.why), []).append(r.stage)
@@ -1206,7 +1206,7 @@ def check_model(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
     tail = f"; code tasks in flight {running}/{lanes} lane(s)"
     if any(routes is None for _sid, routes in per_step):
         return result("sandbox.model", "unknown", "could not resolve which model routing will "
-                      "use" + tail, action="Check Repo and models.")
+                      "use" + tail, action="Check Setup.")
     lines, nothing, dead, seen = [], [], [], {}
     for sid, routes in per_step:
         lines += _route_lines(sid, routes)
@@ -1224,7 +1224,7 @@ def check_model(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
     evidence = "; ".join(lines) + (f". Sources: {states}" if states else "") + tail
     if nothing:
         return result("sandbox.model", "will_fail", evidence + f" — nothing can answer "
-                      f"{', '.join(nothing[:4])}", action="Connect a model in Repo and models.")
+                      f"{', '.join(nothing[:4])}", action="Connect a model in Setup.")
     if dead:
         where, r, said = dead[0]
         return result("sandbox.model", "will_fail", evidence + f" — {where} routes to "
@@ -1257,11 +1257,11 @@ def check_engine(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]]
     sid = str(step["id"])
     if routes is None:
         return result("sandbox.engine", "unknown", f"{sid}: could not resolve which engine "
-                      "routing will use", action="Check Repo and models.")
+                      "routing will use", action="Check Setup.")
     lines = _route_lines(sid, routes)
     if any(not r.engine for r in routes):
         return result("sandbox.engine", "will_fail", "; ".join(lines),
-                      action="Connect a model in Repo and models.")
+                      action="Connect a model in Setup.")
     distinct: dict[tuple, Any] = {}
     for r in routes:
         distinct.setdefault(r.key(), r)
@@ -1286,7 +1286,7 @@ def check_engine(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]]
             verdict = "will_fail"
             notes[-1] = f"{r.engine}: {ver.detail}"
             actions.append((ver.hint or f"Upgrade {r.engine}.") + " Rebuild the image, or pin "
-                           "the job to another engine or model in Repo and models.")
+                           "the job to another engine or model in Setup.")
             continue
         if ver is not None and ver.status == "model_fallback":
             notes.append(f"{r.engine}: {ver.detail} (an engine.model_fallback event will say so)")
@@ -1417,7 +1417,7 @@ def check_run_cost(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
         ctx.connection, ctx.settings, ctx.project_id, stages), default=None)) if stages else {}
     if routes is None:
         return result("budget.run_cost", "unknown", "could not resolve which models the run's "
-                      "steps route to today", action="Check Repo and models.")
+                      "steps route to today", action="Check Setup.")
     estimate = rc.estimate(found, routes)
     pace = _pace(ctx)
     verdict, evidence, action = rc.judge(

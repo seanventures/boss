@@ -179,7 +179,7 @@ def plan_query(project_id: str, question: str, *, connection: Any = None, settin
             who = _provider_name(adapter) or "its provider"
             no_model_reason = (f"BOSS could not get an answer: credit balance too low on "
                                f"{who}. Add credit there (or connect a different model in "
-                               "Repo and models), then ask again.")
+                               "Setup), then ask again.")
     if not isinstance(answer, dict) or not answer.get("status"):
         return {**base, "status": "no_model", "reason": no_model_reason, "connector_kind": None,
                 "suggested_query": None, "window": None}

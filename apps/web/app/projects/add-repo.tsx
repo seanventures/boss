@@ -7,7 +7,7 @@
  * Picking one and pressing Add puts it on THIS project (PUT /v1/projects/{id}/repos/{repo}, the
  * same binding the Knowledge Graph import and Code Tasks › Repositories write); a refusal is said
  * in the drawer in the API's words, with Connect GitHub when GitHub is what is missing.
- * Never the "Add a GitHub account" sheet: adding an account is Repo and models' job (§15).
+ * Never the "Add a GitHub account" sheet: adding an account is Setup's job (§15).
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { GithubLogo, Plus, Warning } from "@phosphor-icons/react";
@@ -65,7 +65,7 @@ export function AddRepoDrawer({ projectId, onClose, onAdded }: { projectId: stri
   };
 
   return (
-    <Drawer title="Add repo" sub="To this project · from the repositories allowed in Repo and models" icon={<Ico icon={GithubLogo} />}
+    <Drawer title="Add repo" sub="To this project · from the repositories allowed in Setup" icon={<Ico icon={GithubLogo} />}
             onClose={onClose} testid="px-add-repo"
             footer={(
               <div className="px-row" style={{ width: "100%" }}>

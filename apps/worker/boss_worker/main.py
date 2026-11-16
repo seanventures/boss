@@ -320,7 +320,7 @@ def _tick_workflow_schedules(client: ControlPlaneClient, settings) -> None:
         LOGGER.debug("workflow_schedules_failed", exc_info=True)
 
 
-#: Repo and models' daily re-check. Asked hourly; only rows whose last check is over a day old
+#: Setup's daily re-check. Asked hourly; only rows whose last check is over a day old
 #: are re-proved (`target: stale`), so a token that expired or was revoked overnight shows on
 #: the Command Center without anybody opening the page.
 SETUP_RECHECK_INTERVAL_SECONDS = 3600

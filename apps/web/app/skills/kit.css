@@ -310,7 +310,7 @@
 .tp-eff-deny { color: var(--danger, #b42318); }
 .tp-eff-ask, .tp-eff-rate_limit { color: var(--warn, #b54708); }
 .tp-eff-allow { color: var(--ok, #067647); }
-.tp-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; align-items: end; }
+.tp-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.42105rem, 1fr)); gap: 8px; align-items: end; }
 .tp-form label { display: flex; flex-direction: column; gap: 4px; font-size: 0.75rem; color: var(--muted); }
 .tp-form input, .tp-form select, .tp-form textarea { font: inherit; font-size: 0.8125rem; padding: 4px 6px;
   border: 1px solid var(--border); border-radius: var(--r); background: var(--bg); color: var(--ink); }

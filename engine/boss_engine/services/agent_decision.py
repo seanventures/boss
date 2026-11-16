@@ -50,7 +50,7 @@ log = logging.getLogger(__name__)
 #: is connected" and sends a person to re-check a connection that was never the problem.
 NO_MODEL_REPLY = (
     "BOSS needs a connected model to understand this, and none is answering right now, so I "
-    "have not done anything. Connect one in Repo and models (a subscription, an API key or a "
+    "have not done anything. Connect one in Setup (a subscription, an API key or a "
     "local model), then ask again.")
 
 
@@ -65,7 +65,7 @@ def no_model_reply(decision: "AgentDecision") -> str:
         return NO_MODEL_REPLY
     who = decision.provider or "its provider"
     return (f"BOSS could not get an answer: credit balance too low on {who}. Add credit there "
-            "(or connect a different model in Repo and models), then ask again.")
+            "(or connect a different model in Setup), then ask again.")
 
 #: Below this confidence the agent asks ONE question instead of acting. An operator can lower
 #: or raise it per install (`agent_decision_confidence`).

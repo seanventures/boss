@@ -1,4 +1,4 @@
-"""The org's repository registry (Settings › Repo and models › Repositories).
+"""The org's repository registry (Settings › Setup › Repositories).
 
 Every repository the GitHub App installation reaches (or, with no App, the org's token), one row
 each in `github_repos`. The operator ticks the ones BOSS may use; a project then chooses only from
@@ -269,7 +269,7 @@ def state_of(row: dict[str, Any]) -> str:
 #: What Add a project says when a repository cannot join a NEW project (03-25): the same refusal
 #: `project_repos._connection_for` gives, said before anything is created.
 NOT_CONNECTED = ("Connect GitHub first: a new project reaches a repository through the "
-                 "organisation's GitHub App (Repo and models › GitHub).")
+                 "organisation's GitHub App (Setup › GitHub).")
 
 
 def _shape(row: dict[str, Any], used_by: list[dict[str, Any]], *, app: bool = False) -> dict[str, Any]:

@@ -425,7 +425,7 @@
   background: color-mix(in srgb, var(--accent) 3%, var(--surface)); animation: npx-rise .16s ease-out; }
 .npx-bring-from { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--fs-meta); min-width: 0; }
 .npx-bring-from .npx-mono { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; min-width: 0; }
-.npx-bring-opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 8px; }
+.npx-bring-opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(9.47368rem, 100%), 1fr)); gap: 8px; }
 .npx-bring-opt { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border-strong);
   background: var(--surface); color: var(--ink); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
 .npx-bring-opt > span { display: flex; flex-direction: column; min-width: 0; }

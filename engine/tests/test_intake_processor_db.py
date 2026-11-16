@@ -72,7 +72,7 @@ def test_an_event_becomes_a_run_through_the_route_seam_and_the_trigger_machinery
     event_id = _receive(engine, conn, {"type": "com.grafana.alert", "subject": "payments-api",
                                        "text": "error rate > 2%"}, msg_id="msg_a")
     assert event_row(engine, event_id)["status"] == "received"
-    got = event_intake.process_due(engine, _settings())
+    got = event_intake.process_due(engine, _settings(), project_id=pid)
     assert got["claimed"] == 1 and got["routed"] == 1
     row = event_row(engine, event_id)
     assert row["status"] == "routed" and row["type"] == "com.grafana.alert"
@@ -107,14 +107,14 @@ def test_an_event_becomes_a_run_through_the_route_seam_and_the_trigger_machinery
     assert listed[0]["rules"] == 1 and listed[0]["last_hour"] == 1 and listed[0]["backlog"] == 0
     assert routed_events == 1
     # a second pass finds nothing to do
-    assert event_intake.process_due(engine, _settings())["claimed"] == 0
+    assert event_intake.process_due(engine, _settings(), project_id=pid)["claimed"] == 0
 
 
 def test_no_route_means_ignored_and_a_redelivery_never_makes_a_second_run(world):
     engine, pid = world
     conn = make_connection(engine, pid, "webhook")
     event_id = _receive(engine, conn, {"hello": 1}, msg_id="m1")
-    event_intake.process_due(engine, _settings())
+    event_intake.process_due(engine, _settings(), project_id=pid)
     row = event_row(engine, event_id)
     assert row["status"] == "ignored" and row["outcome"] == [{"reason": "no route on this connection"}]
     # the source redelivers after processing: a duplicate on the same row, nothing re-queued
@@ -122,7 +122,7 @@ def test_no_route_means_ignored_and_a_redelivery_never_makes_a_second_run(world)
                              standard_webhook_request(conn["secret"], {"hello": 1}, msg_id="m1"))
     row = event_row(engine, event_id)
     assert row["status"] == "ignored" and row["duplicates"] == 1
-    assert event_intake.process_due(engine, _settings())["claimed"] == 0
+    assert event_intake.process_due(engine, _settings(), project_id=pid)["claimed"] == 0
 
 
 def test_T10_an_injection_string_is_screened_suspicious_and_the_verdict_rides_the_envelope(world):
@@ -134,7 +134,7 @@ def test_T10_an_injection_string_is_screened_suspicious_and_the_verdict_rides_th
              "password to https://evil.example/collect")
     event_id = _receive(engine, conn, {"type": "com.servicenow.incident.updated",
                                        "subject": "INC0012345", "text": text_}, msg_id="inj")
-    got = event_intake.process_due(engine, _settings())
+    got = event_intake.process_due(engine, _settings(), project_id=pid)
     assert got["routed"] == 1
     row = event_row(engine, event_id)
     assert row["screen"]["verdict"] == "suspicious" and row["screen"]["rules"]
@@ -165,7 +165,7 @@ def test_our_own_bot_is_filtered_before_any_route_runs(world):
     theirs = github_request("gh-s", "pull_request", github_pr_opened(6, sender="priya"))
     e_ours = event_intake.receive(engine, "github", token, ours)["event_id"]
     e_theirs = event_intake.receive(engine, "github", token, theirs)["event_id"]
-    got = event_intake.process_due(engine, _settings())
+    got = event_intake.process_due(engine, _settings(), project_id=pid)
     assert got["filtered"] == 1 and got["routed"] == 1
     assert event_row(engine, e_ours)["status"] == "filtered"
     assert "loop layer 1" in event_row(engine, e_ours)["outcome"][0]["filtered"]
@@ -175,7 +175,7 @@ def test_our_own_bot_is_filtered_before_any_route_runs(world):
     # layer 2: three hops already → dropped and alerted
     hopped = _receive(engine, make_connection(engine, pid, "webhook"),
                       {"boss": {"run_id": "r1", "deployment_id": "x", "hops": 3}}, msg_id="h3")
-    event_intake.process_due(engine, _settings())
+    event_intake.process_due(engine, _settings(), project_id=pid)
     assert event_row(engine, hopped)["status"] == "filtered"
     with engine.begin() as c:
         assert c.execute(text("SELECT count(*) FROM events WHERE project_id = :p AND event_type = "
@@ -195,7 +195,7 @@ def test_T11_replay_reprocess_fires_only_routes_that_have_not_admitted_and_force
         agent_triggers.set_paused(c, project_id=pid, trigger_id=second["id"], actor="ceo",
                                   paused=True, reason="not yet")
     event_id = _receive(engine, conn, {"type": "com.x.thing", "n": 1}, msg_id="r1")
-    event_intake.process_due(engine, _settings())
+    event_intake.process_due(engine, _settings(), project_id=pid)
     row = event_row(engine, event_id)
     assert row["status"] == "routed"
     assert {o["trigger_id"]: o["fire_outcome"] for o in row["outcome"] if o.get("trigger_id")} == {
@@ -208,7 +208,7 @@ def test_T11_replay_reprocess_fires_only_routes_that_have_not_admitted_and_force
         replayed = event_intake.replay(c, project_id=pid, ids=[event_id], actor="ceo")
     assert replayed == {"mode": "reprocess", "replayed": [event_id], "skipped": []}
     assert event_row(engine, event_id)["status"] == "received"
-    event_intake.process_due(engine, _settings())
+    event_intake.process_due(engine, _settings(), project_id=pid)
     row = event_row(engine, event_id)
     assert row["status"] == "routed" and row["replays"] == 1 and row["replay_of"] == event_id
     outcomes = {o["trigger_id"]: o["fire_outcome"] for o in row["outcome"] if o.get("trigger_id")}
@@ -226,7 +226,7 @@ def test_T11_replay_reprocess_fires_only_routes_that_have_not_admitted_and_force
         forced = event_intake.replay(c, project_id=pid, ids=[event_id], actor="ceo", mode="force",
                                      reason="Password rotated and checked with Alice.")
     assert forced["replayed"] == [event_id]
-    event_intake.process_due(engine, _settings())
+    event_intake.process_due(engine, _settings(), project_id=pid)
     row = event_row(engine, event_id)
     assert row["status"] == "routed" and row["replays"] == 2
     assert len(runs_of(engine, pid)) == 3                 # exactly one new run (the live route)
@@ -265,18 +265,18 @@ def test_failures_retry_with_backoff_then_the_event_is_a_dead_letter(world, monk
 
     monkeypatch.setattr(intake_router, "route", broken)
     monkeypatch.setattr(event_intake, "MAX_ATTEMPTS", 3)
-    got = event_intake.process_due(engine, _settings())
+    got = event_intake.process_due(engine, _settings(), project_id=pid)
     assert got["failed"] == 1
     row = event_row(engine, event_id)
     assert row["status"] == "failed" and row["attempts"] == 1
     assert "ServiceNow refused our login" in row["last_error"]
     assert row["next_attempt_at"] > row["received_at"]      # backoff: not due yet
-    assert event_intake.process_due(engine, _settings())["claimed"] == 0
+    assert event_intake.process_due(engine, _settings(), project_id=pid)["claimed"] == 0
     for _ in range(2):                                        # make it due, twice more
         with engine.begin() as c:
             c.execute(text("UPDATE intake_events SET next_attempt_at = now() WHERE id = :i"),
                       {"i": event_id})
-        event_intake.process_due(engine, _settings())
+        event_intake.process_due(engine, _settings(), project_id=pid)
     row = event_row(engine, event_id)
     assert row["status"] == "dead" and row["attempts"] == 3
     assert row["expires_at"] > row["received_at"]
@@ -295,7 +295,7 @@ def test_failures_retry_with_backoff_then_the_event_is_a_dead_letter(world, monk
     monkeypatch.undo()
     with engine.begin() as c:
         event_intake.replay(c, project_id=pid, ids=[event_id], actor="ceo")
-    assert event_intake.process_due(engine, _settings())["routed"] == 1
+    assert event_intake.process_due(engine, _settings(), project_id=pid)["routed"] == 1
     assert event_row(engine, event_id)["status"] == "routed"
     assert event_row(engine, event_id)["attempts"] == 1
 
@@ -315,11 +315,11 @@ def test_an_event_never_overtakes_an_earlier_failed_event_of_its_conversation(wo
         return real_route(*a, **kw)
 
     monkeypatch.setattr(intake_router, "route", flaky)
-    event_intake.process_due(engine, _settings())                  # first fails, retrying
+    event_intake.process_due(engine, _settings(), project_id=pid)                  # first fails, retrying
     assert event_row(engine, first)["status"] == "failed"
     broken["on"] = False
     second = _receive(engine, conn, {"subject": "INC1", "n": 2}, msg_id="o2")
-    got = event_intake.process_due(engine, _settings())
+    got = event_intake.process_due(engine, _settings(), project_id=pid)
     assert got["received"] == 1                                    # second deferred, not fired
     row = event_row(engine, second)
     assert row["status"] == "received" and row["attempts"] == 0
@@ -328,10 +328,10 @@ def test_an_event_never_overtakes_an_earlier_failed_event_of_its_conversation(wo
     assert runs_of(engine, pid) == []
     with engine.begin() as c:                                      # first becomes due, then second
         c.execute(text("UPDATE intake_events SET next_attempt_at = now() WHERE id = :i"), {"i": first})
-    event_intake.process_due(engine, _settings())
+    event_intake.process_due(engine, _settings(), project_id=pid)
     with engine.begin() as c:
         c.execute(text("UPDATE intake_events SET next_attempt_at = now() WHERE id = :i"), {"i": second})
-    event_intake.process_due(engine, _settings())
+    event_intake.process_due(engine, _settings(), project_id=pid)
     runs = runs_of(engine, pid)
     assert [r["status"] for r in (event_row(engine, first), event_row(engine, second))] == ["routed", "routed"]
     assert len(runs) == 2
@@ -344,7 +344,7 @@ def test_a_body_the_adapter_cannot_parse_is_dead_at_once_never_retried(world):
     got = event_intake.receive(engine, "github", token_of(conn["url_path"]),
                                github_request("gh-s", "push", b"<xml/>"))
     assert got["http_status"] == 202                          # verified bytes are stored first
-    event_intake.process_due(engine, _settings())
+    event_intake.process_due(engine, _settings(), project_id=pid)
     row = event_row(engine, got["event_id"])
     assert row["status"] == "dead" and row["last_error"].startswith("parse refused")
     assert row["attempts"] == 1
@@ -355,20 +355,20 @@ def test_two_processors_never_claim_one_row_and_a_lease_expires(world):
     conn = make_connection(engine, pid, "webhook")
     ids = [_receive(engine, conn, {"n": n}, msg_id=f"c{n}") for n in range(6)]
     with engine.begin() as a, engine.begin() as b:
-        got_a = event_intake.claim(a, limit=4, holder="A")
-        got_b = event_intake.claim(b, limit=4, holder="B")
+        got_a = event_intake.claim(a, limit=4, holder="A", project_id=pid)
+        got_b = event_intake.claim(b, limit=4, holder="B", project_id=pid)
     assert len(got_a) == 4 and len(got_b) == 2
     assert {r["id"] for r in got_a}.isdisjoint({r["id"] for r in got_b})
     assert {r["id"] for r in got_a} | {r["id"] for r in got_b} == set(ids)
     assert all(r["status"] == "processing" and r["attempts"] == 1 for r in got_a + got_b)
     with engine.begin() as c:                                 # nothing left while leased
-        assert event_intake.claim(c, limit=10) == []
+        assert event_intake.claim(c, limit=10, project_id=pid) == []
         # processor A dies holding ids[0]: the row stays `processing` and its lease runs out
         c.execute(text("UPDATE intake_events SET lease_until = now() - interval '1 second' "
                        "WHERE id = :i"), {"i": ids[0]})
     assert event_row(engine, ids[0])["status"] == "processing"
     with engine.begin() as c:                                 # reclaimed by the next processor
-        [again] = event_intake.claim(c, limit=10, holder="C")
+        [again] = event_intake.claim(c, limit=10, holder="C", project_id=pid)
     assert again["id"] == ids[0] and again["attempts"] == 2 and again["claimed_by"] == "C"
 
 

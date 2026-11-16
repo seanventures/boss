@@ -1,4 +1,4 @@
-"""Workflow readiness and Repo and models read the same rows, so they cannot disagree, and the
+"""Workflow readiness and Setup read the same rows, so they cannot disagree, and the
 readiness fixes land on the right row."""
 from apps.api.tests.setup_helpers import PROJECT, as_ceo, connect_key, connect_repository, fakes
 from apps.api.app import main as api_main

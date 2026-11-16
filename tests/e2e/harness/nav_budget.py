@@ -207,7 +207,7 @@ def walk(state: StackState, *, rounds: int = 3, headed: bool = False, seed: int 
                 pg.wait_for_timeout(2000)
                 _no_step_up(pg, f"cold load of {area}")
                 rows = [r for r in _log_since(log, start) if r.get("cred") == "session"]
-                # Reported, not failed: a page may re-check stale rows by itself (Repo and models),
+                # Reported, not failed: a page may re-check stale rows by itself (Setup),
                 # and must then never ask for a second factor — the step-up check above is the
                 # gate. A server action's read is a POST to …/load and changes nothing.
                 writes = [f"{r['method']} {r['path']}" for r in rows

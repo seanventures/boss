@@ -461,7 +461,7 @@ def test_generate_image_without_a_key_says_the_fix(project):
                                 args={"prompt": "a hero image", "path": "hero.png"})
     assert out["ok"] is False
     assert out["needs"] == "provider:openai_images"
-    assert "Connect an OpenAI key for image generation in Repo and model" in out["error"]
+    assert "Connect an OpenAI key for image generation in Setup" in out["error"]
 
 
 def test_generate_image_uses_a_key_stored_through_the_console(project, monkeypatch, tmp_path):
@@ -541,7 +541,7 @@ def test_a_provider_specific_skill_without_its_key_is_refused_by_readiness(sourc
     ok, detail = wr.check(sources, _no_key_settings(), "p", "provider:openai_images")
     assert not ok and "OpenAI" in detail
     need = wr.need_for("provider:openai_images")
-    assert need.fix.startswith("Connect an OpenAI key for image generation in Repo and model")
+    assert need.fix.startswith("Connect an OpenAI key for image generation in Setup")
 
     ok, _ = wr.check(sources, _no_key_settings(openai_api_key="sk-test-not-real"), "p",
                      "provider:openai_images")
@@ -581,7 +581,7 @@ def test_and_the_step_failure_says_the_same_fix(image_skill):
     said = explain(caught.value)
     assert said["kind"] == "provider_requirement"
     assert said["action"].startswith(
-        "Connect an OpenAI key for image generation in Repo and model")
+        "Connect an OpenAI key for image generation in Setup")
     assert said["retry"] is False
 
 

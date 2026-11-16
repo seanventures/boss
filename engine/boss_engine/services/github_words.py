@@ -23,7 +23,7 @@ _NEEDS: tuple[tuple[re.Pattern[str], str, str], ...] = (
     (re.compile(r"/contents/|/git/"), "the repository's files", "Contents: Read and write"),
 )
 
-WHERE = "Repo and models › GitHub"
+WHERE = "Setup › GitHub"
 
 
 def github_error_in_words(error: Any, *, doing: str = "") -> str:

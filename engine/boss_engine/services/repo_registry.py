@@ -335,5 +335,5 @@ def resolve_repository_target(
             }
     raise RepositoryResolutionError(
         f"No repository registered for project {project_id}. Connect a GitHub repository "
-        "in Repo and models (/?area=setup&focus=repository), then rerun this step."
+        "in Setup (/?area=setup&focus=repository), then rerun this step."
     )

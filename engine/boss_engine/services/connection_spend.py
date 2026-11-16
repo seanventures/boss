@@ -703,7 +703,7 @@ def _retire_candidate(c, project_id, source_id, actor, *, provider="", receipt_i
                       outcome=None, not_sent=None):
     """Retire a proof's temporary source: never routable again, never deleted.
 
-    The row stays for the audit trail (receipts and leases point at it), but Repo and models
+    The row stays for the audit trail (receipts and leases point at it), but Setup
     no longer lists it (EntitlementBrokerService.list_sources). Its history names it by what it
     proved — provider, outcome, and the event's own time — never by its proof-<hash> id.
     """

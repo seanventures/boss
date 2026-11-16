@@ -603,6 +603,15 @@ services:
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
       BOSS_GITHUB_OWNER: ${BOSS_GITHUB_OWNER:-}
       BOSS_GITHUB_REPO: ${BOSS_GITHUB_REPO:-}
+      # Bitbucket fails closed unless the process that reads the registry sees these
+      # (BOSSAPP-1184). The registry is this list, not a database column.
+      BOSS_BITBUCKET_TOKEN: ${BOSS_BITBUCKET_TOKEN:-}
+      BOSS_BITBUCKET_USERNAME: ${BOSS_BITBUCKET_USERNAME:-}
+      BOSS_BITBUCKET_APP_PASSWORD: ${BOSS_BITBUCKET_APP_PASSWORD:-}
+      BOSS_BITBUCKET_WEBHOOK_SECRET: ${BOSS_BITBUCKET_WEBHOOK_SECRET:-}
+      BOSS_TARGET_BITBUCKET_WORKSPACE: ${BOSS_TARGET_BITBUCKET_WORKSPACE:-}
+      BOSS_TARGET_BITBUCKET_REPO: ${BOSS_TARGET_BITBUCKET_REPO:-}
+      BOSS_BITBUCKET_REPOS: ${BOSS_BITBUCKET_REPOS:-}
       # PIPELINE KNOBS AN OPERATOR CAN ACTUALLY TURN.
       #
       # This file passes a NAMED LIST into the container, so anything not listed here sits in
@@ -916,6 +925,14 @@ services:
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
       BOSS_GITHUB_OWNER: ${BOSS_GITHUB_OWNER:-}
       BOSS_GITHUB_REPO: ${BOSS_GITHUB_REPO:-}
+      # Same Bitbucket credential and registry as the API (BOSSAPP-1184). A build on this
+      # process reads them from Settings; the webhook secret stays on the API.
+      BOSS_BITBUCKET_TOKEN: ${BOSS_BITBUCKET_TOKEN:-}
+      BOSS_BITBUCKET_USERNAME: ${BOSS_BITBUCKET_USERNAME:-}
+      BOSS_BITBUCKET_APP_PASSWORD: ${BOSS_BITBUCKET_APP_PASSWORD:-}
+      BOSS_TARGET_BITBUCKET_WORKSPACE: ${BOSS_TARGET_BITBUCKET_WORKSPACE:-}
+      BOSS_TARGET_BITBUCKET_REPO: ${BOSS_TARGET_BITBUCKET_REPO:-}
+      BOSS_BITBUCKET_REPOS: ${BOSS_BITBUCKET_REPOS:-}
       # PIPELINE KNOBS AN OPERATOR CAN ACTUALLY TURN.
       #
       # This file passes a NAMED LIST into the container, so anything not listed here sits in
@@ -1120,6 +1137,16 @@ services:
       BOSS_EGRESS_STRICT_SECRETS: ${BOSS_EGRESS_STRICT_SECRETS:-}
       BOSS_GITHUB_APP_ID: ${BOSS_GITHUB_APP_ID:-}
       BOSS_GITHUB_APP_INSTALLATION_ID: ${BOSS_GITHUB_APP_INSTALLATION_ID:-}
+      # Bitbucket cannot mint a per-run token, so this process injects the install credential
+      # and re-checks the registry (BOSSAPP-1184). An empty URL falls back to bitbucket.org.
+      BOSS_BITBUCKET_TOKEN: ${BOSS_BITBUCKET_TOKEN:-}
+      BOSS_BITBUCKET_USERNAME: ${BOSS_BITBUCKET_USERNAME:-}
+      BOSS_BITBUCKET_APP_PASSWORD: ${BOSS_BITBUCKET_APP_PASSWORD:-}
+      BOSS_BITBUCKET_GIT_URL: ${BOSS_BITBUCKET_GIT_URL:-}
+      BOSS_BITBUCKET_API_URL: ${BOSS_BITBUCKET_API_URL:-}
+      BOSS_TARGET_BITBUCKET_WORKSPACE: ${BOSS_TARGET_BITBUCKET_WORKSPACE:-}
+      BOSS_TARGET_BITBUCKET_REPO: ${BOSS_TARGET_BITBUCKET_REPO:-}
+      BOSS_BITBUCKET_REPOS: ${BOSS_BITBUCKET_REPOS:-}
     volumes:
       - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_identity:/var/lib/boss/identity:ro

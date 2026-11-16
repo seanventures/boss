@@ -6,7 +6,7 @@ import { apiErrorText } from "../../../lib/api-error";
 import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
- * Repo and models' reads and writes, off the Server Action path (a Server Action waits on a
+ * Setup's reads and writes, off the Server Action path (a Server Action waits on a
  * full re-render). Every op is named here — the browser cannot reach an arbitrary API path with
  * the console's credentials — and a pasted token or key travels in the body, never a URL.
  *
@@ -58,7 +58,7 @@ const OPS: Record<string, Op> = {
   build_database: { method: "PUT", path: () => "/v1/settings/build_services" },
   // "Build speed": the project setting build_speed (Owner/Admin).
   build_speed: { method: "PUT", path: () => "/v1/settings/build_speed" },
-  // Setup › Repo and models › Embedding model (the org's): save (the key in the body, into the vault), check, remove.
+  // Setup › Embedding model (the org's): save (the key in the body, into the vault), check, remove.
   embedding_model: { method: "POST", path: () => "/v1/setup/embedding-model" },
   embedding_model_check: { method: "POST", path: () => "/v1/setup/embedding-model/check" },
   embedding_model_remove: { method: "DELETE", path: () => "/v1/setup/embedding-model", query: ["project_id"] },

@@ -225,7 +225,7 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
     ),
     "setup": (
         Press("su-test-all", "app/setup/setup-board.tsx", expect=_tid("su-verdict"),
-              why="Repo and models re-checks every row and answers with one verdict"),
+              why="Setup re-checks every row and answers with one verdict"),
         Journey("setup_first_run"),
         Journey("setup_replace_token"),
         Journey("setup_deep_links"),

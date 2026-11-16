@@ -131,7 +131,7 @@ def build_routes(connection: Any, settings: Any, project_id: str,
         if task_pin(spec, stage) is not None or (pinned and engine == pinned):
             why = "pinned by the task"
         elif job.engine == engine and job.why == CHOSEN:
-            why = "pinned in Repo and models"
+            why = "pinned in Setup"
         elif job.engine == engine:
             why = f"auto: {job.why}"
         else:
@@ -153,7 +153,7 @@ def chat_route(connection: Any, settings: Any, project_id: str) -> EngineRoute:
 
     s = routed_settings(connection, settings, project_id)
     job = resolve_job(connection, s, project_id, "chat")
-    why = "pinned in Repo and models" if job.why == CHOSEN else (
+    why = "pinned in Setup" if job.why == CHOSEN else (
         f"auto: {job.why}" if job.engine else job.why)
     return EngineRoute("chat", job.engine, job.model or (default_model(job.engine, s)
                                                          if job.engine else None),

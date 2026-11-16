@@ -17,7 +17,7 @@ SETUP_HREF = "/?area=setup&focus=models"
 
 
 def setup_href(source_id: Optional[str] = None) -> str:
-    """Repo and models' Models row — and that source's menu, when the source is known."""
+    """Setup's Models row — and that source's menu, when the source is known."""
     from urllib.parse import quote
 
     return f"{SETUP_HREF}&source={quote(source_id)}" if source_id else SETUP_HREF
@@ -297,7 +297,7 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
         said = str(misdirected or text).strip()
         return {
             "kind": "credential_misdirected", "headline": said,
-            "action": ("Store a key for this endpoint on the project (Repo and models), or have "
+            "action": ("Store a key for this endpoint on the project (Setup), or have "
                        "the operator list the host in BOSS_CREDENTIAL_HOSTS."),
             "href": setup_href(source_id), "retry": False, "detail": said,
         }
@@ -333,7 +333,7 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
         return {
             "kind": "credential_unreadable",
             "headline": f"BOSS could not read the login it stored for {the_source}.",
-            "action": f"Reconnect {the_source} in Repo and models to store it again.",
+            "action": f"Reconnect {the_source} in Setup to store it again.",
             "href": setup_href(source_id), "retry": False,
         }
     # EVERY LEASE ON THE SOURCE IS HELD BY OTHER WORK. A queue, not a verdict: it frees when
@@ -349,7 +349,7 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
         return {
             "kind": "login_rejected",
             "headline": f"The {who} login was rejected, so no model call can run.",
-            "action": (f"Reconnect the {who} in Repo and models. A subscription (Codex, "
+            "action": (f"Reconnect the {who} in Setup. A subscription (Codex, "
                        "Claude Code, Grok) signs in again inside BOSS: press Sign in there, "
                        "or run `boss connect <provider>`."),
             "href": setup_href(source_id), "retry": False,
@@ -424,7 +424,7 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
             "kind": "capacity_owner",
             "headline": f"The {who} belongs to someone else on this install and cannot be used "
                         "for this work.",
-            "action": "Connect your own subscription in Repo and models.",
+            "action": "Connect your own subscription in Setup.",
             "href": setup_href(source_id), "retry": False,
         }
     # A SKILL THAT NEEDS ONE PROVIDER'S API (image generation, speech-to-text) and the project
@@ -440,7 +440,7 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
                          "project has not connected one." if named else
                          "This step needs a provider capability this project has not "
                          "connected."),
-            "action": named.fix if named else "Connect the provider it names in Repo and models.",
+            "action": named.fix if named else "Connect the provider it names in Setup.",
             "href": setup_href(source_id), "retry": False,
         }
     if "no_eligible_source" in lowered or "no eligible model" in lowered \
@@ -451,7 +451,7 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
         return {
             "kind": "no_model",
             "headline": "No connected model can run this work.",
-            "action": "Connect a model in Repo and models.",
+            "action": "Connect a model in Setup.",
             "href": setup_href(source_id), "retry": False,
         }
     if NO_DIRECT_ANSWER in lowered:

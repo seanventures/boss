@@ -108,6 +108,9 @@ def open_or_update(c: Any, settings: Any, *, project_id: str, repository: str, b
     from .core import emit_event, make_id
     from .local_repo_host import change_set_url
 
+    # ROW LOCKS ON `c` ONLY AFTER THE PUSH (local_repo_host.writes_on): git already received
+    # the push before this runs, and every change-set write below is on `c` itself; a
+    # LocalGitAdapter write from a second connection after this point would wait on our own lock.
     owner, _, name = repository.partition("/")
     git_dir = local_repo.bare_path(owner, name, settings)
     default = local_repo.default_branch(git_dir)

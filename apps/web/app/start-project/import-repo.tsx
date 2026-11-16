@@ -4,7 +4,7 @@
  * ADD A PROJECT › EXISTING · REPO OR FOLDER (BOSSAPP-914 screen 03): three columns, left to right.
  *
  *   1 Pick it        the source: GitHub (the accounts the org's registry reaches — read-only chips,
- *                    `+ account` opens Repo and models, contract §15 — a search box and the allowed
+ *                    `+ account` opens Setup, contract §15 — a search box and the allowed
  *                    repos with how long ago they were pushed, or `in use` when a project has one)
  *                    or Folder on host (a verified server and an absolute path, read over ssh,
  *                    read-only: lib/host-folder.ts)
@@ -108,7 +108,7 @@ export function useRegistry(projectId: string): { registry: Registry | null; loa
 
 /** TODAY'S IMPORT-A-REPO PICKER (03-08..13), one component wherever a repository is picked (Add a
  *  project, and Add repo on a project: 06-01 / 13-23): the account chips (read-only, `+ account`
- *  opens Repo and models), the search, and the rows — name, the last push ("3h", "12d"), or a tag
+ *  opens Setup), the search, and the rows — name, the last push ("3h", "12d"), or a tag
  *  (`in use` by another project, `in this project` here). */
 export function RepoPicker({ registry, loadError, account, onAccount, query, onQuery, picked, onPick, addAccount, here, testid = "import" }: {
   registry: Registry | null; loadError: string | null; account: string; onAccount: (a: string) => void;
@@ -132,7 +132,7 @@ export function RepoPicker({ registry, loadError, account, onAccount, query, onQ
             <User size={11} aria-hidden /> {a}</button>
         ))}
         <a className="spj-link spj-small" href={addAccount} data-testid={`${testid}-add-account`}
-           title="Connect another GitHub account or allow more repositories in Repo and models">+ account</a>
+           title="Connect another GitHub account or allow more repositories in Setup">+ account</a>
       </div>
       <label className="spj-search">
         <MagnifyingGlass size={14} aria-hidden />
@@ -161,7 +161,7 @@ export function RepoPicker({ registry, loadError, account, onAccount, query, onQ
         })}
         {registry && !repos.length ? (
           <li className="spj-quiet" data-testid={`${testid}-none`}>
-            {query ? "No repo matches." : <>No repos yet · <a className="spj-link" href={addAccount}>Connect on Repo and models ›</a></>}
+            {query ? "No repo matches." : <>No repos yet · <a className="spj-link" href={addAccount}>Connect on Setup ›</a></>}
           </li>
         ) : null}
       </ul>

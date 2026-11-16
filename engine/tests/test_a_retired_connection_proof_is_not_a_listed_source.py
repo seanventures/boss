@@ -1,7 +1,7 @@
 """A retired connection proof is not a source anybody connected (BOSSAPP-539).
 
 Every Add model → Connect stages a temporary proof-<hash> entitlement source for its one paid
-proof call and retires it (status inactive) afterwards. Repo and models listed those retired
+proof call and retires it (status inactive) afterwards. Setup listed those retired
 rows as if they were real, with Replace key and Disconnect session on them. They stay in the
 audit trail, never deleted; the list leaves them out; their history names them by what they
 proved: provider, outcome, and the event's own time.

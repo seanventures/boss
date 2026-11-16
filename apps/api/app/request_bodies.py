@@ -546,7 +546,7 @@ class DecisionModelKeyBody(OpenProjectBody):
 
 
 class EmbeddingModelBody(OpenProjectBody):
-    """Setup › Repo and models › Embedding model, the org's (knowledge/embedding_slot.py). The key
+    """Setup › Embedding model, the org's (knowledge/embedding_slot.py). The key
     is write-only. `url` is one pasted URL (for Azure the whole Target URI); the dimension is
     learned from the check unless one is given."""
 

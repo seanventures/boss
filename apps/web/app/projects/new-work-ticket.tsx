@@ -9,10 +9,10 @@
  * from the ticket, one press (lib/tickets importAndStart).
  */
 import React, { useEffect, useRef, useState } from "react";
-import { CheckCircle, MagnifyingGlass } from "@phosphor-icons/react";
+import { CheckCircle, Info, MagnifyingGlass } from "@phosphor-icons/react";
 
 import { TYPE_WORDS, readConnections, readResolve, ticketSetupHref, workflowFor, type Ticket, type TypedError } from "../../lib/tickets";
-import { TicketCard, TkReadState, WorkflowPick } from "../tickets/ticket-parts";
+import { NotSharedLine, TicketCard, TkReadState, WorkflowPick } from "../tickets/ticket-parts";
 import "../tickets/ticket-run.css";
 
 /** A ticket-ish reference in the words: a KEY-12, a link, or #311. */
@@ -66,6 +66,14 @@ export function NewWorkTicket({ resolved, workflow, onWorkflow, projectId }: {
     );
   }
   if (!t) {
+    // NOT SHARED HERE: say where it is and the one way out (Share it, or whom to ask).
+    const hidden = resolved.errors.find((e) => e.shared_from);
+    if (hidden?.shared_from) {
+      return (
+        <p className="tk-heads-up" role="status" data-testid="px-nw-ticket-not-shared">
+          <Info size={14} aria-hidden />{hidden.ref ? <b className="tk-mono-text">{hidden.ref}</b> : null}<NotSharedLine info={hidden.shared_from} projectId={projectId} testid="px-nw-not-shared" /></p>
+      );
+    }
     return resolved.errors.length ? (
       <p className="tk-error" role="alert" data-testid="px-nw-ticket-errors">
         {resolved.errors.map((e) => `${e.ref ? `${e.ref}: ` : ""}${e.message || "could not be read."}`).join(" · ")}</p>

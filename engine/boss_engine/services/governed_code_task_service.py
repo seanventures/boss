@@ -4633,7 +4633,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     _scope = _build_scope.decide(
         str((spec or {}).get("title") or ""), str((spec or {}).get("instructions") or ""),
         (spec or {}).get("acceptance_criteria") or (), workflow_deploys=_deploys,
-        has_manifest=bool(fctx.get("deploy_manifest")))
+        has_manifest=bool(fctx.get("deploy_manifest")), spec=spec or {})
     _build_scope.set_scope(_scope)
     logger.info("code_task.build_scope run=%s scope=%s", run_id, _scope)
     _n_refs = load_reference_links((spec or {}).get("reference_links"))
@@ -5713,8 +5713,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if not n:
                 return None
             with _transaction(engine) as c:
+                # A RESCUE NEEDS NO FRESH RESERVATION (rescue_of_run): the money was spent, and
+                # this exit settles it on the build's own hold. Passing None here used to
+                # raise a blocking "Missing active reservation" card on every failure and never
+                # open the partial PR (since rc.1).
                 pr = sf.propose_pull_request(
-                    c, project_id, task_id, reservation_id=None,
+                    c, project_id, task_id, reservation_id=reservation_id,
+                    rescue_of_run=run_id,
                     dedupe_key=f"code:task:{run_id}", title=f"[partial] {title}",
                     branch_name=work_branch,
                     summary=("INCOMPLETE — this run did not finish.\n\n"
@@ -5738,6 +5743,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                "code_task_run", run_id,
                                {"url": url, "files": n, "reason": reason[:200]})
                     return url
+                # NOT OPENED: an event on the run, never a card a person must clear.
+                emit_event(c, project_id, "code_task.partial_pr_failed", "boss",
+                           "code_task_run", run_id,
+                           {"status": str(pr.get("status") or ""),
+                            "error": str(pr.get("message") or pr.get("error") or "")[:200],
+                            "reason": reason[:200]})
         except Exception as exc:  # noqa: BLE001 — a failed rescue must never mask the real exit
             _log_caught(logger)
             try:
@@ -7434,6 +7445,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _log_caught(logger)
 
         test_arbitrations: list[dict] = []  # CODE_WRONG/TEST_WRONG rulings on failing tests
+
+        # The arbiter runs when implement tests fail, before `if do_review` assigns the
+        # review clone. Until then the tree under test is `root`. Leaving this unbound was
+        # a NameError on every failing implement, so the arbiter never ruled and never
+        # failed closed (BOSSAPP-967). The review block below rebinds it when it exists.
+        review_root = root
 
         def _arbitrate_tests(test_output: str, round_i) -> str:
             """TEST ARBITRATION: before an implementer chases the oracle, establish that the

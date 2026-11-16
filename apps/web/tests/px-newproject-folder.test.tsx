@@ -82,7 +82,7 @@ describe("the one Add-a-project sheet (PX-20)", () => {
     expect($$('[data-testid="add-project"]').length).toBe(1);
     expect(tid("add-project")!.getAttribute("data-kind")).toBe("repo");
     // No GitHub account yet: it still opens and says where to allow one (contract §15).
-    expect(tid("ap-results")!.textContent).toContain("Allow more in Repo and models ›");
+    expect(tid("ap-results")!.textContent).toContain("Allow more in Setup ›");
     await click(tid("ap-close"));
     expect(tid("add-project")).toBeNull();
     expect(window.location.search).toBe("?area=projects");

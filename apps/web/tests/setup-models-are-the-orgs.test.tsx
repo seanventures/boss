@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * Setup › Repo and models › Models is the ORG's (org_models, banking case study 2026-10-24: new
+ * Setup › Models is the ORG's (org_models, banking case study 2026-10-24: new
  * projects had no model). A job chosen for the org reads "All projects"; a job pinned for this
  * project reads "This project" with "Use org's", which removes only the pin (scope=project); an
  * org connection reads "All projects" too.

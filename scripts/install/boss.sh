@@ -283,7 +283,7 @@ cmd_version() {
   printf 'Install   %s\nRelease   %s\n' "$INSTALL_DIR" "$(release_line)"
 }
 
-# What Repo and models says (scripts/install/setup_state.py): `ready`, or the repository line.
+# What Setup says (scripts/install/setup_state.py): `ready`, or the repository line.
 setup_state() {
   BOSS_API_URL="$(api_url)" BOSS_API_KEY="$(host_key)" \
     python3 "$INSTALL_DIR/scripts/install/setup_state.py" "$1" 2>/dev/null </dev/null

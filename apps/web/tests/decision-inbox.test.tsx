@@ -156,8 +156,8 @@ describe("DecisionInbox (W1.6 actionable default)", () => {
           recommendation: { action: "model_capacity_denied", occurrences: 4 },
           allowedActions: [{ action: "reject", label: "Dismiss", tone: "neutral", effect: "e" }],
           guidance: { what_happened: "No connected model had capacity.",
-                      what_to_do: "Add credit in Repo and model, then Retry the step.",
-                      area: "setup", link_label: "Open Repo and model" },
+                      what_to_do: "Add credit in Setup, then Retry the step.",
+                      area: "setup", link_label: "Open Setup" },
         })])}
         tasks={[]} roles={[]} projectId="p" actorId="ceo" orgId="org_1"
       />,

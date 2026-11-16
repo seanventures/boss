@@ -1,7 +1,7 @@
 """A reconnect ends with the store holding the LIVE credential, out loud (BOSSAPP-1026).
 
 On a live install the operator did exactly what the error said — reconnected the Codex
-subscription in Repo and models — and the secret store's version did not move: the sign-in
+subscription in Setup — and the secret store's version did not move: the sign-in
 rewrote the CLI's own auth.json and nobody stored it. Every later restore-from-store then
 signed the working login out again, and nothing anywhere said so. These tests pin the other
 contract: Connect stores the credential it just proved, reports the store generation it wrote,

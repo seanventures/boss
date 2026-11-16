@@ -1,7 +1,7 @@
 """No response and no log line carries a pasted token or key, or any 4+ character piece of one.
 
 Per the operator's rule: a prefix or suffix of a short secret can be the whole secret, so the
-old `last4` is gone from Repo and models entirely.
+old `last4` is gone from Setup entirely.
 """
 import logging
 

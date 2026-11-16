@@ -1,6 +1,6 @@
 """A key the provider refused for money says "Out of credit" on every surface (2026-10-25).
 
-THE LIVE BUG. Runs on the Anthropic key failed "Credit balance is too low" while Repo and models
+THE LIVE BUG. Runs on the Anthropic key failed "Credit balance is too low" while Setup
 said `setup-anthropic · Working · Available`: the last Test had passed a day earlier, the run's
 refusal was folded in as a plain capacity window (or booked on the subscription instead of the
 key it ran on), and the pill kept its green.

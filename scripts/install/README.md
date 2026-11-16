@@ -66,7 +66,7 @@ Connecting an Ollama that is already running does the following:
 
 1. The API and worker containers reach the host as `host.docker.internal`. The Compose file maps that name with `extra_hosts: host-gateway`; Docker Desktop resolves it already. No port is published.
 2. The API container checks that it can read Ollama's model list at `http://host.docker.internal:11434`. If it cannot, nothing is changed, and the fix is printed.
-3. BOSS registers Ollama as an OpenAI-compatible model (`POST /v1/setup/model`, kept for one release beside Repo and models' `POST /v1/setup/models`), with:
+3. BOSS registers Ollama as an OpenAI-compatible model (`POST /v1/setup/model`, kept for one release beside Setup's `POST /v1/setup/models`), with:
    - the base URL `http://host.docker.internal:11434/v1`
    - the first model Ollama lists, or `--local-model` or `BOSS_OLLAMA_MODEL` when that model is pulled
    - the placeholder key `ollama`, because the form requires a key and Ollama ignores it
@@ -313,7 +313,7 @@ BOSS prints the link and one-time code that the provider's login shows. Open the
 Grok's device session is tied to the Unix account and home that runs BOSS, which is why it signs in inside the container: a login under the SSH admin account does not authenticate the containers. BOSS never copies or parses `~/.grok/auth.json`.
 
 - Once the Grok harness is available and its BOSS readiness proof passes, set `BOSS_CODE_AGENT_ENGINE=grok` in `.env` and recreate the API and worker. This selects Grok for governed coding work, not the console's chat model.
-- To run governed coding work on an Anthropic API key as Agent SDK usage (metered on your Anthropic account, never the Claude subscription), store the key in Repo and models -> Anthropic API, then pick **Claude Agent SDK** for Build, Review or Chat there, or set `BOSS_CODE_AGENT_ENGINE=claude_agent_sdk` in `.env` for the whole install and recreate the API and worker. `BOSS_AGENT_SDK_MODEL` sets its model (default `claude-sonnet-5`).
+- To run governed coding work on an Anthropic API key as Agent SDK usage (metered on your Anthropic account, never the Claude subscription), store the key in Setup -> Anthropic API, then pick **Claude Agent SDK** for Build, Review or Chat there, or set `BOSS_CODE_AGENT_ENGINE=claude_agent_sdk` in `.env` for the whole install and recreate the API and worker. `BOSS_AGENT_SDK_MODEL` sets its model (default `claude-sonnet-5`).
 
 > [!NOTE]
 > A CLI installed on the host does not by itself mean the BOSS containers are connected.

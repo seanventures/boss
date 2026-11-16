@@ -24,7 +24,7 @@
       ["self_fixes", "wrench", "Self-fixes", "Bugs in BOSS that BOSS fixed itself"],
     ]],
     ["Settings", [
-      ["setup", "database", "Repo and models", "Where BOSS writes code and what it thinks with"],
+      ["setup", "database", "Setup", "Where BOSS writes code and what it thinks with"],
       ["skills", "puzzle-piece", "Skills & MCP", "What your crew can do"],
       ["budget", "scales", "Govern", "Spend caps, pace and limits"],
       ["enterprise", "identification-card", "Identity", "People, roles, agents and sign-in"],

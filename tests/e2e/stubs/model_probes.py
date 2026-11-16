@@ -1,4 +1,4 @@
-"""What a model provider answers Repo and models' one-question check, chosen by key value.
+"""What a model provider answers Setup's one-question check, chosen by key value.
 
 The model stub (model_stub.py), the API tests and the engine tests answer from here, so a
 rejected key, a key with no credit or a rate-limited one looks the same everywhere:

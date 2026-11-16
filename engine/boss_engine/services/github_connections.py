@@ -875,7 +875,7 @@ class GitHubConnectionService:
             # WHAT EACH FLOW CAN DO (BOSSAPP-1160). The repository-level answer above says what
             # the token may do IN this repository; creating a repository needs a permission no
             # repository can grant (a classic token's `repo` scope, an App's `administration`).
-            # Recorded beside it so Repo and models says "can create repos: no (missing:
+            # Recorded beside it so Setup says "can create repos: no (missing:
             # administration)" instead of green — and never fails the test: builds do not create.
             flows = self._flow_permissions(connection, project_id, github_connection)
             granted = sorted(set(granted) | set(flows["granted"]))
