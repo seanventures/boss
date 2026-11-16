@@ -27,6 +27,7 @@ import {
   refusalMessage, shortName, type ChangeSetGrantView, type ChangeSetView, type Lane,
 } from "../../lib/multirepo";
 import { areaHref } from "../factory/cockpit-util";
+import { kgRunHref } from "../../lib/kg-view";
 import { formatDateTime } from "../../lib/datetime";
 import { steerBuild } from "../factory/cockpit-actions";
 import { showToast } from "../client-forms";
@@ -356,13 +357,19 @@ function LaneEnd({ lane }: { lane: Lane }) {
 }
 
 function LaneRow({ lane, now }: { lane: Lane; now: boolean }) {
+  const story = kgRunHref({ code_task_run_id: lane.code_task_run_id });
   return (
     <div className="mr-lane" data-testid={`mr-lane-${lane.order}`} data-state={lane.lane_state} data-now={now || undefined}>
       <div className="mr-lane-who">
         <span className="mr-lane-ord" aria-label={`Lane ${lane.order}`}>{lane.order}</span>
         <div style={{ minWidth: 0 }} className="mr-ui-repo">
           <div>
-            <b data-user-text title={lane.full_name}>{lane.full_name}</b>
+            {story ? (
+              <a className="mr-ui-link" href={story} data-testid={`mr-lane-story-${lane.order}`}
+                 title={`Open the build story for ${lane.full_name}`} style={{ minWidth: 0, maxWidth: "100%" }}>
+                <b data-user-text>{lane.full_name}</b>
+              </a>
+            ) : <b data-user-text title={lane.full_name}>{lane.full_name}</b>}
             <small data-user-text>{lane.components.join(", ")}</small>
           </div>
         </div>

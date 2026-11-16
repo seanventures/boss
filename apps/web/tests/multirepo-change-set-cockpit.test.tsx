@@ -13,6 +13,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { needsWords } from "../lib/identity/words";
+import { kgRunHref } from "../lib/kg-view";
 import type { ChangeSetView } from "../lib/multirepo";
 import {
   $, $$, blockedSetFixture, changeSetFixture, click, mountAs, stubFetch, tid, unmount, type Role,
@@ -140,6 +141,22 @@ describe("the change's cockpit (screen 5)", () => {
     api();
     await mount("operator");
     expect(tid("mr-csc-stop")?.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("links a lane's build to its story, and a lane with no build has no link", async () => {
+    const cs = changeSetFixture();
+    cs.lanes[2] = { ...cs.lanes[2], code_task_run_id: null };
+    api(cs);
+    await mount();
+    const href = tid("mr-lane-story-2")?.getAttribute("href") ?? "";
+    const q = new URLSearchParams(href.slice(href.indexOf("?")));
+    expect(href).toBe(kgRunHref({ code_task_run_id: "crun_api" }));
+    expect(q.get("area")).toBe("code_tasks");
+    expect(q.get("build")).toBe("crun_api");
+    expect(q.get("run")).toBeNull();
+    expect(tid("mr-lane-story-1")?.getAttribute("href")).toBe(kgRunHref({ code_task_run_id: "crun_contracts" }));
+    expect(tid("mr-lane-story-3")).toBeNull();
+    expect(tid("mr-lane-3")?.querySelector("a")).toBeNull();
   });
 });
 
