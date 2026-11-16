@@ -193,8 +193,33 @@ class TestARealDebuggingSession:
         from boss_engine.agent import engine_agent
         from boss_engine.services import intent_router
 
-        assert 'args={**(self.ambient or {}), **args,' in inspect.getsource(engine_agent)
+        # The router sets it as the turn's ambient context; the agent sends underscore context
+        # through registry.invoke's `internal`, never in the args the model wrote (PR #161 D1).
         assert 'ambient = {"_thread_id": thread_id}' in inspect.getsource(intent_router)
+        body = inspect.getsource(engine_agent)
+        assert 'internal = {**{k: v for k, v in ambient.items() if str(k).startswith("_")},' in body
+        assert "internal=internal)" in body
+
+    def test_the_thread_id_arrives_through_internal_and_an_invented_one_is_dropped(self):
+        from boss_engine.tools.registry import ToolRegistry
+
+        seen: dict = {}
+        reg = ToolRegistry()
+
+        @reg.tool("echo_thread", "echo", {"type": "object", "properties": {
+            "question": {"type": "string"}}}, permission="decision:read")
+        def _echo(ctx, *, project_id, actor, args):
+            seen.update(args)
+            return {"ok": True}
+
+        reg.invoke("echo_thread", object(), project_id="p", actor="ceo",
+                   args={"question": "why", "_thread_id": "athr_invented"},
+                   internal={"_thread_id": "athr_real"})
+        assert seen == {"question": "why", "_thread_id": "athr_real"}
+        seen.clear()
+        reg.invoke("echo_thread", object(), project_id="p", actor="ceo",
+                   args={"question": "why", "_thread_id": "athr_invented"})
+        assert "_thread_id" not in seen
 
     def test_only_one_runs_at_a_time_per_project(self):
         """An agent that can open investigations would otherwise open one per turn while it
@@ -889,9 +914,20 @@ class TestWhoDecidedNotWhichFlagWasSet:
             raise AssertionError("OPENED")
 
     def _investigate(self, args, *, operator_confirmed=False):
+        # The turn's marker is BOSS's own context (registry.invoke `internal`), never an
+        # argument the model wrote (PR #161 review D1): split the way engine_agent sends it.
         return build_default_registry().invoke(
-            "investigate", self._Ctx(), project_id="p", actor="ceo", args=args,
+            "investigate", self._Ctx(), project_id="p", actor="ceo",
+            args={k: v for k, v in args.items() if not k.startswith("_")},
+            internal={k: v for k, v in args.items() if k.startswith("_")},
             operator_confirmed=operator_confirmed)
+
+    def test_a_model_written_marker_is_dropped(self):
+        """`_writes_allowed` in the MODEL's args never opens a fixing investigation."""
+        out = build_default_registry().invoke(
+            "investigate", self._Ctx(), project_id="p", actor="ceo",
+            args={"question": "fix the deploy", "fix": True, "_writes_allowed": True})
+        assert out["ok"] is False and out["requires_confirmation"] is True
 
     def test_an_instruction_opens_a_fixing_investigation(self):
         out = self._investigate({"question": "fix the deploy", "fix": True,

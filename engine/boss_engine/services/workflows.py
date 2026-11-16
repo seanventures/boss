@@ -3303,6 +3303,13 @@ def checked_capability_inputs(connection: Connection, project_id: str, spec: dic
     return input_data
 
 
+#: The run input key holding the contract items a person picked to replace (BOSSAPP-1322),
+#: written only by start_run's `checked_replaces`.
+CHECKED_REPLACES_KEY = "_checked_replaces"
+#: Input keys no caller may set: dropped from every caller's input by start_run.
+SERVER_ONLY_INPUTS = frozenset({"replaces", CHECKED_REPLACES_KEY})
+
+
 def start_run(
     connection: Connection,
     *,
@@ -3321,8 +3328,15 @@ def start_run(
     pins: Optional[dict[str, Any]] = None,
     allow_live: Optional[list[str]] = None,
     rerun_of: Optional[dict[str, Any]] = None,
+    checked_replaces: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Start a run.
+
+    `checked_replaces`: the contract items a PERSON picked to replace, already checked by the
+    HTTP start endpoint (acceptance.contract.checked_replaces, under their request). Recorded
+    under CHECKED_REPLACES_KEY, which no caller can write: every caller's `replaces` and
+    `_checked_replaces` are dropped here (PR #161 review), so `start_workflow` from a model
+    can never remove a contract item.
 
     `mode` 'test', `pins`, `allow_live` and `rerun_of` are set only through
     workflow_test_runs (start_test_run / rerun_from_step), which validates them against the
@@ -3352,7 +3366,9 @@ def start_run(
     # Identity is never a caller's to set (IDENTITY.md §2): `_identity*` keys are dropped here.
     input_data = {k: v for k, v in (input_data or {}).items()
                   if not str(k).startswith(ADOPT_PREFIX) and not str(k).startswith("_identity")
-                  and str(k) != PRECHECK_KEY}
+                  and str(k) != PRECHECK_KEY and str(k) not in SERVER_ONLY_INPUTS}
+    if checked_replaces:
+        input_data[CHECKED_REPLACES_KEY] = [str(x) for x in checked_replaces]
     if precheck_record:
         input_data[PRECHECK_KEY] = dict(precheck_record)
     for key, value in (adopted or {}).items():

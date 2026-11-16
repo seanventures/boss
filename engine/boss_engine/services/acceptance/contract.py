@@ -189,7 +189,9 @@ def _items_and_dropped(spec: Mapping[str, Any]) -> tuple[list[dict[str, Any]], i
     raw = _raw_items(spec)
     union = _spec_of(spec).get(UNION_KEY)
     tags = {re.sub(r"\W+", " ", _norm(i.get("text")).lower()).strip():
-            {t: True for t in ("judgement", "needs_loader") if i.get(t)}
+            {**{t: True for t in ("judgement", "needs_loader") if i.get(t)},
+             **({"request": i["request"]} if i.get("request") else {}),
+             **({"id": i["id"]} if str(i.get("id") or "").startswith("AC-") else {})}
             for i in (union if isinstance(union, list) else []) if isinstance(i, Mapping)}
     seen: set[str] = set()
     items: list[dict[str, Any]] = []
@@ -1299,23 +1301,216 @@ def ensure_for_run(connection: Any, *, run_id: str, fctx: Optional[Mapping[str, 
     found = latest(connection, root_run_id=root, project_id=project_id)
     if found is None:
         builds = lineage_build_rows(connection, root)
+        request = change_request_of(fctx)
         if builds:
             spec: Mapping[str, Any] = union_spec(builds)
+            sources = gather_sources(spec, ticket=ticket, prose=prose)
         elif not is_followup(fctx):
             spec = _spec_of(own_spec)
+            sources = gather_sources(spec, ticket=ticket, prose=prose)
+        elif request:
+            # A change to an app whose earlier builds are not in this lineage (a new lineage
+            # of the same app): its own request is what it is held to.
+            sources = [request_source(request)]
         else:
             return None
-        sources = gather_sources(spec, ticket=ticket, prose=prose)
         if not build_items(sources):
             return None
         found = freeze(connection, project_id=project_id, root_run_id=root, sources=sources,
                        workflow_run_id=(fctx or {}).get("workflow_run_id"))
-    return revise_from_ticket(connection, found, ticket, prose=prose)
+    found = revise_from_ticket(connection, found, ticket, prose=prose)
+    request = change_request_of(fctx)
+    if request and found is not None:
+        found = apply_change_request(connection, found, request=request)
+    return found
+
+
+# ---------------------------------------------------------------------------------------------
+# A person's change to an existing app adds its own must-haves (BOSSAPP-1322, AR-28)
+# ---------------------------------------------------------------------------------------------
+
+#: The finalize_ctx key a follow-up carrying a PERSON'S NEW REQUEST holds (start_followup_task
+#: with is_person_request=True): {id, text, criteria, title, requested_by, replaces}. A
+#: checks-failing / findings / review-fix follow-up has none.
+REQUEST_KEY = "change_request"
+REQUEST_KIND = "request"
+#: An item id a person may name in `replaces`.
+_ITEM_ID = re.compile(r"^AC-\d{1,5}$")
+
+
+def change_request_of(fctx: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
+    req = (fctx or {}).get(REQUEST_KEY)
+    if isinstance(req, Mapping) and str(req.get("text") or "").strip():
+        return dict(req)
+    return None
+
+
+def request_items(request: Mapping[str, Any]) -> list[str]:
+    """A request's must-haves, read the way a first build's are: its brief's must-haves, its
+    PRD's tested-and-gating list and the criteria it was given (_raw_items); else the
+    requirements its structure states (bullets); else the request itself, word for word — so
+    "Add CSV export of tickets" is held to exactly that. Reading a request only ever ADDS
+    items: no words in it remove one (PR #161 review C1)."""
+    text = str(request.get("text") or "")
+    criteria = [c for c in request.get("criteria") or [] if _norm(c)]
+    words = [w for _, w in _raw_items({"instructions": text, "acceptance_criteria": criteria})]
+    if not words:
+        words = requirement_items(text)
+    if not words and _verbatim(text):
+        words = [_verbatim(text)]
+    out, seen = [], set()
+    for w in words:
+        if _key(w) and _key(w) not in seen:
+            seen.add(_key(w))
+            out.append(_verbatim(w))
+    return out
+
+
+#: A line that labels a section or a list (a heading, "Must-haves:", a bullet): never a title.
+_NOT_A_TITLE = re.compile(r"^\s*(?:#|[-*•+]\s|\d+[.)]\s|```|>)|:\s*$")
+
+
+def request_title(request: Mapping[str, Any]) -> str:
+    """What the request is called: its title, else its first line of prose (never a heading,
+    a "Must-haves:" label or a bullet), else its id."""
+    title = _norm(request.get("title") or "")
+    if not title:
+        first = next((ln for ln in str(request.get("text") or "").splitlines()
+                      if ln.strip() and not _NOT_A_TITLE.search(ln)), "")
+        title = _norm(re.split(r"(?<=[.!?])\s", _norm(first), maxsplit=1)[0]) if first else ""
+    if not title:
+        title = f"change request {request.get('id') or ''}".strip()
+    return title[:120]
+
+
+def request_source(request: Mapping[str, Any]) -> dict[str, Any]:
+    """The request as a contract source (kind `request`, ref = the request's id)."""
+    title = request_title(request)
+    return {"kind": REQUEST_KIND, "ref": str(request.get("id") or ""), "url": None,
+            "title": title,
+            "items": [{"source": REQUEST_KIND, "text": w, "request": title}
+                      for w in request_items(request)]}
+
+
+def checked_replaces(project_id: str, actor: str, replaces: Any) -> list[str]:
+    """The item ids a person's request REPLACES (a structured field set through a picker, never
+    read from the request's words), checked where the person asks: ids only (`AC-n`), and the
+    asker must be a person allowed to revise this project's contracts (`_may_revise`: the
+    steer check under the live request). Raises ValueError / ContractRevisionRefused."""
+    ids = [str(x).strip().upper() for x in (replaces or []) if str(x).strip()]
+    bad = [x for x in ids if not _ITEM_ID.match(x)]
+    if bad:
+        raise ValueError(f"replaces names contract item ids (AC-n), not {bad[:3]}")
+    if ids:
+        _may_revise(project_id, actor)
+    return list(dict.fromkeys(ids))
+
+
+def apply_change_request(connection: Any, contract: Mapping[str, Any], *,
+                         request: Mapping[str, Any], actor: str = "boss") -> dict[str, Any]:
+    """Add a person's change request to the lineage's contract as a NEW VERSION: its own
+    must-haves (request_items) join with new ids, attributed to the request. A request only
+    ADDS. Removing an earlier item is the person's structured `replaces` (checked when they
+    asked: checked_replaces) and goes through `revise` — person-only, audited, the request's id
+    and words as the reason — and its live ledger row closes as superseded. Once per request
+    (its id in a version's sources): a repair or a re-check never applies it twice."""
+    rid = str(request.get("id") or "")
+    cur = _newest(connection, contract["id"])
+    for v in versions(connection, root_run_id=cur["lineage_root_run_id"]):
+        if any(s.get("kind") == REQUEST_KIND and s.get("ref") == rid
+               for s in v.get("sources") or []):
+            return cur
+    title = request_title(request)
+    have = {_key(i["text"]) for i in cur["items"]}
+    n = _next_number(connection, cur["lineage_root_run_id"])
+    joined: list[dict[str, Any]] = []
+    for words in request_items(request):
+        if _key(words) in have:
+            continue
+        have.add(_key(words))
+        origin = _src(REQUEST_KIND, REQUEST_KIND, rid)
+        joined.append({"id": f"AC-{n}", "n": n, "text": words, **origin, "sources": [origin],
+                       "priority": "must", "check_hint": None, "request": title})
+        n += 1
+    replaces = [str(x) for x in request.get("replaces") or []]
+    if not joined and not replaces:
+        return cur          # it asks for nothing the contract does not hold: no new version
+    source = {"kind": REQUEST_KIND, "ref": rid, "title": title, "count": len(joined),
+              "requested_by": request.get("requested_by"), "replaces": replaces}
+    cur = _new_version(connection, cur, list(cur["items"]) + joined,
+                       reason=f"change request {rid} \"{title}\": {len(joined)} items added",
+                       actor=actor, sources=list(cur["sources"]) + [source],
+                       added=[i["id"] for i in joined])
+    if replaces:
+        cur = _replace_for_request(connection, cur, request=request, rid=rid, title=title,
+                                   replaces=replaces)
+    return cur
+
+
+def _replace_for_request(connection: Any, cur: Mapping[str, Any], *, request: Mapping[str, Any],
+                         rid: str, title: str, replaces: list[str]) -> dict[str, Any]:
+    """The person's `replaces`, through `revise` (person-only, audited). A refusal or an id the
+    contract does not hold removes nothing and is recorded (acceptance.contract_replace_refused)."""
+    from ..core import emit_event
+
+    who = str(request.get("requested_by") or "")
+    held = {i["id"] for i in cur["items"]}
+    gone = [x for x in replaces if x in held]
+    words = _norm(request.get("text"))[:400]
+    try:
+        if not gone:
+            raise ValueError(f"no such items in contract v{cur['version']}: {replaces}")
+        out = revise(connection, cur["id"], removed=gone, actor=who,
+                     reason=(f"replaced by change request {rid} \"{title}\" (asked by {who}): "
+                             f"{words}"))
+    except (ValueError, ContractRevisionRefused) as exc:
+        emit_event(connection, cur["project_id"], "acceptance.contract_replace_refused", "boss",
+                   "acceptance_contract", cur["id"],
+                   {"request": rid, "replaces": replaces, "by": who, "why": str(exc)[:300]})
+        return dict(cur)
+    _close_superseded_rows(connection, out, gone, rid=rid, title=title, who=who, words=words)
+    return out
+
+
+def _close_superseded_rows(connection: Any, contract: Mapping[str, Any], gone: list[str], *,
+                           rid: str, title: str, who: str, words: str) -> None:
+    """The live ledger row of each replaced item closes (wont_fix, superseded) citing the
+    request, so follow-ups stop resending a requirement the person replaced."""
+    from sqlalchemy import text as sql
+
+    from . import ledger
+
+    for iid in gone:
+        row = connection.execute(sql(
+            "SELECT id FROM findings WHERE project_id = :p AND lineage_root_run_id = :r "
+            "AND fingerprint = :f AND status IN ('open', 'in_progress')"),
+            {"p": contract["project_id"], "r": contract["lineage_root_run_id"],
+             "f": ledger.gap_fingerprint(iid)}).scalar()
+        if row:
+            ledger.transition(connection, row, "wont_fix", actor=who,
+                              reason=(f"superseded: {iid} replaced by change request {rid} "
+                                      f"\"{title}\": {words}")[:1000])
+
+
+def removed_item_keys(connection: Any, contract: Optional[Mapping[str, Any]]) -> set[str]:
+    """The words of every item an earlier version of this lineage's contract held and the
+    newest no longer does (a person replaced or removed it, or the ticket dropped it): never
+    added back from a build's spec, and never needed to clear an earlier failure."""
+    if not contract:
+        return set()
+    now = {_key(i["text"]) for i in contract.get("items") or []}
+    ever: set[str] = set()
+    for v in versions(connection, root_run_id=contract["lineage_root_run_id"]):
+        ever |= {_key(i["text"]) for i in v.get("items") or []}
+    return {k for k in ever - now if k}
 
 
 def gate_items(contract: Mapping[str, Any]) -> list[dict[str, str]]:
     """The contract's items in the gate's union shape ({source, text}): what items_spec hands
-    the in-build check, so the inner seat is held to the same list (LLD §3)."""
+    the in-build check, so the inner seat is held to the same list (LLD §3). Each carries its
+    contract id, which the report shows (`id`), and the request that added it."""
     return [{"source": str(i.get("source") or "criterion"), "text": str(i["text"]),
-             **{t: True for t in ITEM_TAGS if i.get(t)}}
+             **{t: True for t in ITEM_TAGS if i.get(t)},
+             **({"id": i["id"]} if i.get("id") else {}),
+             **({"request": i["request"]} if i.get("request") else {})}
             for i in contract.get("items") or []]

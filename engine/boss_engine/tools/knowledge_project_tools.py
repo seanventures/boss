@@ -262,7 +262,9 @@ KNOWLEDGE_PROJECT_TOOLS: dict[str, dict] = {
             "clauses": {"type": "array", "items": {"type": "object", "properties": {
                 "section": {"type": "string"}, "text": {"type": "string"},
                 "citation": {"type": "string"}, "url": {"type": "string"}},
-                "required": ["section", "text"]}, "minItems": 1}},
+                "required": ["section", "text"]}, "minItems": 1},
+            "sensitivity": {"type": "string",
+                            "description": "who may read it (public by default)"}},
             "required": ["title", "clauses"], "additionalProperties": False},
         "handler": _add_regulation_document, "kind": "write", "permission": "knowledge:manage",
         "operator_only": False,

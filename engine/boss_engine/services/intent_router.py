@@ -1129,6 +1129,12 @@ def remember_offer(proposed: list, entry: dict, registry: Any = None) -> None:
     a specific label (which project, which target) is worth more to the operator reading it than
     whichever source happened to register its offer earlier.
     """
+    # EVERY OFFER THIS TURN MAKES PASSES HERE, so a force merge is dropped here, once: it is the
+    # person's, typed in the console's merge sheet (offer_label.offerable_args).
+    if isinstance(entry, dict) and isinstance(entry.get("args"), dict):
+        from .offer_label import offerable_args
+
+        entry = {**entry, "args": offerable_args(str(entry.get("tool") or ""), entry["args"])}
     for i, existing in enumerate(proposed):
         if _same_offer(existing, entry, registry):
             if _richer_label(entry, existing):

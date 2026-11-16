@@ -94,7 +94,8 @@ def test_tools_call_strips_project_id_override():
     assert resp["result"]["isError"] is False
     assert seen["project_id"] == "session-project"
     assert "project_id" not in seen["args"]
-    assert seen["args"]["title"] == "x"
+    # `title` is not in the tool's schema: dropped, like every unlisted argument (PR #161 D1).
+    assert "title" not in seen["args"]
 
 
 def test_mcp_never_accepts_internal_operator_authority():

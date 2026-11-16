@@ -230,6 +230,12 @@ class ToolSpec:
     #: is a lint failure (test_every_write_tool_declares_an_idempotency_class), and the kernel
     #: reads silence as irreversible.
     idempotency: Optional[str] = None
+    #: ARGUMENTS WHOSE SCHEMA LIVES ELSEWHERE. True for a tool whose valid top-level arguments
+    #: also include ones only the target declares (start_workflow: the workflow version's
+    #: input_schema, brec_6025901347b6445eb9c1). `schema_args` lets the unlisted NON-underscore
+    #: keys through, and the handler keeps only what that schema declares and names the rest
+    #: in `ignored_args`. BOSS's underscore keys are still never a caller's.
+    handler_checks_extra_args: bool = False
 
     def permission_for(self, args: Optional[dict]) -> Optional[str]:
         """The permission THIS call needs (see `permission_by_arg`)."""
@@ -341,6 +347,7 @@ class ToolRegistry:
         offer_note: str = "",
         exposure: Optional[Exposure] = None,
         idempotency: Optional[str] = None,
+        handler_checks_extra_args: bool = False,
     ) -> Callable[[ToolHandler], ToolHandler]:
         """Decorator form: @registry.tool("list_x", "…", {...}, kind="read")."""
 
@@ -366,6 +373,7 @@ class ToolRegistry:
                     offer_note=offer_note,
                     exposure=exposure,
                     idempotency=idempotency,
+                    handler_checks_extra_args=handler_checks_extra_args,
                 )
             )
             return fn
@@ -432,7 +440,12 @@ class ToolRegistry:
         args: dict,
         operator_confirmed: bool = False,
         auth: Any = None,
+        internal: Optional[dict] = None,
     ) -> dict:
+        """`args` are the CALLER's (a model, an MCP client, the CLI, a pressed offer): only
+        the keys the tool's schema lists reach the handler (`schema_args`). `internal` is BOSS's
+        own context for the call (an agent turn's `_thread_id`, `_role`, `_writes_allowed`):
+        underscore keys only, merged after the filter, never from the caller."""
         spec = self.get(name)
         if (
             spec.kind == "write" and spec.requires_durable_workspace
@@ -456,7 +469,13 @@ class ToolRegistry:
         #
         # `run_on_host` has always checked this for itself; the check belongs to the CLASS, not
         # to whichever tool remembered.
-        safe_args = dict(args or {})
+        # ONLY WHAT THE SCHEMA LISTS (PR #161 review D1). A handler reading a key its schema
+        # does not show was a way for any caller to set what the tool never offered:
+        # `create_code_task(person_request=True, replaces=[...])` from an MCP client removed
+        # contract items. Every tool, one rule: unknown keys are dropped (and named in the
+        # result), and BOSS's own context arrives through `internal`, never through `args`.
+        safe_args, ignored = schema_args(spec, args)
+        safe_args.update({k: v for k, v in (internal or {}).items() if str(k).startswith("_")})
         safe_args.pop("_operator_confirmed", None)
         # ONE ACTING PROJECT FOR THE GATE AND THE HANDLER (H1). The gate used to read
         # `args.project_id` while a pinned handler dropped it and acted in the session project, so
@@ -521,6 +540,9 @@ class ToolRegistry:
         # The handler sees the identity the gate decided: an explicit `auth` is this call's
         # caller for the handler too (one that records who acted reads CURRENT_TOOL_AUTH).
         auth_token = CURRENT_TOOL_AUTH.set(auth) if auth is not None else None
+        # Nothing a caller invokes runs with a step's trusted values (a workflow build step's
+        # person_request / replaces): those reach a handler only from the runner's own call.
+        trusted_token = TRUSTED_STEP_ARGS.set({})
         try:
             result = spec.handler(ctx, project_id=project_id, actor=actor, args=safe_args)
         except ToolError:
@@ -531,12 +553,21 @@ class ToolRegistry:
                 return consent
             return {"ok": False, "tool": name, "error": f"{type(exc).__name__}: {exc}"}
         finally:
+            TRUSTED_STEP_ARGS.reset(trusted_token)
             if auth_token is not None:
                 CURRENT_TOOL_AUTH.reset(auth_token)
         if not isinstance(result, dict):
             result = {"result": result}
         result.setdefault("ok", True)
         result.setdefault("tool", name)
+        if ignored or result.get("ignored_args") == []:
+            # A handler that checks its own extra args names what IT dropped; both lists show.
+            own = result.get("ignored_args") if isinstance(result.get("ignored_args"), list) else []
+            merged = sorted(set(own) | set(ignored))
+            if merged:
+                result["ignored_args"] = merged
+            else:
+                result.pop("ignored_args", None)
         return result
 
 
@@ -665,6 +696,40 @@ def cross_project_refusal(spec: "ToolSpec", auth: Any, project_id: str,
 #: supervisor with a run token); `invoke(auth=...)` overrides it for one call. Never set from a
 #: tool argument.
 CURRENT_TOOL_AUTH: ContextVar[Any] = ContextVar("boss_tool_auth", default=None)
+
+#: Keys every tool accepts whatever its schema: the acting project (acting_project) and the
+#: named other project (PROJECT_ARG), both decided by `invoke` itself.
+TRANSPORT_ARGS = frozenset({"project_id", PROJECT_ARG})
+
+
+def schema_args(spec: "ToolSpec", args: Optional[dict]) -> tuple[dict, list[str]]:
+    """(the caller's args the tool's schema lists, the keys dropped). Underscore keys are
+    BOSS's (an agent turn's ambient context, the operator's confirmation) and never come from
+    a caller: `invoke` takes them from `internal`."""
+    schema = spec.parameters or {}
+    # A schema that declares no properties at all is OPEN (JSON Schema: any key): it filters
+    # nothing but BOSS's own underscore keys.
+    open_schema = (("properties" not in schema and schema.get("additionalProperties") is not False)
+                   or bool(getattr(spec, "handler_checks_extra_args", False)))
+    props = set((schema.get("properties") or {}).keys())
+    kept, ignored = {}, []
+    for key, value in dict(args or {}).items():
+        if key in props or key in TRANSPORT_ARGS or (open_schema
+                                                    and not str(key).startswith("_")):
+            kept[key] = value
+        elif key != "_operator_confirmed":
+            ignored.append(str(key))
+    return kept, sorted(ignored)
+
+
+#: A workflow STEP's trusted values for the tool it calls (workflow_capability_runner.
+#: _invoke_tool sets them, under the step's recorded authority): never a caller's argument.
+#: `invoke` clears them for everything it runs, so a model inside a step cannot reach them.
+TRUSTED_STEP_ARGS: ContextVar[dict] = ContextVar("boss_trusted_step_args", default={})
+
+
+def trusted_step_arg(name: str, default: Any = None) -> Any:
+    return (TRUSTED_STEP_ARGS.get() or {}).get(name, default)
 
 #: The router key tool calls use for BOSS_AUTHZ_MODE / BOSS_AUTHZ_ROUTER_MODES ("mcp=enforce").
 TOOL_ROUTER_KEY = "mcp"

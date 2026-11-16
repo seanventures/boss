@@ -340,8 +340,12 @@ class TestTheToolsThemselves:
         from boss_engine.tools import build_default_registry
 
         ctx = EngineContext(settings=_gs(), engine=engine)
+        # The ambient `_thread_id` is BOSS's own context (registry.invoke `internal`), as
+        # engine_agent sends it — never an argument the model wrote (PR #161 review D1).
         return build_default_registry().invoke(
-            name, ctx, project_id=_pid(), actor="ceo", args=args)
+            name, ctx, project_id=_pid(), actor="ceo",
+            args={k: v for k, v in args.items() if not k.startswith("_")},
+            internal={k: v for k, v in args.items() if k.startswith("_")})
 
     def test_remember_works_through_the_registry(self, engine):
         result = self._invoke(engine, "remember", {

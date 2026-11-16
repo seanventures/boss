@@ -123,7 +123,18 @@ def test_a_release_that_needs_a_reason_carries_the_note_as_force():
         card, "Release the incident fix")
     assert with_note["args"]["force"] is True
     assert with_note["args"]["content_hash"] == HASH
-    assert with_note["label"] == "Approve the release"
+    # It forces, so the button says so (PR #161 review): never the softer "Approve the release".
+    assert with_note["label"] == "Approve the release over failing checks"
+    # Whatever label the model wrote.
+    named = chat_approval_offer(
+        {"tool": "decide", "label": "Ship the incident fix",
+         "args": {"decision_id": "dec_rel", "action": "approve", "note": "those commits are the fix"}},
+        card, "Release the incident fix")
+    assert named["args"]["force"] is True
+    assert named["label"] == "Approve the release over failing checks"
+    # And a later relabel keeps it, rather than calling it a merge.
+    from boss_engine.services.offer_label import button_label
+    assert button_label(named["label"], "decide", named["args"]) == named["label"]
 
     bare = chat_approval_offer(
         {"tool": "decide", "label": "Decide: dec_rel, approve",

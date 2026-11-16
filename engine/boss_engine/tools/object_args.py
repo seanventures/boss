@@ -114,6 +114,8 @@ UNCONFINED: dict[str, dict[str, str]] = {
     "skip_workflow_step": {"step_id": "a step of the (confined) run_id"},
     "system_doctor_act": {"finding_id": "an install-wide health finding; the tool needs "
                                         "system:operate, an install-level permission"},
+    "kg_neighbors": {"node_id": "an alias of node: looked up only in the call's project's "
+                                "graph (typed_neighbors(project_id=...))"},
     "create_work_item": {"goal_id": "read only WHERE project_id = the call's project "
                                     "(work_items._check_goal): another project's goal is not found"},
 }

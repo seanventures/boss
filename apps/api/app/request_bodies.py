@@ -60,6 +60,8 @@ class CodeTaskFollowUpBody(OpenRequestBody):
     actor: str | None = None
     engine: str | None = None
     review_panel_size: int | None = None
+    #: Contract item ids (AC-n) this change replaces — a picker's, checked as the person's.
+    replaces: list[str] | None = None
 
 
 class CodeTaskSteerBody(OpenRequestBody):

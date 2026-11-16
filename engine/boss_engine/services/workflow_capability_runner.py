@@ -607,8 +607,12 @@ def _run_authority(ctx: Any, connection: Connection, project_id: str, context: O
 
 
 def _invoke_tool(
-    ctx: Any, tool_name: str, project_id: str, actor: str, args: dict[str, Any]
+    ctx: Any, tool_name: str, project_id: str, actor: str, args: dict[str, Any],
+    trusted: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    """A step's tool call. `trusted`: values only THIS server code decides for the step (a
+    build step's person_request / replaces, BOSSAPP-1322) — handed to the handler through
+    registry.TRUSTED_STEP_ARGS, never as an argument a caller or a workflow could write."""
     if tool_name in {"query_db", "write_db"}:
         raise CapabilityExecutionError(
             "raw SQL is unavailable in project-scoped workflow steps"
@@ -622,7 +626,13 @@ def _invoke_tool(
     spec, refused = _authorize_step_tool(ctx, tool_name, project_id, args)
     if refused is not None:
         return refused
-    result = spec.handler(ctx, project_id=project_id, actor=actor, args=args)
+    from ..tools.registry import TRUSTED_STEP_ARGS
+
+    trusted_token = TRUSTED_STEP_ARGS.set(dict(trusted or {}))
+    try:
+        result = spec.handler(ctx, project_id=project_id, actor=actor, args=args)
+    finally:
+        TRUSTED_STEP_ARGS.reset(trusted_token)
     if isinstance(result, dict) and result.get("ok") is False:
         raise CapabilityExecutionError(str(result.get("error") or f"{tool_name} failed."))
     return result if isinstance(result, dict) else {"result": result}
@@ -2033,7 +2043,8 @@ _BRANCH_TOOLS = frozenset({"extend_code_task"})
 def _start_on_the_branch(ctx, connection: Connection, *, project_id: str, actor: str,
                          context: dict[str, Any], step: Optional[dict[str, Any]],
                          capability_key: str, base_run: str,
-                         args: dict[str, Any]) -> dict[str, Any]:
+                         args: dict[str, Any],
+                         trusted: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Start work on the build's branch (PLRR, More tests, an `extend` build) the way every
     other step calls its tool: under the run's recorded authority (`_step_authority`), as the
     BUILDER the branch's task runs as (runs.resolved_builder of the base run — the agent the
@@ -2061,7 +2072,7 @@ def _start_on_the_branch(ctx, connection: Connection, *, project_id: str, actor:
         log.exception("could not read the builder of %s", base_run)
     builder = builder or _runs.resolved_builder()
     with _step_authority(ctx, connection, project_id, context, step, builder):
-        started = _invoke_tool(ctx, tool, project_id, actor, args)
+        started = _invoke_tool(ctx, tool, project_id, actor, args, trusted=trusted)
     if started.get("ok") is False and started.get("permission"):
         raise SettledCapabilityError(str(started.get("message") or started.get("error")
                                          or f"{tool} was refused for this run's authority."))
@@ -2204,7 +2215,7 @@ def _build_on_the_branch(connection: Connection, ctx: Any, *, project_id: str, a
                                    base_run=base, args={
         "run_id": base, "instructions": str(inputs.get("instructions") or ""),
         "title": str(inputs.get("title") or "Next increment"),
-    })
+    }, trusted={"person_request": True})
     return _settle_started_work(capability, "build", {
         "capability": "build", "tool": "extend_code_task", "base_run_id": base, **started})
 
@@ -3966,6 +3977,7 @@ def _perform_capability(
     #
     # `plrr` was dispatched HERE and could never reach it: the capability declares `tool=None`,
     # and that branch above returns for every key it handles. Moved up rather than duplicated.
+    trusted_step: dict[str, Any] = {}
     if key == "build":
         inputs = {**inputs, "workflow_run_id": str(context.get("run_id") or "")}
         # A FEATURE FOR AN APP THAT EXISTS is that app's next build, not a new app: the tool
@@ -3988,6 +4000,18 @@ def _perform_capability(
             serving = release_base_for(connection, context)
             if serving:
                 inputs = {**inputs, "release_base_sha": serving}
+            else:
+                # THE PERSON'S CHANGE (New work, Change it): its must-haves join the app's
+                # contract (BOSSAPP-1322), and the items they picked to replace (validated at
+                # the start: a person allowed to revise) go through contract.revise.
+                # Decided HERE, never an input a workflow or a caller could write
+                # (TRUSTED_STEP_ARGS); `replaces` is what the start endpoint recorded after
+                # checked_replaces, and the tool re-checks it against the run's input.
+                trusted_step = {"person_request": True,
+                                **({"replaces": list((context.get("input") or {})[
+                                    workflows.CHECKED_REPLACES_KEY])}
+                                   if (context.get("input") or {}).get(
+                                       workflows.CHECKED_REPLACES_KEY) else {})}
 
     # WHAT THE PANEL IS BEING CONVENED FOR.
     #
@@ -4157,7 +4181,8 @@ def _perform_capability(
 
         run_token = WORKFLOW_RUN_ID.set(str(context.get("run_id") or ""))
         try:
-            output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs)
+            output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs,
+                                  trusted=trusted_step)
         finally:
             WORKFLOW_RUN_ID.reset(run_token)
     # The step's own facts are written AFTER the tool's output: a tool (or anything it relays)

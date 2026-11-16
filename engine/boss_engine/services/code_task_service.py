@@ -1171,12 +1171,24 @@ def title_for_change(parent: Optional[dict], change: Any) -> str:
     return f"{app}: {first or 'a change'}"
 
 
+def change_request(instructions: str, *, title: Optional[str] = None,
+                   criteria: Optional[list] = None, actor: str = "operator",
+                   replaces: Optional[list] = None) -> dict:
+    """A person's change request as a follow-up carries it (finalize_ctx.change_request):
+    acceptance.contract.apply_change_request adds its must-haves to the lineage's contract."""
+    return {"id": make_id("chg"), "text": str(instructions), "title": title or "",
+            "criteria": [str(c) for c in (criteria or []) if str(c).strip()],
+            "requested_by": actor,
+            "replaces": [str(x) for x in (replaces or []) if str(x).strip()]}
+
+
 def start_followup_task(
     connection, *, parent_run_id: str, instructions: str, jobs,
     title: Optional[str] = None, acceptance_criteria: Optional[list] = None,
     test_commands: Optional[list] = None, profile: Optional[str] = None,
     actor: str = "operator", engine: Optional[str] = None,
     review_panel_size: Optional[int] = None,
+    is_person_request: bool = False, replaces: Optional[list] = None,
     reference_links: Optional[list[str]] = None,
     workflow_run_id: Optional[str] = None,
     finalize_extra: Optional[dict] = None,
@@ -1309,6 +1321,18 @@ def start_followup_task(
         model_config = pin_engine_model_config(engine_name, model_config)
         if isinstance(child_fctx.get("qa_benchmark"), dict):
             child_fctx["qa_benchmark"]["engine"] = engine_name
+    # A PERSON'S NEW REQUEST ADDS ITS OWN MUST-HAVES (BOSSAPP-1322): "Add CSV export" is held to
+    # the export, not only to the lineage's frozen contract (acceptance.contract.
+    # apply_change_request, at the build's acceptance check). Only callers that carry a
+    # person's request say so (`is_person_request`: New work, Change it, extend, a feature
+    # PRD); a review fix, a multi-repo send-back or a findings follow-up never does. A request
+    # only ADDS; `replaces` (item ids a person picked) goes through contract.revise.
+    if replaces and not is_person_request:
+        raise ValueError("only a person's request may replace contract items")
+    if is_person_request and str(instructions or "").strip():
+        child_fctx["change_request"] = change_request(
+            instructions, title=title, criteria=acceptance_criteria, actor=actor,
+            replaces=replaces)
 
     run_id = start_code_task(
         connection,
@@ -2028,6 +2052,7 @@ def retry_code_task(
     allow_test_retirement: bool = False, job_priority: Optional[int] = None,
     attempt_ceiling: Optional[int] = None, workflow_version_id: str = "",
     title: Optional[str] = None, automatic: bool = False, by_person: bool = False,
+    change_request: Optional[dict] = None,
     recheck: bool = False,
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
@@ -2318,6 +2343,13 @@ def retry_code_task(
                           # another, and boss-platform grew chains titled "Follow-up: checks
                           # failing — Follow-up: checks failing — Follow-up: …" (2026-10-28..11-03).
                           **({"is_followup": True} if fctx_prev.get("is_followup") else {}),
+                          # THE PERSON'S REQUEST TOO (BOSSAPP-1322): a retry is held to the
+                          # same added must-haves (the same id: never added twice).
+                          # An extend that carries a person's NEW request (an
+                          # increment) holds that one instead.
+                          **({"change_request": change_request} if change_request
+                             else {"change_request": fctx_prev["change_request"]}
+                             if isinstance(fctx_prev.get("change_request"), dict) else {}),
                           # ITS INSTRUCTIONS ARE STILL FINDINGS, NOT A BRIEF (BOSSAPP-1307):
                           # verification_target.app_scope never reads a folder out of them.
                           **({"instructions_are_findings": True}
