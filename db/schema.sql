@@ -12735,8 +12735,9 @@ CREATE INDEX IF NOT EXISTS idx_change_consents_subject
 CREATE INDEX IF NOT EXISTS idx_change_consents_decision ON change_consents (decision_id);
 
 -- 841 SOURCES. Where a skill came from outside the project: a GitHub path, a skills.sh entry
--- (resolved to its GitHub repository) or a plain URL. `pinned_sha` is the commit (GitHub) or the
--- sha256 of the body (URL) the skill holds. The sync worker never overwrites: an upstream change
+-- (resolved to its GitHub repository), a plain URL, or a global Codex / Claude skill folder
+-- (BOSSAPP-840). `pinned_sha` is the commit (GitHub) or the sha256 of the body (URL) or of the
+-- folder (Codex, Claude) the skill holds. The sync worker never overwrites: an upstream change
 -- becomes a new skill version, applied by itself only when `auto_update` and the skill is
 -- trusted, otherwise parked as a change_consent awaiting a person.
 CREATE TABLE IF NOT EXISTS skill_sources (
@@ -12744,7 +12745,7 @@ CREATE TABLE IF NOT EXISTS skill_sources (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   org_id TEXT,
   scope TEXT NOT NULL DEFAULT 'project' CHECK (scope IN ('project', 'org')),
-  kind TEXT NOT NULL CHECK (kind IN ('github', 'url', 'skillsh')),
+  kind TEXT NOT NULL CHECK (kind IN ('github', 'url', 'skillsh', 'codex', 'claude')),
   locator TEXT NOT NULL,
   ref TEXT NOT NULL DEFAULT '',
   skill_key TEXT NOT NULL,
@@ -12759,6 +12760,20 @@ CREATE TABLE IF NOT EXISTS skill_sources (
   UNIQUE (project_id, skill_key)
 );
 CREATE INDEX IF NOT EXISTS idx_skill_sources_due ON skill_sources (last_sync_at NULLS FIRST);
+-- 840. A database created before Codex and Claude folders were a source kind still has the
+-- narrower check. Widen it once; a restart that already has both kinds takes no lock.
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'skill_sources_kind_check'
+      AND pg_get_constraintdef(oid) NOT LIKE '%codex%'
+  ) THEN
+    ALTER TABLE skill_sources DROP CONSTRAINT skill_sources_kind_check;
+    ALTER TABLE skill_sources
+      ADD CONSTRAINT skill_sources_kind_check
+      CHECK (kind IN ('github', 'url', 'skillsh', 'codex', 'claude'));
+  END IF;
+END $$;
 
 -- 844 SAVED TEST CASES and VERSION-PINNED RUNS. A run is one case executed against one version
 -- (through eval_harness.run_skill_cases, the same execution and eval_runs record as the suite);

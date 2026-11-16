@@ -1,12 +1,16 @@
-"""Skills from outside the project — GitHub, skills.sh, a URL — pinned and synced (BOSSAPP-841).
+"""Skills from outside the project — GitHub, skills.sh, a URL, a global skill folder — pinned
+and synced (BOSSAPP-841, folder import BOSSAPP-840).
 
 A team's best playbooks live in repositories (a SKILL.md beside its scripts) and in directories
-like skills.sh, which lists skills that are themselves GitHub repositories. Copy-pasting one in
-loses where it came from and every fix made upstream afterwards. A SOURCE keeps the link:
+like skills.sh, which lists skills that are themselves GitHub repositories. They also live in
+the operator's global Codex and Claude skill folders. Copy-pasting one in loses where it came
+from and every fix made upstream afterwards. A SOURCE keeps the link:
 
 * ``kind`` — ``github`` (``owner/repo[/path]``, a ref), ``skillsh`` (``owner/repo/skill``,
-  fetched from its GitHub repository) or ``url`` (a plain https URL to one SKILL.md).
-* ``pinned_sha`` — what the skill holds: the commit for GitHub, sha256 of the body for a URL.
+  fetched from its GitHub repository), ``url`` (a plain https URL to one SKILL.md), ``codex``
+  or ``claude`` (a skill folder under that tool's global skills directory).
+* ``pinned_sha`` — what the skill holds: the commit for GitHub, sha256 of the body for a URL,
+  sha256 of the folder (SKILL.md plus the files beside it) for a Codex or Claude folder.
 * ``auto_update`` — whether an upstream change may apply by itself.
 
 FETCHING GOES THROUGH BOSS'S OWN CLONE PATH. A GitHub fetch is ``identity.runs.repo_access``
@@ -26,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import shutil
 import tempfile
@@ -43,7 +48,12 @@ from .core import emit_event, make_id
 
 _log = logging.getLogger("boss.skill_sources")
 
-KINDS = ("github", "url", "skillsh")
+KINDS = ("github", "url", "skillsh", "codex", "claude")
+#: A skill folder those tools already scan for the operator, not a checkout and not the network.
+FOLDER_KINDS = ("codex", "claude")
+#: Pinned by a content hash. A later fetch of the same bytes is the same pin; there is no commit
+#: to re-resolve the way a GitHub pin is re-resolved.
+_CONTENT_PINNED = frozenset({"url", *FOLDER_KINDS})
 SYNC_ACTOR = "skill_sync"
 MAX_BODY_BYTES = 200_000
 MAX_SUPPORT_FILES = 20
@@ -63,6 +73,8 @@ class Fetched:
     text: str
     filename: str = "SKILL.md"
     files: dict[str, str] = field(default_factory=dict)
+    #: The folder's own name, used when a Claude SKILL.md leaves `name` out.
+    folder_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -72,6 +84,7 @@ class Locator:
     repo: str = ""
     paths: tuple[str, ...] = ()
     url: str = ""
+    path: str = ""
 
 
 def parse_locator(kind: str, locator: str) -> Locator:
@@ -82,6 +95,10 @@ def parse_locator(kind: str, locator: str) -> Locator:
         raise SkillSourceError(f"kind must be one of {', '.join(KINDS)}.")
     if not raw:
         raise SkillSourceError("say where the skill is.")
+    if k in FOLDER_KINDS:
+        if "\x00" in raw or any(part == ".." for part in Path(raw).parts):
+            raise SkillSourceError("that path leaves the global skills directory.")
+        return Locator(kind=k, path=raw)
     if k == "url":
         if not raw.startswith("https://"):
             raise SkillSourceError("a skill URL must start with https://.")
@@ -188,6 +205,136 @@ def fetch_url(loc: Locator, timeout: int = 20) -> Fetched:
     return Fetched(sha=sha, text=body.decode("utf-8", errors="replace"), filename=name)
 
 
+def _add_root(found: list[Path], path: Path) -> None:
+    try:
+        resolved = path.expanduser().resolve()
+    except OSError:
+        return
+    if resolved not in found:
+        found.append(resolved)
+
+
+def folder_roots(kind: str) -> list[Path]:
+    """Directories the tool already scans for the operator's own skills.
+
+    Codex: ``$CODEX_HOME/skills`` when set, otherwise ``~/.codex/skills``, plus the newer
+    ``~/.agents/skills`` and the admin directory ``/etc/codex/skills``. Claude: ``~/.claude/skills``,
+    or ``$CLAUDE_CONFIG_DIR/skills`` when that home is moved.
+    """
+    found: list[Path] = []
+    if kind == "codex":
+        codex_home = os.environ.get("CODEX_HOME", "").strip()
+        if codex_home:
+            _add_root(found, Path(codex_home) / "skills")
+        _add_root(found, Path.home() / ".codex" / "skills")
+        _add_root(found, Path.home() / ".agents" / "skills")
+        _add_root(found, Path("/etc/codex/skills"))
+    else:
+        config = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+        if config:
+            _add_root(found, Path(config) / "skills")
+        _add_root(found, Path.home() / ".claude" / "skills")
+    return found
+
+
+def _under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _skill_dir(candidate: Path, roots: list[Path]) -> Optional[Path]:
+    """The skill folder `candidate` names, only when it stays inside a global root."""
+    try:
+        if not candidate.exists():
+            return None
+        resolved = candidate.resolve()
+    except OSError:
+        return None
+    if resolved.name == "SKILL.md":
+        resolved = resolved.parent
+    if not any(_under(resolved, root) and resolved != root for root in roots):
+        return None
+    skill_md = resolved / "SKILL.md"
+    try:
+        if not skill_md.is_file() or not _under(skill_md.resolve(), resolved):
+            return None
+    except OSError:
+        return None
+    return resolved
+
+
+def _folder_files(folder: Path) -> dict[str, str]:
+    """Text files beside SKILL.md. A symlink that leaves the folder is left out, not read."""
+    files: dict[str, str] = {}
+    root = folder.resolve()
+    for dirpath, dirnames, filenames in os.walk(folder, followlinks=False):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d != "__pycache__")
+        here = Path(dirpath)
+        for name in sorted(filenames):
+            if name.startswith(".") or (here == folder and name == "SKILL.md"):
+                continue
+            path = here / name
+            if path.is_symlink():
+                try:
+                    if not _under(path.resolve(), root):
+                        continue
+                except OSError:
+                    continue
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            if b"\x00" in data or len(data) > MAX_SUPPORT_FILE_BYTES:
+                continue
+            try:
+                files[path.relative_to(folder).as_posix()] = data.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            if len(files) >= MAX_SUPPORT_FILES:
+                return files
+    return files
+
+
+def _folder_sha(body: str, files: dict[str, str]) -> str:
+    hasher = hashlib.sha256()
+    hasher.update(body.encode("utf-8"))
+    hasher.update(b"\0")
+    for name in sorted(files):
+        hasher.update(name.encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(files[name].encode("utf-8"))
+        hasher.update(b"\0")
+    return hasher.hexdigest()
+
+
+def fetch_folder(loc: Locator) -> Fetched:
+    """One global skill folder: its SKILL.md and the text files beside it. No network."""
+    roots = folder_roots(loc.kind)
+    raw = os.path.expanduser(loc.path.strip())
+    path = Path(raw)
+    candidates = [path] if path.is_absolute() else [root / path for root in roots]
+    folder: Optional[Path] = None
+    for candidate in candidates:
+        folder = _skill_dir(candidate, roots)
+        if folder is not None:
+            break
+    if folder is None:
+        raise SkillSourceError(
+            f"no {loc.kind} skill folder {loc.path!r} under the global skills directory.")
+    data = (folder / "SKILL.md").read_bytes()
+    if b"\x00" in data:
+        raise SkillSourceError("SKILL.md is not a text file.")
+    if len(data) > MAX_BODY_BYTES:
+        raise SkillSourceError(f"SKILL.md is over {MAX_BODY_BYTES:,} bytes.")
+    body = data.decode("utf-8")
+    files = _folder_files(folder)
+    return Fetched(sha=_folder_sha(body, files), text=body, filename="SKILL.md", files=files,
+                   folder_name=folder.name)
+
+
 Fetcher = Callable[[Locator, str], Fetched]
 
 
@@ -195,6 +342,8 @@ def default_fetcher(engine: Any, settings: Any, project_id: str) -> Fetcher:
     def fetch(loc: Locator, ref: str) -> Fetched:
         if loc.kind == "url":
             return fetch_url(loc)
+        if loc.kind in FOLDER_KINDS:
+            return fetch_folder(loc)
         return fetch_github(engine, settings, project_id, loc, ref)
 
     return fetch
@@ -206,10 +355,14 @@ def default_fetcher(engine: Any, settings: Any, project_id: str) -> Fetcher:
 def _as_skill(fetched: Fetched, skill_key: Optional[str]) -> dict[str, Any]:
     """The guide skill a SKILL.md becomes (agent_instructions.parse_skill_md: the same parser and
     lint as an uploaded file)."""
-    from .agent_instructions import InstructionError, parse_skill_md
+    from .agent_instructions import InstructionError, parse_frontmatter, parse_skill_md
 
+    head, _rest = parse_frontmatter(fetched.text)
+    # Claude uses the folder name when the frontmatter leaves `name` out. A name that is
+    # present still wins (parse_skill_md: an explicit label overrides the file).
+    label = fetched.folder_name if fetched.folder_name and not head.get("name") else None
     try:
-        parsed = parse_skill_md(fetched.filename, fetched.text)
+        parsed = parse_skill_md(fetched.filename, fetched.text, label=label)
     except InstructionError as error:
         raise SkillSourceError(f"{error.field}: {error.tip or error.message}") from error
     if skill_key:
@@ -228,7 +381,7 @@ def _fetch_for_import(fetcher: Fetcher, *, kind: str, locator: str, ref: str, pi
                       skill_key: Optional[str]) -> tuple[dict[str, Any], Fetched]:
     loc = parse_locator(kind, locator)
     pinned = str(pin or "").strip()
-    if pinned and loc.kind != "url" and not _SHA.match(pinned):
+    if pinned and loc.kind not in _CONTENT_PINNED and not _SHA.match(pinned):
         raise SkillSourceError("a pin is a commit sha (7-64 hex characters).")
     fetched = fetcher(loc, pinned if loc.kind != "url" and pinned else ref)
     if pinned and not fetched.sha.startswith(pinned) and not pinned.startswith(fetched.sha):
@@ -349,7 +502,7 @@ def sync_one(engine: Any, settings: Any, source_id: str, *,
     try:
         upstream = fetch(loc, source["ref"])
         pinned = source["pinned_sha"]
-        if loc.kind != "url" and pinned and upstream.sha != pinned:
+        if loc.kind not in _CONTENT_PINNED and pinned and upstream.sha != pinned:
             # VERIFY THE PIN before reasoning about a change: what the skill holds must still
             # resolve to a commit that is the pin.
             at_pin = fetch(loc, pinned)

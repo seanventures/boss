@@ -1,10 +1,12 @@
 "use client";
 
 /**
- * Import › From a source (BOSSAPP-841): a SKILL.md from GitHub, skills.sh or a URL, pinned to the
- * commit you previewed. Preview fetches and parses without writing; Import creates the skill as
- * version 1 and keeps the source, so a later upstream change arrives as a new version (applied by
- * itself only with Auto-update on and the skill reviewed; otherwise it waits for your approval).
+ * Import › From a source (BOSSAPP-841, folders BOSSAPP-840): a SKILL.md from GitHub, skills.sh
+ * or a URL, pinned to the commit you previewed, or a Codex / Claude skill folder under that
+ * tool's global skills directory, pinned to the folder's content hash. Preview fetches and
+ * parses without writing; Import creates the skill as version 1 and keeps the source, so a
+ * later upstream change arrives as a new version (applied by itself only with Auto-update on
+ * and the skill reviewed; otherwise it waits for your approval).
  */
 import React, { useState } from "react";
 
@@ -14,9 +16,11 @@ import { showToast } from "../client-forms";
 import { shortError } from "./kit-copy";
 
 const KINDS = [
-  { id: "github", label: "GitHub", placeholder: "owner/repo/path/to/skill" },
-  { id: "skillsh", label: "skills.sh", placeholder: "owner/repo/skill" },
-  { id: "url", label: "URL", placeholder: "https://example.com/SKILL.md" },
+  { id: "github", label: "GitHub", placeholder: "owner/repo/path/to/skill", ref: true },
+  { id: "skillsh", label: "skills.sh", placeholder: "owner/repo/skill", ref: true },
+  { id: "url", label: "URL", placeholder: "https://example.com/SKILL.md", ref: false },
+  { id: "codex", label: "Codex", placeholder: "house-tone  or  ~/.codex/skills/house-tone", ref: false },
+  { id: "claude", label: "Claude", placeholder: "house-voice  or  ~/.claude/skills/house-voice", ref: false },
 ];
 
 type Preview = { sha: string; files: string[]; skill: { skill_key: string; label: string; summary: string; knowledge: string } };
@@ -55,7 +59,7 @@ export function SourceImport({ projectId, actor, onImported }: {
       <span className="kit-seg kit-seg-sm" role="radiogroup" aria-label="Source">
         {KINDS.map((k) => (
           <button key={k.id} type="button" role="radio" aria-checked={kind === k.id} data-testid={`kit-source-kind-${k.id}`}
-                  onClick={() => { setKind(k.id); setPreview(null); }}>{k.label}</button>
+                  onClick={() => { setKind(k.id); setPreview(null); if (!k.ref) { setRef(""); setPin(""); } }}>{k.label}</button>
         ))}
       </span>
       <label className="kit-field">
@@ -63,7 +67,7 @@ export function SourceImport({ projectId, actor, onImported }: {
         <input type="text" value={locator} spellCheck={false} placeholder={shown.placeholder} data-testid="kit-source-locator"
                onChange={(e) => { setLocator(e.target.value); setPreview(null); }} />
       </label>
-      {kind !== "url" ? (
+      {shown.ref ? (
         <div className="kit-row">
           <label className="kit-field">
             <span className="kit-field-label" data-tip="Branch or tag to follow">Ref</span>

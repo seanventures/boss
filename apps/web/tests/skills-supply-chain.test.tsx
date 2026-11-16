@@ -106,4 +106,21 @@ describe("Import › From a source", () => {
     const made = calls.find((c) => c.body?.action === "import_source");
     expect(made?.body).toMatchObject({ kind: "github", pin: "a".repeat(40), skill_key: "release_notes" });
   });
+
+  it("imports a Codex or Claude folder pinned to the preview, with no git ref", async () => {
+    const calls = installKitApi(undefined, supply);
+    await render(<ImportSheet projectId="p1" actor="ceo" onClose={() => {}} onImported={() => {}} />);
+    await click('[data-testid="kit-import-mode-source"]');
+    expect($('[data-testid="kit-source-kind-codex"]')).toBeTruthy();
+    expect($('[data-testid="kit-source-kind-claude"]')).toBeTruthy();
+    await click('[data-testid="kit-source-kind-codex"]');
+    expect($('[data-testid="kit-source-ref"]')).toBeNull();
+    await type('[data-testid="kit-source-locator"]', "house-tone");
+    await click('[data-testid="kit-source-preview-btn"]');
+    await click('[data-testid="kit-source-import-btn"]');
+    const made = calls.find((c) => c.body?.action === "import_source");
+    expect(made?.body).toMatchObject({ kind: "codex", locator: "house-tone", pin: "a".repeat(40) });
+    await click('[data-testid="kit-source-kind-claude"]');
+    expect($('[data-testid="kit-source-ref"]')).toBeNull();
+  });
 });

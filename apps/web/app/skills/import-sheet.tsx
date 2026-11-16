@@ -68,7 +68,7 @@ export function ImportSheet({ projectId, actor, onClose, onImported }: {
           <button type="button" role="tab" className="kit-tab" aria-selected={mode === "paste"}
                   data-testid="kit-import-mode-paste" onClick={() => setMode("paste")}>Paste</button>
           <button type="button" role="tab" className="kit-tab" aria-selected={mode === "source"}
-                  data-tip="GitHub, skills.sh or a URL, pinned and kept in sync"
+                  data-tip="GitHub, skills.sh, a URL, or a Codex or Claude skill folder, pinned and kept in sync"
                   data-testid="kit-import-mode-source" onClick={() => setMode("source")}>From a source</button>
         </div>
         {mode === "source" ? (
