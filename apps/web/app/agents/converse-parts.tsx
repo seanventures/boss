@@ -102,10 +102,27 @@ export { AiBadge } from "./agent-face";
 
 // ── Failures and refusals ──────────────────────────────────────────────────────────────────
 
+/** Trimmed next step. Nothing when it is blank or already the headline. */
+export function failureActionSentence(headline: string, action: string): string | null {
+  const text = action.trim();
+  if (!text || text === headline.trim()) return null;
+  return text;
+}
+
+/** More than six words is a paragraph. Shorter stays a span. */
+function FailureAction({ sentence }: { sentence: string }) {
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  return long
+    ? <p data-testid="ag-fail-action" data-user-text>{sentence}</p>
+    : <span data-testid="ag-fail-action" data-user-text>{sentence}</span>;
+}
+
 export function FailureNote({ failure, onRetry }: { failure: ModelFailure; onRetry?: () => void }) {
+  const sentence = failureActionSentence(failure.headline, failure.action);
   return (
     <div className="ag-fail" role="alert" data-testid="ag-fail">
       <span className="ag-fail-head" title={failure.action}>{failure.headline}</span>
+      {sentence ? <FailureAction sentence={sentence} /> : null}
       <span className="ag-fail-acts">
         {failure.href ? <a href={failure.href} className="ag-link" title={failure.action}>Fix it ↗</a> : null}
         {failure.retry && onRetry ? <button type="button" className="ag-btn" onClick={onRetry}>Retry</button> : null}

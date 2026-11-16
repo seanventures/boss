@@ -29,8 +29,24 @@ async function copy(text: string, what: string) {
  * and at rotation), turn it off and on, and read its recent deliveries with each refusal's reason.
  *
  * The secret is held in this component's state only until Done; nothing re-reads it, because the
- * API never returns it again. Explanations live in tooltips (`title`), not paragraphs.
+ * API never returns it again. A paused trigger keeps its pause line; the last error is also readable
+ * beside it.
  */
+
+/** The paused trigger's last error, trimmed. Blank is nothing to say. */
+export function webhookPauseSentence(error: string | null | undefined): string | null {
+  const text = error?.trim() ?? "";
+  return text ? text : null;
+}
+
+/** More than six words is a paragraph. Shorter stays a span. */
+export function WebhookPauseWhy({ sentence }: { sentence: string | null }) {
+  if (!sentence) return null;
+  return sentence.split(/\s+/).filter(Boolean).length > 6
+    ? <p data-testid="wf-webhook-pause-why" data-user-text>{sentence}</p>
+    : <span data-testid="wf-webhook-pause-why" data-user-text>{sentence}</span>;
+}
+
 export function WebhookTriggers({ projectId, workflowKey, actor }: {
   projectId: string; workflowKey: string; actor?: string;
 }) {
@@ -89,8 +105,11 @@ export function WebhookTriggers({ projectId, workflowKey, actor }: {
             <span className={hook.enabled ? "wf-hook-on" : "wf-faint"}>{hook.enabled ? "On" : "Off"}</span>
           </div>
           {!hook.enabled && hook.last_error ? (
-            <span className="wf-field-error" role="status" title={hook.last_error}
-                  data-testid="wf-webhook-paused">Paused: renew authority</span>
+            <>
+              <span className="wf-field-error" role="status" title={hook.last_error}
+                    data-testid="wf-webhook-paused">Paused: renew authority</span>
+              <WebhookPauseWhy sentence={webhookPauseSentence(hook.last_error)} />
+            </>
           ) : null}
           <div className="wf-row wf-hook-actions">
             <button type="button" className="wf-btn wf-btn-sm" title="Path on your BOSS API's public address"
