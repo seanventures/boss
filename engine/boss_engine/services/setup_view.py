@@ -1399,6 +1399,8 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         "try": trying,
         # Build toolchains in this image (Python and Node always; Java when turned on).
         "toolchains": _toolchains(),
+        # Installed coding adapters (harness_plugins): skills and MCP config, delivered or not.
+        "harness_adapters": harness_adapters(),
         "build_database": build_database(connection, settings, project_id),
         "build_speed": build_speed(connection, settings, project_id),
         # The embedding model, its own slot (knowledge/embedding_slot.py): only that a key is
@@ -1450,6 +1452,17 @@ def _toolchains() -> list[dict[str, Any]]:
     from . import toolchains
 
     return toolchains.setup_summary()
+
+
+def harness_adapters() -> list[dict[str, Any]]:
+    """Installed coding adapters and whether skills and MCP config are delivered to each.
+    Empty when none are installed. Reads manifests only; runs nothing."""
+    from .harness_plugins import installed_adapters
+
+    try:
+        return installed_adapters()
+    except Exception:  # noqa: BLE001 — the rest of Repo and models still renders
+        return []
 
 
 def build_database(connection: Connection, settings: Any, project_id: str) -> dict[str, Any]:

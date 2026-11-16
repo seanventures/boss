@@ -153,6 +153,9 @@ spec:
   again when its files change. `official.` is reserved; a built-in harness name cannot be taken.
 * Built with BOSS's own drivers; registered `verified=False`, `source: plugin:<id>`.
 * `testEnvironment` runs only on demand (`harness_plugins.probe`), never on a task's hot path.
+* Setup lists each installed adapter (`GET /v1/setup` `harness_adapters`,
+  `harness_plugins.installed_adapters`): whether MCP config and skills are delivered, from the
+  driver's own route, not from the manifest's capability names. An unapproved plugin is absent.
 
 ## The agent's kit on every harness (854)
 

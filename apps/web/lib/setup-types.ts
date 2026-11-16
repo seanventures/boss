@@ -208,6 +208,25 @@ export type HeldProof = {
   release: { cost_usd_micros: number; basis: "refused" | "priced" | "unpriced"; succeeded: boolean };
 };
 
+/** Whether an installed adapter is handed MCP config and skills (the driver's route). */
+export type InstalledAdapterKit = {
+  mcp_delivery: string;
+  skills_dir: string;
+  mcp_config: "delivered" | "not_delivered";
+  skills: "delivered" | "not_delivered";
+};
+
+/** One installed coding adapter (Setup › Advanced). Absent from the list until it is approved. */
+export type InstalledAdapter = {
+  id: string;
+  name: string;
+  label: string;
+  version: string;
+  kind: string;
+  source: string;
+  kit: InstalledAdapterKit;
+};
+
 export type ClaudeCredential = {
   order: "subscription_first" | "api_key_first";
   active: "subscription" | "cli_login" | "stored_key" | "env_key" | "none";
@@ -235,6 +254,8 @@ export type SetupView = {
   try: { workflow_key: string; last_run: TryRun | null; done?: boolean };
   /** Build toolchains in this install's image. Absent on an older API. */
   toolchains?: Toolchain[];
+  /** Installed coding adapters, and whether skills and MCP config are delivered. Empty or absent: none. */
+  harness_adapters?: InstalledAdapter[];
   /** "Give builds a database (Postgres)" — the project setting build_services. Absent on an older API. */
   build_database?: { key: string; mode?: "auto" | "always" | "never"; enabled: boolean; source: "project" | "default"; configured: boolean;
                      permission: string } | null;

@@ -566,6 +566,55 @@ def _plugin():
     return found
 
 
+def test_an_unapproved_adapter_is_not_shown(plugin_dir):
+    from boss_engine.services import harness_plugins
+
+    assert harness_plugins.installed_adapters() == []
+
+
+def test_an_installed_adapter_shows_skills_and_mcp_were_delivered(plugin_dir, monkeypatch):
+    """A person reads one installed adapter, and that skills and MCP config are delivered to it."""
+    import inspect
+
+    from boss_engine.services import harness_plugins, setup_view
+    from boss_engine.services.harness_registry import get_harness
+
+    monkeypatch.setenv("BOSS_HARNESS_PLUGINS_APPROVED", f"acme.inhouse@{_plugin().checksum}")
+    harness_plugins.load_harness_plugins()
+    (row,) = harness_plugins.installed_adapters()
+    assert row["id"] == "acme.inhouse" and row["kind"] == "process"
+    assert row["kit"]["mcp_config"] == "delivered" and row["kit"]["skills"] == "delivered"
+    agent = get_harness("acme_inhouse").build(get_settings())
+    assert agent.spec.mcp_delivery == row["kit"]["mcp_delivery"]
+    assert agent.spec.skills_dir == row["kit"]["skills_dir"]
+    assert setup_view.harness_adapters() == [row]
+    assert "harness_adapters()" in inspect.getsource(setup_view._build)
+
+
+def test_kit_words_match_the_driver_for_http_and_acp():
+    from boss_engine.services import harness_plugins
+
+    def manifest(kind, section):
+        return harness_plugins.validate_manifest({
+            "apiVersion": "boss.harness/v1", "kind": "Harness",
+            "metadata": {"id": "acme.svc", "name": "acme_svc", "version": "1.0.0",
+                         "description": "svc"},
+            "spec": {"kind": kind, kind: section}})
+
+    http = manifest("http", {"baseUrl": "http://svc.local"})
+    http_kit = harness_plugins.kit_for(http)
+    http_agent = harness_plugins.builder_for(http)(get_settings())
+    assert http_kit["mcp_config"] == "delivered" and http_kit["skills"] == "delivered"
+    assert http_agent.spec.mcp_delivery == http_kit["mcp_delivery"]
+    assert http_agent.spec.skills_dir == http_kit["skills_dir"]
+    acp = manifest("acp", {"binary": "acme-agent"})
+    acp_kit = harness_plugins.kit_for(acp)
+    acp_agent = harness_plugins.builder_for(acp)(get_settings())
+    assert acp_kit["mcp_config"] == "delivered" and acp_kit["skills"] == "not_delivered"
+    assert acp_agent.spec.mcp_delivery == acp_kit["mcp_delivery"]
+    assert acp_agent.spec.skills_dir == acp_kit["skills_dir"]
+
+
 def test_an_unapproved_community_harness_is_refused(plugin_dir):
     from boss_engine.services import harness_plugins
     from boss_engine.services.harness_registry import _REGISTRY

@@ -384,6 +384,44 @@ def _version_window(manifest: HarnessManifest) -> Optional[Any]:
                          install_hint=a.installHint)
 
 
+def kit_for(manifest: HarnessManifest) -> dict[str, str]:
+    """How this adapter's own driver hands it MCP config and skills.
+
+    The words are the driver's, not the manifest's `capabilities` list: a process or http
+    adapter is given `$BOSS_MCP_CONFIG` and `$BOSS_SKILLS_DIR`; an ACP adapter is given
+    `session/new.mcpServers` and no skills directory (builder_for)."""
+    kind = manifest.spec.kind
+    if kind == "acp":
+        mode, skills = "acp", ""
+    else:
+        from .custom_harness import HttpHarnessConfig, ProcessHarnessConfig
+
+        config = ProcessHarnessConfig if kind == "process" else HttpHarnessConfig
+        mode = str(config.__dataclass_fields__["mcp_delivery"].default or "none")
+        skills = str(config.__dataclass_fields__["skills_dir"].default or "")
+    return {"mcp_delivery": mode, "skills_dir": skills,
+            "mcp_config": "delivered" if mode != "none" else "not_delivered",
+            "skills": "delivered" if skills else "not_delivered"}
+
+
+def installed_adapters() -> list[dict[str, Any]]:
+    """Usable installable adapters, for a person to read. An unapproved plugin is not installed."""
+    try:
+        found = discover()
+    except Exception:  # noqa: BLE001 — a broken plugin tree must not take Setup down
+        _log.warning("harness adapters: discovery failed", exc_info=True)
+        return []
+    rows: list[dict[str, Any]] = []
+    for plugin in found:
+        if not plugin.usable or plugin.manifest is None:
+            continue
+        meta = plugin.manifest.metadata
+        rows.append({"id": meta.id, "name": meta.name, "label": meta.description,
+                     "version": meta.version, "kind": plugin.manifest.spec.kind,
+                     "source": plugin.source, "kit": kit_for(plugin.manifest)})
+    return rows
+
+
 def load_harness_plugins() -> list[HarnessPlugin]:
     """Discover and register every usable harness plugin; return them all (problems included).
     A broken plugin is reported, never raised: it must not take the built-ins down with it."""

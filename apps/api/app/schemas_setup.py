@@ -180,6 +180,8 @@ class SetupView(_Open):
     # `try` is a Python keyword.
     try_: TrySection = Field(alias="try")
     build_database: Optional[dict[str, Any]] = None
+    #: Installed coding adapters and whether skills and MCP config are delivered (BOSSAPP-852).
+    harness_adapters: list[dict[str, Any]] = Field(default_factory=list)
     #: Whose models these are (org_models.view): the org's, its model home, this project's pins.
     models_scope: Optional[dict[str, Any]] = None
     claude_credential: Optional[dict[str, Any]] = None

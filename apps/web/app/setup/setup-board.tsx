@@ -40,6 +40,7 @@ import { RepositoryRegistry } from "../multirepo/registry";
 import { RoutingRow } from "./routing-row";
 import { PublicUrlRow } from "./public-url-row";
 import { ToolchainsRow } from "./toolchains-row";
+import { HarnessAdaptersRow } from "./harness-adapters-row";
 import { GatewaysRow } from "./gateways-row";
 import { PoolsRow } from "./pools-row";
 import { TicketSystemsRow } from "./ticket-systems-row";
@@ -66,6 +67,8 @@ const ADVANCED: Record<string, { line: string; tip: string }> = {
   build_database: { line: "Postgres for builds that need it", tip: "Auto, Always or Never." },
   build_speed: { line: "How many agents write a build at once", tip: "Balanced or Fastest." },
   toolchains: { line: "What builds can compile and run", tip: "Python and Node always; others on the host." },
+  adapters: { line: "Skills and MCP reach it",
+              tip: "An installed agent receives MCP servers and skills on each run." },
   jobs: { line: "Which model does which job", tip: "Pin a model to a job, or let BOSS route." },
   budget: { line: "Monthly spend cap", tip: "Set in Govern › Limits, with what happens at the cap." },
   public_url: { line: "Address used in emailed links", tip: "Sign-in, passkeys and emailed links use it." },
@@ -368,6 +371,9 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
           <div className="su-adv-item" ref={ref("build_database")}><Why id="build_database" /><BuildDatabaseRow /></div>
           <div className="su-adv-item" ref={ref("build_speed")}><Why id="build_speed" /><BuildSpeedRow /></div>
           <div className="su-adv-item" ref={ref("toolchains")}><Why id="toolchains" /><ToolchainsRow /></div>
+          {view.harness_adapters?.length ? (
+            <div className="su-adv-item"><Why id="adapters" /><HarnessAdaptersRow /></div>
+          ) : null}
           {/* Model routing, where "Who does what" lived; its rows are "Pin a job" inside. */}
           <div className="su-adv-item"><Why id="jobs" /><RoutingRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} /></div>
           {/* BUDGET LIVES IN GOVERN (operator, 2026-11-05: "The Budget things should move to
