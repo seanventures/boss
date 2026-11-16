@@ -40,6 +40,13 @@ export const P95_SOURCE: Record<string, string> = { app: "p95 from the app's own
 export const p95Words = (ms: number | null | undefined, window?: string) =>
   ms === null || ms === undefined ? "" : `p95 ${ms}ms · ${window || "24 h"}`;
 
+/** Where an environment's p95 was measured. Anything other than the app or a probe stays off the card. */
+export function envP95SourceSentence(source: string | null | undefined): string | null {
+  if (source === "app") return "From the app's requests.";
+  if (source === "probe") return "From health probes.";
+  return null;
+}
+
 /** "14:00" in the viewer's zone. */
 const hourLocal = (iso: string) => { try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { return iso; } };
 
@@ -207,6 +214,7 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
   };
   const host = e.host_name || e.host;
   const url = e.url ? (/^https?:/.test(e.url) ? e.url : `http://${e.url}`) : "";
+  const p95From = envP95SourceSentence(e.p95_source);
   return (
     <section className="px-card px-env" aria-labelledby={`px-env-${e.key}`} data-testid={`px-env-${e.key}`}>
       <div className="px-card-h"><Ico icon={Flask} c="green" />
@@ -263,8 +271,10 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
             </div>
           ) : <div className="px-faint" style={{ fontSize: ".56rem" }}>No checks yet</div>}
         </div>
-        <dl className="px-kv">
+        {/* Two columns would put the sentence under the label. The third sits it beside the number. */}
+        <dl className="px-kv" style={p95From ? { gridTemplateColumns: "max-content max-content minmax(0,1fr)" } : undefined}>
           <dt title={P95_SOURCE[e.p95_source ?? ""] ?? undefined}>p95 · {e.window || "24 h"}</dt><dd className="px-mono" data-testid={`px-env-p95-${e.key}`}>{e.p95_ms !== null ? `${e.p95_ms}ms` : "—"}</dd>
+          {p95From ? <small className="px-faint" data-testid={`px-env-p95-source-${e.key}`}>{p95From}</small> : null}
           <dt>Errors</dt><dd className="px-mono">{e.error_rate !== null ? `${e.error_rate}%` : "—"}</dd>
         </dl>
       </div>

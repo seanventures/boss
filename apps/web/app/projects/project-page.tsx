@@ -272,6 +272,11 @@ export function ProjectPage({ projectId, actor, orgId, homeId }: { projectId: st
   );
 }
 
+/** Health word, then " · " and the p95 words, only when that p95 string is non-empty. */
+export function healthChipText(healthWord: string, p95: string): string {
+  return p95 ? `${healthWord} · ${p95}` : healthWord;
+}
+
 function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
   const p = ctx.overview.project;
   const repo = p.repos[0];
@@ -337,7 +342,7 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
              title={[p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "Nothing deployed yet", healthWhy,
                      staging?.uptime_pct != null ? `${staging.label || "Staging"} ${staging.uptime_pct}% up` : "",
                      p95Words(staging?.p95_ms, staging?.window)].filter(Boolean).join(" · ") + " — opens Health"}>
-            <span className="px-dot" data-s={health} data-round aria-hidden />{p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "No health yet"}</a>
+            <span className="px-dot" data-s={health} data-round aria-hidden />{healthChipText(p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "No health yet", p95Words(staging?.p95_ms, staging?.window))}</a>
           <span className="px-tag" data-tone={onboarding ? "blue" : "green"} data-testid="px-head-status" title="Project stage on the journey">{onboarding ? <><Compass size={11} aria-hidden /> Onboarding</>
             : <>{(() => { const I = STAGE_ICON[p.stage] ?? Compass; return <I size={11} aria-hidden />; })()} {p.status_label || "Ready"}</>}</span>
           {onboarding && elapsed ? <span className="px-mono px-faint" style={{ fontSize: "var(--fs-meta)" }} data-testid="px-head-elapsed">{clockWords(elapsed)}</span> : null}

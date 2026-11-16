@@ -681,6 +681,11 @@ export function WorkBoard({
   );
 }
 
+export function deadletterRestSentence(count: number): string | null {
+  if (count > 5) return `5 failures are on this page. ${count - 5} more are not.`;
+  return null;
+}
+
 /* ============================================================
    Workflow Health (monitoring dashboard)
    ============================================================ */
@@ -775,6 +780,9 @@ export function WorkflowHealth({
                   </span>
                 </div>
               ))}
+              {deadletterRestSentence(deadletters.length) ? (
+                <p>{deadletterRestSentence(deadletters.length)}</p>
+              ) : null}
             </div>
           )}
           {recommendedActions.length > 0 ? (

@@ -65,6 +65,11 @@ export function AnomalyScanCard({ projectId, actor }: { projectId: string; actor
   );
 }
 
+export function traceRestSentence(count: number): string | null {
+  if (count > 40) return `40 events are on this page. ${count - 40} more are not.`;
+  return null;
+}
+
 export function RunTraceViewer({ trace, initialRunId }: { trace: RunTrace; initialRunId?: string }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -77,6 +82,7 @@ export function RunTraceViewer({ trace, initialRunId }: { trace: RunTrace; initi
     else next.delete("trace_run");
     router.push(`/?${next.toString()}`);
   };
+  const rest = trace ? traceRestSentence(trace.timeline.length) : null;
 
   return (
     <article className="stack-card">
@@ -121,6 +127,7 @@ export function RunTraceViewer({ trace, initialRunId }: { trace: RunTrace; initi
               </div>
             ))}
           </div>
+          {rest ? <p>{rest}</p> : null}
         </>
       ) : null}
     </article>

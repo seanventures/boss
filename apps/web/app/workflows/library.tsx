@@ -94,6 +94,17 @@ export function cronProblem(expr: string): string | null {
   return null;
 }
 
+/** Why a schedule did not start, for the row. The title keeps the longer missing list. */
+export function scheduleMissSentence(schedule: {
+  last_error?: string | null;
+  last_missing?: readonly unknown[] | null;
+}): string | null {
+  const trimmed = schedule.last_error?.trim() ?? "";
+  if (trimmed) return `Last run failed: ${trimmed}`;
+  if (schedule.last_missing?.length) return "Not started last time.";
+  return null;
+}
+
 export type ScheduleDraft = {
   workflowKey: string;
   name: string;
@@ -851,6 +862,12 @@ function SchedulePopover({ workflow, schedules, projectId, busy, inputSchema, on
                   <Warning size={12} aria-label="Did not start" data-testid={`wf-sched-refused-${s.id}`} />
                 ) : null}
               </span>
+              {(() => {
+                const said = scheduleMissSentence(s);
+                if (!said) return null;
+                // A sentence longer than six words is a paragraph; shorter stays a text node.
+                return said.trim().split(/\s+/).filter(Boolean).length > 6 ? <p>{said}</p> : said;
+              })()}
               <GatedButton permission="workflow_schedule:manage" type="button" className="wf-link" disabled={!!busy}
                       data-testid={`wf-schedule-toggle-${s.id}`}
                       onClick={() => onToggle(s.id, !s.enabled)}>{s.enabled ? "Pause" : "Resume"}</GatedButton>

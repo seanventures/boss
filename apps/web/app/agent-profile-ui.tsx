@@ -31,6 +31,12 @@ import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readi
 const words = (value: unknown): string =>
   typeof value === "string" && value ? value.replaceAll("_", " ") : "—";
 
+/** Visible stop reason. Blank is nothing. A sentence over six words is a paragraph. */
+export function runStoppedSentence(reason: string | null | undefined): string | null {
+  const trimmed = reason?.trim() ?? "";
+  return trimmed ? `Stopped: ${trimmed}` : null;
+}
+
 /** The Studio definitions that describe this role. Keyed by role_key, the thing a workflow
  *  step's `captain` names, so the agent page, the roster and the editor agree. */
 export function profilesFor(feed: Pick<AgentStudioFeed, "agents">, roleKey: string): StudioAgent[] {
@@ -64,10 +70,13 @@ function RecentRuns({ runs }: { runs: StudioRun[] }) {
         const output = run.output ?? {};
         const summary = typeof output.summary === "string" ? output.summary
           : typeof output.brief === "string" ? output.brief : "";
+        const stopped = runStoppedSentence(run.blocked_reason);
+        const long = !!stopped && stopped.split(/\s+/).filter(Boolean).length > 6;
         return (
           <li key={run.id} title={run.blocked_reason ? `Stopped: ${run.blocked_reason}` : summary || undefined}>
             <span className="wf-tag" data-status={run.status}>{words(run.status)}</span>
             <ClientRelativeTime iso={run.completed_at ?? run.created_at} style="short" empty="" />
+            {stopped ? (long ? <p>{stopped}</p> : <span>{stopped}</span>) : null}
           </li>
         );
       })}

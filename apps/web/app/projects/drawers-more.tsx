@@ -135,6 +135,13 @@ const STAGE_WORDS: Record<string, string> = {
   production: "Production always waits for a person.",
 };
 
+/** App and probe only. Any other source, including none, stays off the stage card. */
+export function stageP95SourceSentence(source: string | null | undefined): string | null {
+  if (source === "app") return "From the app's requests.";
+  if (source === "probe") return "From health probes.";
+  return null;
+}
+
 export function StageBody({ ctx, n }: { ctx: PxCtx; n: Node }) {
   const deps = usePxRead<Deployments>(n.key === "staging" || n.key === "production" ? PX_PATHS.deployments(ctx.projectId) : null, parseDeployments,
                                       { everyMs: 30_000, demo: () => parseDeployments(FX_DEPLOYMENTS) });
@@ -222,6 +229,7 @@ export function StageBody({ ctx, n }: { ctx: PxCtx; n: Node }) {
           <div className="px-row" style={{ gap: 12 }}>
             {e.uptime_pct !== null ? <Ring pct={e.uptime_pct} tone={e.health === "healthy" ? "green" : "amber"} label={`Uptime ${e.uptime_pct}%`}>{e.uptime_pct}</Ring> : null}
             <span className="px-mono px-faint" style={{ fontSize: ".58rem" }}>{e.p95_ms !== null ? `p95 ${e.p95_ms}ms` : ""}</span>
+            {stageP95SourceSentence(e.p95_source) ? <span className="px-faint" style={{ fontSize: ".58rem" }} data-testid={`px-stage-env-p95-source-${e.key}`}>{stageP95SourceSentence(e.p95_source)}</span> : null}
             {e.series.length > 1 ? <Spark series={e.series} tone="green" label="Health, last 24 hours" /> : null}
           </div>
           {e.last_deploy ? <small className="px-faint">Last deploy {e.last_deploy.label} · {whenLocal(e.last_deploy.at)}{e.last_deploy.by ? ` · ${e.last_deploy.by}` : ""}</small> : null}

@@ -2,6 +2,22 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.21]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.21.md](docs/community/RELEASE_NOTES_v1.0-rc10.21.md).
+
+### Added
+
+- A schedule row says why it did not start. The dead-letter list says when more failures are off the page. The deploy card, the environment drawer, and the stage card say whether p95 is the app or probes. The project health chip shows the p95 number. The identity overview and the pulse say when more agents are off the page. A recent run says why it stopped. The safety trace says when more events are off the page.
+
+### Changed
+
+- The community candidate version is `1.0.0-rc.10.21`.
+
+### Release scope
+
+- This is the git tag of public main after rc10.20. It is not a live host deploy. No image tag or release-gate run is attached. The export record still cites `docs/community/RC9_VALIDATION.md`. A failed deploy phase still has no phase-only retry. A migration approval was not added.
+
 ## [v1.0-rc10.20]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.20.md](docs/community/RELEASE_NOTES_v1.0-rc10.20.md).
