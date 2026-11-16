@@ -15766,3 +15766,54 @@ CREATE TABLE IF NOT EXISTS preview_share_policy (
   stopped_by TEXT,
   stopped_at TIMESTAMPTZ
 );
+-- BOSSAPP-1252: teammates run a task on an isolated copy. The shared branch
+-- stays unchanged until a finished copy is applied. An unfinished apply is refused.
+-- A failed run, or a copy whose branch moved, is a dead letter with a reason.
+CREATE TABLE IF NOT EXISTS task_copy_boards (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  shared_branch TEXT NOT NULL,
+  shared_head TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, shared_branch)
+);
+CREATE TABLE IF NOT EXISTS task_copies (
+  id TEXT PRIMARY KEY,
+  board_id TEXT NOT NULL REFERENCES task_copy_boards(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  teammate TEXT NOT NULL,
+  copy_branch TEXT NOT NULL,
+  base_head TEXT NOT NULL,
+  copy_head TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('running', 'finished', 'applied', 'dead')),
+  note TEXT NOT NULL DEFAULT '',
+  failure_reason TEXT NOT NULL DEFAULT '',
+  failure_kind TEXT NOT NULL DEFAULT '' CHECK (failure_kind IN ('', 'run', 'conflict')),
+  receipt_id TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ,
+  applied_at TIMESTAMPTZ,
+  UNIQUE (board_id, task_key, teammate),
+  UNIQUE (board_id, copy_branch)
+);
+CREATE INDEX IF NOT EXISTS idx_task_copies_board
+  ON task_copies (board_id, created_at);
+CREATE TABLE IF NOT EXISTS task_copy_dead_letters (
+  id TEXT PRIMARY KEY,
+  copy_id TEXT NOT NULL REFERENCES task_copies(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('run', 'conflict')),
+  reason TEXT NOT NULL,
+  shared_head TEXT NOT NULL,
+  copy_head TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  retried_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_task_copy_dead_letters_copy
+  ON task_copy_dead_letters (copy_id, created_at DESC);
