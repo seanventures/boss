@@ -1200,6 +1200,10 @@ def _build_onto_existing_app(ctx, cts, pid: str, actor: str, args: dict, extends
                 parent_run_id=extends,
                 instructions=instructions,
                 jobs=ctx.jobs,
+                # A workflow build step carrying the person's New work / Change it says so;
+                # an agent's own call does not (BOSSAPP-1322).
+                is_person_request=bool(args.get("person_request")),
+                replaces=(args.get("replaces") or None) if args.get("person_request") else None,
                 title=_titled_for_the_app(c, cts, extends, args.get("title")),
                 acceptance_criteria=cts.with_existing_tests_criterion(
                     args.get("acceptance_criteria")),
@@ -1554,8 +1558,15 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         exposure=Exposure(tags=("builds", "runs")))
     def extend_code_task(ctx, *, project_id, actor, args):
         cts = services_module("code_task_service")
+        # AN INCREMENT A PERSON ASKED FOR (Incremental Build's next increment) adds its own
+        # must-haves to the app's contract; a More tests / readiness pass does not.
+        _request = (cts.change_request(args.get("instructions") or "", title=args.get("title"),
+                                       actor=actor)
+                    if args.get("person_request") and str(args.get("instructions") or "").strip()
+                    else None)
         result = cts.retry_code_task(
             ctx.engine, ctx.settings, ctx.jobs, args["run_id"],
+            change_request=_request,
             fix_note=(args.get("instructions") or ""),
             profile=(args.get("profile") or None),
             allow_test_retirement=bool(args.get("allow_test_retirement")),

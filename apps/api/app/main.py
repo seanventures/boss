@@ -7941,11 +7941,17 @@ def follow_up_code_task_endpoint(run_id: str, payload: CodeTaskFollowUpBody):
             if parent is None:
                 raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
             require_project_actor(c, parent["project_id"], actor, "task_create")
+            # A PERSON'S CHANGE: its must-haves join the app's contract; `replaces` (contract
+            # item ids the person picked) is checked here, under their request (BOSSAPP-1322).
+            from boss_engine.services.acceptance.contract import checked_replaces
+
+            replaces = checked_replaces(parent["project_id"], actor,
+                                        (payload or {}).get("replaces"))
             result = start_followup_task(
                 c, parent_run_id=run_id, instructions=instructions, jobs=jobs,
                 title=(payload or {}).get("title"),
                 profile=(payload or {}).get("profile"),
-                actor=actor,
+                actor=actor, is_person_request=True, replaces=replaces or None,
                 engine=(payload or {}).get("engine"),
                 review_panel_size=(
                     int((payload or {}).get("review_panel_size"))
@@ -27890,6 +27896,22 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
             raise HTTPException(status_code=404, detail="that preview is not in this project")
         run_input["preview_id"] = preview_id
         extends["preview_id"] = preview_id
+    # THE CONTRACT ITEMS THIS CHANGE REPLACES (a picker's ids, never read from the words):
+    # only with extends_run_id, only a person allowed to revise (BOSSAPP-1322, PR #161 C1).
+    replaces = run_input.pop("replaces", None)
+    if replaces:
+        from boss_engine.services.acceptance.contract import (ContractRevisionRefused,
+                                                              checked_replaces)
+
+        if not extends_run_id:
+            raise HTTPException(status_code=422,
+                                detail="replaces names items of an existing app's contract")
+        try:
+            run_input["replaces"] = checked_replaces(project_id, actor, replaces)
+        except ContractRevisionRefused as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
     # THE TICKET THIS WORK IS FOR (BOSSAPP-1047): read from its system here, before the start's
     # transaction, and attached only AFTER the agreement check below (the agreement binds the
     # brief the person saw; the ticket is what that brief names).

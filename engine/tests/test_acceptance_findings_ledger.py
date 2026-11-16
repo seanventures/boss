@@ -126,7 +126,7 @@ def test_a_check_that_proves_it_fixed_closes_the_row_and_a_regression_reopens_it
         assert d.fixed == [fid]
         row = al.get(c, fid)
         assert row["status"] == "fixed" and row["resolved_check_id"] == fixed_check["id"]
-        assert fixed_check["diff"]["newly_met"] == ["1"]
+        assert fixed_check["diff"]["newly_met"] == ["AC-1"]     # by contract id (PR #161 C2)
         _, d = _check(c, p, root, {1: "MISSING"})
         assert d.reopened == [fid] and d.opened == []
         row = al.get(c, fid)

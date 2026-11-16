@@ -149,7 +149,8 @@ def held_to_contract(connection: Any, *, run_id: str, fctx: Mapping[str, Any],
     held = _contract.gate_items(contract)
     # An item a change request explicitly replaced or removed is not added back from a
     # build's own spec (BOSSAPP-1322): the version that dropped it says so.
-    keys = {_contract._key(i["text"]) for i in held} | _contract.removed_keys(contract)  # noqa: SLF001
+    keys = ({_contract._key(i["text"]) for i in held}  # noqa: SLF001
+            | _contract.removed_item_keys(connection, contract))
     beyond = [{"source": s, "text": t} for s, t in _raw_items(spec)
               if _contract._key(t) not in keys]  # noqa: SLF001
     base = dict(spec)
@@ -419,7 +420,9 @@ def must_have_table(record: Optional[Mapping[str, Any]]) -> str:
     rows = ["| # | Must-have | Status | Evidence |", "|---|---|---|---|"]
 
     def row(i: Mapping[str, Any]) -> str:
-        return (f"| {i['n']} | {cell(i['text'])}" + (" _(taste)_" if i.get("judgement") else "")
+        # The CONTRACT's id (AC-n) when the item has one: the id a person names to replace it
+        # (PR #161 review C2); the check's own position otherwise.
+        return (f"| {i.get('id') or i['n']} | {cell(i['text'])}" + (" _(taste)_" if i.get("judgement") else "")
                 + f" | {_STATUS_WORD.get(i['status'], i['status'])}"
                 + (" — advisory (taste)" if _advisory(i) else "")
                 + f" | {cell(i.get('evidence'))} |")
@@ -563,7 +566,15 @@ def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = No
             gates.pop(g)
     if cur_ok:
         checks.append((run_id, cur))
-    open_failures = _unresolved(checks)
+    removed: set[str] = set()
+    try:
+        with connection.begin_nested():
+            removed = {item_key(k) for k in _contract.removed_item_keys(
+                connection, _contract.latest(connection, root_run_id=root,
+                                             project_id=project_id))}
+    except Exception:  # noqa: BLE001 — no contract: nothing was removed
+        removed = set()
+    open_failures = _unresolved(checks, removed)
     if open_failures:
         runs = gates.setdefault(GATE, [])
         for rid, _ in open_failures:
@@ -583,15 +594,19 @@ def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = No
     return {"gates": gates, "acceptance": latest}
 
 
-def _unresolved(checks: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
+def _unresolved(checks: list[tuple[str, dict]],
+                removed: Iterable[str] = ()) -> list[tuple[str, dict]]:
     """The not_met checks no LATER met check covered: a met clears a failure only when it
     judged at least the failed check's items (`source.item_keys`). Slice 3 meeting its own
-    items never clears slice 2's gaps; a follow-up held to the union of every slice clears all."""
+    items never clears slice 2's gaps; a follow-up held to the union of every slice clears all.
+    `removed`: item keys a person has since replaced or removed from the contract — a later
+    check need not judge those to clear the failure (PR #161 review C3)."""
     out = []
+    gone = set(removed or ())
     for i, (rid, acc) in enumerate(checks):
         if acc.get("verdict") != "not_met":
             continue
-        keys = set((acc.get("source") or {}).get("item_keys") or [])
+        keys = set((acc.get("source") or {}).get("item_keys") or []) - gone
         cleared = any(later.get("verdict") == "met"
                       and keys <= set((later.get("source") or {}).get("item_keys") or [])
                       for _, later in checks[i + 1:])

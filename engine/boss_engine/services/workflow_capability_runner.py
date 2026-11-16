@@ -2204,6 +2204,7 @@ def _build_on_the_branch(connection: Connection, ctx: Any, *, project_id: str, a
                                    base_run=base, args={
         "run_id": base, "instructions": str(inputs.get("instructions") or ""),
         "title": str(inputs.get("title") or "Next increment"),
+        "person_request": True,
     })
     return _settle_started_work(capability, "build", {
         "capability": "build", "tool": "extend_code_task", "base_run_id": base, **started})
@@ -3984,6 +3985,13 @@ def _perform_capability(
             serving = release_base_for(connection, context)
             if serving:
                 inputs = {**inputs, "release_base_sha": serving}
+            else:
+                # THE PERSON'S CHANGE (New work, Change it): its must-haves join the app's
+                # contract (BOSSAPP-1322), and the items they picked to replace (validated at
+                # the start: a person allowed to revise) go through contract.revise.
+                inputs = {**inputs, "person_request": True,
+                          **({"replaces": list((context.get("input") or {})["replaces"])}
+                             if (context.get("input") or {}).get("replaces") else {})}
 
     # WHAT THE PANEL IS BEING CONVENED FOR.
     #

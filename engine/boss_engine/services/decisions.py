@@ -2128,6 +2128,8 @@ class DecisionService:
                 jobs=self.jobs,
                 title=title_for_change(parent, feature),
                 actor=actor,
+                # The panel's PRD for a person's feature: its gating list joins the contract.
+                is_person_request=True,
                 workflow_run_id=str(governing) if governing else None,
                 finalize_extra={"origin": origin},
             )
