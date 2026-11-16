@@ -92,18 +92,39 @@ function ItemCard({ it, onOpen }: { it: ListItem; onOpen: () => void }) {
   );
 }
 
+/** Trimmed reason, then who stopped it. Nothing unless agents are stopped, or both are blank. */
+export function stopPillSentence(stopped: boolean, by: string | null | undefined, reason: string | null | undefined): string | null {
+  if (!stopped) return null;
+  const why = reason?.trim() ?? "";
+  const who = by?.trim() ?? "";
+  if (why && who) return `${why}, ${who}`;
+  return why || who || null;
+}
+
+/** The stop pill. More than six words of why is a paragraph; six or fewer is a span. */
+export function StopPillFace({ stop, sentence }: {
+  stop: { stopped: boolean; by: string | null; reason: string };
+  sentence: string | null;
+}) {
+  const href = `/?${new URLSearchParams({ area: "budget", tab: "autonomy" }).toString()}`;
+  const words = sentence ? sentence.split(/\s+/).filter(Boolean).length : 0;
+  return (
+    <a className="aa-pill" href={href} data-tone={stop.stopped ? "red" : "green"} data-testid="aa-stop-pill"
+       title={stop.stopped ? `Stopped${stop.by ? ` by ${stop.by}` : ""}${stop.reason ? `, ${stop.reason}` : ""}. Open Autonomy & safety.` : "Agents may act within their levels. Open Autonomy & safety."}>
+      <span className="aa-dot-live" aria-hidden />{stop.stopped ? "Stopped" : "On"}
+      {sentence && words > 0 ? (words > 6
+        ? <p data-testid="aa-stop-why" data-user-text>{sentence}</p>
+        : <span data-testid="aa-stop-why" data-user-text>{sentence}</span>) : null}
+    </a>
+  );
+}
+
 function StopPill({ projectId }: { projectId: string }) {
   const live = useConsoleLive();
   const settings = usePolledRead({ key: settingsPath(projectId), read: polled(settingsPath(projectId), parseSettings), pollMs: 30_000, paused: !live, enabled: !!projectId });
   const stop = settings.data?.stop;
   if (!stop) return null;
-  const href = `/?${new URLSearchParams({ area: "budget", tab: "autonomy" }).toString()}`;
-  return (
-    <a className="aa-pill" href={href} data-tone={stop.stopped ? "red" : "green"} data-testid="aa-stop-pill"
-       title={stop.stopped ? `Stopped${stop.by ? ` by ${stop.by}` : ""}${stop.reason ? `, ${stop.reason}` : ""}. Open Autonomy & safety.` : "Agents may act within their levels. Open Autonomy & safety."}>
-      <span className="aa-dot-live" aria-hidden />{stop.stopped ? "Stopped" : "On"}
-    </a>
-  );
+  return <StopPillFace stop={stop} sentence={stopPillSentence(stop.stopped, stop.by, stop.reason)} />;
 }
 
 const LOADER_WORDS: Record<string, string> = {
