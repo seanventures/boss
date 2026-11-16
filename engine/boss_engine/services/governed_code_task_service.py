@@ -3258,6 +3258,27 @@ def _fix_round_change(prior_findings: str, fixed: dict, answers: str = "") -> st
             + "WHAT THE FIX CHANGED:\n" + files)
 
 
+def _record_review_scope(engine, run_id: str, modes: dict) -> None:
+    """Keep each scopable seat's review mode ON THE RUN (finalize_ctx.review_scope: {seat:
+    scoped|full}), not only in an event: a SCOPED pass re-read only the repair's delta, so it
+    never clears an earlier failure of that seat's gate on the merge card
+    (acceptance_gate.lineage_failures). A seat once scoped in this run stays scoped here."""
+    try:
+        with _transaction(engine) as c:
+            row = c.execute(sql("SELECT finalize_ctx->'review_scope' FROM code_task_runs "
+                                "WHERE id = :id"), {"id": run_id}).scalar()
+            held = row if isinstance(row, dict) else (json.loads(row) if row else {})
+            merged = {s: (repair_review_scope.SCOPED
+                          if repair_review_scope.SCOPED in (held.get(s), m) else m)
+                      for s, m in {**held, **modes}.items()}
+            c.execute(sql(
+                "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+                "|| jsonb_build_object('review_scope', CAST(:m AS JSONB)) WHERE id = :id"),
+                {"m": json.dumps(merged), "id": run_id})
+    except Exception:  # noqa: BLE001 — unrecorded reads as not cleared (fail closed)
+        _log_caught(logger)
+
+
 def _repair_review_scope_blocks(engine, *, run_id: str, project_id: str, fctx: dict,
                                 change: "review_input.ChangeUnderReview", baseline: dict,
                                 enabled: bool = True) -> dict:
@@ -3271,6 +3292,10 @@ def _repair_review_scope_blocks(engine, *, run_id: str, project_id: str, fctx: d
     the FULL review."""
     parent_id = str((fctx or {}).get("parent_run_id") or "").strip()
     if not parent_id or not enabled or change.empty:
+        if parent_id:
+            _record_review_scope(engine, run_id,
+                                 {s: repair_review_scope.FULL
+                                  for s in repair_review_scope.SCOPABLE_SEATS})
         return {}
     parent = None
     try:
@@ -3309,6 +3334,7 @@ def _repair_review_scope_blocks(engine, *, run_id: str, project_id: str, fctx: d
         record[seat] = p.record()
         if p.scoped:
             blocks[seat] = repair_review_scope.render(p)
+    _record_review_scope(engine, run_id, {s: r["mode"] for s, r in record.items()})
     try:
         with _transaction(engine) as c:
             emit_event(c, project_id, "code_task.repair_review_scope", "boss", "code_task_run",
@@ -10083,6 +10109,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # allowed to raise or block the existing flow — a supervisor failure degrades to
             # a no-op here, same as any other best-effort telemetry.
             _sup_decision = None
+            _sup_reason = None
             try:
                 from datetime import datetime as _datetime, timezone as _timezone
 
@@ -10107,6 +10134,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         spend_usd_micros=int(fctx.get("spend_usd_micros") or 0),
                         started_at=_started_at,
                     )
+                    _sup_reason = _signal.reason or None
                     if _signal.tripped or _signal.forced:
                         with _transaction(engine) as _c:
                             _judgement_on = _supervisor.judgement_enabled(_c, settings, project_id)
@@ -10325,7 +10353,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # supervisor's stop_report short-circuit skipped it: crun_f5868a67, BOSSAPP-1319).
             action = _checks_failing.stop_or_open(action, failing, faults=gate_faults,
                                                   open_pr=_can_ship_pr,
-                                                  enabled=_open_when_failing)
+                                                  enabled=_open_when_failing,
+                                                  reason=_sup_reason)
+            # AN ENVIRONMENT/REFUSAL STOP opens its PR but never a follow-up (it would hit the
+            # same broken environment or wait on the same person); the PR and card say why.
+            _env_stop = (_checks_failing.environment_stop(failing, faults=gate_faults,
+                                                          reason=_sup_reason)
+                         if action == _checks_failing.ACTION else None)
             if action == "ship" and failing and advisory_gate:
                 # ADVISORY first pass: surface the failing checks (their verdicts are already
                 # recorded on the run, so the UI shows exactly which failed) but PROCEED to open the
@@ -10373,6 +10407,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     **_checks_failing.collect(failing, evidence, details=_details),
                     "hard": action == _checks_failing.ACTION,
                     "rounds_used": rounds_used, "quality_gate_id": qg_id,
+                    **({"stopped": _checks_failing.stopped_record(_env_stop, failing)}
+                       if _env_stop else {}),
                 }
                 evidence[_checks_failing.KEY] = checks_record
                 dissent = {
@@ -10943,6 +10979,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # A PR that opened with its checks failing always gets its follow-up: it is the fix.
         if (deferred_findings
                 and (getattr(settings, "code_review_followup_tasks", True) or _checks)
+                and not ((_checks or {}).get("stopped") or {}).get("no_followup")
                 and not fctx.get("is_followup")
                 and _followup_ok
                 and not _already_spawned_followup(engine, run_id)):

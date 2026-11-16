@@ -63,3 +63,20 @@ def test_a_placeholder_is_not_a_reason():
     assert person_reject_note("Resolved from the BOSS console.") is None
     assert person_reject_note("  ") is None
     assert person_reject_note("too\n  vague") == "too vague"
+
+
+
+@pytest.mark.parametrize("note", ["Rejected by Ana Ruiz from chat.", "Rejected from Infra.",
+                                  "Rejected by usr_12ab from chat", "Approved from Infra.",
+                                  "Rejected from the project page.",
+                                  "Resolved from the BOSS console."])
+def test_a_surfaces_who_and_where_is_not_a_reason(note):
+    """PR #158 review 3: chat_channels' "Rejected by … from chat." and Infra's words name only
+    who and where — never the person's why."""
+    assert person_reject_note(note) is None
+
+
+@pytest.mark.parametrize("note", ["The plan uses Node; the brief says Go.",
+                                  "Rejected from the start: it ignores the rulebook."])
+def test_a_written_reason_is_kept(note):
+    assert person_reject_note(note) == note

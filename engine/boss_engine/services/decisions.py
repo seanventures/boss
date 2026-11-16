@@ -66,11 +66,19 @@ _NO_REASON_NOTES = frozenset({
 })
 
 
+#: A surface's own words naming only WHO and WHERE (chat_channels' "Rejected by Ana from
+#: chat.", Infra's "Rejected from Infra.", the console's): never the person's reason.
+_SURFACE_NOTE = re.compile(
+    r"(?i)^(?:approved|rejected|resolved|declined)(?: by [^.]{1,80}?)?"
+    r" (?:from|in|on|via) (?:the )?(?:chat|infra|boss console|console|project page|"
+    r"command center|slack|teams|telegram|email)\b[^.]{0,40}\.?$")
+
+
 def person_reject_note(note: Optional[str]) -> Optional[str]:
     """The reason a person wrote when rejecting, or None when they wrote none (a surface's
-    placeholder note is not a reason). One line, bounded."""
+    placeholder note — who and where, no why — is not a reason). One line, bounded."""
     text_value = " ".join(str(note or "").split())
-    if text_value.lower() in _NO_REASON_NOTES:
+    if text_value.lower() in _NO_REASON_NOTES or _SURFACE_NOTE.match(text_value):
         return None
     return text_value[:1000]
 

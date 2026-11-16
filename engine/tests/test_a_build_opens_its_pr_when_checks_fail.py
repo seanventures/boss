@@ -59,8 +59,15 @@ def test_repair_rounds_still_run_first():
                    rounds_used=0) == "repair"
 
 
+def test_a_stop_only_a_person_can_clear_opens_its_pr_with_no_follow_up():
+    """A secret only a person sets (every failing fault PERSON): the PR still opens, labelled,
+    per the operator's rule — and no follow-up, which would wait on the same person (PR #158
+    review 2; checks_failing.environment_stop)."""
+    assert _action(["app_serves"], faults={"app_serves": "PERSON"}) == cf.ACTION
+    assert cf.environment_stop(["app_serves"], faults={"app_serves": "PERSON"}) == "refusal"
+
+
 @pytest.mark.parametrize("failing,kw", [
-    (["app_serves"], {"faults": {"app_serves": "PERSON"}}),     # a secret only a person sets
     (["template_tests"], {}),                                   # an applied template's gate
     (["no_committed_secrets"], {}),                             # a secret never reaches a PR
     (["written_tests_pass"], {"open_pr": False}),               # a run that opens no PR

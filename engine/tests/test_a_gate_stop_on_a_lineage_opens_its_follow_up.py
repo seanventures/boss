@@ -48,7 +48,6 @@ def test_a_supervisor_stop_on_failing_must_haves_opens_the_pr():
 
 
 @pytest.mark.parametrize("failing,kw", [
-    (["app_serves"], {"faults": {"app_serves": "PERSON"}}),   # a secret only a person sets
     (["template_tests"], {}),                                 # an applied template's gate
     (["no_committed_secrets"], {}),
     (ACCEPTANCE, {"open_pr": False}),                         # a run that opens no PR
@@ -128,3 +127,48 @@ def test_a_new_build_after_a_rejected_follow_up_opens_one_for_its_open_must_have
     assert run["finalize_ctx"]["is_followup"] is True
     assert run["finalize_ctx"]["root_run_id"] == root
 
+
+
+
+# ── PR #158 review 2: an environment or refusal stop opens its PR, never a follow-up ───────
+
+@pytest.mark.parametrize("failing,faults,reason,expect", [
+    (["app_serves"], {"app_serves": "HARNESS"}, "environment_only", "environment_only"),
+    (["app_serves"], {"app_serves": "PERSON"}, "refusal", "refusal"),
+    (["app_serves", "nothing_broke"], {"app_serves": "HARNESS", "nothing_broke": "PERSON"},
+     None, "environment_only"),
+    (["app_serves"], {"app_serves": "PERSON"}, None, "refusal"),
+])
+def test_an_environment_or_refusal_stop_opens_the_pr_with_no_follow_up(failing, faults, reason,
+                                                                       expect):
+    assert cf.stop_or_open("block", failing, faults=faults, reason=reason) == cf.ACTION
+    assert cf.environment_stop(failing, faults=faults, reason=reason) == expect
+    rec = {**cf.collect(failing), "stopped": cf.stopped_record(expect, failing)}
+    words = "environment problem" if expect == "environment_only" else "needs a person"
+    assert rec["stopped"]["words"].startswith(f"stopped: {words}, ")
+    assert "No follow-up build is queued" in cf.pr_section(rec)
+    assert f"Stopped: {words}" in cf.pr_section(rec)
+    assert "no follow-up build is queued" in cf.decision_summary(rec)
+
+
+@pytest.mark.parametrize("reason", ["repeated_failure", "stalled", "round_cap", None])
+def test_a_work_failure_stop_still_gets_its_one_follow_up(reason):
+    faults = {"acceptance_met": "WORK"}
+    assert cf.stop_or_open("block", ACCEPTANCE, faults=faults, reason=reason) == cf.ACTION
+    assert cf.environment_stop(ACCEPTANCE, faults=faults, reason=reason) is None
+    assert "queued as a follow-up build" in cf.pr_section(cf.collect(ACCEPTANCE))
+
+
+def test_held_gates_still_hold_on_an_environment_stop():
+    assert cf.stop_or_open("block", ["template_tests"], faults={"template_tests": "HARNESS"},
+                           reason="environment_only") == "block"
+    assert cf.stop_or_open("block", ["app_serves"], faults={"app_serves": "HARNESS"},
+                           reason="environment_only", open_pr=False) == "block"
+
+
+def test_the_pipeline_records_the_stop_and_skips_the_follow_up():
+    src = inspect.getsource(governed)
+    assert "reason=_sup_reason)" in src
+    assert '"stopped": _checks_failing.stopped_record(_env_stop, failing)' in src
+    spawn = src.index("# A PR that opened with its checks failing always gets its follow-up")
+    assert 'not ((_checks or {}).get("stopped") or {}).get("no_followup")' in src[spawn:spawn + 600]

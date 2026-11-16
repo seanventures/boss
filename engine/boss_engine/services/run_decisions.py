@@ -363,6 +363,19 @@ def withdraw_superseded_pr_questions(connection, run_id: str, *, actor: str = "b
     return out
 
 
+def normalize_pr_url(url: Optional[str]) -> str:
+    """One spelling of a pull request's URL: https, no `www.`, lower-case host/owner/repo, no
+    `.git` on the repo, no trailing slash, query or fragment."""
+    import re as _re
+
+    u = str(url or "").strip()
+    u = _re.sub(r"[?#].*$", "", u)
+    u = _re.sub(r"^(?:https?://)?(?:www\.)?", "https://", u, flags=_re.I)
+    u = u.rstrip("/")
+    u = _re.sub(r"\.git(?=/|$)", "", u, flags=_re.I)
+    return u.lower()
+
+
 def withdraw_superseded_merge_cards(connection, project_id: str, pull_request_url: str,
                                     new_decision_id: str, *, run_id: Optional[str] = None,
                                     actor: str = "boss") -> list[str]:
@@ -376,15 +389,18 @@ def withdraw_superseded_merge_cards(connection, project_id: str, pull_request_ur
     the card that replaces it."""
     if not (pull_request_url and new_decision_id):
         return []
-    older = connection.execute(
-        text("SELECT id FROM decisions WHERE project_id = :p AND id <> :d "
-             "AND recommendation->>'action' = 'review_pull_request' "
-             "AND recommendation->>'pull_request_url' = :u AND status IN :open "
+    want = normalize_pr_url(pull_request_url)
+    rows = connection.execute(
+        text("SELECT id, recommendation->>'pull_request_url' AS u FROM decisions "
+             "WHERE project_id = :p AND id <> :d "
+             "AND recommendation->>'action' = 'review_pull_request' AND status IN :open "
              # Only OLDER cards: a sweep from an earlier build never withdraws a newer one.
              "AND created_at <= (SELECT created_at FROM decisions WHERE id = :d) "
              "ORDER BY created_at").bindparams(bindparam("open", expanding=True)),
-        {"p": project_id, "d": new_decision_id, "u": pull_request_url,
-         "open": list(UNANSWERED)}).scalars().all()
+        {"p": project_id, "d": new_decision_id, "open": list(UNANSWERED)}).mappings().all()
+    # The SAME pull request however its URL was written (a trailing slash, http, `.git`, the
+    # owner's or repo's case): one PR, one live merge card.
+    older = [r["id"] for r in rows if r["u"] and normalize_pr_url(r["u"]) == want]
     out: list[str] = []
     for decision_id in older:
         note = (f"Superseded by {new_decision_id}"

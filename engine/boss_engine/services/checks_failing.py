@@ -107,9 +107,36 @@ def may_open(failing: Iterable[str], *, faults: Optional[Mapping[str, str]] = No
     return not (set(failing) & HELD_GATES)
 
 
+#: Supervisor stop reasons whose failures a follow-up build would only hit again.
+NO_FOLLOWUP_REASONS = ("environment_only", "refusal")
+_STOP_WORDS = {"environment_only": "environment problem", "refusal": "needs a person"}
+
+
+def environment_stop(failing: Iterable[str], *, faults: Optional[Mapping[str, str]] = None,
+                     reason: Optional[str] = None) -> Optional[str]:
+    """Why a stop must NOT queue a follow-up, or None: the run supervisor stopped for
+    `environment_only` or `refusal`, or every failing gate's fault is the environment
+    (HARNESS) or a person's act (PERSON). A follow-up would hit the same broken environment or
+    wait on the same person; `repeated_failure` and `stalled` still get their one follow-up."""
+    if reason in NO_FOLLOWUP_REASONS:
+        return str(reason)
+    failing = [str(g) for g in failing or ()]
+    kinds = {(faults or {}).get(g) for g in failing}
+    if failing and kinds and kinds <= {"HARNESS", "PERSON"}:
+        return "refusal" if kinds == {"PERSON"} else "environment_only"
+    return None
+
+
+def stopped_record(reason: str, failing: Iterable[str]) -> dict[str, Any]:
+    """What the PR and its card say about such a stop: "stopped: environment problem, <gates>"."""
+    labels = ", ".join(_gate_label(g) for g in _ordered(failing))
+    return {"reason": reason, "no_followup": True,
+            "words": f"stopped: {_STOP_WORDS.get(reason, reason)}, {labels}"}
+
+
 def stop_or_open(action: str, failing: Iterable[str], *,
                  faults: Optional[Mapping[str, str]] = None, open_pr: bool = True,
-                 enabled: bool = True) -> str:
+                 enabled: bool = True, reason: Optional[str] = None) -> str:
     """THE ONE EXIT FROM A GATE STOP (BOSSAPP-1319). Whatever decided to stop the build — the
     gate disposition (resolve_gate_failure_action), the run supervisor's stop_report at its
     round cap, an inconclusive check whose escalations are spent — a ``"block"`` that
@@ -121,6 +148,13 @@ def stop_or_open(action: str, failing: Iterable[str], *,
     ever reaching this rule, so the build parked at awaiting_gate_override with no follow-up,
     while the two rounds before it (under the cap) each opened one."""
     if action == "block" and enabled and may_open(failing, faults=faults, open_pr=open_pr):
+        return ACTION
+    # AN ENVIRONMENT OR REFUSAL STOP STILL OPENS THE PR (the operator's rule: a PR always opens),
+    # labelled, with no follow-up (environment_stop); held gates still hold.
+    failing = [str(g) for g in failing or ()]
+    if (action == "block" and enabled and open_pr and failing
+            and not (set(failing) & HELD_GATES)
+            and environment_stop(failing, faults=faults, reason=reason)):
         return ACTION
     return action
 
@@ -223,9 +257,13 @@ def pr_section(record: Optional[Mapping[str, Any]], *, followup_run_id: Optional
              "",
              "BOSS's checks still fail after the build's repair rounds. This pull request is "
              "open so the work can be read; it is a draft and labelled `checks failing`, and "
-             "BOSS merges it only when a person decides to, with a reason. The failing gates "
-             "and findings are queued as a follow-up build.",
+             "BOSS merges it only when a person decides to, with a reason. "
+             + ("No follow-up build is queued: it would hit the same problem."
+                if (record.get("stopped") or {}).get("no_followup")
+                else "The failing gates and findings are queued as a follow-up build."),
              ""]
+    if record.get("stopped"):
+        lines += [f"**{str(record['stopped'].get('words') or '').capitalize()}.**", ""]
     if record.get("security"):
         lines += ["**Security:** a security check is failing. Read the security findings "
                   "first.", ""]
@@ -276,6 +314,11 @@ def decision_summary(record: Optional[Mapping[str, Any]]) -> str:
         return ""
     sec = (" Security finding open: read the security findings first."
            if record.get("security") else "")
+    stopped = record.get("stopped") or {}
+    if stopped.get("no_followup"):
+        return (f"CHECKS FAILING ({stopped.get('words')}).{sec} The pull request opened anyway; "
+                "no follow-up build is queued, since it would hit the same problem. Merging it "
+                "is your decision: say why when you merge.")
     return (f"CHECKS FAILING: {headline(record)}.{sec} The pull request opened anyway after "
             "the repair rounds; the failing checks are queued as a follow-up build. Merging "
             "it is your decision: say why when you merge.")

@@ -493,6 +493,27 @@ def _gates_passed(value: Any) -> set[str]:
     return {str(g) for g in value or []} if isinstance(value, list) else set()
 
 
+def _full_review_gates(fctx: Mapping[str, Any], passed: set[str]) -> set[str]:
+    """The passed gates a (non-follow-up) build RE-JUDGED over the whole change: the whole-tree
+    gates always; a judgment seat's gate (security_clean, code_review_passed, consistent) only
+    when that seat ran in FULL mode in this build. A repair or extend with a parent may review
+    SCOPED (repair_review_scope: only its delta), and a scoped pass never re-read the file an
+    earlier failure was about. A build with no parent is never scoped; one with a parent and no
+    recorded mode is treated as scoped (fail closed)."""
+    from .checks_failing import SEAT_OF_GATE
+
+    modes = fctx.get("review_scope") if isinstance(fctx.get("review_scope"), Mapping) else {}
+    has_parent = bool(str(fctx.get("parent_run_id") or "").strip())
+    out = set()
+    for g in passed - {GATE}:
+        seat = (SEAT_OF_GATE.get(g) or (None,))[0]
+        if g in WHOLE_TREE_GATES or seat is None:
+            out.add(g)
+        elif not has_parent or modes.get(seat) == "full":
+            out.add(g)
+    return out
+
+
 def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = None,
                      current_acceptance: Optional[Mapping[str, Any]] = None,
                      current_failing: Iterable[str] = ()) -> dict[str, Any]:
@@ -554,7 +575,7 @@ def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = No
             # failure. A follow-up's judgment seats read only its own delta (its base is the
             # shipped branch), so from a follow-up only the WHOLE_TREE_GATES clear.
             rejudged = (WHOLE_TREE_GATES if fctx.get("is_followup")
-                        else _gates_passed(r["gates_passed"]) - {GATE})
+                        else _full_review_gates(fctx, _gates_passed(r["gates_passed"])))
             for g in _gates_passed(r["gates_passed"]) & rejudged:
                 passed_after[g] = idx
         acc = _spec_of(r["acc"])
