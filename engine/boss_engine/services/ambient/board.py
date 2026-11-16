@@ -60,7 +60,7 @@ TRANSITIONS: dict[str, frozenset[str]] = {
                             "failed"}),
 }
 LINK_KINDS = ("signal", "workflow_run", "code_task", "decision", "act", "incident", "meeting",
-              "pull_request", "reservation", "alert", "recommendation")
+              "pull_request", "reservation", "alert", "recommendation", "finding")
 DEFAULT_LEASE_MINUTES = 30
 MAX_LEASE_MINUTES = 240
 
