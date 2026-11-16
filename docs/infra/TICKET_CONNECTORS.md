@@ -89,6 +89,30 @@ project key of that connection. The known keys are the configured `project_key` 
 `ISO-8601` and `CVE-2024-1234` never match. `service.parse_refs(text, connections)` runs this
 across every connected system.
 
+### The workflow a ticket starts on
+
+New work's ticket card, Start from a ticket and the import view all pick the workflow from the
+ticket's type and size (`ticket_intake.default_workflow`, sent to the console as
+`suggested_workflow`; BOSSAPP-1334):
+
+| Type  | Size small, or no size | Size medium or large |
+|-------|------------------------|----------------------|
+| Epic  | Major feature          | Major feature        |
+| Story | Minor feature          | Major feature        |
+| Task  | Minor feature          | Major feature        |
+| Other | Minor feature          | Major feature        |
+| Bug   | Bug fix                | Bug fix              |
+
+The size comes from the ticket: a t-shirt label (`size:M`, `size-l`, `medium`), a `Size:`,
+`T-shirt size:` or `Estimate:` line in its description, or `Story points:` in its description
+(under 5 is small, under 13 medium, otherwise large). With no size, the type alone decides. A
+person can still pick another workflow; the card's pick and New work's Workflow chip are the same
+choice.
+
+Acceptance criteria come from a configured field, else the items under an "Acceptance criteria"
+or "Definition of done" heading (Markdown, `**bold**` or Jira's `h3.`), read as bullets or, when
+there are none, as plain lines up to the next blank line or heading.
+
 ## The manifest
 
 Each connector lives in its own folder, `connectors/tickets/<key>/`, which holds a

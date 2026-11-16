@@ -3690,6 +3690,17 @@ def deploy_step_target(connection: Connection, engine: Any, project_id: str,
                                        create=True)
 
 
+def with_run_profile(inputs: dict[str, Any], run_input: Any) -> dict[str, Any]:
+    """THE PROFILE THE PERSON PICKED when they started the run (New work / Add project,
+    BOSSAPP-1334): a build step runs on it, unless the workflow's own step bound one. Only a
+    profile a person may pick (lean | balanced | strict) is carried; anything else is ignored."""
+    chosen = str((run_input or {}).get("profile") or "").strip().lower() \
+        if isinstance(run_input, dict) else ""
+    if chosen in ("lean", "balanced", "strict") and not inputs.get("profile"):
+        return {**inputs, "profile": chosen}
+    return inputs
+
+
 def _perform_capability(
     connection: Connection,
     ctx: Any,
@@ -4052,6 +4063,7 @@ def _perform_capability(
     trusted_step: dict[str, Any] = {}
     if key == "build":
         inputs = {**inputs, "workflow_run_id": str(context.get("run_id") or "")}
+        inputs = with_run_profile(inputs, context.get("input"))
         # A FEATURE FOR AN APP THAT EXISTS is that app's next build, not a new app: the tool
         # starts it from the app's branch and lineage. Read from the run input, which the start
         # endpoint validated, rather than bound by each workflow — every build step honours it.

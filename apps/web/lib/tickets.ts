@@ -80,8 +80,14 @@ export type Ticket = {
   /** A full read only. */
   body: string; acceptance_criteria: string[]; comments: { author: string; at: string; body: string }[];
   attachments: { name: string; url: string }[];
-  /** The BOSS project the ticket belongs to (its mapping, else its connection's home). */
-  maps_to: { project_id: string; name: string } | null;
+  /** The BOSS project the ticket belongs to (its mapping, else its connection's home). `by`:
+   *  "mapping" when a project-key mapping says so, "home" when it only fell back to the project
+   *  the connection was added from — which says nothing about where THIS ticket goes. */
+  maps_to: { project_id: string; name: string; by: "mapping" | "home" } | null;
+  /** Its size as the ticket says it (labels, a "Size:" line, story points), and the workflow its
+   *  type and size start on (engine ticket_intake.default_workflow, BOSSAPP-1334). */
+  size: "small" | "medium" | "large" | null;
+  suggested_workflow: string;
   /** "org" when the connection was added from another project (import names its system). */
   connection_reach: "project" | "org";
 };
@@ -193,7 +199,10 @@ export function parseTicket(v: unknown): Ticket {
     comments: a(x.comments).map((m) => ({ author: s(o(m).author), at: s(o(m).at), body: s(o(m).body) })),
     attachments: a(x.attachments).map((m) => ({ name: s(o(m).name), url: s(o(m).url) })).filter((m) => m.name),
     connection_reach: s(x.connection_reach) === "org" ? "org" : "project",
-    maps_to: s(o(x.maps_to).project_id) ? { project_id: s(o(x.maps_to).project_id), name: s(o(x.maps_to).name) || s(o(x.maps_to).project_id) } : null,
+    maps_to: s(o(x.maps_to).project_id) ? { project_id: s(o(x.maps_to).project_id), name: s(o(x.maps_to).name) || s(o(x.maps_to).project_id),
+                                            by: s(o(x.maps_to).by) === "home" ? "home" : "mapping" } : null,
+    size: s(x.size) === "small" || s(x.size) === "medium" || s(x.size) === "large" ? (s(x.size) as "small" | "medium" | "large") : null,
+    suggested_workflow: s(x.suggested_workflow) || workflowFor(TYPES.includes(t) ? t : "other"),
   };
 }
 
@@ -286,6 +295,11 @@ export const WORKFLOW_WORDS: Record<string, string> = { major_feature: "Major fe
 export const START_WORKFLOWS = ["minor_feature", "major_feature", "fast_fix"] as const;
 export const TYPE_WORDS: Record<TicketType, string> = { epic: "Epic", story: "Story", task: "Task", bug: "Bug", other: "Ticket" };
 export const workflowFor = (t: TicketType) => WORKFLOW_FOR_TYPE[t] ?? "minor_feature";
+/** The workflow a ticket starts on: the engine's pick from its type AND size, else its type's. */
+export const ticketWorkflow = (t: Pick<Ticket, "type"> & { suggested_workflow?: string }) => t.suggested_workflow || workflowFor(t.type);
+/** "Story · Medium": what the pick was made from. */
+export const pickedFrom = (t: Pick<Ticket, "type" | "size">) =>
+  `${TYPE_WORDS[t.type]}${t.size ? ` · ${t.size[0].toUpperCase()}${t.size.slice(1)}` : ""}`;
 export const workflowWords = (key: string) => WORKFLOW_WORDS[key] ?? key.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 
 /** "J", "P", "GH": the provider's monogram for the tiles and chips. */
@@ -444,7 +458,8 @@ export const importVia = (via: ImportVia): R =>
 export const importTickets = (projectId: string, via: ImportVia, items: { key: string; with_children?: boolean }[]): Promise<WriteResult> =>
   obsWrite(`/v1/projects/${enc(projectId)}/tickets/import`, { ...importVia(via), items: items.map((i) => ({ key: i.key, with_children: Boolean(i.with_children) })) },
            press(`import:${projectId}`, "Import to Work"));
-export const startFromTicket = (workItemId: string, body: { project_id?: string; workflow_key?: string; start_anyway?: string[] } = {}): Promise<WriteResult> =>
+/** `profile` (BOSSAPP-1334): lean | balanced | strict, carried to the build; omitted = the project's default. */
+export const startFromTicket = (workItemId: string, body: { project_id?: string; workflow_key?: string; start_anyway?: string[]; profile?: string | null } = {}): Promise<WriteResult> =>
   obsWrite(`/v1/work-items/${enc(workItemId)}/start-from-ticket`, body as R, press(`start:${workItemId}`, "Start"));
 export const retryTicketSync = (workItemId: string): Promise<WriteResult> =>
   obsWrite(`/v1/work-items/${enc(workItemId)}/ticket-sync/retry`, {}, press(`retry:${workItemId}`, "Retry"));
@@ -469,7 +484,7 @@ export const parseWebhook = (v: unknown): WebhookSecret => {
  * (a work item + binding), then started on the workflow its type calls for (or the one picked).
  */
 export async function importAndStart(projectId: string, t: Pick<Ticket, "key" | "connection_id" | "in_boss" | "type" | "provider"> & { connection_reach?: string }, workflowKey?: string,
-                                     startAnyway: readonly string[] = [],
+                                     startAnyway: readonly string[] = [], profile?: string | null,
 ): Promise<{ ok: boolean; error: string | null; workItemId: string; runId: string; note: string; readiness: Readiness | null }> {
   let workItemId = t.in_boss?.work_item_id ?? "";
   if (!workItemId) {
@@ -479,8 +494,9 @@ export async function importAndStart(projectId: string, t: Pick<Ticket, "key" | 
     workItemId = (done.imported.find((r) => r.key === t.key) ?? done.already_in_boss.find((r) => r.key === t.key) ?? done.imported[0])?.work_item_id ?? "";
     if (!workItemId) return { ok: false, error: `${t.key} was not imported.`, workItemId: "", runId: "", note: "", readiness: null };
   }
-  const st = await startFromTicket(workItemId, { project_id: projectId, workflow_key: workflowKey || workflowFor(t.type),
-                                                 ...(startAnyway.length ? { start_anyway: [...startAnyway] } : {}) });
+  const st = await startFromTicket(workItemId, { project_id: projectId, workflow_key: workflowKey || ticketWorkflow(t),
+                                                 ...(startAnyway.length ? { start_anyway: [...startAnyway] } : {}),
+                                                 ...(profile ? { profile } : {}) });
   if (!st.ok) return { ok: false, error: st.error, workItemId, runId: "", note: "", readiness: refusalReadiness(st.refusal) };
   const b = o(st.body);
   return { ok: true, error: null, workItemId, runId: s(b.run_id) || s(o(b.run).id), note: s(b.note), readiness: null };

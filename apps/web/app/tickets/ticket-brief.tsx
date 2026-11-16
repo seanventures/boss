@@ -20,7 +20,7 @@ import { ChatCircleText, Play, ArrowsLeftRight } from "@phosphor-icons/react";
 
 import { GatedButton, useGate } from "../../components/gated";
 import {
-  importAndStart, readConnections, readResolve, readTicket, workflowFor, workflowWords,
+  importAndStart, readConnections, readResolve, readTicket, ticketWorkflow, workflowWords,
   type Connection, type Read, type Ticket,
 } from "../../lib/tickets";
 import { TicketCard, TkReadState } from "./ticket-parts";
@@ -81,7 +81,7 @@ export function TicketBrief({ projectId, calls, text, onStarted }: {
     return <div className="tk-brief"><TkReadState read={read} what={`Reading ${ref}`} onRetry={() => setN((x) => x + 1)} rows={1} testid="tk-brief" /></div>;
   }
   if (!t) return null;
-  const picked = flow || workflowFor(t.type);
+  const picked = flow || ticketWorkflow(t);
   const wb = connection?.settings.write_back;
   const doing = connection?.settings.status_map.doing || "In Progress";
   const start = async () => {

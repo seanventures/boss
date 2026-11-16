@@ -337,8 +337,8 @@ def _html_inline(text: str) -> str:
 # ---------------------------------------------------------------------------------------------
 
 _AC_HEADING = re.compile(
-    r"^\s*(?:#{1,6}\s*|\*\*)?\s*(acceptance\s+criteria|definition\s+of\s+done|"
-    r"\bac\b)\s*:?\s*(?:\*\*)?\s*:?\s*$", re.IGNORECASE)
+    r"^\s*(?:#{1,6}\s*|\*\*|h[1-6]\.\s*)?\s*(acceptance\s+criteria|definition\s+of\s+done|"
+    r"\bac\b)\s*(?:\([^)]*\))?\s*:?\s*(?:\*\*)?\s*:?\s*$", re.IGNORECASE)
 _ANY_HEADING = re.compile(r"^\s*(?:#{1,6}\s+\S|\*\*[^*]+\*\*\s*:?\s*$)")
 _ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*\S)\s*$")
 _GHERKIN = re.compile(r"^\s*(given|when|then|and)\b.*", re.IGNORECASE)
@@ -357,6 +357,7 @@ def acceptance_criteria(markdown: str, field_value: Any = None) -> list[str]:
     for index, line in enumerate(lines):
         if _AC_HEADING.match(line):
             items: list[str] = []
+            plain: list[str] = []
             for after in lines[index + 1:]:
                 if _ANY_HEADING.match(after) and not _ITEM.match(after):
                     break
@@ -365,8 +366,16 @@ def acceptance_criteria(markdown: str, field_value: Any = None) -> list[str]:
                     items.append(match.group(1).strip())
                 elif after.strip() and _GHERKIN.match(after):
                     items.append(after.strip())
+                elif after.strip():
+                    plain.append(after.strip())
+                elif plain and not items:
+                    break               # a blank line ends a list written as plain lines
             if items:
                 return items
+            # A LIST WRITTEN AS PLAIN LINES (a Jira description's paragraphs under an
+            # "Acceptance criteria" heading, BOSSAPP-1334): each line is a criterion.
+            if plain:
+                return plain
     gherkin = [lb.strip() for lb in lines if _GHERKIN.match(lb) and len(lb.split()) > 2]
     if any(g.lower().startswith("given") for g in gherkin) and \
             any(g.lower().startswith("then") for g in gherkin):

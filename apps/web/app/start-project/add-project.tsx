@@ -58,6 +58,7 @@ import { normalizeChannel } from "../workflows/compose-plan";
 import { ReadinessPanel, asReadiness, unaccepted, type Readiness } from "../workflow-readiness-ui";
 import { useRegistry } from "./import-repo";
 import { WORDS_IN_LINK, withNewWorkDoor } from "../../lib/compose-links";
+import { asRunProfile, useDefaultProfile } from "../../lib/run-profiles";
 import { keepNewWorkDraft } from "../../lib/new-work";
 import { InUseBlock, InUseTag, PlanBoxes, egressOf, ownFields, usedBy, type InUseActions, type PlanState } from "./add-project-plan";
 import { BriefCard, Marked, type BriefRow } from "../projects/brief-card";
@@ -91,13 +92,21 @@ function dropDraft(): void { writeDraft(""); }
 
 /** A refusal in words. `doing` says what was being done, so a closed "Confirm it's you" reads as
  *  what did NOT happen ("Not created …"), never as a create when the press was something else. */
-function refusalText(e: unknown, doing: "create" | "read" = "read"): string {
+export function refusalText(e: unknown, doing: "create" | "read" = "read"): string {
   if (e instanceof IdentityError) {
     if (e.code === "step_up_cancelled") {
       return doing === "create" ? "Not created: “Confirm it’s you” was closed. Press Create and start to confirm and go on."
         : "Not read: “Confirm it’s you” was closed.";
     }
-    return typeof e.body.message === "string" && e.body.message ? e.body.message : e.message;
+    // THE CONSENT SHEET CLOSED (BOSSAPP-1334): words, never the raw "consent_required".
+    if (e.body.error === "consent_required") {
+      return doing === "create"
+        ? "Not started: the agents need your consent first. Press Create and start to give it."
+        : "Needs your consent first.";
+    }
+    // The body's own sentence when it is one; a bare code is never shown.
+    const said = typeof e.body.message === "string" && /\s/.test(e.body.message.trim()) ? e.body.message : e.message;
+    return /\s/.test(said.trim()) ? said : `Not done: ${said.replace(/_/g, " ")}.`;
   }
   return e instanceof Error ? e.message : String(e);
 }
@@ -126,6 +135,8 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   const titleId = useId();
   const guarded = useGuardedCall();
   const canCreate = useGate("project:create");
+  // The project's default profile: the Profile choice opens on it (BOSSAPP-1334).
+  const defaultProfile = useDefaultProfile(projectId);
   const [door, setDoorState] = useState<Door>(() => doorOf(startKind, !!initialText));
   // ESC NEVER LOSES WORDS: the idea is kept for this tab until Create and start succeeds or the
   // person presses Clear; opening the sheet again brings it back, said in one line.
@@ -555,6 +566,10 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
       staging: plan.staging, map_rules: !idea && plan.mapRules, start_anyway: startAnyway,
       // Only the person's "Make a separate project anyway" sends it (the server refuses otherwise).
       allow_shared_repo: repoIds.some((id) => shared.includes(id)),
+      // The profile picked, else the project default shown (BOSSAPP-1334).
+      profile: asRunProfile(plan.profile) ?? defaultProfile ?? null,
+      // The ticket the brief was written from: the run records it whatever the words keep.
+      ticket_ref: idea && u?.ticket?.key ? { key: u.ticket.key, ...(u.ticket.url ? { url: u.ticket.url } : {}) } : null,
     };
     try {
       const r = await guarded("Create the project and start it.", () => withConsent(() =>
@@ -938,7 +953,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
             <PlanBoxes kind={kind} preview={preview} plan={plan} set={set} cards={cards} adapters={adapters}
                        helmPicks={u?.picks ?? EMPTY_PICKS} workflow={workflow} registry={allRepos} repoLabel={repoLabel} codeName={repo?.full_name ?? pickedFolder?.path ?? ""}
                        live={helmLive} accountLogin={account} accounts={pickable} owners={owners} homeHref={homeHref} inUse={inUse}
-                       newRepo={{ name: repoName, check: repoCheck, checking }} codeWhere={codeWhere} />
+                       newRepo={{ name: repoName, check: repoCheck, checking }} codeWhere={codeWhere} defaultProfile={defaultProfile} />
           </section>
 
           {refusals}
@@ -1129,6 +1144,19 @@ function IdeaCard({ text, u, reading, ok, fix, onOk, onFix, onFixChange, onSave,
   const state = fresh ? "reading" : u && u.status !== "ok" ? "fallback" : ok && !f ? "confirmed" : "ready";
   return (
     <div data-testid="ap-understood" data-state={fresh ? "reading" : u?.status ?? "reading"} data-ok={ok || undefined}>
+      {/* THE TICKET THE WORDS LINK TO (BOSSAPP-1334): the brief is written from it, said so. */}
+      {u?.ticket?.key && u.ticket.untrusted ? (
+        // A FLAGGED TICKET: said out loud, and nothing of it was copied into the brief.
+        <p className="tk-warn" role="alert" data-testid="ap-ub-ticket-flagged" style={{ margin: "0 0 6px" }}
+           title={(u.ticket.screen?.reasons ?? []).join("; ") || undefined}>
+          BOSS flagged text in {u.ticket.key} as possible instructions to its agents. Its criteria were not copied: write or confirm the must-haves yourself.</p>
+      ) : u?.ticket?.key ? (
+        <p className="px-faint" data-testid="ap-ub-ticket" title={u.ticket.title || undefined} style={{ margin: "0 0 6px" }}>
+          Read from {u.ticket.key}{u.ticket.criteria ? ` · ${u.ticket.criteria} acceptance criteria` : ""}</p>
+      ) : u?.ticket_note?.message ? (
+        <p className="px-faint" role="status" data-testid="ap-ub-ticket-note" style={{ margin: "0 0 6px" }}>
+          {u.ticket_note.ref ? `${u.ticket_note.ref}: ` : ""}{u.ticket_note.message}</p>
+      ) : null}
       <BriefCard state={state} agent={HELM} heading="Project brief" rows={rows} columns={2} editing={!!f} confirmed={ok}
                  title={b?.title ?? ""} testid="ap-ub"
                  chips={<>{b?.must_haves.length ? <span className="px-tag">{b.must_haves.length} must-haves</span> : null}

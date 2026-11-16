@@ -18,13 +18,14 @@ import { ArrowRight, DownloadSimple, Kanban } from "@phosphor-icons/react";
 import { GatedButton, useGate } from "../../components/gated";
 import { writePxUrl, type WorkItem } from "../../lib/project-experience";
 import {
-  TYPE_WORDS, codeWords, importAndStart, readConnections, readWaiting, refusalReadiness, startFromTicket, syncWords, workflowFor, workflowWords,
+  TYPE_WORDS, codeWords, importAndStart, readConnections, readWaiting, refusalReadiness, startFromTicket, syncWords, ticketWorkflow, workflowFor, workflowWords,
   type Connection, type Read, type Ticket, type TypedError,
   ticketSetupHref,
 } from "../../lib/tickets";
 import { ProviderMono, TicketChip, TkEmpty, TkReadState, TkTag, WorkflowPick } from "../tickets/ticket-parts";
 import type { PxCtx } from "./project-page";
 import { StartRefusal, type PendingRefusal, type Readiness } from "../workflow-readiness-ui";
+import { useDefaultProfile } from "../../lib/run-profiles";
 import "../tickets/ticket-import.css";
 
 // ── the `tickets` URL param (tickets=import opens T8) ──────────────────────────────────────────
@@ -135,6 +136,8 @@ export function WaitingSection({ ctx, conns }: { ctx: PxCtx; conns: Connection[]
   const [said, setSaid] = useState<{ text: string; tone: "red" | "green" } | null>(null);
   const [held, setHeld] = useState<PendingRefusal | null>(null);
   const startGate = useGate("workflow_run:start", pid);
+  // The project's default profile, sent with each start (BOSSAPP-1334: the build runs on it).
+  const runProfile = useDefaultProfile(pid);
   const load = useCallback(() => { if (!ctx.demo) void readWaiting(pid).then(setRead); }, [pid, ctx.demo]);
   useEffect(() => { load(); }, [load]);
   const live = conns.filter((c) => c.status === "connected" && c.settings.pickup.label && c.settings.inbound.mode !== "off");
@@ -151,11 +154,11 @@ export function WaitingSection({ ctx, conns }: { ctx: PxCtx; conns: Connection[]
     if (!startGate.allowed) return;
     setBusy(t.key); setSaid(null);
     try {
-      const r = await importAndStart(pid, t, workflowFor(t.type), anyway);
+      const r = await importAndStart(pid, t, ticketWorkflow(t), anyway, runProfile);
       if (!r.ok && r.readiness) { setHeld(heldFor(t.key, r.error, r.readiness, (more) => start(t, more))); return; }
       if (!r.ok) { setSaid({ text: r.error ?? `${t.key} did not start.`, tone: "red" }); return; }
       setHeld(null);
-      setSaid({ text: `Started ${t.key} as ${workflowWords(workflowFor(t.type)).toLowerCase()}.${r.note ? ` ${r.note}` : ""}`, tone: "green" });
+      setSaid({ text: `Started ${t.key} as ${workflowWords(ticketWorkflow(t)).toLowerCase()}.${r.note ? ` ${r.note}` : ""}`, tone: "green" });
       load(); ctx.refreshWork();
     } finally { setBusy(""); }
   };
@@ -180,7 +183,7 @@ export function WaitingSection({ ctx, conns }: { ctx: PxCtx; conns: Connection[]
             <TkTag tone={t.type === "bug" ? "red" : t.type === "epic" ? "violet" : "blue"}>{TYPE_WORDS[t.type]}</TkTag>
             {t.priority ? <TkTag tone={/high|urgent|critical|blocker/i.test(t.priority) ? "amber" : "idle"}>{t.priority}</TkTag> : null}
             <GatedButton permission="work_tracker:write" projectId={pid} className="tk-btn tk-btn-sm" data-kind="primary" data-testid={`tk-waiting-start-${t.key}`}
-                         disabled={Boolean(busy) || !startGate.allowed} title={startGate.allowed ? `Starts it as ${workflowWords(workflowFor(t.type)).toLowerCase()}` : startGate.reason}
+                         disabled={Boolean(busy) || !startGate.allowed} title={startGate.allowed ? `Starts it as ${workflowWords(ticketWorkflow(t)).toLowerCase()}` : startGate.reason}
                          onClick={() => void start(t)}>
               {busy === t.key ? "Starting…" : t.type === "epic" ? "Plan first" : "Start"}
             </GatedButton>
@@ -211,6 +214,8 @@ export function ImportedSection({ ctx }: { ctx: PxCtx }) {
   const [picks, setPicks] = useState<Record<string, string>>({});
   const [held, setHeld] = useState<PendingRefusal | null>(null);
   const startGate = useGate("workflow_run:start", pid);
+  // The project's default profile, sent with each start (BOSSAPP-1334: the build runs on it).
+  const runProfile = useDefaultProfile(pid);
   const rows = readyTickets(ctx.work?.items ?? []);
   if (!rows.length) return said ? <p className={said.tone === "red" ? "tk-error" : "tk-ok"} role="status" data-testid="tk-imported-said">{said.text}</p> : null;
 
@@ -222,7 +227,8 @@ export function ImportedSection({ ctx }: { ctx: PxCtx }) {
     if (!startGate.allowed) return;
     setBusy(workItemId); setSaid(null);
     try {
-      const r = await startFromTicket(workItemId, { project_id: pid, workflow_key: workflow, ...(anyway.length ? { start_anyway: anyway } : {}) });
+      const r = await startFromTicket(workItemId, { project_id: pid, workflow_key: workflow, ...(anyway.length ? { start_anyway: anyway } : {}),
+                                                    ...(runProfile ? { profile: runProfile } : {}) });
       const readiness = r.ok ? null : refusalReadiness(r.refusal);
       if (readiness) { setHeld(heldFor(key, r.error, readiness, (more) => start(workItemId, key, workflow, more))); return; }
       if (!r.ok) { setSaid({ text: r.error ?? `${key} did not start.`, tone: "red" }); return; }

@@ -222,11 +222,18 @@ def test_connect_browse_import_and_start_from_a_ticket(world, client, engine, pr
         inbox = client.get(f"/v1/projects/{project}/tickets/waiting").json()["tickets"]
         assert not {f"KAN-{D.EPIC}", f"KAN-{D.STORY}"} & {t["key"] for t in inbox}
 
-        # START from the story's work item: a story runs minor_feature, the ticket rides along.
+        # A profile that is not one is refused before anything starts (BOSSAPP-1334).
+        bad_profile = client.post(f"/v1/work-items/{story_item}/start-from-ticket",
+                                  json={"profile": "turbo"})
+        assert bad_profile.status_code == 422, bad_profile.text
+        assert bad_profile.json()["detail"]["error"] == "bad_profile"
+        # START from the story's work item: a story runs minor_feature, the ticket rides along,
+        # on the profile the person picked (BOSSAPP-1334).
         started = _until_started(
             client, lambda b: client.post(f"/v1/work-items/{story_item}/start-from-ticket",
-                                          json=b), {})
+                                          json=b), {"profile": "lean"})
     assert started.status_code == 200, started.text
+    assert _run_input(engine, started.json()["run"]["id"])["profile"] == "lean"
     out = started.json()
     assert out["workflow_key"] == "minor_feature" and out["ticket"]["key"] == f"KAN-{D.STORY}"
     run_id = out["run"]["id"]

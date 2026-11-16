@@ -243,3 +243,25 @@ describe("a ticket start the project is not ready for (console walk)", () => {
   });
 });
 
+
+describe("the profile a ticket's work runs on (BOSSAPP-1334)", () => {
+  it("Ready to start and Waiting for BOSS send the project's profile with the start", async () => {
+    const calls = stub((url, method) => {
+      if (url.startsWith("/v1/pipeline-profiles")) return json({ project_id: "p1", default: "strict", items: [] });
+      if (url.endsWith("/tickets/waiting")) return json({ tickets: [tk("LEND-151", "story")], errors: [] });
+      if (method === "POST" && url.endsWith("/tickets/import")) return json({ imported: [{ key: "LEND-151", work_item_id: "wi_151", parent_work_item_id: null }], already_in_boss: [] });
+      return json({ run_id: "r" });
+    });
+    await mount(<ImportedSection ctx={withWork([ready("wi_b", "LEND-149", "bug")])} />);
+    await settle();
+    click('[data-testid="tk-imported-start-LEND-149"]');
+    await settle();
+    expect(calls.find((c) => c.url === "/v1/work-items/wi_b/start-from-ticket")?.body).toEqual({ project_id: "p1", workflow_key: "fast_fix", profile: "strict" });
+    unmount();
+    await mount(<WaitingSection ctx={ctx()} conns={[CONN]} />);
+    await settle();
+    click('[data-testid="tk-waiting-start-LEND-151"]');
+    await settle();
+    expect(calls.find((c) => c.url === "/v1/work-items/wi_151/start-from-ticket")?.body).toMatchObject({ profile: "strict" });
+  });
+});

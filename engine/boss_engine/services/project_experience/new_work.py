@@ -633,6 +633,21 @@ def plan(connection: Connection, project_id: str, kind: str = "feature",
     return out
 
 
+#: The profiles a person picks when starting work (New work, Add project, Change it).
+CHOOSABLE_PROFILES = ("lean", "balanced", "strict")
+
+
+def chosen_profile(profile: Optional[str]) -> str:
+    """The profile a person picked when starting work (BOSSAPP-1334): "" for none (the project's
+    default applies), else one of CHOOSABLE_PROFILES; anything else is refused (ValueError)."""
+    value = str(profile or "").strip().lower()
+    if not value:
+        return ""
+    if value not in CHOOSABLE_PROFILES:
+        raise ValueError(f"profile is one of {', '.join(CHOOSABLE_PROFILES)}")
+    return value
+
+
 class AnchorClosed(LookupError):
     """The app's change was closed without merging: New work does not reopen or build on it."""
 
@@ -741,6 +756,6 @@ def app_anchor(connection: Connection, project_id: str, app: Optional[str]
             "pr_state": state, "mode": mode}
 
 
-__all__ = ["KINDS", "WAS_SIZE", "AnchorClosed", "app_anchor", "choose", "create_issue", "defaults", "estimate",
+__all__ = ["CHOOSABLE_PROFILES", "KINDS", "WAS_SIZE", "AnchorClosed", "app_anchor", "chosen_profile", "choose", "create_issue", "defaults", "estimate",
            "issue_of", "options", "plan", "round_minutes", "steps", "strip", "targets", "tell",
            "ticket_link", "ticket_title", "tracker"]

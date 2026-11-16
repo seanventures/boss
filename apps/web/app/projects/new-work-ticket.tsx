@@ -11,7 +11,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { CheckCircle, Info, MagnifyingGlass } from "@phosphor-icons/react";
 
-import { TYPE_WORDS, readConnections, readResolve, ticketSetupHref, workflowFor, type Ticket, type TypedError } from "../../lib/tickets";
+import { pickedFrom, readConnections, readResolve, ticketSetupHref, ticketWorkflow, type Ticket, type TypedError } from "../../lib/tickets";
 import { NotSharedLine, TicketCard, TkReadState, WorkflowPick } from "../tickets/ticket-parts";
 import "../tickets/ticket-run.css";
 
@@ -79,16 +79,18 @@ export function NewWorkTicket({ resolved, workflow, onWorkflow, projectId }: {
         {resolved.errors.map((e) => `${e.ref ? `${e.ref}: ` : ""}${e.message || "could not be read."}`).join(" · ")}</p>
     ) : null;
   }
-  const picked = workflow || workflowFor(t.type);
+  const picked = workflow || ticketWorkflow(t);
   return (
     <TicketCard ticket={t} testid="px-nw-ticket">
       <span className="tk-row" style={{ gap: 6 }}>
         <span className="tk-muted">Workflow:</span>
         <WorkflowPick value={picked} onChange={onWorkflow} testid="px-nw-ticket-workflow" />
-        <span className="tk-faint">· picked from {TYPE_WORDS[t.type]}</span>
+        <span className="tk-faint" data-testid="px-nw-ticket-picked-from">· picked from {pickedFrom(t)}</span>
       </span>
       <span className="tk-spacer" />
-      {t.maps_to && projectId && t.maps_to.project_id !== projectId ? (
+      {/* ONLY A REAL MAPPING NAMES ANOTHER PROJECT (BOSSAPP-1334): the fall-back to the project the
+          connection was added from said "Maps to BOSS dogfood bootstrap" on every other project. */}
+      {t.maps_to && t.maps_to.by === "mapping" && projectId && t.maps_to.project_id !== projectId ? (
         <span className="tk-faint" data-testid="px-nw-ticket-maps" title="Its ticket system maps this project key to another BOSS project. Start brings it here.">Maps to {t.maps_to.name}</span>
       ) : null}
       {t.in_boss ? <span className="tk-tag" data-tone="green" data-testid="px-nw-ticket-in-boss" title="BOSS already has this ticket; Start starts its work item">Already in BOSS</span> : null}

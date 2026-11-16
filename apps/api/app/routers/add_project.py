@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import re
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -106,7 +107,8 @@ class UnderstandBody(BaseModel):
     pinned: Optional[dict[str, Any]] = None
 
 
-def _understand(project_id: str, payload: UnderstandBody, actor: str) -> dict[str, Any]:
+def _understand(project_id: str, payload: UnderstandBody, actor: str,
+                ticket: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     from boss_engine.services.project_experience import add_project
 
     with begin(_engine) as connection:
@@ -115,7 +117,23 @@ def _understand(project_id: str, payload: UnderstandBody, actor: str) -> dict[st
         return add_project.understand(
             connection, _settings, project_id, words=payload.words, hint=payload.hint or "",
             previous=payload.previous, pinned=payload.pinned, catalogue=catalogue,
-            stacks=_stacks(), workflows=flows, actor=actor)
+            stacks=_stacks(), workflows=flows, actor=actor, ticket=ticket)
+
+
+def _linked_ticket(project_id: str, words: str) -> tuple[Optional[dict[str, Any]], Optional[dict]]:
+    """THE TICKET THE WORDS LINK TO (BOSSAPP-1334): a link or key of a connected ticket system,
+    read through the same resolver as a start (ticket_intake.resolve_for_start), as the person
+    asking. Read HERE, on the request (its identity), before Helm's turn runs on the pool. One
+    that cannot be read is a note, never a failed sheet."""
+    from apps.api.app.main import _ticket_for_start
+
+    try:
+        return _ticket_for_start(project_id, {"directive": words})
+    except HTTPException as error:
+        detail = error.detail if isinstance(error.detail, dict) else {"message": str(error.detail)}
+        return None, detail
+    except Exception:  # noqa: BLE001 — Helm still reads the words
+        return None, None
 
 
 def _within(fn, wait_s: float, words: str) -> dict[str, Any]:
@@ -155,8 +173,14 @@ def add_project_understand(project_id: str, payload: UnderstandBody,
     with begin(_engine) as connection:
         _require_project(connection, project_id)
     actor = _actor(request)
-    return _within(lambda: _understand(project_id, payload, actor), add_project.WAIT_S,
-                   payload.words)
+    ticket, note = _linked_ticket(project_id, payload.words)
+    out = _within(lambda: _understand(project_id, payload, actor, ticket), add_project.WAIT_S,
+                  payload.words)
+    # A timeout or a failed turn still shows what the ticket says (with_ticket on the raw words).
+    out = add_project.with_ticket(out, ticket, pinned=payload.pinned)
+    if note and not ticket:
+        out["ticket_note"] = note
+    return out
 
 
 class ConnectorsBody(BaseModel):
@@ -313,6 +337,13 @@ class CreateAndStartBody(BaseModel):
     #: consent: apply / compose refuse `egress_not_accepted` without it).
     accept_egress: list[str] = Field(default_factory=list, max_length=40)
     workflow_key: Optional[str] = Field(default=None, max_length=120)
+    #: THE PROFILE THE PERSON PICKED (BOSSAPP-1334): lean | balanced | strict, carried in the run
+    #: input to the build step. Empty: the project's default.
+    profile: Optional[str] = Field(default=None, max_length=20)
+    #: THE TICKET THE BRIEF WAS WRITTEN FROM (BOSSAPP-1334): {key, url}, so the run records where it
+    #: came from even when the brief or the directive no longer quotes the link. Carried as the
+    #: run's source_ref / source_url (the start door reads the ticket from them; never refuses).
+    ticket_ref: Optional[dict[str, str]] = None
     #: The workflow's own start form, Who to tell (notify_channel) and anything it declared.
     inputs: dict[str, Any] = Field(default_factory=dict)
     notify_when: list[str] = Field(default_factory=list, max_length=6)
@@ -413,13 +444,27 @@ def _needs(body: "CreateAndStartBody", kind: str) -> list[tuple[str, str]]:
     return out
 
 
+#: A refusal code said in words, for a refusal that brought no sentence of its own (BOSSAPP-1334:
+#: closing the consent sheet showed the raw "consent_required").
+_CODE_WORDS = {
+    "consent_required": ("Made, not started: the agents need your consent first. Press Create and "
+                         "start to give it, or Start on the project page later."),
+}
+
+
 def _words_of(exc: HTTPException) -> dict[str, Any]:
+    """The refusal as the sheet shows it: its own sentence, never a bare code."""
     d = exc.detail
     if isinstance(d, dict):
         out = dict(d)
-        out.setdefault("message", d.get("message") or d.get("summary") or d.get("error") or "")
+        said = str(d.get("message") or d.get("summary") or "").strip()
+        if not said or not re.search(r"\s", said):
+            code = str(d.get("error") or said or "").strip()
+            said = _CODE_WORDS.get(code) or (code.replace("_", " ").capitalize() if code else "")
+        out["message"] = said
         return out
-    return {"message": str(d)}
+    said = str(d or "")
+    return {"message": _CODE_WORDS.get(said, said)}
 
 
 def _run_input(body: CreateAndStartBody, brief: dict[str, Any], repo: Optional[str]
@@ -452,6 +497,18 @@ def _run_input(body: CreateAndStartBody, brief: dict[str, Any], repo: Optional[s
         run_input["reference_links"] = links
     if repo:
         run_input["repository"] = repo
+    from boss_engine.services.project_experience.new_work import chosen_profile
+
+    picked = chosen_profile(body.profile)       # validated in _create_and_start
+    if picked:
+        run_input["profile"] = picked
+    ref = body.ticket_ref or {}
+    key = str(ref.get("key") or "").strip()[:200]
+    url = str(ref.get("url") or "").strip()[:500]
+    if key:
+        run_input.setdefault("source_ref", key)
+    if url.lower().startswith(("https://", "http://")):
+        run_input.setdefault("source_url", url)
     # TALKS TO (More detail): an app of THIS project, named by its key and an alias, is an app
     # link the start requests; anything else ("Xero API", typed as words) is what the app calls,
     # said in the directive. Sending words as app_links refused the whole create ("an alias is
@@ -547,6 +604,12 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
     kind = body.kind if body.kind in ("idea", "repo", "folder") else None
     if kind is None:
         raise Refused("input", 422, {"error": "bad_kind", "message": "kind is idea, repo or folder."})
+    from boss_engine.services.project_experience.new_work import chosen_profile
+
+    try:
+        chosen_profile(body.profile)
+    except ValueError as error:
+        raise Refused("input", 422, {"error": "bad_profile", "message": str(error)}) from None
     if kind == "idea" and not (body.words.strip() or (body.brief or {}).get("title")):
         raise Refused("input", 422, {"error": "words_required", "message": "Say what it should do."})
     if kind == "repo" and not body.repo_ids:

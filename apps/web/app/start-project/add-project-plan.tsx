@@ -21,6 +21,7 @@ import type { TemplateCard } from "../../lib/templates";
 import type { StackAdapter } from "../../lib/templates";
 import { workflowInputFields, type WorkflowInputField } from "../../lib/workflow-inputs";
 import { WIZARD_COLLECTS } from "../workflow-readiness-ui";
+import { RUN_PROFILES, asRunProfile, profileWords, type RunProfile } from "../../lib/run-profiles";
 import { hostPort, ownerChip, ownerFixLines, repoCheckFix, type Candidate, type Host, type Kind, type OwnerCredential, type Pick, type Preview, type RepoCheck, type Where, type Workflow } from "../../lib/add-project";
 import type { RegistryRepo } from "../../lib/multirepo";
 
@@ -49,6 +50,9 @@ export type PlanState = {
   mapRules: boolean;
   /** The hosts the connectors' app talks to, allowed out loud (the templates' consent). */
   egressOk: boolean;
+  /** THE PROFILE IT RUNS ON (BOSSAPP-1334): lean · balanced · strict, "" / absent = the project's
+   *  default (shown as such). Sent as `profile` and carried to the build. */
+  profile?: RunProfile | "";
   /** WHERE A NEW APP'S CODE LIVES (BOSSAPP-917/918): this machine, a new GitHub repo, or a
    *  folder in a repo you have (repoIds, `layout`). */
   where: Where;
@@ -196,7 +200,9 @@ export function StepStrip({ w, testid = "ap-strip" }: { w: Workflow | null; test
   );
 }
 
-export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks, workflow, registry, repoLabel, codeName = "", live, accountLogin, accounts = [], owners = null, homeHref, inUse, newRepo, codeWhere = null }: {
+export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks, workflow, registry, repoLabel, codeName = "", live, accountLogin, accounts = [], owners = null, homeHref, inUse, newRepo, codeWhere = null, defaultProfile = null }: {
+  /** The project's default profile (the Profile choice opens on it). */
+  defaultProfile?: RunProfile | null;
   kind: Kind; preview: Preview | null; plan: PlanState; set: (patch: Partial<PlanState>) => void;
   cards: TemplateCard[] | null; adapters: StackAdapter[]; helmPicks: { stack: Pick | null; connectors: Pick[]; workflow: Pick | null };
   workflow: Workflow | null; registry: RegistryRepo[]; repoLabel: { v: string; s: string };
@@ -378,7 +384,8 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
             {kind === "idea" ? (
               <>
                 <span className="npx-v">{workflow?.short ?? "…"}</span>
-                <span className="npx-s">{workflow ? <>{workflow.steps} steps · <b className="npx-amber">{workflow.approvals} you approve</b></> : "reading"}</span>
+                <span className="npx-s">{workflow ? <>{workflow.steps} steps · <b className="npx-amber">{workflow.approvals} you approve</b></> : "reading"}
+                  <span data-testid="ap-box-profile"> · {profileWords(asRunProfile(plan.profile) ?? defaultProfile).toLowerCase()}</span></span>
               </>
             ) : (
               <>
@@ -390,6 +397,15 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
           {open === "workflow" ? (
             <Pop title="Workflow" icon={<GitBranch size={14} />} anchor="Workflow" testid="workflow" onDone={() => setOpen(null)} wide
                  foot={<button type="button" className="npx-link" data-testid="ap-wf-all" aria-expanded={allFlows} onClick={() => setAllFlows((v) => !v)}>All installed workflows ▾</button>}>
+              {/* THE PROFILE (BOSSAPP-1334): the same choice Change it has, opening on the project's default. */}
+              <label className="npx-field" data-testid="ap-profile-field">
+                <span title="How much checking the build gets">Profile</span>
+                <select className="npx-input" data-testid="ap-wf-profile" value={asRunProfile(plan.profile) ?? defaultProfile ?? ""}
+                        onChange={(e) => set({ profile: asRunProfile(e.target.value) ?? "" })}>
+                  {defaultProfile ? null : <option value="">Project default</option>}
+                  {RUN_PROFILES.map((x) => <option key={x.key} value={x.key} title={x.tip}>{x.label}{x.key === defaultProfile ? " (project default)" : ""}</option>)}
+                </select>
+              </label>
               <div className="npx-wfp" role="radiogroup" aria-label="Workflow">
                 {(allFlows ? flows : paths.length ? paths : flows).map((w) => (
                   <button key={w.key} type="button" role="radio" aria-checked={w.key === workflow?.key} className="npx-wfc" data-testid={`ap-wf-${w.key}`}

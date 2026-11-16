@@ -205,6 +205,8 @@ export type StartFields = {
   workflow_key?: string; start_anyway?: string[];
   /** The app it builds onto (AR-20): the door's `app`, sent as is; the engine resolves it. */
   app?: string;
+  /** The profile it runs on (BOSSAPP-1334): lean | balanced | strict. */
+  profile?: string;
 };
 
 /** The body Start and Add to Next send: the words, the confirmed brief, the chips. */
@@ -218,6 +220,7 @@ export function workBody(kind: WorkKind, text: string, f: StartFields): R {
     ...(f.workflow_key ? { workflow_key: f.workflow_key } : {}),
     ...(f.start_anyway?.length ? { start_anyway: f.start_anyway } : {}),
     ...(f.app ? { app: f.app } : {}),
+    ...(f.profile ? { profile: f.profile } : {}),
   };
 }
 
