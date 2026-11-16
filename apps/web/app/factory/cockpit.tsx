@@ -109,7 +109,7 @@ export function askSuggestions(c: Pick<CockpitData, "app" | "brief" | "lineage" 
 
 /** What a retry reuses, said before the press (the old Retry's tooltip, mirroring the server's
  *  _repair_needs_write_tests): it resumes, it does not rebuild from scratch. */
-const TEST_GATES = new Set(["tests_strong_enough", "tests_written_first", "coder_did_not_edit_tests",
+const TEST_GATES = new Set(["tests_strong_enough", "tests_written_first", "coder_did_not_edit_tests", "brief_tests_written",
   "written_tests_pass", "existing_tests_intact"]);
 export function retryTip(c: Pick<CockpitData, "outputs">): string {
   const failing = (c.outputs.checks?.gates ?? []).filter((g) => !g.ok && !g.waivedBy).map((g) => g.name);

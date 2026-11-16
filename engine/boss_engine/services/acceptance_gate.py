@@ -572,7 +572,8 @@ def headline(record: Optional[Mapping[str, Any]]) -> str:
         return f"Must-haves: not checked ({record.get('why') or 'no answer'})"
     if not record.get("items"):
         return ""
-    bits = [f"{c.get(MET, 0)} met", f"{c.get(PARTIAL, 0)} partial", f"{c.get(MISSING, 0)} missing"]
+    reg = record.get("regressed_vs_parent") or {}
+    bits = ([str(reg.get("words"))] if reg.get("words") else []) + [f"{c.get(MET, 0)} met", f"{c.get(PARTIAL, 0)} partial", f"{c.get(MISSING, 0)} missing"]
     if c.get(UNJUDGED):
         bits.append(f"{c[UNJUDGED]} not judged")
     if record.get("advisory"):
@@ -664,7 +665,8 @@ def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = No
     from sqlalchemy import text
 
     row = connection.execute(text(
-        "SELECT project_id, COALESCE(finalize_ctx->>'root_run_id', id) FROM code_task_runs "
+        "SELECT project_id, COALESCE(finalize_ctx->>'root_run_id', id), "
+        "finalize_ctx->>'parent_run_id' FROM code_task_runs "
         "WHERE id = :id"), {"id": run_id}).first()
     gates: dict[str, list[str]] = {}
     for g in current_failing or ():
@@ -677,7 +679,7 @@ def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = No
         if acc and acc.get("verdict") == "not_met":
             gates.setdefault(GATE, [run_id])
         return {"gates": gates, "acceptance": acc}
-    project_id, root = row[0], row[1]
+    project_id, root, parent_run = row[0], row[1], row[2]
     rows = connection.execute(text(
         "SELECT r.id, r.status, r.pull_request_url, r.finalize_ctx, r.state->'acceptance' AS acc, "
         "q.gates_passed FROM code_task_runs r LEFT JOIN quality_gates q "
@@ -742,7 +744,45 @@ def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = No
             # acceptance seat): an earlier `met` is not a pass for code it never read.
             latest = {**latest, "verdict": "not_checked",
                       "why": f"not checked since {checks[-1][0]}"}
-    return {"gates": gates, "acceptance": latest}
+    return {"gates": gates, "acceptance": latest,
+            "regressed": regressed_vs_parent(checks, run_id=run_id, parent_run_id=parent_run)}
+
+
+def regressed_vs_parent(checks: list[tuple[str, dict]], *, run_id: str,
+                        parent_run_id: Optional[str]) -> Optional[dict[str, Any]]:
+    """{"parent_run_id", "parent": the parent's check, "from_met", "to_met"} when THIS run's
+    acceptance check met fewer of the same must-haves than its parent's, else None
+    (BOSSAPP-1330). A checks-failing follow-up of FXQuote went from 17 met to 13 and its merge
+    card showed only the 13: the better verdict was quietly replaced. Compared only on the
+    same items (the parent's item keys within this check's), so a slice judged on different
+    items is never a regression."""
+    if not parent_run_id:
+        return None
+    mine = next((acc for rid, acc in reversed(checks) if rid == run_id), None)
+    parent = next((acc for rid, acc in reversed(checks) if rid == parent_run_id), None)
+    if not mine or not parent:
+        return None
+    keys = set((parent.get("source") or {}).get("item_keys") or [])
+    mine_keys = set((mine.get("source") or {}).get("item_keys") or [])
+    if keys and mine_keys and not keys <= mine_keys:
+        return None
+    was = int((parent.get("counts") or {}).get(MET, 0) or 0)
+    now = int((mine.get("counts") or {}).get(MET, 0) or 0)
+    if now >= was:
+        return None
+    return {"parent_run_id": parent_run_id, "from_met": was, "to_met": now,
+            "parent": parent, "words": f"regressed vs parent: {was}→{now} met"}
+
+
+def regression_card(reg: Mapping[str, Any]) -> dict[str, Any]:
+    """What a merge card carries of a regression: the words, both counts, the parent's table."""
+    parent = reg.get("parent") or {}
+    return {"words": reg.get("words"), "parent_run_id": reg.get("parent_run_id"),
+            "from_met": reg.get("from_met"), "to_met": reg.get("to_met"),
+            "parent_counts": parent.get("counts") or {},
+            "parent_headline": headline({k: v for k, v in parent.items()
+                                         if k != "regressed_vs_parent"}),
+            "parent_table": must_have_table(parent)}
 
 
 def _unresolved(checks: list[tuple[str, dict]],
@@ -815,6 +855,11 @@ def merge_card_checks(connection: Any, *, run_id: Optional[str], evidence: Any,
                                        current_failing=cf.gate_names(checks_failing))
         acceptance = lineage.get("acceptance") or (
             acceptance if isinstance(acceptance, Mapping) else None)
+        reg = lineage.get("regressed")
+        if reg and isinstance(acceptance, Mapping):
+            # BOTH VERDICTS ON THE CARD (BOSSAPP-1330): the worse one leads, said as a
+            # regression, and the parent's better one stays beside it.
+            acceptance = {**acceptance, "regressed_vs_parent": reg}
         if not checks_failing:
             card = card_checks_failing(lineage, run_id=run_id)
     except Exception as exc:  # noqa: BLE001 — the card still opens; its own checks still show
@@ -841,7 +886,7 @@ def card_words(card: Optional[Mapping[str, Any]], acceptance: Optional[Mapping[s
 
 __all__ = [
     "batch_summary", "card_words", "evidence_paths", "run_check", "item_key", "items_dropped", "lineage_build_rows",
-    "merge_card_checks", "union_spec", "UNION_KEY",
+    "merge_card_checks", "union_spec", "UNION_KEY", "regressed_vs_parent", "regression_card",
     "GATE", "SEAT", "KEY", "SUMMARY_KEY", "acceptance_items", "acceptance_prompt",
     "brief_must_haves", "card_checks_failing", "findings_summary", "headline", "items_spec",
     "judge", "lineage_failures", "must_have_table", "parse_acceptance",

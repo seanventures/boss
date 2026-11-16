@@ -119,7 +119,7 @@ export function RetryControls(
   const [state, action, pending] = useActionState(callAction(retryCodeTaskWithStateAction, undefined, "code_task:retry"), null);
   // Which stages the retry will SKIP, mirroring _repair_needs_write_tests on the server, so the
   // operator knows this resumes rather than restarting. Kept in sync with _TEST_GATES.
-  const TEST_GATES = ["tests_strong_enough", "tests_written_first", "coder_did_not_edit_tests",
+  const TEST_GATES = ["tests_strong_enough", "tests_written_first", "coder_did_not_edit_tests", "brief_tests_written",
                       "written_tests_pass", "existing_tests_intact"];
   const reusesTests = failingGates.length > 0 && !failingGates.some((g) => TEST_GATES.includes(g));
   const explains = "Resumes on the same branch and reuses the approved plan"

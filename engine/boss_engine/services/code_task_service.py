@@ -1777,7 +1777,19 @@ def extend_title(engine, run_id: str, what: Any) -> Optional[str]:
 
 
 class BranchOwned(RetryRefused):
-    """Another run of the same lineage is already working on its branch and pull request."""
+    """Another run of the same lineage is already working on its branch and pull request.
+
+    Not a failure of whoever asked: a wait, until the owner finishes (BOSSAPP-1331). The owner
+    travels with it (`tool_result`), so a step that asked through a tool waits on that run
+    instead of reading the sentence."""
+
+    def __init__(self, message: str, *, owner_id: str = "") -> None:
+        super().__init__(message)
+        self.owner_id = owner_id
+
+    @property
+    def tool_result(self) -> dict:
+        return {"error_kind": "branch_owned", "wait_for_run": self.owner_id}
 
 
 def lineage_branch_owner(connection, project_id: str, root: str,
@@ -1817,7 +1829,7 @@ def refuse_second_owner(owner: Optional[dict]) -> None:
     raise BranchOwned(
         f"{owner['id']} “{str(owner.get('title') or '')[:80]}” is already working on this "
         f"branch{pr}. One run owns a pull request at a time: wait for it to finish, then "
-        "continue from it.")
+        "continue from it.", owner_id=str(owner["id"]))
 
 
 #: How many lines of the previous attempt's verify output a retry is shown.

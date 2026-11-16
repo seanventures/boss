@@ -100,11 +100,13 @@ def test_an_advisory_step_that_fails_to_start_completes_and_the_deploy_beside_it
         steps, stopped = _steps(c, run_id), _run(c, run_id)
         assert stopped["status"] == "running", stopped
         assert not stopped["blocked_reason"]
-        assert steps["m"]["status"] == "succeeded"
+        # NOT RUN, NEVER "SUCCEEDED" (BOSSAPP-1331): skipped, with its reason.
+        assert steps["m"]["status"] == "skipped"
         # SAID, NEVER SILENT: the cause, the note, and an event of its own.
         assert "extend_code_task" in steps["m"]["last_error"]
         out = steps["m"]["output"]
-        assert out["advisory_failed"] is True and out["status"] == "not_applicable"
+        assert out["advisory_failed"] is True and out["status"] == "not_run"
+        assert out["note"].startswith("not run:")
         assert "could not start" in out["note"] and "carries on" in out["note"]
         said = _events(c, run_id, "workflow.step_advisory_failed")
         assert len(said) == 1 and "extend_code_task" in said[0]["error"]

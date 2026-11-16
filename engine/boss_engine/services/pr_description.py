@@ -19,6 +19,7 @@ _GATE_WORDS = {
     "code_written": "Code written", "written_tests_pass": "New tests pass",
     "existing_tests_intact": "Old tests pass", "tests_written_first": "Tests came first",
     "coder_did_not_edit_tests": "Tests untouched", "tests_strong_enough": "Tests catch bugs",
+    "brief_tests_written": "Named tests written",
     "code_review_passed": "Review passed", "security_clean": "Security clean",
     "consistent": "Consistent", "nothing_broke": "Nothing broke", "app_serves": "App starts",
     "web_package_honest": "Package honest", "template_tests": "Template tests",

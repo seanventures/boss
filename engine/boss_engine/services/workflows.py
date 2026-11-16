@@ -6027,11 +6027,15 @@ def force_complete_waiting_step(
     crashed worker. So its completion is a separate door, and it only opens for a step actually
     in `waiting`.
     """
+    not_run = did_not_run(output)
+    if not_run:
+        # Not run, with its reason (BOSSAPP-1331): a service's preview that never came up.
+        output = {**output, RELEASED_NOT_RUN: True}
     row = connection.execute(
         text(
             """
             UPDATE workflow_step_runs
-            SET status='succeeded', output=CAST(:output AS JSONB),
+            SET status=:status, output=CAST(:output AS JSONB),
                 completed_at=GREATEST(COALESCE(started_at, clock_timestamp()),
                                       LEAST(clock_timestamp(),
                                             COALESCE(CAST(:finished AS timestamptz),
@@ -6042,7 +6046,7 @@ def force_complete_waiting_step(
             """
         ),
         {"id": step_run_id, "project_id": project_id, "output": json.dumps(output),
-         "finished": finished_at},
+         "finished": finished_at, "status": "skipped" if not_run else "succeeded"},
     ).mappings().first()
     if not row:
         raise WorkflowNotFoundError("Waiting workflow step not found.")
@@ -6070,7 +6074,8 @@ def force_complete_waiting_step(
         )
     _emit_step_event(
         connection, _run_row(connection, row["workflow_run_id"]),
-        "workflow.step_succeeded", row, {"awaited": True},
+        "workflow.step_skipped" if not_run else "workflow.step_succeeded", row,
+        {"awaited": True, **({"reason": not_run} if not_run else {})},
     )
     _after_success(
         connection, row["workflow_run_id"], row["step_id"], int(row["iteration"]),
@@ -6151,14 +6156,30 @@ def skipped_by_operator(row: Any) -> bool:
     return bool(isinstance(output, dict) and output.get("skipped_by_operator"))
 
 
+#: On a skipped step's output: the RUN skipped it and goes on past it (it did not run — a
+#: service's preview, an advisory pass that could not start), as an operator's skip does.
+RELEASED_NOT_RUN = "not_run_released"
+
+
+def released_not_run(row: Any) -> bool:
+    """A step the run itself recorded as NOT RUN and went on past (BOSSAPP-1331): skipped, its
+    reason kept, and released like a success — never a branch the run did not take."""
+    if row["status"] != "skipped":
+        return False
+    output = _json(row["output"], {})
+    return bool(isinstance(output, dict) and output.get(RELEASED_NOT_RUN))
+
+
 def _settled_for_downstream(row: Any) -> bool:
     """May the steps after this one run?
 
-    Succeeded, or skipped BY AN OPERATOR who decided the run should go on without it. A step
-    skipped because its branch was never taken (`path_not_reached`) is not a decision anybody
-    made about this step, so it does not release a join.
+    Succeeded, skipped BY AN OPERATOR who decided the run should go on without it, or recorded
+    as not run by the run itself (`released_not_run`). A step skipped because its branch was
+    never taken (`path_not_reached`) is not a decision anybody made about this step, so it does
+    not release a join.
     """
-    return row["status"] == "succeeded" or skipped_by_operator(row)
+    return (row["status"] == "succeeded" or skipped_by_operator(row)
+            or released_not_run(row))
 
 
 def _latest_step_row(
@@ -6710,6 +6731,20 @@ def _record_gate_answer(connection: Connection, run_id: str, step_id: str, *,
         })
 
 
+def did_not_run(output: Optional[dict[str, Any]]) -> Optional[str]:
+    """The reason a step's output says it DID NOT RUN, or None: it was skipped (`skipped`, e.g.
+    a service's preview) or could not start (`advisory_failed`, `not_run`)."""
+    out = output if isinstance(output, dict) else {}
+    # An advisory pass that failed WHILE IT RAN (`awaited_status`) did run: only one that
+    # could not start is "not run".
+    could_not_start = bool(out.get("advisory_failed")) and not out.get("awaited_status")
+    if not (out.get("skipped") or could_not_start or out.get("not_run")
+            or str(out.get("status") or "") in ("skipped", "not_run")):
+        return None
+    return str(out.get("reason") or out.get("note") or out.get("message")
+               or "the step did not run")[:500]
+
+
 def complete_step(
     connection: Connection,
     *,
@@ -6730,7 +6765,7 @@ def complete_step(
     ).mappings().first()
     if not row:
         raise WorkflowNotFoundError("Workflow step run not found.")
-    if row["status"] == "succeeded":
+    if row["status"] in ("succeeded", "skipped"):
         return _serialize_step(row)
     if row["status"] not in {"leased", "running"} or row["lease_owner"] != worker_id:
         raise WorkflowLeaseError("Workflow step is not leased by this worker.")
@@ -6742,11 +6777,15 @@ def complete_step(
         # takes its error path from there. Said, not raised, so the caller's transaction keeps
         # the record.
         return _time_out_attempt(connection, row)
+    # A STEP THAT DID NOT RUN IS NOT RUN (BOSSAPP-1331): its output says it was skipped (a
+    # service's preview, a UX sign-off of an app with no page) or could not start (an
+    # advisory pass), so its row is `skipped` with the reason — never "succeeded".
+    not_run = did_not_run(output)
     updated = connection.execute(
         text(
             """
             UPDATE workflow_step_runs
-            SET status='succeeded', output=CAST(:output AS JSONB),
+            SET status=:status, output=CAST(:output AS JSONB),
                 evidence=CAST(:evidence AS JSONB), lease_owner=NULL,
                 lease_expires_at=NULL, heartbeat_at=NULL,
                 completed_at=clock_timestamp(), updated_at=now()
@@ -6754,8 +6793,10 @@ def complete_step(
             """
         ),
         {
+            "status": "skipped" if not_run else "succeeded",
             "id": step_run_id,
-            "output": json.dumps(output or {}, default=str),
+            "output": json.dumps({**(output or {}), RELEASED_NOT_RUN: True} if not_run
+                                 else (output or {}), default=str),
             "evidence": json.dumps(evidence or [], default=str),
         },
     ).mappings().one()
@@ -6774,14 +6815,15 @@ def complete_step(
     _emit_step_event(
         connection,
         run,
-        "workflow.step_succeeded",
+        "workflow.step_skipped" if not_run else "workflow.step_succeeded",
         updated,
-        {"evidence_count": len(evidence or [])},
+        {"evidence_count": len(evidence or []),
+         **({"reason": not_run} if not_run else {})},
     )
     spec = _run_spec(connection, row["workflow_run_id"])
     template = _step_map(spec)[row["step_id"]]
     contract_raw = template.get("contract")
-    if contract_raw:
+    if contract_raw and not not_run:   # a step that did not run produced nothing
         from .knowledge import context_graph
         from .knowledge.step_contracts import parse_contract, unsatisfied_required
 
@@ -7261,15 +7303,17 @@ def _complete_advisory_failure(
     decide. The output does not enter the run context: nothing downstream reads a step that
     did not do its work.
     """
-    note = (f"this step could not start ({str(error).strip() or 'no reason given'}); it is "
-            "advisory, so the run carries on without it.")[:600]
-    said = {**(output or {}), "status": "not_applicable", "advisory": True,
-            "advisory_failed": True, "note": note}
+    note = (f"not run: this step could not start ({str(error).strip() or 'no reason given'}); "
+            "it is advisory, so the run carries on without it.")[:600]
+    said = {**(output or {}), "status": "not_run", "advisory": True,
+            "advisory_failed": True, "not_run": True, "note": note, RELEASED_NOT_RUN: True}
+    # NOT RUN, NEVER "SUCCEEDED" (BOSSAPP-1331): a More tests pass that could not start was
+    # recorded green; the step is `skipped`, its reason kept, and the run goes on past it.
     updated = connection.execute(
         text(
             """
             UPDATE workflow_step_runs
-            SET status='succeeded', last_error=:error,
+            SET status='skipped', last_error=:error,
                 lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
                 completed_at=clock_timestamp(),
                 output = COALESCE(output, '{}'::jsonb) || CAST(:output AS JSONB),
@@ -7282,8 +7326,8 @@ def _complete_advisory_failure(
     run = _run_row(connection, row["workflow_run_id"])
     _emit_step_event(connection, run, "workflow.step_advisory_failed", updated,
                      {"error": error, "note": note})
-    _emit_step_event(connection, run, "workflow.step_succeeded", updated,
-                     {"advisory_failed": True})
+    _emit_step_event(connection, run, "workflow.step_skipped", updated,
+                     {"advisory_failed": True, "reason": note})
     _after_success(connection, row["workflow_run_id"], row["step_id"], int(row["iteration"]))
     return _serialize_step(updated)
 

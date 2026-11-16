@@ -364,6 +364,7 @@ GATE_LABELS: dict[str, tuple[str, str]] = {
     "existing_tests_intact": ("Old tests pass", "check"),
     "tests_written_first": ("Tests came first", "tests"),
     "coder_did_not_edit_tests": ("Tests untouched", "build"),
+    "brief_tests_written": ("Named tests written", "tests"),
     "tests_strong_enough": ("Tests catch bugs", "check"),
     "code_review_passed": ("Review passed", "review"),
     "security_clean": ("Security clean", "review"),
@@ -2378,6 +2379,10 @@ def gate_reason(name: str, ok: bool, evidence: Mapping[str, Any],
         return _plural(n, "test file", "test files") if n else (None if ok else "no tests first")
     if name == "coder_did_not_edit_tests":
         return None if ok else "coder edited tests"
+    if name == "brief_tests_written":
+        gone = list(((ev.get("brief_tests") or {}).get("missing")) or [])
+        return None if ok else (f"missing: {', '.join(map(str, gone))}"[:60] if gone
+                                else "a named test is missing")
     if name == "web_package_honest":
         contract = ev.get("web_package_contract") if isinstance(ev.get("web_package_contract"),
                                                                dict) else {}

@@ -2585,7 +2585,12 @@ class SoftwareFactoryService:
                     "stack": acceptance.get("stack") or {},
                     "why": acceptance.get("why") or "",
                     "items_dropped": int(acceptance.get("items_dropped") or 0),
-                    "table": _acceptance_gate.must_have_table(acceptance)}}
+                    "table": _acceptance_gate.must_have_table(acceptance),
+                    # WORSE THAN ITS PARENT (BOSSAPP-1330): said, with the parent's verdict and
+                    # table beside this one — never quietly replaced by the worse check.
+                    **({"regressed_vs_parent": _acceptance_gate.regression_card(
+                        acceptance["regressed_vs_parent"])}
+                       if acceptance.get("regressed_vs_parent") else {})}}
                    if isinstance(acceptance, dict) and acceptance.get("verdict")
                    # Never checked against the root's must-haves: the card says so.
                    else {_acceptance_gate.KEY: {"verdict": "not_checked", "items": []}}

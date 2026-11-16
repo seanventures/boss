@@ -551,7 +551,11 @@ class ToolRegistry:
             consent = consent_result(name, safe_args, exc)
             if consent is not None:
                 return consent
-            return {"ok": False, "tool": name, "error": f"{type(exc).__name__}: {exc}"}
+            # A refusal that knows its own shape says it (BranchOwned: the run it waits on), so
+            # a caller acts on the kind, never on the sentence.
+            said = getattr(exc, "tool_result", None)
+            return {**(said if isinstance(said, dict) else {}),
+                    "ok": False, "tool": name, "error": f"{type(exc).__name__}: {exc}"}
         finally:
             TRUSTED_STEP_ARGS.reset(trusted_token)
             if auth_token is not None:

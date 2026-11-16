@@ -1240,6 +1240,13 @@ _KIND_SKIP_DIRS = frozenset({
     "__pycache__", "coverage", "testdata", "fixtures", "test", "tests", "__tests__", "spec",
     "e2e", "docs", "doc", ".github", ".next", ".nuxt", ".svelte-kit", ".cache", "examples"})
 _KIND_MAX_FILES = 6000
+#: Server code whose string literals may hold a page, read at most this many files per tree.
+_SERVER_CODE_SUFFIXES = (".go", ".py", ".rb", ".java", ".kt", ".rs", ".php", ".ex", ".cs",
+                         ".js", ".mjs", ".ts")
+_KIND_MAX_READS = 400
+_HTML_MARKUP = re.compile(r"(?i)<!doctype\s+html|<html[\s>]|<body[\s>]")
+_HTML_CONTENT_TYPE = re.compile(r"(?i)text/html")
+_TEST_FILE = re.compile(r"(?i)(?:_test\.|\.test\.|\.spec\.|^test_)")
 
 
 def app_tree_kind(tree: Optional[Path | str]) -> tuple[str, str]:
@@ -1259,6 +1266,8 @@ def app_tree_kind(tree: Optional[Path | str]) -> tuple[str, str]:
         return "unknown", "no tree"
     manifests: list[str] = []
     seen = 0
+    read = 0
+    serves_html: Optional[str] = None
     for dirpath, dirnames, filenames in os.walk(base):
         rel_dir = Path(dirpath).relative_to(base)
         dirnames[:] = [d for d in dirnames if d not in _KIND_SKIP_DIRS and not d.startswith(".")
@@ -1284,6 +1293,20 @@ def app_tree_kind(tree: Optional[Path | str]) -> tuple[str, str]:
                     return "app", f"{rel} depends on {', '.join(front[:3])}"
             if name in APP_MANIFESTS or name in ("Gemfile", "composer.json", "mix.exs"):
                 manifests.append(rel)
+            if (name.lower().endswith(_SERVER_CODE_SUFFIXES) and read < _KIND_MAX_READS
+                    and not _TEST_FILE.search(name)):
+                # A PAGE SERVED FROM CODE (#174 review): a Go or Python app that writes its
+                # HTML in a string literal has no .html file, and is still an app.
+                read += 1
+                try:
+                    with open(Path(dirpath) / name, encoding="utf-8", errors="ignore") as fh:
+                        code = fh.read(200_000)
+                except OSError:
+                    code = ""
+                if _HTML_MARKUP.search(code):
+                    return "app", f"it serves a page from code ({rel})"
+                if serves_html is None and _HTML_CONTENT_TYPE.search(code):
+                    serves_html = rel
         if seen > _KIND_MAX_FILES:
             break
     try:
@@ -1294,6 +1317,10 @@ def app_tree_kind(tree: Optional[Path | str]) -> tuple[str, str]:
         front = []
     if front:
         return "app", f"it has a web front end ({front[0]})"
+    if serves_html:
+        # It answers text/html but no page is in sight: not provably a service — ask.
+        return "unknown", (f"{serves_html} answers text/html, and no page is in the tree: "
+                           "it may serve one")
     if manifests:
         return "service", (f"{manifests[0]} and no page, UI file, template or front-end "
                            "dependency anywhere in the app")
