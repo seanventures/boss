@@ -6552,6 +6552,26 @@ def reopen_failed_step(
     return _serialize_step(row)
 
 
+def park_for_ended_authority(
+    connection: Connection, *, project_id: str, step_run_id: str, worker_id: str, run_id: str,
+) -> dict[str, Any]:
+    """Park the leased step on the ended-authority sentence. Same run, no new attempt."""
+    from .step_recovery import AUTHORITY_ENDED
+
+    parked = park_step_awaiting(
+        connection, project_id=project_id, step_run_id=step_run_id, worker_id=worker_id,
+        output={"status": "awaiting", "error": AUTHORITY_ENDED, "note": AUTHORITY_ENDED,
+                "await": {"kind": "authority", "then": "renew"}})
+    connection.execute(
+        text("UPDATE workflow_step_runs SET last_error=:m WHERE id=:id"),
+        {"m": AUTHORITY_ENDED, "id": step_run_id})
+    connection.execute(
+        text("UPDATE workflow_runs SET blocked_reason=:m WHERE id=:id "
+             "AND status IN ('running','waiting','paused')"),
+        {"m": AUTHORITY_ENDED, "id": run_id})
+    return parked
+
+
 def park_step_awaiting(
     connection: Connection,
     *,
@@ -6946,6 +6966,16 @@ def wait_step(
     return _serialize_step(updated)
 
 
+def retryable_failure(error: str, retryable: bool) -> tuple[str, bool]:
+    """An ended authority is not another attempt. The stored sentence is the exact one."""
+    from .step_recovery import authority_message
+
+    said = authority_message(error)
+    if said:
+        return said, False
+    return error, retryable
+
+
 def fail_step(
     connection: Connection,
     *,
@@ -6973,6 +7003,7 @@ def fail_step(
         raise WorkflowNotFoundError("Workflow step run not found.")
     if row["status"] not in {"leased", "running"} or row["lease_owner"] != worker_id:
         raise WorkflowLeaseError("Workflow step is not leased by this worker.")
+    error, retryable = retryable_failure(error, retryable)
     # A FAILURE NO RETRY CAN FIX, SAID AS ITS FIX — whichever kind of step raised it. Here,
     # where every step failure is recorded, so no step path can miss it (model_failures).
     from .model_failures import settled_failure

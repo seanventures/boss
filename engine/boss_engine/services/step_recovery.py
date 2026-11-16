@@ -181,6 +181,26 @@ _BOSS_BUILD = re.compile(
 _SECRET_SCAN = re.compile(r"secret (?:scan|literal)|no_committed_secrets|committed secret", re.I)
 _PERSON_SECRET = re.compile(r"secret[s]? (?:this target does not have|only you|is required)|"
                             r"needs? (?:a|the) (?:key|token|password) (?:only|from) ", re.I)
+#: A run parked because the grant it was started under is no longer live. The sentence is the
+#: whole message: a repair build, a self-fix, or another attempt is not a renewal.
+AUTHORITY_ENDED = (
+    "the authority this run was started under has ended; renew it to continue."
+)
+
+
+def authority_message(value: Any) -> Optional[str]:
+    """The exact parked-run sentence when `value` is that failure, else None.
+
+    A wrapper ("the repair build could not be started (…)") still names the sentence.
+    What is stored and shown is the sentence itself.
+    """
+    if AUTHORITY_ENDED in str(value or ""):
+        return AUTHORITY_ENDED
+    return None
+
+
+def failure_authority(failure: Mapping[str, Any]) -> Optional[str]:
+    return authority_message(_failure_text(failure))
 
 
 # ── BOSS's build ───────────────────────────────────────────────────────────────────────────────
@@ -343,6 +363,8 @@ def cause_signature(kind: str, failure: Mapping[str, Any]) -> tuple[str, dict[st
     from .deploy_repair import _missing_tool
 
     family = "deploy" if kind.startswith("deploy") else kind
+    if authority_message(_failure_text(failure)):
+        return f"{family}:authority_ended", {"pattern": "authority_ended"}
     if kind == FINDINGS_KIND or (str(failure.get("phase") or "") == GATE_WAIT_PHASE
                                  and family != "deploy"):
         # First: a review finding can quote anything (a port, a host name, "secret"), and it
@@ -938,6 +960,15 @@ def coded_decision(kind: str, evidence: Mapping[str, Any], *, signature: str,
         asked = waiver_ask(failure, repeated=repeated) if kind_of == "open_findings" else \
             _ask(failure, host, repeated=repeated, cause=choice.get("cause"))
         choice = {**asked, "evidence": choice["evidence"]}
+    if authority_message(said):
+        # After every other rule, including "one fresh attempt" of a first build failure.
+        # Renewing the authority is a person's act; the same run then continues.
+        choice = {"action": ASK_PERSON, "cause": AUTHORITY_ENDED,
+                  "reasoning": "only a person can renew the authority this run was started under",
+                  "question": AUTHORITY_ENDED,
+                  "after": "The same run continues when that authority is renewed. "
+                           "BOSS does not start another one.",
+                  "evidence": [AUTHORITY_ENDED]}
     return choice
 
 
@@ -1104,11 +1135,11 @@ def decide(connection: Connection, settings: Any, *, project_id: str, run_id: st
     caps = limits(connection, settings, project_id)
     ok, why_not = budget_left(connection, state, caps)
     result: dict[str, Any] = {}
-    if pattern.get("pattern") == "rules_forbidden":
-        # A model must not override this into a retry: the refusal is the rules, and the
-        # same build fails the same way.
+    if pattern.get("pattern") in ("rules_forbidden", "authority_ended"):
+        # A model must not override this into a retry. A rules 403 fails the same way again.
+        # An ended authority is renewed by a person; a repair build is not that renewal.
         decision = dict(triage)
-        by = {"engine": "coded", "model": "", "source": "rules_forbidden"}
+        by = {"engine": "coded", "model": "", "source": str(pattern.get("pattern"))}
     elif not ok:
         failure = evidence.get("failure") or {}
         decision = {**_ask(failure, evidence.get("host_state") or {}),

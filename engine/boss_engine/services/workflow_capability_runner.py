@@ -4445,8 +4445,13 @@ def _start_recovery_build(
     """A new attempt of `build_run_id`'s lineage (code_task_service.retry_code_task), told
     `note` — started by the run's BUILD step's agent under the run's recorded authority, past
     the same tool check as any build it starts. Returns (new run id, "") or ("", why not)."""
+    from boss_engine.identity import consent as _consent
     from . import code_task_service as cts
 
+    if _consent.recorded_authority(connection, run_id) is not None \
+            and _consent.acting_for_workflow_run(connection, run_id) is None:
+        # The grant is gone. A repair build would be this run starting itself again.
+        return "", step_recovery.AUTHORITY_ENDED
     settings = getattr(ctx, "settings", None) or get_settings()
     if ctx is None or getattr(ctx, "engine", None) is None or getattr(ctx, "jobs", None) is None:
         return "", "the repair build could not be started here (no job queue)"
@@ -4736,6 +4741,21 @@ def _recover_awaited(
     step now waits on what was decided, or {"ask": the error's words, "output": …} for the
     caller to fail the step for a person, with the agent's one question."""
     step_id = str(step["step_id"])
+    if step_recovery.failure_authority(failure):
+        # The awaited work ended because the run's authority ended. Leave it parked on that
+        # sentence. A repair build is not a person renewing the grant.
+        _park_for_recovery(connection, project_id, step["id"],
+                           {"kind": "authority", "then": "renew"},
+                           {"note": step_recovery.AUTHORITY_ENDED})
+        connection.execute(
+            text("UPDATE workflow_step_runs SET last_error=:m WHERE id=:i"),
+            {"m": step_recovery.AUTHORITY_ENDED, "i": step["id"]})
+        connection.execute(
+            text("UPDATE workflow_runs SET blocked_reason=:m WHERE id=:id "
+                 "AND status IN ('running','waiting','paused')"),
+            {"m": step_recovery.AUTHORITY_ENDED, "id": run_id})
+        return {"done": {"run_id": run_id, "step_id": step_id, "awaited": "authority",
+                         "outcome": "parked", "error": step_recovery.AUTHORITY_ENDED}}
     began = _recovery_begin(connection, ctx, project_id=project_id, run_id=run_id,
                             step_id=step_id, kind=kind, output=output, evidence=evidence)
     if began is None:
@@ -5022,6 +5042,20 @@ def _resume_recovery(connection: Connection, ctx: Any, *, project_id: str, run_i
         note=("BOSS was updated since this build failed for a cause BOSS placed on itself "
               f"({handle.get('signature') or 'BOSS-side'}). Build it again as it was.")) \
         if build_run_id else ("", "no build to start again")
+    if not new_id and step_recovery.authority_message(why_not):
+        _park_for_recovery(connection, project_id, step["id"],
+                           {"kind": "authority", "then": "renew"},
+                           {"note": step_recovery.AUTHORITY_ENDED})
+        connection.execute(
+            text("UPDATE workflow_step_runs SET last_error=:m WHERE id=:i"),
+            {"m": step_recovery.AUTHORITY_ENDED, "i": step["id"]})
+        connection.execute(
+            text("UPDATE workflow_runs SET blocked_reason=:m WHERE id=:id "
+                 "AND status IN ('running','waiting','paused')"),
+            {"m": step_recovery.AUTHORITY_ENDED, "id": run_id})
+        return {"run_id": run_id, "step_id": step_id, "outcome": "parked",
+                "error": step_recovery.AUTHORITY_ENDED,
+                "because": step_recovery.AUTHORITY_ENDED}
     if not new_id:
         workflows.force_fail_waiting_step(
             connection, project_id=project_id, step_run_id=step["id"],
@@ -5774,6 +5808,32 @@ def _complete_advisory_failure(connection: Connection, *, project_id: str, run_i
     return True
 
 
+def follow_authority_park(connection, *, project_id: str, run_id: str, step) -> dict[str, Any]:
+    """A step parked because its authority ended.
+
+    It stays parked, with the exact sentence, until a person renews that authority.
+    Then the same step is queued on the same run. A repair build is not started.
+    """
+    from boss_engine.identity import consent as _consent
+
+    message = step_recovery.AUTHORITY_ENDED
+    step_id = str(step["step_id"])
+    recorded = _consent.recorded_authority(connection, run_id)
+    live = (_consent.acting_for_workflow_run(connection, run_id)
+            if recorded is not None else None)
+    if recorded is None or live is None:
+        return {"run_id": run_id, "step_id": step_id, "outcome": "parked", "error": message}
+    connection.execute(text(
+        "UPDATE workflow_runs SET status='running', paused_at=NULL, blocked_reason=NULL, "
+        "updated_at=now() WHERE id=:id AND status IN ('paused','waiting','running')"),
+        {"id": run_id})
+    workflows.requeue_waiting_step(
+        connection, project_id=project_id, step_run_id=step["id"],
+        output={"note": message}, event="workflow.authority_renewed",
+        data={"run_id": run_id})
+    return {"run_id": run_id, "step_id": step_id, "outcome": "continued", "error": message}
+
+
 def resume_awaited(
     connection: Connection, *, project_id: str, run_id: str, worker_id: str,
     ctx: Any = None,
@@ -5833,6 +5893,11 @@ def resume_awaited(
                 continue
         handle = (output or {}).get("await") or {}
         kind, awaited_id = str(handle.get("kind") or ""), str(handle.get("id") or "")
+        if kind == "authority" and str(step["status"]) == "waiting":
+            # Parked until a person renews the grant. Nothing here starts a build.
+            done.append(follow_authority_park(
+                connection, project_id=project_id, run_id=run_id, step=step))
+            continue
 
         # A FAILED STEP IS ONLY HERE TO BE RESCUED BY A RETRY.
         #
@@ -8104,7 +8169,18 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
                 })
         except CapabilityExecutionError as error:
             agent_acts.note_ran_as(claimed["id"], step_agents.last_resolved())
-            wait = _as_wait(error)
+            if step_recovery.authority_message(str(error)):
+                # Not a retry and not a repair. The step waits on the same run.
+                workflows.park_for_ended_authority(
+                    connection, project_id=project_id, step_run_id=claimed["id"],
+                    worker_id=worker_id, run_id=run_id)
+                performed.append({
+                    "run_id": run_id, "step_id": claimed["step_id"],
+                    "outcome": "parked", "error": step_recovery.AUTHORITY_ENDED,
+                })
+                wait = None
+            else:
+                wait = _as_wait(error)
             if wait is not None:
                 # NOT YET, NOT FAILED. No `continue` here: it would skip the run's savepoint
                 # commit in the `else` below.
