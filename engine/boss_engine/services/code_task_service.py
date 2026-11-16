@@ -737,16 +737,23 @@ def start_code_task(
         spec["app_root"] = bench["app_root"]
     if bench.get("project_kind"):
         spec["project_kind"] = bench["project_kind"]
-    # A LINEAGE'S DECLARED STACK TRAVELS WITH IT. A follow-up's (or a repair's) instructions are
-    # its findings, with no `Stack:` line: stamped here as the structured required_stack, its
-    # gate stays Go and BOSS's Node hardening stays out (verification_target.required_app_stack),
-    # exactly as the acceptance gate holds the lineage to Go (Northgate, BOSSAPP-1230).
-    lineage_root = str((finalize_ctx or {}).get("root_run_id")
-                       or (finalize_ctx or {}).get("deferred_from_run") or "").strip()
-    if lineage_root and not spec.get("required_stack"):
+    # A LINEAGE'S DECLARED STACK TRAVELS WITH IT (Northgate, BOSSAPP-1230), as the structured
+    # required_stack the gate and BOSS's Node hardening read (verification_target
+    # .required_app_stack) — exactly as the acceptance gate holds the lineage to it.
+    #  * A FOLLOW-UP (is_followup / deferred_from_run): its instructions are only the findings it
+    #    fixes, so the lineage's stack always wins; a finding line such as "Stack: Python is
+    #    wrong here" never re-declares the app.
+    #  * Any other lineage child (a repair, a decomposed slice) is stamped only when it declares
+    #    NOTHING itself: a Next.js slice (`Stack: node/next`), `Stack: TypeScript` or
+    #    `Stack: api=go, web=node` keeps its own declaration.
+    _fctx = finalize_ctx or {}
+    lineage_root = str(_fctx.get("root_run_id") or _fctx.get("deferred_from_run") or "").strip()
+    if lineage_root:
         from . import verification_target as _vt
+        from .acceptance_gate import required_stack as _declared
 
-        if _vt.required_app_stack(spec) is None:
+        followup = bool(_fctx.get("is_followup") or _fctx.get("deferred_from_run"))
+        if followup or not any(r.get("hard") for r in _declared(spec)):
             stack = _vt.lineage_required_stack(connection, lineage_root)
             if stack:
                 spec["required_stack"] = [{"language": stack, "from": "lineage"}]
