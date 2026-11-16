@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
 from . import contract as _contract
+from . import dependencies as _deps
 from .contract import MAX_TOTAL_ITEMS, _norm, item_key
 
 
@@ -897,11 +898,50 @@ class _Definitions:
                 strings = re.findall(r"\"([^\"\n]*)\"|'([^'\n]*)'", rhs)
                 strings = [x or y for x, y in strings]
                 if _ENV_LOOKUP.search(rhs) and strings:
+                    # CONFIGURED BY THE ENVIRONMENT (PR #172 review P3): when the Dockerfile
+                    # or compose file sets the variable, that is the value that runs, never
+                    # the code's default.
+                    configured = self.env_values(strings[0])
+                    if configured:
+                        distinct = set(configured)
+                        return distinct.pop() if len(distinct) == 1 else None
                     strings = strings[1:]       # the variable's name, then any default
                 values.extend(strings[-1:])
             distinct = set(values)
             return distinct.pop() if len(distinct) == 1 else None
         return self.param_value(rel, func, expr, depth)
+
+    def env_values(self, name: str) -> list[str]:
+        """What the tree's Dockerfiles and compose files set environment variable `name` to
+        (`ENV NAME=value`, `ENV NAME value`, compose `NAME: value` / `- NAME=value`)."""
+        if not re.fullmatch(r"[A-Za-z_]\w*", name or ""):
+            return []
+        cache = self.__dict__.setdefault("_env_cache", {})
+        if name in cache:
+            return cache[name]
+        found: list[str] = []
+        n = re.escape(name)
+        for p in _walk(self.root):
+            low = p.name.lower()
+            if not (low.startswith("dockerfile") or low.endswith(".dockerfile")
+                    or ("compose" in low and low.endswith((".yml", ".yaml")))):
+                continue
+            try:
+                text = p.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            # A path inside the image is the tree file a COPY put there (`COPY rates.yaml
+            # /app/rates.yaml`), so the value names what the tree holds.
+            copies = [(c.group(1).split(), c.group(2)) for c in re.finditer(
+                r"(?m)^\s*COPY\s+(?!--from)(?:--\S+\s+)*(.+?)\s+(\S+)\s*$", text)]
+            for m in re.finditer(r"(?m)^\s*ENV\s+(.*)$", text):
+                for k, v in re.findall(r"([A-Za-z_]\w*)(?:=|\s+)(\"[^\"]*\"|\S+)", m.group(1)):
+                    if k == name:
+                        found.append(_image_path(v.strip("\"'"), copies))
+            for m in re.finditer(r"(?m)^\s*-?\s*" + n + r"\s*[:=]\s*(\S.*?)\s*$", text):
+                found.append(m.group(1).strip("\"'"))
+        cache[name] = found
+        return found
 
     def defining_file(self, name: str) -> Optional[str]:
         """The ONE code file (a test included) that defines `name`, or None (none, or several)."""
@@ -1140,6 +1180,16 @@ _ENV_LOOKUP = re.compile(r"\b(?:os\.(?:Getenv|LookupEnv|getenv)|os\.environ\.get
                          r"System\.getenv|getenv|env::var|ENV\.fetch)\s*\(")
 
 
+def _image_path(value: str, copies: list[tuple[list[str], str]]) -> str:
+    """`value` (a path in the image) as the tree file a Dockerfile COPY placed there, else
+    `value` unchanged."""
+    for srcs, dest in copies:
+        for src in srcs:
+            if dest == value or (dest.endswith("/") and dest + Path(src).name == value):
+                return src
+    return value
+
+
 def _read_args(body: str) -> list[str]:
     """The identifiers a read call takes as its first argument (`os.ReadFile(cfgPath)` →
     cfgPath, `open(path)` → path): a path the function was handed, not one it names."""
@@ -1151,73 +1201,50 @@ def _read_args(body: str) -> list[str]:
     return list(dict.fromkeys(out))
 
 
-#: What an item about the project's DEPENDENCIES is about: a qualified dependency noun ("one Go
-#: module", "standard library only", "single pinned dependency", "no other third-party runtime
-#: dependency", "licences of every dependency"), or a pin/upgrade to a version.
-_DEP_NOUN = (r"(?:dependenc(?:y|ies)|deps|modules?|packages?|librar(?:y|ies)|imports?|"
-             r"requirements?|versions?|licen[cs]es?|lockfiles?|go\.(?:mod|sum)|"
-             r"package(?:-lock)?\.json|requirements\.txt|pyproject\.toml|cargo\.toml|pom\.xml)")
-_DEP_QUAL = (r"(?:single|one|only|no|zero|pinned|pin|third[- ]party|external|runtime|direct|"
-             r"transitive|vendored|standard|stdlib|upstream|allowed|approved|declared|exact|"
-             r"locked|minimum|supported|other|every|all|licensed|open[- ]source)")
-_DEP_SUBJECT = re.compile(
-    r"(?i)\b" + _DEP_QUAL + r"\b(?:[\s\-]+[\w.\-]+){0,2}?[\s\-]+" + _DEP_NOUN + r"\b"
-    r"|\b" + _DEP_NOUN + r"\b[\s\w]{0,20}?\b(?:only|pinned|locked)\b"
-    r"|\bstandard[\s\-]+library\b|\bstdlib\b"
-    r"|\b(?:upgrade|bump|pin|update)\w*\b[^.;]{0,40}\bto\s+v?\d"
-    r"|\blicen[cs]e[ds]?\b")
-#: What an item about BEHAVIOUR names: a status code, an endpoint, a verb the program does.
-_BEHAVIOUR = re.compile(
-    r"(?i)\b[1-5]\d\d\b|\b(?:GET|POST|PUT|PATCH|DELETE)\s+/|/[a-z][\w/{}-]*\b|"
-    r"\b(?:returns?|responds?|serves?|loads?|reads?|renders?|computes?|calculates?|applies|"
-    r"apply|derives?|rejects?|accepts?|converts?|rounds?|validates?|sends?|writes?|stores?|"
-    r"handles?|exposes?|emits?|logs?|parses?|retries|caches?)\b")
-
-
-def declares_dependencies(item_text: Any) -> bool:
-    """Whether the item is ABOUT what the project depends on — its modules, dependencies,
-    versions or licences — so the manifest and lockfile that declare them (go.mod, go.sum,
-    package.json, …) ARE its evidence (BOSSAPP-1333: "Stack: Go. (one Go module, standard
-    library only)" and "Single pinned dependency … confirmed via go.sum" were marked "only
-    manifests/lockfiles cited").
-
-    Read from the item's subject, not a keyword: the dependency noun must be QUALIFIED as the
-    thing the item constrains ("one module", "standard library only", "no other third-party
-    dependency", "pinned to v3"), and the item must not be about behaviour — a status code, an
-    endpoint or a verb the program does ("loads rates from YAML", "returns 400"), which a
-    manifest can never show. Backticked code is not read as the subject."""
-    text = re.sub(r"`[^`]*`", " ", str(item_text or ""))
-    return bool(_DEP_SUBJECT.search(text)) and not _BEHAVIOUR.search(text)
-
-
-def code_evidence(found: list[str], item_text: Any) -> list[str]:
+def code_evidence(found: list[str], item_text: Any = None) -> list[str]:
     """The cited files that evidence the item: code, configuration or tests — never a document,
-    and a manifest or lockfile only for an item about the dependencies it declares."""
-    deps = declares_dependencies(item_text)
-    return [f for f in found if not _DOC_PATH.search(f)
-            and (deps or not _DECL_PATH.search(f))]
+    and never a manifest or lockfile, which a dependency item's claim is checked against
+    instead (acceptance/dependencies.py, PR #172 review P1)."""
+    return [f for f in found if not _DOC_PATH.search(f) and not _DECL_PATH.search(f)]
 
 
-def same_as(answers: Mapping[int, tuple[str, str]], n: int, why: str) -> str:
-    """`why` with the answer of every item it points at ("same as ITEM 1") appended, followed
-    up to three hops and never back to itself: the evidence the reviewer gave THERE is this
-    item's too, and it is verified here as this item's (BOSSAPP-1333: "same as ITEM 1. (no file
-    evidence cited)" on a near-duplicate item whose referenced item was met on fxquote.go)."""
-    out, seen, frontier = [why], {n}, [why]
+#: How alike two items must be for one's evidence to be the other's (Jaccard of content words).
+NEAR_DUPLICATE = 0.6
+
+
+def near_duplicate(a: Any, b: Any) -> bool:
+    """Whether two items say the same thing (the 1↔10 and 2↔11 pairs of FXQuote: "A quote applies
+    the pair's spread and rounds half-even" / "A quote correctly applies the pair's configured
+    spread and rounds half-even")."""
+    wa, wb = _words(str(a or "")), _words(str(b or ""))
+    return bool(wa and wb) and len(wa & wb) / len(wa | wb) >= NEAR_DUPLICATE
+
+
+def same_as(answers: Mapping[int, tuple[str, str]], texts: Mapping[int, str], n: int,
+            why: str) -> tuple[str, list[int]]:
+    """(`why` with the MET answer of every NEAR-DUPLICATE item it points at appended, the items
+    it points at that are NOT near-duplicates). "same as ITEM 1" on an item that says what
+    item 1 says carries item 1's evidence, verified here as this item's (BOSSAPP-1333); on any
+    other item it borrows nothing — "413 on >1 MB" is not evidenced by "written in Go" (PR #172
+    review P2). Followed up to three hops, never back to itself."""
+    out, foreign, seen, frontier = [why], [], {n}, [why]
     for _ in range(3):
         nxt = []
         for text_ in frontier:
             for m in _SAME_AS.finditer(text_ or ""):
                 ref = int(m.group(1))
-                if ref in seen or ref not in answers:
+                if ref in seen or ref not in texts:
                     continue
                 seen.add(ref)
-                status, other = answers[ref]
+                if not near_duplicate(texts.get(n), texts.get(ref)):
+                    foreign.append(ref)
+                    continue
+                status, other = answers.get(ref, (UNJUDGED, ""))
                 if status == MET and other:
                     out.append(other)
                     nxt.append(other)
         frontier = nxt
-    return " ".join(out)
+    return " ".join(out), foreign
 
 
 def _join_bases(body: str) -> list[str]:
@@ -1549,14 +1576,25 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any, exec_log: Any 
         answers[int(m.group(1))] = (m.group(2).lower(), clip(_norm(m.group(4)), 600))
     out = []
     defs = _Definitions(Path(root)) if root is not None else None  # the tree, read once
+    texts = {int(i["n"]): str(i.get("text") or "") for i in items}
     for it in items:
         status, why = answers.get(int(it["n"]), (UNJUDGED, ""))
         # The contract's tags under the floor (contract.floor_tags): what this check acts on.
         it = {**{k: v for k, v in it.items() if k not in _contract.ITEM_TAGS},
               **_contract.floor_tags(it.get("text"), it, where="gate")}
+        dep = _deps.claim(it.get("text"), root) if status == MET else None
+        if dep is not None:
+            # A DEPENDENCY ITEM IS SETTLED BY READING THE MANIFESTS (PR #172 review P1).
+            verdict_, said = dep
+            if verdict_ == "false":
+                status, why = PARTIAL, f"{why} ({said})".strip()
+            elif verdict_ == "human":
+                status, why = HUMAN, f"{why} (needs a person: {said})".strip()
+            out.append({**it, "status": status, "evidence": why})
+            continue
         if status == MET:
-            # "same as ITEM 1": that item's answer is evidence here too, verified here.
-            cited_why = same_as(answers, int(it["n"]), why)
+            # "same as ITEM 1" on a near-duplicate: that item's answer is evidence here too.
+            cited_why, foreign = same_as(answers, texts, int(it["n"]), why)
             found, absent = evidence_paths(root, cited_why, defs=defs,
                                            item_text=str(it.get("text") or ""))
             code = code_evidence(found, it.get("text"))
@@ -1571,6 +1609,12 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any, exec_log: Any 
                 # the answer's own test run over the packages is its evidence. Only then — a
                 # `go test ./...` never evidences anything else (BOSSAPP-1329 review).
                 code = ["(test run)"]
+            if not code and foreign and not found and not absent:
+                # BORROWED, NOT EVIDENCED: it points at an item that says something else.
+                out.append({**it, "status": UNJUDGED, "unverified": True,
+                            "evidence": f"{why} (not judged: cites another item's evidence, "
+                                        f"ITEM {', '.join(map(str, foreign))})".strip()})
+                continue
             if not code:
                 reason = ("only manifests/lockfiles cited" if found and all(
                               _DECL_PATH.search(f) for f in found)
@@ -2029,6 +2073,7 @@ def parse_exercised(reply: str, items: list[dict], *, root: Any, exec_log: Any =
     replay = dict(replay or {})
     out = []
     defs = _Definitions(Path(root)) if root is not None else None  # the tree, read once
+    texts = {int(i["n"]): str(i.get("text") or "") for i in items}
     for it in items:
         key = str(it.get("id") or it["n"])
         it = {**{k: v for k, v in it.items() if k not in _contract.ITEM_TAGS},
@@ -2044,6 +2089,18 @@ def parse_exercised(reply: str, items: list[dict], *, root: Any, exec_log: Any =
             continue
         status, why = answers.get(int(it["n"]), (UNJUDGED, ""))
         row: dict[str, Any] = {**it, "status": status, "evidence": why, "evidence_refs": []}
+        dep = _deps.claim(it.get("text"), root) if status == MET else None
+        if dep is not None:
+            # A DEPENDENCY ITEM IS SETTLED BY READING THE MANIFESTS (PR #172 review P1).
+            verdict_, said = dep
+            if verdict_ == "met":
+                row["evidence_refs"] = [{"kind": "manifest", "ref": said, "verified": True}]
+            elif verdict_ == "false":
+                row.update(status=PARTIAL, evidence=f"{why} ({said})".strip())
+            else:
+                row.update(status=HUMAN, evidence=f"{why} (needs a person: {said})".strip())
+            out.append(row)
+            continue
         if status == MET:
             claims = exec_claims(why)
             refs: list[dict[str, Any]] = []
@@ -2054,7 +2111,7 @@ def parse_exercised(reply: str, items: list[dict], *, root: Any, exec_log: Any =
                              "verified": ok, **({"why": problem} if problem else {})})
                 if not ok:
                     failed.append(problem)
-            cited_why = same_as(answers, int(it["n"]), why)
+            cited_why, foreign = same_as(answers, texts, int(it["n"]), why)
             files, no_file = (_file_refs(root, cited_why, defs=defs,
                                          item_text=str(it.get("text") or ""))
                               if root is not None
@@ -2071,6 +2128,10 @@ def parse_exercised(reply: str, items: list[dict], *, root: Any, exec_log: Any =
             elif failed:
                 row.update(status=UNJUDGED, unverified=True)
                 reason = "evidence not verified: " + "; ".join(failed[:3])
+            elif not refs and not files and foreign and no_file == "no evidence cited":
+                row.update(status=UNJUDGED, unverified=True)
+                reason = ("not judged: cites another item's evidence, ITEM "
+                          + ", ".join(map(str, foreign)))
             elif not refs and not files:
                 row.update(status=UNJUDGED, unverified=True)
                 reason = f"no verifiable evidence ({no_file})"
