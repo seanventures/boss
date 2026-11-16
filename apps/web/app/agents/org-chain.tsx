@@ -46,6 +46,19 @@ export function ChainChips({ view, names }: { view: OrgChainView | undefined; na
   );
 }
 
+/** The question beside the takeover title, else the reason, when that text is not the title. */
+export function takeoverWhySentence(
+  visible: string,
+  question: string | null | undefined,
+  reason: string | null | undefined,
+): string | null {
+  const asked = (question ?? "").trim();
+  if (asked && asked !== visible) return asked;
+  const because = (reason ?? "").trim();
+  if (because && because !== visible) return because;
+  return null;
+}
+
 export function TakeoverQueue({ offers, names, busy, onTakeOver }: {
   offers: TakeoverOffer[];
   names: Map<string, string>;
@@ -57,27 +70,34 @@ export function TakeoverQueue({ offers, names, busy, onTakeOver }: {
     <section className="org-takeover" data-testid="org-takeover"
              aria-label="Stalled work waiting on a manager">
       <h3 className="org-takeover-head">Waiting on a manager <span>{offers.length}</span></h3>
-      {offers.map((offer) => (
-        <div className="org-takeover-row" key={offer.id} data-testid={`org-takeover-${offer.run_id}`}>
-          <div className="org-takeover-what">
-            <span className="org-takeover-title" title={offer.question || offer.reason}>
-              {offer.title || offer.run_id}
-            </span>
-            <span className="detail">
-              {nameOf(offer.subject, names)} stalled · {nameOf(offer.offered_to, names)} has it
-              {offer.deadline ? ` until ${localFull(offer.deadline)}` : ""}, then the next manager,
-              then a person
-            </span>
+      {offers.map((offer) => {
+        const why = takeoverWhySentence(offer.title || offer.run_id, offer.question, offer.reason);
+        const long = !!why && why.split(/\s+/).filter(Boolean).length > 6;
+        return (
+          <div className="org-takeover-row" key={offer.id} data-testid={`org-takeover-${offer.run_id}`}>
+            <div className="org-takeover-what">
+              <span className="org-takeover-title" title={offer.question || offer.reason}>
+                {offer.title || offer.run_id}
+              </span>
+              {why ? (long
+                ? <p data-testid={`org-takeover-why-${offer.run_id}`} data-user-text>{why}</p>
+                : <span data-testid={`org-takeover-why-${offer.run_id}`} data-user-text>{why}</span>) : null}
+              <span className="detail">
+                {nameOf(offer.subject, names)} stalled · {nameOf(offer.offered_to, names)} has it
+                {offer.deadline ? ` until ${localFull(offer.deadline)}` : ""}, then the next manager,
+                then a person
+              </span>
+            </div>
+            <GatedButton permission="agent:update" type="button" className="org-place-btn"
+                         disabled={busy} data-testid={`org-takeover-btn-${offer.run_id}`}
+                         title={`Take it over as ${nameOf(offer.offered_to, names)}: the work moves `
+                           + "to them and resumes; nobody else is asked"}
+                         onClick={() => onTakeOver(offer)}>
+              Take over
+            </GatedButton>
           </div>
-          <GatedButton permission="agent:update" type="button" className="org-place-btn"
-                       disabled={busy} data-testid={`org-takeover-btn-${offer.run_id}`}
-                       title={`Take it over as ${nameOf(offer.offered_to, names)}: the work moves `
-                         + "to them and resumes; nobody else is asked"}
-                       onClick={() => onTakeOver(offer)}>
-            Take over
-          </GatedButton>
-        </div>
-      ))}
+        );
+      })}
     </section>
   );
 }

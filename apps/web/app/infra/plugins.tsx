@@ -27,6 +27,12 @@ export const SOURCE_WORDS: Record<PluginSource, { label: string; tip: string }> 
   community: { label: "Community", tip: "Third-party and unverified; off until an operator turns it on" },
 };
 
+/** Why a plugin is blocked. Trimmed problems joined with "; ". Nothing when every problem is blank. */
+export function pluginProblemSentence(problems: readonly string[] | null | undefined): string | null {
+  const kept = (problems ?? []).map((problem) => problem.trim()).filter(Boolean);
+  return kept.length ? kept.join("; ") : null;
+}
+
 function PluginRowView({ p, onChanged }: { p: PluginRow; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -45,6 +51,8 @@ function PluginRowView({ p, onChanged }: { p: PluginRow; onChanged: () => void }
     else afterWrite(onChanged);
   };
   const pressOn = () => (p.source === "community" ? setConfirming(true) : void write(true));
+  const problemSentence = pluginProblemSentence(p.problems);
+  const problemLong = !!problemSentence && problemSentence.split(/\s+/).filter(Boolean).length > 6;
 
   return (
     <>
@@ -64,6 +72,9 @@ function PluginRowView({ p, onChanged }: { p: PluginRow; onChanged: () => void }
           {p.problems.length ? (
             <span className="inf-notice" data-testid="inf-plugin-problem" title={p.problems.join("\n")}>Blocked</span>
           ) : null}
+          {problemSentence ? (problemLong
+            ? <p data-testid="inf-plugin-problems" data-user-text>{problemSentence}</p>
+            : <span data-testid="inf-plugin-problems" data-user-text>{problemSentence}</span>) : null}
           {p.enabled ? (
             <GatedButton permission="instance:manage" type="button" className="ag-btn" disabled={busy}
                          data-testid="inf-plugin-off" title="Turn off: new plans stop using it"
