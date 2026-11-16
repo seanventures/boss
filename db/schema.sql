@@ -16105,3 +16105,40 @@ CREATE TABLE IF NOT EXISTS freeze_table_bytes (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (project_id, path)
 );
+-- BOSSAPP-1270: a builder's sentence, saved as the rule for one live app action.
+-- Evaluation reads these columns. It does not call a model. No matching allow
+-- does not run. An allow runs, then one row is written in live_action_decisions.
+CREATE TABLE IF NOT EXISTS live_action_rules (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  app_key TEXT NOT NULL,
+  description TEXT NOT NULL,
+  effect TEXT NOT NULL CHECK (effect IN ('allow', 'block')),
+  action_pattern TEXT NOT NULL,
+  predicate JSONB NOT NULL DEFAULT '{}'::jsonb,
+  position INTEGER NOT NULL DEFAULT 100,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS idx_live_action_rules_lookup
+  ON live_action_rules (project_id, app_key, position, created_at, id);
+
+CREATE TABLE IF NOT EXISTS live_action_decisions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  rule_id TEXT REFERENCES live_action_rules(id) ON DELETE SET NULL,
+  app_key TEXT NOT NULL,
+  action TEXT NOT NULL,
+  effect TEXT NOT NULL CHECK (effect IN ('allow')),
+  actor TEXT NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dedupe_key TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS idx_live_action_decisions_project
+  ON live_action_decisions (project_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_live_action_decisions_dedupe
+  ON live_action_decisions (project_id, app_key, dedupe_key)
+  WHERE dedupe_key IS NOT NULL;
