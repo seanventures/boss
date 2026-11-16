@@ -301,15 +301,16 @@ def _named(deps: dict[str, str], name: str) -> Optional[str]:
     return None
 
 
-def claim(item_text: Any, root: Any) -> Optional[Claim]:
+def claim(item_text: Any, root: Any, *, assume: bool = False) -> Optional[Claim]:
     """The item's dependency claim settled against the tree's manifests, or None when the item
-    is not about dependencies (a behaviour item, judged on code)."""
+    is not about dependencies (a behaviour item, judged on code). `assume`: the caller already
+    knows the text is a dependency claim (a part of a stack item, `stack_claim`)."""
     if root is None:
         return None
     found = manifests(root)
     deps: dict[str, str] = found["deps"]
     text = str(item_text or "")
-    if not is_dependency_item(text, deps):
+    if not assume and not is_dependency_item(text, deps):
         return None
     files = ", ".join(found["files"][:3]) or "no manifest"
     if not found["files"]:
@@ -373,4 +374,173 @@ def claim(item_text: Any, root: Any) -> Optional[Claim]:
     return ("met", f"{files} declares {declared}")
 
 
-__all__ = ["claim", "is_dependency_item", "manifests", "third_party_imports"]
+# ── a STACK item, part by part (Northgate r8b, item 6) ──────────────────────────────────────
+
+_STACK_LINE = re.compile(r"(?i)^\s*stack\s*:")
+#: Each language a Stack line names, by what in the tree shows it is that language.
+_LANGUAGES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "go": (("go.mod",), (".go",)), "golang": (("go.mod",), (".go",)),
+    "python": (("pyproject.toml", "requirements.txt", "setup.py"), (".py",)),
+    "node": (("package.json",), (".js", ".mjs", ".ts")),
+    "nodejs": (("package.json",), (".js", ".mjs", ".ts")),
+    "javascript": (("package.json",), (".js", ".mjs", ".jsx")),
+    "typescript": (("tsconfig.json", "package.json"), (".ts", ".tsx")),
+    "java": (("pom.xml", "build.gradle", "build.gradle.kts"), (".java",)),
+    "kotlin": (("build.gradle.kts", "build.gradle", "pom.xml"), (".kt",)),
+    "rust": (("Cargo.toml",), (".rs",)), "ruby": (("Gemfile",), (".rb",)),
+}
+_STATIC = re.compile(r"(?i)\bstatic(?:ally)?(?:[\s\-]+linked)?\s+(?:binar(?:y|ies)|executables?|"
+                     r"builds?)\b|\bstatically[\s\-]+linked\b")
+_STACK_WORDS = frozenset("""static statically linked linking binary binaries executable executables
+build builds built cgo cross compiled single one module modules both two three""".split())
+_STATIC_OUTPUT = re.compile(r"(?i)not a dynamic executable|statically linked|static-pie linked")
+#: golang images whose Go (1.20+) turns cgo off when no C compiler is installed.
+_GOLANG_ALPINE = re.compile(r"(?i)^\s*FROM\s+(?:\S+/)?golang:(?:(\d+)\.(\d+)[\w.\-]*)?-?alpine\S*")
+
+
+def _walk_dirs(root: Path):
+    import os
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP and not d.startswith("."))
+        yield Path(dirpath), dirnames, filenames
+
+
+def _static_by_command(commands: Any) -> Optional[str]:
+    """A recorded command that shows the binaries are static: `ldd` / `file` saying so, or a
+    `go build` run with CGO_ENABLED=0 that succeeded."""
+    for cmd in commands or ():
+        get = (cmd.get if isinstance(cmd, dict) else lambda k, d=None, c=cmd: getattr(c, k, d))
+        line = " ".join(get("argv", None) or []) or str(get("cmd", "") or "")
+        out = f"{get('stdout', '') or ''}\n{get('stderr', '') or ''}"
+        if re.search(r"(?:^|[\s/])(?:ldd|file)\s", line + " ") and _STATIC_OUTPUT.search(out):
+            return f"`{line[:60]}` reports a static executable"
+        if re.search(r"\bgo\s+build\b", line) and "CGO_ENABLED=0" in line and \
+                str(get("exit", "")) == "0":
+            return f"`{line[:60]}` built with CGO_ENABLED=0"
+    return None
+
+
+def _static_by_dockerfile(root: Path) -> Optional[str]:
+    """A Dockerfile whose build makes the binaries static: every `go build` with CGO_ENABLED=0
+    (on the line or in the stage's ENV), or in a golang alpine stage of Go 1.20+ with no C
+    compiler installed (cgo is then off by default); or a final stage FROM scratch or a static
+    distroless image."""
+    for here, _, files in _walk_dirs(root):
+        for name in files:
+            low = name.lower()
+            if not (low.startswith("dockerfile") or low.endswith(".dockerfile")):
+                continue
+            rel = (here / name).relative_to(root).as_posix()
+            text = (here / name).read_text(encoding="utf-8", errors="ignore")
+            stages = re.split(r"(?mi)^(?=\s*FROM\s)", text)
+            stages = [s for s in stages if re.match(r"(?i)\s*FROM\s", s)]
+            if not stages:
+                continue
+            final = stages[-1].splitlines()[0]
+            if re.search(r"(?i)\bFROM\s+(?:scratch|\S*distroless/static\S*)\b", final):
+                return f"{rel}: the final stage is {final.split()[1]}"
+            builds, static = 0, 0
+            for stage in stages:
+                env_off = re.search(r"(?mi)^\s*ENV\s+.*\bCGO_ENABLED[=\s]+0\b", stage)
+                env_on = re.search(r"\bCGO_ENABLED[=\s]+1\b", stage)
+                alpine = _GOLANG_ALPINE.match(stage.splitlines()[0])
+                toolchain = re.search(r"(?mi)^\s*RUN\s+.*\bapk\s+add\b.*\b(?:gcc|build-base|musl-dev|"
+                                      r"clang)\b", stage)
+                no_cc = bool(alpine) and not toolchain and not env_on and (
+                    not alpine.group(1) or (int(alpine.group(1)), int(alpine.group(2))) >= (1, 20))
+                for run in re.findall(r"(?mi)^\s*RUN\s+(.*(?:\\\n.*)*)", stage):
+                    if not re.search(r"\bgo\s+build\b", run):
+                        continue
+                    builds += 1
+                    if "CGO_ENABLED=0" in run or env_off or no_cc:
+                        static += 1
+            if builds and static == builds:
+                return (f"{rel}: every go build runs with cgo off"
+                        + (" (golang alpine, no C compiler)" if "CGO_ENABLED=0" not in text else ""))
+    return None
+
+
+def stack_claim(item_text: Any, root: Any, commands: Any = ()) -> Optional[Claim]:
+    """A `Stack:` item settled part by part against the tree (Northgate r8b item 6: "Stack: Go.
+    (gateway and gwlint: one Go module, static binaries)" was PARTIAL as "only manifests cited"):
+
+      language        the tree has that language's manifest or code;
+      one Go module   exactly one go.mod, and each package the item names before the colon
+                      ("gateway and gwlint") is a directory under it;
+      static binaries a BUILD property: a recorded `ldd` / `file` / `go build` with
+                      CGO_ENABLED=0 (`commands`, verified by the caller), or a Dockerfile build
+                      that makes them static — never the answer's prose;
+      dependencies    "standard library only", "single dependency X", "pinned" (`claim`).
+    Met only when every part is proven; a part disproved or unproven is named. None for an item
+    that is not a Stack line."""
+    text = str(item_text or "")
+    if root is None or not _STACK_LINE.match(text):
+        return None
+    root = Path(root)
+    proven: list[str] = []
+    wrong: list[str] = []
+    unproven: list[str] = []
+    m = re.match(r"(?i)^\s*stack\s*:\s*([^.(;]+)", text)
+    langs = [w.lower() for w in re.split(r"[\s,/+]+|\band\b", m.group(1) if m else "") if w.strip()]
+    all_files = [(here, files) for here, _, files in _walk_dirs(root)]
+    names_in_tree = {f for _, files in all_files for f in files}
+    exts = {Path(f).suffix.lower() for f in names_in_tree}
+    for lang in langs:
+        if lang not in _LANGUAGES:
+            unproven.append(f"the stack {lang!r} cannot be checked")
+            continue
+        manifests_, suffixes = _LANGUAGES[lang]
+        if any(mf in names_in_tree for mf in manifests_) or exts & set(suffixes):
+            proven.append(f"{lang} ({next((mf for mf in manifests_ if mf in names_in_tree), 'code')})")
+        else:
+            wrong.append(f"no {lang} in the tree")
+    named: list[str] = []
+    if _ONE_MODULE.search(text):
+        mods = [here for here, files in all_files if "go.mod" in files]
+        if len(mods) != 1:
+            wrong.append(f"{len(mods)} go.mod files, not one module")
+        else:
+            label = re.search(r"\(\s*([^():]+?)\s*:", text)
+            named = [n.strip().lower() for n in re.split(r",|\band\b|&", label.group(1))
+                     if n.strip()] if label else []
+            dirs = [here.relative_to(root).as_posix() for here, _ in all_files
+                    if here != root and here.is_relative_to(mods[0])]
+            missing = [n for n in named if not any(n in Path(d).name.lower() for d in dirs)]
+            if missing:
+                wrong.append(f"no package for {', '.join(missing)} in the module")
+            else:
+                proven.append("one Go module" + (f" ({', '.join(named)})" if named else ""))
+    if _STATIC.search(text):
+        how = _static_by_command(commands) or _static_by_dockerfile(root)
+        if how:
+            proven.append(f"static: {how}")
+        else:
+            unproven.append("static binaries (no recorded ldd / file / CGO_ENABLED=0 go build, "
+                            "and no Dockerfile build that makes them static)")
+    if _NONE.search(text) or _SINGLE.search(text) or _PIN.search(text) or \
+            re.search(r"(?i)\bpinned\b", text) or _LICENCE.search(text):
+        dep = claim(text, root, assume=True)
+        if dep and dep[0] == "false":
+            wrong.append(dep[1])
+        elif dep and dep[0] == "human":
+            unproven.append(dep[1])
+        elif dep:
+            proven.append(dep[1])
+    # Anything else the line says is a part BOSS cannot check: never passed over in silence.
+    rest = re.sub(r"(?i)^\s*stack\s*:\s*[^.(;]+", " ", text)
+    for rx in (_ONE_MODULE, _STATIC, _NONE, _SINGLE, _PIN, _NO_OTHER):
+        rest = rx.sub(" ", rest)
+    rest = re.sub(r"`[^`]*`", " ", rest)
+    left = [w for w in (x.lower() for x in _WORD.findall(rest))
+            if w not in _VOCAB and w not in _STACK_WORDS and w not in named and w not in langs
+            and not re.fullmatch(r"v?\d+", w)]
+    if left:
+        unproven.append(f"cannot check: {' '.join(dict.fromkeys(left))}")
+    if wrong or unproven:
+        return ("false", "; ".join(wrong + [f"not proven: {u}" if not u.startswith("cannot")
+                                            else u for u in unproven]))
+    return ("met", "; ".join(proven))
+
+
+__all__ = ["claim", "is_dependency_item", "manifests", "stack_claim", "third_party_imports"]

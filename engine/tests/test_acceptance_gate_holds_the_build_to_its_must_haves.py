@@ -919,6 +919,14 @@ def test_the_kan9_repro_a_reader_tagging_real_requirements_judgement_never_passe
     # The floor ADDS needs_loader on the rulebook items (they name a rules YAML).
     assert all(i.get("needs_loader") for i in items if i["text"] in rulebook)
     (tmp_path / "main.go").write_text("package main\n")
+    # The Stack item is proven part by part (one go.mod covering gateway and gwlint, a static
+    # build): a tree that has them, so only the items this repro is about stay partial.
+    (tmp_path / "go.mod").write_text("module northgate\n\ngo 1.23\n")
+    for c in ("northgate-gateway", "gwlint"):
+        (tmp_path / "cmd" / c).mkdir(parents=True)
+        (tmp_path / "cmd" / c / "main.go").write_text("package main\n")
+    (tmp_path / "Dockerfile").write_text("FROM golang:1.23 AS build\n"
+                                         "RUN CGO_ENABLED=0 go build ./cmd/...\nFROM scratch\n")
     bad = {i["n"] for i in items if i["text"] in [jwks, *rulebook]}
     reply = "\n".join(f"ITEM {i['n']}: " + ("PARTIAL — HS256 shared secret; 5 hard-coded checks"
                                             if i["n"] in bad else "MET — main.go")

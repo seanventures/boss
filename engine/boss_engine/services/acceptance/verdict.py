@@ -935,14 +935,15 @@ class _Definitions:
                 continue
             # A path inside the image is the tree file a COPY put there (`COPY rates.yaml
             # /app/rates.yaml`), so the value names what the tree holds.
-            copies = [(c.group(1).split(), c.group(2)) for c in re.finditer(
-                r"(?m)^\s*COPY\s+(?!--from)(?:--\S+\s+)*(.+?)\s+(\S+)\s*$", text)]
+            copies = _image_copies(text, p.parent.relative_to(self.root))
             for m in re.finditer(r"(?m)^\s*ENV\s+(.*)$", text):
                 for k, v in re.findall(r"([A-Za-z_]\w*)(?:=|\s+)(\"[^\"]*\"|\S+)", m.group(1)):
                     if k == name:
                         found.append(_image_path(v.strip("\"'"), copies))
             for m in re.finditer(r"(?m)^\s*-?\s*" + n + r"\s*[:=]\s*(\S.*?)\s*$", text):
-                found.append(m.group(1).strip("\"'"))
+                # compose: a path in the container is the tree directory a bind mount put there
+                # (`./config:/app/config-staging`, Northgate r8b item 2).
+                found.append(_image_path(m.group(1).strip("\"'"), copies))
             # `env_file:` (compose): the file in the tree is read; one that is not makes the
             # value unknowable, so the path is unresolved (PR #172 re-review).
             for m in re.finditer(r"(?ms)^(\s*)env_file\s*:\s*(.*?)(?=^\1\S|\Z)", text):
@@ -1201,12 +1202,43 @@ _ENV_LOOKUP = re.compile(r"\b(?:os\.(?:Getenv|LookupEnv|getenv)|os\.environ\.get
 _UNRESOLVED = "\x00unresolved"
 
 
+def _image_copies(text: str, here: Path) -> list[tuple[list[str], str]]:
+    """(tree sources, path in the container) for every Dockerfile `COPY` (relative to its
+    WORKDIR) and every compose bind mount (`./config:/app/config-staging`), the sources
+    relative to the tree root."""
+    out: list[tuple[list[str], str]] = []
+    workdir = "/"
+    base = "" if str(here) in ("", ".") else here.as_posix() + "/"
+    for ln in text.splitlines():
+        w = re.match(r"\s*WORKDIR\s+(\S+)", ln, re.I)
+        if w:
+            workdir = w.group(1) if w.group(1).startswith("/") else workdir.rstrip("/") + "/" + w.group(1)
+            continue
+        c = re.match(r"\s*COPY\s+(?!--from)(?:--\S+\s+)*(.+?)\s+(\S+)\s*$", ln, re.I)
+        if c:
+            dest = c.group(2)
+            if not dest.startswith("/"):
+                dest = workdir.rstrip("/") + "/" + re.sub(r"^\./", "", dest)
+            out.append(([base + re.sub(r"^\./", "", s_) for s_ in c.group(1).split()], dest))
+            continue
+        v = re.match(r"\s*-\s*[\"']?(\.{1,2}/[^:\s\"']*|[\w\-][^:\s\"']*/[^:\s\"']*)"
+                     r":(/[^:\s\"']+)", ln)
+        if v:
+            out.append(([base + re.sub(r"^\./", "", v.group(1)).rstrip("/")], v.group(2)))
+    return out
+
+
 def _image_path(value: str, copies: list[tuple[list[str], str]]) -> str:
-    """`value` (a path in the image) as the tree file a Dockerfile COPY placed there, else
-    `value` unchanged."""
+    """`value` (a path in the container) as the tree path a COPY or a bind mount put there —
+    the file itself, or a path under a copied/mounted directory — else unchanged."""
     for srcs, dest in copies:
+        dest = dest.rstrip("/") or "/"
         for src in srcs:
-            if dest == value or (dest.endswith("/") and dest + Path(src).name == value):
+            if value.rstrip("/") == dest:
+                return src.rstrip("/") or "."
+            if value.startswith(dest + "/"):
+                return f"{src.rstrip('/')}/{value[len(dest) + 1:]}"
+            if dest + "/" + Path(src).name == value:
                 return src
     return value
 
@@ -1643,9 +1675,11 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any, exec_log: Any 
         # The contract's tags under the floor (contract.floor_tags): what this check acts on.
         it = {**{k: v for k, v in it.items() if k not in _contract.ITEM_TAGS},
               **_contract.floor_tags(it.get("text"), it, where="gate")}
-        dep = _deps.claim(it.get("text"), root) if status == MET else None
+        # A STACK ITEM IS SETTLED PART BY PART (stack_claim); a DEPENDENCY ITEM BY READING THE
+        # MANIFESTS (PR #172 review P1). No recorded commands at this door.
+        dep = ((_deps.stack_claim(it.get("text"), root) or _deps.claim(it.get("text"), root))
+               if status == MET else None)
         if dep is not None:
-            # A DEPENDENCY ITEM IS SETTLED BY READING THE MANIFESTS (PR #172 review P1).
             verdict_, said = dep
             if verdict_ == "false":
                 status, why = PARTIAL, f"{why} ({said})".strip()
@@ -2150,9 +2184,15 @@ def parse_exercised(reply: str, items: list[dict], *, root: Any, exec_log: Any =
             continue
         status, why = answers.get(int(it["n"]), (UNJUDGED, ""))
         row: dict[str, Any] = {**it, "status": status, "evidence": why, "evidence_refs": []}
-        dep = _deps.claim(it.get("text"), root) if status == MET else None
+        dep = None
+        if status == MET:
+            # A STACK ITEM PART BY PART, its build property proven by a command BOSS recorded and
+            # verified; a DEPENDENCY ITEM by reading the manifests (PR #172 review P1).
+            ran = [_lookup(exec_log, c["ref"]) for c in exec_claims(why)
+                   if verify_command(c, exec_log)[0]]
+            dep = (_deps.stack_claim(it.get("text"), root, commands=ran)
+                   or _deps.claim(it.get("text"), root))
         if dep is not None:
-            # A DEPENDENCY ITEM IS SETTLED BY READING THE MANIFESTS (PR #172 review P1).
             verdict_, said = dep
             if verdict_ == "met":
                 row["evidence_refs"] = [{"kind": "manifest", "ref": said, "verified": True}]
