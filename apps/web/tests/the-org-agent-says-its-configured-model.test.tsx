@@ -37,6 +37,14 @@ function board(model: string | null) {
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 
+function clearHost() {
+  act(() => root?.unmount());
+  host?.remove();
+  document.body.innerHTML = "";
+  root = null;
+  host = null;
+}
+
 afterEach(() => {
   act(() => root?.unmount());
   host?.remove();
@@ -85,43 +93,27 @@ describe("the org agent says its configured model", () => {
     const models = [...short.querySelectorAll("span")].find((el) => el.textContent === MODELS);
     expect(models?.getAttribute("title")).toContain("Configured: gpt-4o.");
 
-    act(() => root?.unmount());
-    host?.remove();
-    document.body.innerHTML = "";
-    root = null;
-    host = null;
+    clearHost();
 
     const six = await show(SIX);
     expect(six.textContent).toContain(MODELS);
     expect(six.textContent).toContain(`Configured: ${SIX}.`);
     expect(sentenceEl(six, `Configured: ${SIX}.`)?.tagName).toBe("SPAN");
 
-    act(() => root?.unmount());
-    host?.remove();
-    document.body.innerHTML = "";
-    root = null;
-    host = null;
+    clearHost();
 
     const long = await show(LONG);
     expect(long.textContent).toContain(MODELS);
     expect(long.textContent).toContain(`Configured: ${LONG}.`);
     expect(sentenceEl(long, `Configured: ${LONG}.`)?.tagName).toBe("P");
 
-    act(() => root?.unmount());
-    host?.remove();
-    document.body.innerHTML = "";
-    root = null;
-    host = null;
+    clearHost();
 
     const blank = await show("   ");
     expect(blank.textContent).toContain(MODELS);
     expect(blank.textContent ?? "").not.toContain("Configured");
 
-    act(() => root?.unmount());
-    host?.remove();
-    document.body.innerHTML = "";
-    root = null;
-    host = null;
+    clearHost();
 
     const missing = await show(null);
     expect(missing.textContent).toContain(MODELS);
