@@ -20,6 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from . import activity_sql
+from .activity_retention import retention_days
 from .redaction import redact, redact_secrets
 
 try:
@@ -787,8 +788,8 @@ def _build(row: Mapping[str, Any]) -> dict[str, Any]:
 
 # ── The query, as a value ────────────────────────────────────────────────────────────────────
 
-#: The relative windows an operator picks. 30 days is the floor of the retention for turns and
-#: app output, so a longer range would quietly show a log with holes in it.
+#: The relative windows an operator picks. Named ranges stop at 30 days, the retention floor.
+#: A custom since/until may run out to retention_days(); it is not a named range.
 RANGES: dict[str, timedelta] = {
     "15m": timedelta(minutes=15), "1h": timedelta(hours=1), "24h": timedelta(hours=24),
     "7d": timedelta(days=7), "30d": timedelta(days=30),
@@ -1055,7 +1056,7 @@ def _branches(query: LogQuery, select: str, *, sources: Optional[list[str]] = No
                 src=f"'{name}'", ts=spec.ts, level=spec.level, status=spec.status,
                 raw=spec.raw, started=spec.started, finished=spec.finished,
                 agent=spec.agent or "NULL::text", service=spec.service or "NULL::text",
-                run_key=spec.run_key, kind=spec.kind or "NULL::text",
+                run_key=spec.run_key, kind=spec.kind or "NULL::text", actor=spec.actor,
                 fts=(spec.fts if (spec.fts and query.q) else "false"))
             sql = f"SELECT {columns} FROM {spec.table} t WHERE {where}"
             if order:
@@ -1219,6 +1220,34 @@ def _missing_sources(connection: Connection) -> set[str]:
             if any(t in absent for t in spec.tables())}
 
 
+def _retention_span() -> timedelta:
+    """How far back a window may reach. Never shorter than the old 30-day export bound."""
+    return timedelta(days=max(EXPORT_MAX_DAYS, retention_days()))
+
+
+def _cut_to_retention(query: LogQuery) -> bool:
+    """Cut an explicit window that runs past retention. Returns whether it was cut.
+
+    No start is not a window: a list with no since still reads the whole log. A named range
+    is at most 30 days, the floor, and its start is pinned inside prepare — a later clock
+    reading is not a longer window.
+    """
+    if query.since is None:
+        return False
+    if query.range in RANGES and (
+        query.until is None
+        or query.until - query.since <= RANGES[query.range] + timedelta(minutes=2)
+    ):
+        return False
+    until = query.until or datetime.now(timezone.utc)
+    span = _retention_span()
+    if until - query.since <= span + timedelta(seconds=1):
+        return False
+    query.since = until - span
+    query.range = ""
+    return True
+
+
 class ActivityLogService:
     """Project-scoped, read-only union of everything BOSS logged — as queries, not scans."""
 
@@ -1274,8 +1303,12 @@ class ActivityLogService:
         if _text(cursor) and _text(after):
             raise ValueError("use cursor (older) or after (newer), not both.")
         query = ActivityLogService.prepare(connection, project_id, **params)
+        window_capped = _cut_to_retention(query)
         if str(summary).lower() in ("1", "true", "yes"):
-            return ActivityLogService._summary(connection, query, limit=min(parsed_limit, 20))
+            result = ActivityLogService._summary(connection, query, limit=min(parsed_limit, 20))
+            if window_capped:
+                result["window_capped"] = True
+            return result
 
         params_sql = _params(query)
         descending = parsed_order == "desc"
@@ -1337,6 +1370,8 @@ class ActivityLogService:
                 result["truncated_note"] = (
                     "Counted by the search index and a plain-text match; a few counted rows "
                     "may not contain the exact text.")
+        if window_capped:
+            result["window_capped"] = True
         return result
 
     @staticmethod
@@ -1441,22 +1476,23 @@ class ActivityLogService:
 
     @staticmethod
     def facets(connection: Connection, project_id: str, **params: Any) -> dict[str, Any]:
-        """How many rows match per LEVEL, STREAM, AGENT, RUN, PROCESS and STATUS — counted in
-        SQL over the window, each facet ignoring its own selection (so a chip says how many
-        rows selecting it would show). Never counted from a page."""
+        """How many rows match per LEVEL, STREAM, AGENT, ACTOR, RUN, PROCESS and STATUS —
+        counted in SQL over the window, each facet ignoring its own selection (so a chip says
+        how many rows selecting it would show). Never counted from a page."""
         query = ActivityLogService.prepare(connection, project_id, **params)
         base_query = LogQuery(**{**query.__dict__, "levels": [], "exclude_levels": [],
-                                 "hide_verbose": False, "status": "", "agents": [],
+                                 "hide_verbose": False, "status": "", "actor": "", "agents": [],
                                  "exclude_agents": [], "service": "", "sources": [],
                                  "exclude_sources": [], "kinds": []})
         branches = _branches(
             base_query,
             "{src} AS src, {level} AS lvl, {status} AS st, {agent} AS agent, "
-            "{service} AS svc, {run_key} AS run_key, {kind} AS kd",
+            "{service} AS svc, {run_key} AS run_key, {kind} AS kd, {actor} AS actor",
             sources=list(SOURCES))
         levels = {name: 0 for name in LEVELS}
         sources = {name: 0 for name in SOURCES}
         agents: list[dict[str, Any]] = []
+        actors: list[dict[str, Any]] = []
         runs: list[dict[str, Any]] = []
         services: dict[str, int] = {}
         kinds: list[dict[str, Any]] = []
@@ -1478,6 +1514,8 @@ class ActivityLogService:
                 "status": "st = :status" if query.status else "true",
                 # A kind token is a real kind or a stream name (`kind:job`), as in _where.
                 "kind": ("(kd = ANY(:kinds) OR src = ANY(:kinds))" if query.kinds else "true"),
+                # Same as level: the actor chip counts with its own selection left out.
+                "actor": "actor = :actor" if query.actor else "true",
             }
 
             def but(name: str) -> str:
@@ -1496,6 +1534,9 @@ class ActivityLogService:
                     AND coalesce(svc, '') <> '' GROUP BY svc
                 UNION ALL (SELECT 'agent', agent, count(*) FROM base WHERE {but('agent')}
                     AND coalesce(agent, '') <> '' GROUP BY agent ORDER BY 3 DESC, 2 LIMIT 41)
+                UNION ALL (SELECT 'actor', actor, count(*) FROM base WHERE {but('actor')}
+                    AND btrim(coalesce(actor, '')) <> '' GROUP BY actor
+                    ORDER BY 3 DESC, 2 LIMIT 40)
                 UNION ALL (SELECT 'kind', kd, count(*) FROM base WHERE {but('kind')}
                     AND coalesce(kd, '') <> '' GROUP BY kd ORDER BY 3 DESC, 2 LIMIT 40)
                 UNION ALL (SELECT 'run', run_key, count(*) FROM base WHERE {everything}
@@ -1514,6 +1555,8 @@ class ActivityLogService:
                     services[k] = n
                 elif f == "agent":
                     agents.append({"role_key": k, "n": n})
+                elif f == "actor":
+                    actors.append({"actor": k, "n": n})
                 elif f == "run":
                     runs.append({"id": k, "n": n})
                 elif f == "kind":
@@ -1530,6 +1573,7 @@ class ActivityLogService:
             "project_id": query.project_id,
             "levels": levels, "sources": sources, "statuses": statuses, "services": services,
             "agents": agents[:40], "agents_more": max(0, len(agents) - 40),
+            "actors": actors[:40],
             # The real kinds in the window, for `kind:` autocomplete (D13), most common first.
             "kinds": kinds,
             "runs": runs[:8], "runs_more": len(runs) > 8,
@@ -1617,12 +1661,12 @@ class ActivityLogService:
 
     @staticmethod
     def export_params(project_id: str, **params: Any) -> dict[str, Any]:
-        """The filter with its window bounded to 30 days (the newest 30 when none was given)."""
+        """The filter with its window bounded to retention (the newest span when none was given)."""
         query = LogQuery.build(project_id, **params)
         until = query.until or datetime.now(timezone.utc)
-        if query.since is None or until - query.since > timedelta(days=EXPORT_MAX_DAYS):
-            return {**params, "since": _iso(until - timedelta(days=EXPORT_MAX_DAYS)),
-                    "range": None}
+        span = _retention_span()
+        if query.since is None or until - query.since > span:
+            return {**params, "since": _iso(until - span), "range": None, "window_capped": True}
         return params
 
     @staticmethod
