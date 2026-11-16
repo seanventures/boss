@@ -61,6 +61,8 @@ export function ReportsView({ report }: { report: ReportFeed }) {
   ];
 
   const maxDay = Math.max(1, ...d.daily.map((x) => x.succeeded + x.failed + x.tasks));
+  const scorecardAgents = d.agents.slice(0, 12);
+  const agentsNotOnPage = d.agents.length - scorecardAgents.length;
 
   return (
     <div className="rep">
@@ -167,7 +169,7 @@ export function ReportsView({ report }: { report: ReportFeed }) {
           <div className="rep-agent-head">
             <span>Agent</span><span>Trust</span><span>Autonomy</span><span>Runs</span><span>Violations</span><span>Last review</span>
           </div>
-          {d.agents.slice(0, 12).map((a) => {
+          {scorecardAgents.map((a) => {
             const viol = a.policy_violations + a.scope_violations;
             const trustTone = a.trust_score >= 70 ? "green" : a.trust_score >= 40 ? "amber" : "red";
             return (
@@ -182,6 +184,9 @@ export function ReportsView({ report }: { report: ReportFeed }) {
             );
           })}
         </div>
+        {agentsNotOnPage > 0 ? (
+          <p className="detail">{scorecardAgents.length} agents are on this page. {agentsNotOnPage} more are not.</p>
+        ) : null}
       </div>
     </div>
   );
