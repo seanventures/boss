@@ -6,7 +6,8 @@ import { TOOL_CALL_FORWARD } from "../../../../lib/tool-calls";
 
 /**
  * The current tool-call filter as NDJSON (GET /v1/tool-calls/export): streamed through, never
- * buffered. The cap and the redaction happen in the API.
+ * buffered. The cap and the redaction happen in the API. `X-Truncated` is 1 only when
+ * that cap hid older rows.
  */
 export const dynamic = "force-dynamic";
 
@@ -29,7 +30,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: `BOSS answered ${r.status}` }, { status: r.status || 502 });
     }
     const headers = new Headers();
-    for (const name of ["content-type", "content-disposition"]) {
+    for (const name of ["content-type", "content-disposition", "x-truncated"]) {
       const value = r.headers.get(name);
       if (value) headers.set(name, value);
     }

@@ -1,7 +1,8 @@
 """The tool-call audit over HTTP (BOSSAPP-819): every tool call BOSS decided, as it recorded it.
 
 GET /v1/tool-calls          one page, newest first, keyset (`cursor` = the last page's `next`)
-GET /v1/tool-calls/export   the same filter as NDJSON, streamed, at most 50,000 rows
+GET /v1/tool-calls/export   the same filter as NDJSON, streamed, at most 50,000 rows.
+                            X-Truncated is 1 only when a further row exists past that cap.
 
 Filters: run, server, tool, decision, outcome, screen (the injection screen's verdict:
 clean | suspicious | unscreened, or `none` for a call with no result), since / until (ISO times).
@@ -72,21 +73,40 @@ def build_tool_calls_router(*, engine, require_reader: Callable[..., None]) -> A
         since: Optional[str] = Query(default=None, max_length=40),
         until: Optional[str] = Query(default=None, max_length=40),
     ) -> StreamingResponse:
-        """NDJSON, newest first, streamed page by page (never held in memory)."""
+        """NDJSON, newest first, streamed page by page (never held in memory).
+
+        X-Truncated is 1 only when a further matching row exists past the cap. It is set on
+        this response before the first byte; the body stays one tool-call row per line.
+        """
         filters = _filters(run_id, server_id, tool, decision, outcome, screen, since, until)
+        cap = audit.EXPORT_MAX_ROWS
         with begin(engine) as c:
             require_reader(c, project_id)
+            truncated = audit.export_tool_calls(
+                c, project_id=project_id, max_rows=cap, **filters).truncated
 
         def lines() -> Iterator[str]:
-            with begin(engine) as stream:
-                for row in audit.export_tool_calls(stream, project_id=project_id, **filters):
+            # Not begin(): its contextvar cannot span streamed chunks. Each chunk runs in a
+            # fresh worker context, and the token reset then fails.
+            connection = engine.connect()
+            transaction = connection.begin()
+            try:
+                for row in audit.export_tool_calls(
+                        connection, project_id=project_id, max_rows=cap, **filters):
                     yield json.dumps(row, default=str) + "\n"
+                transaction.commit()
+            except BaseException:
+                transaction.rollback()
+                raise
+            finally:
+                connection.close()
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         return StreamingResponse(
             lines(), media_type="application/x-ndjson",
             headers={"Content-Disposition":
-                     f'attachment; filename="boss-tool-calls-{stamp}.ndjson"'})
+                     f'attachment; filename="boss-tool-calls-{stamp}.ndjson"',
+                     "X-Truncated": "1" if truncated else "0"})
 
     return router
 

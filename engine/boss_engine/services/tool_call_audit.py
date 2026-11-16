@@ -6,6 +6,8 @@ decision, and the outcome. Update and delete are rejected by the database.
 READING IT (BOSSAPP-819): query_tool_calls is one keyset page with the
 audit's filters (GET /v1/tool-calls, the console's Activity › Tool calls);
 export_tool_calls streams the same filter (GET /v1/tool-calls/export).
+`truncated` on that export is true only when a further row exists past the
+cap. Exactly the cap, or fewer, did not hide older rows.
 `explanation` is the policy's own words for the decision when the writer has
 them; nothing here invents one.
 """
@@ -380,17 +382,57 @@ def query_tool_calls(connection: Connection, *, project_id: str, cursor: Optiona
             "next": _cursor_out(rows[-1]) if more and rows else None}
 
 
+def _row_past_cap(connection: Connection, project_id: str, filters: dict, cap: int) -> bool:
+    """True only when a matching row exists past `cap` in export order.
+
+    One fetch past the cap: exactly `cap` rows, or fewer, is not a cut.
+    """
+    where, params = _where(project_id, filters)
+    params["cap"] = max(0, int(cap))
+    found = connection.execute(
+        text(
+            f"SELECT 1 FROM tool_call_audit WHERE {where} "
+            "ORDER BY recorded_at DESC, id DESC OFFSET :cap LIMIT 1"
+        ),
+        params,
+    ).first()
+    return found is not None
+
+
+class _ToolCallExport:
+    """Newest-first rows, at most max_rows, never held as one list.
+
+    `truncated` is decided before the first row, and only when a further row exists.
+    """
+
+    def __init__(self, connection: Connection, *, project_id: str, max_rows: int,
+                 filters: dict):
+        self._connection = connection
+        self._project_id = project_id
+        self._max_rows = max(0, int(max_rows))
+        self._filters = filters
+        self.truncated = _row_past_cap(connection, project_id, filters, self._max_rows)
+
+    def __iter__(self) -> Iterator[dict]:
+        after: Optional[tuple[datetime, str]] = None
+        sent = 0
+        while sent < self._max_rows:
+            rows = _page(self._connection, self._project_id, self._filters, after=after,
+                         limit=min(_EXPORT_PAGE, self._max_rows - sent))
+            if not rows:
+                return
+            for row in rows:
+                yield _row(row)
+            sent += len(rows)
+            after = (rows[-1]["recorded_at"], rows[-1]["id"])
+
+
 def export_tool_calls(connection: Connection, *, project_id: str,
-                      max_rows: int = EXPORT_MAX_ROWS, **filters: Any) -> Iterator[dict]:
-    """Every matching row, newest first, page by page (never held in memory), at most max_rows."""
-    after: Optional[tuple[datetime, str]] = None
-    sent = 0
-    while sent < max_rows:
-        rows = _page(connection, project_id, filters, after=after,
-                     limit=min(_EXPORT_PAGE, max_rows - sent))
-        if not rows:
-            return
-        for row in rows:
-            yield _row(row)
-        sent += len(rows)
-        after = (rows[-1]["recorded_at"], rows[-1]["id"])
+                      max_rows: Optional[int] = None, **filters: Any) -> _ToolCallExport:
+    """Every matching row, newest first, page by page (never held in memory), at most max_rows.
+
+    The cap is EXPORT_MAX_ROWS unless the caller names one. `truncated` is true only when
+    a further matching row exists; a short file, including one that fills the cap exactly,
+    is not truncated."""
+    cap = EXPORT_MAX_ROWS if max_rows is None else int(max_rows)
+    return _ToolCallExport(connection, project_id=project_id, max_rows=cap, filters=filters)
