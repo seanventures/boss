@@ -81,6 +81,12 @@ function Needs({ icon, what, p }: { icon: React.ReactNode; what: string; p: Perm
 /** Reads that FAILED (page.tsx): each panel then says so instead of looking locked or empty. */
 export type OverviewFailures = Partial<Record<"posture" | "people" | "roles" | "groups" | "serviceAccounts" | "agents" | "events", ReadFailure | null>>;
 
+/** Twelve faces fit on the card. A longer directory says how many are not on this page. */
+export function agentRestSentence(count: number): string | null {
+  if (count <= 12) return null;
+  return `12 agents are on this page. ${count - 12} more are not.`;
+}
+
 export function Overview({ posture, people, roles, groups, serviceAccounts, agents, events, failures = {} }: {
   posture: Posture | null; people: Person[] | null; roles: AccessRole[] | null; groups: Group[] | null;
   serviceAccounts: ServiceAccount[] | null; agents: Passport[] | null; events: AuditEvent[] | null;
@@ -90,6 +96,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
   const now = useNow();
   const canGrant = useCan("delegation:grant");
   const counts = posture?.counts;
+  const agentRest = agents ? agentRestSentence(agents.length) : null;
   const active = people?.filter((p) => p.status === "active") ?? [];
   const alone = people !== null && active.length <= 1;
   const rows = people && roles ? roleCounts(people, roles) : [];
@@ -325,6 +332,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
                   </a>
                 ))}
               </div>
+              {agentRest ? <p className="idn-dim idn-small" data-copy="prose">{agentRest}</p> : null}
               {counts ? (
                 <div className="idn-stats3">
                   <span><b>{counts.active_grants}</b>active grants</span>
