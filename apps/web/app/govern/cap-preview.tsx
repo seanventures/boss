@@ -83,6 +83,19 @@ export function DailyBars({ daily, cap, cumulative, testid = "gv-daily", highlig
   );
 }
 
+/** Trimmed stopped-day names, in order. Null when none remain. Not a date format. */
+export function stoppedDaysSentence(days: readonly string[] | null | undefined): string | null {
+  const names = (days ?? []).map((day) => day.trim()).filter(Boolean);
+  return names.length > 0 ? names.join(", ") : null;
+}
+
+function StoppedDays({ days }: { days: readonly string[] | null | undefined }) {
+  const sentence = stoppedDaysSentence(days);
+  if (!sentence) return null;
+  const Tag = sentence.split(/\s+/).filter(Boolean).length > 6 ? "p" : "span";
+  return <Tag data-testid="gv-stopped-days" data-user-text>{sentence}</Tag>;
+}
+
 export function CapPreview({ preview }: { preview: CapPreviewData }) {
   if (preview.not_enough_history) {
     return <span className="gv-preview-line" data-testid="gv-would-stop" title="Replays the last 30 days of real spend">Not enough history</span>;
@@ -93,6 +106,7 @@ export function CapPreview({ preview }: { preview: CapPreviewData }) {
       <span className="gv-preview-line" data-testid="gv-would-stop" title="Replays the last 30 days of real spend">
         {preview.days_stopped ? `Would have stopped ${preview.days_stopped} day${preview.days_stopped === 1 ? "" : "s"}` : "Would have stopped none"}
       </span>
+      <StoppedDays days={preview.stopped_days} />
     </span>
   );
 }
