@@ -115,9 +115,11 @@ _declare(IRREVERSIBLE,
 _declare(IDEMPOTENT,
          # converges when repeated: the second run finds the state the first one left
          "allow_repository", "archive_project", "assign_mcp_to_agent", "assign_skill_to_agent",
-         "close_orphaned_runs", "complete_work_item", "connect_coding_agent", "forget",
+         "close_local_change", "close_orphaned_runs", "complete_work_item", "connect_coding_agent",
+         "forget",
          "link_run_origin", "link_work_items", "merge_apps", "recheck_workflow_run",
-         "register_repository", "remove_project_repository", "resolve_review_comment",
+         "register_repository", "remove_project_repository", "reopen_local_change",
+         "resolve_review_comment",
          "restore_project", "retarget_app", "retry_workflow_step", "set_job_priority",
          # a fix PR converges: the branch exists, the file is at this content, the PR is open
          "github_open_fix_pr",

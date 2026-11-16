@@ -122,6 +122,43 @@ def test_a_github_connection_needs_the_sources_secret_and_rejects_unknown_kinds(
         assert event_intake.get_connection(c, out["id"]) is None
 
 
+def test_a_connection_config_hides_a_url_credential_and_a_masked_save_keeps_it(world):
+    """BOSSAPP-1203: config and health are read views. A query token and a URL password are
+    hidden; a service-account username stays. Saving the masked config back does not replace
+    the stored secret, and a genuinely new value does."""
+    engine, pid = world
+    token = "fake-qs-token-1203"
+    password = "fake-qs-pw-1203"
+    user = "deploy-bot-prod-account-01"
+    clone = f"https://{user}:{password}@git.example/r?access_token={token}"
+    plain = f"https://{user}@git.example/r"
+    out = make_connection(engine, pid, "webhook", config={
+        "callback": clone, "mirror": plain, "label": "alerts",
+        "hooks": {"url": clone}})
+    shown = json.dumps(out["config"])
+    assert token not in shown and password not in shown
+    assert out["config"]["mirror"] == plain and out["config"]["label"] == "alerts"
+    assert out["config"]["callback"] == f"https://{user}:***@git.example/r?access_token=***"
+    assert out["config"]["hooks"]["url"] == out["config"]["callback"]
+    with engine.begin() as c:
+        c.execute(text("UPDATE intake_connections SET health = CAST(:h AS JSONB) WHERE id = :id"),
+                  {"h": json.dumps({"last_error": clone}), "id": out["id"]})
+        described = event_intake.describe_connection(c, event_intake.get_connection(c, out["id"]))
+        event_intake.update_connection(c, project_id=pid, connection_id=out["id"], actor="ceo",
+                                        config=out["config"])
+        kept = event_intake.get_connection(c, out["id"])["config"]
+    assert token not in json.dumps(described["health"]) and password not in json.dumps(described["health"])
+    assert token in kept["callback"] and password in kept["callback"]
+    assert kept["hooks"]["url"] == clone and kept["mirror"] == plain
+    changed = "https://other.example/new"
+    with engine.begin() as c:
+        event_intake.update_connection(c, project_id=pid, connection_id=out["id"], actor="ceo",
+                                        config={"callback": changed})
+        row = event_intake.get_connection(c, out["id"])
+    assert row["config"]["callback"] == changed
+    assert row["config"]["hooks"]["url"] == clone
+
+
 # ---- the front door ------------------------------------------------------------------------------
 
 

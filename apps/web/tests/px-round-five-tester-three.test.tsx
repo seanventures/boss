@@ -93,7 +93,7 @@ describe("the sample (00a-26)", () => {
   it("the sheet asks before it creates the project", () => {
     const src = readFileSync("app/start-project/start-sheet.tsx", "utf8");
     expect(src.indexOf("installWideRefusal(")).toBeGreaterThan(0);
-    expect(src.indexOf("installWideRefusal(")).toBeLessThan(src.indexOf("createFresh(SAMPLE.name)"));
+    expect(src.indexOf("installWideRefusal(")).toBeLessThan(src.indexOf("ensureSample(SAMPLE.name)"));
   });
 });
 

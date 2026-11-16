@@ -3970,6 +3970,17 @@ def _serialize_step(row: Any) -> dict[str, Any]:
     }
 
 
+def shown_run_input(value: Any) -> Any:
+    """A run's input as a read view shows it. A webhook delivery's body is that input, so URL
+    credentials in it are masked (BOSSAPP-1203). The row the steps read is not this copy."""
+    data = _json(value, {})
+    if isinstance(data, dict) and str(data.get("trigger") or "") == "webhook":
+        from .redaction import mask_url_credentials_in
+
+        return mask_url_credentials_in(data)
+    return data
+
+
 def _serialize_run(row: Any) -> dict[str, Any]:
     return {
         "id": row["id"],
@@ -3981,7 +3992,7 @@ def _serialize_run(row: Any) -> dict[str, Any]:
         "root_run_id": row.get("root_run_id"),
         "actor": row["actor"],
         "status": row["status"],
-        "input": _json(row["input"], {}),
+        "input": shown_run_input(row["input"]),
         "output": _json(row["output"], {}),
         "context": _json(row["context"], {}),
         "policy_snapshot": _json(row["policy_snapshot"], {}),

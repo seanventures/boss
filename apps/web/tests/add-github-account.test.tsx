@@ -137,6 +137,11 @@ describe("Add a GitHub account, guided by BOSS", () => {
       "Working: BOSS can read it, push branches and open pull requests.");
     expect(q(panel, "ga-step-check")!.getAttribute("data-s")).toBe("done");
     expect(q(panel, "ga-foot-note")!.textContent).toBe("1 of 1 working.");
+    expect(q(panel, "acct-handoff-where")!.textContent).toContain("Start a project");
+    expect(q(panel, "acct-handoff-where")!.textContent).toContain("Add from GitHub");
+    expect(q(panel, "acct-handoff-where")!.textContent).toContain("the project's Repositories");
+    expect(q(panel, "acct-import-kaappu/helpdesk")!.textContent).toBe("Import as a project");
+    expect(q(panel, "acct-add-kaappu/helpdesk")!.textContent).toBe("Add to this project");
     await click(q(panel, "ga-done"));
     expect(q(document.body, "su-add-account")).toBeNull();
   });

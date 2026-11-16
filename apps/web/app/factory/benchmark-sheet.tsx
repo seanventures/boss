@@ -11,6 +11,7 @@ import React, { useState } from "react";
 
 import { previewWebHref } from "../../lib/browser-links";
 import { callAction } from "../../lib/call-action";
+import { withConsentResult } from "../../lib/identity/consent";
 import { GatedButton } from "../../components/gated";
 import { startQaBenchmarkAppAction } from "../actions";
 import { showToast } from "../client-forms";
@@ -43,7 +44,7 @@ export function BenchmarkSheetBody({ benchmarks, builtIds, projectId, actor, own
     if (again) data.set("force", "true");
     let out: { run_id?: string; kind?: "meeting" | "code" | "existing"; error?: string } | undefined;
     try {
-      out = await callAction(startQaBenchmarkAppAction, undefined, "code_task:create")(data);
+      out = await withConsentResult(() => callAction(startQaBenchmarkAppAction, undefined, "code_task:create")(data));
       if (out?.run_id) showToast("success", out.kind === "meeting" ? "Plan started" : "Build started");
     } finally {
       setBusy(null);

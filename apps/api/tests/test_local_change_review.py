@@ -553,3 +553,166 @@ def test_the_host_tools_key_never_signs_a_persons_comment(client, engine, world,
                                         principal_id="sva_host_tools", system_note=True)
         assert note["author_kind"] == "agent"
         assert local_review.summary(db, local_review.change_row(db, pid, 1)["id"])["human_open"] == 0
+
+
+def test_a_person_closes_and_reopens_a_local_change(client, world, engine, repo_root):
+    """BOSSAPP-955: Close and Reopen are a person's decision, like Merge (decision:approve, and
+    only a person's session). Closing pins the sha and leaves the branch; a later branch delete
+    still reads by that sha; Reopen restores a missing branch. A merged change is neither."""
+    from boss_engine.identity.principal import AuthContext, AuthMethod
+
+    pid, _b, bare, branch, _pr, _r = _project_with_change(engine, world)
+    head = local_repo.branch_sha(bare, branch)
+    with _viewer(world):
+        denied = client.post(f"/v1/projects/{pid}/local-changes/1/close", json={})
+    assert denied.status_code == 403, denied.text
+    # A key cannot step up for decision:approve (the same gate as Merge).
+    with world.acting_as(world.key_ctx(world.owner, ("decision:approve", "code_task:read"))):
+        keyed = client.post(f"/v1/projects/{pid}/local-changes/1/close", json={})
+    assert keyed.status_code == 401 and keyed.json()["error"] == "step_up_required", keyed.text
+    # A bridged credential that holds the permission still is not a person's session.
+    bridge = AuthContext(world.owner, AuthMethod.LEGACY_PASSWORD, legacy="shared_password")
+    with world.acting_as(bridge):
+        refused = client.post(f"/v1/projects/{pid}/local-changes/1/close", json={})
+    assert refused.status_code == 403 and "people_only" in refused.text, refused.text
+
+    with _owner(world):
+        closed = client.post(f"/v1/projects/{pid}/local-changes/1/close", json={})
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["state"] == "closed" and closed.json()["closed_by"]
+    assert local_repo.branch_sha(bare, branch) == head
+    assert local_repo.rev_parse(bare, "refs/boss/closed/1") == head
+    with _viewer(world):
+        view = client.get(f"/v1/projects/{pid}/local-changes/1")
+        by_sha = client.get(f"/v1/projects/{pid}/local-changes/1/file",
+                            params={"path": "src/app.js", "ref": head})
+    assert view.json()["state"] == "closed"
+    assert by_sha.status_code == 200 and by_sha.json()["text"].splitlines()[4] == "line five"
+    with _owner(world):
+        again = client.post(f"/v1/projects/{pid}/local-changes/1/close", json={})
+        reopened = client.post(f"/v1/projects/{pid}/local-changes/1/reopen", json={})
+    assert again.status_code == 409 and again.json()["error"] == "not_open"
+    assert reopened.status_code == 200 and reopened.json()["state"] == "open", reopened.text
+    assert reopened.json()["closed_by"] is None
+    with _owner(world):
+        not_closed = client.post(f"/v1/projects/{pid}/local-changes/1/reopen", json={})
+    assert not_closed.status_code == 409 and not_closed.json()["error"] == "not_closed"
+
+    # The branch is gone (a delete that already landed): close still pins, the file still
+    # reads, and reopen puts the branch back at the stored sha.
+    local_repo.git(["update-ref", "-d", f"refs/heads/{branch}"], git_dir=bare)
+    with _owner(world):
+        closed_gone = client.post(f"/v1/projects/{pid}/local-changes/1/close", json={})
+    assert closed_gone.status_code == 200, closed_gone.text
+    assert local_repo.branch_sha(bare, branch) is None
+    assert local_repo.rev_parse(bare, "refs/boss/closed/1") == head
+    with _viewer(world):
+        still = client.get(f"/v1/projects/{pid}/local-changes/1/file",
+                           params={"path": "src/sla.js"})
+    assert still.status_code == 200 and "hours" in still.json()["text"], still.text
+    with world.acting_as(world.key_ctx(world.owner, ("decision:approve",))):
+        key_reopen = client.post(f"/v1/projects/{pid}/local-changes/1/reopen", json={})
+    assert key_reopen.status_code == 401 and key_reopen.json()["error"] == "step_up_required"
+    with _owner(world):
+        back = client.post(f"/v1/projects/{pid}/local-changes/1/reopen", json={})
+    assert back.status_code == 200 and back.json()["state"] == "open", back.text
+    assert local_repo.branch_sha(bare, branch) == head
+
+    with engine.begin() as db:
+        db.execute(text("UPDATE local_change_sets SET state = 'merged' WHERE project_id = :p "
+                        "AND number = 1"), {"p": pid})
+    with _owner(world):
+        no_close = client.post(f"/v1/projects/{pid}/local-changes/1/close", json={})
+        no_reopen = client.post(f"/v1/projects/{pid}/local-changes/1/reopen", json={})
+    assert no_close.status_code == 409 and no_close.json()["error"] == "not_open"
+    assert no_reopen.status_code == 409 and no_reopen.json()["error"] == "not_closed"
+
+
+def test_mcp_close_and_reopen_follow_the_same_people_rule(engine, world, repo_root):
+    pid, _b, bare, branch, _pr, _r = _project_with_change(engine, world)
+    head = local_repo.branch_sha(bare, branch)
+    from boss_engine.identity.principal import AuthContext, AuthMethod
+
+    owner = world.ctx(world.owner, mfa=True)
+    viewer = world.ctx(world.viewer)
+    key = world.key_ctx(world.owner, ("decision:approve",))
+    bridge = AuthContext(world.owner, AuthMethod.LEGACY_PASSWORD, legacy="shared_password")
+    denied = _tool(engine, world, viewer, "close_local_change", pid, {"change_number": 1})
+    assert denied["ok"] is False and denied["error"] == "forbidden", denied
+    keyed = _tool(engine, world, key, "close_local_change", pid, {"change_number": 1})
+    assert keyed["ok"] is False and keyed["error"] == "step_up_required", keyed
+    refused = _tool(engine, world, bridge, "close_local_change", pid, {"change_number": 1})
+    assert refused["ok"] is False and refused["error"] == "people_only", refused
+    closed = _tool(engine, world, owner, "close_local_change", pid, {"change_number": 1})
+    assert closed["ok"] is True and closed["state"] == "closed", closed
+    assert local_repo.rev_parse(bare, "refs/boss/closed/1") == head
+    again = _tool(engine, world, owner, "close_local_change", pid, {"change_number": 1})
+    assert again["ok"] is False and again["error"] == "not_open", again
+    key_open = _tool(engine, world, bridge, "reopen_local_change", pid, {"change_number": 1})
+    assert key_open["ok"] is False and key_open["error"] == "people_only", key_open
+    opened = _tool(engine, world, owner, "reopen_local_change", pid, {"change_number": 1})
+    assert opened["ok"] is True and opened["state"] == "open", opened
+    assert local_repo.branch_sha(bare, branch) == head
+
+
+def test_a_pushed_review_that_needs_consent_is_kept_for_the_sheet(client, world, engine,
+                                                                  repo_root, monkeypatch):
+    """BOSSAPP-1012: a push that cannot queue the review (consent) keeps the request on the
+    change, and asking again answers the flat 409 the consent sheet reads — not a lost event."""
+    from boss_engine.identity import consent
+    from boss_engine.identity.consent import ConsentRequired
+    from boss_engine.services import local_git_hooks
+
+    pid, _bound, _bare, _branch, _pr, _r = _project_with_change(engine, world)
+    repo = f"local_{pid}/desk"
+    body = {
+        "error": "consent_required",
+        "task": "Review change #1: Add an SLA timer",
+        "task_run_id": "pending:Review1",
+        "agents": [{"id": "agt_forge", "name": "Software Engineer", "role_key": "forge"}],
+        "permissions": ["code_task:read", "code_task:steer", "repository:read"],
+        "projects": [pid],
+        "github": None,
+        "local": {"repo": repo, "repos": [repo], "summary": "on this machine"},
+        "durations": [{"kind": "task", "label": "For this build only", "days": None},
+                      {"kind": "standing", "label": "For 30 days", "days": 30}],
+        "max_days": 90,
+    }
+    def _need_consent(**_kw: object) -> None:
+        raise ConsentRequired(body)
+
+    monkeypatch.setattr(consent, "require_authority", _need_consent)
+    with engine.begin() as db:
+        row = local_review.change_row(db, pid, 1)
+        queued = local_git_hooks.queue_review_of(db, get_settings(), change=row, pusher="ada",
+                                                 jobs=object())
+    assert queued is None
+    with engine.connect() as db:
+        saved = db.execute(text(
+            "SELECT review_consent, run_id FROM local_change_sets WHERE project_id = :p AND number = 1"),
+            {"p": pid}).mappings().one()
+        why = db.execute(text(
+            "SELECT data FROM events WHERE project_id = :p AND event_type = 'local_repo.review_not_queued'"),
+            {"p": pid}).scalars().all()
+    assert saved["run_id"] is None
+    assert saved["review_consent"]["error"] == "consent_required"
+    assert saved["review_consent"]["task_run_id"] == "pending:Review1"
+    assert saved["review_consent"]["local"]["summary"] == "on this machine"
+    assert why and "ConsentRequired" in why[-1]["reason"]
+    with _owner(world):
+        view = client.get(f"/v1/projects/{pid}/local-changes/1")
+        asked = client.post(f"/v1/projects/{pid}/local-changes/1/review")
+    assert view.status_code == 200, view.text
+    assert view.json()["review_consent"]["error"] == "consent_required"
+    assert view.json()["review_consent"]["task"] == body["task"]
+    assert asked.status_code == 409, asked.text
+    assert asked.json()["error"] == "consent_required"
+    assert asked.json()["task_run_id"] == "pending:Review1"
+    assert "detail" not in asked.json()
+    monkeypatch.setattr(consent, "require_authority", lambda **_kw: None)
+    with _owner(world):
+        started = client.post(f"/v1/projects/{pid}/local-changes/1/review")
+        again = client.get(f"/v1/projects/{pid}/local-changes/1")
+    assert started.status_code == 200, started.text
+    assert started.json()["run_id"]
+    assert again.json()["review_consent"] is None

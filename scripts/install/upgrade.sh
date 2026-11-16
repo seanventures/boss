@@ -276,6 +276,18 @@ keep_previous_images() {
     if command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then d=(sudo -n docker)
     else echo 'Docker is unavailable to this user; no instant rollback point kept.' >&2; return 0; fi
   fi
+  # BOSSAPP-1204: a previous attempt already moved this tag and died before the container
+  # ran it. Retagging prev-$tag now would point it at the image the container never ran, and
+  # the resume's backup would refuse. Leave the rollback point that still names the running image.
+  local tag_id="" run_id="" prev_id="" cid=""
+  tag_id="$("${d[@]}" image inspect --format '{{.Id}}' "boss-community-api:$tag" 2>/dev/null || true)"
+  cid="$("${d[@]}" compose -f "$INSTALL_DIR/scripts/install/community-compose.yml" --env-file "$INSTALL_DIR/.env" ps -q api 2>/dev/null || true)"
+  [[ -z "$cid" ]] || run_id="$("${d[@]}" inspect --format '{{.Image}}' "$cid" 2>/dev/null || true)"
+  prev_id="$("${d[@]}" image inspect --format '{{.Id}}' "boss-community-api:prev-$tag" 2>/dev/null || true)"
+  if [[ -n "$run_id" && -n "$tag_id" && -n "$prev_id" && "$run_id" == "$prev_id" && "$run_id" != "$tag_id" && -f "$INSTALL_DIR/.boss-rollback" ]]; then
+    echo 'A previous upgrade moved the API tag and stopped before the container ran it. Keeping that rollback point.' >&2
+    return 0
+  fi
   for svc in "${ROLLBACK_SERVICES[@]}"; do
     if "${d[@]}" image inspect "boss-community-$svc:$tag" >/dev/null 2>&1; then
       "${d[@]}" tag "boss-community-$svc:$tag" "boss-community-$svc:prev-$tag" </dev/null &&

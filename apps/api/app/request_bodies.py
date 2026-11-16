@@ -327,6 +327,9 @@ class ProjectCreateBody(OpenRequestBody):
     #: `app` (default: it builds apps) or `knowledge_graph` (a knowledge graph for an existing
     #: codebase). Checked by bootstrap.project_type_for, which names the types on a bad one.
     project_type: str | None = None
+    #: Try a sample: find the live project in this org with this key, or create it and stamp it.
+    #: One Hello World (`hello-world`) per organization, across sheets and sessions.
+    sample_key: str | None = None
 
 
 class DeploymentTargetCreateBody(OpenProjectBody):

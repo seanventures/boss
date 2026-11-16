@@ -387,11 +387,11 @@ def describe_connection(connection: Connection, row: Mapping[str, Any], *,
         "label": manifest.label if manifest else row["kind"],
         "icon": manifest.icon if manifest else row["kind"],
         "name": row.get("name") or "", "mode": row["mode"], "status": row["status"],
-        "config": _json(row.get("config"), {}) or {},
+        "config": mask_url_credentials_in(_json(row.get("config"), {}) or {}),
         "secret_fields": sorted(k for k in refs if not k.endswith("_previous")),   # names only
         "url_path": inbound_path(str(row["kind"]), str(row["path_token"])),
         "chat_endpoint_id": row.get("chat_endpoint_id"),
-        "limits": _limits(row.get("limits")), "health": health,
+        "limits": _limits(row.get("limits")), "health": mask_url_credentials_in(health),
         "rules": rules, "created_by": row.get("created_by"),
         "runs_as": ({"on_behalf_of": row.get("on_behalf_of"), "grant_id": row.get("grant_id")}
                     if row.get("on_behalf_of") else None),
@@ -403,6 +403,21 @@ def describe_connection(connection: Connection, row: Mapping[str, Any], *,
         out["dead"] = int(counts.get("dead") or 0)
         out["last_event_at"] = _iso(counts.get("last_event_at"))
     return out
+
+
+def _keep_shown_secret(stored: Any, incoming: Any) -> Any:
+    """A read view sends a masked URL back unchanged. That is the stored secret, not a new one."""
+    if isinstance(stored, str) and isinstance(incoming, str):
+        shown = mask_url_credentials(stored)
+        if incoming == shown and shown != stored:
+            return stored
+        return incoming
+    if isinstance(stored, dict) and isinstance(incoming, dict):
+        return {key: _keep_shown_secret(stored[key], value) if key in stored else value
+                for key, value in incoming.items()}
+    if isinstance(stored, list) and isinstance(incoming, list) and len(stored) == len(incoming):
+        return [_keep_shown_secret(old, new) for old, new in zip(stored, incoming)]
+    return incoming
 
 
 def update_connection(connection: Connection, *, project_id: str, connection_id: str, actor: str,
@@ -428,7 +443,7 @@ def update_connection(connection: Connection, *, project_id: str, connection_id:
             elif value is None:
                 cfg.pop(str(key), None)
             else:
-                cfg[str(key)] = value
+                cfg[str(key)] = _keep_shown_secret(cfg.get(str(key)), value)
     refs = dict(_json(row.get("secret_refs"), {}) or {})
     for fname, value in given_secrets.items():
         if fname not in secret_fields:
@@ -958,6 +973,18 @@ def backoff_seconds(attempts: int) -> int:
     return BACKOFF_SECONDS[min(max(attempts, 1), len(BACKOFF_SECONDS)) - 1]
 
 
+def _due_now(connection: Connection, now: Optional[datetime]) -> datetime:
+    """The clock `next_attempt_at` is stamped with. Inserts use `DEFAULT now()` (the database
+    clock). A host clock that trails the database leaves a row inserted a moment ago not yet
+    due, so a pass that does not name `now` reads the database clock."""
+    if now is not None:
+        return now
+    stamped = connection.execute(text("SELECT clock_timestamp()")).scalar()
+    if stamped.tzinfo is None:
+        stamped = stamped.replace(tzinfo=timezone.utc)
+    return stamped
+
+
 def claim(connection: Connection, *, limit: int = PROCESSOR_BATCH, holder: str = HOLDER,
           now: Optional[datetime] = None, project_id: Optional[str] = None) -> list[dict]:
     """Claim due rows: received or failed and due, or `processing` whose lease expired (its
@@ -976,7 +1003,7 @@ def claim(connection: Connection, *, limit: int = PROCESSOR_BATCH, holder: str =
     `project_id` limits the claim to one project (tests on a shared database)."""
     from . import projects_archive
 
-    now = now or _now()
+    now = _due_now(connection, now)
     rows = connection.execute(text(f"""
         WITH ranked AS (
             SELECT id, row_number() OVER (PARTITION BY connection_id ORDER BY received_at, id) AS rn,
@@ -1306,8 +1333,9 @@ def process_due(engine: Any, settings: Any = None, *, limit: int = PROCESSOR_BAT
     from ..db import begin
 
     settings = settings or _settings()
-    now = now or _now()
     with begin(engine) as c:
+        # One clock for the claim and for the backoff written on the rows it takes.
+        now = _due_now(c, now)
         rows = claim(c, limit=limit, holder=holder, now=now, project_id=project_id)
     out = {"claimed": len(rows), "routed": 0, "ignored": 0, "filtered": 0, "refused": 0,
            "failed": 0, "dead": 0, "received": 0, "deferred": 0, "digest": 0}

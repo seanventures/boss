@@ -11,6 +11,8 @@ GET  /v1/projects/{id}/local-changes/{n}             one: branch, diff, files, c
                                                      comments, sandbox checks, its decision
 POST /v1/projects/{id}/local-changes/{n}/merge       Merge into the default branch (a person's
                                                      approval of the change's review decision)
+POST /v1/projects/{id}/local-changes/{n}/close       Close an open change (a person's decision)
+POST /v1/projects/{id}/local-changes/{n}/reopen      Reopen a closed change (a person's decision)
 GET  /v1/projects/{id}/local-changes/{n}/tree        the Code tab's tree at head|base (BOSSAPP-948)
 GET  /v1/projects/{id}/local-changes/{n}/file        one file at head|base|a commit of the change
 GET  /v1/projects/{id}/local-changes/{n}/comments    the line-comment threads (local_review)
@@ -289,6 +291,48 @@ def local_change_merge(project_id: str, number: int, request: Request, payload: 
                              f"Change #{number} has no review waiting for a decision."}, status_code=409)
     return approve_decision_card(decision["id"], DecisionActionRequest(
         actor=_actor(request), note=payload.note or f"Merge change #{number}", force=payload.force))
+
+
+def _close_view(row: dict[str, Any]) -> dict[str, Any]:
+    closed_at = row.get("closed_at")
+    return {"number": int(row["number"]), "state": row["state"], "branch": row["branch"],
+            "head_sha": row.get("head_sha"), "closed_by": row.get("closed_by"),
+            "closed_at": closed_at.isoformat() if hasattr(closed_at, "isoformat") else closed_at}
+
+
+@router.post("/v1/projects/{project_id}/local-changes/{number}/close")
+@permit(P.DECISION_APPROVE, scope=Scope.project(path="project_id"))
+def local_change_close(project_id: str, number: int, request: Request) -> Any:
+    """Close an open local change. The branch stays; the sha stays readable. A person's
+    decision, the same rule as merging it. A pushed branch delete closes it too."""
+    from boss_engine.services import local_review
+
+    _people_only(request, "Closing a change")
+    with begin(_engine) as connection:
+        _require(connection, project_id)
+        try:
+            row = local_review.close_change(connection, _settings, project_id=project_id,
+                                            number=number, actor=_actor(request))
+        except local_review.ReviewError as error:
+            return _review_refused(error)
+        return _close_view(row)
+
+
+@router.post("/v1/projects/{project_id}/local-changes/{number}/reopen")
+@permit(P.DECISION_APPROVE, scope=Scope.project(path="project_id"))
+def local_change_reopen(project_id: str, number: int, request: Request) -> Any:
+    """Reopen a closed local change. Restores the branch ref when a delete removed it."""
+    from boss_engine.services import local_review
+
+    _people_only(request, "Reopening a change")
+    with begin(_engine) as connection:
+        _require(connection, project_id)
+        try:
+            row = local_review.reopen_change(connection, _settings, project_id=project_id,
+                                             number=number, actor=_actor(request))
+        except local_review.ReviewError as error:
+            return _review_refused(error)
+        return _close_view(row)
 
 
 # ── local review: the Code tab, line comments, Request changes (BOSSAPP-948) ─────────────────

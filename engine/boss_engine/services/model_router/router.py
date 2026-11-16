@@ -177,8 +177,14 @@ def _parse_pin(value: Any, default_engine: Optional[str]) -> Optional[Target]:
     if not text:
         return None
     if ":" in text:
-        engine, _, model = text.partition(":")
-        return Target(engine.strip().lower(), model.strip() or None)
+        from ..harness_registry import split_engine_model
+
+        engine, model = split_engine_model(text)
+        if engine:
+            return Target(engine, model)
+        # `llama3.1:8b` is the model. It stays on the engine the pin was given
+        # with, instead of becoming an engine named llama3.1 (BOSSAPP-1023).
+        text = model or text
     return Target((default_engine or "").lower(), text) if default_engine else None
 
 

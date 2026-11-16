@@ -483,7 +483,7 @@ def test_delete_a_local_project_removes_its_repo(person: Person):
     assert not bare.parent.exists() or not any(bare.parent.iterdir())
 
 
-# ── 9 Try a sample, twice: the next free name, no cap ─────────────────────────────────────────
+# ── 9 Try a sample, twice: one Hello World per install (BOSSAPP-1014) ─────────────────────────
 
 def test_try_a_sample_twice(person: Person):
     p = person
@@ -493,9 +493,7 @@ def test_try_a_sample_twice(person: Person):
         assert p.tid("ap-sample").get_attribute("data-lit") is not None
         p.tid("ap-sample").click()
         made.append(p.landed(timeout_s=120))
-    assert made[0] != made[1], "a second press makes a second sample"
-    names = [project_name(pid) for pid in made]
-    if names[0] is not None:
-        # The next free "Hello World N", past 20 (the old cap refused there).
-        nums = [int(m.group(1)) if (m := re.fullmatch(r"Hello World(?: (\d+))?", n or "")) and m.group(1) else 1 for n in names]
-        assert all(n.startswith("Hello World") for n in names) and nums[1] > nums[0], names
+    assert made[0] == made[1], made
+    name = project_name(made[0])
+    if name is not None:
+        assert name.startswith("Hello World"), name

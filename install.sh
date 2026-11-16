@@ -1922,6 +1922,16 @@ else
   echo "  cd $INSTALL_DIR && make metatron"
 fi
 echo ""
+# VOLUME LABELS (BOSSAPP-1193): an upgrade started by a pre-#131 upgrade.sh never reaches the
+# relabel a current upgrade.sh runs after this installer. The containers are already up (above),
+# so the services have moved onto the labelled volumes. The steward removes the retired,
+# unlabelled ones when no container uses them. It never stops a service and never touches a
+# data volume. Best effort: a failure here does not fail the install.
+if [[ -f "$INSTALL_DIR/scripts/install/steward.py" ]] && command -v python3 >/dev/null 2>&1 &&
+   grep -q -- '--relabel-volumes' "$INSTALL_DIR/scripts/install/steward.py"; then
+  python3 "$INSTALL_DIR/scripts/install/steward.py" --install-dir "$INSTALL_DIR" --relabel-volumes </dev/null ||
+    echo 'BOSS volume labels were not checked; the Infra Agent lists any it cannot judge.' >&2
+fi
 echo "  # CLI on this machine"
 echo "  source $INSTALL_DIR/boss-community.env.sh"
 echo ""

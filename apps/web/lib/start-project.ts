@@ -228,12 +228,14 @@ export const startProjectApi = {
     idGet<StartView>(`/v1/projects/${enc(projectId)}/start`, { signal }),
   facts: (projectId: string, repoId: string, signal?: AbortSignal) =>
     idGet<RepoFacts>(`/v1/github/repos/${enc(repoId)}/facts?project_id=${enc(projectId)}`, { signal }),
-  /** POST /v1/projects. A name in use comes back as the existing project's id (`exists`). */
-  create: async (name: string, opts: { description?: string; type?: "app" | "knowledge_graph" } = {}) => {
+  /** POST /v1/projects. A name in use comes back as the existing project's id (`exists`).
+   *  `sampleKey` is find-or-create: the org's project for that key, not a new name. */
+  create: async (name: string, opts: { description?: string; type?: "app" | "knowledge_graph"; sampleKey?: string } = {}) => {
     try {
       return await idPost<CreatedProject>("/v1/projects", {
         name, ...(opts.description ? { description: opts.description } : {}),
         ...(opts.type === "knowledge_graph" ? { project_type: "knowledge_graph" } : {}),
+        ...(opts.sampleKey ? { sample_key: opts.sampleKey } : {}),
       });
     } catch (e) {
       if (e instanceof IdentityError && e.status === 409) {
@@ -252,8 +254,14 @@ async function takenSlugs(): Promise<Set<string>> {
   return new Set((r.items ?? []).map((p) => String(p.slug ?? p.id ?? "")));
 }
 
-/** Create a project under `name`, or `name 2`, `name 3`… when the name is taken (the sample and
- *  the presets: pressing Try a sample twice makes a second Hello World, never an error). */
+/** The one Hello World per organization (BOSSAPP-1014). The server finds `sample_key`
+ *  hello-world or creates it. Closing the sheet does not make another. */
+export async function ensureSample(name: string, create = startProjectApi.create): Promise<CreatedProject> {
+  return create(name, { sampleKey: "hello-world" });
+}
+
+/** Create a project under `name`, or `name 2`, `name 3`… when the name is taken (the presets:
+ *  a second Bug triage board is a second project). Try a sample uses `ensureSample` instead. */
 export async function createFresh(name: string, opts: { description?: string; type?: "app" | "knowledge_graph" } = {},
                                   create = startProjectApi.create,
                                   taken: () => Promise<Set<string>> = takenSlugs): Promise<CreatedProject> {

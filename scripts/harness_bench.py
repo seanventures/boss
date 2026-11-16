@@ -618,6 +618,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         raise Refused("; ".join(why))
     db_url = database_url(args.db_url)
     os.environ["DATABASE_URL"] = db_url
+    # A host bench must use the install's secret store, not Infisical merely
+    # because this process can see INFISICAL_* (BOSSAPP-1033). The value is a
+    # flag, not a credential.
+    if not os.path.exists("/.dockerenv") and not os.environ.get("KUBERNETES_SERVICE_HOST"):
+        os.environ["BOSS_HOST_BENCH"] = "1"
     overrides = parse_sets(args.set)
     if args.level == "bare" and overrides:
         raise Refused("--set configures the governed pipeline; the bare level runs none of it")

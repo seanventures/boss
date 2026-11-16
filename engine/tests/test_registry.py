@@ -79,6 +79,8 @@ _EXPECTED_TOOLS: set[str] = {
     # say "not safe" gives the implementer nothing to act on; these three are how a finding
     # gets a file and a line, and how a person adds one of their own.
     "add_review_comment", "list_review_comments", "resolve_review_comment",
+    # Close and reopen a local change (BOSSAPP-955): a person's decision, undone by the other.
+    "close_local_change", "reopen_local_change",
     # A hollow review (PR #223: "nothing to review" on 77 files) is answered by reviewing the
     # pull request's real diff again and posting the round on the PR.
     "review_pull_request_again",
@@ -299,7 +301,7 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 222, (  # + create_config_target, deploy_config, promote_config (AMEX-G4) + 5 storage_* and 2 work_hold_* (unpinned drift on main at f2348b85c) + github_comment, github_open_fix_pr, contract_test (AMEX-G5/G6/G7, 2026-11-14) + 6 ticket tools (BOSSAPP-1047 B2, 2026-11-13) + 4 run FS tools (AP-P6) + 7 coordination tools and transfer_to_agent (AP-P7)
+    assert len(reg.names()) == 224, (  # + close_local_change, reopen_local_change (BOSSAPP-955) + create_config_target, deploy_config, promote_config (AMEX-G4) + 5 storage_* and 2 work_hold_* (unpinned drift on main at f2348b85c) + github_comment, github_open_fix_pr, contract_test (AMEX-G5/G6/G7, 2026-11-14) + 6 ticket tools (BOSSAPP-1047 B2, 2026-11-13) + 4 run FS tools (AP-P6) + 7 coordination tools and transfer_to_agent (AP-P7)
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 118  # + storage_inspect, storage_plan (unpinned drift on main at f2348b85c) + task, start/check/update/cancel/list_subagents, write_todos (AP-P7) + ls, read_file, grep (AP-P6 run FS) + ticket_get, ticket_search, ticket_browse (BOSSAPP-1047 B2) + wiki_read (BOSSAPP-891) + list_work_items (BOSSAPP-830) + install_restarts + + dq_platform_status + kg_neighbors, dq_rulebook_status (rulebook source G6/G7) + aml_sample_status + knowledge_project_setup (BOSSAPP-768 project flow) + find_tools (K5, BOSSAPP-961)
@@ -307,7 +309,7 @@ def test_default_registry_shape():
     #                         + wait_for (waiting for BOSS's own work) + kg_schema (what the knowledge graph holds) + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
-    assert len(write) == 104  # + create_config_target, deploy_config, promote_config (AMEX-G4) + storage_propose_rule, storage_report, storage_run_step, work_hold_release, work_hold_set (unpinned drift on main at f2348b85c) + github_comment, github_open_fix_pr, contract_test (AMEX-G5/G6/G7) + transfer_to_agent (AP-P7 handoff) + write_file (AP-P6 run FS) + ticket_import, ticket_comment, ticket_transition (BOSSAPP-1047 B2) + offer_options (BOSSAPP-879), watch_work_item (880), propose_hire, request_budget_override (884), + propose_secret (BOSSAPP-871), + report_friction (BOSSAPP-889), + wiki_propose (BOSSAPP-891), + request_tool_access (BOSSAPP-848), + delete_project, + load_dq_platform + add_document_from_file (G3) + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
+    assert len(write) == 106  # + close_local_change, reopen_local_change (BOSSAPP-955) + create_config_target, deploy_config, promote_config (AMEX-G4) + storage_propose_rule, storage_report, storage_run_step, work_hold_release, work_hold_set (unpinned drift on main at f2348b85c) + github_comment, github_open_fix_pr, contract_test (AMEX-G5/G6/G7) + transfer_to_agent (AP-P7 handoff) + write_file (AP-P6 run FS) + ticket_import, ticket_comment, ticket_transition (BOSSAPP-1047 B2) + offer_options (BOSSAPP-879), watch_work_item (880), propose_hire, request_budget_override (884), + propose_secret (BOSSAPP-871), + report_friction (BOSSAPP-889), + wiki_propose (BOSSAPP-891), + request_tool_access (BOSSAPP-848), + delete_project, + load_dq_platform + add_document_from_file (G3) + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
     # + file_platform_gap, request_self_fix (BOSSAPP-571's doorway) + record_learning (BOSSAPP-768 S2b), + kg_propose_rule (BOSSAPP-768 S2a), + archive_project, restore_project (BOSSAPP-768 S5), + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
@@ -570,6 +572,10 @@ _SAFE_WRITES = [
     # to undo than saying it again.
     "add_review_comment",
     "resolve_review_comment",
+    # CLOSING A LOCAL CHANGE IS UNDONE BY REOPENING IT (BOSSAPP-955). The branch stays, the sha
+    # stays readable, and neither spends money nor merges. A person's press, like Merge.
+    "close_local_change",
+    "reopen_local_change",
     "close_orphaned_runs",
     # AUTHORING A PATH IS NOT WALKING IT. Both write a definition and neither starts a run or
     # spends a model budget: a workflow that exists but is not mapped to a class of work changes

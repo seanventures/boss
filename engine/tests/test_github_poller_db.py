@@ -115,7 +115,7 @@ def test_a_polled_pull_request_touching_a_tenant_file_starts_a_run(world):
     assert health["interval_seconds"] == event_intake.POLL_SECONDS_DEFAULT
 
     # Counts are per pass over the whole inbox (a shared test database); the rows are ours.
-    event_intake.process_due(engine, _settings())
+    event_intake.process_due(engine, _settings(), project_id=pid)
     by_pr = {r["envelope"]["subject"]: r for r in _rows(engine, conn["id"])}
     tenant = by_pr[f"{REPO}#4"]
     assert tenant["status"] == "routed"
@@ -145,13 +145,13 @@ def test_the_same_commit_by_webhook_and_by_poll_is_one_event(world):
     got = event_intake.receive(engine, "github", token_of(conn["url_path"]),
                                github_request("gh-s", "pull_request", body, delivery="d-hook"))
     assert got["http_status"] == 202
-    event_intake.process_due(engine, _settings())
+    event_intake.process_due(engine, _settings(), project_id=pid)
     assert _rows(engine, conn["id"])[0]["status"] == "routed"
 
     # The poller then sees the same head commit.
     api.pulls = [{**_pr(4, body["pull_request"]["head"]["sha"], updated=LATER)}]
     assert event_intake.poll_due(engine, _settings(), connection_id=conn["id"])["inserted"] == 1
-    event_intake.process_due(engine, _settings())
+    event_intake.process_due(engine, _settings(), project_id=pid)
     rows = _rows(engine, conn["id"])
     polled = [r for r in rows if r["dedupe_key"].startswith("github:poll:")][0]
     assert polled["status"] == "filtered"
@@ -163,7 +163,7 @@ def test_the_same_commit_by_webhook_and_by_poll_is_one_event(world):
     api.etag = {"pulls": 'W/"p9"', "branches": 'W/"b9"'}
     api.pulls = [_pr(4, "8" * 40, updated=LATER)]
     assert event_intake.poll_due(engine, _settings(), connection_id=conn["id"])["inserted"] == 1
-    event_intake.process_due(engine, _settings())
+    event_intake.process_due(engine, _settings(), project_id=pid)
     assert _rows(engine, conn["id"])[-1]["status"] == "routed"
     assert len(runs_of(engine, pid)) == 2
 
@@ -227,10 +227,10 @@ def test_two_connections_on_one_repository_see_a_commit_once(world):
     body = github_pr_opened(4, repo=REPO)
     event_intake.receive(engine, "github", token_of(hook["url_path"]),
                          github_request("gh-s", "pull_request", body, delivery="d-two"))
-    event_intake.process_due(engine, _settings())
+    event_intake.process_due(engine, _settings(), project_id=pid)
     api.pulls = [_pr(4, body["pull_request"]["head"]["sha"], updated=LATER)]
     assert event_intake.poll_due(engine, _settings(), connection_id=poll["id"])["inserted"] == 1
-    event_intake.process_due(engine, _settings())
+    event_intake.process_due(engine, _settings(), project_id=pid)
     [polled] = _rows(engine, poll["id"])
     assert polled["status"] == "filtered"
     assert len(runs_of(engine, pid)) == 1

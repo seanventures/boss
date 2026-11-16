@@ -17,7 +17,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft, ArrowSquareOut, ChatCircleDots, ChatCircleText, CircleNotch, Code, FileCode, GitCommit, GitMerge,
-  FolderOpen, GithubLogo, HardDrives, Info, PencilSimpleLine, Robot, ShieldCheck, Terminal,
+  FolderOpen, GithubLogo, HardDrives, Info, PencilSimpleLine, Robot, ShieldCheck, Terminal, XCircle,
 } from "@phosphor-icons/react";
 
 import { BoxPop } from "../../../../components/box-pop";
@@ -25,6 +25,7 @@ import { ConsentHost } from "../../../../components/identity/consent-sheet";
 import { CanButton, IdentityProvider, useGuardedCall, useIdentity } from "../../../../components/identity/identity-provider";
 import type { MePermissionsResponse, MeResponse } from "../../../../lib/identity/contract";
 import { idGet, idPost, refusalSentence } from "../../../../lib/identity/api";
+import { askConsent } from "../../../../lib/identity/consent";
 import { parseChangeSet, type ChangeSet } from "../../../../lib/repo-links";
 import { commentsByLine, parseUnifiedDiff } from "../../../../lib/diff-view";
 import {
@@ -230,6 +231,7 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
       {!cs && !error ? <div className="cs-loading" role="status" aria-label={`Loading change #${number}`}><i /><i /><i /></div> : null}
       {cs ? (
         <>
+          <PushedReviewConsent cs={cs} at={at} reread={read} />
           <header className="cs-head gr-hd">
             <div className="gr-hd-1">
               <h1 data-testid="change-set-title">{cs.title || `${word} #${cs.number}`} <span className="cs-faint">#{cs.number}</span></h1>
@@ -354,10 +356,23 @@ export function Decide({ cs, projectId, number, reread, at, compact = false }: {
 }) {
   const where: ChangeAt = at ?? { projectId, number };
   const guarded = useGuardedCall();
-  const [busy, setBusy] = useState<"merge" | "merging" | null>(null);
+  const [busy, setBusy] = useState<"merge" | "merging" | "close" | "reopen" | null>(null);
   const [said, setSaid] = useState<string | null>(null);
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
+  const settle = async (which: "close" | "reopen", words: string) => {
+    if (busy) return;
+    setBusy(which); setSaid(null);
+    try {
+      await guarded(words, () => idPost(`${changeBase(where)}/${which}`, {}));
+      await reread().catch(() => null);
+    } catch (e) {
+      if (!alive.current) return;
+      setSaid(refusalSentence(e));
+    } finally {
+      if (alive.current) setBusy(null);
+    }
+  };
   const merge = async () => {
     if (busy) return;
     setBusy("merge"); setSaid(null);
@@ -387,7 +402,7 @@ export function Decide({ cs, projectId, number, reread, at, compact = false }: {
       Merged{cs.merged_by ? ` by ${cs.merged_by}` : ""}{cs.merged_sha ? ` as ${cs.merged_sha.slice(0, 7)}` : ""}</span>
   ) : merging ? (
     <span className="cs-merging" role="status" data-testid="change-set-merging"><CircleNotch size={14} className="cs-spin" aria-hidden /> BOSS is merging…</span>
-  ) : cs.merge ? (
+  ) : cs.state === "open" && cs.merge ? (
     <button type="button" className="cs-primary" data-testid="change-set-merge" disabled={!!busy || !!cs.merge.held} aria-busy={!!busy || undefined}
             title={cs.merge.held?.reason || "A person merges · BOSS runs the governed merge"} data-held={cs.merge.held?.state || undefined}
             onClick={() => void merge()}>
@@ -395,11 +410,28 @@ export function Decide({ cs, projectId, number, reread, at, compact = false }: {
       {cs.merge.held ? cs.merge.held.label : "Merge"}
     </button>
   ) : null;
+  const local = cs.source === "local";
+  const closeBtn = local && cs.state === "open" && !merging ? (
+    <CanButton permission="decision:approve" projectId={where.projectId} className="lr-btn" data-kind="ghost"
+               data-testid="change-set-close" disabled={!!busy} tip="Close this change. It stays readable."
+               onClick={() => void settle("close", `Close change #${cs.number || number}.`)}>
+      {busy === "close" ? <CircleNotch size={15} className="cs-spin" aria-hidden /> : <XCircle size={15} aria-hidden />}Close
+    </CanButton>
+  ) : null;
+  const reopenBtn = local && cs.state === "closed" ? (
+    <CanButton permission="decision:approve" projectId={where.projectId} className="lr-btn" data-kind="ghost"
+               data-testid="change-set-reopen" disabled={!!busy} tip="Reopen this change."
+               onClick={() => void settle("reopen", `Reopen change #${cs.number || number}.`)}>
+      {busy === "reopen" ? <CircleNotch size={15} className="cs-spin" aria-hidden /> : <GitMerge size={15} aria-hidden />}Reopen
+    </CanButton>
+  ) : null;
   if (compact) {
     return (
       <span className="gr-decide">
+        {cs.state === "open" && !d && cs.labels.includes("pushed") && cs.source === "local"
+          ? <RunReview cs={cs} at={where} reread={reread} /> : null}
         {cs.state === "open" && !merging ? <RequestChanges cs={cs} at={where} reread={reread} compact /> : null}
-        {button}
+        {closeBtn}{reopenBtn}{button}
         {said ? <span className="cs-error" role="alert">{said}</span> : null}
       </span>
     );
@@ -409,7 +441,7 @@ export function Decide({ cs, projectId, number, reread, at, compact = false }: {
       <div className="cs-card-h"><GitMerge size={15} aria-hidden /><b>Decision</b><span className="cs-spacer" />
         {d ? <span className="cs-pill" data-tone={d.status === "approved" ? "green" : d.status === "pending" ? "amber" : "grey"}>{d.status}</span> : null}</div>
       {d?.question ? <p className="cs-q">{d.question}</p> : null}
-      {button}
+      {closeBtn}{reopenBtn}{button}
       {cs.merge ? <p className="cs-faint cs-small" data-testid={cs.merge.held ? "change-set-held" : undefined}>
         {cs.merge.held ? cs.merge.held.reason : "A person merges · BOSS runs the governed merge"}</p>
         : cs.state === "open" && !merging ? <p className="cs-faint cs-small">Merge opens once the review asks for a decision.</p> : null}
@@ -480,6 +512,31 @@ function RequestChanges({ cs, at, reread, compact = false }: { cs: ChangeSet; at
       {said && !open ? <span className="cs-error" role="alert">{said}</span> : null}
     </span>
   );
+}
+
+/** A pushed change whose review is waiting on consent: the page opens the same sheet a direct
+ *  change and a BOSS-built change open (BOSSAPP-1012). One ask per request; dismissing leaves
+ *  Run the review in the header. */
+export function PushedReviewConsent({ cs, at, reread }: {
+  cs: ChangeSet; at: ChangeAt; reread: () => Promise<ChangeSet>;
+}) {
+  const asked = useRef<string | null>(null);
+  useEffect(() => {
+    const req = cs.review_consent;
+    if (!req || cs.state !== "open" || cs.decision || cs.source !== "local" || cs.run_id) return undefined;
+    const key = req.task_run_id || req.task;
+    if (asked.current === key) return undefined;
+    asked.current = key;
+    let live = true;
+    void (async () => {
+      const grant = await askConsent(req);
+      if (!live || !grant) return;
+      try { await runReview(at); } catch { /* Run the review stays in the header */ }
+      if (live) await reread().catch(() => null);
+    })();
+    return () => { live = false; };
+  }, [cs.review_consent, cs.state, cs.decision, cs.source, cs.run_id, at, reread]);
+  return null;
 }
 
 /** A pushed change whose review did not start with the push (consent, budget): start it now. */

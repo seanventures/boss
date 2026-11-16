@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Optional
 
 from sqlalchemy import create_engine, text
@@ -746,8 +747,31 @@ def ensure_schema(engine: Engine, settings: Optional[Settings] = None) -> None:
         print(f"[ensure_schema] context graph backfill skipped: {str(exc).strip()[:160]}")
 
 
+#: The connections of the transactions THIS thread (context) has open through `begin`, newest
+#: last. A component that opens a second connection of its own (local_repo_host) reads it to
+#: tell whether its caller still holds a transaction: a second connection that waits on a row
+#: the caller already wrote waits on our own lock, forever (crun_ce0f6332, 2026-11-15).
+_OPEN_TRANSACTIONS: ContextVar[tuple] = ContextVar("boss_open_transactions", default=())
+
+
+def open_transaction() -> Optional[object]:
+    """The connection of the innermost transaction this context opened through `begin`, or None."""
+    stack = _OPEN_TRANSACTIONS.get()
+    return stack[-1] if stack else None
+
+
+def open_transactions() -> tuple:
+    """Every transaction this context has open through `begin`, outermost first: an outer one
+    that wrote holds its locks while an inner one runs."""
+    return _OPEN_TRANSACTIONS.get()
+
+
 @contextmanager
 def begin(engine: Optional[Engine] = None):
     active_engine = engine or get_engine()
     with active_engine.begin() as connection:
-        yield connection
+        token = _OPEN_TRANSACTIONS.set(_OPEN_TRANSACTIONS.get() + (connection,))
+        try:
+            yield connection
+        finally:
+            _OPEN_TRANSACTIONS.reset(token)

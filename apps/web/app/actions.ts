@@ -8,7 +8,7 @@ import { BossApiError, type DataBoundary, type LlmCallRow } from "@boss/api-clie
 import { API_URL, client, PROJECT_ID, resolveProjectId, authHeaders} from "../lib/client";
 import { buildCommandRequest } from "../lib/commands";
 import { apiWrite, pressToken } from "../lib/api-write";
-import { act, apiFetch } from "../lib/server-action";
+import { act, apiFetch, consentOfThrown } from "../lib/server-action";
 import { missingInput, okResult, type ActionResult } from "../lib/action-result";
 import { previewWebHref } from "../lib/browser-links";
 import { apiErrorTechnical, detailText } from "../lib/api-error";
@@ -2515,29 +2515,32 @@ export async function createCodeTaskAction(formData: FormData): Promise<ActionRe
  * task: it plans, tests, reviews and opens a gated PR. Nothing is re-run in place; the original
  * run keeps its history, exactly as redeploy does for deployments.
  */
-export async function relaunchCodeTaskAction(formData: FormData): Promise<{ run_id?: string; error?: string }> {
+export async function relaunchCodeTaskAction(formData: FormData): Promise<{
+  ok?: boolean; run_id?: string; error?: string; data?: { consent?: unknown };
+}> {
   const projectId = getProjectId(formData);
   const title = String(formData.get("title") ?? "").trim();
   const instructions = String(formData.get("instructions") ?? "").trim();
   // Instructions are what the agent actually works from. Without them a "relaunch" would be a
   // differently-named empty task, so refuse rather than start something that cannot succeed.
   if (!title || !instructions) return { error: "this task has no instructions to re-run" };
-  const created = await client.createCodeTask({
-    project_id: projectId,
-    title,
-    instructions,
-    acceptance_criteria: splitLines(String(formData.get("acceptance_criteria") ?? "")),
-    test_commands: splitLines(String(formData.get("test_commands") ?? "")),
-    owner: String(formData.get("owner") ?? "").trim() || undefined,
-    repo: String(formData.get("repo") ?? "").trim() || undefined,
-    base_branch: String(formData.get("base_branch") ?? "").trim() || undefined,
-    // Carry the ORIGINAL run's cost/rigor. Without these a relaunch silently adopted the
-    // project default: the currency build ran `lean`, and re-running it produced something
-    // else entirely while the button claimed "Strict". A re-run that changes the rules is
-    // not a re-run.
-    profile: String(formData.get("profile") ?? "").trim() || undefined,
-    risk_tier: formData.get("risk_tier") ? Number(formData.get("risk_tier")) : undefined,
-  });
+  try {
+    const created = await client.createCodeTask({
+      project_id: projectId,
+      title,
+      instructions,
+      acceptance_criteria: splitLines(String(formData.get("acceptance_criteria") ?? "")),
+      test_commands: splitLines(String(formData.get("test_commands") ?? "")),
+      owner: String(formData.get("owner") ?? "").trim() || undefined,
+      repo: String(formData.get("repo") ?? "").trim() || undefined,
+      base_branch: String(formData.get("base_branch") ?? "").trim() || undefined,
+      // Carry the ORIGINAL run's cost/rigor. Without these a relaunch silently adopted the
+      // project default: the currency build ran `lean`, and re-running it produced something
+      // else entirely while the button claimed "Strict". A re-run that changes the rules is
+      // not a re-run.
+      profile: String(formData.get("profile") ?? "").trim() || undefined,
+      risk_tier: formData.get("risk_tier") ? Number(formData.get("risk_tier")) : undefined,
+    });
   // Deliberately NO revalidatePath here.
   //
   // Revalidating replaces the client tree with a fresh server render, which remounts the
@@ -2548,7 +2551,12 @@ export async function relaunchCodeTaskAction(formData: FormData): Promise<{ run_
   // The id is returned so the button can name what it started. "Started — it is at the top of
   // this list" was a guess about a list this action cannot see, and when the list did not
   // move the operator pressed the button again.
-  return { run_id: created?.run_id };
+  return { ok: true, run_id: created?.run_id };
+  } catch (e) {
+    const consent = consentOfThrown(e);
+    if (consent) return { ok: false, error: "Needs your consent", data: { consent } };
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 /** The code-task list, fetched on demand.
@@ -2592,14 +2600,16 @@ export async function getQaBenchmarkReportAction(runId: string) {
 export async function startQaBenchmarkAppAction(
   formData: FormData,
 ): Promise<{
+  ok: boolean;
   run_id?: string;
   kind?: "meeting" | "code" | "existing";
   pullRequestUrl?: string;
   error?: string;
+  data?: { consent?: unknown };
 }> {
   const projectId = getProjectId(formData);
   const benchmarkId = String(formData.get("benchmark_id") ?? "").trim();
-  if (!benchmarkId) return { error: "no benchmark named" };
+  if (!benchmarkId) return { ok: false, error: "no benchmark named" };
   try {
     const started = await client.startQaBenchmarkApp(benchmarkId, {
       project_id: projectId,
@@ -2629,18 +2639,23 @@ export async function startQaBenchmarkAppAction(
       // Not an error and not a launch: the work exists. The card offers it instead of
       // quietly spending twenty minutes and several dollars making a second copy.
       return {
+        ok: true,
         run_id: out.run_id,
         kind: "existing",
         pullRequestUrl: out.pull_request_url,
       };
     }
     return {
+      ok: true,
       run_id: out?.run_id,
       kind: out?.status === "meeting_convened" ? "meeting" : "code",
     };
   } catch (e) {
+    // A 409 consent_required opens the same sheet as a direct change (BOSSAPP-1012).
+    const consent = consentOfThrown(e);
+    if (consent) return { ok: false, error: "Needs your consent", data: { consent } };
     // A silent throw here is indistinguishable from a dead button. Say what happened.
-    return { error: e instanceof Error ? e.message : String(e) };
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
 

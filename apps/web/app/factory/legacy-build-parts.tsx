@@ -41,6 +41,7 @@ import { groupRunsIntoApps } from "../app-grouping";
 
 import React, { useActionState, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { withConsentResult } from "../../lib/identity/consent";
 import { useConsoleRefresh } from "../use-console-refresh";
 import type { CodeTaskRun, LlmCallRow, PreviewRec, QaBenchmarkApp, QaBenchmarkReport } from "@boss/api-client";
 import { forgetRunDeployment, loadRunDeployment } from "../../lib/run-deployments";
@@ -801,7 +802,7 @@ export function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, def
       run_id?: string; kind?: "meeting" | "code" | "existing"; error?: string;
     } | undefined;
     try {
-      out = await callAction(startQaBenchmarkAppAction, undefined, "code_task:create")(data);
+      out = await withConsentResult(() => callAction(startQaBenchmarkAppAction, undefined, "code_task:create")(data));
     } finally {
       setSent(false);
       await onLaunched?.(benchmark.id, out?.run_id,

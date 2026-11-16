@@ -128,10 +128,30 @@ fi
 API_CONTAINER="$("${COMPOSE[@]}" ps --all -q api)"
 if [[ -n "$API_CONTAINER" ]]; then
   INSTALLED_API_IMAGE_ID="$("${DOCKER[@]}" inspect --format '{{.Image}}' "$API_CONTAINER")"
-  [[ "$API_IMAGE_ID" == "$INSTALLED_API_IMAGE_ID" ]] || {
-    echo 'The API image tag differs from the installed container. Restore its reviewed local tag before backup; no image was pulled or substituted.' >&2
-    exit 1
-  }
+  # A previous upgrade can move the tag onto an image this container never started (the build
+  # finished, compose up did not). The image the container is still running is the one
+  # upgrade.sh kept as prev-$tag. That resume may back up. Any other divergence — a third
+  # image, or a tag that was pulled — is still a substituted image.
+  if [[ "$API_IMAGE_ID" != "$INSTALLED_API_IMAGE_ID" ]]; then
+    _resumed=0
+    if [[ -f "$INSTALL_DIR/.boss-rollback" ]]; then
+      _recorded="$(grep -m 1 '^BOSS_IMAGE_TAG=' "$INSTALL_DIR/.boss-rollback" | cut -d= -f2- || true)"
+      _prev="$(grep -m 1 '^BOSS_PREV_IMAGE_TAG=' "$INSTALL_DIR/.boss-rollback" | cut -d= -f2- || true)"
+      if [[ "$_recorded" == "$BOSS_COMMUNITY_IMAGE_TAG" && -n "$_prev" ]]; then
+        _prev_id="$("${DOCKER[@]}" image inspect --format '{{.Id}}' "boss-community-api:${_prev}" 2>/dev/null || true)"
+        _digests="$("${DOCKER[@]}" image inspect --format '{{json .RepoDigests}}' "$API_IMAGE" 2>/dev/null || true)"
+        if [[ -n "$_prev_id" && "$_prev_id" == "$INSTALLED_API_IMAGE_ID" ]]; then
+          case "$_digests" in
+            '[]'|null) _resumed=1 ;;
+          esac
+        fi
+      fi
+    fi
+    [[ "$_resumed" == 1 ]] || {
+      echo 'The API image tag differs from the installed container. Restore its reviewed local tag before backup; no image was pulled or substituted.' >&2
+      exit 1
+    }
+  fi
 fi
 # Refuse missing volumes before Compose run could silently create an empty replacement.
 for field in db_volume identity_volume artifacts_volume; do

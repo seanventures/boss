@@ -128,7 +128,12 @@ def test_pre_receive_refuses_in_words():
                               is_ancestor=lambda x, y: False)
     assert "building this branch" in ok(a, b, "refs/heads/boss/code/crun_1", default_branch="main",
                                         busy=["boss/code/crun_1"], is_ancestor=anc)
-    assert "deleting" in ok(a, z, "refs/heads/fix", default_branch="main", busy=[], is_ancestor=anc)
+    # A pushed delete of a non-default branch is how its change is closed (BOSSAPP-955).
+    assert ok(a, z, "refs/heads/fix", default_branch="main", busy=[], is_ancestor=anc) is None
+    assert "building this branch" in ok(a, z, "refs/heads/boss/code/crun_1", default_branch="main",
+                                        busy=["boss/code/crun_1"], is_ancestor=anc)
+    assert "moves only through BOSS's merge" in ok(a, z, "refs/heads/main", default_branch="main",
+                                                   busy=[], is_ancestor=anc)
     assert ok(z, b, "refs/heads/fix/inbox", default_branch="main", busy=[], is_ancestor=anc) is None
     assert ok(a, b, "refs/notes/boss-review", default_branch="main", busy=[], is_ancestor=anc) is None
     assert ok(a, b, "refs/heads/boss/code/done", default_branch="main", busy=["boss/code/x"],
@@ -229,6 +234,63 @@ def test_clone_pull_and_push_a_branch_through_the_api(server, engine, world, rep
     vpush = _git(venv, "push", "origin", "viewer/try", cwd=vwork, check=False)
     assert vpush.returncode != 0
     assert local_repo.branch_sha(bare, "viewer/try") is None
+
+
+def test_deleting_a_pushed_branch_closes_its_change(server, engine, world, repo_root, tmp_path,
+                                                   monkeypatch):
+    """BOSSAPP-955: a branch delete pushed to the BOSS git remote closes the open change and
+    keeps the sha readable (pinned), and pushing the name again opens a new change."""
+    from fastapi.testclient import TestClient
+
+    from boss_engine.identity import consent
+
+    monkeypatch.setattr(consent, "require_authority", lambda **kw: None)
+    pid, bare = _project(engine, world)
+    token = _token(engine, world, world.owner, ["repository:read", "repository:push",
+                                                "code_task:read"])
+    (tmp_path / "o").mkdir()
+    env = _git_env(tmp_path / "o", token)
+    work = tmp_path / "w"
+    _git(env, "clone", f"{server}/git/{pid}.git", str(work))
+    _git(env, "switch", "-c", "fix/abandon", cwd=work)
+    (work / "src" / "app.js").write_text("closed-line\n" + (work / "src" / "app.js").read_text())
+    _git(env, "commit", "-qam", "A change to abandon", cwd=work)
+    pushed = _git(env, "push", "-u", "origin", "fix/abandon", cwd=work)
+    assert "BOSS opened change #1" in pushed.stderr, pushed.stderr
+    head = _git(env, "rev-parse", "HEAD", cwd=work).stdout.strip()
+
+    deleted = _git(env, "push", "origin", ":fix/abandon", cwd=work)
+    assert deleted.returncode == 0, deleted.stderr
+    assert "BOSS closed change #1" in deleted.stderr, deleted.stderr
+    assert local_repo.branch_sha(bare, "fix/abandon") is None
+    assert local_repo.rev_parse(bare, "refs/boss/closed/1") == head
+    with engine.connect() as db:
+        row = db.execute(text(
+            "SELECT state, head_sha FROM local_change_sets WHERE project_id = :p AND number = 1"),
+            {"p": pid}).mappings().one()
+    assert row["state"] == "closed" and row["head_sha"] == head
+
+    client = TestClient(main.app, raise_server_exceptions=False)
+    with world.acting_as(world.ctx(world.owner, mfa=True)):
+        by_head = client.get(f"/v1/projects/{pid}/local-changes/1/file",
+                             params={"path": "src/app.js"})
+        by_sha = client.get(f"/v1/projects/{pid}/local-changes/1/file",
+                            params={"path": "src/app.js", "ref": head})
+        view = client.get(f"/v1/projects/{pid}/local-changes/1")
+    assert view.status_code == 200 and view.json()["state"] == "closed", view.text
+    assert by_head.status_code == 200 and "closed-line" in by_head.json()["text"], by_head.text
+    assert by_sha.status_code == 200 and by_sha.json()["sha"] == head
+
+    # The same name again is a new change; the closed one stays #1.
+    _git(env, "push", "-u", "origin", "fix/abandon", cwd=work)
+    with engine.connect() as db:
+        states = db.execute(text(
+            "SELECT number, state FROM local_change_sets WHERE project_id = :p ORDER BY number"),
+            {"p": pid}).mappings().all()
+    assert [(int(r["number"]), r["state"]) for r in states] == [(1, "closed"), (2, "open")]
+    # Deleting main is still refused.
+    refused = _git(env, "push", "origin", ":main", cwd=work, check=False)
+    assert refused.returncode != 0 and "moves only through BOSS's merge" in refused.stderr
 
 
 def test_a_branch_a_run_is_building_is_refused(server, engine, world, repo_root, tmp_path):

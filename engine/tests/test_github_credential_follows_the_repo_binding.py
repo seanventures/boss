@@ -7,6 +7,7 @@ COVERS the repos -> a covering org token -> the honest refusal. Proved through e
 credential path is (test_identity_github_setup)."""
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import text
 
 from boss_engine.identity import github_setup
@@ -17,6 +18,17 @@ from .test_identity_github_setup import PAT, _clone, _connect_app, _injected, _r
 B_TOKEN = "github_pat_SECONDACCOUNTBOUND00000000000"
 B_ENV = "BOSS_KAAPPU_GITHUB_TOKEN"
 REPO_B = "paramg-kaapppu/kaappu-org"
+
+
+@pytest.fixture(autouse=True)
+def _clear_registry(env):
+    """This suite creates github_repos for org_boss. The table has no project FK, so the next
+    identity suite's truncate of projects leaves the rows, and egress then refuses (403 vs 200)
+    (BOSSAPP-1187). Drop them when the test ends, pass or fail."""
+    yield
+    with env.db() as c:
+        if c.execute(text("SELECT to_regclass('public.github_repos') IS NOT NULL")).scalar():
+            c.execute(text("DELETE FROM github_repos WHERE org_id IN ('org_boss', 'org_other')"))
 
 
 def _registry_tables(c) -> None:
@@ -62,8 +74,9 @@ def _bind_second_account(env, repo: str = REPO_B) -> None:  # noqa: F811
 def _registry_world(env) -> None:
     """The org registry's tables beside the binding world: github_repos with its dedupe index,
     the events table the binding service emits through, and the bindings host column — each the
-    slice db/schema.sql defines. The identity reset never truncates github_repos (it carries no
-    project reference), so the registry starts each test empty here."""
+    slice db/schema.sql defines. Identity reset deletes org_boss github_repos (no project FK,
+    so a truncate of projects never did); this delete keeps the registry empty even if that
+    reset is skipped."""
     with env.db() as c:
         _second_account_world(c)
         sql = (ROOT / "db" / "schema.sql").read_text(encoding="utf-8")

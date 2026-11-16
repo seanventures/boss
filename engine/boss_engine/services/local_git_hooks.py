@@ -3,12 +3,13 @@ the API's `git http-backend` (local_git_http), from the image's hooks directory
 (services/git_hooks, set by core.hooksPath in the environment — no clone can change them).
 
     pre-receive    the fence: refuses, in words, a push to the default branch ("main moves only
-                   through BOSS's merge"), a tag, a force push, a delete, a ref outside
-                   refs/heads (git notes refs/notes/boss-review excepted), and a boss/* branch
-                   while a run is building it
+                   through BOSS's merge"), a tag, a force push, a ref outside refs/heads (git
+                   notes refs/notes/boss-review excepted), and a boss/* branch while a run is
+                   building it. Deleting any other branch is allowed: that closes its change.
     post-receive   each pushed branch becomes a change set (opened, or updated and its comments
-                   re-anchored), its review is queued, and git notes on refs/notes/boss-review
-                   become comments; it prints `remote: BOSS opened change #N <url>`
+                   re-anchored), its review is queued, a deleted branch closes its open change
+                   (the sha stays readable), and git notes on refs/notes/boss-review become
+                   comments; it prints `remote: BOSS opened change #N <url>`
 
 `reconcile` does the post-receive work for refs that moved any other way (the change list reads
 it), so a change set never lags its branch.
@@ -51,12 +52,13 @@ def check_update(old: str, new: str, ref: str, *, default_branch: str, busy: Ite
     if branch == default_branch:
         return (f"{default_branch} moves only through BOSS's merge. Push a branch: it becomes a "
                 "change you can review and merge.")
-    if new == ZERO:
-        return (f"{branch}: deleting a branch is not done by push. Close its change in BOSS "
-                "instead.")
     if branch in set(busy):
         return (f"{branch}: a BOSS run is building this branch right now. Push again when it "
                 "has finished (its change page says so).")
+    # A delete of any other branch closes its open change (post-receive), the way closing it
+    # in BOSS does. The default branch and a branch a run is building stay refused above.
+    if new == ZERO:
+        return None
     if old != ZERO and not is_ancestor(old, new):
         return (f"{branch}: a force push would rewrite history BOSS has reviewed. Pull, merge or "
                 "rebase onto it locally, and push a fast-forward (or a new branch).")
@@ -106,6 +108,9 @@ def open_or_update(c: Any, settings: Any, *, project_id: str, repository: str, b
     from .core import emit_event, make_id
     from .local_repo_host import change_set_url
 
+    # ROW LOCKS ON `c` ONLY AFTER THE PUSH (local_repo_host.writes_on): git already received
+    # the push before this runs, and every change-set write below is on `c` itself; a
+    # LocalGitAdapter write from a second connection after this point would wait on our own lock.
     owner, _, name = repository.partition("/")
     git_dir = local_repo.bare_path(owner, name, settings)
     default = local_repo.default_branch(git_dir)
@@ -176,13 +181,17 @@ def queue_review_of(c: Any, settings: Any, *, change: Mapping[str, Any], pusher:
                               "requested_by": pusher},
                 jobs=jobs)
         c.execute(text(
-            "UPDATE local_change_sets SET run_id = :r, updated_at = now() WHERE id = :i"),
+            "UPDATE local_change_sets SET run_id = :r, review_consent = NULL, updated_at = now() "
+            "WHERE id = :i"),
             {"r": run_id, "i": change["id"]})
         emit_event(c, change["project_id"], "local_repo.review_queued", pusher,
                    "local_change_set", change["id"], {"number": int(change["number"]),
                                                      "run_id": run_id})
         return run_id
     except Exception as error:  # noqa: BLE001 — the change set stands; the review waits for a press
+        # The push cannot show a sheet. Keep a consent request on the change (its own row, so
+        # the page opens the same sheet); any other refusal clears one that no longer applies.
+        _remember_review_consent(c, change, error)
         if raise_refusals:
             raise
         emit_event(c, change["project_id"], "local_repo.review_not_queued", pusher,
@@ -190,6 +199,24 @@ def queue_review_of(c: Any, settings: Any, *, change: Mapping[str, Any], pusher:
                    {"number": int(change["number"]),
                     "reason": f"{type(error).__name__}: {str(error)[:300]}"})
         return None
+
+
+def _remember_review_consent(c: Any, change: Mapping[str, Any], error: BaseException) -> None:
+    """Persist a ConsentRequired body on the change; clear it for any other refusal."""
+    from sqlalchemy import text
+
+    from ..identity.consent import ConsentRequired
+
+    body = getattr(error, "body", None) if isinstance(error, ConsentRequired) else None
+    if isinstance(body, dict) and body.get("error") == "consent_required":
+        c.execute(text(
+            "UPDATE local_change_sets SET review_consent = CAST(:b AS JSONB), updated_at = now() "
+            "WHERE id = :i"),
+            {"b": json.dumps(body, default=str), "i": change["id"]})
+        return
+    c.execute(text(
+        "UPDATE local_change_sets SET review_consent = NULL, updated_at = now() WHERE id = :i"),
+        {"i": change["id"]})
 
 
 def post_receive(lines: Iterable[str], env: Mapping[str, str], *, settings: Any = None,
@@ -217,10 +244,22 @@ def post_receive(lines: Iterable[str], env: Mapping[str, str], *, settings: Any 
     notes_pushed = any(ref == NOTES_REF for _o, _n, ref in updates)
     touched: list[dict[str, Any]] = []
     for old, new, ref in updates:
-        if not ref.startswith("refs/heads/") or new == ZERO:
+        if not ref.startswith("refs/heads/"):
             continue
         branch = ref[len("refs/heads/"):]
         if branch == default:
+            continue
+        if new == ZERO:
+            try:
+                with engine.begin() as c:
+                    closed = local_review.close_open_branch(
+                        c, settings, repository=repository, branch=branch, sha=old, actor=pusher)
+                if closed:
+                    _say(f"BOSS closed change #{closed['number']}  {branch}")
+                    _say(f"  {_change_url(console, project_id, closed['number'])}")
+            except Exception as error:  # noqa: BLE001 — the delete landed; say what did not
+                _say(f"BOSS could not close the change for {branch}: {type(error).__name__}: "
+                     f"{str(error)[:200]}.")
             continue
         try:
             with engine.begin() as c:

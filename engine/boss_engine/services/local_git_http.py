@@ -12,8 +12,9 @@ it uploads anything), and this module runs the backend with:
 
   * the hooks from the image (`core.hooksPath` = services/git_hooks, set through GIT_CONFIG_*
     environment, never written into the repository, so no clone can change them): pre-receive
-    refuses the default branch, tags, force pushes, deletes and a boss/* branch a run is building;
-    post-receive opens or updates the change set and queues its review (local_git_hooks);
+    refuses the default branch, tags, force pushes and a boss/* branch a run is building;
+    deleting any other branch is allowed and post-receive closes its change (local_git_hooks);
+    post-receive also opens or updates a pushed change set and queues its review;
   * `receive.maxInputSize` (BOSS_GIT_REMOTE_MAX_PUSH_MB, 200 MB);
   * the pusher's actor in the environment the hooks read.
 
@@ -138,7 +139,9 @@ def git_config_env(settings: Any, *, push: bool) -> dict[str, str]:
              ("http.uploadpack", "true"),
              ("receive.maxInputSize", str(max_push_bytes(settings))),
              ("receive.denyNonFastForwards", "true"),
-             ("receive.denyDeletes", "true"),
+             # Deletes are the hook's decision (BOSSAPP-955): a non-default branch delete closes
+             # its change. receive.denyDeletes would refuse that before the hook can.
+             ("receive.denyDeletes", "false"),
              ("uploadpack.allowFilter", "true")]
     env = {"GIT_CONFIG_COUNT": str(len(pairs))}
     for i, (k, v) in enumerate(pairs):

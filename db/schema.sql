@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS projects (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   -- What a project is for, in its creator's words (POST /v1/projects). Optional.
   description TEXT,
+  -- Try a sample (BOSSAPP-1014): one live project per org for a key such as hello-world.
+  sample_key TEXT,
   UNIQUE(workspace_id, slug)
 );
 
@@ -10792,6 +10794,10 @@ CREATE INDEX IF NOT EXISTS idx_projects_archived ON projects(id) WHERE archived_
 -- a knowledge graph (import code → assign the team → first rules scan → review), guided by the
 -- Knowledge Graph area's setup (services/knowledge/project_setup.py). A generic column, not a KG
 -- flag: the type decides which guided flow and home card a project gets.
+-- One Hello World per organization (BOSSAPP-1014). Try a sample finds the live project with
+-- this key instead of creating another. An archived sample gives the key up.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS sample_key TEXT;
+
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS project_type TEXT NOT NULL DEFAULT 'app';
 DO $project_type$
 BEGIN
@@ -11707,6 +11713,8 @@ CREATE TABLE IF NOT EXISTS local_change_sets (
   merged_sha TEXT,
   merged_by TEXT,
   merged_at TIMESTAMPTZ,
+  closed_by TEXT,
+  closed_at TIMESTAMPTZ,
   run_id TEXT,
   pending_push BOOLEAN NOT NULL DEFAULT false,
   github_pr_url TEXT,
@@ -11791,6 +11799,13 @@ CREATE TABLE IF NOT EXISTS local_working_copies (
 );
 -- A change set opened by a push names who pushed it (`pushed` label; author = the pusher).
 ALTER TABLE local_change_sets ADD COLUMN IF NOT EXISTS author TEXT;
+-- A pushed change whose review could not start because it needs consent (BOSSAPP-1012).
+-- The flat 409 body, so the change page opens the same consent sheet. Cleared once queued.
+ALTER TABLE local_change_sets ADD COLUMN IF NOT EXISTS review_consent JSONB;
+-- Who closed a change, and when (BOSSAPP-955). Cleared on reopen. The sha stays pinned at
+-- refs/boss/closed/<number> so the change still reads after its branch is deleted.
+ALTER TABLE local_change_sets ADD COLUMN IF NOT EXISTS closed_by TEXT;
+ALTER TABLE local_change_sets ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
 
 -- PUSH PENDING (BOSSAPP-922): a GitHub project's branch whose commits landed in the local mirror
 -- while GitHub was down. The worker's push-pending job pushes it and opens the pull request when
@@ -15519,3 +15534,61 @@ CREATE TABLE IF NOT EXISTS acceptance_contracts (
 CREATE INDEX IF NOT EXISTS idx_acceptance_contracts_lineage
   ON acceptance_contracts (lineage_root_run_id, version DESC);
 -- ================================ end AA-A ==
+
+-- BOSSAPP-1231: a project mapping used to copy the home connection's token into the mapping
+-- row (its own secret_refs row and the vault ciphertext in secret_material). Reads resolve
+-- the home credential, so the copy is dormant. Drop the copy and its vault material. A
+-- reference the home row still names is left in the store; the mirror only loses the pointer.
+-- secret_access_events is append-only and is not touched.
+DO $bossapp_1231$
+DECLARE
+  r RECORD;
+BEGIN
+  FOR r IN
+    SELECT s.id AS secret_ref_id, s.ref_key
+    FROM work_tracker_providers m
+    JOIN secret_refs s ON s.id = m.configuration->>'secret_ref_id'
+    WHERE COALESCE(m.configuration->>'mirror_of', '') <> ''
+      AND COALESCE(m.configuration->>'secret_ref_id', '') <> ''
+      AND s.project_id = m.project_id
+      AND NOT EXISTS (
+        SELECT 1 FROM work_tracker_providers h
+        WHERE h.id <> m.id
+          AND COALESCE(h.configuration->>'mirror_of', '') = ''
+          AND h.configuration->>'secret_ref_id' = s.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM delivery_bot_identities b WHERE b.credential_secret_ref_id = s.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM deployment_hosts dh WHERE dh.key_secret_ref = s.id
+      )
+  LOOP
+    UPDATE secret_refs SET supersedes_secret_ref_id = NULL
+      WHERE supersedes_secret_ref_id = r.secret_ref_id;
+    DELETE FROM secret_material
+      WHERE ref_key = r.ref_key
+        AND NOT EXISTS (
+          SELECT 1 FROM secret_refs other
+          WHERE other.ref_key = r.ref_key AND other.id <> r.secret_ref_id
+        );
+    DELETE FROM secret_refs WHERE id = r.secret_ref_id;
+  END LOOP;
+
+  UPDATE work_tracker_providers AS m
+  SET configuration = m.configuration
+        - 'secret_ref_id' - 'last4' - 'fingerprint'
+        - 'api_token' - 'access_token' - 'token' - 'pat' - 'password'
+        - 'oauth_client_secret' - 'oauth_client_secret_ref',
+      updated_at = now()
+  WHERE COALESCE(m.configuration->>'mirror_of', '') <> ''
+    AND (
+      m.configuration ? 'secret_ref_id' OR m.configuration ? 'last4'
+      OR m.configuration ? 'fingerprint' OR m.configuration ? 'api_token'
+      OR m.configuration ? 'access_token' OR m.configuration ? 'token'
+      OR m.configuration ? 'pat' OR m.configuration ? 'password'
+      OR m.configuration ? 'oauth_client_secret'
+      OR m.configuration ? 'oauth_client_secret_ref'
+    );
+END
+$bossapp_1231$;

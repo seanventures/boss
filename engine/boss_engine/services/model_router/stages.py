@@ -44,17 +44,15 @@ def pinned_engine(spec: dict) -> str:
     if isinstance(default, dict):
         _pinned_engine = str(default.get("engine") or "").strip().lower()
     elif isinstance(default, str) and default.strip():
-        _pinned_engine = default.split(":", 1)[0].strip().lower()
-        # ASK THE REGISTRY, not a list of three. This allow-list predates the harness seam and
-        # silently dropped every engine added since — a run pinned to "codex:gpt-5-codex" or
-        # "openrouter:…" in string form fell back to the process default and ran somewhere
-        # else, with nothing saying so.
-        try:
-            from ..harness_registry import get_harness
+        # Split once. `ollama:llama3.1:8b` pins ollama; `llama3.1:8b` is a model
+        # tag and pins nothing (BOSSAPP-1023). An unknown prefix is not a pin.
+        from ..harness_registry import is_registered_harness, split_engine_model
 
-            get_harness(_pinned_engine)
-        except Exception:  # noqa: BLE001 — an unknown engine is not a pin
-            _pinned_engine = ""
+        text = default.strip()
+        if ":" in text:
+            _pinned_engine = split_engine_model(text)[0] or ""
+        else:
+            _pinned_engine = text.lower() if is_registered_harness(text) else ""
     return _pinned_engine
 
 
@@ -127,8 +125,18 @@ class StageRouter:
         s = self.settings
         if escalated:
             prior = previous or {}
+            prior_engine = str(prior.get("engine") or "").strip().lower()
             engine = (s.code_agent_strong_engine or prior.get("engine") or self.build_engine)
-            model = (s.code_agent_strong_model or prior.get("model"))
+            chosen = str(engine or "").strip().lower()
+            strong_model = str(s.code_agent_strong_model or "").strip() or None
+            # The previous stage's model belongs to the previous engine. A move
+            # onto the hard-problems lane must not carry it across (BOSSAPP-1025).
+            if strong_model:
+                model = strong_model
+            elif prior_engine and chosen == prior_engine:
+                model = prior.get("model") or None
+            else:
+                model = None
             return LegacyRoute(engine, model, "escalated to the hard-problems lane", "strong",
                                {"escalated": True})
         r = route_for_step(self.profile, step, self.spec.get("model_config"))

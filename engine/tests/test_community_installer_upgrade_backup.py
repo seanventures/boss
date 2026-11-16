@@ -273,8 +273,15 @@ def _stopped_database_backend(tmp: Path, env: dict[str, str]) -> None:
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         "if [[ $1 == info ]]; then exit 0; fi\n"
-        "if [[ $1 == image && $2 == inspect ]]; then [[ ${BOSS_TEST_API_IMAGE_MISSING:-0} != 1 ]] || exit 1; echo sha256:" + "a" * 64 + "; exit 0; fi\n"
-        "if [[ $1 == inspect ]]; then echo sha256:" + "b" * 64 + "; exit 0; fi\n"
+        "if [[ $1 == image && $2 == inspect ]]; then [[ ${BOSS_TEST_API_IMAGE_MISSING:-0} != 1 ]] || exit 1; "
+        "if [[ \"$*\" == *RepoDigests* ]]; then printf '%s\\n' \"${BOSS_TEST_REPO_DIGESTS:-[]}\"; exit 0; fi; "
+        "ref=\"${@: -1}\"; "
+        "if [[ \"$ref\" == *prev-* && -n ${BOSS_TEST_PREV_IMAGE_ID:-} ]]; then printf '%s\\n' \"$BOSS_TEST_PREV_IMAGE_ID\"; exit 0; fi; "
+        "if [[ -n ${BOSS_TEST_TAG_IMAGE_ID:-} ]]; then printf '%s\\n' \"$BOSS_TEST_TAG_IMAGE_ID\"; exit 0; fi; "
+        "echo sha256:" + "a" * 64 + "; exit 0; fi\n"
+        "if [[ $1 == inspect ]]; then "
+        "if [[ -n ${BOSS_TEST_CONTAINER_IMAGE_ID:-} ]]; then printf '%s\\n' \"$BOSS_TEST_CONTAINER_IMAGE_ID\"; exit 0; fi; "
+        "echo sha256:" + "b" * 64 + "; exit 0; fi\n"
         "if [[ $1 == volume && $2 == inspect ]]; then [[ $3 != \"${BOSS_TEST_MISSING_VOLUME:-}\" ]] || exit 1; exit 0; fi\n"
         "if [[ $1 == compose && $2 == version ]]; then echo 'Docker Compose test'; exit 0; fi\n"
         "args=$*\n"
@@ -283,7 +290,7 @@ def _stopped_database_backend(tmp: Path, env: dict[str, str]) -> None:
         "  *' ps --status running --services')\n"
         "    [[ $(cat \"$BOSS_TEST_DB_STATE\") != running ]] || echo db\n"
         "    [[ -z ${BOSS_TEST_WORKER_STATE:-} || $(cat \"$BOSS_TEST_WORKER_STATE\") != running ]] || echo worker ;;\n"
-        "  *' ps --all -q api') exit 0 ;;\n"
+        "  *' ps --all -q api') [[ -z ${BOSS_TEST_API_CONTAINER:-} ]] || echo \"$BOSS_TEST_API_CONTAINER\" ;;\n"
         "  *' ps --all -q db') echo fixture-db ;;\n"
         "  *' ps --all --services')\n"
         "    [[ ${BOSS_TEST_CONTAINER_MISSING:-0} == 1 ]] || echo db ;;\n"
@@ -467,6 +474,109 @@ def test_backup_preserves_running_database_and_worker_state(install_pair):
     assert (tmp / "db-state").read_text().strip() == "running"
     assert worker_state.read_text().strip() == "running"
     assert (Path(result.stdout.strip()) / "source-commit").read_text().strip() == old
+
+
+def _image_id(digit: str) -> str:
+    return "sha256:" + digit * 64
+
+
+def _rollback_point(installed: Path, *, image_tag: str = "boss-community",
+                    prev_tag: str = "prev-boss-community") -> None:
+    (installed / ".boss-rollback").write_text(
+        "BOSS_IMAGE_TAG=%s\nBOSS_PREV_IMAGE_TAG=%s\n" % (image_tag, prev_tag))
+
+
+def test_an_interrupted_upgrade_backup_continues_when_the_container_is_still_the_previous_image(
+        install_pair):
+    """The previous attempt built the new API tag and died before the container ran it.
+    The container is still the image .boss-rollback kept. Backup may proceed. A pulled or
+    third image under that tag may not."""
+    installed, old, _, env, tmp = install_pair
+    _stopped_database_backend(tmp, env)
+    (tmp / "db-state").write_text("running\n")
+    worker_state = tmp / "worker-state"
+    worker_state.write_text("running\n")
+    env["BOSS_TEST_WORKER_STATE"] = str(worker_state)
+    env["BOSS_TEST_API_CONTAINER"] = "fixture-api"
+    env["BOSS_TEST_TAG_IMAGE_ID"] = _image_id("1")
+    env["BOSS_TEST_PREV_IMAGE_ID"] = _image_id("2")
+    env["BOSS_TEST_CONTAINER_IMAGE_ID"] = _image_id("2")
+    _rollback_point(installed)
+
+    result = _run("bash", REPO / "scripts/install/backup.sh", "--dir", installed,
+                  "--backup-dir", tmp / "backups", cwd=REPO, env=env)
+
+    assert result.returncode == 0, result.stderr
+    assert "differs from the installed container" not in result.stderr
+    assert (tmp / "docker-trace").read_text().splitlines() == ["stop-worker", "start-worker"]
+    assert (Path(result.stdout.strip()) / "source-commit").read_text().strip() == old
+
+
+def test_a_real_api_image_mismatch_still_refuses_before_writers_pause(install_pair):
+    installed, _, _, env, tmp = install_pair
+    _stopped_database_backend(tmp, env)
+    (tmp / "db-state").write_text("running\n")
+    worker_state = tmp / "worker-state"
+    worker_state.write_text("running\n")
+    env["BOSS_TEST_WORKER_STATE"] = str(worker_state)
+    env["BOSS_TEST_API_CONTAINER"] = "fixture-api"
+    env["BOSS_TEST_TAG_IMAGE_ID"] = _image_id("1")
+    env["BOSS_TEST_PREV_IMAGE_ID"] = _image_id("2")
+    env["BOSS_TEST_CONTAINER_IMAGE_ID"] = _image_id("3")
+    _rollback_point(installed)
+
+    third = _run("bash", REPO / "scripts/install/backup.sh", "--dir", installed,
+                 "--backup-dir", tmp / "backups", cwd=REPO, env=env)
+
+    assert third.returncode != 0
+    assert "differs from the installed container" in third.stderr
+    assert "no image was pulled or substituted" in third.stderr
+    assert not (tmp / "docker-trace").exists()
+    assert (tmp / "db-state").read_text().strip() == "running"
+    assert worker_state.read_text().strip() == "running"
+
+    env["BOSS_TEST_CONTAINER_IMAGE_ID"] = _image_id("2")
+    env["BOSS_TEST_REPO_DIGESTS"] = '["registry.example/api@sha256:' + "d" * 64 + '"]'
+    pulled = _run("bash", REPO / "scripts/install/backup.sh", "--dir", installed,
+                  "--backup-dir", tmp / "pulled-backups", cwd=REPO, env=env)
+
+    assert pulled.returncode != 0
+    assert "differs from the installed container" in pulled.stderr
+    assert not (tmp / "docker-trace").exists()
+
+
+def test_resume_keeps_the_rollback_image_the_container_is_still_running(install_pair):
+    """keep_previous_images runs before backup. On a resume it must not move prev-$tag onto
+    the image the container never ran, or the backup allowance above has nothing left to see."""
+    installed, _, _, env, tmp = install_pair
+    (installed / ".boss-rollback").write_text(
+        "BOSS_IMAGE_TAG=boss-community\nBOSS_PREV_IMAGE_TAG=prev-boss-community\n"
+        "BOSS_PREV_MARKER=stay\n")
+    (tmp / "bin/docker").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "if [[ $1 == info || $1 == context ]]; then exit 0; fi\n"
+        "if [[ $1 == image && $2 == inspect ]]; then\n"
+        "  ref=\"${@: -1}\"\n"
+        "  if [[ \"$ref\" == *prev-* ]]; then echo '%s'; exit 0; fi\n"
+        "  if [[ \"$*\" == *'{{.Id}}'* ]]; then echo '%s'; exit 0; fi\n"
+        "  exit 0\n"
+        "fi\n"
+        "if [[ $1 == inspect ]]; then echo '%s'; exit 0; fi\n"
+        "if [[ $1 == compose && $* == *' ps -q api' ]]; then echo fixture-api; exit 0; fi\n"
+        "if [[ $1 == tag ]]; then echo tag >> \"%s\"; exit 0; fi\n"
+        "if [[ $1 == compose && $2 == version ]]; then echo 'Docker Compose test'; exit 0; fi\n"
+        "printf '%%s\\n' \"$*\" >> \"%s\"\n"
+        "exit 86\n" % (_image_id("2"), _image_id("1"), _image_id("2"),
+                      tmp / "tag-trace", tmp / "docker-trace"))
+    (tmp / "bin/docker").chmod(0o755)
+
+    result = _run("bash", REPO / "scripts/install/upgrade.sh", "--dir", installed,
+                  "--skip-disk-check", cwd=REPO, env=env)
+
+    assert "BOSS_PREV_MARKER=stay" in (installed / ".boss-rollback").read_text()
+    assert not (tmp / "tag-trace").exists()
+    assert result.returncode != 0  # the installer still stops in the fake docker
 
 
 def test_missing_api_image_does_not_pause_running_writers(install_pair):

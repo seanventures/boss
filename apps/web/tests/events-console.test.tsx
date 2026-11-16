@@ -306,6 +306,9 @@ describe("E4 Rules", () => {
     await new Promise((r) => setTimeout(r, 450)); await settle();
     expect($('[data-testid="ev-match-count"]')?.textContent).toBe("Would match 7 of the last 50 events");
     expect($('[data-testid="ev-match-people-hidden"]')).toBeNull();
+    const creds = $('[data-testid="ev-match-credentials-hidden"]');
+    expect(creds?.textContent).toContain("Credentials hidden");
+    expect(creds?.getAttribute("title")).toContain("URL credentials");
   });
   it("Save sends the sentence as the filter, the acting-for, limits, quiet hours and the daily budget", async () => {
     const calls = api();
@@ -378,6 +381,8 @@ describe("E5 Stream", () => {
     const note = $('[data-testid="ev-search-truncated"]');
     expect(note?.textContent).toBe("Searched the newest 5,000 events");
     expect(note?.getAttribute("title")).toContain("Narrow the period or source");
+    expect(note?.getAttribute("title")).toContain("URL credentials");
+    expect(note?.getAttribute("title")?.startsWith("Without")).toBe(false);
     expect(note?.className).toBe("ev-faint");
     unmount();
     api();

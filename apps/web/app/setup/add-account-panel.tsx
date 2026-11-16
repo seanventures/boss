@@ -26,6 +26,7 @@ import { Consent, CONSENT_REFUSAL, toast, useBoard } from "./parts";
 import { Out, Refusal, Tip } from "./pill";
 import { InstallNeededLinks, refusalOf, type SigninFound } from "./repository-row";
 import { AddGitHubAccount } from "./add-github-account";
+import { RepoHandoff } from "./repo-handoff";
 import { TOKEN_PERMISSIONS, tokenPageFor } from "../../lib/github-accounts";
 
 export type How = "own" | "org" | "token";
@@ -343,7 +344,12 @@ function ClassicSteps({ onClose, onAdvanced, initial, onBack, account = null }: 
       </div>
     );
   } else {
-    body = <CheckAccess names={picked} />;
+    body = (
+      <div className="su-stack">
+        <CheckAccess names={picked} />
+        <RepoHandoff projectId={projectId} repos={picked.map((full_name) => ({ full_name }))} />
+      </div>
+    );
   }
 
   const continueLabel = step === 3 ? "Done" : step === 1 && appFlow && how !== "token" ? "Connect GitHub"

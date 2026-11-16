@@ -11,8 +11,9 @@ existing tracker path reads (``connected_tracker``, ``connection_for``, the bind
 key). The table is per project (``UNIQUE(project_id, provider_key)``), and the approved design
 (T1/T2) maps one Jira site onto many BOSS projects. Rather than a second, org-level table that
 every existing reader would have to learn, a mapping onto another project FANS OUT: that project
-gets a MIRROR row (``configuration.mirror_of = <home row id>``) carrying the same site, the same
-settings, and its own project-scoped copy of the token. So every reader keeps asking "the
+gets a MIRROR row (``configuration.mirror_of = <home row id>``) carrying the same site and
+the same settings, and no token of its own. Reads and meeting ticket creation resolve the home
+row's credential (a copied token would sit dormant beside it). So every reader keeps asking "the
 project's tracker" and gets the right answer, bindings keep their foreign key in their own
 project, and identity confines every id to its project exactly as before. Settings are edited on
 the HOME row; a PATCH re-syncs its mirrors. No schema change.
@@ -325,6 +326,24 @@ def is_connected(row: dict[str, Any]) -> bool:
         str(row["provider_key"]), row["configuration"])
 
 
+def mirror_home_connected(db: Connection, row: dict[str, Any]) -> bool:
+    """An active mapping row whose home connection is connected. The row holds no token of its
+    own; the home's credential is what a read or a meeting ticket uses (BOSSAPP-1231)."""
+    if row.get("status") != "active":
+        return False
+    home_id = str((row.get("configuration") or {}).get("mirror_of") or "")
+    if not home_id or home_id == str(row.get("id") or ""):
+        return False
+    found = db.execute(text(
+        "SELECT status, provider_key, configuration FROM work_tracker_providers WHERE id = :i"),
+        {"i": home_id}).mappings().first()
+    if found is None or found["status"] != "active":
+        return False
+    from .work_orchestration import tracker_is_connected
+
+    return tracker_is_connected(str(found["provider_key"]), _config(found))
+
+
 def ticket_connection(db: Connection, row: dict[str, Any], *, person_id: Optional[str] = None,
                       app_settings: Any = None) -> TicketConnection:
     """The connection a row reads through. A MIRROR reads with its HOME's configuration and
@@ -502,7 +521,7 @@ def serialize(db: Connection, row: dict[str, Any]) -> dict[str, Any]:
     config = row["configuration"]
     fields = {f["name"]: config.get(f["name"]) for f in manifest.auth_fields
               if not f.get("secret") and config.get(f["name"]) not in (None, "")}
-    status = "connected" if is_connected(row) else (
+    status = "connected" if is_connected(row) or mirror_home_connected(db, row) else (
         "disconnected" if row.get("status") == "disconnected" else "not_connected")
     home = str(config.get("mirror_of") or "")
     mirrors = []
@@ -544,8 +563,9 @@ def project_rows(db: Connection, project_id: str, *, include_disconnected: bool 
             continue
         row = dict(raw)
         row["configuration"] = _config(raw)
-        if is_connected(row) or (include_disconnected and row["status"] == "disconnected"
-                                 and row["configuration"].get("ticket_system")):
+        if is_connected(row) or mirror_home_connected(db, row) or (
+                include_disconnected and row["status"] == "disconnected"
+                and row["configuration"].get("ticket_system")):
             out.append(row)
     return out
 
@@ -563,7 +583,8 @@ def list_connections(db: Connection, project_id: str, *, scope: str = "all"
     out = [org_view(db, row, {**serialize(db, row), "reach": "project"}) for row in own]
     if scope == "project":
         return out
-    seen = {reach.home_id(row) for row in own if is_connected(row)}
+    seen = {reach.home_id(row) for row in own
+            if is_connected(row) or (row.get("configuration") or {}).get("mirror_of")}
     for row in reach.reachable_rows(db, project_id):
         if row.get("reach") != "org" or str(row["id"]) in seen:
             continue
@@ -836,23 +857,18 @@ def sync_mirrors(db: Connection, app_settings: Any, home: dict[str, Any], *, act
             raise TicketApiError("conflict", f"Project {target} already has its own "
                                              f"{label_of(provider)} connection. Disconnect it "
                                              "there first.", status=409)
+        # No token, and no pointer at the home's. The row is a mapping; ticket_connection and
+        # connected_tracker resolve the home credential in the home project (BOSSAPP-1231).
         mirrored = {k: v for k, v in config.items()
                     if k not in ("secret_ref_id", "last4", "fingerprint", "mirror_of",
+                                  "api_token", "access_token", "token", "pat", "password",
+                                  "oauth_client_secret", "oauth_client_secret_ref",
                                   # the inbound webhook is the home's (ticket_sync.home_row)
                                   "webhook_secret_ref", "webhook")}
-        secret_meta = None
-        token = ""
-        if existing and existing["configuration"].get("mirror_of") == home["id"] and \
-                existing["configuration"].get("secret_ref_id") and \
-                existing["configuration"].get("fingerprint") == config.get("fingerprint"):
-            secret_meta = {k: existing["configuration"].get(k)
-                           for k in ("secret_ref_id", "last4", "fingerprint")}
-        elif config.get("secret_ref_id"):
-            token = stored_token(db, app_settings, home)
         row = store(db, app_settings, project_id=target, adapter=adapter_for(provider),
-                    configuration=mirrored, token=token,
+                    configuration=mirrored, token="",
                     outcome={"account": config.get("acts_as")}, actor=actor,
-                    mirror_of=str(home["id"]), secret_meta=secret_meta)
+                    mirror_of=str(home["id"]))
         out.append({"connection_id": row["id"], "project_id": target})
     # A mirror a project made by USING the org-level connection (ticket_reach) is not a mapping's
     # and stays when the mappings change.
