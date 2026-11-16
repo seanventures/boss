@@ -26,7 +26,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Iterable, Optional
 
 from sqlalchemy import text
 
@@ -1209,6 +1209,136 @@ def lineage_impl_files(engine, run: dict) -> list[str]:
     return out
 
 
+#: A file a browser opens: a build that wrote one is an APP to preview; one that wrote none is a
+#: service or a library (auto_preview_after_pr's quick read of what the build WROTE).
+BROWSABLE_SUFFIXES: tuple[str, ...] = (".html", ".jsx", ".tsx", ".vue", ".svelte")
+
+#: What a workflow's Preview step records when the build is a service or a library and its
+#: preview did not come up: the step is skipped, the run goes on (BOSSAPP-1308).
+SERVICE_PREVIEW_SKIPPED = "preview skipped (service)"
+
+
+def builds_a_browsable_app(files: Optional[Iterable[str]]) -> bool:
+    return any(str(p).endswith(BROWSABLE_SUFFIXES) for p in (files or []))
+
+
+#: Files that make a tree a UI: pages, components, styles and server-side templates (Go
+#: html/template, Rails ERB, Jinja, EJS, Handlebars, Razor, JSP, Astro, Liquid, HEEx…).
+UI_FILE_SUFFIXES: tuple[str, ...] = (
+    ".html", ".htm", ".jsx", ".tsx", ".vue", ".svelte", ".astro", ".css", ".scss", ".sass",
+    ".less", ".gohtml", ".tmpl", ".tpl", ".erb", ".haml", ".slim", ".ejs", ".hbs",
+    ".handlebars", ".mustache", ".pug", ".jinja", ".jinja2", ".j2", ".njk", ".twig",
+    ".cshtml", ".razor", ".jsp", ".liquid", ".heex", ".eex", ".leex")
+#: A package.json dependency that makes its project a web front end.
+FRONTEND_DEPENDENCIES = frozenset({
+    "react", "react-dom", "vue", "svelte", "@sveltejs/kit", "next", "nuxt", "@angular/core",
+    "vite", "astro", "solid-js", "preact", "@remix-run/react", "gatsby", "ember-source", "lit",
+    "@vitejs/plugin-react", "react-scripts", "@builder.io/qwik", "alpinejs", "htmx.org"})
+#: Never a sign of what the app IS: dependencies, build output, tests, fixtures and docs.
+_KIND_SKIP_DIRS = frozenset({
+    "node_modules", ".git", "vendor", "dist", "build", "target", ".venv", "venv", "env",
+    "__pycache__", "coverage", "testdata", "fixtures", "test", "tests", "__tests__", "spec",
+    "e2e", "docs", "doc", ".github", ".next", ".nuxt", ".svelte-kit", ".cache", "examples"})
+_KIND_MAX_FILES = 6000
+
+
+def app_tree_kind(tree: Optional[Path | str]) -> tuple[str, str]:
+    """("app" | "service" | "unknown", why) — what the APP'S TREE says it is, never what one
+    build happened to write: a feature added to a web app that touched only `server.js` is
+    still a web app. An app has a page (an index.html, any UI file or server-side template),
+    a front-end dependency in a package.json, or a front-end service (stacks.detect_services).
+    A service has a manifest (go.mod, pyproject.toml, package.json, pom.xml…) and none of
+    those. "unknown" — no tree, no manifest — is never a service: a failed preview of it still
+    fails (BOSSAPP-1308)."""
+    from .app_root import APP_MANIFESTS
+
+    if not tree:
+        return "unknown", "no tree"
+    base = Path(tree)
+    if not base.is_dir():
+        return "unknown", "no tree"
+    manifests: list[str] = []
+    seen = 0
+    for dirpath, dirnames, filenames in os.walk(base):
+        rel_dir = Path(dirpath).relative_to(base)
+        dirnames[:] = [d for d in dirnames if d not in _KIND_SKIP_DIRS and not d.startswith(".")
+                       and len(rel_dir.parts) < 6]
+        for name in filenames:
+            seen += 1
+            if seen > _KIND_MAX_FILES:
+                break
+            rel = (rel_dir / name).as_posix()
+            if name.lower().endswith(UI_FILE_SUFFIXES):
+                return "app", f"it has a page or UI file ({rel})"
+            if name == "package.json":
+                try:
+                    pkg = json.loads((Path(dirpath) / name).read_text(errors="ignore") or "{}")
+                except (OSError, ValueError):
+                    pkg = {}
+                deps: set[str] = set()
+                for key in ("dependencies", "devDependencies", "peerDependencies"):
+                    if isinstance(pkg.get(key), dict):
+                        deps |= set(pkg[key])
+                front = sorted(deps & FRONTEND_DEPENDENCIES)
+                if front:
+                    return "app", f"{rel} depends on {', '.join(front[:3])}"
+            if name in APP_MANIFESTS or name in ("Gemfile", "composer.json", "mix.exs"):
+                manifests.append(rel)
+        if seen > _KIND_MAX_FILES:
+            break
+    try:
+        from .stacks import detect_services
+
+        front = [svc.rel for svc in detect_services(base) if svc.role == "frontend"]
+    except Exception:  # noqa: BLE001 — the files above still decide
+        front = []
+    if front:
+        return "app", f"it has a web front end ({front[0]})"
+    if manifests:
+        return "service", (f"{manifests[0]} and no page, UI file, template or front-end "
+                           "dependency anywhere in the app")
+    return "unknown", "no manifest and no page"
+
+
+def record_app_kind(engine, run_id: str, tree: Optional[Path | str], *,
+                    overwrite: bool = False) -> Optional[str]:
+    """Write app_tree_kind(tree) on the build (state.app_kind), the fact is_service_build reads.
+    The build records it from its own app folder; a preview records it from the branch it cloned
+    when the build did not. Never fails its caller."""
+    try:
+        kind, why = app_tree_kind(tree)
+        guard = "" if overwrite else " AND COALESCE(state->'app_kind'->>'kind', '') = ''"
+        with begin(engine) as c:
+            c.execute(text(
+                "UPDATE code_task_runs SET state = COALESCE(state, '{}'::jsonb) "
+                "|| jsonb_build_object('app_kind', CAST(:k AS jsonb)) WHERE id = :r" + guard),
+                {"r": run_id, "k": json.dumps({"kind": kind, "why": why[:300]})})
+        return kind
+    except Exception:  # noqa: BLE001
+        logger.warning("could not record the app kind of %s", run_id, exc_info=True)
+        return None
+
+
+def is_service_build(engine, run_id: str) -> Optional[bool]:
+    """Is the build `run_id` a service or a library, by its APP'S TREE (state.app_kind, written
+    by record_app_kind from the build's app folder or the preview's clone)? None when BOSS has
+    no such record: unknown is never a service, so a failed preview of it still fails."""
+    if not run_id:
+        return None
+    try:
+        with begin(engine) as c:
+            kind = c.execute(text("SELECT state->'app_kind'->>'kind' FROM code_task_runs "
+                                  "WHERE id = :i"), {"i": run_id}).scalar()
+    except Exception:  # noqa: BLE001 — unknown, never a guess
+        logger.debug("is_service_build: could not read %s", run_id, exc_info=True)
+        return None
+    if kind == "service":
+        return True
+    if kind == "app":
+        return False
+    return None
+
+
 def _changed_dirs(changed: Optional[list[str]]) -> list[str]:
     """Directories this task touched, in the order they appear in the diff."""
     out: list[str] = []
@@ -1882,31 +2012,49 @@ def _url_ok(url: str, *, headers: Optional[dict[str, str]] = None, check_body: b
 
 
 HEALTH_DECLARATION_FILE = "boss.preview.health"
+#: The readiness twin of boss.preview.health: a service may declare where it is READY instead.
+READY_DECLARATION_FILE = "boss.preview.ready"
+
+#: Where a SERVICE says it is up when nothing is declared, asked in this order after the
+#: declared path. An API gateway answers 404 at `/` by design — it routes only what its config
+#: names — and serves /healthz and /readyz (northgate-gateway, wfr_51eb3963, BOSSAPP-1308).
+SERVICE_HEALTH_PATHS: tuple[str, ...] = ("/healthz", "/readyz")
+
+
+def _declared_path_in(workdir: Optional[Path], name: str) -> Optional[str]:
+    try:
+        line = (Path(workdir) / name).read_text(errors="ignore").strip()
+    except (OSError, TypeError):
+        return None
+    line = line.splitlines()[0].strip() if line else ""
+    if line.startswith("/") and "://" not in line and len(line) < 300:
+        return line
+    return None
 
 
 def preview_health_path(workdir: Optional[Path]) -> str:
-    """The path a preview's health check asks for: the one line of boss.preview.health, else the
-    health check the app's own boss.deploy.yaml declares, else `/`.
+    """The path a preview's health check asks for: the one line of boss.preview.health, else
+    boss.preview.ready, else the health check the app's own boss.deploy.yaml declares, else `/`.
 
     ONE DECLARATION OF HEALTH, NOT TWO. An API with nothing at `/` (a JSON order service, a
     Dropwizard `/hello`) declares `health: [{url: http://127.0.0.1:8000/health}]` for its deploy
     and was then failed by its preview as "no page at the site root — check that the build
     produced a UI and not only an API", because the preview only read its own file. The deploy
     manifest is the app saying where it is healthy; the preview asks the same path."""
-    try:
-        line = (Path(workdir) / HEALTH_DECLARATION_FILE).read_text(errors="ignore").strip()
-    except (OSError, TypeError):
-        line = ""
-    line = line.splitlines()[0].strip() if line else ""
-    if line.startswith("/") and "://" not in line and len(line) < 300:
-        return line
-    return _declared_deploy_health_path(workdir) or "/"
+    return (_declared_path_in(workdir, HEALTH_DECLARATION_FILE)
+            or _declared_path_in(workdir, READY_DECLARATION_FILE)
+            or _declared_deploy_health_path(workdir) or "/")
+
+
+def service_health_paths(declared: str = "/") -> list[str]:
+    """The paths that say a SERVICE is up, in the order they are asked: the declared health or
+    ready path (preview_health_path), then /healthz, then /readyz."""
+    out = [declared] if declared and declared != "/" else []
+    return out + [p for p in SERVICE_HEALTH_PATHS if p not in out]
 
 
 def _declared_deploy_health_path(workdir: Optional[Path]) -> Optional[str]:
     """The path of the first health check in the app's boss.deploy.yaml, or None."""
-    from urllib.parse import urlsplit
-
     from .app_deploy_manifest import DEFAULT_MANIFEST_PATH, ManifestError, load_manifest
 
     if workdir is None:
@@ -1916,9 +2064,23 @@ def _declared_deploy_health_path(workdir: Optional[Path]) -> Optional[str]:
     except (OSError, TypeError, ValueError, ManifestError):
         return None
     for check in manifest.health:
-        path = urlsplit(str(check.url or "")).path
-        if path.startswith("/") and len(path) < 300 and "{" not in path:
+        path = health_url_path(check.url)
+        if path:
             return path
+    return None
+
+
+def health_url_path(url: Any) -> Optional[str]:
+    """The path of a health check URL, or None. A deploy check is written against its target
+    ("{target.public_url}/healthz", or with a port, "{target.public_url}:8080/healthz"): the
+    placeholder and any `:port` after it are the host, the rest is the path. Read whole it held
+    a `{` and was dropped, so northgate-gateway's preview asked `/` (BOSSAPP-1308)."""
+    from urllib.parse import urlsplit
+
+    raw = re.sub(r"^\{[^{}]*\}(?::\d+)?", "", str(url or "").strip())
+    path = urlsplit(raw).path if "://" in raw else raw.split("?", 1)[0].split("#", 1)[0]
+    if path.startswith("/") and len(path) < 300 and "{" not in path:
+        return path
     return None
 
 
@@ -1962,6 +2124,38 @@ def _command_is_java(command) -> bool:
 
 def _http_ok(port: int, path: str = "/") -> bool:
     return _url_ok(f"http://127.0.0.1:{port}{path if path != '/' else ''}", check_body=True)
+
+
+def _answers_2xx(port: int, path: str) -> bool:
+    """Does `path` on `port` answer 2xx? A health route's body is its own business (an empty 200
+    or `ok` is a healthy service), so only the status counts."""
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", int(port), timeout=2)
+        try:
+            conn.request("GET", path or "/")
+            return 200 <= int(conn.getresponse().status) < 300
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — nothing answering is not up
+        return False
+
+
+def _serving(port: int, health_path: str = "/", *, service: bool = False) -> bool:
+    """Is the app on `port` up for a preview?
+
+    A page at the health path (`/` unless declared) is up, as before. A SERVICE is up when its
+    health says so: when the app DECLARED a health/ready path (preview_health_path), or its tree
+    is a service (app_tree_kind, `service=True`), the declared path, /healthz and /readyz are
+    asked in that order and a 2xx on any is up. northgate-gateway answered 404 at `/` and 200 at
+    /healthz, and its preview was failed as "no page at the site root" (BOSSAPP-1308). A UI
+    never passes on its /healthz: a web app whose static build is missing answers 404 at `/`
+    and must still fail."""
+    if _http_ok(port, health_path):
+        return True
+    declared = health_path not in ("", "/")
+    if not (declared or service):
+        return False
+    return any(_answers_2xx(port, p) for p in service_health_paths(health_path))
 
 
 #: Statuses that say the ROUTE is not there, as opposed to "not ready yet". An app answering
@@ -2029,8 +2223,11 @@ def _diagnose_listening_port(log_path: str, port_hint: int,
                         f"(boss.deploy.yaml health / boss.preview.health) — fix the route or the "
                         f"declaration.")
             return (f"the app IS listening on port {port}, but GET / returned "
-                    f"{http_error.code}. It serves no page at the site root — check that the "
-                    f"build produced a UI and not only an API.")
+                    f"{http_error.code}, and neither "
+                    f"{' nor '.join(SERVICE_HEALTH_PATHS)} answered 2xx. It serves no page "
+                    f"at the site root and no health route — a UI must serve `/`; a service "
+                    f"declares its health path (boss.preview.health / boss.preview.ready, or "
+                    f"health in boss.deploy.yaml) or serves /healthz.")
         except Exception:  # noqa: BLE001 — a port that will not answer is a port that failed
             return (f"the app IS listening on port {port} but GET {path} did not complete.")
     return None
@@ -2185,7 +2382,8 @@ def why_it_failed_text(text: str, limit: int = 900) -> str:
 def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0,
                            proc: Optional[subprocess.Popen] = None,
                            health_path: str = "/", listener_uid: Optional[int] = None,
-                           absent_grace: float = ABSENT_ROUTE_GRACE_SECONDS) -> Optional[int]:
+                           absent_grace: float = ABSENT_ROUTE_GRACE_SECONDS,
+                           service: bool = False) -> Optional[int]:
     """Return the port the app actually serves HTTP on — its log-announced port first, then the
     injected PORT — each health-checked, so a neighboring local service is never mistaken for it.
 
@@ -2209,7 +2407,7 @@ def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0,
     absent_since: dict[int, float] = {}
     while time.time() < deadline:
         for port in candidates():
-            if _http_ok(port, health_path):
+            if _serving(port, health_path, service=service):
                 return port
             if _route_absent(port, health_path) is None:
                 absent_since.pop(port, None)
@@ -2218,7 +2416,7 @@ def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0,
         if proc is not None and proc.poll() is not None:
             # One last look: a server that forked and exited its parent may be up by now.
             for port in candidates():
-                if _http_ok(port, health_path):
+                if _serving(port, health_path, service=service):
                     return port
             return None
         time.sleep(0.8)
@@ -2671,7 +2869,9 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
                                           timeout=preview_start_timeout(_app_dir_of_plan(tree, plan), timeout,
                                                                         command=plan.command),
                                           proc=proc,
-                                          health_path=health)
+                                          health_path=health,
+                                          service=app_tree_kind(
+                                              _app_dir_of_plan(tree, plan))[0] == "service")
             exit_code = proc.poll()
             if port is not None:
                 record.update(proven=True, port=port)
@@ -3003,6 +3203,8 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         if clone.returncode != 0:
             return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
     _record_repo_manifests(engine, run_id, workdir)
+    # WHAT THE APP IS, from the branch it serves (is_service_build), when the build did not say.
+    _tree_kind = record_app_kind(engine, run_id, workdir)
 
     def _verify(cmd_str: str) -> dict:
         """Library/CLI/module build — there is no web server to serve. 'Run it' means run its
@@ -3097,6 +3299,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     window = preview_start_timeout(workdir, changed=_changed, limit=ready_timeout, command=command)
     port = _discover_working_port(log_path, port_hint, timeout=window, proc=proc,
                                   health_path=health,
+                                  service=_tree_kind == "service",
                                   listener_uid=ident.uid if ident is not None else None)
     if port is None:
         # NAME WHICH FAILURE THIS IS before killing the process — once it is dead, the
@@ -3400,8 +3603,10 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
 
     url = f"http://127.0.0.1:{host_port}"
     ok = False
+    _health = preview_health_path(workdir)
+    _service = app_tree_kind(workdir)[0] == "service"
     for _ in range(20):
-        if _http_ok(host_port):
+        if _serving(host_port, _health, service=_service):
             ok = True
             break
         time.sleep(1.0)
@@ -3604,6 +3809,7 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
                                       timeout=preview_start_timeout(workdir, changed=_changed,
                                                                     command=command),
                                       health_path=preview_health_path(workdir),
+                                      service=app_tree_kind(workdir)[0] == "service",
                                       listener_uid=ident.uid if ident is not None else None)
         if port is None:
             _kill(proc.pid)
