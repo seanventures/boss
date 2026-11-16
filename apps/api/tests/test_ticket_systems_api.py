@@ -785,3 +785,76 @@ def test_the_org_list_shows_every_connection_and_another_org_none(world, client,
         # And they cannot ask about a project of another org.
         assert client.get("/v1/ticket-systems/org",
                           params={"project_id": world.project_a}).status_code in (403, 404)
+
+
+def test_mapping_here_never_drops_or_moves_a_mapping_the_caller_cannot_see(world, client, engine,
+                                                                          jira):
+    """PR #140 re-review repro: the owner maps KAN → A and OPS → B; P (admin on A and C, nothing
+    on B) presses "Map KAN here" from C. KAN moves to C; OPS → B stays, and B's mirror with it.
+    Moving or removing B's mapping needs integration:manage on B."""
+    with world.acting_as(world.ctx(world.owner)):
+        made = client.post("/v1/projects", json={"name": "Ledger C", "slug": f"tk-c-{uuid.uuid4().hex[:6]}"})
+        assert made.status_code == 201, made.text
+        project_c = made.json().get("id") or made.json().get("project", {}).get("id") or made.json().get("slug")
+        cid = _connect(client, world.project_a, jira).json()["connection"]["id"]
+        mapped = client.patch(f"/v1/ticket-systems/{cid}", json={"mappings": [
+            {"external_project": "KAN", "boss_project_id": world.project_a, "default": True},
+            {"external_project": "OPS", "boss_project_id": world.project_b, "default": False}]})
+        assert mapped.status_code == 200, mapped.text
+    p = world.person("tk-admin-a-c")
+    world.bind(p, "admin", project=world.project_a)
+    world.bind(p, "admin", project=project_c)
+
+    def b_mirror():
+        with engine.connect() as db:
+            return db.execute(text(
+                "SELECT status FROM work_tracker_providers WHERE project_id = :p "
+                "AND configuration->>'mirror_of' = :h"), {"p": world.project_b, "h": cid}).scalar()
+
+    assert b_mirror() == "active"
+    with world.acting_as(world.ctx(p)):
+        seen = next(c for c in client.get("/v1/ticket-systems/org", params={
+            "project_id": project_c}).json()["connections"] if c["id"] == cid)
+        # P sees only the mapping onto A; B is not theirs to see.
+        assert seen["settings"]["mappings"] == [
+            {"external_project": "KAN", "boss_project_id": world.project_a, "default": True}]
+        # What the console's "Map KAN here" sends: the visible list with KAN moved to C.
+        moved = client.patch(f"/v1/ticket-systems/{cid}", json={"mappings": [
+            {"external_project": "KAN", "boss_project_id": project_c, "default": True}]})
+        assert moved.status_code == 200, moved.text
+        # Moving OPS off B (which P cannot manage) is refused, and so is dropping it.
+        refused = client.patch(f"/v1/ticket-systems/{cid}", json={"mappings": [
+            {"external_project": "KAN", "boss_project_id": project_c, "default": True},
+            {"external_project": "OPS", "boss_project_id": project_c, "default": False}]})
+        assert refused.status_code in (403, 404), refused.text
+    with engine.connect() as db:
+        stored = ticket_intake._stored_settings(ticket_intake.get_row(db, cid)["configuration"])["mappings"]
+    assert sorted((m["external_project"], m["boss_project_id"], m["default"]) for m in stored) == [
+        ("KAN", project_c, True), ("OPS", world.project_b, False)]
+    assert b_mirror() == "active"
+
+
+def test_an_agent_never_tells_a_person_a_project_the_console_hides(world, client, engine, jira):
+    """ticket_get (ticket_reach.lookup) answers for the person the agent acts for: a home or a
+    mapped project they cannot read is "another project", as on their screen."""
+    from boss_engine.services import ticket_reach
+
+    member_b = world.person("tk-agent-member-b")
+    world.bind(member_b, "operator", project=world.project_b)
+    with world.acting_as(world.ctx(world.owner)):
+        cid = _connect(client, world.project_a, jira).json()["connection"]["id"]
+    with engine.connect() as db:
+        a_name = db.execute(text("SELECT name FROM projects WHERE id = :p"),
+                            {"p": world.project_a}).scalar()
+        said = ticket_reach.lookup(db, world.project_b, f"KAN-{D.STORY}", person_id=member_b.id)
+    assert said["error"] == "not_shared" and a_name not in said["message"]
+    assert said["home_project"] == "" and said["home_project_name"] == "another project"
+    with world.acting_as(world.ctx(world.owner)):
+        assert client.patch(f"/v1/ticket-systems/{cid}", json={"share_with_org": True}).status_code == 200
+    ticket_reach.clear_cache()
+    with engine.connect() as db:
+        found = ticket_reach.lookup(db, world.project_b, f"KAN-{D.STORY}", person_id=member_b.id)
+        owner_sees = ticket_reach.lookup(db, world.project_b, f"KAN-{D.STORY}",
+                                         person_id=world.owner.id)
+    assert found["ok"] and found["maps_to"]["project_id"] == "" and found["maps_to"]["name"] == "another project"
+    assert owner_sees["maps_to"]["project_id"] == world.project_a

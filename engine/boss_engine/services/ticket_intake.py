@@ -560,7 +560,7 @@ def list_connections(db: Connection, project_id: str, *, scope: str = "all"
     from . import ticket_reach as reach
 
     own = project_rows(db, project_id, include_disconnected=True)
-    out = [{**serialize(db, row), "reach": "project"} for row in own]
+    out = [org_view(db, row, {**serialize(db, row), "reach": "project"}) for row in own]
     if scope == "project":
         return out
     seen = {reach.home_id(row) for row in own if is_connected(row)}
@@ -825,10 +825,12 @@ def sync_mirrors(db: Connection, app_settings: Any, home: dict[str, Any], *, act
         if db.execute(text(org_of), {"p": target}).scalar() != home_org:
             raise TicketApiError("invalid_settings", f"There is no BOSS project {target!r} in "
                                                      "this organisation.")
-        may_manage(target)
         existing = db.execute(text(_ROW + " WHERE project_id = :p AND provider_key = :k"),
                               {"p": target, "k": provider}).mappings().first()
         existing = dict(existing, configuration=_config(existing)) if existing else None
+        if not (existing and existing["status"] == "active"
+                and existing["configuration"].get("mirror_of") == home["id"]):
+            may_manage(target)   # a project newly mapped onto; one already mirrored is kept
         if existing and is_connected(existing) and \
                 existing["configuration"].get("mirror_of") != home["id"]:
             raise TicketApiError("conflict", f"Project {target} already has its own "
@@ -859,7 +861,36 @@ def sync_mirrors(db: Connection, app_settings: Any, home: dict[str, Any], *, act
                                    "AND NOT (project_id = ANY(:keep))"),
                        {"h": home["id"], "keep": mapped}).mappings().all()
     for row in stale:
+        # Unmapping a project stops its tickets there: only someone who manages it may.
+        may_manage(str(row["project_id"]))
         disconnect(db, dict(row, configuration=_config(row)), actor)
+    return out
+
+
+def guard_mappings(old: list[dict[str, Any]], new: list[dict[str, Any]], *,
+                   may_see: Callable[[str], bool], may_manage: Callable[[str], None]
+                   ) -> list[dict[str, Any]]:
+    """A mappings PATCH from someone who may not see every mapped project (PR #140 review):
+    the list they send was missing the mappings onto projects hidden from them, so a stored
+    mapping onto a project they cannot SEE is kept as it was — unless the same key is now sent
+    elsewhere (a move), which, like removing or moving any mapping, needs integration:manage on
+    the project it leaves (``may_manage`` raises). Returns the list to store."""
+    sent = {(str(m["external_project"]).upper(), str(m["boss_project_id"])) for m in new}
+    keys = {k for k, _ in sent}
+    out = list(new)
+    for m in old:
+        key, target = str(m.get("external_project") or "").upper(), str(m.get("boss_project_id") or "")
+        if not key or not target or (key, target) in sent:
+            continue
+        if not may_see(target) and key not in keys:
+            default = bool(m.get("default"))
+            if default and any(x.get("default") for x in out):
+                may_manage(target)   # the default moves off a project they cannot see
+                default = False
+            out.append({"external_project": m["external_project"], "boss_project_id": target,
+                        "default": default})
+            continue
+        may_manage(target)
     return out
 
 

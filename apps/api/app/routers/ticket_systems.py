@@ -355,8 +355,20 @@ def update_ticket_system(connection_id: str,
                 intake.set_oauth_app(connection, settings, row, oauth_app, actor=actor)
                 row = intake.get_row(connection, connection_id)
             merged = intake.merge_settings(row["configuration"], body)
+            if "mappings" in body:
+                # Never drop a mapping the caller could not see, and leave none without the
+                # right to manage the project it leaves (the Settings drawer saves the whole list).
+                merged["mappings"] = intake.guard_mappings(
+                    intake._stored_settings(row["configuration"]).get("mappings") or [],
+                    merged.get("mappings") or [], may_see=reach.may_see_project,
+                    may_manage=lambda p: _also("integration:manage", p, "ticket_mapping"))
+            stored = {(str(m.get("external_project") or "").upper(), str(m.get("boss_project_id") or ""))
+                      for m in intake._stored_settings(row["configuration"]).get("mappings") or []}
             for mapping in merged.get("mappings") or []:
-                if mapping["boss_project_id"] != row["project_id"]:
+                # A NEW mapping onto another project needs integration:manage there; one that
+                # was already stored (kept as it was) does not.
+                if mapping["boss_project_id"] != row["project_id"] and \
+                        (mapping["external_project"].upper(), mapping["boss_project_id"]) not in stored:
                     _also("integration:manage", mapping["boss_project_id"], "ticket_mapping")
             intake.update_settings_row(connection, connection_id, merged)
             row = intake.get_row(connection, connection_id)

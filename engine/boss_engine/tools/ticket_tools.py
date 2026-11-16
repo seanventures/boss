@@ -205,8 +205,9 @@ def _get(ctx, *, project_id, actor, args):
             result = {"ok": True, "ticket": view, "connection": found["connection"],
                       "maps_to": maps_to, "in_this_project": found["in_this_project"]}
             if not found["in_this_project"]:
-                result["note"] = (f"{view.get('key')} maps to the BOSS project "
-                                  f"{maps_to['name']} ({maps_to['project_id']}), not this one. "
+                where = (f"the BOSS project {maps_to['name']} ({maps_to['project_id']})"
+                         if maps_to.get("project_id") else "another BOSS project")
+                result["note"] = (f"{view.get('key')} maps to {where}, not this one. "
                                   "It can still be imported here if the person wants it here.")
             return _screened(db, ctx, pid, result,
                              f"ticket:{view.get('provider')}:{view.get('key')}")

@@ -96,8 +96,8 @@ describe("Setup › Ticket systems (T1)", () => {
     expect($('[data-testid="tk-systems-empty"]')).toBeNull();
     expect($('[data-testid="tk-shared-wtp_home"]')?.textContent?.trim()).toBe("Shared");
     expect($('[data-testid="tk-shared-from-wtp_home"]')?.textContent).toBe("added in BOSS dogfood bootstrap");
-    // Nothing maps here: say where its tickets land; the whole mapping is the tooltip.
-    expect($('[data-testid="tk-maps-wtp_home"]')?.textContent).toBe("None · lands in BOSS dogfood bootstrap");
+    // Nothing maps here: say so; where each key lands is the line below, the mapping the tooltip.
+    expect($('[data-testid="tk-maps-wtp_home"]')?.textContent).toBe("None here");
     expect($('[data-testid="tk-maps-wtp_home"]')?.getAttribute("title")).toBe("KAN → BOSS dogfood bootstrap");
     // Nothing lands here: say where KAN tickets go and open New work THERE (never a made-up key).
     expect($('[data-testid="tk-where-new"]')).toBeNull();
@@ -211,10 +211,26 @@ describe("Setup › Ticket systems (T1)", () => {
     expect($('[data-testid="tk-where-there"]')?.textContent).toBe("New work in BOSS dogfood bootstrap →");
     expect($('[data-testid="tk-map-here"]')?.textContent).toBe("Map KAN here");
     await click('[data-testid="tk-map-here"]');
+    // Asked first, in words that say who stops seeing them; nothing is sent until Map.
+    expect($('[data-testid="tk-map-confirm"]')?.textContent)
+      .toContain("Moves KAN tickets from BOSS dogfood bootstrap to Northgate Gateway; people there stop seeing new KAN tickets.");
+    expect(calls.some((c) => c.method === "PATCH")).toBe(false);
+    await click('[data-testid="tk-map-yes"]');
     const patch = calls.find((c) => c.method === "PATCH")!;
     expect([patch.url, patch.body]).toEqual(["/v1/ticket-systems/wtp_home",
       { mappings: [{ external_project: "KAN", boss_project_id: "northgate", default: true }] }]);
     expect($('[data-testid="tk-said"]')?.textContent).toBe("KAN tickets now land in Northgate Gateway.");
+  });
+
+  it("says where each key really lands, not the home", async () => {
+    api((url) => (url.startsWith("/v1/ticket-systems?project_id=") ? json({ connections: [
+      { ...JIRA, id: "wtp_home", project_id: "boss-dogfood", reach: "org", can_manage: false,
+        home_project: { id: "boss-dogfood", name: "BOSS dogfood bootstrap", owners: [] }, project_names: { ops: "Ops" },
+        settings: { ...JIRA.settings, mappings: [{ external_project: "KAN", boss_project_id: "ops", default: false }], project_keys: ["KAN", "SAM"] } }] })
+      : undefined));
+    await mount(<TicketSystemsRow projectId="northgate" />);
+    expect($('[data-testid="tk-where-lands"]')?.textContent).toBe("KAN tickets land in Ops. SAM tickets land in BOSS dogfood bootstrap.");
+    expect($('[data-testid="tk-where-there"]')?.getAttribute("href")).toBe("?area=project&project_id=ops&tab=work&compose=1");
   });
 
   it("when keys land here, New work names this project and the key, without a made-up number", async () => {

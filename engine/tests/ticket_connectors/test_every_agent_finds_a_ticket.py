@@ -358,7 +358,8 @@ def test_new_work_resolves_a_bare_key_once_shared(eng, org, fake):
     assert sentence == {"refs": [], "tickets": [], "errors": [], "connected": 1}
     shared = [c for c in listed if c["id"] == org["cid"]]
     assert shared and shared[0]["reach"] == "org" and shared[0]["settings"]["share_with_org"]
-    assert shared[0]["home_project"] == {"id": org["home"], "name": "BOSS dogfood bootstrap"}
+    assert {k: shared[0]["home_project"][k] for k in ("id", "name")} == \
+        {"id": org["home"], "name": "BOSS dogfood bootstrap"}
 
 
 # ── every agent has it, with its own permission, and is told when to use it ──────────────────

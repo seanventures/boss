@@ -82,6 +82,23 @@ export function ticketSummary(usable: Connection[], hidden: Connection[], projec
   return `${c.label} · ${shared ? "shared" : "this project only"} · ${here ? `${here === "All" ? "all keys" : here} here` : "maps elsewhere"}${more}`;
 }
 
+/** Where each of a connection's keys lands, grouped by BOSS project, in order: a key's own
+ *  mapping, else the default mapping, else the connection's home. Never assumes the home. */
+export function landingGroups(c: Connection, projectId: string): { id: string; name: string; keys: string[] }[] {
+  const home = c.home_project ?? { id: c.project_id, name: "this project", owners: [] };
+  const nameOf = (id: string) => (id === projectId ? "this project" : c.project_names[id] ?? (id === home.id ? home.name : "another project"));
+  const def = c.settings.mappings.find((m) => m.default);
+  const groups = new Map<string, { id: string; name: string; keys: string[] }>();
+  for (const key of keysOf(c)) {
+    const m = c.settings.mappings.find((x) => x.external_project.toUpperCase() === key.toUpperCase());
+    const id = m?.boss_project_id ?? def?.boss_project_id ?? home.id;
+    const g = groups.get(id) ?? { id, name: nameOf(id), keys: [] };
+    g.keys.push(key);
+    groups.set(id, g);
+  }
+  return [...groups.values()].filter((g) => g.id !== projectId);
+}
+
 /** The ticket-system project keys a connection knows (its mappings, then its project list). */
 export const keysOf = (c: Connection): string[] =>
   [...new Set([...c.settings.mappings.map((m) => m.external_project), ...c.settings.project_keys])].filter(Boolean);
@@ -168,9 +185,10 @@ export function TicketSystemsRow({ projectId, focused = false, onSummary }: {
                  : { text: r.error ?? "The test failed.", tone: "red" });
     if (r.ok) reload();
   };
-  /** "Map KAN here": that key's tickets land in this project (a mirror here; manage at its home). */
+  /** "Map KAN here", asked first: that key's tickets move from where they land to this project. */
+  const [mapAsk, setMapAsk] = useState<{ c: Connection; key: string; from: string } | null>(null);
   const mapHere = async (c: Connection, key: string) => {
-    setSaid(null);
+    setSaid(null); setMapAsk(null);
     const others = c.settings.mappings.filter((m) => m.external_project !== key);
     const was = c.settings.mappings.find((m) => m.external_project === key);
     const r = await saveTicketSettings(c.id, { mappings: [...others, { external_project: key, boss_project_id: projectId, default: Boolean(was?.default) }] });
@@ -263,7 +281,7 @@ export function TicketSystemsRow({ projectId, focused = false, onSummary }: {
           <div key={c.id} className="tk-system" role="row" data-testid={`tk-system-${c.id}`} data-status={c.status}>
             {nameCell(c)}
             <span role="cell" className="tk-cell" data-label="Maps here" data-testid={`tk-maps-${c.id}`} title={mapWords(c, projectId, {}).join(" · ")}>
-              {here ? <span className="tk-mono-text">{here}</span> : <span className="tk-faint">None · lands in {homeName(c, projectId)}</span>}
+              {here ? <span className="tk-mono-text">{here}</span> : <span className="tk-faint">None here</span>}
               {c.managed_from ? <span className="tk-faint">Managed from another project</span> : null}
             </span>
             <span role="cell" className="tk-cell" data-label="Sync">
@@ -323,8 +341,8 @@ export function TicketSystemsRow({ projectId, focused = false, onSummary }: {
   const landsHere = live.find((c) => mapsHere(c, projectId));
   const elsewhere = landsHere ? null : live[0] ?? null;
   const hereKey = landsHere ? mapsHere(landsHere, projectId).split(", ").find((k) => /^[A-Z][A-Z0-9_]+$/.test(k)) : undefined;
-  const awayKeys = elsewhere ? keysOf(elsewhere).slice(0, 3) : [];
-  const awayHome = elsewhere?.home_project;
+  const away = elsewhere ? landingGroups(elsewhere, projectId) : [];
+  const awayKeys = away.flatMap((g) => g.keys);
 
   return (
     <section className="su-row tk-setup" data-testid="su-row-ticket_systems" aria-label="Ticket systems" id="su-ticket_systems"
@@ -419,18 +437,29 @@ export function TicketSystemsRow({ projectId, focused = false, onSummary }: {
                title={`Opens New work in ${here}.`}>New work in {here} →</a>
           </div>
         ) : null}
-        {view === "here" && elsewhere && awayKeys.length ? (
+        {view === "here" && elsewhere && away.length ? (
           <div className="tk-try" data-testid="tk-where-elsewhere">
             <Sparkle size={14} aria-hidden />
-            <span data-testid="tk-where-lands"><b className="tk-mono-text">{awayKeys.join(", ")}</b> tickets land in {awayHome?.name ?? "another project"}.</span>
-            {awayHome && !awayHome.hidden && awayHome.id ? (
-              <a className="tk-linkbtn" href={`?area=project&project_id=${encodeURIComponent(awayHome.id)}&tab=work&compose=1`} data-testid="tk-where-there"
-                 title={`Opens New work in ${awayHome.name}, where these tickets belong.`}>New work in {awayHome.name} →</a>
+            <span data-testid="tk-where-lands">{away.map((g, i) => (
+              <React.Fragment key={g.id}>{i ? " " : null}<b className="tk-mono-text">{g.keys.join(", ")}</b> tickets land in {g.name}.</React.Fragment>
+            ))}</span>
+            {away[0].id && away[0].name !== "another project" ? (
+              <a className="tk-linkbtn" href={`?area=project&project_id=${encodeURIComponent(away[0].id)}&tab=work&compose=1`} data-testid="tk-where-there"
+                 title={`Opens New work in ${away[0].name}, where ${away[0].keys[0]} tickets belong.`}>New work in {away[0].name} →</a>
             ) : null}
             {elsewhere.can_manage && manage.allowed ? (
-              <button type="button" className="su-btn su-btn-sm" data-testid="tk-map-here" onClick={() => void mapHere(elsewhere, awayKeys[0])}
-                      title={`${awayKeys[0]} tickets will land in ${here} instead.`}>Map {awayKeys[0]} here</button>
+              <button type="button" className="su-btn su-btn-sm" data-testid="tk-map-here"
+                      onClick={() => { setSaid(null); setAsking(null); setMapAsk({ c: elsewhere, key: awayKeys[0], from: away[0].name }); }}
+                      title={`${awayKeys[0]} tickets would land in ${here} instead. Asks first.`}>Map {awayKeys[0]} here</button>
             ) : null}
+          </div>
+        ) : null}
+        {mapAsk ? (
+          <div className="tk-confirm" data-kind="share" role="alertdialog" aria-label={`Map ${mapAsk.key} here?`} data-testid="tk-map-confirm">
+            <span>Moves {mapAsk.key} tickets from {mapAsk.from} to {here}; people there stop seeing new {mapAsk.key} tickets.</span>
+            <button type="button" className="su-btn su-btn-sm su-btn-primary" data-testid="tk-map-yes" onClick={() => void mapHere(mapAsk.c, mapAsk.key)}>
+              Map {mapAsk.key} here</button>
+            <button type="button" className="su-btn su-btn-sm" onClick={() => setMapAsk(null)} data-testid="tk-map-no">Cancel</button>
           </div>
         ) : null}
         <div className="tk-faint tk-vault"><ShieldCheck size={13} aria-hidden /> <span title="Tokens are stored in BOSS's vault. Agents never see them; BOSS makes every call for them.">Tokens stay in BOSS&apos;s vault</span>{" "}

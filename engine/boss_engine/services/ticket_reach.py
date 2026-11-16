@@ -195,29 +195,46 @@ def owner_names(db: Connection, project_id: str, *, limit: int = 3) -> list[str]
 ANOTHER_PROJECT = "another project"
 
 
-def may_see_project(project_id: str) -> bool:
+def may_see_project(project_id: str, *, person_id: Optional[str] = None, db: Any = None) -> bool:
     """WHAT A TICKET SYSTEM SAYS ABOUT ITS HOME (PR #140 review): ticket systems are an org-wide
     setting, but a project the caller cannot read (project:read) stays hidden, as /v1/projects
-    hides it. Not enforced (legacy mode): visible, as the rest of that mode."""
+    hides it. ``person_id``: answer for THAT person (an agent's tool acting for them, so the agent
+    never tells a person names the console hides). Otherwise the request's principal; not
+    enforced (legacy mode, no request): visible, as the rest of that mode."""
+    if person_id and db is not None:
+        try:
+            from ..identity import authz
+            from ..identity.scope import ResolvedScope
+            from ..identity.users import load_principal
+
+            person = load_principal(db, person_id)
+            if person is not None:
+                held = authz.effective_permissions(
+                    person, ResolvedScope.in_project(person.org_id, project_id), db=db).permissions
+                return "project:read" in held
+            # Not a person this install's identity knows (legacy actor): as for any caller.
+        except Exception:  # noqa: BLE001 — cannot tell: hidden, never shown
+            return False
     from ..identity import viewer
 
     said = viewer.may(project_id, "project:read")
     return True if said is None else bool(said)
 
 
-def home_view(db: Connection, project_id: str) -> dict[str, Any]:
+def home_view(db: Connection, project_id: str, *, person_id: Optional[str] = None) -> dict[str, Any]:
     """A connection's home project as the console names it, with whom to ask about it — or,
     for a project the caller cannot read, "another project" and the org's Owners."""
-    if may_see_project(project_id):
+    if may_see_project(project_id, person_id=person_id, db=db):
         return {"id": project_id, "name": project_name(db, project_id),
                 "owners": owner_names(db, project_id)}
     return {"id": "", "name": ANOTHER_PROJECT, "owners": org_owner_names(db, project_id),
             "hidden": True}
 
 
-def not_shared_error(db: Connection, row: dict[str, Any]) -> intake.TicketApiError:
+def not_shared_error(db: Connection, row: dict[str, Any], *, person_id: Optional[str] = None
+                     ) -> intake.TicketApiError:
     label = intake.label_of(row)
-    home = home_view(db, str(row["project_id"]))
+    home = home_view(db, str(row["project_id"]), person_id=person_id)
     if home.get("hidden"):
         return intake.TicketApiError(
             "not_shared", f"The {label} connection was added in another project and is not "
@@ -363,9 +380,11 @@ def mapped_project(db: Connection, row: dict[str, Any], key: str) -> dict[str, A
     return {"project_id": target, "name": project_name(db, target), "by": how}
 
 
-def visible_maps_to(maps_to: dict[str, Any]) -> dict[str, Any]:
+def visible_maps_to(maps_to: dict[str, Any], *, person_id: Optional[str] = None,
+                    db: Any = None) -> dict[str, Any]:
     """``maps_to`` for a person: a BOSS project they cannot read is "another project"."""
-    if maps_to.get("project_id") and not may_see_project(str(maps_to["project_id"])):
+    if maps_to.get("project_id") and not may_see_project(str(maps_to["project_id"]),
+                                                         person_id=person_id, db=db):
         return {**maps_to, "project_id": "", "name": ANOTHER_PROJECT}
     return maps_to
 
@@ -524,7 +543,7 @@ def lookup(db: Connection, project_id: str, ref: str, *, person_id: Optional[str
                   and (not wanted or str(r["provider_key"]) == wanted)]
         if _recognised(db, hidden, said, person_id=None):
             row = _recognised(db, hidden, said, person_id=None)[0][0]
-            error = not_shared_error(db, row)
+            error = not_shared_error(db, row, person_id=person_id)
             return {"ok": False, **error.body()}
         if not rows:
             if cid or wanted:
@@ -532,7 +551,7 @@ def lookup(db: Connection, project_id: str, ref: str, *, person_id: Optional[str
                         "message": f"No connected ticket system {cid or wanted} is reachable "
                                    "from this project."}
             if hidden:
-                return {"ok": False, **not_shared_error(db, hidden[0]).body()}
+                return {"ok": False, **not_shared_error(db, hidden[0], person_id=person_id).body()}
             return not_connected(project_id)
         if find_urls(said) or not _key_shaped(said):
             sites = ", ".join(sorted({f"{site_of(r) or intake.label_of(r)} "
@@ -565,7 +584,8 @@ def lookup(db: Connection, project_id: str, ref: str, *, person_id: Optional[str
         view["connection_id"] = str(row["id"])
         view["in_boss"] = intake.mark([ticket], intake.in_boss_map(
             db, intake.family_ids(db, row)))[0]["in_boss"]
-        maps_to = mapped_project(db, row, ticket.key or tref.label())
+        maps_to = visible_maps_to(mapped_project(db, row, ticket.key or tref.label()),
+                                  person_id=person_id, db=db)
         return {"ok": True, "ticket": view, "connection": where, "maps_to": maps_to,
                 "this_project": project_id,
                 "in_this_project": maps_to["project_id"] == project_id,
