@@ -660,9 +660,12 @@ def build_monitoring_router(
 
     @router.get("/v1/notifications")
     @permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
-    def list_notifications(project_id: str, request: Request, response: Response):
+    def list_notifications(project_id: str, request: Request, response: Response,
+                           since: Optional[str] = None, until: Optional[str] = None,
+                           q: Optional[str] = None, limit: int = 50):
         return _read(project_id, request, response,
-                     lambda c, pid: {"notifications": notify.outbox(c, pid)})
+                     lambda c, pid: notify.outbox(c, pid, limit=limit, since=since,
+                                                  until=until, q=q))
 
     # ── silences, maintenance, inhibition ───────────────────────────────────────────────────
     @router.get("/v1/silences")

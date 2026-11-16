@@ -938,15 +938,58 @@ def deliver_chat_due(engine, settings: Any, *, now: Optional[datetime] = None, l
     return out
 
 
-def outbox(connection, project_id: str, limit: int = 50) -> list[dict[str, Any]]:
+def outbox(connection, project_id: str, limit: int = 50, since=None, until=None,
+           q=None) -> dict[str, Any]:
     """The notifications BOSS sent (or holds), newest first, each with the worst SEV level of
-    the alerts it carried (`sev`, null for BOSS's own self-checks)."""
+    the alerts it carried (`sev`, null for BOSS's own self-checks).
+
+    `since`/`until` bound `created_at`, half-open. `q` is a case-insensitive substring of the
+    subject or the body; LIKE wildcards are literal. At most 50 rows. `capped` is true when
+    more rows match than were returned. The payload and the dedupe key are never returned.
+    """
     from . import severity as sev
 
+    def _like(value: str) -> str:
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    def _when(value):
+        if value is None or value == "":
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        raw = str(value).strip()
+        if not raw:
+            return None
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(raw)
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+    try:
+        cap = int(limit)
+    except (TypeError, ValueError):
+        cap = 50
+    cap = 50 if cap > 50 else (1 if cap < 1 else cap)
+    where = ["n.project_id = :p"]
+    params: dict[str, Any] = {"p": project_id, "n": cap + 1}
+    start, end = _when(since), _when(until)
+    if start is not None:
+        where.append("n.created_at >= :since")
+        params["since"] = start
+    if end is not None:
+        where.append("n.created_at < :until")
+        params["until"] = end
+    needle = q if isinstance(q, str) else ("" if q is None else str(q))
+    if needle:
+        where.append("(n.subject ILIKE :q ESCAPE '\\' OR n.body ILIKE :q ESCAPE '\\')")
+        params["q"] = "%" + _like(needle) + "%"
     rows = [dict(r) for r in connection.execute(sql(
         "SELECT n.*, c.name AS contact_point, c.kind AS channel FROM notifications n "
-        "LEFT JOIN contact_points c ON c.id = n.contact_point_id WHERE n.project_id = :p "
-        "ORDER BY n.created_at DESC LIMIT :n"), {"p": project_id, "n": limit}).mappings()]
+        "LEFT JOIN contact_points c ON c.id = n.contact_point_id WHERE "
+        + " AND ".join(where) +
+        " ORDER BY n.created_at DESC, n.id DESC LIMIT :n"), params).mappings()]
+    capped = len(rows) > cap
+    rows = rows[:cap]
     ids = sorted({str(i) for r in rows for i in (_json(r.get("alert_ids"), []) or [])})
     labels = {r["id"]: (_json(r["labels"], {}) or {}) for r in connection.execute(sql(
         "SELECT id, labels FROM app_alerts WHERE id = ANY(:i)"), {"i": ids}).mappings()} \
@@ -956,9 +999,9 @@ def outbox(connection, project_id: str, limit: int = 50) -> list[dict[str, Any]]
         got = [labels[i] for i in (_json(r.get("alert_ids"), []) or []) if i in labels
                and labels[i].get("boss_meta") != "true"]
         out.append({**{k: (mon.iso(v) if isinstance(v, datetime) else v) for k, v in r.items()
-                       if k not in ("body", "payload", "dedupe_key")},
+                       if k not in ("payload", "dedupe_key")},
                     "sev": sev.worst(got)})
-    return out
+    return {"notifications": out, "capped": capped}
 
 
 __all__ = ["CONTACT_KINDS", "MAX_CHAT_ATTEMPTS", "contact_point_view", "create_contact_point",

@@ -185,16 +185,21 @@ export function parseLabelLines(text: string): Record<string, string> {
 // ── notifications (the outbox) ──────────────────────────────────────────────────────────────
 
 export type Notification = { id: string; kind: string; status: string; contactPoint: string | null; channel: string | null;
-  subject: string; attempts: number; errorWord: string | null; sentAt: string | null; createdAt: string | null;
+  subject: string; body: string | null; attempts: number; errorWord: string | null; sentAt: string | null; createdAt: string | null;
   /** SEV1–SEV4 of what it told, when the API says (null for a test message). */
   sev: Sev | null };
-export const parseNotifications = (w: unknown): Notification[] => arr(obj(w).notifications).map((x) => {
-  const o = obj(x);
-  const cp = o.contact_point && typeof o.contact_point === "object" ? optStr(obj(o.contact_point).name) : optStr(o.contact_point);
-  return { id: str(o.id), kind: str(o.kind), status: str(o.status), contactPoint: cp, channel: optStr(o.channel),
-           subject: str(o.subject), attempts: num(o.attempts), errorWord: optStr(o.error_word), sentAt: optStr(o.sent_at),
-           createdAt: optStr(o.created_at), sev: o.sev || o.severity ? sevOf(o.sev, o.severity) : null };
-});
+export const parseNotifications = (w: unknown): Notification[] & { capped: boolean } => {
+  const root = obj(w);
+  const rows = arr(root.notifications).map((x) => {
+    const o = obj(x);
+    const cp = o.contact_point && typeof o.contact_point === "object" ? optStr(obj(o.contact_point).name) : optStr(o.contact_point);
+    return { id: str(o.id), kind: str(o.kind), status: str(o.status), contactPoint: cp, channel: optStr(o.channel),
+             subject: str(o.subject), body: optStr(o.body), attempts: num(o.attempts), errorWord: optStr(o.error_word),
+             sentAt: optStr(o.sent_at), createdAt: optStr(o.created_at), sev: o.sev || o.severity ? sevOf(o.sev, o.severity) : null };
+  }) as Notification[] & { capped: boolean };
+  rows.capped = root.capped === true;
+  return rows;
+};
 
 // ── silences, maintenance windows, inhibit rules ────────────────────────────────────────────
 
@@ -230,7 +235,14 @@ const at = (path: string, projectId: string) => (projectId ? `${path}?${qs(proje
 export const useSignalSources = (projectId: string): Polled<Source[]> => usePolled(at("/v1/signal-sources", projectId), parseSources, () => POLL_MS);
 export const useContactPoints = (projectId: string): Polled<ContactPoint[]> => usePolled(at("/v1/contact-points", projectId), parseContactPoints, () => POLL_MS);
 export const usePolicies = (projectId: string): Polled<Policy[]> => usePolled(at("/v1/notification-policies", projectId), parsePolicies, () => POLL_MS);
-export const useNotifications = (projectId: string): Polled<Notification[]> => usePolled(at("/v1/notifications", projectId), parseNotifications, () => POLL_MS);
+export const useNotifications = (projectId: string, window?: { since?: string | null; until?: string | null; q?: string | null }): Polled<Notification[] & { capped: boolean }> => {
+  const params = new URLSearchParams();
+  if (projectId) params.set("project_id", projectId);
+  if (window?.since) params.set("since", window.since);
+  if (window?.until) params.set("until", window.until);
+  if (window?.q) params.set("q", window.q);
+  return usePolled(projectId ? `/v1/notifications?${params.toString()}` : null, parseNotifications, () => POLL_MS);
+};
 export const useSilences = (projectId: string): Polled<Silences> => usePolled(at("/v1/silences", projectId), parseSilences, () => POLL_MS);
 
 /** "30 s", "5 min", "4 h". */

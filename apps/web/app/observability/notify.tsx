@@ -182,20 +182,26 @@ function ContactPoints({ projectId, actor, cps, refresh }: Zone & { cps: ReturnT
       </button>
       {sends ? (
         !outbox.data ? <Skeleton testId="obs-sends-loading" /> : outbox.data.length === 0 ? <Empty>Nothing sent yet</Empty> : (
-          <ul className="obs-list" data-testid="obs-sends">
-            {outbox.data.slice(0, 15).map((n) => (
-              <li key={n.id} className="obs-line" data-testid="obs-send">
-                <span className="obs-adot" data-tone={n.status === "sent" ? "green" : n.status === "failed" || n.status === "dead" ? "red" : "grey"} aria-hidden />
-                <span className="inf-num inf-faint" title={lt.full(n.sentAt ?? n.createdAt)}>{whenWord(n.sentAt ?? n.createdAt, lt)}</span>
-                {n.sev ? <SevFlag sev={n.sev} /> : null}
-                <span className="obs-strong obs-alert-what" data-user-text>{n.subject || n.kind}</span>
-                {n.contactPoint ? <span className="inf-muted">{n.contactPoint}</span> : null}
-                <span className="ag-spacer" />
-                <span className="obs-chip" data-tone={n.status === "sent" ? "green" : n.status === "failed" || n.status === "dead" ? "red" : undefined}
-                      title={n.errorWord ?? `${n.attempts} attempt${n.attempts === 1 ? "" : "s"}`}>{n.status}</span>
-              </li>
-            ))}
-          </ul>
+          <>
+            <ul className="obs-list" data-testid="obs-sends">
+              {outbox.data.slice(0, 15).map((n) => (
+                <li key={n.id} className="obs-line" data-testid="obs-send">
+                  <span className="obs-adot" data-tone={n.status === "sent" ? "green" : n.status === "failed" || n.status === "dead" ? "red" : "grey"} aria-hidden />
+                  <span className="inf-num inf-faint" title={lt.full(n.sentAt ?? n.createdAt)}>{whenWord(n.sentAt ?? n.createdAt, lt)}</span>
+                  {n.sev ? <SevFlag sev={n.sev} /> : null}
+                  <div className="obs-strong obs-alert-what" data-user-text>
+                    <span>{n.subject || n.kind}</span>
+                    {n.body ? <p data-testid="obs-send-body">{n.body}</p> : null}
+                  </div>
+                  {n.contactPoint ? <span className="inf-muted">{n.contactPoint}</span> : null}
+                  <span className="ag-spacer" />
+                  <span className="obs-chip" data-tone={n.status === "sent" ? "green" : n.status === "failed" || n.status === "dead" ? "red" : undefined}
+                        title={n.errorWord ?? `${n.attempts} attempt${n.attempts === 1 ? "" : "s"}`}>{n.status}</span>
+                </li>
+              ))}
+            </ul>
+            {outbox.data.capped ? <p data-testid="obs-sends-capped">This list is the newest matches. Older matches are not on this page.</p> : null}
+          </>
         )
       ) : null}
       {adding ? <AddContactSheet projectId={projectId} actor={actor} onClose={() => setAdding(false)} onSaved={refresh} /> : null}
