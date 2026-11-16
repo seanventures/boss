@@ -2,6 +2,22 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.22]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.22.md](docs/community/RELEASE_NOTES_v1.0-rc10.22.md).
+
+### Added
+
+- A plan card shows the full title when it says more than the short label. The staging tile says the health reason. A review step says its error. A stopped mission says its error. An org agent says its configured model. A savings row says the action. A preview says why restart is off. A workforce card says the autonomy level. A workflow definition shows its description. A deploy card says when a host is shared.
+
+### Changed
+
+- The community candidate version is `1.0.0-rc.10.22`.
+
+### Release scope
+
+- This is the git tag of public main after rc10.21. It is not a live host deploy. No image tag or release-gate run is attached. The export record still cites `docs/community/RC9_VALIDATION.md`. A failed deploy phase still has no phase-only retry. A migration approval was not added.
+
 ## [v1.0-rc10.21]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.21.md](docs/community/RELEASE_NOTES_v1.0-rc10.21.md).
