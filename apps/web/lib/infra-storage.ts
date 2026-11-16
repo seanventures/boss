@@ -105,6 +105,8 @@ export type StorageAsk = {
   rule: { kind: string; words: string; preticked: boolean } | null;
   alternatives: { label: string; args: Record<string, string | number | boolean> }[];
   neverAutomatic: string[];
+  /** What this cleanup left for a person (unlabelled items, data volumes, non-scratch databases). */
+  leftAlone: string[];
 };
 
 export type StorageType = { key: string; label: string; gb: number; pct: number; rebuildable: boolean };
@@ -364,6 +366,7 @@ export function parseAsk(w: unknown): StorageAsk | null {
     rule: str(proposal.kind) ? { kind: str(proposal.kind), words: ruleWords(str(proposal.kind), obj(proposal.rule)), preticked: proposal.preticked !== false } : null,
     alternatives: arr(r.alternatives).map((a) => { const x = obj(a); const aa: Record<string, string | number | boolean> = {}; for (const [k, v] of Object.entries(obj(x.args))) aa[k] = typeof v === "number" || typeof v === "boolean" ? v : str(v); return { label: str(x.label), args: aa }; }).filter((a) => a.label),
     neverAutomatic: strs(r.never_automatic),
+    leftAlone: strs(r.left_alone),
   };
 }
 

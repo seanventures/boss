@@ -98,6 +98,8 @@ describe("the tier 3 question", () => {
     expect(ask.rule).toEqual({ kind: "backups", words: "keep 10 · 7 days · 20 GB cap", preticked: true });
     expect(ask.alternatives).toEqual([{ label: "Keep 20 instead", args: { keep_newest: 20 } }]);
     expect(ask.toDelete).toHaveLength(5);
+    expect(parseAsk({ id: "d", recommendation: { action: "storage_delete", tool: "storage.remove_backups", plan_hash: "ph", left_alone: ["unlabelled items", "data volumes", "non-scratch databases"] } })!.leftAlone)
+      .toEqual(["unlabelled items", "data volumes", "non-scratch databases"]);
     expect(parseAsk({ id: "d", recommendation: { action: "deploy" } })).toBeNull();
     expect(parseAsk(null)).toBeNull();
     expect(demoDecision("other")).toBeNull();

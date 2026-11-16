@@ -170,19 +170,92 @@ def admit_for_incident(connection: Any, incident: Mapping[str, Any], *, actor: s
     return str(admitted.get("run_id") or "") or None
 
 
-def on_resolved(connection: Any, incident: Mapping[str, Any], report: Mapping[str, Any]) -> None:
-    """Book the agent's spend on the incident so the card and the report can show it."""
+def on_resolved(connection: Any, incident: Mapping[str, Any], report: Mapping[str, Any], *,
+                notifier: Any = None) -> None:
+    """Book the agent's spend, then post the report to chat and to notifications."""
     run_id = incident.get("agent_run_id")
-    if not run_id:
-        return
+    if run_id:
+        try:
+            micros = connection.execute(text(
+                "SELECT COALESCE(sum(cost_usd_micros), 0) FROM llm_calls WHERE run_id = :r"),
+                {"r": run_id}).scalar() or 0
+            connection.execute(text("UPDATE storage_incidents SET spend_usd = :u WHERE id = :id"),
+                               {"u": float(micros) / 1e6, "id": incident["id"]})
+        except Exception:  # noqa: BLE001
+            _log.debug("infra agent spend not booked", exc_info=True)
     try:
-        micros = connection.execute(text(
-            "SELECT COALESCE(sum(cost_usd_micros), 0) FROM llm_calls WHERE run_id = :r"),
-            {"r": run_id}).scalar() or 0
-        connection.execute(text("UPDATE storage_incidents SET spend_usd = :u WHERE id = :id"),
-                           {"u": float(micros) / 1e6, "id": incident["id"]})
+        post_report(connection, incident, report, notifier=notifier)
     except Exception:  # noqa: BLE001
-        _log.debug("infra agent spend not booked", exc_info=True)
+        _log.debug("incident report not posted", exc_info=True)
+
+
+def post_report(connection: Any, incident: Mapping[str, Any], report: Mapping[str, Any], *,
+                notifier: Any = None) -> None:
+    """Post the incident report once to the incident thread and once to the console inbox.
+
+    `notifier` is the test seam (`.chat` and `.notify`). The default writes a local agent
+    message and a notifications row; it does not deliver mail, Slack, or a webhook.
+    """
+    if not incident.get("project_id"):
+        return
+    body = _report_body(incident, report)
+    if not str(body or "").strip():
+        return
+    sender = notifier or _LocalReportNotifier()
+    # A failed post rolls back its own savepoint. The resolve transaction stays usable.
+    try:
+        _in_savepoint(connection, lambda: sender.chat(connection, incident, body))
+    except Exception:  # noqa: BLE001
+        _log.debug("incident report not posted to chat", exc_info=True)
+    try:
+        _in_savepoint(connection, lambda: sender.notify(connection, incident, body))
+    except Exception:  # noqa: BLE001
+        _log.debug("incident report not posted to notifications", exc_info=True)
+
+
+def _in_savepoint(connection: Any, fn) -> None:
+    nested = getattr(connection, "begin_nested", None)
+    if nested is None:
+        fn()
+        return
+    with nested():
+        fn()
+
+
+def _report_body(incident: Mapping[str, Any], report: Mapping[str, Any]) -> str:
+    from . import storage_incidents
+
+    inc = dict(incident)
+    if isinstance(report, Mapping):
+        inc["report"] = dict(report)
+    return storage_incidents.report_markdown(None, inc)
+
+
+class _LocalReportNotifier:
+    """Chat on the incident's agent thread, and one console notification. No outbound delivery."""
+
+    def chat(self, connection: Any, incident: Mapping[str, Any], body: str) -> None:
+        from ..config import Settings
+        from . import thread_runs
+        from .agent_service import AgentService
+
+        thread_id = thread_runs.ensure_thread(
+            connection, project_id=str(incident["project_id"]), actor="agent:infra",
+            external_ref=f"storage_incident:{incident['id']}", agent_id=KEY)
+        AgentService(Settings()).append_message(
+            connection, thread_id=thread_id, role="assistant", content=body, agent_role=KEY)
+
+    def notify(self, connection: Any, incident: Mapping[str, Any], body: str) -> None:
+        from . import notify
+
+        project_id = str(incident["project_id"])
+        cp_id = notify.ensure_console(connection, project_id)
+        notify._enqueue(
+            connection, project_id, cp_id=cp_id, group_key=f"storage-report:{incident['id']}",
+            kind="digest", urgency="low", alert_ids=[], incident_id=None,
+            subject=f"Storage incident {incident['id']} resolved", body=body,
+            dedupe=f"storage-report:{incident['id']}", now=datetime.now(timezone.utc),
+            payload={"storage_incident_id": incident["id"], "host_id": incident.get("host_id")})
 
 
 def _note(connection: Any, incident: Mapping[str, Any], note: str) -> None:
@@ -196,4 +269,5 @@ def _note(connection: Any, incident: Mapping[str, Any], note: str) -> None:
 
 
 __all__ = ["AGENT_DOCUMENT", "ENVIRONMENT", "KEY", "MAX_USD_PER_DAY", "MAX_USD_PER_INCIDENT", "NAME",
-           "REPLICAS", "admit_for_incident", "ensure_deployed", "on_resolved", "spend_today_usd"]
+           "REPLICAS", "admit_for_incident", "ensure_deployed", "on_resolved", "post_report",
+           "spend_today_usd"]

@@ -542,6 +542,12 @@ def _execute_api(c: Any, engine: Any, inc: dict, plan: list, step: dict, items: 
 
 # ── tier 3: one card ────────────────────────────────────────────────────────────────────────
 
+#: What this cleanup will not touch (BOSSAPP-1192). Named on the card, beside never_automatic,
+#: so a person sees what was left for them. The policy chips stay the shorter words.
+LEFT_ALONE = ("unlabelled items", "data volumes", "non-scratch databases")
+_LEFT_ALONE_LINE = "Left alone: unlabelled items, data volumes, and non-scratch databases."
+
+
 def _ask(c: Any, inc: dict, plan: list, step: dict, items: Sequence[str]) -> dict[str, Any]:
     """ONE decision card carrying the rule proposal (docs/infra/INFRA_AGENT_API.md §7)."""
     from . import storage_incidents
@@ -563,7 +569,7 @@ def _ask(c: Any, inc: dict, plan: list, step: dict, items: Sequence[str]) -> dic
     reason = (f"{inc.get('cause_text') or 'Storage is critical.'} Tiers 1–2 freed {done_gb:.0f} GB; "
               f"{free_now:.0f} % is free, the target is {_f(inc.get('target_pct') or 25):.0f} %. "
               "This cannot be undone, so it needs a person — once: tick the rule and next time it "
-              "is automatic.")
+              "is automatic. " + _LEFT_ALONE_LINE)
     rec = {"action": "storage_delete", "incident_id": inc["id"], "host_id": inc["host_id"],
            "tool": step["tool"], "args": step.get("args") or {}, "plan_hash": step.get("plan_hash"),
            "items": len(items), "gb": round(gb, 2), "keeps": keeps,
@@ -575,6 +581,7 @@ def _ask(c: Any, inc: dict, plan: list, step: dict, items: Sequence[str]) -> dic
            "alternatives": ([{"label": "Keep 20 instead", "args": {**proposed, "keep_newest": 20}}]
                             if "keep_newest" in proposed else []),
            "never_automatic": ["unlabelled", "data volumes", "non-scratch databases"],
+           "left_alone": list(LEFT_ALONE),
            "ui": "StorageDeleteDecision"}
     decision_id = create_blocking_decision(c, inc.get("project_id") or storage_incidents.default_project(c),
                                            None, question, rec, {"estimated_cost_usd": 0.0}, reason,

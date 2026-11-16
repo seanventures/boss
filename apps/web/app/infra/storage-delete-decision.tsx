@@ -75,6 +75,7 @@ const NEVER_ICON: Record<string, React.ReactNode> = {
   "data volumes": <HardDrives size={11} aria-hidden />, unlabelled: <Prohibit size={11} aria-hidden />, "anything unlabelled": <Prohibit size={11} aria-hidden />,
 };
 const NEVER_DEFAULT = ["backups", "databases", "data volumes", "anything unlabelled"];
+const LEFT_ALONE_DEFAULT = ["unlabelled items", "data volumes", "non-scratch databases"];
 
 export function StorageDeleteDecision({ ask, projectId, actor, why, onAnswered, density = "page" }: {
   ask: StorageAsk; projectId: string; actor: string;
@@ -138,6 +139,7 @@ export function StorageDeleteDecision({ ask, projectId, actor, why, onAnswered, 
   const stays = whatStays(ask);
   const waited = waitedWord(ask.askedAt, now);
   const never = ask.neverAutomatic.length ? ask.neverAutomatic : NEVER_DEFAULT;
+  const leftAlone = ask.leftAlone.length ? ask.leftAlone : LEFT_ALONE_DEFAULT;
 
   return (
     <div className="sdd" data-density={density} data-testid="storage-delete-decision" data-decision={ask.decisionId}>
@@ -248,6 +250,12 @@ export function StorageDeleteDecision({ ask, projectId, actor, why, onAnswered, 
           <span className="sdd-label">Never automatic</span>
           <span className="sdd-chips">
             {never.map((w) => <span key={w} className="ia-chip" data-tone="red">{NEVER_ICON[w] ?? <Prohibit size={11} aria-hidden />}{w}</span>)}
+          </span>
+        </div>
+        <div className="sdd-box" data-testid="sdd-left-alone">
+          <span className="sdd-label">Left alone</span>
+          <span className="sdd-chips">
+            {leftAlone.map((w) => <span key={w} className="ia-chip">{w}</span>)}
           </span>
         </div>
       </aside>

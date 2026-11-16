@@ -50,6 +50,14 @@ describe("the deletion card", () => {
     for (const word of ["backups", "databases", "data volumes", "anything unlabelled"]) expect(document.body.textContent).toContain(word);
   });
 
+  it("lists what the agent left alone: unlabelled items, data volumes, non-scratch databases", async () => {
+    const { StorageDeleteDecision } = await import("../app/infra/storage-delete-decision");
+    await mount(<StorageDeleteDecision ask={{ ...ask, leftAlone: ["unlabelled items", "data volumes", "non-scratch databases"] }} projectId="p1" actor="alice" />);
+    const left = $('[data-testid="sdd-left-alone"]')!;
+    expect(left.textContent).toContain("Left alone");
+    for (const word of ["unlabelled items", "data volumes", "non-scratch databases"]) expect(left.textContent).toContain(word);
+  });
+
   it("offers the rule pre-ticked when the agent proposes it, and the one tap carries it with the plan hash", async () => {
     await open();
     const rule = $('[data-testid="sdd-make-rule"]') as HTMLInputElement;

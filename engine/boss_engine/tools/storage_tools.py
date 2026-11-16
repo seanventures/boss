@@ -110,13 +110,18 @@ def register_storage_tools(reg: ToolRegistry) -> None:
         kind = str(args["kind"])
         if kind not in storage_rules.KINDS or kind == "threshold":
             return {"ok": False, "error": f"kind must be one of {', '.join(k for k in storage_rules.KINDS if k != 'threshold')}"}
+        rule = dict(args.get("rule") or {})
+        if storage_incidents.duplicates_shipped_default(kind, rule):
+            return {"ok": False, "error": "that rule duplicates the shipped default; it is already in force"}
         with ctx.begin() as c:
             inc = storage_incidents.get(c, str(args["incident_id"]))
             if inc is None:
                 return {"ok": False, "error": "no such incident"}
-            decision_id = storage_incidents.propose_rule(c, inc, kind=kind, rule=dict(args.get("rule") or {}),
+            decision_id = storage_incidents.propose_rule(c, inc, kind=kind, rule=rule,
                                                          why=str(args.get("why") or "")[:500],
                                                          actor=actor or "agent:infra")
+        if not decision_id:
+            return {"ok": False, "error": "that rule duplicates the shipped default; it is already in force"}
         return {"ok": True, "decision_id": decision_id}
 
     @reg.tool(

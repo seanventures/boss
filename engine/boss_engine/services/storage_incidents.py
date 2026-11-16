@@ -523,9 +523,25 @@ def times_seen(connection: Any, cause_key: str, *, days: int = LEARN_WINDOW_DAYS
         {"c": cause_key, "since": _now() - timedelta(days=days)}).scalar() or 0)
 
 
+def duplicates_shipped_default(kind: str, rule: Optional[Mapping[str, Any]]) -> bool:
+    """True when every proposed field already matches the rule that ships enabled.
+
+    A backup rule has no shipped default, so it is never a duplicate. A partial telemetry
+    rule (`keep_days` only) still matches. An empty proposal does not.
+    """
+    shipped = storage_rules.DEFAULT_RULES.get(str(kind))
+    if shipped is None:
+        return False
+    proposed = dict(rule or {})
+    if not proposed:
+        return False
+    return all(key in shipped and shipped[key] == value for key, value in proposed.items())
+
+
 def learn(connection: Any, inc: Mapping[str, Any]) -> dict[str, Any]:
     """A cause seen LEARN_AFTER times in LEARN_WINDOW_DAYS, with no enabled rule for it yet →
-    a change-consent decision carrying the concrete rule (`storage_rule`)."""
+    a change-consent decision carrying the concrete rule (`storage_rule`). A proposal that
+    only repeats a shipped default is not opened; the default is already in force."""
     cause_key = str(inc.get("cause_key") or "")
     out: dict[str, Any] = {"rule_added": None, "rule_proposed": None}
     if cause_key not in RULE_FOR_CAUSE:
@@ -534,6 +550,10 @@ def learn(connection: Any, inc: Mapping[str, Any]) -> dict[str, Any]:
     existing = storage_rules.rule_for(connection, kind, str(inc["host_id"]))
     if existing is not None and existing.get("source") in ("learned", "operator"):
         out["rule_added"] = existing
+        return out
+    if duplicates_shipped_default(kind, rule):
+        if existing is not None and existing.get("enabled", True):
+            out["rule_added"] = existing
         return out
     if times_seen(connection, cause_key) < LEARN_AFTER:
         return out
@@ -549,12 +569,19 @@ def learn(connection: Any, inc: Mapping[str, Any]) -> dict[str, Any]:
     decision_id = propose_rule(connection, inc, kind=kind, rule=rule,
                                why=f"{cause_key} was seen {times_seen(connection, cause_key)} "
                                    f"times in {LEARN_WINDOW_DAYS} days")
+    if not decision_id:
+        if existing is not None and existing.get("enabled", True):
+            out["rule_added"] = existing
+        return out
     out["rule_proposed"] = {"decision_id": decision_id, "kind": kind, "rule": rule}
     return out
 
 
 def propose_rule(connection: Any, inc: Mapping[str, Any], *, kind: str, rule: Mapping[str, Any],
-                 why: str, actor: str = "agent:infra") -> str:
+                 why: str, actor: str = "agent:infra") -> Optional[str]:
+    """Open a `storage_rule` card. None when the proposal copies a shipped default."""
+    if duplicates_shipped_default(kind, rule):
+        return None
     from .core import create_blocking_decision
 
     project_id = inc.get("project_id") or default_project(connection)
