@@ -246,6 +246,7 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
                            onChecked={() => { detail.refresh(); pulse.refresh(); }}
                            onDeploy={() => go({ view: "sources", app: null, atab: null }, "push")} />
             <a className="inf-link" href={logsHref("deployment", targetId)} data-testid="obs-app-logs"
+               title="Opens the Activity log, not this app's requests."
                onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(logsHref("deployment", targetId)); } }}>Logs ↗</a>
             <span className="ag-spacer" />
             <button type="button" className="ag-btn" data-testid="obs-app-ask" onClick={ask}>Ask BOSS</button>
