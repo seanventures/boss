@@ -92,6 +92,28 @@ function areaIsAgents(): boolean {
   }
 }
 
+/** Why the control plane could not be reached. A trimmed reason is the sentence. Blank is nothing. */
+export function blockedReasonSentence(reason: string | null | undefined): string | null {
+  const trimmed = reason?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** Beside "Could not reach the control plane". More than six words is a paragraph. */
+export function ControlPlaneUnreachable({ title, sentence }: {
+  title?: string | null;
+  sentence: string | null;
+}) {
+  const Tag = sentence && sentence.split(/\s+/).filter(Boolean).length > 6 ? "p" : "span";
+  return (
+    <>
+      <p className="detail" title={title ?? undefined}>
+        Could not reach the control plane
+      </p>
+      {sentence ? <Tag data-testid="wf-reach-why" data-user-text>{sentence}</Tag> : null}
+    </>
+  );
+}
+
 /**
  * Agents: every agent, keyed by `role_key`, the thing a workflow step's `captain` names, so
  * the roster, the team, a step's agent picker and an agent's "Used in" all count the same.
@@ -279,9 +301,10 @@ export function WorkforceArea(
 
   if (!workforce.apiReachable) {
     return (
-      <p className="detail" title={workforce.blockedReason}>
-        Could not reach the control plane
-      </p>
+      <ControlPlaneUnreachable
+        title={workforce.blockedReason}
+        sentence={blockedReasonSentence(workforce.blockedReason)}
+      />
     );
   }
 

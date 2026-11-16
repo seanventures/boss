@@ -40,6 +40,30 @@ export function channelSentence(s: Send): string {
   return "Exported as a patch for you to send.";
 }
 
+/** Why this channel. A trimmed reason, or nothing when blank. */
+export function channelWhySentence(why: string | null | undefined): string | null {
+  const trimmed = why?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** The channel line, with why beside it. More than six words is a paragraph. */
+export function SendChannel({ send }: { send: Send }) {
+  const sentence = channelWhySentence(send.channel_why);
+  const long = !!sentence && sentence.split(/\s+/).filter(Boolean).length > 6;
+  return (
+    <>
+      <div className="sfx-send-where" data-testid="sfx-send-channel" title={send.channel_why || undefined}>
+        {channelSentence(send)}
+      </div>
+      {sentence
+        ? (long
+          ? <p data-testid="sfx-send-channel-why" data-user-text>{sentence}</p>
+          : <span data-testid="sfx-send-channel-why" data-user-text>{sentence}</span>)
+        : null}
+    </>
+  );
+}
+
 export function SendSheet({ projectId, actor, selfFixId, onClose, onSent }: {
   projectId: string; actor: string; selfFixId: string; onClose: () => void; onSent?: (s: Send) => void;
 }) {
@@ -125,9 +149,7 @@ export function SendSheet({ projectId, actor, selfFixId, onClose, onSent }: {
       {!send && !error ? <div className="sfx-sub">Building the preview…</div> : null}
       {send ? (
         <>
-          <div className="sfx-send-where" data-testid="sfx-send-channel" title={send.channel_why || undefined}>
-            {channelSentence(send)}
-          </div>
+          <SendChannel send={send} />
           <div className="sfx-send-similar" data-testid="sfx-send-similar" title={send.dedupe?.why || "Searched by the fix's class signature"}>
             Similar: {DEDUPE[send.dedupe?.state ?? "skipped"]}
             {send.dedupe?.match ? (

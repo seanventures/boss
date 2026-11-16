@@ -43,6 +43,12 @@ export function agentDescriptionSentence(description: string | null | undefined)
   return trimmed ? trimmed : null;
 }
 
+/** Visible last-test summary. Blank is nothing. A sentence over six words is a paragraph. */
+export function lastTestSummarySentence(summary: string | null | undefined): string | null {
+  const trimmed = summary?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
 /** Visible check issues. Errors first, then warnings. Blank is nothing. */
 export function validationIssueSentence(
   errors: readonly string[] | null | undefined,
@@ -135,6 +141,8 @@ export function ProfileRow({ agent, feed, actor }: { agent: StudioAgent; feed: A
   const descriptionLong = !!description && description.split(/\s+/).filter(Boolean).length > 6;
   const issues = validationIssueSentence(validation.errors, validation.warnings);
   const issuesLong = !!issues && issues.split(/\s+/).filter(Boolean).length > 6;
+  const lastSummary = lastTest ? lastTestSummarySentence(lastTest.result?.summary) : null;
+  const lastSummaryLong = !!lastSummary && lastSummary.split(/\s+/).filter(Boolean).length > 6;
   return (
     <div className="wf-ag-profile" data-testid={`agent-profile-${agent.agent_key}`}>
       <div className="wf-ag-profile-head">
@@ -180,7 +188,15 @@ export function ProfileRow({ agent, feed, actor }: { agent: StudioAgent; feed: A
             : null}
           </div>
           {lastTest ? (
-            <div><dt>Last test</dt><dd title={lastTest.result?.summary}>{words(lastTest.status)}</dd></div>
+            <div>
+              <dt>Last test</dt>
+              <dd title={lastTest.result?.summary}>{words(lastTest.status)}</dd>
+              {lastSummary
+                ? (lastSummaryLong
+                  ? <p data-testid={`agent-profile-last-test-${agent.agent_key}`} data-user-text>{lastSummary}</p>
+                  : <span data-testid={`agent-profile-last-test-${agent.agent_key}`} data-user-text>{lastSummary}</span>)
+                : null}
+            </div>
           ) : null}
         </dl>
       ) : null}

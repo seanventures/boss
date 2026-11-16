@@ -3,11 +3,13 @@
  * Blank or whitespace issues say nothing. Errors come first, then warnings. Each one is
  * trimmed, then joined with "; ". More than six words is a paragraph; six or fewer is a span.
  * The sentence is validationIssueSentence(validation.errors, validation.warnings).
- * The skills list and the last-test summary stay off the row.
+ * The skills list stays a count. The last-test summary is shown beside Last test,
+ * not inside Checks and not in the skills count.
  *
  * Breaks if the issues stay title-only, padding survives, a blank issue still renders,
  * warnings precede errors, a long sentence is a span, Passed or Pending is replaced,
- * the skills list or the last-test summary is shown, or the row stops calling
+ * the skills list shows a name, the last-test summary moves into Checks or the skills
+ * count, the summary disappears from beside Last test, or the row stops calling
  * validationIssueSentence(validation.errors, validation.warnings).
  */
 import { readFileSync } from "node:fs";
@@ -166,11 +168,18 @@ describe("the profile checks say what failed", () => {
     expect(joinWhy?.hasAttribute("data-user-text")).toBe(true);
     expect(join.textContent).not.toContain("  schema gap  ");
     expect(join.textContent).not.toContain(SKILL);
-    expect(join.textContent).not.toContain(SUMMARY);
+    expect(joinDd.textContent).not.toContain(SUMMARY);
     const skills = join.querySelector("dd[title='vault-reader']");
     expect(skills?.textContent).toBe("1");
+    expect(skills?.textContent).not.toContain(SUMMARY);
     const last = [...join.querySelectorAll("dd")].find((dd) => dd.getAttribute("title") === SUMMARY);
     expect(last?.textContent).toBe("failed");
+    const lastWhy = join.querySelector("[data-testid='agent-profile-last-test-join']");
+    expect(lastWhy?.tagName).toBe("SPAN");
+    expect(lastWhy?.textContent).toBe(SUMMARY);
+    expect(last?.contains(lastWhy)).toBe(false);
+    expect(joinDd.contains(lastWhy)).toBe(false);
+    expect(joinWhy?.textContent).not.toContain(SUMMARY);
   });
 
   it("says nothing when the issues are blank and keeps Passed, Pending, and the title", async () => {
@@ -186,7 +195,13 @@ describe("the profile checks say what failed", () => {
     expect(blankDd.textContent).toBe("Pending");
     expect(blankDd.getAttribute("title")).toBe("   \n\t  \n ");
     expect(blank.textContent).not.toContain(SKILL);
-    expect(blank.textContent).not.toContain(SUMMARY);
+    expect(blankDd.textContent).not.toContain(SUMMARY);
+    const blankLast = [...blank.querySelectorAll("dd")].find((dd) => dd.getAttribute("title") === SUMMARY);
+    expect(blankLast?.textContent).toBe("failed");
+    const blankWhy = blank.querySelector("[data-testid='agent-profile-last-test-blank']");
+    expect(blankWhy?.textContent).toBe(SUMMARY);
+    expect(blankDd.contains(blankWhy)).toBe(false);
+    expect(blankLast?.contains(blankWhy)).toBe(false);
 
     const passed = profile(shown, "passed");
     const passedDd = checksDd(passed);
@@ -201,7 +216,11 @@ describe("the profile checks say what failed", () => {
     expect(pendingDd.hasAttribute("title")).toBe(false);
     const last = [...pending.querySelectorAll("dd")].find((dd) => dd.getAttribute("title") === SUMMARY);
     expect(last?.textContent).toBe("failed");
-    expect(pending.textContent).not.toContain(SUMMARY);
+    expect(pendingDd.textContent).not.toContain(SUMMARY);
+    const pendingWhy = pending.querySelector("[data-testid='agent-profile-last-test-pending']");
+    expect(pendingWhy?.textContent).toBe(SUMMARY);
+    expect(pendingDd.contains(pendingWhy)).toBe(false);
+    expect(last?.contains(pendingWhy)).toBe(false);
   });
 
   it("calls validationIssueSentence with the check errors and warnings", () => {
@@ -221,5 +240,7 @@ describe("the profile checks say what failed", () => {
     expect(code).not.toContain("validationIssueSentence(lastTest");
     expect(code).toContain("(version.requested_skills ?? []).length");
     expect(code).toContain("title={lastTest.result?.summary}");
+    expect(code).toContain("lastTestSummarySentence(lastTest.result?.summary)");
+    expect(code).toContain("agent-profile-last-test-${agent.agent_key}");
   });
 });
