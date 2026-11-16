@@ -1,6 +1,8 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
+
+import { logHref } from "../lib/log-url";
 
 /**
  * WHAT HAPPENED AND WHAT TO DO, instead of Next's "Application error".
@@ -10,7 +12,7 @@ import React from "react";
  * any refusal landed on Next's generic page with no word about what failed and no way back to
  * where the operator was. This boundary keeps the console's chrome-free page honest: it says a
  * request failed, gives the reason when there is one (and the error id the server logged when
- * production hides the message), and offers the three ways forward.
+ * production hides the message), and offers the ways forward.
  *
  * IT DOES NOT KNOW WHAT FAILED, so it does not claim to. The first version was headed "That
  * action did not go through" and promised "Nothing you had typed was sent twice". This boundary
@@ -28,6 +30,11 @@ export default function ConsoleError({
   const message = (error?.message || "").trim();
   // Production replaces a server error's message with this sentence; it says nothing useful.
   const hidden = !message || /omitted in production builds/i.test(message);
+  // The digest is Next's id for this page, not a stored activity row, so the link does not
+  // search for it. The org is copied from the URL after mount; the first href has no window,
+  // which is what the server rendered, so hydration matches.
+  const [activityHref, setActivityHref] = useState(() => logHref({}, ""));
+  useEffect(() => { setActivityHref(logHref({})); }, []);
   return (
     <main className="org-gate" data-testid="console-error">
       <div className="org-gate-inner">
@@ -39,8 +46,8 @@ export default function ConsoleError({
         </p>
         {error?.digest ? (
           <p className="org-gate-sub">
-            Error id <code className="mono">{error.digest}</code>, the same id is in the console
-            container&apos;s log next to the full reason.
+            Error id <code className="mono">{error.digest}</code> is the page digest, not a stored
+            activity row. The same id is in the container log next to the full reason.
           </p>
         ) : null}
         <p className="org-gate-sub">
@@ -56,6 +63,9 @@ export default function ConsoleError({
             Reload this page
           </button>
           <a className="cap-btn" href="/">Back to Command Center</a>
+          {error?.digest ? (
+            <a className="cap-btn" href={activityHref}>Open the Activity log</a>
+          ) : null}
         </div>
       </div>
     </main>
