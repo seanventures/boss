@@ -401,13 +401,31 @@ def _isolated_copy(cwd: Path) -> Path:
     dest = Path(tempfile.mkdtemp(prefix="boss-review-copy-"))
     tree = dest / Path(cwd).name
     shutil.copytree(cwd, tree, symlinks=True, ignore=_COPY_IGNORE, dirs_exist_ok=False)
-    for heavy in ("node_modules", ".git"):
-        src = Path(cwd) / heavy
-        if src.exists() and not (tree / heavy).exists():
-            try:
-                os.symlink(src, tree / heavy)
-            except OSError:
-                pass
+    return _link_heavy(tree, Path(cwd))
+
+
+def _link_heavy(tree: Path, cwd: Path) -> Path:
+    """The heavy directories the copy skipped, without a way back into the live tree
+    (BOSSAPP-1325). `.git` is COPIED: a symlink let a read-only seat write the live repository's
+    config and hooks, which BOSS's own git then ran. `node_modules` stays a link only when the
+    seat cannot write through it (no write bit for anyone but its owner, BOSS); a node_modules a
+    run's uid wrote is left out: the reviewer judges the code, not the installed packages."""
+    git = cwd / ".git"
+    if git.exists() and not (tree / ".git").exists():
+        try:
+            if git.is_dir():
+                shutil.copytree(git, tree / ".git", symlinks=True)
+            else:
+                shutil.copy2(git, tree / ".git")          # a worktree's `.git` file
+        except OSError:
+            pass
+    modules = cwd / "node_modules"
+    if modules.is_dir() and not (tree / "node_modules").exists():
+        try:
+            if os.stat(modules).st_mode & 0o022 == 0 and os.stat(modules).st_uid == os.getuid():
+                os.symlink(modules, tree / "node_modules")
+        except OSError:
+            pass
     return tree
 
 

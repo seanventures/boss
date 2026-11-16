@@ -1352,7 +1352,7 @@ class Settings(BaseSettings):
     self_fix_health_minutes: int = Field(default=10, alias="BOSS_SELF_FIX_HEALTH_MINUTES", ge=1)
     # The self-source mirror (spec §6.1): a bare clone of the install's checkout, seeded by the
     # host self-installer (`boss self-fix seed`), mounted read-write into the API and the worker.
-    self_fix_source: str = Field(default="/var/lib/boss/selfsrc/boss.git",
+    self_fix_source: str = Field(default="/var/lib/boss/private/selfsrc/boss.git",
                                  alias="BOSS_SELF_FIX_SOURCE")
     # Where self-fix builds check BOSS out and run its tests ("" = <artifact root>/self-fix).
     self_fix_work_dir: str = Field(default="", alias="BOSS_SELF_FIX_WORK_DIR")

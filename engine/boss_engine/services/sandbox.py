@@ -80,6 +80,14 @@ def _shared_tool_caches() -> dict:
         pw = Path(_TOOL_CACHE_ROOT) / "playwright"
         npm.mkdir(parents=True, exist_ok=True)
         pw.mkdir(parents=True, exist_ok=True)
+        # THE NPM CACHE IS BOSS'S (BOSSAPP-1325): it holds every project's package tarballs,
+        # private ones included. A sandboxed run has its own npm cache (sandbox_identity.env);
+        # only the browsers stay readable to it.
+        import os as _os_
+
+        _os_.chmod(Path(_TOOL_CACHE_ROOT), 0o711)
+        _os_.chmod(npm, 0o700)
+        _os_.chmod(pw, 0o755)
     except Exception as exc:  # noqa: BLE001
         # An unwritable cache path must not stop a build: fall back to the tool defaults and
         # simply be as slow as before.
@@ -301,8 +309,11 @@ class EphemeralSandbox:
             root = Path(configured).expanduser().resolve()
         else:
             root = Path(tempfile.gettempdir()) / "boss-sandboxes"
-        root.mkdir(parents=True, exist_ok=True)
-        return root
+        # Owner-only (private_dirs, BOSSAPP-1325): an unisolated sandbox's tree is another
+        # project's code to every sandboxed uid on the machine.
+        from .private_dirs import ensure_private
+
+        return ensure_private(root)
 
     def provision(
         self, owner: str, repo: str, *, base_branch: str = "main",
@@ -919,7 +930,15 @@ class EphemeralSandbox:
             env = {"PATH": os.defpath, "HOME": str(self.path), "LANG": "C.UTF-8",
                    "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1",
                    "GIT_CONFIG_GLOBAL": os.devnull, "GIT_ATTR_NOSYSTEM": "1"}
-            argv = ["git", "-C", str(self.path), *own_config, *args]
+            # NO HOOK OR FSMONITOR FROM THE TREE RUNS WITH BOSS'S AUTHORITY (BOSSAPP-1325): a
+            # run's uid can write the workspace's .git (and, before, a reviewer's copy linked to
+            # it). Git that runs as BOSS — provisioning with its credential, or a workspace with
+            # no sandbox uid — never executes what the tree configured; git that runs AS the
+            # workload's uid may (it has nothing the workload has not).
+            as_boss = provisioning or isolated is None
+            no_tree_code = (["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
+                            if as_boss else [])
+            argv = ["git", "-C", str(self.path), *no_tree_code, *own_config, *args]
             cwd = str(self.path)
             if provisioning:
                 env.update(getattr(self, "_git_env", {}) or {})

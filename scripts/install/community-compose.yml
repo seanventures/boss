@@ -392,13 +392,13 @@ services:
       # installed self-fixes over the release (written by the host self-installer; empty = the
       # release as it is), and BOSS's own source, mirrored read-only for its fix builds.
       BOSS_STACK_HEAD: ${BOSS_STACK_HEAD:-}
-      BOSS_SELF_FIX_SOURCE: /var/lib/boss/selfsrc/boss.git
+      BOSS_SELF_FIX_SOURCE: /var/lib/boss/private/selfsrc/boss.git
       # LOCAL-FIRST PROJECTS (BOSSAPP-915): one bare git repository per local project, and the
       # mirrors GitHub builds fall back to during an outage, in a named volume shared by the API
       # and the worker (where sandboxes clone). Import local code reads only from the import
       # directory: .boss/import beside the install, mounted read-only.
       BOSS_LOCAL_REPO_ROOT: /var/lib/boss/repos
-      BOSS_LOCAL_IMPORT_ROOT: /var/lib/boss/import
+      BOSS_LOCAL_IMPORT_ROOT: /var/lib/boss/private/import
       # BOSS'S OWN TELEMETRY (BOSSAPP-867, docs/community/SELF_TELEMETRY.md). All off unless .env
       # sets them; each default equals config.py's. Traces and Sentry also need their packages in
       # the image (pip install -r apps/api/requirements-observability.txt).
@@ -697,11 +697,11 @@ services:
       - boss_community_toolchain_cache_v2:/var/lib/boss/toolchain-cache
       # BOSS's own source for self-fix builds, read-only (`boss self-fix seed` fills it on the
       # host; install.sh creates the directory so Docker never makes it as root).
-      - ../../.boss/selfsrc:/var/lib/boss/selfsrc:ro
+      - ../../.boss/selfsrc:/var/lib/boss/private/selfsrc:ro
       # Local projects' repositories and GitHub mirrors (services/local_repo.py), and the one
       # folder Import local code may read from this machine (read-only).
       - boss_community_repos:/var/lib/boss/repos
-      - ../../.boss/import:/var/lib/boss/import:ro
+      - ../../.boss/import:/var/lib/boss/private/import:ro
       - boss_community_build_services_secret:/run/boss-build-services
       # ONE Codex session shared by api and worker. A subscription CLI holds a rotating
       # credential: every refresh revokes the previous one, so two containers each holding
@@ -772,13 +772,13 @@ services:
       # installed self-fixes over the release (written by the host self-installer; empty = the
       # release as it is), and BOSS's own source, mirrored read-only for its fix builds.
       BOSS_STACK_HEAD: ${BOSS_STACK_HEAD:-}
-      BOSS_SELF_FIX_SOURCE: /var/lib/boss/selfsrc/boss.git
+      BOSS_SELF_FIX_SOURCE: /var/lib/boss/private/selfsrc/boss.git
       # LOCAL-FIRST PROJECTS (BOSSAPP-915): one bare git repository per local project, and the
       # mirrors GitHub builds fall back to during an outage, in a named volume shared by the API
       # and the worker (where sandboxes clone). Import local code reads only from the import
       # directory: .boss/import beside the install, mounted read-only.
       BOSS_LOCAL_REPO_ROOT: /var/lib/boss/repos
-      BOSS_LOCAL_IMPORT_ROOT: /var/lib/boss/import
+      BOSS_LOCAL_IMPORT_ROOT: /var/lib/boss/private/import
       # BOSS'S OWN TELEMETRY (BOSSAPP-867, docs/community/SELF_TELEMETRY.md). All off unless .env
       # sets them; each default equals config.py's. Traces and Sentry also need their packages in
       # the image (pip install -r apps/api/requirements-observability.txt).
@@ -1002,11 +1002,11 @@ services:
       - boss_community_toolchain_cache_v2:/var/lib/boss/toolchain-cache
       # BOSS's own source for self-fix builds, read-only (`boss self-fix seed` fills it on the
       # host; install.sh creates the directory so Docker never makes it as root).
-      - ../../.boss/selfsrc:/var/lib/boss/selfsrc:ro
+      - ../../.boss/selfsrc:/var/lib/boss/private/selfsrc:ro
       # Local projects' repositories and GitHub mirrors (services/local_repo.py), and the one
       # folder Import local code may read from this machine (read-only).
       - boss_community_repos:/var/lib/boss/repos
-      - ../../.boss/import:/var/lib/boss/import:ro
+      - ../../.boss/import:/var/lib/boss/private/import:ro
       # ONE Codex session shared by api and worker. A subscription CLI holds a rotating
       # credential: every refresh revokes the previous one, so two containers each holding
       # their own copy revoke each other — api detects, worker builds, and whichever runs
