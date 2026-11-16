@@ -42,6 +42,22 @@ export function spendWord(spendMicros: number, included: boolean, estimated: boo
   return { text: "—", tip: "No metered spend" };
 }
 
+/** A failed call's error, visible. Nothing when the call succeeded, or the error is blank. */
+export function callErrorSentence(ok: boolean, error: string | null | undefined): string | null {
+  if (ok) return null;
+  const trimmed = error?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** The error beside ok / ✗. More than six words is a paragraph. */
+export function CallErrorLine({ sentence }: { sentence: string | null }) {
+  if (!sentence) return null;
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  return long
+    ? <p data-testid="obs-call-error" data-user-text>{sentence}</p>
+    : <span data-testid="obs-call-error" data-user-text>{sentence}</span>;
+}
+
 export function GroupDrawer({ projectId, group, keyName, row, since, onClose }: {
   projectId: string; group: Group; keyName: string; row: ModelGroupRow | null; since: string | null; onClose: () => void;
 }) {
@@ -105,6 +121,7 @@ export function GroupDrawer({ projectId, group, keyName, row, since, onClose }: 
                 <span className="inf-num" title="Tokens in / out">{compact(c.tokensIn)}/{compact(c.tokensOut)}</span>
                 <span className="inf-num">{ms(c.latencyMs)}</span>
                 <span className={c.ok ? "obs-ok" : "obs-bad"} title={c.ok ? "OK" : c.error ?? "Failed"} aria-label={c.ok ? "OK" : "Failed"}>{c.ok ? "ok" : "✗"}</span>
+                <CallErrorLine sentence={callErrorSentence(c.ok, c.error)} />
                 <span className="inf-num inf-faint" title="Retries">{c.retries ? `↻${c.retries}` : ""}</span>
                 {c.runId ? (
                   <a className="inf-link" href={buildHref(c.runId)} title="Open the build that made this"
