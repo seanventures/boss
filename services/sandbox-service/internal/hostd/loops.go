@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/cpclient"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/cpclient"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
 )
 
 // watchLoop long-polls desired state. Level-based: each changed answer is the

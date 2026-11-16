@@ -47,9 +47,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/lbd"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/pki"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/lbd"
+	"github.com/seanventures/boss/services/sandbox-service/internal/pki"
 )
 
 func env(key, def string) string {

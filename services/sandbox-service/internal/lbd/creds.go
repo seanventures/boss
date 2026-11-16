@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/pki"
+	"github.com/seanventures/boss/services/sandbox-service/internal/pki"
 )
 
 // Creds is the director's fleet identity: a 24 h certificate from the

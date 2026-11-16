@@ -15,7 +15,7 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
 )
 
 var (

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/contract"
+	"github.com/seanventures/boss/services/sandbox-service/internal/contract"
 )
 
 const DefaultLeaseTTL = 120 * time.Second

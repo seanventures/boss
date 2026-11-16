@@ -6,8 +6,8 @@ import (
 	gopath "path"
 	"strings"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/guest"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/guest"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
 )
 
 // Route kinds (guest_calls.route).

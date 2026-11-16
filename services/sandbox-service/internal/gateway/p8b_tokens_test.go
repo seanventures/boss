@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/guest"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/guest"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
 )
 
 // P8b S12/S13 (BOSSAPP-1073, 1074): the MCP route takes the model gateway's

@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/backend"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/contract"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/job"
+	"github.com/seanventures/boss/services/sandbox-service/internal/backend"
+	"github.com/seanventures/boss/services/sandbox-service/internal/contract"
+	"github.com/seanventures/boss/services/sandbox-service/internal/job"
 )
 
 // DefaultTaskTimeout bounds a task when the submit body carries no timeout.

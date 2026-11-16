@@ -5,7 +5,7 @@ the project header and its tiles, the Health environments, the agents' `list_dep
 the Deploy step when it explains a target it could not use. Before this, each read its own
 `deployment_targets` query, and they disagreed on the laptop's Hello World (2026-11-08):
 
-  * the header said "hello world rest api · 2.29.2.202:8007" and the card linked :8007 while
+  * the header said "hello world rest api · 192.0.2.202:8007" and the card linked :8007 while
     the only deploy there had FAILED — an address was shown as live because a target row held
     it, not because anything answered there;
   * the card's status said "Unknown" (health with no probe) instead of "Last deploy failed";

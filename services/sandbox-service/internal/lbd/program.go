@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/lbd/ipvs"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/lbd/ipvs"
 )
 
 // OverrideTTL bounds a pushed withdraw's precedence over desired state. The

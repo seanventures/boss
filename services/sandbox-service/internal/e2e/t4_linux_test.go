@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/guest"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/netpol"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/vmm"
+	"github.com/seanventures/boss/services/sandbox-service/internal/guest"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/netpol"
+	"github.com/seanventures/boss/services/sandbox-service/internal/vmm"
 )
 
 func control(t *testing.T, m vmm.Manager, id, op string) *guest.Response {

@@ -31,7 +31,7 @@ const HASH = "sha256:" + "a".repeat(64);
 function wireCard(needsReason: boolean) {
   return {
     id: "dec_deploy2", kind: "deploy", label: "Deploy PR #2 (not merged) to Staging",
-    detail: "Deploy paramg/helpdesk-ai-v3@99b569f71330 to 2.29.2.202?",
+    detail: "Deploy paramg/helpdesk-ai-v3@99b569f71330 to 192.0.2.202?",
     mini: [{ label: "PR #2 not merged", state: "failed" }, { label: "Staging · you", state: "waiting" },
            { label: "Smoke test", state: "todo" }],
     action: { label: "Approve deploy", href: "?drawer=needs:dec_deploy2", decision_id: "dec_deploy2" },

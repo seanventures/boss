@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
 )
 
 // DefaultPushPort is boss-lbd's mTLS listener for host pushes.

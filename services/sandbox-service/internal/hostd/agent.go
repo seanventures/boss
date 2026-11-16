@@ -21,14 +21,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/cache"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/cpclient"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/gateway"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/lbd"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/netpol"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/pki"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/vmm"
+	"github.com/seanventures/boss/services/sandbox-service/internal/cache"
+	"github.com/seanventures/boss/services/sandbox-service/internal/cpclient"
+	"github.com/seanventures/boss/services/sandbox-service/internal/gateway"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/lbd"
+	"github.com/seanventures/boss/services/sandbox-service/internal/netpol"
+	"github.com/seanventures/boss/services/sandbox-service/internal/pki"
+	"github.com/seanventures/boss/services/sandbox-service/internal/vmm"
 )
 
 // Config is everything the agent needs. Zero durations take the LLD defaults.

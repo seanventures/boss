@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/vmm"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/vmm"
 )
 
 func perRunPool(dep string, minWarm int) hostapi.DesiredState {

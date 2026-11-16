@@ -1,7 +1,7 @@
 """NEEDS YOU, in words a person reads at a glance (contract §2 `needs_you[]`).
 
 Every card is built from the decision's STRUCTURED data, never from its question text:
-"Deploy paramg/helpdesk-ai-demo@cfe343f1c6cd to 2.29.2.202" was the stack deploy's question
+"Deploy paramg/helpdesk-ai-demo@cfe343f1c6cd to 192.0.2.202" was the stack deploy's question
 copied onto the card. Now:
 
   * a stack deploy (`deploy_stack`) → "Deploy PR #3 to Staging": the pull request whose merge

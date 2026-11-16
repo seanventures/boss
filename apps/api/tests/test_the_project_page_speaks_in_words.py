@@ -1,7 +1,7 @@
 """The Project page speaks in words a person reads at a glance (GAPS 4, 5, 7, 8, 9, 11, 12, 16, 17).
 
 helpdesk-ai-demo, 2026-11-06: Needs you said "Deploy paramg/helpdesk-ai-demo@cfe343f1c6cd to
-2.29.2.202" twice — once for a commit three releases old, once for the very commit already live;
+192.0.2.202" twice — once for a commit three releases old, once for the very commit already live;
 every title was the brief's first words ("Finish the visual refresh the last"); "This week" drew
 "PR #3 opened" four times; Deployments history said "awaiting_approval · by usr_…"; Try it had a
 bare "Demo login" with no user name. These tests drive the same story (apps/api/tests/

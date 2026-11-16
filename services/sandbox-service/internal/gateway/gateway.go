@@ -30,9 +30,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/guest"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/pki"
+	"github.com/seanventures/boss/services/sandbox-service/internal/guest"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/pki"
 )
 
 // MaxConnsPerVM is the per-VM connection cap (LLD §3.6).

@@ -1,4 +1,4 @@
-module github.com/seanheiney/boss/services/sandbox-service
+module github.com/seanventures/boss/services/sandbox-service
 
 go 1.22
 

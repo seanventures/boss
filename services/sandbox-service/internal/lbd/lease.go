@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
 )
 
 type (

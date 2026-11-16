@@ -74,7 +74,7 @@ def test_a_deploy_of_an_open_pull_requests_head_is_never_named_for_another_pr(
                                        "value": "Ships 1 commit beyond the serving commit fa64985."},
                                       {"label": "99b569f · no BOSS run · unknown, NOT reviewed",
                                        "value": "More tests"}]}},
-        question="Deploy paramg/helpdesk-ai-v3@99b569f71330 to 2.29.2.202?")
+        question="Deploy paramg/helpdesk-ai-v3@99b569f71330 to 192.0.2.202?")
     try:
         o = _get(world, client, f"/v1/projects/{helpdesk['id']}/overview")
         card = next(n for n in o["needs_you"] if n["id"] == did)

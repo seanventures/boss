@@ -3,7 +3,7 @@
  * BOSSAPP-930 / 932 — a deploy you can watch, and an address that is live only when it is.
  *
  * From the laptop's Hello World (2026-11-08): the header said "hello world rest api ·
- * 2.29.2.202:8007" and the Deployments card linked it as live, "Unknown", while the only deploy
+ * 192.0.2.202:8007" and the Deployments card linked it as live, "Unknown", while the only deploy
  * there had failed; nothing showed the deploy's progress while it ran. Rendered on the real
  * ProjectPage with the engine's answers (deploy_truth): a first deploy running shows its seven
  * phases live with times and a log behind a press, no live link, and the header's
@@ -50,11 +50,11 @@ const FAILED = { index: 6, total: 7, current: "health", failed_phase: "health", 
   phase("prepare", "Prepare", "done", 3), phase("upload", "Upload", "done", 6), phase("environment", "Environment", "done", 2),
   phase("switch", "Switch", "done", 4), phase("install", "Install", "done", 2, "bash: line 1: cd: hello-api: No such file or directory"),
   phase("health", "Health", "failed", 606, "BOSS_UNHEALTHY 000"), phase("smoke", "Smoke", "pending", null)] };
-const REASON = "The app did not answer as expected at http://2.29.2.202:8007 within 600s.";
+const REASON = "The app did not answer as expected at http://192.0.2.202:8007 within 600s.";
 
 function env(state: "deploying" | "failed") {
   return { ...FX_DEPLOYMENTS.environments[0], key: "staging", label: "Staging", app: "Hello World REST API", target_id: "deptgt_362",
-           url: "", address: "http://2.29.2.202:8007", health: "unknown", uptime_pct: null, p95_ms: null, hours: [], last_deploy: null,
+           url: "", address: "http://192.0.2.202:8007", health: "unknown", uptime_pct: null, p95_ms: null, hours: [], last_deploy: null,
            deploy: { state, word: state === "failed" ? "Last deploy failed" : "Setting up · 4/7", live: false,
                      reason: state === "failed" ? REASON : "",
                      attempt: { id: state === "failed" ? "sdep_f86f" : "sdep_run", kind: "stack", status: state === "failed" ? "failed" : "running", commit: "a0cb065", at: "2026-11-09T00:39:44+00:00" },
@@ -102,7 +102,7 @@ describe("a deploy you can watch (BOSSAPP-932)", () => {
     await openDeployments();
     const card = tid("px-env-staging")!;
     expect(card.querySelector("a.px-env-url")).toBeNull();
-    expect(tid("px-env-address-staging")!.textContent).toContain("Setting up · will answer at 2.29.2.202:8007");
+    expect(tid("px-env-address-staging")!.textContent).toContain("Setting up · will answer at 192.0.2.202:8007");
     expect(tid("px-env-state-staging")!.textContent).toBe("Setting up · 4/7");
     expect(card.textContent).not.toContain("Unknown");
     expect(tid("px-env-live-count-staging")!.textContent).toBe("Step 4 of 7");

@@ -219,7 +219,7 @@ Cloud metadata addresses and link-local addresses are always refused. Any other 
 `HostNotAllowed`, which is checked before anything is sent. This covers a pagination link that
 points somewhere else.
 
-A self-hosted Plane, such as `https://plane.local.sean.network`, works because it is the
+A self-hosted Plane, such as `https://plane.example.com`, works because it is the
 connection's `api_base_url`. A host credential from the environment (`env:PLANE_API_KEY`) stays
 bound to its provider's hosts through `env_refs.assert_may_send`, and the process-wide
 `check_outbound` still runs under every request.

@@ -22,7 +22,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/legacy"
+	"github.com/seanventures/boss/services/sandbox-service/internal/legacy"
 )
 
 func main() {

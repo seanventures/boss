@@ -239,7 +239,7 @@ describe("Claim this BOSS", () => {
       "GET /v1/identity/me": { body: { csrf_token: "csrf_1" } },
     });
     window.history.replaceState(null, "", "/claim");
-    const origin = "https://boss-1.tail18604a.ts.net";
+    const origin = "https://boss-1.tail1234.ts.net";
     const el = await mount(<ClaimFlow options={options({ path: "network_bridge", paths: ["setup_token", "legacy_password", "network"], network: "private_network", origin, expires_at: null, seats: SEATS })} />);
     expect(el.querySelector("[data-testid='claim-no-token']")).toBeNull();
     expect(el.querySelector("[data-testid='claim-legacy-password']")).toBeNull();

@@ -113,7 +113,7 @@ class TestTheRunsOwnLinkageWinsOverNames:
 
     def _db(self):
         target = {"id": self.TARGET_ID, "app_name": "helpdesk-laptop", "environment": "staging",
-                  "domains": ["2.29.2.202:8009"], "health_checks": []}
+                  "domains": ["192.0.2.202:8009"], "health_checks": []}
         title = self.TITLE
 
         class Db:

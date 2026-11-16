@@ -14,11 +14,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/backend"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/contract"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/job"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/run"
+	"github.com/seanventures/boss/services/sandbox-service/internal/backend"
+	"github.com/seanventures/boss/services/sandbox-service/internal/contract"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/job"
+	"github.com/seanventures/boss/services/sandbox-service/internal/run"
 )
 
 type Server struct {

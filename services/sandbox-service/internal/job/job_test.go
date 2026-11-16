@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/contract"
+	"github.com/seanventures/boss/services/sandbox-service/internal/contract"
 )
 
 func TestAdmitFailsClosedWhenFrozen(t *testing.T) {

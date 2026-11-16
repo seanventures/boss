@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/guest"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/guest"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
 )
 
 func (e *env) inboxRuns(id string) []string {

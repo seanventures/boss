@@ -2,7 +2,7 @@
 
 Create/test keep the existing PlaneWorkTrackerAdapter code path. Everything else goes through the
 shared HTTP helper at the connection's base URL (``api_base_url``; a self-hosted Plane such as
-https://plane.local.sean.network is reached because it IS the configured base URL), with
+https://plane.example.com is reached because it IS the configured base URL), with
 ``X-API-Key``.
 
 Epics: Plane modules and cycles are NOT epics. An epic is an issue that is the PARENT of other

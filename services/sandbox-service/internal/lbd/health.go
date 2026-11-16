@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
 )
 
 // Health-check policy (LLD §3.14.2): 1 s interval, 2 failures → withdraw

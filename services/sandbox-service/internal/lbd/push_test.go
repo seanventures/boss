@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/lbd/ipvs"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/pki"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/lbd/ipvs"
+	"github.com/seanventures/boss/services/sandbox-service/internal/pki"
 )
 
 // leaf issues a certificate under issuer with CN=id and the given EKUs

@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/backend"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/httpapi"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/job"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/run"
+	"github.com/seanventures/boss/services/sandbox-service/internal/backend"
+	"github.com/seanventures/boss/services/sandbox-service/internal/httpapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/job"
+	"github.com/seanventures/boss/services/sandbox-service/internal/run"
 )
 
 func EnvBool(key string, def bool) bool {

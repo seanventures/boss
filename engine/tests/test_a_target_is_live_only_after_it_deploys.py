@@ -4,7 +4,7 @@ From the laptop's Hello World (paramg/boss-sandbox, wfr_0b799972, 2026-11-08):
   * the Deploy step's attempt 1 said "No such deployment target in this project. Pick a stack
     target in Infra." about the target it had JUST made — on its own uncommitted connection,
     invisible to the planner's transaction — while the Deployments tab showed it;
-  * the header and the card linked http://2.29.2.202:8007 as live while the only deploy there
+  * the header and the card linked http://192.0.2.202:8007 as live while the only deploy there
     had failed, with the status "Unknown";
   * onboarding's "Use for staging" slot ("boss-sandbox", :8006, never deployed) showed as a
     second staging environment beside the app's own target;

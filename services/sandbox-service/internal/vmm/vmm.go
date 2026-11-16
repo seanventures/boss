@@ -32,7 +32,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/procscan"
+	"github.com/seanventures/boss/services/sandbox-service/internal/procscan"
 )
 
 // ErrNotImplemented marks seams left for a later phase.

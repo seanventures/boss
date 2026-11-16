@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
 )
 
 // RunLease is what the HOST holds for a run its VM is driving (HOST_API.md

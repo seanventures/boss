@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/lbd"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/lbd"
 )
 
 // Director pushes (P8b-10, LLD §3.14.2 "withdraw in under a second"). The

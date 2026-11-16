@@ -1,6 +1,6 @@
 """BOSSAPP-813: a fresh install is claimed on its own site when the browser is on a private network.
 
-Operator, 2026-11-05: "I'll use this link only - https://boss-1.tail18604a.ts.net/ ... where is the
+Operator, 2026-11-05: "I'll use this link only - https://boss-1.tail1234.ts.net/ ... where is the
 claim link after I go to this website?" Like Gitea, n8n or Portainer, the first visitor sets up the
 Owner on the site — but only a visitor whose REAL client address is private. The address is
 resolved from the socket peer and the X-Forwarded-For of BOSS_TRUSTED_PROXIES only; the docker

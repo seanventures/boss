@@ -36,7 +36,7 @@ const REFUSAL = { headline: "No such host in this project or its organisation.",
 const ACTION = { label: "Use for staging", do: "staging_target", host_id: HOST, post: `/v1/projects/${P}/onboarding/deploy-target`,
                  href: `?project_id=${P}&area=infra&add=target&host=${HOST}&env=staging` };
 const PLAN = { project: "HelpDesk", app_name: "helpdesk-ai-v3", repository: "paramg/helpdesk-ai-v3", environment: "staging",
-               host_id: HOST, host: "edge", address: "2.29.2.202", shared: true, port: 8004, manifest_path: "boss.deploy.yaml" };
+               host_id: HOST, host: "edge", address: "192.0.2.202", shared: true, port: 8004, manifest_path: "boss.deploy.yaml" };
 
 const withAction = (r: { key: string }) => (r.key === "deploy_target" ? { ...r, owner: "you", state: "todo", action: ACTION } : r);
 const NEEDS_TARGET = parseOnboarding({
@@ -62,7 +62,7 @@ describe("Use for staging, on the onboarding page", () => {
     await settle();
     expect(tid("px-ob-staging")).not.toBeNull();
     expect(tid("px-ob-staging-what")!.textContent).toBe("Staging target for HelpDesk");
-    expect(tid("px-ob-staging-where")!.textContent).toBe("2.29.2.202 · shared host");
+    expect(tid("px-ob-staging-where")!.textContent).toBe("192.0.2.202 · shared host");
     expect(tid("px-ob-staging-port")!.textContent).toBe("8004");
     expect(tid("px-ob-staging-manifest")!.textContent).toBe("boss.deploy.yaml");
     expect(calls.find((c) => c.method === "GET" && c.path.endsWith("/onboarding/deploy-target"))!.search).toBe(`?host_id=${HOST}`);
@@ -103,10 +103,10 @@ describe("Use for staging, on the onboarding page", () => {
 });
 
 describe("Infra's App target sheet", () => {
-  const racks = [{ id: HOST, name: "edge", address: "2.29.2.202", state: { tone: "green" } }] as unknown as Rack[];
+  const racks = [{ id: HOST, name: "edge", address: "192.0.2.202", state: { tone: "green" } }] as unknown as Rack[];
   const engine = (create: (c: Call) => { status?: number; body: unknown }) => stubFetch((c: Call) => {
     if (c.path === `/v1/projects/${P}/repositories`) return { body: { repositories: [{ full_name: "paramg/helpdesk-ai-v3" }], suggested: "paramg/helpdesk-ai-v3" } };
-    if (c.path === `/v1/projects/${P}/hosts/${HOST}/free-port`) return { body: { host_id: HOST, address: "2.29.2.202", port: 8004 } };
+    if (c.path === `/v1/projects/${P}/hosts/${HOST}/free-port`) return { body: { host_id: HOST, address: "192.0.2.202", port: 8004 } };
     if (c.method === "POST" && c.path === "/v1/deployments/stack/targets") return create(c);
     return undefined;
   });

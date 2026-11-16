@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/lbd/ipvs"
+	"github.com/seanventures/boss/services/sandbox-service/internal/lbd/ipvs"
 )
 
 func TestHealthCheckDrainsAfterTwoFailuresDeletesAfterFourAndRestores(t *testing.T) {

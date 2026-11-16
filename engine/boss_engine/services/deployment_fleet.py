@@ -226,7 +226,7 @@ def usable_host(connection, host_id: str, project_id: str) -> dict[str, Any]:
 
     A project may use its own hosts and the verified hosts its organisation shares
     (`usable_hosts_sql`). Each create/attach path used to ask "is the host in THIS project?" on
-    its own, so the onboarding agent offered the shared, verified 2.29.2.202 for staging and the
+    its own, so the onboarding agent offered the shared, verified 192.0.2.202 for staging and the
     stack-target create then refused it ("No such host in this project."). Managing the machine
     (key, verify, retire) stays with the project that registered it.
     """

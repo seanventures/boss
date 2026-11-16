@@ -8,8 +8,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/vmm"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/vmm"
 )
 
 // facts measures the hardening facts. Each false fact carries its reason.

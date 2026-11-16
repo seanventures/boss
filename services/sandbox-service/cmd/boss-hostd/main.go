@@ -52,10 +52,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostd"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/legacy"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/netpol"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/vmm"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostd"
+	"github.com/seanventures/boss/services/sandbox-service/internal/legacy"
+	"github.com/seanventures/boss/services/sandbox-service/internal/netpol"
+	"github.com/seanventures/boss/services/sandbox-service/internal/vmm"
 )
 
 func env(key, def string) string {

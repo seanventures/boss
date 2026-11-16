@@ -6,7 +6,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/netpol"
+	"github.com/seanventures/boss/services/sandbox-service/internal/netpol"
 )
 
 func inProcessNet(netpol.Policy) netpol.Manager { return netpol.Noop{} }

@@ -8,7 +8,7 @@ import (
 
 	"github.com/vishvananda/netlink"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/netpol"
+	"github.com/seanventures/boss/services/sandbox-service/internal/netpol"
 )
 
 func inProcessNet(p netpol.Policy) netpol.Manager { return &netpol.Linux{Policy: p} }

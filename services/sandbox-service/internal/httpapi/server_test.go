@@ -11,8 +11,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/contract"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/job"
+	"github.com/seanventures/boss/services/sandbox-service/internal/contract"
+	"github.com/seanventures/boss/services/sandbox-service/internal/job"
 )
 
 func goldenSubmit(t *testing.T) []byte {

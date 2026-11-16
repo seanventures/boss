@@ -141,7 +141,7 @@ def test_the_real_captured_reply_comes_out_clean():
     import pathlib
 
     captured = pathlib.Path(
-        "/Users/param/Downloads/boss-video-kg/captures/v2_impact.txt")
+        "/Users/me/Downloads/boss-video-kg/captures/v2_impact.txt")
     if not captured.exists():
         pytest.skip("capture not present on this machine")
     said = readable_reply(captured.read_text(encoding="utf-8"))

@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/guest"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/procscan"
+	"github.com/seanventures/boss/services/sandbox-service/internal/guest"
+	"github.com/seanventures/boss/services/sandbox-service/internal/procscan"
 )
 
 // Process runs boss-vsockd as the stand-in VM (local parity backend).

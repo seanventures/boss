@@ -19,10 +19,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/cpclient"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/lbd/ipvs"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/pki"
+	"github.com/seanventures/boss/services/sandbox-service/internal/cpclient"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/lbd/ipvs"
+	"github.com/seanventures/boss/services/sandbox-service/internal/pki"
 )
 
 // Config is everything boss-lbd needs. Zero values take the defaults.

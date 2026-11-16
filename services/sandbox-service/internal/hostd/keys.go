@@ -3,7 +3,7 @@ package hostd
 import (
 	"crypto/ecdsa"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/pki"
+	"github.com/seanventures/boss/services/sandbox-service/internal/pki"
 )
 
 type ecdsaKey = ecdsa.PrivateKey

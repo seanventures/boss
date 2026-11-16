@@ -7,10 +7,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/cpclient"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/gateway"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/guest"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/hostapi"
+	"github.com/seanventures/boss/services/sandbox-service/internal/cpclient"
+	"github.com/seanventures/boss/services/sandbox-service/internal/gateway"
+	"github.com/seanventures/boss/services/sandbox-service/internal/guest"
+	"github.com/seanventures/boss/services/sandbox-service/internal/hostapi"
 )
 
 // workLoop is the host's ONE outstanding work request (LLD §3.13.0, REVISION

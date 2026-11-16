@@ -214,10 +214,10 @@ def test_jira_parse_ref_urls_and_keys():
 
 def test_plane_and_github_urls():
     plane = get_adapter("plane")
-    conn = TicketConnection("plane", {"api_base_url": "https://plane.local.sean.network"})
+    conn = TicketConnection("plane", {"api_base_url": "https://plane.example.com"})
     pid, iid = "3f2a9c1e-0000-4000-8000-000000000001", "3f2a9c1e-0000-4000-8000-000000000002"
-    found = plane.parse_ref(f"https://plane.local.sean.network/acme/projects/{pid}/issues/{iid} "
-                            "https://plane.local.sean.network/acme/browse/BOSSAPP-12/ "
+    found = plane.parse_ref(f"https://plane.example.com/acme/projects/{pid}/issues/{iid} "
+                            "https://plane.example.com/acme/browse/BOSSAPP-12/ "
                             f"https://evil.example/acme/projects/{pid}/issues/{iid}", conn=conn)
     assert [(r.id, r.key) for r in found] == [(iid, None), (None, "BOSSAPP-12")]
     github = get_adapter("github_issues")
@@ -240,15 +240,15 @@ class _Recorder:
 
 
 def test_the_operator_base_url_is_allowed_and_others_are_not(monkeypatch):
-    """A self-hosted Plane (https://plane.local.sean.network) is reachable when it is the
+    """A self-hosted Plane (https://plane.example.com) is reachable when it is the
     connection's base URL, or the operator's PLANE_BASE_URL — and nothing else is."""
     recorder = _Recorder()
     monkeypatch.setattr(ticket_http, "TRANSPORT", recorder)
     plane = get_adapter("plane")
-    conn = TicketConnection("plane", {"api_base_url": "https://plane.local.sean.network",
+    conn = TicketConnection("plane", {"api_base_url": "https://plane.example.com",
                                       "workspace_slug": "sean", "api_token": "p" * 24})
     plane.session(conn).request("GET", "/api/v1/workspaces/sean/projects/")
-    assert recorder.urls == ["https://plane.local.sean.network/api/v1/workspaces/sean/projects/"]
+    assert recorder.urls == ["https://plane.example.com/api/v1/workspaces/sean/projects/"]
     with pytest.raises(HostNotAllowed):
         plane.session(conn).request("GET", "https://evil.example/api/v1/")
     # an operator-set host (env) is allowed even with no base URL on the connection
@@ -256,7 +256,7 @@ def test_the_operator_base_url_is_allowed_and_others_are_not(monkeypatch):
     bare = TicketConnection("plane", {"api_token": "p" * 24})
     plane.session(bare).request("GET", "https://plane.ops.example/api/v1/x/")
     with pytest.raises(HostNotAllowed):
-        plane.session(bare).request("GET", "https://plane.local.sean.network/api/v1/x/")
+        plane.session(bare).request("GET", "https://plane.example.com/api/v1/x/")
     # official hosts need https
     with pytest.raises(HostNotAllowed):
         plane.session(bare).request("GET", "http://api.plane.so/api/v1/x/")
@@ -270,9 +270,9 @@ def test_a_host_credential_stays_bound_to_its_provider(monkeypatch):
 
     monkeypatch.setattr(ticket_http, "TRANSPORT", _Recorder())
     monkeypatch.setenv("PLANE_API_KEY", "host-plane-key-0123456789")
-    monkeypatch.setenv("PLANE_BASE_URL", "https://plane.local.sean.network")
+    monkeypatch.setenv("PLANE_BASE_URL", "https://plane.example.com")
     plane = get_adapter("plane")
-    ok = TicketConnection("plane", {"api_base_url": "https://plane.local.sean.network",
+    ok = TicketConnection("plane", {"api_base_url": "https://plane.example.com",
                                     "credential_ref": "env:PLANE_API_KEY"})
     plane.session(ok).request("GET", "/api/v1/workspaces/x/projects/")
     bad = TicketConnection("plane", {"api_base_url": "https://evil.example",

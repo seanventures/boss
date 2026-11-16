@@ -17,7 +17,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/guest"
+	"github.com/seanventures/boss/services/sandbox-service/internal/guest"
 )
 
 func main() {

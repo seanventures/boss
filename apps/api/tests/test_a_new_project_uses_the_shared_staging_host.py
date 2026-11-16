@@ -1,7 +1,7 @@
 """A new project's onboarding offers the org's shared, verified host for staging — and "Use for
 staging" really makes the target there, in place.
 
-2026-11-07 (helpdesk from paramg/helpdesk-ai-v3): onboarding offered 2.29.2.202, a verified host
+2026-11-07 (helpdesk from paramg/helpdesk-ai-v3): onboarding offered 192.0.2.202, a verified host
 registered under helpdesk-ai-demo, but the button opened Infra's generic App target sheet
 (production, no port) and the create refused it as raw JSON: {"headline":"No such host in this
 project.",...}. Target creation asked "is the host in THIS project?" while every other path asked

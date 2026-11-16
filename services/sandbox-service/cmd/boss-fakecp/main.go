@@ -17,7 +17,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/fakecp"
+	"github.com/seanventures/boss/services/sandbox-service/internal/fakecp"
 )
 
 func main() {

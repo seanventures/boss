@@ -6,7 +6,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/netpol"
+	"github.com/seanventures/boss/services/sandbox-service/internal/netpol"
 )
 
 func netClient() netpol.Manager {

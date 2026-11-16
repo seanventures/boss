@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seanheiney/boss/services/sandbox-service/internal/backend"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/contract"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/job"
-	"github.com/seanheiney/boss/services/sandbox-service/internal/run"
+	"github.com/seanventures/boss/services/sandbox-service/internal/backend"
+	"github.com/seanventures/boss/services/sandbox-service/internal/contract"
+	"github.com/seanventures/boss/services/sandbox-service/internal/job"
+	"github.com/seanventures/boss/services/sandbox-service/internal/run"
 )
 
 func requireProcessBackend(t *testing.T) {
