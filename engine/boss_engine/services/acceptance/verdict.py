@@ -175,7 +175,8 @@ def _extensionless(root: Path) -> dict[str, list[str]]:
 
 
 def evidence_paths(root: Any, why: str, *,
-                   defs: Optional["_Definitions"] = None) -> tuple[list[str], list[str]]:
+                   defs: Optional["_Definitions"] = None,
+                   item_text: Optional[str] = None) -> tuple[list[str], list[str]]:
     """(cited paths that exist in the tree, cited paths that do not). A bare extensionless
     name (Makefile) counts when exactly one file of that name is in the tree. A cited symbol
     (`auth.VerifyJWT`, `Store.Swap`) counts as the file that defines it (_Definitions)."""
@@ -218,6 +219,11 @@ def evidence_paths(root: Any, why: str, *,
         # the one file that defines it is evidence — a test included, since it proves the
         # test exists (BOSSAPP-1329).
         hit = defs.defining_file(m.group(1))
+        # A TEST quoted by name evidences only an item it is about (#171 review): its name or
+        # package shares a word with the item's.
+        if hit and _TEST_PATH.search(hit) and item_text is not None \
+                and not _words(m.group(1) + " " + Path(hit).parent.as_posix()) & _words(item_text):
+            hit = None
         if hit:
             found.append(hit)
     bare = None
@@ -781,15 +787,65 @@ class _Definitions:
             args = _call_args(body, m.end() - 1) or []
             # passed IN to the reader (`ReloadOnce(dir, store)`), or what the reader RETURNED
             # (`cfg, err := config.Load(dir)`)
-            lhs = re.search(r"^\s*(?:var\s+|let\s+|const\s+)?([\w\s,]+?)\s*:?=\s*$",
-                            bare_body[bare_body.rfind("\n", 0, m.start()) + 1:m.start()])
-            names = {a.strip().lstrip("&*") for a in args}
-            names |= {n.strip() for n in lhs.group(1).split(",")} if lhs else set()
-            if hit and idents & names:
+            if not hit:
+                continue
+            # WHAT THE READER RETURNED, then used on the cited path (`cfg, err :=
+            # config.Load(dir)` → `New(cfg)`); a discarded result (`_ =`, a bare call) is not.
+            returned = _assigned_names(bare_body, m.start())
+            # OR A VALUE THE READER FILLS: an argument its body assigns into, or hands the
+            # loaded value to (`store.Swap(snap)` in ReloadOnce) — never one it only takes.
+            params = _params_of(self.of(hit)[1] or "", m.group(2))
+            filled = {a.strip().lstrip("&*") for p, a in zip(params, args)
+                      if a.strip().lstrip("&*") in idents
+                      and self.fills(hit, m.group(2), p, data)}
+            if idents & (returned | filled):
                 found = self.reaches(data, [(hit, m.group(2))])
                 if found:
                     return found
         return None
+
+    def fills(self, rel: str, func: str, param: str, data: list[str], depth: int = 2) -> bool:
+        """Whether `func`'s body writes the loaded data into its parameter `param`: assigns
+        into it (`p.Rate = …`, `*p = …`, `p[k] = …`), passes it a value a reader returned
+        (`p.Swap(snap)` after `snap, err := Load(dir)`), or hands it to a call that fills it."""
+        code, bare = self.of(rel)
+        if code is None:
+            return False
+        body = _body_of(code, bare or "", func, rel)
+        blank = _blank_strings(body)
+        p = re.escape(param)
+        # into it, not over it: `p = x` rebinds the local and fills nothing
+        if re.search(r"(?<![\w.])(?:\*" + p + r"|" + p + r"(?:\.\w+|\[[^\]\n]*\])+)\s*=(?!=)",
+                     blank):
+            return True
+        imports = _import_map(code, rel)
+        loaded: set[str] = set()
+        calls = []
+        for m in list(_CALL.finditer(blank)) + list(_LOCAL_CALL.finditer(blank)):
+            if m.re is _CALL:
+                pkg = imports.get(m.group(1)) or (
+                    m.group(1) if self.is_type(m.group(1)) else None)
+                hit, name = (self.symbol_file(f"{pkg}.{m.group(2)}") if pkg else None,
+                             m.group(2))
+            else:
+                hit, name = self.local_def(rel, m.group(1)), m.group(1)
+            if not hit or name == func:
+                continue
+            calls.append((m, hit, name))
+            if self.reaches(data, [(hit, name)]):
+                loaded |= _assigned_names(blank, m.start())
+        for m in re.finditer(r"(?<![\w.])" + p + r"\.\w+\s*\(", blank):
+            args = {a.strip().lstrip("&*") for a in _call_args(body, m.end() - 1) or []}
+            if args & loaded:
+                return True
+        if depth > 0:
+            for m, hit, name in calls:
+                args = [a.strip().lstrip("&*") for a in _call_args(body, m.end() - 1) or []]
+                cparams = _params_of(self.of(hit)[1] or "", name)
+                if any(a == param and self.fills(hit, name, cp, data, depth - 1)
+                       for cp, a in zip(cparams, args)):
+                    return True
+        return False
 
     def _expr_value(self, rel: str, func: Optional[str], expr: str, depth: int
                     ) -> Optional[str]:
@@ -1141,6 +1197,17 @@ def _params_of(bare: str, sym: str) -> list[str]:
     return [n for n in names if n not in ("self", "cls")]
 
 
+def _assigned_names(text: str, call_at: int) -> set[str]:
+    """The names a call's result is assigned to (`cfg, err := config.Load(dir)` → cfg, err),
+    never `_`; empty for a bare call."""
+    line = text[text.rfind("\n", 0, call_at) + 1:call_at]
+    lhs = re.search(r"^\s*(?:if\s+)?(?:var\s+|let\s+|const\s+)?([\w\s,]+?)\s*:?=\s*$", line)
+    if not lhs:
+        return set()
+    return {n.strip() for n in lhs.group(1).split(",")
+            if re.fullmatch(r"[A-Za-z]\w*", n.strip())} - {"err", "ok"}
+
+
 def _receiver_type(bare: str, sym: str) -> Optional[str]:
     """The type a Go method belongs to (`func (h *Handler) proxy(` → Handler), or None."""
     m = re.search(r"\bfunc\s+\(\s*\w*\s*\*?\s*([A-Za-z_]\w*)(?:\[[^\]]*\])?\s*\)\s*"
@@ -1194,6 +1261,24 @@ def _cited_symbols(root: Path, why: str, defs: _Definitions) -> dict[str, list[s
                     out.setdefault(rel, []).append(m.group(2))
                     break
     return {k: list(dict.fromkeys(v)) for k, v in out.items()}
+
+
+_STOP_WORDS = frozenset(
+    "test tests the and for with that this from into are not all its has have when then "
+    "must should will can each every any internal pkg src lib main cmd app".split())
+
+
+def _words(text: str) -> set[str]:
+    """Content words of a name or a sentence: camelCase, snake_case, kebab and path parts
+    split, lower-cased, a plural `s` dropped, 3+ letters, no filler."""
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", str(text or ""))
+    out = set()
+    for w in re.findall(r"[A-Za-z]{3,}", spaced):
+        w = w.lower()
+        w = w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w
+        if w not in _STOP_WORDS:
+            out.add(w)
+    return out
 
 
 #: A single quoted name in an answer (`ServeHTTP`), not a path or a qualified name.
@@ -1346,7 +1431,8 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any, exec_log: Any 
         it = {**{k: v for k, v in it.items() if k not in _contract.ITEM_TAGS},
               **_contract.floor_tags(it.get("text"), it, where="gate")}
         if status == MET:
-            found, absent = evidence_paths(root, why, defs=defs)
+            found, absent = evidence_paths(root, why, defs=defs,
+                                           item_text=str(it.get("text") or ""))
             code = [f for f in found if not _DOC_PATH.search(f) and not _DECL_PATH.search(f)]
             reason = ""
             if not code and it.get("judgement") and defs is not None:
@@ -1384,8 +1470,24 @@ _SUITE_RUN = re.compile(r"(?i)\b(?:go\s+test\b[^`\n]*\./|pytest\b|npm\s+(?:run\s
                         r"mvn\s+(?:-\S+\s+)*test\b|gradle\s+test\b|cargo\s+test\b)")
 
 
+#: Words that only scope or qualify a suite claim ("all packages pass clean with -race").
+_SUITE_FILLER = frozenset(
+    "all every the and with without across over whole full entire suite unit integration "
+    "package packages module modules clean cleanly green locally ci race detector flag run "
+    "runs ran test tests passe pass passing failure fail failing zero none must should still "
+    "always both also".split())
+
+
 def _suite_item(text: str) -> bool:
-    return bool(_SUITE_ITEM.search(text))
+    """Whether the item is ONLY the suite claim (#171 review): its tests clause removed,
+    nothing substantive is left. "All tests pass" and "`go test -race ./...` passes" are;
+    "Add CSV export of invoices and tests pass" is not — the export needs its own evidence."""
+    text = str(text or "")
+    if not _SUITE_ITEM.search(text):
+        return False
+    rest = _SUITE_ITEM.sub(" ", text)
+    rest = re.sub(r"`[^`]*`|\./\S*|-\w+", " ", rest)
+    return not (_words(rest) - _SUITE_FILLER)
 
 
 def _suite_run(why: str) -> bool:
@@ -1748,12 +1850,12 @@ def verify_command(claim: Mapping[str, Any], exec_log: Any) -> tuple[bool, str]:
     return True, ""
 
 
-def _file_refs(root: Any, why: str, *,
-               defs: Optional[_Definitions] = None) -> tuple[list[dict[str, Any]], str]:
+def _file_refs(root: Any, why: str, *, defs: Optional[_Definitions] = None,
+               item_text: Optional[str] = None) -> tuple[list[dict[str, Any]], str]:
     """Verified file evidence of an answer and why there is none: a cited path in the tree that
     is code, configuration or a test (never a document or manifest alone), and a cited
     `path:line` whose line exists. `defs`: the tree, read once per check."""
-    found, absent = evidence_paths(root, why, defs=defs)
+    found, absent = evidence_paths(root, why, defs=defs, item_text=item_text)
     code = [f for f in found if not _DOC_PATH.search(f) and not _DECL_PATH.search(f)]
     bad_lines = set()
     for m in _LINE_CITE.finditer(str(why or "")):
@@ -1826,7 +1928,9 @@ def parse_exercised(reply: str, items: list[dict], *, root: Any, exec_log: Any =
                              "verified": ok, **({"why": problem} if problem else {})})
                 if not ok:
                     failed.append(problem)
-            files, no_file = (_file_refs(root, why, defs=defs) if root is not None
+            files, no_file = (_file_refs(root, why, defs=defs,
+                                         item_text=str(it.get("text") or ""))
+                              if root is not None
                               else ([], "no tree"))
             row["evidence_refs"] = refs + files
             reason = ""

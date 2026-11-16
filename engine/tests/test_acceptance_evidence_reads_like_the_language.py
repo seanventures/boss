@@ -39,7 +39,12 @@ def _reply(answers) -> str:
         + "\n\nACCEPTANCE: MET\n"
 
 
-#: Every real check replays 30/0. Item 11, where the reviewer cited only the code that USES
+#: The real checks replay 30/0 — but one. Item 5 is "All tests pass; the README quick start
+#: works as written": a test run is evidence only for an item that is ONLY the suite claim
+#: (#171 review), so its README clause needs its own evidence. Three reviewers cited
+#: Makefile / docker-compose.yml for it; acc_867e506d cited nothing but the run and prose
+#: ("verified via integration tests"), which is exactly the "CSV export works; all tests
+#: pass" probe — it stays PARTIAL. Item 11, where the reviewer cited only the code that USES
 #: the route config (applyCORS, Against), holds through the value passed on: main builds
 #: `store`, hands it to config.ReloadOnce (→ Load reads the YAML) and to proxy.NewHandler,
 #: whose ServeHTTP calls applyCORS — never because a config type is merely taken (#171 (a)).
@@ -47,7 +52,7 @@ EXPECT = {
     "acc_b2239214c5bc45a9b4c4": ("crun_673c3dcd34d6447e924b", 30, []),
     "acc_2841e1f5536945928a79": ("crun_673c3dcd34d6447e924b", 30, []),
     "acc_2c775eb7064541238af1": ("crun_f4360a7195f945a58b62", 30, []),
-    "acc_867e506d842a445ca76c": ("crun_f4360a7195f945a58b62", 30, []),
+    "acc_867e506d842a445ca76c": ("crun_f4360a7195f945a58b62", 29, [5]),
 }
 
 
@@ -63,7 +68,7 @@ def test_every_met_the_reviewer_evidenced_stands(check_id):
         (i["n"], i["evidence"][-160:]) for i in rec["items"] if i["status"] != "met"]
     for n in partial:
         item = next(i for i in rec["items"] if i["n"] == n)
-        assert "loader not named" in item["evidence"]
+        assert "no file evidence cited" in item["evidence"], item["evidence"]
 
 
 # ── (a) package patterns and commands are not file paths ────────────────────────────────────
@@ -97,9 +102,14 @@ def test_python_and_maven_module_arguments(tmp_path):
     ("Secrets are never written to logs.", "`go test ./...` passes", "partial"),
     ("The gateway retries an upstream once.", "`go test -race ./internal/proxy/...` passes",
      "partial"),
-    # an item that IS the suite run is evidenced by that run
+    # ... nor for the rest of an item that also asks for something else (#171 review)
+    ("Add CSV export of invoices and tests pass", "`go test ./...` passes", "partial"),
+    ("CSV export works; all tests pass", "`go test ./...` all packages pass", "partial"),
     ("All tests pass; the README quick start works as written.",
-     "`go vet ./...` clean, `go test ./...` all packages pass (verified live).", "met"),
+     "`go vet ./...` clean, `go test ./...` all packages pass (verified live).", "partial"),
+    # an item that IS the suite run is evidenced by that run
+    ("All tests pass.", "`go test ./...` all packages pass (verified live).", "met"),
+    ("`go test -race ./...` passes on every package.", "ran `go test -race ./...` → ok", "met"),
 ])
 def test_a_test_run_evidences_only_the_suite_item(item, why, status):
     got = v.parse_acceptance(f"ITEM 1: MET — {why}\n", [{"n": 1, "text": item}], root=TREE)[0]
@@ -162,6 +172,17 @@ def test_the_155_negatives_still_fail(tmp_path, files, why):
                                                    needs_loader=True)
 
 
+def test_a_quoted_test_evidences_only_an_item_it_is_about():
+    why = "`TestStore_ConcurrentSwapAndRead_NoRace` passes (verified live)."
+    off = v.parse_acceptance(f"ITEM 1: MET — {why}\n",
+                             [{"n": 1, "text": "Secrets are never written to logs."}],
+                             root=TREE)[0]
+    assert off["status"] == "partial", off["evidence"]
+    on = v.parse_acceptance(f"ITEM 1: MET — {why}\n",
+                            [{"n": 1, "text": "Config swaps are race-free."}], root=TREE)[0]
+    assert on["status"] == "met", on["evidence"]
+
+
 def _tree(tmp_path, files):
     for rel, body in files.items():
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -200,6 +221,43 @@ def test_a_config_type_merely_taken_is_not_a_loader(tmp_path):
         "package main\n\nimport (\n\t\"northgate/internal/config\"\n\t\"northgate/internal/proxy\"\n)\n\nfunc main() {\n"
         "\tcfg := config.Load()\n\tproxy.Limit(cfg)\n}\n")
     assert v.wiring_problem(root, why, item_text=LIMITS, needs_loader=True) is None
+
+
+@pytest.mark.parametrize("load,main,ok", [
+    # the probe: Load takes opts and never fills it
+    ("func Load(o *Options) error {\n\t_, err := os.ReadFile(\"config/limits.yaml\")\n"
+     "\treturn err\n}\n", "opts := &config.Options{Rate: 5}\n\t_ = config.Load(opts)\n"
+     "\tratelimit.New(opts)", False),
+    # the same as a bare call
+    ("func Load(o *Options) error {\n\t_, err := os.ReadFile(\"config/limits.yaml\")\n"
+     "\treturn err\n}\n", "opts := &config.Options{}\n\tconfig.Load(opts)\n"
+     "\tratelimit.New(opts)", False),
+    # a discarded result
+    ("func Load() (*Options, error) {\n\tb, err := os.ReadFile(\"config/limits.yaml\")\n"
+     "\treturn parse(b), err\n}\n", "opts := &config.Options{Rate: 5}\n\t_, _ = config.Load()\n"
+     "\tratelimit.New(opts)", False),
+    # the reader fills the pointer it was given
+    ("func Load(o *Options) error {\n\tb, err := os.ReadFile(\"config/limits.yaml\")\n"
+     "\to.Rate = parse(b)\n\treturn err\n}\n", "opts := &config.Options{}\n"
+     "\t_ = config.Load(opts)\n\tratelimit.New(opts)", True),
+    # what the reader returned is passed on
+    ("func Load() (*Options, error) {\n\tb, err := os.ReadFile(\"config/limits.yaml\")\n"
+     "\treturn parse(b), err\n}\n", "opts, err := config.Load()\n\t_ = err\n"
+     "\tratelimit.New(opts)", True),
+])
+def test_only_a_value_the_reader_returns_or_fills_is_passed_on(tmp_path, load, main, ok):
+    root = _tree(tmp_path, {
+        "config/limits.yaml": "rate: 5\n",
+        "internal/config/load.go": "package config\n\n" + load,
+        "internal/ratelimit/limiter.go": "package ratelimit\n\nimport \"northgate/internal/"
+                                         "config\"\n\nfunc New(o *config.Options) *Limiter {\n"
+                                         "\treturn &Limiter{rate: o.Rate}\n}\n",
+        "cmd/gw/main.go": "package main\n\nimport (\n\t\"northgate/internal/config\"\n"
+                          "\t\"northgate/internal/ratelimit\"\n)\n\nfunc main() {\n\t"
+                          + main + "\n}\n"})
+    why = "`internal/ratelimit/limiter.go:New` applies the configured rate."
+    got = v.wiring_problem(root, why, item_text=LIMITS, needs_loader=True)
+    assert (got is None) == ok, got
 
 
 def test_a_sibling_beside_a_dead_loader_is_not_the_loader(tmp_path):
