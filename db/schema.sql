@@ -16228,3 +16228,19 @@ CREATE TABLE IF NOT EXISTS task_voice_transcripts (
 );
 CREATE INDEX IF NOT EXISTS idx_task_voice_transcripts_task
   ON task_voice_transcripts (project_id, task_id, filed_order);
+-- BOSSAPP-ROSTER-BULK: one action sets the model connection and default model
+-- on many agents. The pin lives here so the roles row — who the agent is, and
+-- what they may do — is not rewritten. A failed row does not undo the others.
+-- One receipt (services/roster_bulk.py) records the whole action.
+CREATE TABLE IF NOT EXISTS roster_model_assignments (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  connection_id TEXT,
+  default_model TEXT,
+  updated_by TEXT NOT NULL,
+  receipt_id TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, role_key)
+);
+CREATE INDEX IF NOT EXISTS idx_roster_model_assignments_receipt
+  ON roster_model_assignments (receipt_id);
