@@ -141,6 +141,9 @@ describe("the backlog row says the detail", () => {
     expect(row).toContain("{b.label}");
     expect(row).toContain("backlogDetailSentence(b.detail, b.label, b.why)");
     expect(row).toContain("<View i={i} sentence={backlogDetailSentence(b.detail, b.label, b.why)}");
+    const viewAt = src.indexOf("<View i={i} sentence={backlogDetailSentence(b.detail, b.label, b.why)}");
+    const cellAt = src.lastIndexOf("className=\"px-ck-t\"", viewAt);
+    expect(src.slice(cellAt - 5, cellAt)).toBe("<div ");
     expect(src).toContain("{b.why ? <span className=\"px-faint\" data-testid={`px-ob-backlog-why-${i}`}>· {b.why}</span> : null}");
 
     const checkStart = src.indexOf('data-testid="px-ob-checklist"');

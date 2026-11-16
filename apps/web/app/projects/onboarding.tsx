@@ -560,10 +560,10 @@ function BacklogCard({ projectId, ob, unlocked, total, onSaid }: {
             return (
               <div key={b.id || i} className="px-ck-i px-ob-bl" data-testid={`px-ob-backlog-${i}`}>
                 <span className="px-rank">{i + 1}</span>
-                <span className="px-ck-t" style={{ minWidth: 0 }} title={b.detail}><span className="px-ell" style={{ display: "block" }}>{b.label}</span>
+                <div className="px-ck-t" style={{ minWidth: 0 }} title={b.detail}><span className="px-ell" style={{ display: "block" }}>{b.label}</span>
                   <View i={i} sentence={backlogDetailSentence(b.detail, b.label, b.why)} />
                   <small className="px-row" style={{ gap: 4 }}>{src.icon}{b.external_url ? <a href={b.external_url} target="_blank" rel="noreferrer noopener">{src.words} ↗</a> : src.words}
-                    {b.why ? <span className="px-faint" data-testid={`px-ob-backlog-why-${i}`}>· {b.why}</span> : null}</small></span>
+                    {b.why ? <span className="px-faint" data-testid={`px-ob-backlog-why-${i}`}>· {b.why}</span> : null}</small></div>
                 {b.accepted ? <span className="px-tag" data-tone="green" title="On the Roadmap's Next lane">on Roadmap</span>
                   : <span className="px-tag" data-tone={kind === "bug" ? "red" : undefined}>{kind}</span>}
               </div>
