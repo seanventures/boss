@@ -47,7 +47,8 @@ export function ReportsView({ report }: { report: ReportFeed }) {
     return <p className="detail">{report.blockedReason ?? "Reports are unavailable."}</p>;
   }
   const d = report.data;
-  const w = d.windows[win];
+  const w = d.windows[win] as typeof d.windows.today &
+    Pick<typeof d, "by_kind" | "by_model" | "decision_latency">;
 
   const summary: { label: string; value: string; tone: string; Icon: typeof I.task }[] = [
     { label: "Tasks created", value: String(w.tasks), tone: "accent", Icon: I.task },
@@ -111,12 +112,12 @@ export function ReportsView({ report }: { report: ReportFeed }) {
       <div className="rep-split">
         {/* execution by kind */}
         <div className="bx-card wf-pad">
-          <div className="wf-section-title">Execution by job kind <span className="wf-count">all time</span></div>
-          {d.by_kind.length === 0 ? (
+          <div className="wf-section-title">Execution by job kind <span className="wf-count">{WIN_LABEL[win]}</span></div>
+          {w.by_kind.length === 0 ? (
             <p className="detail">No jobs executed yet.</p>
           ) : (
             <div className="rep-table">
-              {d.by_kind.map((k) => {
+              {w.by_kind.map((k) => {
                 const rate = pct(k.succeeded, k.total);
                 return (
                   <div key={k.kind} className="rep-row">
@@ -137,12 +138,12 @@ export function ReportsView({ report }: { report: ReportFeed }) {
 
         {/* cost by model */}
         <div className="bx-card wf-pad">
-          <div className="wf-section-title">Cost by model <span className="wf-count">all time</span></div>
-          {d.by_model.length === 0 ? (
+          <div className="wf-section-title">Cost by model <span className="wf-count">{WIN_LABEL[win]}</span></div>
+          {w.by_model.length === 0 ? (
             <p className="detail">No billable model spend recorded yet. This populates once a real model provider (e.g. OpenAI) executes a settled, receipted call.</p>
           ) : (
             <div className="rep-table">
-              {d.by_model.map((m) => (
+              {w.by_model.map((m) => (
                 <div key={m.model} className="rep-row">
                   <code className="mono">{m.model}</code>
                   <span className="rep-cell">{m.count} call{m.count === 1 ? "" : "s"}</span>
@@ -153,7 +154,7 @@ export function ReportsView({ report }: { report: ReportFeed }) {
           )}
           <div className="wf-section-title" style={{ marginTop: 14 }}>Decision latency</div>
           <p className="detail">
-            Avg time to approve: <b style={{ color: "var(--ink)" }}>{dur(d.decision_latency.avg_seconds)}</b> across {d.decision_latency.count} approved decision{d.decision_latency.count === 1 ? "" : "s"}.
+            Avg time to approve: <b style={{ color: "var(--ink)" }}>{dur(w.decision_latency.avg_seconds)}</b> across {w.decision_latency.count} approved decision{w.decision_latency.count === 1 ? "" : "s"}.
           </p>
         </div>
       </div>
