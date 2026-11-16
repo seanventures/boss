@@ -26,7 +26,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from sqlalchemy import text
 
@@ -1209,6 +1209,41 @@ def lineage_impl_files(engine, run: dict) -> list[str]:
     return out
 
 
+#: A file a browser opens: a build that wrote one is an APP to preview; one that wrote none is a
+#: service or a library (auto_preview_after_pr, and a workflow's Preview step).
+BROWSABLE_SUFFIXES: tuple[str, ...] = (".html", ".jsx", ".tsx", ".vue", ".svelte")
+
+#: What a workflow's Preview step records when the build is a service or a library and its
+#: preview did not come up: the step is skipped, the run goes on (BOSSAPP-1308).
+SERVICE_PREVIEW_SKIPPED = "preview skipped (service)"
+
+
+def builds_a_browsable_app(files: Optional[Iterable[str]]) -> bool:
+    return any(str(p).endswith(BROWSABLE_SUFFIXES) for p in (files or []))
+
+
+def is_service_build(engine, run_id: str) -> Optional[bool]:
+    """Is the build `run_id` a service or a library — its lineage wrote nothing a browser opens
+    (BROWSABLE_SUFFIXES)? The same reading auto_preview_after_pr makes before skipping a
+    preview. None when BOSS cannot tell (no such run, no files recorded): unknown is never a
+    service, so a preview that failed for an app still fails."""
+    if not run_id:
+        return None
+    try:
+        with begin(engine) as c:
+            row = c.execute(text("SELECT id, state, finalize_ctx, spec FROM code_task_runs "
+                                 "WHERE id = :i"), {"i": run_id}).mappings().first()
+        if not row:
+            return None
+        files = lineage_impl_files(engine, dict(row))
+    except Exception:  # noqa: BLE001 — unknown, never a guess
+        logger.debug("is_service_build: could not read %s", run_id, exc_info=True)
+        return None
+    if not files:
+        return None
+    return not builds_a_browsable_app(files)
+
+
 def _changed_dirs(changed: Optional[list[str]]) -> list[str]:
     """Directories this task touched, in the order they appear in the diff."""
     out: list[str] = []
@@ -1882,25 +1917,45 @@ def _url_ok(url: str, *, headers: Optional[dict[str, str]] = None, check_body: b
 
 
 HEALTH_DECLARATION_FILE = "boss.preview.health"
+#: The readiness twin of boss.preview.health: a service may declare where it is READY instead.
+READY_DECLARATION_FILE = "boss.preview.ready"
+
+#: Where a SERVICE says it is up when nothing is declared, asked in this order after the
+#: declared path. An API gateway answers 404 at `/` by design — it routes only what its config
+#: names — and serves /healthz and /readyz (northgate-gateway, wfr_51eb3963, BOSSAPP-1308).
+SERVICE_HEALTH_PATHS: tuple[str, ...] = ("/healthz", "/readyz")
+
+
+def _declared_path_in(workdir: Optional[Path], name: str) -> Optional[str]:
+    try:
+        line = (Path(workdir) / name).read_text(errors="ignore").strip()
+    except (OSError, TypeError):
+        return None
+    line = line.splitlines()[0].strip() if line else ""
+    if line.startswith("/") and "://" not in line and len(line) < 300:
+        return line
+    return None
 
 
 def preview_health_path(workdir: Optional[Path]) -> str:
-    """The path a preview's health check asks for: the one line of boss.preview.health, else the
-    health check the app's own boss.deploy.yaml declares, else `/`.
+    """The path a preview's health check asks for: the one line of boss.preview.health, else
+    boss.preview.ready, else the health check the app's own boss.deploy.yaml declares, else `/`.
 
     ONE DECLARATION OF HEALTH, NOT TWO. An API with nothing at `/` (a JSON order service, a
     Dropwizard `/hello`) declares `health: [{url: http://127.0.0.1:8000/health}]` for its deploy
     and was then failed by its preview as "no page at the site root — check that the build
     produced a UI and not only an API", because the preview only read its own file. The deploy
     manifest is the app saying where it is healthy; the preview asks the same path."""
-    try:
-        line = (Path(workdir) / HEALTH_DECLARATION_FILE).read_text(errors="ignore").strip()
-    except (OSError, TypeError):
-        line = ""
-    line = line.splitlines()[0].strip() if line else ""
-    if line.startswith("/") and "://" not in line and len(line) < 300:
-        return line
-    return _declared_deploy_health_path(workdir) or "/"
+    return (_declared_path_in(workdir, HEALTH_DECLARATION_FILE)
+            or _declared_path_in(workdir, READY_DECLARATION_FILE)
+            or _declared_deploy_health_path(workdir) or "/")
+
+
+def service_health_paths(declared: str = "/") -> list[str]:
+    """The paths that say a SERVICE is up, in the order they are asked: the declared health or
+    ready path (preview_health_path), then /healthz, then /readyz."""
+    out = [declared] if declared and declared != "/" else []
+    return out + [p for p in SERVICE_HEALTH_PATHS if p not in out]
 
 
 def _declared_deploy_health_path(workdir: Optional[Path]) -> Optional[str]:
@@ -1916,7 +1971,11 @@ def _declared_deploy_health_path(workdir: Optional[Path]) -> Optional[str]:
     except (OSError, TypeError, ValueError, ManifestError):
         return None
     for check in manifest.health:
-        path = urlsplit(str(check.url or "")).path
+        # A deploy check is written against its target ("{target.public_url}/healthz"): the
+        # placeholder is the host, the rest is the path. Read as a whole it held a `{` and was
+        # dropped, so northgate-gateway's preview asked `/` (BOSSAPP-1308).
+        url = re.sub(r"^\{[^{}]*\}", "", str(check.url or "").strip())
+        path = urlsplit(url).path
         if path.startswith("/") and len(path) < 300 and "{" not in path:
             return path
     return None
@@ -1962,6 +2021,36 @@ def _command_is_java(command) -> bool:
 
 def _http_ok(port: int, path: str = "/") -> bool:
     return _url_ok(f"http://127.0.0.1:{port}{path if path != '/' else ''}", check_body=True)
+
+
+def _answers_2xx(port: int, path: str) -> bool:
+    """Does `path` on `port` answer 2xx? A health route's body is its own business (an empty 200
+    or `ok` is a healthy service), so only the status counts."""
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", int(port), timeout=2)
+        try:
+            conn.request("GET", path or "/")
+            return 200 <= int(conn.getresponse().status) < 300
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — nothing answering is not up
+        return False
+
+
+def _serving(port: int, health_path: str = "/") -> bool:
+    """Is the app on `port` up for a preview?
+
+    A page at the health path (`/` unless declared) is up, as before. A SERVICE is up when its
+    health says so: when it declared a health/ready path, or when `/` answers "no such route"
+    (404/410 — an API with nothing at the root), the declared path, /healthz and /readyz are
+    asked in that order and a 2xx on any is up. northgate-gateway answered 404 at `/` and 200 at
+    /healthz, and its preview was failed as "no page at the site root" (BOSSAPP-1308). A UI
+    whose `/` serves an error page is still not up: the fallback is only for an absent root."""
+    if _http_ok(port, health_path):
+        return True
+    if health_path in ("", "/") and _route_absent(port, "/") is None:
+        return False
+    return any(_answers_2xx(port, p) for p in service_health_paths(health_path))
 
 
 #: Statuses that say the ROUTE is not there, as opposed to "not ready yet". An app answering
@@ -2029,8 +2118,11 @@ def _diagnose_listening_port(log_path: str, port_hint: int,
                         f"(boss.deploy.yaml health / boss.preview.health) — fix the route or the "
                         f"declaration.")
             return (f"the app IS listening on port {port}, but GET / returned "
-                    f"{http_error.code}. It serves no page at the site root — check that the "
-                    f"build produced a UI and not only an API.")
+                    f"{http_error.code}, and neither "
+                    f"{' nor '.join(SERVICE_HEALTH_PATHS)} answered 2xx. It serves no page "
+                    f"at the site root and no health route — a UI must serve `/`; a service "
+                    f"declares its health path (boss.preview.health / boss.preview.ready, or "
+                    f"health in boss.deploy.yaml) or serves /healthz.")
         except Exception:  # noqa: BLE001 — a port that will not answer is a port that failed
             return (f"the app IS listening on port {port} but GET {path} did not complete.")
     return None
@@ -2209,7 +2301,7 @@ def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0,
     absent_since: dict[int, float] = {}
     while time.time() < deadline:
         for port in candidates():
-            if _http_ok(port, health_path):
+            if _serving(port, health_path):
                 return port
             if _route_absent(port, health_path) is None:
                 absent_since.pop(port, None)
@@ -2218,7 +2310,7 @@ def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0,
         if proc is not None and proc.poll() is not None:
             # One last look: a server that forked and exited its parent may be up by now.
             for port in candidates():
-                if _http_ok(port, health_path):
+                if _serving(port, health_path):
                     return port
             return None
         time.sleep(0.8)
@@ -3401,7 +3493,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     url = f"http://127.0.0.1:{host_port}"
     ok = False
     for _ in range(20):
-        if _http_ok(host_port):
+        if _serving(host_port):
             ok = True
             break
         time.sleep(1.0)

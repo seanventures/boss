@@ -908,6 +908,7 @@ def resolve_gate_plan(
     layout: Any = None,
     lineage: list[str] | None = None,
     recorded: str | None = None,
+    finalize_ctx: dict[str, Any] | None = None,
 ) -> GatePlan:
     """The verify plan for a provisioned checkout.
 
@@ -936,7 +937,8 @@ def resolve_gate_plan(
     # What the BASE tree held, read before any agent ran: never the lazily pinned copy below.
     base_apps = pinned.base_apps if pinned is not None else None
     # The named app: the pinned benchmark app, else the one folder the brief names.
-    named = app_id or app_scope(spec, None)
+    # ``finalize_ctx``: the run's, so a follow-up's findings are never read as its brief.
+    named = app_id or app_scope(spec, finalize_ctx)
     where = app_root.resolve(base, app_id=named, recorded=recorded, changed=changed,
                              lineage=lineage)
     raw = spec.get("test_commands")
@@ -1290,8 +1292,28 @@ def brief_app_dir(instructions: Any) -> str | None:
 
 def app_scope(spec: dict[str, Any] | None, finalize_ctx: dict[str, Any] | None) -> str | None:
     """THE app directory a build's tests belong to: the pinned benchmark app, else the folder its
-    brief names. None: the whole repository is the app (a single-app repo)."""
-    return official_app_id(spec, finalize_ctx) or brief_app_dir((spec or {}).get("instructions"))
+    brief names. None: the whole repository is the app (a single-app repo).
+
+    A FOLLOW-UP HAS NO BRIEF. Its instructions are the findings it was sent to fix, and a finding
+    quotes folders as evidence: "there is no `schema/` directory at all" made the checks-failing
+    follow-up crun_8abe60c6 of northgate-gateway (a Go module at the repository root) verify,
+    gate and judge acceptance inside `schema/` — `go vet` found no packages and all 30 must-haves
+    read "missing" (BOSSAPP-1307). A follow-up builds on its lineage's app, which BOSS recorded
+    (app_root.recorded_app_dir) or the lineage's files place; never on a folder its findings
+    happen to name."""
+    named = official_app_id(spec, finalize_ctx)
+    if named:
+        return named
+    if is_continuation_of_findings(finalize_ctx):
+        return None
+    return brief_app_dir((spec or {}).get("instructions"))
+
+
+def is_continuation_of_findings(finalize_ctx: dict[str, Any] | None) -> bool:
+    """Is this run a follow-up (checks failing, deferred findings, an operator's follow-up) or an
+    attempt of one, whose instructions are findings rather than the app's brief?"""
+    fctx = finalize_ctx or {}
+    return bool(fctx.get("is_followup") or fctx.get("deferred_from_run"))
 
 
 def in_app_scope(path: str, scope: str | None) -> bool:

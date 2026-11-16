@@ -4178,6 +4178,16 @@ def _perform_capability(
                                          or f"'{capability.tool}' was refused."))
     failed = _tool_failed_to_start(key, result)
     if failed:
+        service_skip = (_service_preview_skipped(
+            connection, build_run_id=str((inputs or {}).get("run_id") or result.get("run_id") or ""),
+            why=failed, output=result)
+            if key == "preview" else None)
+        if service_skip:
+            emit_event(connection, project_id, "workflow.step_skipped", step_actor or actor,
+                       "workflow_run", str(context.get("run_id") or ""),
+                       {"step_id": step.get("id"), "capability": key,
+                        "reason": service_skip["reason"][:500]})
+            return service_skip
         raise CapabilityExecutionError(failed)
 
     # STARTED IS NOT FINISHED. See `_settle_started_work`.
@@ -5362,6 +5372,34 @@ def _preview_not_permitted(key: str, output: dict[str, Any],
             "note": f"skipped: {reason}"}
 
 
+def _service_preview_skipped(connection: Any, *, build_run_id: str, why: str,
+                             output: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
+    """A Preview step whose build is a SERVICE OR A LIBRARY and whose preview did not come up is
+    SKIPPED — "preview skipped (service)" — and the run goes on; None for an app (or a build
+    BOSS cannot read), whose failed preview still fails the step.
+
+    The build itself had already said so: auto-preview skipped northgate-gateway as a
+    "service/library build". Its workflow's Preview step then started one anyway, the Go API
+    gateway answered 404 at `/` as it should, and the whole run failed at Preview
+    (wfr_51eb3963, BOSSAPP-1308). A preview is for a person to look at a page; a service is
+    exercised by its tests and its deploy's health checks."""
+    from .preview_service import SERVICE_PREVIEW_SKIPPED, is_service_build
+
+    if not build_run_id:
+        return None
+    engine = getattr(connection, "engine", None)
+    if engine is None or not is_service_build(engine, build_run_id):
+        return None
+    detail = " ".join(str(why or "").split())[:300]
+    reason = (f"{SERVICE_PREVIEW_SKIPPED}: this build is a service or a library — it has no "
+              "page for a browser — so it is exercised by its tests and its deploy's health "
+              "checks, not a preview. The run goes on."
+              + (f" (The preview said: {detail})" if detail else ""))
+    return {**(output or {}), "ok": True, "status": "skipped", "skipped": "service",
+            "error": None, "reason": reason, "message": reason, "summary": reason,
+            "note": reason, "build_run_id": build_run_id}
+
+
 def _tool_failed_to_start(key: str, output: dict[str, Any]) -> Optional[str]:
     """A sentence when the tool reported failure and there is nothing to wait on.
 
@@ -5784,6 +5822,40 @@ def _dossier_brief(title: Any, state: Any) -> str:
 _ADVISORY_CAPABILITIES = frozenset({"more_tests"})
 
 
+def _skip_service_preview(connection: Connection, *, project_id: str, run_id: str, step: Any,
+                          output: dict, preview_id: str, status: str, why: str,
+                          done: list) -> bool:
+    """A SERVICE'S PREVIEW NEVER FAILS THE RUN (_service_preview_skipped): a failed preview of a
+    service or library build completes its step as skipped; True when it did."""
+    if status != "failed":
+        return False
+    service_skip = _service_preview_skipped(
+        connection, build_run_id=_preview_build_run(connection, preview_id), why=why,
+        output=output)
+    if not service_skip:
+        return False
+    workflows.force_complete_waiting_step(
+        connection, project_id=project_id, step_run_id=step["id"],
+        output={**service_skip, "awaited_status": status})
+    emit_event(connection, project_id, "workflow.step_skipped", "boss", "workflow_run", run_id,
+               {"step_id": step["step_id"], "capability": "preview",
+                "reason": service_skip["reason"][:500]})
+    done.append({"run_id": run_id, "step_id": step["step_id"], "outcome": "skipped_service",
+                 "awaited_status": status})
+    return True
+
+
+def _preview_build_run(connection: Connection, preview_id: str) -> str:
+    """The build a preview previews (app_previews.run_id), or ""."""
+    try:
+        with connection.begin_nested():
+            return str(connection.execute(
+                text("SELECT run_id FROM app_previews WHERE id = :i"),
+                {"i": preview_id}).scalar() or "")
+    except Exception:  # noqa: BLE001 — unknown: the failure stands
+        return ""
+
+
 def _complete_advisory_failure(connection: Connection, *, project_id: str, run_id: str,
                                step: Any, output: dict, status: str, why: str,
                                done: list) -> bool:
@@ -6149,6 +6221,10 @@ def resume_awaited(
             # one or two tables away and this line used to discard it, leaving the operator
             # with a sentence that only restates the failure.
             why = _why_it_ended(connection, table, awaited_id)
+            if kind == "preview" and _skip_service_preview(
+                    connection, project_id=project_id, run_id=run_id, step=step, output=output,
+                    preview_id=awaited_id, status=status, why=str(why or ""), done=done):
+                continue
             if _complete_advisory_failure(connection, project_id=project_id, run_id=run_id,
                                           step=step, output=output, status=status,
                                           why=str(why or ""), done=done):
