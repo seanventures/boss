@@ -365,10 +365,11 @@ def _dm(connection: Connection, endpoint: Mapping[str, Any], user: str, words: s
 
 
 def prompt_link(connection: Connection, settings: Any, connection_row: Mapping[str, Any],
-                event: IntakeEvent, *, now: Optional[datetime] = None) -> bool:
+                event: IntakeEvent, *, now: Optional[datetime] = None, force: bool = False) -> bool:
     """The unknown sender's private link prompt (chat_channels' one-time code), at most once
     per user per hour: the outbox dedupe key carries the hour, so a second event in the same
-    hour writes nothing. False when there is no chat endpoint to answer through."""
+    hour writes nothing. `force` (a person pressed Resend) mints a new code and a new dedupe
+    key, so it sends inside that hour. False when there is no chat endpoint to answer through."""
     from .chat_channels import _link_words, start_link
 
     endpoint = _endpoint(connection, connection_row)
@@ -376,11 +377,14 @@ def prompt_link(connection: Connection, settings: Any, connection_row: Mapping[s
     if endpoint is None or not user:
         return False
     now = now or _now()
-    dedupe = f"link_dm:intake:{endpoint['id']}:{user}:{_bucket(now)}"
-    exists = connection.execute(text("SELECT 1 FROM chat_outbox WHERE dedupe_key = :d"),
-                                {"d": dedupe}).scalar()
-    if exists:
-        return False
+    if force:
+        dedupe = f"link_dm:intake:{endpoint['id']}:{user}:resend:{make_id('r')}"
+    else:
+        dedupe = f"link_dm:intake:{endpoint['id']}:{user}:{_bucket(now)}"
+        exists = connection.execute(text("SELECT 1 FROM chat_outbox WHERE dedupe_key = :d"),
+                                    {"d": dedupe}).scalar()
+        if exists:
+            return False
     code = start_link(connection, endpoint, user, event.bossactor.display or "", now)
     return _dm(connection, endpoint, user, _link_words(settings, code), dedupe)
 

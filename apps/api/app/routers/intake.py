@@ -22,6 +22,7 @@ are the shapes it will read.
 
   PEOPLE LINKS (E7)
   GET     /v1/intake/connections/{connection_id}/people                  integration:read
+  POST    /v1/intake/connections/{connection_id}/people/prompts          integration:manage
   POST    /v1/intake/connections/{connection_id}/people/{link_id}/revoke integration:manage
 
   EVENTS (E5) and DEAD LETTERS (E6)
@@ -90,6 +91,12 @@ class AttestationBody(BaseModel):
     actor: Optional[str] = None
     identity_provider_id: str
     domains: Optional[list[str]] = Field(default=None, max_length=50)
+
+
+class PromptBody(BaseModel):
+    actor: Optional[str] = None
+    external_user_id: Optional[str] = None
+    resend: bool = False
 
 
 class ReplayBody(ProjectBody):
@@ -357,6 +364,21 @@ def build_intake_router(*, engine, settings: Callable[[], Any],
                 return event_intake.connection_people(
                     db, project_id=project_id, connection_id=connection_id,
                     reveal=people_visible(request, db), limit=limit, offset=offset)
+            except Exception as error:  # noqa: BLE001
+                _fail(error)
+
+    @router.post("/v1/intake/connections/{connection_id}/people/prompts")
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.of("intake_connection", path="connection_id"))
+    def prompt_intake_people(connection_id: str, body: Optional[PromptBody] = None) -> dict:
+        """Send link prompts to not-linked people, or resend one. Never a guest, never a code."""
+        body = body or PromptBody()
+        with begin(engine) as db:
+            project_id = _connection_project(db, connection_id)
+            require_write_actor(db, project_id, body.actor, "integration_manage")
+            try:
+                return event_intake.prompt_people(
+                    db, settings(), project_id=project_id, connection_id=connection_id,
+                    external_user_id=body.external_user_id or None, resend=body.resend)
             except Exception as error:  # noqa: BLE001
                 _fail(error)
 

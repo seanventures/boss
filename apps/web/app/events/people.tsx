@@ -13,7 +13,7 @@ import { ShieldCheck, UsersThree } from "@phosphor-icons/react";
 
 import { GatedButton, useGate } from "../../components/gated";
 import { formatDate, formatRelativeTime } from "../../lib/datetime";
-import { clearAttestation, methodWords, readPeople, revokePerson, type Person, type PersonState } from "../../lib/intake";
+import { clearAttestation, methodWords, promptPeople, readPeople, revokePerson, type Person, type PersonState } from "../../lib/intake";
 import { useNow } from "../agents/live-util";
 import { EvFrame, useConnPick, useEv } from "./frame";
 import { Chip, Empty, Face, ReadState, Said, SourceMark, goEvents, useRead } from "./parts";
@@ -43,6 +43,22 @@ export function PeopleTab() {
   const rows = (data?.people ?? []).filter((p) => filter === "all" || p.state === filter);
   const ago = (iso: string) => (iso && now ? formatRelativeTime(iso, now) : "");
 
+  const promptWords = (body: unknown): string => {
+    const x = body && typeof body === "object" ? body as Record<string, unknown> : {};
+    const sent = Array.isArray(x.sent) ? x.sent.length : 0;
+    const already = Array.isArray(x.already_sent) ? x.already_sent.length : 0;
+    if (sent && already) return `Sent ${sent}. ${already} already had a prompt this hour.`;
+    if (sent === 1) return "Link prompt sent.";
+    if (sent > 1) return `Link prompts sent to ${sent} people.`;
+    if (already) return "Already sent this hour.";
+    return "Nobody to prompt.";
+  };
+  const sendPrompts = async (user = "", resend = false) => {
+    if (!picked) return;
+    const r = await promptPeople(picked.id, user, resend);
+    setSaid(r.ok ? { text: promptWords(r.body), tone: "green" } : { text: r.error || "Not sent.", tone: "red" });
+    if (r.ok) reload();
+  };
   const revoke = async (p: Person) => {
     setConfirm(null);
     if (!picked) return;
@@ -95,6 +111,10 @@ export function PeopleTab() {
           <section className="ev-card" aria-labelledby="ev-pp-h">
             <div className="ev-row-line">
               <h2 id="ev-pp-h" className="ev-sec-title">People</h2>
+              {data.counts.not_linked > 0 ? (
+                <GatedButton permission="integration:manage" projectId={projectId} className="ev-btn" data-size="sm"
+                             onClick={() => void sendPrompts()} data-testid="ev-send-prompts">Send link prompts · {data.counts.not_linked}</GatedButton>
+              ) : null}
               <span className="ev-spacer" />
               <div className="ev-seg" role="radiogroup" aria-label="Show">
                 {FILTERS.map((f) => <button key={f.key} type="button" role="radio" aria-checked={filter === f.key} onClick={() => setFilter(f.key)} data-testid={`ev-people-filter-${f.key}`}>{f.word}</button>)}
@@ -117,6 +137,11 @@ export function PeopleTab() {
                     {p.state === "linked" || p.state === "revoked" ? <Chip tone={p.state === "revoked" ? "red" : p.method === "sso_email" ? "green" : "blue"} tip={METHOD_TIPS[p.method] || p.method}>
                       {p.state === "revoked" ? "Revoked" : methodWords(p.method)}</Chip> : null}
                     <span className="ev-faint">{p.state === "revoked" ? ago(p.revoked_at) : p.state === "linked" ? ago(p.linked_at) : p.prompted_at ? `Link sent ${ago(p.prompted_at)}` : p.last_seen_at ? `seen ${ago(p.last_seen_at)}` : ""}</span>
+                    {p.state === "not_linked" ? (
+                      <GatedButton permission="integration:manage" projectId={projectId} className="ev-link"
+                                   title="Send the link prompt again, even if one already went this hour."
+                                   onClick={() => void sendPrompts(p.external_user_id, true)} data-testid={`ev-resend-${p.external_user_id}`}>Resend</GatedButton>
+                    ) : null}
                     {p.state === "linked" ? (
                       confirm?.link_id === p.link_id ? (
                         <>

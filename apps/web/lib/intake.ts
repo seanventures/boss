@@ -499,3 +499,8 @@ export const removeRuleBudget = (projectId: string, policyId: string): Promise<W
   obsWrite(`/v1/budget-policies/scoped/${enc(policyId)}?project_id=${enc(projectId)}`, {}, press(`budget:${policyId}:rm`, "Daily budget"), "DELETE");
 export const revokePerson = (connectionId: string, linkId: string): Promise<WriteResult> =>
   obsWrite(`${conn(connectionId)}/people/${enc(linkId)}/revoke`, {}, press(`person:${linkId}`, "Revoke"));
+/** A fresh press scope: Send and Resend must each enqueue, not replay the first press. */
+export const promptPeople = (connectionId: string, externalUserId = "", resend = false): Promise<WriteResult> =>
+  obsWrite(`${conn(connectionId)}/people/prompts`,
+    { ...(externalUserId ? { external_user_id: externalUserId } : {}), ...(resend ? { resend: true } : {}) },
+    press(`prompts:${connectionId}:${externalUserId || "all"}:${Date.now()}`, resend ? "Resend" : "Send link prompts"));

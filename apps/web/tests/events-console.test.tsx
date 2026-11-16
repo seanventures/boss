@@ -119,6 +119,7 @@ function api(over: (url: string, method: string, body: Record<string, unknown>) 
       { ...EVENTS.events[1], id: "iev_d2", kind: "webhook", status: "dead", text: "INC0012305 created", actor: { kind: "service", display: "" },
         last_error: "TimeoutError: timed out", attempts: 5, routes: [], first_failed_at: iso(1_800_000) }],
       per_connection: [{ connection_id: "icn_s", kind: "slack", name: "northpeak", dead: 0 }, { connection_id: "icn_w", kind: "webhook", name: "Grafana alerts", dead: 2 }] });
+    if (url.endsWith("/people/prompts")) return json({ sent: body.external_user_id ? [body.external_user_id] : ["U0DEV"], already_sent: [], skipped: [] });
     if (url.endsWith("/people")) return json(PEOPLE);
     if (url.startsWith("/v1/chat/endpoints?")) return json({ endpoints: [] });
     if (url.startsWith("/v1/identity/providers")) return json({ providers: [{ id: "idp_okta", name: "Okta", domains: ["northpeak.com"], status: "active" }] });
@@ -452,6 +453,14 @@ describe("E7 People", () => {
     expect($('[data-testid="ev-person-U0MARCO"]')?.textContent).toContain("Code");
     expect($('[data-testid="ev-person-U0DEV"]')?.textContent).toContain("Link sent");
     expect($('[data-testid="ev-person-U0ANA"]')?.textContent).toContain("Guest · never auto-linked");
+    expect($('[data-testid="ev-send-prompts"]')?.textContent).toContain("Send link prompts · 1");
+    expect($('[data-testid="ev-resend-U0DEV"]')).not.toBeNull();
+    expect($('[data-testid="ev-resend-U0ANA"]')).toBeNull();
+    expect($('[data-testid="ev-resend-U0PRIYA"]')).toBeNull();
+    await click($('[data-testid="ev-send-prompts"]'));
+    expect(calls.find((c) => c.url.endsWith("/people/prompts"))!.body).toEqual({});
+    await click($('[data-testid="ev-resend-U0DEV"]'));
+    expect(calls.filter((c) => c.url.endsWith("/people/prompts")).pop()!.body).toEqual({ external_user_id: "U0DEV", resend: true });
     await click($('[data-testid="ev-people-filter-guest"]'));
     expect($$('[data-testid^="ev-person-"]').length).toBe(1);
     await click($('[data-testid="ev-people-filter-all"]'));

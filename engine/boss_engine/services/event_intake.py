@@ -62,6 +62,7 @@ from ..connectors.intake.contract import (
     MODES,
     TERMINAL_STATUSES,
     CapabilityNotSupported,
+    ExternalActor,
     IntakeConnection,
     IntakeEvent,
     ParseRefused,
@@ -2207,6 +2208,56 @@ def revoke_person_link(connection: Connection, *, project_id: str, connection_id
                connection_id, {"link_id": link_id, "external_user_id": done["external_user_id"],
                                "method": done["method"], "by_admin": True})
     return {"revoked": link_id, "external_user_id": done["external_user_id"]}
+
+
+def _prompt_event(connection_id: str, user: str, display: str) -> IntakeEvent:
+    return IntakeEvent(id=f"prompt:{user}", source="intake://prompt", type="com.slack.message",
+                       bossconnection=connection_id,
+                       bossactor=ExternalActor(kind="user", external_id=user, display=display))
+
+
+def prompt_people(connection: Connection, settings: Any, *, project_id: str, connection_id: str,
+                  external_user_id: Optional[str] = None, resend: bool = False) -> dict:
+    """Send a link prompt to every not-linked person on this connection, or to one of them.
+    Guests are never prompted. A second bulk send in the same hour does not send again; Resend
+    (`external_user_id` and `resend`) forces a new code. The answer never includes a link code."""
+    from . import intake_identity
+
+    row = get_connection(connection, connection_id, project_id=project_id)
+    if row is None or not row.get("chat_endpoint_id"):
+        raise IntakeServiceError("no such chat connection in this project.", status=404,
+                                 code="not_found")
+    page = connection_people(connection, project_id=project_id, connection_id=connection_id,
+                             limit=PEOPLE_PAGE_MAX)
+    people = {str(p["external_user_id"]): p for p in page["people"]}
+
+    def one(person: Mapping[str, Any], *, force: bool) -> bool:
+        return intake_identity.prompt_link(
+            connection, settings, row,
+            _prompt_event(connection_id, str(person["external_user_id"]), str(person.get("display") or "")),
+            force=force)
+
+    if external_user_id:
+        person = people.get(external_user_id)
+        if person is None:
+            raise IntakeServiceError("no such person on this connection.", status=404, code="not_found")
+        if person.get("guest") or person.get("state") == "guest":
+            raise IntakeServiceError("Guests are never sent a link prompt.", status=422, code="guest")
+        if person.get("state") == "linked":
+            raise IntakeServiceError("That person is already linked.", status=422, code="already_linked")
+        if person.get("state") != "not_linked":
+            raise IntakeServiceError("Only a person who is not linked can be prompted.", status=422,
+                                     code="not_promptable")
+        sent = one(person, force=bool(resend))
+        return {"sent": [external_user_id] if sent else [],
+                "already_sent": [] if sent else [external_user_id], "skipped": []}
+    sent: list[str] = []
+    already: list[str] = []
+    for person in page["people"]:
+        if person.get("state") != "not_linked" or person.get("guest"):
+            continue
+        (sent if one(person, force=False) else already).append(str(person["external_user_id"]))
+    return {"sent": sent, "already_sent": already, "skipped": []}
 
 
 def sweep_retention(connection: Connection, *, now: Optional[datetime] = None) -> dict:

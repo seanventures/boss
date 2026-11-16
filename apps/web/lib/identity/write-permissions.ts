@@ -203,6 +203,7 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/intake.ts#setRuleBudget": "budget:manage",                 // POST /v1/budget-policies/scoped (scope trigger, per day)
   "lib/intake.ts#removeRuleBudget": "budget:manage",              // DELETE /v1/budget-policies/scoped/{id}
   "lib/intake.ts#revokePerson": "integration:manage",             // POST /v1/intake/connections/{id}/people/{link}/revoke
+  "lib/intake.ts#promptPeople": "integration:manage",             // POST /v1/intake/connections/{id}/people/prompts
 
   // lib/llm-gateways.ts — Setup › Advanced › Gateways (BOSSAPP-887)
   "lib/llm-gateways.ts#createGateway": "model_provider:manage",   // POST /v1/llm-gateways
