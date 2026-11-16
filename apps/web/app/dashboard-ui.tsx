@@ -67,7 +67,7 @@ export function DashboardPanel({
         <Kpi label="Awaiting You" value={s.workload.pendingDecisions} color={s.workload.pendingDecisions > 0 ? "var(--amber)" : undefined} hint={`${s.workload.highRiskPending} high-risk`} />
         <Kpi label="Open Tasks" value={s.workload.openTasks} hint={`${s.workload.completedTasks} done`} />
         <Kpi label="Running" value={running} color={running > 0 ? "var(--teal)" : undefined} hint={`${s.queue.queued} queued, ${s.queue.retryable} retry`} />
-        <Kpi label="Run-rate 1h" value={usd(s.spend.runRate1hUsdMicros)} hint={`of ${usd(s.spend.capUsdMicros)} cap`} />
+        <Kpi label="1h new reservations, not settled receipts" value={usd(s.spend.runRate1hUsdMicros)} hint={`of ${usd(s.spend.capUsdMicros)} cap`} />
         <Kpi label="Canary" value={s.canary ? s.canary.status.toUpperCase() : "—"} color={s.canary ? tone(s.canary.status) : undefined} hint={s.canary ? `${s.canary.passed}/${s.canary.failed}/${s.canary.skipped}` : "not run"} />
       </div>
 
