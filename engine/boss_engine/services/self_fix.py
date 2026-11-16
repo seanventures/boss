@@ -297,7 +297,7 @@ def running_stack_head() -> str:
 
 def mirror_path(settings: Any) -> Path:
     return Path(str(getattr(settings, "self_fix_source", "") or
-                    "/var/lib/boss/selfsrc/boss.git"))
+                    "/var/lib/boss/private/selfsrc/boss.git"))
 
 
 def install_capable(settings: Any) -> tuple[bool, str]:

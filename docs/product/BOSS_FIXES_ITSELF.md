@@ -360,7 +360,7 @@ Open findings get one repair round (as today). Still open → `refused: review`,
 
 ### 6.1 The self-source mirror
 
-- A bare repository BOSS manages, `boss_community_selfsrc` volume (`/var/lib/boss/selfsrc/boss.git`), registered as repository kind **`boss_self`** (a new value beside the `github_repository_bindings` rows; `repo_registry.resolve_repository_target` resolves `repository="boss"` to it).
+- A bare repository BOSS manages, `boss_community_selfsrc` volume (`/var/lib/boss/private/selfsrc/boss.git`), registered as repository kind **`boss_self`** (a new value beside the `github_repository_bindings` rows; `repo_registry.resolve_repository_target` resolves `repository="boss"` to it).
 - **Seeded** by the host self-installer at install/upgrade time: `git clone --mirror <install checkout>` (fast, offline, includes the exact `BOSS_SOURCE_SHA` and the release tags). The checkout's `origin` (normally `github.com/seanventures/boss`) is recorded as `upstream`.
 - **Base commit** for a self-fix = the running `BOSS_SOURCE_SHA` plus the current stack head (fixes stack in order).
 - The sandbox clones from the mirror (local path, no egress, no token). The sandbox can **never** push to the mirror; BOSS's pipeline writes the self-fix branch after the gates pass.
