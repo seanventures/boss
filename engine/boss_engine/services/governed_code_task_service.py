@@ -5574,7 +5574,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     _stack_record: dict = {}
 
     def _push_held(where: str) -> bool:
-        reason = template_push_hold(_tpl_applies, _tpl_gates)
+        # THE ONE CHOKE POINT FOR EVERY COMMIT OR UPSERT (#168 review R2): a re-check commits
+        # nothing — no checkpoint, rescue, partial PR, preview declaration or PRD record —
+        # whatever gate preparation left in the checkout (change_recheck.push_hold_reason).
+        reason = _change_recheck.push_hold_reason(
+            _recheck, template_push_hold(_tpl_applies, _tpl_gates))
         if reason is None:
             return False
         try:
@@ -8588,6 +8592,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # reviewer that never saw the tree) never replaces a judged table.
         _acceptance_history: list[dict] = []
         _acceptance_judged: dict = {}
+        if _recheck:
+            # A RE-CHECK STARTS FROM THE CHANGE'S LAST JUDGED TABLE (#168 review M1): its
+            # history continues, and a re-check whose own check refused or did not run never
+            # replaces that verdict on the PR.
+            try:
+                with _transaction(engine) as _c:
+                    _of = load_code_task_run(_c, str(fctx.get(_change_recheck.OF_KEY) or ""))
+                _change_recheck.seed_acceptance(_of, _acceptance_history, _acceptance_judged)
+            except Exception:  # noqa: BLE001 — no earlier table: the re-check's own stands
+                _log_caught(logger)
         panel_size = 1
         review_seat = None  # the panel seat whose findings stand for the review (§6.4)
         review_cost = 0
@@ -9385,7 +9399,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 rec, spent = _judge_acceptance_check(**kwargs)
                 _ledger_acceptance_check(engine, run_id, project_id, rec, root=review_root)
                 return (_acceptance_gate.keep_history(_acceptance_history, rec,
-                                                      _acceptance_judged), spent)
+                                                      _acceptance_judged,
+                                                      keep_on_not_run=_recheck), spent)
 
             def _judge_acceptance_check(max_turns: Optional[int] = None,
                                         max_budget_usd: Optional[float] = None,
@@ -10774,7 +10789,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         "quality_gate_id": qg_id, "failing_gates": failing}
 
         # GATE PASSED — open the PR via the existing software-factory path.
-        if _push_held("pull_request"):
+        # (A re-check reaches the PR terminal with no files: its verdict and card, no commit.)
+        if not _recheck and _push_held("pull_request"):
             # Unreachable by design (a failing template gate never ships), kept as the last
             # door: a template build whose gates did not pass opens no PR, whatever led here.
             with _transaction(engine) as c:
@@ -11085,8 +11101,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # CI FAILED AFTER THE PR OPENED: one bounded repair round in the same lineage
         # (repair_after_ci_failure). After the terminal write, so the attempt chains off a
         # settled run; the merge/deploy approvals stay refused meanwhile (ci_gate).
-        ci_repair_run = repair_after_ci_failure(engine, settings, jobs, run_id, project_id,
-                                                fctx, evidence.get("ci_wait") or {})
+        ci_repair_run = (None if _recheck else   # a re-check never starts a build (R1)
+                         repair_after_ci_failure(engine, settings, jobs, run_id, project_id,
+                                                 fctx, evidence.get("ci_wait") or {}))
         # WHAT THIS RUN COST, DELIVERED AND LOST — recorded now, while every fact is fresh.
         #
         # Answering "what went wrong" on an 85-minute build took two hours of reading container
@@ -11124,6 +11141,22 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.followup_skipped", "boss",
                            "code_task_run", run_id, {"reason": _followup_skip_reason})
+        if _recheck:
+            # A RE-CHECK NEVER STARTS A BUILD ON ITS OWN (#168 review R1): its findings go to
+            # the ledger and ONE card, "Fix these (about $X)", starts the follow-up when a person
+            # with the steer permission presses it.
+            if _followup_ok and (deferred_findings or _checks):
+                try:
+                    _change_recheck.raise_fix_card(
+                        engine, run_id=run_id, project_id=project_id, task_id=task_id,
+                        title=title, spec=spec, base_branch=work_branch,
+                        parent_root=str(fctx.get("root_run_id") or run_id),
+                        parent_origin=fctx.get("origin"),
+                        workflow_run_id=fctx.get("workflow_run_id"),
+                        findings=list(deferred_findings or []), checks_failing=_checks)
+                except Exception:  # noqa: BLE001 — the verdict is delivered; the card is extra
+                    _log_caught(logger)
+            _followup_ok, _followup_skip_reason = False, "a re-check never starts a build"
         # ONE OWNER PER PULL REQUEST (code_task_service.lineage_branch_owner). A workflow whose
         # More tests pass has not started yet hands the deferred findings to THAT pass — it
         # extends this same branch and PR next — instead of starting a second run on the branch

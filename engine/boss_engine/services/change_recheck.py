@@ -170,5 +170,163 @@ def request(engine: Any, settings: Any, jobs: Any, run_id: str, *, project_id: s
             "estimate": cost, "gates": list(GATES)}
 
 
+# ── what a re-check may not do: commit, or start a build ─────────────────────────────────────
+
+#: Why a re-check holds every push (governed _push_held, the one choke point).
+PUSH_HOLD = "a re-check commits nothing: it only judges the change as it stands"
+
+
+def push_hold_reason(recheck: bool, template_reason: Optional[str]) -> Optional[str]:
+    """Why a push is held, or None: a re-check holds EVERY commit and upsert (a checkpoint, a
+    rescue, a partial PR, the preview declaration, the PRD record, a stage commit), whatever its
+    label; otherwise an applied template's hold, as before (#168 review R2)."""
+    return PUSH_HOLD if recheck else template_reason
+
+
+def seed_acceptance(of_run: Optional[Mapping[str, Any]], history: list, judged: dict) -> None:
+    """Start a re-check's acceptance history and judged table from the run it re-checks (#168
+    review M1): its history continues, and its last JUDGED table (met / not_met, never a refused
+    or unrun one) stands until the re-check's own check judges."""
+    state = (of_run or {}).get("state") or {}
+    for h in state.get("acceptance_history") or []:
+        if isinstance(h, Mapping):
+            history.append(dict(h))
+    acc = state.get("acceptance")
+    if (isinstance(acc, Mapping) and acc.get("verdict") in ("met", "not_met")
+            and not acc.get("refused")):
+        judged["record"] = dict(acc)
+
+
+#: The card a re-check raises when it fails or has findings: "Fix these (about $X)".
+FIX_ACTION = "start_recheck_followup"
+#: A follow-up's cost when the lineage recorded no build spend to go by.
+DEFAULT_FIX_ESTIMATE_USD = 8.0
+
+
+def fix_estimate(connection: Any, project_id: str, root: str) -> dict:
+    """What fixing the findings is likely to cost: what the lineage's newest coding attempt
+    cost in all (llm_calls), else DEFAULT_FIX_ESTIMATE_USD."""
+    from sqlalchemy import text
+
+    try:
+        with connection.begin_nested():
+            row = connection.execute(text(
+                "SELECT l.code_task_run_id AS rid, SUM(l.cost_usd_micros) AS micros "
+                "FROM llm_calls l JOIN code_task_runs r ON r.id = l.code_task_run_id "
+                "WHERE r.project_id = :p AND (r.id = :root OR r.finalize_ctx->>'root_run_id' = :root) "
+                "AND COALESCE(r.finalize_ctx->>'recheck_only', '') = '' "
+                "AND l.stage IN ('implement', 'solo', 'write_tests') "
+                "GROUP BY l.code_task_run_id, r.created_at ORDER BY r.created_at DESC LIMIT 1"),
+                {"p": project_id, "root": root}).mappings().first()
+            if row and int(row["micros"] or 0) > 0:
+                total = connection.execute(text(
+                    "SELECT SUM(cost_usd_micros) FROM llm_calls WHERE code_task_run_id = :r"),
+                    {"r": row["rid"]}).scalar()
+                return {"usd": round(int(total or 0) / 1_000_000, 2),
+                        "basis": f"what {row['rid']} cost"}
+    except Exception:  # noqa: BLE001 — no ledger to read: the default estimate
+        pass
+    return {"usd": DEFAULT_FIX_ESTIMATE_USD, "basis": "no earlier build spend recorded"}
+
+
+def raise_fix_card(engine: Any, *, run_id: str, project_id: str, task_id: Optional[str],
+                   title: str, spec: Mapping[str, Any], base_branch: str, parent_root: str,
+                   parent_origin: Any, workflow_run_id: Optional[str], findings: list,
+                   checks_failing: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """The re-check failed or found something: its findings are recorded in the ledger (open
+    rows, nobody holds them) and ONE card asks a person to start the fix. Returns the card's id
+    (an open card for this re-check is reused), or None when there is nothing to fix."""
+    from ..db import begin
+    from .checks_failing import followup_findings, headline
+    from .core import create_blocking_decision, emit_event
+
+    # The pipeline's findings already lead with the failing checks (checks_failing.followup_findings).
+    items = list(findings or []) or (followup_findings(checks_failing) if checks_failing else [])
+    if not items:
+        return None
+    with begin(engine) as c:
+        try:
+            from .acceptance import ledger as _ledger
+
+            with c.begin_nested():
+                lin = _ledger.lineage_of(c, run_id)
+                _ledger.observe_findings(c, project_id=project_id,
+                                         lineage=(lin or {}).get("lineage") or parent_root,
+                                         run_id=run_id, findings=items, stage="recheck",
+                                         pr_url=(lin or {}).get("pr_url"))
+        except Exception:  # noqa: BLE001 — the card still carries every finding
+            pass
+        from sqlalchemy import text
+
+        open_card = c.execute(text(
+            "SELECT id FROM decisions WHERE project_id = :p AND status = 'pending' "
+            "AND recommendation->>'action' = :a AND recommendation->>'run_id' = :r LIMIT 1"),
+            {"p": project_id, "a": FIX_ACTION, "r": run_id}).scalar()
+        if open_card:
+            return str(open_card)
+        cost = fix_estimate(c, project_id, parent_root)
+        what = (f"its checks fail ({headline(checks_failing)})" if checks_failing
+                else f"{len(items)} finding{'s' if len(items) != 1 else ''} to fix")
+        decision_id = create_blocking_decision(
+            c, project_id, task_id,
+            f"Fix these (about ${cost['usd']:.2f}): the re-check of “{str(title)[:70]}” says {what}",
+            {"action": FIX_ACTION, "run_id": run_id, "estimate": cost,
+             "findings": items[:40], "checks_failing": dict(checks_failing or {}) or None,
+             "followup": {"spec": dict(spec or {}), "base_branch": base_branch,
+                          "parent_title": title, "parent_root": parent_root,
+                          "parent_origin": parent_origin, "workflow_run_id": workflow_run_id},
+             "summary": (f"The re-check found {len(items)} open item(s). Nothing is built until "
+                         f"you press Fix these (about ${cost['usd']:.2f}, {cost['basis']}).")},
+            {"phase": "recheck", "estimate_usd": cost["usd"]},
+            "a re-check never starts a build on its own", risk_tier=1)
+        c.execute(text("UPDATE decisions SET deadline_at = NULL WHERE id = :d"),
+                  {"d": decision_id})
+        emit_event(c, project_id, "code_task.recheck_fix_card", "boss", "code_task_run",
+                   run_id, {"decision_id": decision_id, "items": len(items),
+                            "estimate_usd": cost["usd"]})
+    return str(decision_id)
+
+
+def may_start_fix(connection: Any, project_id: str) -> bool:
+    """Inside an enforced request: does the caller hold code_task:steer on the project? Outside
+    one (the host shell, a test) the in-process caller is trusted, as everywhere else."""
+    from sqlalchemy import text
+
+    from ..identity import authz, lineage
+    from ..identity.permissions_gen import P
+    from ..identity.scope import ResolvedScope
+
+    if not lineage.request_enforced():
+        return True
+    ctx = lineage.current_context()
+    org_id = connection.execute(text(
+        "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE p.id = :p"), {"p": project_id}).scalar()
+    if ctx is None or not org_id or ctx.principal.org_id != org_id:
+        return False
+    return authz.check(ctx, P.CODE_TASK_STEER, ResolvedScope.in_project(org_id, project_id),
+                       db=connection).allowed
+
+
+def start_fix(engine: Any, settings: Any, jobs: Any, rec: Mapping[str, Any], *,
+              project_id: str, task_id: Optional[str]) -> Optional[str]:
+    """A person pressed Fix these: the follow-up that fixes the re-check's findings, on the
+    change's branch, like any checks-failing follow-up. Returns its run id."""
+    from .governed_code_task_service import _spawn_deferred_findings_task
+
+    f = dict(rec.get("followup") or {})
+    return _spawn_deferred_findings_task(
+        engine, settings, jobs, project_id=project_id, task_id=task_id,
+        spec=dict(f.get("spec") or {}), base_branch=str(f.get("base_branch") or ""),
+        findings=list(rec.get("findings") or []), parent_run_id=str(rec.get("run_id") or ""),
+        parent_title=str(f.get("parent_title") or ""),
+        parent_root=str(f.get("parent_root") or "") or None,
+        parent_origin=f.get("parent_origin"),
+        checks_failing=rec.get("checks_failing") or None,
+        parent_workflow_run_id=f.get("workflow_run_id"))
+
+
 __all__ = ["CHECK_STAGES", "GATES", "KEY", "NOTE", "NoWriteAgent", "OF_KEY", "RecheckRefused",
-           "WRITING_STAGES", "estimate", "is_recheck", "preview", "refusal", "request"]
+           "WRITING_STAGES", "estimate", "is_recheck", "preview", "refusal", "request",
+           "FIX_ACTION", "PUSH_HOLD", "fix_estimate", "may_start_fix", "push_hold_reason",
+           "raise_fix_card", "seed_acceptance", "start_fix"]

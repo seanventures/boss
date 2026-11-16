@@ -2070,6 +2070,12 @@ def retry_code_task(
     spec = prev.get("spec") or {}
     state = prev.get("state") or {}
     fctx_prev = prev.get("finalize_ctx") or {}
+    # A RETRY OF A RE-CHECK IS A RE-CHECK (#168 review M2): it never turns into a coding attempt.
+    recheck = recheck or bool(fctx_prev.get("recheck_only"))
+    if recheck and not str(fix_note or "").strip():
+        from .change_recheck import NOTE as _RECHECK_NOTE
+
+        fix_note = _RECHECK_NOTE
     attempt = int(fctx_prev.get("attempt", 1)) + 1
     root = fctx_prev.get("root_run_id") or run_id
     refuse_finished_retry(prev, fix_note)

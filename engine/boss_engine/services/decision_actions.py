@@ -79,6 +79,8 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     "execute_agent_tool",
     # Retry once set (checks_failing.wait_for_person): the build's gates run again.
     "retry_when_secret_set",
+    # Fix these (change_recheck): the follow-up for a re-check's findings starts.
+    "start_recheck_followup",
     "resume_agent_run",
     "resume_code_task",
     "review_plan_draft",
@@ -751,6 +753,18 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "Returns the work to whoever did it, with your comment. After "
                     f"{rec.get('max_rounds') or 3} rounds it escalates to the responsible person.",
                     needs="note"),
+            _delegate(),
+        ]
+    if _action_of(decision) == "start_recheck_followup":
+        # A RE-CHECK'S FINDINGS (change_recheck): nothing is built until a person says so.
+        usd = (_rec(decision).get("estimate") or {}).get("usd")
+        return [
+            _action("approve", f"Fix these (about ${float(usd):.2f})" if usd is not None
+                    else "Fix these", "approve",
+                    "Starts a follow-up build on this change's branch that fixes the re-check's "
+                    "findings. Needs the Steer builds permission."),
+            _action("reject", "Not now", "reject",
+                    "Nothing is built. The findings stay open in the ledger."),
             _delegate(),
         ]
     if _action_of(decision) == "retry_when_secret_set":
