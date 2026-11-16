@@ -2,6 +2,22 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.18]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.18.md](docs/community/RELEASE_NOTES_v1.0-rc10.18.md).
+
+### Added
+
+- Each health environment shows the stored latency objective, or says none is stored. The inbox shows a person only when the API already returned one. A succeeded staging run already on the deployments tab can be promoted with the existing action. A verify tail that names one failed test shows that name while the tail stays folded. A week deploy point shows the short commit it already stored. An activity export sets `X-Window-Capped` when retention cut the window. A tool-call export sets `X-Truncated` only when a further row exists past the cap. The agent scorecard says how many agents are past the first 12. The preview log drawer says the text is the process log.
+
+### Changed
+
+- The community candidate version is `1.0.0-rc.10.18`. Report windows now carry a daily chart and an agent list for that window. The page chart and the scorecard still read the flat series.
+
+### Release scope
+
+- This is the git tag of public main after rc10.17. It is not a live host deploy. No image tag or release-gate run is attached. The export record still cites `docs/community/RC9_VALIDATION.md`. A failed deploy phase still has no phase-only retry. A migration approval was not added.
+
 ## [v1.0-rc10.17]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.17.md](docs/community/RELEASE_NOTES_v1.0-rc10.17.md).
