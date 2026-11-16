@@ -69,7 +69,8 @@ def test_config_default_keeps_microvm_claims_frozen():
 
 def test_golden_submit_fixture_matches_python_contract():
     body = json.loads(GOLDEN_SUBMIT.read_text(encoding="utf-8"))
-    assert body["contract_version"] == CONTRACT_VERSION == "1.0"
+    assert body["contract_version"] == CONTRACT_VERSION == "1.1"
+    assert "engine_env" not in body and "git_token" not in body
     assert validate_submit_request(body) == []
     built = build_submit_request(
         {
@@ -80,15 +81,23 @@ def test_golden_submit_fixture_matches_python_contract():
             "test_commands": ["pytest -q"],
             "engine": "claude_code",
             "claude_oauth_token": "tok",
+            "handles": body["handles"],
         },
         "default",
         task_id="crun_s1_contract",
+        endpoints=body["endpoints"],
+        mcp=body["mcp"],
     )
     assert built["contract_version"] == body["contract_version"]
     assert built["task_id"] == body["task_id"]
     assert built["repo"] == body["repo"]
     assert built["engine"] == body["engine"]
-    assert built["engine_env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "tok"
+    assert built["handles"] == body["handles"]
+    assert built["endpoints"] == body["endpoints"]
+    assert built["mcp"] == body["mcp"]
+    # v1.1 carries handles, not the credential. The token must not ride along.
+    assert "engine_env" not in built and "git_token" not in built
+    assert "tok" not in json.dumps(built)
 
 
 def test_frozen_firecracker_path_fails_closed_named_reason():

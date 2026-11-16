@@ -630,6 +630,16 @@ services:
       # default; with it off an approved merge asks the person to merge in GitHub. Never reached
       # the container before, so .env had no way to turn it on (2026-11-06).
       BOSS_ENABLE_SANDBOX_MERGE: ${BOSS_ENABLE_SANDBOX_MERGE:-false}
+      # Config deploys and the sandbox lane (DEPLOY_CONFIG.md, SANDBOX.md, MICROVM_ENABLE.md).
+      # Defaults match config.py. An empty compose default would replace a real one with "".
+      BOSS_CONFIG_DEPLOY_ROOTS: ${BOSS_CONFIG_DEPLOY_ROOTS:-}
+      BOSS_CONFIG_RELOAD_COMMANDS: ${BOSS_CONFIG_RELOAD_COMMANDS:-}
+      BOSS_GOVERNED_SANDBOX_PROVIDER: ${BOSS_GOVERNED_SANDBOX_PROVIDER:-local}
+      BOSS_LOCAL_FENCED_BINARIES: ${BOSS_LOCAL_FENCED_BINARIES:-}
+      BOSS_MICROVM_CLAIMS_FROZEN: ${BOSS_MICROVM_CLAIMS_FROZEN:-true}
+      BOSS_SANDBOX_PROVIDER: ${BOSS_SANDBOX_PROVIDER:-local}
+      BOSS_SANDBOX_AGENT_URL: ${BOSS_SANDBOX_AGENT_URL:-http://127.0.0.1:8088}
+      BOSS_SANDBOX_TOKEN: ${BOSS_SANDBOX_TOKEN:-}
       BOSS_CODE_AGENT_MAX_TURNS: ${BOSS_CODE_AGENT_MAX_TURNS:-90}
       BOSS_CODE_AGENT_REVIEW_MAX_TURNS: ${BOSS_CODE_AGENT_REVIEW_MAX_TURNS:-48}
       BOSS_CODE_AGENT_TIMEOUT_SECONDS: ${BOSS_CODE_AGENT_TIMEOUT_SECONDS:-2700}
@@ -951,6 +961,16 @@ services:
       # default; with it off an approved merge asks the person to merge in GitHub. Never reached
       # the container before, so .env had no way to turn it on (2026-11-06).
       BOSS_ENABLE_SANDBOX_MERGE: ${BOSS_ENABLE_SANDBOX_MERGE:-false}
+      # Config deploys and the sandbox lane (DEPLOY_CONFIG.md, SANDBOX.md, MICROVM_ENABLE.md).
+      # Defaults match config.py. An empty compose default would replace a real one with "".
+      BOSS_CONFIG_DEPLOY_ROOTS: ${BOSS_CONFIG_DEPLOY_ROOTS:-}
+      BOSS_CONFIG_RELOAD_COMMANDS: ${BOSS_CONFIG_RELOAD_COMMANDS:-}
+      BOSS_GOVERNED_SANDBOX_PROVIDER: ${BOSS_GOVERNED_SANDBOX_PROVIDER:-local}
+      BOSS_LOCAL_FENCED_BINARIES: ${BOSS_LOCAL_FENCED_BINARIES:-}
+      BOSS_MICROVM_CLAIMS_FROZEN: ${BOSS_MICROVM_CLAIMS_FROZEN:-true}
+      BOSS_SANDBOX_PROVIDER: ${BOSS_SANDBOX_PROVIDER:-local}
+      BOSS_SANDBOX_AGENT_URL: ${BOSS_SANDBOX_AGENT_URL:-http://127.0.0.1:8088}
+      BOSS_SANDBOX_TOKEN: ${BOSS_SANDBOX_TOKEN:-}
       BOSS_CODE_AGENT_MAX_TURNS: ${BOSS_CODE_AGENT_MAX_TURNS:-90}
       BOSS_CODE_AGENT_REVIEW_MAX_TURNS: ${BOSS_CODE_AGENT_REVIEW_MAX_TURNS:-48}
       BOSS_CODE_AGENT_TIMEOUT_SECONDS: ${BOSS_CODE_AGENT_TIMEOUT_SECONDS:-2700}
