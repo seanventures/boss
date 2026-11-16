@@ -92,6 +92,30 @@ const at = (iso: string) => {
   return Number.isFinite(t) ? localWith(t, { hour: "2-digit", minute: "2-digit" }) : "";
 };
 
+/** The linked ticket's sync error. A trimmed error, or nothing when blank. */
+export function syncErrorSentence(error: string | null | undefined): string | null {
+  const trimmed = error?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** Beside the status tag. More than six words is a paragraph. */
+export function LinkedSyncStatus({ tone, title, status, sentence }: {
+  tone: string;
+  title?: string;
+  status: string;
+  sentence: string | null;
+}) {
+  const note = !sentence ? null : sentence.split(/\s+/).filter(Boolean).length > 6
+    ? <p data-testid="tk-linked-sync-error" data-user-text>{sentence}</p>
+    : <span data-testid="tk-linked-sync-error" data-user-text>{sentence}</span>;
+  return (
+    <>
+      <span className="tk-tag" data-tone={tone} data-testid="tk-linked-status" title={title}>{status}</span>
+      {note}
+    </>
+  );
+}
+
 /** T6: the drawer block. Renders nothing for work that did not come from a ticket. */
 export function LinkedTicket({ projectId, runId, workItemId }: { projectId: string; runId?: string | null; workItemId?: string | null }) {
   const item = useWorkItemOfRun(runId, workItemId, projectId);
@@ -142,9 +166,11 @@ export function LinkedTicket({ projectId, runId, workItemId }: { projectId: stri
           {tl.ticket.url ? <a href={tl.ticket.url} target="_blank" rel="noreferrer noopener" data-testid="tk-linked-key">{tl.ticket.key}<ArrowSquareOut size={11} aria-hidden /></a>
             : <b data-testid="tk-linked-key">{tl.ticket.key}</b>}</h3>
         <span className="tk-spacer" />
-        <span className="tk-tag" data-tone={tl.sync_status === "failed" ? "red" : tl.sync_status === "paused" ? "amber" : "teal"} data-testid="tk-linked-status"
-              title={tl.sync_error || (tl.last_synced_at ? `Last written ${at(tl.last_synced_at)}` : undefined)}>
-          {tl.sync_status === "failed" ? "Write-back failed" : tl.sync_status === "paused" ? "Sync paused" : `${label}${status ? `: ${status}` : ""}`}</span>
+        <LinkedSyncStatus
+          tone={tl.sync_status === "failed" ? "red" : tl.sync_status === "paused" ? "amber" : "teal"}
+          title={tl.sync_error || (tl.last_synced_at ? `Last written ${at(tl.last_synced_at)}` : undefined)}
+          status={tl.sync_status === "failed" ? "Write-back failed" : tl.sync_status === "paused" ? "Sync paused" : `${label}${status ? `: ${status}` : ""}`}
+          sentence={syncErrorSentence(tl.sync_error)} />
       </div>
 
       <ol className="tk-steps" data-testid="tk-linked-steps">
