@@ -10,6 +10,10 @@
  * there is something under them. The `Now:` line is one node, replaced in place on each poll.
  * New rows append at the bottom; a reader who scrolled up gets `n new ↓`, and the list does
  * not move under them.
+ *
+ * A sessionStorage stamp, keyed by run id, is the newest line time from the last open.
+ * The first open has no stamp, so nothing is marked, and that newest time is stored.
+ * A later open marks lines after the stamp. One note names the count.
  */
 import { logHref } from "../../lib/log-url";
 import { CaretDown, CaretRight } from "@phosphor-icons/react";
@@ -27,6 +31,7 @@ import { buildIndex, type LogLine, type ToolLog } from "../../lib/build-detail";
 import { ToolList } from "./tool-log";
 import { SearchBox, SearchResults, useLogSearch } from "./log-search";
 import { useAreaKeydown } from "../../lib/area-keys";
+import { sinceOpen, storyOpenedKey } from "../../lib/story-opened";
 
 
 
@@ -164,7 +169,7 @@ function CommentList({ items }: { items: ReviewComment[] }) {
   );
 }
 
-function ActRow({ row, props, live, enter, jump }: { row: StoryAct; props: StoryProps; live: NowLine | null; enter?: boolean; jump?: Jump | null }) {
+function ActRow({ row, props, live, enter, jump, since }: { row: StoryAct; props: StoryProps; live: NowLine | null; enter?: boolean; jump?: Jump | null; since?: boolean }) {
   useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const face = useRef<HTMLButtonElement>(null);
   // A running act's span ticks from a clock that exists only after mount (hydration-safe).
@@ -182,8 +187,8 @@ function ActRow({ row, props, live, enter, jump }: { row: StoryAct; props: Story
     : [];
   const fixed = row.commentsFixed > 0 ? props.comments.filter((c) => c.status === "addressed" && c.round < row.round) : [];
   return (
-    <li className="fx-ck-row" data-enter={enter || undefined} data-type="act" data-status={row.status} data-testid={`fx-story-${row.id}`} data-role={row.roleKey ?? undefined}
-        data-act={row.actId}>
+    <li className="fx-ck-row" data-enter={enter || undefined} data-since-open={since ? "true" : undefined} data-type="act" data-status={row.status} data-testid={`fx-story-${row.id}`} data-role={row.roleKey ?? undefined}
+        data-act={row.actId} style={since ? { boxShadow: "inset 3px 0 0 var(--accent)" } : undefined}>
       <time className="fx-ck-time" dateTime={row.startedAt} title={row.startedAt}>{clockOf(row.startedAt)}</time>
       <button ref={face} type="button" className="fx-row-face" aria-label={`${whoName(row.roleKey)}: who did this`}
               data-testid={`fx-story-face-${row.id}`} onClick={() => face.current && props.onFace(row.actId, face.current)}>
@@ -232,12 +237,13 @@ const YOU_WORDS: Record<string, string> = {
   approved_plan: "Approved the plan", retried: "Retried", stopped: "Stopped", steered: "Steered",
 };
 
-function YouRow({ row, viewer, enter }: { row: StoryYou; viewer: string; enter?: boolean }) {
+function YouRow({ row, viewer, enter, since }: { row: StoryYou; viewer: string; enter?: boolean; since?: boolean }) {
   useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const mine = !row.actor || row.actor === viewer;
   const word = row.what === "waived" ? (row.count ? `Waived ${plural(row.count, "check")}` : "Waived checks") : YOU_WORDS[row.what] ?? row.what;
   return (
-    <li className="fx-ck-row" data-enter={enter || undefined} data-type="you" data-what={row.what} data-testid={`fx-story-${row.id}`}>
+    <li className="fx-ck-row" data-enter={enter || undefined} data-since-open={since ? "true" : undefined} data-type="you" data-what={row.what} data-testid={`fx-story-${row.id}`}
+        style={since ? { boxShadow: "inset 3px 0 0 var(--accent)" } : undefined}>
       <time className="fx-ck-time" dateTime={row.at} title={row.at}>{clockOf(row.at)}</time>
       <span className="fx-row-face">
         <RunFace roleKey={null} variant={mine ? "you" : "person"} personId={row.actor} size={24} state="idle" />
@@ -272,11 +278,12 @@ function YouRow({ row, viewer, enter }: { row: StoryYou; viewer: string; enter?:
   );
 }
 
-function BossRow({ row, enter }: { row: StoryBoss; enter?: boolean }) {
+function BossRow({ row, enter, since }: { row: StoryBoss; enter?: boolean; since?: boolean }) {
   const cmds = Array.isArray(row.detail?.commands) ? (row.detail?.commands as Record<string, unknown>[]) : [];
   const steps = Array.isArray(row.detail?.steps) ? (row.detail?.steps as Record<string, unknown>[]) : [];
   return (
-    <li className="fx-ck-row" data-enter={enter || undefined} data-type="boss" data-what={row.what} data-testid={`fx-story-${row.id}`}>
+    <li className="fx-ck-row" data-enter={enter || undefined} data-since-open={since ? "true" : undefined} data-type="boss" data-what={row.what} data-testid={`fx-story-${row.id}`}
+        style={since ? { boxShadow: "inset 3px 0 0 var(--accent)" } : undefined}>
       <time className="fx-ck-time" dateTime={row.at} title={row.at}>{clockOf(row.at)}</time>
       <span className="fx-row-face" title="BOSS machinery. No agent at this station.">
         <RunFace roleKey={null} variant="boss" size={24} state="idle" />
@@ -301,12 +308,30 @@ function BossRow({ row, enter }: { row: StoryBoss; enter?: boolean }) {
   );
 }
 
+/** Newest line time read at this open. Survives a strict-mode remount; a real unmount drops it. */
+const openedBaseline = new Map<string, string | null>();
+const openedForget = new Map<string, ReturnType<typeof setTimeout>>();
+
+function rowAt(row: StoryRow): string | null {
+  const at = row.type === "act" ? row.startedAt : row.at;
+  return at || null;
+}
+
+function readOpened(runId: string): string | null {
+  try { return window.sessionStorage.getItem(storyOpenedKey(runId)); } catch { return null; }
+}
+
+function writeOpened(runId: string, stamp: string): void {
+  try { window.sessionStorage.setItem(storyOpenedKey(runId), stamp); } catch { /* private mode */ }
+}
+
 export function Story(props: StoryProps) {
   const { rows, stations, filter, pending = [] } = props;
   const list = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
   const seen = useRef(rows.length);
   const [unseen, setUnseen] = useState(0);
+  const [opened, setOpened] = useState<{ runId: string; at: string | null } | null>(null);
   // Rows present at first paint never animate (page load is not a state change); a row that
   // arrives later rises in once, and only while the reader is at the bottom.
   const initial = useRef<Set<string> | null>(null);
@@ -321,6 +346,27 @@ export function Story(props: StoryProps) {
                                at: p.at, appliedRole: null })),
   ];
   const shown = filter ? all.filter((r) => r.station === filter) : all;
+  const lineKey = all.map((r) => `${r.id}\t${rowAt(r) ?? ""}`).join("\n");
+  // The stamp is the previous open. This open stores the newest line time and does not scroll.
+  useEffect(() => {
+    const pendingForget = openedForget.get(props.runId);
+    if (pendingForget) { clearTimeout(pendingForget); openedForget.delete(props.runId); }
+    if (!openedBaseline.has(props.runId)) openedBaseline.set(props.runId, readOpened(props.runId));
+    const previous = openedBaseline.get(props.runId) ?? null;
+    const next = sinceOpen(all.map((r) => ({ id: r.id, at: rowAt(r) })), previous);
+    if (next.stamp) writeOpened(props.runId, next.stamp);
+    setOpened((cur) => (cur?.runId === props.runId && cur.at === previous ? cur : { runId: props.runId, at: previous }));
+    const runId = props.runId;
+    return () => {
+      openedForget.set(runId, setTimeout(() => {
+        openedForget.delete(runId);
+        openedBaseline.delete(runId);
+      }, 0));
+    };
+  }, [props.runId, lineKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const previous = opened?.runId === props.runId ? opened.at : null;
+  const since = sinceOpen(shown.map((r) => ({ id: r.id, at: rowAt(r) })), previous);
+  const sinceIds = new Set(since.ids);
 
   useLayoutEffect(() => {
     const el = list.current;
@@ -391,6 +437,12 @@ export function Story(props: StoryProps) {
         <SearchBox value={search.state} onChange={search.setState} count={search.hits.length} current={search.current}
                    onStep={search.step} inputRef={input} />
       </header>
+      {since.count > 0 && since.note ? (
+        <span className="fx-story-since" data-testid="fx-story-since" role="note">
+          <span>{since.count} new</span>
+          <span>{since.note}</span>
+        </span>
+      ) : null}
       {search.active ? (
         <div className="fx-story-list fx-hits-wrap" data-testid="fx-story-hits">
           <SearchResults hits={search.hits} query={search.state.query} current={search.current} onPick={pick} />
@@ -401,9 +453,9 @@ export function Story(props: StoryProps) {
           <div key={`${g.key}-${gi}`} className="fx-story-group" data-station={g.key ?? undefined}>
             {g.key ? <h3 className="fx-story-station">{label(g.key)}</h3> : null}
             <ol className="fx-story-rows">
-              {g.rows.map((r) => r.type === "act" ? <ActRow key={r.id} row={r} props={props} live={props.now} enter={entering(r.id)} jump={jump} />
-                : r.type === "you" ? <YouRow key={r.id} row={r} viewer={props.viewer} enter={entering(r.id)} />
-                : <BossRow key={r.id} row={r} enter={entering(r.id)} />)}
+              {g.rows.map((r) => r.type === "act" ? <ActRow key={r.id} row={r} props={props} live={props.now} enter={entering(r.id)} jump={jump} since={sinceIds.has(r.id)} />
+                : r.type === "you" ? <YouRow key={r.id} row={r} viewer={props.viewer} enter={entering(r.id)} since={sinceIds.has(r.id)} />
+                : <BossRow key={r.id} row={r} enter={entering(r.id)} since={sinceIds.has(r.id)} />)}
             </ol>
           </div>
         ))}
