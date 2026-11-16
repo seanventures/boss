@@ -683,6 +683,11 @@ def decide_as_person(connection, settings: Any, link: Mapping[str, Any],
     return contextvars.copy_context().run(run)
 
 
+def withdrawn_words(note: str) -> str:
+    """A press that WITHDREW its card (a stale re-check Fix card, PR #170): never "Approved"."""
+    return f"Withdrawn: {note.strip() or 'this card no longer applies.'}"
+
+
 def _answer_words(action: str, who: str) -> str:
     return {"approve": f"Approved by {who} from chat.",
             "reject": f"Rejected by {who} from chat."}.get(action, f"{action} by {who} from chat.")
@@ -813,7 +818,10 @@ def _decide(connection, settings, endpoint, inbound: ChatInbound, link, decision
         row = decide_as_person(connection, settings, link, decision, action,
                                note or f"Answered from {endpoint['kind']} chat")
         nested.commit()
-        outcome = {"status": "done", "decision_status": row.get("status")}
+        outcome = {"status": "done", "decision_status": row.get("status"),
+                   # A stale card's press withdrew it (PR #170): its note says why.
+                   **({"withdrawn": str(row.get("resolution_note") or "")}
+                      if row.get("status") == "withdrawn" else {})}
     except ApprovalPending as pending:
         nested.commit()
         outcome = {"status": "pending_second", **pending.body()}
@@ -841,7 +849,8 @@ def _decide(connection, settings, endpoint, inbound: ChatInbound, link, decision
                 "code": outcome.get("code")})
     if outcome["status"] == "done":
         _retire_other_actions(connection, decision["id"], spent["id"])
-        words = _answer_words(action, who)
+        words = (withdrawn_words(outcome["withdrawn"])
+                 if outcome.get("decision_status") == "withdrawn" else _answer_words(action, who))
         adapter = adapter_for(endpoint["kind"])
         for t in threads_of_decision(connection, decision["id"]):
             if t["endpoint_id"] != endpoint["id"]:

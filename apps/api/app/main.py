@@ -24524,6 +24524,13 @@ def approve_decision_card(
             # §6.13: the first of two approvals of a tier-3 decision is recorded (this transaction
             # commits it); the decision stays pending for a second person.
             return JSONResponse(status_code=202, content=pending.body())
+        if row.get("status") == "withdrawn":
+            # A STALE CARD'S PRESS WITHDREW IT (a re-check's Fix card, #170): nothing was
+            # approved, so the answer is not 200. Returned, never raised, so this transaction
+            # still commits the withdrawal and the card stops asking.
+            return JSONResponse(status_code=409, content={
+                "detail": str(row.get("resolution_note") or "This card was withdrawn."),
+                "status": "withdrawn", "decision_id": decision_id})
         return decision_card_from_row(row)
 
 
@@ -24562,6 +24569,9 @@ def approve_decision_in(connection, decision_id: str, payload: DecisionActionReq
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
         raise_decision_actor_error(decision_id, payload.actor, error)
+    if row.get("status") == "withdrawn":
+        # Withdrawn at the press (a stale Fix card): no approval happened to record.
+        return row
     _record_governed(
         connection,
         project_id=row["project_id"],

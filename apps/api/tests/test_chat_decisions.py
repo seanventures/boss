@@ -561,3 +561,36 @@ def test_an_events_api_delivery_to_the_endpoint_url_reaches_the_slack_intake_con
             c.execute(text("DELETE FROM intake_events WHERE connection_id = :c"),
                       {"c": conn["id"]})
             c.execute(text("DELETE FROM intake_connections WHERE id = :c"), {"c": conn["id"]})
+
+
+def test_a_press_that_withdrew_a_stale_card_says_withdrawn_not_approved(
+        engine, world, client, channel, monkeypatch):
+    """PR #170 review: a stale Fix card's press withdraws the card. Slack/Teams said "Approved
+    by X from chat."; the card and the presser are told "Withdrawn: <note>" instead."""
+    ep = _endpoint(engine, world.project_a)
+    _link(engine, ep, world.owner)
+    decision_id = _decision(engine, world.project_a)
+    _deliver(engine)
+    tokens = _card_tokens(channel)
+    note = "Nothing is open: the findings this card listed were fixed since. Nothing was started."
+
+    def withdraw(connection, settings, link, decision, action, said):
+        connection.execute(text("UPDATE decisions SET status = 'withdrawn', resolution_note = :n "
+                                "WHERE id = :i"), {"i": decision["id"], "n": note})
+        return dict(connection.execute(text("SELECT * FROM decisions WHERE id = :i"),
+                                       {"i": decision["id"]}).mappings().one())
+
+    monkeypatch.setattr(chat, "decide_as_person", withdraw)
+    r = _slack_post(client, ep["id"], _press_body(tokens["approve"], "approve"),
+                    "application/x-www-form-urlencoded")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "done"
+    with engine.connect() as c:
+        outcome = c.execute(text("SELECT outcome FROM chat_actions WHERE decision_id = :d "
+                                 "AND outcome IS NOT NULL"), {"d": decision_id}).scalar()
+    assert outcome["decision_status"] == "withdrawn" and outcome["withdrawn"] == note
+    assert _status(engine, decision_id)["status"] == "withdrawn"
+    _deliver(engine)
+    said = json.dumps([p for n, p in channel.calls])
+    assert channel.named("chat.update"), [n for n, _ in channel.calls]
+    assert f"Withdrawn: {note}" in said and "Approved by" not in said

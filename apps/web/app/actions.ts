@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { orgFromReferer, workflowHref } from "./actions-href";
 import { BossApiError, type DataBoundary, type LlmCallRow } from "@boss/api-client";
 import { API_URL, client, PROJECT_ID, resolveProjectId, authHeaders} from "../lib/client";
+import { withdrawnNote, withdrawnSentence } from "../lib/decision-withdrawn";
 import { buildCommandRequest } from "../lib/commands";
 import { apiWrite, pressToken } from "../lib/api-write";
 import { act, apiFetch, consentOfThrown } from "../lib/server-action";
@@ -715,7 +716,16 @@ export async function resolveDecisionAction(formData: FormData): Promise<ActionR
     }
     await client.settleDecision(decisionId, { actor: getActor(formData), settle_at: settleAt });
   } else if (action === "approve") {
-    await client.approveDecision(decisionId, payload);
+    try {
+      await client.approveDecision(decisionId, payload);
+    } catch (error) {
+      // A STALE CARD'S PRESS WITHDREW IT (PR #170): nothing was approved; say what happened.
+      const withdrawn = withdrawnNote(error);
+      if (withdrawn === null) throw error;
+      revalidatePath("/");
+      return { ok: true, message: withdrawnSentence(withdrawn),
+               data: { decision: { id: decisionId, status: "withdrawn" } } };
+    }
   } else if (action === "reject") {
     await client.rejectDecision(decisionId, payload);
   } else if (action === "revise") {
