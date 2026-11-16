@@ -102,10 +102,24 @@ class TestTheBriefingIsTheWholeFactory:
         assert out["counts"]["workflow_steps"] == 1
 
     def test_an_unanswered_hold_says_why_it_waits_for_ever(self):
-        """"Overdue" alone is a nag. An expired hold applies NOTHING, which is the reason to
-        act — seven of these were why the factory was idle."""
+        """A hold on the compliance boundary never expires. Past its deadline the briefing
+        still says it is waiting for an answer: expiring it would only hide a question whose
+        default applies nothing. An off-boundary hold still says that reason outright."""
+        from boss_engine.services import decision_actions
+
         out = factory_briefing(_Conn(decisions=[DECISION]), "p")
-        assert "applies nothing" in out["items"][0]["note"]
+        item = out["items"][0]
+        assert item["note"] == "waiting for an answer"
+        assert item["attention"] == "needs_action"
+        assert str(item["age"]).endswith("ago")
+        assert decision_actions.never_expires(DECISION)
+        off = {**DECISION, "id": "dec_off", "question": "Reconcile the saved connection",
+               "recommendation": {"action": "connection_reconciliation"}}
+        expired = factory_briefing(_Conn(decisions=[off]), "p")["items"][0]
+        assert expired["attention"] == "expired"
+        assert expired["note"] == (
+            "past its deadline — the default is 'hold', which applies nothing, so "
+            "this waits until somebody answers it")
 
     def test_a_quiet_build_is_not_called_stalled(self):
         """The last build called stalled was cancelled, and it was fine."""
