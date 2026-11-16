@@ -242,7 +242,47 @@ def _queue_chat_cards(connection: Any, decision_id: str) -> None:
         logger.warning("chat card queue failed for %s", decision_id, exc_info=True)
 
 
-def _emit_event_postgres(
+def _session_killed_for_idle(exc: BaseException) -> bool:
+    """True when Postgres ended this session for idling inside a transaction.
+
+    Matched on the driver class and sqlstate only. The wrapper's message quotes
+    the INSERT parameters, and those can say anything.
+    """
+    seen: set[int] = set()
+    pending: list[BaseException | None] = [exc]
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if type(current).__name__ == "IdleInTransactionSessionTimeout":
+            return True
+        if getattr(current, "sqlstate", None) == "25P03":
+            return True
+        pending.append(getattr(current, "__cause__", None))
+        pending.append(getattr(current, "__context__", None))
+        orig = getattr(current, "orig", None)
+        if isinstance(orig, BaseException):
+            pending.append(orig)
+    return False
+
+
+def _end_killed_session(connection: Any) -> None:
+    """Roll the dead transaction back and drop the connection Postgres closed."""
+    try:
+        connection.rollback()
+    except Exception:  # noqa: BLE001 - the session is already gone
+        logger.debug("rollback after idle-in-transaction timeout failed")
+    invalidate = getattr(connection, "invalidate", None)
+    if invalidate is None:
+        return
+    try:
+        invalidate()
+    except Exception:  # noqa: BLE001 - the caller still closes its own connection
+        logger.debug("invalidate after idle-in-transaction timeout failed")
+
+
+def _write_event(
     connection: Any,
     project_id: str,
     event_type: str,
@@ -350,6 +390,38 @@ def _emit_event_postgres(
                 },
             )
     return event_id
+
+
+def _emit_event_postgres(
+    connection: Any,
+    project_id: str,
+    event_type: str,
+    actor: str,
+    entity_type: str,
+    entity_id: str,
+    data: dict,
+) -> str:
+    try:
+        return _write_event(
+            connection, project_id, event_type, actor,
+            entity_type, entity_id, data)
+    except Exception as exc:  # noqa: BLE001 - only an idle-killed session is recovered
+        if not _session_killed_for_idle(exc):
+            raise
+        # The caller's transaction is already dead, so the insert never landed.
+        # End it, then commit the event on a short transaction. A live transaction
+        # still writes on the caller: the project row may not be committed yet.
+        _end_killed_session(connection)
+        engine = getattr(connection, "engine", None)
+        if engine is None:
+            raise
+        logger.warning(
+            "event insert recovered after idle-in-transaction timeout",
+            extra={"project_id": project_id, "event_type": event_type})
+        with engine.begin() as fresh:
+            return _write_event(
+                fresh, project_id, event_type, actor,
+                entity_type, entity_id, data)
 
 
 def record_policy_eval(
