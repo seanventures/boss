@@ -1289,6 +1289,17 @@ def start_followup_task(
         model_config = pin_engine_model_config(engine_name, model_config)
         if isinstance(child_fctx.get("qa_benchmark"), dict):
             child_fctx["qa_benchmark"]["engine"] = engine_name
+    # A PERSON'S NEW REQUEST ADDS ITS OWN MUST-HAVES (BOSSAPP-1322): "Add CSV export" is held to
+    # the export, not only to the lineage's frozen contract (acceptance.contract.
+    # apply_change_request, at the build's acceptance check). A fix of review comments is not
+    # a new request: it is judged against the contract and its findings, as before.
+    _review_fix = any(k in (finalize_extra or {})
+                      for k in ("local_review_fix", "github_review_fix", "review_comments"))
+    if not _review_fix and str(instructions or "").strip():
+        child_fctx["change_request"] = {
+            "id": make_id("chg"), "text": str(instructions), "title": title or "",
+            "criteria": [str(c) for c in (acceptance_criteria or []) if str(c).strip()],
+            "requested_by": actor}
 
     run_id = start_code_task(
         connection,
@@ -2287,6 +2298,10 @@ def retry_code_task(
                           # another, and boss-platform grew chains titled "Follow-up: checks
                           # failing — Follow-up: checks failing — Follow-up: …" (2026-10-28..11-03).
                           **({"is_followup": True} if fctx_prev.get("is_followup") else {}),
+                          # THE PERSON'S REQUEST TOO (BOSSAPP-1322): a retry is held to the
+                          # same added must-haves (the same id: never added twice).
+                          **({"change_request": fctx_prev["change_request"]}
+                             if isinstance(fctx_prev.get("change_request"), dict) else {}),
                           # ITS INSTRUCTIONS ARE STILL FINDINGS, NOT A BRIEF (BOSSAPP-1307):
                           # verification_target.app_scope never reads a folder out of them.
                           **({"instructions_are_findings": True}

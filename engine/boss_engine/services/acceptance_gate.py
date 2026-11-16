@@ -147,7 +147,9 @@ def held_to_contract(connection: Any, *, run_id: str, fctx: Mapping[str, Any],
     if contract is None:
         return dict(spec), dict(source)
     held = _contract.gate_items(contract)
-    keys = {_contract._key(i["text"]) for i in held}  # noqa: SLF001
+    # An item a change request explicitly replaced or removed is not added back from a
+    # build's own spec (BOSSAPP-1322): the version that dropped it says so.
+    keys = {_contract._key(i["text"]) for i in held} | _contract.removed_keys(contract)  # noqa: SLF001
     beyond = [{"source": s, "text": t} for s, t in _raw_items(spec)
               if _contract._key(t) not in keys]  # noqa: SLF001
     base = dict(spec)
@@ -415,10 +417,17 @@ def must_have_table(record: Optional[Mapping[str, Any]]) -> str:
     def cell(s: Any) -> str:
         return _norm(s).replace("|", "\\|")
     rows = ["| # | Must-have | Status | Evidence |", "|---|---|---|---|"]
-    rows += [f"| {i['n']} | {cell(i['text'])}" + (" _(taste)_" if i.get("judgement") else "")
-             + f" | {_STATUS_WORD.get(i['status'], i['status'])}"
-             + (" — advisory (taste)" if _advisory(i) else "")
-             + f" | {cell(i.get('evidence'))} |" for i in items]
+
+    def row(i: Mapping[str, Any]) -> str:
+        return (f"| {i['n']} | {cell(i['text'])}" + (" _(taste)_" if i.get("judgement") else "")
+                + f" | {_STATUS_WORD.get(i['status'], i['status'])}"
+                + (" — advisory (taste)" if _advisory(i) else "")
+                + f" | {cell(i.get('evidence'))} |")
+    rows += [row(i) for i in items if not i.get("request")]
+    # THE ITEMS A CHANGE REQUEST ADDED, under the request that added them (BOSSAPP-1322).
+    for request in dict.fromkeys(str(i["request"]) for i in items if i.get("request")):
+        rows.append(f"| | **Added by the change \"{cell(request)}\"** | | |")
+        rows += [row(i) for i in items if i.get("request") == request]
     for r in (record.get("stack") or {}).get("required") or []:
         path = ((record.get("stack") or {}).get("found") or {}).get(r["stack"])
         status = "met" if path else ("MISSING" if r.get("hard") else "not declared, not found")

@@ -189,7 +189,8 @@ def _items_and_dropped(spec: Mapping[str, Any]) -> tuple[list[dict[str, Any]], i
     raw = _raw_items(spec)
     union = _spec_of(spec).get(UNION_KEY)
     tags = {re.sub(r"\W+", " ", _norm(i.get("text")).lower()).strip():
-            {t: True for t in ("judgement", "needs_loader") if i.get(t)}
+            {**{t: True for t in ("judgement", "needs_loader") if i.get(t)},
+             **({"request": i["request"]} if i.get("request") else {})}
             for i in (union if isinstance(union, list) else []) if isinstance(i, Mapping)}
     seen: set[str] = set()
     items: list[dict[str, Any]] = []
@@ -1299,23 +1300,161 @@ def ensure_for_run(connection: Any, *, run_id: str, fctx: Optional[Mapping[str, 
     found = latest(connection, root_run_id=root, project_id=project_id)
     if found is None:
         builds = lineage_build_rows(connection, root)
+        request = change_request_of(fctx)
         if builds:
             spec: Mapping[str, Any] = union_spec(builds)
+            sources = gather_sources(spec, ticket=ticket, prose=prose)
         elif not is_followup(fctx):
             spec = _spec_of(own_spec)
+            sources = gather_sources(spec, ticket=ticket, prose=prose)
+        elif request:
+            # A change to an app whose earlier builds are not in this lineage (a new lineage
+            # of the same app): its own request is what it is held to.
+            sources = [request_source(request)]
         else:
             return None
-        sources = gather_sources(spec, ticket=ticket, prose=prose)
         if not build_items(sources):
             return None
         found = freeze(connection, project_id=project_id, root_run_id=root, sources=sources,
                        workflow_run_id=(fctx or {}).get("workflow_run_id"))
-    return revise_from_ticket(connection, found, ticket, prose=prose)
+    found = revise_from_ticket(connection, found, ticket, prose=prose)
+    request = change_request_of(fctx)
+    if request and found is not None:
+        found = apply_change_request(connection, found, request=request)
+    return found
+
+
+# ---------------------------------------------------------------------------------------------
+# A person's change to an existing app adds its own must-haves (BOSSAPP-1322, AR-28)
+# ---------------------------------------------------------------------------------------------
+
+#: The finalize_ctx key a follow-up carrying a PERSON'S NEW REQUEST holds (start_followup_task):
+#: {id, text, criteria, title, requested_by}. A checks-failing / findings follow-up has none.
+REQUEST_KEY = "change_request"
+REQUEST_KIND = "request"
+#: An explicit change to an earlier item, in the request's own words: "replace item 3",
+#: "remove AC-12", "drop must-have 4". Only these touch earlier items; nothing is dropped
+#: silently.
+_CHANGES_ITEM = re.compile(
+    r"(?i)\b(replace|remove|drop|retire|supersede|delete)[sd]?\b[^.\n]{0,40}?"
+    r"\b(?:AC-|item\s*#?\s*|must-have\s*#?\s*|requirement\s*#?\s*)(\d+)\b")
+
+
+def change_request_of(fctx: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
+    req = (fctx or {}).get(REQUEST_KEY)
+    if isinstance(req, Mapping) and str(req.get("text") or "").strip():
+        return dict(req)
+    return None
+
+
+def request_items(request: Mapping[str, Any]) -> list[str]:
+    """A request's must-haves, read the way a first build's are: its brief's must-haves, its
+    PRD's tested-and-gating list and the criteria it was given (_raw_items); else the
+    requirements its structure states (bullets); else the request itself, word for word — so
+    "Add CSV export of tickets" is held to exactly that."""
+    text = str(request.get("text") or "")
+    criteria = [c for c in request.get("criteria") or [] if _norm(c)]
+    words = [w for _, w in _raw_items({"instructions": text, "acceptance_criteria": criteria})]
+    if not words:
+        words = requirement_items(text)
+    if not words and _verbatim(text):
+        words = [_verbatim(text)]
+    out, seen = [], set()
+    for w in words:
+        if _key(w) and _key(w) not in seen:
+            seen.add(_key(w))
+            out.append(_verbatim(w))
+    return out
+
+
+def request_title(request: Mapping[str, Any]) -> str:
+    title = _norm(request.get("title") or "")
+    if not title:
+        first = next((ln for ln in str(request.get("text") or "").splitlines() if ln.strip()), "")
+        title = _norm(first)
+    return title[:120]
+
+
+def request_source(request: Mapping[str, Any]) -> dict[str, Any]:
+    """The request as a contract source (kind `request`, ref = the request's id)."""
+    title = request_title(request)
+    return {"kind": REQUEST_KIND, "ref": str(request.get("id") or ""), "url": None,
+            "title": title,
+            "items": [{"source": REQUEST_KIND, "text": w, "request": title}
+                      for w in request_items(request)]}
+
+
+def item_changes(text: str, items: Iterable[Mapping[str, Any]]) -> list[dict[str, str]]:
+    """The earlier items the request EXPLICITLY changes: [{id, verb, said}] for each "replace
+    item 3" / "remove AC-12" naming an item the contract holds; `said` is the sentence."""
+    have = {str(i.get("id")) for i in items}
+    out = []
+    for m in _CHANGES_ITEM.finditer(str(text or "")):
+        iid = f"AC-{int(m.group(2))}"
+        if iid in have and iid not in {o["id"] for o in out}:
+            start = max(str(text).rfind(".", 0, m.start()), str(text).rfind("\n", 0, m.start()))
+            end = min([p for p in (str(text).find(".", m.end()), str(text).find("\n", m.end()))
+                       if p >= 0] or [len(str(text))])
+            out.append({"id": iid, "verb": m.group(1).lower(),
+                        "said": _norm(str(text)[start + 1:end + 1])[:300]})
+    return out
+
+
+def apply_change_request(connection: Any, contract: Mapping[str, Any], *,
+                         request: Mapping[str, Any], actor: str = "boss") -> dict[str, Any]:
+    """Add a person's change request to the lineage's contract as a NEW VERSION: its own
+    must-haves (request_items) join with new ids, attributed to the request; every earlier
+    item still counts unless the request EXPLICITLY replaces or removes it ("replace item 3"),
+    which the version's reason records with the request's own words. Once per request (its id
+    in a version's sources): a repair or a re-check never adds it twice."""
+    rid = str(request.get("id") or "")
+    cur = _newest(connection, contract["id"])
+    for v in versions(connection, root_run_id=cur["lineage_root_run_id"]):
+        if any(s.get("kind") == REQUEST_KIND and s.get("ref") == rid
+               for s in v.get("sources") or []):
+            return cur
+    title = request_title(request)
+    changes = item_changes(str(request.get("text") or ""), cur["items"])
+    words_of = {i["id"]: i["text"] for i in cur["items"]}
+    for c in changes:
+        c["text"] = words_of.get(c["id"], "")
+    gone = {c["id"] for c in changes}
+    kept = [i for i in cur["items"] if i["id"] not in gone]
+    have = {_key(i["text"]) for i in kept}
+    n = _next_number(connection, cur["lineage_root_run_id"])
+    joined: list[dict[str, Any]] = []
+    for words in request_items(request):
+        if _key(words) in have:
+            continue
+        have.add(_key(words))
+        origin = _src(REQUEST_KIND, REQUEST_KIND, rid)
+        joined.append({"id": f"AC-{n}", "n": n, "text": words, **origin, "sources": [origin],
+                       "priority": "must", "check_hint": None, "request": title})
+        n += 1
+    source = {"kind": REQUEST_KIND, "ref": rid, "title": title, "count": len(joined),
+              "requested_by": request.get("requested_by"),
+              "changed": changes}
+    reason = f"change request \"{title}\": {len(joined)} items added"
+    if changes:
+        reason += "; " + "; ".join(f"{c['id']} {c['verb']}d as the request says: \"{c['said']}\""
+                                   for c in changes)
+    return _new_version(connection, cur, kept + joined, reason=reason, actor=actor,
+                        sources=list(cur["sources"]) + [source],
+                        added=[i["id"] for i in joined], removed=sorted(gone))
+
+
+def removed_keys(contract: Optional[Mapping[str, Any]]) -> set[str]:
+    """The words of every item a change request explicitly replaced or removed (its version's
+    request source records them): the gate never adds them back from a build's own spec."""
+    return {_key(c.get("text")) for s in (contract or {}).get("sources") or []
+            if s.get("kind") == REQUEST_KIND for c in s.get("changed") or []
+            if _key(c.get("text"))}
 
 
 def gate_items(contract: Mapping[str, Any]) -> list[dict[str, str]]:
     """The contract's items in the gate's union shape ({source, text}): what items_spec hands
     the in-build check, so the inner seat is held to the same list (LLD §3)."""
     return [{"source": str(i.get("source") or "criterion"), "text": str(i["text"]),
-             **{t: True for t in ITEM_TAGS if i.get(t)}}
+             **{t: True for t in ITEM_TAGS if i.get(t)},
+             **({"request": i["request"]} if i.get("request") else {})}
             for i in contract.get("items") or []]
