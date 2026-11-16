@@ -246,6 +246,22 @@ function ContactPoints({ projectId, actor, cps, refresh }: Zone & { cps: ReturnT
 
 // ── POLICIES ────────────────────────────────────────────────────────────────────────────────
 
+/** Quiet-hours chip text. A blank zone adds no trailing comma. */
+export function quietChipText(hours: { start: string; end: string; timezone: string }): string {
+  const zone = hours.timezone.trim();
+  const base = `quiet ${hours.start}, ${hours.end}`;
+  return zone ? `${base}, ${zone}` : base;
+}
+
+/** The zone is visible text. A sentence over six words is a paragraph. */
+function QuietHoursChip({ hours }: { hours: { start: string; end: string; timezone: string } }) {
+  const title = `Low urgency waits; ${hours.timezone}`;
+  if (quietChipText(hours).trim().split(/\s+/).filter(Boolean).length > 6) {
+    return <p className="obs-chip" data-testid="obs-policy-quiet" title={title}>{quietChipText(hours)}</p>;
+  }
+  return <span className="obs-chip" data-testid="obs-policy-quiet" title={title}>{quietChipText(hours)}</span>;
+}
+
 function PolicySheet({ projectId, actor, policy, parent, cps, onClose, onSaved }: Zone & {
   policy: Policy | null; parent: Policy | null; cps: ContactPoint[]; onClose: () => void; onSaved: () => void;
 }) {
@@ -368,7 +384,7 @@ function Policies({ projectId, actor, cps }: Zone & { cps: ContactPoint[] }) {
                 <span className="inf-faint" title="Group wait, repeat interval">
                   {p.groupWaitS != null ? `wait ${secondsWord(p.groupWaitS)}` : ""}{p.repeatIntervalS != null ? `, repeat ${secondsWord(p.repeatIntervalS)}` : ""}
                 </span>
-                {p.quietHours ? <span className="obs-chip" title={`Low urgency waits; ${p.quietHours.timezone}`}>quiet {p.quietHours.start}, {p.quietHours.end}</span> : null}
+                {p.quietHours ? <QuietHoursChip hours={p.quietHours} /> : null}
                 {p.continueMatching ? <span className="obs-chip" title="Keeps matching the next sibling">continues</span> : null}
                 {p.ruleId ? <span className="obs-chip" title="Written by a rule's Notify setting">rule</span> : null}
                 <span className="ag-spacer" />
