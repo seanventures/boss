@@ -154,8 +154,8 @@ function EnvCard({ e, ctx }: { e: Env; ctx: PxCtx }) {
           <span className="px-lbl">Uptime</span>
           <span className="px-row" style={{ marginTop: 6 }}>
             <Ring pct={e.uptime_pct ?? 0} tone={e.health === "healthy" ? "green" : e.health === "down" ? "red" : "amber"} label={`Uptime ${e.uptime_pct ?? "unknown"}%`}>{e.uptime_pct ?? "—"}</Ring>
-            {e.slo.target === 99.5 ? (
-              <p className="px-faint" style={{ margin: 0 }}>SLO 99.5% is the install default, not your objective.</p>
+            {e.slo_words ? (
+              <p className="px-faint" style={{ margin: 0 }}>{e.slo_words}</p>
             ) : e.slo.target !== null ? <small className="px-faint">SLO {e.slo.target}%</small> : null}
           </span>
         </button>
