@@ -23,6 +23,19 @@ import "./deploys.css";
 
 const AMBER_MS = 5 * 60_000;
 
+/** Why Restart is off. A trimmed reason is the sentence. Blank is nothing. */
+export function restartWhySentence(reason: string | null | undefined): string | null {
+  const trimmed = reason?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** A sentence over six words is a paragraph. Shorter stays a span. */
+function RestartWhy({ reason }: { reason: string | null }) {
+  const sentence = restartWhySentence(reason);
+  if (!sentence) return null;
+  return sentence.split(/\s+/).filter(Boolean).length > 6 ? <p>{sentence}</p> : <span>{sentence}</span>;
+}
+
 /** Time left: the fraction of (expires_at − created_at) still to run, and its words. */
 export function ttlOf(row: Pick<PreviewRow, "createdAt" | "expiresAt">, now: number): { fraction: number; leftMs: number; label: string } | null {
   const end = row.expiresAt ? Date.parse(row.expiresAt) : NaN;
@@ -93,8 +106,11 @@ function PreviewRowView({ row, projectId, actor, now, onLog, onChanged, live }: 
                   title="Start it again with the same build" onClick={() => void act("restart")}>
             {busy === "restart" ? "Restarting…" : "Restart"}</GatedButton>
         ) : row.restartWhy ? (
-          <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled data-testid="inf-preview-restart"
-                  title={row.restartWhy} aria-description={row.restartWhy}>Restart</GatedButton>
+          <>
+            <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled data-testid="inf-preview-restart"
+                    title={row.restartWhy} aria-description={row.restartWhy}>Restart</GatedButton>
+            <RestartWhy reason={row.restartWhy} />
+          </>
         ) : null}
         {row.can.stop ? (
           <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-preview-stop"
