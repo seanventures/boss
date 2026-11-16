@@ -710,3 +710,109 @@ def test_a_follow_up_that_no_check_saw_does_not_inherit_an_earlier_met(eng, proj
         assert f"not checked since {root}" in words and "Automated checks: passed" not in words
     finally:
         _cleanup(eng, project)
+
+
+# ---------------------------------------------------------------------------------------------
+# BOSSAPP-1233 review: a file that IS the deliverable stands; a wiring claim is verified
+# ---------------------------------------------------------------------------------------------
+
+def _one(text: str, reply: str, root: Path) -> dict:
+    return ag.parse_acceptance(reply, [{"n": 1, "text": text, "source": "ticket"}], root=root)[0]
+
+
+@pytest.mark.parametrize("files,item,why", [
+    ({"docker-compose.yml": "services: {}\n", "Makefile": "run-staging:\n\tdocker compose up\n"},
+     "Provide `docker-compose.yml` for both plus two tiny mock upstreams",
+     "docker-compose.yml defines staging and production; Makefile run-staging starts it"),
+    ({"examples/lumen-pay.good.yaml": "tenant: lumen-pay\n",
+      "examples/lumen-pay.bad.yaml": "tenant: lumen-pay\n"},
+     "`examples/`: `lumen-pay.good.yaml`, `lumen-pay.bad.yaml`",
+     "examples/lumen-pay.good.yaml and examples/lumen-pay.bad.yaml (5 violations)"),
+    ({".github/workflows/lint.yml": "jobs: {}\n"}, "CI runs gwlint on every tenant change",
+     ".github/workflows/lint.yml runs gwlint validate tenants/"),
+    ({"Makefile": "test:\n\tgo test ./...\n"}, "`make test` runs the tests",
+     "Makefile target test runs go test"),
+])
+def test_a_data_file_that_is_the_deliverable_is_met_on_the_reviewers_word(tmp_path, files, item,
+                                                                         why):
+    for rel, body in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(body)
+    got = _one(item, f"ITEM 1: MET — {why}\n", tmp_path)
+    assert got["status"] == "met", got["evidence"]
+
+
+def test_an_extensionless_file_is_evidence_only_when_it_is_in_the_tree(tmp_path):
+    (tmp_path / "Dockerfile").write_text("FROM scratch\n")
+    assert ag.evidence_paths(tmp_path, "Dockerfile builds a static binary")[0] == ["Dockerfile"]
+    assert ag.evidence_paths(tmp_path, "Makefile and LICENSE")[0] == []
+
+
+def _rulebook_tree(root: Path, loader_file: str, loader_body: str) -> None:
+    (root / "rules").mkdir()
+    (root / "rules/api-guidelines.yaml").write_text("rules:\n  - id: SEC-001\n")
+    (root / loader_file).parent.mkdir(parents=True, exist_ok=True)
+    (root / loader_file).write_text(loader_body)
+
+
+RULEBOOK_ITEM = ("**A rulebook, in YAML, readable by non-engineers:** `rules/api-guidelines.yaml`. "
+                 "At least 20 rules:")
+
+
+def test_a_directory_embed_loader_is_met(tmp_path):
+    """`//go:embed rules` names a directory, not the file: the named function decides."""
+    _rulebook_tree(tmp_path, "internal/lint/rulebook.go",
+                   "package lint\n\n//go:embed rules\nvar rulesFS embed.FS\n\n"
+                   "func LoadRulebook() ([]Rule, error) { return parse(rulesFS) }\n")
+    got = _one(RULEBOOK_ITEM, "ITEM 1: MET — rules/api-guidelines.yaml (24 rules); LOADED BY "
+               "internal/lint/rulebook.go:LoadRulebook\n", tmp_path)
+    assert got["status"] == "met", got["evidence"]
+
+
+@pytest.mark.parametrize("loader_file,body,claim,reason", [
+    # A test that mentions the YAML only in a comment is not a loader.
+    ("internal/lint/lint_test.go",
+     "package lint\n// loads rules/api-guidelines.yaml\nfunc TestRules(t *testing.T) {}\n",
+     "internal/lint/lint_test.go:TestRules", "is a test"),
+    # The named function exists only in a comment of the cited file.
+    ("internal/lint/lint.go",
+     "package lint\n// TODO: LoadRulebook reads rules/api-guidelines.yaml\nfunc Check() {}\n",
+     "internal/lint/lint.go:LoadRulebook", "LoadRulebook is not in the code"),
+    # The named loader file is not in the tree.
+    ("internal/lint/lint.go", "package lint\n", "internal/lint/rules.go:LoadRulebook",
+     "is not in the tree"),
+])
+def test_a_wiring_claim_that_does_not_hold_is_partial(tmp_path, loader_file, body, claim, reason):
+    _rulebook_tree(tmp_path, loader_file, body)
+    got = _one(RULEBOOK_ITEM, f"ITEM 1: MET — rules/api-guidelines.yaml, {loader_file}; "
+               f"LOADED BY {claim}\n", tmp_path)
+    assert got["status"] == "partial" and reason in got["evidence"]
+
+
+def test_a_judgement_item_is_reported_and_advisory(tmp_path):
+    (tmp_path / "a.go").write_text("package a\n")
+    items = [{"n": 1, "text": "Plain, concise naming.", "source": "ticket"},
+             {"n": 2, "text": "Written in Go", "source": "ticket"}]
+    reply = ("ITEM 1: PARTIAL (judgement) — a few long names in a.go\nITEM 2: MET — a.go\n"
+             "ACCEPTANCE: MET\n")
+    rec = ag.judge(items, reply, {}, root=tmp_path)
+    assert rec["verdict"] == "met" and rec["advisory"] == [1] and rec["partial"] == []
+    assert "(judgement, advisory)" in ag.must_have_table(rec)
+    assert "1 judgement (advisory)" in ag.headline(rec)
+    assert "MAJOR" not in ag.findings_summary(rec)
+    # A checkable item marked judgement-free stays a failure; a judgement tag never makes MET.
+    rec2 = ag.judge(items, reply.replace("ITEM 2: MET — a.go", "ITEM 2: MISSING — none"), {},
+                    root=tmp_path)
+    assert rec2["verdict"] == "not_met" and rec2["missing"] == [2]
+
+
+def test_reviewer_passes_are_capped_and_the_rest_is_never_met(tmp_path):
+    (tmp_path / "a.go").write_text("package a\n")
+    n = ag.MAX_PASSES * ag.MAX_ITEMS + 7
+    items = ag.acceptance_items({"acceptance_criteria": [f"criterion {i}" for i in range(n)]})
+    ask = BatchReviewer()
+    rec, _ = ag.run_check(items, ask=ask, title="t", stack={}, root=tmp_path)
+    assert ask.passes == ag.MAX_PASSES
+    assert rec["verdict"] == "not_met" and rec["items_not_judged"] == 7 and not ag.passed(rec)
+    assert "7 items not judged" in ag.must_have_table(rec)
+    assert "7 not judged" in ag.headline(rec)

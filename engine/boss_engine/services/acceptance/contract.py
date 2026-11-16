@@ -254,7 +254,8 @@ def _verbatim(text: Any) -> str:
     return _norm(text)
 
 
-def ticket_items(ticket: Optional[Mapping[str, Any]]) -> list[str]:
+def ticket_items(ticket: Optional[Mapping[str, Any]], *,
+                 prose: Optional[Iterable[str]] = None) -> list[str]:
     """EVERY requirement a ticket states (BOSSAPP-1233), word for word, never truncated: the
     connector's `acceptance_criteria` field and the items under an "Acceptance" heading of its
     description first (prd_gating_criteria — the same parser the PRD's list goes through), then
@@ -264,15 +265,21 @@ def ticket_items(ticket: Optional[Mapping[str, Any]]) -> list[str]:
     WHY. Northgate KAN-9 (2026-11-15) was judged on its five "Acceptance" lines only; its "What
     to build" must-haves — a >=20-rule YAML rulebook gwlint loads, JWKS-cached JWT, a JWT
     audience rule — were never items, so a build with five hard-coded lint checks and an HS256
-    shared secret scored 7 of 8 met."""
+    shared secret scored 7 of 8 met.
+
+    `prose`: what the prose reader (ticket_prose: a model that reasons over the description's
+    prose and cites each requirement word for word) found. For a BUG ticket it replaces the
+    structural reading of the description — the steps to reproduce are context, the expected
+    behaviour is the requirement — whenever it found anything."""
     if not isinstance(ticket, Mapping):
         return []
-    body = ticket.get("body") if ticket.get("body") is not None else ticket.get("body_markdown")
-    body = str(body or "")
+    body = _body_of(ticket)
+    prose = [p for p in (prose or []) if _verbatim(p)]
+    structural = ([] if (prose and _is_bug(ticket))
+                  else [*prd_gating_criteria(body), *requirement_items(body)])
     out: list[str] = []
     seen: set[str] = set()
-    for words in [*(ticket.get("acceptance_criteria") or []), *prd_gating_criteria(body),
-                  *requirement_items(body)]:
+    for words in [*(ticket.get("acceptance_criteria") or []), *structural, *prose]:
         w = _verbatim(words)
         if w and _key(w) not in seen:
             seen.add(_key(w))
@@ -321,7 +328,10 @@ def _parse(markdown: str) -> list[dict[str, Any]]:
             continue
         stripped = line.strip()
         if not stripped:
+            # A blank line ends the bullet: the next paragraph is its own block, never glued
+            # onto the last bullet (a bug ticket's "Environment:" after its repro steps).
             flush()
+            last_bullet = None
             continue
         h = _HEADING.match(line)
         if h:
@@ -339,7 +349,7 @@ def _parse(markdown: str) -> list[dict[str, Any]]:
             last_bullet = {"kind": "bullet", "indent": _indent(line), "text": _norm(b.group(2))}
             blocks.append(last_bullet)
             continue
-        if last_bullet is not None and not para:
+        if last_bullet is not None and not para and _indent(line) > last_bullet["indent"]:
             last_bullet["text"] = _norm(last_bullet["text"] + " " + stripped)
             continue
         last_bullet = None
@@ -387,35 +397,54 @@ def _bullet_items(node: Mapping[str, Any]) -> list[str]:
 
 
 def requirement_items(markdown: str) -> list[str]:
-    """Every concrete, checkable requirement a ticket or brief STATES, word for word, in
-    document order — read from its structure, not from keywords:
+    """Every concrete, checkable requirement a ticket or brief STATES in its structure, word for
+    word, in document order — read from its structure, not from keywords:
 
       - a `Stack:` field line (the stack the work must be in);
       - every bullet (and numbered item), under a heading or before the first one, with its
         sub-bullets (_bullet_items: one item per requirement, short parts kept together);
-      - a deliverable written as prose: the paragraphs of a SUB-section that holds no list
-        ("### 3. Demo content" + one paragraph naming the example files and the README).
-        Prose under a top-level section, or beside a list, is context and is not an item.
+      - the prose of a SUB-section (a heading under the document's top-level sections), with
+        or without a list beside it: "### 1. `northgate-gateway`" + "A reverse-proxy API
+        gateway, one static binary, configured by YAML.", "### 3. Demo content" + its paragraph.
+
+    Prose before the first heading or directly under a top-level section is NOT read here: it
+    may be context or a requirement, which is a judgement — `prose_to_read` hands it to the
+    prose reader (ticket_prose), which reasons over it.
 
     Left out: a section whose heading says it is not gating (stretch, optional, out of scope,
     nice to have — _NOT_GATING, the PRD parser's own test) and everything under it; code
     blocks, tables and block quotes."""
+    return _reading(markdown)[0]
+
+
+def prose_to_read(markdown: str) -> str:
+    """The prose the structural reader left for the prose reader: paragraphs before the first
+    heading and directly under top-level sections (not under a not-gating heading), each under
+    its heading. Empty when there is none."""
+    return _reading(markdown)[1]
+
+
+def _reading(markdown: str) -> tuple[list[str], str]:
     blocks = _parse(markdown)
     levels = [b["level"] for b in blocks if b["kind"] == "heading"]
     base = min(levels) if levels else 1
     if levels.count(base) == 1 and levels[0] == base and len(set(levels)) > 1:
         base = min(lv for lv in levels if lv > base)        # a lone first heading is the title
     out: list[str] = []
+    left: list[str] = []
     path: list[tuple[int, str]] = []
     section: list[dict[str, Any]] = []
 
     def close() -> None:
         bullets = [b for b in section if b["kind"] == "bullet"]
+        paras = [b["text"] for b in section if b["kind"] == "para"]
         if not any(_NOT_GATING.search(t) for _lv, t in path):
             for node in _bullet_tree(bullets):
                 out.extend(_bullet_items(node))
-            if path and not bullets and path[-1][0] > base:
-                out.extend(b["text"] for b in section if b["kind"] == "para")
+            if path and path[-1][0] > base:
+                out.extend(paras)
+            elif paras:
+                left.append("\n".join(([f"[{path[-1][1]}]"] if path else []) + paras))
         section.clear()
 
     for b in blocks:
@@ -435,7 +464,138 @@ def requirement_items(markdown: str) -> list[str]:
         if w and _key(w) not in seen:
             seen.add(_key(w))
             kept.append(w)
-    return kept
+    return kept, "\n\n".join(left)
+
+
+# ---------------------------------------------------------------------------------------------
+# The prose reader: a model reasons over what structure cannot decide (BOSSAPP-1233)
+# ---------------------------------------------------------------------------------------------
+
+#: Fewer structural items than this and the prose reader reads the WHOLE description.
+MIN_STRUCTURAL_ITEMS = 3
+#: The prose reader's bounds: what it is shown, and how many items it may return.
+MAX_PROSE_CHARS = 12000
+MAX_PROSE_ITEMS = 30
+_PROSE_OPEN, _PROSE_CLOSE = "=== REQUIREMENTS ===", "=== END REQUIREMENTS ==="
+
+
+def _body_of(ticket: Mapping[str, Any]) -> str:
+    body = ticket.get("body") if ticket.get("body") is not None else ticket.get("body_markdown")
+    return str(body or "")
+
+
+def _is_bug(ticket: Mapping[str, Any]) -> bool:
+    return "bug" in str(ticket.get("type") or ticket.get("issue_type") or "").lower()
+
+
+def _plain(text: Any) -> str:
+    """Words without markdown emphasis/code marks, whitespace folded: what "word for word" is
+    checked on (a model may drop the ** a ticket wraps a label in)."""
+    return _norm(re.sub(r"[*`_]+", "", str(text or "")))
+
+
+def prose_input(ticket: Optional[Mapping[str, Any]]) -> str:
+    """What the prose reader must read for this ticket: the whole description for a bug ticket
+    or one the structure gives fewer than MIN_STRUCTURAL_ITEMS items, else only the prose the
+    structure left (prose_to_read). Empty: nothing to read, no model call."""
+    if not isinstance(ticket, Mapping):
+        return ""
+    body = _body_of(ticket)
+    if not body.strip():
+        return ""
+    found = len(prd_gating_criteria(body)) + len(requirement_items(body))
+    if _is_bug(ticket) or found < MIN_STRUCTURAL_ITEMS:
+        return body
+    return prose_to_read(body)
+
+
+def prose_prompt(ticket: Mapping[str, Any], text: str, listed: list[str]) -> str:
+    kind = "a BUG report" if _is_bug(ticket) else "a ticket"
+    return (
+        "You are BOSS's REQUIREMENTS READER. Below is the text of " + kind + " (\"" +
+        str(ticket.get("title") or "") + "\"). List every concrete, checkable requirement it "
+        "STATES that the work must deliver — what an acceptance check will hold the build to.\n"
+        "RULES:\n"
+        "- Copy each requirement WORD FOR WORD from the text: a whole sentence or a whole "
+        "clause of one, never paraphrased, never merged across sentences. BOSS keeps only "
+        "words it finds in the text.\n"
+        "- One item per concrete, checkable requirement; keep trivially related parts (a list "
+        "of fields) in one item.\n"
+        "- Leave out context: background and motivation, who reported it, the environment, "
+        "what happens today, anything the text says is out of scope or for later. In a bug "
+        "report the steps to reproduce and the actual behaviour are context; the EXPECTED "
+        "behaviour is the requirement.\n"
+        "- Leave out what is already listed below.\n"
+        f"- At most {MAX_PROSE_ITEMS} items.\n\n"
+        "ALREADY LISTED:\n" + ("\n".join(f"- {x}" for x in listed) or "(none)") + "\n\n"
+        "THE TEXT:\n" + text[:MAX_PROSE_CHARS] + "\n\n"
+        "Answer ONLY with a JSON object between these two lines:\n" + _PROSE_OPEN + "\n"
+        '{"items": [{"text": "<the words, copied>", "why": "<why it is a requirement>"}]}\n'
+        + _PROSE_CLOSE + "\n")
+
+
+def parse_prose(reply: Any, text: str) -> list[str]:
+    """The reader's items that are the text's own words (each checked against `text`), deduped,
+    at most MAX_PROSE_ITEMS. A reply that cannot be read is no items, never invented ones."""
+    body = str(reply or "")
+    if _PROSE_OPEN in body:
+        body = body.split(_PROSE_OPEN, 1)[1].split(_PROSE_CLOSE, 1)[0]
+    m = re.search(r"\{.*\}", body, re.S)
+    try:
+        data = json.loads(m.group(0)) if m else {}
+    except ValueError:
+        return []
+    raw = data.get("items") if isinstance(data, Mapping) else None
+    plain_text = _plain(text)
+    out: list[str] = []
+    seen: set[str] = set()
+    for it in raw if isinstance(raw, list) else []:
+        words = _verbatim(it.get("text") if isinstance(it, Mapping) else it)
+        if not words or len(_plain(words)) < 8 or _plain(words) not in plain_text:
+            continue
+        if _key(words) not in seen:
+            seen.add(_key(words))
+            out.append(words)
+        if len(out) >= MAX_PROSE_ITEMS:
+            break
+    return out
+
+
+def ticket_prose(ticket: Optional[Mapping[str, Any]], *, ask: Any = None,
+                 held: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+    """{prose_digest, prose_items}: what the prose reader found in this ticket. The reader is
+    asked ONCE per distinct prose (`held`, the contract's stored ticket source, answers again
+    for the same digest — so a check never re-asks, and a contract never flaps on a model's
+    second opinion). `ask(prompt) -> reply text`; None, or a failing ask, reads nothing."""
+    text = prose_input(ticket)
+    if not text.strip() or not isinstance(ticket, Mapping):
+        return {"prose_digest": None, "prose_items": []}
+    digest = _digest(["prose", "bug" if _is_bug(ticket) else "", text])
+    if held and held.get("prose_digest") == digest:
+        return {"prose_digest": digest, "prose_items": list(held.get("prose_items") or [])}
+    if ask is None:
+        return {"prose_digest": None, "prose_items": []}
+    try:
+        reply = ask(prose_prompt(ticket, text, ticket_items(ticket)))
+    except Exception as exc:  # noqa: BLE001 — the structural items still stand
+        _log.warning("acceptance contract: the prose reader failed (%s)", type(exc).__name__)
+        return {"prose_digest": None, "prose_items": []}
+    return {"prose_digest": digest, "prose_items": parse_prose(reply, text)}
+
+
+def default_prose_ask(connection: Any, project_id: Optional[str]) -> Any:
+    """The prose reader's ask on the project's configured review engine — the governed role
+    path the rulebook reader uses (banking_regulatory_pipeline._role_agent + run_verdict, one
+    single-turn verdict). The agent is built only when a prose read is needed."""
+    def ask(prompt: str) -> str:
+        from ...config import get_settings
+        from ..engine_contract import run_verdict
+        from ..knowledge.banking_regulatory_pipeline import _role_agent
+
+        agent, _engine = _role_agent(connection, get_settings(), str(project_id or ""))
+        return str((run_verdict(agent, prompt, max_turns=2,
+                                temp_prefix="boss-acceptance-prose-") or {}).get("summary") or "")
+    return ask
 
 
 def _ticket_ref(ticket: Mapping[str, Any]) -> str:
@@ -448,7 +608,7 @@ def _digest(value: Any) -> str:
 
 def gather_sources(spec: Mapping[str, Any], *, ticket: Optional[Mapping[str, Any]] = None,
                    templates: Iterable[Mapping[str, Any]] = (),
-                   operator_items: Iterable[str] = ()) -> list[dict[str, Any]]:
+                   operator_items: Iterable[str] = (), ask: Any = None) -> list[dict[str, Any]]:
     """The contract's sources: [{kind, ref, url, items: [{source, text}], digest}], ticket first.
 
     `spec` is the lineage's build spec (a union spec for a decomposed PRD: union_spec); its items
@@ -457,11 +617,12 @@ def gather_sources(spec: Mapping[str, Any], *, ticket: Optional[Mapping[str, Any
     ({id, title, criteria}), `operator_items` words a person added."""
     out: list[dict[str, Any]] = []
     if ticket:
-        words = ticket_items(ticket)
+        prose = ticket_prose(ticket, ask=ask)
+        words = ticket_items(ticket, prose=prose["prose_items"])
         if words:
             out.append({"kind": "ticket", "ref": _ticket_ref(ticket), "url": ticket.get("url"),
                         "provider": ticket.get("provider"),
-                        "updated_at": ticket.get("updated_at"),
+                        "updated_at": ticket.get("updated_at"), **prose,
                         "items": [{"source": "ticket", "text": w} for w in words]})
     # The build's own items, in the order the gate reads them (_raw_items: the brief's
     # must-haves, the PRD's gating list, the run's acceptance criteria), one source per kind.
@@ -646,7 +807,8 @@ def _source_rows(sources: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     contract), plus the source's own item texts for a ticket (so a later change is a diff)."""
     out = []
     for s in sources:
-        row = {k: s.get(k) for k in ("kind", "ref", "url", "provider", "updated_at", "digest")
+        row = {k: s.get(k) for k in ("kind", "ref", "url", "provider", "updated_at", "digest",
+                                     "prose_digest", "prose_items")
                if s.get(k) is not None}
         row["count"] = len(s.get("items") or [])
         out.append(row)
@@ -762,7 +924,7 @@ def revise(connection: Any, contract_id: str, *, added: Iterable[Any] = (),
 
 def revise_from_ticket(connection: Any, contract: Mapping[str, Any],
                        ticket: Optional[Mapping[str, Any]], *,
-                       actor: str = "boss") -> dict[str, Any]:
+                       actor: str = "boss", ask: Any = None) -> dict[str, Any]:
     """The contract with the ticket's CURRENT acceptance criteria — BOSS's own revision, made
     because the run's ticket snapshot changed (a person chose "Include it" on the mid-run change
     card, ticket_sync.on_card_answered) and recorded as `acceptance.contract_revised` by BOSS.
@@ -771,10 +933,14 @@ def revise_from_ticket(connection: Any, contract: Mapping[str, Any],
     was its only source (a brief must-have the ticket also listed stays, with its id). A new
     criterion that another source already asks for gains the ticket as a source; otherwise it
     joins with a new id. Unchanged criteria: the contract as it is."""
-    now = ticket_items(ticket)
-    if not ticket or not now:
+    if not ticket:
         return dict(contract)
     cur = _newest(connection, contract["id"])
+    held_src = next((x for x in cur["sources"] if x.get("kind") == "ticket"), None)
+    prose = ticket_prose(ticket, ask=ask, held=held_src)
+    now = ticket_items(ticket, prose=prose["prose_items"])
+    if not now:
+        return dict(contract)
     ref = _ticket_ref(ticket)
     now_keys = {_key(w) for w in now}
     held_keys = {_key(i["text"]) for i in cur["items"] if _from_ticket(i)}
@@ -815,8 +981,8 @@ def revise_from_ticket(connection: Any, contract: Mapping[str, Any],
                                   f"{len(retagged)} re-sourced" if retagged else "") if x)
     source = {"kind": "ticket", "ref": ref, "url": ticket.get("url"),
               "provider": ticket.get("provider"), "updated_at": ticket.get("updated_at"),
-              "digest": _digest(now), "count": len(now)}
-    held_src = next((x for x in cur["sources"] if x.get("kind") == "ticket"), None)
+              "digest": _digest(now), "count": len(now),
+              **{k: v for k, v in prose.items() if v is not None}}
     # The same ticket snapshot read again by a reader that now takes in more of it (BOSSAPP-1233:
     # the whole description, not only its "Acceptance" list) did not change: say so.
     unchanged = bool(held_src and ticket.get("updated_at")
@@ -868,7 +1034,7 @@ def _project_of(connection: Any, run_id: str) -> Optional[str]:
 
 def ensure_for_run(connection: Any, *, run_id: str, fctx: Optional[Mapping[str, Any]],
                    own_spec: Mapping[str, Any],
-                   ticket: Any = "_read") -> Optional[dict[str, Any]]:
+                   ticket: Any = "_read", ask: Any = "_default") -> Optional[dict[str, Any]]:
     """The contract this run is held to, frozen now if its lineage has none yet.
 
     Frozen from the lineage's builds (lineage_build_rows: the original build, its repairs and
@@ -887,6 +1053,8 @@ def ensure_for_run(connection: Any, *, run_id: str, fctx: Optional[Mapping[str, 
         # workflow carries none of its own, and the root's snapshot is what a person updated.
         ticket = ticket_of_run(connection, run_id) or (
             ticket_of_run(connection, root) if root != run_id else None)
+    if isinstance(ask, str) and ask == "_default":
+        ask = default_prose_ask(connection, project_id) if ticket else None
     found = latest(connection, root_run_id=root, project_id=project_id)
     if found is None:
         builds = lineage_build_rows(connection, root)
@@ -896,12 +1064,12 @@ def ensure_for_run(connection: Any, *, run_id: str, fctx: Optional[Mapping[str, 
             spec = _spec_of(own_spec)
         else:
             return None
-        sources = gather_sources(spec, ticket=ticket)
+        sources = gather_sources(spec, ticket=ticket, ask=ask)
         if not build_items(sources):
             return None
         found = freeze(connection, project_id=project_id, root_run_id=root, sources=sources,
                        workflow_run_id=(fctx or {}).get("workflow_run_id"))
-    return revise_from_ticket(connection, found, ticket)
+    return revise_from_ticket(connection, found, ticket, ask=ask)
 
 
 def gate_items(contract: Mapping[str, Any]) -> list[dict[str, str]]:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +22,15 @@ from boss_engine.services.acceptance import contract as ac
 
 from ._acceptance_fixtures import load_northgate_v1
 from .test_workflow_capability_runner import eng, project  # noqa: F401 - fixtures used by name
+
+PROSE = Path(__file__).resolve().parent / "fixtures" / "acceptance_prose"
+
+
+@pytest.fixture(autouse=True)
+def no_model_for_prose(monkeypatch):
+    """No test reaches a real engine: the prose reader's default ask reads nothing here (the
+    prose tests pass their own scripted reader)."""
+    monkeypatch.setattr(ac, "default_prose_ask", lambda connection, project_id: None)
 
 
 @pytest.fixture(scope="module")
@@ -61,13 +71,13 @@ def test_ticket_items_come_from_the_connector_field_and_the_whole_description(ng
     assert ac.ticket_items({"acceptance_criteria": ["  a  b ", "", "c"]}) == ["a b", "c"]
     from_body = ac.ticket_items(ng.ticket())
     # BOSSAPP-1233: every requirement the ticket states, its "Acceptance" list first (was 5).
-    assert len(from_body) == 25
+    assert len(from_body) == 26
     assert from_body[4] == "All tests pass; the README quick start works as written."
     assert ac.ticket_items({"body": "no acceptance here"}) == []
     assert ac.ticket_items(None) == []
     # The connector's field and the description together, deduplicated, the field first.
     both = ac.ticket_items({**ng.ticket(), "acceptance_criteria": [from_body[1], "Extra"]})
-    assert both[:2] == [from_body[1], "Extra"] and len(both) == 26
+    assert both[:2] == [from_body[1], "Extra"] and len(both) == 27
 
 
 def test_the_northgate_ticket_yields_an_item_for_each_must_have_the_run_never_checked(ng):
@@ -78,7 +88,7 @@ def test_the_northgate_ticket_yields_an_item_for_each_must_have_the_run_never_ch
     word from the ticket."""
     body = ng.ticket_text
     items = ac.requirement_items(body)
-    assert len(items) == 25
+    assert len(items) == 26
     whole = ac.ticket_items(ng.ticket())
     flat = ac._norm(body)
     rulebook = [i for i in whole if "`rules/api-guidelines.yaml`" in i]
@@ -171,7 +181,7 @@ def test_ticket_items_dedupe_with_the_brief_and_prd_keeping_every_source(ng):
     for i in shared:
         srcs = [x["source"] for x in i["sources"]]
         assert srcs[0] == "ticket" and "criterion" in srcs and len(set(srcs)) == len(srcs)
-    assert len([i for i in items if i["source"] == "ticket"]) == 25
+    assert len([i for i in items if i["source"] == "ticket"]) == 26
     assert len({ac._key(i["text"]) for i in items}) == len(items)
 
 
@@ -226,7 +236,7 @@ def test_the_contract_freezes_once_and_the_build_its_repairs_and_follow_ups_are_
         spec, source = ag.items_spec(c, run_id=root, fctx={"ticket": ng.ticket()},
                                      own_spec=ng.spec())
     held = _texts(spec)
-    assert len(held) == 47           # the ticket's 25 requirements + the 23, one shared
+    assert len(held) == 48           # the ticket's 26 requirements + the 23, one shared
     assert held[0].startswith("`make run-staging` starts the gateway")      # the ticket first
     assert source["root"] is True and source["contract"]["version"] == 1
     with eng.begin() as c:
@@ -247,17 +257,17 @@ def test_the_contract_freezes_once_and_the_build_its_repairs_and_follow_ups_are_
         with eng.begin() as c:
             spec, source = ag.items_spec(c, run_id=run_id, fctx=fctx, own_spec=own)
         texts = _texts(spec)
-        assert texts[:47] == held, run_id               # the whole contract, first, in order
-        assert source["contract"] == {"id": v1["id"], "version": 1, "items": 47}
+        assert texts[:48] == held, run_id               # the whole contract, first, in order
+        assert source["contract"] == {"id": v1["id"], "version": 1, "items": 48}
         # What a run adds beyond the contract still counts after it (never fewer items).
         if run_id == repair:
-            assert texts[47:] == []
+            assert texts[48:] == []
     with eng.begin() as c:
         assert [v["version"] for v in ac.versions(c, root_run_id=root)] == [1]
         # freeze is first-time-only: other sources later never rewrite version 1.
         again = ac.freeze(c, project_id=project, root_run_id=root,
                           sources=ac.gather_sources({"acceptance_criteria": ["other"]}))
-        assert again["id"] == v1["id"] and len(again["items"]) == 47
+        assert again["id"] == v1["id"] and len(again["items"]) == 48
         from sqlalchemy import text
 
         assert c.execute(text(
@@ -299,7 +309,7 @@ def test_a_ticket_change_is_a_new_version_that_keeps_every_id(eng, project, ng, 
     assert first_ticket["text"] not in ids2                       # dropped
     assert all(ids2[t] == by_text[t] for t in ids2 if t in by_text)  # every kept id unchanged
     new = [i for i in v2["items"] if i["text"].startswith("`make token`")]
-    assert new and new[0]["id"] == "AC-48" and new[0]["source"] == "ticket"
+    assert new and new[0]["id"] == "AC-49" and new[0]["source"] == "ticket"
     assert "`make token` mints a demo JWT for the quick start" in _texts(spec)
     with eng.begin() as c:
         # The same ticket again changes nothing; a person's revision is version 3, and a removed
@@ -321,7 +331,7 @@ def test_a_ticket_change_is_a_new_version_that_keeps_every_id(eng, project, ng, 
         assert v3["version"] == 3 and v3["created_by"] == "usr_test_person"
         assert v3["items"][-1]["sources"] == [{"source": "operator", "source_kind": "operator",
                                                 "source_ref": "usr_test_person"}]
-        assert [i["id"] for i in v3["items"]][-1] == "AC-49"
+        assert [i["id"] for i in v3["items"]][-1] == "AC-50"
         assert "AC-2" not in {i["id"] for i in v3["items"]}
         assert c.execute(text(
             "SELECT count(*) FROM events WHERE project_id = :p "
@@ -343,7 +353,7 @@ def test_a_follow_up_whose_builds_are_gone_is_held_to_the_contract_not_to_nothin
                                      fctx={"is_followup": True, "root_run_id": root},
                                      own_spec={"instructions": "Fix"})
     assert source["root"] is True and source["contract"]["version"] == 1
-    assert len(_texts(spec)) == 47
+    assert len(_texts(spec)) == 48
 
 
 def test_a_run_with_no_ticket_is_judged_on_exactly_the_items_it_was_before(eng, project, ng):
@@ -433,7 +443,119 @@ def test_a_contract_frozen_from_the_acceptance_list_alone_takes_in_the_whole_tic
         assert len(v1["items"]) == 27
         v2 = ac.revise_from_ticket(c, v1, ng.ticket())
     assert v2["version"] == 2
-    assert v2["reason"].startswith(f"{ng.ticket()['key']} read in full: 20 items added")
-    assert len(v2["items"]) == 47
+    assert v2["reason"].startswith(f"{ng.ticket()['key']} read in full: 21 items added")
+    assert len(v2["items"]) == 48
     assert [i["id"] for i in v2["items"][:27]] == [i["id"] for i in v1["items"]]
     assert any("JWKS URL with caching" in i["text"] for i in v2["items"])
+
+
+# ---------------------------------------------------------------------------------------------
+# BOSSAPP-1233 review: prose the structure cannot decide is read by a model, word for word
+# ---------------------------------------------------------------------------------------------
+
+class ProseReader:
+    """A scripted prose reader: answers the given items (copied or not) and counts its calls."""
+
+    def __init__(self, *texts):
+        self.texts, self.calls, self.prompts = list(texts), 0, []
+
+    def __call__(self, prompt):
+        self.calls += 1
+        self.prompts.append(prompt)
+        body = json.dumps({"items": [{"text": t, "why": "stated"} for t in self.texts]})
+        return f"Reading.\n{ac._PROSE_OPEN}\n{body}\n{ac._PROSE_CLOSE}\n"
+
+
+def _ticket(name, **kw):
+    return {"provider": "jira", "key": "NG-9", "id": "NG-9", "title": name, "url": None,
+            "body": (PROSE / name).read_text(encoding="utf-8"), "acceptance_criteria": [],
+            "updated_at": "2026-11-15", **kw}
+
+
+def test_a_blank_line_ends_a_bullet():
+    """A bug ticket's "Environment:" paragraph after its last repro step was glued onto it."""
+    body = (PROSE / "bug_short.md").read_text(encoding="utf-8")
+    steps = ac.requirement_items(body)
+    assert steps[-1] == "Save the file."
+    assert not any("Environment" in s or "Expected" in s for s in steps)
+    # An INDENTED line right under a bullet still continues it; an unindented one does not.
+    assert ac.requirement_items("- one\n  more\nnot it\n") == ["one more"]
+
+
+def test_a_bug_ticket_is_held_to_its_expected_behaviour_not_its_repro_steps():
+    ticket = _ticket("bug_short.md", type="Bug")
+    expected = ("Expected: the reload accepts the URL and requests to `/v1/payments` keep "
+                "reaching the upstream.")
+    reader = ProseReader(expected, "the gateway logs a panic and stops serving, paraphrased")
+    prose = ac.ticket_prose(ticket, ask=reader)
+    assert reader.calls == 1
+    assert "steps to reproduce and the actual behaviour are context" in reader.prompts[0]
+    assert "Environment: staging" in reader.prompts[0]          # the WHOLE report was read
+    items = ac.ticket_items(ticket, prose=prose["prose_items"])
+    assert items == [expected]                  # the paraphrase is not the ticket's words: dropped
+    # Without a reader, BOSS still holds the run to what structure gives (never nothing).
+    assert ac.ticket_items(ticket) == ac.requirement_items(ticket["body"])
+
+
+def test_a_description_only_story_yields_its_requirements_word_for_word():
+    ticket = _ticket("story_description_only.md", type="Story")
+    assert ac.requirement_items(ticket["body"]) == []           # structure finds nothing
+    said = ["Add a `GET /v1/usage` endpoint that returns, for the calling tenant only, the "
+            "requests made in the last 24 hours per route and the share of the rate limit used.",
+            "The response must be JSON and must never include another tenant's numbers.",
+            "The endpoint needs the same authentication as the tenant's routes."]
+    # A reader that drops a ticket's ** or ` marks still cites word for word.
+    reader = ProseReader(*said, said[0].replace("`", ""), "Charts in a console")
+    prose = ac.ticket_prose(ticket, ask=reader)
+    assert prose["prose_items"][:3] == said and len(prose["prose_items"]) == 3
+    assert "## Proposal" in reader.prompts[0] and "out of scope or for later" in reader.prompts[0]
+    assert ac.ticket_items(ticket, prose=prose["prose_items"]) == said
+
+
+def test_the_prose_reader_is_bounded_and_unreadable_answers_are_nothing():
+    ticket = _ticket("story_description_only.md", body="Do it. " * 5000)
+    reader = ProseReader()
+    ac.ticket_prose(ticket, ask=reader)
+    assert len(reader.prompts[0]) < ac.MAX_PROSE_CHARS + 4000
+    assert ac.parse_prose("no json here", "text") == []
+    many = json.dumps({"items": [{"text": f"word {i} here"} for i in range(80)]})
+    text = " ".join(f"word {i} here." for i in range(80))
+    assert len(ac.parse_prose(many, text)) == ac.MAX_PROSE_ITEMS
+
+
+def test_northgate_sends_only_its_left_over_prose_to_the_reader(ng):
+    """KAN-9's structure gives 26 items; only its intro prose is left for the reader."""
+    left = ac.prose_input(ng.ticket())
+    assert left.startswith("Northgate API Gateway: automate tenant API onboarding")
+    assert "Routing" not in left and "At least 20 rules" not in left
+
+
+def test_the_prose_reader_is_asked_once_per_ticket_text_never_per_check(eng, project, ng,
+                                                                          monkeypatch):
+    """The contract keeps what the reader found with its digest: every later check reuses it
+    (no second model call, no contract flapping on a second opinion)."""
+    reader = ProseReader("We want BOSS to run it: every tenant config change is validated "
+                         "(format, security, API guidelines), rejected with a report and a "
+                         "suggested fix when it doesn't conform, then deployed to staging, "
+                         "contract-tested, approved, and promoted to production.")
+    monkeypatch.setattr(ac, "default_prose_ask", lambda connection, project_id: reader)
+    with eng.begin() as c:
+        root = _run(c, project, spec=ng.spec(), fctx={"ticket": ng.ticket()})
+    try:
+        for _ in range(3):
+            with eng.begin() as c:
+                ag.items_spec(c, run_id=root, fctx={"ticket": ng.ticket()}, own_spec=ng.spec())
+        assert reader.calls == 1
+        with eng.begin() as c:
+            v = ac.latest(c, root_run_id=root)
+        assert v["version"] == 1
+        assert any(i["text"].startswith("We want BOSS to run it") for i in v["items"])
+        src = next(x for x in v["sources"] if x["kind"] == "ticket")
+        assert src["prose_digest"] and len(src["prose_items"]) == 1
+    finally:
+        from sqlalchemy import text
+
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM acceptance_contracts WHERE project_id = :p"),
+                      {"p": project})
+            c.execute(text("DELETE FROM code_task_runs WHERE project_id = :p"), {"p": project})

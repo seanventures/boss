@@ -44,6 +44,9 @@ KEY = "acceptance"
 SUMMARY_KEY = "acceptance_summary"
 #: Items per reviewer pass: a longer list is judged in several passes (`run_check`), never cut.
 MAX_ITEMS = 40
+#: Reviewer passes per check (BOSSAPP-1233): items beyond MAX_PASSES x MAX_ITEMS are not judged,
+#: and a check with items it did not judge is not met (the card says how many).
+MAX_PASSES = 4
 MAX_TREE_FILES = 600
 
 MET, PARTIAL, MISSING, UNJUDGED = "met", "partial", "missing", "unjudged"
@@ -263,15 +266,22 @@ def acceptance_prompt(items: list[dict], *, title: str, stack: Mapping[str, Any]
         "  ITEM <n>: MISSING — <what you looked for and where; what is absent>\n"
         "MET requires a path that exists in the tree and is code, configuration or a test — a "
         "README or other document alone is not evidence. When unsure, say PARTIAL and why.\n"
-        "MET also requires the requirement to be WIRED: show the code that loads or uses what "
-        "the item names. A file named after the requirement is not delivery on its own — a "
-        "rules YAML the linter never reads (its checks hard-coded instead), a JSON Schema "
-        "nothing validates against, a config field nothing enforces (a JWT audience no verifier "
-        "checks, a JWKS URL while tokens are checked against a shared secret), a rule that "
-        "exists only in a list or a doc. Name the loading/using function in the MET line; if "
-        "you cannot find one, the item is PARTIAL (say what is not wired). Judge each part of "
-        "an item that lists several (every rule, every field, every endpoint): one part "
-        "missing makes it PARTIAL.\n"
+        "MET also requires the requirement to be WIRED. Decide for each item whether a file it "
+        "names must be READ BY THE CODE (a rulebook, a schema, a config the program loads) or "
+        "IS the deliverable itself (a compose file, an example, a CI workflow, a Makefile). "
+        "For a file the code must read, a file named after the requirement is not delivery on "
+        "its own — a rules YAML the linter never reads (its checks hard-coded instead), a JSON "
+        "Schema nothing validates against, a config field nothing enforces (a JWT audience no "
+        "verifier checks, a JWKS URL while tokens are checked against a shared secret), a rule "
+        "that exists only in a list or a doc. Put the loader in the MET line as "
+        "`LOADED BY <file>:<function>` (the non-test code that reads it; BOSS checks that the "
+        "function is in that file); if you cannot find one, the item is PARTIAL (say what is "
+        "not wired). Judge each part of an item that lists several (every rule, every field, "
+        "every endpoint): one part missing makes it PARTIAL.\n"
+        "An item that is a matter of taste with no objective check (naming style, clarity, "
+        "'clean' code) is answered with `(judgement)` after its status, e.g. "
+        "`ITEM <n>: PARTIAL (judgement) — ...`: it is reported, and advisory. Never use it for "
+        "an item that can be checked (a behaviour, a file, a command, a language).\n"
         "End with EXACTLY one final line:\n  ACCEPTANCE: MET\n  ACCEPTANCE: NOT MET\n\n"
         "THE BRANCH'S FILES:\n" + (tree or "(empty)") + "\n"
     )
@@ -279,23 +289,30 @@ def acceptance_prompt(items: list[dict], *, title: str, stack: Mapping[str, Any]
 
 _ANSWER = re.compile(
     r"(?im)^[\s>*\-•]*\**\s*ITEM\s*#?\s*(\d+)\s*\**\s*[:.)\-]\s*\**\s*(MET|PARTIAL|MISSING)\b\**"
-    r"\s*(?:[—–:\-]+\s*)?(.*)$")
+    r"(\s*\(\s*judge?ment\s*\))?\**\s*(?:[—–:\-]+\s*)?(.*)$")
 _SUMMARY = re.compile(r"(?im)^[\s>*`]*ACCEPTANCE\s*:\s*\**\s*(NOT\s+MET|MET)\b")
 _PATHISH = re.compile(r"(?<![\w/.-])([\w.\-]+(?:/[\w.\-]+)+|[\w\-]+\.[A-Za-z][\w]{0,8})"
                       r"(?::\d+)?(?![\w/])")
+#: A bare word that may be an extensionless file (Makefile, Dockerfile, LICENSE, Procfile): it
+#: counts as evidence only when a file of exactly that name is in the tree.
+_BARE = re.compile(r"(?<![\w/.\-])([A-Za-z][\w\-]{2,})(?![\w/.\-])")
 _DOC_PATH = re.compile(r"(?i)(^|/)(readme[^/]*|changelog[^/]*|docs?/.*|[^/]*\.(md|rst|txt|adoc))$")
 #: Manifests and lockfiles declare a dependency; they deliver no behaviour.
-#: Data files: what a requirement may NAME (a rulebook, a schema, a config) — delivery only when
-#: code in the tree loads it (BOSSAPP-1233: a rules YAML the linter never read was cited as MET).
-_DATA_PATH = re.compile(r"(?i)\.(ya?ml|json|toml|ini|cfg|conf|csv|xml)$")
 _DECL_PATH = re.compile(r"(?i)(^|/)(go\.(mod|sum)|package(-lock)?\.json|[^/]*\.lock|"
                         r"pnpm-lock\.ya?ml|requirements[^/]*\.txt|pyproject\.toml|setup\.(py|cfg)|"
                         r"pipfile|cargo\.toml|pom\.xml|build\.gradle(\.kts)?|gemfile)$")
+#: A test file: it exercises a loader, it is not one.
+_TEST_PATH = re.compile(r"(?i)(^|/)(tests?|__tests__|spec|testdata)/|_test\.\w+$|\.(test|spec)\.\w+$"
+                        r"|(^|/)test_[^/]*$")
+#: The reviewer's wiring claim (acceptance_prompt): "LOADED BY <file>:<symbol>".
+_LOADED_BY = re.compile(r"(?i)\bLOADED\s+BY\s+`?([\w.\-/]+?):`?([A-Za-z_][\w.$]*)`?")
 
 
 def _resolve(root: Path, cited: str) -> Optional[str]:
     """The tree path a cited path names (exact, else a unique suffix match), or None."""
-    cited = cited.strip("`'\".,;:()[]").lstrip("./")
+    cited = cited.strip("`'\",;:()[]").rstrip(".")
+    while cited.startswith(("./", "/")):           # never a leading dot of a name (.github/)
+        cited = cited[1:] if cited.startswith("/") else cited[2:]
     if not cited or ".." in Path(cited).parts:
         return None
     direct = root / cited
@@ -306,8 +323,18 @@ def _resolve(root: Path, cited: str) -> Optional[str]:
     return str(hits[0].relative_to(root)) if len(hits) == 1 else None
 
 
+def _extensionless(root: Path) -> dict[str, list[str]]:
+    """The tree's files with no extension (Makefile, Dockerfile, LICENSE), by name."""
+    out: dict[str, list[str]] = {}
+    for p in _walk(root):
+        if "." not in p.name:
+            out.setdefault(p.name, []).append(str(p.relative_to(root)))
+    return out
+
+
 def evidence_paths(root: Any, why: str) -> tuple[list[str], list[str]]:
-    """(cited paths that exist in the tree, cited paths that do not)."""
+    """(cited paths that exist in the tree, cited paths that do not). A bare extensionless
+    name (Makefile) counts when exactly one file of that name is in the tree."""
     if root is None:
         return [], []
     found, absent = [], []
@@ -317,28 +344,79 @@ def evidence_paths(root: Any, why: str) -> tuple[list[str], list[str]]:
             continue
         hit = _resolve(Path(root), cited)
         (found if hit else absent).append(hit or cited)
+    bare = None
+    for m in _BARE.finditer(str(why or "")):
+        if bare is None:
+            bare = _extensionless(Path(root))
+        hits = bare.get(m.group(1)) or []
+        if len(hits) == 1:
+            found.append(hits[0])
     return list(dict.fromkeys(found)), list(dict.fromkeys(absent))
+
+
+def _code_lines(text: str) -> str:
+    """The text without its comments (line comments `//`, `#`, `--`, `;`, block-comment lines),
+    so a symbol named only in a comment is not found."""
+    out = []
+    block = False
+    for line in text.splitlines():
+        s = line.strip()
+        if block:
+            if "*/" in s:
+                block = False
+            continue
+        if s.startswith("/*"):
+            block = "*/" not in s
+            continue
+        if s.startswith(("//", "#", "--", ";", "*")):
+            continue
+        out.append(re.split(r"\s(?://|#)\s", line, maxsplit=1)[0])
+    return "\n".join(out)
+
+
+def wiring_problem(root: Any, why: str) -> Optional[str]:
+    """Why a MET's wiring claim does not hold, or None. The REVIEWER decides whether an item's
+    file must be loaded by code (a rulebook, a schema) or is the deliverable itself (a compose
+    file, an example, a CI workflow) — this only VERIFIES what it claimed: each
+    "LOADED BY <file>:<symbol>" must name a file in the tree that is not a test, and the symbol
+    must be in that file's code (not only in a comment). BOSSAPP-1233: a rules YAML the linter
+    never read was cited as MET."""
+    if root is None:
+        return None
+    for m in _LOADED_BY.finditer(str(why or "")):
+        cited, symbol = m.group(1), m.group(2).split(".")[-1]
+        hit = _resolve(Path(root), cited)
+        if not hit:
+            return f"the loader it names, {cited}, is not in the tree"
+        if _TEST_PATH.search(hit):
+            return f"the loader it names is a test ({hit}), not the code that loads the file"
+        try:
+            body = (Path(root) / hit).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return f"the loader it names, {hit}, could not be read"
+        if not re.search(r"(?<![\w$])" + re.escape(symbol) + r"(?![\w$])", _code_lines(body)):
+            return f"{symbol} is not in the code of {hit} (only in a comment, or absent)"
+    return None
 
 
 def parse_acceptance(reply: str, items: list[dict], *, root: Any) -> list[dict[str, Any]]:
     """Each item with the reviewer's status and evidence (the LAST answer for an item wins).
 
     A MET stands only on evidence: at least one cited path that EXISTS in the tree and is not a
-    document (README, *.md, docs/). Otherwise it reads as PARTIAL, saying why — an unevidenced
-    or invented claim is what this gate exists to stop."""
-    answers: dict[int, tuple[str, str]] = {}
+    document (README, *.md, docs/), and a wiring claim ("LOADED BY <file>:<symbol>") that holds
+    (wiring_problem). Otherwise it reads as PARTIAL, saying why — an unevidenced or invented
+    claim is what this gate exists to stop. An answer marked "(judgement)" is a matter of taste
+    the reviewer could not check objectively: reported, advisory (`judgement`)."""
+    answers: dict[int, tuple[str, bool, str]] = {}
     for m in _ANSWER.finditer(str(reply or "")):
-        answers[int(m.group(1))] = (m.group(2).lower(), _norm(m.group(3))[:600])
+        answers[int(m.group(1))] = (m.group(2).lower(), bool(m.group(3)),
+                                    _norm(m.group(4))[:600])
     out = []
-    loaders = _Loaders(root)
     for it in items:
-        status, why = answers.get(int(it["n"]), (UNJUDGED, ""))
+        status, judgement, why = answers.get(int(it["n"]), (UNJUDGED, False, ""))
         if status == MET:
             found, absent = evidence_paths(root, why)
             code = [f for f in found if not _DOC_PATH.search(f) and not _DECL_PATH.search(f)]
-            unwired = [f for f in code if _DATA_PATH.search(f)
-                       and Path(f).name.lower() in str(it.get("text") or "").lower()
-                       and not loaders.loads(f)]
             reason = ""
             if not code:
                 reason = ("only manifests/lockfiles cited" if found and all(
@@ -346,55 +424,19 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any) -> list[dict[s
                           else "only documents cited" if found
                           else f"cited paths not in the tree: {', '.join(absent[:4])}" if absent
                           else "no file evidence cited")
-            elif all(_DATA_PATH.search(f) for f in code):
-                reason = ("only data files cited, no code shown loading them: "
-                          + ", ".join(code[:4]))
-            elif unwired:
-                reason = ("the item's file is in the tree but nothing in it loads it: "
-                          + ", ".join(unwired[:4]))
+            else:
+                reason = wiring_problem(root, why) or ""
             if reason:
                 status, why = PARTIAL, f"{why} ({reason})".strip()
-        out.append({**it, "status": status, "evidence": why})
+        out.append({**it, "status": status, "evidence": why,
+                    **({"judgement": True} if judgement and status != MET else {})})
     return out
-
-
-class _Loaders:
-    """Which of the tree's data files some OTHER non-document file refers to (by path, file
-    name, or its folder) — the least a loaded rulebook/schema/config shows. Read once, lazily."""
-
-    MAX_BYTES = 512 * 1024
-
-    def __init__(self, root: Any) -> None:
-        self.root = Path(root) if root is not None else None
-        self._texts: Optional[dict[str, str]] = None
-
-    def _all(self) -> dict[str, str]:
-        if self._texts is None:
-            self._texts = {}
-            for p in _walk(self.root) if self.root is not None else ():
-                rel = str(p.relative_to(self.root))
-                if _DOC_PATH.search(rel):
-                    continue
-                try:
-                    if p.stat().st_size <= self.MAX_BYTES:
-                        self._texts[rel] = p.read_text(encoding="utf-8", errors="ignore")
-                except OSError:
-                    continue
-        return self._texts
-
-    def loads(self, rel: str) -> bool:
-        path = Path(rel)
-        names = {rel, path.name}
-        if path.parent != Path("."):
-            names |= {f"{path.parent.as_posix()}/", f'"{path.parent.as_posix()}"',
-                      f"'{path.parent.as_posix()}'"}
-        return any(any(n in text for n in names)
-                   for other, text in self._all().items() if other != rel)
 
 
 def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
           root: Any, source: Optional[Mapping[str, Any]] = None,
-          dropped: int = 0, summary_line: Optional[str] = "") -> dict[str, Any]:
+          dropped: int = 0, summary_line: Optional[str] = "",
+          over_cap: int = 0) -> dict[str, Any]:
     """The gate's record. It FAILS CLOSED; verdict:
       met       EVERY item MET with evidence in the tree, every declared manifest present, and
                 the reviewer's own summary line says MET
@@ -402,7 +444,9 @@ def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
                 summary contradicting its items (facts — repair, then a checks-failing PR)
       not_run   the reviewer left items unanswered, or the items could not be found (the
                 check's fault, not the code's: it is re-run, and never passes)
-      no_items  the run states nothing to hold it to (a non-follow-up with no criteria)"""
+      no_items  the run states nothing to hold it to (a non-follow-up with no criteria)
+    A `(judgement)` answer (a matter of taste) is reported and ADVISORY: it never fails the
+    check. `over_cap`: items beyond MAX_PASSES reviewer passes, not judged — not met."""
     stack = dict(stack or {})
     source = dict(source or {"root": True})
     # WHICH ITEMS this check judged: a later check clears this one's failure only if it judged
@@ -413,13 +457,17 @@ def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
     summary = (" ".join(m[-1].group(1).upper().split()) if m else None)
     if summary_line != "":
         summary = summary_line      # several passes: run_check combined their summary lines
-    missing = [i["n"] for i in judged if i["status"] == MISSING]
-    partial = [i["n"] for i in judged if i["status"] == PARTIAL]
+    missing = [i["n"] for i in judged if i["status"] == MISSING and not i.get("judgement")]
+    partial = [i["n"] for i in judged if i["status"] == PARTIAL and not i.get("judgement")]
+    advisory = [i["n"] for i in judged if i.get("judgement")]
     unjudged = [i["n"] for i in judged if i["status"] == UNJUDGED]
     met = [i["n"] for i in judged if i["status"] == MET]
     why = ""
     if stack.get("missing") or missing or partial:
         verdict = "not_met"
+    elif over_cap:
+        verdict, why = "not_met", (f"{over_cap} items not judged (beyond {MAX_PASSES} reviewer "
+                                   f"passes of {MAX_ITEMS})")
     elif not source.get("root"):
         verdict, why = "not_run", str(source.get("why") or "the must-haves were not found")
     elif not items:
@@ -439,6 +487,7 @@ def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
         verdict = "met"
     return {"verdict": verdict, "why": why, "summary_line": summary, "items": judged,
             "missing": missing, "partial": partial, "unjudged": unjudged, "met": met,
+            "advisory": advisory, "items_not_judged": int(over_cap or 0),
             "stack": stack, "source": source, "items_dropped": int(dropped or 0),
             "counts": {s: sum(1 for i in judged if i["status"] == s)
                        for s in (MET, PARTIAL, MISSING, UNJUDGED)}}
@@ -468,6 +517,9 @@ def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, An
     replies: list[Optional[str]] = []
     cost = 0
     model = None
+    cap = MAX_PASSES * MAX_ITEMS
+    over = max(0, len(items) - cap)
+    items = items[:cap]
     for start in range(0, len(items), MAX_ITEMS):
         batch = items[start:start + MAX_ITEMS]
         try:
@@ -481,7 +533,7 @@ def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, An
         model = model or rr.get("model") or (rr.get("usage") or {}).get("model")
         replies.append(str(rr.get("summary") or ""))
     rec = judge(items, "\n".join(r or "" for r in replies), stack, root=root, source=source,
-                dropped=dropped, summary_line=batch_summary(replies))
+                dropped=dropped, summary_line=batch_summary(replies), over_cap=over)
     rec["passes"] = len(replies)
     rec["model"] = model
     rec["reply"] = "\n".join(r or "" for r in replies)[:6000]
@@ -506,13 +558,17 @@ def findings_summary(record: Optional[Mapping[str, Any]]) -> str:
     for status, word in ((MISSING, "MISSING"), (PARTIAL, "only PARTIAL"),
                          (UNJUDGED, "not judged")):
         for i in record.get("items") or []:
-            if i.get("status") == status:
+            if i.get("status") == status and not i.get("judgement"):
                 lines.append(f"FINDING: MAJOR — Must-have {i['n']} {word}: {i['text']}"
                              + (f" — {i['evidence']}" if i.get("evidence") else ""))
     if record.get("why"):
         lines.append(f"FINDING: MAJOR — Acceptance check: {record['why']}.")
     for note in stack.get("notes") or []:
         lines.append(f"Note: {note}.")
+    for i in record.get("items") or []:
+        if i.get("judgement"):
+            lines.append(f"Note: must-have {i['n']} is a judgement call ({i['status']}, "
+                         f"advisory): {i['text']}")
     if record.get("items_dropped"):
         lines.append(f"Note: {record['items_dropped']} further items beyond the first "
                      f"{MAX_TOTAL_ITEMS} were not checked.")
@@ -532,13 +588,17 @@ def must_have_table(record: Optional[Mapping[str, Any]]) -> str:
     def cell(s: Any) -> str:
         return _norm(s).replace("|", "\\|")
     rows = ["| # | Must-have | Status | Evidence |", "|---|---|---|---|"]
-    rows += [f"| {i['n']} | {cell(i['text'])} | {_STATUS_WORD.get(i['status'], i['status'])} "
-             f"| {cell(i.get('evidence'))} |" for i in items]
+    rows += [f"| {i['n']} | {cell(i['text'])} | {_STATUS_WORD.get(i['status'], i['status'])}"
+             + (" (judgement, advisory)" if i.get("judgement") else "")
+             + f" | {cell(i.get('evidence'))} |" for i in items]
     for r in (record.get("stack") or {}).get("required") or []:
         path = ((record.get("stack") or {}).get("found") or {}).get(r["stack"])
         status = "met" if path else ("MISSING" if r.get("hard") else "not declared, not found")
         rows.append(f"| stack | {r['stack']} manifest ({' or '.join(r['manifests'])}) "
                     f"| {status} | {cell(path or 'not in the tree')} |")
+    if record.get("items_not_judged"):
+        rows.append(f"\n{record['items_not_judged']} items not judged (beyond {MAX_PASSES} "
+                    f"reviewer passes of {MAX_ITEMS}): the check is not met.")
     if record.get("items_dropped"):
         rows.append(f"\n{record['items_dropped']} further items beyond the first {MAX_TOTAL_ITEMS} "
                     "were not checked.")
@@ -557,6 +617,10 @@ def headline(record: Optional[Mapping[str, Any]]) -> str:
     bits = [f"{c.get(MET, 0)} met", f"{c.get(PARTIAL, 0)} partial", f"{c.get(MISSING, 0)} missing"]
     if c.get(UNJUDGED):
         bits.append(f"{c[UNJUDGED]} not judged")
+    if record.get("advisory"):
+        bits.append(f"{len(record['advisory'])} judgement (advisory)")
+    if record.get("items_not_judged"):
+        bits.append(f"{record['items_not_judged']} not judged (over {MAX_PASSES} passes)")
     if (record.get("stack") or {}).get("missing"):
         bits.append("required stack missing: " + ", ".join(record["stack"]["missing"]))
     if record.get("items_dropped"):
@@ -778,5 +842,5 @@ __all__ = [
     "brief_must_haves", "card_checks_failing", "findings_summary", "headline", "items_spec",
     "judge", "lineage_failures", "must_have_table", "parse_acceptance",
     "passed", "pr_section", "prd_gating_criteria", "required_stack", "stack_manifest_check",
-    "tree_listing",
+    "tree_listing", "wiring_problem", "MAX_PASSES",
 ]
