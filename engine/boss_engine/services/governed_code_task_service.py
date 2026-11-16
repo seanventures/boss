@@ -2639,6 +2639,63 @@ def _generated_pr_summary(engine, settings, run_id: str, project_id: str, *, tit
         quality_gate_id=qg_id or "", baseline=evidence.get("baseline"))
 
 
+def _ledger_review(engine, run_id: str, project_id: str, comments: list) -> None:
+    """The review's findings into the findings ledger (acceptance/ledger.py, BOSSAPP-1216), in
+    their own transaction after the review's model calls. Never fails the build: bookkeeping."""
+    from .acceptance import ledger as _ledger
+
+    try:
+        with _transaction(engine) as c:
+            lin = _ledger.lineage_of(c, run_id)
+            if lin:
+                _ledger.observe_review(c, project_id=project_id, lineage=lin["lineage"],
+                                       run_id=run_id, comments=comments, pr_url=lin["pr_url"])
+    except Exception as exc:  # noqa: BLE001
+        _log_caught(logger)
+        # The class only: a driver error can carry the connection URL.
+        logger.warning("findings ledger: review of %s not recorded (%s)", run_id,
+                       type(exc).__name__)
+
+
+def _ledger_acceptance_check(engine, run_id: str, project_id: str, record: dict, *,
+                             root=None) -> Optional[str]:
+    """The in-build acceptance check as a row (acceptance_checks, layer 'build_gate', mode
+    'static') and its gaps and fixes into the findings ledger (BOSSAPP-1216). Returns the check
+    id, None when it could not be recorded (never fails the build)."""
+    from .acceptance import checks as _checks
+    from .acceptance import ledger as _ledger
+
+    if not isinstance(record, dict) or not record.get("verdict"):
+        return None
+    head = None
+    if root is not None:
+        try:
+            head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(root), timeout=10,
+                                  capture_output=True, text=True).stdout.strip() or None
+        except Exception:  # noqa: BLE001 — a check without its sha is still a check
+            head = None
+    try:
+        with _transaction(engine) as c:
+            lin = _ledger.lineage_of(c, run_id)
+            if not lin:
+                return None
+            held = (record.get("source") or {}).get("contract") or {}
+            check = _checks.record_check(
+                c, project_id=project_id, lineage_root_run_id=lin["lineage"],
+                layer="build_gate", mode="static", record=record,
+                contract_id=held.get("id"), code_task_run_id=run_id, head_sha=head,
+                pr_url=lin["pr_url"])
+            _ledger.observe_check(c, project_id=project_id, lineage=lin["lineage"],
+                                  check=check, record=record, run_id=run_id,
+                                  stage="acceptance_check", pr_url=lin["pr_url"])
+            return check.get("id")
+    except Exception as exc:  # noqa: BLE001
+        _log_caught(logger)
+        logger.warning("findings ledger: acceptance check of %s not recorded (%s)", run_id,
+                       type(exc).__name__)
+        return None
+
+
 def _record_review_comments(engine, run_id: str, project_id: str, evidence: dict,
                             *, round_i: int = 0) -> int:
     """Turn the panel's findings into durable, line-anchored comments AS THE REVIEW HAPPENS.
@@ -2661,6 +2718,10 @@ def _record_review_comments(engine, run_id: str, project_id: str, evidence: dict
         fresh += review_comments.parse_findings(evidence.get(key) or "", stage=stage)
     if not fresh:
         return 0
+    # THE FINDINGS LEDGER (BOSSAPP-1216): every finding of every severity — advisory under the
+    # fast lane or not — is a ledger row the moment the review produced it, whatever the gate
+    # then decides to block on, defer or drop.
+    _ledger_review(engine, run_id, project_id, fresh)
     try:
         with _transaction(engine) as c:
             row = c.execute(sql(
@@ -3457,6 +3518,29 @@ def advisory_followup_findings(failing, evidence: dict, deferred: list) -> list[
     return out
 
 
+def _ledger_followup(engine, *, project_id: str, parent_run_id: str, parent_root: str,
+                     findings: list) -> Optional[dict]:
+    """What a follow-up carries, from the findings ledger (acceptance/ledger.followup_spec):
+    `findings` recorded as rows first, then the lineage's open rows no live follow-up holds,
+    and the frozen contract. None when the ledger cannot be read (the caller then builds the
+    task from `findings`, as before): a follow-up is never lost to bookkeeping."""
+    from .acceptance import ledger as _ledger
+
+    try:
+        with _transaction(engine) as c:
+            lin = _ledger.lineage_of(c, parent_run_id)
+            lineage = (lin or {}).get("lineage") or parent_root
+            _ledger.observe_findings(c, project_id=project_id, lineage=lineage,
+                                     run_id=parent_run_id, findings=list(findings or []),
+                                     stage="followup", pr_url=(lin or {}).get("pr_url"))
+            return _ledger.followup_spec(c, project_id=project_id, lineage=lineage)
+    except Exception as exc:  # noqa: BLE001
+        _log_caught(logger)
+        logger.warning("findings ledger: follow-up of %s built from its findings (%s)",
+                       parent_run_id, type(exc).__name__)
+        return None
+
+
 def _spawn_deferred_findings_task(
     engine, settings, jobs, *, project_id, task_id, spec, base_branch,
     findings: list[dict], parent_run_id: str, parent_title: str,
@@ -3473,14 +3557,28 @@ def _spawn_deferred_findings_task(
     ``checks_failing`` (checks_failing.collect): the parent's PR opened with checks still
     failing after its repair rounds. The task is then those checks' fix — its failing gates
     and open findings come first in ``findings``, security first — and says so.
+
+    BUILT FROM THE FINDINGS LEDGER (BOSSAPP-1216, acceptance/ledger.py): ``findings`` are first
+    recorded as ledger rows, and the task carries the lineage's OPEN rows that no live
+    follow-up holds — every gap and finding still open across its rounds, not only this run's
+    free text — each with its key (F-n), plus the frozen acceptance contract word for word. The
+    rows it carries are held by it (`in_progress`) until a check proves them fixed; rows a live
+    follow-up already holds are never sent twice, so when nothing is left unheld no task starts.
+    When the ledger cannot be read the task is built from ``findings`` as before.
     """
-    lines = [f"- [{f['severity'].upper()}] {f['text']}"
-             for f in (findings or []) if f.get("text")]
-    if not lines:
-        return None
     from .code_task_service import start_code_task
     limit = 40 if checks_failing else 20
-    body = "\n".join(lines[:limit])
+    plan = _ledger_followup(engine, project_id=project_id, parent_run_id=parent_run_id,
+                            parent_root=parent_root or parent_run_id, findings=findings)
+    if plan is not None and not plan["findings"]:
+        return None    # every open row is already carried by a live follow-up
+    source = plan["findings"] if plan is not None else list(findings or [])
+    lines = [f"- [{str(f['severity']).upper()}] {f['text']}" for f in source if f.get("text")]
+    if not lines:
+        return None
+    # Every open row rides the task (the ledger is the list); the criteria stay bounded.
+    body = "\n".join(lines[:max(limit, 80)] if plan is not None else lines[:limit])
+    contract_block = (plan or {}).get("contract_block") or ""
     if checks_failing:
         from .checks_failing import headline
 
@@ -3497,13 +3595,14 @@ def _spawn_deferred_findings_task(
                "deferred to this task. Fix them on top of the shipped branch, most severe first.")
         heading = "DEFERRED FINDINGS"
     with _transaction(engine) as c:
-        return start_code_task(
+        new_run = start_code_task(
             c, project_id=project_id, task_id=task_id,
             title=f"{title_lead} — {parent_title}"[:160],
             instructions=(
                 f"{why}\n\n"
                 f"{heading} (from run {parent_run_id}):\n{body}\n\n"
-                "Fix ONLY these. Do not refactor beyond them and do not weaken existing tests "
+                + (f"{contract_block}\n\n" if contract_block else "")
+                + "Fix ONLY these. Do not refactor beyond them and do not weaken existing tests "
                 "or checks."),
             acceptance_criteria=[f"{'Fixed' if checks_failing else 'Deferred finding addressed'}: "
                                  f"{ln[:180]}" for ln in lines[:limit]],
@@ -3537,12 +3636,25 @@ def _spawn_deferred_findings_task(
                           # tests: waiting" while its approval sat elsewhere, and the operator
                           # asked "how does the user know?" (2026-11-06). Retries carry it too.
                           **({"workflow_run_id": parent_workflow_run_id}
-                             if parent_workflow_run_id else {})},
+                             if parent_workflow_run_id else {}),
+                          # The ledger rows it was sent to fix (acceptance/ledger.py).
+                          **({"ledger_ids": plan["ledger_ids"]} if plan is not None else {})},
             jobs=jobs, profile=spec.get("profile"),
             # BOSS ITSELF continues this lineage: it acts under the person and grant the lineage
             # was started under (a standing grant, or the workflow run's), never the worker key's.
             continuation=True,
         )
+        if new_run and plan is not None:
+            # THE ROWS IT CARRIES ARE ITS OWN until a check proves them fixed (or it ends).
+            from .acceptance import ledger as _ledger
+
+            try:
+                with c.begin_nested():
+                    _ledger.hold(c, plan["ledger_ids"], followup_run_id=str(new_run))
+            except Exception:  # noqa: BLE001 — the follow-up stands; its rows stay open
+                _log_caught(logger)
+                logger.warning("findings ledger: rows not held by %s", new_run)
+        return new_run
 
 
 # The verdict grammar lives in review_verdict.py so the decision eval (evals/task_rigor,
@@ -8959,9 +9071,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # against the root run's must-haves and the PRD's tested-and-gating list, by an
             # LLM reviewer on the consistency lane, plus the required stack's manifest. Before
             # the gate decision, so a missing must-have is decided like any other fact.
-            def _run_acceptance_check(max_turns: Optional[int] = None,
-                                      max_budget_usd: Optional[float] = None,
-                                      batch_size: Optional[int] = None) -> tuple[dict, int]:
+            def _run_acceptance_check(**kwargs) -> tuple[dict, int]:
+                # Every check is a row and its gaps are ledger rows (BOSSAPP-1216), after the
+                # reviewer's model calls, in a transaction of its own.
+                rec, spent = _judge_acceptance_check(**kwargs)
+                _ledger_acceptance_check(engine, run_id, project_id, rec, root=review_root)
+                return rec, spent
+
+            def _judge_acceptance_check(max_turns: Optional[int] = None,
+                                        max_budget_usd: Optional[float] = None,
+                                        batch_size: Optional[int] = None) -> tuple[dict, int]:
                 _stack: dict = {}
                 _source: dict = {"root": True}
                 try:
