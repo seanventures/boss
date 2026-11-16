@@ -37,6 +37,12 @@ export function runStoppedSentence(reason: string | null | undefined): string | 
   return trimmed ? `Stopped: ${trimmed}` : null;
 }
 
+/** Visible profile description. Blank is nothing. A sentence over six words is a paragraph. */
+export function agentDescriptionSentence(description: string | null | undefined): string | null {
+  const trimmed = description?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
 /** The Studio definitions that describe this role. Keyed by role_key, the thing a workflow
  *  step's `captain` names, so the agent page, the roster and the editor agree. */
 export function profilesFor(feed: Pick<AgentStudioFeed, "agents">, roleKey: string): StudioAgent[] {
@@ -109,17 +115,24 @@ export function AgentProfile({ feed, roleKey, actor, bare = false }: {
   );
 }
 
-function ProfileRow({ agent, feed, actor }: { agent: StudioAgent; feed: AgentStudioFeed; actor: string }) {
+export function ProfileRow({ agent, feed, actor }: { agent: StudioAgent; feed: AgentStudioFeed; actor: string }) {
   const [result, setResult] = useState<StudioActionResult | undefined>();
   const [pending, start] = useTransition();
   const version = agent.active_version;
   const policy = version?.model_policy ?? {};
   const validation = version?.validation ?? {};
   const lastTest = feed.tests.find((t) => t.agent_name === agent.name);
+  const description = agentDescriptionSentence(agent.description);
+  const descriptionLong = !!description && description.split(/\s+/).filter(Boolean).length > 6;
   return (
     <div className="wf-ag-profile" data-testid={`agent-profile-${agent.agent_key}`}>
       <div className="wf-ag-profile-head">
         <strong title={agent.description || undefined}>{agent.name}</strong>
+        {description
+          ? (descriptionLong
+            ? <p data-testid={`agent-profile-desc-${agent.agent_key}`} data-user-text>{description}</p>
+            : <span data-testid={`agent-profile-desc-${agent.agent_key}`} data-user-text>{description}</span>)
+          : null}
         <span className="wf-tag" title="Each publish is a new version">
           {version ? `v${version.version}` : "No version"}
         </span>

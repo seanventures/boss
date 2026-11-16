@@ -140,6 +140,22 @@ export function runHref(runId: string): string {
   return `?area=delivery_workflows&wfr=${encodeURIComponent(runId)}`;
 }
 
+/** Trimmed why for the plan header. Blank is nothing. */
+export function proposalWhySentence(why: string | null | undefined): string | null {
+  const text = why?.trim() ?? "";
+  return text ? text : null;
+}
+
+/** More than six words is a paragraph. Shorter stays a span. */
+function ProposalWhy({ why }: { why: string | null | undefined }) {
+  const sentence = proposalWhySentence(why);
+  if (!sentence) return null;
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  return long
+    ? <p data-testid="ag-proposal-why" data-user-text>{sentence}</p>
+    : <span data-testid="ag-proposal-why" data-user-text>{sentence}</span>;
+}
+
 /**
  * The plan, as a card the operator reviews. Nothing starts until Start is pressed; Start goes
  * through the composer's own door, so a project that cannot run it yet says what is missing,
@@ -191,6 +207,7 @@ export function ProposalCard({ proposal, onStart, onDismiss, compact }: {
         <span className="ag-area-name">Plan</span>
         <strong className="ag-proposal-title" data-user-text>{proposal.title}</strong>
         {proposal.why ? <span className="ag-why" data-tip={proposal.why} title={proposal.why}>Why</span> : null}
+        <ProposalWhy why={proposal.why} />
       </header>
       <dl className="ag-proposal-rows">
         <dt>Workflow</dt>
