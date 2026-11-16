@@ -1137,9 +1137,12 @@ def build_recommendations(
                 }
             )
 
-    # Model routing suggestion mismatch vs profile preferred class
+    # Model routing suggestion mismatch vs profile preferred class.
+    # A stored preferred_model_class (source stored) overrides the profile.
     profile = resolve_profile(profile_name)
-    routing = suggest_model_routing(profile_name=profile["name"])
+    routing = suggest_model_routing(
+        profile_name=profile["name"], policies=list(policies.values()),
+    )
     # If material spend on stages that profiles mark low_cost, nudge
     cheap_spend = sum(
         int(s["cost_usd_micros"])
@@ -1201,13 +1204,39 @@ def build_recommendations(
     }
 
 
+def _stored_preferred(policies: Optional[Iterable[Mapping[str, Any]]], stage: str) -> Optional[str]:
+    """A saved preferred_model_class for this stage, else the stored '*' row.
+
+    Only rows that were actually saved (`source == "stored"`), still enabled, and set to
+    low_cost or strong. Documented defaults stay out: they must not become a surprise route.
+    """
+    chosen: Optional[str] = None
+    star: Optional[str] = None
+    for row in policies or []:
+        if not isinstance(row, Mapping) or row.get("source") != "stored":
+            continue
+        if row.get("enabled") is False:
+            continue
+        cls = row.get("preferred_model_class")
+        if cls not in ("low_cost", "strong"):
+            continue
+        key = str(row.get("stage") or PROJECT_DEFAULT_STAGE)
+        if key == stage:
+            chosen = str(cls)
+        elif key == PROJECT_DEFAULT_STAGE:
+            star = str(cls)
+    return chosen if chosen is not None else star
+
+
 def suggest_model_routing(
     *,
     profile_name: Optional[str] = None,
+    policies: Optional[Iterable[Mapping[str, Any]]] = None,
 ) -> dict[str, Any]:
     """Map pipeline stages → preferred model class (low_cost|strong) from profiles.
 
-    Pure function over PROFILES — no DB, no model calls.
+    Pure over PROFILES unless `policies` includes a stored preferred_model_class.
+    No DB, no model calls. A stored stage wins over a stored '*'.
     """
     profile = resolve_profile(profile_name)
     stages: list[dict[str, Any]] = []
@@ -1219,16 +1248,19 @@ def suggest_model_routing(
             stage_names.append(key)
 
     for stage in stage_names:
-        cls = model_for_step(profile, stage)
+        stored = _stored_preferred(policies, stage)
+        cls = stored if stored is not None else model_for_step(profile, stage)
+        if stored is not None:
+            rationale = "stored preferred_model_class"
+        elif stage in routing_map:
+            rationale = "explicit profile override"
+        else:
+            rationale = f"profile default ({routing_map.get('default', 'strong')})"
         stages.append(
             {
                 "stage": stage,
                 "preferred_class": cls,
-                "rationale": (
-                    "explicit profile override"
-                    if stage in routing_map
-                    else f"profile default ({routing_map.get('default', 'strong')})"
-                ),
+                "rationale": rationale,
             }
         )
 
@@ -1239,3 +1271,16 @@ def suggest_model_routing(
         "default_profile": DEFAULT_PROFILE,
         "stages": stages,
     }
+
+
+def routing_for(
+    connection: Connection,
+    project_id: str,
+    *,
+    profile_name: Optional[str] = None,
+) -> dict[str, Any]:
+    """Profile routing with this project's stored preferred_model_class applied."""
+    listed = list_policies(connection, project_id)
+    return suggest_model_routing(
+        profile_name=profile_name, policies=listed.get("policies") or [],
+    )

@@ -1010,7 +1010,7 @@ def models(connection: Any, settings: Any, project_id: str, *, win: str = "24h",
            group: str = "model", metric: str = "tokens") -> Models:
     """ONE grouped aggregate over llm_calls for the window: totals, the 24-point sparks, every
     group's row and trend, and the stacked series — all GROUPING SETS of the same scan."""
-    from .llm_telemetry import _SUMMARY_GROUP_COLS
+    from .llm_telemetry import _SUMMARY_GROUP_COLS, cache_and_classes
 
     group = group if group in _SUMMARY_GROUP_COLS else "model"
     metric = metric if metric in ("tokens", "calls", "spend", "latency") else "tokens"
@@ -1020,6 +1020,8 @@ def models(connection: Any, settings: Any, project_id: str, *, win: str = "24h",
     rows = connection.execute(text(
         "SELECT g, b, GROUPING(g) AS no_g, GROUPING(b) AS no_b, count(*) AS calls, "
         "  COALESCE(sum(prompt_tokens), 0) AS tin, COALESCE(sum(completion_tokens), 0) AS tout, "
+        "  COALESCE(sum(cache_read_tokens), 0) AS cache_read, "
+        "  COALESCE(sum(cache_write_tokens), 0) AS cache_write, "
         "  COALESCE(sum(cost_usd_micros) FILTER (WHERE NOT included_in_subscription), 0) AS spend,"
         "  count(*) FILTER (WHERE included_in_subscription) AS included, "
         "  COALESCE(bool_or(price_estimated), false) AS est, "
@@ -1028,7 +1030,8 @@ def models(connection: Any, settings: Any, project_id: str, *, win: str = "24h",
         "    FILTER (WHERE latency_ms > 0) AS p95, "
         "  count(*) FILTER (WHERE NOT ok) AS failed, COALESCE(sum(retries), 0) AS retries "
         f"FROM (SELECT {_SUMMARY_GROUP_COLS[group]} AS g, {_bucket_sql('created_at')} AS b, "
-        "        prompt_tokens, completion_tokens, cost_usd_micros, included_in_subscription, "
+        "        prompt_tokens, completion_tokens, cache_read_tokens, cache_write_tokens, "
+        "        cost_usd_micros, included_in_subscription, "
         "        price_estimated, latency_ms, ok, retries "
         "      FROM llm_calls WHERE project_id = :p AND created_at >= :a AND created_at < :z) c "
         "GROUP BY GROUPING SETS ((g, b), (g), (b), ())"),
@@ -1037,12 +1040,16 @@ def models(connection: Any, settings: Any, project_id: str, *, win: str = "24h",
 
     def cell(r: Any) -> dict[str, Any]:
         return {"calls": int(r["calls"]), "tokens_in": int(r["tin"]),
-                "tokens_out": int(r["tout"]), "spend_micros": int(r["spend"]),
+                "tokens_out": int(r["tout"]),
+                "cache_read_tokens": int(r["cache_read"] or 0),
+                "cache_write_tokens": int(r["cache_write"] or 0),
+                "spend_micros": int(r["spend"]),
                 "included_calls": int(r["included"]), "estimated": bool(r["est"]),
                 "avg_ms": _int(r["avg_ms"]), "p95_ms": _int(r["p95"]),
                 "failed": int(r["failed"]), "retries": int(r["retries"])}
 
-    total = cell({"calls": 0, "tin": 0, "tout": 0, "spend": 0, "included": 0, "est": False,
+    total = cell({"calls": 0, "tin": 0, "tout": 0, "cache_read": 0, "cache_write": 0,
+                  "spend": 0, "included": 0, "est": False,
                   "avg_ms": None, "p95": None, "failed": 0, "retries": 0})
     by_bucket: dict[int, dict[str, Any]] = {}
     by_group: dict[str, dict[str, Any]] = {}
@@ -1057,7 +1064,8 @@ def models(connection: Any, settings: Any, project_id: str, *, win: str = "24h",
         else:
             group_buckets.setdefault(str(r["g"]), {})[int(r["b"])] = cell(r)
 
-    empty = cell({"calls": 0, "tin": 0, "tout": 0, "spend": 0, "included": 0, "est": False,
+    empty = cell({"calls": 0, "tin": 0, "tout": 0, "cache_read": 0, "cache_write": 0,
+                  "spend": 0, "included": 0, "est": False,
                   "avg_ms": None, "p95": None, "failed": 0, "retries": 0})
     buckets = [by_bucket.get(i, empty) for i in range(n)]
     spark = {
@@ -1082,6 +1090,8 @@ def models(connection: Any, settings: Any, project_id: str, *, win: str = "24h",
             "key": k, "label": label,
             "role_key": (k if group == "role" and k != "?" else None), "guest": guest,
             "calls": g["calls"], "tokens_in": g["tokens_in"], "tokens_out": g["tokens_out"],
+            "cache_read_tokens": g["cache_read_tokens"],
+            "cache_write_tokens": g["cache_write_tokens"],
             "spend_micros": g["spend_micros"],
             "included": g["calls"] > 0 and g["included_calls"] == g["calls"],
             "estimated": g["estimated"], "avg_ms": g["avg_ms"], "p95_ms": g["p95_ms"],
@@ -1129,9 +1139,14 @@ def models(connection: Any, settings: Any, project_id: str, *, win: str = "24h",
     body: Models = {
         "window": _window_wire(w), "group": group, "metric": metric,
         "totals": {"calls": total["calls"], "tokens_in": total["tokens_in"],
-                   "tokens_out": total["tokens_out"], "spend_micros": total["spend_micros"],
+                   "tokens_out": total["tokens_out"],
+                   "cache_read_tokens": total["cache_read_tokens"],
+                   "cache_write_tokens": total["cache_write_tokens"],
+                   "spend_micros": total["spend_micros"],
                    "included_calls": total["included_calls"], "estimated": total["estimated"],
                    "p95_ms": total["p95_ms"], "failed": total["failed"]},
+        "by_call_class": cache_and_classes(
+            connection, project_id, since=w["start"], until=w["end"])["by_call_class"],
         "spark": spark,  # type: ignore[typeddict-item]
         "series": {"buckets": [_iso(w["start"] + timedelta(seconds=i * w["cell_s"]))
                                for i in range(n)], "bands": bands},

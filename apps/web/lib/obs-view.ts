@@ -184,10 +184,12 @@ export type FailedCall = { at: string; roleKey: string | null; stage: string | n
   errorWord: string; retries: number; runId: string | null };
 export type RoutingRow = { at: string; provider: string | null; budget: string | null; boundary: string | null;
   outcome: string | null; model: string | null; id: string };
+export type CallClassRow = { callClass: string; calls: number; cacheReadTokens: number; cacheWriteTokens: number };
 export type Models = {
   window: WindowInfo; group: Group; metric: Metric;
-  totals: { calls: number; tokensIn: number; tokensOut: number; spendMicros: number; includedCalls: number;
-            estimated: boolean; p95Ms: number | null; failed: number };
+  totals: { calls: number; tokensIn: number; tokensOut: number; cacheReadTokens: number; cacheWriteTokens: number;
+            spendMicros: number; includedCalls: number; estimated: boolean; p95Ms: number | null; failed: number };
+  byCallClass: CallClassRow[];
   spark: { calls: number[]; tokens: number[]; spend: number[]; p95: number[]; errors: number[] };
   series: { buckets: string[]; bands: { key: string; label: string; values: number[] }[] };
   groups: ModelGroupRow[]; failed: FailedCall[];
@@ -203,8 +205,15 @@ export function parseModels(w: unknown): Models {
   const rf = obj(ro.filters);
   return {
     window: parseWindow(o.window), group: groupOf(o.group), metric: metricOf(o.metric),
-    totals: { calls: num(t.calls), tokensIn: num(t.tokens_in), tokensOut: num(t.tokens_out), spendMicros: num(t.spend_micros),
+    totals: { calls: num(t.calls), tokensIn: num(t.tokens_in), tokensOut: num(t.tokens_out),
+              cacheReadTokens: num(t.cache_read_tokens), cacheWriteTokens: num(t.cache_write_tokens),
+              spendMicros: num(t.spend_micros),
               includedCalls: num(t.included_calls), estimated: t.estimated === true, p95Ms: optNum(t.p95_ms), failed: num(t.failed) },
+    byCallClass: arr(o.by_call_class).map((c) => {
+      const x = obj(c);
+      return { callClass: str(x.call_class), calls: num(x.calls),
+               cacheReadTokens: num(x.cache_read_tokens), cacheWriteTokens: num(x.cache_write_tokens) };
+    }),
     spark: { calls: nums(sp.calls), tokens: nums(sp.tokens), spend: nums(sp.spend), p95: nums(sp.p95), errors: nums(sp.errors) },
     series: { buckets: arr(se.buckets).map(String),
               bands: arr(se.bands).map((b) => { const x = obj(b); return { key: str(x.key), label: str(x.label, str(x.key)), values: nums(x.values) }; }) },

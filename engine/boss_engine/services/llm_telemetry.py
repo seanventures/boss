@@ -521,7 +521,49 @@ _SUMMARY_GROUP_COLS = {
     "role": "COALESCE(role, '?')",
     "model": "COALESCE(model, '?')",
     "engine": "COALESCE(engine, '?')",
+    "call_class": "COALESCE(NULLIF(call_class, ''), 'other')",
 }
+
+
+def cache_and_classes(connection, project_id: str, *, since, until=None) -> dict:
+    """Cache tokens and the call-class breakdown over one window of llm_calls.
+
+    Observability (`obs_view.models`) and `get_costs` both read this, so the two
+    cannot name different cache totals for the same rows. `until` is exclusive;
+    omit it to read through now.
+    """
+    bound = "AND created_at < :z" if until is not None else ""
+    params = {"p": project_id, "a": since, **({"z": until} if until is not None else {})}
+    rows = connection.execute(
+        text(
+            "SELECT COALESCE(NULLIF(call_class, ''), 'other') AS call_class, "
+            "       count(*) AS calls, "
+            "       COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens, "
+            "       COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens "
+            "FROM llm_calls "
+            f"WHERE project_id = :p AND created_at >= :a {bound} "
+            "GROUP BY 1 ORDER BY 1"
+        ),
+        params,
+    ).mappings().all()
+    classes = []
+    read = write = 0
+    for row in rows:
+        cache_read = int(row["cache_read_tokens"] or 0)
+        cache_write = int(row["cache_write_tokens"] or 0)
+        read += cache_read
+        write += cache_write
+        classes.append({
+            "call_class": str(row["call_class"]),
+            "calls": int(row["calls"] or 0),
+            "cache_read_tokens": cache_read,
+            "cache_write_tokens": cache_write,
+        })
+    return {
+        "cache_read_tokens": read,
+        "cache_write_tokens": write,
+        "by_call_class": classes,
+    }
 
 
 def list_llm_calls(

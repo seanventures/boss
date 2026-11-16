@@ -45,6 +45,12 @@ function Stat({ id, label, tip, value, spark, testId }: { id: string; label: str
   );
 }
 
+function tokenWords(t: Models["totals"]): React.ReactNode {
+  const fresh = <>{compact(t.tokensIn)} in, {compact(t.tokensOut)} out</>;
+  if (t.cacheReadTokens + t.cacheWriteTokens <= 0) return fresh;
+  return <>{fresh}, {compact(t.cacheReadTokens)} cache read, {compact(t.cacheWriteTokens)} cache write</>;
+}
+
 export function StatStrip({ m }: { m: Models }) {
   const t = m.totals;
   const spend = t.spendMicros > 0
@@ -55,7 +61,7 @@ export function StatStrip({ m }: { m: Models }) {
   return (
     <div className="obs-stats" data-testid="obs-stats">
       <Stat id="calls" testId="obs-stat-calls" label="Calls" value={t.calls.toLocaleString("en-US")} spark={m.spark.calls} />
-      <Stat id="tokens" testId="obs-stat-tokens" label="Tokens" value={<>{compact(t.tokensIn)} in, {compact(t.tokensOut)} out</>} spark={m.spark.tokens} />
+      <Stat id="tokens" testId="obs-stat-tokens" label="Tokens" value={tokenWords(t)} spark={m.spark.tokens} />
       <Stat id="spend" testId="obs-stat-spend" label="Spend" value={spend} spark={m.spark.spend} />
       <Stat id="p95" testId="obs-stat-p95" label="p95" value={ms(t.p95Ms)} spark={m.spark.p95} />
       <Stat id="errors" testId="obs-stat-errors" label="Errors" tip="Calls that failed after retries, of all calls"
@@ -220,6 +226,15 @@ export function ModelsTab({ projectId, url, go }: ObsTabProps) {
         <span className="inf-empty obs-models-none" title="Calls appear when an agent thinks" data-testid="obs-models-empty">No model calls yet</span>
       ) : null}
       <StatStrip m={m} />
+      {m.byCallClass.length > 0 ? (
+        <p className="obs-classes" data-testid="obs-call-classes">
+          {m.byCallClass.map((c) => (
+            <span key={c.callClass} data-testid="obs-call-class">
+              {c.callClass} {c.calls.toLocaleString("en-US")} · {compact(c.cacheReadTokens)} read · {compact(c.cacheWriteTokens)} write
+            </span>
+          ))}
+        </p>
+      ) : null}
       <div className="obs-controls">
         <span className="inf-seg" role="radiogroup" aria-label="Metric" data-testid="obs-metric">
           {METRICS.map((x) => (

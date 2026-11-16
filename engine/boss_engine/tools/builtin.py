@@ -5077,6 +5077,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         days = int(args.get("days") or 7)
         limit = int(args.get("limit") or 25)
         from ..services.included_spend import LLM_INCLUDED_SQL, LLM_MONEY_SQL, ledger_spend
+        from ..services.llm_telemetry import cache_and_classes
 
         with ctx.begin() as c:
             # MONEY AND ESTIMATE ARE TWO FIGURES, and the money is Govern's (brec_85de2541).
@@ -5087,6 +5088,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             since = c.execute(_text("SELECT now() - make_interval(days => :d)"),
                               {"d": days}).scalar()
             ledger = ledger_spend(c, pid, since)
+            cache = cache_and_classes(c, pid, since=since)
             # THE TOTAL IS NOT THE SUM OF THE PAGE.
             #
             # total_cost_usd used to be sum(runs), and runs is LIMIT-ed to the most recent 25.
@@ -5147,6 +5149,9 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             "calls_by_credential": {"api_key_or_metered": ledger["metered_calls"],
                                     "subscription_or_local": ledger["included_calls"]},
             "total_tokens": int(totals.get("tokens") or 0),
+            "cache_read_tokens": cache["cache_read_tokens"],
+            "cache_write_tokens": cache["cache_write_tokens"],
+            "by_call_class": cache["by_call_class"],
             "total_llm_calls": int(totals.get("calls") or 0),
             "runs_in_window": total_runs,
             # Explicit, so a truncated list cannot be mistaken for the whole ledger.

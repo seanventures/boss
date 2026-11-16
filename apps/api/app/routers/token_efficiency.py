@@ -220,9 +220,27 @@ def get_consumption(
 @permit(P.MODEL_PROVIDER_READ, scope=Scope.org())
 def get_routing(
     profile_name: Optional[str] = Query(None),
+    project_id: Optional[str] = Query(None),
 ) -> dict[str, Any]:
-    """Stage → preferred model class (low_cost|strong) from pipeline profiles."""
-    return te.suggest_model_routing(profile_name=profile_name)
+    """Stage → preferred model class (low_cost|strong) from pipeline profiles.
+
+    With a project id, a stored preferred_model_class on that project overrides the
+    profile. Without one, the answer is the profile alone.
+    """
+    if not (project_id or "").strip():
+        return te.suggest_model_routing(profile_name=profile_name)
+    try:
+        with begin(get_engine()) as connection:
+            te.ensure_tables(connection)
+            return te.routing_for(
+                connection, project_id.strip(), profile_name=profile_name,
+            )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except ProgrammingError as error:
+        if te.is_missing_relation(error):
+            return te.suggest_model_routing(profile_name=profile_name)
+        raise
 
 
 __all__ = ["router"]
