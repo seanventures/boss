@@ -25,7 +25,19 @@ import (
 )
 
 // Handler is the gateway's request chain (trimmed for the fixture).
-type Handler struct{}
+type Handler struct {
+	Store   *config.Store
+	JWKS    *auth.JWKSCache
+	Limiter *ratelimit.Limiter
+}
+
+func NewHandler(store *config.Store, jwks *auth.JWKSCache, limiter *ratelimit.Limiter) *Handler {
+	return &Handler{
+		Store:   store,
+		JWKS:    jwks,
+		Limiter: limiter,
+	}
+}
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m, _ := Match(nil, r)

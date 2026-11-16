@@ -98,15 +98,18 @@ def _has_source(folder: Path) -> bool:
 
 def _command_target(root: Path, cited: str, before: str) -> Optional[list[str]]:
     """What a command's package or module argument names, or None when `cited` is a path:
-      Go     `./...`, `./internal/config/...` → the folder (when it holds code);
-      Python `-m pkg.mod` → pkg/mod.py or the package folder;
-      Maven  `-pl module` → the module folder.
-    An empty list: a command argument that names nothing in the tree — not evidence, and not
-    a missing path either."""
+      Go     `./...`, `./internal/config/...` → nothing (a package pattern, #171 review (d));
+      Python `-m pkg.mod` → pkg/mod.py (its file), else nothing;
+      Maven  `-pl module` → nothing (a module folder).
+    An empty list: a command argument that is not file evidence — and not a missing path
+    either. An item whose requirement IS the suite run is evidenced by the run itself
+    (`_suite_item`), never by these."""
     go = _GO_PATTERN.match(cited)
     if go is not None:
-        folder = go.group(1).rstrip("/") or "."
-        return [folder] if _has_source(root / folder) else []
+        # A PACKAGE PATTERN IS NOT FILE EVIDENCE (BOSSAPP-1329 review): `./...` names the
+        # whole repository and `./internal/config/...` a folder — "`go test ./...` passes" says
+        # nothing about which code delivers an item. Neither evidence nor a missing file.
+        return []
     flag = before.rstrip()
     if flag.endswith("-m") and re.fullmatch(r"[A-Za-z_][\w.]*", cited):
         mod = cited.replace(".", "/")
@@ -114,9 +117,9 @@ def _command_target(root: Path, cited: str, before: str) -> Optional[list[str]]:
             hit = _resolve(root, cand)
             if hit:
                 return [hit]
-        return [mod] if _has_source(root / mod) else []
+        return []                       # a package folder: not file evidence
     if flag.endswith(("-pl", "--projects")):
-        return [cited.strip("/")] if _has_source(root / cited.strip("/")) else []
+        return []                       # a module folder: not file evidence either
     return None
 
 
@@ -210,6 +213,13 @@ def evidence_paths(root: Any, why: str, *,
             hit = defs.symbol_file(m.group(1))
             if hit:
                 found.append(hit)
+    for m in _TICKED_IDENT.finditer(text_):
+        # A NAME THE ANSWER QUOTES (`TokenBucket`, `TestStore_ConcurrentSwapAndRead_NoRace`):
+        # the one file that defines it is evidence — a test included, since it proves the
+        # test exists (BOSSAPP-1329).
+        hit = defs.defining_file(m.group(1))
+        if hit:
+            found.append(hit)
     bare = None
     for m in _BARE.finditer(str(why or "")):
         if bare is None:
@@ -336,6 +346,12 @@ _DATA_FILE = re.compile(r"(?i)\.(ya?ml|json|toml|ini|cfg|conf|csv|xml)$")
 _STRING = re.compile(r"""(["'`])((?:(?!\1).){1,200})\1""")
 
 
+def _blank_strings(code: str) -> str:
+    """`code` with every string literal's contents blanked, offsets kept: calls are found in
+    this and their arguments read from `code` at the same positions."""
+    return _STRING.sub(lambda m: m.group(1) + " " * len(m.group(2)) + m.group(1), code)
+
+
 def _defines(code: str, symbol: str) -> bool:
     """Whether `code` DEFINES `symbol` (a function, method, class, constant or variable) —
     not only calls or mentions it."""
@@ -437,11 +453,41 @@ def _reads(code: str, data_file: str, code_path: str = "") -> bool:
             continue
         if _suffix_of(data_file, lit) and lit.endswith(name):
             return True
-        if folder != "." and _suffix_of(folder, lit):
+        # THE WHOLE FOLDER (BOSSAPP-1329 review): `"tenants"` alone is any tenants folder (a
+        # cache dir); only "config/tenants" — written, or a join BOSS resolved — is this one.
+        if folder != "." and lit == folder:
             folder_named = True
-            if _folder_read(code, m_lits.get(lit, [])) and _pattern_admits(lits, name):
-                return True
+            for m in m_lits.get(lit, []):
+                # The extension filter is the READ'S OWN (#171 review (b)): strings of the
+                # function around the folder read, never a hint elsewhere in the file.
+                scope = _scope_at(code, m.start())
+                if _folder_read(code, [m]) and _pattern_admits(
+                        [_lit(x.group(2)) for x in _STRING.finditer(scope)], name):
+                    return True
     return folder_named and name_glob
+
+
+_DEF_LINE = re.compile(r"^(\s*)(?:(?:export\s+)?(?:async\s+)?(?:func|def|function|fn|fun)\b"
+                       r"|(?:public|private|protected|static)\b[^=;]*\()")
+
+
+def _scope_at(code: str, pos: int) -> str:
+    """The function around position `pos`: from the nearest definition line above it to the
+    next definition at the same or a shallower indent (the whole text when there is none)."""
+    lines = code.splitlines(keepends=True)
+    offsets, at = [], 0
+    for line in lines:
+        offsets.append(at)
+        at += len(line)
+    idx = max(i for i, o in enumerate(offsets) if o <= pos) if offsets else 0
+    start = next((i for i in range(idx, -1, -1) if _DEF_LINE.match(lines[i])), None)
+    if start is None:
+        return code
+    indent = len(_DEF_LINE.match(lines[start]).group(1))
+    end = next((j for j in range(start + 1, len(lines))
+                if _DEF_LINE.match(lines[j])
+                and len(_DEF_LINE.match(lines[j]).group(1)) <= indent), len(lines))
+    return "".join(lines[start:end])
 
 
 def _pattern_admits(lits: list[str], name: str) -> bool:
@@ -470,13 +516,11 @@ def _folder_read(code: str, matches: list[Any]) -> bool:
         before = code[line_start:m.start()]
         if re.search(r"\b" + _READ_FN + r"\s*\([^)\n]*$", before):
             return True
-        # Bound to a name directly (`rulesDir = "rules"`) or through a path join on the same
-        # line (`tenantsDir := filepath.Join(dir, "tenants")`, BOSSAPP-1329).
+        # Bound to a name (`rulesDir = "rules"`; a join BOSS resolved, `_bind_joins`, reads
+        # the same: `tenantsDir := "config/tenants"`).
         bound = (re.search(r"(?:\b(?:const|var|let|val)\s+)?([A-Za-z_]\w*)\s*(?::=|=)\s*$",
                            before)
-                 or re.search(r"\b([A-Za-z_]\w*)\s*=\s*$", before)
-                 or re.search(r"^\s*(?:(?:const|var|let|val)\s+)?([A-Za-z_]\w*)\s*(?::=|=)"
-                              r"\s*[\w.]*(?:[Jj]oin|resolve|Path|path)\w*\s*\(", before))
+                 or re.search(r"\b([A-Za-z_]\w*)\s*=\s*$", before))
         if bound and line:
             name = re.escape(bound.group(1))
             if re.search(r"\b" + _READ_FN + r"\s*\([^)\n]*\b" + name + r"\b", code):
@@ -571,42 +615,15 @@ class _Definitions:
 
     def loader_of(self, data: list[str], among: Iterable[str],
                   cited: Optional[Mapping[str, Iterable[str]]] = None) -> Optional[str]:
-        """The file that READS one of the data files (`_reads`), looked for only where the
-        evidence points: a cited code file, or a file defining a symbol the evidence cites (both
-        already in `among`) — or ONE HOP from the body of a symbol the evidence cites
-        (`cited`: {file: [symbol]}): a qualified call in that body (`rules.Load()` in the cited
-        `docs.go:RenderReadme`) whose qualifier is an import of that file or a type, never a
-        local variable or parameter. A call elsewhere in the cited file (a dead `unusedDebug()`)
-        is not followed (AR-23 re-review). Never any file in the tree that merely mentions the
-        data file or its folder. None when there is none."""
-        cands = [r for r in dict.fromkeys(among) if _CODE_FILE.search(r)
-                 and not _TEST_PATH.search(r)]
-        hops: list[str] = []
-        for rel in cands:
-            code, bare = self.of(rel)
-            if code is None:
-                continue
-            if any(d != rel and _reads(code, d, rel) for d in data):
-                return rel
-            imported = _import_names(code, rel)
-            for symbol in (cited or {}).get(rel) or ():
-                body = _body_of(code, bare, symbol, rel)
-                for m in list(_CALL.finditer(body))[:40]:
-                    qual = m.group(1)
-                    if qual not in imported and not self.is_type(qual):
-                        continue
-                    hit = self.symbol_file(f"{qual}.{m.group(2)}")
-                    if hit and hit != rel and hit not in hops:
-                        hops.append(hit)
-        for rel in hops:
-            code, _ = self.of(rel)
-            if code is not None and any(d != rel and _reads(code, d, rel) for d in data):
-                return rel
-        return None
+        """The code that READS one of the data files, looked for only where the evidence points
+        (`reaches` from the cited files and the cited symbols' bodies). None when there is none."""
+        return self.reaches(data, _starts(among, cited or {}))
 
     def file_reads(self, rel: str, data: list[str]) -> bool:
-        """Whether the non-test file `rel` reads one of `data` (`_reads`), or with no data file
-        named, some data or config file (`_reads_data`)."""
+        """Whether the non-test file `rel`, read WHOLE, reads one of `data` (`_reads`), or with
+        no data file named, some data or config file (`_reads_data`). Only for a file the
+        evidence cites with no symbol (#155): a file BOSS arrives at by a call is judged by the
+        called function's body (`body_reads`)."""
         if _TEST_PATH.search(rel) or not _CODE_FILE.search(rel):
             return False
         code, _ = self.of(rel)
@@ -614,6 +631,197 @@ class _Definitions:
             return False
         return (any(d != rel and _reads(code, d, rel) for d in data) if data
                 else _reads_data(code))
+
+    def body_reads(self, rel: str, sym: str, data: list[str],
+                   bindings: Optional[Mapping[str, str]] = None) -> bool:
+        """Whether the BODY of `sym` in `rel` reads the data (BOSSAPP-1329 review): what the
+        function itself does — its own read calls and strings, the file's top-level string
+        constants it may name, an embedded file it references, a path join whose base is a
+        bound parameter (`bindings`, or resolved from every caller: `param_value`). A sibling
+        function of the same file never counts."""
+        if _TEST_PATH.search(rel) or not _CODE_FILE.search(rel):
+            return False
+        code, bare = self.of(rel)
+        if code is None:
+            return False
+        body = _body_of(code, bare, sym, rel)
+        if not body:
+            return False
+        binds = dict(bindings or {})
+        for name in _join_bases(body):
+            if name not in binds:
+                value = self.param_value(rel, sym, name)
+                if value is not None:
+                    binds[name] = value
+        text = _bind_joins(_top_level_strings(code, rel) + "\n" + body, binds)
+        if (any(d != rel and _reads(text, d, rel) for d in data) if data
+                else _reads_data(text)):
+            return True
+        here = Path(rel).parent.as_posix()
+        for var, patterns in _embedded(code).items():
+            if not re.search(r"\b" + re.escape(var) + r"\b", body):
+                continue
+            if not data:
+                return True
+            for pattern in patterns:
+                full = pattern if here in ("", ".") else f"{here}/{pattern}"
+                # as `_reads` takes an embed: relative to the package, or as written
+                if any(d == c or _fnmatch(d, c) or Path(d).parent.as_posix() == c
+                       for c in (pattern, full) for d in data):
+                    return True
+        return False
+
+    def param_value(self, rel: str, sym: str, name: str, depth: int = 3) -> Optional[str]:
+        """The string a parameter of `sym` holds at EVERY call site of it in the tree's
+        non-test code (a literal, a local assigned one — an env lookup's default included — or
+        the caller's own parameter, resolved the same way), or None when the callers disagree,
+        there are none, or it cannot be told."""
+        if depth <= 0:
+            return None
+        code, bare = self.of(rel)
+        if bare is None:
+            return None
+        params = _params_of(bare, sym)
+        if name not in params:
+            return None
+        idx = params.index(name)
+        values: set[str] = set()
+        for crel, caller, args in self.call_sites(rel, sym):
+            if args is None or idx >= len(args):
+                return None
+            value = self._expr_value(crel, caller, args[idx], depth - 1)
+            if value is None:
+                return None
+            values.add(value)
+        return values.pop() if len(values) == 1 else None
+
+    def call_sites(self, rel: str, sym: str
+                   ) -> list[tuple[str, Optional[str], Optional[list[str]]]]:
+        """Every call of `rel`'s `sym` in the tree's non-test code — unqualified within its
+        package, qualified by an import of its package elsewhere — as (file, enclosing
+        function, arguments)."""
+        pkg = Path(rel).parent.name
+        here = Path(rel).parent
+        out: list[tuple[str, Optional[str], Optional[list[str]]]] = []
+        self.code()
+        for crel, cbare in list(self._bare.items()):
+            if _TEST_PATH.search(crel):
+                continue
+            ccode = self._code.get(crel, "")
+            same = _ext(crel) == _ext(rel) and Path(crel).parent == here
+            quals = {a for a, p in _import_map(ccode, crel).items() if p == pkg}
+            pattern = (r"(?<![\w.])" if same else r"\b(?:" + "|".join(map(re.escape, quals))
+                       + r")\.") if (same or quals) else None
+            if pattern is None:
+                continue
+            for m in re.finditer(pattern + re.escape(sym) + r"\s*\(", ccode):
+                line_before = ccode[ccode.rfind("\n", 0, m.start()) + 1:m.start()]
+                if re.search(r"\b(?:func|def|function|fn|class)\s*(?:\([^)]*\)\s*)?$",
+                             line_before):
+                    continue                    # its definition, not a call
+                out.append((crel, _enclosing_func(cbare, ccode.count("\n", 0, m.start())),
+                            _call_args(ccode, m.end() - 1)))
+        return out
+
+    def fed_by_loader(self, data: list[str], rel: str, sym: str, depth: int = 3
+                      ) -> Optional[str]:
+        """THE VALUE PASSED ON (#171 review (a)): the cited code is fed by a value its caller
+        also hands to code that reads the data — `main` builds `store`, passes it to
+        `config.ReloadOnce` (which reaches `Load`) and to `proxy.NewHandler`, whose handler
+        calls the cited `applyCORS`. Followed up the callers of the cited function (a method
+        through its type's constructor) at most `depth` levels; at each caller, only a variable
+        passed BOTH on the cited path and to a call that reaches the reader counts. A value
+        built by hand (`RateLimit{Rate: 5}`) is passed from nothing. Returns the reading file,
+        or None."""
+        frontier, seen = [(rel, sym)], set()
+        for _ in range(depth):
+            nxt = []
+            for frel, fsym in frontier:
+                if (frel, fsym) in seen or fsym is None:
+                    continue
+                seen.add((frel, fsym))
+                _, fbare = self.of(frel)
+                recv = _receiver_type(fbare or "", fsym)
+                sites = (self.constructions(frel, recv) if recv
+                         else self.call_sites(frel, fsym))
+                for crel, caller, args in sites:
+                    idents = {a.strip().lstrip("&*") for a in args or ()
+                              if re.fullmatch(r"\s*[&*]?[A-Za-z_]\w*\s*", a)}
+                    if caller and idents:
+                        hit = self._passes_to_reader(crel, caller, idents, data)
+                        if hit:
+                            return hit
+                    if caller and any(not re.fullmatch(r"\s*(?:[\"'`].*|\d.*|[&\w.]*\{.*)\s*",
+                                                       a, re.S) for a in args or ()):
+                        nxt.append((crel, caller))
+            frontier = nxt
+        return None
+
+    def constructions(self, rel: str, type_name: str
+                      ) -> list[tuple[str, Optional[str], Optional[list[str]]]]:
+        """The call sites that build a `type_name` of `rel`'s package: its constructors
+        (`func NewHandler(…) *Handler`) and the type called directly (a class)."""
+        out = list(self.call_sites(rel, type_name))
+        for r in self.package_files(rel):
+            _, bare = self.of(r)
+            for m in re.finditer(r"(?m)^func\s+([A-Za-z_]\w*)\s*\([^)]*\)\s*\(?\*?"
+                                 + re.escape(type_name) + r"\b", bare or ""):
+                out += self.call_sites(r, m.group(1))
+        return out
+
+    def _passes_to_reader(self, rel: str, func: str, idents: set[str], data: list[str]
+                          ) -> Optional[str]:
+        code, bare = self.of(rel)
+        body = _body_of(code or "", bare or "", func, rel)
+        bare_body = _blank_strings(body)
+        imports = _import_map(code or "", rel)
+        for m in _CALL.finditer(bare_body):
+            pkg = imports.get(m.group(1)) or (m.group(1) if self.is_type(m.group(1)) else None)
+            hit = self.symbol_file(f"{pkg}.{m.group(2)}") if pkg else None
+            args = _call_args(body, m.end() - 1) or []
+            # passed IN to the reader (`ReloadOnce(dir, store)`), or what the reader RETURNED
+            # (`cfg, err := config.Load(dir)`)
+            lhs = re.search(r"^\s*(?:var\s+|let\s+|const\s+)?([\w\s,]+?)\s*:?=\s*$",
+                            bare_body[bare_body.rfind("\n", 0, m.start()) + 1:m.start()])
+            names = {a.strip().lstrip("&*") for a in args}
+            names |= {n.strip() for n in lhs.group(1).split(",")} if lhs else set()
+            if hit and idents & names:
+                found = self.reaches(data, [(hit, m.group(2))])
+                if found:
+                    return found
+        return None
+
+    def _expr_value(self, rel: str, func: Optional[str], expr: str, depth: int
+                    ) -> Optional[str]:
+        expr = expr.strip()
+        lit = re.fullmatch(r"\"([^\"\n]*)\"|'([^'\n]*)'|`([^`\n]*)`", expr)
+        if lit:
+            return next(g for g in lit.groups() if g is not None)
+        if not re.fullmatch(r"[A-Za-z_]\w*", expr) or func is None:
+            return None
+        code, bare = self.of(rel)
+        body = _body_of(code or "", bare or "", func, rel)
+        assign = re.search(r"(?m)^\s*(?:var\s+)?" + re.escape(expr)
+                           + r"\s*(?::=|=)\s*(.+)$", body)
+        if assign:
+            strings = re.findall(r"\"([^\"\n]*)\"", assign.group(1))
+            return strings[-1] if strings else None
+        return self.param_value(rel, func, expr, depth)
+
+    def defining_file(self, name: str) -> Optional[str]:
+        """The ONE code file (a test included) that defines `name`, or None (none, or several)."""
+        if name in _KEYWORDS or len(name) < 3:
+            return None
+        self.code()
+        hits = [rel for rel, bare in self._bare.items() if _defines(bare, name)]
+        return hits[0] if len(hits) == 1 else None
+
+    def package_dir(self, name: str) -> Optional[str]:
+        """The ONE folder named `name` that holds code (`proxy` → internal/proxy), or None."""
+        self.code()
+        dirs = {Path(rel).parent.as_posix() for rel in self._bare
+                if Path(rel).parent.name == name}
+        return dirs.pop() if len(dirs) == 1 else None
 
     def package_files(self, rel: str) -> list[str]:
         """The non-test code files of `rel`'s package: its directory for Go, itself otherwise."""
@@ -636,25 +844,26 @@ class _Definitions:
 
     def reaches(self, data: list[str], starts: Iterable[tuple[str, Optional[str]]],
                 *, depth: int = 4, cap: int = 60) -> Optional[str]:
-        """The file that reads the item's data (`file_reads`), reached from where the evidence
-        points (BOSSAPP-1329): each start is a cited file (read whole) and, with a symbol, that
-        symbol's BODY, from which BOSS follows — at most `depth` calls deep —
-          * a qualified call whose qualifier is an import (its alias resolved to the package)
-            or a type (`rulesyaml.Load()`, `config.ReloadOnce(…)`);
-          * an unqualified call to a function of the same package (`ReloadOnce(…)` → `Load`);
-          * a config type the body takes (`c config.CORS`): a type with yaml/json-tagged fields
-            in a package whose files read the data — the code consumes the loaded config.
-        A cited `package main` file with no symbol starts from its `main`. Never a call outside
-        a cited body (dead code), a local variable's method, or a file the evidence does not
-        lead to. None when nothing reached reads it."""
-        queue: list[tuple[str, Optional[str], int]] = [(r, s, 0) for r, s in starts]
+        """The code that reads the item's data, reached from where the evidence points
+        (BOSSAPP-1329): a cited file with no symbol is read whole (#155); every function — a
+        cited symbol, or one BOSS arrives at by a call — is judged by its own BODY
+        (`body_reads`), never by its file's other functions. From a function's body BOSS
+        follows, at most `depth` calls deep, a qualified call whose qualifier is an import (its
+        alias resolved) or a type, and an unqualified call within the same package, carrying
+        the call's string arguments into the callee's parameters. A cited `package main` file
+        starts from its `main`. Never a call outside a body on the path (dead code), a local
+        variable's method, a config type merely taken, or a file the evidence does not lead
+        to. Returns the reading file, or None."""
+        queue: list[tuple[str, Optional[str], int, dict]] = [(r, s, 0, {}) for r, s in starts]
         seen: set[tuple[str, Optional[str]]] = set()
         while queue:
-            rel, sym, level = queue.pop(0)
+            rel, sym, level, binds = queue.pop(0)
             if (rel, sym) in seen or len(seen) >= cap or _TEST_PATH.search(rel):
                 continue
             seen.add((rel, sym))
-            if self.file_reads(rel, data):
+            if sym is None and self.file_reads(rel, data):
+                return rel
+            if sym is not None and self.body_reads(rel, sym, data, binds):
                 return rel
             if level >= depth:
                 continue
@@ -666,28 +875,30 @@ class _Definitions:
                 else [])
             imports = _import_map(code, rel)
             for s in symbols:
-                body = _body_of(bare, bare, s, rel)
-                for m in list(_CALL.finditer(body))[:60]:
+                body = _body_of(code, bare, s, rel)
+                bare_body = _blank_strings(body)
+                hops: list[tuple[str, str, int]] = []
+                for m in list(_CALL.finditer(bare_body))[:60]:
                     qual, name = m.group(1), m.group(2)
                     pkg = imports.get(qual) or (qual if self.is_type(qual) else None)
-                    if not pkg:
-                        continue
-                    hit = self.symbol_file(f"{pkg}.{name}")
+                    hit = self.symbol_file(f"{pkg}.{name}") if pkg else None
                     if hit:
-                        queue.append((hit, name, level + 1))
-                for m in list(_LOCAL_CALL.finditer(body))[:60]:
+                        hops.append((hit, name, m.end() - 1))
+                for m in list(_LOCAL_CALL.finditer(bare_body))[:60]:
                     hit = self.local_def(rel, m.group(1))
                     if hit and m.group(1) != s:
-                        queue.append((hit, m.group(1), level + 1))
-                for m in list(_TYPE_REF.finditer(body))[:30]:
-                    pkg = imports.get(m.group(1))
-                    if not pkg:
-                        continue
-                    hit = self.symbol_file(f"{pkg}.{m.group(2)}")
-                    if hit and _defines_type(self.of(hit)[1] or "", m.group(2)) \
-                            and _TAGGED_FIELD.search(self.of(hit)[0] or ""):
-                        for r in self.package_files(hit):
-                            queue.append((r, None, level + 1))
+                        hops.append((hit, m.group(1), m.end() - 1))
+                for hit, name, paren in hops:
+                    args = _call_args(body, paren) or []
+                    _, hbare = self.of(hit)
+                    params = _params_of(hbare or "", name)
+                    carried = {}
+                    for p, a in zip(params, args):
+                        v = (self._expr_value(rel, s, a, 2) if a.strip() not in binds
+                             else binds[a.strip()])
+                        if v is not None:
+                            carried[p] = v
+                    queue.append((hit, name, level + 1, carried))
         return None
 
     def is_type(self, name: str) -> bool:
@@ -792,12 +1003,169 @@ def _body_of(code: str, bare: str, symbol: str, path: str = "") -> str:
     return "\n".join(lines[start:])
 
 
+def _fnmatch(name: str, pattern: str) -> bool:
+    import fnmatch
+
+    return fnmatch.fnmatch(name, pattern)
+
+
+def _top_level_strings(code: str, path: str) -> str:
+    """The file's top-level string constants (`const rulesDir = "rules"`), which a function
+    body may name: the only part of a file outside the body a body is judged with."""
+    lines = []
+    for line in code.splitlines():
+        if re.match(r"^(?:const|var|let|val|final|static)?\s*[A-Za-z_]\w*(?:\s+\w+)?\s*:?=\s*"
+                    r"[\"'`][^\"'`\n]*[\"'`]\s*;?\s*$", line):
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def _embedded(code: str) -> dict[str, list[str]]:
+    """{var: [patterns]} for Go's `//go:embed <patterns>` directives and the var each one
+    declares."""
+    out: dict[str, list[str]] = {}
+    lines = code.splitlines()
+    for i, line in enumerate(lines):
+        if not line.strip().startswith("//go:embed"):
+            continue
+        pats = [p.strip("\"`").rstrip("/") for p in line.split()[1:]]
+        for nxt in lines[i + 1:i + 4]:
+            m = re.match(r"^\s*var\s+([A-Za-z_]\w*)", nxt)
+            if m:
+                out.setdefault(m.group(1), []).extend(pats)
+                break
+    return out
+
+
+_JOIN = re.compile(r"\b(?:filepath|path|os\.path|Paths)\.(?:[Jj]oin|get|resolve)\s*\(")
+
+
+def _join_bases(body: str) -> list[str]:
+    """The identifiers a path join takes as its base (`filepath.Join(dir, "tenants")` → dir)."""
+    out = []
+    for m in _JOIN.finditer(body):
+        args = _call_args(body, m.end() - 1) or []
+        if args and re.fullmatch(r"[A-Za-z_]\w*", args[0].strip()):
+            out.append(args[0].strip())
+    return out
+
+
+def _bind_joins(text: str, binds: Mapping[str, str]) -> str:
+    """Every path join whose parts are all known (string literals, or bound names) written as
+    the one path it makes: `filepath.Join(dir, "tenants")` with dir = "config" →
+    `"config/tenants"`. A join with an unknown part is left as it is, and a folder string in it
+    is no longer the folder (BOSSAPP-1329 review: a `tenants` cache dir is not config/tenants)."""
+    out, pos = [], 0
+    for m in _JOIN.finditer(text):
+        if m.start() < pos:
+            continue
+        args = _call_args(text, m.end() - 1)
+        if not args:
+            continue
+        parts = []
+        for a in args:
+            a = a.strip()
+            lit = re.fullmatch(r"\"([^\"\n]*)\"|'([^'\n]*)'", a)
+            if lit:
+                parts.append(next(g for g in lit.groups() if g is not None))
+            elif a in binds:
+                parts.append(binds[a])
+            else:
+                parts = None
+                break
+        end = _close_paren(text, m.end() - 1)
+        if parts is None or end is None:
+            continue
+        joined = "/".join(p.strip("/") for p in parts if p and p != ".")
+        out.append(text[pos:m.start()])
+        out.append(f'"{joined}"')
+        pos = end + 1
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def _close_paren(text: str, open_at: int) -> Optional[int]:
+    depth = 0
+    for i in range(open_at, min(len(text), open_at + 2000)):
+        ch = text[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+    return None
+
+
+def _call_args(text: str, open_at: int) -> Optional[list[str]]:
+    """The top-level comma-separated arguments of the call whose `(` is at `open_at`."""
+    end = _close_paren(text, open_at)
+    if end is None:
+        return None
+    inner, args, depth, cur = text[open_at + 1:end], [], 0, ""
+    for ch in inner:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            args.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        args.append(cur)
+    return args
+
+
+def _params_of(bare: str, sym: str) -> list[str]:
+    """A function's parameter names, in order (Go `func (r *T) Load(dir string, s *Store)`,
+    Go's grouped `a, b string`, Python `def load(self, dir, n=1)`, JS/TS/Java)."""
+    m = re.search(r"\b(?:func|def|function|fn|fun)\s+(?:\([^)]*\)\s*)?" + re.escape(sym)
+                  + r"\s*\(", bare) or re.search(r"\b" + re.escape(sym) + r"\s*\(", bare)
+    if not m:
+        return []
+    args = _call_args(bare, m.end() - 1) or []
+    names = []
+    for a in args:
+        a = a.strip().split("=")[0].strip()
+        tokens = re.findall(r"[A-Za-z_]\w*", a)
+        if not tokens:
+            continue
+        if ":" in a:                                   # TS `dir: string`, Python annotations
+            names.append(a.split(":")[0].strip().lstrip("*"))
+        elif len(tokens) >= 2 and _ext_hint(bare) == "java":
+            names.append(tokens[-1])
+        else:
+            names.append(tokens[0])
+    return [n for n in names if n not in ("self", "cls")]
+
+
+def _receiver_type(bare: str, sym: str) -> Optional[str]:
+    """The type a Go method belongs to (`func (h *Handler) proxy(` → Handler), or None."""
+    m = re.search(r"\bfunc\s+\(\s*\w*\s*\*?\s*([A-Za-z_]\w*)(?:\[[^\]]*\])?\s*\)\s*"
+                  + re.escape(sym) + r"\s*\(", bare)
+    return m.group(1) if m else None
+
+
+def _ext_hint(bare: str) -> str:
+    return "java" if re.search(r"\b(?:public|private|protected)\s+\w", bare) else ""
+
+
+def _enclosing_func(bare: str, line_no: int) -> Optional[str]:
+    """The function line `line_no` (0-based; the same in the code and its string-free copy)
+    is inside: the nearest definition at or above it."""
+    best = None
+    for i, line in enumerate(bare.splitlines()[:line_no + 1]):
+        m = re.match(r"^\s*(?:func\s+(?:\([^)]*\)\s*)?|def\s+|function\s+)([A-Za-z_]\w*)",
+                     line)
+        if m:
+            best = m.group(1)
+    return best
+
+
 #: An unqualified call (`ReloadOnce(dir, …)`), not a method (`x.F(`) nor a definition.
 _LOCAL_CALL = re.compile(r"(?<![\w.])(?<!func )(?<!def )([A-Za-z_]\w*)\s*\(")
-#: A qualified type reference that is not a call (`c config.CORS`, `*config.Snapshot`).
-_TYPE_REF = re.compile(r"\b([A-Za-z_]\w*)\.([A-Z]\w*)\b(?!\s*\()")
-#: A struct field bound to a config key (Go struct tags).
-_TAGGED_FIELD = re.compile(r"`[^`\n]*\b(?:yaml|json|toml|mapstructure):\"")
 
 
 #: A qualified call in code (`rules.Load(`, `loader.read_rules(`).
@@ -828,6 +1196,9 @@ def _cited_symbols(root: Path, why: str, defs: _Definitions) -> dict[str, list[s
     return {k: list(dict.fromkeys(v)) for k, v in out.items()}
 
 
+#: A single quoted name in an answer (`ServeHTTP`), not a path or a qualified name.
+_TICKED_IDENT = re.compile(r"`([A-Za-z_]\w{2,})(?:\(\))?`")
+
 #: `package/dir:Symbol` (a Go package, a Python package folder) — no file extension.
 _DIR_SYMBOL = re.compile(r"`?((?:[\w.\-]+/)*[\w.\-]+):`?([A-Za-z_]\w*)")
 
@@ -837,7 +1208,9 @@ def _starts(found: Iterable[str], cited: Mapping[str, Iterable[str]]
     """Where a loader search starts: each cited symbol's body, and each cited code file."""
     out: list[tuple[str, Optional[str]]] = [(rel, s) for rel, syms in cited.items()
                                             for s in syms]
-    out += [(rel, None) for rel in found if _CODE_FILE.search(rel)]
+    # A file cited WITH a symbol is that symbol's body only (BOSSAPP-1329 review: a sibling
+    # beside a dead loader is not the loader); a file cited bare is read whole (#155).
+    out += [(rel, None) for rel in found if _CODE_FILE.search(rel) and not cited.get(rel)]
     return list(dict.fromkeys(out))
 
 
@@ -857,8 +1230,9 @@ def _named_loader(root: Path, why: str, data: list[str],
         code, bare = defs.of(hit)
         if code is None or not _defines(bare, symbol):
             continue
-        if (any(d != hit and _reads(code, d, hit) for d in data) if data
-                else _reads_data(code)):
+        # The cited function's own body, and what it calls (`reaches`), never its file's
+        # siblings (BOSSAPP-1329 review).
+        if defs.reaches(data, [(hit, symbol)]):
             return hit
     return None
 
@@ -911,7 +1285,12 @@ def wiring_problem(root: Any, why: str, *, item_text: str = "",
             return None
         # FOLLOWED FROM THE CITED CODE (BOSSAPP-1329): the watcher that calls the loader, the
         # generator whose package reads the rulebook, the handler that takes the loaded config.
-        if defs.reaches(data, _starts(found, _cited_symbols(root, why, defs))):
+        cited = _cited_symbols(root, why, defs)
+        if defs.reaches(data, _starts(found, cited)):
+            return None
+        # Or the value the cited code works on is one a caller also passed to the loader.
+        if any(defs.fed_by_loader(data, rel, s) for rel, syms in cited.items() for s in syms
+               if not _TEST_PATH.search(rel)):
             return None
         return "loader not named: this item's file must be read by the code (LOADED BY)"
     found, _absent = evidence_paths(root, why, defs=defs) if claims else ([], [])
@@ -935,8 +1314,8 @@ def wiring_problem(root: Any, why: str, *, item_text: str = "",
         if defs.reaches(data, [(hit, symbol)]):
             continue
         if data:
-            missing = [d for d in data if d != hit and not _reads(code, d, hit)]
-            return f"{hit} does not name {', '.join(missing[:3])} in code that reads it"
+            return (f"{hit} does not name {', '.join(data[:3])} in code that reads it "
+                    f"({symbol}'s own body, or the code it calls)")
         return f"{hit} reads no data or config file"
     return None
 
@@ -970,11 +1349,17 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any, exec_log: Any 
             found, absent = evidence_paths(root, why, defs=defs)
             code = [f for f in found if not _DOC_PATH.search(f) and not _DECL_PATH.search(f)]
             reason = ""
-            if not code and it.get("judgement"):
-                # A JUDGEMENT ABOUT THE WHOLE CODEBASE (naming, readability — the contract's
-                # `judgement` tag, never a keyword) needs no file citation (BOSSAPP-1329).
-                reason = ""
-            elif not code:
+            if not code and it.get("judgement") and defs is not None:
+                # A JUDGEMENT ABOUT THE CODEBASE still stands only on evidence (BOSSAPP-1329
+                # review): the packages it quotes (`proxy`, `auth`), when the tree has them.
+                code = [d for d in (defs.package_dir(m.group(1))
+                                    for m in _TICKED_IDENT.finditer(why)) if d]
+            if not code and _suite_item(str(it.get("text") or "")) and _suite_run(why):
+                # THE ITEM IS THE SUITE RUN ("All tests pass", "`go test -race ./...` passes"):
+                # the answer's own test run over the packages is its evidence. Only then — a
+                # `go test ./...` never evidences anything else (BOSSAPP-1329 review).
+                code = ["(test run)"]
+            if not code:
                 reason = ("only manifests/lockfiles cited" if found and all(
                               _DECL_PATH.search(f) for f in found)
                           else "only documents cited" if found
@@ -988,6 +1373,23 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any, exec_log: Any 
                 status, why = PARTIAL, f"{why} ({reason})".strip()
         out.append({**it, "status": status, "evidence": why})
     return out
+
+
+#: An item whose requirement IS the test suite running green (its own words).
+_SUITE_ITEM = re.compile(r"(?i)\b(?:all\s+)?tests?\s+(?:all\s+)?pass(?:es)?\b|"
+                         r"`?(?:go\s+test|pytest|npm\s+test|mvn\s+test|gradle\s+test|"
+                         r"cargo\s+test)\b[^`]*`?\s+passes\b")
+#: An answer that ran the suite over the packages (`go test ./...`, `pytest`, `npm test`).
+_SUITE_RUN = re.compile(r"(?i)\b(?:go\s+test\b[^`\n]*\./|pytest\b|npm\s+(?:run\s+)?test\b|"
+                        r"mvn\s+(?:-\S+\s+)*test\b|gradle\s+test\b|cargo\s+test\b)")
+
+
+def _suite_item(text: str) -> bool:
+    return bool(_SUITE_ITEM.search(text))
+
+
+def _suite_run(why: str) -> bool:
+    return bool(_SUITE_RUN.search(why))
 
 
 def _advisory(item: Mapping[str, Any]) -> bool:

@@ -934,7 +934,8 @@ def test_the_kan9_repro_a_reader_tagging_real_requirements_judgement_never_passe
 
 @pytest.mark.parametrize("text,allowed", [
     ("Plain, concise naming. Someone at the customer will read this code.", True),
-    ("Clear, readable error messages.", True),
+    ("Clear, readable error messages.", False),                 # errors: never taste (#171)
+    ("Secrets never appear in logs", False),                    # secrets, logging (#171)
     ("Clean, idiomatic Go; `go vet` and `go test ./...` clean.", False),          # backticks
     ("JWT/OAuth2 with JWKS caching", False),                                        # standard
     ("Rate limits answer 429", False),                                              # a digit

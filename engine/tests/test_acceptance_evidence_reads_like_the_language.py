@@ -39,45 +39,73 @@ def _reply(answers) -> str:
         + "\n\nACCEPTANCE: MET\n"
 
 
-@pytest.mark.parametrize("check_id,run", [
-    ("acc_b2239214c5bc45a9b4c4", "crun_673c3dcd34d6447e924b"),
-    ("acc_2841e1f5536945928a79", "crun_673c3dcd34d6447e924b"),
-    ("acc_2c775eb7064541238af1", "crun_f4360a7195f945a58b62"),
-    ("acc_867e506d842a445ca76c", "crun_f4360a7195f945a58b62"),
-])
-def test_every_met_the_reviewer_evidenced_stands(check_id, run):
+#: Every real check replays 30/0. Item 11, where the reviewer cited only the code that USES
+#: the route config (applyCORS, Against), holds through the value passed on: main builds
+#: `store`, hands it to config.ReloadOnce (→ Load reads the YAML) and to proxy.NewHandler,
+#: whose ServeHTTP calls applyCORS — never because a config type is merely taken (#171 (a)).
+EXPECT = {
+    "acc_b2239214c5bc45a9b4c4": ("crun_673c3dcd34d6447e924b", 30, []),
+    "acc_2841e1f5536945928a79": ("crun_673c3dcd34d6447e924b", 30, []),
+    "acc_2c775eb7064541238af1": ("crun_f4360a7195f945a58b62", 30, []),
+    "acc_867e506d842a445ca76c": ("crun_f4360a7195f945a58b62", 30, []),
+}
+
+
+@pytest.mark.parametrize("check_id", sorted(EXPECT))
+def test_every_met_the_reviewer_evidenced_stands(check_id):
+    run, met, partial = EXPECT[check_id]
     check = DATA["checks"][check_id]
     assert check["run"] == run
     downgraded = {a["n"] for a in check["answers"] if a["recorded"] == "partial"}
     assert check["recorded"]["partial"] == len(downgraded) >= 3
     rec = ag.judge(DATA["items"], _reply(check["answers"]), {}, root=TREE)
-    assert rec["counts"] == {"met": 30, "partial": 0, "missing": 0, "unjudged": 0}, [
+    assert rec["counts"]["met"] == met and rec["partial"] == partial, [
         (i["n"], i["evidence"][-160:]) for i in rec["items"] if i["status"] != "met"]
-    assert rec["verdict"] == "met"
+    for n in partial:
+        item = next(i for i in rec["items"] if i["n"] == n)
+        assert "loader not named" in item["evidence"]
 
 
 # ── (a) package patterns and commands are not file paths ────────────────────────────────────
 
-@pytest.mark.parametrize("cited,expect", [
-    ("`go vet ./...` and `go test ./...` pass", ["."]),
-    ("`go test -race ./internal/config/...` passes", ["internal/config"]),
-    ("Makefile/docker-compose targets exist", ["Makefile", "docker-compose.yml"]),
+@pytest.mark.parametrize("cited", [
+    "`go vet ./...` and `go test ./...` pass",
+    "`go test -race ./internal/config/...` passes",
 ])
-def test_package_patterns_and_name_lists_are_what_they_name(cited, expect):
-    found, absent = v.evidence_paths(TREE, cited)
-    assert absent == [] and set(expect) <= set(found), (found, absent)
+def test_a_package_pattern_is_neither_evidence_nor_missing(cited):
+    assert v.evidence_paths(TREE, cited) == ([], [])
 
 
-def test_python_and_maven_module_arguments_name_their_code(tmp_path):
+def test_a_name_list_is_its_parts():
+    found, absent = v.evidence_paths(TREE, "Makefile/docker-compose targets exist")
+    assert absent == [] and {"Makefile", "docker-compose.yml"} <= set(found)
+
+
+def test_python_and_maven_module_arguments(tmp_path):
     (tmp_path / "app").mkdir()
     (tmp_path / "app/main.py").write_text("def run():\n    pass\n")
     (tmp_path / "services/api/src").mkdir(parents=True)
     (tmp_path / "services/api/src/App.java").write_text("class App {}\n")
     assert v.evidence_paths(tmp_path, "`python -m app.main` runs") == (["app/main.py"], [])
-    assert v.evidence_paths(tmp_path, "`mvn -pl services/api test` passes") == (
-        ["services/api"], [])
-    # A pattern naming nothing in the tree is no evidence, and no missing file either.
+    # A module FOLDER is not file evidence, and not a missing file.
+    assert v.evidence_paths(tmp_path, "`mvn -pl services/api test` passes") == ([], [])
     assert v.evidence_paths(tmp_path, "`go test ./pkg/...`") == ([], [])
+
+
+@pytest.mark.parametrize("item,why,status", [
+    # (d) the probe: a test run is not evidence for anything but the test run itself
+    ("Secrets are never written to logs.", "`go test ./...` passes", "partial"),
+    ("The gateway retries an upstream once.", "`go test -race ./internal/proxy/...` passes",
+     "partial"),
+    # an item that IS the suite run is evidenced by that run
+    ("All tests pass; the README quick start works as written.",
+     "`go vet ./...` clean, `go test ./...` all packages pass (verified live).", "met"),
+])
+def test_a_test_run_evidences_only_the_suite_item(item, why, status):
+    got = v.parse_acceptance(f"ITEM 1: MET — {why}\n", [{"n": 1, "text": item}], root=TREE)[0]
+    assert got["status"] == status, got["evidence"]
+    files, _no = v._file_refs(TREE, why)
+    assert all(f["ref"] != "." for f in files), "the repository root is never file evidence"
 
 
 # ── (b) the loader is followed from the cited code, the #155 negatives still fail ───────────
@@ -86,12 +114,18 @@ ITEM2 = DATA["items"][1]["text"]
 
 
 def test_a_folder_read_through_a_path_join_is_a_read():
-    code = (TREE / "internal/config/loader.go").read_text()
-    lexed = v._code_lines(code, "internal/config/loader.go")
-    assert v._reads(lexed, "config/tenants/lumen-pay.yaml", "internal/config/loader.go")
-    # The extension filter must admit the file: a .json filter never reads the YAML.
-    json_only = lexed.replace('".yaml"', '".json"').replace('".yml"', '".json"')
-    assert not v._reads(json_only, "config/tenants/lumen-pay.yaml", "internal/config/loader.go")
+    rel = "internal/config/loader.go"
+    lexed = v._code_lines((TREE / rel).read_text(), rel)
+    # The join's base is a parameter: alone, "tenants" is any tenants folder (#171 review (b)).
+    assert not v._reads(lexed, "config/tenants/lumen-pay.yaml", rel)
+    # Every caller passes "config" (main's CONFIG_DIR default, through ReloadOnce): it reads.
+    defs = v._Definitions(TREE)
+    assert defs.param_value(rel, "Load", "dir") == "config"
+    assert defs.body_reads(rel, "Load", ["config/tenants/lumen-pay.yaml"])
+    # The extension filter is the read call's own: a .json filter never reads the YAML.
+    json_only = v._bind_joins(lexed, {"dir": "config"}).replace('".yaml"', '".json"') \
+        .replace('".yml"', '".json"')
+    assert not v._reads(json_only, "config/tenants/lumen-pay.yaml", rel)
 
 
 def test_the_watcher_reaches_the_loader_two_calls_down():
@@ -128,16 +162,110 @@ def test_the_155_negatives_still_fail(tmp_path, files, why):
                                                    needs_loader=True)
 
 
-# ── (c) a judgement about the whole codebase needs no file ─────────────────────────────────
+def _tree(tmp_path, files):
+    for rel, body in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(body)
+    return tmp_path
 
-def test_a_judgement_item_needs_no_file_and_a_checkable_one_still_does():
+
+LIMITS = "Rate limits come from `config/limits.yaml`, not from code."
+
+
+def test_a_config_type_merely_taken_is_not_a_loader(tmp_path):
+    """(a1) yaml-tagged RateLimit, a Load() nobody calls, main builds RateLimit{Rate: 5}."""
+    root = _tree(tmp_path, {
+        "config/limits.yaml": "rate: 5\n",
+        "internal/config/types.go": "package config\n\ntype RateLimit struct {\n"
+                                    "\tRate int `yaml:\"rate\"`\n}\n",
+        "internal/config/load.go": "package config\n\nfunc Load() (*RateLimit, error) {\n"
+                                   "\tb, err := os.ReadFile(\"config/limits.yaml\")\n"
+                                   "\treturn parse(b), err\n}\n",
+        "internal/proxy/limit.go": "package proxy\n\nimport \"northgate/internal/config\"\n\n"
+                                   "func Limit(r config.RateLimit) bool { return r.Rate > 0 }\n",
+        "cmd/gw/main.go": "package main\n\nimport (\n\t\"northgate/internal/config\"\n\t\"northgate/internal/proxy\"\n)\n\n"
+                          "func main() {\n\tproxy.Limit(config.RateLimit{Rate: 5})\n}\n"})
+    why = "`internal/proxy/limit.go:Limit` takes `config.RateLimit`; built in `cmd/gw/main.go`."
+    assert "loader not named" in v.wiring_problem(root, why, item_text=LIMITS,
+                                                   needs_loader=True)
+    # main calling the loader too changes nothing while the limit it passes is built by hand
+    (root / "cmd/gw/main.go").write_text(
+        "package main\n\nimport (\n\t\"northgate/internal/config\"\n\t\"northgate/internal/proxy\"\n)\n\nfunc main() {\n"
+        "\tcfg, _ := config.Load()\n\t_ = cfg\n\tproxy.Limit(config.RateLimit{Rate: 5})\n}\n")
+    why = "`internal/proxy/limit.go:Limit` takes `config.RateLimit`."
+    assert "loader not named" in v.wiring_problem(root, why, item_text=LIMITS,
+                                                   needs_loader=True)
+    # the loaded value passed on to the cited code is the wiring
+    (root / "cmd/gw/main.go").write_text(
+        "package main\n\nimport (\n\t\"northgate/internal/config\"\n\t\"northgate/internal/proxy\"\n)\n\nfunc main() {\n"
+        "\tcfg := config.Load()\n\tproxy.Limit(cfg)\n}\n")
+    assert v.wiring_problem(root, why, item_text=LIMITS, needs_loader=True) is None
+
+
+def test_a_sibling_beside_a_dead_loader_is_not_the_loader(tmp_path):
+    """(a2) the cited Defaults() reads nothing; a dead Load() in the same file does."""
+    root = _tree(tmp_path, {
+        "config/limits.yaml": "rate: 5\n",
+        "internal/config/config.go": "package config\n\nfunc Defaults() *RateLimit {\n"
+                                     "\treturn &RateLimit{Rate: 5}\n}\n\nfunc Load() error {\n"
+                                     "\t_, err := os.ReadFile(\"config/limits.yaml\")\n"
+                                     "\treturn err\n}\n"})
+    for why in ("LOADED BY `internal/config/config.go:Defaults`",
+                "loaded in `internal/config/config.go:Defaults`"):
+        assert v.wiring_problem(root, why, item_text=LIMITS, needs_loader=True), why
+
+
+def test_a_folder_named_like_the_data_folder_is_not_it(tmp_path):
+    """(b) a cache dir called tenants is not config/tenants; the extension filter is the read
+    call's own."""
+    item = "Editing `config/tenants/acme.yaml` is picked up without restart."
+    base = {"config/tenants/acme.yaml": "id: acme\n"}
+    cache = _tree(tmp_path / "cache", {**base, "internal/cache/cache.go": (
+        "package cache\n\nfunc Load() error {\n\tdir := filepath.Join(os.TempDir(), "
+        "\"tenants\")\n\tentries, err := os.ReadDir(dir)\n\t_ = entries\n\treturn err\n}\n")})
+    why = "LOADED BY `internal/cache/cache.go:Load`"
+    assert "does not name" in v.wiring_problem(cache, why, item_text=item, needs_loader=True)
+    json_only = _tree(tmp_path / "json", {**base, "internal/config/load.go": (
+        "package config\n\nvar ext = \".yaml\"\n\nfunc Load() error {\n"
+        "\tentries, err := os.ReadDir(\"config/tenants\")\n\tfor _, e := range entries {\n"
+        "\t\tif strings.HasSuffix(e.Name(), \".json\") { read(e) }\n\t}\n\treturn err\n}\n")})
+    why = "LOADED BY `internal/config/load.go:Load`"
+    assert v.wiring_problem(json_only, why, item_text=item, needs_loader=True)
+    elsewhere = _tree(tmp_path / "elsewhere", {**base, "internal/config/load.go": (
+        "package config\n\nfunc Load() error {\n\tentries, err := os.ReadDir(\"config/tenants\")"
+        "\n\tfor _, e := range entries {\n\t\tif strings.HasSuffix(e.Name(), \".json\") "
+        "{ read(e) }\n\t}\n\treturn err\n}\n\nfunc Other() bool {\n\treturn "
+        "strings.HasSuffix(x, \".yaml\")\n}\n")})
+    assert v.wiring_problem(elsewhere, why, item_text=item, needs_loader=True), \
+        "a .yaml string in another function is not this read's filter"
+    whole = _tree(tmp_path / "whole", {**base, "internal/config/load.go": (
+        "package config\n\nfunc Load(dir string) error {\n\tentries, err := "
+        "os.ReadDir(filepath.Join(dir, \"tenants\"))\n\t_ = entries\n\treturn err\n}\n"),
+        "cmd/gw/main.go": "package main\n\nimport \"northgate/internal/config\"\n\n"
+                          "func main() {\n\tdir := getenv(\"CONFIG_DIR\", \"config\")\n"
+                          "\tconfig.Load(dir)\n}\n"})
+    assert v.wiring_problem(whole, why, item_text=item, needs_loader=True) is None, \
+        "a join whose base every caller sets to config is config/tenants"
+
+
+# ── (c) a judgement item still stands only on evidence ─────────────────────────────────────
+
+def test_a_judgement_item_needs_evidence_and_never_covers_secrets_or_logging():
     naming = next(i for i in DATA["items"] if i.get("judgement"))
-    why = "naming across `internal/*` packages is plain and consistent."
-    got = v.parse_acceptance(f"ITEM {naming['n']}: MET — {why}\n", [naming], root=TREE)[0]
-    assert got["status"] == "met", got["evidence"]
-    plain = {**naming, "judgement": False, "text": "The gateway logs every request."}
-    got = v.parse_acceptance(f"ITEM {naming['n']}: MET — {why}\n", [plain], root=TREE)[0]
+    bare = "naming is plain and consistent; code reads cleanly for a non-author."
+    got = v.parse_acceptance(f"ITEM {naming['n']}: MET — {bare}\n", [naming], root=TREE)[0]
     assert got["status"] == "partial" and "no file evidence cited" in got["evidence"]
+    assert v._advisory(got), "a judgement PARTIAL is advisory, never failing"
+    quoted = "naming across `proxy` and `auth` (`TokenBucket`, `ReloadState`) is plain."
+    got = v.parse_acceptance(f"ITEM {naming['n']}: MET — {quoted}\n", [naming], root=TREE)[0]
+    assert got["status"] == "met", got["evidence"]
+    from boss_engine.services.acceptance import contract as ac
+
+    for text in ("Secrets are never written to logs.", "Retries back off politely.",
+                 "Errors read well to an operator.", "Auth failures are clear.",
+                 "The security posture is sensible."):
+        assert "judgement" not in ac.floor_tags(text, {"judgement": True}), text
+    assert ac.floor_tags("Plain, concise naming.", {"judgement": True}) == {"judgement": True}
 
 
 # ── (d) never cut mid-sentence ─────────────────────────────────────────────────────────────

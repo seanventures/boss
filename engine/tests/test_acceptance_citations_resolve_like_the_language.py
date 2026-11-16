@@ -110,7 +110,12 @@ GO_TREE = {
     "cmd/gwlint/gwlint_test.go": ("package main\n\nfunc TestGwlint_Fix_RoundTrip_ListsUnfixableAsNeedingHuman"
                                   "(t *testing.T) {}\n\nfunc TestGwlint_NeverLeaksSecretValue(t *testing.T) {}\n"),
     "cmd/gwlintdocs/main.go": "package main\n\nfunc main() { lint.RenderReadme(os.Args[1]) }\n",
-    "cmd/northgate-gateway/main.go": "package main\n\nfunc main() { config.Load(os.Getenv(\"CONFIG_DIR\")) }\n",
+    # As the real main wires it: one config dir, defaulting to "config", for the first load and
+    # the watcher — so `filepath.Join(dir, "tenants")` is config/tenants (#171 review (b)).
+    "cmd/northgate-gateway/main.go": (
+        "package main\n\nimport \"northgate/internal/config\"\n\nfunc main() {\n"
+        "\tdir := getenv(\"CONFIG_DIR\", \"config\")\n\tstore := &config.Store{}\n"
+        "\tconfig.Load(dir)\n\tgo config.Watch(dir, store)\n}\n"),
     "cmd/northgate-gateway/integration_test.go": (
         "package main\n\nfunc TestGateway_HotReload_InvalidEditRejectedKeepsServing(t *testing.T) {}\n"),
     "mocks/echo-upstream/main.go": "package main\n\nfunc main() {}\n",
