@@ -106,12 +106,14 @@ def test_pressing_a_card_after_the_fix_starts_nothing(eng, project, monkeypatch)
             c.execute(text("UPDATE findings SET status = 'fixed' WHERE project_id = :p"),
                       {"p": project})
         before = _runs(eng, project)
-        with pytest.raises(dmod.InvalidDecisionTransitionError, match="Nothing is open"), \
-                eng.begin() as c:
-            dmod.DecisionService(get_settings()).transition(c, card, action="approve",
-                                                            actor="ceo", note="go")
+        with eng.begin() as c:
+            row = dmod.DecisionService(get_settings()).transition(c, card, action="approve",
+                                                                  actor="ceo", note="go")
         assert _runs(eng, project) == before
-        assert _status(eng, card)["status"] == "pending"
+        # A STALE CARD STOPS ASKING (#169 review): withdrawn with the refusal's own words.
+        got = _status(eng, card)
+        assert row["status"] == got["status"] == "withdrawn"
+        assert got["resolution_note"].startswith("Nothing is open")
         with eng.begin() as c:
             assert {r["status"] for r in c.execute(text(
                 "SELECT status FROM findings WHERE project_id = :p"),
@@ -162,5 +164,47 @@ def test_an_agent_or_worker_can_never_press_it(eng, project, actor, kind):  # no
                 _member(c, project, actor, kind)
             assert cr.may_start_fix(c, project, actor) is False
             assert cr.may_start_fix(c, project, "ceo") is True
+    finally:
+        _cleanup(eng, project)
+
+
+def test_pressing_a_card_a_newer_build_superseded_withdraws_it_in_words(eng, project, monkeypatch):  # noqa: F811
+    """#169 review: the press refused ("a newer build exists") but left the card pending, so it
+    kept asking for a press that could never do anything. It is withdrawn with those words."""
+    monkeypatch.setattr(dmod, "_spawn_as_this_request", lambda fn: fn())
+    try:
+        root, _recheck, card = _lineage_with_card(eng, project)
+        with eng.begin() as c:
+            newer = _run(c, project, fctx={"root_run_id": root})
+        before = _runs(eng, project)
+        with eng.begin() as c:
+            dmod.DecisionService(get_settings()).transition(c, card, action="approve",
+                                                            actor="ceo", note="go")
+        got = _status(eng, card)
+        assert got["status"] == "withdrawn" and newer in got["resolution_note"]
+        assert "Nothing was started" in got["resolution_note"]
+        assert _runs(eng, project) == before
+        with eng.begin() as c:
+            assert c.execute(text("SELECT count(*) FROM events WHERE entity_id = :d AND "
+                                  "event_type = 'decision.withdrawn'"), {"d": card}).scalar() == 1
+    finally:
+        _cleanup(eng, project)
+
+
+def test_a_press_without_steer_leaves_even_a_stale_card_pending(eng, project, monkeypatch):  # noqa: F811
+    """Only "not a person / no steer" keeps the card: someone who may press it still can."""
+    from boss_engine.identity import lineage
+
+    monkeypatch.setattr(lineage, "request_enforced", lambda: True)
+    monkeypatch.setattr(lineage, "current_context", lambda: None)   # no steer in this request
+    try:
+        root, _recheck, card = _lineage_with_card(eng, project)
+        with eng.begin() as c:
+            _run(c, project, fctx={"root_run_id": root})          # stale, too
+        with pytest.raises(dmod.InvalidDecisionTransitionError, match="Steer builds"), \
+                eng.begin() as c:
+            dmod.DecisionService(get_settings()).transition(c, card, action="approve",
+                                                            actor="ceo", note="go")
+        assert _status(eng, card)["status"] == "pending"
     finally:
         _cleanup(eng, project)
