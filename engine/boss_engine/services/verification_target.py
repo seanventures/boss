@@ -803,6 +803,78 @@ def required_app_stack(spec: dict[str, Any] | None) -> str | None:
     return key if key in _REQUIRED_GATE_STACKS else None
 
 
+def lineage_required_stack(connection: Any, root_run_id: str | None) -> str | None:
+    """The required stack (required_app_stack) of a lineage: what its BUILDS declared, read
+    exactly as the acceptance gate reads a follow-up (acceptance.contract.union_spec of
+    lineage_build_rows: the first build's instructions and structured required_stack), else
+    the root run's own spec. A follow-up's own spec is only the findings it fixes, so without
+    this its gate fell back to npm and BOSS's hardening came back, while the acceptance gate
+    still held the lineage to Go. The frozen acceptance contract holds items, not the stack:
+    its sources are these same builds. None when nothing is declared or nothing can be read."""
+    root = str(root_run_id or "").strip()
+    if not root or connection is None:
+        return None
+    from contextlib import nullcontext
+
+    try:
+        from sqlalchemy import text
+
+        from .acceptance.contract import lineage_build_rows, union_spec
+
+        # A savepoint: a failed read never aborts the caller's transaction (the run's insert).
+        with (connection.begin_nested() if hasattr(connection, "begin_nested")
+              else nullcontext()):
+            builds = lineage_build_rows(connection, root)
+            found = required_app_stack(union_spec(builds)) if builds else None
+            if found is None:
+                raw = connection.execute(text("SELECT spec FROM code_task_runs WHERE id = :i"),
+                                         {"i": root}).scalar()
+                spec = json.loads(raw) if isinstance(raw, str) else raw
+                found = required_app_stack(spec if isinstance(spec, dict) else {})
+        return found
+    except Exception:  # noqa: BLE001 — an unreadable lineage declares nothing; the tree decides
+        return None
+
+
+#: The build files that make a folder an app of each required stack (required_stack_dir).
+_REQUIRED_BUILD_FILES = {
+    "go": ("go.mod",),
+    "java": ("pom.xml", "build.gradle", "build.gradle.kts"),
+    "python": ("pyproject.toml", "requirements.txt", "setup.py", "Pipfile"),
+}
+_REQUIRED_DIR_DEPTH = 3
+
+
+def required_stack_dir(app_dir: Path | str, required: str) -> Path:
+    """The folder under `app_dir` holding the required stack's build file: `app_dir` itself,
+    else the shallowest folder below it that has one (`backend/go.mod` of a Go backend beside a
+    web/ front end). `app_dir` when none exists yet (an empty repo's first plan): running the
+    gate there says what is missing. Never the app's root with no build file when one exists
+    deeper: `go vet ./...` at a root with no go.mod fails every round."""
+    import os
+
+    base = Path(app_dir)
+    names = _REQUIRED_BUILD_FILES.get(required, ())
+    if any((base / n).is_file() for n in names):
+        return base
+    best: tuple[int, str] | None = None
+    try:
+        for current, dirs, files in os.walk(base):
+            rel = Path(current).relative_to(base)
+            depth = len(rel.parts)
+            dirs[:] = sorted(d for d in dirs if not d.startswith(".")
+                             and d not in _BASE_SKIP_DIRS and d not in ("testdata", "e2e"))
+            if depth >= _REQUIRED_DIR_DEPTH:
+                dirs[:] = []
+            if depth and any(n in files for n in names):
+                key = (depth, rel.as_posix())
+                if best is None or key < best:
+                    best = key
+    except OSError:
+        return base
+    return base / best[1] if best is not None else base
+
+
 def _required_toolchain_plan(required: str, app_dir: Path) -> GatePlan:
     """The Go or Java gate for an app whose brief requires it (required_app_stack), in its
     folder. A package.json, a Vite config or a Playwright harness beside it never makes it npm;
@@ -930,21 +1002,6 @@ def resolve_gate_plan(
         declared = _manifest_plan()
         if declared is not None:
             return declared
-    # THE STACK THE BRIEF REQUIRES IS THE GATE (required_app_stack): a Go brief is gated by
-    # `go vet` and `go test` whatever other manifests the tree grows. Northgate's brief said
-    # "Stack: Go." on an empty repo: the first plan (no go.mod yet) was the npm default, the
-    # test author was told "the gate runs npm", wrote a package.json that delegated to Go, and
-    # with that package.json beside the go.mod every later verify was npm again
-    # (crun_ce0f6332b459476a9768, 2026-11-15). With the toolchain on or off.
-    required = required_app_stack(spec)
-    if required in ("go", "java"):
-        return _required_toolchain_plan(required, where.path)
-    if required == "python":
-        commands = [PYTHON_TEST_CMD]
-        cwd = _cwd(commands)
-        if is_pytest_project(cwd):
-            commands = [PYTEST_CMD]
-        return GatePlan(commands, cwd, "default", " && ".join(commands))
     # A MULTI-SERVICE APP (services.stacks): a backend and a web front end — or two backends —
     # each in its own directory with its own manifest. Each is installed, built and unit-tested
     # in its own toolchain, then the backend is started and the e2e runs against it. Treating
@@ -967,6 +1024,29 @@ def resolve_gate_plan(
                 break
     else:
         stack_root = stacks.find_stack_root(base, changed, named)
+    # THE STACK THE BRIEF REQUIRES IS THE GATE (required_app_stack): a Go brief is gated by
+    # `go vet` and `go test` whatever other manifests the tree grows. Northgate's brief said
+    # "Stack: Go." on an empty repo: the first plan (no go.mod yet) was the npm default, the
+    # test author was told "the gate runs npm", wrote a package.json that delegated to Go, and
+    # with that package.json beside the go.mod every later verify was npm again
+    # (crun_ce0f6332b459476a9768, 2026-11-15). With the toolchain on or off.
+    # A MULTI-SERVICE TREE ONE OF WHOSE SERVICES IS THE REQUIRED LANGUAGE keeps the multi-service
+    # plan, which gates every service in its own toolchain (a Python api/ beside a web/ front end
+    # is never `unittest` at the root with the front end untested). Otherwise the required gate
+    # runs in the folder holding that language's build file (required_stack_dir).
+    required = required_app_stack(spec)
+    if required is not None:
+        if stack_root is None and stacks.is_multi_service(stacks.detect_services(where.path)):
+            stack_root = where.path
+        if stack_root is not None and not any(
+                s.language == required for s in stacks.detect_services(stack_root)):
+            stack_root = None
+        if stack_root is None:
+            app_dir = required_stack_dir(where.path, required)
+            if required in ("go", "java"):
+                return _required_toolchain_plan(required, app_dir)
+            commands = [PYTEST_CMD if is_pytest_project(app_dir) else PYTHON_TEST_CMD]
+            return GatePlan(commands, app_dir, "default", " && ".join(commands))
     if stack_root is not None:
         stack = stacks.stack_plan(stack_root)
         return GatePlan([c for c, _ in stack.steps + stack.e2e_steps], stack_root, "stack",
@@ -1021,6 +1101,14 @@ def resolve_gate_plan(
             message = toolchains.missing_message("go", "go.mod")
             return GatePlan([], app_dir, "toolchain_missing", message, error=message)
         compiled = None
+    # WITH THE TOOLCHAIN ON, THE SAME BASE-TREE RULE: a Java or Go build in a folder whose BASE
+    # tree held no Node / Python app is that build, so a package.json (or Python manifest) an
+    # agent ADDS beside it never flips the gate to npm. Only when the base tree was read: an
+    # unpinned plan keeps the tree's word.
+    added_manifests = (base_apps is not None and app_rel is not None and not app_in_base
+                       and bool(java or compiled == "go"))
+    if added_manifests:
+        node_here = False
     if java and not node_here:
         commands = toolchains.java_gate_commands(java)
         # A first build downloads its dependencies through egress: give it the manifest's room.
@@ -1033,7 +1121,7 @@ def resolve_gate_plan(
     # or Python default — Northgate's Go tree was "verified" as a Node package (2026-11-15).
     py_here = any((app_dir / n).is_file()
                   for n in ("requirements.txt", "pyproject.toml", "setup.py", "Pipfile"))
-    if compiled == "go" and not node_here and not py_here:
+    if compiled == "go" and not node_here and (not py_here or added_manifests):
         commands = list(toolchains.GO_GATE)
         return GatePlan(commands, app_dir, "toolchain", " && ".join(commands),
                         timeout_seconds=toolchains.GATE_TIMEOUT_SECONDS,

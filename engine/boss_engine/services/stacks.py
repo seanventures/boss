@@ -964,8 +964,16 @@ def check_text(text: str, *, template_stack: Optional[str] = None,
 #: The `Stack:` line, however the architect formatted it: a bullet, bold, or wrapped in backticks
 #: exactly as STACK_LINE_INSTRUCTION shows it. A backticked line was not matched, so the check
 #: fell back to prose and read "Rust/Ruby/PHP … unsupported" as a request (HelpDesk AI, D1 #3).
-_STACK_LINE = re.compile(r"^\s*(?:[-*]\s*)?[`*]*\s*stack\s*[`*]*\s*[:—-]\s*[`*]*\s*(.+)$",
-                         re.I | re.M)
+#: "Tech stack: Go" / "Tech Stack:" too (a ticket's wording).
+_STACK_LINE = re.compile(r"^\s*(?:[-*]\s*)?[`*]*\s*(?:tech(?:nology)?\s+)?stack\s*[`*]*\s*[:—-]"
+                         r"\s*[`*]*\s*(.+)$", re.I | re.M)
+#: A fenced code block (``` or ~~~): a `Stack:` line inside one is sample text, not a declaration.
+_CODE_FENCE = re.compile(r"^[ \t]*(```|~~~)[^\n]*\n.*?(?:^[ \t]*\1[ \t]*$|\Z)", re.S | re.M)
+
+
+def _stack_line(markdown: str) -> "Optional[re.Match[str]]":
+    """The first `Stack:` line outside fenced code blocks, or None."""
+    return _STACK_LINE.search(_CODE_FENCE.sub("", str(markdown or "")))
 #: Instructions for the architect: one line the approval check parses.
 STACK_LINE_INSTRUCTION = (
     "Under 'Components', the FIRST line must declare the stack, in exactly this form: "
@@ -976,7 +984,7 @@ STACK_LINE_INSTRUCTION = (
 
 def declared_stack(markdown: str) -> Optional[list[dict[str, str]]]:
     """[{service, language, framework}] from the architecture's `Stack:` line, or None."""
-    m = _STACK_LINE.search(str(markdown or ""))
+    m = _stack_line(markdown)
     if not m:
         return None
     out = []
@@ -1022,7 +1030,7 @@ def check_architecture(markdown: str) -> StackVerdict:
                            for k in langs if k not in LANGUAGES]
             off = [k for k in langs if k in LANGUAGES and not language_ready(k)]
             return verdict(unsupported, off, where="The architecture")
-        line = _STACK_LINE.search(str(markdown or ""))
+        line = _stack_line(markdown)
         named = check_text(line.group(1) if line else "", where="The architecture")
         if not named.ok or languages_named(line.group(1) if line else ""):
             return named

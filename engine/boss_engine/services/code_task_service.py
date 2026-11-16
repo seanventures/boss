@@ -737,6 +737,19 @@ def start_code_task(
         spec["app_root"] = bench["app_root"]
     if bench.get("project_kind"):
         spec["project_kind"] = bench["project_kind"]
+    # A LINEAGE'S DECLARED STACK TRAVELS WITH IT. A follow-up's (or a repair's) instructions are
+    # its findings, with no `Stack:` line: stamped here as the structured required_stack, its
+    # gate stays Go and BOSS's Node hardening stays out (verification_target.required_app_stack),
+    # exactly as the acceptance gate holds the lineage to Go (Northgate, BOSSAPP-1230).
+    lineage_root = str((finalize_ctx or {}).get("root_run_id")
+                       or (finalize_ctx or {}).get("deferred_from_run") or "").strip()
+    if lineage_root and not spec.get("required_stack"):
+        from . import verification_target as _vt
+
+        if _vt.required_app_stack(spec) is None:
+            stack = _vt.lineage_required_stack(connection, lineage_root)
+            if stack:
+                spec["required_stack"] = [{"language": stack, "from": "lineage"}]
     if isinstance(review_panel_size, int):  # VAG Phase 1 (#9): per-run refute-panel size override
         spec["review_panel_size"] = review_panel_size
     if open_pr is False:  # eval/bake-off runs: verify via the gate, do not open a PR

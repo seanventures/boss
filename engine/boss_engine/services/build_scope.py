@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import re
 from contextvars import ContextVar
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 _SCOPE: ContextVar[Optional[dict[str, bool]]] = ContextVar("boss_build_scope", default=None)
 
@@ -51,14 +51,15 @@ _OPS_WORDS = re.compile(
     r"deploy(ed|ment|s)?|production|sre)\b", re.I)
 _E2E_WORDS = re.compile(
     r"\b(playwright|e2e|end[- ]to[- ]end|browser tests?|test:e2e|ui tests?)\b", re.I)
-#: "Next" only as Next.js: BOSS's own deploy brief says "next to its boss.preview.command", and
+#: "Next" only as Next.js (Next.js, NextJS, Next-js, next.config): BOSS's own deploy brief says "next to its boss.preview.command", and
 #: the bare word made Northgate's Go build a bundled front end (crun_ce0f6332b459476a9768).
-_BUNDLER_WORDS = re.compile(r"\b(vite|react|vue|svelte|next\.?js|tailwind|spa)\b", re.I)
+_BUNDLER_WORDS = re.compile(r"\b(vite|react|vue|svelte|next[.\- ]?js|next\.config|tailwind|spa)\b",
+                            re.I)
 #: Workflow capabilities after which BOSS runs and watches the app.
 _OPS_CAPABILITIES = frozenset({"deploy", "monitor", "smoke_test", "preview_deploy"})
 
 
-def _bundler(text: str, instructions: str) -> bool:
+def _bundler(text: str, instructions: str, spec: Optional[Mapping[str, Any]] = None) -> bool:
     """Does the brief name a bundled front end? Never for an app whose brief REQUIRES a non-Node
     stack (verification_target.required_app_stack): a Go, Java or Python app gets no vite, React
     types or Playwright written into its package.json by BOSS's hardening, whatever words its
@@ -67,11 +68,15 @@ def _bundler(text: str, instructions: str) -> bool:
         return False
     from .verification_target import required_app_stack
 
-    return required_app_stack({"instructions": instructions}) is None
+    # The run's spec when the caller has it: a follow-up's instructions are only its findings,
+    # and its declared stack is the structured `required_stack` stamped from its lineage.
+    return required_app_stack(dict(spec) if spec is not None
+                              else {"instructions": instructions}) is None
 
 
 def decide(title: str, instructions: str, criteria: Iterable[str] = (), *,
-           workflow_deploys: bool = False, has_manifest: bool = False) -> dict[str, bool]:
+           workflow_deploys: bool = False, has_manifest: bool = False,
+           spec: Optional[Mapping[str, Any]] = None) -> dict[str, bool]:
     text = "\n".join([title or "", instructions or "", *[str(c) for c in criteria or ()]])
     if MORE_TESTS_MARKER in text:
         # PASS 2 (workflow step more_tests): the browser tests pass 1 deferred are written now,
@@ -83,13 +88,13 @@ def decide(title: str, instructions: str, criteria: Iterable[str] = (), *,
             "e2e_deferred": False,
             "more_tests": True,
             "more_tests_light": light,
-            "bundler": _bundler(text, instructions),
+            "bundler": _bundler(text, instructions, spec),
         }
     return {
         "ops": bool(workflow_deploys or has_manifest or _OPS_WORDS.search(text)),
         "e2e": False,
         "e2e_deferred": bool(_E2E_WORDS.search(text)),
-        "bundler": _bundler(text, instructions),
+        "bundler": _bundler(text, instructions, spec),
     }
 
 

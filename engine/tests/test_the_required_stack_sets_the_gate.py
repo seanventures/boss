@@ -212,3 +212,115 @@ def test_the_prd_scaffold_is_not_seeded_into_a_go_app():
     go_brief = "Build the gateway and its admin dashboard.\n\nStack: Go.\n"
     assert prd_decomposition._looks_like_web_app(go_brief) is False
     assert prd_decomposition._looks_like_web_app("Build an admin dashboard.") is True
+
+
+# ---- a required stack in a multi-service tree (PR #142 review) ---------------------------------
+
+WEB_PKG = json.dumps({"name": "web", "scripts": {"build": "vite build",
+                                                 "test:e2e": "playwright test"},
+                      "devDependencies": {"vite": "^5.3.1", "react": "^18.3.1"}})
+
+
+def _tree(tmp_path: Path, files: dict[str, str]) -> Path:
+    repo = tmp_path / "repo"
+    for rel, body in files.items():
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text(body)
+    return repo
+
+
+@pytest.mark.parametrize("changed", [None, ["api/main.py", "web/src/main.tsx"]])
+def test_a_python_api_beside_a_web_front_end_keeps_the_multi_service_plan(tmp_path, go_off,
+                                                                           changed):
+    repo = _tree(tmp_path, {"api/requirements.txt": "fastapi\nuvicorn\n",
+                            "api/main.py": "from fastapi import FastAPI\napp = FastAPI()\n",
+                            "web/package.json": WEB_PKG, "web/src/main.tsx": "export {}\n"})
+    plan = _plan({"instructions": "Stack: Python"}, repo, changed=changed)
+    assert plan.source == "stack"
+    dirs = {d for _, d in plan.steps}
+    assert repo / "api" in dirs and repo / "web" in dirs   # the front end is built too
+
+
+def test_a_go_backend_beside_a_web_front_end_keeps_the_multi_service_plan(tmp_path, go_on):
+    repo = _tree(tmp_path, {"backend/go.mod": GO_MOD,
+                            "backend/main.go": "package main\n\nimport \"net/http\"\n\n"
+                                               "func main() { http.ListenAndServe(\":8080\", nil) }\n",
+                            "web/package.json": WEB_PKG})
+    plan = _plan(NORTHGATE_SPEC, repo)
+    assert plan.source == "stack"
+    assert ("go vet ./...", repo / "backend") in plan.steps
+    assert not any(d == repo and c.startswith("go ") for c, d in plan.steps)
+
+
+def test_a_go_module_in_a_subfolder_is_gated_where_its_go_mod_is(tmp_path, go_on):
+    """No front end to plan, an agent's package.json at the root: `go vet` runs in gateway/,
+    never at a root with no go.mod (which fails every round)."""
+    repo = _tree(tmp_path, {"README.md": "x\n", "package.json": json.dumps(AGENT_PKG),
+                            "gateway/go.mod": GO_MOD, "gateway/main.go": "package main\n"})
+    plan = _plan(NORTHGATE_SPEC, repo)
+    assert plan.source == "toolchain" and plan.commands == list(toolchains.GO_GATE)
+    assert plan.cwd == repo / "gateway"
+    assert all(d == repo / "gateway" for _, d in plan.steps)
+
+
+def test_the_build_file_folder_is_the_shallowest_one(tmp_path):
+    repo = _tree(tmp_path, {"a/b/go.mod": GO_MOD, "svc/go.mod": GO_MOD,
+                            "node_modules/x/go.mod": GO_MOD})
+    assert vt.required_stack_dir(repo, "go") == repo / "svc"
+    assert vt.required_stack_dir(repo, "java") == repo
+
+
+# ---- how a stack is declared -------------------------------------------------------------------
+
+@pytest.mark.parametrize("text, expected", [
+    ("Tech stack: Go", "go"),
+    ("**Tech Stack:** Go (one module)", "go"),
+    ("- Technology stack: java/spring", "java"),
+    # A Stack line inside a code fence is sample text, not the brief's declaration.
+    ("Build the CLI.\n\n```yaml\nStack: go\n```\n", None),
+    ("Example:\n~~~\nStack: python\n~~~\nStack: Go", "go"),
+])
+def test_tech_stack_lines_count_and_fenced_ones_do_not(text, expected):
+    assert vt.required_app_stack({"instructions": text}) == expected
+
+
+@pytest.mark.parametrize("brief", ["A Next-js storefront", "Edit next.config.js to add a rewrite",
+                                   "NextJS app router pages"])
+def test_next_js_spellings_are_still_a_bundled_front_end(brief):
+    assert build_scope.decide("App", brief)["bundler"] is True
+
+
+def test_a_follow_ups_structured_stack_keeps_the_bundler_off():
+    spec = {"instructions": "Fix the React-to-alerts wording in the README.",
+            "required_stack": [{"language": "go", "from": "lineage"}]}
+    assert build_scope.decide("Follow-up", spec["instructions"])["bundler"] is True
+    assert build_scope.decide("Follow-up", spec["instructions"], spec=spec)["bundler"] is False
+
+
+# ---- no declared stack, toolchain on: the base tree decides (#138's rule, both ways) ------------
+
+def test_a_package_json_an_agent_adds_beside_a_base_go_mod_stays_go(tmp_path, go_on):
+    repo = _tree(tmp_path, {"go.mod": GO_MOD, "main.go": "package main\n\nfunc main() {}\n"})
+    base = vt.pin_verify_manifest(repo)
+    (repo / "package.json").write_text(json.dumps(AGENT_PKG))
+    plan = _plan({"instructions": "Add a /healthz route."}, repo, pinned=base,
+                 changed=["package.json", "main.go"])
+    assert plan.source == "toolchain" and plan.commands == list(toolchains.GO_GATE)
+
+
+def test_a_go_mod_and_package_json_both_added_to_an_empty_repo_are_go(tmp_path, go_on):
+    repo = _empty_repo(tmp_path)
+    base = vt.pin_verify_manifest(repo)
+    (repo / "go.mod").write_text(GO_MOD)
+    (repo / "main.go").write_text("package main\n\nfunc main() {}\n")
+    (repo / "package.json").write_text(json.dumps(AGENT_PKG))
+    plan = _plan({"instructions": "Build a gateway."}, repo, pinned=base,
+                 changed=["go.mod", "main.go", "package.json"])
+    assert plan.commands == list(toolchains.GO_GATE)
+
+
+def test_a_base_node_app_with_a_stray_go_mod_stays_npm_with_go_on(tmp_path, go_on):
+    repo = _tree(tmp_path, {"go.mod": GO_MOD, "package.json": PKG})
+    plan = _plan({"instructions": "Add a page."}, repo, pinned=vt.pin_verify_manifest(repo),
+                 changed=["src/page.ts"])
+    assert plan.commands and plan.commands[0].startswith("npm ")
