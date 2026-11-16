@@ -19,6 +19,21 @@ import {
   createGateway, deleteGateway, gatewayFormError, HARNESS_WORDS, readGateways, testGateway, updateGateway, type Gateway,
 } from "../../lib/llm-gateways";
 
+/** Detail beside Works or Failed. Blank, or those words, says nothing. */
+export function gatewayTestDetailSentence(detail: string | null | undefined): string | null {
+  const text = detail?.trim() ?? "";
+  if (!text || text === "Works" || text === "Failed") return null;
+  return text;
+}
+
+/** Beside the gateway test result. More than six words is a paragraph. */
+export function View({ id, sentence }: { id: string; sentence: string | null }) {
+  if (!sentence) return null;
+  return sentence.split(/\s+/).filter(Boolean).length > 6
+    ? <p data-testid={`gateway-test-why-${id}`} data-user-text>{sentence}</p>
+    : <span data-testid={`gateway-test-why-${id}`} data-user-text>{sentence}</span>;
+}
+
 export function GatewaysRow({ projectId }: { projectId: string }) {
   const [items, setItems] = useState<Gateway[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +72,7 @@ export function GatewaysRow({ projectId }: { projectId: string }) {
               <span className="su-faint" data-testid={`gateway-test-${g.id}`} title={g.last_test.detail}>
                 {" · "}{g.last_test.ok ? "Works" : "Failed"}</span>
             ) : null}
+            {g.last_test ? <View id={g.id} sentence={gatewayTestDetailSentence(g.last_test.detail)} /> : null}
             <span className="su-line su-actions">
               <GatedButton permission="model_provider:manage" projectId={projectId} className="su-link"
                            data-testid={`gateway-test-run-${g.id}`}
