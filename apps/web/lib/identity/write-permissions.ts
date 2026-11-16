@@ -376,6 +376,7 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
 export const INLINE_WRITES: Readonly<Record<string, readonly WriteGate[]>> = {
   "app/agent-quick-create.tsx": ["agent:publish"],                 // POST /v1/agent-studio/templates/{id}/install
   "app/agent-ui.tsx": ["assistant:chat"],                          // /api/agent-thread, /api/agent clear
+  "app/agents/create-wizard.tsx": ["agent:deploy"],               // POST /v1/agents/{role}/deployments and …/triggers
   "app/agents-on-this.tsx": ["work_item:manage"],                  // POST /v1/projects/{id}/agents
   "app/default-agent-picker.tsx": ["work_item:manage"],            // POST /v1/projects/{id}/agents
   "app/ask-boss-hero.tsx": ["workflow:publish", "workflow_run:start", "discovery:create"], // apply, /api/builds, /api/discoveries

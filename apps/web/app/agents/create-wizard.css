@@ -1,0 +1,194 @@
+/* Agent or bot. Console density: the chosen plate carries a teal bar, nothing else shouts. */
+.abw-backdrop {
+  position: fixed;
+  z-index: var(--z-dialog);
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+}
+.abw-dialog {
+  width: min(560px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-xl);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-lg);
+  animation: abw-in 160ms ease-out;
+}
+.abw-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 12px;
+  align-items: center;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.abw-head h2 {
+  margin: 0;
+  grid-column: 1;
+  font-family: var(--display);
+  font-size: var(--fs-page);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.abw-close {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--fs-ui);
+  cursor: pointer;
+}
+.abw-close:hover:not(:disabled) { color: var(--ink); border-color: var(--border-strong); }
+.abw-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--mono);
+  font-size: var(--fs-label);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.abw-steps li + li::before { content: "·"; margin: 0 8px; color: var(--faint); }
+.abw-steps [aria-current="step"] { color: var(--ink); }
+.abw-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+.abw-kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.abw-kind, .abw-wake, .abw-btn {
+  font-family: var(--sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  cursor: pointer;
+}
+.abw-kind {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 14px 14px 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--bg);
+}
+.abw-kind b { font-family: var(--display); font-size: var(--fs-title); font-weight: 600; }
+.abw-kind span { font-size: var(--fs-meta); color: var(--muted); }
+.abw-kind[aria-pressed="true"], .abw-wake[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--teal);
+}
+.abw-fields, .abw-group { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.abw-group legend, .abw-field > span, .abw-envs > span, .abw-k, .abw-note {
+  font-family: var(--mono);
+  font-size: var(--fs-label);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.abw-field { display: grid; gap: 4px; }
+.abw-field input, .abw-field textarea, .abw-filter, .abw-tools {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--fs-ui);
+}
+.abw-field input, .abw-filter, .abw-tools { height: 36px; padding: 0 10px; }
+.abw-field textarea { padding: 8px 10px; resize: vertical; line-height: 1.4; }
+.abw-list { display: grid; max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: var(--r); }
+.abw-list label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+.abw-list label:first-child { border-top: 0; }
+.abw-list label.on { background: var(--accent-soft); }
+.abw-list b { font-size: var(--fs-row); font-weight: 600; overflow-wrap: anywhere; }
+.abw-list span { display: grid; gap: 4px; min-width: 0; }
+.abw-empty { padding: 12px; color: var(--muted); font-size: var(--fs-meta); }
+.abw-wakes, .abw-envs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.abw-wake {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--bg);
+}
+.abw-review { display: grid; gap: 6px; margin: 0; }
+.abw-review div { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.abw-review dt {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--fs-label);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.abw-review dd { margin: 0; font-size: var(--fs-ui); overflow-wrap: anywhere; }
+.abw-done { display: grid; gap: 4px; }
+.abw-done code {
+  font-family: var(--mono);
+  font-size: var(--fs-title);
+  color: var(--accent-text);
+  overflow-wrap: anywhere;
+}
+.abw-alert { color: var(--red); font-size: var(--fs-meta); overflow-wrap: anywhere; }
+.abw-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.abw-btn {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+  background: transparent;
+}
+.abw-btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.abw-btn:disabled, .abw-close:disabled { opacity: 0.5; cursor: not-allowed; }
+.abw-kind:focus-visible, .abw-wake:focus-visible, .abw-btn:focus-visible, .abw-close:focus-visible,
+.abw-field input:focus-visible, .abw-field textarea:focus-visible, .abw-filter:focus-visible, .abw-tools:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+@keyframes abw-in { from { opacity: 0; transform: translateY(8px); } }
+@media (prefers-reduced-motion: reduce) {
+  .abw-dialog { animation: none; }
+}
+@media (max-width: 640px) {
+  .abw-backdrop { padding: 0; }
+  .abw-dialog { width: 100%; max-height: none; height: 100%; border-radius: 0; }
+  .abw-kinds { grid-template-columns: 1fr; }
+  .abw-btn { min-height: 44px; }
+}

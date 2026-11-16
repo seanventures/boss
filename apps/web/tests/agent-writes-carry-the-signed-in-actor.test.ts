@@ -78,6 +78,8 @@ const KNOWN_AGENT_WRITERS = [
   // through lib/agents and the Kit with the signed-in actor they are handed; the org board
   // client only READS /v1/agents/org-board. The Activity client only READS /v1/agents/activity.
   "app/agents/org-actions.ts",
+  // Roster › Agent or bot: createAgent, then deploy and a trigger, as the signed-in actor.
+  "app/agents/create-wizard.tsx",
   // The Passport's Loadout grants (Give/Remove a skill or MCP server, holders): lib/agents and
   // the Kit, with the signed-in actor the Passport hands it.
   "app/skills/agent-abilities.tsx",

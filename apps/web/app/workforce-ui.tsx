@@ -8,6 +8,7 @@ import type { AgentStudioFeed } from "../lib/agent-studio";
 import { AgentDetail } from "./agent-detail-ui";
 import { PanelsView, orphanProfiles } from "./agent-profile-ui";
 import { AgentQuickCreate } from "./agent-quick-create";
+import { AgentBotWizard } from "./agents/create-wizard";
 import type { OrgChart, OrgNode, TakeoverOffer, V2Agent, Workforce } from "../lib/v2/workforce";
 import { apiWrite } from "../lib/api-write";
 import { identityOf, isLive, openAgent } from "../lib/agent-world";
@@ -177,6 +178,7 @@ export function WorkforceArea(
   // `true` for a blank agent; a name to register an agent that works with no registered role;
   // a name and a team for Organization's `Make agent` (a role a workflow names, nobody fills).
   const [creating, setCreating] = useState<boolean | string | { name: string; team?: string }>(false);
+  const [wizard, setWizard] = useState(false);
 
   const closeAgent = useCallback(() => {
     setOpenRole("");
@@ -357,6 +359,8 @@ export function WorkforceArea(
                 title="Ask 2-5 agents at once" onClick={() => openRoom()}>Room</button>
         <button type="button" className="wf-btn wf-btn-primary ag-home-wide" data-testid="wf-new-agent"
                 onClick={() => setCreating(true)}>+ New agent</button>
+        <button type="button" className="wf-btn ag-home-wide" data-testid="wf-agent-bot"
+                onClick={() => setWizard(true)}>Agent or bot</button>
         <div className="ag-home-menu">
           <button type="button" className="ag-icon-btn" aria-label="More" aria-expanded={menuOpen}
                   onClick={() => setMenuOpen((v) => !v)}><DotsThree size={16} weight="bold" aria-hidden /></button>
@@ -364,6 +368,7 @@ export function WorkforceArea(
             <div className="ag-home-menu-pop" role="menu">
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); openRoom(); }}>Room</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); setCreating(true); }}>+ New agent</button>
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); setWizard(true); }}>Agent or bot</button>
             </div>
           ) : null}
         </div>
@@ -376,6 +381,11 @@ export function WorkforceArea(
                           initialTeam={typeof creating === "object" ? creating.team : undefined}
                           onClose={() => setCreating(false)}
                           onCreated={(roleKey) => { setCreating(false); openAgent(roleKey); }} />
+      ) : null}
+      {wizard ? (
+        <AgentBotWizard projectId={workforce.project_id} actor={actor}
+                        onClose={() => setWizard(false)}
+                        onCreated={(roleKey) => { setWizard(false); openAgent(roleKey); }} />
       ) : null}
 
       {view === "live" ? (
