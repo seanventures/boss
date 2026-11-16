@@ -34,6 +34,7 @@ import { areaHref, costWord, kilo, money, secondsWord, whoName } from "./cockpit
 import { localWith } from "../../lib/local-time";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { missingWord } from "../../lib/build-detail";
+import { failedTestName } from "../../lib/failed-test-name";
 import { nowInput } from "./now-band";
 
 export type OutputKey = "brief" | "pr" | "checks" | "tests" | "changes" | "comments" | "preview" | "deploy" | "cost";
@@ -385,6 +386,7 @@ function TestsBody({ c }: { c: Cockpit }) {
   const t = c.outputs.tests;
   const [show, setShow] = useState(false);
   if (!t || !t.commands.length) return <span className="fx-muted">Not run</span>;
+  const failed = failedTestName(t.outputTail);
   return (
     <span className="fx-out-col">
       {t.commands.map((cmd, i) => (
@@ -395,6 +397,7 @@ function TestsBody({ c }: { c: Cockpit }) {
           {typeof cmd.durationMs === "number" ? <span className="fx-muted">, {secondsWord(Math.round(cmd.durationMs / 1000))}</span> : null}
         </span>
       ))}
+      {failed ? <span className="fx-mono fx-cmd" data-ok="false" data-testid="fx-tests-failed" data-user-text>{failed}</span> : null}
       {t.outputTail ? (
         <>
           <button type="button" className="ag-link" aria-expanded={show} data-testid="fx-tests-output" onClick={() => setShow((v) => !v)}>
