@@ -15742,3 +15742,27 @@ CREATE TABLE IF NOT EXISTS identity_siem_deliveries (
 
 CREATE INDEX IF NOT EXISTS identity_siem_deliveries_open
   ON identity_siem_deliveries (org_id, status);
+-- BOSSAPP-1251: a named link to an in-progress app. The password is stored only as a
+-- hash. An admin can stop one link, or stop new links. Expired and stopped links are
+-- refused. This is not a visitor publish snapshot.
+CREATE TABLE IF NOT EXISTS preview_shares (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  app_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  slug TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  stopped_at TIMESTAMPTZ,
+  stopped_by TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_preview_shares_project
+  ON preview_shares (project_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS preview_share_policy (
+  project_id TEXT PRIMARY KEY,
+  new_links_stopped BOOLEAN NOT NULL DEFAULT false,
+  stopped_by TEXT,
+  stopped_at TIMESTAMPTZ
+);
