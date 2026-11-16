@@ -161,11 +161,18 @@ function AddContactSheet({ projectId, actor, onClose, onSaved }: Zone & { onClos
   );
 }
 
+/** Recent-sends search. Empty text omits q. Surrounding spaces are not a search. */
+export function sendsQuery(typed: string): { q: string } | undefined {
+  const q = typed.trim();
+  return q ? { q } : undefined;
+}
+
 function ContactPoints({ projectId, actor, cps, refresh }: Zone & { cps: ReturnType<typeof useContactPoints>; refresh: () => void }) {
   const lt = useLocalTime();
   const [adding, setAdding] = useState(false);
   const [sends, setSends] = useState(false);
-  const outbox = useNotifications(sends ? projectId : "");
+  const [q, setQ] = useState("");
+  const outbox = useNotifications(sends ? projectId : "", sendsQuery(q));
   return (
     <section className="obs-zone" aria-labelledby="obs-cp-head" data-testid="obs-cps">
       <ZoneHead id="obs-cp-head" label="CONTACT POINTS" count={cps.data?.length} tip="Where BOSS sends what fired">
@@ -181,7 +188,13 @@ function ContactPoints({ projectId, actor, cps, refresh }: Zone & { cps: ReturnT
         {sends ? "Hide recent sends" : "Recent sends"}
       </button>
       {sends ? (
-        !outbox.data ? <Skeleton testId="obs-sends-loading" /> : outbox.data.length === 0 ? <Empty>Nothing sent yet</Empty> : (
+        <>
+          <label className="inf-field">
+            <span>Find in subject or body</span>
+            <input type="text" value={q} onChange={(e) => setQ(e.target.value)} data-testid="obs-sends-q"
+                   autoComplete="off" spellCheck={false} />
+          </label>
+          {!outbox.data ? <Skeleton testId="obs-sends-loading" /> : outbox.data.length === 0 ? <Empty>Nothing sent yet</Empty> : (
           <>
             <ul className="obs-list" data-testid="obs-sends">
               {outbox.data.slice(0, 15).map((n) => (
@@ -202,7 +215,8 @@ function ContactPoints({ projectId, actor, cps, refresh }: Zone & { cps: ReturnT
             </ul>
             {outbox.data.capped ? <p data-testid="obs-sends-capped">This list is the newest matches. Older matches are not on this page.</p> : null}
           </>
-        )
+          )}
+        </>
       ) : null}
       {adding ? <AddContactSheet projectId={projectId} actor={actor} onClose={() => setAdding(false)} onSaved={refresh} /> : null}
     </section>
