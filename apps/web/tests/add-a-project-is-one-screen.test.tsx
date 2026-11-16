@@ -298,8 +298,8 @@ describe("a repo: inline results, Helm's read, onboarding", () => {
 describe("adding a feature is Project › New work (BOSSAPP-989: the one door)", () => {
   it("the add-a-feature patch names the Work tab with New work focused and the app", async () => {
     const { addFeaturePatch } = await import("../lib/compose-links");
-    const p = addFeaturePatch("helpdesk");
-    expect([p.area, p.tab, p.compose, p.app]).toEqual(["project", "work", "1", "helpdesk"]);
+    const p = addFeaturePatch({ projectId: "p1", app: "helpdesk" });
+    expect([p.area, p.project_id, p.tab, p.compose, p.app]).toEqual(["project", "p1", "work", "1", "helpdesk"]);
   });
 });
 

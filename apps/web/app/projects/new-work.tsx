@@ -41,7 +41,7 @@ import {
 } from "../../lib/project-experience";
 import { FX_WORK_PLAN } from "../../lib/project-experience-fixtures";
 import {
-  PRIORITIES, PRIORITY_WORDS, addToNext, issueIsBug, issueLinkIn, newDraftId, parsePlanDetail, planDetailPath, readDraft, startNewWork,
+  MAX_BRIEF_CHARS, PRIORITIES, PRIORITY_WORDS, addToNext, anchorWords, briefLength, issueIsBug, issueLinkIn, newDraftId, parsePlanDetail, planDetailPath, readDraft, startNewWork,
   understand, writeDraft, type Brief, type ChatMsg, type IssueChoice, type IssueRead, type PlanDetail, type Priority, type Understanding,
 } from "../../lib/new-work";
 import { BriefCard, Marked, type BriefRow } from "./brief-card";
@@ -55,7 +55,10 @@ import "./new-work.css";
 export type Kind = WorkKind;
 /** What a door opens it with; `fromBar`: the first keys typed in the Work tab's bar (a kept
  *  draft still comes back, with them added). */
-export type Prefill = { text?: string; kind?: Kind; fromBar?: boolean } | null;
+export type Prefill = { text?: string; kind?: Kind; fromBar?: boolean;
+  /** The app it builds onto (AR-20): an "+ Add a feature" door's `app` (a build's run id or the
+   *  app's key). Start sends it; the engine continues that app's branch and change. */
+  app?: string } | null;
 
 const KINDS: { key: Kind; label: string; icon: typeof Sparkle; ph: string }[] = [
   { key: "feature", label: "Feature", icon: Sparkle, ph: "Describe it — e.g. \"let agents tag tickets by product\"" },
@@ -68,8 +71,8 @@ const SUGGEST: Record<Kind, string[]> = {
   bug: ["How would you reproduce it?", "What else could break?", "Seen this before?"],
   ticket: ["What does the issue miss?", "Smaller first step?", "Similar work before?"],
 };
-/** The box's limit (the start door's and the old composer's). */
-const MAX = 2000;
+/** The box's limit: the start door's own (AR-21, lib/new-work MAX_BRIEF_CHARS). */
+const MAX = MAX_BRIEF_CHARS;
 /** Text files ride in the words (a log, a stack trace); at most this much of each. */
 const MAX_FILE_CHARS = 6000;
 const TEXT_FILE = /\.(log|txt|md|json|ya?ml|csv|tsv|xml|html?|css|[jt]sx?|py|go|rb|java|kt|rs|sql|sh|toml|ini|env\.example|stack|trace)$/i;
@@ -169,7 +172,8 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
   // ── Helm's plan for this kind (and the picked workflow), with the chips' defaults ──────────
   // A Ticket whose issue is labelled a bug runs the project's bug workflow (its default).
   const planKind: Kind = kind === "ticket" && issueIsBug(issue) ? "bug" : kind;
-  const plan = usePxRead<PlanDetail>(planDetailPath(pid, planKind, picked.v), parsePlanDetail,
+  const anchorApp = prefill?.app?.trim() ?? "";
+  const plan = usePxRead<PlanDetail>(planDetailPath(pid, planKind, picked.v, anchorApp), parsePlanDetail,
     { everyMs: 120_000, demo: () => parsePlanDetail({ ...FX_WORK_PLAN, kind: planKind, ...DEMO_DETAIL }) });
   const p = plan.data;
   const k = KINDS.find((x) => x.key === kind)!;
@@ -337,11 +341,17 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
   const fields = (anyway: string[]) => ({
     brief: status === "ready" ? brief : null, priority: priority.v, notify: notify.v, issue: issueChoice,
     ...(wfKey ? { workflow_key: wfKey } : {}), ...(anyway.length ? { start_anyway: anyway } : {}),
+    ...(anchorApp ? { app: anchorApp } : {}),
   });
   const locked = Boolean(refusal) && unaccepted(refusal, startAnyway).length > 0;
+  // THE BRIEF'S LENGTH (AR-21): never cut; a counter near the limit, Start held past it.
+  const len = briefLength(words());
+  // AN APP THAT IS NOT THIS PROJECT'S holds Start: it never quietly builds on main instead.
+  const anchor = p?.anchor ?? null;
+  const anchorBad = Boolean(anchorApp) && Boolean(p?.anchorError);
   const start = async () => {
     const t = words();
-    if (!text.trim() || busy || locked) return;
+    if (!text.trim() || busy || locked || len.over || anchorBad) return;
     setBusy("start"); setSaid({ text: "" });
     if (tk) {
       // FROM A TICKET: one press imports it (unless BOSS has it) and starts it from the ticket.
@@ -379,7 +389,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
   };
   startRef.current = () => { void start(); };
   const planNext = async () => {
-    if (!text.trim() || busy) return;
+    if (!text.trim() || busy || len.over || anchorApp) return;
     setBusy("next"); setSaid({ text: "" });
     try {
       const r = await addToNext(pid, kind, words(), fields([]));
@@ -411,7 +421,8 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
       }
       try {
         const body = (await f.text()).slice(0, MAX_FILE_CHARS);
-        setText((t) => `${t}${t && !t.endsWith("\n") ? "\n" : ""}\n${f.name}:\n${body}`.slice(0, MAX));
+        // Never cut to the limit here: past it the counter and Start's message say so (AR-21).
+        setText((t) => `${t}${t && !t.endsWith("\n") ? "\n" : ""}\n${f.name}:\n${body}`);
       } catch { setFileNote(`Could not read ${f.name}.`); }
     }
   };
@@ -458,7 +469,8 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
     <div className="px-nw-in" data-full={editor ? "" : undefined} data-testid="px-nw-in">
       <span className="px-nw-kind" aria-hidden><k.icon size={18} weight="fill" /></span>
       <label className="px-sr" htmlFor="px-compose-text">Describe the work</label>
-      <textarea id="px-compose-text" ref={box} className="px-nw-txt" value={text} placeholder={k.ph} maxLength={MAX}
+      {/* No maxLength: a browser cut a 2,080-character brief at 2,000 without a word (AR-21). */}
+      <textarea id="px-compose-text" ref={box} className="px-nw-txt" value={text} placeholder={k.ph} aria-invalid={len.over || undefined}
                 rows={editor ? 18 : Math.min(12, Math.max(4, lines(text)))} inputMode={kind === "ticket" ? "url" : undefined}
                 data-testid="px-compose-text"
                 onChange={(e) => { setText(e.target.value); setBack(false); if (confirmed) setConfirmed(false); }}
@@ -475,8 +487,9 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
         <span><ArrowsVertical size={11} aria-hidden /> {Math.max(1, lines(text))} line{lines(text) === 1 ? "" : "s"} · grows</span><span aria-hidden>·</span>
         <span>⇧↵ new line · ⌘↵ start</span>
         <span className="px-spacer" />
+        {len.count ? <span className="px-nw-count" data-testid="px-nw-count" data-over={len.over || undefined}>{len.count}</span> : null}
         {linked ? <span className="px-nw-chip" data-tone="blue" data-testid="px-nw-link"><GithubLogo size={11} aria-hidden /> {issue?.read ? `${issue.label} · ${issue.title.slice(0, 40)}` : "issue link · Helm reads it"}</span>
-          : <span className="px-hide-phone">{status === "idle" ? "Helm reads as you type" : `${text.length} / ${MAX}`}</span>}
+          : len.count ? null : <span className="px-hide-phone">{status === "idle" ? "Helm reads as you type" : `${text.length.toLocaleString("en-US")} / ${MAX.toLocaleString("en-US")}`}</span>}
       </div>
       {fileNote ? <p className="px-nw-note" role="alert">{fileNote}</p> : null}
     </div>
@@ -682,7 +695,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
               <span className="px-row" style={{ gap: "4px 10px", flexWrap: "wrap" }}>{crew.length ? crew.map((a) => <span key={a.name} className="px-row" style={{ gap: 4, flex: "none" }}><Face agent={a} size={18} />{a.name}</span>) : <span className="px-faint">from the workflow&apos;s steps</span>}
                 <button type="button" className="px-linkbtn" onClick={() => { onClose(); ctx.tab("settings", { section: "team" }); }}>Change</button></span>
               <span className="px-lbl">Branch</span>
-              <span className="px-row" style={{ gap: 6, alignItems: "flex-start" }}><GitBranch size={12} aria-hidden style={{ flex: "none", marginTop: 2 }} />{repo ? <span className="px-mono" style={{ overflowWrap: "anywhere" }}>{repo.full_name} · onto {repo.branch || "main"}</span> : <span className="px-faint">no repository yet</span>}</span>
+              <span className="px-row" style={{ gap: 6, alignItems: "flex-start" }}><GitBranch size={12} aria-hidden style={{ flex: "none", marginTop: 2 }} />{repo ? <span className="px-mono" style={{ overflowWrap: "anywhere" }} data-testid="px-nw-onto">{repo.full_name} · onto {anchor?.branch || repo.branch || "main"}</span> : <span className="px-faint">no repository yet</span>}</span>
               <span className="px-lbl">Connector</span>
               <span><a className="px-linkbtn" href={`?project_id=${encodeURIComponent(pid)}&area=skills`}>Add a connector</a> <span className="px-faint">the build uses this project&apos;s connected ones</span></span>
               <label className="px-lbl" htmlFor="px-nw-read">Read first</label>
@@ -715,7 +728,14 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
         <div className="px-sheet-h px-nw-head">
           <span className="px-ico" data-c="teal" aria-hidden><PlusCircle size={16} /></span>
           <h2 id={titleId}>New work</h2>
-          <span className="px-tag px-hide-phone" title="Builds onto this project's branch"><GitBranch size={11} aria-hidden /> {ctx.overview.project.name} · its branch</span>
+          {anchorApp ? (
+            // AN APP'S DOOR (AR-20): which app, which branch and which change Start builds onto.
+            <span className="px-tag" data-testid="px-nw-anchor" data-tone={anchorBad ? "red" : undefined}
+                  title={anchor ? `Builds onto ${anchor.app}'s branch ${anchor.branch} and its open change, as Change it does` : anchorBad ? p?.anchorError : "Finding the app…"}>
+              <GitBranch size={11} aria-hidden /> {anchor ? anchorWords(anchor) : anchorBad ? "that app is not in this project" : "finding the app…"}</span>
+          ) : (
+            <span className="px-tag px-hide-phone" title="Builds onto this project's branch"><GitBranch size={11} aria-hidden /> {ctx.overview.project.name} · its branch</span>
+          )}
           {back ? <span className="px-faint px-hide-phone" style={{ fontSize: ".56rem" }} data-testid="px-nw-back">Your draft is back ·{" "}
             <button type="button" className="px-linkbtn" onClick={() => { setText(""); setChat([]); setBrief(null); setStatus("idle"); setConfirmed(false); setFromChat([]); setBack(false); lastRead.current = ""; writeDraft(pid, null); }}>Clear</button></span> : null}
           <span className="px-spacer" />
@@ -763,12 +783,18 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
           {status === "idle" || status === "reading" ? <span className="px-faint px-hide-phone" style={{ fontSize: ".56rem" }}>Start uses the defaults; {helm?.name ?? "Helm"}&apos;s read takes a few seconds</span> : null}
           <Said text={said.text} tone={said.tone} />
           <span className="px-spacer" />
-          <GatedButton permission="workflow_run:start" projectId={pid} className="px-btn" data-testid="px-nw-next" title="Adds it to Planned, ranked by Marshal, without starting"
-                       disabled={!text.trim() || Boolean(busy)} onClick={() => void planNext()}>
+          {len.over || anchorBad ? (
+            // WHY START IS HELD, right above it (AR-21 / AR-20): never a silent cut or a silent main.
+            <span className="px-nw-held" role="alert" data-testid="px-nw-held">
+              {len.over ? len.message : `${p?.anchorError ?? "That app is not in this project"}. Open New work from the app's own page.`}</span>
+          ) : null}
+          <GatedButton permission="workflow_run:start" projectId={pid} className="px-btn" data-testid="px-nw-next"
+                       title={anchorApp ? "Add to Next does not keep the app yet: Start builds it onto the app now" : "Adds it to Planned, ranked by Marshal, without starting"}
+                       disabled={!text.trim() || Boolean(busy) || len.over || Boolean(anchorApp)} onClick={() => void planNext()}>
             <ListPlus size={13} aria-hidden /> {busy === "next" ? "Adding…" : "Add to Next"}</GatedButton>
           <GatedButton permission="workflow_run:start" projectId={pid} className="px-btn px-nw-start" data-kind="primary" data-testid="px-compose-start"
                        title={refusal ? (locked ? "Tick Start anyway above to accept what is missing" : "Starts it, accepting what is missing") : "Starts it with the brief and defaults shown (also confirms the brief)"}
-                       disabled={!text.trim() || Boolean(busy) || locked} onClick={() => void start()}>
+                       disabled={!text.trim() || Boolean(busy) || locked || len.over || anchorBad} onClick={() => void start()}>
             <Play size={12} weight="fill" aria-hidden /> {busy === "start" ? "Starting…" : refusal ? "Start anyway" : "Start"}{gate.allowed ? <span className="px-nw-kbd" aria-hidden>⌘↵</span> : null}</GatedButton>
         </div>
       </div>

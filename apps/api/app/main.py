@@ -11470,6 +11470,8 @@ def submit_code_task_feedback_endpoint(run_id: str, payload: CodeTaskFeedbackBod
             # added and this endpoint dropped it, so every change ran inline whatever was
             # chosen — the picker had never worked.
             workflow_version_id=str(payload.get("workflow_version_id") or ""),
+            # THE PROFILE PICKED ON THE SHEET (AR-22); empty runs on the lineage's own.
+            profile=str(payload.get("profile") or ""),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))

@@ -14,6 +14,7 @@ import {
   PX_PATHS, a, n, o, parseAgent, parseWorkPlan, pxWrite, s, startWork, toWorkKind,
   type Agent, type PxWrite, type WorkKind, type WorkPlan,
 } from "./project-experience";
+import { changeRef } from "./repo-links";
 
 type R = Record<string, unknown>;
 
@@ -111,7 +112,46 @@ export type NwDefaults = {
   tell: { routes: { event: string; label: string; words: string }[] };
   priority: Priority;
 };
-export type PlanDetail = WorkPlan & { steps: Step[]; optionDetail: Record<string, OptionDetail>; defaults: NwDefaults | null };
+/** THE APP NEW WORK BUILDS ONTO (AR-20), as the engine resolved the door's `app=`: the build the
+ *  change continues, the app's name, its lineage branch and its change / PR. */
+export type Anchor = { runId: string; app: string; branch: string; prNumber: number | null; prUrl: string | null };
+export type PlanDetail = WorkPlan & {
+  steps: Step[]; optionDetail: Record<string, OptionDetail>; defaults: NwDefaults | null;
+  /** Only when an app was asked for: the anchor, or why that app is not one of this project's. */
+  anchor?: Anchor | null; anchorError?: string;
+};
+
+/** THE BRIEF'S LIMIT (AR-21): the engine's MAX_DIRECTIVE (services/project_experience/add_project.py)
+ *  and POST …/work's `text` max_length — one number; a test reads the Python and keeps them
+ *  equal. The box never cuts at it: a counter shows near it, and Start says why it is held. */
+export const MAX_BRIEF_CHARS = 20000;
+/** Where the counter starts showing (90% of the limit). */
+export const BRIEF_COUNTER_FROM = Math.floor(MAX_BRIEF_CHARS * 0.9);
+/** What the box says about its length: nothing well below the limit, a count near it, a refusal past it. */
+export function briefLength(text: string): { count: string | null; over: boolean; message: string } {
+  const n = text.length;
+  const over = n > MAX_BRIEF_CHARS;
+  const fmt = (v: number) => v.toLocaleString("en-US");
+  return {
+    count: n >= BRIEF_COUNTER_FROM ? `${fmt(n)} / ${fmt(MAX_BRIEF_CHARS)}` : null,
+    over,
+    message: over ? `This is ${fmt(n - MAX_BRIEF_CHARS)} characters over the ${fmt(MAX_BRIEF_CHARS)} limit. Shorten it, or attach the rest as a file link, before starting.` : "",
+  };
+}
+
+/** The modal's words for the app it builds onto: "building on Northgate Gateway · change #4"
+ *  (a local change set), "· PR #4" on GitHub, or its branch while it has no change yet. */
+export function anchorWords(anchor: Anchor): string {
+  const name = anchor.app || "this app";
+  return anchor.prNumber ? `building on ${name} · ${changeRef(anchor.prUrl, anchor.prNumber, true)}` : `building on ${name} · ${anchor.branch}`;
+}
+
+const parseAnchor = (v: unknown): Anchor | null => {
+  const x = o(v);
+  if (!s(x.run_id)) return null;
+  const pr = typeof x.pr_number === "number" && Number.isFinite(x.pr_number) ? x.pr_number : null;
+  return { runId: s(x.run_id), app: s(x.app), branch: s(x.branch), prNumber: pr, prUrl: s(x.pr_url) || null };
+};
 
 const nnum = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
@@ -128,6 +168,8 @@ export const parsePlanDetail = (v: unknown): PlanDetail => {
   const tracker = d && d.tracker ? o(d.tracker) : null;
   return {
     ...base,
+    ...("anchor" in x ? { anchor: parseAnchor(x.anchor) } : {}),
+    ...(s(x.anchor_error) ? { anchorError: s(x.anchor_error) } : {}),
     steps: a(x.steps).map((z) => ({ id: s(o(z).id), label: s(o(z).label), you: o(z).you === true, approve: s(o(z).approve), agent: parseAgent(o(z).agent) })).filter((z) => z.label),
     optionDetail,
     defaults: d ? {
@@ -141,13 +183,16 @@ export const parsePlanDetail = (v: unknown): PlanDetail => {
   };
 };
 
-export const planDetailPath = (projectId: string, kind: string, workflowKey = "") => `${PX_PATHS.workPlan(projectId, kind, workflowKey)}&detail=true`;
+export const planDetailPath = (projectId: string, kind: string, workflowKey = "", app = "") =>
+  `${PX_PATHS.workPlan(projectId, kind, workflowKey)}&detail=true${app ? `&app=${encodeURIComponent(app)}` : ""}`;
 
 // ── Start and Add to Next ────────────────────────────────────────────────────────────────────
 export type IssueChoice = { mode: "none" } | { mode: "link"; url: string } | { mode: "create" };
 export type StartFields = {
   brief: Brief | null; priority: Priority; notify: string; issue: IssueChoice;
   workflow_key?: string; start_anyway?: string[];
+  /** The app it builds onto (AR-20): the door's `app`, sent as is; the engine resolves it. */
+  app?: string;
 };
 
 /** The body Start and Add to Next send: the words, the confirmed brief, the chips. */
@@ -160,6 +205,7 @@ export function workBody(kind: WorkKind, text: string, f: StartFields): R {
     ...(f.issue.mode === "create" ? { issue: { mode: "create" } } : {}),
     ...(f.workflow_key ? { workflow_key: f.workflow_key } : {}),
     ...(f.start_anyway?.length ? { start_anyway: f.start_anyway } : {}),
+    ...(f.app ? { app: f.app } : {}),
   };
 }
 

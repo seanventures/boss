@@ -203,8 +203,10 @@ export function filterApps(apps: CcApp[], f: ShelfFilter, needOf: (a: CcApp) => 
   return apps.filter((a) => shelfState(a, needOf(a)) === f);
 }
 
-export function AppsShelf({ apps, attention = [], orgId }: {
+export function AppsShelf({ apps, attention = [], orgId, projectId }: {
   apps: CcApp[] | null; attention?: AttentionItem[]; orgId?: string | null;
+  /** The project these apps are in: "+ Add a feature" opens New work there (AR-20). */
+  projectId: string;
 }) {
   useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const [filter, setFilter] = useState<ShelfFilter>("all");
@@ -257,7 +259,7 @@ export function AppsShelf({ apps, attention = [], orgId }: {
               </Go>
               {/* ADDING TO AN APP is the main job: its own door on every card (hover on a
                   desktop, always shown on touch), into the composer with the app chosen. */}
-              <Go className="cc-app-add" patch={addFeaturePatch(a.key)} orgId={orgId} testId="cc-app-add"
+              <Go className="cc-app-add" patch={addFeaturePatch({ projectId, app: a.key })} orgId={orgId} testId="cc-app-add"
                   title={`Add a feature to ${a.app}`} ariaLabel={`Add a feature to ${a.app}`}>
                 ＋ Add a feature
               </Go>

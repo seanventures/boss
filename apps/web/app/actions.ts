@@ -3229,6 +3229,8 @@ export async function submitCodeTaskFeedbackAction(
       severity: String(formData.get("severity") ?? "normal").trim(),
       selected_element: String(formData.get("selected_element") ?? "").trim(),
       workflow_version_id: String(formData.get("workflow_version_id") ?? "").trim(),
+      // The profile picked on Change it (AR-22); empty runs on the lineage's own.
+      profile: String(formData.get("profile") ?? "").trim(),
     });
     revalidatePath("/");
     return result;

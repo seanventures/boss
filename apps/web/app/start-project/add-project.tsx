@@ -284,7 +284,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
     addWork: (pid) => {
       // The person's words go along as the work: an idea's words, or the lines under a repo.
       const words = (kind === "idea" ? text : text.split("\n").slice(1).join("\n")).trim();
-      const qs = new URLSearchParams({ tab: "work", compose: "1", compose_kind: "feature", ...(words ? { compose_text: words.slice(0, 1500) } : {}) });
+      const qs = new URLSearchParams({ tab: "work", compose: "1", compose_kind: "feature", ...(words ? { compose_text: words } : {}) });
       go(`${projectPageHref(pid, homeId)}&${qs.toString()}`);
     },
     shared,

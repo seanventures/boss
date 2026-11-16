@@ -33,6 +33,7 @@ import {
 } from "../../lib/tickets";
 import { AddTicketSystem } from "./add-ticket-system";
 import { RowMenu } from "./parts";
+import { newWorkSearch } from "../../lib/compose-links";
 
 export const CONNECTORS_DOC = "https://github.com/seanventures/boss/blob/main/docs/infra/TICKET_CONNECTORS.md";
 
@@ -433,7 +434,7 @@ export function TicketSystemsRow({ projectId, focused = false, onSummary }: {
           <div className="tk-try" data-testid="tk-where">
             <Sparkle size={14} aria-hidden />
             <span>Paste {hereKey ? <>a <b className="tk-mono-text" data-testid="tk-where-key">{hereKey}</b> key</> : "a ticket key"} or a ticket link into New work, or ask BOSS to implement it.</span>
-            <a className="tk-linkbtn" href={`?area=project&project_id=${encodeURIComponent(projectId)}&tab=work&compose=1`} data-testid="tk-where-new"
+            <a className="tk-linkbtn" href={newWorkSearch({ projectId })} data-testid="tk-where-new"
                title={`Opens New work in ${here}.`}>New work in {here} →</a>
           </div>
         ) : null}
@@ -444,7 +445,7 @@ export function TicketSystemsRow({ projectId, focused = false, onSummary }: {
               <React.Fragment key={g.id}>{i ? " " : null}<b className="tk-mono-text">{g.keys.join(", ")}</b> tickets land in {g.name}.</React.Fragment>
             ))}</span>
             {away[0].id && away[0].name !== "another project" ? (
-              <a className="tk-linkbtn" href={`?area=project&project_id=${encodeURIComponent(away[0].id)}&tab=work&compose=1`} data-testid="tk-where-there"
+              <a className="tk-linkbtn" href={newWorkSearch({ projectId: away[0].id })} data-testid="tk-where-there"
                  title={`Opens New work in ${away[0].name}, where ${away[0].keys[0]} tickets belong.`}>New work in {away[0].name} →</a>
             ) : null}
             {elsewhere.can_manage && manage.allowed ? (

@@ -633,6 +633,52 @@ def plan(connection: Connection, project_id: str, kind: str = "feature",
     return out
 
 
-__all__ = ["KINDS", "WAS_SIZE", "choose", "create_issue", "defaults", "estimate", "issue_of",
-           "options", "plan", "round_minutes", "steps", "strip", "targets", "tell",
+def app_anchor(connection: Connection, project_id: str, app: Optional[str]
+               ) -> Optional[dict[str, Any]]:
+    """THE APP NEW WORK BUILDS ONTO (AR-20): every "+ Add a feature" door names the app (`app=`,
+    a build's run id or the app's key), and New work then builds onto THAT app's lineage — its
+    branch and its open pull request, as the build page's Change it does — instead of a fresh
+    build on the default branch. None when no app is named; LookupError when the name is no app
+    of this project (never a silent fall-back to main).
+
+    {run_id, app, branch, pr_number, pr_url}: the build the change continues (start door's
+    `extends_run_id`), the app's name, the lineage branch and the lineage's change/PR."""
+    from ..code_task_service import load_code_task_run, work_branch_for
+    from ..factory_view import app_name
+
+    handle = (app or "").strip()
+    if not handle:
+        return None
+    run: Optional[dict[str, Any]] = None
+    if handle.startswith("crun_"):
+        run = load_code_task_run(connection, handle)
+        if run is None or str(run.get("project_id")) != project_id:
+            raise LookupError("that app is not in this project")
+    else:
+        from ...templates.apply import TemplateError, resolve_app
+
+        try:
+            found = resolve_app(connection, project_id, app_key=handle)
+        except TemplateError:
+            raise LookupError("no app by that name has a finished build in this project") from None
+        run = load_code_task_run(connection, found["run_id"])
+        if run is None:
+            raise LookupError("no app by that name has a finished build in this project")
+    fctx = run.get("finalize_ctx") or {}
+    root = str(fctx.get("root_run_id") or run["id"])
+    pr = connection.execute(text(
+        "SELECT pull_request_number, pull_request_url FROM code_task_runs "
+        "WHERE project_id = :p AND (id = :root OR finalize_ctx->>'root_run_id' = :root) "
+        "AND pull_request_url IS NOT NULL ORDER BY created_at DESC LIMIT 1"),
+        {"p": project_id, "root": root}).mappings().first()
+    number = pr["pull_request_number"] if pr else None
+    if number is None and pr and pr["pull_request_url"]:
+        tail = re.search(r"/(\d+)/?$", str(pr["pull_request_url"]))
+        number = int(tail.group(1)) if tail else None
+    return {"run_id": run["id"], "app": app_name(run), "branch": work_branch_for(run),
+            "pr_number": number, "pr_url": (pr["pull_request_url"] if pr else None)}
+
+
+__all__ = ["KINDS", "WAS_SIZE", "app_anchor", "choose", "create_issue", "defaults", "estimate",
+           "issue_of", "options", "plan", "round_minutes", "steps", "strip", "targets", "tell",
            "ticket_link", "ticket_title", "tracker"]

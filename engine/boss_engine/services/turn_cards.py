@@ -432,10 +432,14 @@ def proposal(connection: Connection, project_id: str, *, offers: Iterable[Mappin
     short = shorten(title or said, 6) or shorten(said, 6) or "New work"
     kind = _kind_of(said, offer)
     plan = plan_steps(connection, project_id, kind)
-    body = {"kind": kind, "text": said[:8000], "title": short}
+    # THE BRIEF'S ONE LIMIT (AR-21): the start door's (MAX_DIRECTIVE), never a smaller cut here.
+    from .project_experience.add_project import MAX_DIRECTIVE
+
+    said = said[:MAX_DIRECTIVE]
+    body = {"kind": kind, "text": said, "title": short}
     if message_id:
         body["source_ref"] = f"chat:{message_id}"
-    return {"kind": "new_work", "work_kind": kind, "title": short, "text": said[:8000],
+    return {"kind": "new_work", "work_kind": kind, "title": short, "text": said,
             "estimate": plan["estimate"], "steps": plan["steps"], "workflow": plan["workflow"],
             "offer_id": str((offer or {}).get("id") or "") or None,
             "state": "open",
@@ -447,8 +451,12 @@ def _edit_href(project_id: str, kind: str, said: str) -> str:
     """Work tab's composer, prefilled (`compose=` + `kind=`)."""
     from .project_experience.common import href
 
+    # Whole, up to the brief's limit (AR-21): an Edit that dropped the words past 1,500
+    # characters lost the brief's last items without a word.
+    from .project_experience.add_project import MAX_DIRECTIVE
+
     return href(project_id, area="project", tab="work", compose="1", compose_kind=kind,
-                compose_text=said[:1500])
+                compose_text=said[:MAX_DIRECTIVE])
 
 
 def for_turn(connection: Connection, project_id: str, *, reply: str,

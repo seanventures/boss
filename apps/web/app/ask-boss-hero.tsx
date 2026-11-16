@@ -1846,8 +1846,8 @@ export function AskBossHero({
                 // ADDING TO WHAT EXISTS is the main job (np/compose owns the flow): a quiet
                 // second door beside Build, never a second primary.
                 <a className="askboss-add" data-testid="askboss-add-existing"
-                   href={linkTo(addFeaturePatch(), orgId)}
-                   onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(addFeaturePatch()); } }}
+                   href={linkTo(addFeaturePatch({ projectId }), orgId)}
+                   onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(addFeaturePatch({ projectId })); } }}
                    title="Add a feature to an app your team already built">
                   ＋ Add to an existing app
                 </a>

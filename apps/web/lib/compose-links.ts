@@ -10,11 +10,30 @@
  */
 export const COMPOSE_AREA = "delivery_workflows";
 
+/** Where New work opens: the project, and the app it builds onto (a build's run id or the
+ *  app's key). An app is never named without its project — an app's door that dropped the
+ *  project opened New work in whatever project the URL last held, on another repo (AR-20). */
+export type NewWorkTarget = { projectId: string; app?: string | null };
+
 /** ADDING A FEATURE IS PROJECT › NEW WORK (Add a project v2, c-after-create.html note 3; the
  *  main use case): the door opens the project's Work tab with New work focused (`compose=1`).
- *  Workflows › New build is gone (BOSSAPP-989): every old door lands here or on Add a project. */
-export function addFeaturePatch(appKey?: string | null): { area: "project" } & Record<string, string | null> {
-  return { area: "project", tab: "work", compose: "1", app: appKey ?? null, view: null, role: null, build: null };
+ *  Workflows › New build is gone (BOSSAPP-989): every old door lands here or on Add a project.
+ *
+ *  THE ONE BUILDER for every link into New work (AR-20): it always carries `project_id`, and
+ *  `app` when the door is an app's — New work then builds onto that app's branch and change.
+ *  With no target (a door that is not an app's, e.g. the hero) it keeps the page's project. */
+export function addFeaturePatch(target?: NewWorkTarget | null): { area: "project" } & Record<string, string | null> {
+  return {
+    area: "project", ...(target?.projectId ? { project_id: target.projectId } : {}),
+    tab: "work", compose: "1", app: target?.app || null, view: null, role: null, build: null,
+  };
+}
+
+/** The same door as a plain link's query string (`<a href>`), from the one builder. */
+export function newWorkSearch(target: NewWorkTarget): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(addFeaturePatch(target))) if (v !== null) q.set(k, v);
+  return `?${q.toString()}`;
 }
 
 /** Every "New build" door's tooltip. Each door is a GatedButton on workflow_run:start, what the
