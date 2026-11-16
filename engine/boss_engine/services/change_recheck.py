@@ -55,6 +55,13 @@ class NoWriteAgent:
     as it is."""
 
     engine = "recheck"
+    #: The optional knobs the pipeline SETS on a writing agent (governed: `a.redact = …`,
+    #: `a.budget_ceiling = …`, `a.command_runner = …`). Declared, so any other attribute is an
+    #: AttributeError (getattr(agent, name, default) still gets its default) — never a None
+    #: that a later `agent.something()` would call.
+    redact: Any = None
+    budget_ceiling: Any = None
+    command_runner: Any = None
 
     def __init__(self, step: str):
         from .engine_contract import EngineCapabilities
@@ -72,11 +79,6 @@ class NoWriteAgent:
     def run(self, spec: Any, repo: Any, sandbox: Any) -> Any:
         raise RecheckRefused("a re-check writes no code")
 
-    def __getattr__(self, name: str) -> Any:
-        # Optional knobs the pipeline sets or reads on an agent (redact, budget_ceiling, …).
-        if name.startswith("__"):
-            raise AttributeError(name)
-        return None
 
 
 def is_recheck(fctx: Optional[Mapping[str, Any]]) -> bool:
