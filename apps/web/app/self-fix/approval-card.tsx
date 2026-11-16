@@ -38,6 +38,19 @@ const SEATS: Record<string, string> = {
 const passed = (v?: string) => ["pass", "passed", "approve", "approved", "ok", "clean"].includes((v ?? "").toLowerCase());
 const base = (p: string) => p.split("/").pop() || p;
 
+/** Visible confidence reasons. Blank reasons are nothing. */
+export function confidenceReasonsSentence(reasons: readonly string[] | null | undefined): string | null {
+  const kept = (reasons ?? []).map((reason) => reason.trim()).filter(Boolean);
+  return kept.length ? kept.join(", ") : null;
+}
+
+/** Beside the confidence level. More than six words is a paragraph. */
+function ConfidenceReasonsWhy({ sentence }: { sentence: string | null }) {
+  if (!sentence) return null;
+  const Tag = sentence.split(/\s+/).filter(Boolean).length > 6 ? "p" : "span";
+  return <Tag data-testid="sfx-card-confidence-why" data-user-text>{sentence}</Tag>;
+}
+
 export function SelfFixCard({ card, projectId, selfFixId }: { card: Card; projectId: string; selfFixId?: string }) {
   const [diff, setDiff] = useState<DiffView | null>(null);
   const [diffError, setDiffError] = useState("");
@@ -90,6 +103,7 @@ export function SelfFixCard({ card, projectId, selfFixId }: { card: Card; projec
         <dd data-testid="sfx-card-confidence" title={(card.confidence?.reasons ?? []).join(", ")}>
           {card.confidence?.level ?? "—"}
         </dd>
+        <ConfidenceReasonsWhy sentence={confidenceReasonsSentence(card.confidence?.reasons)} />
         <dt>Change</dt>
         <dd data-testid="sfx-card-change">
           <span title={files.join("\n")}>
