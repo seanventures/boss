@@ -16083,6 +16083,8 @@ CREATE TABLE IF NOT EXISTS field_acl_records (
   app_id TEXT PRIMARY KEY REFERENCES field_acl_apps(id) ON DELETE CASCADE,
   values JSONB NOT NULL DEFAULT '{}'::jsonb,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- BOSSAPP-1269: a builder freezes a file or a data table so an agent write to
 -- that path is refused and the stored bytes stay as they were. An unfrozen
 -- path can change. File bytes stay on disk. Table bytes stay in
