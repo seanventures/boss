@@ -1295,6 +1295,33 @@ class DecisionService:
                 str(run_id),
                 {"decision_id": row["id"]},
             )
+        elif action == "retry_when_secret_set":
+            # RETRY ONCE SET (checks_failing.wait_for_person): the person set the secret the
+            # app needs. The waiting build ends (its draft PR stays) and a new attempt runs the
+            # gates again on the same branch and pull request, as the person's own Retry.
+            run_id = str(recommendation.get("run_id") or "")
+            connection.execute(text(
+                "UPDATE code_task_runs SET status = 'completed', phase = 'done', "
+                "updated_at = now() WHERE id = :id AND status = 'waiting_on_person'"),
+                {"id": run_id})
+            settings, jobs = self.settings, self.jobs
+            names = ", ".join(str(n) for n in recommendation.get("needs_secret") or [])
+            note = (f"{names or 'The missing secret'} is set now (a person confirmed it). Run "
+                    "the checks again on this branch; do not code around the secret.")
+            emit_event(connection, row["project_id"], "code_task.secret_retry_requested", actor,
+                       "code_task_run", run_id, {"decision_id": row["id"]})
+
+            def _retry() -> None:
+                from ..db import get_engine
+                from .code_task_service import retry_code_task
+
+                try:
+                    retry_code_task(get_engine(), settings, jobs, run_id, fix_note=note,
+                                    by_person=True)
+                except Exception:  # noqa: BLE001 — the run says so; Retry stays on it
+                    _log.exception("retry once set failed for %s", run_id)
+
+            _spawn_as_this_request(_retry)
         elif action == "review_plan_draft":
             self._queue_pr_proposal_from_plan(connection, row, actor, recommendation)
         elif action == "github.community.dispatch_plan":
@@ -1663,6 +1690,13 @@ class DecisionService:
             from .stack_deploy import on_decision_not_approved
 
             on_decision_not_approved(connection, self.settings, row, actor, "rejected")
+        elif rec.get("action") == "retry_when_secret_set" and rec.get("run_id"):
+            # Nobody will set it: the waiting build ends with its draft PR open, saying so.
+            connection.execute(text(
+                "UPDATE code_task_runs SET status = 'completed', phase = 'done', "
+                "error = CONCAT_WS(' ', error, 'A person chose not to set it; the draft pull "
+                "request stays open.'), updated_at = now() "
+                "WHERE id = :id AND status = 'waiting_on_person'"), {"id": str(rec["run_id"])})
         elif rec.get("action") == "resume_code_task" and rec.get("run_id"):
             # A PLAN SOMEBODY SAID NO TO ENDS ITS BUILD (independent re-check): it stayed
             # "Needs you · plan" in the Factory and on the shelf after Reject. The build is

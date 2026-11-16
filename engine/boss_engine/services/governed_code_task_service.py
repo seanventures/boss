@@ -49,6 +49,7 @@ from ..templates import run_env as _run_env
 from . import agent_acts, baseline_verify, ci_gate, design_prompts, plane_sync, review_comments, verification_target
 from . import red_first, repair_review_scope, review_input, review_panel
 from . import approved_prd_design
+from .checks_failing import wait_for_person as _checks_failing_wait
 from . import acceptance_gate as _acceptance_gate
 from .knowledge import learning_context, learning_writeback  # learning while executing (BOSSAPP-768)
 from .bakeoff import (
@@ -10407,7 +10408,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     **_checks_failing.collect(failing, evidence, details=_details),
                     "hard": action == _checks_failing.ACTION,
                     "rounds_used": rounds_used, "quality_gate_id": qg_id,
-                    **({"stopped": _checks_failing.stopped_record(_env_stop, failing)}
+                    **({"stopped": _checks_failing.stopped_record(
+                        _env_stop, failing,
+                        needs=((app_serves_record or {}).get("needs_secret")
+                               if "app_serves" in failing
+                               and gate_faults.get("app_serves") == "PERSON" else None),
+                        why=str((_sup_decision or {}).get("reason") or ""))}
                        if _env_stop else {}),
                 }
                 evidence[_checks_failing.KEY] = checks_record
@@ -11014,6 +11020,23 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                "code_task_run", run_id,
                                {"error": f"{type(exc).__name__}: {exc}"[:300],
                                 "findings": deferred_findings[:20]})
+        # A SECRET ONLY A PERSON CAN SET (checks_failing.wait_for_person): the draft PR is
+        # open, and the build now waits for that person — one card saying what to set and
+        # where, whose "Retry once set" runs the gates again on this branch and PR.
+        if ((_checks or {}).get("stopped") or {}).get("reason") == "person":
+            try:
+                with _transaction(engine) as c:
+                    _secret_card = _checks_failing_wait(
+                        c, run_id=run_id, project_id=project_id, task_id=task_id,
+                        record=_checks, pull_request_url=proposal.get("pull_request_url"))
+                    on_status_written(c, run_id)
+                if _secret_card:
+                    return {"status": "waiting_on_person", "done": True,
+                            "quality_gate_id": qg_id, "decision_id": _secret_card,
+                            "checks_failing": _checks, **proposal,
+                            "secret_decision_id": _secret_card}
+            except Exception:  # noqa: BLE001 — the PR is open; the run stays completed
+                _log_caught(logger)
         return {"status": "completed", "done": True, "quality_gate_id": qg_id,
                 "deferred_findings": deferred_findings,
                 "followup_run_id": followup_run_id,

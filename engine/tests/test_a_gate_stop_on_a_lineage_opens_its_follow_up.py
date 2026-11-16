@@ -144,8 +144,8 @@ def test_an_environment_or_refusal_stop_opens_the_pr_with_no_follow_up(failing, 
     assert cf.stop_or_open("block", failing, faults=faults, reason=reason) == cf.ACTION
     assert cf.environment_stop(failing, faults=faults, reason=reason) == expect
     rec = {**cf.collect(failing), "stopped": cf.stopped_record(expect, failing)}
-    words = "environment problem" if expect == "environment_only" else "needs a person"
-    assert rec["stopped"]["words"].startswith(f"stopped: {words}, ")
+    words = "environment problem" if expect == "environment_only" else "an agent refused"
+    assert rec["stopped"]["words"].startswith(f"stopped: {words}")
     assert "No follow-up build is queued" in cf.pr_section(rec)
     assert f"Stopped: {words}" in cf.pr_section(rec)
     assert "no follow-up build is queued" in cf.decision_summary(rec)
@@ -169,6 +169,94 @@ def test_held_gates_still_hold_on_an_environment_stop():
 def test_the_pipeline_records_the_stop_and_skips_the_follow_up():
     src = inspect.getsource(governed)
     assert "reason=_sup_reason)" in src
-    assert '"stopped": _checks_failing.stopped_record(_env_stop, failing)' in src
+    assert '"stopped": _checks_failing.stopped_record(\n                        _env_stop, failing,' in src
     spawn = src.index("# A PR that opened with its checks failing always gets its follow-up")
     assert 'not ((_checks or {}).get("stopped") or {}).get("no_followup")' in src[spawn:spawn + 600]
+
+
+# ── PR #158 re-review (c): a secret only a person can set — say what and where, then wait ──
+
+def test_a_person_stop_names_the_secret_and_where_to_set_it():
+    """The reviewer's probe: an `app_serves` PERSON fault, needs_secret=['STRIPE_KEY']."""
+    failing, faults = ["app_serves"], {"app_serves": "PERSON"}
+    reason = cf.environment_stop(failing, faults=faults)
+    assert cf.stop_or_open("block", failing, faults=faults) == cf.ACTION
+    stopped = cf.stopped_record(reason, failing, needs=["STRIPE_KEY"])
+    assert stopped["reason"] == "person" and stopped["needs_secret"] == ["STRIPE_KEY"]
+    assert ("Set STRIPE_KEY for environments build, preview and deploy in the app's Secrets, "
+            "then press Retry") in stopped["words"]
+    rec = {**cf.collect(failing), "stopped": stopped}
+    assert "Set STRIPE_KEY for environments" in cf.pr_section(rec)
+    assert "Set STRIPE_KEY for environments" in cf.decision_summary(rec)
+
+
+def test_an_agent_refusal_reads_as_a_refusal_not_a_person():
+    stopped = cf.stopped_record("refusal", ["code_review_passed"],
+                                why="the reviewer refused to read the vendored keys")
+    assert stopped["words"] == ("stopped: an agent refused: the reviewer refused to read the "
+                                "vendored keys")
+    assert "needs a person" not in stopped["words"]
+
+
+def test_the_pipeline_passes_the_secret_and_waits_for_the_person():
+    src = inspect.getsource(governed)
+    assert 'needs=((app_serves_record or {}).get("needs_secret")' in src
+    wait = src.index("_secret_card = _checks_failing_wait(")
+    assert wait < src.index('        return {"status": "completed", "done": True, '
+                            '"quality_gate_id": qg_id,\n                "deferred_findings"')
+
+
+def test_a_person_stopped_build_waits_and_retry_once_set_reruns_it(eng, project,  # noqa: F811
+                                                                   monkeypatch):
+    import uuid
+
+    from boss_engine.config import get_settings
+    from boss_engine.services import code_task_service as cts
+    from boss_engine.services import decision_actions as da
+    from boss_engine.services import decisions as dmod
+
+    calls: list = []
+    monkeypatch.setattr(cts, "retry_code_task",
+                        lambda engine, settings, jobs, run_id, **kw: calls.append((run_id, kw)))
+    monkeypatch.setattr(dmod, "_spawn_as_this_request", lambda fn: fn())
+    url = "https://g.test/acme/shop/pull/4"
+    run_id = f"crun_{uuid.uuid4().hex[:12]}"
+    failing = ["app_serves"]
+    rec = {**cf.collect(failing), "stopped": cf.stopped_record(
+        "refusal", failing, needs=["STRIPE_KEY"])}
+    try:
+        with eng.begin() as c:
+            c.execute(text(
+                "INSERT INTO project_members (id, project_id, member_id, display_name, "
+                "member_type, role_keys, permissions) VALUES (:i, :p, 'ceo', 'ceo', 'human', "
+                "'[\"ceo\"]'::jsonb, '[\"decision_resolve\"]'::jsonb) ON CONFLICT DO NOTHING"),
+                {"i": f"pm_{project}_ceo", "p": project})
+            c.execute(text("INSERT INTO code_task_runs (id, project_id, title, status, phase, "
+                           "pull_request_url) VALUES (:i, :p, 'shop', 'completed', 'done', :u)"),
+                      {"i": run_id, "p": project, "u": url})
+            dec = cf.wait_for_person(c, run_id=run_id, project_id=project, task_id=None,
+                                     record=rec, pull_request_url=url)
+            run = c.execute(text("SELECT status, phase, error FROM code_task_runs WHERE id=:i"),
+                            {"i": run_id}).mappings().one()
+            card = dict(c.execute(text("SELECT * FROM decisions WHERE id=:d"),
+                                  {"d": dec}).mappings().one())
+        assert (run["status"], run["phase"]) == ("waiting_on_person", "awaiting_secret")
+        assert "Set STRIPE_KEY for environments" in run["error"]
+        assert "STRIPE_KEY" in card["question"]
+        assert card["recommendation"]["next_step"].startswith("Set STRIPE_KEY")
+        acts = {a["action"]: a["label"] for a in da.allowed_actions(card)}
+        assert acts["approve"] == "Retry once set"
+        with eng.begin() as c:
+            dmod.DecisionService(get_settings()).transition(c, dec, action="approve",
+                                                            actor="ceo", note="set it")
+            status = c.execute(text("SELECT status FROM code_task_runs WHERE id=:i"),
+                               {"i": run_id}).scalar()
+        assert status == "completed"
+        assert calls and calls[0][0] == run_id and calls[0][1]["by_person"] is True
+        assert "STRIPE_KEY" in calls[0][1]["fix_note"]
+    finally:
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM decisions WHERE project_id=:p"), {"p": project})
+            c.execute(text("DELETE FROM jobs WHERE project_id=:p"), {"p": project})
+            c.execute(text("DELETE FROM code_task_runs WHERE project_id=:p"), {"p": project})
+            c.execute(text("DELETE FROM project_members WHERE project_id=:p"), {"p": project})
