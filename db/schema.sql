@@ -15643,3 +15643,28 @@ CREATE TABLE IF NOT EXISTS factory_launch_attachments (
 );
 CREATE INDEX IF NOT EXISTS idx_factory_launch_attachments_org
   ON factory_launch_attachments (org_id, created_at DESC);
+
+-- BOSSAPP-1243: a visitor snapshot is a frozen plate for one audience. It is not the
+-- in-progress preview. Pending rows have no visitor URL; an approved URL is never that preview.
+CREATE TABLE IF NOT EXISTS visitor_snapshots (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  audience TEXT NOT NULL,
+  approval_state TEXT NOT NULL CHECK (approval_state IN ('pending', 'approved')),
+  source_preview_id TEXT,
+  preview_url TEXT,
+  visitor_url TEXT,
+  snapshot JSONB NOT NULL,
+  snapshot_hash TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  published_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, dedupe_key),
+  CHECK (
+    (approval_state = 'pending' AND visitor_url IS NULL)
+    OR (approval_state = 'approved' AND visitor_url IS NOT NULL)
+  ),
+  CHECK (visitor_url IS NULL OR preview_url IS NULL OR visitor_url <> preview_url)
+);
+CREATE INDEX IF NOT EXISTS idx_visitor_snapshots_audience
+  ON visitor_snapshots (project_id, audience, approval_state, created_at DESC);
