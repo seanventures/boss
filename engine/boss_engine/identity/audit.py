@@ -759,9 +759,13 @@ def export(org_id: str, *, db: Any, ctx: Optional[AuthContext] = None,
            actor_principal_id: Optional[str] = None, actor_kind: Optional[str] = None,
            since: Optional[datetime] = None, until: Optional[datetime] = None,
            limit: int = 100_000) -> dict[str, Any]:
-    """The export bundle: every event in range (oldest first), the chain verification and the
-    head anchor, so a reader can re-verify offline. Writes `audit.exported` in the same
-    transaction (no export without its record)."""
+    """The export bundle: events in range, oldest first, at most `limit` (default 100_000).
+
+    `truncated` is true when that query returned `limit` rows. A truncated bundle is not a
+    proof the range was whole: the cap may have cut it. The chain verification and the head
+    anchor describe the stored chain, which can extend past the rows in the bundle. Writes
+    `audit.exported` in the same transaction (no export without its record). That new row is
+    not one of the exported events."""
     verification = verify_chain(org_id, db=db)
     where = ["org_id = :o"]
     params: dict[str, Any] = {"o": org_id, "n": int(limit)}
@@ -774,6 +778,9 @@ def export(org_id: str, *, db: Any, ctx: Optional[AuthContext] = None,
     rows = db.execute(_sql(_SELECT + " WHERE " + " AND ".join(where) + " ORDER BY seq LIMIT :n"),
                       params).mappings().all()
     events = [to_public(row_from_db(r)) for r in rows]
+    # Hitting the cap is not proof nothing followed it. Exactly `limit` rows and "more existed"
+    # look the same from this query, so the bundle says it was cut.
+    truncated = len(rows) == int(limit)
     top = head(org_id, db=db)
     details = {"count": len(events), "since": since.isoformat() if since else None,
                "until": until.isoformat() if until else None, "chain_ok": verification.ok,
@@ -795,6 +802,12 @@ def export(org_id: str, *, db: Any, ctx: Optional[AuthContext] = None,
                          "last_seq": verification.last_seq,
                          "first_break_seq": verification.first_break_seq},
         "anchor": {"seq": top[0], "hash": top[1].hex()} if top else None,
+        "truncated": truncated,
+        "notice": (
+            "A truncated bundle is not a proof the range was whole."
+            if truncated else
+            "This bundle returned fewer rows than the limit, so the cap did not cut the range."
+        ),
         "events": events,
     }
 
