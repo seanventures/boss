@@ -215,6 +215,8 @@ describe("Setup › Ticket systems (T1)", () => {
     expect($('[data-testid="tk-map-confirm"]')?.textContent)
       .toContain("Moves KAN tickets from BOSS dogfood bootstrap to Northgate Gateway; people there stop seeing new KAN tickets.");
     expect(calls.some((c) => c.method === "PATCH")).toBe(false);
+    // One ask at a time: the line's button waits while its confirm is open.
+    expect(($('[data-testid="tk-map-here"]') as HTMLButtonElement).disabled).toBe(true);
     await click('[data-testid="tk-map-yes"]');
     const patch = calls.find((c) => c.method === "PATCH")!;
     expect([patch.url, patch.body]).toEqual(["/v1/ticket-systems/wtp_home",

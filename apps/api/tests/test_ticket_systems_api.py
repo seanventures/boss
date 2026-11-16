@@ -858,3 +858,35 @@ def test_an_agent_never_tells_a_person_a_project_the_console_hides(world, client
                                          person_id=world.owner.id)
     assert found["ok"] and found["maps_to"]["project_id"] == "" and found["maps_to"]["name"] == "another project"
     assert owner_sees["maps_to"]["project_id"] == world.project_a
+
+
+def test_flipping_a_stored_mappings_default_needs_manage_on_its_project(world, client, engine, jira):
+    """PR #140 third look: KAN → B is the default; Q sees B (viewer) but manages only the home A
+    and C. Sending KAN → B back with default false and OPS → C as the new default would move B's
+    default away — refused. Gaining the default on a stored mapping is checked the same way."""
+    with world.acting_as(world.ctx(world.owner)):
+        made = client.post("/v1/projects", json={"name": "Ledger D", "slug": f"tk-d-{uuid.uuid4().hex[:6]}"})
+        assert made.status_code == 201, made.text
+        project_c = made.json().get("id") or made.json().get("project", {}).get("id") or made.json().get("slug")
+        cid = _connect(client, world.project_a, jira).json()["connection"]["id"]
+        assert client.patch(f"/v1/ticket-systems/{cid}", json={"mappings": [
+            {"external_project": "KAN", "boss_project_id": world.project_b, "default": True},
+            {"external_project": "OPS", "boss_project_id": project_c, "default": False}]}).status_code == 200
+    q = world.person("tk-viewer-b-admin-a-c")
+    world.bind(q, "admin", project=world.project_a)
+    world.bind(q, "admin", project=project_c)
+    world.bind(q, "viewer", project=world.project_b)
+    with world.acting_as(world.ctx(q)):
+        moved = client.patch(f"/v1/ticket-systems/{cid}", json={"mappings": [
+            {"external_project": "KAN", "boss_project_id": world.project_b, "default": False},
+            {"external_project": "OPS", "boss_project_id": project_c, "default": True}]})
+        assert moved.status_code in (403, 404), moved.text
+        # Unchanged pairs and flags pass (nothing about B changes).
+        same = client.patch(f"/v1/ticket-systems/{cid}", json={"mappings": [
+            {"external_project": "KAN", "boss_project_id": world.project_b, "default": True},
+            {"external_project": "OPS", "boss_project_id": project_c, "default": False}]})
+        assert same.status_code == 200, same.text
+    with engine.connect() as db:
+        stored = ticket_intake._stored_settings(ticket_intake.get_row(db, cid)["configuration"])["mappings"]
+    assert sorted((m["external_project"], m["boss_project_id"], m["default"]) for m in stored) == [
+        ("KAN", world.project_b, True), ("OPS", project_c, False)]

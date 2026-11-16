@@ -448,7 +448,7 @@ export function TicketSystemsRow({ projectId, focused = false, onSummary }: {
                  title={`Opens New work in ${away[0].name}, where ${away[0].keys[0]} tickets belong.`}>New work in {away[0].name} →</a>
             ) : null}
             {elsewhere.can_manage && manage.allowed ? (
-              <button type="button" className="su-btn su-btn-sm" data-testid="tk-map-here"
+              <button type="button" className="su-btn su-btn-sm" data-testid="tk-map-here" disabled={Boolean(mapAsk)}
                       onClick={() => { setSaid(null); setAsking(null); setMapAsk({ c: elsewhere, key: awayKeys[0], from: away[0].name }); }}
                       title={`${awayKeys[0]} tickets would land in ${here} instead. Asks first.`}>Map {awayKeys[0]} here</button>
             ) : null}

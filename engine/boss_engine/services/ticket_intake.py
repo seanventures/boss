@@ -877,6 +877,14 @@ def guard_mappings(old: list[dict[str, Any]], new: list[dict[str, Any]], *,
     the project it leaves (``may_manage`` raises). Returns the list to store."""
     sent = {(str(m["external_project"]).upper(), str(m["boss_project_id"])) for m in new}
     keys = {k for k, _ in sent}
+    # A stored mapping sent back with its DEFAULT flipped (losing it, or gaining it) changes
+    # where unmapped keys land for that project: it needs integration:manage there.
+    was_default = {(str(m.get("external_project") or "").upper(), str(m.get("boss_project_id") or "")):
+                   bool(m.get("default")) for m in old}
+    for m in new:
+        pair = (str(m["external_project"]).upper(), str(m["boss_project_id"]))
+        if pair in was_default and was_default[pair] != bool(m.get("default")):
+            may_manage(pair[1])
     out = list(new)
     for m in old:
         key, target = str(m.get("external_project") or "").upper(), str(m.get("boss_project_id") or "")
