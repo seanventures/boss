@@ -20,6 +20,7 @@ import { StationLine, WaitGlyph, activeStation, stationMoves } from "./station-l
 import { Stations, fromFactory } from "../stations";
 import { nameOf } from "../agents/run-face";
 import { actorWords } from "../../lib/actor-words";
+import { ribbonCost } from "../agents/chain-model";
 
 /** States whose face never moves: motion would claim work that is not happening. */
 export const STILL_STATES = new Set(["quiet", "budget_wait", "blocked", "budget_refused", "needs_waiver", "needs_person", "queued", "github_wait"]);
@@ -69,7 +70,7 @@ export function BuildRow({ build: b, density = "row", band = "wide", now, still,
   useIdentityVersion();
   const frozen = still || STILL_STATES.has(b.state);
   const parts = nowParts(b, now);
-  const cost = b.metered && b.costUsd > 0 ? `$${b.costUsd.toFixed(2)}` : "";
+  const cost = ribbonCost(b.metered ? b.costUsd : 0, b.includedUsd);
   const started = localTime(b.startedAt);
   // A tooltip is ~14 words: a long build title (the Captain writes whole briefs) is cut.
   const nameTip = [shortTitle(b.title), `attempt ${b.attempt}`, b.actor ? `started by ${actorWords(b.actor)}` : "", started]
@@ -86,7 +87,7 @@ export function BuildRow({ build: b, density = "row", band = "wide", now, still,
   return (
     <li className="fx-row" data-testid={`fx-build-row-${b.runId}`} data-state={b.state} data-density={density}
         data-still={frozen || undefined} data-band={band} onClick={open}
-        title={cost && (band === "narrow" || phone) ? `${cost}, Metered model spend so far` : undefined}>
+        title={cost && (band === "narrow" || phone) ? `${cost.text}, ${cost.title}` : undefined}>
       <span className="fx-row-name">
         <button type="button" className="fx-row-open ag-trunc" data-fx-open title={nameTip}
                 data-testid={`fx-build-open-${b.runId}`}>
@@ -118,7 +119,7 @@ export function BuildRow({ build: b, density = "row", band = "wide", now, still,
                             merged={b.state === "merged" || b.state === "deployed"} testid={`fx-build-pr-${b.runId}`} /> : null}
       </span>
       {cost && band !== "narrow" && !phone
-        ? <span className="fx-row-cost" title="Metered model spend so far">{cost}</span>
+        ? <span className="fx-row-cost" title={cost.title}>{cost.text}</span>
         : <span className="fx-row-cost" aria-hidden />}
       <button type="button" className="ag-icon-btn fx-row-go" data-fx-open aria-label={`Open ${b.app}`} title="Open the build">Open</button>
     </li>

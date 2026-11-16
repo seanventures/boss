@@ -741,17 +741,9 @@ def load_facts(connection: Any, project_id: str, runs: list[Mapping[str, Any]], 
                 rid = wanted.get(identity_key(str(row["app_name"] or "")), "")
             if rid:
                 facts.deploys.setdefault(rid, []).append(dict(row))
-    for row in connection.execute(
-        text("SELECT code_task_run_id AS run_id, "
-             "COALESCE(sum(cost_usd_micros) FILTER (WHERE NOT included_in_subscription), 0) "
-             "AS metered, count(*) FILTER (WHERE included_in_subscription) AS included, "
-             "count(*) AS calls FROM llm_calls WHERE code_task_run_id = ANY(:ids) "
-             "GROUP BY code_task_run_id"),
-        {"ids": ids},
-    ).mappings().all():
-        facts.cost[str(row["run_id"])] = {"metered_usd": int(row["metered"] or 0) / 1e6,
-                                          "included": int(row["included"] or 0),
-                                          "calls": int(row["calls"] or 0)}
+    from .included_spend import runs_split
+
+    facts.cost.update(runs_split(connection, ids))
     for row in connection.execute(
         text("SELECT DISTINCT ON (payload->>'run_id') payload->>'run_id' AS run_id, id, status, "
              "last_error, run_after FROM jobs WHERE project_id = :p AND kind = 'code.task' "
@@ -1611,7 +1603,9 @@ def build_row(run: Mapping[str, Any], facts: Facts, *, now: datetime,
     k, n = k_of_n(stations)
     fctx = _j(run.get("finalize_ctx"), {}) or {}
     cost = facts.cost.get(rid, {})
-    metered = float(cost.get("metered_usd") or 0)
+    metered = float(cost.get("money_usd") if cost.get("money_usd") is not None
+                    else cost.get("metered_usd") or 0)
+    included = float(cost.get("included_usd") or 0)
     return {
         "run_id": rid, "app": app_name(run), "title": str(run.get("title") or ""),
         "attempt": int(fctx.get("attempt") or 1), "root_run_id": _lineage_key(run),
@@ -1624,6 +1618,7 @@ def build_row(run: Mapping[str, Any], facts: Facts, *, now: datetime,
         "station_since": _iso(fctx.get("phase_started_at")) or _iso(run.get("updated_at")),
         "updated_at": _iso(run.get("updated_at")),
         "cost_usd": round(metered, 4) if metered > 0 else 0, "metered": metered > 0,
+        "included_usd": round(included, 6),
         "attention_id": attention_id,
         "preview": preview_flag(preview, now),
         "origin": origin,
@@ -2522,29 +2517,35 @@ def _attempt_kind(run: Mapping[str, Any], fctx: Mapping[str, Any]) -> str:
 
 
 def _cost(connection: Any, run_id: str, st: BuildState) -> dict[str, Any]:
+    from .included_spend import LLM_INCLUDED_SQL, LLM_MONEY_SQL, runs_split
+
+    split = runs_split(connection, [run_id]).get(run_id) or {}
     rows = connection.execute(
         text("SELECT COALESCE(a.role_key, l.role) AS role, l.stage, count(*) AS calls, "
              "COALESCE(sum(l.turns), 0) AS turns, COALESCE(sum(l.total_tokens), 0) AS tokens, "
-             "COALESCE(sum(l.cost_usd_micros) FILTER (WHERE NOT l.included_in_subscription), 0) "
-             "AS micros, count(*) FILTER (WHERE l.included_in_subscription) AS included "
+             f"COALESCE(sum({LLM_MONEY_SQL}), 0) AS micros, "
+             f"COALESCE(sum({LLM_INCLUDED_SQL}), 0) AS included_micros, "
+             "count(*) FILTER (WHERE l.included_in_subscription) AS included "
              "FROM llm_calls l LEFT JOIN agent_acts a ON a.act_id = l.act_id "
              "WHERE l.code_task_run_id = :r GROUP BY 1, 2"),
         {"r": run_id},
     ).mappings().all()
     by_agent: dict[str, dict[str, Any]] = {}
     by_station: dict[str, float] = {}
-    metered, included, calls = 0.0, 0, 0
+    metered = float(split.get("money_usd") or 0)
+    included_usd = float(split.get("included_usd") or 0)
+    included = int(split.get("included_calls") or 0)
+    calls = int(split.get("calls") or 0)
     for r in rows:
         usd = int(r["micros"] or 0) / 1e6
-        metered += usd
-        included += int(r["included"] or 0)
-        calls += int(r["calls"] or 0)
         key = str(r["role"] or "")
         agent = by_agent.setdefault(key, {"role_key": r["role"] or None, "turns": 0,
-                                          "tokens": 0, "usd": 0.0})
+                                          "tokens": 0, "usd": 0.0, "included_usd": 0.0})
         agent["turns"] += int(r["turns"] or 0)
         agent["tokens"] += int(r["tokens"] or 0)
         agent["usd"] = round(agent["usd"] + usd, 6)
+        agent["included_usd"] = round(agent.get("included_usd", 0.0)
+                                      + int(r["included_micros"] or 0) / 1e6, 6)
         station = _station_of_stage(r["stage"])
         if station and usd > 0:
             by_station[station] = round(by_station.get(station, 0.0) + usd, 6)
@@ -2558,7 +2559,8 @@ def _cost(connection: Any, run_id: str, st: BuildState) -> dict[str, Any]:
         word = "Included in plan"
     else:
         word = "Not yet"
-    return {"word": word, "metered_usd": round(metered, 6), "subscription_calls": included,
+    return {"word": word, "metered_usd": round(metered, 6), "included_usd": round(included_usd, 6),
+            "subscription_calls": included,
             "by_agent": agents, "by_station": by_station}
 
 
@@ -2835,7 +2837,8 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
                             "finalize_ctx": None, "spec": None, "state": None},
         "app": row["app"], "state": st,
         "started_at": row.get("started_at"), "station_since": row.get("station_since"),
-        "cost_usd": row["cost_usd"], "metered": row["metered"], "live": live,
+        "cost_usd": row["cost_usd"], "included_usd": row.get("included_usd") or 0,
+        "metered": row["metered"], "live": live,
         "stoppable": str(run.get("status")) in ("running", "repairing", "blocked"),
         "retryable": ok, "retry_reason": why,
         "failure": failure_line(fctx, run.get("error")) if row["state"] == "failed" else None,

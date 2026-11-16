@@ -49,6 +49,7 @@ import { TicketChip } from "../tickets/ticket-parts";
 import { providerLabel } from "../projects/linked-ticket";
 import { syncWords } from "../../lib/tickets";
 import { ActPopover, StationFaceView, areaHref, money, secondsWord, spanOf } from "./cockpit-util";
+import { ribbonCost } from "../agents/chain-model";
 import { DiagnosisFlow, WhyLine } from "../../components/stuck-work";
 import { isWaitingForGitHub } from "../../lib/github-wait";
 import { LogsDrawer, type LogTab } from "./logs-drawer";
@@ -360,6 +361,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
   const toolCount = c.story.reduce((n, r) => n + (r.type === "act" ? r.toolCalls : 0), 0);
   const { log } = useToolLog(projectId, c.run.id, `${toolCount}:${c.live}:${c.run.updatedAt ?? ""}`);
   const steerTip = "Guide the agents. They read it between stations.";
+  const cost = ribbonCost(c.metered ? c.costUsd : 0, c.includedUsd);
 
   return (
     <section ref={root} className="fx-cockpit" data-testid="fx-cockpit" data-run={c.run.id} data-state={s.state}
@@ -383,7 +385,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
             <span className="fx-state-word" title={s.tip || undefined}>{s.word}</span>
             {s.n ? <span className="fx-k" title="Stations done. BOSS doesn't guess finish times." data-testid="fx-k">{s.k} of {s.n}</span> : null}
             {elapsed ? <span className="fx-elapsed" data-testid="fx-elapsed">{elapsed}</span> : null}
-            {c.metered && c.costUsd > 0 ? <span className="fx-cost" title="Metered model spend so far" data-testid="fx-cost">{money(c.costUsd)}</span> : null}
+            {cost ? <span className="fx-cost" title={cost.title} data-testid="fx-cost">{cost.text}</span> : null}
             {s.preview === "running" && c.outputs.preview ? (
               <a className="fx-flag" href={previewWebHref(c.outputs.preview.id)}
                  target="_blank" rel="noreferrer" data-testid="fx-preview-flag">Preview live</a>

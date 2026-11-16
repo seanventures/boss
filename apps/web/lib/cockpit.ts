@@ -138,7 +138,7 @@ export type Cockpit = {
   app: string;
   state: CockpitState;
   startedAt?: string; stationSince?: string;
-  costUsd: number; metered: boolean;
+  costUsd: number; includedUsd: number; metered: boolean;
   /** Poll at 4s while true, 30s otherwise. */
   live: boolean;
   stoppable: boolean;
@@ -328,7 +328,9 @@ export function parseCockpit(w: unknown): Cockpit {
       preview: preview === "starting" || preview === "running" || preview === "failed" ? preview : null,
     },
     startedAt: opt(o.started_at), stationSince: opt(o.station_since),
-    costUsd: o.metered === false ? 0 : num(o.cost_usd), metered: o.metered === true,
+    costUsd: o.metered === false ? 0 : num(o.cost_usd),
+    includedUsd: num(o.included_usd),
+    metered: o.metered === true,
     live: o.live === true, stoppable: o.stoppable === true,
     retryable: o.retryable === true, retryReason: opt(o.retry_reason),
     failure: failureOf(o.failure),

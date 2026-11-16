@@ -2020,10 +2020,12 @@ def _live_cost(connection: Connection, act_ids: list[str]) -> dict[str, tuple[in
     """Model spend of OPEN acts, read live: an act's own columns are filled when it closes."""
     if not act_ids:
         return {}
+    from .included_spend import LLM_MONEY_SQL
+
     rows = connection.execute(
         text("SELECT act_id, sum(prompt_tokens) pt, sum(completion_tokens) ct, "
-             # money only, as close_act rolls it up: a subscription call costs nothing
-             "sum(cost_usd_micros) FILTER (WHERE NOT included_in_subscription) micros "
+             # money only, the same split the ribbon uses (included_spend.runs_split)
+             f"sum({LLM_MONEY_SQL}) micros "
              "FROM llm_calls WHERE act_id = ANY(:a) GROUP BY act_id"),
         {"a": act_ids},
     ).mappings().all()
@@ -2039,8 +2041,10 @@ def _included_cost(connection: Connection, act_ids: list[str]) -> dict[str, floa
     only the money said "$0.00" for a nine-hour build (operator report, wfr_47b4e27e9a3c)."""
     if not act_ids:
         return {}
+    from .included_spend import LLM_INCLUDED_SQL
+
     rows = connection.execute(
-        text("SELECT act_id, sum(cost_usd_micros) FILTER (WHERE included_in_subscription) micros "
+        text(f"SELECT act_id, sum({LLM_INCLUDED_SQL}) micros "
              "FROM llm_calls WHERE act_id = ANY(:a) GROUP BY act_id"),
         {"a": act_ids},
     ).mappings().all()

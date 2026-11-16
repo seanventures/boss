@@ -185,6 +185,50 @@ LLM_INCLUDED_SQL = ("CASE WHEN COALESCE(included_in_subscription, false) "
                     "THEN COALESCE(cost_usd_micros, 0) ELSE 0 END")
 
 
+def runs_split(connection: Any, run_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """One build's ledger, as money and as included list price.
+
+    The build ribbon (factory_view.load_facts and _cost) and the act chain
+    (agent_acts) both show this pair. A row is one or the other, never both,
+    and never a single total that adds them together.
+    """
+    from sqlalchemy import text
+
+    ids = [str(i) for i in run_ids if i]
+    if not ids:
+        return {}
+    rows = connection.execute(text(
+        "SELECT code_task_run_id AS run_id, "
+        f"COALESCE(SUM({LLM_MONEY_SQL}), 0) AS money, "
+        f"COALESCE(SUM({LLM_INCLUDED_SQL}), 0) AS included, "
+        "COUNT(*) AS calls, "
+        "COUNT(*) FILTER (WHERE COALESCE(included_in_subscription, false)) AS included_calls "
+        "FROM llm_calls WHERE code_task_run_id = ANY(:ids) "
+        "GROUP BY code_task_run_id"), {"ids": ids}).mappings().all()
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        # An older aggregate named the money column `metered` and `included` as a call count.
+        if "money" in row:
+            money_micros = int(row["money"] or 0)
+            included_micros = int(row["included"] or 0)
+            calls = int(row["included_calls"] or 0)
+        else:
+            money_micros = int(row.get("metered") or 0)
+            included_micros = 0
+            calls = int(row.get("included") or 0)
+        money = round(money_micros / 1e6, 6)
+        included = round(included_micros / 1e6, 6)
+        out[str(row["run_id"])] = {
+            "money_usd": money,
+            "included_usd": included,
+            "metered_usd": money,
+            "included": calls,
+            "included_calls": calls,
+            "calls": int(row["calls"] or 0),
+        }
+    return out
+
+
 def ledger_spend(connection: Any, project_id: str, start: Any, end: Any = None, *,
                  with_calls: bool = True) -> dict[str, int]:
     """Money spent over [start, end) and how it splits:

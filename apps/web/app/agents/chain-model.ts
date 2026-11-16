@@ -444,5 +444,16 @@ export function spendLabel(cost: number, included = 0): string {
   return usd(cost);
 }
 
+/** The ribbon's cost: the same (money, included) pair the chain says, or nothing when both are zero. */
+export function ribbonCost(cost: number, included = 0): { text: string; title: string } | null {
+  const money = cost > 0 ? cost : 0;
+  const inc = included > 0 ? included : 0;
+  if (!money && !inc) return null;
+  const title = inc
+    ? (money ? `Metered model spend so far. ${INCLUDED_TIP}` : INCLUDED_TIP)
+    : "Metered model spend so far";
+  return { text: spendLabel(money, inc), title };
+}
+
 /** The tooltip that says what "included" means wherever spendLabel says it. */
 export const INCLUDED_TIP = "Included: list-price value of work a subscription covered. Not money, not counted against budgets.";

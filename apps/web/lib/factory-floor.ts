@@ -87,6 +87,8 @@ export type BuildRow = {
   updatedAt?: string;
   /** Metered model spend so far; 0 when unmetered (and then never shown). */
   costUsd: number;
+  /** List price of calls a subscription covered. Never added into costUsd. */
+  includedUsd: number;
   metered: boolean;
   attentionId: string | null;
   preview: PreviewFlag | null;
@@ -199,7 +201,9 @@ export function parseBuildRow(w: unknown): BuildRow {
     stations: arr(o.stations).map(parseStation),
     k: Math.min(num(o.k), n), n, rounds: num(o.rounds),
     startedAt: opt(o.started_at), stationSince: opt(o.station_since), updatedAt: opt(o.updated_at),
-    costUsd: o.metered === false ? 0 : num(o.cost_usd), metered: o.metered === true,
+    costUsd: o.metered === false ? 0 : num(o.cost_usd),
+    includedUsd: num(o.included_usd),
+    metered: o.metered === true,
     attentionId: opt(o.attention_id) ?? null,
     preview: o.preview ? parsePreviewFlag(o.preview) : null,
     origin: o.origin ? parseOrigin(o.origin) : null,
