@@ -65,15 +65,21 @@ class Pipeline:
                            "VALUES (:p, 'ws_pipe', 'pipe', :p)"), {"p": self.project})
         from apps.api.app.bootstrap_ports import build_ports
         from boss_engine.config import get_settings
-        from boss_engine.ports import configure_engine_ports
+        from boss_engine.ports.composition import configure_engine_ports, get_engine_ports
 
+        self.stack = contextlib.ExitStack()
+        # Everything set up here is undone in close(), in reverse: the process's engine ports,
+        # the gate directory on sys.path, the local GitHub and BOSS's pointer at it.
+        previous_ports = get_engine_ports()
         configure_engine_ports(build_ports(get_settings(), self.engine))
+        self.stack.callback(configure_engine_ports, previous_ports)
         if str(GATE) not in sys.path:
             sys.path.insert(0, str(GATE))
+            self.stack.callback(lambda: str(GATE) in sys.path and sys.path.remove(str(GATE)))
         from remote import LocalGitHub  # tests/e2e/gate/remote.py
 
         self.hub = LocalGitHub(work / "github").start()
-        self.stack = contextlib.ExitStack()
+        self.stack.callback(self.hub.stop)
         self.stack.callback(self.hub.point_boss_at_me())
         self.repos: dict[str, Path] = {}
 
@@ -193,18 +199,81 @@ class Pipeline:
         scripted_engine.reset()
 
     def close(self) -> None:
-        with contextlib.suppress(Exception):
+        """Undo the world, then delete every row of this project — loudly: a row the purge
+        cannot delete is a test failure, never a leftover (queued code.task jobs once were)."""
+        try:
             self.stack.close()
-        with contextlib.suppress(Exception):
-            self.hub.stop()
-        with contextlib.suppress(Exception):
-            with self.engine.begin() as c:
-                c.execute(self.text("DELETE FROM decisions WHERE project_id = :p"),
-                          {"p": self.project})
-                c.execute(self.text("DELETE FROM code_task_runs WHERE project_id = :p"),
-                          {"p": self.project})
-        with contextlib.suppress(Exception):
+            purge_projects(self.engine, [self.project])
+        finally:
             self.engine.dispose()
+
+
+def purge_projects(engine: Any, project_ids: list[str]) -> None:
+    """Delete every row of these projects in ONE transaction that raises on any error.
+
+    Every table with a `project_id` column is emptied of the projects' rows — jobs (the queued
+    `code.task` ones too), events, quality gates, budget reservations, the findings ledger and
+    acceptance rows, decisions, runs — children before the tables they reference (the schema's
+    NO ACTION / RESTRICT foreign keys, read from pg_constraint), then the project rows. The
+    append-only ledgers allow it the way a project deletion does (`boss.ledger_purge`). Rows
+    of other projects are never touched; a key that still blocks the delete fails the test."""
+    from sqlalchemy import bindparam, text
+
+    if not project_ids:
+        return
+    with engine.begin() as c:
+        c.execute(text("SET LOCAL boss.ledger_purge = 'on'"))
+        tables = {r[0] for r in c.execute(text(
+            "SELECT c.table_name FROM information_schema.columns c "
+            "JOIN information_schema.tables t ON t.table_schema = c.table_schema "
+            "AND t.table_name = c.table_name WHERE c.table_schema = 'public' "
+            "AND c.column_name = 'project_id' AND t.table_type = 'BASE TABLE' "
+            "AND c.table_name <> 'projects'"))}
+        # parent -> the tables that must be emptied before it (their keys neither cascade nor
+        # set null). A partition's rows are deleted through its parent table.
+        before: dict[str, set[str]] = {t: set() for t in tables}
+        for child, parent in c.execute(text(
+                "SELECT ch.relname, pa.relname FROM pg_constraint k "
+                "JOIN pg_class ch ON ch.oid = k.conrelid JOIN pg_class pa ON pa.oid = k.confrelid "
+                "WHERE k.contype = 'f' AND k.confdeltype IN ('a', 'r') "
+                "AND ch.relname <> pa.relname")):
+            if child in tables and parent in tables:
+                before[parent].add(child)
+        order: list[str] = []
+        left = set(tables)
+        while left:
+            ready = sorted(t for t in left if not (before[t] & left))
+            if not ready:                    # a cycle: let the database say which key blocks
+                ready = sorted(left)
+            order += ready
+            left -= set(ready)
+        ids = bindparam("ids", expanding=True)
+        for t in order:
+            c.execute(text(f'DELETE FROM "{t}" WHERE project_id IN :ids').bindparams(ids),
+                      {"ids": list(project_ids)})
+        c.execute(text("DELETE FROM projects WHERE id IN :ids").bindparams(ids),
+                  {"ids": list(project_ids)})
+
+
+def leftovers(engine: Any, project_ids: Optional[list[str]] = None) -> dict[str, int]:
+    """What remains of the harness's projects (all `p_pipe*`, or these): project rows, jobs
+    still queued or running, and code-task runs."""
+    from sqlalchemy import text
+
+    where = "id LIKE 'p\\_pipe%'" if project_ids is None else "id = ANY(:ids)"
+    pwhere = ("project_id LIKE 'p\\_pipe%'" if project_ids is None
+              else "project_id = ANY(:ids)")
+    args = {} if project_ids is None else {"ids": list(project_ids)}
+    with engine.begin() as c:
+        return {
+            "projects": int(c.execute(text(f"SELECT count(*) FROM projects WHERE {where}"),
+                                      args).scalar()),
+            "queued_jobs": int(c.execute(text(
+                f"SELECT count(*) FROM jobs WHERE {pwhere} "
+                "AND status IN ('queued', 'leased', 'running')"), args).scalar()),
+            "runs": int(c.execute(text(f"SELECT count(*) FROM code_task_runs WHERE {pwhere}"),
+                                  args).scalar()),
+        }
 
 
 _ENV = ("DATABASE_URL", "BOSS_AUTHZ_MODE", "BOSS_SCRIPTED_ENGINE", "BOSS_SCRIPTED_FAULTS",
@@ -239,6 +308,18 @@ def pipeline(tmp_path_factory):
     finally:
         mp.undo()
         p.close()
+        # NOTHING LEFT BEHIND: no project row, no queued job, no run of this module's project.
+        from sqlalchemy import create_engine
+
+        check = create_engine(p.engine.url, future=True)
+        try:
+            left = leftovers(check, [p.project])
+            # ...and no `p_pipe*` project of any earlier run of this file either.
+            anywhere = leftovers(check)
+        finally:
+            check.dispose()
+        assert left == {"projects": 0, "queued_jobs": 0, "runs": 0}, left
+        assert anywhere == {"projects": 0, "queued_jobs": 0, "runs": 0}, anywhere
         for k, v in saved.items():
             if v is None:
                 os.environ.pop(k, None)
