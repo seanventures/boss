@@ -40,8 +40,12 @@ SEVERITIES = ("nit", "minor", "major", "blocker")
 KINDS = ("acceptance_gap", "review", "security", "consistency", "readiness", "pipeline")
 LIVE = ("open", "in_progress")
 CLOSED_BY_PERSON = ("waived", "wont_fix")
-#: A follow-up run in one of these no longer holds the rows it carried.
-_ENDED_RUN = ("completed", "failed", "cancelled", "canceled", "rejected", "abandoned")
+#: A follow-up holds its rows only while its run is in one of these. Every other status — done,
+#: failed, cancelled, BLOCKED (a missing grant, a parked gate), anything new — has ended its
+#: hold, so a blocked follow-up never strands the rows it was sent to fix.
+LIVE_RUN = ("queued", "running")
+#: A hold older than this is released whatever the run says (a run stuck "running" forever).
+HOLD_TTL_HOURS = 48
 
 _STAGE_KIND = {"review_code": "review", "security_check": "security",
                "consistency_check": "consistency", "readiness": "readiness",
@@ -414,6 +418,43 @@ def transition(connection: Any, finding_id: str, to: str, *, actor: str,
     return row
 
 
+ALSO = "ALSO REPORTED"
+_STOP = frozenset("""the and for with that this from into when then than not none have has had
+does done only also must should would could item items file files code line lines missing
+partial found there their they them what which while where""".split())
+
+
+def _words(text: Any) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", _fold(text)) if len(w) >= 4 and w not in _STOP}
+
+
+def close_enough(path: Optional[str], text: Any, target: Mapping[str, Any]) -> bool:
+    """Whether a finding the agent declared "same as F-n" plausibly IS F-n: the same file, or a
+    significant word in common (stems by a 4-letter prefix: "Makefile" and "make"). A model
+    cannot bury a finding in an unrelated row by naming it."""
+    p = _fold(path).lstrip("./")
+    if p and p == _fold(target.get("path")).lstrip("./"):
+        return True
+    mine = _words(title_of(text))
+    theirs = _words(f"{target.get('title') or ''} {target.get('body') or ''} "
+                    f"{target.get('path') or ''}")
+    return any(a[:4] == b[:4] for a in mine for b in theirs)
+
+
+def _carry(connection: Any, target_id: str, *, stage: str, severity: str, text: Any,
+           path: Optional[str] = None, line: Optional[int] = None) -> None:
+    """Keep a merged finding's own words on the row it merged into (the follow-up line and the
+    ticket read them), once."""
+    from sqlalchemy import text as sql
+
+    where = f" {path}:{line}" if path and line else f" {path}" if path else ""
+    note = f"{ALSO} ({stage}, {_sev(severity).upper()}){where}: {' '.join(str(text).split())}"
+    connection.execute(sql(
+        "UPDATE findings SET body = body || CASE WHEN position(:n in body) > 0 THEN '' "
+        "ELSE E'\n' || :n END, updated_at = now() WHERE id = :t"),
+        {"n": note[:1500], "t": target_id})
+
+
 def merge_into(connection: Any, finding_id: str, target_id: str, *, check_id: Optional[str] = None,
                run_id: Optional[str] = None, stage: str = "") -> Optional[dict[str, Any]]:
     """Merge a live row into another live row of the same lineage (`duplicate`, duplicate_of):
@@ -435,6 +476,8 @@ def merge_into(connection: Any, finding_id: str, target_id: str, *, check_id: Op
          "t": target["id"]})
     _observe(connection, target["id"], check_id=check_id, run_id=run_id, stage=stage,
              status_seen="open", evidence=[{"kind": "merged", "ref": human_key(row)}])
+    _carry(connection, target["id"], stage=stage or "merged", severity=row["severity"],
+           text=row.get("body") or row.get("title"), path=row.get("path"), line=row.get("line"))
     row = get(connection, finding_id) or row
     _sync_work_item(connection, row)
     _emit(connection, row["project_id"], "finding.merged", row, {"into": human_key(target)})
@@ -608,11 +651,21 @@ def _count(delta: LedgerDelta, row: Mapping[str, Any], what: str) -> None:
 
 def observe_review(connection: Any, *, project_id: str, lineage: str, run_id: Optional[str],
                    comments: Iterable[Any], check_id: Optional[str] = None,
-                   pr_url: Optional[str] = None, stage: Optional[str] = None) -> LedgerDelta:
+                   pr_url: Optional[str] = None, stage: Optional[str] = None,
+                   seats: Iterable[str] = (), reviewed_paths: Iterable[str] = ()
+                   ) -> LedgerDelta:
     """Reviewer findings (review_comments.ReviewComment, any severity, advisory or not) into
-    the ledger: `rv:` fingerprint dedupe; "same as F-n" merges into F-n when F-n is a live row
-    of this lineage (BOSS checks the id; otherwise the finding stands on its own)."""
+    the ledger: `rv:` fingerprint dedupe; "same as F-n" merges into F-n only when F-n is a live
+    row of this lineage AND plausibly the same problem (close_enough: the same file, or a word
+    in common) AND it would not bury a finding two severities above F-n — otherwise the finding
+    stands on its own. A merge keeps the finding's words on F-n (`ALSO REPORTED`).
+
+    `seats` / `reviewed_paths` (L4): the seats that reviewed this round and the files it
+    changed. A live review row a seat raised earlier, on one of those files, that the same seat
+    did not report again this round is FIXED BY THAT RE-REVIEW (`fixed_by_review`), so a
+    follow-up stops resending what a repair round already fixed."""
     delta = LedgerDelta()
+    reported: set[str] = set()
     for c in comments or []:
         get_ = (c.get if isinstance(c, Mapping) else (lambda k, d=None, _c=c: getattr(_c, k, d)))
         body = str(get_("body") or get_("text") or "").strip()
@@ -623,8 +676,11 @@ def observe_review(connection: Any, *, project_id: str, lineage: str, run_id: Op
         fp = review_fingerprint(path, body)
         same = _SAME_AS.search(body)
         target = by_key(connection, project_id, f"F-{same.group(1)}") if same else None
-        if target is not None and (target["status"] not in LIVE
-                                   or target["lineage_root_run_id"] != lineage):
+        if target is not None and (
+                target["status"] not in LIVE or target["lineage_root_run_id"] != lineage
+                or not close_enough(path, body, target)
+                or SEVERITIES.index(_sev(get_("severity")))
+                - SEVERITIES.index(_sev(target["severity"])) >= 2):
             target = None
         ev = [{"kind": "file", "ref": f"{path}:{line}" if line else path}] if path else []
         if target is not None:
@@ -638,6 +694,8 @@ def observe_review(connection: Any, *, project_id: str, lineage: str, run_id: Op
                                                                          "text": body[:300]}]):
                 from sqlalchemy import text
 
+                _carry(connection, target["id"], stage=seat, severity=str(get_("severity")),
+                       text=_SAME_AS.sub("", body).strip(), path=path, line=line)
                 connection.execute(text(
                     "UPDATE findings SET seen_count = seen_count + 1, last_seen_at = now(), "
                     "severity = :s, updated_at = now() WHERE id = :i"),
@@ -645,6 +703,8 @@ def observe_review(connection: Any, *, project_id: str, lineage: str, run_id: Op
                      "i": target["id"]})
             if target["id"] not in delta.seen:
                 delta.seen.append(target["id"])
+            reported.add(fp)
+            reported.add(target["fingerprint"])
             continue
         title = title_of(body)
         row, what = upsert(
@@ -653,6 +713,44 @@ def observe_review(connection: Any, *, project_id: str, lineage: str, run_id: Op
             fingerprint=fp, title=title[:300], body=body, evidence=ev, path=path,
             line=line, stage=seat, run_id=run_id, check_id=check_id, pr_url=pr_url)
         _count(delta, row, what)
+        reported.add(fp)
+    delta.add(fixed_by_review(connection, project_id=project_id, lineage=lineage, run_id=run_id,
+                              seats=seats, reviewed_paths=reviewed_paths, reported=reported,
+                              check_id=check_id))
+    return delta
+
+
+def fixed_by_review(connection: Any, *, project_id: str, lineage: str, run_id: Optional[str],
+                    seats: Iterable[str], reviewed_paths: Iterable[str],
+                    reported: Iterable[str], check_id: Optional[str] = None) -> LedgerDelta:
+    """Close the live review rows a re-review no longer reports (L4): raised by one of `seats`,
+    anchored to a file in `reviewed_paths` (what this round's change touched, so the seat read
+    it), and not among the fingerprints the seat `reported` now. A seat that did not review, or
+    a row with no file, is never closed this way."""
+    from sqlalchemy import text
+
+    delta = LedgerDelta()
+    seats = [s for s in seats or [] if s]
+    paths = {_fold(p).lstrip("./") for p in reviewed_paths or [] if p}
+    if not seats or not paths:
+        return delta
+    rows = connection.execute(text(
+        "SELECT f.id, f.path, f.fingerprint FROM findings f WHERE f.project_id = :p "
+        "AND f.lineage_root_run_id = :r AND f.status IN ('open', 'in_progress') "
+        "AND f.kind IN ('review', 'security', 'consistency') AND f.path IS NOT NULL "
+        "AND EXISTS (SELECT 1 FROM finding_observations o WHERE o.finding_id = f.id "
+        "            AND o.stage IN :seats AND o.status_seen = 'open')"
+        ).bindparams(_expanding("seats")),
+        {"p": project_id, "r": lineage, "seats": list(seats)}).mappings().all()
+    done = set(reported or ())
+    for r in rows:
+        if r["fingerprint"] in done or _fold(r["path"]).lstrip("./") not in paths:
+            continue
+        if mark_fixed(connection, r["id"], check_id=check_id, run_id=run_id,
+                      stage="re-review", evidence=[{"kind": "re-review", "ref": run_id,
+                                                    "seats": list(seats),
+                                                    "path": r["path"]}]):
+            delta.fixed.append(r["id"])
     return delta
 
 
@@ -661,10 +759,13 @@ def observe_findings(connection: Any, *, project_id: str, lineage: str, run_id: 
                      pr_url: Optional[str] = None) -> tuple[LedgerDelta, list[str]]:
     """The free-text findings a follow-up was about to carry ({severity, text}: a failing
     gate, a seat's finding, a deferred one) into the ledger, so the follow-up is built from
-    rows. Returns (delta, the row ids they are). An acceptance FINDING line is not a second row:
-    its gap is already in the ledger from the check that found it (observe_check)."""
+    rows. Returns (delta, the row ids they are). An acceptance seat's line is the SAME row as
+    the gap its check recorded (`ac:` fingerprint) when that row is live; when it is not (the
+    check's own write failed, or the item was not judged) it is recorded here — a follow-up is
+    never lost because the check's bookkeeping was."""
     delta = LedgerDelta()
     ids: list[str] = []
+    contract_ids: Optional[dict[str, str]] = None
     for f in findings or []:
         words = " ".join(str(f.get("text") or "").split())
         if not words:
@@ -675,6 +776,19 @@ def observe_findings(connection: Any, *, project_id: str, lineage: str, run_id: 
         line = f.get("line") or (int(m.group("line")) if m and m.group("line") else None)
         body = re.sub(r"^[\s—–:\-]+", "", m.group("text") if m else words) or words
         if seat == "acceptance_check":
+            if contract_ids is None:
+                from . import contract as _contract
+
+                contract_ids = _contract_ids(_contract.latest(
+                    connection, root_run_id=lineage, project_id=project_id))
+            got = _acceptance_line(connection, project_id=project_id, lineage=lineage,
+                                   body=body, severity=str(f.get("severity") or "major"),
+                                   ids=contract_ids, run_id=run_id, pr_url=pr_url)
+            if got is not None:
+                row, what = got
+                if what != "live":
+                    _count(delta, row, what)
+                ids.append(row["id"])
             continue
         gate = _GATE_LINE.match(body)
         sev = str(f.get("severity") or "major")
@@ -694,6 +808,45 @@ def observe_findings(connection: Any, *, project_id: str, lineage: str, run_id: 
         _count(delta, row, what)
         ids.append(row["id"])
     return delta, list(dict.fromkeys(ids))
+
+
+_MUST_HAVE_LINE = re.compile(r"^Must-have (\d+) (MISSING|only PARTIAL|not judged|needs a person)"
+                             r":\s*(.*)$", re.S)
+_STACK_LINE = re.compile(r"^Required stack '([^']+)'")
+
+
+def _acceptance_line(connection: Any, *, project_id: str, lineage: str, body: str,
+                     severity: str, ids: Mapping[str, str], run_id: Optional[str],
+                     pr_url: Optional[str]) -> Optional[tuple[dict[str, Any], str]]:
+    """The ledger row of one acceptance seat line (acceptance_gate.findings_summary's words):
+    (row, 'live') when its gap row is already live, else (row, what upsert did)."""
+    from . import contract as _contract
+
+    m = _MUST_HAVE_LINE.match(body)
+    stack = _STACK_LINE.match(body)
+    if m:
+        words = m.group(3)
+        said = _contract._key(words)  # noqa: SLF001
+        hits = sorted(((len(k), iid) for k, iid in ids.items() if k and said.startswith(k)),
+                      reverse=True)
+        item_id = hits[0][1] if hits else None
+        head = re.split(r"\s+[—–]\s+", words, maxsplit=1)[0]
+        fp = gap_fingerprint(item_id) if item_id else _gap_key({"text": head}, None)
+        title = f"{item_id or 'Must-have ' + m.group(1)} {m.group(2).lower()}: {head}"
+        kind, contract_item_id = "acceptance_gap", item_id
+    elif stack:
+        fp, title = f"ac:stack:{stack.group(1)}", body
+        kind, contract_item_id = "acceptance_gap", None
+    else:
+        fp, title = "gate:acceptance_check", title_of(body)
+        kind, contract_item_id = "pipeline", None
+    live = _live(connection, project_id, lineage, fp)
+    if live is not None:
+        return live, "live"
+    return upsert(connection, project_id=project_id, lineage=lineage, kind=kind,
+                  severity=severity, fingerprint=fp, title=title[:300], body=body,
+                  stage="acceptance_check", run_id=run_id, contract_item_id=contract_item_id,
+                  pr_url=pr_url)
 
 
 def _seen_in_run(connection: Any, finding_id: str, run_id: Optional[str]) -> bool:
@@ -716,10 +869,13 @@ def release_dead_holds(connection: Any, *, project_id: str, lineage: str) -> lis
     rows = connection.execute(text(
         "UPDATE findings f SET status = 'open', updated_at = now() "
         "WHERE f.project_id = :p AND f.lineage_root_run_id = :r AND f.status = 'in_progress' "
-        "AND (f.followup_run_id IS NULL OR NOT EXISTS (SELECT 1 FROM code_task_runs c "
-        "     WHERE c.id = f.followup_run_id AND c.status NOT IN :ended)) RETURNING f.id"
-        ).bindparams(_expanding("ended")),
-        {"p": project_id, "r": lineage, "ended": list(_ENDED_RUN)}).scalars().all()
+        "AND (f.followup_run_id IS NULL "
+        "  OR f.held_at IS NULL OR f.held_at < now() - make_interval(hours => :ttl) "
+        "  OR NOT EXISTS (SELECT 1 FROM code_task_runs c "
+        "     WHERE c.id = f.followup_run_id AND c.status IN :live)) RETURNING f.id"
+        ).bindparams(_expanding("live")),
+        {"p": project_id, "r": lineage, "live": list(LIVE_RUN),
+         "ttl": HOLD_TTL_HOURS}).scalars().all()
     for fid in rows:
         row = get(connection, fid)
         if row:
@@ -766,9 +922,10 @@ def held_by_live_followup(connection: Any, ids: Iterable[str]) -> list[str]:
         return []
     return list(connection.execute(text(
         "SELECT f.id FROM findings f JOIN code_task_runs c ON c.id = f.followup_run_id "
-        "WHERE f.id IN :ids AND f.status = 'in_progress' AND c.status NOT IN :ended"
-        ).bindparams(_expanding("ids"), _expanding("ended")),
-        {"ids": ids, "ended": list(_ENDED_RUN)}).scalars().all())
+        "WHERE f.id IN :ids AND f.status = 'in_progress' AND c.status IN :live "
+        "AND f.held_at >= now() - make_interval(hours => :ttl)"
+        ).bindparams(_expanding("ids"), _expanding("live")),
+        {"ids": ids, "live": list(LIVE_RUN), "ttl": HOLD_TTL_HOURS}).scalars().all())
 
 
 def hold(connection: Any, ids: Iterable[str], *, followup_run_id: str) -> int:
@@ -779,7 +936,8 @@ def hold(connection: Any, ids: Iterable[str], *, followup_run_id: str) -> int:
     if not ids:
         return 0
     got = connection.execute(text(
-        "UPDATE findings SET status = 'in_progress', followup_run_id = :r, updated_at = now() "
+        "UPDATE findings SET status = 'in_progress', followup_run_id = :r, held_at = now(), "
+        "updated_at = now() "
         "WHERE id IN :ids AND status IN ('open', 'in_progress') RETURNING id"
         ).bindparams(_expanding("ids")), {"r": followup_run_id, "ids": ids}).scalars().all()
     for fid in got:
@@ -798,7 +956,9 @@ def followup_line(row: Mapping[str, Any]) -> str:
     reopened = " REGRESSED" if int(row.get("reopened_count") or 0) else ""
     body = " ".join(str(row.get("body") or row.get("title") or "").split())
     if row.get("kind") == "acceptance_gap":
-        body = " ".join(str(row.get("title") or "").split())
+        also = [ln.strip() for ln in str(row.get("body") or "").splitlines()
+                if ln.strip().startswith(ALSO)]
+        body = " ".join(" ".join([str(row.get("title") or ""), *also]).split())
     return f"{human_key(row)}{where}{reopened}{seen}: {body}"[:1200]
 
 

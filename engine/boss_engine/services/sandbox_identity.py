@@ -49,6 +49,13 @@ DEFAULT_RUN_ROOT = "/var/lib/boss/sandboxes"          # compiled into the helper
 SHIM_ROOT = "/run/boss-shim"                          # compiled into the helper
 UID_BASE = 61000
 UID_COUNT = 1000
+#: THE SEALED SUB-POOL (the Acceptance Agent's sandbox, BOSSAPP-1219): the top SEALED_COUNT uids of
+#: the pool. scripts/sandbox/entrypoint.sh gives them their own chain, ahead of the pool's, that
+#: allows LOOPBACK ONLY — no BOSS API on the compose network, no boss-egress, no CONNECT proxy, no
+#: Docker DNS — and writes SEALED_MARKER once the rules are in. An ordinary run never leases one.
+SEALED_COUNT = 100
+SEALED_BASE = UID_BASE + UID_COUNT - SEALED_COUNT
+SEALED_MARKER = ".network-sealed"
 #: What a sandboxed process gets for its proxies: boss-egress's CONNECT proxy (the model gateway
 #: and package route). Loopback and the API stay direct.
 EGRESS_CONNECT_ENV = "BOSS_EGRESS_CONNECT_PROXY"
@@ -87,6 +94,19 @@ def network_fenced() -> bool:
     except OSError:
         return False
     return st.st_uid == 0                         # root wrote it, after the rules went in
+
+
+def network_sealed() -> bool:
+    """Did the entrypoint install the sealed (loopback-only) chain for SEALED_BASE.. uids? A
+    root-owned marker, written after the rules were read back. Never True with the network
+    fence switched off."""
+    if (os.environ.get(NETWORK_ENV) or "enforce").strip().lower() == "off":
+        return False
+    try:
+        st = os.stat(os.path.join(SHIM_ROOT, SEALED_MARKER))
+    except OSError:
+        return False
+    return st.st_uid == 0
 
 
 NETWORK_PROBLEM_MARKER = ".network-unfenced"   # the entrypoint could not fence: why (one line)
@@ -136,6 +156,9 @@ class SandboxIdentity:
     #: A workload that must hold no model credential (an authored skill's command, AMEX-G2):
     #: no CLI login was seeded into its HOME, and env() withholds every model-shaped name.
     credential_free: bool = False
+    #: A uid of the SEALED sub-pool (loopback only): env() gives it no proxy, and git in it reads
+    #: no system/global config and has no credential helper.
+    sealed: bool = False
 
     @property
     def home(self) -> Path:
@@ -207,6 +230,21 @@ class SandboxIdentity:
         out[f"GIT_CONFIG_KEY_{n}"] = "safe.directory"
         out[f"GIT_CONFIG_VALUE_{n}"] = "*"
         out["GIT_CONFIG_COUNT"] = str(n + 1)
+        if self.sealed:
+            # LOOPBACK ONLY: no route out, so no proxy to name; and git with no system or global
+            # config, no credential helper and no prompt — nothing that could authenticate a push.
+            for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY",
+                         "all_proxy", EGRESS_CONNECT_ENV):
+                out.pop(name, None)
+            n = int(out.get("GIT_CONFIG_COUNT") or 0)
+            out[f"GIT_CONFIG_KEY_{n}"] = "credential.helper"
+            out[f"GIT_CONFIG_VALUE_{n}"] = ""
+            out["GIT_CONFIG_COUNT"] = str(n + 1)
+            out.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
+                        "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "/bin/false",
+                        "SSH_ASKPASS": "/bin/false", "NO_PROXY": "*", "no_proxy": "*"})
+            out.pop("SSH_AUTH_SOCK", None)
+            return out
         proxy = (os.environ.get(EGRESS_CONNECT_ENV) or "").strip()
         if proxy:
             for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
@@ -248,12 +286,15 @@ _ACTIVE: dict[str, SandboxIdentity] = {}
 _ACTIVE_LOCK = threading.Lock()
 
 
-def _lease_uid(key: str) -> tuple[int, int]:
+def _lease_uid(key: str, *, sealed: bool = False) -> tuple[int, int]:
     """An flock on SHIM_ROOT/uid-<n>.lock, held for the run's life: unique across every process
-    in this container. Starts at a hash of the key so restarts of one run tend to the same uid."""
-    start = int(hashlib.sha256(key.encode()).hexdigest(), 16) % UID_COUNT
-    for i in range(UID_COUNT):
-        uid = UID_BASE + (start + i) % UID_COUNT
+    in this container. Starts at a hash of the key so restarts of one run tend to the same uid.
+    An ordinary lease comes from below SEALED_BASE; a sealed one only from the sealed sub-pool."""
+    base, count = ((SEALED_BASE, SEALED_COUNT) if sealed
+                   else (UID_BASE, UID_COUNT - SEALED_COUNT))
+    start = int(hashlib.sha256(key.encode()).hexdigest(), 16) % count
+    for i in range(count):
+        uid = base + (start + i) % count
         fd = os.open(os.path.join(SHIM_ROOT, f"uid-{uid}.lock"), os.O_CREAT | os.O_RDWR, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -304,12 +345,21 @@ def bind(owner_id: str, *, project_id: Optional[str] = None) -> Iterator[Optiona
 
 
 def acquire(owner_id: str, *, project_id: Optional[str] = None,
-            what: str = "run", seed_logins: bool = True) -> Optional[SandboxIdentity]:
+            what: str = "run", seed_logins: bool = True,
+            sealed: bool = False) -> Optional[SandboxIdentity]:
     """`bind` for a workload that outlives the call that starts it (an app PREVIEW): the uid and
     directory are held until `release(owner_id)`. Same rules: None when isolation is off (or
     `auto` with no helper, logged loudly); SandboxUnavailable when it is `required` and
     impossible. Idempotent: a second acquire of a held owner returns the same identity."""
     m = mode()
+    if sealed:
+        # A SEALED workload never runs unfenced, whatever the mode says: no None, no `auto`.
+        if m == "off" or not available() or not network_sealed():
+            raise SandboxUnavailable(
+                "the sealed (loopback-only) sandbox is unavailable: "
+                + ("sandbox isolation is off" if m == "off"
+                   else unavailable_reason() if not available()
+                   else "the entrypoint did not install the sealed network rules"))
     if m == "off":
         return None
     if not available():
@@ -323,9 +373,9 @@ def acquire(owner_id: str, *, project_id: Optional[str] = None,
     if existing is not None:
         return existing
     key = owner_key(owner_id)
-    uid, lock_fd = _lease_uid(key)
+    uid, lock_fd = _lease_uid(key, sealed=sealed)
     ident = SandboxIdentity(key=key, uid=uid, run_dir=run_root() / key, _lock_fd=lock_fd,
-                            credential_free=not seed_logins)
+                            credential_free=not seed_logins or sealed, sealed=sealed)
     try:
         ident.killall()                                  # nothing of a previous lease survives
         if ident.run_dir.exists():
@@ -338,7 +388,7 @@ def acquire(owner_id: str, *, project_id: Optional[str] = None,
                 os.chmod(sub, 0o2777)
         finally:
             os.umask(old)
-        if seed_logins:
+        if seed_logins and not sealed:
             _seed_cli_logins(ident)
         _seed_toolchains(ident, project_id)
         ident._helper("adopt", str(uid), str(ident.run_dir))

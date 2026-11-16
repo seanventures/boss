@@ -356,4 +356,119 @@ def test_every_in_build_acceptance_check_is_recorded_in_the_ledger():
     assert len(calls) == 2              # its definition and the wrapper's one call
     assert len(re.findall(r"\b_run_acceptance_check\(", source)) >= 4   # def + 3 call sites
     review = inspect.getsource(governed._record_review_comments)
-    assert "_ledger_review(engine, run_id, project_id, fresh)" in review
+    assert "_ledger_review(engine, run_id, project_id, fresh, seats=_seats" in review
+
+
+# ── PR #151 review: L1-L4 ───────────────────────────────────────────────────────────────────
+
+def test_a_blocked_follow_up_releases_its_rows_and_an_old_hold_expires(eng, ledger_project):
+    """L1: only a queued or running follow-up holds rows; BLOCKED (or any other status) ends
+    the hold, and a hold older than the TTL is released whatever the run says."""
+    p = ledger_project
+    with eng.begin() as c:
+        root = _run(c, p, spec=SPEC)
+        _check(c, p, root, {1: "MISSING", 2: "MISSING"})
+        a, b = (r["id"] for r in al.open_for(c, project_id=p))
+        blocked = _run(c, p, status="blocked", fctx={"root_run_id": root})
+        running = _run(c, p, status="running", fctx={"root_run_id": root})
+        al.hold(c, [a], followup_run_id=blocked)
+        al.hold(c, [b], followup_run_id=running)
+        assert al.held_by_live_followup(c, [a, b]) == [b]
+        assert al.release_dead_holds(c, project_id=p, lineage=root) == [a]
+        c.execute(text("UPDATE findings SET held_at = now() - interval '3 days' WHERE id = :i"),
+                  {"i": b})
+        assert al.held_by_live_followup(c, [b]) == []
+        assert al.release_dead_holds(c, project_id=p, lineage=root) == [b]
+        assert {al.get(c, x)["status"] for x in (a, b)} == {"open"}
+
+
+def test_an_acceptance_finding_is_kept_when_its_checks_ledger_write_failed(eng, ledger_project,
+                                                                          monkeypatch):
+    """L2: the in-build check's own ledger write failed (swallowed), so no `ac:` row exists:
+    the follow-up's acceptance lines become the rows — the follow-up still starts."""
+    p = ledger_project
+    with eng.begin() as c:
+        root = _run(c, p, spec=SPEC)
+        ag.items_spec(c, run_id=root, fctx={}, own_spec=SPEC)        # the contract exists
+    monkeypatch.setattr(al, "observe_check", lambda *a, **k: (_ for _ in ()).throw(
+        RuntimeError("ledger down")))
+    rec = {"verdict": "not_met", "source": {"root": True}, "stack": {}, "counts": {},
+           "items": [{"n": 1, "text": "Unauthenticated requests get 401", "status": "missing",
+                      "evidence": "absent"},
+                     {"n": 3, "text": "Rate limit returns 429", "status": "unjudged"}]}
+    assert governed._ledger_acceptance_check(eng, root, p, rec) is None     # swallowed
+    monkeypatch.undo()
+    with eng.begin() as c:
+        assert al.open_for(c, project_id=p) == []
+    new = _spawn(eng, p, root, root, [
+        {"severity": "major", "text": "(acceptance_check) Must-have 1 MISSING: Unauthenticated "
+                                      "requests get 401 — absent"},
+        {"severity": "major", "text": "(acceptance_check) Must-have 3 not judged: Rate limit "
+                                      "returns 429"}])
+    assert new
+    with eng.begin() as c:
+        rows = {r["fingerprint"]: r for r in al.open_for(c, project_id=p)}
+    assert set(rows) == {"ac:AC-1", "ac:AC-3"}
+    assert all(r["followup_run_id"] == new for r in rows.values())
+    # Seen again by a later check, it is the same row (the check's own fingerprint).
+    with eng.begin() as c:
+        _, d = _check(c, p, root, {1: "MISSING"})
+        assert rows["ac:AC-1"]["id"] in d.seen and not d.opened
+
+
+def test_same_as_cannot_bury_a_finding_in_an_unrelated_row(eng, ledger_project):
+    """L3: a BLOCKER on JWT declared "same as" a NIT about a README typo stands on its own;
+    a plausible merge keeps the merged finding's words on the row and in the follow-up."""
+    p = ledger_project
+    with eng.begin() as c:
+        root = _run(c, p)
+        nit = al.observe_review(c, project_id=p, lineage=root, run_id=root,
+                                comments=parse_findings("FINDING: NIT README.md:3 — typo in "
+                                                        "heading", stage="review_code")).opened[0]
+        key = al.get(c, nit)["key"]
+        jwt = al.observe_review(c, project_id=p, lineage=root, run_id=root,
+                                comments=parse_findings(
+                                    f"FINDING: BLOCKER src/auth.go:14 — JWT audience is never "
+                                    f"checked [same as {key}]", stage="acceptance_step"))
+        assert len(jwt.opened) == 1 and not jwt.merged and nit not in jwt.seen
+        row = al.get(c, jwt.opened[0])
+        assert row["severity"] == "blocker" and row["path"] == "src/auth.go"
+        assert al.get(c, nit)["severity"] == "nit" and "JWT" not in al.get(c, nit)["body"]
+        # A close one (same file, one level apart) merges — and keeps its words.
+        al.observe_review(c, project_id=p, lineage=root, run_id=f"{root}-2",
+                          comments=parse_findings(f"FINDING: MINOR README.md:9 — heading "
+                                                  f"spelled wrong twice [same as {key}]",
+                                                  stage="acceptance_step"))
+        merged = al.get(c, nit)
+        assert "ALSO REPORTED (acceptance_step, MINOR) README.md:9:" in merged["body"]
+        assert "heading spelled wrong twice" in merged["body"]
+        assert "heading spelled wrong twice" in al.followup_line(merged)
+
+
+def test_a_re_review_that_no_longer_reports_a_finding_closes_it(eng, ledger_project):
+    """L4: the review seat looked again at the files it flagged (this round changed them) and
+    said nothing about it: the row is fixed by that re-review. A file it did not touch, or a
+    seat that gave no structured answer, closes nothing."""
+    p = ledger_project
+    with eng.begin() as c:
+        root = _run(c, p)
+    round1 = {"review_summary": "FINDING: MAJOR src/a.go:3 — error is swallowed\n"
+                                "FINDING: MINOR src/b.go:9 — stray debug print\n"
+                                "VERDICT: REFUTED",
+              "impl_files": ["src/a.go", "src/b.go"]}
+    governed._record_review_comments(eng, root, p, round1)
+    with eng.begin() as c:
+        follow = _run(c, p, fctx={"is_followup": True, "root_run_id": root})
+    # A reply with no structure is no signal: nothing closes.
+    governed._record_review_comments(eng, follow, p, {"review_summary": "looks fine?",
+                                                      "impl_files": ["src/a.go"]})
+    with eng.begin() as c:
+        assert len(al.open_for(c, project_id=p)) == 2
+    governed._record_review_comments(eng, follow, p, {"review_summary": "VERDICT: SURVIVED",
+                                                      "impl_files": ["src/a.go"]})
+    with eng.begin() as c:
+        live = {r["title"]: r for r in al.open_for(c, project_id=p)}
+        fixed = c.execute(text("SELECT title, status FROM findings WHERE project_id = :p"),
+                          {"p": p}).all()
+    assert set(live) == {"stray debug print"}                 # src/b.go was not re-reviewed
+    assert ("error is swallowed", "fixed") in fixed

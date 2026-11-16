@@ -493,6 +493,54 @@ def exec_claims(why: str) -> list[dict[str, Any]]:
     return out
 
 
+#: The shortest quote that counts: "401" or "ok" alone appears in almost any output.
+MIN_EXCERPT = 6
+#: Interpreters whose inline-code flag makes the command line itself the output's author.
+_INTERPRETERS = re.compile(r"^(python[\d.]*|pypy[\d.]*|node(js)?|deno|bun|ruby|perl|php|"
+                           r"sh|bash|dash|zsh|ksh|fish|pwsh|powershell|osascript|lua|Rscript)$")
+_INLINE_FLAGS = frozenset({"-c", "-e", "--eval", "-p", "--print", "-r", "--command",
+                           "-Command", "-E"})
+#: Commands whose output is whatever they were told to print.
+_PRINTERS = frozenset({"echo", "printf", "yes", "true", "false"})
+
+
+def _inline_flag(arg: str) -> bool:
+    """`-c`, `-e`, `--eval`, or a short-flag cluster carrying one (`-xc`, `-pe`). Fails closed:
+    a harmless cluster that happens to hold one of those letters is refused too."""
+    if arg in _INLINE_FLAGS:
+        return True
+    return (arg.startswith("-") and not arg.startswith("--") and len(arg) > 1
+            and arg[1:].isalpha() and bool(set(arg[1:]) & {"c", "e", "p"}))
+
+
+def manufactured(cmd: Any) -> Optional[str]:
+    """Why a recorded command's output cannot be evidence of the work, or None: an inline-code
+    interpreter (`python3 -c "print('401')"`, `node -e`, `sh -c`) or a printer (echo, printf)
+    writes whatever the agent asked it to; and a command run after the session changed the
+    clone (a file it wrote, an edit) — or when BOSS could not tell — reads the agent's words,
+    not the delivered work (`tree_dirty`, recorded by the session)."""
+    import shlex
+
+    argv = list(_field(cmd, "argv") or [])
+    if not argv and _field(cmd, "kind") != "http":
+        try:
+            argv = shlex.split(str(_field(cmd, "cmd") or ""))
+        except ValueError:
+            return "the command could not be read"
+    if argv:
+        prog = Path(str(argv[0])).name
+        if prog in _PRINTERS:
+            return f"{prog} prints what it is told"
+        if _INTERPRETERS.match(prog) and any(_inline_flag(a) for a in argv[1:]):
+            return f"{prog} ran code written on its own command line"
+    dirty = _field(cmd, "tree_dirty")
+    if dirty is None:
+        return "BOSS could not tell whether the session had changed the clone"
+    if dirty:
+        return "the session had changed the clone before it ran"
+    return None
+
+
 def verify_command(claim: Mapping[str, Any], exec_log: Any) -> tuple[bool, str]:
     """(verified, why not). BOSS checks a cited command against the record IT kept — never the
     model's prose (I6): the command ran in this check, the quoted words are in its output
@@ -507,6 +555,11 @@ def verify_command(claim: Mapping[str, Any], exec_log: Any) -> tuple[bool, str]:
     excerpt = _ws(claim.get("excerpt"))
     if not excerpt:
         return False, f"{ref} cited without the output it showed"
+    if len(excerpt) < MIN_EXCERPT:
+        return False, f"the quote from {ref} is too short to prove anything"
+    made = manufactured(cmd)
+    if made:
+        return False, f"{ref} is not evidence: {made}"
     output = _ws(f"{_field(cmd, 'stdout', '')}\n{_field(cmd, 'stderr', '')}")
     if excerpt not in output:
         return False, f"the quoted words are not in {ref}'s output"

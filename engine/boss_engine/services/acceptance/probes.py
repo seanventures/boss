@@ -76,9 +76,10 @@ def from_command(item: str, cmd: Any, *, excerpt: Optional[str] = None,
 
 def from_record(record: Mapping[str, Any], exec_log: Any, *,
                 check_id: Optional[str] = None) -> list[dict[str, Any]]:
-    """The probes a judged check leaves behind: for each item MET on verified command evidence,
-    one probe per verified command (its files: the item's verified file evidence). Items carried
-    by replay keep the probe that carried them."""
+    """The probes a judged check leaves behind: for each item MET on verified command evidence
+    AND at least one verified tree file, one probe per verified command (its files: those tree
+    files). An item proven by a command alone leaves no probe: with no file to watch, a later
+    change could never send it back to the agent. Items carried by replay keep their probe."""
     out: list[dict[str, Any]] = []
     getter = getattr(exec_log, "get", None)
     for item in record.get("items") or []:
@@ -87,6 +88,8 @@ def from_record(record: Mapping[str, Any], exec_log: Any, *,
         key = str(item.get("id") or item.get("n"))
         refs = item.get("evidence_refs") or []
         files = [r["ref"] for r in refs if r.get("kind") == "file" and r.get("verified")]
+        if not files:
+            continue
         for r in refs:
             if r.get("kind") == "exec" and r.get("verified") and callable(getter):
                 cmd = getter(r["ref"])
@@ -99,11 +102,12 @@ def from_record(record: Mapping[str, Any], exec_log: Any, *,
 
 
 def changed(probe: Mapping[str, Any], changed_files: Optional[Iterable[str]]) -> bool:
-    """Whether any of the probe's files changed (None: the diff is unknown — nothing counts as
-    changed, the probe's own result decides)."""
-    if changed_files is None:
-        return False
+    """Whether the probe's item may have changed: one of its files is in the diff — or the diff
+    is unknown (None), or the probe names no file. Fails closed: only a known, clean diff over
+    named files lets a passing probe carry its item."""
     files = set(probe.get("files") or [])
+    if changed_files is None or not files:
+        return True
     return bool(files & set(changed_files))
 
 

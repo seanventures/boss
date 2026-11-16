@@ -33,9 +33,11 @@ def tree(tmp_path: Path) -> Path:
 def record() -> CommandRecord:
     r = CommandRecord()
     r.add(Command(id="E1", cmd="HTTP GET http://127.0.0.1:8081/payments", kind="http",
-                  exit=0, status=401, stdout='HTTP 401\n{"error":"missing token"}'))
-    r.add(Command(id="E2", cmd="make run-staging", exit=2,
-                  stderr="make: *** No rule to make target 'run-staging'.  Stop."))
+                  exit=0, status=401, stdout='HTTP 401\n{"error":"missing token"}',
+                  tree_dirty=False))
+    r.add(Command(id="E2", cmd="make run-staging", argv=["make", "run-staging"], exit=2,
+                  stderr="make: *** No rule to make target 'run-staging'.  Stop.",
+                  tree_dirty=False))
     r.add(Command(id="E3", cmd="git push origin main", refused="git push is not allowed"))
     return r
 
@@ -153,3 +155,67 @@ def test_exec_claims_read_each_citation_between_e_ids():
     assert got == [{"ref": "E2", "excerpt": "No rule", "exit": 2, "status": None},
                    {"ref": "E10", "excerpt": "denied", "exit": None, "status": 401},
                    {"ref": "E3", "excerpt": None, "exit": None, "status": None}]
+
+
+# ── evidence the agent could have manufactured (PR #151 review V1) ─────────────────────────
+
+def _one(cmd: Command) -> CommandRecord:
+    r = CommandRecord()
+    r.add(cmd)
+    return r
+
+
+@pytest.mark.parametrize("argv,why", [
+    (["python3", "-c", "print('401 Unauthorized')"], "ran code written on its own command line"),
+    (["node", "-e", "console.log('401 Unauthorized')"], "ran code written on its own command line"),
+    (["node", "-pe", "'401 Unauthorized'"], "ran code written on its own command line"),
+    (["sh", "-c", "echo 401 Unauthorized"], "ran code written on its own command line"),
+    (["bash", "-xc", "echo 401 Unauthorized"], "ran code written on its own command line"),
+    (["echo", "401 Unauthorized"], "echo prints what it is told"),
+    (["printf", "401 Unauthorized"], "printf prints what it is told"),
+])
+def test_inline_code_and_printers_are_never_evidence(tree, argv, why):
+    rec = _one(Command(id="E1", cmd=" ".join(argv), argv=argv, exit=0,
+                       stdout="401 Unauthorized\n", tree_dirty=False))
+    item = av.judge(ITEMS[:1], 'AC-1: MET — E1 (exit 0) "401 Unauthorized"\nACCEPTANCE: MET',
+                    {}, root=tree, exec_log=rec)["items"][0]
+    assert item["status"] == "unjudged" and why in item["evidence"]
+
+
+@pytest.mark.parametrize("dirty,why", [
+    (True, "the session had changed the clone before it ran"),
+    (None, "BOSS could not tell whether the session had changed the clone"),
+])
+def test_a_command_run_on_a_changed_or_unknown_tree_is_not_evidence(tree, dirty, why):
+    """Write a file, then read it back through a tree command: the agent's own words."""
+    rec = _one(Command(id="E1", cmd="make show", argv=["make", "show"], exit=0,
+                       stdout="401 Unauthorized\n", tree_dirty=dirty))
+    item = av.judge(ITEMS[:1], 'AC-1: MET — E1 (exit 0) "401 Unauthorized"\nACCEPTANCE: MET',
+                    {}, root=tree, exec_log=rec)["items"][0]
+    assert item["status"] == "unjudged" and why in item["evidence"]
+
+
+def test_a_quote_too_short_to_prove_anything_is_not_evidence(tree, record):
+    item = av.judge(ITEMS[:1], 'AC-1: MET — E1 (exit 0) HTTP 401 "401"\nACCEPTANCE: MET', {},
+                    root=tree, exec_log=record)["items"][0]
+    assert item["status"] == "unjudged" and "too short" in item["evidence"]
+
+
+def test_a_tree_command_on_a_clean_tree_is_evidence(tree):
+    rec = _one(Command(id="E1", cmd="python3 tools/check.py", argv=["python3", "tools/check.py"],
+                       exit=0, stdout="gateway-ok 401 Unauthorized\n", tree_dirty=False))
+    item = av.judge(ITEMS[:1], 'AC-1: MET — E1 (exit 0) "401 Unauthorized"\nACCEPTANCE: MET',
+                    {}, root=tree, exec_log=rec)["items"][0]
+    assert item["status"] == "met"
+
+
+def test_probes_need_a_tree_file_and_a_known_diff():
+    from boss_engine.services.acceptance import probes as ap
+
+    assert ap.changed({"files": ["a.go"]}, None)               # unknown diff: changed
+    assert ap.changed({"files": []}, [])                       # no file to watch: changed
+    assert ap.changed({"files": ["a.go"]}, ["a.go"])
+    assert not ap.changed({"files": ["a.go"]}, ["b.go"])
+    replayed = {"AC-1": {"result": "pass", "changed": True}, "AC-2": {"result": "pass",
+                                                                     "changed": False}}
+    assert set(ap.carried(replayed)) == {"AC-2"}

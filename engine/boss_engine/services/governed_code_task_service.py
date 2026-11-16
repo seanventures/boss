@@ -2698,7 +2698,8 @@ def _generated_pr_summary(engine, settings, run_id: str, project_id: str, *, tit
         quality_gate_id=qg_id or "", baseline=evidence.get("baseline"))
 
 
-def _ledger_review(engine, run_id: str, project_id: str, comments: list) -> None:
+def _ledger_review(engine, run_id: str, project_id: str, comments: list, *,
+                   seats: tuple = (), reviewed_paths: tuple = ()) -> None:
     """The review's findings into the findings ledger (acceptance/ledger.py, BOSSAPP-1216), in
     their own transaction after the review's model calls. Never fails the build: bookkeeping."""
     from .acceptance import ledger as _ledger
@@ -2708,7 +2709,8 @@ def _ledger_review(engine, run_id: str, project_id: str, comments: list) -> None
             lin = _ledger.lineage_of(c, run_id)
             if lin:
                 _ledger.observe_review(c, project_id=project_id, lineage=lin["lineage"],
-                                       run_id=run_id, comments=comments, pr_url=lin["pr_url"])
+                                       run_id=run_id, comments=comments, pr_url=lin["pr_url"],
+                                       seats=seats, reviewed_paths=reviewed_paths)
     except Exception as exc:  # noqa: BLE001
         _log_caught(logger)
         # The class only: a driver error can carry the connection URL.
@@ -2775,12 +2777,24 @@ def _record_review_comments(engine, run_id: str, project_id: str, evidence: dict
                        ("security_check", "security_summary"),
                        ("consistency_check", "consistency_summary")):
         fresh += review_comments.parse_findings(evidence.get(key) or "", stage=stage)
-    if not fresh:
-        return 0
     # THE FINDINGS LEDGER (BOSSAPP-1216): every finding of every severity — advisory under the
     # fast lane or not — is a ledger row the moment the review produced it, whatever the gate
-    # then decides to block on, defer or drop.
-    _ledger_review(engine, run_id, project_id, fresh)
+    # then decides to block on, defer or drop. A seat that reviewed this round's files and no
+    # longer reports a row it raised closes it (fixed by that re-review), even with no findings.
+    # A seat counts as having re-reviewed only when it said something structured: FINDING
+    # lines, or a clean verdict. A reply with neither is no signal (never "clean").
+    _seats = tuple(stage for stage, key in (("review_code", "review_summary"),
+                                            ("security_check", "security_summary"),
+                                            ("consistency_check", "consistency_summary"))
+                   if any(c.stage == stage for c in fresh) or re.search(
+                       r"(?im)^\W*VERDICT\s*:\W*(SURVIVED|CLEAN|CONSISTENT|PASS(ED)?)\b",
+                       str(evidence.get(key) or "")))
+    _paths = tuple(str(p) for k in ("impl_files", "test_files")
+                   for p in (evidence.get(k) if isinstance(evidence.get(k), list) else []))
+    if fresh or (_seats and _paths):
+        _ledger_review(engine, run_id, project_id, fresh, seats=_seats, reviewed_paths=_paths)
+    if not fresh:
+        return 0
     try:
         with _transaction(engine) as c:
             row = c.execute(sql(

@@ -11,11 +11,21 @@ Acceptance Agent runs the work, and the record of everything it ran.
     status for a request), its output trimmed to a cap (with the full output's sha256) and its
     duration. The record — not the model's prose — is what evidence is verified against
     (verdict.verify_command, I6).
-  FENCED. The executable allow-list and no-shell rule are the sandbox's own
-    (sandbox.assert_allowed_executable); the environment is credential-free
-    (local_fenced.skill_environment, no DATABASE_URL, no provider keys); a URL in a command or a
-    request may name only loopback — or, in `loopback+target` mode, the run's own staging
-    target; `git push` and remote edits are refused outright.
+  SEALED, OR NOT AT ALL. Every command runs as a uid of the SEALED sub-pool
+    (sandbox_identity.acquire(sealed=True)): its own uid (never BOSS's — no BOSS HOME, keychain,
+    ~/.ssh or .env), its own directory, and the entrypoint's loopback-only network chain (no
+    internet, no boss-egress or its proxy, no BOSS API on the compose network, no Docker DNS).
+    Git inside it reads no system or global config and has no credential helper. When that
+    fence is unavailable (a developer's Mac, a host without iptables owner match, isolation off)
+    `open_sandbox` REFUSES (AcceptanceFenceUnavailable): it never runs a command unfenced. On
+    top: the sandbox allow-list and no-shell rule (sandbox.assert_allowed_executable); `git push`
+    and remote edits refused; a URL in a command may name only loopback. BOSS's own requests
+    (`http`) may also reach the run's staging target in `loopback+target` mode — the commands
+    never can.
+  EVIDENCE IT CANNOT MANUFACTURE. After each command BOSS records whether the session had
+    changed the clone (`tree_dirty`, from git status run by BOSS). verdict.verify_command does
+    not accept a command run on a changed tree, an inline-code command (`python -c`, `node -e`,
+    `sh -c`) or an echo/printf as evidence.
   REPLAY FIRST. `run_session` replays the previous check's probes (probes.replay) BEFORE any
     model call; items whose probe still passes and whose files did not change are carried as
     MET, and when nothing else is left NO MODEL IS ASKED AT ALL.
@@ -34,9 +44,10 @@ import logging
 import os
 import re
 import shlex
+import contextlib
+import json
 import shutil
 import subprocess
-import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -93,6 +104,9 @@ class Command:
     timed_out: bool = False
     refused: Optional[str] = None
     replay: bool = False                     # run by a replayed probe (no model asked)
+    #: Had the session changed the clone (a write, a new file) when this ran? None: unknown.
+    #: Evidence from a changed tree is not accepted (verdict.verify_command).
+    tree_dirty: Optional[bool] = None
     method: Optional[str] = None
     url: Optional[str] = None
     headers: Optional[dict] = None
@@ -100,7 +114,8 @@ class Command:
     started_at: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
-        return {k: v for k, v in asdict(self).items() if v not in (None, [], {})}
+        return {k: v for k, v in asdict(self).items()
+                if v not in (None, [], {}) or k == "tree_dirty"}
 
     def header(self) -> str:
         """How the agent sees it: `[E4] exit 0 · 132 ms · curl -s ...`."""
@@ -172,43 +187,125 @@ def _host_of(url: str) -> str:
         return ""
 
 
-class _LocalRunner:
-    """Runs one allow-listed command, without a shell, in the clone, with a credential-free
-    environment — the rules of sandbox.EphemeralSandbox.run, for a clone BOSS made itself."""
+class AcceptanceFenceUnavailable(RuntimeError):
+    """The sealed sandbox cannot be provided here: the acceptance session refuses to run commands
+    rather than run them unfenced. Said in the words of the one thing to fix."""
 
-    def __init__(self, settings: Any, root: Path):
+
+def fence_problem(settings: Any) -> Optional[str]:
+    """Why the sealed acceptance sandbox cannot run commands here, or None."""
+    from .. import sandbox_identity
+    from ..local_fenced import fence_problem as _local_problem
+
+    problem = _local_problem(settings)
+    if problem:
+        return problem
+    if not sandbox_identity.network_sealed():
+        return ("the sealed (loopback-only) network rules are not installed "
+                "(scripts/sandbox/entrypoint.sh seal_network; .network-sealed missing)")
+    return None
+
+
+def git_env(home: Any) -> dict[str, str]:
+    """The environment BOSS's own git runs with on a clone: no system or global config, no
+    credential helper, no prompt, no agent socket — a hostile repository's config and hooks
+    find nothing to authenticate with."""
+    from ..local_fenced import skill_environment
+
+    env = skill_environment()
+    env.update({"HOME": str(home), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
+                "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "/bin/false",
+                "SSH_ASKPASS": "/bin/false", "GIT_CONFIG_COUNT": "3",
+                "GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "",
+                "GIT_CONFIG_KEY_1": "safe.directory", "GIT_CONFIG_VALUE_1": "*",
+                "GIT_CONFIG_KEY_2": "core.hooksPath", "GIT_CONFIG_VALUE_2": "/dev/null"})
+    return env
+
+
+class _FencedRunner:
+    """Runs one allow-listed command, without a shell, AS THE SEALED UID: spawned under the
+    session's owner, so owned_process wraps it in boss-sandbox-exec for that uid with the sealed
+    identity's environment (sandbox_identity.SandboxIdentity.env)."""
+
+    def __init__(self, settings: Any, owner_id: str, project_id: Optional[str] = None):
         self.settings = settings
-        self.root = root
+        self.owner_id = owner_id
+        self.project_id = project_id
 
     def run(self, command: str, *, timeout: int, cwd: Optional[str] = None) -> Any:
-        from ..local_fenced import skill_environment
-        from ..sandbox import (CommandResult, SandboxError, assert_allowed_executable,
-                               looks_like_shell)
+        from ..sandbox import SandboxError, assert_allowed_executable, looks_like_shell
 
         argv = shlex.split(command)
         if not argv:
             raise SandboxError("Empty command.")
         if looks_like_shell(command):
             raise SandboxError("shell syntax: sandbox commands run without a shell")
-        if self.settings is not None:
-            assert_allowed_executable(argv[0], self.settings)
-        env = {**skill_environment(), "CI": "1", "HOME": str(self.root)}
-        started = time.monotonic()
+        assert_allowed_executable(argv[0], self.settings)
+        return self._spawn(command, argv, timeout=timeout, cwd=cwd)
+
+    def request(self, method: str, url: str, *, headers: Optional[Mapping[str, str]],
+                body: Optional[str], timeout: int) -> tuple[Optional[int], str, Optional[str]]:
+        """A loopback HTTP request made FROM THE SEALED UID (so it meets the same network
+        fence as the commands): (status, body, error)."""
+        payload = json.dumps({"m": method, "u": url, "h": dict(headers or {}), "b": body,
+                              "t": timeout})
+        res = self._spawn(f"HTTP {method} {url}", ["python3", "-c", _REQUEST_SCRIPT, payload],
+                          timeout=timeout + 5, cwd=None)
         try:
-            proc = subprocess.run(argv, cwd=cwd or str(self.root), env=env, capture_output=True,
-                                  text=True, timeout=timeout, start_new_session=True)
-        except subprocess.TimeoutExpired as exc:
-            return CommandResult(command=command, argv=argv, exit_code=None,
-                                 duration_ms=int((time.monotonic() - started) * 1000),
-                                 timed_out=True, stdout=str(exc.stdout or ""),
-                                 stderr=str(exc.stderr or ""))
-        except FileNotFoundError as exc:
-            return CommandResult(command=command, argv=argv, exit_code=127,
-                                 duration_ms=int((time.monotonic() - started) * 1000),
-                                 timed_out=False, stdout="", stderr=str(exc))
-        return CommandResult(command=command, argv=argv, exit_code=proc.returncode,
+            got = json.loads((res.stdout or "").strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            return None, "", f"no response ({'timeout' if res.timed_out else 'error'})"
+        return got.get("s"), str(got.get("b") or ""), got.get("e")
+
+    def _spawn(self, command: str, argv: list[str], *, timeout: int,
+               cwd: Optional[str]) -> Any:
+        from .. import owned_process
+        from ..local_fenced import _Tail, skill_environment
+        from ..sandbox import CommandResult, SandboxError
+
+        env = {**skill_environment(), "CI": "1"}
+        started = time.monotonic()
+        timed_out = False
+        with owned_process.owner_scope(OWNER_KIND, self.owner_id, project_id=self.project_id):
+            proc = owned_process.popen(argv, cwd=cwd, stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+                                       refuse_when_stopped=False)
+            if proc.sandbox is None:
+                # Never unfenced: the owner holds no sealed uid (released under us).
+                proc.end(reason="unfenced", grace=0)
+                raise SandboxError("the sealed sandbox is gone; the command was not run")
+            out, err = _Tail(proc.stdout, OUTPUT_CAP * 4), _Tail(proc.stderr, OUTPUT_CAP * 4)
+            try:
+                code: Optional[int] = proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out, code = True, None
+                proc.end(reason="timeout", grace=0)
+            finally:
+                if not proc._ended:  # noqa: SLF001
+                    proc.end(reason=f"exit:{proc.returncode}", grace=2.0)
+        stdout, _ = out.finish()
+        stderr, _ = err.finish()
+        return CommandResult(command=command, argv=argv, exit_code=code,
                              duration_ms=int((time.monotonic() - started) * 1000),
-                             timed_out=False, stdout=proc.stdout, stderr=proc.stderr)
+                             timed_out=timed_out, stdout=stdout, stderr=stderr)
+
+
+OWNER_KIND = "acceptance"
+
+#: The loopback request the sealed uid makes for `AcceptanceSandbox.http` (BOSS's code, not the
+#: agent's: its output is a JSON line BOSS parses).
+_REQUEST_SCRIPT = (
+    "import json,sys,urllib.request,urllib.error\n"
+    "a=json.loads(sys.argv[1])\n"
+    "r=urllib.request.Request(a['u'],method=a['m'],headers=a['h'],"
+    "data=a['b'].encode() if a['b'] is not None else None)\n"
+    "o=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n"
+    "try:\n"
+    " with o.open(r,timeout=a['t']) as x: print(json.dumps({'s':x.status,"
+    "'b':x.read(65536).decode('utf-8','replace')}))\n"
+    "except urllib.error.HTTPError as x: print(json.dumps({'s':x.code,"
+    "'b':x.read(65536).decode('utf-8','replace')}))\n"
+    "except Exception as x: print(json.dumps({'e':type(x).__name__}))\n")
 
 
 @dataclass
@@ -222,6 +319,7 @@ class AcceptanceSandbox:
     runner: Any = None
     owner: Any = None                       # the EphemeralSandbox, when it made the clone
     scratch: Optional[Path] = None          # the directory to delete at close
+    identity_owner: Optional[str] = None    # the sealed uid's owner id, released at close
 
     # -- the fence ---------------------------------------------------------------------------
     def _host_allowed(self, host: str) -> bool:
@@ -259,7 +357,7 @@ class AcceptanceSandbox:
         if why:
             cmd.refused = why
             return self.record.add(cmd)
-        workdir = None
+        workdir = str(self.root)          # every command runs IN the clone
         if cwd:
             target = (self.root / cwd).resolve()
             if not str(target).startswith(str(self.root.resolve())):
@@ -281,7 +379,22 @@ class AcceptanceSandbox:
         cmd.duration_ms = int(res.duration_ms or 0)
         cmd.output_sha256 = hashlib.sha256((out + "\0" + err).encode()).hexdigest()
         cmd.stdout, cmd.stderr = _trim(out), _trim(err)
+        cmd.tree_dirty = self.tree_dirty()
         return self.record.add(cmd)
+
+    def tree_dirty(self) -> Optional[bool]:
+        """Has the session changed the clone (modified, added or deleted anything, ignored files
+        included)? Run by BOSS with a sanitized git. None when git cannot say (fail closed)."""
+        try:
+            got = subprocess.run(["git", "status", "--porcelain", "--ignored",
+                                  "--untracked-files=all"], cwd=str(self.root),
+                                 capture_output=True, text=True, timeout=30,
+                                 env=git_env(self.root))
+        except Exception:  # noqa: BLE001
+            return None
+        if got.returncode != 0:
+            return None
+        return bool(got.stdout.strip())
 
     def http(self, method: str, url: str, *, headers: Optional[Mapping[str, str]] = None,
              body: Optional[str] = None, timeout: int = 30, replay: bool = False) -> Command:
@@ -296,9 +409,28 @@ class AcceptanceSandbox:
             cmd.refused = f"egress: {host or url} is not loopback" + (
                 "" if self.egress == LOOPBACK else " or the run's target")
             return self.record.add(cmd)
+        started = time.monotonic()
+        sealed_request = getattr(self.runner, "request", None)
+        if _is_loopback(host) and callable(sealed_request):
+            # LOOPBACK FROM THE SEALED UID: the request meets the commands' network fence (a
+            # BOSS-process request to loopback could reach BOSS's own services).
+            try:
+                status, text, error = sealed_request(method, url, headers=headers, body=body,
+                                                     timeout=timeout)
+            except Exception as exc:  # noqa: BLE001 — an infra fact, recorded
+                status, text, error = None, "", type(exc).__name__
+            cmd.duration_ms = int((time.monotonic() - started) * 1000)
+            if status is None:
+                cmd.exit, cmd.stderr = 7, f"no response ({error or 'error'})"
+                return self.record.add(cmd)
+            cmd.exit, cmd.status = 0, int(status)
+            cmd.output_sha256 = hashlib.sha256(text.encode()).hexdigest()
+            cmd.stdout = _trim(f"HTTP {status}\n{text}")
+            cmd.tree_dirty = self.tree_dirty()
+            return self.record.add(cmd)
+        # Only the run's own staging target (loopback+target) is requested by BOSS itself.
         req = urllib.request.Request(url, method=method, headers=dict(headers or {}),
                                      data=body.encode() if isinstance(body, str) else None)
-        started = time.monotonic()
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
             with opener.open(req, timeout=timeout) as resp:
@@ -313,6 +445,8 @@ class AcceptanceSandbox:
         cmd.exit, cmd.status = 0, int(status)
         cmd.output_sha256 = hashlib.sha256(text.encode()).hexdigest()
         cmd.stdout = _trim(f"HTTP {status}\n{text}")
+        # A server the session started from files it wrote is not the work under test.
+        cmd.tree_dirty = self.tree_dirty()
         return self.record.add(cmd)
 
     def changed_since(self, base_sha: Optional[str]) -> Optional[list[str]]:
@@ -321,7 +455,8 @@ class AcceptanceSandbox:
         if not base_sha or not self.head_sha or base_sha == self.head_sha:
             return [] if base_sha and base_sha == self.head_sha else None
         got = subprocess.run(["git", "diff", "--name-only", f"{base_sha}..{self.head_sha}"],
-                             cwd=str(self.root), capture_output=True, text=True, timeout=30)
+                             cwd=str(self.root), capture_output=True, text=True, timeout=30,
+                             env=git_env(self.root))
         if got.returncode != 0:
             return None
         return [x for x in got.stdout.splitlines() if x.strip()]
@@ -331,6 +466,10 @@ class AcceptanceSandbox:
             if self.owner is not None:
                 self.owner.teardown()
         finally:
+            if self.identity_owner:
+                from .. import sandbox_identity
+
+                sandbox_identity.release(self.identity_owner)   # kills the uid, removes its dir
             if self.scratch is not None:
                 shutil.rmtree(self.scratch, ignore_errors=True)
 
@@ -342,13 +481,22 @@ class AcceptanceSandbox:
 
 
 def _git(args: list[str], cwd: Path, timeout: int = 120) -> str:
-    env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "TMPDIR")}
-    env["GIT_TERMINAL_PROMPT"] = "0"
     got = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True,
-                         timeout=timeout, env=env)
+                         timeout=timeout, env=git_env(cwd))
     if got.returncode != 0:
         raise RuntimeError(f"git {args[0]} failed ({got.returncode})")
     return got.stdout.strip()
+
+
+def _commit_of(root: Path, ref: str) -> str:
+    """The commit a sha, branch or tag names in the clone — a branch the clone only has as
+    `origin/<ref>` included (a bundle with no HEAD leaves no local branch)."""
+    for candidate in (ref, f"origin/{ref}", f"refs/remotes/origin/{ref}"):
+        try:
+            return _git(["rev-parse", "--verify", "--quiet", f"{candidate}^{{commit}}"], root)
+        except RuntimeError:
+            continue
+    raise RuntimeError(f"git rev-parse failed ({ref} is not in the clone)")
 
 
 def _cut_remotes(root: Path) -> None:
@@ -361,14 +509,20 @@ def open_sandbox(settings: Any, *, run_id: str, source: Any = None, head_sha: Op
                  branch: Optional[str] = None, owner: Optional[str] = None,
                  repo: Optional[str] = None, token: Optional[str] = None,
                  egress_access: Any = None, egress: str = LOOPBACK,
-                 target_url: Optional[str] = None) -> AcceptanceSandbox:
-    """A throwaway clone of the PR head.
+                 target_url: Optional[str] = None,
+                 project_id: Optional[str] = None) -> AcceptanceSandbox:
+    """A throwaway clone of the PR head in the SEALED sandbox, or AcceptanceFenceUnavailable.
 
-    `source` (a local repository path or a git bundle): cloned into a fresh scratch directory.
-    Otherwise `owner`/`repo`/`branch` through the existing EphemeralSandbox (its credential
-    belongs to provisioning only). Then `head_sha` is checked out detached when it is in the
-    clone, and every remote is removed. `egress='loopback+target'` with `target_url` lets the
-    session reach the run's own staging target besides loopback."""
+    A sealed uid is leased first (loopback-only network, its own directory). `source` (a local
+    repository or git bundle) is cloned by BOSS, with a sanitized git, into that uid's
+    directory; otherwise `owner`/`repo`/`branch` are fetched by the existing EphemeralSandbox
+    (its credential belongs to provisioning only) into the same directory. `head_sha` is checked
+    out detached, every remote removed. `egress='loopback+target'` with `target_url` lets
+    BOSS's own requests (`http`) reach the run's staging target; commands stay loopback-only."""
+    import uuid
+
+    from .. import owned_process, sandbox_identity
+
     if egress not in (LOOPBACK, LOOPBACK_TARGET):
         raise ValueError("egress is loopback or loopback+target")
     targets: tuple[str, ...] = ()
@@ -377,40 +531,57 @@ def open_sandbox(settings: Any, *, run_id: str, source: Any = None, head_sha: Op
         if not host:
             raise ValueError("loopback+target needs the run's target URL")
         targets = (host,)
-    scratch: Optional[Path] = None
+    problem = fence_problem(settings)
+    if problem:
+        raise AcceptanceFenceUnavailable(
+            f"the acceptance sandbox will not run commands unfenced: {problem}")
+    owner_id = f"acceptance:{run_id}:{uuid.uuid4().hex[:8]}"
+    try:
+        ident = sandbox_identity.acquire(owner_id, project_id=project_id, what="acceptance",
+                                         seed_logins=False, sealed=True)
+    except sandbox_identity.SandboxUnavailable as exc:
+        raise AcceptanceFenceUnavailable(str(exc)) from exc
+    if ident is None or not ident.sealed:
+        sandbox_identity.release(owner_id)
+        raise AcceptanceFenceUnavailable("no sealed sandbox uid was leased")
     eph = None
     try:
         if source is not None:
-            base = Path(getattr(settings, "sandbox_root_path", None) or tempfile.gettempdir())
-            base = base / "boss-acceptance"
-            base.mkdir(parents=True, exist_ok=True)
-            scratch = Path(tempfile.mkdtemp(prefix=f"acc-{run_id}-", dir=base))
-            root = scratch / "clone"
-            _git(["clone", "--quiet", "--no-hardlinks", str(source), str(root)], scratch)
+            work = ident.workspace("acc-")
+            root = work / "clone"
+            _git(["clone", "--quiet", "--no-hardlinks", "--no-local", str(source), str(root)],
+                 work)
         else:
             from ..sandbox import EphemeralSandbox
 
-            eph = EphemeralSandbox(settings, task_id=f"acc-{run_id}")
-            root = Path(eph.provision(owner, repo, base_branch=branch or "main", token=token,
-                                      egress=egress_access))
+            with owned_process.owner_scope(OWNER_KIND, owner_id, project_id=project_id):
+                eph = EphemeralSandbox(settings, task_id=f"acc-{run_id}")
+                root = Path(eph.provision(owner, repo, base_branch=branch or "main",
+                                          token=token, egress=egress_access))
         if head_sha:
             try:
-                _git(["checkout", "--quiet", "--detach", head_sha], root)
+                _git(["checkout", "--quiet", "--detach", _commit_of(root, head_sha)], root)
             except RuntimeError:
                 _log.warning("acceptance sandbox: %s is not in the clone; checking its branch",
                              str(head_sha)[:12])
         elif branch and source is not None:
-            _git(["checkout", "--quiet", "--detach", branch], root)
+            _git(["checkout", "--quiet", "--detach", _commit_of(root, branch)], root)
         _cut_remotes(root)
         head = _git(["rev-parse", "HEAD"], root)
-        runner = eph if eph is not None else _LocalRunner(settings, root)
+        os.chmod(root, 0o2777)
+        for dirpath, dirnames, filenames in os.walk(root):
+            for n in dirnames + filenames:
+                with contextlib.suppress(OSError):
+                    full = os.path.join(dirpath, n)
+                    if not os.path.islink(full):
+                        os.chmod(full, 0o2777 if os.path.isdir(full) else 0o664)
         return AcceptanceSandbox(root=root, head_sha=head, egress=egress, target_hosts=targets,
-                                 runner=runner, owner=eph, scratch=scratch)
+                                 runner=_FencedRunner(settings, owner_id, project_id),
+                                 owner=eph, identity_owner=owner_id)
     except Exception:
         if eph is not None:
             eph.teardown()
-        if scratch is not None:
-            shutil.rmtree(scratch, ignore_errors=True)
+        sandbox_identity.release(owner_id)
         raise
 
 

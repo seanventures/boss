@@ -15628,6 +15628,7 @@ CREATE TABLE IF NOT EXISTS findings (
   reopened_count      INT NOT NULL DEFAULT 0,
   work_item_id        TEXT REFERENCES work_items(id) ON DELETE SET NULL,
   followup_run_id     TEXT,
+  held_at             TIMESTAMPTZ,
   pr_url              TEXT,
   waived_by           TEXT,
   waive_reason        TEXT,
@@ -15660,18 +15661,21 @@ CREATE INDEX IF NOT EXISTS ix_finding_observations_finding
   ON finding_observations (finding_id, at DESC);
 
 -- A lineage's work item links each of its findings (work_item_links.kind 'finding').
-DO $aa_b_links$ BEGIN
-  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'work_item_links_kind_check'
-             AND conrelid = 'work_item_links'::regclass
-             AND pg_get_constraintdef(oid) NOT LIKE '%''finding''%') THEN
+DO $aa_b_links$
+DECLARE
+  def TEXT;
+  kinds TEXT[];
+BEGIN
+  -- Extend whatever kinds the live constraint holds (never a fixed list that could drop one).
+  SELECT pg_get_constraintdef(oid) INTO def FROM pg_constraint
+   WHERE conname = 'work_item_links_kind_check' AND conrelid = 'work_item_links'::regclass;
+  IF def IS NOT NULL AND def NOT LIKE '%''finding''%' THEN
+    SELECT array_agg(m[1]) INTO kinds FROM regexp_matches(def, '''([a-z_]+)''', 'g') AS m;
     ALTER TABLE work_item_links DROP CONSTRAINT work_item_links_kind_check;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'work_item_links_kind_check'
-                 AND conrelid = 'work_item_links'::regclass) THEN
-    ALTER TABLE work_item_links ADD CONSTRAINT work_item_links_kind_check
-      CHECK (kind IN ('signal', 'workflow_run', 'code_task', 'decision', 'act', 'incident',
-                      'meeting', 'pull_request', 'reservation', 'alert', 'recommendation',
-                      'finding'));
+    EXECUTE format('ALTER TABLE work_item_links ADD CONSTRAINT work_item_links_kind_check '
+                   'CHECK (kind IN (%s))',
+                   (SELECT string_agg(quote_literal(k), ', ')
+                      FROM unnest(kinds || ARRAY['finding']) AS k));
   END IF;
 END $aa_b_links$;
 -- ================================ end AA-B / AA-E ==
