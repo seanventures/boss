@@ -1,6 +1,11 @@
 "use client";
 
-import type { AiSreCapability, AiSreFeed } from "../lib/ai-sre";
+import {
+  noiseCard,
+  NOISE_REPORT_NOT_LOADED,
+  type AiSreCapability,
+  type AiSreFeed,
+} from "../lib/ai-sre";
 
 const STATUS_COLOR: Record<string, string> = {
   shipped: "#3fb950",
@@ -129,6 +134,46 @@ export function AiSreHome({ feed }: { feed: AiSreFeed }) {
           </>
         )}
       </article>
+      <NoiseCard feed={feed} />
     </div>
+  );
+}
+
+function NoiseCard({ feed }: { feed: AiSreFeed }) {
+  const card = feed.noise ? noiseCard(feed.noise) : null;
+  return (
+    <article className="stack-card" aria-label="Noise">
+      <h3 style={{ margin: 0 }}>Noise</h3>
+      {card == null ? (
+        <p className="detail">{feed.noiseError || NOISE_REPORT_NOT_LOADED}</p>
+      ) : (
+        <>
+          <p className="detail">
+            raw signals <b data-noise-raw={card.raw}>{card.raw}</b>
+            {", "}
+            clustered incidents <b data-noise-clustered={card.clustered}>{card.clustered}</b>
+            {card.showRatio ? (
+              <>
+                {", "}
+                ratio <b data-noise-ratio={String(card.ratio)}>{String(card.ratio)}</b>
+              </>
+            ) : null}
+          </p>
+          {card.signatures.length > 0 ? (
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {card.signatures.map((row) => (
+                <li key={`${row.kind}:${row.signature}`} data-noise-signature={row.signature}>
+                  <span data-copy="data">{row.signature}</span>
+                  {" "}
+                  <span data-copy="data">{row.kind}</span>
+                  {" "}
+                  <span data-copy="data">{row.signal_rows}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </>
+      )}
+    </article>
   );
 }
