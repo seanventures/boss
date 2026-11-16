@@ -46,7 +46,6 @@ import os
 import re
 import shutil
 import sys
-import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -580,9 +579,17 @@ def _child(project_id: str, repo: str, root: Path, limits: Limits, previous: str
     return out
 
 
+def kg_index_root(configured: Optional[str] = None) -> Path:
+    """Where the index clones every bound repository: an owner-only BOSS directory
+    (private_dirs, BOSSAPP-1325). It was /tmp/boss-kg-index with the default umask, readable by
+    every sandboxed agent — crun_bbf93235's planner read another project's clone there."""
+    from ..private_dirs import ensure_private, private_dir
+
+    return ensure_private(configured) if configured else private_dir("kg-index")
+
+
 def _work_dir(limits: Limits, binding_id: str) -> Path:
-    base = Path(limits.work_dir) if limits.work_dir else Path(tempfile.gettempdir()) / "boss-kg-index"
-    return base / binding_id
+    return kg_index_root(str(limits.work_dir) if limits.work_dir else None) / binding_id
 
 
 def _finish(engine: Any, row: dict, job_id: str, *, state: str, error: Optional[str] = None,

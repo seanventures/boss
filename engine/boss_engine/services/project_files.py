@@ -50,8 +50,11 @@ def _artifact_root(settings: Any) -> Path:
 
 
 def _kg_root(settings: Any) -> Path:
+    """The knowledge-graph index's clones: BOSS's alone (private_dirs), never /tmp."""
+    from .knowledge.repo_index import kg_index_root
+
     configured = str(getattr(settings, "kg_index_dir", "") or "")
-    return Path(configured) if configured else Path(tempfile.gettempdir()) / "boss-kg-index"
+    return kg_index_root(configured or None)
 
 
 def owned_roots(settings: Any) -> dict[str, Path]:

@@ -6056,7 +6056,15 @@ _MAX_FILE_BYTES = 400_000
 # Where cloned customer repos are cached. Read-only working copies, refreshed on
 # demand — BOSS already clones this repo to build and to deploy; this reuses the
 # same credential path rather than inventing a second way to reach the code.
-_REPO_CACHE = _os.environ.get("BOSS_REPO_CACHE") or "/tmp/boss-repo-cache"
+_REPO_CACHE = _os.environ.get("BOSS_REPO_CACHE") or ""
+
+
+def _repo_cache() -> str:
+    """The chat tools' clone cache: an owner-only BOSS directory (private_dirs, BOSSAPP-1325),
+    never /tmp — a sandboxed agent could read every cached customer repository there."""
+    from ..services.private_dirs import ensure_private, private_dir
+
+    return str(ensure_private(_REPO_CACHE) if _REPO_CACHE else private_dir("repo-cache"))
 
 
 #: Words a person puts in front of a role's name in a sentence, and never in the table.
@@ -6161,9 +6169,9 @@ def _repo_root(settings: Any, repo: str,
 
     ref = (ref or "").strip()
     slug = re.sub(r"[^0-9A-Za-z._-]+", "_", ref)[:80]
-    dest = _os.path.join(_REPO_CACHE, f"{owner}__{short}" + (f"__{slug}" if slug else ""))
+    dest = _os.path.join(_repo_cache(), f"{owner}__{short}" + (f"__{slug}" if slug else ""))
     try:
-        _os.makedirs(_REPO_CACHE, exist_ok=True)
+        _repo_cache()
         from ..services.repo_host import git_access
 
         # The checkout is what the read tools hand an agent: the token rides in git's
@@ -6260,9 +6268,9 @@ def _boss_source_root(settings: Any, ref: _Optional[str] = None
             fallback["why"] = f"the running commit {wanted[:12]} is not in the mirror yet"
             _BOSS_ROOT_ORIGIN[_SOURCE_ROOT] = fallback
             return _SOURCE_ROOT, None
-        dest = _os.path.join(_REPO_CACHE, f"boss-self__{sha}")
+        dest = _os.path.join(_repo_cache(), f"boss-self__{sha}")
         if not _os.path.isdir(dest):
-            _os.makedirs(_REPO_CACHE, exist_ok=True)
+            _repo_cache()
             # Built beside, then renamed into place: a second reader never sees half a tree.
             staging = f"{dest}.tmp-{_os.getpid()}-{uuid.uuid4().hex[:6]}"
             try:
@@ -8587,7 +8595,7 @@ def _register_image_tools(reg: ToolRegistry) -> None:
         if not project_id or not re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", str(project_id)) \
                 or str(project_id) in {".", ".."}:
             return {"ok": False, "error": "generate_image needs the acting project"}
-        root = _os.path.join(_os.environ.get("BOSS_IMAGE_DIR") or _os.path.join(_REPO_CACHE, "images"),
+        root = _os.path.join(_os.environ.get("BOSS_IMAGE_DIR") or _os.path.join(_repo_cache(), "images"),
                              str(project_id))
         _os.makedirs(root, exist_ok=True)
         dest = _safe_path(rel, root)

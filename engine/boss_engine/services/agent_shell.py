@@ -110,7 +110,10 @@ def ensure_workspace(
         shutil.rmtree(path, ignore_errors=True)
     if (path / ".git").is_dir():
         return path, None
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # Owner-only (private_dirs, BOSSAPP-1325): another run's sandboxed agent never reads it.
+    from .private_dirs import ensure_private
+
+    ensure_private(path.parent)
     # `git_env` (repo_host.GitAccess.environ()) carries the credential to git's own process
     # only; the URL is then credential-free and nothing lands in `.git/config` or argv.
     result = owned_process.run(
