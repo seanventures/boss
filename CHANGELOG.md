@@ -2,6 +2,22 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.19]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.19.md](docs/community/RELEASE_NOTES_v1.0-rc10.19.md).
+
+### Added
+
+- The reports page draws the selected window's days and agents, and shows subscription-included spend beside the settled figure. An activity export says when retention cut it and how many lines it wrote. The dashboard names the cursor, the ack backlog, and the canary counts. A workflow card shows the last run's status. Recent sends say when returned rows are off the page, and a failed send shows its error word. The activity rail says when it is showing 40 people. A finding path opens that lane's pull request. A tool-call export says when the cap hid older rows. The app Logs control says it opens the Activity log. A change-set lane shows its short commit and its diff counts.
+
+### Changed
+
+- The community candidate version is `1.0.0-rc.10.19`.
+
+### Release scope
+
+- This is the git tag of public main after rc10.18. It is not a live host deploy. No image tag or release-gate run is attached. The export record still cites `docs/community/RC9_VALIDATION.md`. A failed deploy phase still has no phase-only retry. A migration approval was not added.
+
 ## [v1.0-rc10.18]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.18.md](docs/community/RELEASE_NOTES_v1.0-rc10.18.md).
