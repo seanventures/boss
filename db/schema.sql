@@ -15968,3 +15968,27 @@ CREATE TABLE IF NOT EXISTS project_prompts (
 );
 CREATE INDEX IF NOT EXISTS idx_project_prompts_project
   ON project_prompts (project_id, created_at DESC);
+-- BOSSAPP-1265: a person edits the hosts one run may call. The proxy refuses any other host.
+-- The secret named for the run is stored here so the proxy can inject it. The receipt does
+-- not copy secret_value.
+CREATE TABLE IF NOT EXISTS run_outbound_allowlists (
+  run_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  hosts JSONB NOT NULL DEFAULT '[]'::jsonb,
+  updated_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_run_outbound_allowlists_project
+  ON run_outbound_allowlists (project_id);
+CREATE TABLE IF NOT EXISTS run_egress_secrets (
+  run_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  secret_name TEXT NOT NULL,
+  secret_value TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_run_egress_secrets_project
+  ON run_egress_secrets (project_id);
