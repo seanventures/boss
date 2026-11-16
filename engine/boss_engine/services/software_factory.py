@@ -1917,6 +1917,15 @@ class SoftwareFactoryService:
 
         reservation = (self.budget.assert_active_reservation(connection, project_id, reservation_id)
                        if reservation_id else None)
+        if rescue_of_run and not self._is_rescue_of(connection, project_id, rescue_of_run,
+                                                    reservation_id):
+            # Not this project's build, or not its hold: no waiver, the ordinary rule below.
+            self.events.emit(
+                connection, project_id, "software_factory.rescue_pr_refused", "coding_worker",
+                "code_task_run", rescue_of_run,
+                {"reservation_id": reservation_id,
+                 "why": "the rescue names no build of this project holding this reservation"})
+            rescue_of_run = None
         if rescue_of_run:
             # THE RESCUE TOUCHES NO HOLD: the build's exit settles its money on its reservation.
             self.events.emit(
@@ -2672,6 +2681,24 @@ class SoftwareFactoryService:
                              {"pull_request_number": number, "decision_id": decision_id,
                               "why": "a person decided to merge it with its checks failing"})
 
+    @staticmethod
+    def _is_rescue_of(connection: Any, project_id: str, run_id: str,
+                      reservation_id: Optional[str]) -> bool:
+        """`run_id` is a build of this project, and `reservation_id` (when given) is its hold:
+        the one it started with, or one it renewed to open its PR (code_task.reservation_renewed)."""
+        row = connection.execute(
+            sql("SELECT reservation_id FROM code_task_runs WHERE id = :r AND project_id = :p"),
+            {"r": run_id, "p": project_id}).mappings().first()
+        if row is None:
+            return False
+        if not reservation_id or str(row["reservation_id"] or "") == str(reservation_id):
+            return True
+        return bool(connection.execute(
+            sql("SELECT 1 FROM events WHERE project_id = :p AND entity_id = :r "
+                "AND event_type = 'code_task.reservation_renewed' "
+                "AND data->>'reservation_id' = :res LIMIT 1"),
+            {"p": project_id, "r": run_id, "res": str(reservation_id)}).first())
+
     def _release_hold(self, connection: Any, project_id: str, reservation_id: Optional[str],
                       note: str) -> None:
         """Release the PR step's hold; a rescue PR has none (propose_pull_request)."""
@@ -2700,6 +2727,7 @@ class SoftwareFactoryService:
                           "failing_gates": _checks_failing.gate_names(checks_failing),
                           "security": bool(checks_failing.get("security")), **posted})
 
+    @_host_writes_on_caller
     def merge_pull_request(
         self,
         connection: Any,

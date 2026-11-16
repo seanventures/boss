@@ -94,20 +94,21 @@ def writes_on(connection: Any) -> Iterator[None]:
 
 
 def _written_transaction_open() -> Optional[Any]:
-    """The caller's transaction (db.begin, this thread) when it has written anything, or None.
-    A transaction that has written has a transaction id; one that only read has none."""
-    from ..db import open_transaction
+    """A transaction this thread holds open (db.begin, ANY level of the stack) that has written
+    anything, or None. A transaction that has written has a transaction id; one that only read
+    has none."""
+    from ..db import open_transactions
 
-    outer = open_transaction()
-    if outer is None:
-        return None
-    try:
-        if outer.dialect.name != "postgresql":
-            return None
-        xid = outer.execute(text("SELECT txid_current_if_assigned()")).scalar()
-    except Exception:  # noqa: BLE001 — a closed or failed caller connection is not ours to judge
-        return None
-    return outer if xid is not None else None
+    for outer in reversed(open_transactions()):
+        try:
+            if outer.dialect.name != "postgresql":
+                continue
+            xid = outer.execute(text("SELECT txid_current_if_assigned()")).scalar()
+        except Exception:  # noqa: BLE001 — a closed or failed caller connection is not ours
+            continue
+        if xid is not None:
+            return outer
+    return None
 
 
 def _guard_own_transaction(what: str) -> None:
@@ -312,7 +313,10 @@ class LocalGitAdapter:
                             draft: Optional[bool] = None, base: Optional[str] = None,
                             run_id: Optional[str] = None) -> PullRequestResult:
         """Open (or refresh) the change set for this branch: one open change set per branch,
-        as GitHub keeps one open PR per head."""
+        as GitHub keeps one open PR per head. It commits on its OWN short transaction even
+        under writes_on (`independent`): the number is allocated and visible at once, as a
+        GitHub PR is, and the repository's advisory lock is never held for a caller's long
+        transaction — so a caller must not have written this branch's change-set row first."""
         # BOSSAPP-866: a secret value handed to the run never reaches the PR text.
         from .run_secret_redaction import scrub as _scrub_known
 

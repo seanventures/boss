@@ -287,6 +287,9 @@ def test_a_rescue_leaves_an_active_hold_to_the_builds_exit(engine, world, repo_r
     pid, bound, branch, run_id = _project(engine, world)
     sf = _factory(engine, pid)
     reservation_id = _reserve(engine, sf, pid)
+    with engine.begin() as c:
+        c.execute(text("UPDATE code_task_runs SET reservation_id = :res WHERE id = :r"),
+                  {"res": reservation_id, "r": run_id})
     with boss_db.begin(engine) as c:
         proposal = _propose(sf, c, pid, branch, run_id, reservation_id=reservation_id,
                             rescue_of_run=run_id)
@@ -296,6 +299,61 @@ def test_a_rescue_leaves_an_active_hold_to_the_builds_exit(engine, world, repo_r
                            {"i": reservation_id}).scalar()
     assert status == "active"
     assert _missing_reservation_cards(engine, pid) == 0
+
+
+def test_a_rescue_naming_another_build_or_hold_gets_no_waiver(engine, world, repo_root):
+    pid, _bound, branch, run_id = _project(engine, world)
+    other_pid, _b2, _br2, other_run = _project(engine, world)
+    sf = _factory(engine, pid)
+    # A build of ANOTHER project: the ordinary rule, the card, and the refusal on record.
+    with boss_db.begin(engine) as c:
+        refused = _propose(sf, c, pid, branch, run_id, reservation_id=None,
+                           rescue_of_run=other_run)
+    assert refused["status"] == "blocked" and _missing_reservation_cards(engine, pid) == 1
+    # A hold that is not the build's (nor one it renewed): no waiver either.
+    stranger = _reserve(engine, sf, pid)
+    with engine.connect() as c:
+        assert sf._is_rescue_of(c, pid, run_id, stranger) is False  # noqa: SLF001
+    with engine.begin() as c:
+        c.execute(text(
+            "INSERT INTO events (id, project_id, event_type, actor, entity_type, entity_id, data) "
+            "VALUES (:id, :p, 'code_task.reservation_renewed', 'boss', 'code_task_run', :r, "
+            "CAST(:d AS JSONB))"),
+            {"id": "evt_" + uuid.uuid4().hex[:20], "p": pid, "r": run_id,
+             "d": json.dumps({"reservation_id": stranger})})
+        assert sf._is_rescue_of(c, pid, run_id, stranger) is True     # noqa: SLF001 — renewed
+    with engine.connect() as c:
+        events = c.execute(text("SELECT count(*) FROM events WHERE project_id = :p AND "
+                                "event_type = 'software_factory.rescue_pr_refused'"),
+                           {"p": pid}).scalar()
+    assert events == 1 and other_pid != pid
+
+
+def test_the_whole_merge_of_a_checks_failing_draft_runs_on_the_merges_transaction(
+        engine, world, repo_root):
+    """software_factory.merge_pull_request marks the draft ready (the row is then locked on the
+    merge's connection) and merges the change set: both on that connection, or the merge would
+    wait on the lock the draft-ready step just took."""
+    from boss_engine.services.core import create_blocking_decision
+
+    pid, bound, branch, run_id = _project(engine, world)
+    sf = _factory(engine, pid)
+    pr = sf.github.create_pull_request(branch, "Desk timer", "", draft=True, run_id=run_id)
+    record = {**cf.collect(["written_tests_pass"], {}), "draft": True}
+    with engine.begin() as c:
+        decision_id = create_blocking_decision(
+            c, pid, None, "Approve code change: Desk timer",
+            {"action": "review_pull_request", "pull_request_url": pr.url, cf.KEY: record},
+            {}, "review")
+        c.execute(text("UPDATE decisions SET status = 'approved', approved_by = 'owner', "
+                       "approved_at = now() WHERE id = :d"), {"d": decision_id})
+    with boss_db.begin(engine) as c:
+        _idle_limit(c)
+        merged = sf.merge_pull_request(c, pid, None, decision_id, f"merge:{run_id}", pr.number,
+                                       pr.url, "Desk timer", branch)
+    assert merged.get("status") not in ("failed", "blocked"), merged
+    change = _change(engine, bound, pr.number)
+    assert change["state"] == "merged" and change["draft"] is False and change["merged_sha"]
 
 
 def test_rescue_pr_passes_the_runs_hold_and_records_a_failure_as_an_event():

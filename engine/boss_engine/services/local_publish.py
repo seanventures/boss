@@ -384,6 +384,10 @@ def publish(c: Any, settings: Any, project_id: str, *, owner: str, repo: str,
         from .github_outage import repoint_pull_request
         from .local_repo_host import change_set_url
 
+        # Safe only because each push and GitHub call happens BEFORE `c` locks that change set's
+        # row (the UPDATE below), and the GitHub adapter never touches local_change_sets: a local
+        # adapter write from a second connection here would wait on our own lock
+        # (local_repo_host.writes_on).
         for row in rows:
             key = str(row["number"])
             try:

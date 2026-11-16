@@ -760,6 +760,12 @@ def open_transaction() -> Optional[object]:
     return stack[-1] if stack else None
 
 
+def open_transactions() -> tuple:
+    """Every transaction this context has open through `begin`, outermost first: an outer one
+    that wrote holds its locks while an inner one runs."""
+    return _OPEN_TRANSACTIONS.get()
+
+
 @contextmanager
 def begin(engine: Optional[Engine] = None):
     active_engine = engine or get_engine()
