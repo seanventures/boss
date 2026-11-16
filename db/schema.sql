@@ -15719,3 +15719,26 @@ ALTER TABLE budget_reservations ADD COLUMN IF NOT EXISTS member_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_budget_reservations_member_active
   ON budget_reservations (member_id, status)
   WHERE member_id IS NOT NULL AND status = 'active';
+-- BOSSAPP-1249: stream new security-audit rows to one customer SIEM URL.
+-- Delivery state lives here. identity_security_events is not updated or deleted,
+-- so the hash chain is not rewritten.
+CREATE TABLE IF NOT EXISTS identity_siem_destinations (
+  org_id      TEXT PRIMARY KEY REFERENCES orgs(id) ON DELETE CASCADE,
+  url         TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS identity_siem_deliveries (
+  org_id      TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  event_id    BIGINT NOT NULL,
+  seq         BIGINT NOT NULL,
+  status      TEXT NOT NULL CHECK (status IN ('sent', 'retry', 'dead')),
+  attempts    INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  last_error  TEXT NOT NULL DEFAULT '',
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (org_id, event_id)
+);
+
+CREATE INDEX IF NOT EXISTS identity_siem_deliveries_open
+  ON identity_siem_deliveries (org_id, status);
