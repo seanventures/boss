@@ -22,11 +22,16 @@ const SHORT = "Cuts the launch video";
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 
-afterEach(() => {
+function clearHost() {
   act(() => root?.unmount());
   host?.remove();
+  document.body.innerHTML = "";
   root = null;
   host = null;
+}
+
+afterEach(() => {
+  clearHost();
 });
 
 function wire(why: string) {
@@ -92,10 +97,7 @@ describe("the start proposal says why", () => {
     expect(sixSentence!.hasAttribute("data-user-text")).toBe(true);
     expect(SIX.split(/\s+/).filter(Boolean).length).toBe(6);
 
-    act(() => root?.unmount());
-    host?.remove();
-    root = null;
-    host = null;
+    clearHost();
 
     const seven = mount(SEVEN);
     expect(whyChip(seven).textContent).toBe("Why");
@@ -103,10 +105,7 @@ describe("the start proposal says why", () => {
     expect(sentenceEl(seven)!.tagName).toBe("P");
     expect(SEVEN.split(/\s+/).filter(Boolean).length).toBe(7);
 
-    act(() => root?.unmount());
-    host?.remove();
-    root = null;
-    host = null;
+    clearHost();
 
     const short = mount(SHORT);
     expect(whyChip(short).textContent).toBe("Why");
@@ -120,10 +119,7 @@ describe("the start proposal says why", () => {
     expect(whyChip(blank).getAttribute("title")).toBe(" \n\t ");
     expect(sentenceEl(blank)).toBeNull();
 
-    act(() => root?.unmount());
-    host?.remove();
-    root = null;
-    host = null;
+    clearHost();
 
     const empty = mount("");
     expect(empty.querySelector(".ag-why")).toBeNull();
