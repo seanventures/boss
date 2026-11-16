@@ -1,0 +1,612 @@
+"use client";
+
+/**
+ * The build bench on the default overview (BOSSAPP-1273).
+ *
+ * Same jobs as a studio home: a status line, a headline, one composer, an add menu,
+ * a mode, a microphone when the browser can dictate, "I'm feeling lucky", chips, and
+ * a template gallery. Drawn as a job ticket in the console's own type and tokens.
+ *
+ * Chips only fill the sentence. Lucky is the only control that starts a build, and an
+ * empty sentence is allowed — the server invents the spec. A refused launch never
+ * shows a project or a run.
+ */
+import React, { useEffect, useId, useRef, useState } from "react";
+
+import { openStartSheet } from "./start-project/start-host";
+
+import "./build-home.css";
+
+const PLACEHOLDER = "Describe an app and let BOSS do the rest";
+
+const CHIPS = [
+  "Build an Android app",
+  "Maps",
+  "Create a game",
+  "Three.js 3D scenes",
+  "Build an XR app",
+] as const;
+
+const MODES = [
+  { id: "build", label: "Build" },
+  { id: "prototype", label: "Prototype" },
+] as const;
+
+type Phase = "ready" | "starting" | "started" | "error";
+
+type TemplateCard = {
+  id: string;
+  title: string;
+  category: string;
+  blurb: string;
+  prompt: string;
+};
+
+type Attachment = { id: string; name: string };
+
+type LaunchIds = { projectId: string; runId: string };
+
+type Gallery =
+  | { state: "loading" }
+  | { state: "ready"; templates: TemplateCard[] }
+  | { state: "error"; message: string };
+
+type Rec = {
+  lang: string;
+  interimResults: boolean;
+  onresult: ((ev: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+function recognitionCtor(): (new () => Rec) | null {
+  if (typeof window === "undefined") return null;
+  const w = window as unknown as {
+    SpeechRecognition?: new () => Rec;
+    webkitSpeechRecognition?: new () => Rec;
+  };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+
+function str(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function first(obj: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = str(obj[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
+async function readBody(res: Response): Promise<unknown> {
+  const text = await res.text();
+  if (!text) return null;
+  if (text.trim().startsWith("<")) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return { message: text.slice(0, 280) };
+  }
+}
+
+function messageOf(data: unknown, fallback: string): string {
+  if (!data || typeof data !== "object") return fallback;
+  const record = data as Record<string, unknown>;
+  for (const key of ["message", "error", "detail"]) {
+    const value = str(record[key]);
+    if (value) return value;
+  }
+  return fallback;
+}
+
+function templatesFrom(data: unknown): TemplateCard[] {
+  const list = Array.isArray(data)
+    ? data
+    : data && typeof data === "object" && Array.isArray((data as { templates?: unknown }).templates)
+      ? (data as { templates: unknown[] }).templates
+      : null;
+  if (!list) throw new Error("Templates did not load.");
+  const cards: TemplateCard[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const id = first(record, ["id", "template_id"]);
+    const title = first(record, ["title", "name"]);
+    if (!id || !title) continue;
+    cards.push({
+      id,
+      title,
+      category: first(record, ["category", "kind"]),
+      blurb: first(record, ["blurb", "summary", "description"]),
+      prompt: first(record, ["prompt"]),
+    });
+  }
+  if (list.length > 0 && cards.length === 0) throw new Error("Templates did not load.");
+  return cards;
+}
+
+function idsFrom(data: unknown): string[] {
+  if (!data || typeof data !== "object") return [];
+  const record = data as Record<string, unknown>;
+  for (const key of ["attachment_ids", "ids"]) {
+    const list = record[key];
+    if (!Array.isArray(list)) continue;
+    return list.map((item) => str(item)).filter(Boolean);
+  }
+  const single = first(record, ["id", "attachment_id"]);
+  return single ? [single] : [];
+}
+
+function launchIds(data: unknown): LaunchIds | null {
+  if (!data || typeof data !== "object") return null;
+  const record = data as Record<string, unknown>;
+  const projectId = first(record, ["project_id", "projectId"]);
+  const runId = first(record, ["run_id", "runId"]);
+  if (!projectId && !runId) return null;
+  return { projectId, runId };
+}
+
+function rowsFor(files: File[], ids: string[]): Attachment[] {
+  if (ids.length === files.length) {
+    return ids.map((id, index) => ({ id, name: files[index]?.name || id }));
+  }
+  if (ids.length === 1) return [{ id: ids[0]!, name: files.map((file) => file.name).filter(Boolean).join(", ") || ids[0]! }];
+  return ids.map((id) => ({ id, name: id }));
+}
+
+const STATUS: Record<Phase, string> = {
+  ready: "Ready to build",
+  starting: "Starting",
+  started: "Build started",
+  error: "Not started",
+};
+
+export function BuildHome() {
+  const promptId = useId();
+  const menuId = useId();
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const addRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const uploadRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
+  const recRef = useRef<Rec | null>(null);
+  const generation = useRef(0);
+
+  const [prompt, setPrompt] = useState("");
+  const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("build");
+  const [templateId, setTemplateId] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [phase, setPhase] = useState<Phase>("ready");
+  const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [launch, setLaunch] = useState<LaunchIds | null>(null);
+  const [launchError, setLaunchError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [driveNote, setDriveNote] = useState(false);
+  const [canDictate, setCanDictate] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [micError, setMicError] = useState<string | null>(null);
+  const [gallery, setGallery] = useState<Gallery>({ state: "loading" });
+  const [galleryTicket, setGalleryTicket] = useState(0);
+
+  const touch = () => {
+    generation.current += 1;
+    setLaunch(null);
+    setLaunchError(null);
+    setPhase("ready");
+  };
+
+  useEffect(() => {
+    setCanDictate(recognitionCtor() !== null);
+    return () => {
+      try { recRef.current?.stop(); } catch { /* already stopped */ }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onDoc = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setMenuOpen(false);
+      addRef.current?.focus();
+    };
+    document.addEventListener("click", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("click", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
+  useEffect(() => {
+    let live = true;
+    setGallery({ state: "loading" });
+    fetch("/api/factory/templates")
+      .then(async (res) => {
+        const data = await readBody(res);
+        if (!res.ok) throw new Error(messageOf(data, "Templates did not load."));
+        return templatesFrom(data);
+      })
+      .then((templates) => {
+        if (live) setGallery({ state: "ready", templates });
+      })
+      .catch((error: unknown) => {
+        if (!live) return;
+        setGallery({ state: "error", message: error instanceof Error && error.message ? error.message : "Templates did not load." });
+      });
+    return () => { live = false; };
+  }, [galleryTicket]);
+
+  const upload = async (files: File[]) => {
+    if (!files.length || uploading) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const body = new FormData();
+      for (const file of files) body.append("file", file);
+      const res = await fetch("/api/factory/attachments", { method: "POST", body });
+      const data = await readBody(res);
+      if (!res.ok) {
+        setUploadError(messageOf(data, "The file did not upload."));
+        return;
+      }
+      const ids = idsFrom(data);
+      if (!ids.length) {
+        setUploadError("The upload did not return an id.");
+        return;
+      }
+      setAttachments((current) => [...current, ...rowsFor(files, ids)]);
+      touch();
+    } catch (error: unknown) {
+      setUploadError(error instanceof Error && error.message ? error.message : "The file did not upload.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const onFiles = (input: HTMLInputElement) => {
+    const files = [...(input.files ?? [])];
+    input.value = "";
+    if (files.length) void upload(files);
+  };
+
+  const lucky = async () => {
+    if (busy || uploading) return;
+    const mine = generation.current;
+    const body = {
+      prompt,
+      mode,
+      template_id: templateId,
+      attachment_ids: [...new Set(attachments.map((item) => item.id))],
+    };
+    setBusy(true);
+    setLaunch(null);
+    setLaunchError(null);
+    setPhase("starting");
+    try {
+      const res = await fetch("/api/factory/launch", {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await readBody(res);
+      if (generation.current !== mine) return;
+      if (!res.ok) {
+        setPhase("error");
+        setLaunchError(messageOf(data, "The build did not start."));
+        setLaunch(null);
+        return;
+      }
+      const ids = launchIds(data);
+      if (!ids) {
+        setPhase("error");
+        setLaunch(null);
+        setLaunchError("The launch did not name a project or a run.");
+        return;
+      }
+      setLaunch(ids);
+      setPhase("started");
+    } catch (error: unknown) {
+      if (generation.current !== mine) return;
+      setPhase("error");
+      setLaunch(null);
+      setLaunchError(error instanceof Error && error.message ? error.message : "The build did not start.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const dictate = () => {
+    const Ctor = recognitionCtor();
+    if (!Ctor) return;
+    if (listening && recRef.current) {
+      try { recRef.current.stop(); } catch { /* already stopped */ }
+      setListening(false);
+      return;
+    }
+    setMicError(null);
+    const rec = new Ctor();
+    rec.interimResults = false;
+    rec.onresult = (event) => {
+      const parts: string[] = [];
+      for (let index = 0; index < event.results.length; index += 1) {
+        const text = event.results[index]?.[0]?.transcript?.trim();
+        if (text) parts.push(text);
+      }
+      if (!parts.length) return;
+      const said = parts.join(" ");
+      setPrompt((current) => (current.trim() ? `${current.trim()} ${said}` : said));
+      touch();
+    };
+    rec.onerror = () => setMicError("The microphone did not start.");
+    rec.onend = () => setListening(false);
+    recRef.current = rec;
+    try {
+      rec.start();
+      setListening(true);
+    } catch {
+      setListening(false);
+      setMicError("The microphone did not start.");
+    }
+  };
+
+  const choose = (card: TemplateCard) => {
+    setTemplateId(card.id);
+    if (card.prompt) setPrompt(card.prompt);
+    touch();
+    promptRef.current?.focus();
+  };
+
+  return (
+    <div className="bh" data-testid="build-home" data-template-id={templateId ?? ""}>
+      <div className="bh-bench">
+        <p className="bh-status" data-state={phase} data-testid="build-status">
+          <span className="bh-dot" aria-hidden="true" />
+          {STATUS[phase]}
+        </p>
+        <h1 className="bh-title">Build with BOSS</h1>
+        <p className="bh-lede">Describe the app. BOSS builds it.</p>
+
+        <div className="bh-ticket">
+          <label className="bh-prompt-wrap" htmlFor={promptId}>
+            <span className="bh-sr">Describe an app</span>
+            <textarea
+              id={promptId}
+              ref={promptRef}
+              className="bh-prompt"
+              data-testid="build-prompt"
+              placeholder={PLACEHOLDER}
+              value={prompt}
+              rows={5}
+              autoComplete="off"
+              onChange={(event) => {
+                setPrompt(event.target.value);
+                touch();
+              }}
+            />
+          </label>
+          <div className="bh-foot">
+            <div className="bh-addwrap" ref={menuRef}>
+              <button
+                ref={addRef}
+                type="button"
+                className="bh-add"
+                data-testid="build-add"
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                aria-controls={menuOpen ? menuId : undefined}
+                onClick={() => setMenuOpen((open) => !open)}
+              >
+                Add
+              </button>
+              {menuOpen ? (
+                <ul id={menuId} className="bh-menu" role="menu" data-testid="build-add-menu">
+                  <li role="none">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid="build-add-github"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        addRef.current?.focus();
+                        openStartSheet("import");
+                      }}
+                    >
+                      Import from GitHub
+                    </button>
+                  </li>
+                  <li role="none">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid="build-add-drive"
+                      onClick={() => {
+                        setDriveNote(true);
+                        setMenuOpen(false);
+                        addRef.current?.focus();
+                      }}
+                    >
+                      Drive
+                      <span className="bh-menu-note">Drive is not connected</span>
+                    </button>
+                  </li>
+                  <li role="none">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid="build-add-upload"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        uploadRef.current?.click();
+                      }}
+                    >
+                      Upload files
+                    </button>
+                  </li>
+                  <li role="none">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid="build-add-camera"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        cameraRef.current?.click();
+                      }}
+                    >
+                      Camera
+                    </button>
+                  </li>
+                </ul>
+              ) : null}
+            </div>
+            <label className="bh-mode">
+              <span>Mode</span>
+              <select
+                aria-label="Mode"
+                data-testid="build-mode"
+                value={mode}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  if (next === "build" || next === "prototype") setMode(next);
+                  touch();
+                }}
+              >
+                {MODES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+            </label>
+            {canDictate ? (
+              <button
+                type="button"
+                className="bh-mic"
+                data-testid="build-mic"
+                aria-pressed={listening}
+                aria-label="Dictate"
+                onClick={dictate}
+              >
+                {listening ? "Stop" : "Mic"}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="bh-lucky"
+              data-testid="build-lucky"
+              disabled={busy || uploading}
+              aria-busy={busy || uploading}
+              onClick={() => void lucky()}
+            >
+              I&apos;m feeling lucky
+            </button>
+          </div>
+          <input
+            ref={uploadRef}
+            className="bh-sr"
+            type="file"
+            multiple
+            tabIndex={-1}
+            aria-label="Upload files"
+            data-testid="build-upload-input"
+            onChange={(event) => onFiles(event.currentTarget)}
+          />
+          <input
+            ref={cameraRef}
+            className="bh-sr"
+            type="file"
+            accept="image/*"
+            capture="environment"
+            tabIndex={-1}
+            aria-label="Camera"
+            data-testid="build-camera-input"
+            onChange={(event) => onFiles(event.currentTarget)}
+          />
+        </div>
+
+        <ul className="bh-chips" aria-label="Suggestions">
+          {CHIPS.map((chip) => (
+            <li key={chip}>
+              <button
+                type="button"
+                className="bh-chip"
+                data-testid="build-chip"
+                onClick={() => {
+                  setPrompt(chip);
+                  touch();
+                  promptRef.current?.focus();
+                }}
+              >
+                {chip}
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        {launch ? (
+          <p className="bh-ids" role="status" data-testid="build-launch">
+            {launch.projectId ? <>Project <span data-testid="build-project-id">{launch.projectId}</span></> : null}
+            {launch.projectId && launch.runId ? <span aria-hidden="true"> · </span> : null}
+            {launch.runId ? <>Run <span data-testid="build-run-id">{launch.runId}</span></> : null}
+          </p>
+        ) : null}
+        {launchError ? <p className="bh-error" role="alert" data-testid="build-launch-error">{launchError}</p> : null}
+        {driveNote ? <p className="bh-note" role="status" data-testid="build-drive-note">Drive is not connected</p> : null}
+        {micError ? <p className="bh-error" role="alert">{micError}</p> : null}
+
+        {attachments.length ? (
+          <ul className="bh-files" aria-label="Attached files">
+            {attachments.map((item) => (
+              <li key={`${item.id}:${item.name}`} data-testid="build-attachment" data-attachment-id={item.id}>
+                <span>{item.name}</span>
+                <code>{item.id}</code>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {uploading ? <p className="bh-note" role="status">Uploading</p> : null}
+        {uploadError ? <p className="bh-error" role="alert" data-testid="build-upload-error">{uploadError}</p> : null}
+      </div>
+
+      <section className="bh-gallery" aria-label="Templates" data-testid="build-templates">
+        <div className="bh-gallery-head">
+          <h2>Templates</h2>
+        </div>
+        {gallery.state === "loading" ? <p className="bh-note" role="status" data-testid="build-templates-loading">Loading templates</p> : null}
+        {gallery.state === "error" ? (
+          <div className="bh-gallery-error" role="alert" data-testid="build-templates-error">
+            <p>{gallery.message}</p>
+            <button type="button" onClick={() => setGalleryTicket((n) => n + 1)}>Try again</button>
+          </div>
+        ) : null}
+        {gallery.state === "ready" && gallery.templates.length === 0 ? (
+          <p className="bh-note" data-testid="build-templates-empty">No templates yet. The bench still builds from the sentence.</p>
+        ) : null}
+        {gallery.state === "ready" && gallery.templates.length > 0 ? (
+          <ul className="bh-cards">
+            {gallery.templates.map((card) => (
+              <li key={card.id}>
+                <button
+                  type="button"
+                  className="bh-card"
+                  data-testid="build-template"
+                  data-template-id={card.id}
+                  aria-pressed={templateId === card.id}
+                  onClick={() => choose(card)}
+                >
+                  {card.category ? <span className="bh-cat">{card.category}</span> : null}
+                  <span className="bh-card-title">{card.title}</span>
+                  {card.blurb ? <span className="bh-blurb">{card.blurb}</span> : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </section>
+    </div>
+  );
+}

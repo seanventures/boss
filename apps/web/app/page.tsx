@@ -146,6 +146,7 @@ import { FoundationsScreen, ComponentsScreen } from "./design-system-showcase";
 import { buildAgentRoster } from "../lib/roster";
 import { TZ_COOKIE, fetchCommandCenterApps, fetchCommandCenterView } from "../lib/command-center-view-server";
 import { CommandCenter } from "./command-center-ui";
+import { BuildHome } from "./build-home";
 import { ReliabilityHome } from "./reliability-ui";
 import { AssuranceCenter } from "./assurance-ui";
 import { fetchAssuranceFeed } from "../lib/assurance";
@@ -1149,6 +1150,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             inline before the first run. See command-center-ui.tsx. */}
         {shows("overview") ? (
         <section className="ov-cc" data-area="overview" aria-label="Command center">
+          {/* First once setup is ready and no area was asked for. Projects and Repo and models
+              still own a first run — landingArea does not point those here. */}
+          <BuildHome />
           {/* The monthly check-in: renders nothing unless it is this person's month (≤ once in 30 days). */}
           <CheckinCard projectId={activeProjectId} actor={activeActorId} />
           {/* THE PROJECT PAGE (BOSSAPP-810): "What should we add?" for a project of its own (not the
