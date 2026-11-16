@@ -47,4 +47,26 @@ describe("the personal inbox", () => {
     await settle();
     expect(calls.some((c) => c.method === "GET" && c.url.includes("mine=false"))).toBe(true);
   });
+
+  it("shows the person the inbox already names, and nothing when that person is absent", async () => {
+    expect(parseInbox({ ...FEED, person: "person:ada" }).person).toBe("person:ada");
+    expect(parseInbox(FEED).person).toBeNull();
+    expect(parseInbox({ person: "", items: [{ targets: ["person:li"] }] }).person).toBeNull();
+    expect(parseInbox({ person: { name: "Ada" } }).person).toBeNull();
+
+    const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    vi.stubGlobal("fetch", vi.fn(async () => json({ ...FEED, person: "person:ada" })));
+    await mount(<InboxView projectId="p1" />);
+    expect($('[data-testid="ib-person"]')?.textContent).toBe("person:ada");
+    unmount();
+
+    vi.stubGlobal("fetch", vi.fn(async () => json({
+      ...FEED,
+      items: FEED.items.map((e, i) => (i === 0 ? { ...e, targets: ["person:li"] } : e)),
+    })));
+    await mount(<InboxView projectId="p1" />);
+    expect($('[data-testid="ib-person"]')).toBeNull();
+    expect(document.body.textContent ?? "").not.toContain("person:ada");
+    expect(document.body.textContent ?? "").not.toContain("person:li");
+  });
 });

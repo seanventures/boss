@@ -35,6 +35,7 @@ export function InboxView({ projectId, demo = false }: { projectId: string; demo
       <div className="wt-bar">
         <span className="wt-counts"><Bell size={13} aria-hidden /> {feed.unread} unread · {feed.count} waiting
           {feed.snoozed ? ` · ${feed.snoozed} snoozed` : ""}{feed.archived ? ` · ${feed.archived} archived` : ""}</span>
+        {feed.person ? <span className="wt-key" data-testid="ib-person">{feed.person}</span> : null}
         <span className="px-spacer" />
         <div className="px-seg" role="group" aria-label="Whose">
           <button type="button" aria-pressed={mine} onClick={() => setMine(true)} data-testid="ib-mine">Mine</button>

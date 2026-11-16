@@ -12,7 +12,7 @@ export type InboxEntry = {
   for_you: boolean; risk_tier: number; deadline_at: string | null; blocked_count: number;
   score: number; why: string[]; read: boolean; snoozed_until: string | null; archived: boolean;
 };
-export type Inbox = { items: InboxEntry[]; count: number; unread: number; snoozed: number; archived: number };
+export type Inbox = { items: InboxEntry[]; count: number; unread: number; snoozed: number; archived: number; person: string | null };
 
 const obj = (v: unknown): Record<string, unknown> =>
   (v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {});
@@ -33,6 +33,7 @@ export function parseInbox(w: unknown): Inbox {
       read: e.read === true, snoozed_until: str(e.snoozed_until) || null, archived: e.archived === true,
     })),
     count: Number(o.count) || 0, unread: Number(o.unread) || 0, snoozed: Number(o.snoozed) || 0, archived: Number(o.archived) || 0,
+    person: str(o.person).trim() || null,
   };
 }
 
