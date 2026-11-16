@@ -2,6 +2,29 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.14]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.14.md](docs/community/RELEASE_NOTES_v1.0-rc10.14.md).
+
+### Added
+
+- Easy Mode launches a project from one description. The template catalog is included. A template does not build until launch.
+- Agent, bot, and workflow wizards. Gap controls for preview, drafts, spend, prompts, security, and built-app access. One primary agent per person, bulk model change, trace export, and a voice transcript filed on a task.
+- A brief records the required stack. A swapped stack asks. Add project stops when the build image lacks it.
+
+### Fixed
+
+- A merged pull request is shown as merged and is not opened a second time. People are named on wiki, comments, holds, and watches.
+- A host must own the VM or deployment it acts on, and a host run fills git scope from its grant.
+
+### Changed
+
+- The community candidate version is `1.0.0-rc.10.14`.
+
+### Release scope
+
+- This is the git tag of public main after rc10.13. It is not a live host deploy. No image tag or release-gate run is attached. The export record still cites `docs/community/RC9_VALIDATION.md`.
+
 ## [v1.0-rc10.13]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.13.md](docs/community/RELEASE_NOTES_v1.0-rc10.13.md).
