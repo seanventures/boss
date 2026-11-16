@@ -15705,3 +15705,17 @@ CREATE TABLE IF NOT EXISTS builder_turn_checkins (
 );
 CREATE INDEX IF NOT EXISTS idx_builder_turn_checkins_turn
   ON builder_turn_checkins (project_id, turn_id, created_at DESC);
+-- BOSSAPP-1247: one member's monthly build-spend cap. No row, or a NULL cap, means that
+-- member is not capped. This does not replace budget_policies.monthly_cap_usd_micros.
+CREATE TABLE IF NOT EXISTS member_monthly_build_caps (
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  member_id TEXT NOT NULL,
+  monthly_cap_usd_micros BIGINT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (org_id, member_id),
+  CHECK (monthly_cap_usd_micros IS NULL OR monthly_cap_usd_micros >= 0)
+);
+ALTER TABLE budget_reservations ADD COLUMN IF NOT EXISTS member_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_budget_reservations_member_active
+  ON budget_reservations (member_id, status)
+  WHERE member_id IS NOT NULL AND status = 'active';

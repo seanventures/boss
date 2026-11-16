@@ -1315,6 +1315,7 @@ class BudgetGovernor:
         job_id: Optional[str] = None,
         allocation_id: Optional[str] = None,
         risk_tier: Optional[int] = None,
+        member_id: Optional[str] = None,
     ) -> dict:
         # Covers every allocation and allocation-free caller. Try rather than wait: some
         # callers retain their transaction across work or already own source/allocation
@@ -1636,6 +1637,24 @@ class BudgetGovernor:
                                reason=reason, amount_usd_micros=amount_usd_micros)
                 return refused
 
+        # BOSSAPP-1247: one member's monthly build cap. Unset does not refuse. The project
+        # monthly cap above is unchanged and still refuses first.
+        member_refusal = member_monthly_cap_refusal(
+            connection, project_id, member_id, amount_usd_micros, category)
+        if member_refusal is not None:
+            member_refusal["budget_state"] = snapshot["budget_state"]
+            record_policy_eval(
+                connection, project_id, "budget.reserve", "deny", action=category,
+                reason="member monthly build cap",
+                detail={"requested_usd_micros": amount_usd_micros,
+                        "member_id": member_id,
+                        "cap_usd_micros": member_refusal["cap_usd_micros"],
+                        "spent_usd_micros": member_refusal["spent_usd_micros"]})
+            record_refusal(connection, project_id, member_refusal, category=category,
+                           reason=reason, amount_usd_micros=amount_usd_micros,
+                           period=member_refusal)
+            return member_refusal
+
         reservation_id = make_id("res")
         connection.execute(
             text(
@@ -1661,6 +1680,8 @@ class BudgetGovernor:
                 "expires_at": expires_at(expires_in_minutes),
             },
         )
+        if member_id and category == BUILD_CATEGORY:
+            assign_reservation_member(connection, reservation_id, member_id)
         emit_event(
             connection,
             project_id,
@@ -2253,3 +2274,160 @@ class BudgetGovernor:
         utilization = committed_usd_micros / cap_usd_micros if cap_usd_micros else 0.0
         return state_for_utilization(cap_usd_micros, utilization, soft_cap_pct,
                                      auto_lite_mode_pct, freeze_provisioning_pct)
+
+
+# ── ONE MEMBER'S MONTHLY BUILD CAP (BOSSAPP-1247) ─────────────────────────────────────────────
+#
+# budget_policies.monthly_cap_usd_micros is the PROJECT month and stays the project month.
+# A member cap is optional: no row, or a NULL cap, means that member is not capped. It is
+# counted only on build reservations (BUILD_CATEGORY) attributed to that member, across every
+# project in the org, so one member at the cap does not stop the rest of the workspace.
+
+
+def set_member_monthly_cap(connection: Connection, org_id: str, member_id: str,
+                           monthly_cap_usd_micros: Optional[int]) -> Optional[int]:
+    """Write this member's monthly build cap. None unsets it (the member is not capped)."""
+    if not org_id or not member_id:
+        raise ValueError("org_id and member_id are required.")
+    cap: Optional[int]
+    if monthly_cap_usd_micros is None:
+        cap = None
+    else:
+        cap = int(monthly_cap_usd_micros)
+        if cap < 0:
+            raise ValueError("monthly_cap_usd_micros must be unset or zero or more.")
+    connection.execute(
+        text(
+            """
+            INSERT INTO member_monthly_build_caps (org_id, member_id, monthly_cap_usd_micros)
+            VALUES (:o, :m, :c)
+            ON CONFLICT (org_id, member_id) DO UPDATE
+            SET monthly_cap_usd_micros = EXCLUDED.monthly_cap_usd_micros,
+                updated_at = now()
+            """
+        ),
+        {"o": org_id, "m": member_id, "c": cap},
+    )
+    return cap
+
+
+def member_monthly_cap(connection: Connection, org_id: str, member_id: str) -> Optional[int]:
+    """The member's monthly build cap, or None when it is unset."""
+    value = connection.execute(
+        text(
+            """
+            SELECT monthly_cap_usd_micros FROM member_monthly_build_caps
+            WHERE org_id = :o AND member_id = :m
+            """
+        ),
+        {"o": org_id, "m": member_id},
+    ).scalar()
+    return None if value is None else int(value)
+
+
+def _org_for_project(connection: Connection, project_id: str) -> Optional[str]:
+    return connection.execute(
+        text(
+            """
+            SELECT w.org_id FROM projects p
+            JOIN workspaces w ON w.id = p.workspace_id
+            WHERE p.id = :p
+            """
+        ),
+        {"p": project_id},
+    ).scalar()
+
+
+def member_month_build_spend(connection: Connection, org_id: str, member_id: str,
+                             now: Optional[datetime] = None) -> dict[str, Any]:
+    """This member's build money in the org this month: settled receipts plus active holds.
+
+    An active hold is the liability (it is not also summed from a receipt). A released hold
+    is neither. Included (subscription) receipts are $0, same as every other money cap.
+    """
+    bounds = budget_period("month", now)
+    row = connection.execute(
+        text(
+            f"""
+            SELECT
+              COALESCE((
+                SELECT SUM({MONEY_SQL})
+                FROM cost_receipts cr
+                JOIN budget_reservations br ON br.id = cr.reservation_id
+                JOIN projects p ON p.id = cr.project_id
+                JOIN workspaces w ON w.id = p.workspace_id
+                WHERE w.org_id = :o AND br.member_id = :m
+                  AND br.category = :cat AND br.status <> 'active'
+                  AND cr.created_at >= :start AND cr.created_at < :end
+              ), 0) AS actual,
+              COALESCE((
+                SELECT SUM(br.amount_usd_micros)
+                FROM budget_reservations br
+                JOIN projects p ON p.id = br.project_id
+                JOIN workspaces w ON w.id = p.workspace_id
+                WHERE w.org_id = :o AND br.member_id = :m
+                  AND br.category = :cat AND br.status = 'active'
+              ), 0) AS reserved
+            """
+        ),
+        {"o": org_id, "m": member_id, "cat": BUILD_CATEGORY,
+         "start": bounds["start"], "end": bounds["end"]},
+    ).mappings().one()
+    actual = int(row["actual"] or 0)
+    reserved = int(row["reserved"] or 0)
+    return {**bounds, "actual_usd_micros": actual, "reserved_usd_micros": reserved,
+            "committed_usd_micros": actual + reserved}
+
+
+def member_monthly_cap_refusal(connection: Connection, project_id: str,
+                               member_id: Optional[str], amount_usd_micros: int,
+                               category: str = BUILD_CATEGORY) -> Optional[dict[str, Any]]:
+    """The refusal when this build reservation would pass the member's monthly cap.
+
+    None when the member is unnamed, the category is not a build, the cap is unset, or the
+    request still fits. Other members are not part of the sum.
+    """
+    if not member_id or category != BUILD_CATEGORY or int(amount_usd_micros or 0) <= 0:
+        return None
+    org_id = _org_for_project(connection, project_id)
+    if not org_id:
+        return None
+    cap = member_monthly_cap(connection, org_id, member_id)
+    if cap is None:
+        return None
+    spend = member_month_build_spend(connection, org_id, member_id)
+    committed = int(spend["committed_usd_micros"])
+    if committed + int(amount_usd_micros) <= cap:
+        return None
+    return {
+        "status": "denied",
+        "refusal": "member_monthly_cap",
+        "transient": False,
+        "decision_id": None,
+        "period": "month",
+        "member_id": member_id,
+        "org_id": org_id,
+        "cap_usd_micros": cap,
+        "spent_usd_micros": committed,
+        "committed_usd_micros": committed,
+        "actual_usd_micros": spend["actual_usd_micros"],
+        "reserved_usd_micros": spend["reserved_usd_micros"],
+        "resets_at": spend["end"].isoformat(),
+        "resets_at_label": spend["resets_at_label"],
+        "cap_name": "monthly build cap",
+        "message": (
+            f"Member {member_id} is at the monthly build cap "
+            f"(${committed / 1e6:,.2f} of ${cap / 1e6:,.2f}). "
+            f"The rest of the workspace is not stopped. "
+            f"It resets at {spend['resets_at_label']}."
+        ),
+    }
+
+
+def assign_reservation_member(connection: Connection, reservation_id: str,
+                              member_id: str) -> None:
+    """Attribute a build hold to the member whose monthly cap it counts against."""
+    connection.execute(
+        text("UPDATE budget_reservations SET member_id = :m WHERE id = :id"),
+        {"m": member_id, "id": reservation_id},
+    )
