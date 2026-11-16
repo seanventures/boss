@@ -56,6 +56,9 @@ export type Kind = WorkKind;
 /** What a door opens it with; `fromBar`: the first keys typed in the Work tab's bar (a kept
  *  draft still comes back, with them added). */
 export type Prefill = { text?: string; kind?: Kind; fromBar?: boolean;
+  /** A door whose words were too long for its link (`compose_from=draft`): their length. The
+   *  door kept them as this project's draft; if they are not there, the modal says so (AR-21). */
+  fromCard?: number;
   /** The app it builds onto (AR-20): an "+ Add a feature" door's `app` (a build's run id or the
    *  app's key). Start sends it; the engine continues that app's branch and change. */
   app?: string } | null;
@@ -150,7 +153,10 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
   const [editor, setEditor] = useState(false);
   const [wordsOpen, setWordsOpen] = useState(false);
   const [busy, setBusy] = useState<"" | "start" | "next">("");
-  const [said, setSaid] = useState<{ text: string; tone?: "red" | "green" }>({ text: "" });
+  const [said, setSaid] = useState<{ text: string; tone?: "red" | "green" }>(() => (
+    prefill?.fromCard && (restored?.text.length ?? 0) < prefill.fromCard
+      ? { text: `The words (${prefill.fromCard.toLocaleString("en-US")} characters) were too long to travel in a link and are not in this browser's draft. Open it again from where you wrote them.`, tone: "red" }
+      : { text: "" }));
   const [refusal, setRefusal] = useState<Readiness | null>(null);
   const [startAnyway, setStartAnyway] = useState<string[]>([]);
   const [fileNote, setFileNote] = useState("");

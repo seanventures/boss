@@ -87,7 +87,8 @@ def test_the_plan_says_which_app_branch_and_change_new_work_builds_onto(client, 
     assert plan.status_code == 200, plan.text
     assert plan.json()["anchor"] == {
         "run_id": RUN, "app": "Northgate Gateway", "branch": f"boss/code/{ROOT}",
-        "pr_number": 4, "pr_url": CHANGE_URL.format(p=_project())}
+        "pr_number": 4, "pr_url": CHANGE_URL.format(p=_project()), "pr_state": "open",
+        "mode": "continue"}
 
     # By the app's key too (the Command Center's door names the app, not a build).
     from boss_engine.services.agent_assignment import app_key
@@ -191,5 +192,126 @@ def test_a_lineage_with_no_profile_keeps_the_size_rule():
 
     assert change_profile({}, "scoped_tweak") == "balanced"
     assert change_profile({}, "full_rerun") == "strict"
-    assert change_profile({"profile": "lean"}, "full_rerun") == "lean"
     assert change_profile({"profile": "lean"}, "scoped_tweak", "balanced") == "balanced"
+
+
+def test_strict_is_the_floor_for_a_full_rerun_unless_a_person_picks():
+    """Review: the lineage's profile wins for every caller (Change it, preview feedback, MCP),
+    but a redesign/schema/rewrite of a lean app still gets strict — as the size rule gave it."""
+    from boss_engine.services.feedback_agent import change_profile
+
+    assert change_profile({"profile": "lean"}, "full_rerun") == "strict"
+    assert change_profile({"profile": "lean"}, "scoped_tweak") == "lean"
+    assert change_profile({"profile": "lean"}, "full_rerun", "lean") == "lean"  # a person's pick
+
+
+def test_a_full_rerun_change_of_a_lean_app_is_proposed_strict(client, engine):
+    _the_app(engine, profile="lean")
+    proposed = client.post(f"/v1/code-tasks/{RUN}/feedback", json={
+        "message": "Redesign the routing table and add a schema migration for upstreams.",
+        "expected": "Upstreams persist through a migration."})
+    assert proposed.status_code == 200, proposed.text
+    assert proposed.json()["proposal"]["classification"] == "full_rerun"
+    assert proposed.json()["proposal"]["profile"] == "strict"
+
+
+# ── review A2 / A3: which change, which build ───────────────────────────────────────────────
+
+def _merge(engine, run_id):
+    with engine.begin() as connection:
+        connection.execute(text(
+            "UPDATE code_task_runs SET finalize_ctx = finalize_ctx || "
+            "CAST(:m AS JSONB) WHERE id = :i"),
+            {"i": run_id, "m": json.dumps({"merge": {"sha": "a" * 40}})})
+
+
+def _close(engine, run_id):
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO decisions (id, project_id, question, recommendation, status) "
+            "VALUES ('dec_closedng01', :p, 'Merge the gateway change?', '{}'::jsonb, 'rejected') "
+            "ON CONFLICT (id) DO NOTHING"), {"p": _project()})
+        connection.execute(text("UPDATE code_task_runs SET decision_id = 'dec_closedng01' "
+                                "WHERE id = :i"), {"i": run_id})
+
+
+def test_a_merged_change_starts_a_new_change_from_the_default_branch(client, engine):
+    _the_app(engine)
+    _merge(engine, RUN)
+    plan = client.get(f"/v1/projects/{_project()}/work/plan", params={"app": RUN}).json()
+    assert plan["anchor"]["pr_state"] == "merged"
+    assert plan["anchor"]["mode"] == "new_change"
+    assert plan["anchor"]["branch"] == "main"
+
+    started = _start(client, {"kind": "feature", "app": RUN, "text": "Add a /healthz route."})
+    assert started.status_code == 200, started.text
+    run_input = _workflow_input(engine, started.json()["run_id"])
+    assert run_input["extends_run_id"] == RUN
+    assert run_input["extends_from_default"] is True
+
+
+def test_a_new_change_after_a_merge_is_its_own_lineage_of_the_same_app(engine):
+    """The build step's follow-up: its own branch (its own root), cut from the default branch,
+    still the same app — never a push onto the merged branch."""
+    from apps.api.app.main import jobs
+    from boss_engine.services.code_task_service import (
+        load_code_task_run, start_followup_task, work_branch_for,
+    )
+
+    _the_app(engine)
+    _merge(engine, RUN)
+    with engine.begin() as connection:
+        started = start_followup_task(connection, parent_run_id=RUN, instructions="Add /healthz.",
+                                      jobs=jobs, new_change=True)
+        child = load_code_task_run(connection, started["run_id"])
+    fctx = child["finalize_ctx"]
+    assert "root_run_id" not in fctx or fctx["root_run_id"] == child["id"]
+    assert work_branch_for(child) == f"boss/code/{child['id']}"
+    assert child["spec"]["base_branch"] == "main"
+    assert fctx["app_id"] == "app_northgate"
+
+
+def test_a_change_closed_without_merging_is_refused(client, engine):
+    _the_app(engine)
+    _close(engine, RUN)
+    plan = client.get(f"/v1/projects/{_project()}/work/plan", params={"app": RUN}).json()
+    assert plan["anchor"] is None
+    assert "closed without merging" in plan["anchor_error"]
+    refused = client.post(f"/v1/projects/{_project()}/work",
+                          json={"kind": "feature", "app": RUN, "text": "Add a route."})
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"]["error"] == "change_closed"
+
+
+def test_an_older_builds_id_anchors_on_the_lineages_newest_completed_build(client, engine):
+    _the_app(engine)
+    plan = client.get(f"/v1/projects/{_project()}/work/plan", params={"app": ROOT}).json()
+    # ROOT is the first build; the change continues the newest completed one (RUN).
+    assert plan["anchor"]["run_id"] == RUN
+
+
+# ── review A4: an answer's long words ───────────────────────────────────────────────────────
+
+def test_an_answer_card_never_cuts_and_never_puts_long_words_in_its_link(engine):
+    from boss_engine.services import turn_cards
+
+    offer = [{"tool": "create_code_task", "id": "off_1",
+              "args": {"instructions": "x" * (MAX_DIRECTIVE + 10), "title": "Gateway"}}]
+    with engine.begin() as connection:
+        card = turn_cards.proposal(connection, _project(), offers=offer, decision=None,
+                                   message="build it")
+    assert card is not None
+    assert len(card["text"]) == MAX_DIRECTIVE + 10          # never cut
+    assert card["over_limit"]["chars"] == MAX_DIRECTIVE + 10
+    assert "10 characters over" in card["over_limit"]["message"]
+    assert len(card["edit_href"]) < 400                      # no 60 KB URL (431)
+    assert "compose_from=draft" in card["edit_href"]
+    assert "compose_text" not in card["edit_href"]
+
+    short = [{"tool": "create_code_task", "id": "off_2",
+              "args": {"instructions": "Add a /healthz route.", "title": "Gateway"}}]
+    with engine.begin() as connection:
+        small = turn_cards.proposal(connection, _project(), offers=short, decision=None,
+                                    message="build it")
+    assert "over_limit" not in small
+    assert "compose_text=" in small["edit_href"]

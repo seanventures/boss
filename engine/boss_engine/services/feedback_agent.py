@@ -97,7 +97,12 @@ CHOOSABLE_PROFILES = ("lean", "balanced", "strict")
 def change_profile(spec: Optional[dict], classification: str, chosen: str = "") -> str:
     """THE PROFILE A CHANGE RUNS ON (AR-22): the person's pick on the sheet; else the lineage's
     own (a lean app's change stays lean — it was started "balanced" whatever the app ran on);
-    else what the change's size suggests, as before. A pick that is no profile is refused."""
+    else what the change's size suggests, as before. A pick that is no profile is refused.
+
+    STRICT IS THE FLOOR FOR A FULL RERUN when nobody picked: a redesign, a schema change or a
+    rewrite (classification `full_rerun`) of a lean app still gets every check, as the size rule
+    always gave it. This applies to every caller (Change it, preview feedback, MCP); only a
+    person's explicit pick goes under it."""
     from .pipeline_profiles import PROFILES
 
     chosen = (chosen or "").strip().lower()
@@ -105,10 +110,12 @@ def change_profile(spec: Optional[dict], classification: str, chosen: str = "") 
         if chosen not in CHOOSABLE_PROFILES:
             raise ValueError(f"profile is one of {', '.join(CHOOSABLE_PROFILES)}")
         return chosen
+    if classification == "full_rerun":
+        return "strict"
     lineage = str((spec or {}).get("profile") or "").strip().lower()
     if lineage in PROFILES:
         return lineage
-    return "strict" if classification == "full_rerun" else "balanced"
+    return "balanced"
 
 
 def submit_feedback(

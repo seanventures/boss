@@ -1181,8 +1181,14 @@ def start_followup_task(
     workflow_run_id: Optional[str] = None,
     finalize_extra: Optional[dict] = None,
     release_base_sha: Optional[str] = None,
+    new_change: bool = False,
 ) -> dict:
     """Continue work on an app that already exists, from the run that built it.
+
+    ``new_change``: the app's change (its lineage's PR) was MERGED, so its code is on the
+    default branch. The change is a NEW lineage of the same app (same ``app_id``, its own
+    branch and PR) cut from the default branch — pushing onto the merged branch would reopen
+    history the person already accepted.
 
     ``release_base_sha``: this change targets a release (an incident's fix) and is built on a
     branch of its own cut from that serving commit — never on the app's lineage branch, whose
@@ -1225,6 +1231,10 @@ def start_followup_task(
         "is_followup": True,
         "requested_by": actor,
     }
+    if new_change:
+        # Its own lineage (its run id is its root, so its own branch), still the same app.
+        child_fctx.pop("root_run_id")
+        child_fctx["after_merged_run_id"] = root
     # Where the outcome BEGAN, carried forward. root_run_id says which attempts are the same
     # work; origin says which panel or dossier it came from. A follow-up that keeps the first
     # and drops the second becomes an orphan on screen -- one app reading as several, which is
@@ -1270,6 +1280,11 @@ def start_followup_task(
     if workflow_run_id:
         child_fctx["workflow_run_id"] = str(workflow_run_id)
     base_branch = work_branch_for(run)
+    if new_change:
+        root_run = load_code_task_run(connection, root) or run
+        first_base = str((root_run.get("spec") or {}).get("base_branch") or "").strip()
+        base_branch = None if (not first_base or first_base.startswith("boss/code/")) \
+            else first_base
     if release_base_sha:
         from . import release_scope
 

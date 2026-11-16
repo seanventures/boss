@@ -57,6 +57,8 @@ import {
 import { normalizeChannel } from "../workflows/compose-plan";
 import { ReadinessPanel, asReadiness, unaccepted, type Readiness } from "../workflow-readiness-ui";
 import { useRegistry } from "./import-repo";
+import { WORDS_IN_LINK, withNewWorkDoor } from "../../lib/compose-links";
+import { keepNewWorkDraft } from "../../lib/new-work";
 import { InUseBlock, InUseTag, PlanBoxes, egressOf, ownFields, usedBy, type InUseActions, type PlanState } from "./add-project-plan";
 import { BriefCard, Marked, type BriefRow } from "../projects/brief-card";
 import { SAMPLE, knowledgePresetHref } from "./start-sheet";
@@ -284,8 +286,9 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
     addWork: (pid) => {
       // The person's words go along as the work: an idea's words, or the lines under a repo.
       const words = (kind === "idea" ? text : text.split("\n").slice(1).join("\n")).trim();
-      const qs = new URLSearchParams({ tab: "work", compose: "1", compose_kind: "feature", ...(words ? { compose_text: words } : {}) });
-      go(`${projectPageHref(pid, homeId)}&${qs.toString()}`);
+      // Long words ride as the project's New work draft, never in the URL and never cut (AR-21).
+      if (words.length > WORDS_IN_LINK) keepNewWorkDraft(pid, words, "feature");
+      go(withNewWorkDoor(projectPageHref(pid, homeId), { projectId: pid, kind: "feature", words }));
     },
     shared,
     share: (id) => setShared((s) => (s.includes(id) ? s : [...s, id])),

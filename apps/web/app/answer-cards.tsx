@@ -19,6 +19,7 @@ import {
 import { AgentAvatar } from "./agent-avatar";
 import { useWrapMarks } from "../lib/wrap-flow";
 import { pxHref, pxWrite, startWork, toWorkKind } from "../lib/project-experience";
+import { keepNewWorkDraft } from "../lib/new-work";
 
 export type Citation = { kind: string; ref: string; label: string; href: string; external?: boolean; title?: string };
 export type ProposalStep = { key?: string; label: string; type?: string; role_key?: string | null; icon?: string;
@@ -30,7 +31,15 @@ export type Proposal = {
   start: { href: string; method: string; body: Record<string, unknown> };
   edit_href: string; offer_id?: string | null; state?: "open" | "started" | "dismissed";
   run_id?: string; href?: string;
+  /** The words are past the brief's limit (AR-21): Start is held; Edit to shorten them. */
+  over_limit?: { chars: number; limit: number; message: string } | null;
 };
+
+/** EDIT CARRIES THE WORDS (AR-21): they become New work's draft for this project, so a long
+ *  answer reaches the box whole — its link carries them only when they are short. */
+export function keepCardDraft(projectId: string, card: Proposal): void {
+  keepNewWorkDraft(projectId, card.text, toWorkKind(card.work_kind ?? card.start?.body?.kind));
+}
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {});
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -109,6 +118,7 @@ export function ProposalCard({ projectId, threadId, messageId, proposal, onOutco
   };
   const start = async () => {
     if (busy) return;
+    if (card.over_limit) { setSaid(card.over_limit.message); return; }
     setBusy(true); setSaid("");
     const b = card.start.body;
     const res = await startWork(projectId, toWorkKind(b.kind), str(b.text) || card.text, {
@@ -163,13 +173,15 @@ export function ProposalCard({ projectId, threadId, messageId, proposal, onOutco
         </div>
       ) : (
         <div className="ac-act-row">
-          <button type="button" className="ac-btn" data-kind="primary" disabled={busy} onClick={() => void start()} data-testid="agent-proposal-start">
+          <button type="button" className="ac-btn" data-kind="primary" disabled={busy || Boolean(card.over_limit)} title={card.over_limit?.message}
+                  onClick={() => void start()} data-testid="agent-proposal-start">
             <Play size={12} weight="fill" aria-hidden /> {busy ? "Starting…" : "Start"}</button>
-          <a className="ac-btn" href={pxHref(card.edit_href)} data-testid="agent-proposal-edit" title="Open it in New work to change the words, the kind or the workflow">Edit</a>
+          <a className="ac-btn" href={pxHref(card.edit_href)} data-testid="agent-proposal-edit" title="Open it in New work to change the words, the kind or the workflow"
+             onClick={() => keepCardDraft(projectId, card)}>Edit</a>
           <button type="button" className="ac-btn" data-kind="ghost" onClick={() => void dismiss()} data-testid="agent-proposal-dismiss">Not now</button>
         </div>
       )}
-      {said ? <p className="ac-said" role="status" data-testid="agent-proposal-said">{said}</p> : null}
+      {said || card.over_limit ? <p className="ac-said" role="status" data-testid="agent-proposal-said">{said || card.over_limit?.message}</p> : null}
     </div>
   );
 }

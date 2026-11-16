@@ -298,7 +298,7 @@ def _title_of(text_in: str, fallback: str) -> str:
 
 @router.post("/v1/projects/{project_id}/work")
 @permit(P.WORKFLOW_RUN_START, scope=Scope.project(path="project_id"))
-def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
+def project_new_work(project_id: str, payload: NewWorkBody, request: Request) -> dict[str, Any]:
     """New work through THE start door (start_delivery_workflow), exactly as the project page's
     "What should we add?" box starts it: the project's mapped small-feature workflow (or Minor
     Feature) on its repository, or its new-app default when it has none. Consent, readiness and
@@ -354,9 +354,18 @@ def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
         # the default branch under a modal that said it was adding to the app.
         try:
             anchor = new_work.app_anchor(connection, project_id, payload.app)
+        except new_work.AnchorClosed as error:
+            raise HTTPException(status_code=409, detail={
+                "error": "change_closed", "message": str(error)}) from None
         except LookupError as error:
             raise HTTPException(status_code=404, detail={
                 "error": "unknown_app", "message": str(error)}) from None
+    if anchor:
+        # BUILDING ONTO AN APP CHANGES THAT APP'S BUILD, its branch and its change: the same
+        # permission Change it needs on it (code_task:steer), beyond starting work here.
+        from apps.api.app.routers.identity_access import require_permission
+
+        require_permission(request, P.CODE_TASK_STEER, project_id, label="new_work.app")
     repo = (page.get("repo") or {}).get("full_name")
     # A TICKET OF A CONNECTED SYSTEM (BOSSAPP-1047) — a Jira/Plane link, or a bare key like
     # LEND-12 of a project the connection knows — is read ONCE, here, before anything starts,
@@ -397,6 +406,8 @@ def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
         run_input["repository"] = repo
     if anchor:
         run_input["extends_run_id"] = anchor["run_id"]
+        if anchor.get("mode") == "new_change":
+            run_input["extends_from_default"] = True
     if payload.source_ref or link:
         run_input["source_ref"] = str(payload.source_ref or link)[:200]
     if issue:

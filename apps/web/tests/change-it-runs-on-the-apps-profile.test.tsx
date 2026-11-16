@@ -41,14 +41,15 @@ async function propose(words = "Add a /healthz route that reports the upstream p
 }
 
 describe("Change it's profile", () => {
-  it("opens on a lean app's own profile and sends it", async () => {
+  it("opens on a lean app's own profile, and untouched leaves the choice to the engine", async () => {
     await mount(<ChangeIt projectId="northgate-gateway" runId="crun_9a9a" actor="ceo" profile="lean" onClose={() => {}} />);
     expect(select()?.value).toBe("lean");
     expect(Array.from(select()!.options).map((o) => o.value)).toEqual(["lean", "balanced", "strict"]);
     expect(select()!.selectedOptions[0].textContent).toContain("this app's");
     await propose();
     expect(actions.propose).toHaveBeenCalledTimes(1);
-    expect(sentProfile()).toBe("lean");
+    // Untouched: the engine runs it on the lineage's profile (strict for a full rerun).
+    expect(sentProfile()).toBe("");
   });
 
   it("sends the profile the person picks instead", async () => {

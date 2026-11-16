@@ -26,11 +26,12 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/",
 }));
 
-import { addFeaturePatch, newWorkSearch } from "../lib/compose-links";
+import { WORDS_IN_LINK, addFeaturePatch, newWorkSearch, withNewWorkDoor } from "../lib/compose-links";
 import { addFeatureHref } from "../app/factory/apps-tab";
 import { AppsShelf } from "../app/command-center/rails";
 import { parseCcApps } from "../lib/command-center-apps";
-import { MAX_BRIEF_CHARS, anchorWords, briefLength } from "../lib/new-work";
+import { MAX_BRIEF_CHARS, anchorWords, briefLength, keepNewWorkDraft, readDraft } from "../lib/new-work";
+import { ProposalCard, keepCardDraft, type Proposal } from "../app/answer-cards";
 import { ProjectPage } from "../app/projects/project-page";
 import {
   FX_DEPLOYMENTS, FX_HEALTH, FX_KNOWLEDGE, FX_ONBOARDING, FX_OVERVIEW, FX_SETTINGS, FX_WORK, FX_WORK_PLAN,
@@ -38,6 +39,22 @@ import {
 import { mountAs, stubFetch, tid, unmount, type Call } from "./_helpers/multirepo-fixtures";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+/** Code without its comments (line and block), so a door named in prose is not a door. */
+function stripComments(code: string): string {
+  return code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+}
+/** Does this code open New work without the builder? `compose` set to 1 as a key, a quoted key,
+ *  a URLSearchParams set or entry, a URL param — or a URL pairing tab=work with any compose. */
+function opensNewWorkByHand(code: string): boolean {
+  const Q = "[\"'`]";
+  return [
+    new RegExp(`(^|[^\\w])${Q}?compose${Q}?\\s*:\\s*${Q}1${Q}`),
+    new RegExp(`${Q}compose${Q}\\s*,\\s*${Q}1${Q}`),
+    /[?&]compose=1\b/,
+    /tab=work[^"'`\s]*compose=|compose=[^"'`\s]*tab=work/,
+  ].some((re) => re.test(code));
+}
 
 const WEB = join(__dirname, "..");
 const P = "northgate-gateway";
@@ -90,10 +107,9 @@ describe("every link into New work carries the project, and the app when it is a
   });
 
   it("no door builds a New work link by hand: each goes through the builder with its project", () => {
-    // Inside the project page a door is `ctx.tab("work", { compose: "1" })` / projectHref(pid, …):
-    // the project is already the page's. Add a project's "add work there" builds on
-    // projectPageHref(pid). Everything else calls the builder.
-    const ALLOWED = new Set(["lib/compose-links.ts", "app/start-project/add-project.tsx"]);
+    // STRUCTURAL (AR-20 review): any object, URL or URLSearchParams that opens New work — `compose`
+    // set to 1 in any quoting, or a URL pairing tab=work with compose — anywhere in the console,
+    // the project page included, must be the builder's. Only lib/compose-links.ts builds one.
     const files: string[] = [];
     const walk = (dir: string) => {
       for (const name of readdirSync(dir)) {
@@ -110,8 +126,8 @@ describe("every link into New work carries the project, and the app when it is a
     const noProject: string[] = [];
     for (const f of files) {
       const rel = relative(WEB, f);
-      const code = readFileSync(f, "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
-      if (!ALLOWED.has(rel) && !rel.startsWith("app/projects/") && /compose=1|compose: ?"1"/.test(code)) handMade.push(rel);
+      const code = stripComments(readFileSync(f, "utf8"));
+      if (rel !== "lib/compose-links.ts" && opensNewWorkByHand(code)) handMade.push(rel);
       for (const m of code.matchAll(/addFeaturePatch\(([^)]*)\)/g)) {
         if (rel === "lib/compose-links.ts") continue;
         if (!/projectId/.test(m[1])) noProject.push(`${rel}: addFeaturePatch(${m[1]})`);
@@ -123,6 +139,18 @@ describe("every link into New work carries the project, and the app when it is a
     }
     expect(handMade).toEqual([]);
     expect(noProject).toEqual([]);
+  });
+
+  it("the scan catches every way of writing the door", () => {
+    const caught = [
+      `ctx.tab("work", { compose: "1" })`, `x({ 'compose': '1' })`, "const u = `?tab=work&compose=1`;",
+      `new URLSearchParams({ tab: "work", compose: "1" })`, `q.set("compose", "1")`, `[["compose", "1"]]`,
+      `href="?area=project&compose=0&tab=work"`, `navigateTo(projectHref(p, { tab: 'work', compose: '1' }))`,
+    ];
+    for (const c of caught) expect(opensNewWorkByHand(c), c).toBe(true);
+    for (const ok of [`ctx.tab("work")`, `addFeaturePatch({ projectId })`, `// compose=1 in a comment`, `{ composer: "1" }`]) {
+      expect(opensNewWorkByHand(stripComments(ok)), ok).toBe(false);
+    }
   });
 });
 
@@ -187,10 +215,13 @@ describe("New work opened from an app's door builds onto that app", () => {
   });
 
   it("names a GitHub app's change as its PR, and an app with no change yet by its branch", () => {
-    expect(anchorWords({ runId: RUN, app: "Shop", branch: "boss/code/r", prNumber: 7, prUrl: "https://github.com/acme/shop/pull/7" }))
+    expect(anchorWords({ runId: RUN, app: "Shop", branch: "boss/code/r", prNumber: 7, prUrl: "https://github.com/acme/shop/pull/7", prState: "open", mode: "continue" }))
       .toBe("building on Shop · PR #7");
-    expect(anchorWords({ runId: RUN, app: "Shop", branch: "boss/code/r", prNumber: null, prUrl: null }))
+    expect(anchorWords({ runId: RUN, app: "Shop", branch: "boss/code/r", prNumber: null, prUrl: null, prState: null, mode: "continue" }))
       .toBe("building on Shop · boss/code/r");
+    // ITS CHANGE WAS MERGED: a new change from the default branch, and the header says so.
+    expect(anchorWords({ runId: RUN, app: "Shop", branch: "main", prNumber: 7, prUrl: "https://github.com/acme/shop/pull/7", prState: "merged", mode: "new_change" }))
+      .toBe("Shop · PR #7 merged; this starts a new change from main");
   });
 });
 
@@ -245,5 +276,67 @@ describe("a long brief is never cut", () => {
     expect(briefLength("short").count).toBeNull();
     expect(briefLength("x".repeat(MAX_BRIEF_CHARS)).over).toBe(false);
     expect(briefLength("x".repeat(MAX_BRIEF_CHARS + 1)).over).toBe(true);
+  });
+});
+
+// ── long words never ride in a URL, and never get cut (AR-21 review) ─────────────────────────
+describe("a door with long words keeps them as the draft, not in its link", () => {
+  const LONG = `${"- the gateway keeps its last good config\n".repeat(60)}- LAST ITEM kept`;
+
+  it("the builder puts short words in the link and long ones nowhere near it", () => {
+    expect(addFeaturePatch({ projectId: P, kind: "feature", words: "Add a route" })).toMatchObject({ compose_kind: "feature", compose_text: "Add a route" });
+    const long = addFeaturePatch({ projectId: P, kind: "feature", words: LONG });
+    expect(LONG.length).toBeGreaterThan(WORDS_IN_LINK);
+    expect(long.compose_text).toBeUndefined();
+    expect([long.compose_from, long.compose_chars]).toEqual(["draft", String(LONG.length)]);
+    const href = withNewWorkDoor(`/?project_id=other&area=projects&org=org_boss`, { projectId: P, words: LONG });
+    expect(href.length).toBeLessThan(400);
+    expect(new URLSearchParams(href.split("?")[1]).get("project_id")).toBe(P);
+  });
+
+  it("New work brings the kept draft back whole", async () => {
+    engine();
+    keepNewWorkDraft(P, LONG, "bug");
+    await open(`&tab=work&compose=1&compose_kind=bug&compose_from=draft&compose_chars=${LONG.length}`);
+    expect(box()?.value).toBe(LONG);
+    expect(params().get("compose_from")).toBeNull();
+    expect(tid("px-composer")?.textContent).not.toContain("too long to travel");
+  });
+
+  it("a link opened without its draft says the words are missing, never shows a cut", async () => {
+    engine();
+    await open(`&tab=work&compose=1&compose_from=draft&compose_chars=${LONG.length}`);
+    expect(box()?.value).toBe("");
+    expect(tid("px-composer")?.textContent).toContain(`${LONG.length.toLocaleString("en-US")} characters) were too long to travel in a link`);
+  });
+});
+
+describe("an answer's New work card", () => {
+  const card = (text: string, over = false): Proposal => ({
+    kind: "new_work", title: "Gateway", text, work_kind: "feature", state: "open",
+    start: { href: `/v1/projects/${P}/work`, method: "POST", body: { kind: "feature", text } },
+    edit_href: `?project_id=${P}&area=project&tab=work&compose=1&compose_from=draft&compose_chars=${text.length}`,
+    ...(over ? { over_limit: { chars: text.length, limit: MAX_BRIEF_CHARS, message: "These words are 5 characters over the 20,000 limit." } } : {}),
+  });
+
+  it("Edit keeps the whole words as the project's draft", () => {
+    const long = "x".repeat(5000);
+    keepCardDraft(P, card(long));
+    expect(readDraft(P)?.text).toBe(long);
+  });
+
+  it("over the limit, Start is held and the card says why — the words are not cut", async () => {
+    const calls = stubFetch(() => ({ body: {} }));
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root: Root = createRoot(host);
+    const words = "x".repeat(MAX_BRIEF_CHARS + 5);
+    await act(async () => { root.render(<ProposalCard projectId={P} threadId="t" messageId="m" proposal={card(words, true)} />); });
+    const start = host.querySelector("[data-testid=agent-proposal-start]") as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    expect(host.querySelector("[data-testid=agent-proposal-said]")?.textContent).toContain("over the 20,000 limit");
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(0);
+    act(() => { root.unmount(); });
+    host.remove();
   });
 });

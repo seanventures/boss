@@ -114,7 +114,12 @@ export type NwDefaults = {
 };
 /** THE APP NEW WORK BUILDS ONTO (AR-20), as the engine resolved the door's `app=`: the build the
  *  change continues, the app's name, its lineage branch and its change / PR. */
-export type Anchor = { runId: string; app: string; branch: string; prNumber: number | null; prUrl: string | null };
+export type Anchor = {
+  runId: string; app: string; branch: string; prNumber: number | null; prUrl: string | null;
+  /** The lineage's change: open (continued), merged (a NEW change from `branch`, the default),
+   *  or none yet. A closed-unmerged change never anchors (the engine refuses it). */
+  prState: "open" | "merged" | null; mode: "continue" | "new_change";
+};
 export type PlanDetail = WorkPlan & {
   steps: Step[]; optionDetail: Record<string, OptionDetail>; defaults: NwDefaults | null;
   /** Only when an app was asked for: the anchor, or why that app is not one of this project's. */
@@ -143,6 +148,11 @@ export function briefLength(text: string): { count: string | null; over: boolean
  *  (a local change set), "· PR #4" on GitHub, or its branch while it has no change yet. */
 export function anchorWords(anchor: Anchor): string {
   const name = anchor.app || "this app";
+  if (anchor.mode === "new_change") {
+    // ITS CHANGE WAS MERGED: this is a new change from the default branch, said so.
+    const ref = changeRef(anchor.prUrl, anchor.prNumber, false);
+    return `${name} · ${ref} merged; this starts a new change from ${anchor.branch}`;
+  }
   return anchor.prNumber ? `building on ${name} · ${changeRef(anchor.prUrl, anchor.prNumber, true)}` : `building on ${name} · ${anchor.branch}`;
 }
 
@@ -150,7 +160,9 @@ const parseAnchor = (v: unknown): Anchor | null => {
   const x = o(v);
   if (!s(x.run_id)) return null;
   const pr = typeof x.pr_number === "number" && Number.isFinite(x.pr_number) ? x.pr_number : null;
-  return { runId: s(x.run_id), app: s(x.app), branch: s(x.branch), prNumber: pr, prUrl: s(x.pr_url) || null };
+  return { runId: s(x.run_id), app: s(x.app), branch: s(x.branch), prNumber: pr, prUrl: s(x.pr_url) || null,
+           prState: x.pr_state === "open" || x.pr_state === "merged" ? x.pr_state : null,
+           mode: x.mode === "new_change" ? "new_change" : "continue" };
 };
 
 const nnum = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
@@ -278,4 +290,14 @@ function DEMO_UNDERSTANDING(body: UnderstandBody): R {
     applied: retag ? ["Done when +1", "estimate updated"] : [], settings: { ...(high ? { priority: "high" } : {}), ...(tell ? { notify: tell } : {}) },
     graph: { indexed: true, files: 4 },
   };
+}
+
+/** A NEW WORK DOOR'S WORDS, KEPT WHOLE (AR-21): written as this project's New work draft, which
+ *  the modal brings back. Every door whose words may be too long for a link calls this before it
+ *  navigates (lib/compose-links WORDS_IN_LINK). */
+export function keepNewWorkDraft(projectId: string, text: string, kind: WorkKind = "feature"): void {
+  writeDraft(projectId, {
+    id: newDraftId(), kind, text, chat: [], brief: null, confirmed: false, priority: null,
+    notify: "", issue: { mode: "none" }, workflow: "", at: Date.now(),
+  });
 }

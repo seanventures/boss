@@ -1210,6 +1210,7 @@ def _build_onto_existing_app(ctx, cts, pid: str, actor: str, args: dict, extends
                 workflow_run_id=finalize_ctx.get("workflow_run_id"),
                 finalize_extra={"origin": finalize_ctx.get("origin"), "agent": agent},
                 release_base_sha=str(args.get("release_base_sha") or "").strip() or None,
+                new_change=bool(args.get("extends_from_default")),
             )
         except ValueError as exc:  # a simulated or vanished parent: say so, start nothing
             return {"ok": False, "error": str(exc)}
@@ -1398,6 +1399,12 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     "description": "with extends_run_id: the running preview (prev_...) the "
                                    "operator was looking at when they asked for this. The "
                                    "builder is told which one.",
+                },
+                "extends_from_default": {
+                    "type": "boolean",
+                    "description": "with extends_run_id: the app's change was MERGED, so this "
+                                   "is a new change for the app from the default branch (a "
+                                   "new branch and PR), not a push onto the merged branch.",
                 },
                 "risk_tier": {"type": "integer", "minimum": 0, "maximum": 3},
                 "profile": {

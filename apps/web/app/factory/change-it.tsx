@@ -118,6 +118,9 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = ""
   const [expected, setExpected] = useState("");
   const [through, setThrough] = useState("");
   const [runOn, setRunOn] = useState(() => defaultChangeProfile(profile));
+  // Untouched, the engine decides (the lineage's profile, strict for a full rerun); a person's
+  // pick is sent as theirs.
+  const [profilePicked, setProfilePicked] = useState(false);
   const [busy, setBusy] = useState(false);
   const [proposal, setProposal] = useState<FeedbackActionResult | null>(null);
   const [error, setError] = useState("");
@@ -159,7 +162,7 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = ""
     form.set("message", message);
     form.set("expected", expected);
     form.set("workflow_version_id", through);
-    form.set("profile", runOn);
+    form.set("profile", profilePicked ? runOn : "");
     form.set("actor", actor);
     if (previewId) form.set("anchor", `/v1/previews/${previewId}/web/`);
     const r = await callAction(submitCodeTaskFeedbackAction, undefined, "code_task:steer")(null, form);
@@ -245,7 +248,7 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = ""
             <label className="fx-ck-field">
               <span title="How much checking the change gets. It opens on this app's own profile.">Profile</span>
               <select className="mr-select" value={runOn} data-testid="fx-change-profile"
-                      onChange={(e) => setRunOn(defaultChangeProfile(e.target.value))}>
+                      onChange={(e) => { setRunOn(defaultChangeProfile(e.target.value)); setProfilePicked(true); }}>
                 {CHANGE_PROFILES.map((x) => (
                   <option key={x.key} value={x.key} title={x.tip}>
                     {x.label}{x.key === defaultChangeProfile(profile) && profile ? " (this app's)" : ""}
