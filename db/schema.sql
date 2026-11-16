@@ -15948,3 +15948,23 @@ CREATE TABLE IF NOT EXISTS private_tcp_dials (
 );
 CREATE INDEX IF NOT EXISTS idx_private_tcp_dials_connector
   ON private_tcp_dials (project_id, connector_id, created_at);
+-- BOSSAPP-1263: a saved prompt is not an agent. Promotion is a decision.
+-- The agent is created only after that decision is approved, through the
+-- existing agent-create path. Saving a prompt writes a row here and nothing
+-- in roles.
+CREATE TABLE IF NOT EXISTS project_prompts (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  agent_body JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dedupe_key TEXT NOT NULL,
+  decision_id TEXT,
+  promoted_role_key TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_project_prompts_project
+  ON project_prompts (project_id, created_at DESC);
