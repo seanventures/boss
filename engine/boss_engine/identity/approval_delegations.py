@@ -312,6 +312,17 @@ def hard_limit(db: Any, row: Mapping[str, Any]) -> Optional[tuple[str, str]]:
             return ("governance_never_delegated",
                     f"This build's plan touches {', '.join(touched)}. A delegate never approves "
                     "an identity, security or permissions change. The person decides it.")
+        # A PLAN THAT LEAVES A SECURITY OR HIGH FINDING OUT OF ITS BRIEF (plan_coverage, AR-24
+        # review): approving it ships the gap, and that is the person's call, never a delegate's.
+        from ..services.plan_coverage import serious_gaps
+
+        gaps = serious_gaps(rec.get("coverage") if isinstance(rec.get("coverage"), Mapping)
+                            else None)
+        if gaps:
+            return ("governance_never_delegated",
+                    f"This build's plan leaves {len(gaps)} security or HIGH item"
+                    f"{'s' if len(gaps) != 1 else ''} of its brief out. A delegate never approves "
+                    "a plan with a security gap. The person decides it.")
     if raw_action in _MAIN_MERGE_ACTIONS:
         return ("main_merge_never_delegated",
                 "A delegate never merges to main or the default branch. The person decides it.")

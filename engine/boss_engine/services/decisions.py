@@ -1857,6 +1857,12 @@ class DecisionService:
             from .architecture_docs import on_decision_answered
 
             on_decision_answered(connection, row, action=action, actor=actor, note=note)
+        elif recommendation_action == "resume_code_task" and action == "revise":
+            # REQUEST CHANGES ON A PLAN (AR-24): the paused build designs again with the note,
+            # its new plan is checked against its brief, and it asks again (plan_coverage).
+            from .plan_coverage import on_plan_sent_back
+
+            on_plan_sent_back(connection, row, actor=actor, note=note, jobs=self.jobs)
         elif action == "revise" and decision_actions.is_local_review(row):
             # REQUEST CHANGES ON A LOCAL CHANGE (BOSSAPP-948): the fix round on its own branch,
             # with the person's open line comments as required inputs (local_review).

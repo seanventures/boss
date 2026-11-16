@@ -50,6 +50,7 @@ from . import agent_acts, baseline_verify, ci_gate, design_prompts, plane_sync, 
 from . import red_first, repair_review_scope, review_input, review_panel
 from . import approved_prd_design
 from .checks_failing import wait_for_person as _checks_failing_wait
+from . import plan_coverage as _plan_coverage
 from . import acceptance_gate as _acceptance_gate
 from .knowledge import learning_context, learning_writeback  # learning while executing (BOSSAPP-768)
 from .bakeoff import (
@@ -4557,6 +4558,68 @@ def _guest_engine_fields(
             "azure_key": key("azure_openai_key")}
 
 
+def _plan_covers_brief(engine, settings, project_id, run_id, design, *, title, instructions,
+                       criteria, root, route, planner_note: str = "") -> tuple[dict, int]:
+    """The design with its plan checked against its brief (plan_coverage.ensure_covers): a
+    plan that leaves required items out goes back to the planner — the same read-only plan
+    session, told exactly what is missing — at most plan_coverage.MAX_REPLANS times. Returns
+    (design with `coverage`, cost of the re-plans). Never raises: a check that cannot run
+    leaves the design as it was."""
+    spent = [0]
+
+    def _replan(note: str, current: dict):
+        set_llm_context(stage="plan")
+        agent, model = route("plan")
+        answer = agent.run_role(
+            _ctx_block(title, instructions, criteria) + (planner_note or "")
+            + "You are the design lead. You wrote the plan below for this change; it was "
+            "checked against the brief above.\n\n" + note
+            + "\n\nYOUR PREVIOUS PLAN:\n" + str(current.get("plan") or "")[:12000]
+            + "\n\nRead what you need of the repository again. Do NOT edit any files. Write "
+            "the whole revised plan as a section starting with the heading line `=== PLAN ===` "
+            "(the files to add or change, the function signatures, and the key edge cases; end "
+            "it with `database: postgres` or `database: none` as before), then add this second "
+            "section:\n\n" + _plan_self_check_section(),
+            root, read_only=True, model=model)
+        spent[0] += int(answer.get("cost_usd_micros") or 0)
+        parts = _split_design(str(answer.get("summary") or ""))
+        if not parts["plan"]:
+            return None
+        return {"plan": parts["plan"], "plan_review": parts["plan_review"],
+                "plan_ok": _plan_verdict(parts["plan_review"]) != "revise"}
+
+    def _record(round_no: int, cov) -> None:
+        with _transaction(engine) as c:
+            emit_event(c, project_id, "code_task.plan_coverage_checked", "boss",
+                       "code_task_run", run_id,
+                       {"round": round_no, "ok": cov.ok, "items": cov.items, "by": cov.by,
+                        "missing": [m["id"] for m in cov.missing][:30],
+                        "skipped": [m["id"] for m in cov.skipped][:30],
+                        "unjudged": cov.unjudged})
+            if not cov.ok and round_no < _plan_coverage.MAX_REPLANS:
+                emit_event(c, project_id, "code_task.plan_sent_back_to_planner", "boss",
+                           "code_task_run", run_id,
+                           {"round": round_no + 1,
+                            "missing": [m["item"][:160] for m in cov.missing][:12]})
+
+    try:
+        try:
+            from .typed_decisions import make_decider
+
+            decider = make_decider(settings)
+        except Exception:  # noqa: BLE001 — the deterministic match still runs
+            _log_caught(logger)
+            decider = None
+        set_llm_context(stage="plan_coverage")
+        out, _cov = _plan_coverage.ensure_covers(
+            dict(design), instructions=instructions, criteria=criteria, decider=decider,
+            replan=_replan, on_round=_record)
+        return out, spent[0]
+    except Exception:  # noqa: BLE001 — never fail a build on its own bookkeeping
+        _log_caught(logger)
+        return design, spent[0]
+
+
 def _requires_plan_approval(risk_tier: int) -> bool:
     # Top-risk changes pause for a human to sign off the plan BEFORE any code is written.
     return risk_tier >= 3
@@ -4574,7 +4637,17 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
     markers = sensitive_markers or []
     plan_ok = bool(design.get("plan_ok", True))
     why = plan_gate_explanation(markers, plan_ok=plan_ok)
-    if markers:
+    coverage = design.get("coverage") if isinstance(design.get("coverage"), dict) else {}
+    gap = _plan_coverage.gap_words(coverage)
+    if gap:
+        # THE GAP COMES FIRST (AR-24): what the plan leaves out of its brief after BOSS sent it
+        # back to the planner, so the person can request the changes instead of approving it.
+        why = f"{gap}\n\n{why}"
+    if gap and not markers:
+        question = (f"The plan for “{(title or 'this task')[:70]}” leaves "
+                    f"{len(coverage.get('missing') or [])} brief item(s) out — approve it anyway, "
+                    "request changes, or reject?")
+    elif markers:
         question = (
             f"Approve the plan for “{(title or 'this task')[:70]}”? It touches "
             f"{', '.join(markers)} — BOSS won't write code until you sign off on the approach."
@@ -4611,6 +4684,10 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
                 "plan_ok": plan_ok,
                 "plan": (design.get("plan") or "")[:4000],
                 "plan_review": (design.get("plan_review") or "")[:2000],
+                # What the plan was checked against (plan_coverage): the items it leaves out,
+                # the ones it skips with a reason, and how many re-plans that took.
+                "coverage": {k: coverage.get(k) for k in (
+                    "ok", "items", "missing", "skipped", "replans", "unjudged")} if coverage else None,
             },
             cost_summary={"phase": "plan", "risk_tier": risk_tier},
             reason=why,
@@ -5029,7 +5106,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if refused:
             logger.warning("plan gate of %s not released: %s", run_id, refused)
             resume_design = None
-    if resume_design is None:
+    # REQUEST CHANGES ON THE PLAN (AR-24, plan_coverage.on_plan_sent_back): the person's note
+    # is the reason this run designs again, so neither its own sent-back design (removed with
+    # the answer) nor a parent's inherited one is reused, and the note joins the brief.
+    _plan_sent_back = ("" if prior_state.get("design")
+                       else _plan_coverage.change_request_brief(prior_state))
+    if resume_design is None and not _plan_sent_back:
         # RESUME ACROSS ATTEMPTS. A repair re-ran standards+spec+plan+review_plan every time —
         # four agent sessions (~10 min, ~$5 on the strong lane) re-deriving a plan for a task
         # that had not changed. Measured: every retry re-ran 10/10 stages and inherited 0 of the
@@ -7089,6 +7171,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         elif do_design:
             with _transaction(engine) as c:
                 _phase(c, "design")
+            # THE PERSON'S NOTE AND THE PLAN THEY SENT BACK GO TO THE PLANNER ONLY (AR-24
+            # review): joined to `instructions` they became the brief every later stage reads —
+            # the old plan's `[HIGH]` bullets turned into required items, and the writer and
+            # reviewer saw the rejected plan as if it were the task.
+            _design_brief = f"{instructions}{_plan_sent_back}"
             # AN APPROVED PRD IS THE DESIGN (approved_prd_design). HelpDesk AI's SLA-timers build
             # (crun_c8e2a5f8) spent 572 s here re-planning a PRD whose "Proposed Solution" the
             # owner had just approved (dec_13a8cd75). When the origin carries one, a short,
@@ -7096,7 +7183,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # (standards/spec/plan/plan_review/plan_ok/packages). Any doubt — no solution
             # section, an incomplete answer, the repo contradicting the PRD — runs the full
             # design exactly as before, and the event says which path ran and why.
-            design = _design_from_approved_prd(
+            design = None if _plan_sent_back else _design_from_approved_prd(
                 engine, project_id, run_id, fctx, title=title, instructions=instructions,
                 criteria=criteria, root=root, route=_route)
             if design is not None:
@@ -7119,7 +7206,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # separate review session below, so the check never silently disappears.
                 set_llm_context(stage="design")
                 a, m = _route("plan")
-                joint = a.run_role(_design_prompt(title, instructions, criteria), root,
+                joint = a.run_role(_design_prompt(title, _design_brief, criteria), root,
                                    read_only=True, model=m)
                 parts = _split_design(joint.get("summary", ""))
                 d1 = {"summary": parts["standards"], "cost_usd_micros": joint.get("cost_usd_micros")}
@@ -7135,7 +7222,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 if not parts["spec"]:
                     set_llm_context(stage="spec")
                     a, m = _route("spec")
-                    d2 = a.run_role(_spec_prompt(title, instructions, criteria), root,
+                    d2 = a.run_role(_spec_prompt(title, _design_brief, criteria), root,
                                     read_only=True, model=m)
                 if not parts["plan"]:
                     # The plan's own session self-checks too; its sections replace the joint
@@ -7169,6 +7256,18 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                           # The partition BOSS runs the writing stages in parallel from
                           # (parallel_build); empty when the change is too small to split.
                           "packages": parts.get("packages", "")}
+            # THE PLAN COVERS ITS BRIEF (AR-24, plan_coverage): every security / blocker /
+            # HIGH finding and every must-have the brief names is in the plan or explicitly
+            # skipped with a reason. Uncovered: back to the planner with the missing items
+            # named (bounded), and only then to a person with the gap on the plan card. The
+            # northgate follow-up crun_b14450fc's plan fixed a request id and dropped the HIGH
+            # path traversal its brief listed first — and asked a person to approve that.
+            if not _is_not_a_code_task(design.get("plan_review") or ""):
+                design, _cov_cost = _plan_covers_brief(
+                    engine, settings, project_id, run_id, design, title=title,
+                    instructions=instructions, criteria=criteria, root=root, route=_route,
+                    planner_note=_plan_sent_back)
+                cost += _cov_cost
             # PERSIST THE PLAN THE MOMENT IT EXISTS.
             # `state` was only written when a run FINISHED, so a mid-run death lost the design
             # along with everything else — both spend-limit failures recorded an EMPTY state, and
@@ -7213,10 +7312,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 instructions = (f"{instructions}\n\nREFINED SPEC:\n{design.get('spec', '')}"
                                 f"\n\nTECHNICAL PLAN:\n{design.get('plan', '')}")
             # HUMAN APPROVE-PLAN GATE (Wire-Phase 2b): top risk pauses for sign-off before code.
-            if _requires_plan_approval(risk_tier):
+            # So does a plan that still leaves brief items out after its re-plans (AR-24): a
+            # person sees the gap and approves, requests changes or rejects — never code first.
+            _gaps = not ((design.get("coverage") or {}).get("ok", True))
+            # A PLAN A PERSON SENT BACK GOES BACK TO THAT PERSON (AR-24 review): the re-plan is
+            # never approved by the run itself, whatever the tier or the coverage says.
+            _asked_again = bool(prior_state.get("plan_change_request"))
+            if _requires_plan_approval(risk_tier) or _gaps or _asked_again:
                 return _block_for_plan_approval(
                     engine, budget, run_id=run_id, project_id=project_id, task_id=task_id,
-                    reservation_id=reservation_id, design=design, risk_tier=risk_tier,
+                    reservation_id=reservation_id, design=design, risk_tier=max(risk_tier, 2),
                     title=title,
                     sensitive_markers=sensitive_markers_in({**spec, "title": title}))
 
