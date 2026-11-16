@@ -74,12 +74,38 @@ def test_the_named_tests_must_exist_in_the_suite(tmp_path):
     (tmp_path / "fxquote_test.go").write_text(suite)
     # The shipped branch: "file untouched" — every planned test is missing.
     assert set(brief_tests.missing(names, tmp_path, ["fxquote_test.go"])) == set(PLANNED)
-    added = suite + "".join(f"\nfunc {n}(t *testing.T) {{}}\n" for n in PLANNED)
+    added = suite + "".join(f"\nfunc {n}(t *testing.T) {{ t.Log(\"ok\") }}\n" for n in PLANNED)
     (tmp_path / "fxquote_test.go").write_text(added)
     assert brief_tests.missing(names, tmp_path, ["fxquote_test.go"]) == []
-    # A suite whose output lists the tests it ran must have run each one.
+    # A suite whose output lists the tests it ran must have run each one; a SKIP is not a run.
     listed = "\n".join(f"--- PASS: {n} (0.00s)" for n in names if n != PLANNED[0])
     assert brief_tests.missing(names, tmp_path, ["fxquote_test.go"], listed) == [PLANNED[0]]
+    skipped = listed + f"\n=== RUN   {PLANNED[0]}\n--- SKIP: {PLANNED[0]} (0.00s)"
+    assert brief_tests.missing(names, tmp_path, ["fxquote_test.go"], skipped) == [PLANNED[0]]
+    assert brief_tests.ran("test_x", "t.py::test_x SKIPPED") is False
+    assert brief_tests.ran("test_x", "t.py::test_x PASSED") is True
+    # An empty test is not written: a Go function with no statement, a Python `pass`.
+    (tmp_path / "fxquote_test.go").write_text(added.replace(
+        f"func {PLANNED[0]}(t *testing.T) {{ t.Log(\"ok\") }}",
+        f"func {PLANNED[0]}(t *testing.T) {{\n\t// TODO\n}}"))
+    assert brief_tests.missing(names, tmp_path, ["fxquote_test.go"]) == [PLANNED[0]]
+    (tmp_path / "test_a.py").write_text("def test_real():\n    assert 1\n\n"
+                                        "def test_empty():\n    pass\n")
+    assert brief_tests.defined(tmp_path, ["test_a.py"]) == {"test_real"}
+
+
+@pytest.mark.parametrize("text,names", [
+    # quoted or listed: named; prose: not
+    ("Add `TestFoo_Works` and test the prose word TestProse.", ["TestFoo_Works"]),
+    ("Tests to add:\n- TestListed_Behaviour — covers it\n- `TestQuoted(t *testing.T)`",
+     ["TestListed_Behaviour", "TestQuoted"]),
+    # fixtures and helpers are never a test the brief asks for
+    ("use the `test_client` fixture and `TestHelpers`; add `test_rejects_bad_spread`",
+     ["test_rejects_bad_spread"]),
+    ("`TestP1_ReadyzFailsOnBadConfig` stays", ["TestP1_ReadyzFailsOnBadConfig"]),
+])
+def test_only_quoted_or_listed_test_names_count(text, names):
+    assert brief_tests.named(text) == names
 
 
 def test_the_gate_is_a_test_gate_with_words():
@@ -143,6 +169,43 @@ def test_branch_owned_says_whom_it_waits_for():
         refuse_second_owner({"id": "crun_5daadf836f8543599260", "title": "Follow-up"})
     assert caught.value.tool_result == {"error_kind": "branch_owned",
                                         "wait_for_run": "crun_5daadf836f8543599260"}
+
+
+def test_an_owned_branch_is_a_wait_through_the_real_tool_call(eng, project, monkeypatch):  # noqa: F811
+    """The REAL `_invoke_tool` and the real `extend_code_task` handler (#174 review): the
+    handler runs retry_code_task, which raises BranchOwned against a running owner in the DB."""
+    import types
+
+    from boss_engine.config import get_settings
+    from boss_engine.tools.builtin import build_default_registry
+
+    base, owner = f"crun_{uuid.uuid4().hex[:12]}", f"crun_{uuid.uuid4().hex[:12]}"
+    with eng.begin() as c:
+        for rid, status, fctx in ((base, "completed", {}),
+                                  (owner, "running", {"root_run_id": base, "is_followup": True})):
+            c.execute(text(
+                "INSERT INTO code_task_runs (id, project_id, status, phase, title, spec, state, "
+                "finalize_ctx, pull_request_url, created_at) VALUES (:i, :p, :s, 'done', "
+                "'FXQuote', CAST(:sp AS JSONB), '{}'::jsonb, CAST(:f AS JSONB), :u, "
+                "clock_timestamp())"),
+                {"i": rid, "p": project, "s": status, "f": json.dumps(fctx),
+                 "sp": json.dumps({"owner": "local_fxquote", "repo": "fxquote"}),
+                 "u": "http://boss-local/local_fxquote/fxquote/pull/1"})
+    monkeypatch.setattr(runner, "_tool_registry", build_default_registry)
+    ctx = types.SimpleNamespace(engine=eng, settings=get_settings(), jobs=None)
+    token = runner._IN_STEP_AUTHORITY.set(True)
+    try:
+        with pytest.raises(runner.CapabilityWaitError) as caught:
+            runner._invoke_tool(ctx, "extend_code_task", project, "test",
+                                {"run_id": base, "instructions": "add the named tests",
+                                 "title": "More tests"})
+        assert caught.value.kind == "branch_owned" and owner in str(caught.value)
+        assert caught.value.wait_seconds == 120
+    finally:
+        runner._IN_STEP_AUTHORITY.reset(token)
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM code_task_runs WHERE id IN (:a, :b)"),
+                      {"a": base, "b": owner})
 
 
 def test_a_more_tests_pass_on_an_owned_branch_waits_for_the_owner(monkeypatch):
@@ -227,10 +290,40 @@ def test_ux_sign_off_skips_for_a_service_and_records_it(eng, project, kind, skip
             c.execute(text("DELETE FROM code_task_runs WHERE id = :i"), {"i": crun})
 
 
+def test_the_app_kind_reads_the_app_not_the_folder_the_tests_ran_in(tmp_path):
+    # A monorepo: an API in backend/, its front end in a sibling folder — an app, never skipped.
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "backend" / "go.mod").write_text("module api\n")
+    (tmp_path / "backend" / "main.go").write_text("package main\n")
+    (tmp_path / "frontend" / "src").mkdir(parents=True)
+    (tmp_path / "frontend" / "src" / "App.tsx").write_text("export default () => null\n")
+    assert g._app_kind_of(tmp_path, None)["kind"] == "app"
+    assert g._app_kind_of(tmp_path, "backend")["kind"] == "unknown", "ambiguous: ask"
+
+
+@pytest.mark.parametrize("code,kind", [
+    # a Go app that writes its page in a string literal is an app
+    ('package main\n\nconst page = `<!DOCTYPE html><html><body>hi</body></html>`\n', "app"),
+    ('import flask\nPAGE = "<html><body>quote</body></html>"\n', "app"),
+    # it answers text/html, no page in sight: ambiguous, so a person is asked
+    ('package main\n\nfunc h(w W) { w.Header().Set("Content-Type", "text/html") }\n',
+     "unknown"),
+    # a plain JSON API
+    ('package main\n\nfunc h(w W) { w.Header().Set("Content-Type", "application/json") }\n',
+     "service"),
+])
+def test_a_page_served_from_code_is_an_app(tmp_path, code, kind):
+    from boss_engine.services.preview_service import app_tree_kind
+
+    (tmp_path / "go.mod").write_text("module x\n")
+    (tmp_path / ("main.py" if "flask" in code else "main.go")).write_text(code)
+    assert app_tree_kind(tmp_path)[0] == kind
+
+
 def test_the_ui_quality_pass_reads_the_apps_kind(tmp_path):
     (tmp_path / "go.mod").write_text("module fxquote\n\ngo 1.23\n")
     (tmp_path / "fxquote.go").write_text("package fxquote\n")
-    assert g._app_kind_of(tmp_path, ".")["kind"] == "service"
+    assert g._app_kind_of(tmp_path, None)["kind"] == "service"
     src = Path(g.__file__).read_text(encoding="utf-8")
     assert '_ui_pass_applies = _kind_now.get("kind") != "service"' in src
     assert "if _ui_pass_applies and should_run_quality_pass(" in src

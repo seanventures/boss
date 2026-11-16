@@ -608,6 +608,17 @@ def _run_authority(ctx: Any, connection: Connection, project_id: str, context: O
     return under()
 
 
+def _branch_owned_wait(said: Any) -> Optional["CapabilityWaitError"]:
+    """The wait a branch-owned refusal is (`BranchOwned.tool_result`, or the same keys on a tool
+    result): the step waits for the run on the branch to finish, then starts. None otherwise."""
+    if not isinstance(said, dict) or said.get("error_kind") != "branch_owned":
+        return None
+    owner = str(said.get("wait_for_run") or "another run")
+    return CapabilityWaitError(
+        f"Waiting for {owner} to finish on this branch; this step starts when it does.",
+        wait_seconds=120, kind="branch_owned")
+
+
 def _invoke_tool(
     ctx: Any, tool_name: str, project_id: str, actor: str, args: dict[str, Any],
     trusted: Optional[dict[str, Any]] = None,
@@ -633,9 +644,19 @@ def _invoke_tool(
     trusted_token = TRUSTED_STEP_ARGS.set(dict(trusted or {}))
     try:
         result = spec.handler(ctx, project_id=project_id, actor=actor, args=args)
+    except Exception as exc:
+        # A REFUSAL THAT IS A WAIT (BOSSAPP-1331): another run owns the branch. The handler is
+        # called directly here, so BranchOwned arrives as itself, never as a tool result.
+        wait = _branch_owned_wait(getattr(exc, "tool_result", None))
+        if wait is not None:
+            raise wait from exc
+        raise
     finally:
         TRUSTED_STEP_ARGS.reset(trusted_token)
     if isinstance(result, dict) and result.get("ok") is False:
+        wait = _branch_owned_wait(result)
+        if wait is not None:
+            raise wait
         raise CapabilityExecutionError(str(result.get("error") or f"{tool_name} failed."))
     return result if isinstance(result, dict) else {"result": result}
 
@@ -2110,13 +2131,11 @@ def _start_on_the_branch(ctx, connection: Connection, *, project_id: str, actor:
     builder = builder or _runs.resolved_builder()
     with _step_authority(ctx, connection, project_id, context, step, builder):
         started = _invoke_tool(ctx, tool, project_id, actor, args, trusted=trusted)
-    if started.get("ok") is False and started.get("error_kind") == "branch_owned":
-        # ANOTHER RUN OWNS THE BRANCH (BOSSAPP-1331): this step waits for it to finish, then
-        # starts — it never "succeeds" having done nothing, and never fails over a wait.
-        owner = str(started.get("wait_for_run") or "another run")
-        raise CapabilityWaitError(
-            f"Waiting for {owner} to finish on this branch; this step starts when it does.",
-            wait_seconds=120, kind="branch_owned")
+    # ANOTHER RUN OWNS THE BRANCH (BOSSAPP-1331): `_invoke_tool` raised the wait; a stand-in
+    # that answers with the tool-result shape waits the same way.
+    wait = _branch_owned_wait(started)
+    if wait is not None:
+        raise wait
     if started.get("ok") is False and started.get("permission"):
         raise SettledCapabilityError(str(started.get("message") or started.get("error")
                                          or f"{tool} was refused for this run's authority."))

@@ -482,13 +482,21 @@ export function bucketOf(run: { status: string; standing?: RunStanding;
   return runIsLive(run) ? "running" : "done";
 }
 
-/** Who skipped a step and why, when an OPERATOR skipped it, "" for a branch never taken.
- *  The two read the same on the rail otherwise, and they mean opposite things: one is a
- *  decision somebody made about this step, the other is a path the run did not go down. */
+/** Who skipped a step and why, when an OPERATOR skipped it — or why the RUN recorded it as not
+ *  run (a service's preview, a pass that could not start: `not_run_released`, BOSSAPP-1331) —
+ *  "" for a branch never taken. They read the same on the rail otherwise, and they mean
+ *  different things: a decision about this step, a step that did not run for a reason, and a
+ *  path the run did not go down. */
 export function skippedBy(step: RunStep): string {
   const out = (step.output ?? {}) as {
-    skipped_by_operator?: unknown; skipped_by?: unknown; skipped_by_name?: unknown; skip_reason?: unknown };
-  if (step.status !== "skipped" || !out.skipped_by_operator) return "";
+    skipped_by_operator?: unknown; skipped_by?: unknown; skipped_by_name?: unknown; skip_reason?: unknown;
+    not_run_released?: unknown; reason?: unknown; note?: unknown };
+  if (step.status !== "skipped") return "";
+  if (out.not_run_released && !out.skipped_by_operator) {
+    const why = String(out.reason ?? out.note ?? "").replace(/^not run:\s*/i, "").trim();
+    return (why ? `not run: ${why}` : "not run").slice(0, 240);
+  }
+  if (!out.skipped_by_operator) return "";
   // A name, never a raw member id ("skipped by usr_kdzh…"): the recorded name, a role key
   // read as words, or "an operator".
   const name = String(out.skipped_by_name ?? "").trim();

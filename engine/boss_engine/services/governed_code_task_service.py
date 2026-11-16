@@ -1052,16 +1052,29 @@ def repair_lost_the_work(expected: list[str], root: Path, *,
             "Retry starts from the work the build kept, or builds it in full when none was kept.")
 
 
-def _app_kind_of(root: Any, verify_cwd: Optional[str]) -> Optional[dict]:
-    """{"kind", "why"} for the app the build verified (its verify folder, else the checkout),
-    from its tree; None when the tree cannot be read."""
+def _app_kind_of(root: Any, app_dir: Optional[str]) -> Optional[dict]:
+    """{"kind", "why"} for THE APP — the lineage's app folder (`verification_target.app_scope`),
+    else the repository — from its tree; None when the tree cannot be read.
+
+    Never the folder the tests happened to run in (#174 review): a monorepo verified in
+    `backend/` with its front end in a sibling folder is an app. A "service" holds only when the
+    repository says so too; an app folder with no page in a repository that has one is
+    ambiguous, so it is "unknown" — and a person is asked rather than skipped."""
     try:
         from .preview_service import app_tree_kind
 
-        where = Path(root)
-        if verify_cwd and verify_cwd != "." and not Path(str(verify_cwd)).is_absolute():
-            where = where / str(verify_cwd)
-        kind, why = app_tree_kind(where if where.is_dir() else Path(root))
+        base = Path(root)
+        where = base
+        if app_dir and app_dir != "." and not Path(str(app_dir)).is_absolute() \
+                and (base / str(app_dir)).is_dir():
+            where = base / str(app_dir)
+        kind, why = app_tree_kind(where)
+        if kind == "service" and where != base:
+            repo_kind, repo_why = app_tree_kind(base)
+            if repo_kind != "service":
+                return {"kind": "unknown",
+                        "why": (f"{app_dir} has no page, but the repository is not plainly a "
+                                f"service ({repo_why})")[:300]}
         return {"kind": kind, "why": why[:300]}
     except Exception:  # noqa: BLE001 — unknown is never a service
         _log_caught(logger)
@@ -8521,7 +8534,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # got this pass for its "thin UI evidence" — it had no UI at all — and the pass wrote
         # web/index.html, which then made the tree an "app" with a preview and a UX sign-off
         # nobody asked for. Decided by the app's kind from its tree, never by the brief's words.
-        _kind_now = _app_kind_of(root, last_verify_cwd) or {}
+        _kind_now = _app_kind_of(root, _app_scope) or {}
         _ui_pass_applies = _kind_now.get("kind") != "service"
         if not _ui_pass_applies and should_run_quality_pass(
                 workspace_evidence, tests_passed=bool(tests_passed and impl_files)):
@@ -9665,7 +9678,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "repo_manifests": _deploy_manifests_in(root),
             # WHAT THE APP IS, from its own tree (preview_service.app_tree_kind): a service or
             # library's failed workflow Preview is skipped, never an app's (BOSSAPP-1308).
-            "app_kind": _app_kind_of(root, last_verify_cwd),
+            "app_kind": _app_kind_of(root, _app_scope),
             "test_command": test_cmd, "test_exit_code": official_test_exit,
             "verify_cwd": last_verify_cwd,
             "last_verify_output": official_verify_output or last_verify_output,

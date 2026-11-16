@@ -114,6 +114,13 @@ describe("an operator's skip reads as one", () => {
       skipped_by_operator: true, skipped_by: "ceo", skip_reason: "out of budget" } });
     expect(skippedBy(byOperator)).toBe("skipped by ceo: out of budget");
     expect(skippedBy(step("skipped", { output: { reason: "path_not_reached" } }))).toBe("");
+    // A step the RUN recorded as not run says why (BOSSAPP-1331), never a bare "skipped".
+    expect(skippedBy(step("skipped", { output: { not_run_released: true,
+      note: "not run: this step could not start (BranchOwned)" } })))
+      .toBe("not run: this step could not start (BranchOwned)");
+    expect(skippedBy(step("skipped", { output: { not_run_released: true, skipped: "service",
+      reason: "UX sign-off skipped: this build is a service" } })))
+      .toBe("not run: UX sign-off skipped: this build is a service");
     // And the run's lane says it on the node, not only in a tooltip.
     expect(laneStateOf(byOperator)).toMatchObject({ phase: "skipped", meta: "skipped by ceo: out of budget" });
     expect(laneStateOf(step("skipped", { output: { reason: "path_not_reached" } })).meta).toBe("skipped");
