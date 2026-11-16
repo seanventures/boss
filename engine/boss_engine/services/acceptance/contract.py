@@ -1366,11 +1366,20 @@ def request_items(request: Mapping[str, Any]) -> list[str]:
     return out
 
 
+#: A line that labels a section or a list (a heading, "Must-haves:", a bullet): never a title.
+_NOT_A_TITLE = re.compile(r"^\s*(?:#|[-*•+]\s|\d+[.)]\s|```|>)|:\s*$")
+
+
 def request_title(request: Mapping[str, Any]) -> str:
+    """What the request is called: its title, else its first line of prose (never a heading,
+    a "Must-haves:" label or a bullet), else its id."""
     title = _norm(request.get("title") or "")
     if not title:
-        first = next((ln for ln in str(request.get("text") or "").splitlines() if ln.strip()), "")
-        title = _norm(first)
+        first = next((ln for ln in str(request.get("text") or "").splitlines()
+                      if ln.strip() and not _NOT_A_TITLE.search(ln)), "")
+        title = _norm(re.split(r"(?<=[.!?])\s", _norm(first), maxsplit=1)[0]) if first else ""
+    if not title:
+        title = f"change request {request.get('id') or ''}".strip()
     return title[:120]
 
 
@@ -1424,6 +1433,8 @@ def apply_change_request(connection: Any, contract: Mapping[str, Any], *,
                        "priority": "must", "check_hint": None, "request": title})
         n += 1
     replaces = [str(x) for x in request.get("replaces") or []]
+    if not joined and not replaces:
+        return cur          # it asks for nothing the contract does not hold: no new version
     source = {"kind": REQUEST_KIND, "ref": rid, "title": title, "count": len(joined),
               "requested_by": request.get("requested_by"), "replaces": replaces}
     cur = _new_version(connection, cur, list(cur["items"]) + joined,

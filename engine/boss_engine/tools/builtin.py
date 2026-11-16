@@ -1181,6 +1181,24 @@ def _build_onto_existing_app(ctx, cts, pid: str, actor: str, args: dict, extends
         refused = extra_permission_refusal("create_code_task", "code_task:steer", pid)
         if refused is not None:
             return refused
+    from sqlalchemy import text
+
+    from .registry import trusted_step_arg
+
+    person_request = trusted_step_arg("person_request") is True
+    replaces = None
+    if person_request and trusted_step_arg("replaces"):
+        replaces = [str(x) for x in trusted_step_arg("replaces")]
+        # RE-CHECKED against what the start endpoint recorded (checked_replaces, as the person):
+        # the governing run's own input, nothing else.
+        with ctx.begin() as c:
+            recorded = c.execute(text("SELECT input->'replaces' FROM workflow_runs WHERE id = :r "
+                                      "AND project_id = :p"),
+                                 {"r": str(finalize_ctx.get("workflow_run_id") or ""),
+                                  "p": pid}).scalar()
+        if not isinstance(recorded, list) or sorted(map(str, recorded)) != sorted(replaces):
+            return {"ok": False, "error": "the items to replace are not the ones this run's "
+                                          "start recorded; nothing was started"}
     with ctx.begin() as c:
         parent = _code_task_in_project(c, extends, pid)
         if parent is None:
@@ -1215,10 +1233,9 @@ def _build_onto_existing_app(ctx, cts, pid: str, actor: str, args: dict, extends
                 parent_run_id=extends,
                 instructions=instructions,
                 jobs=ctx.jobs,
-                # A workflow build step carrying the person's New work / Change it says so;
-                # an agent's own call does not (BOSSAPP-1322).
-                is_person_request=bool(args.get("person_request")),
-                replaces=(args.get("replaces") or None) if args.get("person_request") else None,
+                # A workflow build step carrying the person's New work / Change it says so,
+                # through the runner's trusted values — never an argument (PR #161 D1).
+                is_person_request=person_request, replaces=replaces,
                 title=_titled_for_the_app(c, cts, extends, args.get("title")),
                 acceptance_criteria=cts.with_existing_tests_criterion(
                     args.get("acceptance_criteria")),
@@ -1582,9 +1599,12 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         cts = services_module("code_task_service")
         # AN INCREMENT A PERSON ASKED FOR (Incremental Build's next increment) adds its own
         # must-haves to the app's contract; a More tests / readiness pass does not.
+        from .registry import trusted_step_arg
+
         _request = (cts.change_request(args.get("instructions") or "", title=args.get("title"),
                                        actor=actor)
-                    if args.get("person_request") and str(args.get("instructions") or "").strip()
+                    if trusted_step_arg("person_request") is True
+                    and str(args.get("instructions") or "").strip()
                     else None)
         result = cts.retry_code_task(
             ctx.engine, ctx.settings, ctx.jobs, args["run_id"],
@@ -4205,6 +4225,13 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                 "action": {"type": "string", "enum": list(_DECISION_ACTIONS)},
                 "note": {"type": "string", "description": "why — recorded as provenance"},
                 "delegate_to": {"type": "string", "description": "for action=delegate"},
+                "content_hash": {"type": "string",
+                                 "description": "approve exactly the content you were shown "
+                                                "(its hash); refused if it changed since"},
+                "force": {"type": "boolean",
+                          "description": "merge over BOSS's own merge gate; needs a note "
+                                         "saying why (decide always waits for a person's "
+                                         "click)"},
             },
             ["decision_id", "action", "note"],
         ),
@@ -5327,6 +5354,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                 "base_branch": {"type": "string",
                                 "description": "branch BOSS builds on; the repository's default "
                                                "when omitted"},
+                "default_branch": {"type": "string",
+                                   "description": "the same as base_branch (older name)"},
                 "role_hint": {"type": "string",
                               "enum": ["contracts", "backend", "frontend", "deploy_config",
                                        "library", "service", "other"]},
@@ -6896,6 +6925,8 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                                    "description": "also show what is awaiting review"},
               "query": {"type": "string",
                         "description": "rank by relevance to this text (what you are doing)"},
+              "role": {"type": "string",
+                       "description": "whose memory: an agent's role (defaults to yours)"},
               "project_id": {"type": "string"}}),
         kind="read", permission="memory:read",
         exposure=Exposure(tags=("memory",), core_for=("chat",)))

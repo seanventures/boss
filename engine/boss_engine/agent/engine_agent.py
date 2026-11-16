@@ -1405,11 +1405,18 @@ class EngineAgent:
         # write gate above has already passed, so reaching this line means the operator
         # instructed an action rather than asking a question — the distinction a tool that
         # escalates its own permissions (a fixing investigation) has to be able to make.
-        outgoing = {**(self.ambient or {}), **args, "_writes_allowed": bool(allow_writes)}
+        # The model's args, and BOSS's own context apart from them (registry.invoke takes the
+        # underscore keys only from `internal`, never from args the model wrote).
+        ambient = dict(self.ambient or {})
+        internal = {**{k: v for k, v in ambient.items() if str(k).startswith("_")},
+                    "_writes_allowed": bool(allow_writes)}
+        outgoing = {**{k: v for k, v in ambient.items() if not str(k).startswith("_")},
+                    **{k: v for k, v in args.items() if not str(k).startswith("_")}}
 
         def send(sent: dict) -> dict:
             return self.registry.invoke(
-                name, self.ctx, project_id=project_id, actor=actor, args=sent)
+                name, self.ctx, project_id=project_id, actor=actor, args=sent,
+                internal=internal)
 
         # OUTSIDE TEXT DOES NOT LEAVE ON A WRITE. A page, a tool result, or a document that
         # arrived this turn is marked; a write that would send it waits for the operator.

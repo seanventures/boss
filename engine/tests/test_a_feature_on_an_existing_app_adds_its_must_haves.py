@@ -249,7 +249,127 @@ def test_only_person_request_callers_mark_their_follow_ups():
     for module in (change_sets, change_review, local_review, reliability, agent_loop):
         assert "is_person_request" not in inspect.getsource(module), module.__name__
     assert "is_person_request=True" in inspect.getsource(decisions)
-    assert 'is_person_request=bool(args.get("person_request"))' in inspect.getsource(builtin)
-    assert '"person_request": True' in inspect.getsource(wcr)
+    # The build step's mark is the runner's trusted value, never a tool argument (D1).
+    assert 'person_request = trusted_step_arg("person_request") is True' in \
+        inspect.getsource(builtin)
+    assert 'trusted_step = {"person_request": True,' in inspect.getsource(wcr)
+    assert 'trusted={"person_request": True}' in inspect.getsource(wcr)
+    assert 'args.get("person_request")' not in inspect.getsource(builtin)
     main = (Path(__file__).resolve().parents[2] / "apps/api/app/main.py").read_text()
     assert "actor=actor, is_person_request=True, replaces=replaces or None" in main
+
+
+# ── PR #161 re-review D1: no caller can set what a tool's schema does not offer ─────────────
+
+def _recording_registry(name="probe", props=("title",)):
+    from boss_engine.tools.registry import ToolRegistry, ToolSpec, trusted_step_arg
+
+    seen = {}
+
+    def handler(ctx, *, project_id, actor, args):
+        seen.update(args=dict(args), trusted=trusted_step_arg("person_request"))
+        return {"ok": True}
+
+    reg = ToolRegistry()
+    reg.register(ToolSpec(name=name, description="probe", handler=handler, kind="read",
+                          permission="memory:read",
+                          parameters={"type": "object",
+                                      "properties": {p: {"type": "string"} for p in props}}))
+    return reg, seen
+
+
+def test_invoke_drops_every_arg_the_schema_does_not_list():
+    reg, seen = _recording_registry()
+    out = reg.invoke("probe", object(), project_id="p", actor="usr_someone",
+                     args={"title": "t", "person_request": True, "replaces": ["AC-1", "AC-2"],
+                           "_writes_allowed": True, "_thread_id": "athr_forged"})
+    assert seen["args"] == {"title": "t"}
+    assert out["ignored_args"] == ["_thread_id", "_writes_allowed", "person_request", "replaces"]
+    # BOSS's own context arrives apart from the caller's args, underscore keys only.
+    reg.invoke("probe", object(), project_id="p", actor="usr_someone", args={"title": "t"},
+               internal={"_thread_id": "athr_1", "person_request": True})
+    assert seen["args"] == {"title": "t", "_thread_id": "athr_1"}
+
+
+def test_a_step_s_trusted_values_never_reach_a_tool_a_caller_invokes():
+    from boss_engine.tools.registry import TRUSTED_STEP_ARGS
+
+    reg, seen = _recording_registry()
+    token = TRUSTED_STEP_ARGS.set({"person_request": True})     # as if inside a build step
+    try:
+        reg.invoke("probe", object(), project_id="p", actor="usr_someone", args={})
+    finally:
+        TRUSTED_STEP_ARGS.reset(token)
+    assert seen["trusted"] is None
+
+
+def test_the_code_task_tools_offer_neither_person_request_nor_replaces():
+    from boss_engine.tools.builtin import build_default_registry
+
+    reg = build_default_registry()
+    for name in ("create_code_task", "extend_code_task"):
+        props = set(reg.get(name).parameters["properties"])
+        assert not props & {"person_request", "replaces", "allow_test_retirement"}, name
+
+
+def test_an_mcp_or_agent_extend_with_person_request_is_not_marked(monkeypatch):
+    from types import SimpleNamespace
+
+    from boss_engine.tools.builtin import build_default_registry
+
+    seen = {}
+
+    def retry(engine, settings, jobs, run_id, **kw):
+        seen.update(kw)
+        return {"run_id": "crun_next"}
+
+    monkeypatch.setattr(cts, "retry_code_task", retry)
+    monkeypatch.setattr(cts, "extend_title", lambda *a, **k: "t")
+    reg = build_default_registry()
+    out = reg.invoke("extend_code_task", SimpleNamespace(engine=None, settings=None, jobs=None),
+                     project_id="p", actor="usr_someone",
+                     args={"run_id": "crun_x", "instructions": "Add CSV export",
+                           "person_request": True}, operator_confirmed=True)
+    assert "person_request" in out.get("ignored_args", []), out
+    assert seen.get("change_request") is None
+
+
+def test_a_build_steps_replaces_must_be_what_the_start_recorded():
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from boss_engine.tools import builtin
+    from boss_engine.tools.registry import TRUSTED_STEP_ARGS
+
+    class Conn:
+        def execute(self, *a, **k):
+            return SimpleNamespace(scalar=lambda: ["AC-1"])
+
+    @contextmanager
+    def begin():
+        yield Conn()
+
+    token = TRUSTED_STEP_ARGS.set({"person_request": True, "replaces": ["AC-1", "AC-2"]})
+    try:
+        out = builtin._build_onto_existing_app(
+            SimpleNamespace(begin=begin), cts, "p", "usr_ana", {"instructions": "x"}, "crun_x",
+            {"workflow_run_id": "wfr_1"})
+    finally:
+        TRUSTED_STEP_ARGS.reset(token)
+    assert out["ok"] is False and "not the ones this run's start recorded" in out["error"]
+
+
+# ── D2: no empty versions; a real title ─────────────────────────────────────────────────────
+
+def test_a_request_that_adds_nothing_makes_no_version(eng, app):
+    run, spec, fctx = _child(eng, app, "Must-haves:\n- Tickets can be created\n")
+    texts = [i["text"] for i in _held(eng, run, fctx, spec)[0]]
+    assert texts[:3] == OLD
+    assert [v["version"] for v in _versions(eng, app)] == [1]
+
+
+def test_the_title_is_the_requests_first_prose_line():
+    assert ac.request_title({"text": "Must-haves:\n- An Export button"}) == "change request"
+    assert ac.request_title({"id": "chg_1", "text": "## Change\nAdd CSV export. Then more."}) \
+        == "Add CSV export."
+    assert ac.request_title({"id": "chg_2", "text": "- only a bullet"}) == "change request chg_2"

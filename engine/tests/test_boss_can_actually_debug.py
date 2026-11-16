@@ -889,9 +889,20 @@ class TestWhoDecidedNotWhichFlagWasSet:
             raise AssertionError("OPENED")
 
     def _investigate(self, args, *, operator_confirmed=False):
+        # The turn's marker is BOSS's own context (registry.invoke `internal`), never an
+        # argument the model wrote (PR #161 review D1): split the way engine_agent sends it.
         return build_default_registry().invoke(
-            "investigate", self._Ctx(), project_id="p", actor="ceo", args=args,
+            "investigate", self._Ctx(), project_id="p", actor="ceo",
+            args={k: v for k, v in args.items() if not k.startswith("_")},
+            internal={k: v for k, v in args.items() if k.startswith("_")},
             operator_confirmed=operator_confirmed)
+
+    def test_a_model_written_marker_is_dropped(self):
+        """`_writes_allowed` in the MODEL's args never opens a fixing investigation."""
+        out = build_default_registry().invoke(
+            "investigate", self._Ctx(), project_id="p", actor="ceo",
+            args={"question": "fix the deploy", "fix": True, "_writes_allowed": True})
+        assert out["ok"] is False and out["requires_confirmation"] is True
 
     def test_an_instruction_opens_a_fixing_investigation(self):
         out = self._investigate({"question": "fix the deploy", "fix": True,

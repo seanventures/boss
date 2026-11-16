@@ -13874,8 +13874,7 @@ def agent_action(payload: AgentActionRunRequest, request: Request) -> AgentActio
     # reports back lost its thread the same way. Underscore keys are BOSS's, never the client's.
     pressed_args = {k: v for k, v in dict(payload.args or {}).items()
                     if not str(k).startswith("_")}
-    if payload.thread_id:
-        pressed_args["_thread_id"] = payload.thread_id
+    pressed_internal = {"_thread_id": payload.thread_id} if payload.thread_id else {}
     # THE PRESS SPEAKS FOR THE AGENT THE CONVERSATION IS ADDRESSED TO. A learning recorded by
     # pressing "Record learning" in the Site Reliability Engineer's thread was credited to
     # "BOSS (general)" (northpeak-bank, 2026-10-25): the turn carried its speaker, the press did
@@ -13887,7 +13886,7 @@ def agent_action(payload: AgentActionRunRequest, request: Request) -> AgentActio
             thread_id=payload.thread_id):
         result = registry.invoke(
             spec.name, ctx, project_id=payload.project_id, actor=payload.actor,
-            args=pressed_args, operator_confirmed=True,
+            args=pressed_args, internal=pressed_internal, operator_confirmed=True,
             # IDENTITY (S2): the person who pressed it must hold the TOOL's permission too
             # (`run_on_host` is host:exec), not only assistant:chat.
             auth=_request_identity(request),
