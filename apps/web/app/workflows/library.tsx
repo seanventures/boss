@@ -676,7 +676,7 @@ function LibraryCard(p: CardProps) {
         ) : null}
         {w.last_run ? (
           <span title={`Last run ${w.last_run.status}, ${formatDateTime(w.last_run.at)}`}>
-            <Clock size={14} aria-hidden /> {ageOf(w.last_run.at, p.now)}
+            <Clock size={14} aria-hidden /> {ageOf(w.last_run.at, p.now)} {w.last_run.status}
           </span>
         ) : null}
         {p.liveRuns.has(w.definition_id) ? (
