@@ -35,6 +35,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Optional, Sequence
 
 from . import build_budget as _build_budget
+from . import brief_tests as _brief_tests
 from .work_hold import PauseAtCheckpoint as _PauseAtCheckpoint
 from . import repair_findings
 from . import parallel_build as _parallel_build
@@ -221,6 +222,38 @@ def _record_auto_preview_failure(engine, project_id: str, run_id: str, exc: Base
     except Exception:  # noqa: BLE001
         _log_caught(logger)
         logger.warning("auto-preview failure not recorded for %s", run_id, exc_info=True)
+
+
+def repair_tests_gap(feedback_history: Any, instructions: str, *, resumed: bool,
+                     named_tests: Optional[list[str]] = None) -> str:
+    """What the test author of a continuation is sent to close: the last round's fix note, the
+    brief's ITERATION FEEDBACK — or, with neither, THE BRIEF ITSELF (BOSSAPP-1330). A
+    checks-failing follow-up carries no iteration feedback: its findings ARE its instructions.
+    The empty gap read "nothing to close" and the five tests its plan named were never written.
+    A resumed run with no feedback has no gap (its work was interrupted, not judged). The tests
+    the brief names are listed either way."""
+    hist = feedback_history if isinstance(feedback_history, list) and feedback_history else [{}]
+    last = hist[-1] if isinstance(hist[-1], dict) else {}
+    text = str(instructions or "")
+    gap = (last.get("fix_note")
+           or (text.split("=== ITERATION FEEDBACK", 1)[-1]
+               if "=== ITERATION FEEDBACK" in text else "")) or ""
+    if not str(gap).strip() and not resumed:
+        gap = text
+    if not str(gap).strip():
+        return ""
+    return str(gap) + _brief_tests.brief_note(named_tests or [])
+
+
+def _all_test_paths(root: Path) -> list[str]:
+    """Every test file of the working tree, relative to it (never .git or dependencies)."""
+    out: list[str] = []
+    for p in Path(root).rglob("*"):
+        rel = p.relative_to(root).as_posix()
+        if (p.is_file() and "node_modules/" not in rel and not rel.startswith(".git/")
+                and _is_test_path(rel)):
+            out.append(rel)
+    return out
 
 
 def _is_test_path(path: str) -> bool:
@@ -765,6 +798,7 @@ _TEST_GATES = frozenset({
     "coder_did_not_edit_tests",  # the coder moved the goalposts
     "written_tests_pass",      # this run's own tests fail
     "existing_tests_intact",   # pre-existing tests were weakened or deleted
+    "brief_tests_written",     # a test the brief names is not in the suite (BOSSAPP-1330)
 })
 
 
@@ -7516,6 +7550,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _event("code_task.split_fell_back", {"why": "the split raised", "tests": tests})
                 return None
 
+        # THE TESTS THE BRIEF NAMES (BOSSAPP-1330): its instructions and its own plan. The test
+        # author is told them, and the gate `brief_tests_written` holds the build to them.
+        _named_tests = _brief_tests.named(
+            instructions, (design or {}).get("spec"), (design or {}).get("plan"))
         if do_separate_tests:
             # STEP write tests (qa), tests only.
             _abort_if_cancelled("write_tests")
@@ -7534,7 +7572,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 prompt = _qa_prompt(
                     title, instructions, criteria, test_cmd,
                     iac=iac_task, web=_web_verify, app_root=_app_id, stack_note=_stack_note,
-                ) + _placed_tests_note(_placed_tpl_tests)
+                ) + _placed_tests_note(_placed_tpl_tests) + _brief_tests.brief_note(_named_tests)
                 # AUGMENT, DON'T RE-AUTHOR. On a repair the prior attempt's tests are ALREADY in
                 # the working tree (the retry clones the lineage branch), and the review names the
                 # exact gap — e.g. "the defects are all in app.js, which no test covers". Sending
@@ -7556,10 +7594,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     if existing:
                         # NOTE: `evidence` is not bound this early in the pipeline — the
                         # findings live in the iteration feedback carried on fctx/instructions.
-                        _hist = fctx.get("feedback_history") or [{}]
-                        gap = (_hist[-1].get("fix_note")
-                               or (instructions.split("=== ITERATION FEEDBACK", 1)[-1]
-                                   if "=== ITERATION FEEDBACK" in instructions else "")) or ""
+                        gap = repair_tests_gap(fctx.get("feedback_history"), instructions,
+                                               resumed=_resumed, named_tests=_named_tests)
                         # TWO DIFFERENT SITUATIONS, TWO DIFFERENT INSTRUCTIONS. A repair has
                         # reviewers' findings to act on. A RESUME has none: the previous
                         # attempt was killed mid-run, not judged, so there is no gap to close
@@ -7577,7 +7613,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 "only what is genuinely missing, and otherwise change "
                                 "nothing.\n\n"
                                 f"TASK CONTEXT: {title}\n\nRun `{test_cmd}` and leave the "
-                                "whole suite green. Touch as few files as possible.")
+                                "whole suite green. Touch as few files as possible."
+                                + _brief_tests.brief_note(_named_tests))
                         else:
                             prompt = (
                                 "This is a REPAIR iteration. A working test suite ALREADY "
@@ -7587,7 +7624,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 "COVERAGE GAP the reviewers identified, by ADDING focused "
                                 "tests (or extending an existing file where that is the "
                                 "natural home).\n\n"
-                                f"GAP TO CLOSE:\n{gap[:2000]}\n\n"
+                                f"GAP TO CLOSE:\n{gap[:6000]}\n\n"
                                 f"TASK CONTEXT: {title}\n\nRun `{test_cmd}` and leave the "
                                 "whole suite green. Touch as few files as possible.")
                 if escalate:
@@ -8480,7 +8517,19 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         except Exception:  # noqa: BLE001
             _log_caught(logger)
             workspace_evidence = {}
-        if should_run_quality_pass(
+        # A UI PASS IS FOR AN APP WITH A PAGE (BOSSAPP-1332). FXQuote, an API-only Go service,
+        # got this pass for its "thin UI evidence" — it had no UI at all — and the pass wrote
+        # web/index.html, which then made the tree an "app" with a preview and a UX sign-off
+        # nobody asked for. Decided by the app's kind from its tree, never by the brief's words.
+        _kind_now = _app_kind_of(root, last_verify_cwd) or {}
+        _ui_pass_applies = _kind_now.get("kind") != "service"
+        if not _ui_pass_applies and should_run_quality_pass(
+                workspace_evidence, tests_passed=bool(tests_passed and impl_files)):
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.quality_pass_skipped", "boss",
+                           "code_task_run", run_id,
+                           {"reason": "service", "why": _kind_now.get("why") or ""})
+        if _ui_pass_applies and should_run_quality_pass(
             workspace_evidence, tests_passed=bool(tests_passed and impl_files),
         ):
             snapshot = {}
@@ -9344,6 +9393,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if do_separate_tests:
             gates["tests_written_first"] = bool(test_files)
             gates["coder_did_not_edit_tests"] = tests_untouched
+        _brief_missing: list[str] = []
+        if _named_tests and not _recheck:
+            # HELD TO ITS OWN BRIEF (BOSSAPP-1330): every test the brief or its plan names exists
+            # in the suite, and ran where the suite's output lists what it ran.
+            _brief_missing = _brief_tests.missing(
+                _named_tests, root,
+                _all_test_paths(root),
+                official_verify_output or "")
+            gates["brief_tests_written"] = not _brief_missing
+            if _brief_missing:
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.brief_tests_missing", "boss",
+                               "code_task_run", run_id,
+                               {"named": _named_tests[:40], "missing": _brief_missing[:40]})
         # BOUND BEFORE THE BRANCH THAT FILLS IT.
         #
         # This was declared inside `if do_review:` and read at the bottom of the function
@@ -9586,6 +9649,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "substrate": "microvm" if use_microvm else "local",
             "sandbox_task_ids": guest_vm_ids,
             "test_author_independent": do_separate_tests,
+            # The tests the brief names and the ones the suite lacks (BOSSAPP-1330).
+            "brief_tests": {"named": _named_tests[:40], "missing": _brief_missing[:40]},
             # MEASURED, NOT ASSERTED (BOSSAPP-960): this flag used to be `do_review` — "a
             # review ran" — which read as independence on gates and dashboards while the
             # reviewer was the builder's own model. It now says what is true: a review ran AND

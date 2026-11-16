@@ -460,7 +460,9 @@ def _run_context(connection: Connection, run_id: str) -> dict[str, Any]:
             steps[row["step_id"]] = {**output, "step_status": "failed"}
             skipped.pop(row["step_id"], None)
             continue
-        if row["status"] == "succeeded":
+        if row["status"] == "succeeded" or workflows.released_not_run(row):
+            # A step the run recorded as not run (BOSSAPP-1331) keeps its honest output here,
+            # as it did while it was recorded "succeeded": what it says it did not do.
             if isinstance(row["output"], dict):
                 steps[row["step_id"]] = output
             skipped.pop(row["step_id"], None)
@@ -768,6 +770,41 @@ def _adopted_gate(
         "approved_at": approved_at.isoformat() if hasattr(approved_at, "isoformat")
                        else approved_at,
     }
+
+
+#: Gate steps about how a PAGE looks and behaves: nothing to sign off on an app with no page.
+UI_ONLY_CAPABILITIES = frozenset({"ux_review"})
+
+
+def _no_page_to_sign_off(connection: Any, key: str,
+                         context: Optional[dict[str, Any]]) -> Optional[str]:
+    """Why a UI-only step (UX sign-off) is skipped, or None (BOSSAPP-1332).
+
+    FXQuote, an API-only Go service, got a card asking a person to "use the preview and sign
+    off on how it looks". Decided from the APP'S KIND BOSS recorded for the build (state
+    app_kind, from its tree: preview_service.is_service_build) — never from words in the
+    brief. A service or a library is skipped; an app, or a build whose kind BOSS has not
+    recorded, is asked as before."""
+    if key not in UI_ONLY_CAPABILITIES or not isinstance(context, dict):
+        return None
+    build = _build_run_id(context)
+    engine = getattr(connection, "engine", None)
+    if not build or engine is None:
+        return None
+    from .preview_service import is_service_build
+
+    if not is_service_build(engine, build):
+        return None
+    why = ""
+    try:
+        why = str(connection.execute(text(
+            "SELECT state->'app_kind'->>'why' FROM code_task_runs WHERE id = :i"),
+            {"i": build}).scalar() or "")
+    except Exception:  # noqa: BLE001 — the skip stands without its detail
+        why = ""
+    return ("UX sign-off skipped: this build is a service or a library — it has no page for "
+            "a person to look at" + (f" ({why})" if why else "") + ". It is exercised by its "
+            "tests and its deploy's health checks.")[:500]
 
 
 def _no_prd_to_approve(key: str, context: Optional[dict[str, Any]]) -> bool:
@@ -2073,6 +2110,13 @@ def _start_on_the_branch(ctx, connection: Connection, *, project_id: str, actor:
     builder = builder or _runs.resolved_builder()
     with _step_authority(ctx, connection, project_id, context, step, builder):
         started = _invoke_tool(ctx, tool, project_id, actor, args, trusted=trusted)
+    if started.get("ok") is False and started.get("error_kind") == "branch_owned":
+        # ANOTHER RUN OWNS THE BRANCH (BOSSAPP-1331): this step waits for it to finish, then
+        # starts — it never "succeeds" having done nothing, and never fails over a wait.
+        owner = str(started.get("wait_for_run") or "another run")
+        raise CapabilityWaitError(
+            f"Waiting for {owner} to finish on this branch; this step starts when it does.",
+            wait_seconds=120, kind="branch_owned")
     if started.get("ok") is False and started.get("permission"):
         raise SettledCapabilityError(str(started.get("message") or started.get("error")
                                          or f"{tool} was refused for this run's authority."))
@@ -2843,6 +2887,15 @@ def _execute_step(
                 "capability": key, "tool": None, "status": "not_applicable",
                 "note": "No PRD to approve — this build was started as a direct change.",
             }, {})
+        no_page = _no_page_to_sign_off(connection, key, context)
+        if no_page:
+            emit_event(connection, project_id, "workflow.step_skipped", actor,
+                       "workflow_run", str(context.get("run_id") or ""),
+                       {"step_id": step.get("id") if isinstance(step, dict) else None,
+                        "capability": key, "reason": no_page})
+            return {"capability": key, "tool": None, "status": "skipped",
+                    "skipped": "service", "reason": no_page, "note": no_page,
+                    "summary": no_page}
         if key == "security_decide" and not security_review_steps.has_choices(
                 connection, project_id, context):
             return workflow_outcomes.apply(key, security_review_steps.not_applicable(
@@ -7198,6 +7251,8 @@ def _gate_subject(
     if capability.is_gate:
         if _no_prd_to_approve(key, context):
             return None  # runs as ordinary work below and records "no PRD"
+        if context is not None and _no_page_to_sign_off(connection, key, context):
+            return None  # a service has no page: runs as ordinary work and records the skip
         if key == "security_decide" and context is not None and not \
                 security_review_steps.has_choices(connection, project_id, context):
             return None  # nothing to choose from: runs as ordinary work and records why

@@ -265,7 +265,8 @@ def test_a_service_builds_failed_preview_is_skipped_and_the_run_goes_on(eng, pro
         runner.tick(c, Ctx(eng), project_id=project)
         runner.tick(c, Ctx(eng), project_id=project)
         steps = _steps(c, run["id"])
-        assert steps["s"]["status"] == "succeeded", steps["s"]
+        # A step that did not run is recorded as not run (BOSSAPP-1331), with its reason.
+        assert steps["s"]["status"] == "skipped", steps["s"]
         assert steps["s"]["output"]["skipped"] == "service"
         assert ps.SERVICE_PREVIEW_SKIPPED in steps["s"]["output"]["note"]
         assert steps["after"]["status"] != "pending", "the run went on past Preview"
@@ -288,7 +289,8 @@ def test_a_library_without_a_runnable_preview_is_skipped_and_the_run_goes_on(eng
         runner.tick(c, Ctx(eng), project_id=project)
         runner.tick(c, Ctx(eng), project_id=project)
         steps = _steps(c, run["id"])
-        assert steps["s"]["status"] == "succeeded", steps["s"]
+        # A step that did not run is recorded as not run (BOSSAPP-1331), with its reason.
+        assert steps["s"]["status"] == "skipped", steps["s"]
         assert steps["s"]["output"]["skipped"] == "service"
         assert ps.SERVICE_PREVIEW_SKIPPED in steps["s"]["output"]["note"]
         assert steps["after"]["status"] != "pending", "the run went on past Preview"
