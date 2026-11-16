@@ -18,7 +18,7 @@ import { ArrowRight, DownloadSimple, Kanban } from "@phosphor-icons/react";
 import { GatedButton, useGate } from "../../components/gated";
 import { writePxUrl, type WorkItem } from "../../lib/project-experience";
 import {
-  TYPE_WORDS, codeWords, importAndStart, readConnections, readWaiting, refusalReadiness, startFromTicket, syncWords, workflowFor, workflowWords,
+  TYPE_WORDS, codeWords, importAndStart, readConnections, readWaiting, refusalReadiness, startFromTicket, syncWords, ticketWorkflow, workflowFor, workflowWords,
   type Connection, type Read, type Ticket, type TypedError,
   ticketSetupHref,
 } from "../../lib/tickets";
@@ -151,11 +151,11 @@ export function WaitingSection({ ctx, conns }: { ctx: PxCtx; conns: Connection[]
     if (!startGate.allowed) return;
     setBusy(t.key); setSaid(null);
     try {
-      const r = await importAndStart(pid, t, workflowFor(t.type), anyway);
+      const r = await importAndStart(pid, t, ticketWorkflow(t), anyway);
       if (!r.ok && r.readiness) { setHeld(heldFor(t.key, r.error, r.readiness, (more) => start(t, more))); return; }
       if (!r.ok) { setSaid({ text: r.error ?? `${t.key} did not start.`, tone: "red" }); return; }
       setHeld(null);
-      setSaid({ text: `Started ${t.key} as ${workflowWords(workflowFor(t.type)).toLowerCase()}.${r.note ? ` ${r.note}` : ""}`, tone: "green" });
+      setSaid({ text: `Started ${t.key} as ${workflowWords(ticketWorkflow(t)).toLowerCase()}.${r.note ? ` ${r.note}` : ""}`, tone: "green" });
       load(); ctx.refreshWork();
     } finally { setBusy(""); }
   };
@@ -180,7 +180,7 @@ export function WaitingSection({ ctx, conns }: { ctx: PxCtx; conns: Connection[]
             <TkTag tone={t.type === "bug" ? "red" : t.type === "epic" ? "violet" : "blue"}>{TYPE_WORDS[t.type]}</TkTag>
             {t.priority ? <TkTag tone={/high|urgent|critical|blocker/i.test(t.priority) ? "amber" : "idle"}>{t.priority}</TkTag> : null}
             <GatedButton permission="work_tracker:write" projectId={pid} className="tk-btn tk-btn-sm" data-kind="primary" data-testid={`tk-waiting-start-${t.key}`}
-                         disabled={Boolean(busy) || !startGate.allowed} title={startGate.allowed ? `Starts it as ${workflowWords(workflowFor(t.type)).toLowerCase()}` : startGate.reason}
+                         disabled={Boolean(busy) || !startGate.allowed} title={startGate.allowed ? `Starts it as ${workflowWords(ticketWorkflow(t)).toLowerCase()}` : startGate.reason}
                          onClick={() => void start(t)}>
               {busy === t.key ? "Starting…" : t.type === "epic" ? "Plan first" : "Start"}
             </GatedButton>

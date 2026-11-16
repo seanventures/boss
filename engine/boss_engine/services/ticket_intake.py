@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, Callable, Iterable, Mapping, Optional
 
 from sqlalchemy import text
@@ -939,6 +940,9 @@ def ticket_view(ticket: Ticket, *, in_boss: Optional[dict[str, Any]] = None,
         "assignee": ticket.assignee, "parent_key": ticket.parent_key,
         "children_count": ticket.children_count, "updated_at": ticket.updated_at,
         "screen": screen_of(ticket), "untrusted": ticket.untrusted, "in_boss": in_boss,
+        # The workflow it starts on, from its type AND size (default_workflow, BOSSAPP-1334).
+        "size": ticket_size(ticket),
+        "suggested_workflow": default_workflow(ticket.type, ticket_size(ticket)),
     }
     if full:
         out.update({
@@ -1492,14 +1496,62 @@ def binding_of_item(db: Connection, project_id: str, work_item_id: str
     return dict(row) if row else None
 
 
-#: Ticket type -> the catalogue workflow work from it starts on.
+#: Ticket type -> the catalogue workflow work from it starts on, when its size says nothing.
 DEFAULT_WORKFLOWS = {"epic": "major_feature", "story": "minor_feature",
                      "task": "minor_feature", "other": "minor_feature", "bug": "fast_fix"}
 FALLBACK_WORKFLOW = "minor_feature"
 
+#: THE WORKFLOW A TICKET STARTS ON, BY TYPE AND SIZE (BOSSAPP-1334). The mapping, in one place
+#: (the console's New work card and Start from a ticket both read `suggested_workflow`):
+#:
+#:   type      size small / unknown     size medium or large
+#:   epic      major_feature            major_feature
+#:   story     minor_feature            major_feature   (a Medium story is a feature with a spec)
+#:   task      minor_feature            major_feature
+#:   other     minor_feature            major_feature
+#:   bug       fast_fix                 fast_fix        (a bug is fixed, whatever its size)
+#:
+#: Size is read from the ticket itself (ticket_size): a t-shirt label (size:M, size-l, "medium"),
+#: a "Size:" / "T-shirt size:" / "Estimate:" line in its description, or story points (5+ is
+#: medium). No size: the type alone decides, as before.
+SIZED_UP = {"story": "major_feature", "task": "major_feature", "other": "major_feature"}
 
-def default_workflow(ticket_type: str) -> str:
-    return DEFAULT_WORKFLOWS.get(str(ticket_type or "other"), FALLBACK_WORKFLOW)
+_SIZE_WORD = {"xs": "small", "s": "small", "small": "small", "m": "medium", "medium": "medium",
+              "l": "large", "large": "large", "xl": "large", "xxl": "large"}
+_SIZE_LABEL = re.compile(r"^(?:size|t-?shirt|tshirt|estimate)[\s:=_-]*(xs|s|m|l|xl|xxl|small|"
+                         r"medium|large)$", re.IGNORECASE)
+_SIZE_LINE = re.compile(r"^\s*(?:[-*]\s*)?\**\s*(?:t-?shirt\s+)?(?:size|estimate)\s*\**\s*[:=]\s*"
+                        r"\**\s*(xs|s|m|l|xl|xxl|small|medium|large)\b", re.IGNORECASE | re.MULTILINE)
+_POINTS = re.compile(r"^\s*(?:[-*]\s*)?\**\s*story\s+points?\s*\**\s*[:=]\s*\**\s*(\d+)",
+                     re.IGNORECASE | re.MULTILINE)
+
+
+def ticket_size(ticket: Any) -> Optional[str]:
+    """small | medium | large from the ticket's own labels or description, else None."""
+    labels = ticket.get("labels") if isinstance(ticket, dict) else getattr(ticket, "labels", None)
+    body = (ticket.get("body") or ticket.get("body_markdown") if isinstance(ticket, dict)
+            else getattr(ticket, "body_markdown", "")) or ""
+    for label in labels or []:
+        raw = str(label or "").strip().lower()
+        if raw in ("small", "medium", "large"):
+            return raw
+        m = _SIZE_LABEL.match(raw)
+        if m:
+            return _SIZE_WORD[m.group(1).lower()]
+    m = _SIZE_LINE.search(str(body))
+    if m:
+        return _SIZE_WORD[m.group(1).lower()]
+    m = _POINTS.search(str(body))
+    if m:
+        return "small" if int(m.group(1)) < 5 else "medium" if int(m.group(1)) < 13 else "large"
+    return None
+
+
+def default_workflow(ticket_type: str, size: Optional[str] = None) -> str:
+    kind = str(ticket_type or "other")
+    if size in ("medium", "large") and kind in SIZED_UP:
+        return SIZED_UP[kind]
+    return DEFAULT_WORKFLOWS.get(kind, FALLBACK_WORKFLOW)
 
 
 def _wanted(item: Any, name: str) -> Any:
@@ -1548,7 +1600,7 @@ def start_plan(db: Connection, row: dict[str, Any], ticket: Ticket, *, project_i
     from . import workflows as workflow_runtime
 
     info = ticket_input(row, ticket)
-    wanted = (workflow_key or default_workflow(ticket.type)).strip()
+    wanted = (workflow_key or default_workflow(ticket.type, ticket_size(ticket))).strip()
     note = None
     version = workflow_runtime.running_version(db, project_id, wanted)
     if not version:

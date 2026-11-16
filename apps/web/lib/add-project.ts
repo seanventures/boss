@@ -45,6 +45,10 @@ export type Picks = { stack: Pick | null; connectors: Pick[]; workflow: Pick | n
 export type Understanding = {
   status: "ok" | "no_model" | "timeout" | "empty"; brief: Brief; picks: Picks; message?: string;
   by?: { engine?: string; model?: string };
+  /** THE TICKET THE WORDS LINK TO, read from its system (BOSSAPP-1334): the brief is written from
+   *  it — its acceptance criteria are the must-haves. `ticket_note`: one named but not readable. */
+  ticket?: { provider?: string; key: string; url?: string | null; title?: string; criteria?: number } | null;
+  ticket_note?: { ref?: string; message?: string } | null;
 };
 
 export const BRIEF_FIELDS = ["title", "problem", "who_uses", "must_haves", "out_of_scope", "done_when", "open_questions"] as const;
@@ -121,6 +125,8 @@ export function stackLanguage(adapterId: string | null | undefined, languages: R
 
 export type CreateBody = {
   context_project_id: string; kind: Kind; name: string; words: string; brief?: Brief | null; note?: string | null;
+  /** The profile it runs on (BOSSAPP-1334): lean | balanced | strict; null = the project's default. */
+  profile?: string | null;
   repo_ids?: string[];
   /** A folder on a server: read in place (today), or copied here (`import_code`, local first). */
   folder?: { host_id: string; path: string; import_code?: boolean; keep_history?: boolean } | null;

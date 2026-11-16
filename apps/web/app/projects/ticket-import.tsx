@@ -13,7 +13,7 @@ import { CaretDown, CaretRight, Check, MagnifyingGlass } from "@phosphor-icons/r
 import { GatedButton } from "../../components/gated";
 import { writePxUrl } from "../../lib/project-experience";
 import {
-  TYPE_WORDS, importTickets, parseImport, readChildren, readEpics, readExternalProjects, readUnparented, searchTickets, workflowFor, workflowWords,
+  TYPE_WORDS, importTickets, parseImport, readChildren, readEpics, readExternalProjects, readUnparented, searchTickets, ticketWorkflow, workflowWords,
   type Connection, type ExternalProject, type Read, type Ticket, type TicketType,
 } from "../../lib/tickets";
 import { ProviderMono, TkEmpty, TkReadState, TkTag } from "../tickets/ticket-parts";
@@ -248,7 +248,7 @@ function ImportBody({ ctx, conn, conns, crumb, onConn, label, project, pid }: {
             {picks.map((p) => (
               <li key={p.ticket.key} data-testid={`tk-imp-sum-${p.ticket.key}`}>
                 <b>{p.ticket.key} · {p.ticket.title}</b>
-                <span className="tk-faint">{p.ticket.type === "epic" ? "epic + its tickets" : TYPE_WORDS[p.ticket.type]} → {workflowWords(workflowFor(p.ticket.type))}</span>
+                <span className="tk-faint">{p.ticket.type === "epic" ? "epic + its tickets" : TYPE_WORDS[p.ticket.type]} → {workflowWords(ticketWorkflow(p.ticket))}</span>
               </li>
             ))}
           </ul>

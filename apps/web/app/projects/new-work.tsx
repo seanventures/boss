@@ -48,7 +48,8 @@ import { BriefCard, Marked, type BriefRow } from "./brief-card";
 import { Face, Flow, Said } from "./kit";
 import type { PxCtx } from "./project-page";
 import { changeWords, projectIsLocal } from "../../lib/repo-links";
-import { importAndStart } from "../../lib/tickets";
+import { importAndStart, ticketWorkflow } from "../../lib/tickets";
+import { RUN_PROFILES, profileWords, useDefaultProfile, type RunProfile } from "../../lib/run-profiles";
 import { NewWorkTicket, RecognisesLine, useResolvedTicket } from "./new-work-ticket";
 import "./new-work.css";
 
@@ -97,7 +98,7 @@ const fileIcon = (path: string) => (/\.py$/.test(path) ? FilePy : /\.tsx$/.test(
   : /migration|\.sql$/i.test(path) ? Database : /\.(js|jsx|go|rb|java|rs|kt)$/.test(path) ? FileCode : FileIcon);
 
 type Status = "idle" | "reading" | "ready" | "fallback";
-type By = "default" | "helm" | "you";
+type By = "default" | "helm" | "you" | "ticket";
 
 /** THE WORK TAB's bar (the composer's place): click, press N, or start typing — the modal opens
  *  with your words. */
@@ -170,10 +171,12 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
   // T3 (BOSSAPP-1047): a ticket key or link in the words is read from the connected ticket
   // system; Start then imports it and starts it from the ticket, on the workflow its type picks.
   const resolved = useResolvedTicket(pid, text, !ctx.demo);
-  const [tkWorkflow, setTkWorkflow] = useState("");
   const tkGate = useGate("work_tracker:write", pid);
+  // THE PROFILE IT RUNS ON (BOSSAPP-1334): opens on the project's default; the person may pick.
+  const defaultProfile = useDefaultProfile(pid, !ctx.demo);
+  const [profilePick, setProfilePick] = useState<RunProfile | null>(null);
+  const runProfile = profilePick ?? defaultProfile;
   const tk = resolved.state === "ready" ? resolved.ticket : null;
-  useEffect(() => { setTkWorkflow(""); }, [tk?.key]);
 
   // ── Helm's plan for this kind (and the picked workflow), with the chips' defaults ──────────
   // A Ticket whose issue is labelled a bug runs the project's bug workflow (its default).
@@ -183,6 +186,16 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
     { everyMs: 120_000, demo: () => parsePlanDetail({ ...FX_WORK_PLAN, kind: planKind, ...DEMO_DETAIL }) });
   const p = plan.data;
   const k = KINDS.find((x) => x.key === kind)!;
+  // ONE WORKFLOW CHOICE (BOSSAPP-1334): the ticket card's pick and the "Picked for you" chip are
+  // the same value. A ticket sets it from its type and size (a Medium story is Major feature)
+  // unless the person chose one; changing either changes both. Only a workflow this project
+  // runs (the plan's own options) is picked for them.
+  const tkSuggested = tk ? ticketWorkflow(tk) : "";
+  useEffect(() => {
+    if (!tk) { setPicked((x) => (x.by === "ticket" ? { v: "", by: "default" } : x)); return; }
+    if (!p || !(p.optionDetail[tkSuggested] || p.workflow?.key === tkSuggested)) return;
+    setPicked((x) => (x.by === "you" || x.v === tkSuggested ? x : { v: tkSuggested, by: "ticket" }));
+  }, [tk, tkSuggested, p]);
 
   // ── keep the draft (Esc, ✕, a reload) ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -348,6 +361,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
     brief: status === "ready" ? brief : null, priority: priority.v, notify: notify.v, issue: issueChoice,
     ...(wfKey ? { workflow_key: wfKey } : {}), ...(anyway.length ? { start_anyway: anyway } : {}),
     ...(anchorApp ? { app: anchorApp } : {}),
+    ...(runProfile ? { profile: runProfile } : {}),
   });
   const locked = Boolean(refusal) && unaccepted(refusal, startAnyway).length > 0;
   // THE BRIEF'S LENGTH (AR-21): never cut; a counter near the limit, Start held past it.
@@ -363,7 +377,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
       // FROM A TICKET: one press imports it (unless BOSS has it) and starts it from the ticket.
       try {
         if (!tkGate.allowed) { setSaid({ text: tkGate.reason, tone: "red" }); return; }
-        const r = await importAndStart(pid, tk, tkWorkflow || undefined, startAnyway);
+        const r = await importAndStart(pid, tk, picked.v || tkSuggested || undefined, startAnyway);
         // NOT READY: the same checklist and "Start anyway" ticks as a start without a ticket.
         if (!r.ok && r.readiness) { setRefusal(r.readiness); return; }
         if (!r.ok) { setSaid({ text: r.error ?? "It didn't start.", tone: "red" }); return; }
@@ -622,7 +636,8 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
       {chip("workflow", {
         wide: true, tone: approvals.length ? "you" : undefined, testid: "px-compose-change",
         title: `${picked.v ? "Picked" : `Default for a ${planKind === "bug" ? "bug" : kind === "ticket" ? "ticket" : "feature"}`} · change picks another of this project's workflows`,
-        label: <>Workflow{!picked.v ? <span className="px-nw-auto" title="Picked for you from the kind">AUTO</span> : picked.by === "helm" ? <span className="px-nw-auto">HELM</span> : null}</>,
+        label: <>Workflow{!picked.v ? <span className="px-nw-auto" title="Picked for you from the kind">AUTO</span> : picked.by === "helm" ? <span className="px-nw-auto">HELM</span>
+          : picked.by === "ticket" ? <span className="px-nw-auto" title="Picked from the ticket's type and size">TICKET</span> : null}</>,
         value: <span data-testid="px-compose-workflow" className="px-ell"><span title={p?.workflow?.why ? `Start runs ${p.workflow.name}: ${p.workflow.why}` : undefined}>{wfName}</span>
           {p?.workflow?.why ? <span className="px-faint" style={{ fontWeight: 400, fontSize: ".54rem" }}> · {p.workflow.why}</span> : null}</span>,
         sub: steps.length ? (
@@ -645,6 +660,19 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
             {PRIORITIES.map((x) => (
               <button key={x} type="button" role="radio" aria-checked={priority.v === x} data-testid={`px-nw-prio-${x}`}
                       onClick={() => { setPriority({ v: x, by: "you" }); setPop(null); }}>{priority.v === x ? <Check size={11} weight="bold" aria-hidden /> : <span style={{ width: 11 }} />}{PRIORITY_WORDS[x]}</button>
+            ))}
+          </div>
+        ),
+      })}
+      {chip("profile", {
+        label: "Profile", title: "How much checking the build gets. It opens on this project's default.",
+        value: <span data-testid="px-nw-profile">{profileWords(runProfile)}</span>,
+        sub: profilePick ? "you set it" : "project default",
+        popover: (
+          <div role="radiogroup" aria-label="Profile" className="px-nw-radios">
+            {RUN_PROFILES.map((x) => (
+              <button key={x.key} type="button" role="radio" aria-checked={runProfile === x.key} data-testid={`px-nw-profile-${x.key}`} title={x.tip}
+                      onClick={() => { setProfilePick(x.key); setPop(null); }}>{runProfile === x.key ? <Check size={11} weight="bold" aria-hidden /> : <span style={{ width: 11 }} />}{x.label}{x.key === defaultProfile ? " · project default" : ""}</button>
             ))}
           </div>
         ),
@@ -753,7 +781,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
           <div className="px-nw-main px-nw-top">
             {kinds}
             {showWords || wordsOpen ? box_ : folded}
-            <NewWorkTicket resolved={resolved} workflow={tkWorkflow} onWorkflow={setTkWorkflow} projectId={pid} />
+            <NewWorkTicket resolved={resolved} workflow={picked.v} onWorkflow={(v) => setPicked({ v, by: "you" })} projectId={pid} />
             {kind === "ticket" && !tk ? (
               <RecognisesLine projectId={ctx.demo ? undefined : pid} onBrowse={() => { onClose(); ctx.tab("work", { tickets: "import" }); }} />
             ) : null}

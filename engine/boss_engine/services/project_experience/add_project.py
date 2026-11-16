@@ -402,11 +402,64 @@ def understand(connection: Optional[Connection], settings: Any, project_id: str,
                pinned: Optional[Mapping[str, Any]] = None,
                catalogue: Sequence[Mapping[str, Any]] = (), stacks: Sequence[Mapping[str, Any]] = (),
                workflows: Sequence[Mapping[str, Any]] = (), actor: str = "operator",
-               adapter: Any = None, decider: Any = None, seconds: float = WAIT_S
+               adapter: Any = None, decider: Any = None, seconds: float = WAIT_S,
+               ticket: Optional[Mapping[str, Any]] = None
                ) -> dict[str, Any]:
     """Helm's understanding of the words, as {status, brief, picks, by, cost_usd_micros}.
     status: ok | no_model | timeout (with `message`). Never raises. The turn is the one
-    understanding service's (understanding.turn) — New work's, with a new app as the subject."""
+    understanding service's (understanding.turn) — New work's, with a new app as the subject.
+
+    A TICKET IN THE WORDS (BOSSAPP-1334): `ticket` is the connected ticket system's read of the
+    link or key the words name (ticket_intake `input.ticket`). It is the spec: Helm is given it as
+    outside input, and the brief's must-haves are the ticket's acceptance criteria — never
+    invented, and never "share the spec" when the spec was linked."""
+    out = _understand_words(connection, settings, project_id, words=words, hint=hint,
+                            previous=previous, pinned=pinned, catalogue=catalogue, stacks=stacks,
+                            workflows=workflows, actor=actor, adapter=adapter, decider=decider,
+                            seconds=seconds, ticket=ticket)
+    return with_ticket(out, ticket, pinned=pinned)
+
+
+#: An open question that asks for what a linked ticket already is.
+_ASKS_FOR_SPEC = re.compile(r"\b(spec|specification|requirements?|ticket|story|acceptance|"
+                            r"share|send|link|details?)\b", re.IGNORECASE)
+
+
+def with_ticket(out: dict[str, Any], ticket: Optional[Mapping[str, Any]], *,
+                pinned: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+    """The understanding with the ticket it read applied (see `understand`): its acceptance
+    criteria are the must-haves (a field the person edited stays as they wrote it), its title
+    the title when Helm gave none, and no open question asks for the spec it already is.
+    `ticket` names what was read, for the sheet's "Read from KAN-11" line."""
+    if not isinstance(ticket, Mapping) or not ticket.get("key"):
+        return out
+    from ..ticket_intake import acceptance_criteria
+
+    out = dict(out)
+    brief = dict(out.get("brief") or {})
+    kept = set((pinned or {}).keys())
+    criteria = [c for c in acceptance_criteria(dict(ticket))][:MAX_MUST_HAVES]
+    if criteria and "must_haves" not in kept:
+        brief["must_haves"] = [_clean(c, MAX_MUST_HAVE_CHARS) for c in criteria]
+    if not str(brief.get("title") or "").strip() or brief.get("raw"):
+        brief["title"] = _clean(ticket.get("title"), 90) or brief.get("title") or ""
+    if not str(brief.get("problem") or "").strip() and ticket.get("body"):
+        brief["problem"] = _clean(str(ticket.get("body") or "").split("\n\n")[0], 400)
+    brief["open_questions"] = [q for q in brief.get("open_questions") or []
+                               if not _ASKS_FOR_SPEC.search(str(q))]
+    out["brief"] = brief
+    out["ticket"] = {"provider": ticket.get("provider"), "key": ticket.get("key"),
+                     "url": ticket.get("url"), "title": ticket.get("title"),
+                     "criteria": len(criteria)}
+    return out
+
+
+def _understand_words(connection: Optional[Connection], settings: Any, project_id: str, *,
+                      words: str, hint: str, previous: Optional[Mapping[str, Any]],
+                      pinned: Optional[Mapping[str, Any]], catalogue: Sequence[Mapping[str, Any]],
+                      stacks: Sequence[Mapping[str, Any]], workflows: Sequence[Mapping[str, Any]],
+                      actor: str, adapter: Any, decider: Any, seconds: float,
+                      ticket: Optional[Mapping[str, Any]]) -> dict[str, Any]:
     words = str(words or "").strip()[:MAX_TEXT]
     if not words:
         return {"status": "empty", "brief": raw_brief(""),
@@ -427,6 +480,15 @@ def understand(connection: Optional[Connection], settings: Any, project_id: str,
                                "steps": w.get("steps"), "you_approve": w.get("approvals"),
                                "detail": _clean(w.get("detail"), 160)} for w in workflows][:16],
     }
+    situation = "A person is adding a project to BOSS and typed what they want."
+    if isinstance(ticket, Mapping) and ticket.get("key"):
+        from ..ticket_intake import ticket_block
+
+        # THE LINKED TICKET IS THE SPEC (outside input, delimited): Helm writes the brief from it.
+        context["linked_ticket"] = ticket_block(dict(ticket))
+        situation += (f" Their words link to the ticket {ticket.get('key')}, read from its system "
+                      "below (linked_ticket): it IS the spec. Write the brief from it — its "
+                      "acceptance criteria are the must-haves — and do not ask for the spec.")
 
     def check(answer: dict, _corpus: str) -> str:
         args = answer.get("arguments") if isinstance(answer.get("arguments"), Mapping) else answer
@@ -444,7 +506,7 @@ def understand(connection: Optional[Connection], settings: Any, project_id: str,
             connection, settings, project_id, subject="new_app", actor=actor, agent="Helm",
             external_ref="", message="Rewrite these words as a brief and pick what BOSS would "
                                      "use to build it.",
-            situation="A person is adding a project to BOSS and typed what they want.",
+            situation=situation,
             schema=BRIEF_ARGUMENTS, context=context, rules=SYSTEM, check=check,
             adapter=adapter, decider=decider, seconds=seconds)
     except Exception as exc:  # noqa: BLE001 — Helm's reading is a help, never a failed screen

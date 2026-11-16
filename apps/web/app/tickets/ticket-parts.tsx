@@ -115,7 +115,7 @@ export function WorkflowPick({ value, onChange, testid = "tk-workflow", label = 
 }) {
   const options = (START_WORKFLOWS as readonly string[]).includes(value) ? START_WORKFLOWS : [value, ...START_WORKFLOWS];
   return (
-    <label className="tk-pick" title="Picked from the ticket's type: epic → Major feature, story → Minor feature, bug → Bug fix">
+    <label className="tk-pick" title="Picked from the ticket's type and size: epic → Major feature; a story or task → Minor feature, or Major feature when it is Medium or larger; bug → Bug fix">
       <span className="tk-sr">{label}</span>
       <select value={value} onChange={(e) => onChange(e.target.value)} data-testid={testid} aria-label={label}>
         {options.map((k) => <option key={k} value={k}>{workflowWords(k)}</option>)}

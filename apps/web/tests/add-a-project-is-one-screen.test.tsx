@@ -352,3 +352,53 @@ describe("the walk's gaps stay closed (laptop walk 2026-11-07)", () => {
     expect(css).toMatch(/\.npx-pchip b \{[^}]*overflow: hidden; text-overflow: ellipsis; white-space: nowrap/);
   });
 });
+
+describe("BOSSAPP-1334: a Jira link, the consent sheet, the profile", () => {
+  it("names the ticket the brief was written from", async () => {
+    api((c) => (c.path.endsWith("/understand") ? { body: { ...BRIEF,
+      brief: { ...BRIEF.brief, must_haves: ["GET /quote returns bid and ask", "A quote expires after 30 seconds"] },
+      ticket: { provider: "jira", key: "KAN-11", url: "https://fx.atlassian.net/browse/KAN-11", title: "FXQuote", criteria: 2 } } } : undefined));
+    await mountAs(<AddProjectSheet projectId="p1" homeId="p1" onClose={() => {}} onForm={() => {}} go={vi.fn()} />);
+    await type(tid("ap-input"), "FXQuote for the desk. https://fx.atlassian.net/browse/KAN-11");
+    await enter(tid("ap-input"));
+    expect(tid("ap-ub-ticket")!.textContent).toBe("Read from KAN-11 · 2 acceptance criteria");
+    expect(tid("ap-understood")!.textContent).toContain("A quote expires after 30 seconds");
+  });
+
+  it("says a closed consent sheet in words, never the raw code", async () => {
+    const { refusalText } = await import("../app/start-project/add-project");
+    const { IdentityError } = await import("../lib/identity/api");
+    const closed = new IdentityError(409, "consent_required" as never, { body: { error: "consent_required", message: "consent_required", task: "Plan it" } });
+    const said = refusalText(closed, "create");
+    expect(said).not.toContain("consent_required");
+    expect(said).toMatch(/consent/i);
+    // A body whose message is a bare code is never shown either.
+    const bare = new IdentityError(409, "not_ready" as never, { body: { error: "not_ready", message: "not_ready" } });
+    expect(refusalText(bare)).not.toBe("not_ready");
+  });
+
+  it("offers the profile, opening on the project's default, and sends it", async () => {
+    const calls = api((c) => {
+      if (c.path === "/v1/pipeline-profiles") return { body: { project_id: "p1", default: "lean", items: [] } };
+      if (c.method === "POST" && c.path === "/v1/add-project") return { body: { created: true, project_id: "fx", name: "FX", kind: "idea", href: "?project_id=fx", steps: [], started: {} } };
+      return undefined;
+    });
+    await mountAs(<AddProjectSheet projectId="p1" homeId="p1" onClose={() => {}} onForm={() => {}} go={vi.fn()} />);
+    await type(tid("ap-input"), WORDS);
+    await enter(tid("ap-input"));
+    await settle();
+    expect(tid("ap-box-profile")!.textContent).toContain("lean");
+    await click(tid("ap-box-workflow"));
+    const pick = tid("ap-wf-profile") as HTMLSelectElement;
+    expect(pick.value).toBe("lean");
+    expect([...pick.options].map((o) => o.value)).toEqual(["lean", "balanced", "strict"]);
+    await act(async () => { pick.value = "strict"; pick.dispatchEvent(new Event("change", { bubbles: true })); });
+    await settle();
+    expect(tid("ap-box-profile")!.textContent).toContain("strict");
+    await click(tid("ap-pop-workflow-done"));
+    await click(tid("ap-create"));
+    if (tid("ap-egress-allow")) { await click(tid("ap-egress-allow")); await click(tid("ap-create")); }
+    const sent = calls.filter((c) => c.path === "/v1/add-project");
+    expect(sent.at(-1)!.body).toMatchObject({ profile: "strict" });
+  });
+});

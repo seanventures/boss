@@ -239,6 +239,9 @@ class NewWorkBody(BaseModel):
     #: the app's key). Start then continues that app's lineage — its branch, its open PR — as
     #: the start door's `extends_run_id`; a name that is no app of this project is refused.
     app: Optional[str] = None
+    #: THE PROFILE THE PERSON PICKED (BOSSAPP-1334): lean | balanced | strict, the build runs on
+    #: it (run input `profile`, bound to the build step). Empty: the project's default.
+    profile: Optional[str] = None
     title: Optional[str] = None
     #: Where the suggestion came from (an onboarding candidate's ref, a roadmap item).
     source_ref: Optional[str] = None
@@ -318,6 +321,11 @@ def project_new_work(project_id: str, payload: NewWorkBody, request: Request) ->
     if not said:
         raise HTTPException(status_code=422, detail={
             "error": "text_required", "message": "Say what to do."})
+    try:
+        new_work.chosen_profile(payload.profile)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail={
+            "error": "bad_profile", "message": str(error)}) from None
     # Before a tracker issue or the start door (BOSSAPP-1161). The image's manifest, not
     # the opt-in enable sentence.
     from boss_engine.services import stacks
@@ -408,6 +416,9 @@ def project_new_work(project_id: str, payload: NewWorkBody, request: Request) ->
         run_input["extends_run_id"] = anchor["run_id"]
         if anchor.get("mode") == "new_change":
             run_input["extends_from_default"] = True
+    picked_profile = new_work.chosen_profile(payload.profile)
+    if picked_profile:
+        run_input["profile"] = picked_profile
     if payload.source_ref or link:
         run_input["source_ref"] = str(payload.source_ref or link)[:200]
     if issue:
