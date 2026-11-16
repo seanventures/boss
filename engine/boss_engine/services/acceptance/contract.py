@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import logging
 import re
 from typing import Any, Iterable, Mapping, Optional
@@ -561,41 +562,108 @@ def parse_prose(reply: Any, text: str) -> list[str]:
     return out
 
 
+class ProseReadInTransaction(RuntimeError):
+    """The prose reader (a model call) was about to run while this context holds an open
+    database transaction (BOSSAPP-1232's class: model/IO inside a transaction is ended by
+    Postgres as idle in transaction)."""
+
+
+#: Set (any non-empty value but 0) to make the guard raise instead of log: the tests do.
+STRICT_GUARD_ENV = "BOSS_STRICT_TRANSACTION_GUARD"
+
+
+def _transaction_open() -> bool:
+    try:
+        from ...db import open_transactions
+
+        return bool(open_transactions())
+    except Exception:  # noqa: BLE001 — no tracker is no transaction we know of
+        return False
+
+
+def prose_digest(ticket: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """The digest of what the prose reader must read for this ticket; None when nothing."""
+    text = prose_input(ticket)
+    if not text.strip() or not isinstance(ticket, Mapping):
+        return None
+    return _digest(["prose", "bug" if _is_bug(ticket) else "", text])
+
+
 def ticket_prose(ticket: Optional[Mapping[str, Any]], *, ask: Any = None,
                  held: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """{prose_digest, prose_items}: what the prose reader found in this ticket. The reader is
-    asked ONCE per distinct prose (`held`, the contract's stored ticket source, answers again
-    for the same digest — so a check never re-asks, and a contract never flaps on a model's
-    second opinion). `ask(prompt) -> reply text`; None, or a failing ask, reads nothing."""
-    text = prose_input(ticket)
-    if not text.strip() or not isinstance(ticket, Mapping):
+    asked ONCE per distinct prose: `held` (the contract's stored ticket source) answers for the
+    same digest, so a check never re-asks and a contract never flaps on a second opinion.
+
+    `ask(prompt) -> reply text` is a MODEL CALL: it is never made inside an open database
+    transaction (prepare_for_run makes it before the gate's transaction opens; inside one it is
+    refused — an error under BOSS_STRICT_TRANSACTION_GUARD, a warning otherwise). Without an
+    ask (or when it fails, or is refused) what the contract already holds stands: `held`'s
+    items for a changed text until the reader runs again, nothing for a new one."""
+    digest = prose_digest(ticket)
+    if digest is None or not isinstance(ticket, Mapping):
         return {"prose_digest": None, "prose_items": []}
-    digest = _digest(["prose", "bug" if _is_bug(ticket) else "", text])
+    kept = {"prose_digest": (held or {}).get("prose_digest"),
+            "prose_items": list((held or {}).get("prose_items") or [])}
     if held and held.get("prose_digest") == digest:
-        return {"prose_digest": digest, "prose_items": list(held.get("prose_items") or [])}
+        return kept
     if ask is None:
-        return {"prose_digest": None, "prose_items": []}
+        return kept
+    if _transaction_open():
+        message = ("acceptance contract: the prose reader (a model call) would run inside an "
+                   "open database transaction; read the prose first (prepare_for_run)")
+        if os.environ.get(STRICT_GUARD_ENV, "") not in ("", "0"):
+            raise ProseReadInTransaction(message)
+        _log.warning(message)
+        return kept
+    text = prose_input(ticket)
     try:
         reply = ask(prose_prompt(ticket, text, ticket_items(ticket)))
     except Exception as exc:  # noqa: BLE001 — the structural items still stand
         _log.warning("acceptance contract: the prose reader failed (%s)", type(exc).__name__)
-        return {"prose_digest": None, "prose_items": []}
+        return kept
     return {"prose_digest": digest, "prose_items": parse_prose(reply, text)}
 
 
-def default_prose_ask(connection: Any, project_id: Optional[str]) -> Any:
-    """The prose reader's ask on the project's configured review engine — the governed role
-    path the rulebook reader uses (banking_regulatory_pipeline._role_agent + run_verdict, one
-    single-turn verdict). The agent is built only when a prose read is needed."""
-    def ask(prompt: str) -> str:
-        from ...config import get_settings
-        from ..engine_contract import run_verdict
-        from ..knowledge.banking_regulatory_pipeline import _role_agent
+def _ticket_and_held(connection: Any, *, run_id: str, fctx: Optional[Mapping[str, Any]]
+                     ) -> tuple[Optional[str], Optional[dict], Optional[dict]]:
+    """(project id, the run's ticket snapshot, the lineage contract's ticket source)."""
+    root = lineage_root(run_id, fctx)
+    project_id = _project_of(connection, run_id) if root else None
+    if not project_id:
+        return None, None, None
+    ticket = ticket_of_run(connection, run_id) or (
+        ticket_of_run(connection, root) if root != run_id else None)
+    cur = latest(connection, root_run_id=root, project_id=project_id)
+    held = next((x for x in (cur or {}).get("sources") or [] if x.get("kind") == "ticket"),
+                None)
+    return project_id, ticket, held
 
-        agent, _engine = _role_agent(connection, get_settings(), str(project_id or ""))
-        return str((run_verdict(agent, prompt, max_turns=2,
-                                temp_prefix="boss-acceptance-prose-") or {}).get("summary") or "")
-    return ask
+
+def prepare_for_run(db_engine: Any, *, run_id: str, fctx: Optional[Mapping[str, Any]],
+                    own_spec: Mapping[str, Any], ask: Any) -> Optional[dict[str, Any]]:
+    """Read the ticket's prose (a model call) and store it with the contract — BEFORE the
+    gate's transaction opens, never inside one (BOSSAPP-1232/1233):
+
+      1. a short read-only transaction: the run's ticket and what the contract already holds;
+      2. NO transaction: the prose reader, only when the prose changed (or was never read);
+      3. a short transaction: the contract frozen/revised with what was read.
+
+    The gate's own transaction (items_spec -> ensure_for_run) then finds the prose stored and
+    makes no model call. Returns the contract, or None when there was nothing to read."""
+    from ...db import begin
+
+    with begin(db_engine) as c:
+        project_id, ticket, held = _ticket_and_held(c, run_id=run_id, fctx=fctx)
+    digest = prose_digest(ticket)
+    if not ticket or digest is None or (held and held.get("prose_digest") == digest):
+        return None
+    prose = ticket_prose(ticket, ask=ask, held=held)
+    if prose.get("prose_digest") != digest:
+        return None                       # the reader did not answer: nothing new to store
+    with begin(db_engine) as c:
+        return ensure_for_run(c, run_id=run_id, fctx=fctx, own_spec=own_spec, ticket=ticket,
+                              prose=prose)
 
 
 def _ticket_ref(ticket: Mapping[str, Any]) -> str:
@@ -608,7 +676,8 @@ def _digest(value: Any) -> str:
 
 def gather_sources(spec: Mapping[str, Any], *, ticket: Optional[Mapping[str, Any]] = None,
                    templates: Iterable[Mapping[str, Any]] = (),
-                   operator_items: Iterable[str] = (), ask: Any = None) -> list[dict[str, Any]]:
+                   operator_items: Iterable[str] = (),
+                   prose: Optional[Mapping[str, Any]] = None) -> list[dict[str, Any]]:
     """The contract's sources: [{kind, ref, url, items: [{source, text}], digest}], ticket first.
 
     `spec` is the lineage's build spec (a union spec for a decomposed PRD: union_spec); its items
@@ -617,7 +686,7 @@ def gather_sources(spec: Mapping[str, Any], *, ticket: Optional[Mapping[str, Any
     ({id, title, criteria}), `operator_items` words a person added."""
     out: list[dict[str, Any]] = []
     if ticket:
-        prose = ticket_prose(ticket, ask=ask)
+        prose = dict(prose or ticket_prose(ticket))
         words = ticket_items(ticket, prose=prose["prose_items"])
         if words:
             out.append({"kind": "ticket", "ref": _ticket_ref(ticket), "url": ticket.get("url"),
@@ -924,7 +993,8 @@ def revise(connection: Any, contract_id: str, *, added: Iterable[Any] = (),
 
 def revise_from_ticket(connection: Any, contract: Mapping[str, Any],
                        ticket: Optional[Mapping[str, Any]], *,
-                       actor: str = "boss", ask: Any = None) -> dict[str, Any]:
+                       actor: str = "boss",
+                       prose: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """The contract with the ticket's CURRENT acceptance criteria — BOSS's own revision, made
     because the run's ticket snapshot changed (a person chose "Include it" on the mid-run change
     card, ticket_sync.on_card_answered) and recorded as `acceptance.contract_revised` by BOSS.
@@ -937,7 +1007,7 @@ def revise_from_ticket(connection: Any, contract: Mapping[str, Any],
         return dict(contract)
     cur = _newest(connection, contract["id"])
     held_src = next((x for x in cur["sources"] if x.get("kind") == "ticket"), None)
-    prose = ticket_prose(ticket, ask=ask, held=held_src)
+    prose = dict(prose or ticket_prose(ticket, held=held_src))
     now = ticket_items(ticket, prose=prose["prose_items"])
     if not now:
         return dict(contract)
@@ -1034,7 +1104,8 @@ def _project_of(connection: Any, run_id: str) -> Optional[str]:
 
 def ensure_for_run(connection: Any, *, run_id: str, fctx: Optional[Mapping[str, Any]],
                    own_spec: Mapping[str, Any],
-                   ticket: Any = "_read", ask: Any = "_default") -> Optional[dict[str, Any]]:
+                   ticket: Any = "_read",
+                   prose: Optional[Mapping[str, Any]] = None) -> Optional[dict[str, Any]]:
     """The contract this run is held to, frozen now if its lineage has none yet.
 
     Frozen from the lineage's builds (lineage_build_rows: the original build, its repairs and
@@ -1053,8 +1124,6 @@ def ensure_for_run(connection: Any, *, run_id: str, fctx: Optional[Mapping[str, 
         # workflow carries none of its own, and the root's snapshot is what a person updated.
         ticket = ticket_of_run(connection, run_id) or (
             ticket_of_run(connection, root) if root != run_id else None)
-    if isinstance(ask, str) and ask == "_default":
-        ask = default_prose_ask(connection, project_id) if ticket else None
     found = latest(connection, root_run_id=root, project_id=project_id)
     if found is None:
         builds = lineage_build_rows(connection, root)
@@ -1064,12 +1133,12 @@ def ensure_for_run(connection: Any, *, run_id: str, fctx: Optional[Mapping[str, 
             spec = _spec_of(own_spec)
         else:
             return None
-        sources = gather_sources(spec, ticket=ticket, ask=ask)
+        sources = gather_sources(spec, ticket=ticket, prose=prose)
         if not build_items(sources):
             return None
         found = freeze(connection, project_id=project_id, root_run_id=root, sources=sources,
                        workflow_run_id=(fctx or {}).get("workflow_run_id"))
-    return revise_from_ticket(connection, found, ticket, ask=ask)
+    return revise_from_ticket(connection, found, ticket, prose=prose)
 
 
 def gate_items(contract: Mapping[str, Any]) -> list[dict[str, str]]:

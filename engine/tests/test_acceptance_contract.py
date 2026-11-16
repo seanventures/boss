@@ -27,10 +27,9 @@ PROSE = Path(__file__).resolve().parent / "fixtures" / "acceptance_prose"
 
 
 @pytest.fixture(autouse=True)
-def no_model_for_prose(monkeypatch):
-    """No test reaches a real engine: the prose reader's default ask reads nothing here (the
-    prose tests pass their own scripted reader)."""
-    monkeypatch.setattr(ac, "default_prose_ask", lambda connection, project_id: None)
+def strict_transaction_guard(monkeypatch):
+    """A model call inside an open transaction is an error in these tests (BOSSAPP-1232)."""
+    monkeypatch.setenv(ac.STRICT_GUARD_ENV, "1")
 
 
 @pytest.fixture(scope="module")
@@ -530,32 +529,90 @@ def test_northgate_sends_only_its_left_over_prose_to_the_reader(ng):
     assert "Routing" not in left and "At least 20 rules" not in left
 
 
-def test_the_prose_reader_is_asked_once_per_ticket_text_never_per_check(eng, project, ng,
-                                                                          monkeypatch):
-    """The contract keeps what the reader found with its digest: every later check reuses it
-    (no second model call, no contract flapping on a second opinion)."""
-    reader = ProseReader("We want BOSS to run it: every tenant config change is validated "
-                         "(format, security, API guidelines), rejected with a report and a "
-                         "suggested fix when it doesn't conform, then deployed to staging, "
-                         "contract-tested, approved, and promoted to production.")
-    monkeypatch.setattr(ac, "default_prose_ask", lambda connection, project_id: reader)
+class NoTransactionReader(ProseReader):
+    """A prose reader that fails the test if it is called while a transaction is open."""
+
+    def __call__(self, prompt):
+        from boss_engine.db import open_transactions
+
+        assert not open_transactions(), "the prose reader ran inside an open transaction"
+        return super().__call__(prompt)
+
+
+INTRO = ("We want BOSS to run it: every tenant config change is validated (format, security, "
+         "API guidelines), rejected with a report and a suggested fix when it doesn't conform, "
+         "then deployed to staging, contract-tested, approved, and promoted to production.")
+
+
+def _cleanup_project(eng, project):
+    from sqlalchemy import text
+
+    with eng.begin() as c:
+        c.execute(text("DELETE FROM acceptance_contracts WHERE project_id = :p"), {"p": project})
+        c.execute(text("DELETE FROM code_task_runs WHERE project_id = :p"), {"p": project})
+
+
+def test_the_prose_is_read_before_the_check_and_asked_once_per_ticket_text(eng, project, ng):
+    """prepare_for_run reads the prose OUTSIDE any transaction and stores it with the contract;
+    every later check (items_spec, in its own transaction) reuses it — no second model call, no
+    contract flapping on a second opinion."""
+    reader = NoTransactionReader(INTRO)
     with eng.begin() as c:
         root = _run(c, project, spec=ng.spec(), fctx={"ticket": ng.ticket()})
     try:
-        for _ in range(3):
-            with eng.begin() as c:
-                ag.items_spec(c, run_id=root, fctx={"ticket": ng.ticket()}, own_spec=ng.spec())
+        for _ in range(2):
+            ac.prepare_for_run(eng, run_id=root, fctx={"ticket": ng.ticket()},
+                               own_spec=ng.spec(), ask=reader)
+            for _ in range(2):
+                with eng.begin() as c:
+                    ag.items_spec(c, run_id=root, fctx={"ticket": ng.ticket()},
+                                  own_spec=ng.spec())
         assert reader.calls == 1
         with eng.begin() as c:
             v = ac.latest(c, root_run_id=root)
         assert v["version"] == 1
-        assert any(i["text"].startswith("We want BOSS to run it") for i in v["items"])
+        assert any(i["text"] == INTRO for i in v["items"])
         src = next(x for x in v["sources"] if x["kind"] == "ticket")
-        assert src["prose_digest"] and len(src["prose_items"]) == 1
+        assert src["prose_digest"] and src["prose_items"] == [INTRO]
     finally:
-        from sqlalchemy import text
+        _cleanup_project(eng, project)
 
+
+def test_a_model_call_inside_an_open_transaction_is_refused(eng, project, ng, monkeypatch):
+    """The class that crashed Northgate (BOSSAPP-1232): strict, it raises; in production it is
+    skipped with a warning and what the contract holds stands."""
+    from boss_engine.db import begin
+
+    reader = ProseReader(INTRO)
+    with begin(eng):
+        with pytest.raises(ac.ProseReadInTransaction):
+            ac.ticket_prose(ng.ticket(), ask=reader)
+        monkeypatch.setenv(ac.STRICT_GUARD_ENV, "0")
+        held = {"prose_digest": "old", "prose_items": ["kept"]}
+        assert ac.ticket_prose(ng.ticket(), ask=reader, held=held)["prose_items"] == ["kept"]
+    assert reader.calls == 0
+
+
+def test_the_gates_prepare_step_asks_its_agent_outside_any_transaction(eng, project, ng):
+    """acceptance_gate.prepare_contract (what the pipeline calls before the check's
+    transaction): the reviewer's agent answers through run_verdict, in no transaction."""
+    class Agent:
+        calls = 0
+
+        def run_role(self, prompt, cwd, *, read_only=False, max_turns=None, **_kw):
+            from boss_engine.db import open_transactions
+
+            assert not open_transactions()
+            Agent.calls += 1
+            return {"summary": ProseReader(INTRO)(prompt)}
+
+    with eng.begin() as c:
+        root = _run(c, project, spec=ng.spec(), fctx={"ticket": ng.ticket()})
+    try:
+        ag.prepare_contract(eng, run_id=root, fctx={"ticket": ng.ticket()}, own_spec=ng.spec(),
+                            agent=Agent())
+        assert Agent.calls == 1
         with eng.begin() as c:
-            c.execute(text("DELETE FROM acceptance_contracts WHERE project_id = :p"),
-                      {"p": project})
-            c.execute(text("DELETE FROM code_task_runs WHERE project_id = :p"), {"p": project})
+            assert any(i["text"] == INTRO for i in ac.latest(c, root_run_id=root)["items"])
+    finally:
+        _cleanup_project(eng, project)

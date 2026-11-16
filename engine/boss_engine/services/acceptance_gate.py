@@ -31,6 +31,7 @@ WHAT IT DOES.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -101,6 +102,25 @@ def items_spec(connection: Any, *, run_id: str, fctx: Mapping[str, Any],
                             spec=union_spec(builds),
                             source={"run_id": builds[0]["id"], "root": True,
                                     "builds": [b["id"] for b in builds]})
+
+
+def prepare_contract(db_engine: Any, *, run_id: str, fctx: Mapping[str, Any],
+                     own_spec: Mapping[str, Any], agent: Any,
+                     model: Optional[str] = None) -> None:
+    """Before the check's transaction opens: read the run's ticket prose with `agent` (one
+    single-turn verdict) and store it with the contract (acceptance.contract.prepare_for_run),
+    so no model call ever runs inside an open database transaction (BOSSAPP-1232/1233). Never
+    fails the check: the structural items stand without it."""
+    from .engine_contract import run_verdict
+
+    def ask(prompt: str) -> str:
+        return str((run_verdict(agent, prompt, max_turns=2, model=model,
+                                temp_prefix="boss-acceptance-prose-") or {}).get("summary") or "")
+    try:
+        _contract.prepare_for_run(db_engine, run_id=run_id, fctx=fctx, own_spec=own_spec, ask=ask)
+    except Exception as exc:  # noqa: BLE001 — the check runs on what the contract holds
+        logging.getLogger(__name__).warning("acceptance contract: prose not read (%s)",
+                                            type(exc).__name__)
 
 
 def held_to_contract(connection: Any, *, run_id: str, fctx: Mapping[str, Any],
@@ -842,5 +862,5 @@ __all__ = [
     "brief_must_haves", "card_checks_failing", "findings_summary", "headline", "items_spec",
     "judge", "lineage_failures", "must_have_table", "parse_acceptance",
     "passed", "pr_section", "prd_gating_criteria", "required_stack", "stack_manifest_check",
-    "tree_listing", "wiring_problem", "MAX_PASSES",
+    "tree_listing", "wiring_problem", "MAX_PASSES", "prepare_contract",
 ]
