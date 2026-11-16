@@ -15992,3 +15992,43 @@ CREATE TABLE IF NOT EXISTS run_egress_secrets (
 );
 CREATE INDEX IF NOT EXISTS idx_run_egress_secrets_project
   ON run_egress_secrets (project_id);
+-- BOSSAPP-1266: each built app keeps its own records. Soft-delete sets deleted_at.
+-- A row younger than 30 days can be restored. A row older than 30 days is purged.
+-- Live rows are never purged, and no other table is touched.
+CREATE TABLE IF NOT EXISTS app_data_tables (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  app_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, app_key, name)
+);
+ALTER TABLE app_data_tables ADD COLUMN IF NOT EXISTS app_key TEXT;
+ALTER TABLE app_data_tables ADD COLUMN IF NOT EXISTS name TEXT;
+ALTER TABLE app_data_tables ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS idx_app_data_tables_app
+  ON app_data_tables (project_id, app_key);
+
+CREATE TABLE IF NOT EXISTS app_data_rows (
+  id TEXT PRIMARY KEY,
+  table_id TEXT NOT NULL REFERENCES app_data_tables(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL,
+  app_key TEXT NOT NULL,
+  cells JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at TIMESTAMPTZ
+);
+ALTER TABLE app_data_rows ADD COLUMN IF NOT EXISTS table_id TEXT;
+ALTER TABLE app_data_rows ADD COLUMN IF NOT EXISTS project_id TEXT;
+ALTER TABLE app_data_rows ADD COLUMN IF NOT EXISTS app_key TEXT;
+ALTER TABLE app_data_rows ADD COLUMN IF NOT EXISTS cells JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_data_rows ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE app_data_rows ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE app_data_rows ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_app_data_rows_live
+  ON app_data_rows (table_id)
+  WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_app_data_rows_trash
+  ON app_data_rows (project_id, app_key, deleted_at)
+  WHERE deleted_at IS NOT NULL;
