@@ -25,6 +25,9 @@ are the shapes it will read.
   POST    /v1/intake/connections/{connection_id}/people/prompts          integration:manage
   POST    /v1/intake/connections/{connection_id}/people/{link_id}/revoke integration:manage
 
+  RULES
+  GET     /v1/intake/rules?project_id=&source=&agent=&enabled=   agent:read
+
   EVENTS (E5) and DEAD LETTERS (E6)
   GET     /v1/intake/events?project_id=&status=&connection_id=&q=&hours=&limit=
   GET     /v1/intake/events/{intake_event_id}        envelope, guards, raw, the fires it caused
@@ -48,7 +51,7 @@ from boss_engine.connectors.intake import REGISTRY
 from boss_engine.connectors.intake.contract import MAX_BODY_BYTES, RawRequest
 from boss_engine.db import begin
 from boss_engine.identity import P, PublicReason, Scope, permit, public
-from boss_engine.services import event_intake
+from boss_engine.services import agent_triggers, event_intake
 
 
 class ProjectBody(BaseModel):
@@ -420,6 +423,20 @@ def build_intake_router(*, engine, settings: Callable[[], Any],
     @permit(P.INTEGRATION_MANAGE, scope=Scope.of("intake_connection", path="connection_id"))
     def resume_intake_connection(connection_id: str, body: Optional[ActorBody] = None) -> dict:
         return _set_status(connection_id, body, "active")
+
+    # ── rules (the console's rule list; source, agent, enabled) ─────────────────────────────
+
+    @router.get("/v1/intake/rules")
+    @permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
+    def list_project_intake_rules(project_id: str, source: Optional[str] = None,
+                                  agent: Optional[str] = None,
+                                  enabled: Optional[bool] = None) -> dict:
+        """Intake routes for the project. `source` is a connection id or a kind (`slack`).
+        `agent` is the agent key. `enabled` is true for on, false for paused; omit it for both."""
+        with begin(engine) as db:
+            require_reader(db, project_id)
+            return {"rules": agent_triggers.list_intake_rules(
+                db, project_id, source=source or None, agent=agent or None, enabled=enabled)}
 
     # ── events (E5) and dead letters (E6) ────────────────────────────────────────────────────
 

@@ -102,6 +102,19 @@ function api(over: (url: string, method: string, body: Record<string, unknown>) 
     if (o) return o;
     if (url.startsWith("/v1/intake/connections?")) return json({ connections: [SLACK, HOOK] });
     if (url.startsWith("/v1/agent-platform/agents")) return json(AGENTS);
+    if (url.startsWith("/v1/intake/rules?")) {
+      const q = new URL(url, "http://console.invalid").searchParams;
+      let rules = [RULES.support, RULES.billing].flat() as Array<{ connection_id: string; agent_key: string; on: boolean; priority: number }>;
+      const source = q.get("source");
+      if (source) rules = rules.filter((r) => r.connection_id === source);
+      const agent = q.get("agent");
+      if (agent) rules = rules.filter((r) => r.agent_key === agent);
+      const enabled = q.get("enabled");
+      if (enabled === "true") rules = rules.filter((r) => r.on);
+      if (enabled === "false") rules = rules.filter((r) => !r.on);
+      rules.sort((a, b) => a.priority - b.priority);
+      return json({ rules });
+    }
     if (url.startsWith("/v1/intake/events?")) return json(EVENTS);
     if (url.startsWith("/v1/intake/events/iev_1")) return json(DETAIL_ROUTED);
     if (url.startsWith("/v1/intake/events/iev_2")) return json(DETAIL_REFUSED);
@@ -293,6 +306,26 @@ describe("E4 Rules", () => {
     expect($('[data-testid="ev-match-count"]')?.textContent).toBe("Would match 7 of the last 50 events");
     expect(($('[data-testid="ev-budget"]') as HTMLInputElement).value).toBe("5.00");
     expect($('[data-testid="ev-triage"]')?.getAttribute("aria-checked")).toBe("false");
+    expect(calls.some((c) => c.method === "GET" && c.url.startsWith("/v1/intake/rules?") && c.url.includes("source=icn_s")
+      && !c.url.includes("agent=") && !c.url.includes("enabled="))).toBe(true);
+  });
+  it("filters by agent and enabled on the server, and will not reorder a narrowed list", async () => {
+    const calls = api();
+    await mount(<EventsHome projectId={PID} place={place("rules", { conn: "icn_s" })} />);
+    await type('[data-testid="ev-rules-agent"]', "support");
+    const agentCall = calls.filter((c) => c.url.includes("/v1/intake/rules?")).at(-1)!;
+    expect(agentCall.url).toContain("source=icn_s");
+    expect(agentCall.url).toContain("agent=support");
+    expect(agentCall.url).not.toContain("enabled=");
+    expect($$('[data-testid^="ev-rule-open-"]').map((b) => b.getAttribute("data-testid")))
+      .toEqual(["ev-rule-open-atrg_1", "ev-rule-open-atrg_2"]);
+    expect(($('[data-testid="ev-rule-up-atrg_2"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(($('[data-testid="ev-rule-down-atrg_1"]') as HTMLButtonElement).disabled).toBe(true);
+    await type('[data-testid="ev-rules-enabled"]', "off");
+    const off = calls.filter((c) => c.url.includes("/v1/intake/rules?")).at(-1)!;
+    expect(off.url).toContain("agent=support");
+    expect(off.url).toContain("enabled=false");
+    expect($('[data-testid="ev-rules-empty"]')).not.toBeNull();
   });
   it("a preview read without View people says live results may differ (BOSSAPP-1199)", async () => {
     expect(parsePreview({ ok: true, matched: 1, considered: 2, events: [], people_redacted: true }).people_redacted).toBe(true);

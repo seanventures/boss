@@ -438,6 +438,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["intake/dead-letters", "integration:read"],
   ["intake/events", "integration:read"],
   ["intake/events/{}", "integration:read"],
+  ["intake/rules", "agent:read"],
   ["integration-registry/connections", "integration:read"],
   ["integration-registry/definitions", "integration:read"],
   ["integration-registry/resolutions", "integration:read"],

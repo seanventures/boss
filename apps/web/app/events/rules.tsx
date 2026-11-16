@@ -3,8 +3,8 @@
 /**
  * SETUP › EVENTS › RULES (P9a-7, wireframe E4): "Wake this agent when…". The rules of ONE
  * connection, checked top to bottom (first match wins): each is an agent's trigger of
- * `kind=intake` (routers/agent_platform.py), read across the deployed agents and ordered by
- * priority. Move a rule up or down, switch it on or off, open it.
+ * `kind=intake`, listed by GET /v1/intake/rules (source, agent, enabled) and ordered by
+ * priority. Move a rule up or down when the list is not narrowed, switch it on or off, open it.
  *
  * The editor is a SENTENCE over the filter language (lib/intake-rules.ts): When [a message
  * mentions @BOSS] in [#support] → [agent], acting for [the person], and [text doesn't start with
@@ -58,7 +58,13 @@ export function RulesTab() {
   const lifecycle = useGate("agent:lifecycle", projectId);
   const agentList = useMemo(() => (agents?.ok ? agents.data : []), [agents]);
   const chat = picked ? CHAT_KINDS.has(picked.kind) : false;
-  const rules = useRead<Rule[]>(() => (picked && agents?.ok ? readRules(projectId, agentList, picked.id) : Promise.resolve(null as never)), [projectId, picked?.id, agents]);
+  const [agentFilter, setAgentFilter] = useState("");
+  const [enabledFilter, setEnabledFilter] = useState<"" | "on" | "off">("");
+  const narrowed = Boolean(agentFilter || enabledFilter);
+  const rules = useRead<Rule[]>(() => (picked ? readRules(projectId, {
+    source: picked.id, agent: agentFilter || undefined,
+    enabled: enabledFilter === "" ? undefined : enabledFilter === "on",
+  }) : Promise.resolve(null as never)), [projectId, picked?.id, agentFilter, enabledFilter]);
   const budgets = useRead(() => readRouteBudgets(projectId), [projectId]);
   const catalog = useRead(readCatalog, []);
   const [editing, setEditing] = useState<Editing | null>(null);
@@ -105,6 +111,17 @@ export function RulesTab() {
               onChange={(e) => { setEditing(null); goEvents({ conn: e.target.value }, "replace"); }}>
         {list.map((c) => <option key={c.id} value={c.id}>{c.label}{c.name && c.name !== c.label ? ` · ${c.name}` : ""}</option>)}
       </select>
+      <select className="ev-select" value={agentFilter} aria-label="Agent" data-testid="ev-rules-agent"
+              onChange={(e) => { setAgentFilter(e.target.value); setEditing(null); }}>
+        <option value="">Any agent</option>
+        {agentList.map((g) => <option key={g.key} value={g.key}>{g.name}</option>)}
+      </select>
+      <select className="ev-select" value={enabledFilter} aria-label="Enabled" data-testid="ev-rules-enabled"
+              onChange={(e) => { setEnabledFilter(e.target.value as "" | "on" | "off"); setEditing(null); }}>
+        <option value="">On or off</option>
+        <option value="on">On</option>
+        <option value="off">Off</option>
+      </select>
     </label>
   ) : null;
 
@@ -132,8 +149,8 @@ export function RulesTab() {
                 return (
                   <div key={r.id} className="ev-rule-row" data-testid={`ev-rule-${r.id}`}>
                     <span className="ev-rule-move">
-                      <GatedButton permission="agent:deploy" projectId={projectId} disabled={i === 0} aria-label={`Move ${r.name || words} up`} onClick={() => void move(r, -1)} data-testid={`ev-rule-up-${r.id}`}><ArrowUp size={12} /></GatedButton>
-                      <GatedButton permission="agent:deploy" projectId={projectId} disabled={i === items.length - 1} aria-label={`Move ${r.name || words} down`} onClick={() => void move(r, 1)} data-testid={`ev-rule-down-${r.id}`}><ArrowDown size={12} /></GatedButton>
+                      <GatedButton permission="agent:deploy" projectId={projectId} disabled={narrowed || i === 0} aria-label={`Move ${r.name || words} up`} onClick={() => void move(r, -1)} data-testid={`ev-rule-up-${r.id}`}><ArrowUp size={12} /></GatedButton>
+                      <GatedButton permission="agent:deploy" projectId={projectId} disabled={narrowed || i === items.length - 1} aria-label={`Move ${r.name || words} down`} onClick={() => void move(r, 1)} data-testid={`ev-rule-down-${r.id}`}><ArrowDown size={12} /></GatedButton>
                     </span>
                     <button type="button" className="ev-rule" aria-current={editing?.rule?.id === r.id} data-off={r.on ? undefined : ""} onClick={() => open(r)} data-testid={`ev-rule-open-${r.id}`}>
                       <span className="ev-rule-n">{i + 1}</span>

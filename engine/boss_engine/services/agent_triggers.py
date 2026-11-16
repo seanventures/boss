@@ -652,6 +652,31 @@ def update(connection: Connection, *, project_id: str, trigger_id: str, actor: s
     return describe(connection, get(connection, trigger_id) or {})
 
 
+def list_intake_rules(connection: Connection, project_id: str, *, source: Optional[str] = None,
+                      agent: Optional[str] = None, enabled: Optional[bool] = None) -> list[dict]:
+    """Intake routes for one project, first-match order (priority, then created, then id).
+
+    `source` is a connection id or a connection kind. `agent` is the deployment's agent key.
+    `enabled` true is status on; false is anything else; omitted is every route."""
+    source = (source or "").strip() or None
+    agent = (agent or "").strip() or None
+    rows = connection.execute(text("""
+        SELECT t.*
+          FROM agent_triggers t
+          JOIN agent_deployments d ON d.id = t.deployment_id
+          LEFT JOIN intake_connections c ON c.id = t.connection_id
+         WHERE t.project_id = :p
+           AND t.kind = 'intake'
+           AND (CAST(:source AS TEXT) IS NULL OR t.connection_id = CAST(:source AS TEXT)
+                OR c.kind = CAST(:source AS TEXT))
+           AND (CAST(:agent AS TEXT) IS NULL OR d.agent_key = CAST(:agent AS TEXT))
+           AND (CAST(:enabled AS BOOLEAN) IS NULL
+                OR (t.status = 'on') = CAST(:enabled AS BOOLEAN))
+         ORDER BY t.priority, t.created_at, t.id"""),
+        {"p": project_id, "source": source, "agent": agent, "enabled": enabled}).mappings().all()
+    return [describe(connection, dict(row)) for row in rows]
+
+
 def set_paused(connection: Connection, *, project_id: str, trigger_id: str, actor: str,
                paused: bool, reason: str = "") -> dict:
     """Pause or resume. A paused trigger is never selected by the next tick and `fire` refuses

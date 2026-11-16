@@ -427,17 +427,15 @@ export function readEvents(projectId: string, q: EventQuery = {}) {
 export const readEvent = (id: string) => evRead(`/v1/intake/events/${enc(id)}`, parseEventDetail);
 export const readDeadLetters = (projectId: string) => evRead(`/v1/intake/dead-letters?project_id=${enc(projectId)}`, parseDeadLetters);
 export const readAgents = (projectId: string) => evRead(`/v1/agent-platform/agents?project_id=${enc(projectId)}`, parseAgents);
-export const readRulesOf = (projectId: string, agentKey: string, connectionId: string) =>
-  evRead(`/v1/agents/${enc(agentKey)}/triggers?project_id=${enc(projectId)}&kind=intake&connection_id=${enc(connectionId)}`,
-         (v) => a(o(v).triggers).map(parseRule).filter((r) => r.id));
-/** Every rule on one connection, across the agents (each agent's triggers of `kind=intake`). */
-export async function readRules(projectId: string, agents: Agent[], connectionId: string): Promise<Read<Rule[]>> {
-  const all = await Promise.all(agents.map((g) => readRulesOf(projectId, g.key, connectionId)));
-  const failed = all.find((r): r is Extract<Read<Rule[]>, { ok: false }> => !r.ok);
-  if (failed && all.every((r) => !r.ok)) return failed;
-  const seen = new Set<string>();
-  const rules = all.flatMap((r) => (r.ok ? r.data : [])).filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)));
-  return { ok: true, data: rules.sort(byOrder) };
+export type RuleFilter = { source?: string; agent?: string; enabled?: boolean };
+/** One project-wide list. `source` is a connection id (or a kind), `agent` an agent key,
+ *  `enabled` true for on and false for off. Omitted filters are not sent. */
+export function readRules(projectId: string, filter: RuleFilter = {}): Promise<Read<Rule[]>> {
+  const p = new URLSearchParams({ project_id: projectId });
+  if (filter.source) p.set("source", filter.source);
+  if (filter.agent) p.set("agent", filter.agent);
+  if (typeof filter.enabled === "boolean") p.set("enabled", filter.enabled ? "true" : "false");
+  return evRead(`/v1/intake/rules?${p.toString()}`, (v) => a(o(v).rules).map(parseRule).filter((r) => r.id).sort(byOrder));
 }
 export const readPeople = (connectionId: string) => evRead(`${conn(connectionId)}/people`, parsePeople);
 export const readChatEndpoints = (projectId: string) => evRead(`/v1/chat/endpoints?project_id=${enc(projectId)}`, parseEndpoints);
