@@ -52,7 +52,7 @@ function stateOf(row: PreviewShareLink): "Open" | "Stopped" | "Expired" {
   return "Open";
 }
 
-function refusal(reason: OpenResult["reason"] | string): string {
+function refusal(reason: Extract<OpenResult, { ok: false }>["reason"] | string): string {
   if (reason === "expired") return "That pass expired.";
   if (reason === "stopped") return "That pass was stopped.";
   return "Password refused.";
