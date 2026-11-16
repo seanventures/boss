@@ -4936,6 +4936,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     spec = run["spec"]
     fctx = run["finalize_ctx"] or {}
     job_id = fctx.get("created_by_job_id")
+    # RE-CHECK THIS CHANGE (change_recheck, BOSSAPP-1326): every gate on the branch head, no
+    # code written — every writing stage gets a NoWriteAgent, no design, no repair round.
+    from . import change_recheck as _change_recheck
+
+    _recheck = _change_recheck.is_recheck(fctx)
     # VAG Phase 0: publish the run's identity so every run_role call below records an
     # llm_calls row with the right attribution (stage is set before each step).
     set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id)
@@ -5457,6 +5462,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         """(agent, model) for a decision. Smart mode wraps the agent so a limit or a
         transient failure at call time retries the SAME stage on the next source at once
         (model_router.failover); Fixed mode is exactly as before."""
+        if _recheck and step in _change_recheck.WRITING_STAGES:
+            return _change_recheck.NoWriteAgent(step), None
         eng, model = _take(step, decision)
         agent = _agent_for(eng)
         if decision.mode != "smart":
@@ -5523,7 +5530,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # (no live exec), and the guest never pushes — only the control plane writes git.
     # Per-run override wins (set by the retry fallback after a micro-VM infra failure, or
     # explicitly on the task); else the project-level setting applies.
-    use_microvm = _resolve_use_microvm(settings, spec)
+    # A re-check judges a host checkout of the branch head: no guest VM writes in its place.
+    use_microvm = _resolve_use_microvm(settings, spec) and not _recheck
     from .execution_substrate import normalize_build_substrate
     # The audit record of where THIS run's working stages execute: the micro-VM
     # lane when selected, else the resolved provider's kind (BOSSAPP-824 —
@@ -5566,7 +5574,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     _stack_record: dict = {}
 
     def _push_held(where: str) -> bool:
-        reason = template_push_hold(_tpl_applies, _tpl_gates)
+        # THE ONE CHOKE POINT FOR EVERY COMMIT OR UPSERT (#168 review R2): a re-check commits
+        # nothing — no checkpoint, rescue, partial PR, preview declaration or PRD record —
+        # whatever gate preparation left in the checkout (change_recheck.push_hold_reason).
+        reason = _change_recheck.push_hold_reason(
+            _recheck, template_push_hold(_tpl_applies, _tpl_gates))
         if reason is None:
             return False
         try:
@@ -7146,7 +7158,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # Spec-driven: the refined spec + plan are fed into the downstream coding steps. (The human
         # approve-plan gate is Wire-Phase 2b; for now review plan records a PLAN: OK/REVISE note.)
         design: dict = {}
-        do_design = risk_tier >= 2 and not is_web_app and not _seeded
+        do_design = risk_tier >= 2 and not is_web_app and not _seeded and not _recheck
         # A CONTINUATION PLANS ONLY ON ITS LINEAGE'S CHECKOUT (BOSSAPP-1324): the workspace
         # must be this lineage's repository on its branch's head, or BOSS stops here, in words,
         # before any model call. Never for the stack or an empty tree (PR #164 E2): a rewrite,
@@ -7379,6 +7391,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "write_tests" in _resume_done or fctx.get("prior_failing_gates"))
         # This run finishing write_tests is direct evidence — it does not need a lineage.
         _own_tests_done = "write_tests" in {str(s) for s in (fctx.get("completed_stages") or [])}
+        if _recheck:
+            # A re-check writes no tests: the branch's own suite is the oracle.
+            do_separate_tests = False
         if do_separate_tests and _seeded:
             # The seeded tree carries the QA-authored suite; it is the frozen oracle (and, being
             # pre-existing now, the existing-tests floor keeps the implementer off it).
@@ -7835,7 +7850,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             + _placed_tests_note(_placed_tpl_tests) \
             + (_test_plan_note((locals().get("r1") or {}).get("summary", ""))
                if do_separate_tests else "")
-        max_repair = max(0, min(5, int(
+        max_repair = 0 if _recheck else max(0, min(5, int(
             spec.get("repair_retries", settings.code_repair_max_retries) or 0)))
         repair_attempts = 0
         repair_log: list[dict] = []
@@ -8577,6 +8592,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # reviewer that never saw the tree) never replaces a judged table.
         _acceptance_history: list[dict] = []
         _acceptance_judged: dict = {}
+        if _recheck:
+            # A RE-CHECK STARTS FROM THE CHANGE'S LAST JUDGED TABLE (#168 review M1): its
+            # history continues, and a re-check whose own check refused or did not run never
+            # replaces that verdict on the PR.
+            try:
+                with _transaction(engine) as _c:
+                    _of = load_code_task_run(_c, str(fctx.get(_change_recheck.OF_KEY) or ""))
+                _change_recheck.seed_acceptance(_of, _acceptance_history, _acceptance_judged)
+            except Exception:  # noqa: BLE001 — no earlier table: the re-check's own stands
+                _log_caught(logger)
         panel_size = 1
         review_seat = None  # the panel seat whose findings stand for the review (§6.4)
         review_cost = 0
@@ -9102,7 +9127,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _weakened.append(f"{_p} ({_was_n} -> {_now_n} tests)")
         _halt_if_needs_person()
         gates = {
-            "code_written": bool(impl_files) or (_is_repair_iteration and tests_passed),
+            "code_written": (bool(impl_files) or (_is_repair_iteration and tests_passed)
+                             # A re-check writes nothing; the change is the lineage's.
+                             or (_recheck and bool(_lineage_paths))),
             "written_tests_pass": tests_passed,
             # An existing test that was edited or deleted is the one way a green suite can
             # still mean "we broke something" — so this gate holds at tier 0 too.
@@ -9372,7 +9399,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 rec, spent = _judge_acceptance_check(**kwargs)
                 _ledger_acceptance_check(engine, run_id, project_id, rec, root=review_root)
                 return (_acceptance_gate.keep_history(_acceptance_history, rec,
-                                                      _acceptance_judged), spent)
+                                                      _acceptance_judged,
+                                                      keep_on_not_run=_recheck), spent)
 
             def _judge_acceptance_check(max_turns: Optional[int] = None,
                                         max_budget_usd: Optional[float] = None,
@@ -9686,6 +9714,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                         template_evidence=_tpl_evidence(),
                                         coder_owned_secrets=_coder_owned_secrets())
             _fix_rounds_run = 0
+            if _recheck:
+                inrun_max = 0          # a re-check reports; it never runs a fix round
             if inrun_max:
               try:  # a convergence failure must DEGRADE to the legacy paths, never kill the run
                 for round_i in range(1, inrun_max + 1):
@@ -10491,6 +10521,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                               else "block")
             # EVERY STOP GOES THROUGH THE OPERATOR'S RULE, whichever branch decided it (the
             # supervisor's stop_report short-circuit skipped it: crun_f5868a67, BOSSAPP-1319).
+            if _recheck and action == "repair":
+                # A RE-CHECK NEVER STARTS A REPAIR ROUND: it reports. A failing gate stops here
+                # and the operator's rule (stop_or_open) labels the PR; the existing follow-up
+                # rules decide the rest.
+                action = "block"
             action = _checks_failing.stop_or_open(action, failing, faults=gate_faults,
                                                   open_pr=_can_ship_pr,
                                                   enabled=_open_when_failing,
@@ -10754,7 +10789,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         "quality_gate_id": qg_id, "failing_gates": failing}
 
         # GATE PASSED — open the PR via the existing software-factory path.
-        if _push_held("pull_request"):
+        # (A re-check reaches the PR terminal with no files: its verdict and card, no commit.)
+        if not _recheck and _push_held("pull_request"):
             # Unreachable by design (a failing template gate never ships), kept as the last
             # door: a template build whose gates did not pass opens no PR, whatever led here.
             with _transaction(engine) as c:
@@ -10901,6 +10937,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _pr_files = ([FileChange(path=p, content=content)
                           for p, content in accumulated.items()]
                          if use_microvm else sandbox.diff())
+            if _recheck:
+                # A RE-CHECK COMMITS NOTHING: whatever BOSS's own gate preparation touched in
+                # the checkout stays there; the PR gets the new verdict and card, not a commit.
+                if _pr_files:
+                    emit_event(c, project_id, "code_task.recheck_discarded_changes", "boss",
+                               "code_task_run", run_id,
+                               {"paths": [f.path for f in _pr_files][:40]})
+                _pr_files = []
             _pr_summary = _cf_section(_checks) + _generated_pr_summary(
                 engine, settings, run_id, project_id, title=title, evidence=evidence,
                 gates=gates, paths=[f.path for f in _pr_files], qg_id=qg_id)
@@ -11057,8 +11101,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # CI FAILED AFTER THE PR OPENED: one bounded repair round in the same lineage
         # (repair_after_ci_failure). After the terminal write, so the attempt chains off a
         # settled run; the merge/deploy approvals stay refused meanwhile (ci_gate).
-        ci_repair_run = repair_after_ci_failure(engine, settings, jobs, run_id, project_id,
-                                                fctx, evidence.get("ci_wait") or {})
+        ci_repair_run = (None if _recheck else   # a re-check never starts a build (R1)
+                         repair_after_ci_failure(engine, settings, jobs, run_id, project_id,
+                                                 fctx, evidence.get("ci_wait") or {}))
         # WHAT THIS RUN COST, DELIVERED AND LOST — recorded now, while every fact is fresh.
         #
         # Answering "what went wrong" on an 85-minute build took two hours of reading container
@@ -11096,6 +11141,22 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.followup_skipped", "boss",
                            "code_task_run", run_id, {"reason": _followup_skip_reason})
+        if _recheck:
+            # A RE-CHECK NEVER STARTS A BUILD ON ITS OWN (#168 review R1): its findings go to
+            # the ledger and ONE card, "Fix these (about $X)", starts the follow-up when a person
+            # with the steer permission presses it.
+            if _followup_ok and (deferred_findings or _checks):
+                try:
+                    _change_recheck.raise_fix_card(
+                        engine, run_id=run_id, project_id=project_id, task_id=task_id,
+                        title=title, spec=spec, base_branch=work_branch,
+                        parent_root=str(fctx.get("root_run_id") or run_id),
+                        parent_origin=fctx.get("origin"),
+                        workflow_run_id=fctx.get("workflow_run_id"),
+                        findings=list(deferred_findings or []), checks_failing=_checks)
+                except Exception:  # noqa: BLE001 — the verdict is delivered; the card is extra
+                    _log_caught(logger)
+            _followup_ok, _followup_skip_reason = False, "a re-check never starts a build"
         # ONE OWNER PER PULL REQUEST (code_task_service.lineage_branch_owner). A workflow whose
         # More tests pass has not started yet hands the deferred findings to THAT pass — it
         # extends this same branch and PR next — instead of starting a second run on the branch

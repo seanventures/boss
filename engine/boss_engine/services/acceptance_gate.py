@@ -383,7 +383,7 @@ HISTORY_KEY = "acceptance_history"
 
 
 def keep_history(history: list, record: dict,
-                 judged: Optional[dict] = None) -> dict:
+                 judged: Optional[dict] = None, *, keep_on_not_run: bool = False) -> dict:
     """Append this check's table to the run's `history` (never replacing an earlier one) and
     return the record the gate stands on: this one — unless it REFUSED to judge (`refusal`)
     while an earlier check of the run did judge (`judged`, a holder {"record": …} the caller
@@ -400,7 +400,9 @@ def keep_history(history: list, record: dict,
                                "evidence": str(i.get("evidence") or "")[:300]}
                               for i in record.get("items") or []]})
     holder = judged if judged is not None else {}
-    if record.get("refused"):
+    # A re-check (`keep_on_not_run`): a check that did not run judges nothing either, so the
+    # change's earlier judged table stands (change_recheck, #168 review M1).
+    if record.get("refused") or (keep_on_not_run and record.get("verdict") == "not_run"):
         earlier = holder.get("record")
         if isinstance(earlier, dict):
             return {**earlier, "later_check_refused": record.get("why") or ""}

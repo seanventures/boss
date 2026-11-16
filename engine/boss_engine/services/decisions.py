@@ -1322,6 +1322,33 @@ class DecisionService:
                     _log.exception("retry once set failed for %s", run_id)
 
             _spawn_as_this_request(_retry)
+        elif action == "start_recheck_followup":
+            # FIX THESE (change_recheck, #168 review R1): a re-check never starts a build on its
+            # own; a person with the steer permission starts the follow-up here.
+            from .change_recheck import fix_refusal, may_start_fix, start_fix
+
+            if not may_start_fix(connection, str(row["project_id"]), actor):
+                raise InvalidDecisionTransitionError(
+                    "Starting the fix is a person's call: it needs a person with the Steer "
+                    "builds permission (code_task:steer) on this project, never an agent or a "
+                    "worker.")
+            stale = fix_refusal(connection, recommendation, str(row["project_id"]))
+            if stale:
+                raise InvalidDecisionTransitionError(stale)
+            settings, jobs = self.settings, self.jobs
+            rec_copy, pid, tid = dict(recommendation), str(row["project_id"]), row.get("task_id")
+            emit_event(connection, pid, "code_task.recheck_fix_started", actor, "decision",
+                       str(row["id"]), {"run_id": rec_copy.get("run_id")})
+
+            def _fix() -> None:
+                from ..db import get_engine
+
+                try:
+                    start_fix(get_engine(), settings, jobs, rec_copy, project_id=pid, task_id=tid)
+                except Exception:  # noqa: BLE001 — the card says it was approved; the log says why
+                    _log.exception("fix of re-check %s not started", rec_copy.get("run_id"))
+
+            _spawn_as_this_request(_fix)
         elif action == "review_plan_draft":
             self._queue_pr_proposal_from_plan(connection, row, actor, recommendation)
         elif action == "github.community.dispatch_plan":
