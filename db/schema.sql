@@ -15817,3 +15817,31 @@ CREATE TABLE IF NOT EXISTS task_copy_dead_letters (
 );
 CREATE INDEX IF NOT EXISTS idx_task_copy_dead_letters_copy
   ON task_copy_dead_letters (copy_id, created_at DESC);
+-- BOSSAPP-1253: one project keeps a website, a mobile app, slides, and a data view.
+-- Publishing one surface updates that row only. A together publish marks every held surface
+-- in one record. The same dedupe key does not insert a second record.
+CREATE TABLE IF NOT EXISTS project_suite_surfaces (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('website', 'mobile', 'slides', 'data_view')),
+  title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
+  revision INTEGER NOT NULL DEFAULT 1,
+  published_revision INTEGER,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_project_suite_surfaces_project
+  ON project_suite_surfaces (project_id);
+
+CREATE TABLE IF NOT EXISTS project_suite_publishes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  mode TEXT NOT NULL CHECK (mode IN ('one', 'together')),
+  kinds JSONB NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_project_suite_publishes_project
+  ON project_suite_publishes (project_id, created_at DESC);
