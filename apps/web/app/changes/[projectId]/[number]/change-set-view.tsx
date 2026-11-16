@@ -349,6 +349,21 @@ function SourceLine({ cs }: { cs: ChangeSet }) {
 
 // ── the decision, Merge and Request changes ─────────────────────────────────────────────────
 
+/** Visible reason a merge is held. Blank is nothing. */
+export function mergeHeldSentence(reason: string | null | undefined): string | null {
+  const trimmed = reason?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** Beside the merge button. More than six words is a paragraph; six or fewer is a span. */
+function MergeHeldWhy({ sentence }: { sentence: string | null }) {
+  if (!sentence) return null;
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  return long
+    ? <p data-testid="change-set-held-why" data-user-text>{sentence}</p>
+    : <span data-testid="change-set-held-why" data-user-text>{sentence}</span>;
+}
+
 /** Merge and Request changes. `compact`: the header's buttons; the Checks tab shows the
  *  decision's card (DecisionCard). */
 export function Decide({ cs, projectId, number, reread, at, compact = false }: {
@@ -403,12 +418,15 @@ export function Decide({ cs, projectId, number, reread, at, compact = false }: {
   ) : merging ? (
     <span className="cs-merging" role="status" data-testid="change-set-merging"><CircleNotch size={14} className="cs-spin" aria-hidden /> BOSS is merging…</span>
   ) : cs.state === "open" && cs.merge ? (
-    <button type="button" className="cs-primary" data-testid="change-set-merge" disabled={!!busy || !!cs.merge.held} aria-busy={!!busy || undefined}
-            title={cs.merge.held?.reason || "A person merges · BOSS runs the governed merge"} data-held={cs.merge.held?.state || undefined}
-            onClick={() => void merge()}>
-      {busy ? <CircleNotch size={15} className="cs-spin" aria-hidden /> : <GitMerge size={15} weight="bold" aria-hidden />}
-      {cs.merge.held ? cs.merge.held.label : "Merge"}
-    </button>
+    <>
+      <button type="button" className="cs-primary" data-testid="change-set-merge" disabled={!!busy || !!cs.merge.held} aria-busy={!!busy || undefined}
+              title={cs.merge.held?.reason || "A person merges · BOSS runs the governed merge"} data-held={cs.merge.held?.state || undefined}
+              onClick={() => void merge()}>
+        {busy ? <CircleNotch size={15} className="cs-spin" aria-hidden /> : <GitMerge size={15} weight="bold" aria-hidden />}
+        {cs.merge.held ? cs.merge.held.label : "Merge"}
+      </button>
+      <MergeHeldWhy sentence={mergeHeldSentence(cs.merge.held?.reason)} />
+    </>
   ) : null;
   const local = cs.source === "local";
   const closeBtn = local && cs.state === "open" && !merging ? (
