@@ -15896,3 +15896,18 @@ CREATE INDEX IF NOT EXISTS idx_app_residency_pins_project
 ALTER TABLE app_residency_pins ADD COLUMN IF NOT EXISTS geography TEXT;
 ALTER TABLE app_residency_pins ADD COLUMN IF NOT EXISTS control_plane_host TEXT NOT NULL DEFAULT '';
 ALTER TABLE app_residency_pins ADD COLUMN IF NOT EXISTS pinned_by TEXT;
+-- BOSSAPP-1256: an admin can require private publishes, block a severity, and
+-- ban source export and chat uploads. No row keeps today's allow behavior.
+CREATE TABLE IF NOT EXISTS publish_guards (
+  org_id TEXT PRIMARY KEY REFERENCES orgs(id) ON DELETE CASCADE,
+  require_private BOOLEAN NOT NULL DEFAULT false,
+  blocked_severity TEXT,
+  ban_source_export BOOLEAN NOT NULL DEFAULT false,
+  ban_chat_upload BOOLEAN NOT NULL DEFAULT false,
+  updated_by TEXT NOT NULL DEFAULT 'operator',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT publish_guards_severity_chk CHECK (
+    blocked_severity IS NULL
+    OR blocked_severity IN ('critical', 'high', 'medium', 'low', 'info')
+  )
+);
