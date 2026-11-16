@@ -538,12 +538,14 @@ echo BOSS_PROVISIONED
 
         q = shlex.quote
         base = self.diff_base_sha or ""
-        listing = f"/tmp/boss-diff-{self.task_id}.lst"
+        # A FRESH, UNGUESSABLE LISTING (PR #166 review): a fixed /tmp/boss-diff-<task>.lst could be
+        # pre-created (or symlinked) by another user on the host; mktemp makes a new 0600 file.
         script = (
             f"set -e\numask 077\ncd {q(self.workdir)}\n"
-            f"git diff --cached --name-only -z {q(base) if base else ''} > {q(listing)}\n"
-            f"tar -czf - --null --ignore-failed-read -T {q(listing)} 2>/dev/null | base64\n"
-            f"rm -f {q(listing)}\n"
+            'listing=$(mktemp "${TMPDIR:-/tmp}/boss-diff.XXXXXXXX")\n'
+            "trap 'rm -f \"$listing\"' EXIT\n"
+            f"git diff --cached --name-only -z {q(base) if base else ''} > \"$listing\"\n"
+            'tar -czf - --null --ignore-failed-read -T "$listing" 2>/dev/null | base64\n'
         )
         result = self._script(script, timeout=600)
         if result.returncode != 0:

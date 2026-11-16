@@ -57,7 +57,11 @@ def main() -> int:
     kg = plant(kg_index_root() / "ghrepo_other_project")
     cache = plant(Path(builtin._repo_cache()) / "acme__other")          # noqa: SLF001
     mirror = plant(Path("/var/lib/boss/repos/other/other.git"))
-    private_import = Path(private_dirs.private_root()) / "import"
+    # A DIRECTORY ROW READS A FILE PLANTED INSIDE IT (PR #166 review): `ls` of the directory
+    # alone says nothing about whether its contents are reachable.
+    private_import = plant(Path(private_dirs.private_root()) / "import", "PROBE_SECRET")
+    boss_home = plant(Path("/home/boss"), ".boss-probe-secret")
+    identity = plant(Path("/var/lib/boss/identity"), ".boss-probe-secret")
     a = sandbox_identity.acquire("probe-run-a", seed_logins=False)
     b = sandbox_identity.acquire("probe-run-b", seed_logins=False)
     assert a is not None and b is not None and a.uid != b.uid
@@ -77,8 +81,8 @@ def main() -> int:
         check(f"{who} -> chat repo cache", uid, cache, False)
         check(f"{who} -> repo mirror", uid, mirror, False)
         check(f"{who} -> private imports", uid, private_import, False)
-        check(f"{who} -> BOSS home", uid, Path("/home/boss"), False)
-        check(f"{who} -> identity keys", uid, Path("/var/lib/boss/identity"), False)
+        check(f"{who} -> BOSS home", uid, boss_home, False)
+        check(f"{who} -> identity keys", uid, identity, False)
     # What a run must still do.
     check("pool uid -> its own run directory", a.uid, own_tree / "main.go", True)
     results.append(("pool uid -> writes in its own tree", True,
@@ -103,6 +107,8 @@ def main() -> int:
         print(f"{'ok  ' if ok else 'FAIL'}  {what}: {'readable' if got else 'denied'}{note}")
     sandbox_identity.release("probe-run-a")
     sandbox_identity.release("probe-run-b")
+    for planted in (private_import, boss_home, identity):
+        planted.unlink(missing_ok=True)
     return 1 if bad else 0
 
 

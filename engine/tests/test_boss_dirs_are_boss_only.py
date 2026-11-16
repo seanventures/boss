@@ -285,3 +285,116 @@ def test_bosss_own_files_in_tmp_are_owner_only(tmp_path, monkeypatch):
                 "engine/boss_engine/services/ssh_environment.py"):
         text = (root / rel).read_text(encoding="utf-8")
         assert "umask 077" in text, rel
+
+
+# ── PR #166 review: the per-uid fallback is used only when it is OURS ──────────────────────
+
+@pytest.fixture()
+def tmpdir_of(tmp_path, monkeypatch):
+    tmp = tmp_path / "tmp"
+    tmp.mkdir()
+    monkeypatch.setattr(private_dirs.tempfile, "gettempdir", lambda: str(tmp))
+    monkeypatch.setattr(private_dirs.tempfile, "tempdir", str(tmp))
+    monkeypatch.setattr(private_dirs, "_MKDTEMP_ROOT", None)
+    return tmp
+
+
+def _is_a_fresh_mkdtemp(root: Path, tmp: Path) -> bool:
+    return (root.parent == tmp and root.name.startswith("boss-private-")
+            and root.name != f"boss-private-{os.getuid()}" and private_dirs.owned_private_dir(root))
+
+
+def test_a_fallback_another_uid_pre_created_is_never_used(tmpdir_of, monkeypatch):
+    """The probe: another uid made /tmp/boss-private-<uid> 0777 before BOSS started. BOSS cannot
+    chmod a directory it does not own, and must not keep project clones in it."""
+    planted = tmpdir_of / f"boss-private-{os.getuid()}"
+    planted.mkdir()
+    os.chmod(planted, 0o777)
+    real_lstat, real_chmod = os.lstat, os.chmod
+
+    def someone_elses(path, *a, **k):                         # owned by another uid
+        st = real_lstat(path, *a, **k)
+        if Path(path) == planted:
+            fields = list(tuple(st))
+            fields[4] = os.getuid() + 1
+            return os.stat_result(fields)
+        return st
+
+    def not_the_owner(path, mode, *a, **k):
+        if Path(path) == planted:
+            raise PermissionError(1, "Operation not permitted")
+        return real_chmod(path, mode, *a, **k)
+
+    monkeypatch.setattr(private_dirs.os, "lstat", someone_elses)
+    monkeypatch.setattr(private_dirs.os, "chmod", not_the_owner)
+    root = private_dirs._fallback_root()                       # noqa: SLF001
+    assert root != planted and _is_a_fresh_mkdtemp(root, tmpdir_of)
+    assert private_dirs._fallback_root() == root               # noqa: SLF001 — one per process
+
+
+def test_an_owner_only_directory_of_another_uid_is_not_ours_either(tmpdir_of, monkeypatch):
+    """0700 is not enough: is_private says nothing about WHO the owner is."""
+    planted = tmpdir_of / f"boss-private-{os.getuid()}"
+    planted.mkdir(mode=0o700)
+    real_lstat = os.lstat
+
+    def someone_elses(path, *a, **k):
+        st = real_lstat(path, *a, **k)
+        if Path(path) == planted:
+            fields = list(tuple(st))
+            fields[4] = os.getuid() + 1
+            return os.stat_result(fields)
+        return st
+
+    monkeypatch.setattr(private_dirs.os, "lstat", someone_elses)
+    assert private_dirs.is_private(planted)
+    assert _is_a_fresh_mkdtemp(private_dirs._fallback_root(), tmpdir_of)  # noqa: SLF001
+
+
+def test_a_symlinked_fallback_is_never_followed(tmpdir_of, tmp_path):
+    elsewhere = tmp_path / "their-tree"
+    elsewhere.mkdir(mode=0o700)
+    (tmpdir_of / f"boss-private-{os.getuid()}").symlink_to(elsewhere)
+    root = private_dirs._fallback_root()                       # noqa: SLF001
+    assert _is_a_fresh_mkdtemp(root, tmpdir_of)
+    assert not any(elsewhere.iterdir())
+
+
+def test_our_own_fallback_is_still_the_per_uid_directory(tmpdir_of):
+    root = private_dirs._fallback_root()                       # noqa: SLF001
+    assert root == tmpdir_of / f"boss-private-{os.getuid()}"
+    assert private_dirs.owned_private_dir(root)
+
+
+def test_an_old_world_readable_worker_log_is_made_owner_only(tmp_path, monkeypatch):
+    import subprocess
+
+    from apps.api.app import local_supervisor
+
+    logs = tmp_path / "boss-stack"
+    logs.mkdir()
+    (logs / "worker.log").write_text("old\n")
+    os.chmod(logs / "worker.log", 0o644)                       # an older BOSS's log
+    monkeypatch.setenv("BOSS_LOG_DIR", str(logs))
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: object())
+    local_supervisor._spawn()                                  # noqa: SLF001
+    assert _mode(logs / "worker.log") == 0o600
+
+
+def test_the_remote_diff_listing_is_a_mktemp_file():
+    text = (ENGINE.parents[1] / "engine/boss_engine/services/ssh_environment.py").read_text(
+        encoding="utf-8")
+    assert "/tmp/boss-diff-{self.task_id}" not in text
+    assert 'listing=$(mktemp "${TMPDIR:-/tmp}/boss-diff.XXXXXXXX")' in text
+
+
+def test_the_escape_probe_reads_a_file_planted_in_each_directory_row():
+    import inspect
+
+    from tests.helpers import sandbox_escape_probe as probe
+
+    body = inspect.getsource(probe.main)
+    for planted in ('plant(Path(private_dirs.private_root()) / "import"',
+                    'plant(Path("/home/boss")', 'plant(Path("/var/lib/boss/identity")'):
+        assert planted in body, planted
+    assert 'Path("/home/boss"), False)' not in body

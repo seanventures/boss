@@ -72,8 +72,12 @@ def _spawn() -> subprocess.Popen | None:
     logs.mkdir(parents=True, exist_ok=True, mode=0o700)
     with contextlib.suppress(OSError):
         os.chmod(logs, 0o700)
-    handle = os.fdopen(os.open(logs / "worker.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND,
-                               0o600), "a")
+    fd = os.open(logs / "worker.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    # The open mode applies only to a NEW file: a worker.log an older BOSS left 0644 is made
+    # owner-only here, on the descriptor (no path race).
+    with contextlib.suppress(OSError):
+        os.fchmod(fd, 0o600)
+    handle = os.fdopen(fd, "a")
     try:
         return subprocess.Popen(
             [sys.executable, "-m", _WORKER_MODULE],
