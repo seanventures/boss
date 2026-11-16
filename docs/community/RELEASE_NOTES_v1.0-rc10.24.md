@@ -1,6 +1,6 @@
 # BOSS Community 1.0.0-rc.10.24 candidate
 
-RC10.24 is public `main` after `v1.0-rc10.23`. Ten slices landed.
+RC10.24 is public `main` after `v1.0-rc10.23`. Ten slices landed. Pull request 154, acceptance evidence hardening, was already on main and is included. This captain did not retest that pull request.
 
 This is a test candidate. Cutting the tag does not deploy a host, publish an image, or re-run the release gate.
 

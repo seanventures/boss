@@ -16,7 +16,7 @@ Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.24.md](docs/community/RELEASE_NOT
 
 ### Release scope
 
-- This is the git tag of public main after rc10.23. It is not a live host deploy. No image tag or release-gate run is attached. The export record still cites `docs/community/RC9_VALIDATION.md`. A failed deploy phase still has no phase-only retry. A migration approval was not added.
+- This is the git tag of public main after rc10.23, including pull request 154 which was already on main. It is not a live host deploy. No image tag or release-gate run is attached. The export record still cites `docs/community/RC9_VALIDATION.md`. A failed deploy phase still has no phase-only retry. A migration approval was not added.
 
 ## [v1.0-rc10.23]
 
