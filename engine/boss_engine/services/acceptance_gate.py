@@ -271,8 +271,9 @@ def _stack_lines(stack: Mapping[str, Any]) -> str:
 def acceptance_prompt(items: list[dict], *, title: str, stack: Mapping[str, Any],
                       tree: str) -> str:
     def tags(i: Mapping[str, Any]) -> str:
-        return "".join([", must be loaded" if i.get("needs_loader") else "",
-                        ", judgement" if i.get("judgement") else ""])
+        t = _contract.floor_tags(i.get("text"), i, where="prompt")
+        return "".join([", must be loaded" if t.get("needs_loader") else "",
+                        ", judgement" if t.get("judgement") else ""])
     listed = "\n".join(f"ITEM {i['n']} [{i['source']}{tags(i)}]: {i['text']}" for i in items)
     return (
         "You are BOSS's ACCEPTANCE REVIEWER for the build \"" + str(title or "") + "\". "
@@ -521,6 +522,9 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any) -> list[dict[s
     out = []
     for it in items:
         status, why = answers.get(int(it["n"]), (UNJUDGED, ""))
+        # The contract's tags under the floor (contract.floor_tags): what this check acts on.
+        it = {**{k: v for k, v in it.items() if k not in _contract.ITEM_TAGS},
+              **_contract.floor_tags(it.get("text"), it, where="gate")}
         if status == MET:
             found, absent = evidence_paths(root, why)
             code = [f for f in found if not _DOC_PATH.search(f) and not _DECL_PATH.search(f)]
@@ -532,8 +536,9 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any) -> list[dict[s
                           else f"cited paths not in the tree: {', '.join(absent[:4])}" if absent
                           else "no file evidence cited")
             else:
-                reason = wiring_problem(root, why, item_text=str(it.get("text") or ""),
-                                        needs_loader=bool(it.get("needs_loader"))) or ""
+                reason = wiring_problem(
+                    root, why, item_text=str(it.get("text") or ""),
+                    needs_loader=bool(it.get("needs_loader"))) or ""
             if reason:
                 status, why = PARTIAL, f"{why} ({reason})".strip()
         out.append({**it, "status": status, "evidence": why})
@@ -590,6 +595,10 @@ def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
     elif dropped:
         # Items nobody judged are not met: never a pass over a list that was cut.
         verdict, why = "not_run", f"{dropped} items beyond {MAX_TOTAL_ITEMS} were not judged"
+    elif summary == "NOT MET" and advisory:
+        # The reviewer's NOT MET is about the advisory (taste) items only: every other item
+        # is met. Not a slip — the check is met, with advisory items said on the card.
+        verdict = "met"
     elif summary != "MET":
         # A reviewer's slip, not the code's: re-ask the reviewer (HARNESS), never send the
         # coder to repair it. Still never a pass.
@@ -701,8 +710,9 @@ def must_have_table(record: Optional[Mapping[str, Any]]) -> str:
     def cell(s: Any) -> str:
         return _norm(s).replace("|", "\\|")
     rows = ["| # | Must-have | Status | Evidence |", "|---|---|---|---|"]
-    rows += [f"| {i['n']} | {cell(i['text'])} | {_STATUS_WORD.get(i['status'], i['status'])}"
-             + (" (judgement, advisory)" if _advisory(i) else "")
+    rows += [f"| {i['n']} | {cell(i['text'])}" + (" _(taste)_" if i.get("judgement") else "")
+             + f" | {_STATUS_WORD.get(i['status'], i['status'])}"
+             + (" — advisory (taste)" if _advisory(i) else "")
              + f" | {cell(i.get('evidence'))} |" for i in items]
     for r in (record.get("stack") or {}).get("required") or []:
         path = ((record.get("stack") or {}).get("found") or {}).get(r["stack"])
@@ -731,7 +741,7 @@ def headline(record: Optional[Mapping[str, Any]]) -> str:
     if c.get(UNJUDGED):
         bits.append(f"{c[UNJUDGED]} not judged")
     if record.get("advisory"):
-        bits.append(f"{len(record['advisory'])} judgement (advisory)")
+        bits.append(f"{len(record['advisory'])} advisory (taste)")
     if record.get("items_not_judged"):
         bits.append(f"{record['items_not_judged']} not judged (over {MAX_PASSES} passes)")
     if (record.get("stack") or {}).get("missing"):
@@ -945,7 +955,8 @@ def card_words(card: Optional[Mapping[str, Any]], acceptance: Optional[Mapping[s
     if not acceptance or acceptance.get("verdict") not in ("met", "no_items"):
         why = headline(acceptance) if acceptance else "Must-haves: not checked"
         return f"Automated checks: CI {validation_status}; {why}"
-    return f"Automated checks: {validation_status}"
+    n = len((acceptance or {}).get("advisory") or [])
+    return f"Automated checks: {validation_status}" + (f", {n} advisory" if n else "")
 
 
 __all__ = [

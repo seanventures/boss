@@ -2503,8 +2503,10 @@ class SoftwareFactoryService:
                 **({_acceptance_gate.KEY: {
                     "verdict": acceptance.get("verdict"), "counts": acceptance.get("counts"),
                     "items": [{k: i.get(k) for k in ("n", "text", "status", "evidence",
-                                                     "source")}
+                                                     "source", "judgement")}
                               for i in acceptance.get("items") or []],
+                    # Judgement (taste) items answered PARTIAL: shown, never failing.
+                    "advisory": list(acceptance.get("advisory") or []),
                     "stack": acceptance.get("stack") or {},
                     "why": acceptance.get("why") or "",
                     "items_dropped": int(acceptance.get("items_dropped") or 0),

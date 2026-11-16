@@ -123,9 +123,17 @@ export function automatedChecksLine(r: Record<string, unknown>): string {
       : `${open} of ${items.length} must-haves not met`;
     return `Automated checks: ${vstatus ? `CI ${vstatus.replaceAll("_", " ")}; ` : ""}${why}.`;
   }
+  // Met, with judgement (taste) items answered partial: passed, and says how many are advisory.
+  const advisory = acc ? (mustHavesOf(r)?.items ?? []).filter(isAdvisory).length : 0;
   return vstatus
-    ? `Automated checks: ${vstatus.replaceAll("_", " ")}${vsummary ? `, ${vsummary}` : ""}.`
+    ? `Automated checks: ${vstatus.replaceAll("_", " ")}${advisory ? `, ${advisory} advisory` : ""}`
+      + `${vsummary ? `, ${vsummary}` : ""}.`
     : "";
+}
+
+/** A judgement (taste) must-have answered partial: shown, never failing (BOSSAPP-1233). */
+export function isAdvisory(i: MustHaveItem): boolean {
+  return i.judgement && i.status === "partial";
 }
 
 /**
@@ -133,7 +141,11 @@ export function automatedChecksLine(r: Record<string, unknown>): string {
  * check found for each must-have of the brief and the PRD's tested-and-gating list, on the whole
  * branch, with the files it cites. Missing first, so the card leads with what is not delivered.
  */
-export type MustHaveItem = { n: number; text: string; status: string; evidence: string };
+export type MustHaveItem = {
+  n: number; text: string; status: string; evidence: string;
+  /** A matter of taste, tagged when the acceptance contract was made: a partial is advisory. */
+  judgement: boolean;
+};
 export type MustHaveRecord = { verdict: string; items: MustHaveItem[]; why: string; dropped: number };
 
 export function mustHavesOf(recommendation: Record<string, unknown> | null | undefined
@@ -144,12 +156,14 @@ export function mustHavesOf(recommendation: Record<string, unknown> | null | und
   const items = (Array.isArray(r.items) ? r.items : [])
     .filter((i): i is Record<string, unknown> => !!i && typeof i === "object")
     .map((i) => ({ n: typeof i.n === "number" ? i.n : 0, text: str(i.text),
-                   status: str(i.status) || "unjudged", evidence: str(i.evidence) }))
+                   status: str(i.status) || "unjudged", evidence: str(i.evidence),
+                   judgement: i.judgement === true }))
     .filter((i) => i.text);
   const verdict = str(r.verdict);
   if (!items.length && verdict !== "not_checked" && verdict !== "not_run") return null;
   const rank: Record<string, number> = { missing: 0, partial: 1, unjudged: 2, met: 3 };
-  items.sort((a, b) => (rank[a.status] ?? 2) - (rank[b.status] ?? 2) || a.n - b.n);
+  const order = (i: MustHaveItem) => (isAdvisory(i) ? 2.5 : rank[i.status] ?? 2);
+  items.sort((a, b) => order(a) - order(b) || a.n - b.n);
   return { verdict, items, why: str(r.why),
            dropped: typeof r.items_dropped === "number" ? r.items_dropped : 0 };
 }
@@ -157,8 +171,9 @@ export function mustHavesOf(recommendation: Record<string, unknown> | null | und
 const WORD: Record<string, string> = { missing: "MISSING", partial: "PARTIAL", unjudged: "NOT JUDGED", met: "met" };
 
 export function MustHaves({ data }: { data: MustHaveRecord }) {
-  const count = (s: string) => data.items.filter((i) => i.status === s).length;
-  const open = data.items.length - count("met");
+  const advisory = data.items.filter(isAdvisory).length;
+  const count = (s: string) => data.items.filter((i) => i.status === s && !isAdvisory(i)).length;
+  const open = data.items.length - count("met") - advisory;
   if (!data.items.length) {
     return (
       <p className="dq-guidance" data-testid="decision-must-haves">
@@ -172,16 +187,17 @@ export function MustHaves({ data }: { data: MustHaveRecord }) {
       <summary>
         Must-haves: {count("met")} met, {count("partial")} partial, {count("missing")} missing
         {count("unjudged") ? `, ${count("unjudged")} not judged` : ""}
+        {advisory ? `, ${advisory} advisory (taste)` : ""}
         {data.dropped ? `, ${data.dropped} more not checked` : ""}
       </summary>
       <table className="v2-table">
         <thead><tr><th>#</th><th>Must-have</th><th>Status</th><th>Evidence</th></tr></thead>
         <tbody>
           {data.items.map((i) => (
-            <tr key={i.n} data-status={i.status}>
+            <tr key={i.n} data-status={i.status} data-judgement={i.judgement ? "true" : undefined}>
               <td>{i.n}</td>
-              <td>{i.text}</td>
-              <td><b>{WORD[i.status] ?? i.status}</b></td>
+              <td>{i.text}{i.judgement ? <span className="dq-muted" title="A matter of taste: never fails the check"> (taste)</span> : null}</td>
+              <td><b>{WORD[i.status] ?? i.status}</b>{isAdvisory(i) ? " — advisory (taste)" : ""}</td>
               <td className="v2-mono">{i.evidence}</td>
             </tr>
           ))}

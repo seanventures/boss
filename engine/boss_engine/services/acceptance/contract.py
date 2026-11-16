@@ -696,19 +696,66 @@ def ticket_prose(ticket: Optional[Mapping[str, Any]], *, ask: Any = None,
             "judgement_items": tags["judgement"], "loader_items": tags["needs_loader"]}
 
 
+# ---------------------------------------------------------------------------------------------
+# The safety floor under the reader's tags (a guard on a model's output, not the reasoning)
+# ---------------------------------------------------------------------------------------------
+
+#: An item that says any of these is checkable, so it is never a judgement call, whatever the
+#: reader tagged: a path or file extension, a backticked token, a digit, a URL / protocol /
+#: standard, an endpoint, or "must" / "at least" / "exit code".
+_CHECKABLE = re.compile(
+    r"`|\d|[\w\-]+/[\w.\-<>*]+|\.[A-Za-z][\w]{0,5}\b(?<!\.\s)"
+    r"|\b(?:https?|wss?|grpc|jwt|jwks|mtls|tls|ssl|oauth2?|oidc|saml|http|rest|cors|json|yaml"
+    r"|toml|xml|sql|openapi|get|post|put|patch|delete|head|options)\b"
+    r"|(?:^|\s)/[\w{<:\-]"
+    r"|\bmust\b|\bat\s+least\b|\bexit\s+codes?\b", re.I)
+#: A data file a program reads to decide what it does (a rulebook, a schema, rules/policy).
+_READ_FILE = re.compile(r"(?i)(?<![\w/.\-])([\w.\-]+(?:/[\w.\-]+)*\.(?:ya?ml|json))(?![\w/])")
+_READ_ROLE = re.compile(r"(?i)\bschema\b|\brule ?book\b|\brules\b|\bguidelines?\b|\bpolic(?:y|ies)\b")
+#: Files that ARE the deliverable, never read by the program itself.
+_DELIVERABLE_FILE = re.compile(r"(?i)(^|/)(docker-compose[^/]*|\.github/.*|examples?/.*|"
+                               r"[^/]*\.(?:good|bad|example|sample)\.[^/]+)$")
+
+
+def judgement_allowed(text: Any) -> bool:
+    """Whether an item MAY be a judgement call (the floor under the reader's `judgement`)."""
+    return not _CHECKABLE.search(str(text or ""))
+
+
+def needs_loader_floor(text: Any) -> bool:
+    """Whether an item names a .yaml/.yml/.json file the program must READ (a rulebook, a
+    schema, rules or a policy) — a MET on it must name its loader, whatever the reader said."""
+    words = str(text or "")
+    if not _READ_ROLE.search(words):
+        return False
+    return any(not _DELIVERABLE_FILE.search(m.group(1)) and "<" not in m.group(1)
+               for m in _READ_FILE.finditer(words.replace("`", " ")))
+
+
+def floor_tags(text: Any, tags: Mapping[str, Any], *, where: str = "") -> dict[str, bool]:
+    """The item's tags with the floor applied: `judgement` dropped on a checkable item (logged),
+    `needs_loader` added on an item naming a file the program must read."""
+    out = {t: True for t in ITEM_TAGS if tags.get(t)}
+    if out.get("judgement") and not judgement_allowed(text):
+        out.pop("judgement")
+        _log.info("acceptance contract%s: a judgement tag was dropped on a checkable item: %s",
+                  f" ({where})" if where else "", _norm(text)[:120])
+    if not out.get("needs_loader") and needs_loader_floor(text):
+        out["needs_loader"] = True
+    return out
+
+
 def _tagged(ticket_words: Iterable[str], prose: Mapping[str, Any]) -> list[dict[str, Any]]:
     """The ticket's items as source items, each with the tags the reader gave it at
-    extraction (judgement: advisory in the gate; needs_loader: a MET must name its loader)."""
+    extraction (judgement: advisory in the gate; needs_loader: a MET must name its loader),
+    under the floor (floor_tags)."""
     judgement = {_key(t) for t in prose.get("judgement_items") or []}
     loader = {_key(t) for t in prose.get("loader_items") or []}
     out = []
     for w in ticket_words:
-        it: dict[str, Any] = {"source": "ticket", "text": w}
-        if _key(w) in judgement:
-            it["judgement"] = True
-        if _key(w) in loader:
-            it["needs_loader"] = True
-        out.append(it)
+        tags = floor_tags(w, {"judgement": _key(w) in judgement,
+                              "needs_loader": _key(w) in loader}, where="extraction")
+        out.append({"source": "ticket", "text": w, **tags})
     return out
 
 

@@ -652,7 +652,8 @@ def test_judgement_and_loader_tags_are_set_at_extraction_and_reach_the_gate(eng,
         assert sum(1 for i in v["items"] if i.get("judgement")) == 1     # the stray one ignored
         gate = {i["text"]: i for i in ag.acceptance_items(spec)}
         assert gate[NAMING]["judgement"] and gate[rulebook[0]]["needs_loader"]
-        assert not gate[rulebook[1]].get("needs_loader")
+        # The floor adds it on the other rulebook item too (it names the rules YAML).
+        assert gate[rulebook[1]].get("needs_loader")
     finally:
         _cleanup_project(eng, project)
 

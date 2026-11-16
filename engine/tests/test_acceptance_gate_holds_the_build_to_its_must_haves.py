@@ -104,6 +104,10 @@ def _northgate_tree(root: Path, *, rulebook: bool, go_mod: bool = True) -> Path:
     if rulebook:
         files["config/api-guidelines.yaml"] = "rules:\n" + "".join(
             f"  - id: R{i}\n" for i in range(20))
+        # The rulebook is WIRED: gwlint's loader reads it (BOSSAPP-1233's floor asks for one).
+        files["internal/lint/rulebook.go"] = (
+            "package lint\n\nfunc LoadRulebook() ([]Rule, error) {\n"
+            "\treturn parse(\"config/api-guidelines.yaml\")\n}\n")
     for rel, body in files.items():
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -121,13 +125,15 @@ class TreeReadingReviewer:
         assert read_only, "the acceptance reviewer never edits"
         root = Path(cwd)
         lines = []
-        for n, text in re.findall(r"(?m)^ITEM (\d+) \[\w+\]: (.*)$", prompt):
+        for n, tags, text in re.findall(r"(?m)^ITEM (\d+) \[([^\]]+)\]: (.*)$", prompt):
             named = re.findall(r"[\w./<>-]+\.(?:ya?ml|go)\b", text)
             missing = [f for f in named if "<" not in f and not list(root.rglob(Path(f).name))]
             if missing:
                 lines.append(f"ITEM {n}: MISSING — looked for {', '.join(missing)}; not in the tree")
             else:
-                lines.append(f"ITEM {n}: MET — cmd/northgate/main.go, cmd/gwlint/main.go")
+                loader = ("; LOADED BY internal/lint/rulebook.go:LoadRulebook"
+                          if "must be loaded" in tags else "")
+                lines.append(f"ITEM {n}: MET — cmd/northgate/main.go, cmd/gwlint/main.go{loader}")
         verdict = "NOT MET" if any("MISSING" in ln for ln in lines) else "MET"
         return {"summary": "\n".join(lines) + f"\nACCEPTANCE: {verdict}", "cost_usd_micros": 0}
 
@@ -153,8 +159,9 @@ def _check(root: Path, spec: dict, reviewer, *, source=None) -> dict:
                     dropped=ag.items_dropped(spec))
 
 
-def _all_met(n: int, cite: str = "cmd/northgate/main.go") -> str:
-    return "\n".join(f"ITEM {i}: MET — {cite}" for i in range(1, n + 1)) + "\nACCEPTANCE: MET"
+def _all_met(n: int, cite: str = "cmd/northgate/main.go", loader: str = "") -> str:
+    return "\n".join(f"ITEM {i}: MET — {cite}" + (f"; LOADED BY {loader}" if loader else "")
+                     for i in range(1, n + 1)) + "\nACCEPTANCE: MET"
 
 
 # ── RCA-F: the brief is never cut mid-requirement ──────────────────────────────────────────
@@ -589,6 +596,11 @@ def _cleanup(eng, project):
         c.execute(text("DELETE FROM code_task_runs WHERE project_id = :p"), {"p": project})
 
 
+#: Both root items met; the rulebook item (2) names its loader, as the floor requires.
+ROOT_MET = ("ITEM 1: MET — cmd/northgate/main.go\nITEM 2: MET — cmd/gwlint/main.go; LOADED BY "
+            "internal/lint/rulebook.go:LoadRulebook\nACCEPTANCE: MET")
+
+
 def _rec(reply: str, root: Path, n: int = 2) -> dict:
     return ag.judge(ag.acceptance_items(_northgate_spec())[:n], reply, {}, root=root)
 
@@ -627,14 +639,14 @@ def test_a_clean_follow_up_on_a_pr_whose_parent_shipped_failing_is_never_passed(
         assert ag.card_words(card, acceptance, "passed").startswith("Automated checks: failing")
 
         # A follow-up's met against its OWN items clears nothing.
-        _o = _rec(_all_met(2), tree)
+        _o = _rec(ROOT_MET, tree)
         own_met = {**_o, "source": {**_o["source"], "run_id": follow, "root": False}}
         with eng.begin() as c:
             card1, _ = ag.merge_card_checks(c, run_id=follow, evidence={ag.KEY: own_met},
                                             checks_failing=None, pr_url=PR)
         assert ag.GATE in cf.gate_names(card1)
         # Met against the ROOT's items clears acceptance; the refuted review does not clear.
-        _m = _rec(_all_met(2), tree)
+        _m = _rec(ROOT_MET, tree)
         root_met = {**_m, "source": {**_m["source"], "run_id": root, "root": True}}
         assert root_met["verdict"] == "met"
         with eng.begin() as c:
@@ -809,8 +821,10 @@ def test_judgement_is_the_contracts_tag_never_the_reviewers(tmp_path):
     rec = ag.judge([naming, go], "ITEM 1: PARTIAL — a few long names in a.go\n"
                    "ITEM 2: MET — a.go\nACCEPTANCE: MET\n", {}, root=tmp_path)
     assert rec["verdict"] == "met" and rec["advisory"] == [1] and rec["partial"] == []
-    assert "(judgement, advisory)" in ag.must_have_table(rec)
-    assert "1 judgement (advisory)" in ag.headline(rec)
+    assert "PARTIAL — advisory (taste)" in ag.must_have_table(rec)
+    assert "Plain, concise naming. _(taste)_" in ag.must_have_table(rec)
+    assert "1 advisory (taste)" in ag.headline(rec)
+    assert ag.card_words(None, rec, "passed") == "Automated checks: passed, 1 advisory"
     assert "MAJOR" not in ag.findings_summary(rec)
     rec = ag.judge([naming, go], "ITEM 1: MISSING — none\nITEM 2: MET — a.go\n"
                    "ACCEPTANCE: MET\n", {}, root=tmp_path)
@@ -860,10 +874,15 @@ def test_an_item_that_needs_a_loader_is_partial_without_one(tmp_path):
     got = ag.parse_acceptance("ITEM 1: MET — rules/api-guidelines.yaml (24 rules), "
                               "internal/lint/lint.go\n", items, root=tmp_path)[0]
     assert got["status"] == "partial" and "loader not named" in got["evidence"]
-    # The same answer on an item not tagged at extraction stands on its evidence.
+    # The floor holds even when the reader did not tag it: the item names a rules YAML.
     plain = [{**items[0], "needs_loader": False}]
     assert ag.parse_acceptance("ITEM 1: MET — rules/api-guidelines.yaml, internal/lint/lint.go\n",
-                               plain, root=tmp_path)[0]["status"] == "met"
+                               plain, root=tmp_path)[0]["status"] == "partial"
+    # An item naming a file that IS the deliverable stands on its evidence.
+    (tmp_path / "docker-compose.yml").write_text("services: {}\n")
+    compose = [{"n": 1, "text": "Provide `docker-compose.yml` for both", "source": "ticket"}]
+    assert ag.parse_acceptance("ITEM 1: MET — docker-compose.yml\n", compose,
+                               root=tmp_path)[0]["status"] == "met"
     assert "must be loaded" in ag.acceptance_prompt(items, title="t", stack={}, tree="")
 
 
@@ -877,3 +896,78 @@ def test_reviewer_passes_are_capped_and_the_rest_is_never_met(tmp_path):
     assert rec["verdict"] == "not_met" and rec["items_not_judged"] == 7 and not ag.passed(rec)
     assert "7 items not judged" in ag.must_have_table(rec)
     assert "7 not judged" in ag.headline(rec)
+
+
+def test_the_kan9_repro_a_reader_tagging_real_requirements_judgement_never_passes(tmp_path):
+    """THE REVIEWER'S REPRO (final check of #143): the reader tagged the JWKS item and both
+    "At least 20 rules" items `judgement`; PARTIAL answers on them read as advisory and the card
+    said passed. The floor drops `judgement` on any checkable item, so the verdict is not met."""
+    from boss_engine.services.acceptance import contract as ac
+
+    from ._acceptance_fixtures import load_northgate_v1
+
+    ng = load_northgate_v1()
+    words = ac.ticket_items(ng.ticket())
+    jwks = next(w for w in words if "JWKS URL with caching" in w)
+    rulebook = [w for w in words if "At least 20 rules:" in w]
+    tagged = ac._tagged(words, {"judgement_items": [jwks, *rulebook], "loader_items": []})
+    items = [{"n": k, **t} for k, t in enumerate(tagged, start=1)]
+    assert not any(i.get("judgement") for i in items if i["text"] in [jwks, *rulebook])
+    # The floor ADDS needs_loader on the rulebook items (they name a rules YAML).
+    assert all(i.get("needs_loader") for i in items if i["text"] in rulebook)
+    (tmp_path / "main.go").write_text("package main\n")
+    bad = {i["n"] for i in items if i["text"] in [jwks, *rulebook]}
+    reply = "\n".join(f"ITEM {i['n']}: " + ("PARTIAL — HS256 shared secret; 5 hard-coded checks"
+                                            if i["n"] in bad else "MET — main.go")
+                      for i in items) + "\nACCEPTANCE: NOT MET\n"
+    rec = ag.judge(items, reply, {}, root=tmp_path)
+    assert rec["verdict"] == "not_met" and sorted(rec["partial"]) == sorted(bad)
+    assert rec["advisory"] == [] and not ag.passed(rec)
+    assert not ag.card_words(None, rec, "passed").startswith("Automated checks: passed")
+    # Even a contract stored before the floor (tags set on the item itself) is floored here.
+    stored = [{**i, "judgement": True} if i["n"] in bad else i for i in items]
+    assert ag.judge(stored, reply, {}, root=tmp_path)["verdict"] == "not_met"
+
+
+@pytest.mark.parametrize("text,allowed", [
+    ("Plain, concise naming. Someone at the customer will read this code.", True),
+    ("Clear, readable error messages.", True),
+    ("Clean, idiomatic Go; `go vet` and `go test ./...` clean.", False),          # backticks
+    ("JWT/OAuth2 with JWKS caching", False),                                        # standard
+    ("Rate limits answer 429", False),                                              # a digit
+    ("Serve the report at /v1/usage", False),                                       # endpoint
+    ("The response must be readable", False),                                       # must
+    ("At least twenty rules", False),                                               # at least
+    ("Returns the right exit code", False),                                         # exit code
+    ("Readable config.yaml", False),                                                # a file
+])
+def test_the_judgement_floor(text, allowed):
+    from boss_engine.services.acceptance import contract as ac
+
+    assert ac.judgement_allowed(text) is allowed
+
+
+@pytest.mark.parametrize("text,needs", [
+    ("**A rulebook, in YAML:** `rules/api-guidelines.yaml`. At least 20 rules:", True),
+    ("Validate every tenant file against `schema/tenant.schema.json`", True),
+    ("Provide `docker-compose.yml` for both environments", False),
+    ("`examples/`: `lumen-pay.good.yaml`, `lumen-pay.bad.yaml`", False),
+    ("CI runs gwlint via `.github/workflows/lint.yml` using the rules", False),
+    ("**JSON Schema** for `tenants/<tenant>.yaml`", False),              # a placeholder path
+])
+def test_the_needs_loader_floor(text, needs):
+    from boss_engine.services.acceptance import contract as ac
+
+    assert ac.needs_loader_floor(text) is needs
+
+
+def test_a_not_met_summary_over_advisory_items_only_is_met(tmp_path):
+    (tmp_path / "a.go").write_text("package a\n")
+    items = [{"n": 1, "text": "Plain, concise naming.", "source": "ticket", "judgement": True},
+             {"n": 2, "text": "Written in Go", "source": "ticket"}]
+    rec = ag.judge(items, "ITEM 1: PARTIAL — long names\nITEM 2: MET — a.go\n"
+                   "ACCEPTANCE: NOT MET\n", {}, root=tmp_path)
+    assert rec["verdict"] == "met" and rec["advisory"] == [1]
+    # A NOT MET with nothing advisory and everything met is still the reviewer's slip.
+    rec = ag.judge(items[1:], "ITEM 2: MET — a.go\nACCEPTANCE: NOT MET\n", {}, root=tmp_path)
+    assert rec["verdict"] == "not_run"
