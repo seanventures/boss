@@ -15,6 +15,21 @@ import { notifyChanged } from "../changed";
 import { showToast } from "../client-forms";
 import { waiveChecksAction } from "./floor-actions";
 
+/** Visible reason a check cannot be waived. Nothing when it can, or the reason is blank. */
+export function waiveBlockSentence(waivable: boolean, reason: string | null | undefined): string | null {
+  if (waivable) return null;
+  const trimmed = reason?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+function BlockedWhy({ g }: { g: FailingGate }) {
+  const sentence = waiveBlockSentence(g.waivable, g.reason);
+  if (!sentence) return null;
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  const Tag = long ? "p" : "span";
+  return <Tag data-testid={`fx-waive-why-${g.name}`} data-user-text>{sentence}</Tag>;
+}
+
 export type WaiveSheetProps = {
   runId: string;
   app: string;
@@ -91,6 +106,7 @@ export function WaiveSheet({ runId, app, failing, projectId, actor, onClose, onD
                        return n;
                      })} />
               <span>{g.label}</span>
+              <BlockedWhy g={g} />
             </label>
           ))}
         </fieldset>

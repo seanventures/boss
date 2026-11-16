@@ -29,6 +29,12 @@ import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 const ROWS_MAX = 5;
 
+/** Visible configured model. Blank is nothing. A sentence over six words is a paragraph. */
+export function configuredModelSentence(model: string | null | undefined): string | null {
+  const trimmed = model?.trim() ?? "";
+  return trimmed ? `Configured: ${trimmed}.` : null;
+}
+
 export function OrgAgentPanel({ board, live, roleKey, days, actions, onClose }: {
   board: OrgBoard; live: LiveMap; roleKey: string; days: OrgDays; actions: OrgActions | null;
   onClose: () => void;
@@ -47,6 +53,8 @@ export function OrgAgentPanel({ board, live, roleKey, days, actions, onClose }: 
     && Math.max(...team.membersLoad.map((m) => m.busySeconds)) === agent.busySeconds;
   const teamKeys = [...new Set([...TEAM_ORDER, ...board.teams.map((t) => t.key)])];
   const w = agent?.work;
+  const configured = agent ? configuredModelSentence(agent.configuredModel) : null;
+  const configuredLong = !!configured && configured.split(/\s+/).filter(Boolean).length > 6;
 
   return (
     <Drawer label={`${name}, ${team ? teamLabel(team.key, board) : ""}`} testid="ag-org-agent" onClose={onClose}>
@@ -112,6 +120,9 @@ export function OrgAgentPanel({ board, live, roleKey, days, actions, onClose }: 
                   {agent.models.slice(0, 2).map((m) => `${m.model} ${m.calls}`).join(", ")}
                 </span>
               ) : null}
+              {board.totals.spendOk && agent.models.length && configured
+                ? (configuredLong ? <p>{configured}</p> : <span>{configured}</span>)
+                : null}
               {!(w && (w.done || w.failed)) && !agent.busySeconds && !agent.spend.meteredUsd && !agent.spend.planCalls
                 ? <span className="ag-muted">No work in {windowWords(days)}</span> : null}
             </dd>

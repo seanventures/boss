@@ -279,6 +279,21 @@ export function healthChipText(healthWord: string, p95: string): string {
   return p95 ? `${healthWord} · ${p95}` : healthWord;
 }
 
+/** The project's health reason. A trimmed reason, or nothing when blank. */
+export function healthReasonSentence(reason: string | null | undefined): string | null {
+  const trimmed = reason?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** Beside the health chip. More than six words is a paragraph. */
+export function HealthWhy({ sentence }: { sentence: string | null }) {
+  if (!sentence) return null;
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  return long
+    ? <p data-testid="px-head-health-why" data-user-text>{sentence}</p>
+    : <span data-testid="px-head-health-why" data-user-text>{sentence}</span>;
+}
+
 function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
   const p = ctx.overview.project;
   const repo = p.repos[0];
@@ -345,6 +360,7 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
                      staging?.uptime_pct != null ? `${staging.label || "Staging"} ${staging.uptime_pct}% up` : "",
                      p95Words(staging?.p95_ms, staging?.window)].filter(Boolean).join(" · ") + " — opens Health"}>
             <span className="px-dot" data-s={health} data-round aria-hidden />{healthChipText(p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "No health yet", p95Words(staging?.p95_ms, staging?.window))}</a>
+          <HealthWhy sentence={healthReasonSentence(healthWhy)} />
           <span className="px-tag" data-tone={onboarding ? "blue" : "green"} data-testid="px-head-status" title="Project stage on the journey">{onboarding ? <><Compass size={11} aria-hidden /> Onboarding</>
             : <>{(() => { const I = STAGE_ICON[p.stage] ?? Compass; return <I size={11} aria-hidden />; })()} {p.status_label || "Ready"}</>}</span>
           {onboarding && elapsed ? <span className="px-mono px-faint" style={{ fontSize: "var(--fs-meta)" }} data-testid="px-head-elapsed">{clockWords(elapsed)}</span> : null}

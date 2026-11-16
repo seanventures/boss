@@ -47,6 +47,27 @@ export function envP95SourceSentence(source: string | null | undefined): string 
   return null;
 }
 
+/** How many projects share this server. Said beside the host link only when more than one does. */
+export function hostShareSentence(count: number | null | undefined): string | null {
+  if (typeof count !== "number" || !(count > 1)) return null;
+  return `Shared by ${count} projects.`;
+}
+
+/** Why this environment's health is what it is. A blank reason is nothing. */
+export function deployHealthReasonSentence(reason: string | null | undefined): string | null {
+  const trimmed = reason?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** Beside the health tag. More than six words is a paragraph; six or fewer is a span. */
+export function DeployHealthWhy({ sentence, envKey }: { sentence: string | null; envKey: string }) {
+  if (!sentence) return null;
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  return long
+    ? <p data-testid={`px-env-health-why-${envKey}`} data-user-text>{sentence}</p>
+    : <span data-testid={`px-env-health-why-${envKey}`} data-user-text>{sentence}</span>;
+}
+
 /** "14:00" in the viewer's zone. */
 const hourLocal = (iso: string) => { try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { return iso; } };
 
@@ -215,6 +236,7 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
   const host = e.host_name || e.host;
   const url = e.url ? (/^https?:/.test(e.url) ? e.url : `http://${e.url}`) : "";
   const p95From = envP95SourceSentence(e.p95_source);
+  const sharedBy = hostShareSentence(e.host_projects);
   return (
     <section className="px-card px-env" aria-labelledby={`px-env-${e.key}`} data-testid={`px-env-${e.key}`}>
       <div className="px-card-h"><Ico icon={Flask} c="green" />
@@ -228,7 +250,10 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
             <span data-testid={`px-env-state-${e.key}`}>{e.deploy.word}</span></Tag>
         ) : null}
         {!e.deploy || e.deploy.live ? (
-          <Tag tone={HEALTH_TONE[e.health]} title={e.health_reason || undefined}><span className="px-dot" data-s={e.health} data-round aria-hidden />{HEALTH_WORD[e.health]}</Tag>
+          <>
+            <Tag tone={HEALTH_TONE[e.health]} title={e.health_reason || undefined}><span className="px-dot" data-s={e.health} data-round aria-hidden />{HEALTH_WORD[e.health]}</Tag>
+            <DeployHealthWhy sentence={deployHealthReasonSentence(e.health_reason)} envKey={e.key} />
+          </>
         ) : null}
         <span className="px-spacer" />
         {e.target_id && e.last_deploy ? (
@@ -287,9 +312,12 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
         <span className="px-spacer" />
         {e.last_deploy?.href ? <PxLink href={e.last_deploy.href} testid={`px-env-logs-${e.key}`} title="This deploy and its log, in Infra"><TerminalWindow size={11} aria-hidden /> Logs</PxLink> : null}
         {host ? (
-          <PxLink href={e.host_href || `?area=infra&view=fleet&q=${encodeURIComponent(e.host)}`} testid={`px-env-host-${e.key}`}
-                  title={`${e.host} — opens this server in Infra${e.host_projects && e.host_projects > 1 ? ` (shared by ${e.host_projects} projects)` : ""}`}>
-            <HardDrives size={11} aria-hidden /> runs on {host} ↗</PxLink>
+          <>
+            <PxLink href={e.host_href || `?area=infra&view=fleet&q=${encodeURIComponent(e.host)}`} testid={`px-env-host-${e.key}`}
+                    title={`${e.host} — opens this server in Infra${e.host_projects && e.host_projects > 1 ? ` (shared by ${e.host_projects} projects)` : ""}`}>
+              <HardDrives size={11} aria-hidden /> runs on {host} ↗</PxLink>
+            {sharedBy ? <span className="px-faint">{sharedBy}</span> : null}
+          </>
         ) : null}
       </div>
       <Said text={said.text} tone={said.ok ? "green" : "red"} />

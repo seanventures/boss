@@ -11268,7 +11268,7 @@ CREATE TABLE IF NOT EXISTS work_item_links (
   work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
   kind TEXT NOT NULL CHECK (kind IN ('signal', 'workflow_run', 'code_task', 'decision', 'act',
                                      'incident', 'meeting', 'pull_request', 'reservation',
-                                     'alert', 'recommendation')),
+                                     'alert', 'recommendation', 'finding')),
   ref TEXT NOT NULL,
   project_id TEXT NOT NULL,
   note TEXT,
@@ -15552,6 +15552,133 @@ CREATE TABLE IF NOT EXISTS acceptance_contracts (
 CREATE INDEX IF NOT EXISTS idx_acceptance_contracts_lineage
   ON acceptance_contracts (lineage_root_run_id, version DESC);
 -- ================================ end AA-A ==
+
+-- ================================ AA-B / AA-E: checks, findings ledger, command record ==
+-- (BOSSAPP-1216, BOSSAPP-1219, epic BOSSAPP-1213; boss-acceptance-agent-lld.md §2, §4.2, §5)
+-- ACCEPTANCE_CHECKS: one acceptance check — the in-build seat (layer 'build_gate', static) or
+-- the Acceptance Agent (layer 'step', exercise/environment). `commands` is the session's command
+-- record (every command it ran: id, cmd, exit, trimmed output, duration) and `probes` the
+-- replayable probes distilled from it, so a re-check replays them first with no model call.
+-- `contract_id` is NULL only when the lineage has no stored contract (the check still counts).
+CREATE TABLE IF NOT EXISTS acceptance_checks (
+  id                   TEXT PRIMARY KEY,
+  project_id           TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  contract_id          TEXT REFERENCES acceptance_contracts(id) ON DELETE SET NULL,
+  lineage_root_run_id  TEXT NOT NULL,
+  code_task_run_id     TEXT,
+  workflow_run_id      TEXT,
+  step_id              TEXT,
+  layer                TEXT NOT NULL CHECK (layer IN ('build_gate', 'step')),
+  mode                 TEXT NOT NULL CHECK (mode IN ('static', 'exercise', 'environment')),
+  head_sha             TEXT,
+  pr_url               TEXT,
+  verdict              TEXT NOT NULL CHECK (verdict IN ('met', 'not_met', 'not_run', 'no_items')),
+  why                  TEXT NOT NULL DEFAULT '',
+  counts               JSONB NOT NULL DEFAULT '{}'::jsonb,
+  items                JSONB NOT NULL DEFAULT '[]'::jsonb,
+  probes               JSONB NOT NULL DEFAULT '[]'::jsonb,
+  commands             JSONB NOT NULL DEFAULT '[]'::jsonb,
+  exec_log_artifact_id TEXT,
+  previous_check_id    TEXT REFERENCES acceptance_checks(id) ON DELETE SET NULL,
+  diff                 JSONB NOT NULL DEFAULT '{}'::jsonb,
+  engine               TEXT,
+  model                TEXT,
+  cost_usd_micros      BIGINT NOT NULL DEFAULT 0,
+  duration_ms          BIGINT NOT NULL DEFAULT 0,
+  budget               JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_acceptance_checks_lineage
+  ON acceptance_checks (project_id, lineage_root_run_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_acceptance_checks_pr
+  ON acceptance_checks (project_id, pr_url, created_at DESC);
+
+-- FINDINGS: the ledger — one row per real problem in a build lineage, whoever found it (an
+-- acceptance gap, a reviewer's finding of any severity, advisory or not). Deduplicated by a live
+-- fingerprint (`ac:<contract item id>`, `rv:<sha1(path, title)>`); a later check that PROVES it
+-- fixed sets `fixed` + `resolved_check_id`; seen open again it reopens (`reopened_count`).
+-- `number` is the row's human key F-<number> within the project. Each row owns a work item
+-- (`work_item_id`, subject_type 'finding') under the lineage's work item.
+CREATE TABLE IF NOT EXISTS findings (
+  id                  TEXT PRIMARY KEY,
+  project_id          TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  number              INT NOT NULL,
+  lineage_root_run_id TEXT NOT NULL,
+  contract_id         TEXT,
+  contract_item_id    TEXT,
+  kind                TEXT NOT NULL CHECK (kind IN ('acceptance_gap', 'review', 'security',
+                                                    'consistency', 'readiness', 'pipeline')),
+  severity            TEXT NOT NULL CHECK (severity IN ('blocker', 'major', 'minor', 'nit')),
+  fingerprint         TEXT NOT NULL,
+  title               TEXT NOT NULL,
+  body                TEXT NOT NULL DEFAULT '',
+  evidence            JSONB NOT NULL DEFAULT '[]'::jsonb,
+  verify_with         JSONB NOT NULL DEFAULT '[]'::jsonb,
+  path                TEXT,
+  line                INT,
+  status              TEXT NOT NULL DEFAULT 'open'
+                      CHECK (status IN ('open', 'in_progress', 'fixed', 'waived', 'wont_fix',
+                                        'duplicate')),
+  duplicate_of        TEXT REFERENCES findings(id) ON DELETE SET NULL,
+  first_seen_check_id TEXT,
+  first_seen_run_id   TEXT,
+  last_seen_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  seen_count          INT NOT NULL DEFAULT 1,
+  resolved_check_id   TEXT,
+  reopened_count      INT NOT NULL DEFAULT 0,
+  work_item_id        TEXT REFERENCES work_items(id) ON DELETE SET NULL,
+  followup_run_id     TEXT,
+  held_at             TIMESTAMPTZ,
+  pr_url              TEXT,
+  waived_by           TEXT,
+  waive_reason        TEXT,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, number)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_live_fingerprint
+  ON findings (project_id, lineage_root_run_id, fingerprint)
+  WHERE status IN ('open', 'in_progress');
+CREATE INDEX IF NOT EXISTS ix_findings_lineage
+  ON findings (project_id, lineage_root_run_id, status);
+CREATE INDEX IF NOT EXISTS ix_findings_followup ON findings (followup_run_id)
+  WHERE followup_run_id IS NOT NULL;
+
+-- FINDING_OBSERVATIONS: every time a seat or step saw a row (open) or proved it fixed. `digest`
+-- makes a re-recorded observation (the same run, stage and evidence) a no-op.
+CREATE TABLE IF NOT EXISTS finding_observations (
+  id          BIGSERIAL PRIMARY KEY,
+  finding_id  TEXT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+  check_id    TEXT,
+  run_id      TEXT,
+  stage       TEXT NOT NULL,
+  status_seen TEXT NOT NULL CHECK (status_seen IN ('open', 'fixed')),
+  evidence    JSONB NOT NULL DEFAULT '[]'::jsonb,
+  digest      TEXT NOT NULL DEFAULT '',
+  at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_finding_observations_finding
+  ON finding_observations (finding_id, at DESC);
+
+-- A lineage's work item links each of its findings (work_item_links.kind 'finding').
+DO $aa_b_links$
+DECLARE
+  def TEXT;
+  kinds TEXT[];
+BEGIN
+  -- Extend whatever kinds the live constraint holds (never a fixed list that could drop one).
+  SELECT pg_get_constraintdef(oid) INTO def FROM pg_constraint
+   WHERE conname = 'work_item_links_kind_check' AND conrelid = 'work_item_links'::regclass;
+  IF def IS NOT NULL AND def NOT LIKE '%''finding''%' THEN
+    SELECT array_agg(m[1]) INTO kinds FROM regexp_matches(def, '''([a-z_]+)''', 'g') AS m;
+    ALTER TABLE work_item_links DROP CONSTRAINT work_item_links_kind_check;
+    EXECUTE format('ALTER TABLE work_item_links ADD CONSTRAINT work_item_links_kind_check '
+                   'CHECK (kind IN (%s))',
+                   (SELECT string_agg(quote_literal(k), ', ')
+                      FROM unnest(kinds || ARRAY['finding']) AS k));
+  END IF;
+END $aa_b_links$;
+-- ================================ end AA-B / AA-E ==
 
 -- BOSSAPP-1231: a project mapping used to copy the home connection's token into the mapping
 -- row (its own secret_refs row and the vault ciphertext in secret_material). Reads resolve

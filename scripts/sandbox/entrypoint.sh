@@ -135,8 +135,41 @@ PY
   fence_ipv6 || return 1
 }
 
+# THE SEALED SUB-POOL (the Acceptance Agent's sandbox, sandbox_identity.SEALED_BASE..): the top
+# 100 pool uids get their own chain AHEAD of the pool's, LOOPBACK ONLY — not the BOSS API on the
+# compose network, not boss-egress or its CONNECT proxy, not Docker's DNS (127.0.0.11, a way out
+# by name), not any app preview. The API refuses a sealed sandbox without .network-sealed.
+SEALED_RANGE="$(( ${UID_RANGE%%-*} + 900 ))-${UID_RANGE##*-}"
+seal_network() {
+  iptables -N BOSS_SEALED 2>/dev/null || iptables -F BOSS_SEALED || return 1
+  iptables -D OUTPUT -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED 2>/dev/null || true
+  iptables -A BOSS_SEALED -d 127.0.0.11/32 -j REJECT || return 1
+  iptables -A BOSS_SEALED -p tcp --dport "$PREVIEW_PORTS" -j REJECT || return 1
+  # BOSS's own service ports (the API, egress, link ports) even on loopback.
+  iptables -A BOSS_SEALED -p tcp -m multiport --dports "$PORTS" -j REJECT || return 1
+  # The link gateway's ports (one per cross-app link): never from the acceptance sandbox.
+  iptables -A BOSS_SEALED -p tcp --dport "$LINK_PORTS" -j REJECT || return 1
+  iptables -A BOSS_SEALED -o lo -d 127.0.0.0/8 -j ACCEPT || return 1
+  iptables -A BOSS_SEALED -j REJECT || return 1
+  iptables -I OUTPUT 1 -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED || return 1
+  iptables -C BOSS_SEALED -p tcp --dport "$LINK_PORTS" -j REJECT || return 1
+  iptables -C BOSS_SEALED -j REJECT || return 1
+  iptables -C OUTPUT -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED || return 1
+  if ! ipv6_unavailable; then
+    ip6tables -N BOSS_SEALED 2>/dev/null || ip6tables -F BOSS_SEALED || return 1
+    ip6tables -D OUTPUT -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED 2>/dev/null || true
+    ip6tables -A BOSS_SEALED -p tcp --dport "$PREVIEW_PORTS" -j REJECT || return 1
+    ip6tables -A BOSS_SEALED -p tcp -m multiport --dports "$PORTS" -j REJECT || return 1
+    ip6tables -A BOSS_SEALED -p tcp --dport "$LINK_PORTS" -j REJECT || return 1
+    ip6tables -A BOSS_SEALED -o lo -d ::1/128 -j ACCEPT || return 1
+    ip6tables -A BOSS_SEALED -j REJECT || return 1
+    ip6tables -I OUTPUT 1 -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED || return 1
+    ip6tables -C OUTPUT -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED || return 1
+  fi
+}
+
 mkdir -p "$SHIM_ROOT"
-rm -f "$SHIM_ROOT/.network-fenced" "$SHIM_ROOT/.network-unfenced"
+rm -f "$SHIM_ROOT/.network-fenced" "$SHIM_ROOT/.network-unfenced" "$SHIM_ROOT/.network-sealed"
 case "$MODE" in
   off) echo "boss: BOSS_SANDBOX_NETWORK=off — sandboxed builds can reach this container's networks" >&2 ;;
   *)
@@ -162,6 +195,15 @@ case "$MODE" in
     : > "$SHIM_ROOT/.network-fenced"
     chown root:root "$SHIM_ROOT/.network-fenced"
     chmod 0444 "$SHIM_ROOT/.network-fenced"
+    # The Acceptance Agent's loopback-only sandbox: refused (never unsealed) without this marker.
+    if seal_network; then
+      : > "$SHIM_ROOT/.network-sealed"
+      chown root:root "$SHIM_ROOT/.network-sealed"
+      chmod 0444 "$SHIM_ROOT/.network-sealed"
+    else
+      echo "boss: the sealed (loopback-only) acceptance sandbox rules could not be installed;" >&2
+      echo "boss: acceptance checks that run commands are refused until they are." >&2
+    fi
     fi ;;
 esac
 

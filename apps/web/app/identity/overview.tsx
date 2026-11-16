@@ -87,6 +87,19 @@ export function agentRestSentence(count: number): string | null {
   return `12 agents are on this page. ${count - 12} more are not.`;
 }
 
+/** The access role's description, trimmed. Blank is nothing. */
+export function roleDescriptionSentence(description: string | null | undefined): string | null {
+  const trimmed = description?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** On the people-by-access-role row. More than six words is a paragraph. */
+export function RoleDescription({ id, sentence }: { id: string; sentence: string | null }) {
+  if (!sentence) return null;
+  const Tag = sentence.split(/\s+/).filter(Boolean).length > 6 ? "p" : "span";
+  return <Tag data-testid={`overview-role-desc-${id}`} data-user-text>{sentence}</Tag>;
+}
+
 export function Overview({ posture, people, roles, groups, serviceAccounts, agents, events, failures = {} }: {
   posture: Posture | null; people: Person[] | null; roles: AccessRole[] | null; groups: Group[] | null;
   serviceAccounts: ServiceAccount[] | null; agents: Passport[] | null; events: AuditEvent[] | null;
@@ -147,6 +160,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
                     <RoleChip roleKey={role.key} name={role.name} />
                     <span className="idn-stack">{holders.slice(0, 3).map((p) => <Face key={p.id} name={p.display_name} tone={p.hue} size={22} />)}</span>
                     <span className="idn-cnt">{holders.length}</span>
+                    <RoleDescription id={role.id} sentence={roleDescriptionSentence(role.description)} />
                   </a>
                 ))}
               </div>

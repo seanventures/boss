@@ -167,14 +167,28 @@ function Frame({ frame, members, children }: {
   );
 }
 
+/** The route's description, when it says more than the title. Blank, or a repeat of the title, is nothing. */
+export function routeDescriptionSentence(title: string, description: string | null | undefined): string | null {
+  const text = description?.trim() ?? "";
+  if (!text || text === title.trim()) return null;
+  return text;
+}
+
 /** A condition on the flow: what it routes on, and where each answer goes ("A new incident? ·
  *  Yes: Evidence loop, No: Attached to an open incident, stop"). Never an empty box. */
-function Route({ stage }: { stage: PipelineStage }) {
+export function Route({ stage }: { stage: PipelineStage }) {
+  const sentence = routeDescriptionSentence(stage.title, stage.description);
+  const long = !!sentence && sentence.split(/\s+/).filter(Boolean).length > 6;
   return (
     <div className="pl-route" data-testid={`route-${stage.id}`} title={stage.description}
          aria-label={`Condition: ${stage.description}`}>
       <span className="pl-route-icon" aria-hidden>◇</span>
       <span className="pl-route-title">{stage.title}</span>
+      {sentence
+        ? (long
+          ? <p data-testid={`route-desc-${stage.id}`} data-user-text>{sentence}</p>
+          : <span data-testid={`route-desc-${stage.id}`} data-user-text>{sentence}</span>)
+        : null}
       {stage.frameNote ? <span className="pl-route-note">{stage.frameNote}</span> : null}
     </div>
   );
