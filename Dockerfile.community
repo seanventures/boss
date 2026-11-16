@@ -259,10 +259,10 @@ RUN mkdir -p /var/lib/boss/recovery && chmod 0755 /var/lib/boss/recovery
 # SCHEDULED SELF-BACKUPS (BOSSAPP-838, services/backup_scheduler.py): pg_dump/pg_restore of the
 # SAME major version as BOSS's Postgres 16 (Debian bookworm ships 15, which refuses a 16 server),
 # from the PostgreSQL project's apt repository; and the backups volume's mount point, boss-owned.
-RUN curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/keyrings/pgdg.asc \
+RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/keyrings/pgdg.asc \
     && echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
        > /etc/apt/sources.list.d/pgdg.list \
-    && apt-get update \
+    && apt-get -o Acquire::Retries=5 update \
     && apt-get install -y --no-install-recommends postgresql-client-16 \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /var/lib/boss/backups && chown boss:boss /var/lib/boss/backups \
