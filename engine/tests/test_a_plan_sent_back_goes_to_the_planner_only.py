@@ -176,3 +176,22 @@ def test_the_change_note_is_kept_on_the_run(eng, project):  # noqa: F811
             c.execute(text("DELETE FROM jobs WHERE project_id=:p"), {"p": project})
             c.execute(text("DELETE FROM code_task_runs WHERE project_id=:p"), {"p": project})
             c.execute(text("DELETE FROM project_members WHERE project_id=:p"), {"p": project})
+
+
+# ── (d) a MEDIUM from the security seat is a required, security-flagged item ───────────────
+
+SEC_MEDIUM = ("Fix ONLY these:\n"
+              "- [MEDIUM] (security_check) internal/proxy/handler.go (`applyCORS`) — reflects any "
+              "Origin with credentials\n"
+              "- [MEDIUM] (review_code) internal/proxy/handler.go (`logAccess`) — noisy log\n")
+
+
+def test_a_security_seat_medium_is_required_and_flagged():
+    items = pc.brief_items(SEC_MEDIUM, [])
+    assert [(i.severity, i.security, i.symbols) for i in items] == [
+        ("MEDIUM", True, ["applyCORS"])]        # the review seat's MEDIUM stays optional
+    cov = pc.check({"plan": "Only fix the request id in handler.go (`proxy`)."},
+                   instructions=SEC_MEDIUM, criteria=[], decider=None)
+    assert not cov.ok and cov.missing[0]["security"] is True
+    code, _why = ad.hard_limit(None, _plan_card(cov.missing))
+    assert code == "governance_never_delegated"

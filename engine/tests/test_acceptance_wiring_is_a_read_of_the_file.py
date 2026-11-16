@@ -83,8 +83,8 @@ def test_reading_the_file_holds_however_it_is_read(tmp_path):
         assert v.wiring_problem(root, why, item_text=ITEM, needs_loader=True) is None, body
     # Through a function the cited file calls (docs.go → rules.Load, AR-23 item 25).
     root = _tree(tmp_path / "hop", {**PROBE,
-        "internal/lint/lint.go": "package lint\n\nfunc Check() error { rs, _ := rules.Load(); "
-                                 "return use(rs) }\n",
+        "internal/lint/lint.go": "package lint\n\nimport \"northgate/rules\"\n\n"
+                                 "func Check() error { rs, _ := rules.Load(); return use(rs) }\n",
         "rules/loader.go": "package rules\n\n//go:embed naming.yaml\nvar raw []byte\n\n"
                            "func Load() ([]Rule, error) { return parse(raw) }\n"})
     assert v.wiring_problem(root, why, item_text=ITEM, needs_loader=True) is None
@@ -149,3 +149,47 @@ def test_a_string_holding_a_comment_marker_keeps_the_code_after_it(tmp_path):
     root = _tree(tmp_path, {"internal/web/client.go": (
         "package web\n\nvar base = \"http://example.test\"; func Fetch() {}\n")})
     assert v.evidence_paths(root, "`web.Fetch`") == (["internal/web/client.go"], [])
+
+
+# ── the one hop is from the cited symbol's body, through an import or a type (re-review) ──
+
+LOADER = {"rules/loader.go": "package rules\n\n//go:embed naming.yaml\nvar raw []byte\n\n"
+                             "func Load() ([]Rule, error) { return parse(raw) }\n"}
+
+
+def test_a_dead_function_beside_the_cited_one_is_not_followed(tmp_path):
+    root = _tree(tmp_path, {**PROBE, **LOADER, "internal/lint/lint.go": (
+        "package lint\n\nimport \"northgate/rules\"\n\n"
+        "func Check(path string) error {\n\treturn nil\n}\n\n"
+        "func unusedDebug() {\n\trules.Load()\n}\n")})
+    why = "`rules/naming.yaml`; read by `internal/lint/lint.go:Check`."
+    assert "loader not named" in v.wiring_problem(root, why, item_text=ITEM, needs_loader=True)
+    # The same call inside the cited function is the loader, one hop away.
+    (root / "internal/lint/lint.go").write_text(
+        "package lint\n\nimport \"northgate/rules\"\n\n"
+        "func Check(path string) error {\n\t_, err := rules.Load()\n\treturn err\n}\n",
+        encoding="utf-8")
+    assert v.wiring_problem(root, why, item_text=ITEM, needs_loader=True) is None
+
+
+def test_a_local_variable_is_never_a_package(tmp_path):
+    root = _tree(tmp_path, {**PROBE, "internal/lint/lint.go": (
+        "package lint\n\nfunc Check(path string) error {\n\tl := newLinter()\n"
+        "\treturn l.Load()\n}\n"), "internal/zrules/loader.go": (
+        "package zrules\n\nfunc Load() error {\n\tl := 1\n\t_ = l\n"
+        "\t_, err := os.ReadFile(\"rules/naming.yaml\")\n\treturn err\n}\n")})
+    defs = v._Definitions(root)
+    assert defs.symbol_file("l.Load") is None
+    assert defs.symbol_file("zrules.Load") == "internal/zrules/loader.go"
+    why = "`rules/naming.yaml`; read by `internal/lint/lint.go:Check`."
+    assert "loader not named" in v.wiring_problem(root, why, item_text=ITEM, needs_loader=True)
+
+
+def test_a_method_on_a_type_is_followed(tmp_path):
+    root = _tree(tmp_path, {**PROBE, "internal/lint/lint.go": (
+        "package lint\n\nfunc Check(path string) error {\n\treturn Rulebook.Read(path)\n}\n"),
+        "internal/lint/rulebook.go": (
+        "package lint\n\ntype Rulebook struct{}\n\nfunc (Rulebook) Read(p string) error {\n"
+        "\t_, err := os.ReadFile(\"rules/naming.yaml\")\n\treturn err\n}\n")})
+    why = "`rules/naming.yaml`; read by `internal/lint/lint.go:Check`."
+    assert v.wiring_problem(root, why, item_text=ITEM, needs_loader=True) is None

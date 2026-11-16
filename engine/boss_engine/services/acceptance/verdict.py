@@ -454,38 +454,145 @@ class _Definitions:
             if _TEST_PATH.search(rel) or not _defines(bare, name):
                 continue
             path = Path(rel)
-            if any(q in {*path.parts[:-1], path.stem} or _defines(bare, q) for q in quals):
+            # The qualifier is a package (a path part or the file's stem) or a TYPE the file
+            # defines — never a variable: `l.Load` with a local `l` is not `zrules.Load`.
+            if any(q in {*path.parts[:-1], path.stem} or _defines_type(bare, q) for q in quals):
                 return rel
         return None
 
-    def loader_of(self, data: list[str], among: Iterable[str]) -> Optional[str]:
+    def loader_of(self, data: list[str], among: Iterable[str],
+                  cited: Optional[Mapping[str, Iterable[str]]] = None) -> Optional[str]:
         """The file that READS one of the data files (`_reads`), looked for only where the
-        evidence points: a cited code file, a file defining a symbol the evidence cites (both
-        already in `among`), or a file defining a qualified function one of those calls
-        (`rules.Load()` called from the cited docs.go). Never any file in the tree that merely
-        mentions the data file or its folder (AR-23 review). None when there is none."""
+        evidence points: a cited code file, or a file defining a symbol the evidence cites (both
+        already in `among`) — or ONE HOP from the body of a symbol the evidence cites
+        (`cited`: {file: [symbol]}): a qualified call in that body (`rules.Load()` in the cited
+        `docs.go:RenderReadme`) whose qualifier is an import of that file or a type, never a
+        local variable or parameter. A call elsewhere in the cited file (a dead `unusedDebug()`)
+        is not followed (AR-23 re-review). Never any file in the tree that merely mentions the
+        data file or its folder. None when there is none."""
         cands = [r for r in dict.fromkeys(among) if _CODE_FILE.search(r)
                  and not _TEST_PATH.search(r)]
         hops: list[str] = []
         for rel in cands:
-            code, _ = self.of(rel)
+            code, bare = self.of(rel)
             if code is None:
                 continue
             if any(d != rel and _reads(code, d, rel) for d in data):
                 return rel
-            for m in list(_CALL.finditer(code))[:40]:
-                hit = self.symbol_file(f"{m.group(1)}.{m.group(2)}")
-                if hit and hit not in cands and hit not in hops:
-                    hops.append(hit)
+            imported = _import_names(code, rel)
+            for symbol in (cited or {}).get(rel) or ():
+                body = _body_of(code, bare, symbol, rel)
+                for m in list(_CALL.finditer(body))[:40]:
+                    qual = m.group(1)
+                    if qual not in imported and not self.is_type(qual):
+                        continue
+                    hit = self.symbol_file(f"{qual}.{m.group(2)}")
+                    if hit and hit != rel and hit not in hops:
+                        hops.append(hit)
         for rel in hops:
             code, _ = self.of(rel)
             if code is not None and any(d != rel and _reads(code, d, rel) for d in data):
                 return rel
         return None
 
+    def is_type(self, name: str) -> bool:
+        """Whether a non-test file of the tree defines `name` as a type (class, struct, …)."""
+        self.code()
+        return any(not _TEST_PATH.search(rel) and _defines_type(bare, name)
+                   for rel, bare in self._bare.items())
+
+
+def _defines_type(code: str, name: str) -> bool:
+    """Whether `code` defines `name` as a TYPE: a class, struct, interface, enum, trait,
+    object or record (Go `type Name struct`, Python/Java/TS `class Name`)."""
+    e = re.escape(name)
+    return re.search(r"\b(?:class|struct|interface|enum|trait|object|record|type)\s+" + e
+                     + r"\b", code) is not None
+
+
+def _import_names(code: str, path: str = "") -> set[str]:
+    """The names a file's imports bind as qualifiers: a Go import's alias or package name (its
+    last path element, `gopkg.in/yaml.v3` → `yaml`), Python's `import a` / `import a as b` /
+    `from p import a`, and JS/TS `import x from` / `import * as x` / `const x = require(…)`."""
+    names: set[str] = set()
+    ext = _ext(path)
+    if ext == "go":
+        blocks = re.findall(r"(?ms)^\s*import\s*\((.*?)\)", code)
+        singles = re.findall(r"(?m)^\s*import\s+((?:[A-Za-z_]\w*\s+)?\"[^\"]+\")", code)
+        for spec in [ln for blk in blocks for ln in blk.splitlines()] + singles:
+            m = re.match(r"\s*(?:([A-Za-z_]\w*)\s+)?\"([^\"]+)\"", spec)
+            if not m:
+                continue
+            last = m.group(2).rstrip("/").rsplit("/", 1)[-1]
+            last = re.sub(r"\.v\d+$", "", last)
+            if re.fullmatch(r"v\d+", last) and "/" in m.group(2):
+                last = m.group(2).rstrip("/").rsplit("/", 2)[-2]
+            names.add(m.group(1) or re.sub(r"[^\w]", "_", last))
+        return names
+    for m in re.finditer(r"(?m)^\s*import\s+([\w.]+)(?:\s+as\s+(\w+))?", code):
+        names.add(m.group(2) or m.group(1).split(".")[0])
+    for m in re.finditer(r"(?m)^\s*from\s+[\w.]+\s+import\s+([^\n(]+)", code):
+        for part in m.group(1).split(","):
+            bits = part.split()
+            if bits:
+                names.add(bits[-1] if "as" in bits else bits[0])
+    for m in re.finditer(r"\bimport\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\b", code):
+        names.add(m.group(1))
+    for m in re.finditer(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(", code):
+        names.add(m.group(1))
+    return names
+
+
+def _body_of(code: str, bare: str, symbol: str, path: str = "") -> str:
+    """The code of `symbol`'s definition (its body), or "" when the file does not define it:
+    braces counted in the string-free code for brace languages, the indented block for Python.
+    Line numbers are the same in `code` and `bare` (`_lex` keeps every line break)."""
+    lines, bare_lines = code.splitlines(), bare.splitlines()
+    e = re.escape(symbol)
+    head = re.compile(
+        r"\b(?:func|def|function|fn|fun|sub)\s+(?:\([^)]*\)\s*)?\*?" + e + r"\b"
+        r"|^\s*(?:export\s+)?(?:(?:public|private|protected|static|final|async|override)\s+)*"
+        r"(?:[\w<>\[\],.?]+\s+)?" + e + r"\s*\([^;{]*\)\s*(?:\{|:|throws\b|->)"
+        r"|\b(?:const|let|var)\s+" + e + r"\s*=")
+    start = next((i for i, ln in enumerate(bare_lines) if head.search(ln)), None)
+    if start is None:
+        return ""
+    if _ext(path) in ("py", "pyi"):
+        indent = len(bare_lines[start]) - len(bare_lines[start].lstrip())
+        end = start + 1
+        while end < len(bare_lines) and (not bare_lines[end].strip() or (
+                len(bare_lines[end]) - len(bare_lines[end].lstrip()) > indent)):
+            end += 1
+        return "\n".join(lines[start:end])
+    depth, opened = 0, False
+    for i in range(start, len(bare_lines)):
+        for ch in bare_lines[i]:
+            if ch == "{":
+                depth, opened = depth + 1, True
+            elif ch == "}":
+                depth -= 1
+        if opened and depth <= 0:
+            return "\n".join(lines[start:i + 1])
+    return "\n".join(lines[start:])
+
 
 #: A qualified call in code (`rules.Load(`, `loader.read_rules(`).
 _CALL = re.compile(r"\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\(")
+
+
+def _cited_symbols(root: Path, why: str, defs: _Definitions) -> dict[str, list[str]]:
+    """{file: [symbols]} the evidence cites: each `file:Symbol` (`docs.go:RenderReadme`), and
+    each qualified name resolved to the file defining it (`auth.VerifyJWT`)."""
+    out: dict[str, list[str]] = {}
+    for m in _FILE_SYMBOL.finditer(str(why or "")):
+        hit = _resolve(root, m.group(1))
+        if hit:
+            out.setdefault(hit, []).append(m.group(2).split(".")[-1])
+    for m in _QUALIFIED.finditer(str(why or "")):
+        hit = defs.symbol_file(m.group(1))
+        if hit:
+            out.setdefault(hit, []).append(m.group(1).split(".")[-1])
+    return {k: list(dict.fromkeys(v)) for k, v in out.items()}
 
 
 def _named_loader(root: Path, why: str, data: list[str],
@@ -553,7 +660,8 @@ def wiring_problem(root: Any, why: str, *, item_text: str = "",
         # reads it. Neither: the loader is not named.
         found, _absent = evidence_paths(root, why, defs=defs)
         data = _item_data_files(root, item_text, found)
-        if _named_loader(root, why, data, defs) or (data and defs.loader_of(data, found)):
+        if _named_loader(root, why, data, defs) or (
+                data and defs.loader_of(data, found, _cited_symbols(root, why, defs))):
             return None
         return "loader not named: this item's file must be read by the code (LOADED BY)"
     found, _absent = evidence_paths(root, why, defs=defs) if claims else ([], [])

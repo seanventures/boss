@@ -96,7 +96,8 @@ GO_TREE = {
     "internal/validate/jsonschema.go": "package validate\n\nfunc Against(schema, doc []byte) error { return nil }\n",
     "internal/metrics/metrics.go": ("package metrics\n\ntype Registry struct{}\n\n"
                                     "func (r *Registry) Render() string { return \"\" }\n"),
-    "internal/lint/docs.go": ("package lint\n\n// RenderReadme writes the rulebook table into the README.\n"
+    "internal/lint/docs.go": ("package lint\n\nimport \"northgate/rules\"\n\n"
+                              "// RenderReadme writes the rulebook table into the README.\n"
                               "func RenderReadme(readme string) error { rs, _ := rules.Load(); "
                               "return write(readme, rs) }\n"),
     "internal/lint/engine.go": ("package lint\n\nfunc Validate(path string) []Violation { return nil }\n\n"

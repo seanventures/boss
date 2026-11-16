@@ -166,8 +166,20 @@ def _split_security(sev: str, text: str) -> list[tuple[str, str]]:
     return out
 
 
-def _required(block_sev: str, sev: str) -> bool:
-    if block_sev == "SECURITY":
+#: The seat that raised a finding, as BOSS writes it at the head of the finding.
+_SECURITY_SEAT = re.compile(r"^\s*\(security_check\)", re.I)
+
+
+def _security_block(block_sev: str, text: str) -> bool:
+    """A finding the security seat raised: a `[SECURITY]` block, or any bullet whose finding
+    starts `(security_check)` (`- [MEDIUM] (security_check) …`)."""
+    return block_sev == "SECURITY" or bool(_SECURITY_SEAT.match(text or ""))
+
+
+def _required(block_sev: str, sev: str, security: bool = False) -> bool:
+    """A SECURITY MEDIUM IS REQUIRED (AMEX, AR-24 review): any finding of the security seat at
+    MEDIUM or above, whether it came in a `[SECURITY]` block or as its own bullet."""
+    if block_sev == "SECURITY" or security:
         return sev in _SECURITY_REQUIRED
     return sev in _REQUIRED or block_sev in _REQUIRED and sev not in {
         "LOW", "ADVISORY", "INFO", "NIT", "MINOR"}
@@ -180,14 +192,15 @@ def brief_items(instructions: str, criteria: Any = None) -> list[BriefItem]:
     finding_keys: list[str] = []
     for block_sev, text in _findings(instructions):
         finding_keys.append(_norm(text)[:60])
+        security = _security_block(block_sev, text)
         for sev, part in _split_security(block_sev, text):
-            if not _required(block_sev, sev):
+            part_security = security or sev == "SECURITY" or bool(_SECURITY_SEAT.match(part))
+            if not _required(block_sev, sev, part_security):
                 continue
             files, symbols = _anchors(part)
             items.append(BriefItem(_item_id(sev, part), sev if sev != "SECURITY" else block_sev,
                                    part.strip(), "finding", files, symbols,
-                                   security=(block_sev == "SECURITY" or sev == "SECURITY"
-                                             or "(security_check)" in part[:40])))
+                                   security=part_security))
     for crit in criteria or []:
         crit = str(crit or "").strip()
         if not crit:
