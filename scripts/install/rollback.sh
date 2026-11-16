@@ -114,9 +114,29 @@ fi
 export BOSS_COMMUNITY_IMAGE_TAG="$TAG"
 COMPOSE=("${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE")
 RUNNING="$("${COMPOSE[@]}" --profile web --profile secrets --profile mail ps --status running --services 2>/dev/null || true)"
+# The test Postgres (db-test, label kind=test) holds no BOSS data: a rollback never stops or
+# recreates it, so agents' bench-DB test runs are not killed mid-suite (BOSSAPP-1335).
+TEST_SERVICES="$(printf 'db-test\n'; "${COMPOSE[@]}" --profile dev config --format json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    services = json.load(sys.stdin).get("services") or {}
+except ValueError:
+    services = {}
+for name, svc in services.items():
+    labels = svc.get("labels") or {}
+    if isinstance(labels, list):
+        labels = dict(item.split("=", 1) for item in labels if "=" in item)
+    if labels.get("kind") == "test":
+        print(name)
+' 2>/dev/null || true)"
 SERVICES=()
 while IFS= read -r service; do
-  [[ -z "$service" || "$service" == db ]] || SERVICES+=("$service")
+  [[ -z "$service" || "$service" == db ]] && continue
+  if [[ $'\n'"$TEST_SERVICES"$'\n' == *$'\n'"$service"$'\n'* ]]; then
+    echo "Left the test Postgres ($service) running: a rollback does not touch it." >&2
+    continue
+  fi
+  SERVICES+=("$service")
 done <<<"$RUNNING"
 [[ ${#SERVICES[@]} -gt 0 ]] || SERVICES=(api worker)
 
