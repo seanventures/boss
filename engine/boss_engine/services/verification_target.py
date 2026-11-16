@@ -1294,8 +1294,8 @@ def app_scope(spec: dict[str, Any] | None, finalize_ctx: dict[str, Any] | None) 
     """THE app directory a build's tests belong to: the pinned benchmark app, else the folder its
     brief names. None: the whole repository is the app (a single-app repo).
 
-    A FOLLOW-UP HAS NO BRIEF. Its instructions are the findings it was sent to fix, and a finding
-    quotes folders as evidence: "there is no `schema/` directory at all" made the checks-failing
+    A FINDINGS FOLLOW-UP HAS NO BRIEF. Its instructions are the findings it was sent to fix, and a
+    finding quotes folders as evidence: "there is no `schema/` directory at all" made the checks-failing
     follow-up crun_8abe60c6 of northgate-gateway (a Go module at the repository root) verify,
     gate and judge acceptance inside `schema/` — `go vet` found no packages and all 30 must-haves
     read "missing" (BOSSAPP-1307). A follow-up builds on its lineage's app, which BOSS recorded
@@ -1310,10 +1310,12 @@ def app_scope(spec: dict[str, Any] | None, finalize_ctx: dict[str, Any] | None) 
 
 
 def is_continuation_of_findings(finalize_ctx: dict[str, Any] | None) -> bool:
-    """Is this run a follow-up (checks failing, deferred findings, an operator's follow-up) or an
-    attempt of one, whose instructions are findings rather than the app's brief?"""
+    """Is this run a FINDINGS follow-up (checks failing, deferred review findings — BOSS wrote
+    its instructions from a review), or a retry of one? Its instructions are findings, not the
+    app's brief. An OPERATOR's follow-up (start_followup_task: "Add an admin dashboard in
+    `apps/admin/`") is a brief in its own right, and the folder it names stands."""
     fctx = finalize_ctx or {}
-    return bool(fctx.get("is_followup") or fctx.get("deferred_from_run"))
+    return bool(fctx.get("instructions_are_findings") or fctx.get("deferred_from_run"))
 
 
 def in_app_scope(path: str, scope: str | None) -> bool:

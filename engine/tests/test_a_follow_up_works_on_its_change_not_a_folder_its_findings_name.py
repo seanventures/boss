@@ -63,11 +63,35 @@ def test_the_premise_a_finding_reads_like_a_brief_naming_a_folder():
 
 def test_a_follow_ups_findings_never_name_its_app_folder():
     assert vt.app_scope({"instructions": FINDINGS}, FOLLOWUP) is None
-    # A retry of a follow-up is still a follow-up (code_task_service carries is_followup).
+    # A retry of a findings follow-up carries the mark (code_task_service.retry_code_task).
     assert vt.app_scope({"instructions": FINDINGS},
-                        {"is_followup": True, "parent_run_id": "crun_x"}) is None
+                        {"is_followup": True, "parent_run_id": "crun_x",
+                         "instructions_are_findings": True}) is None
     # A pinned app is named by BOSS, not by the text: it still wins on a follow-up.
     assert vt.app_scope({"instructions": FINDINGS, "app_root": "bench-app"}, FOLLOWUP) == "bench-app"
+
+
+def test_an_operators_follow_up_is_a_brief_and_keeps_the_folder_it_names():
+    """start_followup_task: a person asking for a change writes a brief, not findings."""
+    ask = "Add an admin dashboard in the `apps/admin/` folder."
+    operator = {"root_run_id": "crun_a", "parent_run_id": "crun_a", "is_followup": True,
+                "requested_by": "operator", "app_id": "app_x"}
+    assert vt.app_scope({"instructions": ask}, operator) == "apps/admin"
+    # ...and a retry of it (is_followup carried, no findings mark) still does.
+    assert vt.app_scope({"instructions": ask},
+                        {"is_followup": True, "parent_run_id": "crun_b"}) == "apps/admin"
+
+
+def test_the_findings_mark_is_set_by_the_spawner_and_carried_by_every_retry():
+    import inspect
+
+    from boss_engine.services import code_task_service as cts
+
+    assert '"instructions_are_findings": True' in inspect.getsource(
+        governed._spawn_deferred_findings_task)
+    retry = inspect.getsource(cts.retry_code_task)
+    assert '"instructions_are_findings": True' in retry
+    assert 'fctx_prev.get("deferred_from_run")' in retry
 
 
 def test_a_brief_that_names_its_folder_still_scopes_a_fresh_build_and_its_retry():
@@ -243,3 +267,4 @@ def test_a_checks_failing_follow_up_keeps_its_parents_app_id(full_schema, reques
     assert row["title"].startswith("Follow-up: checks failing")
     assert row["finalize_ctx"]["app_id"] == "app_115e2fc26700a93031af"
     assert row["finalize_ctx"]["is_followup"] is True
+    assert row["finalize_ctx"]["instructions_are_findings"] is True

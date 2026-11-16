@@ -1016,6 +1016,22 @@ def repair_lost_the_work(expected: list[str], root: Path, *,
             "Retry starts from the work the build kept, or builds it in full when none was kept.")
 
 
+def _app_kind_of(root: Any, verify_cwd: Optional[str]) -> Optional[dict]:
+    """{"kind", "why"} for the app the build verified (its verify folder, else the checkout),
+    from its tree; None when the tree cannot be read."""
+    try:
+        from .preview_service import app_tree_kind
+
+        where = Path(root)
+        if verify_cwd and verify_cwd != "." and not Path(str(verify_cwd)).is_absolute():
+            where = where / str(verify_cwd)
+        kind, why = app_tree_kind(where if where.is_dir() else Path(root))
+        return {"kind": kind, "why": why[:300]}
+    except Exception:  # noqa: BLE001 — unknown is never a service
+        _log_caught(logger)
+        return None
+
+
 def workspace_missing_the_change(expected: list[str], root: Path, *,
                                  scope: Optional[str] = None, branch: str = "") -> Optional[str]:
     """A HARNESS VERDICT BEFORE ANY AGENT RUNS: this continuation (a follow-up, a repair, a fix
@@ -3580,6 +3596,9 @@ def _spawn_deferred_findings_task(
                           "root_run_id": parent_root or parent_run_id,
                           "parent_run_id": parent_run_id,
                           "app_id": _app_identity,
+                          # Its instructions are findings, never a brief naming a folder
+                          # (verification_target.app_scope; carried by every retry).
+                          "instructions_are_findings": True,
                           # WHERE THE APP CAME FROM IS A PROPERTY OF THE APP.
                           #
                           # `retry_code_task` already carries `origin` forward; a follow-up is
@@ -6237,7 +6256,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _gate_plan0 = verification_target.resolve_gate_plan(
                     spec, title, root, app_id=_app_id, changed=list(_seeded_paths),
                     pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app,
-            finalize_ctx=fctx)
+                    finalize_ctx=fctx)
         # A CONTINUATION STARTS FROM ITS CHANGE (workspace_missing_the_change): a follow-up,
         # repair or fix round cloned from the branch holding its change (or seeded with it) must
         # find that change's files in its tree — and inside the app folder it will verify — or
@@ -6548,7 +6567,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 plan = verification_target.resolve_gate_plan(
                     spec, title, root, app_id=_app_id, changed=_changed_paths(),
                     pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app,
-            finalize_ctx=fctx)
+                    finalize_ctx=fctx)
                 if plan.runs_steps or plan.source != "default" or plan.error:
                     return []
                 wanted = [c for c in plan.commands
@@ -6587,7 +6606,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             plan = verification_target.resolve_gate_plan(
                 spec, title, root, app_id=_app_id, changed=_changed_paths(),
                 pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app,
-            finalize_ctx=fctx)
+                finalize_ctx=fctx)
             if plan.runs_steps:
                 return None
             app_cwd, prep, _note = _prepare_app(plan, plan.cwd)
@@ -6675,7 +6694,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             plan = verification_target.resolve_gate_plan(
                 spec, title, root, app_id=_app_id, changed=_changed_paths(),
                 pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app,
-            finalize_ctx=fctx)
+                finalize_ctx=fctx)
             # The tree turned into a stack this install cannot gate (an agent wrote a go.mod
             # while Go is off): a person's to fix, so no further repair round runs on it.
             _halt_if_needs_person(plan)
@@ -9254,6 +9273,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # What the repository already declares about how its apps run (a boss.deploy.yaml
             # the build did not write): preview and deploy read it (app_manifest).
             "repo_manifests": _deploy_manifests_in(root),
+            # WHAT THE APP IS, from its own tree (preview_service.app_tree_kind): a service or
+            # library's failed workflow Preview is skipped, never an app's (BOSSAPP-1308).
+            "app_kind": _app_kind_of(root, last_verify_cwd),
             "test_command": test_cmd, "test_exit_code": official_test_exit,
             "verify_cwd": last_verify_cwd,
             "last_verify_output": official_verify_output or last_verify_output,
