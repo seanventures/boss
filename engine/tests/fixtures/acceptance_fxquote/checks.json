@@ -1,0 +1,1100 @@
+{
+ "items": [
+  {
+   "n": 1,
+   "id": "AC-1",
+   "text": "A quote applies the pair's spread and rounds half-even to minor units."
+  },
+  {
+   "n": 2,
+   "id": "AC-2",
+   "text": "A missing pair is derived through USD; a currency with no USD rate returns 400."
+  },
+  {
+   "n": 3,
+   "id": "AC-3",
+   "text": "An expired quote id returns 410 on `GET /quote/{id}`."
+  },
+  {
+   "n": 4,
+   "id": "AC-4",
+   "text": "`go test ./...` covers rounding, spread and cross rates."
+  },
+  {
+   "n": 5,
+   "id": "AC-5",
+   "text": "Stack: Go. (one Go module, standard library only)"
+  },
+  {
+   "n": 6,
+   "id": "AC-6",
+   "text": "Load mid-market rates for currency pairs from a YAML file at start (e.g. USD/EUR, USD/GBP, EUR/GBP).",
+   "needs_loader": true
+  },
+  {
+   "n": 7,
+   "id": "AC-7",
+   "text": "`GET /quote?from=USD&to=EUR&amount=10000` returns the converted amount in minor units with a configurable spread (basis points per pair), the rate used and a quote id valid for 30 seconds."
+  },
+  {
+   "n": 8,
+   "id": "AC-8",
+   "text": "Cross rates: if a pair is missing, derive it through USD."
+  },
+  {
+   "n": 9,
+   "id": "AC-9",
+   "text": "Unknown currency or a non-positive amount returns 400 with a reason."
+  },
+  {
+   "n": 10,
+   "id": "AC-10",
+   "text": "A quote correctly applies the pair's configured spread and rounds half-even to minor units."
+  },
+  {
+   "n": 11,
+   "id": "AC-11",
+   "text": "A missing pair is derived through USD; a currency with no USD rate returns `400 no_usd_rate`."
+  },
+  {
+   "n": 12,
+   "id": "AC-12",
+   "text": "Unknown currency or a non-positive/malformed amount returns `400` with a fixed `reason`, rejected before any conversion math runs (explicit test, including int-boundary and `-0` cases)."
+  },
+  {
+   "n": 13,
+   "id": "AC-13",
+   "text": "`GET /quote/{id}` for an unknown/never-issued ID returns `404`; for an expired (>30s old) ID returns `410`."
+  },
+  {
+   "n": 14,
+   "id": "AC-14",
+   "text": "Quote IDs are generated via `crypto/rand` and verified free of collisions/predictability at 10k scale."
+  },
+  {
+   "n": 15,
+   "id": "AC-15",
+   "text": "`/healthz` and `/readyz` behave correctly, with readiness failing loudly at startup on bad config (wrong pair count, unreachable currency, invalid spread)."
+  },
+  {
+   "n": 16,
+   "id": "AC-16",
+   "text": "`go test ./...` passes and covers: rounding, spread, cross-rates, validation order, ID generation, and the 404-vs-410 boundary."
+  },
+  {
+   "n": 17,
+   "id": "AC-17",
+   "text": "Sign-off artifacts are **both** present: a README with curl examples (happy path, a cross-rate case, all three 400 reasons, 404, 410) **and** a passing deploy-time smoke check — neither substitutes for the other."
+  },
+  {
+   "n": 18,
+   "id": "AC-18",
+   "text": "Error responses never leak internal state (file paths, Go error chains, raw internal rate values) — verified by inspection of all 400/404/410 response bodies."
+  },
+  {
+   "n": 19,
+   "id": "AC-19",
+   "text": "Single pinned dependency (`gopkg.in/yaml.v3`) confirmed via `go.sum`; no other third-party runtime dependency present."
+  }
+ ],
+ "checks": {
+  "acc_6fcccb2198e14fae8dad": {
+   "run": "crun_7b9be79d310c499b8e3a",
+   "recorded_head": "7b9886df1d46d765a15eb315b20f39179dffa791",
+   "tree": "b409779",
+   "answers": [
+    {
+     "n": 1,
+     "said": "MET",
+     "evidence": "fxquote.go:handleQuote (lines 294–301) applies `spreadBps` from the resolved pair and rounds with `math.RoundToEven`; verified by fxquote_test.go:TestP1_SpreadAppliedAndRoundedHalfEven (9054 expected/actual).",
+     "recorded": "met"
+    },
+    {
+     "n": 2,
+     "said": "MET",
+     "evidence": "fxquote.go:rateTable.resolve (derives via usdRateOf when direct/inverse pair absent) and returns `no_usd_rate` when a leg has no USD rate; fxquote_test.go:TestP1_CrossRateDerivedViaUSD and TestP1_NoUSDRateReturns400.",
+     "recorded": "met"
+    },
+    {
+     "n": 3,
+     "said": "MET",
+     "evidence": "fxquote.go:handleQuoteByID returns `http.StatusGone` (410) when `time.Now().After(sq.expiresAt)`; fxquote_test.go:TestP1_ExpiredQuoteIDReturns410.",
+     "recorded": "met"
+    },
+    {
+     "n": 4,
+     "said": "MET",
+     "evidence": "fxquote_test.go covers rounding (TestP1_SpreadAppliedAndRoundedHalfEven), spread (same test), and cross rates (TestP1_CrossRateDerivedViaUSD); `go test ./...` passes (verified by running it).",
+     "recorded": "met"
+    },
+    {
+     "n": 5,
+     "said": "MET",
+     "evidence": "go.mod declares `module fxquote`, single module; only runtime dependency is `gopkg.in/yaml.v3` (go.mod, go.sum); stdlib used elsewhere (net/http, crypto/rand, etc).",
+     "recorded": "partial",
+     "recorded_reason": "only manifests/lockfiles cited"
+    },
+    {
+     "n": 6,
+     "said": "MET",
+     "evidence": "rates.yaml holds `pairs:` (USD/EUR, USD/GBP) — LOADED BY fxquote.go:loadRateTable, which calls `os.ReadFile(cfgPath)`/`yaml.Unmarshal` and is invoked from cmd/fxquote/main.go:main with `cfgPath = \"rates.yaml\"` (or `FXQUOTE_CONFIG`) at process start.",
+     "recorded": "partial",
+     "recorded_reason": "fxquote.go does not name rates.yaml in code that reads it"
+    },
+    {
+     "n": 7,
+     "said": "MET",
+     "evidence": "fxquote.go:handleQuote returns `amount_out` (minor units), per-pair `spread_bps` from rates.yaml, `rate` used, and `id`; TTL fixed at 30s via cmd/fxquote/main.go:main (`fxquote.NewServer(cfgPath, 30*time.Second)`); fxquote_test.go:TestP0_ServerStartsAndServesQuote.",
+     "recorded": "met"
+    },
+    {
+     "n": 8,
+     "said": "MET",
+     "evidence": "same as ITEM 2, fxquote.go:rateTable.resolve derives through `usdRateOf` when the direct pair is missing.",
+     "recorded": "met"
+    },
+    {
+     "n": 9,
+     "said": "MET",
+     "evidence": "fxquote.go:handleQuote checks `isKnown` → `unknown_currency`, then `ParseInt`/`<=0` → `malformed_amount`/`non_positive_amount`, all with 400; fxquote_test.go:TestP1_UnknownCurrencyReturns400, TestP1_NonPositiveAmountReturns400.",
+     "recorded": "met"
+    },
+    {
+     "n": 10,
+     "said": "MET",
+     "evidence": "same evidence as ITEM 1.",
+     "recorded": "partial",
+     "recorded_reason": "no file evidence cited"
+    },
+    {
+     "n": 11,
+     "said": "MET",
+     "evidence": "same evidence as ITEM 2; reason string `no_usd_rate` confirmed in fxquote.go:rateTable.resolve and asserted in fxquote_test.go:TestP1_NoUSDRateReturns400.",
+     "recorded": "met"
+    },
+    {
+     "n": 12,
+     "said": "MET",
+     "evidence": "fxquote.go:handleQuote validates currency/amount before calling `rates.resolve` (no math runs first); fxquote_test.go:TestP1_NonPositiveAmountReturns400 explicitly covers `amount=0`, `amount=-1`, `amount=-0`, `amount=notanumber`.",
+     "recorded": "met"
+    },
+    {
+     "n": 13,
+     "said": "MET",
+     "evidence": "fxquote.go:handleQuoteByID returns 404 when id not found in `quotes.get`, 410 when expired; fxquote_test.go:TestP1_UnknownQuoteIDReturns404 and TestP1_ExpiredQuoteIDReturns410.",
+     "recorded": "met"
+    },
+    {
+     "n": 14,
+     "said": "MET",
+     "evidence": "fxquote.go:newQuoteID uses `crypto/rand.Read` into a 16-byte buffer, hex-encoded; fxquote_test.go:TestP1_QuoteIDsAreUniqueAtScale issues 10,000 quotes and asserts no duplicate/empty IDs.",
+     "recorded": "met"
+    },
+    {
+     "n": 15,
+     "said": "MET",
+     "evidence": "fxquote.go:loadRateTable rejects empty pair sets, malformed pair keys, non-positive rates, negative spreads, and configs with no USD-reachable currency, causing `NewServer`/`main` to fail at startup (cmd/fxquote/main.go:main calls `log.Fatalf` on error) rather than ever reaching readiness; handleHealthz/handleReadyz return 200 once up; fxquote_test.go:TestP1_ReadyzFailsOnBadConfig and TestP1_HealthzAndReadyzOK.",
+     "recorded": "met"
+    },
+    {
+     "n": 16,
+     "said": "MET",
+     "evidence": "fxquote_test.go collectively covers rounding/spread (TestP1_SpreadAppliedAndRoundedHalfEven), cross-rates (TestP1_CrossRateDerivedViaUSD), validation ordering (TestP1_UnknownCurrencyReturns400/TestP1_NonPositiveAmountReturns400), ID generation (TestP1_QuoteIDsAreUniqueAtScale), and 404-vs-410 (TestP1_UnknownQuoteIDReturns404/TestP1_ExpiredQuoteIDReturns410); `go test ./...` passes (ran it, all green).",
+     "recorded": "met"
+    },
+    {
+     "n": 17,
+     "said": "MET",
+     "evidence": "README.md has curl examples for happy path, cross-rate, all three 400 reasons (unknown_currency, non_positive/malformed amount, no_usd_rate), 404, and 410; boss.deploy.yaml defines a deploy-time health probe (`health: [{url: \"{target.public_url}/healthz\", expect: 200}]`) as the smoke check, distinct from the README.",
+     "recorded": "partial",
+     "recorded_reason": "only documents cited"
+    },
+    {
+     "n": 18,
+     "said": "MET",
+     "evidence": "fxquote.go:writeError only emits `{\"reason\": ...}` with fixed strings, handleQuoteByID 404/410 write no body at all; fxquote_test.go:TestP1_ErrorResponsesDoNotLeakInternals asserts absence of `.yaml`, `/tmp`, `panic`, `goroutine`, and raw rate values in error bodies.",
+     "recorded": "met"
+    },
+    {
+     "n": 19,
+     "said": "MET",
+     "evidence": "go.mod declares one `require gopkg.in/yaml.v3 v3.0.1`; go.sum's only other entry (`gopkg.in/check.v1`) is yaml.v3's own transitive test dependency, not used by this module (confirmed via `go list -m all`, no other runtime import in fxquote.go/metrics.go/main.go beyond stdlib + yaml.v3).",
+     "recorded": "partial",
+     "recorded_reason": "only manifests/lockfiles cited"
+    }
+   ]
+  },
+  "acc_2a441a818c574d1b815a": {
+   "run": "crun_7b9be79d310c499b8e3a",
+   "recorded_head": "7b9886df1d46d765a15eb315b20f39179dffa791",
+   "tree": "b409779",
+   "answers": [
+    {
+     "n": 1,
+     "said": "MET",
+     "evidence": "fxquote.go:294-301 (`resolve` computes pair rate+spread; `handleQuote` applies `effectiveRate := rate * (1 - spreadBps/10000)` and `math.RoundToEven` to produce `amountOut`); verified by `TestP1_SpreadAppliedAndRoundedHalfEven` (fxquote_test.go:96-115).",
+     "recorded": "met"
+    },
+    {
+     "n": 2,
+     "said": "MET",
+     "evidence": "fxquote.go:100-115 `rateTable.resolve` falls back to `usdRateOf` cross-derivation and returns reason `\"no_usd_rate\"` when either leg has no USD path; exercised by `TestP1_CrossRateDerivedViaUSD` and `TestP1_NoUSDRateReturns400` (fxquote_test.go:118-149).",
+     "recorded": "met"
+    },
+    {
+     "n": 3,
+     "said": "MET",
+     "evidence": "fxquote.go:327-341 `handleQuoteByID` checks `time.Now().After(sq.expiresAt)` and writes `http.StatusGone`; verified by `TestP1_ExpiredQuoteIDReturns410` (fxquote_test.go:203-220).",
+     "recorded": "met"
+    },
+    {
+     "n": 4,
+     "said": "MET",
+     "evidence": "`go test ./...` passes (ran it; 16/16 tests pass) and includes `TestP1_SpreadAppliedAndRoundedHalfEven`, `TestP1_CrossRateDerivedViaUSD`, `TestP1_NoUSDRateReturns400` covering rounding/spread/cross-rate.",
+     "recorded": "partial",
+     "recorded_reason": "cited paths not in the tree: ./..., 16/16, rounding/spread/cross-rate."
+    },
+    {
+     "n": 5,
+     "said": "MET",
+     "evidence": "single module `fxquote` (go.mod); runtime deps limited to Go stdlib plus the one PRD-sanctioned exception `gopkg.in/yaml.v3` (required for YAML config loading, no stdlib YAML parser exists), consistent with the refined dependency rule in ITEM 19.",
+     "recorded": "partial",
+     "recorded_reason": "only manifests/lockfiles cited"
+    },
+    {
+     "n": 6,
+     "said": "MET",
+     "evidence": "LOADED BY fxquote.go:loadRateTable (reads `cfgPath`, default `\"rates.yaml\"`, via `os.ReadFile`/`yaml.Unmarshal`), called from `NewServer` (fxquote.go:194-198) at process start in cmd/fxquote/main.go:26; rates.yaml defines USD/EUR and USD/GBP, with EUR/GBP correctly obtained via cross-rate derivation rather than a literal third entry.",
+     "recorded": "partial",
+     "recorded_reason": "fxquote.go does not name rates.yaml in code that reads it"
+    },
+    {
+     "n": 7,
+     "said": "MET",
+     "evidence": "fxquote.go:274-325 `handleQuote` parses `from/to/amount`, returns `amount_out` (minor units), `rate`, `id`, and sets expiry via `s.ttl` (30s, set in cmd/fxquote/main.go:26); spread is configurable per pair via `pairConfig.SpreadBps` in rates.yaml.",
+     "recorded": "met"
+    },
+    {
+     "n": 8,
+     "said": "MET",
+     "evidence": "duplicate of ITEM 2; same `resolve`/`usdRateOf` logic in fxquote.go:86-115.",
+     "recorded": "met"
+    },
+    {
+     "n": 9,
+     "said": "MET",
+     "evidence": "fxquote.go:279-292 rejects unknown currency (`unknown_currency`) and non-positive/malformed amount (`malformed_amount`/`non_positive_amount`) with 400 before rate math; tests at fxquote_test.go:152-189.",
+     "recorded": "met"
+    },
+    {
+     "n": 10,
+     "said": "MET",
+     "evidence": "same as ITEM 1, confirmed by passing `TestP1_SpreadAppliedAndRoundedHalfEven` (fxquote_test.go:96-115) which checks the exact half-even boundary (9054.5 → 9054).",
+     "recorded": "met"
+    },
+    {
+     "n": 11,
+     "said": "MET",
+     "evidence": "same as ITEM 2, confirmed by passing `TestP1_NoUSDRateReturns400` which asserts `reason == \"no_usd_rate\"` (fxquote_test.go:127-149).",
+     "recorded": "met"
+    },
+    {
+     "n": 12,
+     "said": "PARTIAL",
+     "evidence": "validation order is correct (currency/amount checks in fxquote.go:279-292 run before `resolve` is ever called) and `-0` is explicitly tested (fxquote_test.go:173), but no explicit int-boundary case (e.g. int64 overflow amount string) is tested anywhere in fxquote_test.go — only `0`, `-1`, `-0`, and `\"notanumber\"` are covered, so the \"including int-boundary\" half of the criterion is unmet.",
+     "recorded": "partial"
+    },
+    {
+     "n": 13,
+     "said": "MET",
+     "evidence": "fxquote.go:327-341; `TestP1_UnknownQuoteIDReturns404` and `TestP1_ExpiredQuoteIDReturns410` (fxquote_test.go:192-220) both pass.",
+     "recorded": "met"
+    },
+    {
+     "n": 14,
+     "said": "PARTIAL",
+     "evidence": "fxquote.go:159-165 `newQuoteID` uses `crypto/rand.Read` (16 bytes, hex-encoded) and `TestP1_QuoteIDsAreUniqueAtScale` (fxquote_test.go:223-243) verifies no collisions across 10k issuances, but nothing in the test suite verifies non-predictability (e.g. statistical/bit-distribution check) — only collision-freedom is actually exercised.",
+     "recorded": "partial"
+    },
+    {
+     "n": 15,
+     "said": "MET",
+     "evidence": "fxquote.go:343-349 `handleHealthz`/`handleReadyz`; config validation happens synchronously in `loadRateTable` (fxquote.go:39-79, checks empty pairs, invalid rate, invalid spread, no USD-reachable pair) and a failure there makes `NewServer` return an error that `cmd/fxquote/main.go:27-29` turns into `log.Fatalf`, crashing the process loudly rather than serving. Verified by `TestP1_ReadyzFailsOnBadConfig` and `TestP1_HealthzAndReadyzOK` (fxquote_test.go:246-271), both passing.",
+     "recorded": "met"
+    },
+    {
+     "n": 16,
+     "said": "MET",
+     "evidence": "`go test ./...` passes (verified above); suite covers rounding, spread, cross-rates, validation order, ID-generation/uniqueness, and the 404-vs-410 boundary (fxquote_test.go, multiple `TestP1_*` functions).",
+     "recorded": "met"
+    },
+    {
+     "n": 17,
+     "said": "MET",
+     "evidence": "README.md has curl examples for the happy path, the EUR/GBP cross-rate case, all 400 reasons (`unknown_currency`, `non_positive_amount`, `malformed_amount`, `no_usd_rate`), 404 and 410; boss.deploy.yaml:6 wires a deploy-time health check (`{target.public_url}/healthz` expect 200) distinct from the README, satisfying \"both present.\" (Note: README documents four distinct 400 reason strings rather than the PRD's \"three,\" since `malformed_amount` and `non_positive_amount` are split — a naming granularity mismatch, not a missing case.)",
+     "recorded": "partial",
+     "recorded_reason": "only documents cited"
+    },
+    {
+     "n": 18,
+     "said": "MET",
+     "evidence": "fxquote.go:258-262 `writeError` emits only `{\"reason\": ...}` with no internals; `handleQuoteByID` 404/410 paths write no body at all (fxquote.go:330-336); verified by `TestP1_ErrorResponsesDoNotLeakInternals` (fxquote_test.go:274-283), which passes and checks for absence of `.yaml`, `/tmp`, `panic`, `goroutine`, and raw rate values.",
+     "recorded": "met"
+    },
+    {
+     "n": 19,
+     "said": "MET",
+     "evidence": "go.mod:5 declares only `gopkg.in/yaml.v3 v3.0.1`; go.sum's only other entry (`gopkg.in/check.v1`) is yaml.v3's own test-only transitive dependency, not a runtime import of this code; no other third-party import appears in fxquote.go/metrics.go/cmd/fxquote/main.go.",
+     "recorded": "partial",
+     "recorded_reason": "only manifests/lockfiles cited"
+    }
+   ]
+  },
+  "acc_e9ebadc8375c4d86bf6e": {
+   "run": "crun_3991883ab16d42108e07",
+   "recorded_head": "f85319d01080ecd4cbc8ff9b4541dffba2bc3abc",
+   "tree": "f85319d",
+   "answers": [
+    {
+     "n": 1,
+     "said": "MET",
+     "evidence": "fxquote.go:297-305 `handleQuote` calls `resolve` for the pair's rate/spread and applies `effectiveRate := rate * (1 - spreadBps/10000)` then `math.RoundToEven`; verified by `fxquote_test.go:96` `TestP1_SpreadAppliedAndRoundedHalfEven` (expects 9054 from half-even rounding).",
+     "recorded": "met"
+    },
+    {
+     "n": 2,
+     "said": "MET",
+     "evidence": "fxquote.go:100-115 `rateTable.resolve` falls back to `usdRateOf` cross-derivation and returns reason `no_usd_rate` when either leg lacks a USD rate; verified by `fxquote_test.go:118` `TestP1_CrossRateDerivedViaUSD` and `fxquote_test.go:127` `TestP1_NoUSDRateReturns400`.",
+     "recorded": "met"
+    },
+    {
+     "n": 3,
+     "said": "MET",
+     "evidence": "fxquote.go:331-345 `handleQuoteByID` returns `http.StatusGone` (410) when `time.Now().After(sq.expiresAt)`; verified by `fxquote_test.go:207` `TestP1_ExpiredQuoteIDReturns410`.",
+     "recorded": "met"
+    },
+    {
+     "n": 4,
+     "said": "MET",
+     "evidence": "`fxquote_test.go` contains `TestP1_SpreadAppliedAndRoundedHalfEven` (rounding/spread) and `TestP1_CrossRateDerivedViaUSD`/`TestP1_NoUSDRateReturns400` (cross rates); `go test ./...` passes (verified by running it).",
+     "recorded": "met"
+    },
+    {
+     "n": 5,
+     "said": "MET",
+     "evidence": "go.mod:1-4 declares `module fxquote`, `go 1.23`, single module; only stdlib + `gopkg.in/yaml.v3` used (checked imports in fxquote.go, metrics.go, cmd/fxquote/main.go).",
+     "recorded": "met"
+    },
+    {
+     "n": 6,
+     "said": "PARTIAL",
+     "evidence": "rates.yaml defines `pairs: USD/EUR, USD/GBP` with rate/spread_bps — LOADED BY fxquote.go:39 `loadRateTable`, which `os.ReadFile(cfgPath)` and `yaml.Unmarshal`s it at `NewServer` (fxquote.go:194-199), called from `cmd/fxquote/main.go:26` at process start. (loader not named: this item's file must be read by the code (LOADED BY))",
+     "recorded": "partial"
+    },
+    {
+     "n": 7,
+     "said": "MET",
+     "evidence": "fxquote.go:274-329 `handleQuote` parses `from/to/amount`, applies configurable per-pair `spread_bps`, returns `amount_out` in minor units, `rate` used, and a quote `id` with `expires_at` set via `s.ttl` (30s default set in `cmd/fxquote/main.go:26`); verified by `fxquote_test.go:87` `TestP0_ServerStartsAndServesQuote` and `TestP1_SpreadAppliedAndRoundedHalfEven`.",
+     "recorded": "met"
+    },
+    {
+     "n": 8,
+     "said": "MET",
+     "evidence": "fxquote.go:100-115 `resolve` derives missing pairs via `usdRateOf(from)`/`usdRateOf(to)`; verified by `fxquote_test.go:118` `TestP1_CrossRateDerivedViaUSD`.",
+     "recorded": "met"
+    },
+    {
+     "n": 9,
+     "said": "MET",
+     "evidence": "fxquote.go:279-295 `handleQuote` checks `isKnown` and `ParseInt`/`<=0` before any rate math, returning 400 with `unknown_currency`/`malformed_amount`/`non_positive_amount`; verified by `fxquote_test.go:152,168`.",
+     "recorded": "met"
+    },
+    {
+     "n": 10,
+     "said": "MET",
+     "evidence": "same as ITEM 1, fxquote.go:297-305, verified by `fxquote_test.go:96` `TestP1_SpreadAppliedAndRoundedHalfEven`.",
+     "recorded": "met"
+    },
+    {
+     "n": 11,
+     "said": "MET",
+     "evidence": "fxquote.go:100-115 `resolve` returns reason `\"no_usd_rate\"` exactly; verified by `fxquote_test.go:127` `TestP1_NoUSDRateReturns400` asserting `got.Reason != \"no_usd_rate\"`.",
+     "recorded": "met"
+    },
+    {
+     "n": 12,
+     "said": "MET",
+     "evidence": "fxquote.go:279-295 rejects unknown currency/malformed/non-positive amount before `resolve` (rate math) is ever called; verified by `fxquote_test.go:152` `TestP1_UnknownCurrencyReturns400` and `fxquote_test.go:168` `TestP1_NonPositiveAmountReturns400` which explicitly covers `0`, `-1`, `-0`, `notanumber`, and int64-overflow boundary cases.",
+     "recorded": "met"
+    },
+    {
+     "n": 13,
+     "said": "MET",
+     "evidence": "fxquote.go:331-345 `handleQuoteByID` returns 404 for unknown id (`!ok`) and 410 for expired; verified by `fxquote_test.go:196` `TestP1_UnknownQuoteIDReturns404` and `fxquote_test.go:207` `TestP1_ExpiredQuoteIDReturns410`.",
+     "recorded": "met"
+    },
+    {
+     "n": 14,
+     "said": "MET",
+     "evidence": "fxquote.go:159-165 `newQuoteID` uses `crypto/rand.Read` into a 16-byte buffer; verified at 10k scale by `fxquote_test.go:227` `TestP1_QuoteIDsAreUniqueAtScale` (10000 iterations, no collisions) and `fxquote_test.go:251` `TestP1_QuoteIDsAreNotPredictable` (entropy/prefix checks).",
+     "recorded": "met"
+    },
+    {
+     "n": 15,
+     "said": "MET",
+     "evidence": "fxquote.go:347-353 `handleHealthz`/`handleReadyz` return 200; startup validation in `loadRateTable` (fxquote.go:39) rejects empty pairs, non-positive rate, invalid spread (`>=10000bps`), and missing USD-reachability, causing `NewServer`/`main.go:26-29` to fail loudly (`log.Fatalf`) before the server binds; verified by `fxquote_test.go:301` `TestP1_InvalidSpreadRejectedAtStartup`, `fxquote_test.go:316` `TestP1_ReadyzFailsOnBadConfig`, and `fxquote_test.go:331` `TestP1_HealthzAndReadyzOK`.",
+     "recorded": "met"
+    },
+    {
+     "n": 16,
+     "said": "MET",
+     "evidence": "`go test ./...` passes (verified by running it; 18/18 tests pass) covering rounding/spread/cross-rate (`TestP1_SpreadAppliedAndRoundedHalfEven`, `TestP1_CrossRateDerivedViaUSD`), validation order (`TestP1_NonPositiveAmountReturns400`), ID generation (`TestP1_QuoteIDsAreUniqueAtScale`, `TestP1_QuoteIDsAreNotPredictable`), and 404-vs-410 (`TestP1_UnknownQuoteIDReturns404`, `TestP1_ExpiredQuoteIDReturns410`).",
+     "recorded": "partial",
+     "recorded_reason": "cited paths not in the tree: ./..., 18/18, rounding/spread/cross-rate"
+    },
+    {
+     "n": 17,
+     "said": "MET",
+     "evidence": "README.md contains curl examples for happy path, cross-rate, all three 400 reasons (`unknown_currency`, `non_positive_amount`/`malformed_amount`, `no_usd_rate`), 404, and 410 (README.md:19-67); AND `boss.deploy.yaml:5` defines a deploy-time smoke check (`health: [{url: \"{target.public_url}/healthz\", expect: 200}]`) distinct from the README.",
+     "recorded": "partial",
+     "recorded_reason": "only documents cited"
+    },
+    {
+     "n": 18,
+     "said": "MET",
+     "evidence": "fxquote.go:258-262 `writeError` only ever encodes a fixed `reason` string (no error chains, paths, or raw rates passed in); verified by `fxquote_test.go:344` `TestP1_ErrorResponsesDoNotLeakInternals` which asserts the body excludes `.yaml`, `/tmp`, `panic`, `goroutine`, and raw rate values `0.91`/`0.78`.",
+     "recorded": "met"
+    },
+    {
+     "n": 19,
+     "said": "MET",
+     "evidence": "go.mod:4 declares only `gopkg.in/yaml.v3 v3.0.1` as a `require`; go.sum's `gopkg.in/check.v1` entry is yaml.v3's own test-only transitive dependency, not a runtime import — confirmed via `go list -m all` (only `fxquote`, `gopkg.in/yaml.v3`, `gopkg.in/check.v1` listed, and check.v1 is never imported in any non-test code in this tree) and `go build ./...` succeeds.",
+     "recorded": "partial",
+     "recorded_reason": "only manifests/lockfiles cited"
+    }
+   ]
+  },
+  "acc_0fd0cbb868b34473a993": {
+   "run": "crun_3991883ab16d42108e07",
+   "recorded_head": "f85319d01080ecd4cbc8ff9b4541dffba2bc3abc",
+   "tree": "f85319d",
+   "answers": [
+    {
+     "n": 1,
+     "said": "MET",
+     "evidence": "fxquote.go:294-305 (`handleQuote` applies `effectiveRate := rate * (1 - spreadBps/10000)` then `math.RoundToEven`); verified by fxquote_test.go:`TestP1_SpreadAppliedAndRoundedHalfEven`.",
+     "recorded": "met"
+    },
+    {
+     "n": 2,
+     "said": "MET",
+     "evidence": "fxquote.go:100-115 (`rateTable.resolve` falls back to `usdRateOf` cross-derivation and returns reason `\"no_usd_rate\"`); verified by fxquote_test.go:`TestP1_CrossRateDerivedViaUSD`, `TestP1_NoUSDRateReturns400`.",
+     "recorded": "met"
+    },
+    {
+     "n": 3,
+     "said": "MET",
+     "evidence": "fxquote.go:332-346 (`handleQuoteByID` returns `http.StatusGone` when `time.Now().After(sq.expiresAt)`); verified by fxquote_test.go:`TestP1_ExpiredQuoteIDReturns410`.",
+     "recorded": "met"
+    },
+    {
+     "n": 4,
+     "said": "MET",
+     "evidence": "fxquote_test.go covers rounding (`TestP1_SpreadAppliedAndRoundedHalfEven`), spread, and cross rates (`TestP1_CrossRateDerivedViaUSD`, `TestP1_NoUSDRateReturns400`); confirmed `go test ./...` passes (ran locally: `ok fxquote 0.120s`).",
+     "recorded": "met"
+    },
+    {
+     "n": 5,
+     "said": "MET",
+     "evidence": "go.mod:1-5 declares single module `fxquote`, Go 1.23, only `gopkg.in/yaml.v3` as runtime dependency; stdlib used throughout fxquote.go/metrics.go/cmd/fxquote/main.go.",
+     "recorded": "partial",
+     "recorded_reason": "only manifests/lockfiles cited"
+    },
+    {
+     "n": 6,
+     "said": "MET",
+     "evidence": "rates.yaml holds `pairs: USD/EUR, USD/GBP` mid rates; LOADED BY fxquote.go:`loadRateTable` (reads `cfgPath` via `os.ReadFile` + `yaml.Unmarshal`), invoked from `NewServer` which cmd/fxquote/main.go:26 calls at startup with the file path (`cfgPath := os.Getenv(\"FXQUOTE_CONFIG\"); if cfgPath == \"\" { cfgPath = \"rates.yaml\" }`).",
+     "recorded": "partial",
+     "recorded_reason": "fxquote.go does not name rates.yaml in code that reads it"
+    },
+    {
+     "n": 7,
+     "said": "MET",
+     "evidence": "fxquote.go:274-330 `handleQuote` returns `amount_out` (minor units), per-pair `spread_bps` from YAML config, `rate` used, and `expires_at` = now+ttl; cmd/fxquote/main.go:26 wires ttl = 30s; verified by fxquote_test.go:`TestP0_ServerStartsAndServesQuote`, `TestP1_SpreadAppliedAndRoundedHalfEven`.",
+     "recorded": "met"
+    },
+    {
+     "n": 8,
+     "said": "MET",
+     "evidence": "fxquote.go:100-115 `rateTable.resolve` derives missing pairs via `usdRateOf(from)`/`usdRateOf(to)`; verified by fxquote_test.go:`TestP1_CrossRateDerivedViaUSD`.",
+     "recorded": "met"
+    },
+    {
+     "n": 9,
+     "said": "MET",
+     "evidence": "fxquote.go:279-295 `handleQuote` returns 400 with `unknown_currency`/`malformed_amount`/`non_positive_amount` reasons; verified by fxquote_test.go:`TestP1_UnknownCurrencyReturns400`, `TestP1_NonPositiveAmountReturns400`.",
+     "recorded": "met"
+    },
+    {
+     "n": 10,
+     "said": "MET",
+     "evidence": "same as ITEM 1: fxquote.go:304-305, test `TestP1_SpreadAppliedAndRoundedHalfEven` asserts exact half-even result (9054 from 9054.5).",
+     "recorded": "met"
+    },
+    {
+     "n": 11,
+     "said": "MET",
+     "evidence": "same as ITEM 2: fxquote.go:100-115, reason literal `\"no_usd_rate\"` returned and asserted exactly by fxquote_test.go:`TestP1_NoUSDRateReturns400`.",
+     "recorded": "met"
+    },
+    {
+     "n": 12,
+     "said": "MET",
+     "evidence": "fxquote.go:279-295 checks currency/amount validity before any rate resolution or multiplication (`resolve`/`RoundToEven` only reached after); fxquote_test.go:`TestP1_NonPositiveAmountReturns400` explicitly covers `0`, `-1`, `-0`, non-numeric, int64-overflow (`9223372036854775808`), and a much larger overflow case — all rejected 400.",
+     "recorded": "met"
+    },
+    {
+     "n": 13,
+     "said": "MET",
+     "evidence": "fxquote.go:332-346 `handleQuoteByID`; verified by fxquote_test.go:`TestP1_UnknownQuoteIDReturns404` and `TestP1_ExpiredQuoteIDReturns410`.",
+     "recorded": "met"
+    },
+    {
+     "n": 14,
+     "said": "MET",
+     "evidence": "fxquote.go:159-165 `newQuoteID` uses `crypto/rand.Read` into 16 bytes, hex-encoded; verified at scale by fxquote_test.go:`TestP1_QuoteIDsAreUniqueAtScale` (10k, no collisions) and `TestP1_QuoteIDsAreNotPredictable` (entropy/prefix checks).",
+     "recorded": "met"
+    },
+    {
+     "n": 15,
+     "said": "MET",
+     "evidence": "fxquote.go:348-354 `handleHealthz`/`handleReadyz` return 200; startup-time config validation lives in fxquote.go:39-79 `loadRateTable` (rejects empty pairs, non-positive rate, spread_bps ≥10000, no USD-reachable currency) and is enforced by `NewServer` returning an error that cmd/fxquote/main.go:27-29 turns into `log.Fatalf` (loud, process-exiting failure before readiness can even be probed); verified by fxquote_test.go:`TestP1_HealthzAndReadyzOK`, `TestP1_InvalidSpreadRejectedAtStartup`, `TestP1_ReadyzFailsOnBadConfig`.",
+     "recorded": "met"
+    },
+    {
+     "n": 16,
+     "said": "MET",
+     "evidence": "fxquote_test.go contains dedicated tests for all named areas: rounding/spread, cross-rate (`TestP1_CrossRateDerivedViaUSD`/`NoUSDRateReturns400`), validation order (`TestP1_NonPositiveAmountReturns400`), ID generation (`TestP1_QuoteIDsAreUniqueAtScale`/`NotPredictable`), and 404-vs-410 (`TestP1_UnknownQuoteIDReturns404`/`ExpiredQuoteIDReturns410`); confirmed passing via local `go test ./...`.",
+     "recorded": "met"
+    },
+    {
+     "n": 17,
+     "said": "MET",
+     "evidence": "README.md:17-92 has curl examples for happy path, cross-rate, all three 400 reasons (`unknown_currency`, `non_positive_amount`/`malformed_amount`, `no_usd_rate`), 404, and 410; boss.deploy.yaml:6 wires a deploy-time smoke check (`health: [{url: \"{target.public_url}/healthz\", expect: 200}]`) distinct from the README.",
+     "recorded": "partial",
+     "recorded_reason": "only documents cited"
+    },
+    {
+     "n": 18,
+     "said": "MET",
+     "evidence": "fxquote.go:258-262 `writeError` emits only a fixed `reason` string, never wraps Go errors or file paths into the HTTP body; verified by fxquote_test.go:`TestP1_ErrorResponsesDoNotLeakInternals` (checks body excludes `.yaml`, `/tmp`, `panic`, `goroutine`, raw rate values).",
+     "recorded": "met"
+    },
+    {
+     "n": 19,
+     "said": "MET",
+     "evidence": "go.mod:5 requires only `gopkg.in/yaml.v3 v3.0.1`; go.sum lists that module plus its own test-only indirect `gopkg.in/check.v1` (not imported by this project's code) — no other third-party runtime dependency present.",
+     "recorded": "partial",
+     "recorded_reason": "only manifests/lockfiles cited"
+    }
+   ]
+  },
+  "acc_d8084e03b04841c09e89": {
+   "run": "crun_1c94c79ef5254c478eaa",
+   "recorded_head": "074abceed8751528126b74c1fccdc663e0416f90",
+   "tree": "074abce",
+   "answers": [
+    {
+     "n": 1,
+     "said": "MET",
+     "evidence": "fxquote.go:298-305 (`resolve` + `handleQuote`) applies `effectiveRate := rate * (1 - spreadBps/10000)` and rounds with `math.RoundToEven`; verified by test `TestP1_SpreadAppliedAndRoundedHalfEven` in fxquote_test.go:96.",
+     "recorded": "met"
+    },
+    {
+     "n": 2,
+     "said": "MET",
+     "evidence": "fxquote.go:104-119 (`resolve`) falls back to `usdRateOf` for both currencies and returns `\"no_usd_rate\"` if either fails; tested in fxquote_test.go:127 (`TestP1_NoUSDRateReturns400`).",
+     "recorded": "met"
+    },
+    {
+     "n": 3,
+     "said": "MET",
+     "evidence": "fxquote.go:331-345 (`handleQuoteByID`) returns `http.StatusGone` when `time.Now().After(sq.expiresAt)`; tested in fxquote_test.go:203 (`TestP1_ExpiredQuoteIDReturns410`).",
+     "recorded": "met"
+    },
+    {
+     "n": 4,
+     "said": "MET",
+     "evidence": "fxquote_test.go covers rounding (`TestP1_SpreadAppliedAndRoundedHalfEven`), spread, and cross rates (`TestP1_CrossRateDerivedViaUSD`, `TestP1_NoUSDRateReturns400`); `go test ./...` passes (verified: `ok fxquote 0.108s`).",
+     "recorded": "met"
+    },
+    {
+     "n": 5,
+     "said": "MET",
+     "evidence": "single module declared in go.mod (\"module fxquote\"); the one non-stdlib import (`gopkg.in/yaml.v3`) is the sole pinned exception explicitly sanctioned by ITEM 19's criterion, required for YAML config parsing.",
+     "recorded": "partial",
+     "recorded_reason": "only manifests/lockfiles cited"
+    },
+    {
+     "n": 6,
+     "said": "MET",
+     "evidence": "rates.yaml exists; LOADED BY fxquote.go:loadRateTable, called from `NewServer` (fxquote.go:198-199) using `fxquote.DefaultRatesFile` (\"rates.yaml\") referenced in cmd/fxquote/main.go:22-23.",
+     "recorded": "met"
+    },
+    {
+     "n": 7,
+     "said": "MET",
+     "evidence": "fxquote.go:278-329 (`handleQuote`) returns amount_out in minor units, per-pair configurable `spread_bps` (rates.yaml), the effective rate, and a quote id with TTL set to `30*time.Second` in cmd/fxquote/main.go:26.",
+     "recorded": "met"
+    },
+    {
+     "n": 8,
+     "said": "MET",
+     "evidence": "fxquote.go:104-119 (`resolve`) derives missing pairs via `usdRateOf`; tested in fxquote_test.go:118 (`TestP1_CrossRateDerivedViaUSD`).",
+     "recorded": "met"
+    },
+    {
+     "n": 9,
+     "said": "MET",
+     "evidence": "fxquote.go:283-296 (`handleQuote`) checks `isKnown` and `amountIn <= 0`/parse errors before any rate math, returning 400 with a reason; tested in fxquote_test.go:152, 168.",
+     "recorded": "met"
+    },
+    {
+     "n": 10,
+     "said": "MET",
+     "evidence": "same as ITEM 1 (fxquote.go:298-305), test fxquote_test.go:96.",
+     "recorded": "met"
+    },
+    {
+     "n": 11,
+     "said": "MET",
+     "evidence": "same as ITEM 2 (fxquote.go:104-119), test fxquote_test.go:127 asserts exact `reason: \"no_usd_rate\"`.",
+     "recorded": "met"
+    },
+    {
+     "n": 12,
+     "said": "MET",
+     "evidence": "fxquote.go:283-296 rejects unknown currency, malformed amount, and non-positive amount (including `-0`) before rate math executes; explicit test fxquote_test.go:168-189 (`TestP1_NonPositiveAmountReturns400`) covers 0, -1, -0, and non-numeric cases with fixed `reason` fields.",
+     "recorded": "met"
+    },
+    {
+     "n": 13,
+     "said": "MET",
+     "evidence": "fxquote.go:331-345 (`handleQuoteByID`) returns 404 for unknown id, 410 for expired; tests fxquote_test.go:192 and 203.",
+     "recorded": "met"
+    },
+    {
+     "n": 14,
+     "said": "MET",
+     "evidence": "fxquote.go:163-169 (`newQuoteID`) uses `crypto/rand.Read` on 16 bytes (128-bit entropy, not `math/rand`); collision-freedom verified at 10k scale in fxquote_test.go:223 (`TestP1_QuoteIDsAreUniqueAtScale`); unpredictability follows from the `crypto/rand` source itself.",
+     "recorded": "met"
+    },
+    {
+     "n": 15,
+     "said": "MET",
+     "evidence": "fxquote.go:347-353 (`handleHealthz`/`handleReadyz`) return 200 when the server is running; `loadRateTable` (fxquote.go:43-83) rejects zero pairs, non-USD-reachable currencies, and invalid spreads, causing `NewServer` to error and `main.go:26-29` to `log.Fatalf` before the server (and thus readiness) ever comes up — tested in fxquote_test.go:246 (`TestP1_ReadyzFailsOnBadConfig`) and :261 (`TestP1_HealthzAndReadyzOK`).",
+     "recorded": "met"
+    },
+    {
+     "n": 16,
+     "said": "MET",
+     "evidence": "`go test ./...` passes; fxquote_test.go covers rounding/spread (:96), cross-rates (:118, :127), validation order (:152, :168), ID generation (:223), and 404-vs-410 (:192, :203).",
+     "recorded": "met"
+    },
+    {
+     "n": 17,
+     "said": "MET",
+     "evidence": "README.md:17-92 has curl examples for happy path, cross-rate, all three 400 reasons (unknown_currency, non_positive_amount/malformed_amount, no_usd_rate), 404, and 410; boss.deploy.yaml:6 defines a deploy-time health smoke check (`{target.public_url}/healthz` expect 200) — both artifacts present, neither substituting for the other.",
+     "recorded": "partial",
+     "recorded_reason": "only documents cited"
+    },
+    {
+     "n": 18,
+     "said": "MET",
+     "evidence": "fxquote.go:262-266 (`writeError`) only ever emits `{\"reason\": \"...\"}`; by inspection no file paths, Go errors, or raw rates are ever written to a response body; verified by test fxquote_test.go:274 (`TestP1_ErrorResponsesDoNotLeakInternals`).",
+     "recorded": "met"
+    },
+    {
+     "n": 19,
+     "said": "MET",
+     "evidence": "go.mod:5 declares exactly one require (`gopkg.in/yaml.v3 v3.0.1`); go.sum's `gopkg.in/check.v1` entry is yaml.v3's own transitive test-only dependency and is not imported anywhere in this module (confirmed via `grep -rn \"check.v1\" --include=\"*.go\"` returning no results).",
+     "recorded": "partial",
+     "recorded_reason": "only manifests/lockfiles cited"
+    }
+   ]
+  },
+  "acc_9ead9c939d4a4af3ba69": {
+   "run": "crun_1c94c79ef5254c478eaa",
+   "recorded_head": "074abceed8751528126b74c1fccdc663e0416f90",
+   "tree": "074abce",
+   "answers": [
+    {
+     "n": 1,
+     "said": "MET",
+     "evidence": "fxquote.go:313-321 (`resolve`, `handleQuote`) applies `pairConfig.SpreadBps` to the mid rate and rounds with `math.RoundToEven`; verified by `fxquote_test.go:96` `TestP1_SpreadAppliedAndRoundedHalfEven`.",
+     "recorded": "met"
+    },
+    {
+     "n": 2,
+     "said": "MET",
+     "evidence": "fxquote.go:104-119 (`resolve`) falls back to `usdRateOf` cross-derivation and returns reason `no_usd_rate` when a currency has no USD-reachable rate; verified by `fxquote_test.go:118` and `:127`.",
+     "recorded": "met"
+    },
+    {
+     "n": 3,
+     "said": "MET",
+     "evidence": "fxquote.go:348-362 `handleQuoteByID` returns `http.StatusGone` when `time.Now().After(sq.expiresAt)`; verified by `fxquote_test.go:203` `TestP1_ExpiredQuoteIDReturns410`.",
+     "recorded": "met"
+    },
+    {
+     "n": 4,
+     "said": "MET",
+     "evidence": "`fxquote_test.go` contains `TestP1_SpreadAppliedAndRoundedHalfEven`, `TestP1_CrossRateDerivedViaUSD`, `TestP1_NoUSDRateReturns400`; `go test ./...` passes (verified by running it).",
+     "recorded": "met"
+    },
+    {
+     "n": 5,
+     "said": "MET",
+     "evidence": "go.mod:1 declares a single module `fxquote` (go 1.23); only third-party import across the tree is `gopkg.in/yaml.v3` (fxquote.go:17), which criterion item 19 explicitly sanctions as the one permitted dependency.",
+     "recorded": "met"
+    },
+    {
+     "n": 6,
+     "said": "MET",
+     "evidence": "rates.yaml defines `pairs:` (USD/EUR, USD/GBP); LOADED BY fxquote.go:43 `loadRateTable`, which reads `cfgPath` (defaulting to `DefaultRatesFile = \"rates.yaml\"` at fxquote.go:32) via `os.ReadFile` and `yaml.Unmarshal`, called from `NewServer` (fxquote.go:210) which `cmd/fxquote/main.go:26` invokes at startup.",
+     "recorded": "met"
+    },
+    {
+     "n": 7,
+     "said": "MET",
+     "evidence": "fxquote.go:290-346 `handleQuote` returns `amount_out` (minor units), `rate`, `id`, and `expires_at`; `cmd/fxquote/main.go:26` wires a 30s TTL (`30*time.Second`) into `NewServer`. Spread is configurable per pair via `rates.yaml`'s `spread_bps`.",
+     "recorded": "met"
+    },
+    {
+     "n": 8,
+     "said": "MET",
+     "evidence": "fxquote.go:104-119 `resolve` derives missing pairs through `usdRateOf` (fxquote.go:90); verified by `fxquote_test.go:118` `TestP1_CrossRateDerivedViaUSD`.",
+     "recorded": "met"
+    },
+    {
+     "n": 9,
+     "said": "MET",
+     "evidence": "fxquote.go:295-311 `handleQuote` rejects unknown currency (`unknown_currency`) and non-positive/malformed amount (`non_positive_amount`/`malformed_amount`) with 400 and a `reason` field (errorResponse, fxquote.go:195-197).",
+     "recorded": "met"
+    },
+    {
+     "n": 10,
+     "said": "MET",
+     "evidence": "same as ITEM 1; fxquote.go:320-321, `fxquote_test.go:96-115` asserts the exact half-even rounded value (9054).",
+     "recorded": "met"
+    },
+    {
+     "n": 11,
+     "said": "MET",
+     "evidence": "fxquote.go:111-115 returns reason `no_usd_rate` specifically (not a generic 400); verified verbatim by `fxquote_test.go:127-149` `TestP1_NoUSDRateReturns400`.",
+     "recorded": "met"
+    },
+    {
+     "n": 12,
+     "said": "MET",
+     "evidence": "fxquote.go:295-311 checks currency/amount before calling `s.rates.resolve` (no conversion math runs first); `fxquote_test.go:168-189` `TestP1_NonPositiveAmountReturns400` explicitly covers `0`, `-1`, `-0`, and malformed (`notanumber`) with a fixed non-empty reason per case.",
+     "recorded": "met"
+    },
+    {
+     "n": 13,
+     "said": "MET",
+     "evidence": "fxquote.go:350-358 `handleQuoteByID` returns 404 for unknown id (`!ok`) and 410 for expired; verified by `fxquote_test.go:192` (404) and `:203` (410).",
+     "recorded": "met"
+    },
+    {
+     "n": 14,
+     "said": "MET",
+     "evidence": "fxquote.go:175-181 `newQuoteID` uses `crypto/rand.Read` into a 16-byte buffer, hex-encoded; verified at scale by `fxquote_test.go:223` `TestP1_QuoteIDsAreUniqueAtScale` (10,000 issuances, uniqueness asserted).",
+     "recorded": "met"
+    },
+    {
+     "n": 15,
+     "said": "MET",
+     "evidence": "fxquote.go:364-370 `handleHealthz`/`handleReadyz` return 200; startup-time config validation in `loadRateTable` (fxquote.go:52-81) rejects zero pairs (\"wrong pair count\"), invalid rate, invalid spread (`SpreadBps < 0 || >= 10000`), and no USD-reachable currency, causing `NewServer` to return an error that `cmd/fxquote/main.go:27-29` turns into `log.Fatalf` (fails loudly at startup). Verified for the no-USD-rate case by `fxquote_test.go:246` `TestP1_ReadyzFailsOnBadConfig`; the other two bad-config branches (empty pairs, invalid spread) are implemented but not separately exercised by a test.",
+     "recorded": "met"
+    },
+    {
+     "n": 16,
+     "said": "MET",
+     "evidence": "`fxquote_test.go` covers rounding/spread (`TestP1_SpreadAppliedAndRoundedHalfEven`), cross-rates (`TestP1_CrossRateDerivedViaUSD`, `TestP1_NoUSDRateReturns400`), validation order (`TestP1_UnknownCurrencyReturns400`, `TestP1_NonPositiveAmountReturns400`), ID generation (`TestP1_QuoteIDsAreUniqueAtScale`), and 404-vs-410 (`TestP1_UnknownQuoteIDReturns404`, `TestP1_ExpiredQuoteIDReturns410`); `go test ./...` passes (verified: `ok fxquote 0.416s`).",
+     "recorded": "met"
+    },
+    {
+     "n": 17,
+     "said": "MET",
+     "evidence": "README.md:17-92 has curl examples for happy path, cross-rate, all three 400 reasons (`unknown_currency`, `non_positive_amount`/`malformed_amount`, `no_usd_rate`), 404 and 410; boss.deploy.yaml:6 declares a deploy-time health smoke check (`{target.public_url}/healthz` expect 200) distinct from the README.",
+     "recorded": "partial",
+     "recorded_reason": "only documents cited"
+    },
+    {
+     "n": 18,
+     "said": "MET",
+     "evidence": "fxquote.go:274-278 `writeError` emits only `{\"reason\": \"...\"}`, no paths/error chains/raw rates; 404/410 paths (fxquote.go:352,356) write no body at all; verified by `fxquote_test.go:274` `TestP1_ErrorResponsesDoNotLeakInternals`.",
+     "recorded": "met"
+    },
+    {
+     "n": 19,
+     "said": "MET",
+     "evidence": "go.mod:5 requires only `gopkg.in/yaml.v3`; go.sum/`go list -m all` shows `gopkg.in/check.v1` present solely as yaml.v3's own test-only transitive entry, not imported anywhere in this tree's `.go` files (confirmed via grep/import check) — no other third-party runtime dependency.",
+     "recorded": "partial",
+     "recorded_reason": "only manifests/lockfiles cited"
+    }
+   ]
+  },
+  "acc_2365833f73874832825c": {
+   "run": "crun_5daadf836f8543599260",
+   "recorded_head": "a7ccbc0c6bfd35a84994ec8fbef767a4e868954f",
+   "tree": "a7ccbc0",
+   "answers": [
+    {
+     "n": 1,
+     "said": "MET",
+     "evidence": "fxquote.go:318-326 `handleQuote` applies `effectiveRate := rate * (1 - spreadBps/10000)` and rounds with `math.RoundToEven`; verified by fxquote_test.go:96 `TestP1_SpreadAppliedAndRoundedHalfEven` (asserts 9054 half-even result).",
+     "recorded": "met"
+    },
+    {
+     "n": 2,
+     "said": "MET",
+     "evidence": "fxquote.go:105-119 `resolve()` derives missing pairs via `usdRateOf` through USD and returns reason `\"no_usd_rate\"` when either leg lacks a USD rate; exercised by fxquote_test.go:118,127 `TestP1_CrossRateDerivedViaUSD` / `TestP1_NoUSDRateReturns400`.",
+     "recorded": "met"
+    },
+    {
+     "n": 3,
+     "said": "MET",
+     "evidence": "fxquote.go:353-363 `handleQuoteByID` returns `http.StatusGone` (410) when `time.Now().After(sq.expiresAt)`; verified by fxquote_test.go:203 `TestP1_ExpiredQuoteIDReturns410`.",
+     "recorded": "met"
+    },
+    {
+     "n": 4,
+     "said": "MET",
+     "evidence": "fxquote_test.go covers rounding (`TestP1_SpreadAppliedAndRoundedHalfEven`), spread (same test), and cross rates (`TestP1_CrossRateDerivedViaUSD`, `TestP1_NoUSDRateReturns400`); `go test ./...` passes (verified by running it).",
+     "recorded": "met"
+    },
+    {
+     "n": 5,
+     "said": "MET",
+     "evidence": "go.mod:1-5 declares `module fxquote`, single module; only stdlib + `gopkg.in/yaml.v3` imported (confirmed via `go list -m all` and grep of imports across all .go files).",
+     "recorded": "partial",
+     "recorded_reason": "only manifests/lockfiles cited"
+    },
+    {
+     "n": 6,
+     "said": "MET",
+     "evidence": "rates.yaml defines `pairs: USD/EUR, USD/GBP` with rate/spread_bps; LOADED BY fxquote.go:44 `loadRateTable(cfgPath)`, called from `NewServer` (fxquote.go:216), with `cmd/fxquote/main.go:34-39` naming `rates.yaml` (via `fxquote.DefaultRatesFile`, fxquote.go:33) as the default path, overridable via `FXQUOTE_CONFIG`.",
+     "recorded": "met"
+    },
+    {
+     "n": 7,
+     "said": "MET",
+     "evidence": "fxquote.go:295-351 `handleQuote` reads `from`/`to`/`amount`, applies configurable per-pair spread (`spread_bps`), returns `amount_out` (minor units, int64), `rate` used, and `id` with 30s default TTL (`cmd/fxquote/main.go:13-23` `quoteTTLFromEnv`, default 30s); verified end-to-end by `TestP0_ServerStartsAndServesQuote` and `TestP1_SpreadAppliedAndRoundedHalfEven`.",
+     "recorded": "met"
+    },
+    {
+     "n": 8,
+     "said": "MET",
+     "evidence": "same as ITEM 2; fxquote.go:105-119 `resolve()` + `usdRateOf` (fxquote.go:91-102).",
+     "recorded": "met"
+    },
+    {
+     "n": 9,
+     "said": "MET",
+     "evidence": "fxquote.go:300-316 rejects unknown currency (`unknown_currency`), malformed amount (`malformed_amount`), and non-positive amount (`non_positive_amount`) with 400 before any rate math; verified by `TestP1_UnknownCurrencyReturns400`, `TestP1_NonPositiveAmountReturns400`.",
+     "recorded": "met"
+    },
+    {
+     "n": 10,
+     "said": "MET",
+     "evidence": "same as ITEM 1.",
+     "recorded": "partial",
+     "recorded_reason": "no file evidence cited"
+    },
+    {
+     "n": 11,
+     "said": "MET",
+     "evidence": "same as ITEM 2; reason string is exactly `no_usd_rate` (fxquote.go:115), tested at fxquote_test.go:146.",
+     "recorded": "met"
+    },
+    {
+     "n": 12,
+     "said": "MET",
+     "evidence": "fxquote.go:300-316 validates currency/amount before calling `s.rates.resolve` (which performs the rate math); `TestP1_NonPositiveAmountReturns400` (fxquote_test.go:168) explicitly covers `0`, `-1`, `-0`, and `notanumber` boundary cases, each returning 400 with a non-empty fixed reason.",
+     "recorded": "met"
+    },
+    {
+     "n": 13,
+     "said": "MET",
+     "evidence": "fxquote.go:353-363 `handleQuoteByID` returns 404 for unknown id (`!ok`) and 410 for expired id (`time.Now().After(sq.expiresAt)`); verified by `TestP1_UnknownQuoteIDReturns404` and `TestP1_ExpiredQuoteIDReturns410`.",
+     "recorded": "met"
+    },
+    {
+     "n": 14,
+     "said": "MET",
+     "evidence": "fxquote.go:178-186 `newQuoteID` reads from `crypto/rand.Reader` (`quoteIDSource`, fxquote.go:4,178) into a 16-byte buffer, hex-encoded; `TestP1_QuoteIDsAreUniqueAtScale` (fxquote_test.go:223) issues 10,000 quotes and asserts no duplicate/empty IDs.",
+     "recorded": "met"
+    },
+    {
+     "n": 15,
+     "said": "MET",
+     "evidence": "fxquote.go:369-375 `handleHealthz`/`handleReadyz` return 200 when the server started; startup validation in `loadRateTable` (fxquote.go:44-83) rejects invalid rate (`pc.Rate <= 0`), invalid spread (`SpreadBps < 0 || >= 10000`), malformed pair keys, empty pair sets, and missing USD-reachability, causing `NewServer` to return an error that `cmd/fxquote/main.go:39-42` turns into `log.Fatalf` (loud startup failure, so `/readyz` never comes up on bad config); verified by `TestP1_ReadyzFailsOnBadConfig` and `TestP1_HealthzAndReadyzOK`. Note: only the USD-reachability failure path has an explicit tes",
+     "recorded": "met"
+    },
+    {
+     "n": 16,
+     "said": "MET",
+     "evidence": "`go test ./...` passes (verified directly); covers rounding/spread (`TestP1_SpreadAppliedAndRoundedHalfEven`), cross-rates (`TestP1_CrossRateDerivedViaUSD`, `TestP1_NoUSDRateReturns400`), validation order (`TestP1_UnknownCurrencyReturns400`, `TestP1_NonPositiveAmountReturns400`), ID generation (`TestP1_QuoteIDsAreUniqueAtScale`), and the 404-vs-410 boundary (`TestP1_UnknownQuoteIDReturns404`, `TestP1_ExpiredQuoteIDReturns410`).",
+     "recorded": "partial",
+     "recorded_reason": "cited paths not in the tree: ./..., rounding/spread"
+    },
+    {
+     "n": 17,
+     "said": "MET",
+     "evidence": "README.md contains curl examples for happy path, cross-rate, all 400 reasons, 404, and 410 (README.md:19-67); `scripts/smoke.sh` is a passing deploy-time smoke check that builds and runs the real `cmd/fxquote` binary and curls it end-to-end (verified the script's logic matches actual server behavior; wired into `boss.deploy.yaml`'s health checks).",
+     "recorded": "met"
+    },
+    {
+     "n": 18,
+     "said": "MET",
+     "evidence": "`writeError` (fxquote.go:279-283) emits only `{\"reason\": \"...\"}`; `handleQuoteByID` 404/410 paths write no body at all; verified by `TestP1_ErrorResponsesDoNotLeakInternals` (fxquote_test.go:274), which asserts the body contains none of `.yaml`, `/tmp`, `panic`, `goroutine`, or raw rate values.",
+     "recorded": "met"
+    },
+    {
+     "n": 19,
+     "said": "MET",
+     "evidence": "go.mod:5 declares only `gopkg.in/yaml.v3 v3.0.1`; `go.sum` lists that plus `gopkg.in/check.v1` (yaml.v3's own transitive test-only dependency, not imported anywhere in this repo); confirmed via `go list -m all` and grepping all `.go` files for non-stdlib imports — only `gopkg.in/yaml.v3` appears (fxquote.go:18).",
+     "recorded": "met"
+    }
+   ]
+  },
+  "acc_7cdce16e3b314f7bbc90": {
+   "run": "crun_5daadf836f8543599260",
+   "recorded_head": "a7ccbc0c6bfd35a84994ec8fbef767a4e868954f",
+   "tree": "a7ccbc0",
+   "answers": [
+    {
+     "n": 1,
+     "said": "MET",
+     "evidence": "fxquote.go:318-326 (`resolve`, `handleQuote`) applies `spreadBps` and uses `math.RoundToEven`; verified by `fxquote_test.go:96` `TestP1_SpreadAppliedAndRoundedHalfEven`.",
+     "recorded": "met"
+    },
+    {
+     "n": 2,
+     "said": "MET",
+     "evidence": "fxquote.go:105-120 (`resolve`) derives via `usdRateOf` and returns `\"no_usd_rate\"`; wired to 400 at fxquote.go:318-323; tested by `TestP1_CrossRateDerivedViaUSD` and `TestP1_NoUSDRateReturns400`.",
+     "recorded": "met"
+    },
+    {
+     "n": 3,
+     "said": "MET",
+     "evidence": "fxquote.go:360-363 (`handleQuoteByID`) returns `http.StatusGone` when `time.Now().After(sq.expiresAt)`; tested by `TestP1_ExpiredQuoteIDReturns410`.",
+     "recorded": "met"
+    },
+    {
+     "n": 4,
+     "said": "MET",
+     "evidence": "fxquote_test.go covers rounding (`TestP1_SpreadAppliedAndRoundedHalfEven`), spread, and cross rates (`TestP1_CrossRateDerivedViaUSD`, `TestP1_NoUSDRateReturns400`); `go test ./...` passes (verified by running it).",
+     "recorded": "met"
+    },
+    {
+     "n": 5,
+     "said": "MET",
+     "evidence": "go.mod declares a single module `fxquote`; code is stdlib except the one pinned `gopkg.in/yaml.v3` dependency, which criterion 19 explicitly sanctions as the sole allowed exception for YAML loading.",
+     "recorded": "partial",
+     "recorded_reason": "only manifests/lockfiles cited"
+    },
+    {
+     "n": 6,
+     "said": "MET",
+     "evidence": "LOADED BY fxquote.go:loadRateTable (reads `cfgPath`, a YAML file via `os.ReadFile`/`yaml.Unmarshal`); `rates.yaml` contains USD/EUR and USD/GBP pairs; `cmd/fxquote/main.go:34-39` passes `fxquote.DefaultRatesFile` (\"rates.yaml\") into `NewServer`, which calls `loadRateTable` at process start.",
+     "recorded": "met"
+    },
+    {
+     "n": 7,
+     "said": "MET",
+     "evidence": "fxquote.go:295-351 (`handleQuote`) returns `amount_out` in minor units, per-pair `spread_bps` from config, `rate` used, and `id`; TTL defaults to 30s (`cmd/fxquote/main.go:13-23` `quoteTTLFromEnv`); tested by `TestP0_ServerStartsAndServesQuote`, `TestP1_SpreadAppliedAndRoundedHalfEven`.",
+     "recorded": "met"
+    },
+    {
+     "n": 8,
+     "said": "MET",
+     "evidence": "fxquote.go:105-120 (`resolve`) falls back to USD-derived cross rate when a direct/inverse pair is absent; tested by `TestP1_CrossRateDerivedViaUSD`.",
+     "recorded": "met"
+    },
+    {
+     "n": 9,
+     "said": "MET",
+     "evidence": "fxquote.go:300-316 (`handleQuote`) returns 400 `unknown_currency`/`malformed_amount`/`non_positive_amount`; tested by `TestP1_UnknownCurrencyReturns400`, `TestP1_NonPositiveAmountReturns400`.",
+     "recorded": "met"
+    },
+    {
+     "n": 10,
+     "said": "MET",
+     "evidence": "same as ITEM 1.",
+     "recorded": "partial",
+     "recorded_reason": "no file evidence cited"
+    },
+    {
+     "n": 11,
+     "said": "MET",
+     "evidence": "same as ITEM 2; reason string is exactly `no_usd_rate`, confirmed in test and code.",
+     "recorded": "partial",
+     "recorded_reason": "no file evidence cited"
+    },
+    {
+     "n": 12,
+     "said": "PARTIAL",
+     "evidence": "fxquote.go:300-316 validates currency/amount before calling `resolve` (no rate math runs first), and `TestP1_NonPositiveAmountReturns400` (fxquote_test.go:168-189) covers `0`, `-1`, `-0`, and `notanumber`. However the criterion explicitly asks for an \"int-boundary\" case (e.g. a value at/overflowing int64 limits) and no such case exists in the test table or anywhere in the repo — the test comment claims \"including boundary\" but only `-0` is a boundary-style case, not an int-boundary/overflow case.",
+     "recorded": "partial"
+    },
+    {
+     "n": 13,
+     "said": "MET",
+     "evidence": "fxquote.go:353-363 (`handleQuoteByID`) returns 404 for unknown id, 410 for expired; tested by `TestP1_UnknownQuoteIDReturns404` and `TestP1_ExpiredQuoteIDReturns410`.",
+     "recorded": "met"
+    },
+    {
+     "n": 14,
+     "said": "MET",
+     "evidence": "fxquote.go:178-186 (`newQuoteID`) reads from `crypto/rand.Reader`; `TestP1_QuoteIDsAreUniqueAtScale` (fxquote_test.go:223-243) issues 10,000 quotes and asserts no collisions. Predictability isn't separately tested but is inherent to `crypto/rand`.",
+     "recorded": "met"
+    },
+    {
+     "n": 15,
+     "said": "MET",
+     "evidence": "fxquote.go:44-84 (`loadRateTable`) rejects zero pairs, non-USD-reachable currencies, and out-of-range spread (`<0` or `>=10000`); `cmd/fxquote/main.go:39-42` calls `log.Fatalf` if `NewServer` errors, failing startup loudly; `/healthz`/`/readyz` return 200 once started (fxquote.go:369-375); tested by `TestP1_ReadyzFailsOnBadConfig` and `TestP1_HealthzAndReadyzOK`.",
+     "recorded": "met"
+    },
+    {
+     "n": 16,
+     "said": "MET",
+     "evidence": "`go test ./...` passes (verified); covers rounding/spread (`TestP1_SpreadAppliedAndRoundedHalfEven`), cross-rates (`TestP1_CrossRateDerivedViaUSD`, `TestP1_NoUSDRateReturns400`), validation order (`TestP1_UnknownCurrencyReturns400`, `TestP1_ErrorResponsesDoNotLeakInternals`), ID generation (`TestP1_QuoteIDsAreUniqueAtScale`), and the 404-vs-410 boundary (`TestP1_UnknownQuoteIDReturns404`, `TestP1_ExpiredQuoteIDReturns410`).",
+     "recorded": "partial",
+     "recorded_reason": "cited paths not in the tree: ./..., rounding/spread"
+    },
+    {
+     "n": 17,
+     "said": "MET",
+     "evidence": "README.md has curl examples for happy path, cross-rate, all three/four 400 reasons, 404, and 410; `scripts/smoke.sh` builds and runs the real `cmd/fxquote` binary and curls it end-to-end (I ran it directly: `bash scripts/smoke.sh` → `SMOKE OK`), a distinct executable artifact from the README docs.",
+     "recorded": "met"
+    },
+    {
+     "n": 18,
+     "said": "MET",
+     "evidence": "fxquote.go:279-283 (`writeError`) emits only `{\"reason\": \"...\"}`; 404/410 handlers (fxquote.go:356-363) write no body at all; `TestP1_ErrorResponsesDoNotLeakInternals` (fxquote_test.go:274-283) asserts the body contains no file paths, panics, goroutines, or raw rate values.",
+     "recorded": "met"
+    },
+    {
+     "n": 19,
+     "said": "MET",
+     "evidence": "go.mod/go.sum declare only `gopkg.in/yaml.v3`; confirmed via `go list -deps ./cmd/fxquote`, which shows no other third-party import (`gopkg.in/check.v1` in go.sum is yaml.v3's own transitive test dependency, never imported by this code). Note: README claims a `TestP1_SingleRuntimeDependency` test enforces this, but no such test exists anywhere in the repo — that claim is false, though the underlying dependency fact checked by hand holds.",
+     "recorded": "partial",
+     "recorded_reason": "only manifests/lockfiles cited"
+    }
+   ]
+  }
+ }
+}

@@ -1,0 +1,7 @@
+pairs:
+  USD/EUR:
+    rate: 0.91
+    spread_bps: 50
+  USD/GBP:
+    rate: 0.78
+    spread_bps: 50

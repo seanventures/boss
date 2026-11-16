@@ -1,0 +1,8 @@
+version: 1
+name: fxquote
+kind: compose
+compose:
+  file: docker-compose.yml
+health: [{url: "{target.public_url}/healthz", expect: 200}]
+open: {url: "{target.public_url}"}
+metrics: {path: /metrics}
