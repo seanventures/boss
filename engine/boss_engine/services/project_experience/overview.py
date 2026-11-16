@@ -386,7 +386,8 @@ def week(connection: Connection, project_id: str, now: datetime, limit: int = 6
     """THIS WEEK as a timeline: at most `limit` points, oldest first, ONE per thing that
     happened. A pull request is one event (merged beats opened, at its first build: every retry
     and follow-up carries the same PR and once drew "PR #3 opened" four times); a deploy is one
-    per environment and commit; labels are ≤ 3 words."""
+    per environment and commit; labels are ≤ 3 words. A deploy whose commit is present also
+    carries sha7, that commit's first seven characters, and nothing when it is not."""
     from .titles import shorten
 
     since = now - timedelta(days=7)
@@ -403,9 +404,12 @@ def week(connection: Connection, project_id: str, now: datetime, limit: int = 6
         seen_deploys.add(key)
         from .health import env_label
 
-        out.append({"at": iso(r["finished_at"]), "kind": "deploy",
-                    "label": f"{env_label(r['environment'])} deploy",
-                    "href": href(project_id, area="infra", view="deploys", deploy=f"stack:{r['id']}")})
+        point = {"at": iso(r["finished_at"]), "kind": "deploy",
+                 "label": f"{env_label(r['environment'])} deploy",
+                 "href": href(project_id, area="infra", view="deploys", deploy=f"stack:{r['id']}")}
+        if r["commit_sha"]:
+            point["sha7"] = str(r["commit_sha"])[:7]
+        out.append(point)
     prs: dict[int, dict[str, Any]] = {}
     for r in connection.execute(text(
             "SELECT DISTINCT ON (n) n, id, url, opened FROM (SELECT COALESCE(pull_request_number, "

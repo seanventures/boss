@@ -125,12 +125,14 @@ export function timelineLabels(ats: (string | null)[], now: Date = new Date()): 
 }
 
 /** A TIMELINE: up to six points, oldest first, a day label over each ("Mon", "Today"; times when
- *  all of them are today), the dot coloured by kind and a few words under it. Fits any width. */
+ *  all of them are today), the dot coloured by kind and a few words under it. A deploy's sha7,
+ *  when the point has one, sits beside the label; a point without one shows nothing extra. */
 export function Timeline({ points, testid, onOpen }: {
-  points: { at: string | null; label: string; kind: string; href?: string; detail?: string }[]; testid?: string; onOpen?: (i: number) => void;
+  points: { at: string | null; label: string; kind: string; href?: string; detail?: string; sha7?: string | null }[]; testid?: string; onOpen?: (i: number) => void;
 }) {
   if (!points.length) return null;
   const labels = timelineLabels(points.map((p) => p.at));
+  const caption = (p: { label: string; sha7?: string | null }) => <>{p.label}{p.sha7 ? <> <span className="px-tl-sha">{p.sha7}</span></> : null}</>;
   return (
     <ol className="px-tl" data-testid={testid} aria-label="Timeline">
       {points.map((p, i) => (
@@ -139,8 +141,8 @@ export function Timeline({ points, testid, onOpen }: {
           <span className="px-tl-dot" aria-hidden />
           {p.href ? (
             <a className="px-tl-cap" href={/^https?:/.test(p.href) ? p.href : pxHref(p.href)} {...(/^https?:/.test(p.href) ? { target: "_blank", rel: "noreferrer noopener" } : {})}
-               onClick={(e) => { if (!onOpen || /^https?:/.test(p.href!) || e.metaKey || e.ctrlKey) return; e.preventDefault(); onOpen(i); }}>{p.label}</a>
-          ) : <span className="px-tl-cap">{p.label}</span>}
+               onClick={(e) => { if (!onOpen || /^https?:/.test(p.href!) || e.metaKey || e.ctrlKey) return; e.preventDefault(); onOpen(i); }}>{caption(p)}</a>
+          ) : <span className="px-tl-cap">{caption(p)}</span>}
         </li>
       ))}
     </ol>

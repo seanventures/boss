@@ -272,7 +272,7 @@ export type Overview = {
   /** The Backlog stage's list: the items its count is made of (open + accepted on the Roadmap). */
   backlog?: NextItem[];
   try_it: { url: string; demo_logins: DemoLogin[] } | null;
-  week: { at: string; label: string; kind: string; href: string; detail?: string }[];
+  week: { at: string; label: string; kind: string; href: string; detail?: string; sha7?: string }[];
 };
 export type Captain = { agent_id: string; name: string; role_key: string; avatar: string; status: string; squad: Agent[]; last_said: string;
   /** 04-34 Marshal (Chief of Staff), who ranks this project's backlog against the others: closes the crew row. */
@@ -725,7 +725,13 @@ export const parseOverview = (v: unknown): Overview => {
     errors: Object.fromEntries(Object.entries(o(x.errors)).map(([k, v]) => [k, s(v, "Couldn't load")])),
     try_it: Object.keys(ti).length ? { url: s(ti.url), demo_logins: a(ti.demo_logins).map(parseLogin) } : null,
     // A week's event opens its record in the console (a PR's build, a deploy), else where it lives.
-    week: a(x.week).map((w) => ({ at: s(o(w).at), label: label4(o(w).label), kind: s(o(w).kind), href: s(o(w).href) || s(o(w).external_url), detail: s(o(w).detail) })),
+    // sha7 is the deploy's short commit when the engine sent one. Never derived from another field.
+    week: a(x.week).map((w) => {
+      const y = o(w);
+      const sha = sn(y.sha7);
+      return { at: s(y.at), label: label4(y.label), kind: s(y.kind), href: s(y.href) || s(y.external_url), detail: s(y.detail),
+               ...(sha ? { sha7: sha } : {}) };
+    }),
   };
 };
 export const parseWork = (v: unknown): WorkList => ({ items: a(o(v).items).map(parseWorkItem).filter((w) => w.id) });
