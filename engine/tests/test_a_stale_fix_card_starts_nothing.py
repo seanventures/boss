@@ -208,3 +208,35 @@ def test_a_press_without_steer_leaves_even_a_stale_card_pending(eng, project, mo
         assert _status(eng, card)["status"] == "pending"
     finally:
         _cleanup(eng, project)
+
+
+# ── PR #170 review: every surface says the card was withdrawn, never "Approved" ────────────
+
+def test_the_decide_tool_reports_withdrawn_not_approved(monkeypatch):
+    import boss_engine.tools.builtin as builtin
+    from boss_engine.tools import build_default_registry
+
+    from .test_a_typed_release_approval_is_a_button import _Conn, _Ctx
+
+    note = "Nothing is open: the findings this card listed were fixed since. Nothing was started."
+
+    class _Svc:
+        def __init__(self, settings):
+            pass
+
+        def transition(self, connection, decision_id, **kw):
+            return {"id": decision_id, "status": "withdrawn", "resolution_note": note}
+
+    class _DecMod:
+        DecisionService = _Svc
+
+    real = builtin.services_module
+    monkeypatch.setattr(builtin, "services_module",
+                        lambda name: _DecMod if name == "decisions" else real(name))
+    out = build_default_registry().invoke(
+        "decide", _Ctx(_Conn({"id": "dec_fix", "project_id": "p", "status": "pending"})),
+        project_id="p", actor="sean", operator_confirmed=True,
+        args={"decision_id": "dec_fix", "action": "approve", "note": "go"})
+    assert out["ok"] is False and out["status"] == "withdrawn", out
+    assert out["error"] == f"withdrawn: {note}"
+

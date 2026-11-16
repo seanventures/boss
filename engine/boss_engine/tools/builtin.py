@@ -4299,6 +4299,12 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             raise
         except Exception as exc:  # surface engine errors as data, never a stack trace
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        if action == "approve" and row.get("status") == "withdrawn":
+            # A STALE CARD'S PRESS WITHDREW IT (a re-check's Fix card, PR #170): nothing was
+            # approved, and the reply must not say it was.
+            note_now = str(row.get("resolution_note") or "this card no longer applies.")
+            return {"ok": False, "action": "withdrawn", "status": "withdrawn", "actor": who,
+                    "error": f"withdrawn: {note_now}", "decision": _json_safe(dict(row))}
         return {"ok": True, "action": action, "actor": who, "decision": _json_safe(dict(row))}
 
     @reg.tool(

@@ -18,6 +18,7 @@ import {
 import { GatedButton } from "../../components/gated";
 import { useGuardedCall } from "../../components/identity/identity-provider";
 import { IdentityError, idPost, refusalSentence } from "../../lib/identity/api";
+import { withdrawnNote, withdrawnSentence } from "../../lib/decision-withdrawn";
 import { isPxDemo, pxHref, workWhen } from "../../lib/project-experience";
 import { PrdRecordView } from "../prd-record";
 import { notifyChanged } from "../changed";
@@ -400,6 +401,15 @@ export function DecisionActs({ ctx, n, onDone }: { ctx: PxCtx; n: NeedsYou; onDo
       ctx.refreshWork();
       onDone?.();
     } catch (e) {
+      // A STALE CARD'S PRESS WITHDREW IT (PR #170): not approved, and not a refusal to retry.
+      const withdrawn = withdrawnNote(e);
+      if (withdrawn !== null) {
+        setSaid({ text: withdrawnSentence(withdrawn) });
+        notifyChanged("decision", { id });
+        ctx.refreshWork();
+        onDone?.();
+        return;
+      }
       setSaid({ text: e instanceof IdentityError && e.code === "step_up_cancelled" ? "Not sent: you cancelled the check." : refusalSentence(e), tone: "red" });
     } finally { setBusy(false); }
   };
