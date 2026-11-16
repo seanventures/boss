@@ -310,6 +310,33 @@ const STEP_ICON: Record<string, React.ReactNode> = {
   active: <CircleNotch size={13} weight="bold" className="mr-spin" />,
 };
 
+/** First 7 of head_sha, and addition/deletion counts, only when that field is present. */
+function laneHeadSha(lane: Lane): string {
+  return typeof lane.head_sha === "string" && lane.head_sha.length > 0 ? lane.head_sha.slice(0, 7) : "";
+}
+function laneDiff(lane: Lane): string {
+  const hasAdd = typeof lane.additions === "number";
+  const hasDel = typeof lane.deletions === "number";
+  if (hasAdd && hasDel) return diffWords(lane);
+  const parts: string[] = [];
+  if (hasAdd) parts.push(`+${lane.additions}`);
+  if (hasDel) parts.push(`−${lane.deletions}`);
+  if (typeof lane.changed_files === "number") parts.push(`${lane.changed_files} ${lane.changed_files === 1 ? "file" : "files"}`);
+  return parts.join(" · ");
+}
+function LaneFacts({ lane }: { lane: Lane }) {
+  const sha = laneHeadSha(lane);
+  const diff = laneDiff(lane);
+  if (!sha && !diff) return null;
+  return (
+    <span>
+      {sha ? <span className="mr-ui-mono">{sha}</span> : null}
+      {sha && diff ? " " : null}
+      {diff || null}
+    </span>
+  );
+}
+
 /** The lane's right side: its PR, what it is doing, or what it waits for. */
 function LaneEnd({ lane }: { lane: Lane }) {
   const plan = lane.plan?.[0];
@@ -341,7 +368,6 @@ function LaneEnd({ lane }: { lane: Lane }) {
         <span className="mr-ui-pill" data-tone={reverted ? "warn" : "ok"} data-testid={`mr-lane-pill-${lane.order}`}>
           PR #{lane.pr_number} {reverted ? "reverted" : merged ? "merged" : "open"}
         </span>
-        {diffWords(lane) ? <span>{diffWords(lane)}</span> : null}
         {what ? <span className="mr-ui-sub" data-user-text>{what}</span> : null}
       </>
     );
@@ -350,7 +376,6 @@ function LaneEnd({ lane }: { lane: Lane }) {
   return (
     <>
       <span className="mr-ui-pill" data-tone="info" data-testid={`mr-lane-pill-${lane.order}`}>{step?.label ?? "Building"}</span>
-      {diffWords(lane) ? <span>{diffWords(lane)}</span> : null}
       {what ? <span className="mr-ui-sub" data-user-text>{what}</span> : null}
     </>
   );
@@ -385,7 +410,7 @@ function LaneRow({ lane, now }: { lane: Lane; now: boolean }) {
           </React.Fragment>
         ))}
       </div>
-      <div className="mr-lane-end"><LaneEnd lane={lane} /></div>
+      <div className="mr-lane-end"><LaneFacts lane={lane} /><LaneEnd lane={lane} /></div>
       {lane.lane_state === "failed" && lane.error ? (
         <div className="mr-lane-err" role="status" data-testid={`mr-lane-error-${lane.order}`}>
           <Warning size={14} weight="bold" aria-hidden /><span>{lane.error}</span>
