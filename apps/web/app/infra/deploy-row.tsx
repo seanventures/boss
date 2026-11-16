@@ -12,7 +12,9 @@ import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
 
 import { showToast } from "../client-forms";
+import { roleWords } from "../agents/chain-model";
 import type { DeployRow, StepState } from "../../lib/infra-view";
+import { actorWords, looksLikeAnId } from "../../lib/actor-words";
 import { RunFace } from "../agents/run-face";
 import { afterWrite, decideDeploy, rollbackDeploy } from "./infra-actions";
 import { ago, dur, inWords, localTime, useNow } from "./infra-util";
@@ -42,16 +44,26 @@ export function triggerWord(row: Pick<DeployRow, "trigger" | "rollbackOfSha7">):
   return row.trigger === "rollback" ? (row.rollbackOfSha7 ? `↩ ${row.rollbackOfSha7}` : "rollback") : row.trigger;
 }
 
-/** Who approved: their face, `You`, or nothing (an unapproved or ungated deploy). */
-export function Approver({ approver }: { approver: DeployRow["approver"] }) {
+/** Who approved: their face and a name in words, or nothing when this deploy was not approved. */
+export function Approver({ approver, viewer }: { approver: DeployRow["approver"]; viewer?: string | null }) {
   if (!approver) return <span className="inf-dep-who" aria-hidden />;
-  if (approver.roleKey) {
-    return <span className="inf-dep-who" title="Approved by"><RunFace roleKey={approver.roleKey} size={20} standalone /></span>;
+  const actor = approver.actor?.trim() ?? "";
+  const roleKey = approver.roleKey?.trim() ?? "";
+  const name = actor ? actorWords(actor, null, viewer) : roleKey ? roleWords(roleKey) : "";
+  if (!actor && roleKey) {
+    return (
+      <span className="inf-dep-who" title={name ? `Approved by ${name}` : "Approved by"}>
+        <RunFace roleKey={roleKey} size={20} standalone={!name} />
+        {name ? <span>{name}</span> : null}
+      </span>
+    );
   }
-  const you = approver.actor === "you";
+  const you = name === "you";
+  const personId = actor && !you && !looksLikeAnId(actor) ? actor : undefined;
   return (
-    <span className="inf-dep-who" title={you ? "Approved by you" : `Approved by ${approver.actor ?? "a person"}`}>
-      <RunFace roleKey={null} variant={you ? "you" : "person"} personId={you ? undefined : approver.actor} size={20} standalone />
+    <span className="inf-dep-who" title={you ? "Approved by you" : `Approved by ${name || "a person"}`}>
+      <RunFace roleKey={null} variant={you ? "you" : "person"} personId={personId} size={20} standalone={!name} />
+      {name ? <span>{name}</span> : null}
     </span>
   );
 }
@@ -139,7 +151,7 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
       <span className="inf-mono inf-dep-sha" data-copy="data" title={row.refName ? `Ref ${row.refName}` : undefined}>{row.sha7 ?? "—"}</span>
       <span className="inf-dep-host inf-trunc inf-muted" data-copy="data" title={where || undefined}>{where || "—"}</span>
       <span className="inf-dep-trigger inf-muted">{triggerWord(row)}</span>
-      <Approver approver={row.approver} />
+      <Approver approver={row.approver} viewer={actor} />
       <StepDots steps={row.steps} />
       <span className="inf-num inf-muted inf-dep-dur">{dur(row.durationMs) || "—"}</span>
       <span className="inf-num inf-faint inf-dep-age" title={when ? localTime(when) : undefined}>{age || "now"}</span>
