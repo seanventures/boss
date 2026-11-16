@@ -7,7 +7,7 @@
  */
 import { primaryRoleLabel } from "../../lib/identity/role-label";
 import React from "react";
-import { Key, Robot, ShieldCheck, ShieldWarning, SignOut, Devices, UserCircle, X } from "@phosphor-icons/react";
+import { Key, Robot, ShieldCheck, ShieldWarning, SignOut, Devices, Terminal, UserCircle, X } from "@phosphor-icons/react";
 
 import { enc, IdentityError, idPost } from "../../lib/identity/api";
 import type { MeBanner } from "../../lib/identity/contract";
@@ -62,6 +62,7 @@ export function AccountMenu({ compact = false, children }: { compact?: boolean; 
         <a role="menuitem" href="/account/sessions"><Devices size={16} aria-hidden /> Sessions</a>
         <a role="menuitem" href="/account/agents"><Robot size={16} aria-hidden /> Agents for me</a>
         <a role="menuitem" href="/account/keys"><Key size={16} aria-hidden /> API keys</a>
+        <a role="menuitem" href="/connected-apps/device"><Terminal size={16} aria-hidden /> Connect a terminal</a>
         {children}
         <button role="menuitem" type="button" onClick={signOut} data-testid="sign-out"><SignOut size={16} aria-hidden /> Sign out</button>
       </div>

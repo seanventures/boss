@@ -1,0 +1,21 @@
+/* The code a terminal printed, set large so it is the page. */
+.idn-device { max-width: var(--page-max-narrow); }
+.idn-device h1 {
+  margin: 4px 0 8px;
+  font-family: var(--display);
+  font-size: var(--fs-page);
+  font-weight: 600;
+  line-height: 1.2;
+}
+.idn-input.idn-device-code {
+  margin: 8px 0 4px;
+  font-family: var(--mono);
+  font-size: var(--fs-display);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.18em;
+  text-align: center;
+  text-transform: uppercase;
+}
+.idn-device .idn-acts { margin-top: 14px; }
+.idn-device .idn-note { margin-top: 14px; }
