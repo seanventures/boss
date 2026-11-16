@@ -15911,3 +15911,40 @@ CREATE TABLE IF NOT EXISTS publish_guards (
     OR blocked_severity IN ('critical', 'high', 'medium', 'low', 'info')
   )
 );
+-- BOSSAPP-1258: a build reaches an approved private TCP service through a customer connector.
+-- Dial only a host and port on private_tcp_approvals. Link-local and cloud metadata addresses
+-- are refused in the service even when a row names them. A private_tcp_dials row is reserved
+-- (status reserved) before the socket opens; the same dedupe key does not dial again.
+CREATE TABLE IF NOT EXISTS private_tcp_connectors (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS private_tcp_approvals (
+  id TEXT PRIMARY KEY,
+  connector_id TEXT NOT NULL REFERENCES private_tcp_connectors(id) ON DELETE CASCADE,
+  host TEXT NOT NULL,
+  port INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (connector_id, host, port)
+);
+CREATE INDEX IF NOT EXISTS idx_private_tcp_approvals_connector
+  ON private_tcp_approvals (connector_id);
+CREATE TABLE IF NOT EXISTS private_tcp_dials (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  connector_id TEXT NOT NULL REFERENCES private_tcp_connectors(id) ON DELETE CASCADE,
+  build_id TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  host TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  address TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (status IN ('reserved', 'reached', 'failed')),
+  reply TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_private_tcp_dials_connector
+  ON private_tcp_dials (project_id, connector_id, created_at);
