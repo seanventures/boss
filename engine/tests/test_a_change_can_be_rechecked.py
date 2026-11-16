@@ -373,3 +373,23 @@ def test_a_retry_of_a_recheck_stays_a_recheck(eng, project):  # noqa: F811
         assert fctx[cr.KEY] is True and "seed_workspace_from" not in fctx
     finally:
         _cleanup(eng, project)
+
+
+def test_a_recheck_records_a_route_for_every_writing_stage_the_pipeline_reads():
+    """Northgate round 8 (crun_69899a6067014b5883c3): a re-check crashed with
+    KeyError: 'implement' because its no-write stage left stage_routes empty while the
+    pipeline reads stage_routes["implement"] after the stage. Every writing stage the
+    pipeline indexes must get a route recorded on the re-check path."""
+    import inspect
+    import re as _re
+
+    from boss_engine.services import change_recheck as cr
+    from boss_engine.services import governed_code_task_service as gm
+
+    src = inspect.getsource(gm._run_governed_code_task)
+    read = set(_re.findall(r'stage_routes\["([a-z_]+)"\]', src))
+    writing_read = read & set(cr.WRITING_STAGES)
+    assert writing_read, "the pipeline reads a writing stage's route"
+    branch = src.split("if _recheck and step in _change_recheck.WRITING_STAGES:", 1)[1]
+    branch = branch.split("return _change_recheck.NoWriteAgent(step), None", 1)[0]
+    assert "stage_routes[step] =" in branch
