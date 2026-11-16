@@ -11,6 +11,7 @@ import React from "react";
  * cited docs/operations/DESIGN_PARTNER_ONBOARDING.md, which does not exist.
  *
  * Every area named below is one the rail shows; tests/onboarding-help-card checks that.
+ * Activity log is area activity. Govern is area budget ("Spend caps, pace and limits").
  */
 export function OnboardingHelpCard() {
   return (
@@ -67,6 +68,12 @@ export function OnboardingHelpCard() {
           </ul>
         </div>
       </div>
+
+      <p className="detail">
+        The <a href="/?area=activity">Activity log</a> has every line BOSS wrote, searchable.
+        {" "}
+        <a href="/?area=budget">Govern</a> holds spend caps, pace and limits.
+      </p>
 
       <p className="detail help-foot">
         Anything BOSS starts is inspectable: every run, its cost, and the evidence behind it.

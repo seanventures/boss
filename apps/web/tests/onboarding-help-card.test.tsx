@@ -33,6 +33,20 @@ describe("console capabilities help card", () => {
     expect(html).toMatch(/<b>Approvals<\/b>/);
   });
 
+  it("links the Activity log and Govern spend, one in-app door each", () => {
+    // A missing href, a second copy, a new-tab target, or "Budget" instead of Govern fails this.
+    const paras = html.match(/<p\b[^>]*>[\s\S]*?<\/p>/g) ?? [];
+    const activity = paras.find((p) => p.includes('href="/?area=activity"') && p.includes(">Activity log<"));
+    const govern = paras.find((p) => p.includes('href="/?area=budget"') && p.includes(">Govern<") && /spend/i.test(p));
+    expect(activity).toBeTruthy();
+    expect(govern).toBeTruthy();
+    expect(html.match(/href="\/\?area=activity"/g)).toHaveLength(1);
+    expect(html.match(/href="\/\?area=budget"/g)).toHaveLength(1);
+    expect(activity).not.toMatch(/\btarget=/);
+    expect(govern).not.toMatch(/\btarget=/);
+    expect(html).not.toMatch(/Budget area/);
+  });
+
   it("names only areas an operator can find in the rail", () => {
     for (const offNav of [/Discovery/, /Meetings/, /CI\/CD/, /Budget area/, /Agents page/]) {
       expect(html).not.toMatch(offNav);
