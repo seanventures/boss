@@ -375,6 +375,14 @@ _CSV_COLUMNS = ("created_at", "level", "status", "source", "kind", "title", "act
                 "data")
 
 
+def window_capped_header(values: dict[str, Any]) -> str:
+    """`X-Window-Capped`: 1 only when retention cut the asked window, else 0.
+
+    Not the row cap. A cut window under 50,000 rows is still 1.
+    """
+    return "1" if values.get("window_capped") is True else "0"
+
+
 @router.get("/v1/activity/export")
 @permit(P.ACTIVITY_EXPORT, scope=Scope.project_or_org(query="project_id"))
 def activity_export(
@@ -385,7 +393,8 @@ def activity_export(
     """The current filter, redacted, newest first, at most 50,000 lines and 30 days.
 
     Streamed straight from the keyset pages, never held in memory. `X-Truncated: 1` is decided
-    before the first byte by counting the filter in SQL."""
+    before the first byte by counting the filter in SQL. `X-Window-Capped: 1` when retention
+    cut the asked window, even when the row cap did not."""
     from boss_engine.services.activity_log import EXPORT_MAX_ROWS
     from boss_engine.services.redaction import redact_secrets
 
@@ -427,6 +436,7 @@ def activity_export(
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     headers = {"Content-Disposition": f'attachment; filename="boss-log-{stamp}.{format}"',
                "X-Truncated": "1" if truncated else "0",
+               "X-Window-Capped": window_capped_header(values),
                "X-Row-Count": str(min(counted, EXPORT_MAX_ROWS))}
     if format == "csv":
         return StreamingResponse(as_csv(), media_type="text/csv; charset=utf-8", headers=headers)
