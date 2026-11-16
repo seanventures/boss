@@ -15877,3 +15877,22 @@ CREATE TABLE IF NOT EXISTS workspace_design_apps (
 );
 CREATE INDEX IF NOT EXISTS idx_workspace_design_apps_scope
   ON workspace_design_apps (org_id, workspace_id, created_at DESC);
+-- BOSSAPP-1255: where a built app is allowed to run. Geography is a label
+-- (eu is one). The control-plane host is stored once and never rewritten.
+-- A null geography is an unset pin: deploys keep today's path. No cloud call.
+CREATE TABLE IF NOT EXISTS app_residency_pins (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  app_key TEXT NOT NULL,
+  geography TEXT,
+  control_plane_host TEXT NOT NULL DEFAULT '',
+  pinned_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, app_key)
+);
+CREATE INDEX IF NOT EXISTS idx_app_residency_pins_project
+  ON app_residency_pins (project_id, app_key);
+ALTER TABLE app_residency_pins ADD COLUMN IF NOT EXISTS geography TEXT;
+ALTER TABLE app_residency_pins ADD COLUMN IF NOT EXISTS control_plane_host TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_residency_pins ADD COLUMN IF NOT EXISTS pinned_by TEXT;
