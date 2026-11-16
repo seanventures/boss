@@ -135,6 +135,19 @@ export function HealthTab({ ctx }: { ctx: PxCtx }) {
   );
 }
 
+/** The latency line, only when the payload included `latency_objective_ms`. */
+export function latencyObjectiveWords(env: { latency_objective_ms?: number | null }): string | null {
+  if (!Object.hasOwn(env, "latency_objective_ms")) return null;
+  const ms = env.latency_objective_ms;
+  return typeof ms === "number" ? `Latency objective is ${ms} ms.` : "No latency objective is stored.";
+}
+
+export function LatencyObjectiveLine({ e }: { e: Env }) {
+  const line = latencyObjectiveWords(e);
+  if (line === null) return null;
+  return <small className="px-faint" data-testid={`px-h-env-latency-${e.key}`}>{line}</small>;
+}
+
 /** One environment: the four numbers that answer "is it OK?". The ring and the sparks open the
  *  environment's drawer with its full charts. */
 function EnvCard({ e, ctx }: { e: Env; ctx: PxCtx }) {
@@ -167,6 +180,7 @@ function EnvCard({ e, ctx }: { e: Env; ctx: PxCtx }) {
         <button type="button" className="px-h-num" onClick={open} data-testid={`px-h-env-p95-${e.key}`} title="Full charts">
           <span className="px-lbl" title={P95_SOURCE[e.p95_source || "probe"]}>p95 latency</span>
           <span className="px-num px-mono">{e.p95_ms ?? "—"}<small className="px-faint"> ms</small></span>
+          <LatencyObjectiveLine e={e} />
           <Spark series={e.series.latency} tone="teal" label="p95 latency, last 24 hours" />
         </button>
         <div className="px-h-num" data-testid={`px-h-env-slo-${e.key}`}>

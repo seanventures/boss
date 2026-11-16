@@ -448,7 +448,12 @@ export type HealthView = {
                   uptime_pct: number | null; error_rate: number | null; p95_ms: number | null;
                   series: { errors: number[]; latency: number[] }; slo: { target: number | null; burn: "ok" | "warning" | "breach"; budget_used_pct: number | null; hours_left: number | null; budget_words: string };
                   /** Present only while 99.5 is still the install default. Empty once a person stores a percent, including 99.5. */
-                  slo_words?: string; href: string }[];
+                  slo_words?: string;
+                  /** Copied only when the payload included the key. Missing is not "no objective". */
+                  latency_objective_ms?: number | null;
+                  /** Copied only when the payload included the key. */
+                  latency_words?: string;
+                  href: string }[];
   /** One row per alert rule (screen 12): firing since …, resolved at …, or ok · quiet 3d. */
   alerts: { id: string; label: string; condition: string; severity: "page" | "ticket" | "info"; state: "firing" | "resolved" | "ok" | "off"; since: string; quiet: string; href: string }[];
   incidents: { id: string; label: string; state: "running" | "needs_you" | "resolved"; since: string; duration_s: number | null; outcome: string; graph_href: string;
@@ -937,6 +942,18 @@ export const parseSettings = (v: unknown): Settings => ({
   }).filter((sec) => sec.key),
 });
 
+/** Pass through a latency objective only when the payload actually carried the key. */
+function latencyObjectiveFields(y: R): { latency_objective_ms?: number | null; latency_words?: string } {
+  const extra: { latency_objective_ms?: number | null; latency_words?: string } = {};
+  if (Object.hasOwn(y, "latency_objective_ms")) {
+    const raw = y.latency_objective_ms;
+    if (typeof raw === "number" && Number.isFinite(raw)) extra.latency_objective_ms = raw;
+    else if (raw === null) extra.latency_objective_ms = null;
+  }
+  if (Object.hasOwn(y, "latency_words") && typeof y.latency_words === "string") extra.latency_words = y.latency_words;
+  return extra;
+}
+
 export const parseHealth = (v: unknown): HealthView => {
   const x = o(v); const mp = o(x.monitoring_pack); const l = o(x.links);
   return {
@@ -946,7 +963,7 @@ export const parseHealth = (v: unknown): HealthView => {
                health_reason: s(y.health_reason), window: s(y.window), p95_source: s(y.p95_source),
                error_rate: nn(y.error_rate), p95_ms: nn(y.p95_ms), series: { errors: nums(ser.errors), latency: nums(ser.latency) },
                slo: { target: nn(slo.target), burn: oneOf(slo.burn, ["ok", "warning", "breach"] as const, "ok"), budget_used_pct: nn(slo.budget_used_pct), hours_left: nn(slo.hours_left), budget_words: s(slo.budget_words) },
-               ...(s(y.slo_words) ? { slo_words: s(y.slo_words) } : {}), href: s(y.href) };
+               ...(s(y.slo_words) ? { slo_words: s(y.slo_words) } : {}), ...latencyObjectiveFields(y), href: s(y.href) };
     }),
     alerts: a(x.alerts).map((z) => {
       const y = o(z);
