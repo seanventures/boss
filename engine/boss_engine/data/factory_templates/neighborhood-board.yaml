@@ -1,0 +1,28 @@
+id: neighborhood-board
+title: Neighborhood board
+blurb: Neighbors post short notices that expire on a chosen date and stay readable on this machine.
+category: web
+prompt: |
+  Build a Next.js app named Neighborhood Board with a list page, a detail page, and a create page.
+  A notice has a title, a body of at most 500 characters, one neighborhood chosen from Park, Market,
+  Harbor, Hill, and Station, and an expiry date. The list shows only notices whose expiry is today
+  or later, newest first, and each row links to its detail page. The create page refuses a save
+  until the title, body, neighborhood, and date are present. Store notices in a sqlite file under
+  the app data directory. There is no sign-in and no outbound network call. A passing test inserts
+  a notice, sees it on the list, and does not see it once the expiry date is in the past.
+stack: Next.js
+resources:
+  - repo
+  - preview
+  - database
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - seed
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

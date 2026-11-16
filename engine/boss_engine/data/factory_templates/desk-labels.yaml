@@ -1,0 +1,27 @@
+id: desk-labels
+title: Desk labels
+blurb: A person places titled labels on the floor and can read the same labels on a desktop fallback.
+category: xr
+prompt: |
+  Build a WebXR page named Desk Labels. A bundled list of six short titles can be placed as text
+  panels. In an immersive session the person taps the floor to drop the next title as a panel that
+  faces the viewer. When WebXR is unavailable, the same list is placed by clicking a ground grid
+  in a Three.js view. Placed labels are stored in a sqlite file or IndexedDB so a reload shows
+  them again. There is no cloud anchor account. A passing test uses the desktop fallback, places
+  two labels, reloads the stored list, and checks that both titles and their grid positions remain.
+stack: WebXR
+resources:
+  - repo
+  - preview
+  - database
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - seed
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

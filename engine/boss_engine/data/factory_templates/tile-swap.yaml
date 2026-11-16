@@ -1,0 +1,26 @@
+id: tile-swap
+title: Tile swap
+blurb: A player swaps tiles on a small board to make lines and finish within a move limit.
+category: game
+prompt: |
+  Build an HTML canvas game named Tile Swap. The board is 8 by 8 and each cell holds one of five
+  colors. A click selects a tile and a second click on an adjacent tile swaps them. Three or more
+  of the same color in a row or column clear, the cells above fall down, and the score increases
+  by the number cleared. The player has 20 swaps. The page shows the score, the swaps left, and a
+  restart control that deals a new board. There is no account and no asset download. A passing
+  test deals a scripted board, swaps two tiles to make a line of three, and checks that those
+  cells clear and the score is 3.
+stack: HTML canvas
+resources:
+  - repo
+  - preview
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

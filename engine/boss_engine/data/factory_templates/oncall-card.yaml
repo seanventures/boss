@@ -1,0 +1,28 @@
+id: oncall-card
+title: On-call card
+blurb: An operator reads who is on call, the open incidents, and the latest handoff note.
+category: internal
+prompt: |
+  Build a Next.js page named On-call card for an internal desk. A JSON file in the repo lists the
+  rotation as name, role of primary or secondary, and the shift date. The page shows today's
+  primary and secondary. Open incidents come from a second JSON file with an id, a title, and a
+  status of open or closed, and only open rows are listed. A handoff note is a single text field
+  saved in a sqlite file, and saving replaces the previous note. There is no paging vendor and no
+  sign-in. A passing test seeds one open and one closed incident and checks that the page shows
+  the open title and the saved note.
+stack: Next.js
+resources:
+  - repo
+  - preview
+  - database
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - seed
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

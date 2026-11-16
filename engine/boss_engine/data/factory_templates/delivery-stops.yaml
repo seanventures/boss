@@ -1,0 +1,27 @@
+id: delivery-stops
+title: Delivery stops
+blurb: A driver reorders delivery stops on a map and sees straight lines between them.
+category: maps
+prompt: |
+  Build a web app named Delivery Stops. A stop has a label and a latitude and longitude. The app
+  starts from five seeded stops stored in a sqlite file. The page lists the stops in order and
+  draws them on a MapLibre GL map whose style file is bundled in the repo. Do not call a routing
+  service or a hosted tile account. Dragging a row reorders the stops, saves the new order, and
+  redraws a straight polyline through them. A passing test reorders the last stop to the front and
+  checks that both the list and the polyline coordinates follow that order.
+stack: MapLibre GL
+resources:
+  - repo
+  - preview
+  - database
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - seed
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

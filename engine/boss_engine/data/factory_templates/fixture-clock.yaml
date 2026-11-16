@@ -1,0 +1,26 @@
+id: fixture-clock
+title: Fixture clock
+blurb: A local service serves a frozen clock and a seeded user list so other apps can demo against it.
+category: internal
+prompt: |
+  Build a Go API named Fixture Clock that listens on localhost. GET /time returns a JSON object
+  with the frozen instant the process was given at startup, and it does not follow the wall clock.
+  GET /users returns the users from a JSON file in the repo, each with an id, a display name, and
+  a role of staff or guest. Unknown paths return 404 with a JSON error. There is no identity
+  provider and no remote call. A passing test starts the server on an ephemeral port, checks that
+  two calls to /time return the same instant, and checks that /users returns the seeded names.
+stack: Go API
+resources:
+  - repo
+  - preview
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - seed
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

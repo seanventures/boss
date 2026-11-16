@@ -1,0 +1,26 @@
+id: gallery-walk
+title: Gallery walk
+blurb: A visitor moves through a corridor of titled frames drawn as colored panels, not pictures.
+category: "3d"
+prompt: |
+  Build a Three.js page named Gallery Walk. The scene is a straight corridor with six frames on
+  the walls. Each frame is a colored plane plus a text title from a JSON file in the repo. Do not
+  ship image files and do not fetch textures. Pointer keys or on-screen buttons move the camera
+  forward, back, and turn left or right in fixed steps. Standing in front of a frame shows that
+  frame's title in a caption bar. A passing test loads the six titles, asserts six frames exist,
+  and moves the camera to the second frame to check that its title is the caption.
+stack: Three.js
+resources:
+  - repo
+  - preview
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - seed
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

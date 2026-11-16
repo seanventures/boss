@@ -1,0 +1,26 @@
+id: crate-room
+title: Crate room
+blurb: A visitor walks a room of labeled crates and reads the label of the crate they click.
+category: "3d"
+prompt: |
+  Build a Three.js page named Crate Room. The scene is a room made of a floor and four walls, all
+  plain colored materials, plus six crates built as box geometries. Do not download a mesh or a
+  texture. Each crate has a label string in a local array. Orbit controls let the visitor move the
+  camera inside the room. Clicking a crate selects it and shows its label in a side panel, and the
+  selected crate uses a brighter material. There is no account. A passing test builds the scene,
+  asserts there are six crates, and simulates a pick on the third crate to check that its label is
+  the one shown.
+stack: Three.js
+resources:
+  - repo
+  - preview
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

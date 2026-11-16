@@ -1,0 +1,26 @@
+id: flood-gauge-map
+title: Flood gauge map
+blurb: An analyst plots flood gauges from a bundled table and reads the latest level.
+category: maps
+prompt: |
+  Build a web app named Flood Gauge Map. Ship a CSV fixture of twelve gauges with an id, a name,
+  a latitude, a longitude, and a water level in centimeters. Draw the rows with Leaflet on a local
+  grid or a bundled tile image, with no tile provider account and no API key. Color a marker blue
+  under 100, amber from 100 to 199, and red at 200 or more. Selecting a marker shows the name and
+  the level. The data is the CSV in the repo, not a remote feed. A passing test loads the fixture,
+  counts twelve markers, and checks that a level of 200 is classified red.
+stack: Leaflet
+resources:
+  - repo
+  - preview
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - seed
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

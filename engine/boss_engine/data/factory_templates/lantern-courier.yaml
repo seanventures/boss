@@ -1,0 +1,26 @@
+id: lantern-courier
+title: Lantern courier
+blurb: A player carries a lantern to the gate before the timer ends while avoiding patrols.
+category: game
+prompt: |
+  Build a Phaser game named Lantern Courier on a single canvas page. The playfield is a top-down
+  grid of 20 by 12 tiles. The player starts on the lantern tile and must reach the gate tile.
+  Arrow keys move one tile at a time. Two patrols move back and forth on fixed rows. Touching a
+  patrol or letting the 45 second timer hit zero ends the run. Reaching the gate saves the
+  remaining time as the best score in local storage. There is no account and no network call.
+  A passing test moves the player along an open path and asserts the score is stored, and a second
+  case asserts a patrol collision ends the run.
+stack: Phaser
+resources:
+  - repo
+  - preview
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

@@ -1,0 +1,28 @@
+id: park-bench-map
+title: Park bench map
+blurb: A visitor taps a bench on a local map and reads the note stored for that bench.
+category: maps
+prompt: |
+  Build a web app named Park Bench Map that draws benches from a GeoJSON file bundled in the repo.
+  Include at least eight point features around a single invented park, each with an id and a name.
+  Plot them with MapLibre GL using a style document shipped in the repo, not a hosted tile account
+  and not an API key. Tapping a point opens a panel with the bench name and a note. Notes are
+  stored in a sqlite file keyed by the feature id and start empty. The page must still show the
+  points if the browser is offline. A passing test loads the fixture, counts eight markers, and
+  saves a note that is still there after a reload.
+stack: MapLibre GL
+resources:
+  - repo
+  - preview
+  - database
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - seed
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

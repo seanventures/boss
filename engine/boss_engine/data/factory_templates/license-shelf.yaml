@@ -1,0 +1,27 @@
+id: license-shelf
+title: License shelf
+blurb: A maintainer lists the licenses found in a source tree and flags packages with none.
+category: internal
+prompt: |
+  Build a Go program named License Shelf. It walks a directory of package folders given on the
+  command line. A package folder may contain a LICENSE file. The program reads the first line and
+  records a known SPDX identifier when that line is MIT, Apache-2.0, or BSD-3-Clause, and records
+  missing otherwise. It writes an HTML report in the workspace listing every package and its
+  result, with missing rows first. Do not call a license-scanning service. The preview is that
+  HTML file opened locally. A passing test runs against a fixture of four packages, one each for MIT,
+  Apache-2.0, and BSD-3-Clause, plus one folder with no license file, and checks the report text.
+stack: Go
+resources:
+  - repo
+  - preview
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - seed
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

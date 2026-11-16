@@ -1,0 +1,26 @@
+id: gear-assembly
+title: Gear assembly
+blurb: A student turns a slider and watches three gears rotate at the ratios printed beside them.
+category: "3d"
+prompt: |
+  Build a Three.js page named Gear Assembly. Three gears are cylinder meshes with tooth notches
+  cut by smaller boxes or by a tooth count drawn as spokes. Do not load a model from a network.
+  The gear ratios are 1 to 2 and 2 to 3, printed as text next to the canvas. A slider from 0 to 360
+  sets the first gear's angle in degrees, and the other two follow at their ratios in the opposite
+  direction so the teeth mesh. The page shows the three angles as numbers. A passing test sets the
+  slider to 90 and checks that the second gear is at 45 degrees the other way and the third is at
+  30 degrees the first way.
+stack: Three.js
+resources:
+  - repo
+  - preview
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

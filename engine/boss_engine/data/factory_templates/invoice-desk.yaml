@@ -1,0 +1,28 @@
+id: invoice-desk
+title: Invoice desk
+blurb: A clerk records clients and invoices, totals the lines, and marks an invoice paid.
+category: web
+prompt: |
+  Build a Next.js app named Invoice Desk backed by a sqlite file in the app data directory.
+  A clerk can add a client with a name and an email address, then open an invoice for that client.
+  An invoice has a date, a list of lines, and a status of open or paid. Each line has a description,
+  a quantity, and a unit price in cents. The invoice page shows the line total and a button that
+  marks the invoice paid. A print stylesheet hides the navigation and shows only the invoice.
+  There is no payment provider and no account beyond the local database. A passing test creates a
+  client, adds two lines, checks the summed total, and marks the invoice paid.
+stack: Next.js
+resources:
+  - repo
+  - preview
+  - database
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - seed
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

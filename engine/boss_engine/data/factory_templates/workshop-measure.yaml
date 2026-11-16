@@ -1,0 +1,26 @@
+id: workshop-measure
+title: Workshop measure
+blurb: A person marks two points and reads the distance between them in meters.
+category: xr
+prompt: |
+  Build a WebXR page named Workshop Measure. The person places two points and the page shows the
+  straight-line distance in meters with two decimal places. In an immersive session the points are
+  controller or touch positions on real surfaces. When WebXR is missing, the desktop fallback is a
+  ground grid in meters where two clicks set the points. A reset control clears both points. Do
+  not use a cloud spatial account. A passing test uses the fallback grid, clicks two points one
+  meter apart on each axis, and checks that the shown distance is the square root of two within a
+  hundredth of a meter.
+stack: WebXR
+resources:
+  - repo
+  - preview
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

@@ -1,0 +1,27 @@
+id: shift-clock
+title: Shift clock
+blurb: A worker clocks in and out and reads the hours worked across the current week.
+category: android
+prompt: |
+  Build a Jetpack Compose app named Shift Clock. The home screen has one button that clocks in
+  when no shift is open and clocks out when a shift is open. A shift stores a start instant and an
+  end instant in Room. The week screen lists shifts whose start falls in the current calendar week
+  and shows the total duration in hours and minutes. Clocking out before clocking in is refused.
+  There is no employer account and no network permission. The preview runs on an emulator. A
+  passing test opens a shift, closes it two hours later using a clock the test controls, and
+  checks that the week total is two hours.
+stack: Jetpack Compose
+resources:
+  - repo
+  - preview
+  - database
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

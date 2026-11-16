@@ -1,0 +1,26 @@
+id: constellation-viewer
+title: Constellation viewer
+blurb: A person selects a star from a bundled catalog and reads its name and distance.
+category: xr
+prompt: |
+  Build a WebXR page named Constellation Viewer. Ship a CSV of at least thirty stars with a name,
+  a right ascension, a declination, and a distance in light years. Render them as points on a
+  sphere around the viewer. Selecting a point shows the name and the distance. In a headset the
+  select input picks a star, and on a desktop a click does the same in a Three.js fallback so the
+  preview does not need a headset. Do not call a sky survey. A passing test loads the CSV, asserts
+  the point count matches the rows, and selects a named star to check the distance text.
+stack: WebXR
+resources:
+  - repo
+  - preview
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - seed
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test

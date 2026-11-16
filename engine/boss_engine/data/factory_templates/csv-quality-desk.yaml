@@ -1,0 +1,28 @@
+id: csv-quality-desk
+title: CSV quality desk
+blurb: An analyst loads a table, profiles empty cells and duplicate keys, and reads a written report.
+category: data
+prompt: |
+  Build a Python app named CSV Quality Desk with a command that reads a CSV path and writes a
+  markdown report beside it. The report names the row count, the column names, the count of empty
+  cells per column, the inferred type of each column as integer, number, or text, and any value in
+  the first column that occurs more than once. Also serve the latest report on a local page so a
+  preview can open it. Keep the profile run in a sqlite file. Do not upload the table. A passing
+  test runs the command on a fixture of five rows with one blank cell and one repeated key and
+  checks that the report states both.
+stack: Python
+resources:
+  - repo
+  - preview
+  - database
+workflows:
+  - name: build
+    steps:
+      - scaffold
+      - seed
+      - test
+      - preview
+  - name: check
+    steps:
+      - lint
+      - test
