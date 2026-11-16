@@ -316,14 +316,54 @@ def test_a_bound_a_crashed_conversion_left_never_blocks_inserts(db):
     assert tr.clear_stale_bound(db) is False
 
 
+def _plant_invalid_index(db, name: str = "idx_events_crashed") -> None:
+    """What CREATE INDEX CONCURRENTLY leaves when the build crashes: the name exists, indisvalid
+    is false. schema.sql's IF NOT EXISTS will not rebuild a name that already exists."""
+    with db.begin() as c:
+        c.execute(text(f'CREATE INDEX "{name}" ON events (actor)'))
+        c.execute(text("UPDATE pg_index SET indisvalid = false, indisready = false "
+                       "WHERE indexrelid = to_regclass(:n)"), {"n": name})
+        valid = c.execute(text("SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(:n)"),
+                          {"n": name}).scalar()
+    assert valid is False
+
+
+def test_an_invalid_index_is_not_carried_onto_the_new_parent(db):
+    """A crashed index build must not become the partitioned parent's index. Attaching it leaves
+    the parent indisvalid forever, and schema.sql's CREATE INDEX IF NOT EXISTS never repairs a
+    name that already exists."""
+    with db.connect() as c:
+        if tr.is_partitioned(c, "events"):
+            pytest.skip("events is already partitioned")
+    _plant_invalid_index(db)
+    got = tr.ensure_partitioned(db, now=NOW)
+    assert got.get("converted") is True and not got.get("error"), got
+    with db.connect() as c:
+        invalid = c.execute(text("""
+            SELECT ic.relname FROM pg_index i
+              JOIN pg_class ic ON ic.oid = i.indexrelid
+             WHERE i.indrelid = 'events'::regclass AND NOT i.indisvalid""")).all()
+        carried = c.execute(text("""
+            SELECT count(*) FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid
+             WHERE i.indrelid = 'events'::regclass AND ic.relname = 'idx_events_crashed'""")).scalar()
+    assert invalid == []
+    assert carried == 0
+
+
 def test_events_convert_online_twice_and_keep_everything(db):
-    _leave_a_stale_bound(db)     # a crashed earlier attempt: the next pass still converts
+    with db.connect() as c:
+        already = tr.is_partitioned(c, "events")
+    if not already:
+        _leave_a_stale_bound(db)     # a crashed earlier attempt: the next pass still converts
     with db.begin() as c:
         _event(c, "job.created", NOW - timedelta(days=20))
         ids = _ids(c, "events")
     first = tr.ensure_partitioned(db, now=NOW)
-    assert first.get("stale_bound_dropped") is True
-    assert first.get("converted") is True, first
+    if already:
+        assert first.get("converted") is False and not first.get("error"), first
+    else:
+        assert first.get("stale_bound_dropped") is True
+        assert first.get("converted") is True, first
     second = tr.ensure_partitioned(db, now=NOW)
     assert second.get("converted") is False and not second.get("error"), second
     with db.connect() as c:

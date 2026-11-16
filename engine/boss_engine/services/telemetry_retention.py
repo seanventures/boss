@@ -504,12 +504,26 @@ def _swap(c: Any, *, cutover: datetime, now: datetime) -> None:
     c.execute(text("LOCK TABLE events IN ACCESS EXCLUSIVE MODE"))
     if is_partitioned(c, "events"):
         return  # another process won the race
+    # A CREATE INDEX CONCURRENTLY that crashed leaves indisvalid false. Attaching that index
+    # makes the parent's index invalid too, and schema.sql's CREATE INDEX IF NOT EXISTS never
+    # rebuilds a name that already exists. Drop it here (we already hold ACCESS EXCLUSIVE) so
+    # the name is free for a later valid build. Constraint indexes are not this list.
+    invalid = c.execute(text("""
+        SELECT ic.relname
+          FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid
+         WHERE i.indrelid = 'events'::regclass
+           AND NOT i.indisvalid
+           AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conindid = i.indexrelid)
+           AND ic.relname <> :helper"""), {"helper": _HELPER_INDEX}).all()
+    for (name,) in invalid:
+        c.execute(text(f'DROP INDEX "{name}"'))
     # What the new parent must carry: every plain index (constraint indexes aside), every
     # user trigger, and the foreign keys that point at events(id) — dropped, see below.
     indexes = c.execute(text("""
         SELECT ic.relname, pg_get_indexdef(i.indexrelid)
           FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid
          WHERE i.indrelid = 'events'::regclass
+           AND i.indisvalid
            AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conindid = i.indexrelid)
            AND ic.relname <> :helper"""), {"helper": _HELPER_INDEX}).all()
     triggers = c.execute(text(
