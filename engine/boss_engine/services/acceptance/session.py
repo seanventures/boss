@@ -291,6 +291,9 @@ class _FencedRunner:
 
 
 OWNER_KIND = "acceptance"
+#: Output a test run writes in any Python repo, ignored or not (bytecode, pytest's cache): it
+#: never makes the tree "changed" — running the tests is not editing the work.
+TOOL_OUTPUT = ("__pycache__/", "*.pyc", ".pytest_cache/")
 
 #: The loopback request the sealed uid makes for `AcceptanceSandbox.http` (BOSS's code, not the
 #: agent's: its output is a JSON line BOSS parses).
@@ -364,6 +367,10 @@ class AcceptanceSandbox:
                 cmd.refused = "cwd outside the clone"
                 return self.record.add(cmd)
             workdir = str(target)
+        # THE TREE AS THE COMMAND FOUND IT, taken BEFORE it runs: a build's own output (pytest's
+        # cache, `go build -o bin/`, target/, node_modules) never makes the command that
+        # produced it unusable; a file an EARLIER command wrote does.
+        before = self.tree_dirty()
         try:
             res = self.runner.run(command, timeout=timeout, cwd=workdir)
         except SandboxError as exc:
@@ -379,22 +386,31 @@ class AcceptanceSandbox:
         cmd.duration_ms = int(res.duration_ms or 0)
         cmd.output_sha256 = hashlib.sha256((out + "\0" + err).encode()).hexdigest()
         cmd.stdout, cmd.stderr = _trim(out), _trim(err)
-        cmd.tree_dirty = self.tree_dirty()
+        cmd.tree_dirty = before
         return self.record.add(cmd)
 
     def tree_dirty(self) -> Optional[bool]:
-        """Has the session changed the clone (modified, added or deleted anything, ignored files
-        included)? Run by BOSS with a sanitized git. None when git cannot say (fail closed)."""
+        """Has the session changed the clone: a tracked file modified or deleted (`git diff
+        --quiet HEAD`), or a new file that is NOT ignored (`git ls-files -o
+        --exclude-standard`)? Ignored output — caches, build directories — does not count.
+        Run by BOSS with a sanitized git. None when git cannot say (fail closed)."""
+        env = git_env(self.root)
         try:
-            got = subprocess.run(["git", "status", "--porcelain", "--ignored",
-                                  "--untracked-files=all"], cwd=str(self.root),
-                                 capture_output=True, text=True, timeout=30,
-                                 env=git_env(self.root))
+            tracked = subprocess.run(["git", "diff", "--quiet", "HEAD", "--"],
+                                     cwd=str(self.root), capture_output=True, timeout=30,
+                                     env=env)
+            if tracked.returncode == 1:
+                return True
+            if tracked.returncode != 0:
+                return None
+            new = subprocess.run(["git", "ls-files", "-o", "--exclude-standard", "-z",
+                                  *[f"--exclude={x}" for x in TOOL_OUTPUT]],
+                                 cwd=str(self.root), capture_output=True, timeout=30, env=env)
         except Exception:  # noqa: BLE001
             return None
-        if got.returncode != 0:
+        if new.returncode != 0:
             return None
-        return bool(got.stdout.strip())
+        return bool(new.stdout)
 
     def http(self, method: str, url: str, *, headers: Optional[Mapping[str, str]] = None,
              body: Optional[str] = None, timeout: int = 30, replay: bool = False) -> Command:
@@ -410,6 +426,7 @@ class AcceptanceSandbox:
                 "" if self.egress == LOOPBACK else " or the run's target")
             return self.record.add(cmd)
         started = time.monotonic()
+        before = self.tree_dirty()          # a server started from files the session wrote
         sealed_request = getattr(self.runner, "request", None)
         if _is_loopback(host) and callable(sealed_request):
             # LOOPBACK FROM THE SEALED UID: the request meets the commands' network fence (a
@@ -426,7 +443,7 @@ class AcceptanceSandbox:
             cmd.exit, cmd.status = 0, int(status)
             cmd.output_sha256 = hashlib.sha256(text.encode()).hexdigest()
             cmd.stdout = _trim(f"HTTP {status}\n{text}")
-            cmd.tree_dirty = self.tree_dirty()
+            cmd.tree_dirty = before
             return self.record.add(cmd)
         # Only the run's own staging target (loopback+target) is requested by BOSS itself.
         req = urllib.request.Request(url, method=method, headers=dict(headers or {}),
@@ -446,7 +463,7 @@ class AcceptanceSandbox:
         cmd.output_sha256 = hashlib.sha256(text.encode()).hexdigest()
         cmd.stdout = _trim(f"HTTP {status}\n{text}")
         # A server the session started from files it wrote is not the work under test.
-        cmd.tree_dirty = self.tree_dirty()
+        cmd.tree_dirty = before
         return self.record.add(cmd)
 
     def changed_since(self, base_sha: Optional[str]) -> Optional[list[str]]:
@@ -486,6 +503,29 @@ def _git(args: list[str], cwd: Path, timeout: int = 120) -> str:
     if got.returncode != 0:
         raise RuntimeError(f"git {args[0]} failed ({got.returncode})")
     return got.stdout.strip()
+
+
+def protect_clone(root: Path) -> None:
+    """The clone as the sealed uid sees it (it is in no group of BOSS's, so `other` bits apply):
+    every TRACKED file and all of .git READ-ONLY (0644, 0755 when executable); working-tree
+    directories 01777 — the session may create files (build output, caches) but the sticky bit
+    keeps it from deleting or renaming over a file it does not own. So a command cannot rewrite
+    the delivered work and then quote it; an edit-to-test item is a person's (HUMAN) for now."""
+    os.chmod(root, 0o1777)
+    for dirpath, dirnames, filenames in os.walk(root):
+        in_git = Path(dirpath) == root / ".git" or (root / ".git") in Path(dirpath).parents
+        for n in dirnames:
+            full = os.path.join(dirpath, n)
+            with contextlib.suppress(OSError):
+                if not os.path.islink(full):
+                    git_dir = in_git or (Path(dirpath) == root and n == ".git")
+                    os.chmod(full, 0o755 if git_dir else 0o1777)
+        for n in filenames:
+            full = os.path.join(dirpath, n)
+            with contextlib.suppress(OSError):
+                if not os.path.islink(full):
+                    mode = os.stat(full).st_mode
+                    os.chmod(full, 0o755 if mode & 0o111 else 0o644)
 
 
 def _commit_of(root: Path, ref: str) -> str:
@@ -568,13 +608,7 @@ def open_sandbox(settings: Any, *, run_id: str, source: Any = None, head_sha: Op
             _git(["checkout", "--quiet", "--detach", _commit_of(root, branch)], root)
         _cut_remotes(root)
         head = _git(["rev-parse", "HEAD"], root)
-        os.chmod(root, 0o2777)
-        for dirpath, dirnames, filenames in os.walk(root):
-            for n in dirnames + filenames:
-                with contextlib.suppress(OSError):
-                    full = os.path.join(dirpath, n)
-                    if not os.path.islink(full):
-                        os.chmod(full, 0o2777 if os.path.isdir(full) else 0o664)
+        protect_clone(root)
         return AcceptanceSandbox(root=root, head_sha=head, egress=egress, target_hosts=targets,
                                  runner=_FencedRunner(settings, owner_id, project_id),
                                  owner=eph, identity_owner=owner_id)
@@ -666,6 +700,9 @@ def judge_prompt(items: list[dict], *, title: str, record: CommandRecord,
         "  AC-<n>: PARTIAL — what works (evidence) / what does not (evidence)\n"
         "  AC-<n>: MISSING — what was run or looked for (evidence) / what is absent\n"
         "  AC-<n>: HUMAN — why a machine cannot judge it\n"
+        "An item that can only be proven by EDITING a file (hot reload, a config change taking "
+        "effect) is HUMAN for now: the delivered files are read-only here, and BOSS does not "
+        "accept evidence from a tree the session changed.\n"
         "A MET must cite a command from THE RECORD with its exit code and words that appear in "
         "its output, or a file:line in the tree that is code, not a README. BOSS checks every "
         "citation; one it cannot verify makes the item not judged.\n"

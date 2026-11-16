@@ -513,6 +513,11 @@ def _inline_flag(arg: str) -> bool:
             and arg[1:].isalpha() and bool(set(arg[1:]) & {"c", "e", "p"}))
 
 
+#: Why a command run after the session edited the clone is not evidence (and the mark that
+#: turns such a MET into HUMAN: parse_exercised).
+EDITED = "the session had changed the clone before it ran"
+
+
 def manufactured(cmd: Any) -> Optional[str]:
     """Why a recorded command's output cannot be evidence of the work, or None: an inline-code
     interpreter (`python3 -c "print('401')"`, `node -e`, `sh -c`) or a printer (echo, printf)
@@ -537,7 +542,7 @@ def manufactured(cmd: Any) -> Optional[str]:
     if dirty is None:
         return "BOSS could not tell whether the session had changed the clone"
     if dirty:
-        return "the session had changed the clone before it ran"
+        return EDITED
     return None
 
 
@@ -656,7 +661,14 @@ def parse_exercised(reply: str, items: list[dict], *, root: Any, exec_log: Any =
             files, no_file = _file_refs(root, why) if root is not None else ([], "no tree")
             row["evidence_refs"] = refs + files
             reason = ""
-            if failed:
+            if failed and all(EDITED in f for f in failed):
+                # ONLY PROVABLE BY EDITING A FILE (hot reload, a config change): BOSS has no
+                # supported edit-then-test probe yet, so it is a person's to confirm — HUMAN
+                # (a minor ledger row), never a major "unverified" gap.
+                row["status"] = HUMAN
+                reason = ("needs a person: it was tested by editing the clone, and an "
+                          "edit-then-test check is not supported yet")
+            elif failed:
                 row.update(status=UNJUDGED, unverified=True)
                 reason = "evidence not verified: " + "; ".join(failed[:3])
             elif not refs and not files:

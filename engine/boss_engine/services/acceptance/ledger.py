@@ -726,7 +726,8 @@ def fixed_by_review(connection: Any, *, project_id: str, lineage: str, run_id: O
     """Close the live review rows a re-review no longer reports (L4): raised by one of `seats`,
     anchored to a file in `reviewed_paths` (what this round's change touched, so the seat read
     it), and not among the fingerprints the seat `reported` now. A seat that did not review, or
-    a row with no file, is never closed this way."""
+    a row with no file, is never closed this way — and neither is a SECURITY finding or a
+    BLOCKER: silence is not proof for those; a check must show them fixed."""
     from sqlalchemy import text
 
     delta = LedgerDelta()
@@ -737,7 +738,8 @@ def fixed_by_review(connection: Any, *, project_id: str, lineage: str, run_id: O
     rows = connection.execute(text(
         "SELECT f.id, f.path, f.fingerprint FROM findings f WHERE f.project_id = :p "
         "AND f.lineage_root_run_id = :r AND f.status IN ('open', 'in_progress') "
-        "AND f.kind IN ('review', 'security', 'consistency') AND f.path IS NOT NULL "
+        "AND f.kind IN ('review', 'consistency') AND f.severity <> 'blocker' "
+        "AND f.path IS NOT NULL "
         "AND EXISTS (SELECT 1 FROM finding_observations o WHERE o.finding_id = f.id "
         "            AND o.stage IN :seats AND o.status_seen = 'open')"
         ).bindparams(_expanding("seats")),

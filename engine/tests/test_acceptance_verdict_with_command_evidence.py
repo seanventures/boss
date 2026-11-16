@@ -182,17 +182,18 @@ def test_inline_code_and_printers_are_never_evidence(tree, argv, why):
     assert item["status"] == "unjudged" and why in item["evidence"]
 
 
-@pytest.mark.parametrize("dirty,why", [
-    (True, "the session had changed the clone before it ran"),
-    (None, "BOSS could not tell whether the session had changed the clone"),
+@pytest.mark.parametrize("dirty,status,why", [
+    # Edit-then-test (hot reload): a person's to confirm for now — HUMAN, a minor row (N4).
+    (True, "human", "needs a person"),
+    (None, "unjudged", "BOSS could not tell whether the session had changed the clone"),
 ])
-def test_a_command_run_on_a_changed_or_unknown_tree_is_not_evidence(tree, dirty, why):
+def test_a_command_run_on_a_changed_or_unknown_tree_is_not_evidence(tree, dirty, status, why):
     """Write a file, then read it back through a tree command: the agent's own words."""
     rec = _one(Command(id="E1", cmd="make show", argv=["make", "show"], exit=0,
                        stdout="401 Unauthorized\n", tree_dirty=dirty))
     item = av.judge(ITEMS[:1], 'AC-1: MET — E1 (exit 0) "401 Unauthorized"\nACCEPTANCE: MET',
                     {}, root=tree, exec_log=rec)["items"][0]
-    assert item["status"] == "unjudged" and why in item["evidence"]
+    assert item["status"] == status and why in item["evidence"]
 
 
 def test_a_quote_too_short_to_prove_anything_is_not_evidence(tree, record):

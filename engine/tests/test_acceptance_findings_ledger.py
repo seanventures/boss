@@ -472,3 +472,37 @@ def test_a_re_review_that_no_longer_reports_a_finding_closes_it(eng, ledger_proj
                           {"p": p}).all()
     assert set(live) == {"stray debug print"}                 # src/b.go was not re-reviewed
     assert ("error is swallowed", "fixed") in fixed
+
+
+def test_a_re_review_never_closes_a_security_finding_or_a_blocker(eng, ledger_project):
+    """N3: silence from a re-review is not proof for those: only a check closes them."""
+    p = ledger_project
+    with eng.begin() as c:
+        root = _run(c, p)
+    governed._record_review_comments(eng, root, p, {
+        "review_summary": "FINDING: BLOCKER src/a.go:3 — panics on empty body\n"
+                          "FINDING: MAJOR src/a.go:9 — retries never back off\nVERDICT: REFUTED",
+        "security_summary": "FINDING: MAJOR src/a.go:20 — token logged\nVERDICT: ISSUES",
+        "impl_files": ["src/a.go"]})
+    governed._record_review_comments(eng, root, p, {
+        "review_summary": "VERDICT: SURVIVED", "security_summary": "VERDICT: CLEAN",
+        "impl_files": ["src/a.go"]})
+    with eng.begin() as c:
+        status = dict(c.execute(text("SELECT title, status FROM findings WHERE project_id = :p"),
+                                {"p": p}).all())
+    assert status == {"panics on empty body": "open", "retries never back off": "fixed",
+                      "token logged": "open"}
+
+
+def test_an_edit_only_item_is_a_minor_human_row_not_a_major_gap(eng, ledger_project):
+    """N4: hot reload (Northgate AC-11/AC-12) cannot be proven without editing a file yet."""
+    p = ledger_project
+    with eng.begin() as c:
+        root = _run(c, p, spec=SPEC)
+        rec = {"verdict": "not_met", "items": [{"n": 1, "text": "Unauthenticated requests get 401",
+                                               "status": "human",
+                                               "evidence": "needs a person: edit-then-test"}]}
+        al.observe_check(c, project_id=p, lineage=root, check={"id": None}, record=rec)
+        row = al.open_for(c, project_id=p)[0]
+    assert row["kind"] == "acceptance_gap" and row["severity"] == "minor"
+    assert "needs a person" in row["title"]

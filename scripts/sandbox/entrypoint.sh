@@ -147,9 +147,12 @@ seal_network() {
   iptables -A BOSS_SEALED -p tcp --dport "$PREVIEW_PORTS" -j REJECT || return 1
   # BOSS's own service ports (the API, egress, link ports) even on loopback.
   iptables -A BOSS_SEALED -p tcp -m multiport --dports "$PORTS" -j REJECT || return 1
+  # The link gateway's ports (one per cross-app link): never from the acceptance sandbox.
+  iptables -A BOSS_SEALED -p tcp --dport "$LINK_PORTS" -j REJECT || return 1
   iptables -A BOSS_SEALED -o lo -d 127.0.0.0/8 -j ACCEPT || return 1
   iptables -A BOSS_SEALED -j REJECT || return 1
   iptables -I OUTPUT 1 -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED || return 1
+  iptables -C BOSS_SEALED -p tcp --dport "$LINK_PORTS" -j REJECT || return 1
   iptables -C BOSS_SEALED -j REJECT || return 1
   iptables -C OUTPUT -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED || return 1
   if ! ipv6_unavailable; then
@@ -157,6 +160,7 @@ seal_network() {
     ip6tables -D OUTPUT -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED 2>/dev/null || true
     ip6tables -A BOSS_SEALED -p tcp --dport "$PREVIEW_PORTS" -j REJECT || return 1
     ip6tables -A BOSS_SEALED -p tcp -m multiport --dports "$PORTS" -j REJECT || return 1
+    ip6tables -A BOSS_SEALED -p tcp --dport "$LINK_PORTS" -j REJECT || return 1
     ip6tables -A BOSS_SEALED -o lo -d ::1/128 -j ACCEPT || return 1
     ip6tables -A BOSS_SEALED -j REJECT || return 1
     ip6tables -I OUTPUT 1 -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED || return 1

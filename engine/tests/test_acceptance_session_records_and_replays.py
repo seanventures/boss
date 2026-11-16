@@ -189,6 +189,8 @@ def test_the_entrypoint_seals_the_sub_pool_to_loopback_ahead_of_the_pool(tmp_pat
                  "iptables -A BOSS_SEALED -o lo -d 127.0.0.0/8 -j ACCEPT",
                  "iptables -A BOSS_SEALED -j REJECT",
                  "iptables -I OUTPUT 1 -m owner --uid-owner 61900-61999 -j BOSS_SEALED",
+                 "iptables -A BOSS_SEALED -p tcp --dport 18100:18199 -j REJECT",
+                 "ip6tables -A BOSS_SEALED -p tcp --dport 18100:18199 -j REJECT",
                  "ip6tables -A BOSS_SEALED -o lo -d ::1/128 -j ACCEPT"):
         assert rule in calls, rule
     # No compose network, no egress for the sealed chain.
@@ -229,6 +231,10 @@ ESCAPES = {
     "write_outside": "python3 -c \"open('{outside}/escaped', 'w').write('x'); print('ESCAPED')\"",
     "read_host": "python3 -c \"print('ESCAPED', open('{secret}').read())\"",
     "git_push": "make push",
+    "link_port": ("python3 -c \"import socket; socket.create_connection(('127.0.0.1', {link}), 5); "
+                  "print('ESCAPED')\""),
+    "edit_tracked": "python3 -c \"open('Makefile', 'a').write('x'); print('ESCAPED')\"",
+    "delete_tracked": "python3 -c \"import os; os.remove('app.py'); print('ESCAPED')\"",
 }
 
 
@@ -239,19 +245,49 @@ def test_no_escape_from_the_sealed_sandbox(repo, settings, tmp_path, escape):
     (repo / "Makefile").write_text("net:\n\tcurl -sS -m 5 https://example.com\n"
                                    "push:\n\tgit push https://example.com/x.git HEAD\n")
     _git(repo, "commit", "-qam", "escape targets")
+    import socket
+
+    link = socket.socket()                     # BOSS's own listener on a link-gateway port
+    link.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    link.bind(("127.0.0.1", 18150))
+    link.listen(1)
     outside = tmp_path / "boss-owned"
     outside.mkdir(mode=0o700)
     secret = outside / ".env"
     secret.write_text("SECRET=1\n")
     secret.chmod(0o600)
     with asn.open_sandbox(settings, run_id=f"crun_esc_{escape}", source=repo) as sbx:
-        cmd = sbx.exec(ESCAPES[escape].format(outside=outside, secret=secret), timeout=30)
+        cmd = sbx.exec(ESCAPES[escape].format(outside=outside, secret=secret, link=18150),
+                       timeout=30)
+        tracked = {n: (sbx.root / n).read_text() for n in ("Makefile", "app.py")}
+    link.close()
+    assert "x" not in tracked["Makefile"].splitlines()[-1:]
     said = f"{cmd.stdout}\n{cmd.stderr}"
     assert "ESCAPED" not in said
     assert cmd.refused or cmd.exit != 0
     # It really ran, in the clone, and was stopped by the fence — not a missing Makefile.
     assert not cmd.refused and "No rule to make target" not in said
     assert not (outside / "escaped").exists()
+
+
+@pytest.mark.skipif(not FENCED, reason="no sealed fence on this host")
+def test_the_sealed_session_has_its_own_temp_directory(repo, settings):
+    with asn.open_sandbox(settings, run_id="crun_tmp", source=repo) as sbx:
+        cmd = sbx.exec("python3 -c \"import tempfile; print(tempfile.gettempdir())\"")
+    assert cmd.exit == 0 and cmd.stdout.strip().startswith(str(si.run_root()))
+
+
+def test_the_clones_tracked_files_and_git_are_read_only_to_the_session(repo, tmp_path):
+    clone = tmp_path / "c"
+    asn._git(["clone", "--quiet", str(repo), str(clone)], tmp_path)
+    (clone / "run.sh").write_text("#!/bin/sh\n")
+    (clone / "run.sh").chmod(0o775)
+    asn.protect_clone(clone)
+    mode = lambda p: p.stat().st_mode & 0o7777  # noqa: E731
+    assert mode(clone / "Makefile") == 0o644 and mode(clone / "run.sh") == 0o755
+    assert mode(clone) == 0o1777                      # may add files, never replace ours
+    assert mode(clone / ".git") == 0o755 and mode(clone / ".git" / "HEAD") == 0o644
+    assert all(mode(Path(d)) == 0o755 for d, _, _ in os.walk(clone / ".git"))
 
 
 # ── the record ──────────────────────────────────────────────────────────────────────────────
@@ -278,7 +314,8 @@ def test_every_command_is_recorded_with_exit_output_duration_and_tree_state(repo
     assert push.refused and "push" in push.refused
     assert net.refused and "example.com" in net.refused
     assert cat.refused and "allowlisted" in cat.refused
-    assert wrote.exit == 0 and wrote.tree_dirty is True and after.tree_dirty is True
+    # The tree AS EACH COMMAND FOUND IT: the write itself ran on a clean tree; the next did not.
+    assert wrote.exit == 0 and wrote.tree_dirty is False and after.tree_dirty is True
     assert not sbx.scratch.exists()                          # nothing is kept
 
 
@@ -421,8 +458,33 @@ def test_a_changed_file_or_a_failing_probe_sends_the_item_back_to_the_agent(repo
     assert av.diff({"items": [{"id": "AC-1", "status": "met"}]}, rec)["regressed"] == ["AC-1"]
 
 
+def test_a_build_and_test_runs_own_output_never_spoils_its_evidence(repo, settings, tmp_path):
+    """pytest's cache, a build directory the repo ignores: the command that made them, and
+    every later one, is still evidence (review N2)."""
+    (repo / ".gitignore").write_text("bin/\n")
+    (repo / "Makefile").write_text("build:\n\tmkdir -p bin\n\tcp app.py bin/app\n"
+                                   "check:\n\t@echo gateway-ok\n")
+    (repo / "test_app.py").write_text("def test_ok():\n    assert 1 + 1 == 2\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "build + tests")
+    sbx = _sandbox(settings, repo, tmp_path)
+    tests = sbx.exec("python3 -m pytest -q test_app.py")
+    build = sbx.exec("make build")
+    check = sbx.exec("make check")
+    again = sbx.exec("python3 -m pytest -q test_app.py")
+    sbx.close()
+    assert tests.exit == 0 and "1 passed" in tests.stdout
+    assert [c.tree_dirty for c in (tests, build, check, again)] == [False] * 4
+    items = [{"id": "AC-1", "n": 1, "source": "ticket", "text": "the tests pass"}]
+    reply = 'AC-1: MET — E4 (exit 0) "1 passed" test_app.py:2\nACCEPTANCE: MET'
+    rec = av.judge(items, reply, {}, root=sbx.root if sbx.root.exists() else tmp_path,
+                   exec_log=sbx.record)
+    assert rec["items"][0]["evidence_refs"][0]["verified"], rec["items"][0]
+
+
 def test_evidence_after_the_session_changed_the_clone_is_not_accepted(repo, settings, tmp_path):
-    """Write a file, then cite a command: the output may be the agent's own words."""
+    """Write a file, then cite a command: the output may be the agent's own words. An item
+    that can only be proven by editing is a person's (HUMAN), never a major unverified gap."""
     engine = Scripted(plan="RUN: python3 -c \"open('x.txt','w').write('1')\"\nRUN: make check",
                       judge='AC-1: MET — E2 (exit 0) "gateway-ok" Makefile:2\nACCEPTANCE: MET')
     sbx = _sandbox(settings, repo, tmp_path)
@@ -430,7 +492,8 @@ def test_evidence_after_the_session_changed_the_clone_is_not_accepted(repo, sett
     rec = av.judge(ITEMS, res.reply, {}, root=sbx.root, exec_log=res.record)
     sbx.close()
     item = rec["items"][0]
-    assert item["status"] == "unjudged" and "changed the clone" in item["evidence"]
+    assert item["status"] == "human" and "needs a person" in item["evidence"]
+    assert rec["verdict"] == "not_met" and rec["unverified"] == []
 
 
 def test_an_open_rows_verify_with_probe_that_passes_proves_it_fixed(repo, settings, tmp_path):
