@@ -395,10 +395,16 @@ def _isolated_copy(cwd: Path) -> Path:
     directories are linked, not copied (a reviewer reads them; anything written through the link
     is a reviewer misbehaving, which the copy cannot fully prevent, and is why an engine with a
     real read-only mode is preferred for review)."""
-    # The system temp directory, never beside the workspace: the reviewer's cwd can be an app
-    # folder inside the repository, and a copy there would be an untracked tree a parallel
-    # writer could commit.
-    dest = Path(tempfile.mkdtemp(prefix="boss-review-copy-"))
+    # Never beside the workspace: the reviewer's cwd can be an app folder inside the repository,
+    # and a copy there would be an untracked tree a parallel writer could commit.
+    #
+    # INSIDE THE RUN'S SANDBOX DIRECTORY when the run has one (sandbox_identity): the session
+    # runs as the run's uid, which can only stand in its own run directory — a copy in the
+    # system temp directory was silently swapped for the run's empty HOME, so every reviewer,
+    # acceptance check and planner of northgate-gateway started with no tree. The planner then
+    # found an old Node checkout under /tmp and planned against it (crun_bbf93235, BOSSAPP-1324)
+    # and the acceptance re-check called all 30 must-haves missing (crun_95aca9c7, BOSSAPP-1323).
+    dest = _copy_home()
     tree = dest / Path(cwd).name
     shutil.copytree(cwd, tree, symlinks=True, ignore=_COPY_IGNORE, dirs_exist_ok=False)
     for heavy in ("node_modules", ".git"):
@@ -409,6 +415,35 @@ def _isolated_copy(cwd: Path) -> Path:
             except OSError:
                 pass
     return tree
+
+
+def _copy_home() -> Path:
+    """A fresh directory for a reviewer's copy: in the bound run's sandbox directory (readable
+    by the run's uid), else the system temp directory (no sandbox: nothing to escape)."""
+    from . import sandbox_identity
+
+    ident = sandbox_identity.current()
+    if ident is not None:
+        return ident.workspace("boss-review-copy-")
+    return Path(tempfile.mkdtemp(prefix="boss-review-copy-"))
+
+
+def session_tree_problem(cwd: Path) -> Optional[str]:
+    """Why an agent session must not start in `cwd`, or None. A sandboxed session can only
+    stand inside its run's directory; a tree outside it is replaced by the run's empty HOME
+    (sandbox_identity.cwd), and the agent then judges, plans or builds against whatever it finds
+    elsewhere on the machine. Refused instead, in words."""
+    from . import sandbox_identity
+
+    ident = sandbox_identity.current()
+    if ident is None:
+        return None
+    try:
+        Path(cwd).resolve().relative_to(ident.run_dir.resolve())
+        return None
+    except (ValueError, OSError):
+        return (f"the session's tree ({cwd}) is outside the run's sandbox directory, so it "
+                "would start in an empty home instead of the tree it was sent to read")
 
 
 # ── The wrapper every engine runs in ──────────────────────────────────────────────────────────
@@ -490,6 +525,11 @@ class ContractedAgent:
             copy = _isolated_copy(work)
             work = copy
             kwargs["_contract_read_only_copy"] = True
+        problem = session_tree_problem(work)
+        if problem:
+            if copy is not None:
+                shutil.rmtree(copy.parent, ignore_errors=True)
+            raise EngineSessionFailed(f"{self.engine} not started: {problem}")
         try:
             raw = _call(self._inner.run_role, run_prompt, work, kwargs)
         finally:

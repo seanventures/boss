@@ -6431,7 +6431,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
             _lineage_paths[:] = [str(p) for p in (_app_root.identity_paths(engine, run) or [])]
             with _transaction(engine) as _c:
-                _recorded_app = _app_root.recorded_app_dir(_c, run)
+                # The record only where THIS tree bears it out (app_root.home_on_tree): a stale
+                # `schema/` record never outranks the Go module at the root (BOSSAPP-1323).
+                _recorded_app = _app_root.home_on_tree(root, _app_root.recorded_app_dir(_c, run))
         except Exception:  # noqa: BLE001 — the named app and the change list still decide
             _log_caught(logger)
         from . import app_root as _app_root_mod
@@ -6447,9 +6449,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
             _known = _app_root.resolve(root, app_id=_app_id or _app_scope, recorded=_recorded_app,
                                        lineage=_lineage_paths)
-            if _known.path is not None and _known.path != Path(root):
+            if _known.path is not None:
+                # The root too ("."): it supersedes a stale subfolder record of the lineage.
                 with _transaction(engine) as _c:
-                    _app_root.remember_app_dir(_c, run_id, _known.path.relative_to(root).as_posix())
+                    _app_root.remember_app_dir(
+                        _c, run_id, (_known.path.relative_to(root).as_posix()
+                                     if _known.path != Path(root) else "."))
         except Exception:  # noqa: BLE001 — recording is a convenience; the plan above stands
             _log_caught(logger)
         # CONTINUE FROM THE FAILED ATTEMPT'S WORKSPACE (saved_workspace_files). Seeded after the
@@ -7142,6 +7147,32 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # approve-plan gate is Wire-Phase 2b; for now review plan records a PLAN: OK/REVISE note.)
         design: dict = {}
         do_design = risk_tier >= 2 and not is_web_app and not _seeded
+        # A CONTINUATION PLANS ONLY ON ITS LINEAGE'S APP (BOSSAPP-1324): the tree in front of
+        # the planner must hold the lineage's required stack in the app's folder, or BOSS stops
+        # here, in words, before any model call.
+        if _is_repair and not use_microvm and _release_target is None:
+            try:
+                with _transaction(engine) as _c:
+                    _lineage_stack = (verification_target.required_app_stack(spec)
+                                      or verification_target.lineage_required_stack(
+                                          _c, str(fctx.get("root_run_id") or "")))
+                _tree_app = _app_root_mod.app_dir(root, app_id=_app_id or _app_scope,
+                                                  recorded=_recorded_app,
+                                                  lineage=_lineage_paths) or Path(root)
+                _wrong_tree = verification_target.continuation_tree_problem(
+                    _tree_app, required=_lineage_stack, branch=str(base_branch or ""))
+            except Exception:  # noqa: BLE001 — a check that cannot run never blocks the build
+                _log_caught(logger)
+                _wrong_tree = None
+            if _wrong_tree:
+                with _transaction(engine) as c:
+                    _release(budget, c, project_id, reservation_id, "wrong tree",
+                             run_id=run_id)
+                    emit_event(c, project_id, "code_task.wrong_tree", "boss",
+                               "code_task_run", run_id,
+                               {"branch": base_branch, "why": _wrong_tree})
+                    return _fail(c, run_id, project_id, _wrong_tree, failure_class="infra",
+                                 reason_code="wrong_tree")
         if do_design and fix_lane_runner.skips_design(lane):
             do_design = False
         if not do_design:
@@ -8546,6 +8577,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         deferred_findings: list[dict] = []  # sub-threshold review findings → follow-up task
         # The acceptance check's record (acceptance_gate.judge), when its seat sat.
         _acceptance_record: Optional[dict] = None
+        # EVERY CHECK'S TABLE, oldest first (BOSSAPP-1323): kept on the run as history; a later
+        # check never erases an earlier one, and a check that refused to judge (wrong folder, a
+        # reviewer that never saw the tree) never replaces a judged table.
+        _acceptance_history: list[dict] = []
+        _acceptance_judged: dict = {}
         panel_size = 1
         review_seat = None  # the panel seat whose findings stand for the review (§6.4)
         review_cost = 0
@@ -9340,7 +9376,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # reviewer's model calls, in a transaction of its own.
                 rec, spent = _judge_acceptance_check(**kwargs)
                 _ledger_acceptance_check(engine, run_id, project_id, rec, root=review_root)
-                return rec, spent
+                return (_acceptance_gate.keep_history(_acceptance_history, rec,
+                                                      _acceptance_judged), spent)
 
             def _judge_acceptance_check(max_turns: Optional[int] = None,
                                         max_budget_usd: Optional[float] = None,
@@ -9476,6 +9513,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             **({_acceptance_gate.KEY: _acceptance_record,
                 _acceptance_gate.SUMMARY_KEY: _acceptance_gate.findings_summary(
                     _acceptance_record)} if _acceptance_record else {}),
+            # The same list object: later checks of this run append to it in place.
+            _acceptance_gate.HISTORY_KEY: _acceptance_history,
             "security_verdict": sec_verdict,
             "consistency_verdict": cons_verdict,
             # IaC verify lane (T3): the full per-step JSON result rides the quality-gate

@@ -306,6 +306,88 @@ def acceptance_prompt(items: list[dict], *, title: str, stack: Mapping[str, Any]
 
 
 
+#: Source files a project tree holds (any language BOSS builds).
+_SOURCE = re.compile(r"(?i)\.(go|py|js|jsx|ts|tsx|mjs|cjs|java|kt|kts|scala|rb|rs|cs|php|swift|c|cc|"
+                     r"cpp|h|hpp|ex|exs|dart|lua)$")
+#: A reviewer saying a cited file is not there.
+_NOT_THERE = re.compile(r"(?i)\b(does not exist|doesn't exist|no such file|not found|none of these "
+                        r"files exist|not in the (working )?tree|no [\w./-]+ exists?|absent)\b")
+
+
+def project_files(root: Any) -> dict[str, int]:
+    """What a check root holds: {"manifests": n, "sources": n} (non-test and test alike)."""
+    from .app_root import APP_MANIFESTS
+
+    out = {"manifests": 0, "sources": 0}
+    if root is None or not Path(root).is_dir():
+        return out
+    for p in _walk(Path(root)):
+        if p.name in APP_MANIFESTS:
+            out["manifests"] += 1
+        elif _SOURCE.search(p.name):
+            out["sources"] += 1
+        if out["manifests"] and out["sources"] >= 3:
+            break
+    return out
+
+
+def refusal(record: Mapping[str, Any], root: Any) -> Optional[str]:
+    """Why a check must not stand as a verdict on the code, or None (BOSSAPP-1323):
+
+      WRONG FOLDER — the root it judged holds no project at all (no manifest, no source file):
+        "missing" there says nothing about the branch;
+      A BLIND REVIEWER — every item it answered is MISSING, its evidence says the files are not
+        there, and none of the paths it looked for is checked against a tree that does hold a
+        project (crun_95aca9c7's re-check started in an empty home and called all 30 must-haves
+        missing on a branch with 53 Go files).
+    Such a check is NOT RUN: re-asked, never met, and its table never replaces a judged one."""
+    files = project_files(root)
+    if not files["manifests"] and not files["sources"]:
+        return ("wrong folder: the tree it judged holds no project files (no manifest, no "
+                "source file), so it refused to judge")
+    items = [i for i in record.get("items") or [] if i.get("status") != UNJUDGED]
+    if not items or any(i.get("status") != MISSING for i in items):
+        return None
+    blind = [i for i in items if _NOT_THERE.search(str(i.get("evidence") or ""))]
+    if len(blind) * 2 >= len(items):
+        return (f"the reviewer did not see the tree: it called all {len(items)} items missing "
+                "because their files were \"not there\", but the tree holds "
+                f"{files['manifests']} manifest(s) and {files['sources']}+ source files")
+    return None
+
+
+#: The run's acceptance tables, oldest first (state / evidence key).
+HISTORY_KEY = "acceptance_history"
+
+
+def keep_history(history: list, record: dict,
+                 judged: Optional[dict] = None) -> dict:
+    """Append this check's table to the run's `history` (never replacing an earlier one) and
+    return the record the gate stands on: this one — unless it REFUSED to judge (`refusal`)
+    while an earlier check of the run did judge (`judged`, a holder {"record": …} the caller
+    keeps), in which case the earlier table stands, marked with why the later one did not
+    count (crun_95aca9c7: a judged 25 met / 5 partial was replaced by a blind 0 / 30, and the
+    follow-up's brief was built from the blind one)."""
+    from datetime import datetime, timezone
+
+    history.append({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "verdict": record.get("verdict"), "why": record.get("why") or "",
+                    "counts": dict(record.get("counts") or {}),
+                    "refused": bool(record.get("refused")),
+                    "items": [{"n": i.get("n"), "status": i.get("status"),
+                               "evidence": str(i.get("evidence") or "")[:300]}
+                              for i in record.get("items") or []]})
+    holder = judged if judged is not None else {}
+    if record.get("refused"):
+        earlier = holder.get("record")
+        if isinstance(earlier, dict):
+            return {**earlier, "later_check_refused": record.get("why") or ""}
+        return record
+    if record.get("verdict") in ("met", "not_met"):
+        holder["record"] = record
+    return record
+
+
 def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, Any], root: Any,
               source: Optional[Mapping[str, Any]] = None, dropped: int = 0,
               batch_size: Optional[int] = None) -> tuple[dict[str, Any], int]:
@@ -351,6 +433,17 @@ def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, An
         replies.append(str(rr.get("summary") or ""))
     rec = judge(items, "\n".join(r or "" for r in replies), stack, root=root, source=source,
                 dropped=dropped, summary_line=batch_summary(replies), over_cap=over)
+    refused = refusal(rec, root) if items else None
+    if refused:
+        # NOT A VERDICT ON THE CODE: not run (re-asked, never met), its items unjudged so no
+        # "missing" reaches the card, the ledger or a follow-up's brief.
+        rec.update(verdict="not_run", why=refused, refused=True,
+                   missing=[], partial=[], met=[],
+                   unjudged=[i["n"] for i in rec.get("items") or []],
+                   items=[{**i, "status": UNJUDGED, "evidence": f"not judged: {refused}"}
+                          for i in rec.get("items") or []],
+                   counts={"met": 0, "partial": 0, "missing": 0,
+                           "unjudged": len(rec.get("items") or [])})
     rec["passes"] = len(replies)
     rec["batch_size"] = size
     rec["stops"] = stops
