@@ -16169,3 +16169,18 @@ ALTER TABLE ip_allow_audit ADD COLUMN IF NOT EXISTS outcome TEXT NOT NULL DEFAUL
 ALTER TABLE ip_allow_audit ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE INDEX IF NOT EXISTS idx_ip_allow_audit_created
   ON ip_allow_audit (created_at DESC);
+-- PAPERCLIP-PRIMARY: one primary agent per person per company. A preference only.
+-- Replacing it clears that person's previous primary in that company. Another
+-- company keeps its own row. This does not alter membership authority.
+CREATE TABLE IF NOT EXISTS person_primary_agents (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  person_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL REFERENCES agent_definitions(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (org_id, person_id),
+  FOREIGN KEY (org_id, person_id) REFERENCES org_members (org_id, member_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_person_primary_agents_agent
+  ON person_primary_agents (agent_id);
