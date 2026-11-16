@@ -9,8 +9,8 @@
  *   2 Paste two secrets (write-only: the vault keeps them, nobody reads them back) and the channel
  *     BOSS posts in. This creates the install's Slack chat endpoint (routers/chat_channels.py),
  *     then the Slack intake connection riding on it. An endpoint that already exists is reused;
- *   3 Test: the secrets resolve, then BOSS waits for your @BOSS and draws Signed → Saved → Replied
- *     as each happens.
+ *   3 Test: the secrets resolve, BOSS posts in the channel you picked, then waits for your
+ *     @BOSS and draws Signed → Saved → Replied as each happens.
  *
  * Beside the steps: who answers a DM that names no agent (the connection's default DM agent),
  * and, for an identity-provider admin only, the SSO attestation that lets a Slack email count as
@@ -23,8 +23,8 @@ import { GatedButton, useGate } from "../../components/gated";
 import { CheckRow, Field, FormError, FormGrid } from "../../components/form-kit";
 import { formatDate } from "../../lib/datetime";
 import {
-  attestConnection, clearAttestation, createConnection, createSlackEndpoint, parseConnection, parseEndpoint, parseTest,
-  chipOf, readChatEndpoints, readEvents, readIdps, testConnection, updateConnection, checkWords, type ChatEndpoint, type Connection, type FlowNode,
+  attestConnection, clearAttestation, createConnection, createSlackEndpoint, parseConnection, parseEndpoint, parseTestMessage,
+  chipOf, readChatEndpoints, readEvents, readIdps, readTestMessage, postTestMessage, updateConnection, checkWords, type ChatEndpoint, type Connection, type FlowNode,
 } from "../../lib/intake";
 import { EvFrame, useEv } from "./frame";
 import { EventFlowView } from "./event-flow";
@@ -97,9 +97,12 @@ export function ConnectSlack() {
 
   const poll = (connId: string, started: number) => {
     const tick = async () => {
-      const r = await readEvents(projectId, { connection_id: connId, hours: 1, limit: 20 });
+      const [r, probe] = await Promise.all([
+        readEvents(projectId, { connection_id: connId, hours: 1, limit: 20 }),
+        readTestMessage(connId),
+      ]);
       const fresh = r.ok ? r.data.events.filter((e) => Date.parse(e.received_at) >= started - 2000) : [];
-      const saved = fresh.length > 0;
+      const saved = (probe.ok && probe.data.round_trip) || fresh.length > 0;
       const replied = fresh.some((e) => e.status === "routed" && e.runs.length > 0);
       // Stopped short: a guard said no (an unlinked person, no grant yet), or no rule matched.
       const stopped = replied ? null : fresh.find((e) => ["refused", "filtered", "ignored", "dead", "failed"].includes(e.status)) ?? null;
@@ -114,11 +117,13 @@ export function ConnectSlack() {
   const runTest = async (c: Connection) => {
     const started = Date.now();
     setTest({ started, signed: null, saved: false, replied: false, waiting: true, lines: [] });
-    const r = await testConnection(c.id);
+    const r = await postTestMessage(c.id);
     if (!r.ok) { setTest({ started, signed: false, saved: false, replied: false, waiting: false, lines: [r.error || "The test failed."] }); return; }
-    const t = parseTest(r.body);
-    setTest({ started, signed: t.ok, saved: false, replied: false, waiting: t.ok, lines: checkWords(t).map((l) => `${l.label}${l.ok ? " ✓" : ""}`) });
-    if (t.ok) poll(c.id, started);
+    const t = parseTestMessage(r.body);
+    const signed = t.ok && t.posted;
+    setTest({ started, signed, saved: t.round_trip, replied: false, waiting: signed && !t.round_trip,
+              lines: checkWords(t).map((l) => `${l.label}${l.ok ? " ✓" : ""}`) });
+    if (signed && !t.round_trip) poll(c.id, started);
   };
 
   const save = async () => {
@@ -278,7 +283,7 @@ export function ConnectSlack() {
           </section>
           <section className="ev-card" aria-labelledby="ev-s3" data-testid="ev-slack-test">
             <h2 id="ev-s3" className="ev-h2">3 · Test</h2>
-            <span className="ev-faint">{endpoint?.channel || channel ? `Mention @BOSS in #${(endpoint?.channel || channel).replace(/^#/, "")}.` : "Mention @BOSS in a channel BOSS is in."} BOSS shows each step here.</span>
+            <span className="ev-faint">{endpoint?.channel || channel ? `BOSS posts in #${(endpoint?.channel || channel).replace(/^#/, "")} and waits for your @BOSS.` : "BOSS posts in the channel you pick and waits for your @BOSS."} BOSS shows each step here.</span>
             {test ? <EventFlowView nodes={flow} size="sm" testId="ev-slack-flow" /> : null}
             {test && !test.waiting && !test.replied && test.signed ? <span className="ev-faint">Nothing arrived yet. Check the Request URL in Slack, then Test again.</span> : null}
             {test?.stopped ? <button type="button" className="ev-link" onClick={() => goEvents({ events: "stream", ev: test.stopped?.id || null, kind: null })} data-testid="ev-slack-stopped">

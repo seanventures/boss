@@ -188,6 +188,7 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/intake.ts#updateConnection": "integration:manage",         // PATCH /v1/intake/connections/{id}
   "lib/intake.ts#deleteConnection": "integration:manage",         // DELETE /v1/intake/connections/{id}
   "lib/intake.ts#testConnection": "integration:manage",           // POST /v1/intake/connections/{id}/test
+  "lib/intake.ts#postTestMessage": "integration:manage",         // POST /v1/intake/connections/{id}/test-message
   "lib/intake.ts#rotateConnectionSecret": "integration:manage",   // POST /v1/intake/connections/{id}/rotate-secret
   "lib/intake.ts#setConnectionPaused": "integration:manage",      // POST /v1/intake/connections/{id}/pause|resume
   "lib/intake.ts#attestConnection": "identity_provider:manage",   // PUT /v1/intake/connections/{id}/sso-attestation

@@ -454,6 +454,17 @@ export const updateConnection = (id: string, patch: { name?: string; config?: R;
   obsWrite(conn(id), patch as R, press(`${id}:save`, "Save"), "PATCH");
 export const deleteConnection = (id: string): Promise<WriteResult> => obsWrite(conn(id), {}, press(`${id}:remove`, "Remove"), "DELETE");
 export const testConnection = (id: string): Promise<WriteResult> => obsWrite(`${conn(id)}/test`, {}, press(`${id}:test`, "Test"));
+export type TestMessage = TestResult & { posted: boolean; round_trip: boolean; channel: string; probe_id: string; event_id: string };
+export const parseTestMessage = (v: unknown): TestMessage => {
+  const t = parseTest(v);
+  const x = o(v);
+  return { ...t, posted: x.posted === true, round_trip: x.round_trip === true, channel: s(x.channel),
+           probe_id: s(x.probe_id), event_id: s(x.event_id) };
+};
+/** A fresh press scope each click: a stable scope would replay the first Test. */
+export const postTestMessage = (id: string): Promise<WriteResult> =>
+  obsWrite(`${conn(id)}/test-message`, {}, press(`${id}:test-message:${Date.now()}`, "Test"));
+export const readTestMessage = (id: string) => evRead(`${conn(id)}/test-message`, parseTestMessage);
 export const rotateConnectionSecret = (id: string): Promise<WriteResult> => obsWrite(`${conn(id)}/rotate-secret`, {}, press(`${id}:rotate`, "Rotate secret"));
 export const setConnectionPaused = (id: string, paused: boolean): Promise<WriteResult> =>
   obsWrite(`${conn(id)}/${paused ? "pause" : "resume"}`, {}, press(`${id}:pause`, paused ? "Pause" : "Resume"));

@@ -67,6 +67,7 @@ from ..connectors.intake.contract import (
     ParseRefused,
     RawRequest,
     RawResponse,
+    OutboxOp,
     StoredRaw,
     VerifyRefused,
     kept_headers,
@@ -646,6 +647,221 @@ def test_connection(connection: Connection, settings: Any, *, project_id: str,
             "last_event_at": _iso(stats["last_event_at"]),
             "refusals": int(health.get("refusals") or 0),
             "last_refusal": health.get("last_refusal")}
+
+
+_SAFE_RECEIPT = ("channel", "ts")
+
+
+def _test_channel(connection: Connection, row: Mapping[str, Any]) -> str:
+    """The channel the test post goes to: the connection's, else the chat endpoint's."""
+    cfg = _json(row.get("config"), {}) or {}
+    channel = str(cfg.get("channel") or "").strip().lstrip("#")
+    if channel:
+        return channel
+    endpoint_id = row.get("chat_endpoint_id") or cfg.get("chat_endpoint_id")
+    if not endpoint_id:
+        return ""
+    raw = connection.execute(text("SELECT config FROM chat_endpoints WHERE id = :e"),
+                             {"e": endpoint_id}).scalar()
+    return str((_json(raw, {}) or {}).get("channel") or "").strip().lstrip("#")
+
+
+def _endpoint_secret_names(connection: Connection, row: Mapping[str, Any]) -> set[str]:
+    cfg = _json(row.get("config"), {}) or {}
+    endpoint_id = row.get("chat_endpoint_id") or cfg.get("chat_endpoint_id")
+    if not endpoint_id:
+        return set()
+    refs = _json(connection.execute(text(
+        "SELECT secret_refs FROM chat_endpoints WHERE id = :e"),
+        {"e": endpoint_id}).scalar(), {}) or {}
+    return {str(name) for name in refs}
+
+
+def _with_endpoint_secrets(connection: Connection, settings: Any, row: Mapping[str, Any],
+                           checked: dict) -> dict:
+    """`test_connection` checks the connection's own refs. A Slack bot token lives on the chat
+    endpoint, and that is the secret the test post sends with, so it is checked here too."""
+    conn = to_intake_connection(connection, settings, row)
+    checks = dict(checked["checks"])
+    for fname in sorted(_endpoint_secret_names(connection, row)):
+        key = f"secret:{fname}"
+        if key in checks:
+            continue
+        try:
+            checks[key] = "ok" if conn.secret(fname) else "empty"
+        except Exception as error:  # noqa: BLE001 — the reason, never the value
+            checks[key] = f"unresolvable ({type(error).__name__})"
+    adapter_ok = checks["adapter"]["ok"] if isinstance(checks.get("adapter"), dict) else True
+    secret_ok = all(v == "ok" for k, v in checks.items() if k.startswith("secret:"))
+    checked = dict(checked)
+    checked["checks"] = checks
+    checked["ok"] = bool(secret_ok) and bool(adapter_ok)
+    health_row = get_connection(connection, str(row["id"])) or {}
+    health = dict(_json(health_row.get("health"), {}) or {})
+    if health.get("last_test_ok") is not checked["ok"]:
+        health["last_test_ok"] = checked["ok"]
+        connection.execute(text(
+            "UPDATE intake_connections SET health = CAST(:h AS JSONB), updated_at = now() "
+            "WHERE id = :id"),
+            {"h": json.dumps(health, default=str), "id": row["id"]})
+    return checked
+
+
+def _safe_receipt(ref: Mapping[str, Any]) -> dict:
+    return {k: ref[k] for k in _SAFE_RECEIPT if ref.get(k) not in (None, "")}
+
+
+def _store_probe(connection: Connection, connection_id: str, probe: dict) -> None:
+    row = get_connection(connection, connection_id) or {}
+    health = dict(_json(row.get("health"), {}) or {})
+    health["test_probe"] = probe
+    connection.execute(text(
+        "UPDATE intake_connections SET health = CAST(:h AS JSONB), updated_at = now() "
+        "WHERE id = :id"),
+        {"h": json.dumps(health, default=str), "id": connection_id})
+
+
+def _raw_event(raw: Any) -> dict:
+    if isinstance(raw, memoryview):
+        raw = raw.tobytes()
+    if isinstance(raw, (bytes, str)):
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            return {}
+    elif isinstance(raw, dict):
+        body = raw
+    else:
+        return {}
+    if not isinstance(body, dict):
+        return {}
+    event = body.get("event")
+    return event if isinstance(event, dict) else {}
+
+
+def _is_person_address(ev: Mapping[str, Any], channel: str, bot_user: str) -> bool:
+    """A person speaking to BOSS after the probe: an app mention, a DM, or a message that
+    names the bot, on the probe's channel. The bot's own echo is not that reply."""
+    if str(ev.get("actor_kind") or "") == "bot":
+        return False
+    env = _json(ev.get("envelope"), {}) or {}
+    data = env.get("data") if isinstance(env.get("data"), dict) else {}
+    conv = env.get("bossconversation") if isinstance(env.get("bossconversation"), dict) else {}
+    raw_ev = _raw_event(ev.get("raw"))
+    user = str(data.get("user") or raw_ev.get("user") or "")
+    if data.get("bot_id") or raw_ev.get("bot_id"):
+        return False
+    if bot_user and user == bot_user:
+        return False
+    if str(raw_ev.get("subtype") or "") in ("bot_message", "message_changed", "message_deleted"):
+        return False
+    if not user and str(ev.get("actor_kind") or "") != "user":
+        return False
+    ch = str(conv.get("channel") or data.get("channel") or raw_ev.get("channel") or "")
+    channel_type = str(data.get("channel_type") or raw_ev.get("channel_type") or "")
+    im = channel_type == "im"
+    kind = str(ev.get("type") or env.get("type") or raw_ev.get("type") or "")
+    text_ = str(data.get("text") or raw_ev.get("text") or "")
+    mentioned = bool(bot_user) and f"<@{bot_user}>" in text_
+    addressed = "app_mention" in kind or im or mentioned or data.get("mentions_bot") is True
+    if not addressed:
+        return False
+    if channel and ch and ch != channel and not im:
+        return False
+    return True
+
+
+def _person_reply(connection: Connection, row: Mapping[str, Any], probe: Mapping[str, Any]
+                  ) -> Optional[dict]:
+    posted_at = probe.get("posted_at")
+    if not posted_at:
+        return None
+    cfg = _json(row.get("config"), {}) or {}
+    bot_user = str(cfg.get("bot_user_id") or "")
+    rows = connection.execute(text("""
+        SELECT id, status, raw, actor_kind, type, envelope
+          FROM intake_events
+         WHERE connection_id = :c
+           AND received_at >= CAST(:at AS timestamptz)
+           AND status <> 'shed'
+         ORDER BY received_at, id
+         LIMIT 100"""), {"c": row["id"], "at": posted_at}).mappings().all()
+    for ev in rows:
+        if _is_person_address(ev, str(probe.get("channel") or ""), bot_user):
+            return dict(ev)
+    return None
+
+
+def _probe_of(row: Mapping[str, Any]) -> dict:
+    health = _json(row.get("health"), {}) or {}
+    probe = health.get("test_probe")
+    return dict(probe) if isinstance(probe, dict) else {}
+
+
+def post_test_message(connection: Connection, settings: Any, *, project_id: str,
+                      connection_id: str) -> dict:
+    """Post BOSS's own test message into the connection's channel and say whether a person has
+    already answered it. The post goes through the intake adapter (`send` / `OutboxOp`); a source
+    that cannot reply is refused and nothing is sent. Secrets are checked first: a secret that
+    does not resolve does not post."""
+    row = get_connection(connection, connection_id, project_id=project_id)
+    if row is None:
+        raise IntakeServiceError("no such connection in this project.", status=404, code="not_found")
+    adapter = _adapter(str(row["kind"]))
+    if not adapter.can("reply"):
+        raise IntakeServiceError("This source cannot take a test post.", status=422,
+                                 code="reply_unsupported")
+    channel = _test_channel(connection, row)
+    if not channel:
+        raise IntakeServiceError("Name the channel BOSS posts the test in.", status=422,
+                                 code="channel_required")
+    checked = _with_endpoint_secrets(connection, settings, row,
+                                    test_connection(connection, settings, project_id=project_id,
+                                                    connection_id=connection_id))
+    out = {"ok": checked["ok"], "checks": checked["checks"], "channel": channel,
+           "posted": False, "round_trip": False, "probe_id": None, "receipt": {},
+           "event_id": None, "event_status": None,
+           "last_hour": checked.get("last_hour"), "backlog": checked.get("backlog"),
+           "dead": checked.get("dead"), "last_event_at": checked.get("last_event_at")}
+    if not checked["ok"]:
+        return out
+    probe_id = make_id("itp")
+    words = f"BOSS test {probe_id}. Mention @BOSS in this channel to confirm the round trip."
+    op = OutboxOp(op="post", conversation={"channel": channel}, message={"text": words},
+                  dedupe_key=f"intake_test:{connection_id}:{probe_id}")
+    conn = to_intake_connection(connection, settings, row)
+    try:
+        receipt = adapter.send(conn, op, conn.secrets)
+    except Exception as error:  # noqa: BLE001 — the type only; the message may carry a token
+        out["ok"] = False
+        out["error"] = type(error).__name__
+        return out
+    if not getattr(receipt, "ok", False):
+        out["ok"] = False
+        out["error"] = "send_failed"
+        return out
+    posted_at = connection.execute(text("SELECT clock_timestamp()")).scalar()
+    safe = _safe_receipt(dict(getattr(receipt, "ref", None) or {}))
+    _store_probe(connection, connection_id, {
+        "id": probe_id, "channel": channel, "posted_at": _iso(posted_at), "receipt": safe})
+    out.update(posted=True, probe_id=probe_id, receipt=safe)
+    return out
+
+
+def confirm_test_message(connection: Connection, *, project_id: str, connection_id: str) -> dict:
+    """Whether the latest test post has a person's reply. Does not post again."""
+    row = get_connection(connection, connection_id, project_id=project_id)
+    if row is None:
+        raise IntakeServiceError("no such connection in this project.", status=404, code="not_found")
+    probe = _probe_of(row)
+    reply = _person_reply(connection, row, probe) if probe.get("id") else None
+    return {"ok": bool(probe.get("id")), "posted": bool(probe.get("id")),
+            "channel": probe.get("channel"), "probe_id": probe.get("id"),
+            "receipt": dict(probe.get("receipt") or {}),
+            "round_trip": reply is not None,
+            "event_id": None if reply is None else reply["id"],
+            "event_status": None if reply is None else reply["status"],
+            "checks": {}}
 
 
 def to_intake_connection(connection: Connection, settings: Any, row: Mapping[str, Any]

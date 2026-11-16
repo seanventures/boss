@@ -14,6 +14,8 @@ are the shapes it will read.
   PATCH   /v1/intake/connections/{connection_id}     name, config, limits, source-issued secrets
   DELETE  /v1/intake/connections/{connection_id}
   POST    /v1/intake/connections/{connection_id}/test            secrets resolve, inbox stats
+  POST    /v1/intake/connections/{connection_id}/test-message    post BOSS's own test message (adapter send)
+  GET     /v1/intake/connections/{connection_id}/test-message    did a person answer that post
   POST    /v1/intake/connections/{connection_id}/rotate-secret   new secret, shown ONCE
   POST    /v1/intake/connections/{connection_id}/pause | /resume
   PUT/DELETE /v1/intake/connections/{connection_id}/sso-attestation   identity_provider:manage
@@ -243,6 +245,33 @@ def build_intake_router(*, engine, settings: Callable[[], Any],
             try:
                 return event_intake.test_connection(db, settings(), project_id=project_id,
                                                     connection_id=connection_id)
+            except Exception as error:  # noqa: BLE001
+                _fail(error)
+
+    @router.post("/v1/intake/connections/{connection_id}/test-message")
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.of("intake_connection", path="connection_id"))
+    def post_intake_test_message(connection_id: str, body: Optional[ActorBody] = None) -> dict:
+        """Check the secrets, then post BOSS's own test message through the intake adapter.
+        Does not replace /test: that one only checks secrets."""
+        with begin(engine) as db:
+            project_id = _connection_project(db, connection_id)
+            require_write_actor(db, project_id, (body or ActorBody()).actor, "integration_manage")
+            try:
+                return event_intake.post_test_message(db, settings(), project_id=project_id,
+                                                      connection_id=connection_id)
+            except Exception as error:  # noqa: BLE001
+                _fail(error)
+
+    @router.get("/v1/intake/connections/{connection_id}/test-message")
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.of("intake_connection", path="connection_id"))
+    def get_intake_test_message(connection_id: str) -> dict:
+        """Whether a person has answered the latest test post. Does not post again."""
+        with begin(engine) as db:
+            project_id = _connection_project(db, connection_id)
+            require_reader(db, project_id)
+            try:
+                return event_intake.confirm_test_message(db, project_id=project_id,
+                                                         connection_id=connection_id)
             except Exception as error:  # noqa: BLE001
                 _fail(error)
 

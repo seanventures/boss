@@ -122,6 +122,8 @@ function api(over: (url: string, method: string, body: Record<string, unknown>) 
     if (url.endsWith("/people")) return json(PEOPLE);
     if (url.startsWith("/v1/chat/endpoints?")) return json({ endpoints: [] });
     if (url.startsWith("/v1/identity/providers")) return json({ providers: [{ id: "idp_okta", name: "Okta", domains: ["northpeak.com"], status: "active" }] });
+    if (url.endsWith("/test-message")) return json({ ok: true, posted: true, round_trip: false, channel: "C0SUPPORT", probe_id: "itp_1",
+      checks: { "secret:signing_secret": "ok", "secret:bot_token": "ok" }, receipt: { channel: "C0SUPPORT", ts: "1.0" } });
     if (url.endsWith("/test")) return json({ ok: true, checks: { "secret:signing_secret": "ok" }, last_hour: 3 });
     if (method === "POST" && url === "/v1/chat/endpoints") return json({ id: "che_new", kind: "slack", name: "Slack", status: "active", config: { channel: "C0SUPPORT" }, urls: {} }, 201);
     if (method === "POST" && url === "/v1/intake/connections") return json({ ...SLACK, id: "icn_new" }, 201);
@@ -249,7 +251,9 @@ describe("E2 Connect Slack", () => {
     expect(ep.body).toMatchObject({ kind: "slack", config: { channel: "C0SUPPORT" }, secrets: { signing_secret: "sig-secret", bot_token: "xoxb-1" } });
     const conn = calls.find((c) => c.method === "POST" && c.url === "/v1/intake/connections")!;
     expect(conn.body).toMatchObject({ kind: "slack", mode: "socket", config: { chat_endpoint_id: "che_new" }, secrets: { app_token: "xapp-1" } });
-    expect(calls.some((c) => c.url === "/v1/intake/connections/icn_new/test")).toBe(true);
+    expect(calls.some((c) => c.method === "POST" && c.url === "/v1/intake/connections/icn_new/test-message")).toBe(true);
+    expect(calls.some((c) => c.url === "/v1/intake/connections/icn_new/test")).toBe(false);
+    expect($('[data-testid="ev-slack-test"]')?.textContent).toContain("BOSS posts in #C0SUPPORT");
     expect($('[data-testid="ev-slack-flow-signed"]')?.getAttribute("data-state")).toBe("done");
     expect(($('[data-testid="ev-slack-signing"]') as HTMLInputElement).value).toBe("");   // the secrets are gone from the page
   });
