@@ -212,6 +212,21 @@ export function PromoteWhy({ sentence }: { sentence: string | null }) {
     : <span data-testid="sc-promote-why" data-user-text="">{sentence}</span>;
 }
 
+/** Why this experiment's verdict. A blank reason is nothing. */
+export function compareWhySentence(why: string | null | undefined): string | null {
+  const trimmed = why?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** Beside the verdict label. More than six words is a paragraph. */
+export function CompareWhy({ sentence }: { sentence: string | null }) {
+  if (!sentence) return null;
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  return long
+    ? <p data-testid="sc-exp-why" data-user-text="">{sentence}</p>
+    : <span data-testid="sc-exp-why" data-user-text="">{sentence}</span>;
+}
+
 function PromoteSheet({ e, arm, projectId, actor, onClose, onDone }: {
   e: Experiment; arm: "a" | "b"; projectId: string; actor: string; onClose: () => void; onDone: () => void;
 }) {
@@ -277,6 +292,7 @@ function ExperimentCard({ e, projectId, actor, onChange }: { e: Experiment; proj
               title={e.stop_reason ? STOP[e.stop_reason] ?? e.stop_reason : undefined}>{word}</span>
         <span className="im-verdict" data-tone={e.compare.verdict === "a" || e.compare.verdict === "b" ? "green" : undefined}
               title={e.compare.why} data-testid="sc-exp-verdict">{e.compare.label}</span>
+        <CompareWhy sentence={compareWhySentence(e.compare.why)} />
         <span className="ag-spacer" />
         {running ? <GatedButton permission="improvement:manage" type="button" className="ag-btn" disabled={busy !== ""} onClick={() => void act("experiment_stop")}>Stop</GatedButton> : null}
       </header>
