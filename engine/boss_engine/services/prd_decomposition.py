@@ -42,7 +42,14 @@ def _titled(directive: str) -> str:
 
 
 def _looks_like_web_app(text_v: str) -> bool:
-    return bool(_WEB_APP_RE.search(text_v or ""))
+    """A web app BOSS seeds its Vite + React scaffold into — never one whose brief REQUIRES a
+    non-Node stack (`Stack: Go.`): a Go gateway's brief that says "dashboard" or "website" gets
+    no package.json, Vite or Playwright (verification_target.required_app_stack)."""
+    if not _WEB_APP_RE.search(text_v or ""):
+        return False
+    from .verification_target import required_app_stack
+
+    return required_app_stack({"instructions": text_v or ""}) is None
 
 
 def project_github(engine, settings: Settings, project_id: str, owner: Optional[str],

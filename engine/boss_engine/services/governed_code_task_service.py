@@ -4633,7 +4633,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     _scope = _build_scope.decide(
         str((spec or {}).get("title") or ""), str((spec or {}).get("instructions") or ""),
         (spec or {}).get("acceptance_criteria") or (), workflow_deploys=_deploys,
-        has_manifest=bool(fctx.get("deploy_manifest")))
+        has_manifest=bool(fctx.get("deploy_manifest")), spec=spec or {})
     _build_scope.set_scope(_scope)
     logger.info("code_task.build_scope run=%s scope=%s", run_id, _scope)
     _n_refs = load_reference_links((spec or {}).get("reference_links"))
