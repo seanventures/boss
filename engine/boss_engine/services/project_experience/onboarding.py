@@ -381,7 +381,7 @@ def _pass(engine: Any, settings: Any, row: Mapping[str, Any], probes: Probes) ->
     # MODELS: cheap, every pass. Read-only (§15): a workspace setting, never picked here.
     with engine.begin() as c:
         ok, said = _safe(lambda: probes.models_ready(c, settings, project_id),
-                         (False, "Could not read Repo and models"))
+                         (False, "Could not read Setup"))
     _record(engine, run_id, items=[_item(
         "models", "done" if ok else "todo", owner="agent" if ok else "you", detail=said, sub=said,
         action=None if ok else {"label": "Add a model", "href": href(project_id, area="setup",
@@ -509,7 +509,7 @@ def _local_access(engine: Any, settings: Any, project_id: str, repo: Mapping[str
         return item
     item = _item("repo_access", "failed", owner="you", sub="Needs you",
                  detail=found["summary"] + fixed,
-                 action={"label": "Repo and models", "href": href(project_id, area="setup",
+                 action={"label": "Setup", "href": href(project_id, area="setup",
                                                                  focus="models")})
     item["_read"] = any(ch["key"] == "local_repo" and ch["ok"] for ch in found["checks"])
     item["machine"] = machine
@@ -540,13 +540,13 @@ def machine_view(project_id: str, found: Mapping[str, Any]) -> dict[str, Any]:
         if ch.get("ok") is not False:
             continue
         if key == "model" and not found.get("online"):
-            # The line reads on into its link: "… connect a local engine in Repo and models ›".
+            # The line reads on into its link: "… connect a local engine in Setup ›".
             cant.append({"key": key, "line": "Offline: the model is remote — connect a local "
                                              "engine", "href": models,
-                         "link": "in Repo and models"})
+                         "link": "in Setup"})
         elif key == "model":
             cant.append({"key": key, "line": "No model can build yet — pick one", "href": models,
-                         "link": "in Repo and models"})
+                         "link": "in Setup"})
         elif key == "git":
             cant.append({"key": key, "line": "git is not installed here — install git, then run "
                                              "onboarding again", "href": None, "link": None})
@@ -1754,7 +1754,7 @@ def _tests_truth(connection: Connection, project_id: str,
 
 
 def _live_models(connection: Connection, project_id: str) -> Optional[tuple[bool, str]]:
-    """Repo and models' own answer now (Probes.models_ready), or None when it can't be read."""
+    """Setup's own answer now (Probes.models_ready), or None when it can't be read."""
     from ...config import get_settings
 
     try:
@@ -1792,7 +1792,7 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
         items.append(item)
     by_key = {i["key"]: i for i in items}
     # THE MODEL IS READ LIVE (10-20): a workspace setting, so the Ready card and the workspace
-    # row say what Repo and models says NOW — never the ✓ the run stored when it last looked.
+    # row say what Setup says NOW — never the ✓ the run stored when it last looked.
     live_model = _live_models(connection, project_id)
     if live_model is not None and "models" in by_key:
         ok, said = live_model

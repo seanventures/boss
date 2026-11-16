@@ -35,7 +35,7 @@ rather than making up a changelog.
 
 **A bound repository.** Step 1 reads it through `repo.read` — the engine's own read tools (git
 history, pull requests, files), scoped to the repositories bound to the project in **Settings →
-Repo and models**. Without one, the agent reports it cannot read the repository.
+Setup**. Without one, the agent reports it cannot read the repository.
 
 **Email configured.** Step 4 sends through the project's SMTP settings.
 
@@ -132,7 +132,7 @@ The script only calls the public API; every step below does the same thing in th
 
 | What you see | What it means |
 |---|---|
-| *collect is blocked: cannot read the repository* | Bind a repository in Settings → Repo and models, or pass `repository` |
+| *collect is blocked: cannot read the repository* | Bind a repository in Settings → Setup, or pass `repository` |
 | *`since` not found* | Use a tag or commit that exists on the default branch |
 | *not ready yet: email* | Configure SMTP in Settings |
 | The join never completes | One branch failed; open it. The join waits for both (`success_policy: all`) |

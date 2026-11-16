@@ -809,7 +809,7 @@ Top to bottom:
 | State | Shown |
 |---|---|
 | loading | skeleton tree rows + canvas shimmer (no spinner-only screen); > 1.5 s shows "Reading 51,319 nodes…" |
-| empty: no repository | illustration-free card "Connect a repository to see its graph" → Repo and models |
+| empty: no repository | illustration-free card "Connect a repository to see its graph" → Setup |
 | empty: indexing | progress from `/v1/knowledge/repositories` ("Indexing 4,380 files"), refreshes |
 | empty layer | e.g. Rules chip with 0 rules: "No rules yet. Scan an area for business rules" + button |
 | error | inline banner with the server's words + Retry; the other panels keep working |

@@ -105,9 +105,9 @@ export function TicketBrief({ projectId, calls, text, onStarted }: {
         </div>
         <div className="tk-brief-chips" aria-label="What BOSS writes back">
           <span className="tk-optchip" aria-pressed={wb ? wb.comment : true} data-testid="tk-brief-wb-comment"
-                title="Set per connection in Repo and models › Ticket systems"><ChatCircleText size={12} aria-hidden /> Comment progress on {t.key}</span>
+                title="Set per connection in Setup › Ticket systems"><ChatCircleText size={12} aria-hidden /> Comment progress on {t.key}</span>
           <span className="tk-optchip" aria-pressed={wb ? wb.transition : true} data-testid="tk-brief-wb-move"
-                title="Set per connection in Repo and models › Ticket systems"><ArrowsLeftRight size={12} aria-hidden /> Move to {doing}</span>
+                title="Set per connection in Setup › Ticket systems"><ArrowsLeftRight size={12} aria-hidden /> Move to {doing}</span>
         </div>
         <span className="tk-spacer" />
         <GatedButton permission="work_tracker:write" projectId={projectId} className="tk-btn" data-kind="primary"

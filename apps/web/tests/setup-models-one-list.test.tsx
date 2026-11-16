@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * Repo and models › Models, redesigned (2026-10-25). The operator: "it is not easy to detect Add
+ * Setup › Models, redesigned (2026-10-25). The operator: "it is not easy to detect Add
  * source and choose source — it's not self intuitive to add the model". Held here:
  *
  * - "+ Add a model" is a primary button in the section header; it opens the one drawer

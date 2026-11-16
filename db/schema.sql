@@ -1197,7 +1197,7 @@ CREATE TABLE IF NOT EXISTS github_connections (
   missing_permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
   account_login TEXT,
   -- When the token stops working (GitHub's github-authentication-token-expiration header),
-  -- so Repo and models can warn before builds stop. NULL: never expires, or not yet known.
+  -- so Setup can warn before builds stop. NULL: never expires, or not yet known.
   expires_at TIMESTAMPTZ,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   last_test_status TEXT,

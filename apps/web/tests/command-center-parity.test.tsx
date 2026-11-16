@@ -31,7 +31,7 @@ type Wire = Record<string, unknown>;
 const REPO = resolve(__dirname, "../../..");
 const setupGap = {
   id: "ready:github", kind: "readiness", title: "Connect a repository", detail: "",
-  fix: { area: "setup", label: "Fix in Repo and models", focus: "repository" }, actions: [], answers: [],
+  fix: { area: "setup", label: "Fix in Setup", focus: "repository" }, actions: [], answers: [],
   decide_inline: false, at: null,
 };
 const busy = () => view({ attention: [failed(), gate(), setupGap], missions: [mission()] });
@@ -120,7 +120,7 @@ const ROWS: Row[] = [
   { row: 44, before: "Stopped count chip beside Needs you", now: "`n stopped` chip in the Needs you head", status: "Kept",
     dom: async () => { await show(); expect(tid("cc-stopped-chip")?.textContent).toBe("1 stopped"); } },
   { row: 23, before: "`n stopped earlier ↗`", now: "Same link, in the card's foot", status: "Kept", covered: "apps/web/tests/command-center-v2.test.tsx" },
-  { row: 24, before: "Setup: <gap> ↗ to its Repo and models row", now: "A setup row with Fix, never folded", status: "Kept",
+  { row: 24, before: "Setup: <gap> ↗ to its Setup row", now: "A setup row with Fix, never folded", status: "Kept",
     dom: async () => { await show(); expect(tid("cc-need-fix")?.getAttribute("href")).toContain("focus=repository"); } },
   { row: 25, before: "`n expired · still answerable ↗`", now: "Same link, in the card's foot", status: "Kept",
     dom: async () => { await show(); expect(tid("cc2-expired-answerable")?.textContent).toBe("3 expired · still answerable ↗"); } },

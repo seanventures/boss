@@ -1,5 +1,5 @@
 /**
- * Repo and models views, as GET /v1/setup returns them, for the board's render tests. The pills
+ * Setup views, as GET /v1/setup returns them, for the board's render tests. The pills
  * are written the way the server's catalogue (engine/boss_engine/services/setup_pills.py) says
  * them, so a test that compares rendered text to these compares it to the server's words.
  */

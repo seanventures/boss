@@ -837,7 +837,7 @@ _CATALOG_RETRY = 60.0
 _catalog_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
 
 
-#: Set while a READ is being served (Repo and models' GET /v1/setup): catalogs then come from
+#: Set while a READ is being served (Setup's GET /v1/setup): catalogs then come from
 #: the cache only, and a stale one is refreshed on a background thread. A request that spawned
 #: `claude -p` to read a catalog held its database transaction open for as long as the CLI took
 #: — and the CLI could take for ever — so one hung CLI per page load hung the whole console.
@@ -1006,7 +1006,7 @@ _CONNECT_NAME = {"claude_code": "claude", "codex": "codex", "grok": "grok"}
 #: (entitlements.disconnect_source → claude_credential.forget_subscription_login), which
 #: revokes the stored token and deletes it from its store. Then the in-BOSS sign-in.
 LEGACY_TOKEN_FIX = (
-    "Remove it with Repo and models › Sources › Claude Code › Disconnect (POST "
+    "Remove it with Setup › Sources › Claude Code › Disconnect (POST "
     "/v1/entitlements/sources/anthropic_claude_code/disconnect), then run `boss connect claude`.")
 
 
@@ -1040,7 +1040,7 @@ def _sign_in_step(spec: "CliHarnessSpec") -> str:
     name = _CONNECT_NAME.get(spec.name)
     if name:
         return (f"sign in inside BOSS: run `boss connect {name}` on the BOSS host, or press "
-                f"Sign in in Repo and models (it runs {spec.signin_hint.split(' (')[0]} as the "
+                f"Sign in in Setup (it runs {spec.signin_hint.split(' (')[0]} as the "
                 "BOSS user)")
     return f"sign in with: {spec.signin_hint}"
 
@@ -1569,7 +1569,7 @@ def apply_codex_pick(env: dict, pick: Optional[str], *, home: str,
         if not key:
             raise CliHarnessUnavailable(
                 "Codex · API key was chosen for this job, but no OpenAI API key is connected. "
-                "Add one in Repo and models, or switch the job to Subscription.")
+                "Add one in Setup, or switch the job to Subscription.")
         key_home = home.rstrip("/") + "-apikey"
         os.makedirs(key_home, mode=0o700, exist_ok=True)
         config = os.path.join(home, "config.toml")
@@ -1999,7 +1999,7 @@ class GenericCliCodeAgent:
         if not content:
             raise CliHarnessUnavailable(
                 f"the pool account {pool.label!r} has no stored login. Replace its login in "
-                "Repo and models, or remove it from the pool.")
+                "Setup, or remove it from the pool.")
         try:
             json.loads(content)
         except json.JSONDecodeError:
@@ -2036,7 +2036,7 @@ class GenericCliCodeAgent:
 
                 mark_needs_reauth(self.settings, self._pool.member_id)
             if verdict.kind == "auth_refused":
-                # NAME THE COPY. "Reconnect in Repo and models" is only actionable when the
+                # NAME THE COPY. "Reconnect in Setup" is only actionable when the
                 # store and the CLI's file agree; when they have diverged, which copy failed is
                 # the whole diagnosis (BOSSAPP-1026). Metadata only — never a value.
                 said = self._credential_provenance()

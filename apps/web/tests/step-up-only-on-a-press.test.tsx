@@ -2,7 +2,7 @@
 /**
  * "CONFIRM IT'S YOU" IS FOR A PRESS, NEVER FOR A PAGE VIEW (operator, 2026-10-10, ~10 reports).
  *
- * A plain refresh of the Command Center or the Factory opened the step-up sheet: Repo and models'
+ * A plain refresh of the Command Center or the Factory opened the step-up sheet: Setup's
  * automatic re-check of stale rows (an effect, POST /api/setup op=checks) was refused
  * step_up_required once the second factor was ten minutes old, and the one write path opened the
  * sheet for it. Every area the session opened stays mounted, so it ran on every page view.
@@ -60,8 +60,8 @@ describe("what counts as the person asking", () => {
 
   it("opening an area is a view, not a request to act", () => {
     for (const [html, pick] of [
-      ['<nav><button id=x data-area-nav="setup">Repo and models</button></nav>', "#x"],
-      ['<a id=x href="?area=setup">Repo and models</a>', "#x"],
+      ['<nav><button id=x data-area-nav="setup">Setup</button></nav>', "#x"],
+      ['<a id=x href="?area=setup">Setup</a>', "#x"],
       ['<div role=tablist><button id=x role=tab>Runs</button></div>', "#x"],
       ['<p id=x>text</p>', "#x"],
     ] as const) {

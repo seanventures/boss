@@ -199,7 +199,7 @@ This is the first draft of the one catalogue every BOSS API route, MCP tool, con
 
 | Permission | What it allows | O | A | P | V | U | Flags |
 |---|---|:-:|:-:|:-:|:-:|:-:|---|
-| `setup:read` | See the Repo and models checklist. | ● | ● | ● | ● | ● |  |
+| `setup:read` | See the Setup checklist. | ● | ● | ● | ● | ● |  |
 | `setup:manage` | Choose the repo, models and coding agents during setup. | ● | ● |  |  |  | step-up |
 | `setup:check` | Re-check GitHub access and ask each model one tiny question. | ● | ● | ● |  |  |  |
 | `model_provider:read` | See model sources, providers, usage, health and SLOs. | ● | ● | ● | ● | ● | delegable |
@@ -993,7 +993,7 @@ Each entry in `AREAS` (apps/web/app/ConsoleShell.tsx) gains a typed `permission`
 | `reliability` | Reliability | `reliability:read` | Ack/resolve/remediate -> reliability:respond; Policies -> reliability:manage |
 | `ai-sre` | AI SRE | `reliability:read` | Ask/overwatch -> reliability:respond |
 | `reports` | Evidence | `activity:read` | - |
-| `setup` | Repo and models | `setup:read` | Pick repo -> repository:manage; Add model -> model_provider:manage; Repo token -> github:connect |
+| `setup` | Setup | `setup:read` | Pick repo -> repository:manage; Add model -> model_provider:manage; Repo token -> github:connect |
 | `skills` | Skills & MCP | `skill:read` | Import skill -> skill:manage; Register MCP -> mcp_server:register; Review/enable -> mcp_server:review; Holders -> agent_ability:assign |
 | `budget` | Govern | `budget:read` | Caps/intensity -> budget:manage; Policies -> policy:manage |
 | `pipeline` | Coding Pipeline | `pipeline:read` | Profiles -> pipeline:manage |

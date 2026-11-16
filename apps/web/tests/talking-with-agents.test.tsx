@@ -255,7 +255,7 @@ describe("talking to one agent", () => {
       if ((init?.method ?? "GET") === "GET" && path === "") return Response.json({ items: [] });
       if ((init?.method ?? "GET") === "GET") return Response.json(conversation("cnv_9", "talk", ["qa"]));
       if (path === "") return Response.json(conversation("cnv_9", "talk", ["qa"]), { status: 201 });
-      return Response.json({ error: "Needs a model. Connect one in Repo and models.", code: "needs_model" }, { status: 409 });
+      return Response.json({ error: "Needs a model. Connect one in Setup.", code: "needs_model" }, { status: 409 });
     }));
     await act(async () => { converse.openTalk("qa"); });
     await settle();

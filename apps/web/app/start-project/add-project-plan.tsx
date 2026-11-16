@@ -452,7 +452,7 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
                       <HardDrives size={16} weight="duotone" aria-hidden /><span><b>On this machine</b><small>BOSS keeps the repo · publish to GitHub any time</small></span>
                     </button>
                     <button type="button" role="radio" aria-checked={plan.where === "github_new"} className="npx-where-opt" data-testid="ap-where-github"
-                            onClick={() => set({ where: "github_new" })} title={accounts.length ? "A new repo on GitHub, made by BOSS when you press Create" : "Connect a GitHub account first (Repo and models)"}>
+                            onClick={() => set({ where: "github_new" })} title={accounts.length ? "A new repo on GitHub, made by BOSS when you press Create" : "Connect a GitHub account first (Setup)"}>
                       <GithubLogo size={16} weight="fill" aria-hidden /><span><b>New GitHub repo</b><small>made by BOSS when you press Create</small></span>
                     </button>
                     <button type="button" role="radio" aria-checked={plan.where === "repo"} className="npx-where-opt" data-testid="ap-where-repo"
@@ -505,7 +505,7 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
                   : <>The {kind === "folder" ? "folder" : "repo"} you picked, <span className="npx-mono">{codeWhere.name}</span>: {codeWhere.sub}.</>)
                   : codeName ? <>The {kind === "folder" ? "folder" : "repo"} you picked, <span className="npx-mono">{codeName}</span>.</> : "Pick a repo or a folder above."}</p>
               )}
-              <p className="npx-faint">Account <b>{accountLogin || "—"}</b> is global — <a className="npx-link" href={homeHref({ area: "setup", focus: "repository" })}>Repo and models</a></p>
+              <p className="npx-faint">Account <b>{accountLogin || "—"}</b> is global — <a className="npx-link" href={homeHref({ area: "setup", focus: "repository" })}>Setup</a></p>
             </Pop>
           ) : null}
         </div>
@@ -613,7 +613,7 @@ function NewRepoForm({ plan, set, accounts, owners = null, newRepo, homeHref }: 
   const chip = ownerChip(owners, owner);
   const fixes = ownerFixLines(owners);
   if (!accounts.length) {
-    return <p className="npx-faint npx-small" data-testid="ap-newrepo-noaccount">No GitHub account yet · <a className="npx-link" href={homeHref({ area: "setup", focus: "repository" })}>Connect one in Repo and models ›</a></p>;
+    return <p className="npx-faint npx-small" data-testid="ap-newrepo-noaccount">No GitHub account yet · <a className="npx-link" href={homeHref({ area: "setup", focus: "repository" })}>Connect one in Setup ›</a></p>;
   }
   return (
     <div className="npx-newrepo" data-testid="ap-newrepo">
@@ -622,7 +622,7 @@ function NewRepoForm({ plan, set, accounts, owners = null, newRepo, homeHref }: 
           <select className="npx-input" data-testid="ap-newrepo-owner" value={owner} onChange={(e) => set({ newRepo: { ...plan.newRepo, owner: e.target.value } })}>
             {accounts.map((a) => <option key={a} value={a}>{a}</option>)}
           </select></label>
-        {chip ? <span className="npx-tag npx-newrepo-via" data-testid="ap-newrepo-via" title="The credential BOSS creates the repository with (Repo and models)"><GithubLogo size={10} aria-hidden />{chip}</span> : null}
+        {chip ? <span className="npx-tag npx-newrepo-via" data-testid="ap-newrepo-via" title="The credential BOSS creates the repository with (Setup)"><GithubLogo size={10} aria-hidden />{chip}</span> : null}
         <span className="npx-newrepo-slash" aria-hidden>/</span>
         <label className="npx-field npx-newrepo-name"><span>Repo name</span>
           <input className="npx-input npx-mono" data-testid="ap-newrepo-name" maxLength={100} spellCheck={false} value={plan.newRepo.name || newRepo?.name || ""}

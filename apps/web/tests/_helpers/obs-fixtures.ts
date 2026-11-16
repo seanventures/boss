@@ -352,7 +352,7 @@ export const HEALTH_CHECK_WIRE = {
   ],
 };
 
-// ── Repo and models: model capacity (entitlement sources + official sessions) ───────────────
+// ── Setup: model capacity (entitlement sources + official sessions) ───────────────
 
 export function entitlementSourcesWire() {
   return {
@@ -393,7 +393,7 @@ export function entitlementSessionsWire() {
 export type ObsBodies = {
   pulse?: unknown; app?: (targetId: string) => unknown; models?: (group: string) => unknown; system?: unknown; sources?: unknown;
   llmCalls?: (offset: number) => unknown; routes?: unknown; catalog?: unknown; entitlements?: unknown; sessions?: unknown;
-  /** Repo and models' board (GET /api/setup), for the `setup` parity rows. */
+  /** Setup's board (GET /api/setup), for the `setup` parity rows. */
   setup?: unknown;
   /** GET /v1/reliability/incidents/{id}/response (the Incident card). */
   incident?: unknown;

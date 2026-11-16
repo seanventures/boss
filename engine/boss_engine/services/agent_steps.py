@@ -559,7 +559,7 @@ def choose_agent(
         not_model = decision.reason or "the model named nobody in the pool"
     raise AgentStepError(
         f"BOSS could not pick which of {len(pool)} agents runs this step: {not_model}. Name "
-        "the agent on the step, or connect a model in Repo and models, then run it again.")
+        "the agent on the step, or connect a model in Setup, then run it again.")
 
 
 def run(

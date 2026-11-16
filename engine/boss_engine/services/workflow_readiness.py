@@ -70,11 +70,11 @@ class Need:
 NEEDS: dict[str, Need] = {
     "repository": Need(
         "repository", "A repository BOSS can push to (GitHub, or local on this machine)",
-        "Connect GitHub in Repo and models, or keep the code local.", "setup",
+        "Connect GitHub in Setup, or keep the code local.", "setup",
         (("focus", "repository"),)),
     "model": Need(
         "model", "A connected model",
-        "Connect in Repo and models.", "setup", (("focus", "models"),)),
+        "Connect in Setup.", "setup", (("focus", "models"),)),
     "deployment_target": Need(
         "deployment_target",
         "Somewhere to deploy: a verified deployment host or a stack target",

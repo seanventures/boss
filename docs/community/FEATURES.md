@@ -51,7 +51,7 @@ Everything in BOSS Community as of `v1.0-rc8`, grouped by area. Cloud and Enterp
 | Observability | ◐ Pulse, per-app drawers, Models, System, and Sources. |
 | Activity log and Govern | ◐ See Control plane. |
 | Agent Studio and Organization | ◐ Agents with a Passport and Loadout (skills, MCP, instructions); Organization as Teams, Flow and Lines. |
-| Setup | ◐ Repo and models, Model routing, and the next step for a new install. |
+| Setup | ◐ Setup, Model routing, and the next step for a new install. |
 | Skills & MCP (Kit) | ◐ The Library and connections; a skill that calls an MCP server never carries the server's reach. |
 
 ## Interfaces

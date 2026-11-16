@@ -33,7 +33,7 @@ from .agent_persona import (
     render,
 )
 
-NEEDS_MODEL = {"code": "needs_model", "message": "Needs a model. Connect one in Repo and models."}
+NEEDS_MODEL = {"code": "needs_model", "message": "Needs a model. Connect one in Setup."}
 
 PROBES: dict[str, dict[str, str]] = {
     "intro": {

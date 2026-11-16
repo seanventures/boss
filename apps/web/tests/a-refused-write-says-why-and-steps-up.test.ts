@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 /**
  * A REFUSED WRITE MUST SAY ITS REAL REASON, AND A STEP-UP REFUSAL MUST OPEN THE STEP-UP PROMPT
- * (boss-1 rc10.9: Setup > Repo and models > Add a model > API key > Anthropic). The API refused
+ * (boss-1 rc10.9: Setup > Setup > Add a model > API key > Anthropic). The API refused
  * POST /v1/setup/models with 401 step_up_required; the drawer showed no prompt and no reason —
  * only a stale pill from an older check.
  *

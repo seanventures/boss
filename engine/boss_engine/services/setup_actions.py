@@ -1,4 +1,4 @@
-"""What Repo and models DOES: one connect per object, one check endpoint, atomic job choices.
+"""What Setup DOES: one connect per object, one check endpoint, atomic job choices.
 
 Every mutation ends by returning the whole `setup_view` (the API does that), so the console
 replaces its state rather than patching it, and nothing it shows was judged in the browser.
@@ -1195,7 +1195,7 @@ def _same_connection(connection: Connection, project_id: str, provider: str, *,
 
 def _backend_it_lives_in(connection: Connection, project_id: str, source_id: str) -> Optional[str]:
     """REPLACE KEEPS THE KEY WHERE IT LIVES (operator decision 2026-10-04). A key stored in Vault
-    from Repo and models' Capacity row is replaced in Vault, not moved to the default store;
+    from Setup's Capacity row is replaced in Vault, not moved to the default store;
     only a first-time store asks (or takes the default)."""
     row = connection.execute(
         text("SELECT r.storage_backend FROM entitlement_sources e "
@@ -1821,7 +1821,7 @@ def ensure_try_workflow(connection: Connection, project_id: str) -> str:
     if existing is None:
         definition = workflows.create_definition(
             connection, project_id=project_id, workflow_key=key, name="First PR",
-            description="Repo and models › Try it: one sentence to a pull request.",
+            description="Setup › Try it: one sentence to a pull request.",
             actor="boss", namespace=workflows.PRODUCT_NAMESPACE, made_by_boss=True)
         existing = definition["id"]
     else:

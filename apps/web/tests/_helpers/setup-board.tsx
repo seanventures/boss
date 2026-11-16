@@ -1,5 +1,5 @@
 /**
- * Mount the Repo and models board in happy-dom against a fake /api/setup.
+ * Mount the Setup board in happy-dom against a fake /api/setup.
  *
  * `api.calls` records every request (method, op, body); `api.answer` decides the response per op
  * (default: the current view). Nothing reaches a network.

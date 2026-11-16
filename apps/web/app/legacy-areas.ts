@@ -275,7 +275,7 @@ export function consoleParams(params: URLSearchParams): { params: URLSearchParam
 
 /** The v2 routes that became console areas, by path. */
 const V2_ROUTES: Record<string, Record<string, string>> = {
-  // v2 Settings (roles, "what this deployment does not have") is Repo and models now.
+  // v2 Settings (roles, "what this deployment does not have") is Setup now.
   "/v2/settings": { area: "setup" },
   "/v2/boss": { area: "delivery_workflows", tab: "library" },
   "/v2/factory": { area: "workforce" },

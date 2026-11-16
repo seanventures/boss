@@ -66,7 +66,7 @@ export const KG_PARITY: readonly ParityRow[] = [
   {
     id: "embedding", capability: "Embedding model, its check, and why meaning search is off",
     was: "Reliability › Knowledge settings › Embedding",
-    now: "Graph › Settings › Embedding (link to Setup › Repo and models › Embedding model)",
+    now: "Graph › Settings › Embedding (link to Setup › Embedding model)",
     check: { tab: "settings", testid: "knowledge-embedding" },
   },
   {

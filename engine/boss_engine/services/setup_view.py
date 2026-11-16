@@ -1,4 +1,4 @@
-"""Repo and models, as ONE server-assembled view: `GET /v1/setup`.
+"""Setup, as ONE server-assembled view: `GET /v1/setup`.
 
 WHY ONE VIEW. Setup was built as forms that perform actions, so its state was whatever the last
 form said: eight GETs on load, five verdicts that disagreed, each card judging for itself. This
@@ -27,7 +27,7 @@ from .setup_checks import STALE_AFTER, now_utc, parse_time, repository_state
 
 #: The smallest code-change workflow: build, then report. No research, no panel, no deploy.
 #: A BOSS-made system workflow rather than a catalogue entry, so it never appears in the
-#: operator's Library — it is Repo and models' `Try it`, not a template to choose.
+#: operator's Library — it is Setup's `Try it`, not a template to choose.
 SETUP_TRY_WORKFLOW = "setup_first_pr"
 
 SUBSCRIPTIONS = ("claude_code", "codex", "grok", "cursor")
@@ -663,7 +663,7 @@ def _source_kind(provider: str, row: Any) -> str:
 
 
 def _model_rows(connection: Connection, project_id: str) -> list[Any]:
-    """The sources Repo and models lists as models: a stored credential or a connection."""
+    """The sources Setup lists as models: a stored credential or a connection."""
     return connection.execute(
         text("SELECT source_id, provider, connection_status, credential_secret_ref_id, "
              "       cost_mode, supported_models, connection_metadata, observed_capacity, "
@@ -724,7 +724,7 @@ def _claude_summary(connection: Connection, project_id: str) -> Optional[dict[st
 def source_pills(connection: Connection, settings: Any, project_id: str, *,
                  now: Optional[datetime] = None) -> dict[str, dict[str, Any]]:
     """{source_id: the pill its Models row shows} — `{state, label, tone, checked_at}` — for
-    every source Repo and models lists. A source absent here has no Models row (its pill is
+    every source Setup lists. A source absent here has no Models row (its pill is
     null). The same `source_entry` the page builds, with the same budget answer."""
     now = now or now_utc()
     try:
@@ -1310,7 +1310,7 @@ def build_basics(connection: Connection, settings: Any, project_id: str, *,
 
 def build(connection: Connection, settings: Any, project_id: str, *,
           now: Optional[datetime] = None) -> dict[str, Any]:
-    """The whole of Repo and models. No network, no decryption, NO SUBPROCESS: every CLI
+    """The whole of Setup. No network, no decryption, NO SUBPROCESS: every CLI
     catalog and detection comes from a cache refreshed in the background (`detecting` says a
     refresh is on its way, so the page asks again)."""
     from .cli_harness import catalogs_from_cache_only
@@ -1475,7 +1475,7 @@ def build_database(connection: Connection, settings: Any, project_id: str) -> di
 
 
 def embedding_model(connection: Connection, settings: Any, project_id: str) -> Optional[dict[str, Any]]:
-    """Setup › Repo and models › Embedding model (the org's). None only when it cannot be read (the rest still renders)."""
+    """Setup › Embedding model (the org's). None only when it cannot be read (the rest still renders)."""
     from .knowledge import embedding_slot
 
     try:
@@ -1495,7 +1495,7 @@ def build_speed(connection: Connection, settings: Any, project_id: str) -> dict[
         with connection.begin_nested():
             chosen = project_settings.get_all(connection, project_id)
             parallelism = project_settings.build_parallelism(connection, project_id, settings)
-    except Exception:  # noqa: BLE001 — the rest of Repo and models still renders
+    except Exception:  # noqa: BLE001 — the rest of Setup still renders
         chosen, parallelism = {}, 1
     mode = str(chosen.get("build_speed") or getattr(settings, "build_speed", None)
                or "balanced").lower()
@@ -1514,7 +1514,7 @@ def _routing(connection: Connection, settings: Any, project_id: str) -> Optional
 
         with connection.begin_nested():
             return routing_view(connection, settings, project_id)
-    except Exception:  # noqa: BLE001 — the rest of Repo and models still renders
+    except Exception:  # noqa: BLE001 — the rest of Setup still renders
         import logging
 
         logging.getLogger("boss.setup_view").warning("routing view failed", exc_info=True)

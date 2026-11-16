@@ -148,7 +148,7 @@ function Summary({ models }: { models: ModelEntry[] }) {
 export const ModelsRow = forwardRef<HTMLElement, {
   mode: string; step: number | null; focused: boolean; add: string | null; source: string | null;
   onAddHandled: () => void; children?: React.ReactNode;
-  /** Repo and models' board (BOSSAPP-808): the one Models block, a heading, the summary and
+  /** Setup's board (BOSSAPP-808): the one Models block, a heading, the summary and
    *  "+ Add model" over the full list, instead of a numbered row. Same drawer, same list. */
   block?: boolean;
 }>(function ModelsRow({ mode, step, focused, add, source, onAddHandled, children, block = false }, ref) {

@@ -65,11 +65,11 @@ export function MemoryHome({ projectId, actor }: { projectId: string; actor: str
       if (r.ok) { setData(body); setError(null); }
       else {
         setError(`Could not load what BOSS remembers: ${body?.error ?? `HTTP ${r.status}`}. `
-                 + "Reload the page; if it stays like this, check the API in Repo and models.");
+                 + "Reload the page; if it stays like this, check the API in Setup.");
       }
     } catch (e) {
       setError(`Could not load what BOSS remembers: ${String((e as Error)?.message ?? e)}. `
-               + "Reload the page; if it stays like this, check the API in Repo and models.");
+               + "Reload the page; if it stays like this, check the API in Setup.");
     }
   }, [projectId, actor]);
 

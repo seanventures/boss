@@ -92,7 +92,7 @@ New in the modal: Helm's understanding (confirm or edit), the short chat (at mos
 | Try a sample | Sheet (2 presses) | Header chip that starts in 1 press |
 | More samples & presets (banking KG) | Sheet › choose | Footer › More ways › Presets |
 | Blank project, KG project (type, description) | Sheet › form | Footer › More ways |
-| GitHub / Folder on host; account chip, + account | Sheet col 1 | Detected from the input, with one result list. The account is read-only, and + account opens Repo and models (global). |
+| GitHub / Folder on host; account chip, + account | Sheet col 1 | Detected from the input, with one result list. The account is read-only, and + account opens Setup (global). |
 | Search repos, ages, in use; folder host + path | Sheet col 1 | Inline results; a typed `/path`, with the host on the result row |
 | Helm reads it (access, stack, build & test, map code) | Sheet col 2 | The summary fills live (FOUND tags, live tag, file count) |
 | Map business rules (KG) | Sheet col 3 | Chip toggle (repo mode) |
@@ -106,5 +106,5 @@ The full 38-row table is on `b-adjust.html`.
 ## Rules kept
 - Helm's understanding is the same pattern in both places (Add a project and New work): your words stay, Helm's rewrite sits below them with its additions marked, and the one primary (Create and start / Start) confirms the brief as shown. Looks right is optional, so the click counts above do not grow.
 - One action per screen, with **Create and start** as the only primary. Labels are 4 words or fewer, and detail sits in popovers.
-- Models and GitHub accounts stay global and are never picked here. They are shown read-only and link to Repo and models.
+- Models and GitHub accounts stay global and are never picked here. They are shown read-only and link to Setup.
 - Suggestions (stack, connectors, workflow, staging) are the captain's reasoning from the sentence or repo, never a keyword list. Each shows the words that triggered it.

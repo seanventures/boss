@@ -300,7 +300,7 @@ export function TicketWorkBand({ ctx, conns }: { ctx: PxCtx; conns: Read<Connect
 export function NoTicketSystem({ testid = "tk-none", projectId }: { testid?: string; projectId?: string }) {
   return (
     <TkEmpty title="No ticket system connected" line="Connect Jira, Plane, GitHub Issues or another once; then import epics and tickets here." testid={testid}>
-      <a className="tk-btn" href={ticketSetupHref(projectId)} data-testid={`${testid}-setup`}><Kanban size={13} aria-hidden /> Open Repo and models › Ticket systems</a>
+      <a className="tk-btn" href={ticketSetupHref(projectId)} data-testid={`${testid}-setup`}><Kanban size={13} aria-hidden /> Open Setup › Ticket systems</a>
     </TkEmpty>
   );
 }

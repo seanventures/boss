@@ -795,6 +795,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["threads/{}/runs/{}/stream", "agent:invoke"],
   ["ticket-systems", "integration:read"],
   ["ticket-systems/catalog", "integration:read"],
+  ["ticket-systems/org", "integration:read"],
   ["ticket-systems/{}/oauth/start", "connection:use_own"],
   ["ticket-systems/{}/projects", "integration:read"],
   ["ticket-systems/{}/projects/{}/epics", "integration:read"],

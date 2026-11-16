@@ -1,7 +1,7 @@
-"""Setup › Repo and models › Embedding model: ONE embedding model for the whole org.
+"""Setup › Embedding model: ONE embedding model for the whole org.
 
 Operator decision 2026-10-22 made the embedding model its own slot; 2026-10-23 ("why is it not
-in Repo and models, so all projects can use it?") made that slot the ORG's: it is set once,
+in Setup, so all projects can use it?") made that slot the ORG's: it is set once,
 in the Models step, and every project of the org uses it. The slot is an `org_settings` row
 (`knowledge.embedding_model`, the same shape `project_settings` has, keyed by the org); its
 key is ONE org-scoped secret (secret_refs scope_type='org'), which every project of the org
@@ -54,7 +54,7 @@ MIN_DIMENSION, MAX_DIMENSION = 8, 4096
 #: The API version BOSS uses on Azure; one from before 2024 cannot take `dimensions`.
 DEFAULT_AZURE_API_VERSION = "2024-10-21"
 #: Where Setup shows it, named the same way everywhere (Metatron, the knowledge console).
-PLACE = "Setup › Repo and models › Embedding model"
+PLACE = "Setup › Embedding model"
 
 #: What Setup offers, in order. `fields` is the form; `more` sits under the row's "More" toggle.
 PROVIDERS: tuple[dict[str, Any], ...] = (

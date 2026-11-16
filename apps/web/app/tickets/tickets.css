@@ -114,9 +114,16 @@ a.tk-key:hover { text-decoration: underline; }
 /* No overflow:hidden on the table: a row's ⋯ menu opens below the last row and was clipped. */
 .tk-systems-head { border-radius: var(--r-lg) var(--r-lg) 0 0; }
 .tk-systems-head, .tk-system {
-  display: grid; grid-template-columns: minmax(10rem, 1.3fr) minmax(9rem, 1.4fr) minmax(7rem, 1fr) minmax(8rem, 1.1fr) minmax(6rem, .8fr) 1.78947rem;
+  display: grid; grid-template-columns: minmax(10rem, 1.3fr) minmax(7rem, 1fr) minmax(9rem, 1.3fr) minmax(8rem, 1fr) minmax(6rem, .8fr) 1.78947rem;
   gap: 10px; align-items: center; padding: 10px 12px; min-width: 0;
 }
+/* Setup › Ticket systems › All in org: System · Added in · Projects → BOSS project · Sharing · Status · ⋯ */
+.tk-systems[data-view="all"] > .tk-systems-head, .tk-systems[data-view="all"] > .tk-system {
+  grid-template-columns: minmax(10rem, 1.2fr) minmax(8rem, 1fr) minmax(10rem, 1.4fr) minmax(9rem, 1.1fr) minmax(6rem, .8fr) 1.78947rem;
+}
+.tk-system[data-spot] { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.tk-home { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.tk-home svg { color: var(--muted); flex: none; }
 .tk-systems-head { background: var(--surface-2); color: var(--muted); font: 700 var(--fs-tag)/1.2 var(--sans); letter-spacing: .04em; text-transform: uppercase; }
 .tk-system + .tk-system, .tk-systems-head + .tk-system { border-top: 1px solid var(--border); }
 .tk-system[data-status="disconnected"] { opacity: .7; }
@@ -185,7 +192,7 @@ a.tk-key:hover { text-decoration: underline; }
 }
 @media (max-width: 640px) {
   .tk-systems-head { display: none; }
-  .tk-system { grid-template-columns: minmax(0, 1fr) 1.78947rem; }
+  .tk-system, .tk-systems[data-view="all"] > .tk-system { grid-template-columns: minmax(0, 1fr) 1.78947rem; }
   .tk-system > .tk-cell { grid-column: 1; }
   .tk-system > .tk-cell::before { content: attr(data-label); color: var(--faint); font: 700 var(--fs-label)/1.2 var(--sans); text-transform: uppercase; letter-spacing: .04em; }
   .tk-system > .tk-cell-menu { grid-column: 2; grid-row: 1; }
@@ -202,7 +209,7 @@ a.tk-key:hover { text-decoration: underline; }
 .tk-setup .su-row-body { container-type: inline-size; container-name: tksetup; }
 @container tksetup (max-width: 860px) {
   .tk-systems-head { display: none; }
-  .tk-system { grid-template-columns: minmax(0, 1fr) 1.78947rem; }
+  .tk-system, .tk-systems[data-view="all"] > .tk-system { grid-template-columns: minmax(0, 1fr) 1.78947rem; }
   .tk-system > .tk-cell { grid-column: 1; }
   .tk-system > .tk-cell::before { content: attr(data-label); color: var(--faint); font: 700 var(--fs-label)/1.2 var(--sans); text-transform: uppercase; letter-spacing: .04em; }
   .tk-system > .tk-cell-menu { grid-column: 2; grid-row: 1; }
@@ -220,3 +227,50 @@ a.tk-key:hover { text-decoration: underline; }
 .tk-share { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; cursor: pointer; }
 .tk-share input { margin-top: 3px; }
 .tk-share-line { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+/* ── Sharing, one control on the row (2026-11-15) ─────────────────────────────────── */
+.tk-pill { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); font: 600 var(--fs-meta)/1.4 var(--sans);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; justify-self: start; align-self: flex-start; }
+.tk-pill[data-tone="green"] { background: var(--green-soft); border-color: transparent; color: var(--green); }
+.tk-pill-btn { cursor: pointer; }
+.tk-pill-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--ink); }
+.tk-pill-btn[data-tone="green"]:hover:not(:disabled) { color: var(--green); }
+.tk-pill-btn:disabled { cursor: default; opacity: .75; }
+.tk-pill-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tk-pill-btn[data-spot] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.tk-confirm[data-kind="share"] { border-color: var(--accent-line); }
+.tk-confirm[data-kind="share"] > span { flex: 1 1 18rem; min-width: 0; }
+
+/* The view switch: This project | All in org */
+.tk-seg { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2); }
+.tk-seg button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 0; border-radius: calc(var(--r) - 2px);
+  background: transparent; color: var(--muted); font: 600 var(--fs-ui) var(--sans); cursor: pointer; white-space: nowrap; }
+.tk-seg button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); }
+.tk-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* "Jira is in BOSS dogfood bootstrap · Share it" / "· Ask Param G (owner of …) to share it" */
+.tk-not-shared { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.tk-not-shared .tk-dot { color: var(--faint); }
+.tk-share-it { display: inline-flex; align-items: center; gap: 4px; color: var(--accent-text); font-weight: 700; text-decoration: none; }
+.tk-share-it:hover { text-decoration: underline; }
+.tk-ask-owner { display: inline; color: var(--muted); }
+.tk-ask-owner svg { vertical-align: -2px; margin-right: 4px; }
+.tk-not-shared[data-compact] { font-size: var(--fs-meta); }
+.tk-greyed > li { opacity: .8; font-size: var(--fs-ui); }
+.tk-empty-org { gap: 8px; }
+.tk-empty-org b { text-align: center; }
+.tk-secondary { color: var(--muted); font-weight: 600; }
+
+/* One door for a ticket: "Paste KAN-12 … · New work in this project →" */
+.tk-try { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px; border: 1px dashed var(--border-strong);
+  border-radius: var(--r-lg); color: var(--muted); font-size: var(--fs-ui); }
+.tk-try > svg { color: var(--accent-text); flex: none; }
+.tk-try > span { flex: 1 1 16rem; min-width: 0; }
+.tk-empty-org .tk-empty-ico { margin: 0 0 4px; width: 40px; height: 40px; }
+.tk-system-name > .tk-stack { min-width: 0; }
+.tk-system-name > .tk-stack > .tk-faint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* New work's "not shared here": a heads-up with a way out, not an error. */
+.tk-heads-up { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0; padding: 8px 12px; border-radius: var(--r);
+  border: 1px solid var(--amber-soft); background: var(--surface-2); color: var(--ink); font-size: var(--fs-ui); }
+.tk-heads-up > svg { color: var(--amber); flex: none; }

@@ -1,4 +1,4 @@
-"""Repo and models › Pick repos, after "Sign in with GitHub" (identity/github_device.py).
+"""Setup › Pick repos, after "Sign in with GitHub" (identity/github_device.py).
 
 The picker lists what GitHub says THIS person can push to where the BOSS App is installed; binding
 one is checked on the server against that same list; and the project's connection is the person's

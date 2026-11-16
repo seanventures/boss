@@ -33,7 +33,7 @@
   --page-max-wide: 1280px;
   /* A denser page that was a little narrower on a laptop: Factory, Govern, Agent Studio. */
   --page-max-compact: 1120px;
-  /* A settings page or a column of decision cards: Repo and models, Approvals. */
+  /* A settings page or a column of decision cards: Setup, Approvals. */
   --page-max-mid: 960px;
   /* Reading and forms: a line of prose, a form column. Grows a little, so a line stays readable. */
   --page-max-narrow: calc(760px + var(--page-grow) * 0.35);

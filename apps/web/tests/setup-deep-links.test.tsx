@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * Every door into Repo and models lands on its row: `focus` opens the row, `add` opens Add a
+ * Every door into Setup lands on its row: `focus` opens the row, `add` opens Add a
  * model on that provider, `source` opens that model's menu, and the legacy `step=` still works.
  * Readiness, model failures, the composer and the dock all link this way.
  */

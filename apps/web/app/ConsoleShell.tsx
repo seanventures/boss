@@ -254,7 +254,7 @@ const AREAS: AreaDef[] = [
   // how it got there; Observability is whether it is alive, how fast, and what thinking costs.
   // The ids say so now: `delivery` (labelled Infra) and `monitoring` (labelled Observability)
   // redirect here (app/legacy-areas.ts), and System Configuration's contents moved into Infra ›
-  // Cloud, Repo and models, Skills & MCP and Observability, so it has no rail entry.
+  // Cloud, Setup, Skills & MCP and Observability, so it has no rail entry.
   { id: "infra", label: "Infra", sub: "Where your apps run", group: "Run", icon: ICONS.infra },
   { id: "observability", label: "Observability", sub: "Is it alive, how fast, what it costs", group: "Run", icon: Pulse },
   { id: "activity", label: "Activity log", sub: "Every line BOSS wrote, searchable", group: "Run", icon: ICONS.activity },
@@ -277,12 +277,11 @@ const AREAS: AreaDef[] = [
   { id: "reliability", label: "Reliability", sub: "On-call, AI SRE, incidents, and knowledge graph", group: "Run", icon: ICONS.reliability },
   { id: "ai-sre", label: "AI SRE", sub: "Honest capability ledger, category, status, and remaining gap", group: "Run", icon: ICONS["ai-sre"] },
   { id: "reports", label: "Evidence", sub: "Throughput, receipts, cost, and agent scorecards", group: "Run", icon: ICONS.reports },
-  // NAMED FOR WHAT IS IN IT, AND FIRST IN SETTINGS. "Setup" is a stage of the product's life , 
-  // it reads as something you do once and never open again, so the page an operator needs when
-  // a model runs out of credit or a repo token expires was filed under a name that says
-  // "already done". It carries a badge while anything on it is unfinished or failing.
-  { id: "setup", label: "Repo and models", sub: "Where BOSS writes code and what it thinks with", group: "Settings", icon: Database },
-  // GET STARTED (BOSSAPP-808): the 3-step Welcome, its own place, never Repo and models' body.
+  // FIRST IN SETTINGS, NAMED "Setup" (operator, 2026-11-15: "it's not only repos, models now.. we
+  // are adding ticket system too"): repos, models, ticket systems and events, each a collapsible
+  // section. It carries a badge while anything on it is unfinished or failing.
+  { id: "setup", label: "Setup", sub: "Repos, models and ticket systems", group: "Settings", icon: Database },
+  // GET STARTED (BOSSAPP-808): the 3-step Welcome, its own place, never Setup's body.
   { id: "welcome", label: "Get started", sub: "Get BOSS working in 3 steps", group: "Settings", icon: Rocket },
   // WHAT YOUR CREW CAN DO (skills-mcp spec §5.1): the Kit of abilities, who holds them, and every
   // skill and MCP server. Second in Settings: a repo and a model come first.
@@ -355,7 +354,7 @@ export type ConsoleShellProps = {
     budgetState: string;
     deadletters: number;
     pendingDecisions: number;
-    /** Repo and models' rail badge, from GET /v1/setup: how many rows are unfinished or
+    /** Setup's rail badge, from GET /v1/setup: how many rows are unfinished or
      *  failing, red when any check is failing. Absent or 0: no badge. */
     setup?: { count: number; tone: "amber" | "red" } | null;
     /** Setup is unfinished: the rail shows Get started (Setup's Welcome) above the areas. */
@@ -1334,7 +1333,7 @@ function ConsoleShellInner({
     );
   }, [query, areasForEdition]);
 
-  // Repo and models' badge: the server's on first paint, then whatever the board last saw.
+  // Setup's badge: the server's on first paint, then whatever the board last saw.
   const [setupBadge, setSetupBadge] = useState(status.setup ?? null);
   useEffect(() => { setSetupBadge(status.setup ?? null); }, [status.setup]);
   useEffect(() => {
@@ -1834,7 +1833,7 @@ function ConsoleShellInner({
             <div className="bx-dock-head">
               {/* WHO IS ANSWERING. One meaning for "no role": BOSS in general (dockSpeaker in
                   lib/dock-subject.ts). This head used to call the no-subject, no-role dock the
-                  Deployment Manager, so Repo and model's "Ask BOSS about this step" went to the
+                  Deployment Manager, so Setup's "Ask BOSS about this step" went to the
                   role whose subject is hosts and rollbacks. */}
               <span className="area-name" data-testid="bx-dock-who">
                 {dockSpeaker({ role: dockRole, discussing: dockDiscussing }).heading}

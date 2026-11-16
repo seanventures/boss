@@ -123,7 +123,7 @@ def choose(connection: Any, settings: Any, project_id: Optional[str]) -> ModelCh
 # resolves here, the console's job pickers show this answer as `Auto · <source>`, and the
 # precedence is:
 #
-#   1. the project's choice (a job picked in Repo and models), or the deployment's deliberate
+#   1. the project's choice (a job picked in Setup), or the deployment's deliberate
 #      choice of engine, when that engine is connected;
 #   2. a working subscription with capacity;
 #   3. a working local model;
@@ -942,7 +942,7 @@ def governed(adapter: Any, connection: Any, settings: Any, project_id: str, *,
 
 # ── The embedding model ────────────────────────────────────────────────────────────────────────
 #
-# ITS OWN SLOT, one per org (operator decisions 2026-10-22/23): Setup › Repo and models ›
+# ITS OWN SLOT, one per org (operator decisions 2026-10-22/23): Setup ›
 # Embedding model stores a provider, a model and its dimension (knowledge/embedding_slot.py). Every embedding
 # call is built HERE from that slot and governed: reserved in the budget category `knowledge`,
 # receipted and settled. Nothing else builds an EmbeddingAdapter
@@ -1035,7 +1035,7 @@ class ProviderRequirement:
 
     @property
     def fix(self) -> str:
-        return (f"Connect an {self.provider} key for {self.capability} in Repo and models. "
+        return (f"Connect an {self.provider} key for {self.capability} in Setup. "
                 f"A subscription or another provider's key does not do {self.capability}.")
 
 

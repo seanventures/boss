@@ -46,7 +46,7 @@ delegate:
     why: "the start door's probe: can the routed engine actually start"
   engine/boss_engine/services/setup_service.py:
     calls: [run_role]
-    why: "Repo and models' CLI probe: a login check and one hello run"
+    why: "Setup's CLI probe: a login check and one hello run"
   engine/boss_engine/services/pr_review_again.py:
     calls: [run_role]
     why: "re-runs the adversarial review on a pull request's diff"

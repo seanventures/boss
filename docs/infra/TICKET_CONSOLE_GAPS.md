@@ -46,8 +46,8 @@ Import took KAN-6 with its stories; Ask BOSS read KAN-8 with `ticket_get` and of
 | 15 | T9 | Cards showed the list's short name ("BOSS walk") for every ticket of the epic | Cards show the ticket's full title |
 | 16 | T9 | The "imported" banner was larger than the type scale | `--fs-ui` |
 | 17 | Project settings | The Ticket system card was missing from the section nav | "Ticket system" in the nav |
-| 18 | all | In-app links said "Setup › Ticket systems"; the rail calls it **Repo and models** | Links and tips say "Repo and models › Ticket systems" |
-| 19 | Account | "Connect with Atlassian" with no app said "needs an OAuth app (client id and secret)" | Says where: "add the app's Client ID and Client secret in Repo and models › Ticket systems › Jira › Settings" |
+| 18 | all | In-app links said "Setup › Ticket systems"; the rail calls it **Setup** | Links and tips say "Setup › Ticket systems" |
+| 19 | Account | "Connect with Atlassian" with no app said "needs an OAuth app (client id and secret)" | Says where: "add the app's Client ID and Client secret in Setup › Ticket systems › Jira › Settings" |
 | 20 | Okta | **Test appeared only after Add provider** | A **Test** on the unsaved form: `POST /v1/identity/providers/test`, a dry run (discovery + signing keys for OIDC; https URL + a certificate that parses for SAML). Needs only the issuer; never sends or keeps a secret; stores nothing |
 | 21 | Okta | A mistyped Okta org (404 on discovery) said "Test failed · check the settings" | "No sign-in settings at that address · check the issuer URL" (`discovery_failed`, `jwks_failed` named) |
 | 22 | Okta | The first copy row said "Redirect URL"; Okta's field is "Sign-in redirect URIs" | "Sign-in redirect URI" for Okta |

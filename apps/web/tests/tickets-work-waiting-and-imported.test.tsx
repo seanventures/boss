@@ -187,9 +187,9 @@ describe("Ready to start (from the work list, origin ticket_import)", () => {
 
 const READINESS = {
   ready: false,
-  checked: [{ key: "repository", label: "A repository BOSS can push to", fix: "Connect GitHub in Repo and models.", area: "setup", href: "/?area=setup&focus=repository",
+  checked: [{ key: "repository", label: "A repository BOSS can push to", fix: "Connect GitHub in Setup.", area: "setup", href: "/?area=setup&focus=repository",
               needed_by: [{ step_id: "build", label: "Build" }], first_step: "build", first_step_label: "Build", after_a_person: false, ok: false, detail: "no repo" }],
-  missing: [{ key: "repository", label: "A repository BOSS can push to", fix: "Connect GitHub in Repo and models.", area: "setup", href: "/?area=setup&focus=repository",
+  missing: [{ key: "repository", label: "A repository BOSS can push to", fix: "Connect GitHub in Setup.", area: "setup", href: "/?area=setup&focus=repository",
               needed_by: [{ step_id: "build", label: "Build" }], first_step: "build", first_step_label: "Build", after_a_person: false, ok: false, detail: "no repo" }],
 };
 

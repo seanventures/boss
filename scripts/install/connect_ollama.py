@@ -303,7 +303,7 @@ def main() -> int:
         raise ConnectError(
             "this install already has an \"Anything OpenAI-compatible\" connection to "
             "another address. Nothing was changed. To use Ollama instead, replace that "
-            "connection in Mission Control (Settings, Repo and models).")
+            "connection in Mission Control (Settings, Setup).")
     # The Ollama model connected before this run, so roles BOSS gave it can follow a switch.
     previous = list(current["models"]) if current is not None else []
     if current is not None and model in current["models"]:

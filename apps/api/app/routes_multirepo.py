@@ -1,6 +1,6 @@
 """/v1 multi-repo apps (docs/product/MULTIREPO.md). The engine is boss_engine.multirepo.
 
-Registry (Settings › Repo and models › Repositories)
+Registry (Settings › Setup › Repositories)
   GET    /v1/github/repos?project_id=              repository:read      the org's repositories
   POST   /v1/github/repos/refresh                  repository:register  re-read what GitHub lists
   PATCH  /v1/github/repos/{repo_id}                repository:register  tick / untick (checks first)

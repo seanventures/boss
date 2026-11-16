@@ -464,11 +464,11 @@ def diagnose(sig: Signals) -> list[dict[str, Any]]:
             "title": "Claude sign-in needed",
             "detail": (f"The Claude subscription's login {when} and BOSS could not refresh it"
                        + (f" ({error})" if error else "") + ". Builds on Claude cannot start "
-                       "until you sign in again in Repo and models (Claude Code, Sign in) or "
+                       "until you sign in again in Setup (Claude Code, Sign in) or "
                        "run `boss connect claude`."),
             "evidence": {k: login.get(k) for k in ("state", "seconds_left", "error")},
             "options": [_opt("claude_sign_in", "Sign in again",
-                             "Opens Repo and models, where Claude Code signs in."),
+                             "Opens Setup, where Claude Code signs in."),
                         _opt("wait_15", "Remind me in 15 min", "BOSS asks again.")],
             "needs_choice": True, "auto": [],
         })
@@ -487,11 +487,11 @@ def diagnose(sig: Signals) -> list[dict[str, Any]]:
             "title": "Codex sign-in needed",
             "detail": (f"The Codex subscription's login {when} and BOSS could not refresh it"
                        + (f" ({error})" if error else "") + ". Builds on Codex cannot start "
-                       "until you sign in again in Repo and models (Codex, Sign in) or "
+                       "until you sign in again in Setup (Codex, Sign in) or "
                        "run `boss connect codex`."),
             "evidence": {k: codex.get(k) for k in ("state", "seconds_left", "error")},
             "options": [_opt("codex_sign_in", "Sign in again",
-                             "Opens Repo and models, where Codex signs in."),
+                             "Opens Setup, where Codex signs in."),
                         _opt("wait_15", "Remind me in 15 min", "BOSS asks again.")],
             "needs_choice": True, "auto": [],
         })
@@ -1272,7 +1272,7 @@ _CHOICES: dict[str, Callable[..., dict[str, Any]]] = {
     "acknowledge": lambda e, s, r, ev, a: {"result": "Noted.", "status": "resolved"},
     "docker_memory_guide": _guide(DOCKER_MEMORY_GUIDE, "Opened the Docker Desktop guide."),
     "use_bigger_place": _guide("?area=places", "Opened Places."),
-    "claude_sign_in": _guide("?area=setup", "Opened Repo and models: press Sign in on Claude Code."),
+    "claude_sign_in": _guide("?area=setup", "Opened Setup: press Sign in on Claude Code."),
     "free_disk_now": _free_disk,
     "restart_step": _restart_step,
     "cancel_build": _cancel_build,

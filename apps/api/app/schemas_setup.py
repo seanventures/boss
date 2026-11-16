@@ -1,6 +1,6 @@
-"""Repo and models: the frozen API contract (mirrors apps/web/lib/setup-types.ts).
+"""Setup: the frozen API contract (mirrors apps/web/lib/setup-types.ts).
 
-`SetupView` is what every Repo and models endpoint returns. The request bodies are typed so the
+`SetupView` is what every Setup endpoint returns. The request bodies are typed so the
 MCP surface and OpenAPI describe them; every credential field is write-only.
 """
 from __future__ import annotations

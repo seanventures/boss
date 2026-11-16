@@ -87,7 +87,7 @@ export function KgSettings({ projectId, actor, initial }: { projectId: string; a
                 <ul className="kg-repos" data-testid="knowledge-code">
                   {status.repositories.map((repo) => <RepoRow key={repo.repo} repo={repo} onIndex={(r) => void run(r)} busy={indexing} />)}
                 </ul>
-              ) : <span data-testid="knowledge-code-none">No repository is registered in this project. <a className="inf-link" href="?area=setup">Repo and models</a></span>}
+              ) : <span data-testid="knowledge-code-none">No repository is registered in this project. <a className="inf-link" href="?area=setup">Setup</a></span>}
               {note ? <p className={note.ok ? "kg-ok" : "kg-inline-err"} role={note.ok ? "status" : "alert"} data-testid="kg-index-note">{note.text}</p> : null}
             </dd>
           </div>
@@ -100,7 +100,7 @@ export function KgSettings({ projectId, actor, initial }: { projectId: string; a
             <dd data-testid="knowledge-embedding">
               {em ? `${em.model} (${em.dimension} dimensions), check ${em.check}.` : "No embedding model is set."}{" "}
               {status.retrieval?.reason ? <span data-testid="knowledge-search-off">{status.retrieval.reason}. </span> : null}
-              <a className="inf-link" href="?area=setup&focus=embedding_model">Setup › Repo and models › Embedding model</a>.{" "}
+              <a className="inf-link" href="?area=setup&focus=embedding_model">Setup › Embedding model</a>.{" "}
               Vector index: {status.vector_index === "not_created" || !status.vector_index ? "not created" : status.vector_index}.
             </dd>
           </div>

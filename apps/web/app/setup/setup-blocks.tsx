@@ -229,16 +229,17 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
       <section className="su-block" data-testid="su-repos" aria-label="Repositories BOSS can work on">
         {/* A project's repo bindings live on Project › Settings › Repos now; adding and checking
             repositories keeps working here (README parity: Repo bindings, 13-30). */}
-        <MovedToProjectSettings section="repos" projectId={projectId} testid="su-repos-moved" />
         <BlockHead title="Repositories BOSS can work on" tip="BOSS writes branches and opens pull requests here."
-                   action={(
+                   action={(<>
+                     <MovedToProjectSettings section="repos" projectId={projectId} testid="su-repos-moved" compact
+                                             label="This project's repos" />
                      <GatedButton permission="repository:register" type="button" className="su-btn"
                                   data-testid="su-add-repo-open"
                                   onClick={() => setOpen(accounts.length ? { kind: "repo", connectionId: null }
                                                                          : { kind: "account" })}>
                        <Plus size={12} weight="bold" aria-hidden="true" />Add repo
                      </GatedButton>
-                   )} />
+                   </>)} />
         {repos.length ? (
           <table className="su-table">
             <thead><tr><th>Repository</th><th>Via</th><th>Used by</th><th>Access</th><th><span className="su-sr">Actions</span></th></tr></thead>

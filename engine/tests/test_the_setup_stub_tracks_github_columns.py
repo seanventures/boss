@@ -1,6 +1,6 @@
 """The sqlite setup stub names every column the real GitHub tables have.
 
-Repo and models reads `db/schema.sql` on Postgres. The tests that exercise that view
+Setup reads `db/schema.sql` on Postgres. The tests that exercise that view
 (`test_first_run_setup`, `test_one_status_from_the_last_proof`,
 `test_a_saved_connection_survives_a_refresh`) build `CREATE_GITHUB_TABLES` instead.
 A column added to the real table and missing from the stub is an OperationalError in

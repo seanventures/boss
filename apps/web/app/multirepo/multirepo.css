@@ -181,7 +181,7 @@
 .mr-ui-xrow b { color: var(--ink); }
 .mr-ui-xrow small { display: block; color: var(--faint); font-size: 0.74rem; margin-top: 2px; }
 
-/* ── 1 · Registry (Repo and models) ───────────────────────────────────────────────────────── */
+/* ── 1 · Registry (Setup) ───────────────────────────────────────────────────────── */
 .mr-reg { display: flex; flex-direction: column; gap: 12px; scroll-margin: 80px; min-width: 0; }
 .mr-reg[data-focused] .mr-ui-card { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .mr-reg-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }

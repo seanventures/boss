@@ -2,7 +2,7 @@
 says so in the conversation that asked for it.
 
 Found on the laptop 2026-10-24 (inv_495a3c51886f4f8b): the install's working model source was
-its Anthropic API key, saved through Repo and models as `setup-anthropic`; the subscription was
+its Anthropic API key, saved through Setup as `setup-anthropic`; the subscription was
 disconnected and the console's own `anthropic_api` source was only declared. The governed
 investigation booked its call on `anthropic_api` (claude_credential mapped every stored key
 there), the router refused it — `no_eligible_source`, in 0.4 s — and nothing was posted back,

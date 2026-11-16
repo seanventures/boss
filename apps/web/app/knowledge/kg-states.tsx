@@ -104,7 +104,7 @@ export function KgNoRepo({ orgId }: { orgId?: string | null }) {
     <StageCard testId="kg-empty-graph" layers
                title="Connect a repository to see its graph"
                body="BOSS indexes the repository into a graph of its areas, packages, classes and calls. Rules and what agents learn while they work are drawn on the same graph.">
-      <AreaLink area="setup" orgId={orgId ?? undefined} className="ag-btn ag-btn-primary">Open Repo and models</AreaLink>
+      <AreaLink area="setup" orgId={orgId ?? undefined} className="ag-btn ag-btn-primary">Open Setup</AreaLink>
     </StageCard>
   );
 }

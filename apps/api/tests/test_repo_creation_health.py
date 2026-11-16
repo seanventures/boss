@@ -3,7 +3,7 @@ new-repo routes say which credential will create, per owner.
 
   * Test all (setup_actions.check_repository) reads the token's scopes from GitHub's own header
     and records the flow permissions (contents, pull_requests, administration) beside the
-    repository ones; Repo and models' account row says "Can create repos: no (missing:
+    repository ones; Setup's account row says "Can create repos: no (missing:
     administration)" instead of green.
   * GET /v1/projects/{id}/github-repository/owners lists each owner with its creating credential
     or its exact fix; /check says the resolver's precise words when none can.
@@ -103,7 +103,7 @@ def test_test_all_records_whether_the_token_can_create_repos(engine, world, monk
     assert set(rows[full_cid]["granted_permissions"]) >= {"administration", "contents", "pull_requests"}
     assert rows[full_cid]["missing_permissions"] == []
 
-    # Repo and models' account rows say it (setup_accounts), and the connection API carries it.
+    # Setup's account rows say it (setup_accounts), and the connection API carries it.
     with engine.begin() as db:
         now = now_utc()
         repository = setup_view._repository(db, settings, world.project_a, now)  # noqa: SLF001 — the view's own section
@@ -126,7 +126,7 @@ def test_test_all_records_whether_the_token_can_create_repos(engine, world, monk
     assert owners["paramg"]["can_create"] and owners["paramg"]["verified"]
     assert owners["paramg"]["via"] == f"paramg (access token, {world.project_a})"
     assert not owners["paramg-kaapppu"]["can_create"]
-    assert owners["paramg-kaapppu"]["fixes"] == ["Replace the token for paramg-kaapppu with one holding the repo scope (Repo and models)"]
+    assert owners["paramg-kaapppu"]["fixes"] == ["Replace the token for paramg-kaapppu with one holding the repo scope (Setup)"]
     assert not owners["someone-else"]["can_create"] and "no GitHub credential" in owners["someone-else"]["words"]
 
     # The check says, in the resolver's words, why paramg-kaapppu cannot — never the generic line.

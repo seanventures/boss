@@ -1,5 +1,5 @@
 /**
- * The feed cache hands every caller its own readable body, and never reuses Repo and models.
+ * The feed cache hands every caller its own readable body, and never reuses Setup.
  *
  * ~1 load in 8 showed a red "Response.clone: Body has already been consumed" and a 502: the
  * server render and /api/setup asked for the same URL together, and the joiners cloned one
@@ -41,7 +41,7 @@ describe("the feed cache", () => {
     for (let i = 0; i < 5; i += 1) expect((await (await cached(url)).json()).n).toBe(1);
   });
 
-  it("never reuses a Repo and models read", async () => {
+  it("never reuses a Setup read", async () => {
     let calls = 0;
     const cached = await install((async () => {
       calls += 1;

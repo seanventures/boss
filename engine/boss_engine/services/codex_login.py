@@ -82,7 +82,7 @@ class CodexSignInNeeded(RuntimeError):
 
 
 def sign_in_words(reason: str) -> str:
-    return ("Codex sign-in needed: " + reason + ". Sign in again in Repo and models "
+    return ("Codex sign-in needed: " + reason + ". Sign in again in Setup "
             "(Codex, Sign in) or run `boss connect codex`.")
 
 

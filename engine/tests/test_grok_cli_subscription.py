@@ -227,7 +227,7 @@ def test_connect_records_owner_only_entitlement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Recorded after one governed proof turn, owned by the workspace operator — and the
-    answer names no environment variable: Repo and models never tells a browser to set one."""
+    answer names no environment variable: Setup never tells a browser to set one."""
     found = {"installed": True, "authenticated": True, "version": "grok 1.0.40",
              "auth_detail": "Available models", "ready": True}
     monkeypatch.setattr(cli_harness, "detect", lambda *_a, **_kw: found)

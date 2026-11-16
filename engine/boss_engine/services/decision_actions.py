@@ -441,9 +441,9 @@ _REFUSAL_GUIDANCE: dict[str, dict[str, str]] = {
             "instead of retrying for ever."),
         "what_to_do": (
             "Add credit or raise the limit on the model account, or connect another model, in "
-            "Repo and models. If the budget was the limit, raise it in Govern. " + _RETRY),
+            "Setup. If the budget was the limit, raise it in Govern. " + _RETRY),
         "area": "setup",
-        "link_label": "Fix in Repo and models",
+        "link_label": "Fix in Setup",
     },
     "budget": {
         "what_happened": (
@@ -492,7 +492,7 @@ _REFUSAL_GUIDANCE: dict[str, dict[str, str]] = {
             "Allow the repository, or point the build at one the rules will clone. "
             "Then Retry the build. Approving this card would not retry it."),
         "area": "setup",
-        "link_label": "Open Repo and models",
+        "link_label": "Open Setup",
     },
 }
 

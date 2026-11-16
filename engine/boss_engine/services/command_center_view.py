@@ -604,7 +604,7 @@ def group_old_findings(attention: list[Mapping[str, Any]], now: datetime,
 
 
 def subscription_connected(basics: Optional[Mapping[str, Any]]) -> bool:
-    """A working subscription model (Claude Code, Codex …) among Repo and models' rows."""
+    """A working subscription model (Claude Code, Codex …) among Setup's rows."""
     from . import setup_view
 
     return any(str(m.get("kind") or "") == "subscription" and setup_view.model_working(m)
@@ -682,7 +682,7 @@ def systems(*, probe: Mapping[str, Any], basics: Optional[Mapping[str, Any]],
 
     out: list[SystemDot] = []
 
-    # MODELS: the rows Repo and models draws, plus the last hour of calls.
+    # MODELS: the rows Setup draws, plus the last hour of calls.
     models = list((basics or {}).get("models") or [])
     working = [m for m in models if setup_view.model_working(m)]
     limited = [m for m in models if str((m.get("pill") or {}).get("state")) == "rate_limited"]
@@ -690,7 +690,7 @@ def systems(*, probe: Mapping[str, Any], basics: Optional[Mapping[str, Any]],
     today_calls = int(probe.get("calls_today") or 0)
     if basics is None:
         out.append({"key": "models", "tone": "grey", "word": "Models", "state": "Unknown",
-                    "tip": "Could not read Repo and models", "href": "?area=setup&focus=models"})
+                    "tip": "Could not read Setup", "href": "?area=setup&focus=models"})
     elif not models:
         # "NOT SET UP" LOOKS THE SAME ON EVERY DOT (independent test D13): grey and hollow. The
         # setup line in Needs you and the sentence ("Finish setup") carry that it blocks work.
@@ -716,7 +716,7 @@ def systems(*, probe: Mapping[str, Any], basics: Optional[Mapping[str, Any]],
     repos = list(((basics or {}).get("repository") or {}).get("repos") or [])
     if basics is None:
         out.append({"key": "repo", "tone": "grey", "word": "Repo", "state": "Unknown",
-                    "tip": "Could not read Repo and models", "href": "?area=setup&focus=repository"})
+                    "tip": "Could not read Setup", "href": "?area=setup&focus=repository"})
     elif not repos:
         out.append({"key": "repo", "tone": "grey", "word": "Repo", "state": "Not set up",
                     "tip": "No repository connected yet", "href": "?area=setup&focus=repository"})

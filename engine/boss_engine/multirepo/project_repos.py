@@ -249,7 +249,7 @@ def add(db: Any, settings: Any, project_id: str, *, registry_repo_id: str, role_
     row = registry.get_row(db, org_id, registry_repo_id)
     if not row.get("allowed") or row.get("archived") or not row.get("reachable", True):
         raise MultiRepoError(409, "not_allowed",
-                             f"{row['full_name']} is not allowed in Repo and models. Tick it there first.")
+                             f"{row['full_name']} is not allowed in Setup. Tick it there first.")
     hint = _hint(role_hint)
     has_primary = db.execute(sql("SELECT 1 FROM github_repository_bindings WHERE project_id = :p AND "
                                  "role = 'primary' AND status = 'active'"), {"p": project_id}).first()

@@ -475,7 +475,7 @@ class ControlPlaneClient:
         return response.json()
 
     def recheck_setup(self, project_id: str) -> dict[str, Any]:
-        """Re-prove Repo and models' rows whose last check is over a day old."""
+        """Re-prove Setup's rows whose last check is over a day old."""
         response = self._client.post(
             "/v1/setup/checks",
             json={"project_id": project_id, "actor": "system", "target": "stale"},

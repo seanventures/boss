@@ -1,6 +1,6 @@
 """Replacing a model key keeps it in the store it already lives in (operator decision 2026-10-04).
 
-Repo and models' Capacity row lets a first-time key go to a chosen secret backend (Vault, the
+Setup's Capacity row lets a first-time key go to a chosen secret backend (Vault, the
 platform store, a local runner). The Model row's `Replace` asks no such question — so it must
 not quietly move a Vault key into the default store either. Replace reads the backend of the key
 it replaces; only a source with no key yet falls back to the default.

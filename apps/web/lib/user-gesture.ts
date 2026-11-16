@@ -3,7 +3,7 @@
  *
  * "Confirm it's you" opened on a plain refresh of the Command Center and the Factory (operator
  * report, 2026-10-10, ~10 times). Nobody had pressed anything: a panel's effect sent a write on
- * load — Repo and models' automatic re-check of stale rows (POST /api/setup op=checks) — the API
+ * load — Setup's automatic re-check of stale rows (POST /api/setup op=checks) — the API
  * answered 401 step_up_required because the second factor was over ten minutes old, and the one
  * write path (lib/api-write.ts) opened the sheet for it. Every loaded area stays mounted, so the
  * Setup board's effect ran on every page view of every area once Setup had been opened.

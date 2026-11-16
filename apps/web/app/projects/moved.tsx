@@ -11,11 +11,21 @@ import { ArrowRight, GearSix } from "@phosphor-icons/react";
 
 import { consoleHref } from "../console-href";
 
-export function MovedToProjectSettings({ section, testid = "moved-to-project-settings", projectId }: {
+export function MovedToProjectSettings({ section, testid = "moved-to-project-settings", projectId, compact = false, label }: {
   section: string; testid?: string; projectId?: string | null;
+  /** A quiet link beside a block's title, where the old control is still the main one. */
+  compact?: boolean; label?: string;
 }) {
   const href = consoleHref({ area: "project", tab: "settings", section, app: undefined, build: undefined,
                              ...(projectId ? { project_id: projectId } : {}) });
+  if (compact) {
+    return (
+      <a className="px-moved-compact" href={href} data-testid={testid} title="This project's own setting lives on its page"
+         style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--accent-text)", fontSize: "var(--fs-meta)",
+                  fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>
+        <GearSix size={12} aria-hidden /> {label ?? "Project › Settings"} <ArrowRight size={11} aria-hidden /></a>
+    );
+  }
   return (
     <a className="px-moved" href={href} data-testid={testid} title="This setting lives on the project's page now"
        style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", margin: "6px 0", borderRadius: 10,

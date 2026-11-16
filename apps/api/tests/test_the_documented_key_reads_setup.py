@@ -1,4 +1,4 @@
-"""The key the docs tell users to source works on Repo and models (audit P2-11).
+"""The key the docs tell users to source works on Setup (audit P2-11).
 
 `boss-community.env.sh` exports BOSS_API_KEY, the legacy console key. Under enforce its
 transport principal is `sys_legacy_console`, while the guard binds the request's actor to that

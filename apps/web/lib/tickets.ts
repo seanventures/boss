@@ -42,13 +42,23 @@ export type Connection = {
   account: string | null; last4: string | null; fingerprint: string | null; capabilities: Record<string, boolean>;
   settings: TicketSettings; managed_from: { connection_id: string; project_id: string } | null;
   /** "org": connected once from another project of the org (home_project), usable here too. */
-  reach: "project" | "org" | "unshared"; home_project: { id: string; name: string } | null;
+  reach: "project" | "org" | "unshared"; home_project: HomeProject | null;
+  /** The caller may manage it (integration:manage at its home): share, settings, test, disconnect. */
+  can_manage: boolean;
+  /** The org list only: this project can use it (its own, shared with the org, or mirrored here). */
+  usable_here: boolean;
+  /** The org list only: names of the BOSS projects its mappings point at. */
+  project_names: Record<string, string>;
   mirrors: { connection_id: string; project_id: string; status: string }[];
   bindings: { total: number; paused: number };
   /** The connection's own OAuth app for "Connect with Atlassian" (null: the connector has none).
    *  Never the secret: whether one is stored, and the callback URL to paste into the app. */
   oauth_app: OAuthApp | null;
 };
+/** A connection's home project: where it was added, managed and shared from, and whom to ask. */
+export type HomeProject = { id: string; name: string; owners: string[];
+  /** A project the viewer may not read: unnamed ("another project", id ""), its owners the org's. */
+  hidden?: boolean };
 export type OAuthApp = { client_id: string; secret_set: boolean; from_host: boolean; callback_url: string };
 /** Whether "Connect with Atlassian" can start: an app is set on the connection or on the host. */
 export const oauthReady = (c: Connection | null): boolean =>
@@ -75,7 +85,11 @@ export type Ticket = {
   /** "org" when the connection was added from another project (import names its system). */
   connection_reach: "project" | "org";
 };
-export type TypedError = { connection_id?: string; ref?: string; error: string; message: string };
+export type TypedError = { connection_id?: string; ref?: string; error: string; message: string;
+  /** not_shared: the connection that has it, where it lives, whom to ask, and whether the caller may share it. */
+  shared_from?: NotShared };
+/** A connection of another project, not shared with this one: enough to say "Share it" or whom to ask. */
+export type NotShared = { connection_id: string; label: string; home: HomeProject; can_manage: boolean };
 export type ExternalProject = { key: string; name: string; id: string; url: string; open_count: number | null; epic_count: number | null };
 export type SyncEntry = {
   receipt_id: string; at: string; action: string; op: string; label: string; summary: string;
@@ -128,7 +142,13 @@ export function parseConnection(v: unknown): Connection {
     managed_from: mf && s(mf.connection_id) ? { connection_id: s(mf.connection_id), project_id: s(mf.project_id) } : null,
     mirrors: a(x.mirrors).map((m) => ({ connection_id: s(o(m).connection_id), project_id: s(o(m).project_id), status: s(o(m).status) })),
     reach: s(x.reach) === "org" ? "org" : s(x.reach) === "unshared" ? "unshared" : "project",
-    home_project: s(o(x.home_project).id) ? { id: s(o(x.home_project).id), name: s(o(x.home_project).name) || s(o(x.home_project).id) } : null,
+    home_project: s(o(x.home_project).id) || s(o(x.home_project).name)
+      ? { id: s(o(x.home_project).id), name: s(o(x.home_project).name) || s(o(x.home_project).id),
+          owners: strs(o(x.home_project).owners), hidden: o(x.home_project).hidden === true || !s(o(x.home_project).id) }
+      : null,
+    can_manage: x.can_manage === true,
+    usable_here: x.usable_here !== false,
+    project_names: Object.fromEntries(Object.entries(o(x.project_names)).map(([k, val]) => [k, s(val)])),
     bindings: { total: n(o(x.bindings).total) ?? 0, paused: n(o(x.bindings).paused) ?? 0 },
     oauth_app: x.oauth_app && typeof x.oauth_app === "object"
       ? { client_id: s(o(x.oauth_app).client_id), secret_set: o(x.oauth_app).secret_set === true,
@@ -177,8 +197,18 @@ export function parseTicket(v: unknown): Ticket {
   };
 }
 
+/** A `not_shared` refusal's "who has it" (the API's home_project, home_project_name, owners, can_manage). */
+export function parseNotShared(v: unknown): NotShared | undefined {
+  const e = o(v);
+  if (s(e.error) !== "not_shared" || !(s(e.home_project) || s(e.home_project_name))) return undefined;
+  return { connection_id: s(e.connection_id), label: s(e.label) || "The ticket system",
+           home: { id: s(e.home_project), name: s(e.home_project_name) || s(e.home_project), owners: strs(e.owners),
+                   hidden: !s(e.home_project) },
+           can_manage: e.can_manage === true && Boolean(s(e.home_project)) };
+}
 const parseErrors = (v: unknown): TypedError[] => a(v).map((e) => ({
   connection_id: s(o(e).connection_id) || undefined, ref: s(o(e).ref) || undefined, error: s(o(e).error), message: s(o(e).message),
+  shared_from: parseNotShared(e),
 }));
 
 export function parseTimeline(v: unknown): SyncTimeline {
@@ -225,7 +255,9 @@ const CODE_WORDS: Record<string, string> = {
 };
 export const codeWords = (code: string, message = "") => message || CODE_WORDS[code] || "BOSS could not do that just now.";
 
-export type Read<T> = { ok: true; data: T } | { ok: false; error: string; code: string; status: number; denied: boolean; missing: boolean };
+export type Read<T> = { ok: true; data: T } | { ok: false; error: string; code: string; status: number; denied: boolean; missing: boolean;
+  /** not_shared: the connection another project has, so the page can offer "Share it" or whom to ask. */
+  sharedFrom?: NotShared };
 
 /** A GET that always answers in words: the typed error's message, permission denied, or missing. */
 export async function ticketRead<T>(path: string, parse: (v: unknown) => T): Promise<Read<T>> {
@@ -238,7 +270,7 @@ export async function ticketRead<T>(path: string, parse: (v: unknown) => T): Pro
     const msg = typeof d === "string" ? d : s(o(d).message);
     const denied = r.status === 403;
     const missing = (r.status === 404 && !code) || r.status === 405;
-    return { ok: false, code, status: r.status, denied, missing,
+    return { ok: false, code, status: r.status, denied, missing, sharedFrom: parseNotShared(d),
              error: denied ? (msg || "You don't have permission to see this. Ask an admin.")
                : missing ? "This BOSS does not have ticket systems yet." : codeWords(code, msg) || `BOSS answered ${r.status}.` };
   } catch (e) {
@@ -296,6 +328,31 @@ const conn = (id: string) => `/v1/ticket-systems/${enc(id)}`;
 export const ticketSetupHref = (projectId?: string) =>
   `?area=setup&focus=ticket_systems${projectId ? `&project_id=${enc(projectId)}` : ""}`;
 
+/** A connection not shared here, from a project list entry (reach "unshared"). */
+export const notSharedOf = (c: Connection): NotShared | null =>
+  c.home_project ? { connection_id: c.id, label: c.label, home: c.home_project, can_manage: c.can_manage } : null;
+/** Setup › Ticket systems › All with that connection's sharing open: one press from "Share it".
+ *  Keeps who you are (`org`) and the project you are in (`project_id`). */
+export function shareHref(currentSearch: string, projectId: string | undefined, connectionId: string): string {
+  const next = new URLSearchParams();
+  const now = new URLSearchParams(currentSearch);
+  for (const key of ["org", "org_id"]) { const v = now.get(key); if (v) next.set(key, v); }
+  next.set("area", "setup");
+  next.set("focus", "ticket_systems");
+  if (projectId) next.set("project_id", projectId);
+  next.set("tk", "all");
+  next.set("share", connectionId);
+  return `?${next}`;
+}
+/** "Ask Param G, owner of BOSS dogfood bootstrap, to share it" — names when the API gave them. */
+export function askOwnerWords(home: HomeProject): string {
+  const names = home.owners.slice(0, 3);
+  // A project the viewer may not read is never named: ask an org owner (their names are fine).
+  if (home.hidden) return names.length ? `Ask an org owner (${names.join(" or ")}) to share it` : "Ask an org owner to share it";
+  return names.length ? `Ask ${names.join(" or ")} (owner of ${home.name}) to share it`
+    : `Ask an owner of ${home.name} to share it`;
+}
+
 /** What sharing a connection means, in the words the person agrees to. */
 export const shareWords = (org: string, owner: string | null) =>
   `Everyone in ${org || "your organisation"} and their agents can read tickets through this connection using ${owner ? `${owner}'s` : "its"} token.`;
@@ -313,6 +370,13 @@ export const readConnections = (projectId: string) =>
 /** The same, plus other projects' connections NOT shared with this one (named only: Setup). */
 export const readConnectionsAndHidden = (projectId: string) =>
   ticketRead(`/v1/ticket-systems?project_id=${enc(projectId)}`, (v) => a(o(v).connections).map(parseConnection));
+/** The same list with the asking project's name ("New work in Northgate Gateway"). */
+export const readTicketSetup = (projectId: string) =>
+  ticketRead(`/v1/ticket-systems?project_id=${enc(projectId)}`, (v) => ({
+    connections: a(o(v).connections).map(parseConnection), projectName: s(o(v).project_name) }));
+/** Setup › Ticket systems › All: every connection of the org, wherever it was added. */
+export const readOrgConnections = (projectId: string) =>
+  ticketRead(`/v1/ticket-systems/org?project_id=${enc(projectId)}`, (v) => a(o(v).connections).map(parseConnection));
 export const readExternalProjects = (connectionId: string, q = "") =>
   ticketRead(`${conn(connectionId)}/projects${q ? `?q=${enc(q)}` : ""}`, (v) => a(o(v).projects).map((p) => {
     const y = o(p);

@@ -580,7 +580,7 @@ def list_connections(db: Connection, project_id: str, *, scope: str = "all"
     from . import ticket_reach as reach
 
     own = project_rows(db, project_id, include_disconnected=True)
-    out = [{**serialize(db, row), "reach": "project"} for row in own]
+    out = [org_view(db, row, {**serialize(db, row), "reach": "project"}) for row in own]
     if scope == "project":
         return out
     seen = {reach.home_id(row) for row in own
@@ -590,14 +590,59 @@ def list_connections(db: Connection, project_id: str, *, scope: str = "all"
             continue
         view = serialize(db, row)
         view["reach"] = "org"
-        view["home_project"] = {"id": row["project_id"],
-                                "name": reach.project_name(db, str(row["project_id"]))}
-        out.append(view)
+        out.append(org_view(db, row, view))
     for row in reach.unshared_rows(db, project_id):
         out.append({"id": row["id"], "provider": row["provider_key"],
                     "label": label_of(row), "status": "not_shared", "reach": "unshared",
-                    "home_project": {"id": row["project_id"],
-                                     "name": reach.project_name(db, str(row["project_id"]))}})
+                    "home_project": reach.home_view(db, str(row["project_id"]))})
+    return out
+
+
+def org_view(db: Connection, row: dict[str, Any], view: dict[str, Any]) -> dict[str, Any]:
+    """A connection homed in ANOTHER project, as this caller may see it (PR #140 review): every
+    org member sees its provider, site, sharing and status; its home's name and owners, the
+    account whose token it uses, the BOSS projects it maps to and its counts only when the
+    caller can read that home (project:read). Otherwise "another project", the org's Owners to
+    ask, and only the mappings onto projects the caller can read."""
+    from . import ticket_reach as reach
+
+    home = reach.home_view(db, str(row["project_id"]))
+    view["home_project"] = home
+    names: dict[str, str] = {}
+    settings = view.get("settings")
+    if isinstance(settings, dict):
+        seen = []
+        for m in settings.get("mappings") or []:
+            pid = str(m.get("boss_project_id") or "")
+            if pid and reach.may_see_project(pid):
+                seen.append(m)
+                names[pid] = reach.project_name(db, pid)
+        settings["mappings"] = seen
+    view["project_names"] = names
+    if home.get("hidden"):
+        view.update({"project_id": "", "account": None, "fields": {}, "last4": None,
+                     "fingerprint": None, "oauth_app": None, "mirrors": [], "managed_from": None,
+                     "bindings": {"total": 0, "paused": 0}})
+    else:
+        view["mirrors"] = [m for m in view.get("mirrors") or []
+                           if reach.may_see_project(str(m.get("project_id") or ""))]
+    return view
+
+
+def list_org_connections(db: Connection, project_id: str) -> list[dict[str, Any]]:
+    """Setup › Ticket systems › All: every connection of the org (ticket_reach.org_connections)
+    as the console lists it — where it was added, whose token (the account BOSS acts as), shared
+    or not, its mappings, its status — each as this caller may see it (:func:`org_view`). Never
+    a token; the caller adds ``can_manage``."""
+    from . import ticket_reach as reach
+
+    out = []
+    for row in reach.org_connections(db, project_id):
+        view = serialize(db, row)
+        view["reach"] = "project" if str(row["project_id"]) == project_id else (
+            "org" if row["shared"] else "unshared")
+        view["usable_here"] = row["usable_here"]
+        out.append(org_view(db, row, view))
     return out
 
 
@@ -801,10 +846,12 @@ def sync_mirrors(db: Connection, app_settings: Any, home: dict[str, Any], *, act
         if db.execute(text(org_of), {"p": target}).scalar() != home_org:
             raise TicketApiError("invalid_settings", f"There is no BOSS project {target!r} in "
                                                      "this organisation.")
-        may_manage(target)
         existing = db.execute(text(_ROW + " WHERE project_id = :p AND provider_key = :k"),
                               {"p": target, "k": provider}).mappings().first()
         existing = dict(existing, configuration=_config(existing)) if existing else None
+        if not (existing and existing["status"] == "active"
+                and existing["configuration"].get("mirror_of") == home["id"]):
+            may_manage(target)   # a project newly mapped onto; one already mirrored is kept
         if existing and is_connected(existing) and \
                 existing["configuration"].get("mirror_of") != home["id"]:
             raise TicketApiError("conflict", f"Project {target} already has its own "
@@ -830,7 +877,44 @@ def sync_mirrors(db: Connection, app_settings: Any, home: dict[str, Any], *, act
                                    "AND NOT (project_id = ANY(:keep))"),
                        {"h": home["id"], "keep": mapped}).mappings().all()
     for row in stale:
+        # Unmapping a project stops its tickets there: only someone who manages it may.
+        may_manage(str(row["project_id"]))
         disconnect(db, dict(row, configuration=_config(row)), actor)
+    return out
+
+
+def guard_mappings(old: list[dict[str, Any]], new: list[dict[str, Any]], *,
+                   may_see: Callable[[str], bool], may_manage: Callable[[str], None]
+                   ) -> list[dict[str, Any]]:
+    """A mappings PATCH from someone who may not see every mapped project (PR #140 review):
+    the list they send was missing the mappings onto projects hidden from them, so a stored
+    mapping onto a project they cannot SEE is kept as it was — unless the same key is now sent
+    elsewhere (a move), which, like removing or moving any mapping, needs integration:manage on
+    the project it leaves (``may_manage`` raises). Returns the list to store."""
+    sent = {(str(m["external_project"]).upper(), str(m["boss_project_id"])) for m in new}
+    keys = {k for k, _ in sent}
+    # A stored mapping sent back with its DEFAULT flipped (losing it, or gaining it) changes
+    # where unmapped keys land for that project: it needs integration:manage there.
+    was_default = {(str(m.get("external_project") or "").upper(), str(m.get("boss_project_id") or "")):
+                   bool(m.get("default")) for m in old}
+    for m in new:
+        pair = (str(m["external_project"]).upper(), str(m["boss_project_id"]))
+        if pair in was_default and was_default[pair] != bool(m.get("default")):
+            may_manage(pair[1])
+    out = list(new)
+    for m in old:
+        key, target = str(m.get("external_project") or "").upper(), str(m.get("boss_project_id") or "")
+        if not key or not target or (key, target) in sent:
+            continue
+        if not may_see(target) and key not in keys:
+            default = bool(m.get("default"))
+            if default and any(x.get("default") for x in out):
+                may_manage(target)   # the default moves off a project they cannot see
+                default = False
+            out.append({"external_project": m["external_project"], "boss_project_id": target,
+                        "default": default})
+            continue
+        may_manage(target)
     return out
 
 
@@ -1076,14 +1160,20 @@ def resolve_text(db: Connection, project_id: str, said: str, *,
                         "not_connected": found}
             if found.get("ok"):
                 view = dict(found["ticket"])
-                view["maps_to"] = found["maps_to"]
+                view["maps_to"] = reach.visible_maps_to(found["maps_to"])
                 view["connection_reach"] = found["connection"]["reach"]
                 return {"refs": [{"connection_id": view["connection_id"],
                                   "provider": view["provider"], "key": view["key"]}],
                         "tickets": [view], "errors": [], "connected": len(rows)}
             return {"refs": [], "tickets": [], "connected": len(rows),
-                    "errors": [{"ref": named, "error": found.get("error"),
+                    "errors": [{**{k: v for k, v in found.items() if k != "ok"},
+                                "ref": named, "error": found.get("error"),
                                 "message": found.get("message")}]}
+        # A key in a sentence ("Implement KAN-12") that only a connection NOT shared with this
+        # project knows: say so, with its way out, instead of nothing.
+        hidden = reach.unshared_ref(db, project_id, said)
+        if hidden:
+            return {"refs": [], "tickets": [], "errors": [hidden], "connected": len(rows)}
         return {"refs": [], "tickets": [], "errors": [], "connected": len(rows)}
     for row, ref in refs[:max(1, limit)]:
         try:
@@ -1098,7 +1188,8 @@ def resolve_text(db: Connection, project_id: str, said: str, *,
         view = ticket_view(ticket, in_boss=None, full=True)
         view["connection_id"] = row["id"]
         view["in_boss"] = mark([ticket], in_boss_map(db, family_ids(db, row)))[0]["in_boss"]
-        view["maps_to"] = reach.mapped_project(db, row, ticket.key or ref.label())
+        view["maps_to"] = reach.visible_maps_to(
+            reach.mapped_project(db, row, ticket.key or ref.label()))
         view["connection_reach"] = row.get("reach") or "project"
         reach.audit_read(db, project_id, row, ticket.key or ref.label(), reader=person_id)
         tickets.append(view)

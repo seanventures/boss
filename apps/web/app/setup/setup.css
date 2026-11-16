@@ -3,7 +3,7 @@
 :root {
   --font-outlier: "JetBrains Mono", ui-monospace, monospace;
 }
-/* Repo and models. Classes are prefixed su- and use only the base tokens. */
+/* Setup. Classes are prefixed su- and use only the base tokens. */
 
 .su-board {
   display: flex;
@@ -804,7 +804,7 @@ button.su-chip { background: transparent; font: 600 0.75rem/1 var(--sans); curso
 button.su-chip:hover, button.su-chip:focus-visible { border-color: var(--accent); outline: 2px solid currentColor; outline-offset: 2px;}
 button.su-chip[aria-checked="true"] { color: var(--accent); border-color: var(--accent); }
 
-/* ── Repo and models: one place per thing (2026-11-05) ─────────────────────────── */
+/* ── Setup: one place per thing (2026-11-05) ─────────────────────────── */
 .su-td-actions { width: 1%; white-space: nowrap; text-align: right; padding-right: 0 !important; }
 .su-row-actions { justify-content: flex-end; flex-wrap: nowrap; }
 .su-row-actions .su-confirm { white-space: normal; }
@@ -829,3 +829,58 @@ button.su-chip[aria-checked="true"] { color: var(--accent); border-color: var(--
 #su-embedding-model .su-field input { min-width: 0; width: 100%; }
 #su-embedding-model [data-testid="su-embedding-form"] .su-line > .su-field { flex: 1 1 280px; }
 .su-account-menu-gap { width: 1%; }
+
+/* ── Setup sections: one fold per topic (2026-11-15, setup-section.tsx) ───────────── */
+.su-sec { border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); min-width: 0; scroll-margin: 80px; }
+.su-sec[data-open] { box-shadow: var(--shadow-sm); }
+.su-sec-head {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px;
+  width: 100%; min-height: 52px; padding: 10px 16px; border: 0; border-radius: var(--r-xl); background: transparent;
+  color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+}
+.su-sec-head:hover { background: var(--surface-2); }
+.su-sec-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.su-sec[data-open] > .su-sec-head { border-radius: var(--r-xl) var(--r-xl) 0 0; border-bottom: 1px solid var(--border); }
+.su-sec-icon { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: var(--r); background: var(--accent-soft); color: var(--accent-text); flex: none; }
+.su-sec-title { margin: 0; font: 700 var(--fs-title)/1.3 var(--display); }
+.su-sec-sum { min-width: 0; color: var(--muted); font-size: var(--fs-ui); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.su-sec-sum::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: var(--faint); vertical-align: 1px; }
+.su-sec-sum[data-tone="green"]::before { background: var(--green); }
+.su-sec-sum[data-tone="amber"]::before { background: var(--amber); }
+.su-sec-sum[data-tone="red"]::before { background: var(--red); }
+.su-sec-caret { color: var(--muted); transition: transform .15s ease; }
+.su-sec[data-open] .su-sec-caret { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) { .su-sec-caret { transition: none; } }
+.su-sec-body { display: flex; flex-direction: column; gap: 4px; padding: 6px 0 4px; min-width: 0; }
+.su-sec-body[hidden] { display: none; }
+/* Inside a section, its blocks lose their own card: one frame per topic, one title. */
+.su-sec-body .su-block, .su-sec-body .su-row { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.su-sec-body .su-block + .su-block { border-top: 1px solid var(--border); }
+.su-sec-body .su-models-block > .su-block-head > .su-block-title,
+.su-sec-body > div > .su-row > .su-row-label { display: none; }
+.su-sec-body > div > .su-row { grid-template-columns: minmax(0, 1fr) auto; }
+.su-sec-body .su-row[data-focused] { box-shadow: none; }
+/* Advanced is the same fold as the others: card, icon, title, one line, caret. */
+.su-advanced.su-advanced-all { margin-top: 0; padding-top: 0; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
+.su-advanced-all[open] { box-shadow: var(--shadow-sm); }
+.su-advanced-all > .su-advanced-summary {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px;
+  min-height: 52px; padding: 10px 16px; margin: 0; list-style: none; color: var(--ink); font-size: inherit; border-radius: var(--r-xl);
+}
+.su-advanced-all > .su-advanced-summary::-webkit-details-marker { display: none; }
+.su-advanced-all > .su-advanced-summary:hover { background: var(--surface-2); }
+.su-advanced-all > .su-advanced-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.su-advanced-all[open] > .su-advanced-summary { margin-bottom: 0; border-radius: var(--r-xl) var(--r-xl) 0 0; border-bottom: 1px solid var(--border); }
+.su-advanced-all[open] .su-sec-caret { transform: rotate(180deg); }
+.su-advanced-all > .su-advanced-summary .su-sec-sum::before { display: none; }
+.su-advanced-all > .su-adv-list { padding: 8px 16px 14px; }
+@media (max-width: 640px) {
+  .su-advanced-all > .su-advanced-summary { grid-template-columns: auto minmax(0, 1fr) auto; padding: 10px 12px; }
+  .su-advanced-all > .su-advanced-summary .su-sec-sum { grid-column: 2 / 3; grid-row: 2; white-space: normal; }
+  .su-advanced-all > .su-advanced-summary .su-sec-caret { grid-column: 3; grid-row: 1; }
+}
+@media (max-width: 640px) {
+  .su-sec-head { grid-template-columns: auto minmax(0, 1fr) auto; padding: 10px 12px; }
+  .su-sec-head .su-sec-sum { grid-column: 2 / 3; grid-row: 2; white-space: normal; }
+  .su-sec-head .su-sec-caret { grid-column: 3; grid-row: 1; }
+}

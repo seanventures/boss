@@ -10,7 +10,7 @@ import { doorCallsIn } from "./every-dock-door-names-its-own-role.test";
 /**
  * A door that opens the dock with `role: null` asks BOSS in general — and the dock says so.
  *
- * The incident (boss-1 console walk, 2026-10-02): Repo and model's "Ask BOSS about this step",
+ * The incident (boss-1 console walk, 2026-10-02): Setup's "Ask BOSS about this step",
  * the Observability starters and the BOSS Agent briefing items all open the dock with
  * `role: null`. lib/dock-subject.ts documents that as "asks BOSS in general", and the console
  * shell then headed the panel "Deployment Manager" and sent the turn with that roleName, so a
@@ -22,7 +22,7 @@ function nullRoleDoors(): string[] {
   const out: string[] = [];
   const files = [
     ...readdirSync(APP).filter((x) => x.endsWith(".tsx") || x.endsWith(".ts")),
-    // Repo and models' Ask BOSS lives with the board it belongs to.
+    // Setup's Ask BOSS lives with the board it belongs to.
     ...readdirSync(join(APP, "setup")).filter((x) => x.endsWith(".tsx")).map((x) => `setup/${x}`),
     // The Observability starters (the retired Monitoring screen's) live in Observability now.
     ...readdirSync(join(APP, "observability")).filter((x) => x.endsWith(".tsx")).map((x) => `observability/${x}`),

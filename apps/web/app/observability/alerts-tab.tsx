@@ -208,7 +208,7 @@ function AlertDetail({ a, targetId, projectId, actor, onDone }: { a: Alert; targ
           : a.triage.by ? <span className="inf-faint" title="Who decided" data-copy="data">{a.triage.by}</span> : null}
         {a.triage.state === "no_model" && a.state === "firing" ? (
           <GatedButton permission="observability:manage" type="button" className="ag-btn ag-btn-sm" data-testid="obs-alert-triage-again"
-                       disabled={busy} title="Connect a model in Repo and models, then ask again" onClick={again}>Ask again</GatedButton>
+                       disabled={busy} title="Connect a model in Setup, then ask again" onClick={again}>Ask again</GatedButton>
         ) : null}
       </div>
       {a.triage.options.length ? (

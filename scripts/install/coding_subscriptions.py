@@ -110,7 +110,7 @@ def _refusal_state(body: bytes) -> str:
 
 
 def connect(api_url: str, api_key: str, provider: str) -> None:
-    # PROVED, NOT ASSUMED. Repo and models' one connect (POST /v1/setup/models) runs one trivial
+    # PROVED, NOT ASSUMED. Setup's one connect (POST /v1/setup/models) runs one trivial
     # turn on the subscription — reserved and receipted like any model call — before it calls
     # it connected, and answers with the whole setup view.
     request = urllib.request.Request(

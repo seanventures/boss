@@ -383,7 +383,7 @@ def test_a_rejected_login_stops_at_once_and_says_what_to_do(engine, governed):
         "a rejected login does not fix itself; retrying it only hid the reason")
     attention = _attention(engine, run_id)
     assert attention["kind"] == "login_rejected" and attention["state"] == "stopped"
-    assert "Repo and models" in attention["action"] and "sk-ant-" in attention["action"]
+    assert "Setup" in attention["action"] and "sk-ant-" in attention["action"]
     with engine.connect() as connection:
         state = connection.execute(text(
             "SELECT observed_capacity->>'credential_state' FROM entitlement_sources "

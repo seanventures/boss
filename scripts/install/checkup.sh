@@ -257,7 +257,7 @@ else
 fi
 
 # 6. repository, pushable
-# Repo and models' own verdict (GET /v1/setup): the repository's last read/write/PR check.
+# Setup's own verdict (GET /v1/setup): the repository's last read/write/PR check.
 setup=$(curl -fsS --max-time 15 "${AUTH[@]}" "$API/v1/setup?project_id=$PROJECT" 2>/dev/null)
 repo_line=$(printf '%s' "$setup" | python3 -c '
 import json, sys
@@ -274,7 +274,7 @@ else:
 ' 2>/dev/null || echo none)
 case "$repo_line" in
   ok\ *) ok "repository: ${repo_line#ok }" ;;
-  bad\ *) bad "repository: ${repo_line#bad } — fix it in Repo and models" repository ;;
+  bad\ *) bad "repository: ${repo_line#bad } — fix it in Setup" repository ;;
   *) warn "repository: not connected — builds cannot open a pull request" ;;
 esac
 
@@ -379,8 +379,8 @@ elif has api_silent && [ "${#DOCKER[@]}" -gt 0 ]; then SAFE+=(restart_api); fi
 has docker_down && MANUAL+=("Docker: start it (Docker Desktop, or: sudo systemctl start docker), then run this again")
 has env_quote && MANUAL+=(".env line $_env_bad: close the quote (or remove the line); Compose reads nothing until then")
 has console_loopback && MANUAL+=("console address: rebuild web for its public address — scripts/install/README.md (public URL)")
-has chat_silent && MANUAL+=("models: boss connect (or Repo and models) to sign the model in again")
-has repository && MANUAL+=("repository: Repo and models › Test access, then fix what it names")
+has chat_silent && MANUAL+=("models: boss connect (or Setup) to sign the model in again")
+has repository && MANUAL+=("repository: Setup › Test access, then fix what it names")
 has sandbox_fence && MANUAL+=("sandbox: docs/community/SANDBOX.md — turning the fence off is a security choice, never made for you")
 describe() {
   case "$1" in

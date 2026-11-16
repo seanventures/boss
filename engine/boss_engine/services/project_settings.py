@@ -365,7 +365,7 @@ KNOBS: dict[str, dict[str, Any]] = {
     },
     # WHICH ANTHROPIC CREDENTIAL PAYS (claude_credential, BOSSAPP-530). Builds, agents and
     # meetings run `claude` on the subscription's login or on the Anthropic API key stored in
-    # Repo and models; disconnecting the subscription falls through to the key either way.
+    # Setup; disconnecting the subscription falls through to the key either way.
     "anthropic_credential_order": {
         "attr": "anthropic_credential_order",
         "label": "Anthropic credential",

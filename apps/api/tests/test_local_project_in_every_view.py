@@ -102,7 +102,7 @@ def test_a_local_project_appears_in_every_api_read_the_console_uses(world, clien
         "Work (code tasks / builds)": (f"/v1/projects/{p}/work", {}),
         "settings": (f"/v1/projects/{p}/settings", {}),
         "readiness dots": (f"/v1/projects/{p}/add-project/preview", {}),
-        "Setup (Repo and models)": ("/v1/setup", {"project_id": p}),
+        "Setup (Setup)": ("/v1/setup", {"project_id": p}),
         "GitHub area bindings": ("/v1/github/repository-bindings", {"project_id": p}),
         "⌘K": ("/v1/jump", {"q": "basket", "project_id": p}),
     }
@@ -115,10 +115,10 @@ def test_a_local_project_appears_in_every_api_read_the_console_uses(world, clien
             answers[name] = got.json()
     # The repository is shown where a repository is shown.
     for name in ("project header (overview)", "Repo & knowledge", "settings",
-                 "Setup (Repo and models)", "GitHub area bindings"):
+                 "Setup (Setup)", "GitHub area bindings"):
         assert full in json.dumps(answers[name]), f"{name} hides the local repository"
     # Setup reads it as connected (the readiness behind "Connect a repository").
-    setup = answers["Setup (Repo and models)"]
+    setup = answers["Setup (Setup)"]
     repos = setup["repository"]["repos"]
     assert [r["host"] for r in repos if r["full_name"] == full] == ["local"]
     assert next(r for r in repos if r["full_name"] == full)["external_url"] is None

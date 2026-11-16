@@ -314,7 +314,7 @@ def start(db: Any, settings: Any, jobs: Any, *, project_id: str, app_key: str, t
     refused = registry.mint_allowed(db, org_id, [r["full_name"] for r in repos])
     if refused:
         raise MultiRepoError(409, "not_allowed", f"{', '.join(refused)} {'is' if len(refused) == 1 else 'are'} not "
-                                                 "allowed in Repo and models any more.")
+                                                 "allowed in Setup any more.")
     inactive = [c["repository"] for c in app["components"] + app["deploy_config"] if not c["repository_active"]]
     if inactive:
         raise MultiRepoError(409, "repository_removed", f"{', '.join(inactive)} was removed from this project.")

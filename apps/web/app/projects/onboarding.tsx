@@ -257,9 +257,9 @@ function WorkspaceRow({ ob }: { ob: Onboarding }) {
     <div className="px-ob-ws" data-testid="px-ob-workspace">
       <span className="px-lbl">Workspace</span>
       <a className="px-chip" data-ok={gh || undefined} href={pxHref("?area=setup&focus=repository")} data-testid="px-ob-ws-github"
-         title={local ? "The code is kept on this machine by BOSS" : "GitHub accounts live in Setup › Repo and models"}>
+         title={local ? "The code is kept on this machine by BOSS" : "GitHub accounts live in Setup"}>
         {local ? <HardDrives size={11} aria-hidden /> : <GithubLogo size={11} aria-hidden />} {local ? "Repo" : "GitHub"} {gh ? "✓" : "—"} <span className="px-faint">{repo?.sub || "checking"}</span></a>
-      <a className="px-chip" data-ok={md || undefined} href={pxHref("?area=setup&focus=models")} data-testid="px-ob-ws-model" title="Models live in Setup › Repo and models">
+      <a className="px-chip" data-ok={md || undefined} href={pxHref("?area=setup&focus=models")} data-testid="px-ob-ws-model" title="Models live in Setup">
         <Brain size={11} aria-hidden /> Model {md ? "✓" : "—"} <span className="px-faint">{model?.sub || "checking"}</span></a>
     </div>
   );

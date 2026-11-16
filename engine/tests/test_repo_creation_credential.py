@@ -123,12 +123,12 @@ def test_when_none_can_the_reason_names_each_missing_permission_and_fix(monkeypa
                     words="the installation lacks administration: write",
                     fix="Grant Administration: Read and write to the boss-localhost App")],
           conns=[_pat(False, missing=["administration"], words="its token lacks the repo scope (missing: administration)",
-                      fix="Replace the token for paramg with one holding the repo scope (Repo and models)")])
+                      fix="Replace the token for paramg with one holding the repo scope (Setup)")])
     got = repo_creation.repo_creation_credential(None, get_settings(), "acme")
     assert not got.ok and got.token is None and got.reason == "no_github_credential"
     assert "no GitHub credential" in got.words and "Administration" in got.words
     assert got.fixes == ["Grant Administration: Read and write to the boss-localhost App",
-                         "Replace the token for paramg with one holding the repo scope (Repo and models)"]
+                         "Replace the token for paramg with one holding the repo scope (Setup)"]
     assert [c["kind"] for c in got.candidates] == ["identity_app", "connection"]
 
 

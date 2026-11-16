@@ -622,7 +622,7 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
                     if row.get("allowed") is False:
                         raise MultiRepoError(409, "repo_not_allowed",
                                              f"{row['full_name']} is not allowed for BOSS yet: "
-                                             "allow it in Repo and models.")
+                                             "allow it in Setup.")
                     project_repos.put(db, _settings, pid, repo_id, actor=actor)
                 except MultiRepoError as error:
                     raise Refused("repository", error.status or 409, {

@@ -22,8 +22,8 @@ Metatron · the BOSS terminal
 │ ✓ Project         BOSS dogfood (boss-dogfood)                                │
 │ ✓ Model connected Claude Sonnet                                              │
 │ ✗ Embedding model not set; knowledge search is off                           │
-│                   fix Console: Setup › Repo and models › Embedding model.    │
+│                   fix Console: Setup › Embedding model.    │
 │ ✗ GitHub access   connected as example-org; no repository chosen             │
-│                   fix Console: Setup › Repo and models › Repository (or boss │
+│                   fix Console: Setup › Repository (or boss │
 │                   connect).                                                  │
 ╰─────────────────────────────────────── boss-dogfood · http://127.0.0.1:8000 ─╯

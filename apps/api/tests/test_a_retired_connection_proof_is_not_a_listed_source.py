@@ -1,4 +1,4 @@
-"""Repo and models lists only sources somebody connected, never a retired proof (BOSSAPP-539).
+"""Setup lists only sources somebody connected, never a retired proof (BOSSAPP-539).
 
 Each Connect stages a temporary proof-<hash> source for its one paid call. The console reads
 GET /v1/entitlements/sources and showed every retired one with Replace key / Disconnect
