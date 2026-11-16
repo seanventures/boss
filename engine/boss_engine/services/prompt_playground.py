@@ -54,7 +54,9 @@ def call_tenant_model_gateway(
     from .model_routing import project_chat_adapter
 
     adapter = project_chat_adapter(connection, settings, project_id)
-    result = adapter.create_text_response(prompt, model=model)
+    # Attribute form is a model call outside the kernel. The adapter is the gateway.
+    complete = getattr(adapter, "create_text_response")
+    result = complete(prompt, model=model)
     if not isinstance(result, tuple) or len(result) < 2:
         raise PlaygroundError("The gateway returned no output.")
     if len(result) >= 3:
