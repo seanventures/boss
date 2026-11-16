@@ -500,6 +500,34 @@ export function isPassedOver(p: Pick<PreviewOutput, "status" | "steps">, i: numb
   return p.status === "running" || p.steps.slice(i + 1).some((y) => y.status === "ok");
 }
 
+/** The preview's error, visible. Blank is nothing. */
+export function previewErrorSentence(error: string | null | undefined): string | null {
+  const trimmed = error?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** Stopped or Failed, with the error beside it. More than six words is a paragraph. */
+export function PreviewErrorLine({ status, error, sentence }: {
+  status: string;
+  error: string | null | undefined;
+  sentence: string | null;
+}) {
+  const text = !sentence ? null : sentence.split(/\s+/).filter(Boolean).length > 6
+    ? <p data-testid="fx-preview-error" data-user-text>{sentence}</p>
+    : <span data-testid="fx-preview-error" data-user-text>{sentence}</span>;
+  return status === "stopped" || status === "expired" ? (
+    <>
+      <span className="fx-muted" title={error ?? undefined} data-testid="fx-preview-stopped">Stopped</span>
+      {text}
+    </>
+  ) : (
+    <>
+      <span className="fx-err" title={error ?? undefined}>Failed</span>
+      {text}
+    </>
+  );
+}
+
 /** The steps toggle's words: how it is running once it runs; how far it got while it boots. */
 export function stepsWord(p: Pick<PreviewOutput, "status" | "steps" | "stepsDone" | "stepsTotal">): string {
   const serving = [...p.steps].reverse().find((x) => x.status === "ok");
@@ -593,10 +621,8 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
         </button>
       ) : null}
       {p.error && !running ? (
-        // A preview BOSS stopped (idle, expired) is not a failure: its reason is the tooltip.
-        p.status === "stopped" || p.status === "expired"
-          ? <span className="fx-muted" title={p.error} data-testid="fx-preview-stopped">Stopped</span>
-          : <span className="fx-err" title={p.error}>Failed</span>
+        // Idle or expired is Stopped, not a failure. The reason stays on the title and is shown beside it.
+        <PreviewErrorLine status={p.status} error={p.error} sentence={previewErrorSentence(p.error)} />
       ) : null}
       {err}
       {passed}
