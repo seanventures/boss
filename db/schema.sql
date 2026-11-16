@@ -2724,11 +2724,14 @@ CREATE INDEX IF NOT EXISTS idx_events_archive_project_created
   ON events_archive(project_id, created_at DESC);
 -- A conversion that died between adding its NOT VALID `created_at < cutover` check and the swap
 -- leaves the check on the PLAIN table; once the cutover passes, every event insert would fail.
--- Only a conversion in flight may hold it, and none is in flight while the schema applies: drop
--- it here (the retention service also drops it before it starts). No-op once events is
--- partitioned (the bound then lives on nothing) and on a fresh install.
+-- A conversion IN FLIGHT holds advisory lock hashtext('boss.events_conversion') (the same key as
+-- telemetry_retention.CONVERSION_LOCK) from before it adds the check until the swap drops it.
+-- Dropping the check under that conversion makes the attach scan the whole table, or fail it.
+-- Take the lock or leave the check: the next boot, or the service, drops it once the conversion
+-- is gone. No-op once events is partitioned and on a fresh install.
 DO $$ BEGIN
-  IF EXISTS (SELECT 1 FROM pg_class WHERE oid = to_regclass('events') AND relkind = 'r')
+  IF pg_try_advisory_xact_lock(hashtext('boss.events_conversion'))
+     AND EXISTS (SELECT 1 FROM pg_class WHERE oid = to_regclass('events') AND relkind = 'r')
      AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'events_legacy_bound'
                  AND conrelid = to_regclass('events')) THEN
     ALTER TABLE events DROP CONSTRAINT events_legacy_bound;

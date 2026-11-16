@@ -434,6 +434,59 @@ def test_a_bound_a_crashed_conversion_left_never_blocks_inserts(db):
     assert tr.clear_stale_bound(db) is False
 
 
+_CONVERSION_LOCK = "boss.events_conversion"
+
+
+def _bound_still_there(db) -> int:
+    with db.connect() as c:
+        return int(c.execute(text(
+            "SELECT count(*) FROM pg_constraint WHERE conname = 'events_legacy_bound' "
+            "AND conrelid = to_regclass('events')")).scalar() or 0)
+
+
+def test_boot_leaves_a_bound_a_live_conversion_holds(db):
+    """Boot drops `events_legacy_bound` whenever `events` is still a plain table. A conversion
+    in flight is the one case that must keep it: the swap uses the validated check to attach
+    the legacy partition without a scan. The conversion lock is that case."""
+    from boss_engine.db import ensure_schema
+
+    assert tr.CONVERSION_LOCK == _CONVERSION_LOCK
+    with db.connect() as c:
+        if tr.is_partitioned(c, "events"):
+            pytest.skip("events is already partitioned")
+    _leave_a_stale_bound(db)
+    holder = db.connect()
+    try:
+        holder.execute(text("SELECT pg_advisory_lock(hashtext(:k))"), {"k": _CONVERSION_LOCK})
+        holder.commit()
+        ensure_schema(db)
+        assert _bound_still_there(db) == 1
+    finally:
+        holder.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": _CONVERSION_LOCK})
+        holder.commit()
+        holder.close()
+        tr.clear_stale_bound(db)
+
+
+def test_clear_stale_bound_leaves_a_bound_a_live_conversion_holds(db):
+    with db.connect() as c:
+        if tr.is_partitioned(c, "events"):
+            pytest.skip("events is already partitioned")
+    _leave_a_stale_bound(db)
+    holder = db.connect()
+    try:
+        holder.execute(text("SELECT pg_advisory_lock(hashtext(:k))"), {"k": _CONVERSION_LOCK})
+        holder.commit()
+        assert tr.clear_stale_bound(db) is False
+        assert _bound_still_there(db) == 1
+    finally:
+        holder.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": _CONVERSION_LOCK})
+        holder.commit()
+        holder.close()
+    assert tr.clear_stale_bound(db) is True
+    assert _bound_still_there(db) == 0
+
+
 def _plant_invalid_index(db, name: str = "idx_events_crashed") -> None:
     """What CREATE INDEX CONCURRENTLY leaves when the build crashes: the name exists, indisvalid
     is false. schema.sql's IF NOT EXISTS will not rebuild a name that already exists."""
@@ -446,16 +499,28 @@ def _plant_invalid_index(db, name: str = "idx_events_crashed") -> None:
     assert valid is False
 
 
-def test_an_invalid_index_is_not_carried_onto_the_new_parent(db):
+def test_an_invalid_index_is_not_carried_onto_the_new_parent(db, monkeypatch):
     """A crashed index build must not become the partitioned parent's index. Attaching it leaves
     the parent indisvalid forever, and schema.sql's CREATE INDEX IF NOT EXISTS never repairs a
-    name that already exists."""
+    name that already exists. The conversion holds the bound lock while it swaps, so a concurrent
+    boot cannot drop the check the attach is about to use."""
     with db.connect() as c:
         if tr.is_partitioned(c, "events"):
             pytest.skip("events is already partitioned")
     _plant_invalid_index(db)
+    seen: dict[str, bool] = {}
+    real_swap = tr._swap
+
+    def _watching(c, **kwargs):
+        blocked = c.execute(text("SELECT NOT pg_try_advisory_xact_lock(hashtext(:k))"),
+                            {"k": _CONVERSION_LOCK}).scalar()
+        seen["blocked"] = bool(blocked)
+        return real_swap(c, **kwargs)
+
+    monkeypatch.setattr(tr, "_swap", _watching)
     got = tr.ensure_partitioned(db, now=NOW)
     assert got.get("converted") is True and not got.get("error"), got
+    assert seen.get("blocked") is True
     with db.connect() as c:
         invalid = c.execute(text("""
             SELECT ic.relname FROM pg_index i
@@ -619,3 +684,89 @@ def test_one_process_sweeps_at_a_time(db):
         assert valid is True
         share = tr.share(c)
     assert share["bytes"] > 0 and any(t["table"] == "events" and t["partitioned"] for t in share["tables"])
+
+
+class _PlantingEngine:
+    """Runs `plant` immediately before a receipt DELETE that does not itself lock the rows.
+
+    One statement that both locks and deletes shares a snapshot, so planting before it is
+    visible to that snapshot and does not prove the re-check. A second statement is the window.
+    """
+
+    def __init__(self, engine, plant):
+        self._engine = engine
+        self._plant = plant
+
+    def connect(self):
+        return _PlantingCM(self._engine.connect(), self._plant)
+
+    def begin(self):
+        return _PlantingCM(self._engine.begin(), self._plant)
+
+
+class _PlantingCM:
+    def __init__(self, cm, plant):
+        self._cm = cm
+        self._plant = plant
+        self._conn = None
+
+    def __enter__(self):
+        self._conn = _PlantingConn(self._cm.__enter__(), self._plant)
+        return self._conn
+
+    def __exit__(self, *exc):
+        return self._cm.__exit__(*exc)
+
+
+class _PlantingConn:
+    def __init__(self, inner, plant):
+        self._inner = inner
+        self._plant = plant
+
+    def execute(self, stmt, params=None, **kwargs):
+        sql = str(getattr(stmt, "text", stmt))
+        if (__import__("re").search(r"\bDELETE\s+FROM\s+\"?receipts\"?", sql, __import__("re").I)
+                and "FOR UPDATE" not in sql.upper()):
+            self._plant()
+        if params is None:
+            return self._inner.execute(stmt, **kwargs)
+        return self._inner.execute(stmt, params, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def test_a_reference_that_lands_after_the_candidate_snapshot_keeps_the_receipt(db):
+    """The delete re-checks the protection predicate. That re-check used to be the same statement
+    as the candidate lock, so it saw the same snapshot: a foreign key that committed after the
+    snapshot and before the delete still lost the receipt."""
+    with db.connect() as c:
+        before = _ids(c, "receipts")
+    with db.begin() as c:
+        rid = _receipt(c, "metatron.watch", NOW - timedelta(days=90))
+        # The sweep's candidate statement holds AccessShare on this table until it commits, and
+        # the row lock on the receipt blocks the foreign-key trigger. Triggers stay off so the
+        # reference can commit in that window; the predicate is the row, not the trigger.
+        c.execute(text("ALTER TABLE st8_cost_lines DISABLE TRIGGER ALL"))
+    planted = {"done": False}
+
+    def plant() -> None:
+        if planted["done"]:
+            return
+        planted["done"] = True
+        with db.begin() as c:
+            c.execute(text("INSERT INTO st8_cost_lines (id, receipt_id) VALUES (:i, :r)"),
+                      {"i": _id("cl"), "r": rid})
+
+    try:
+        tr.sweep(_PlantingEngine(db, plant), now=NOW, only=["rows:receipts"], receipt=False)
+        with db.connect() as c:
+            left = _ids(c, "receipts")
+        assert rid in left
+        assert before <= left
+        assert planted["done"] is True
+    finally:
+        with db.begin() as c:
+            c.execute(text("DELETE FROM st8_cost_lines WHERE receipt_id = :r"), {"r": rid})
+            c.execute(text("DELETE FROM receipts WHERE id = :r"), {"r": rid})
+            c.execute(text("ALTER TABLE st8_cost_lines ENABLE TRIGGER ALL"))

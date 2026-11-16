@@ -87,6 +87,10 @@ MONTHS_AHEAD = 2
 INTERVAL_SECONDS = 3600.0
 FIRST_PASS_DELAY = 300.0
 LOCK_NAME = "boss.telemetry_retention"
+#: Held for the whole events conversion, from before the legacy bound exists until the swap (or
+#: the failure path) has dropped it. schema.sql's boot drop and `clear_stale_bound` take the same
+#: key and leave the bound alone while a conversion holds it. hashtext, so both sides agree.
+CONVERSION_LOCK = "boss.events_conversion"
 RECEIPT_KIND = "storage.telemetry_retention"
 SERVICE_KEY = "telemetry_retention"
 #: The cutover month must be at least this far away when the legacy bound is set: the NOT VALID
@@ -396,9 +400,42 @@ def _cutover(now: datetime) -> datetime:
     return nxt if nxt - now >= CUTOVER_MARGIN else _add_months(nxt, 1)
 
 
-def clear_stale_bound(engine: Any) -> bool:
-    """Drop `events_legacy_bound` from a plain `events`: only a conversion in flight should hold
-    it, and this runs before one starts. True when one was there. Never raises (logged)."""
+class _ConversionGuard:
+    """Session advisory lock held across the conversion's several transactions.
+
+    `pg_try_advisory_lock` so a boot or a second pass that cannot get it leaves the bound alone
+    instead of waiting out the index build. The connection stays checked out: the lock is
+    session-level and dies with it."""
+
+    def __init__(self, engine: Any):
+        self.engine, self.conn, self.held = engine, None, False
+
+    def __enter__(self) -> bool:
+        self.conn = self.engine.connect()
+        try:
+            self.held = bool(self.conn.execute(
+                text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": CONVERSION_LOCK}).scalar())
+            self.conn.commit()
+        except Exception:
+            self.conn.close()
+            self.conn = None
+            raise
+        return self.held
+
+    def __exit__(self, *exc: Any) -> None:
+        try:
+            if self.held and self.conn is not None:
+                self.conn.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"),
+                                  {"k": CONVERSION_LOCK})
+                self.conn.commit()
+        finally:
+            if self.conn is not None:
+                self.conn.close()
+
+
+def _drop_stale_bound_if_plain(engine: Any) -> bool:
+    """Drop `events_legacy_bound` from a plain `events`. Caller holds CONVERSION_LOCK, or has
+    decided no conversion is in flight. True when one was there. Never raises (logged)."""
     try:
         with engine.connect() as c:
             plain = c.execute(text(
@@ -410,6 +447,22 @@ def clear_stale_bound(engine: Any) -> bool:
             return False
         _log.warning("events carried a stale %s from an interrupted conversion; dropping it", _LEGACY_CHECK)
         return _drop_legacy_check(engine)
+    except Exception:  # noqa: BLE001
+        _log.warning("stale events bound not checked", exc_info=True)
+        return False
+
+
+def clear_stale_bound(engine: Any) -> bool:
+    """Drop `events_legacy_bound` from a plain `events` when no conversion holds it.
+
+    A conversion in flight holds CONVERSION_LOCK the whole time the check exists. This refuses
+    while that lock is held (the swap still needs the check). True when one was dropped. Never
+    raises (logged)."""
+    try:
+        with _ConversionGuard(engine) as held:
+            if not held:
+                return False
+            return _drop_stale_bound_if_plain(engine)
     except Exception:  # noqa: BLE001
         _log.warning("stale events bound not checked", exc_info=True)
         return False
@@ -432,24 +485,38 @@ def ensure_partitioned(engine: Any, *, now: Optional[datetime] = None) -> dict[s
     next months. Never raises; a step that cannot get its lock in time is retried next pass."""
     now = now or _now()
     out: dict[str, Any] = {"converted": False, "made": [], "seconds": {}}
-    # FIRST, before anything that can fail: a bound a crashed pass left on the PLAIN table goes.
-    # Left there, every insert after its cutover would fail. (schema.sql drops it at boot too.)
-    out["stale_bound_dropped"] = clear_stale_bound(engine)
-    try:
-        with engine.connect() as c:
-            if not _exists(c, "events"):
-                return out
-            already = is_partitioned(c, "events")
-        if not already:
-            out.update(_convert_events(engine, now=now))
-        with engine.connect() as c:
-            if not is_partitioned(c, "events"):
-                return out
-        out["made"] = ensure_months(engine, now=now)
-    except Exception as exc:  # noqa: BLE001
-        _log.warning("events partitioning not done", exc_info=True)
-        out["error"] = f"{type(exc).__name__}: {exc}"[:300]
-    return out
+    # The lock covers the stale-bound drop and the conversion. Boot (schema.sql) and
+    # clear_stale_bound take the same key and will not drop a check this pass still needs.
+    with _ConversionGuard(engine) as held:
+        if not held:
+            out["skipped"] = "conversion busy"
+            try:
+                with engine.connect() as c:
+                    if _exists(c, "events") and is_partitioned(c, "events"):
+                        out["made"] = ensure_months(engine, now=now)
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("events partitioning not done", exc_info=True)
+                out["error"] = f"{type(exc).__name__}: {exc}"[:300]
+            return out
+        # FIRST, before anything that can fail: a bound a crashed pass left on the PLAIN table
+        # goes. Left there, every insert after its cutover would fail. (schema.sql drops it at
+        # boot too, unless a conversion holds the lock.)
+        out["stale_bound_dropped"] = _drop_stale_bound_if_plain(engine)
+        try:
+            with engine.connect() as c:
+                if not _exists(c, "events"):
+                    return out
+                already = is_partitioned(c, "events")
+            if not already:
+                out.update(_convert_events(engine, now=now))
+            with engine.connect() as c:
+                if not is_partitioned(c, "events"):
+                    return out
+            out["made"] = ensure_months(engine, now=now)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("events partitioning not done", exc_info=True)
+            out["error"] = f"{type(exc).__name__}: {exc}"[:300]
+        return out
 
 
 def _convert_events(engine: Any, *, now: datetime) -> dict[str, Any]:
@@ -828,20 +895,30 @@ def _drop_partition(engine: Any, p: Policy, name: str, protect: str, cols: Seque
 def _delete_rows(engine: Any, p: Policy, pred: str, params: Mapping[str, Any], r: TableResult, *,
                  budget_seconds: float, batch: int) -> None:
     started = time.monotonic()
-    # The candidates are LOCKED (FOR UPDATE SKIP LOCKED: a row someone is referencing right now
-    # holds a KEY SHARE lock and is skipped), and the predicate — protection included — is
-    # evaluated AGAIN by the DELETE itself, so a reference that appeared between the two is seen.
-    stmt = text(f"""
-        WITH v AS (SELECT t.id, t."{p.ts}" AS ts, pg_column_size(ROW(t.*)) AS sz
-                     FROM "{p.table}" t WHERE {pred} LIMIT :batch FOR UPDATE OF t SKIP LOCKED),
-             gone AS (DELETE FROM "{p.table}" t USING v
-                       WHERE t.id = v.id AND t."{p.ts}" = v.ts AND {pred} RETURNING t.id, v.sz)
+    # Lock candidates, then delete in a SECOND statement. One statement shares a snapshot, so the
+    # re-check could not see a receipt reference that committed after the snapshot and before the
+    # row lock (FOR UPDATE does not re-run that subquery when the receipt row itself is unchanged).
+    # The delete's statement takes a new snapshot; the row lock is held across it, so a reference
+    # that landed in between is kept and one that is still inserting waits on the lock.
+    lock_sql = text(f"""
+        INSERT INTO _boss_tr_batch (id, ts, sz)
+        SELECT t.id, t."{p.ts}", pg_column_size(ROW(t.*))
+          FROM "{p.table}" t WHERE {pred} LIMIT :batch FOR UPDATE OF t SKIP LOCKED""")
+    delete_sql = text(f"""
+        WITH gone AS (
+            DELETE FROM "{p.table}" t
+              USING _boss_tr_batch v
+             WHERE t.id = v.id AND t."{p.ts}" = v.ts AND {pred}
+            RETURNING v.sz)
         SELECT count(*), COALESCE(sum(gone.sz), 0) FROM gone""")
     while True:
         with engine.begin() as c:
             c.execute(text(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT}'"))
             c.execute(text(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'"))
-            got = c.execute(stmt, {**params, "batch": int(batch)}).first()
+            c.execute(text("CREATE TEMP TABLE _boss_tr_batch "
+                           "(id text, ts timestamptz, sz bigint) ON COMMIT DROP"))
+            c.execute(lock_sql, {**params, "batch": int(batch)})
+            got = c.execute(delete_sql, params).first()
         n, b = int(got[0] or 0), int(got[1] or 0)
         r.rows += n
         r.batched += n
@@ -1022,8 +1099,9 @@ def start(engine: Any, settings: Any = None, *, interval: float = INTERVAL_SECON
     return _THREAD
 
 
-__all__ = ["AUDIT_FLOOR_DAYS", "CHATTER_SQL", "NOISE_EVENT_TYPES", "POLICIES", "POLICY_BY_KEY",
-           "Policy", "TICK_RECEIPT_KINDS", "clear_stale_bound", "configured_days", "effective_days",
+__all__ = ["AUDIT_FLOOR_DAYS", "CHATTER_SQL", "CONVERSION_LOCK", "NOISE_EVENT_TYPES", "POLICIES",
+           "POLICY_BY_KEY", "Policy", "TICK_RECEIPT_KINDS", "clear_stale_bound", "configured_days",
+           "effective_days",
            "ensure_indexes", "ensure_months", "ensure_partitioned", "is_partitioned", "items_of",
            "leader_lock", "overrides_from_rule", "partitions", "plan", "run_once", "share",
            "start", "sweep", "sweep_locked"]
