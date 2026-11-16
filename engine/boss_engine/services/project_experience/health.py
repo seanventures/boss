@@ -263,6 +263,7 @@ def target_states(connection: Connection, target_ids: list[str], *,
 def environments(connection: Connection, project_id: str, *,
                  now: Optional[datetime] = None) -> list[dict[str, Any]]:
     from ..deployment_health import health_view
+    from ..latency_objective import chosen_latency_ms, latency_words
     from ..obs_view import probe_window
 
     from ..deploy_truth import project_targets, truth
@@ -283,6 +284,8 @@ def environments(connection: Connection, project_id: str, *,
     fires = firing_alerts(connection, ids)
     chosen = chosen_objective(connection, project_id)
     held = DEFAULT_SLO if chosen is None else chosen
+    latency_ms = chosen_latency_ms(connection, project_id)
+    latency_line = latency_words(latency_ms)
     hosts = {str(r["id"]): dict(r) for r in connection.execute(text(
         "SELECT t.id, t.host_id, h.address, h.name FROM deployment_targets t "
         "LEFT JOIN deployment_hosts h ON h.id = t.host_id WHERE t.id = ANY(:ids)"),
@@ -315,6 +318,8 @@ def environments(connection: Connection, project_id: str, *,
                     "budget_used_pct": budget_used(uptime, held),
                     **hours_left(uptime, held)},
             "slo_words": None if chosen is not None else INSTALL_DEFAULT_WORDS,
+            "latency_objective_ms": latency_ms,
+            "latency_words": latency_line,
             "firing": fires.get(t["target_id"], []),
             "last_checked": t.get("last_checked"), "last_error": t.get("last_error"),
             "deployed_commit": (t.get("deployed_commit") or "")[:7] or None,
