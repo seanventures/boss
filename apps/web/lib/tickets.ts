@@ -458,7 +458,8 @@ export const importVia = (via: ImportVia): R =>
 export const importTickets = (projectId: string, via: ImportVia, items: { key: string; with_children?: boolean }[]): Promise<WriteResult> =>
   obsWrite(`/v1/projects/${enc(projectId)}/tickets/import`, { ...importVia(via), items: items.map((i) => ({ key: i.key, with_children: Boolean(i.with_children) })) },
            press(`import:${projectId}`, "Import to Work"));
-export const startFromTicket = (workItemId: string, body: { project_id?: string; workflow_key?: string; start_anyway?: string[] } = {}): Promise<WriteResult> =>
+/** `profile` (BOSSAPP-1334): lean | balanced | strict, carried to the build; omitted = the project's default. */
+export const startFromTicket = (workItemId: string, body: { project_id?: string; workflow_key?: string; start_anyway?: string[]; profile?: string | null } = {}): Promise<WriteResult> =>
   obsWrite(`/v1/work-items/${enc(workItemId)}/start-from-ticket`, body as R, press(`start:${workItemId}`, "Start"));
 export const retryTicketSync = (workItemId: string): Promise<WriteResult> =>
   obsWrite(`/v1/work-items/${enc(workItemId)}/ticket-sync/retry`, {}, press(`retry:${workItemId}`, "Retry"));
@@ -483,7 +484,7 @@ export const parseWebhook = (v: unknown): WebhookSecret => {
  * (a work item + binding), then started on the workflow its type calls for (or the one picked).
  */
 export async function importAndStart(projectId: string, t: Pick<Ticket, "key" | "connection_id" | "in_boss" | "type" | "provider"> & { connection_reach?: string }, workflowKey?: string,
-                                     startAnyway: readonly string[] = [],
+                                     startAnyway: readonly string[] = [], profile?: string | null,
 ): Promise<{ ok: boolean; error: string | null; workItemId: string; runId: string; note: string; readiness: Readiness | null }> {
   let workItemId = t.in_boss?.work_item_id ?? "";
   if (!workItemId) {
@@ -494,7 +495,8 @@ export async function importAndStart(projectId: string, t: Pick<Ticket, "key" | 
     if (!workItemId) return { ok: false, error: `${t.key} was not imported.`, workItemId: "", runId: "", note: "", readiness: null };
   }
   const st = await startFromTicket(workItemId, { project_id: projectId, workflow_key: workflowKey || ticketWorkflow(t),
-                                                 ...(startAnyway.length ? { start_anyway: [...startAnyway] } : {}) });
+                                                 ...(startAnyway.length ? { start_anyway: [...startAnyway] } : {}),
+                                                 ...(profile ? { profile } : {}) });
   if (!st.ok) return { ok: false, error: st.error, workItemId, runId: "", note: "", readiness: refusalReadiness(st.refusal) };
   const b = o(st.body);
   return { ok: true, error: null, workItemId, runId: s(b.run_id) || s(o(b.run).id), note: s(b.note), readiness: null };

@@ -340,6 +340,10 @@ class CreateAndStartBody(BaseModel):
     #: THE PROFILE THE PERSON PICKED (BOSSAPP-1334): lean | balanced | strict, carried in the run
     #: input to the build step. Empty: the project's default.
     profile: Optional[str] = Field(default=None, max_length=20)
+    #: THE TICKET THE BRIEF WAS WRITTEN FROM (BOSSAPP-1334): {key, url}, so the run records where it
+    #: came from even when the brief or the directive no longer quotes the link. Carried as the
+    #: run's source_ref / source_url (the start door reads the ticket from them; never refuses).
+    ticket_ref: Optional[dict[str, str]] = None
     #: The workflow's own start form, Who to tell (notify_channel) and anything it declared.
     inputs: dict[str, Any] = Field(default_factory=dict)
     notify_when: list[str] = Field(default_factory=list, max_length=6)
@@ -498,6 +502,13 @@ def _run_input(body: CreateAndStartBody, brief: dict[str, Any], repo: Optional[s
     picked = chosen_profile(body.profile)       # validated in _create_and_start
     if picked:
         run_input["profile"] = picked
+    ref = body.ticket_ref or {}
+    key = str(ref.get("key") or "").strip()[:200]
+    url = str(ref.get("url") or "").strip()[:500]
+    if key:
+        run_input.setdefault("source_ref", key)
+    if url.lower().startswith(("https://", "http://")):
+        run_input.setdefault("source_url", url)
     # TALKS TO (More detail): an app of THIS project, named by its key and an alias, is an app
     # link the start requests; anything else ("Xero API", typed as words) is what the app calls,
     # said in the directive. Sending words as app_links refused the whole create ("an alias is

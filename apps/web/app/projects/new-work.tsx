@@ -377,7 +377,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
       // FROM A TICKET: one press imports it (unless BOSS has it) and starts it from the ticket.
       try {
         if (!tkGate.allowed) { setSaid({ text: tkGate.reason, tone: "red" }); return; }
-        const r = await importAndStart(pid, tk, picked.v || tkSuggested || undefined, startAnyway);
+        const r = await importAndStart(pid, tk, picked.v || tkSuggested || undefined, startAnyway, runProfile);
         // NOT READY: the same checklist and "Start anyway" ticks as a start without a ticket.
         if (!r.ok && r.readiness) { setRefusal(r.readiness); return; }
         if (!r.ok) { setSaid({ text: r.error ?? "It didn't start.", tone: "red" }); return; }

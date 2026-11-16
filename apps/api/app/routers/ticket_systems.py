@@ -86,6 +86,9 @@ class TicketStartBody(BaseModel):
     accept: Optional[list[str]] = None
     dedupe_key: Optional[str] = Field(default=None, max_length=200)
     actor: Optional[str] = None
+    #: THE PROFILE THE PERSON PICKED (BOSSAPP-1334): lean | balanced | strict, carried in the run
+    #: input to the build step, as New work's own start does. Empty: the project's default.
+    profile: Optional[str] = Field(default=None, max_length=20)
 
 
 # ---- helpers --------------------------------------------------------------------------------
@@ -569,7 +572,14 @@ def start_from_ticket(work_item_id: str, payload: Optional[TicketStartBody] = No
 
     from apps.api.app.main import start_delivery_workflow
     from apps.api.app.request_bodies import WorkflowStartBody
+    from boss_engine.services.project_experience.new_work import chosen_profile
+
     body = payload or TicketStartBody()
+    try:
+        picked_profile = chosen_profile(body.profile)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail={"error": "bad_profile",
+                                                     "message": str(error)}) from None
     with begin(_engine()) as connection:
         item = connection.execute(text(
             "SELECT id, project_id, title FROM work_items WHERE id = :i"),
@@ -598,6 +608,8 @@ def start_from_ticket(work_item_id: str, payload: Optional[TicketStartBody] = No
             raise _refuse(error, row) from None
         info, wanted, note = plan["ticket"], plan["workflow_key"], plan["note"]
     run_input = dict(plan["input"])
+    if picked_profile:
+        run_input["profile"] = picked_profile
     start: dict[str, Any] = {"project_id": project_id, "workflow_key": wanted,
                              "input": run_input, "actor": actor}
     for name in ("start_anyway", "accept", "dedupe_key"):

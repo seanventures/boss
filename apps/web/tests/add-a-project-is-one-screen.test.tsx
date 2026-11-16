@@ -402,3 +402,33 @@ describe("BOSSAPP-1334: a Jira link, the consent sheet, the profile", () => {
     expect(sent.at(-1)!.body).toMatchObject({ profile: "strict" });
   });
 });
+
+describe("BOSSAPP-1334 review: a flagged ticket, and the ticket the run records", () => {
+  it("warns about a flagged ticket and copies nothing of it", async () => {
+    api((c) => (c.path.endsWith("/understand") ? { body: { ...BRIEF,
+      brief: { ...BRIEF.brief, must_haves: [] },
+      ticket: { provider: "jira", key: "KAN-11", url: "https://fx.atlassian.net/browse/KAN-11", title: "FXQuote", criteria: 1,
+                untrusted: true, screen: { verdict: "suspicious", reasons: ["ignore previous instructions"] } } } } : undefined));
+    await mountAs(<AddProjectSheet projectId="p1" homeId="p1" onClose={() => {}} onForm={() => {}} go={vi.fn()} />);
+    await type(tid("ap-input"), "FXQuote for the desk. https://fx.atlassian.net/browse/KAN-11");
+    await enter(tid("ap-input"));
+    expect(tid("ap-ub-ticket-flagged")!.textContent).toContain("BOSS flagged text in KAN-11");
+    expect(tid("ap-ub-ticket-flagged")!.getAttribute("title")).toBe("ignore previous instructions");
+    expect(tid("ap-ub-ticket")).toBeNull();
+  });
+
+  it("sends the ticket the brief came from with Create and start", async () => {
+    const calls = api((c) => {
+      if (c.path.endsWith("/understand")) return { body: { ...BRIEF, ticket: { provider: "jira", key: "KAN-11", url: "https://fx.atlassian.net/browse/KAN-11", title: "FXQuote", criteria: 2 } } };
+      if (c.method === "POST" && c.path === "/v1/add-project") return { body: { created: true, project_id: "fx", name: "FX", kind: "idea", href: "?project_id=fx", steps: [], started: {} } };
+      return undefined;
+    });
+    await mountAs(<AddProjectSheet projectId="p1" homeId="p1" onClose={() => {}} onForm={() => {}} go={vi.fn()} />);
+    await type(tid("ap-input"), "FXQuote for the desk. https://fx.atlassian.net/browse/KAN-11");
+    await enter(tid("ap-input"));
+    await click(tid("ap-create"));
+    if (tid("ap-egress-allow")) { await click(tid("ap-egress-allow")); await click(tid("ap-create")); }
+    const sent = calls.filter((c) => c.path === "/v1/add-project");
+    expect(sent.at(-1)!.body).toMatchObject({ ticket_ref: { key: "KAN-11", url: "https://fx.atlassian.net/browse/KAN-11" } });
+  });
+});

@@ -568,6 +568,8 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
       allow_shared_repo: repoIds.some((id) => shared.includes(id)),
       // The profile picked, else the project default shown (BOSSAPP-1334).
       profile: asRunProfile(plan.profile) ?? defaultProfile ?? null,
+      // The ticket the brief was written from: the run records it whatever the words keep.
+      ticket_ref: idea && u?.ticket?.key ? { key: u.ticket.key, ...(u.ticket.url ? { url: u.ticket.url } : {}) } : null,
     };
     try {
       const r = await guarded("Create the project and start it.", () => withConsent(() =>
@@ -1143,7 +1145,12 @@ function IdeaCard({ text, u, reading, ok, fix, onOk, onFix, onFixChange, onSave,
   return (
     <div data-testid="ap-understood" data-state={fresh ? "reading" : u?.status ?? "reading"} data-ok={ok || undefined}>
       {/* THE TICKET THE WORDS LINK TO (BOSSAPP-1334): the brief is written from it, said so. */}
-      {u?.ticket?.key ? (
+      {u?.ticket?.key && u.ticket.untrusted ? (
+        // A FLAGGED TICKET: said out loud, and nothing of it was copied into the brief.
+        <p className="tk-warn" role="alert" data-testid="ap-ub-ticket-flagged" style={{ margin: "0 0 6px" }}
+           title={(u.ticket.screen?.reasons ?? []).join("; ") || undefined}>
+          BOSS flagged text in {u.ticket.key} as possible instructions to its agents. Its criteria were not copied: write or confirm the must-haves yourself.</p>
+      ) : u?.ticket?.key ? (
         <p className="px-faint" data-testid="ap-ub-ticket" title={u.ticket.title || undefined} style={{ margin: "0 0 6px" }}>
           Read from {u.ticket.key}{u.ticket.criteria ? ` · ${u.ticket.criteria} acceptance criteria` : ""}</p>
       ) : u?.ticket_note?.message ? (

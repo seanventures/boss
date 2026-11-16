@@ -111,6 +111,8 @@ describe("a ticket's workflow, from its type and size", () => {
     await press(tid("px-compose-start"));
     const started = calls.find((c) => /start-from-ticket$/.test(c.path));
     expect((started?.body as { workflow_key?: string })?.workflow_key).toBe("major_feature");
+    // The profile rides on a start from a ticket too (the project's default here: lean).
+    expect((started?.body as { profile?: string })?.profile).toBe("lean");
   });
 
   it("a small story stays a Minor feature", async () => {

@@ -430,27 +430,41 @@ def with_ticket(out: dict[str, Any], ticket: Optional[Mapping[str, Any]], *,
     """The understanding with the ticket it read applied (see `understand`): its acceptance
     criteria are the must-haves (a field the person edited stays as they wrote it), its title
     the title when Helm gave none, and no open question asks for the spec it already is.
-    `ticket` names what was read, for the sheet's "Read from KAN-11" line."""
+    `ticket` names what was read, for the sheet's "Read from KAN-11" line.
+
+    A FLAGGED TICKET (the injection screen found instructions in it, `untrusted`) is never
+    copied into the brief: its criteria are not pre-filled as must-haves (and neither is what
+    Helm wrote from it), nor its description as the problem. The person writes or confirms
+    them; `ticket` carries the verdict and its reasons so the sheet warns them."""
     if not isinstance(ticket, Mapping) or not ticket.get("key"):
         return out
-    from ..ticket_intake import acceptance_criteria
+    from ..ticket_intake import acceptance_criteria, is_untrusted
 
     out = dict(out)
     brief = dict(out.get("brief") or {})
     kept = set((pinned or {}).keys())
+    flagged = is_untrusted(dict(ticket))
     criteria = [c for c in acceptance_criteria(dict(ticket))][:MAX_MUST_HAVES]
-    if criteria and "must_haves" not in kept:
-        brief["must_haves"] = [_clean(c, MAX_MUST_HAVE_CHARS) for c in criteria]
+    if "must_haves" not in kept:
+        if flagged:
+            brief["must_haves"] = []
+        elif criteria:
+            brief["must_haves"] = [_clean(c, MAX_MUST_HAVE_CHARS) for c in criteria]
     if not str(brief.get("title") or "").strip() or brief.get("raw"):
         brief["title"] = _clean(ticket.get("title"), 90) or brief.get("title") or ""
-    if not str(brief.get("problem") or "").strip() and ticket.get("body"):
+    if not flagged and not str(brief.get("problem") or "").strip() and ticket.get("body"):
         brief["problem"] = _clean(str(ticket.get("body") or "").split("\n\n")[0], 400)
     brief["open_questions"] = [q for q in brief.get("open_questions") or []
                                if not _ASKS_FOR_SPEC.search(str(q))]
+    if flagged:
+        brief["from_flagged_ticket"] = True
     out["brief"] = brief
+    screen = ticket.get("screen") if isinstance(ticket.get("screen"), Mapping) else {}
     out["ticket"] = {"provider": ticket.get("provider"), "key": ticket.get("key"),
                      "url": ticket.get("url"), "title": ticket.get("title"),
-                     "criteria": len(criteria)}
+                     "criteria": len(criteria), "untrusted": flagged,
+                     "screen": {"verdict": str(screen.get("verdict") or "unscreened"),
+                                "reasons": [str(r) for r in screen.get("reasons") or []][:8]}}
     return out
 
 
