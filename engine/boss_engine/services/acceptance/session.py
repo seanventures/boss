@@ -107,6 +107,9 @@ class Command:
     #: Had the session changed the clone (a write, a new file) when this ran? None: unknown.
     #: Evidence from a changed tree is not accepted (verdict.verify_command).
     tree_dirty: Optional[bool] = None
+    #: The earlier code-writing command (E-id) that changed files outside the tracked tree —
+    #: ignored files, the session's HOME or temp — before this ran (F1, BOSSAPP-1316).
+    tainted_by: Optional[str] = None
     method: Optional[str] = None
     url: Optional[str] = None
     headers: Optional[dict] = None
@@ -263,7 +266,9 @@ class _FencedRunner:
         from ..local_fenced import _Tail, skill_environment
         from ..sandbox import CommandResult, SandboxError
 
-        env = {**skill_environment(), "CI": "1"}
+        # No bytecode written by imports: a .pyc in the tree is then always something a
+        # command wrote on purpose (and a code-writing command's write taints the session).
+        env = {**skill_environment(), "CI": "1", "PYTHONDONTWRITEBYTECODE": "1"}
         started = time.monotonic()
         timed_out = False
         with owned_process.owner_scope(OWNER_KIND, self.owner_id, project_id=self.project_id):
@@ -291,6 +296,12 @@ class _FencedRunner:
 
 
 OWNER_KIND = "acceptance"
+#: Files a snapshot around a code-writing command may hold; past it, the command taints.
+SNAPSHOT_CAP = 200_000
+
+
+def _raise(err: OSError) -> None:
+    raise err
 #: Output a test run writes in any Python repo, ignored or not (bytecode, pytest's cache): it
 #: never makes the tree "changed" — running the tests is not editing the work.
 TOOL_OUTPUT = ("__pycache__/", "*.pyc", ".pytest_cache/")
@@ -323,6 +334,12 @@ class AcceptanceSandbox:
     owner: Any = None                       # the EphemeralSandbox, when it made the clone
     scratch: Optional[Path] = None          # the directory to delete at close
     identity_owner: Optional[str] = None    # the sealed uid's owner id, released at close
+    #: Directories besides the clone a command can write and a later one read (the sealed uid's
+    #: HOME and temp directory): watched with the clone around code-writing commands.
+    watch: tuple = ()
+    #: Set once a code-writing command (inline interpreter, printer) changed any file outside
+    #: the tracked tree: every LATER command carries it and is not evidence (F1).
+    tainted_by: Optional[str] = None
 
     # -- the fence ---------------------------------------------------------------------------
     def _host_allowed(self, host: str) -> bool:
@@ -371,6 +388,18 @@ class AcceptanceSandbox:
         # cache, `go build -o bin/`, target/, node_modules) never makes the command that
         # produced it unusable; a file an EARLIER command wrote does.
         before = self.tree_dirty()
+        cmd.tainted_by = self.tainted_by
+        # A CODE-WRITING COMMAND (`python3 -c`, echo...) may plant what a later tree command
+        # reads — a gitignored .env, a patched node_modules/vendor file, a file in HOME — which
+        # the tracked-tree check cannot see. Watch every file around it; any change taints the
+        # rest of the session (BOSSAPP-1316).
+        from .verdict import inline_code
+
+        try:
+            writes_code = bool(inline_code(shlex.split(command)))
+        except ValueError:
+            writes_code = True
+        snap = self.snapshot() if writes_code else None
         try:
             res = self.runner.run(command, timeout=timeout, cwd=workdir)
         except SandboxError as exc:
@@ -387,7 +416,40 @@ class AcceptanceSandbox:
         cmd.output_sha256 = hashlib.sha256((out + "\0" + err).encode()).hexdigest()
         cmd.stdout, cmd.stderr = _trim(out), _trim(err)
         cmd.tree_dirty = before
+        if writes_code and not self.tainted_by:
+            after = self.snapshot()
+            if snap is None or after is None or snap != after:
+                self.tainted_by = cmd.id
         return self.record.add(cmd)
+
+    def snapshot(self) -> Optional[dict]:
+        """Every file in the clone (outside .git) and in the watched directories, as
+        {path: (size, mtime_ns)}; None past SNAPSHOT_CAP entries or when a directory cannot be
+        read (fail closed: an unknown is a change)."""
+        try:
+            return self._snapshot()
+        except OSError:
+            return None
+
+    def _snapshot(self) -> Optional[dict]:
+        out: dict = {}
+        for base in (self.root, *[Path(w) for w in self.watch or ()]):
+            if not Path(base).exists():
+                continue
+            for dirpath, dirnames, filenames in os.walk(base, onerror=_raise):
+                if Path(dirpath) == self.root:
+                    dirnames[:] = [d for d in dirnames if d != ".git"]
+                for n in filenames + [d for d in dirnames
+                                      if os.path.islink(os.path.join(dirpath, d))]:
+                    full = os.path.join(dirpath, n)
+                    try:
+                        st = os.lstat(full)
+                    except OSError:
+                        return None
+                    out[full] = (st.st_size, st.st_mtime_ns)
+                    if len(out) > SNAPSHOT_CAP:
+                        return None
+        return out
 
     def tree_dirty(self) -> Optional[bool]:
         """Has the session changed the clone: a tracked file modified or deleted (`git diff
@@ -427,6 +489,7 @@ class AcceptanceSandbox:
             return self.record.add(cmd)
         started = time.monotonic()
         before = self.tree_dirty()          # a server started from files the session wrote
+        cmd.tainted_by = self.tainted_by
         sealed_request = getattr(self.runner, "request", None)
         if _is_loopback(host) and callable(sealed_request):
             # LOOPBACK FROM THE SEALED UID: the request meets the commands' network fence (a
@@ -611,7 +674,8 @@ def open_sandbox(settings: Any, *, run_id: str, source: Any = None, head_sha: Op
         protect_clone(root)
         return AcceptanceSandbox(root=root, head_sha=head, egress=egress, target_hosts=targets,
                                  runner=_FencedRunner(settings, owner_id, project_id),
-                                 owner=eph, identity_owner=owner_id)
+                                 owner=eph, identity_owner=owner_id,
+                                 watch=(ident.home, ident.tmp))
     except Exception:
         if eph is not None:
             eph.teardown()

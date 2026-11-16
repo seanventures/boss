@@ -220,3 +220,33 @@ def test_probes_need_a_tree_file_and_a_known_diff():
     replayed = {"AC-1": {"result": "pass", "changed": True}, "AC-2": {"result": "pass",
                                                                      "changed": False}}
     assert set(ap.carried(replayed)) == {"AC-2"}
+
+
+# ── BOSSAPP-1317: only the interpreter's own options are read ───────────────────────────────
+
+@pytest.mark.parametrize("argv", [
+    ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+    ["python3", "-W", "ignore", "-m", "pytest", "-c", "pytest.ini"],
+    ["python3", "-Wignore", "tools/check.py", "-c", "x"],
+    ["python3", "tools/check.py", "--print", "-e"],
+    ["node", "--require", "ts-node/register", "test.js", "-e"],
+    ["node", "app.js", "-p", "3000"],
+    ["bash", "scripts/check.sh", "-c"],
+    ["ruby", "-I", "lib", "test/run.rb", "-e"],
+    ["php", "-c", "php.ini", "vendor/bin/phpunit"],
+])
+def test_options_after_the_program_are_the_programs_not_inline_code(argv):
+    assert av.inline_code(argv) is None, argv
+    assert av.manufactured(Command(id="E1", cmd=" ".join(argv), argv=argv, exit=0,
+                                   tree_dirty=False)) is None
+
+
+@pytest.mark.parametrize("argv", [
+    ["python3", "-c", "print(1)"], ["python3", "-B", "-c", "print(1)"],
+    ["python3", "-Bc", "print(1)"], ["node", "--eval=console.log(1)"], ["node", "-pe", "1"],
+    ["deno", "--print", "1"], ["sh", "-xc", "echo 1"], ["bash", "-o", "pipefail", "-c", "x"],
+    ["php", "-r", "echo 1;"], ["perl", "-E", "say 1"], ["ruby", "-e", "p 1"],
+    ["echo", "401 Unauthorized"],
+])
+def test_code_on_the_interpreters_own_command_line_is_still_refused(argv):
+    assert av.inline_code(argv), argv

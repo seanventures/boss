@@ -495,22 +495,77 @@ def exec_claims(why: str) -> list[dict[str, Any]]:
 
 #: The shortest quote that counts: "401" or "ok" alone appears in almost any output.
 MIN_EXCERPT = 6
-#: Interpreters whose inline-code flag makes the command line itself the output's author.
-_INTERPRETERS = re.compile(r"^(python[\d.]*|pypy[\d.]*|node(js)?|deno|bun|ruby|perl|php|"
-                           r"sh|bash|dash|zsh|ksh|fish|pwsh|powershell|osascript|lua|Rscript)$")
-_INLINE_FLAGS = frozenset({"-c", "-e", "--eval", "-p", "--print", "-r", "--command",
-                           "-Command", "-E"})
+#: Interpreters whose inline-code flag makes the command line itself the output's author, by
+#: family: (the option letters / names that take code, the options whose NEXT word is a value,
+#: the options that end option parsing because what follows is the program — python's -m).
+_FAMILIES: dict[str, tuple[frozenset, frozenset, frozenset]] = {
+    "python": (frozenset({"c"}), frozenset({"-W", "-X", "--check-hash-based-pycs"}),
+               frozenset({"-m"})),
+    "node": (frozenset({"e", "p", "--eval", "--print"}),
+             frozenset({"-r", "--require", "--import", "--loader", "--experimental-loader",
+                        "--input-type", "-C", "--conditions", "--env-file"}), frozenset()),
+    "shell": (frozenset({"c"}), frozenset({"-o", "+o", "-O", "+O"}), frozenset()),
+    "ruby": (frozenset({"e"}), frozenset({"-I", "-r", "-C"}), frozenset()),
+    "perl": (frozenset({"e", "E"}), frozenset({"-I", "-M", "-m"}), frozenset()),
+    "php": (frozenset({"r", "B", "R", "E"}), frozenset({"-c", "-d", "-z"}), frozenset()),
+    "lua": (frozenset({"e"}), frozenset({"-l"}), frozenset()),
+    "rscript": (frozenset({"e"}), frozenset(), frozenset()),
+    "pwsh": (frozenset({"c", "-Command", "-command", "-EncodedCommand", "-e"}), frozenset(),
+             frozenset()),
+    "osascript": (frozenset({"e"}), frozenset(), frozenset()),
+}
+_FAMILY_OF = (
+    (re.compile(r"^(python[\d.]*|pypy[\d.]*)$"), "python"),
+    (re.compile(r"^(node(js)?|deno|bun)$"), "node"),
+    (re.compile(r"^(sh|bash|dash|zsh|ksh|fish|ash)$"), "shell"),
+    (re.compile(r"^ruby$"), "ruby"), (re.compile(r"^perl[\d.]*$"), "perl"),
+    (re.compile(r"^php[\d.]*$"), "php"), (re.compile(r"^lua[\d.]*$"), "lua"),
+    (re.compile(r"^Rscript$"), "rscript"), (re.compile(r"^(pwsh|powershell)$"), "pwsh"),
+    (re.compile(r"^osascript$"), "osascript"),
+)
+_INTERPRETERS = re.compile("|".join(f"(?:{r.pattern})" for r, _ in _FAMILY_OF))
+
+
+def inline_code(argv: list) -> Optional[str]:
+    """Why this command line authors its own output, or None: a printer (echo, printf), or an
+    interpreter given code on its command line (`python3 -c`, `node -pe`, `sh -xc`). Only the
+    INTERPRETER'S OWN options are read — parsing stops at its program (a script path, or
+    python's `-m <module>`), so `python3 -m pytest -q -p no:cacheprovider` is a test run, not
+    inline code (BOSSAPP-1317)."""
+    if not argv:
+        return None
+    prog = Path(str(argv[0])).name
+    if prog in _PRINTERS:
+        return f"{prog} prints what it is told"
+    family = next((f for r, f in _FAMILY_OF if r.match(prog)), None)
+    if family is None:
+        return None
+    code, takes_value, stops = _FAMILIES[family]
+    args = [str(a) for a in argv[1:]]
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--" or a in stops or a == "-" or not a.startswith(("-", "+")):
+            return None                       # the program starts here
+        name = a.split("=", 1)[0]
+        if a in code or name in code:
+            return f"{prog} ran code written on its own command line"
+        if a in takes_value:
+            i += 2
+            continue
+        if any(a.startswith(v) and len(a) > len(v) and not v.startswith("--")
+               for v in takes_value):
+            i += 1                            # a value attached (-Wignore, -Ilib)
+            continue
+        if (not a.startswith("--") and a[0] == "-" and len(a) > 1 and a[1:].isalpha()
+                and set(a[1:]) & {c for c in code if len(c) == 1}):
+            return f"{prog} ran code written on its own command line"
+        i += 1
+    return None
+
+
 #: Commands whose output is whatever they were told to print.
 _PRINTERS = frozenset({"echo", "printf", "yes", "true", "false"})
-
-
-def _inline_flag(arg: str) -> bool:
-    """`-c`, `-e`, `--eval`, or a short-flag cluster carrying one (`-xc`, `-pe`). Fails closed:
-    a harmless cluster that happens to hold one of those letters is refused too."""
-    if arg in _INLINE_FLAGS:
-        return True
-    return (arg.startswith("-") and not arg.startswith("--") and len(arg) > 1
-            and arg[1:].isalpha() and bool(set(arg[1:]) & {"c", "e", "p"}))
 
 
 #: Why a command run after the session edited the clone is not evidence (and the mark that
@@ -532,17 +587,20 @@ def manufactured(cmd: Any) -> Optional[str]:
             argv = shlex.split(str(_field(cmd, "cmd") or ""))
         except ValueError:
             return "the command could not be read"
-    if argv:
-        prog = Path(str(argv[0])).name
-        if prog in _PRINTERS:
-            return f"{prog} prints what it is told"
-        if _INTERPRETERS.match(prog) and any(_inline_flag(a) for a in argv[1:]):
-            return f"{prog} ran code written on its own command line"
+    made = inline_code(argv)
+    if made:
+        return made
     dirty = _field(cmd, "tree_dirty")
     if dirty is None:
         return "BOSS could not tell whether the session had changed the clone"
     if dirty:
-        return EDITED
+        return EDITED            # a visible edit: an edit-then-test item, a person's (HUMAN)
+    tainted = _field(cmd, "tainted_by")
+    if tainted:
+        # A HIDDEN plant: the tracked tree is clean, but a code-writing command changed what
+        # the work reads (a gitignored .env, node_modules, HOME, temp) — BOSSAPP-1316.
+        return (f"an earlier command ({tainted}) that wrote its own code changed files outside "
+                "the tracked tree (ignored files, HOME or temp) that later commands may read")
     return None
 
 

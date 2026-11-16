@@ -83,7 +83,8 @@ class _TestRunner:
         started = time.monotonic()
         p = subprocess.run(argv, cwd=cwd or str(self.root), capture_output=True, text=True,
                            timeout=timeout,
-                           env={"PATH": os.environ["PATH"], "HOME": str(self.root)})
+                           env={"PATH": os.environ["PATH"], "HOME": os.environ.get("ACC_TEST_HOME") or str(self.root),
+                                "PYTHONDONTWRITEBYTECODE": "1"})
         return CommandResult(command=command, argv=argv, exit_code=p.returncode,
                              duration_ms=int((time.monotonic() - started) * 1000),
                              timed_out=False, stdout=p.stdout, stderr=p.stderr)
@@ -556,3 +557,139 @@ def test_northgate_run_staging_is_judged_on_what_the_command_really_printed(sett
     assert by["AC-15"]["status"] == "missing"
     assert by["AC-1"]["status"] == "unjudged" and by["AC-1"]["unverified"]   # misquoted
     assert rec["verdict"] == "not_met"
+
+
+# ── BOSSAPP-1316: a code-writing command taints what later commands read ────────────────────
+
+@pytest.fixture()
+def flag_repo(tmp_path: Path) -> Path:
+    """check.py prints FEATURE ON when .env (gitignored) or ~/.flag says ON."""
+    src = tmp_path / "flagrepo"
+    src.mkdir()
+    _git(src, "init", "-q", "-b", "main")
+    _git(src, "config", "user.email", "t@example.invalid")
+    _git(src, "config", "user.name", "t")
+    (src / ".gitignore").write_text(".env\nnode_modules/\n")
+    (src / "check.py").write_text(
+        "import os, pathlib\n"
+        "env = pathlib.Path('.env')\n"
+        "home = pathlib.Path(os.environ['HOME']) / '.flag'\n"
+        "on = any(p.exists() and p.read_text().strip() == 'ON' for p in (env, home))\n"
+        "print('FEATURE ON' if on else 'FEATURE OFF')\n")
+    _git(src, "add", "-A")
+    _git(src, "commit", "-qm", "one")
+    return src
+
+
+FLAG_ITEMS = [{"id": "AC-1", "n": 1, "source": "ticket", "text": "the feature is on"}]
+FLAG_MET = 'AC-1: MET — E2 (exit 0) "FEATURE ON" check.py:5\nACCEPTANCE: MET'
+
+
+@pytest.mark.parametrize("plant", [
+    "python3 -c \"open('.env', 'w').write('ON')\"",                       # a gitignored file
+    "python3 -c \"import os; os.makedirs('node_modules/x', exist_ok=True); "
+    "open('node_modules/x/i.js', 'w').write('1'); open('.env', 'w').write('ON')\"",
+])
+def test_a_planted_ignored_file_never_makes_a_later_command_evidence(flag_repo, settings,
+                                                                    tmp_path, plant):
+    sbx = _sandbox(settings, flag_repo, tmp_path)
+    planted = sbx.exec(plant)
+    read = sbx.exec("python3 check.py")
+    rec = av.judge(FLAG_ITEMS, FLAG_MET, {}, root=sbx.root, exec_log=sbx.record)
+    sbx.close()
+    assert planted.exit == 0 and "FEATURE ON" in read.stdout
+    assert read.tree_dirty is False                      # the tracked tree IS clean
+    assert read.tainted_by == "E1"
+    assert rec["items"][0]["status"] == "unjudged" and "E1" in rec["items"][0]["evidence"]
+
+
+def test_a_file_planted_in_the_sessions_home_taints_too(flag_repo, settings, tmp_path,
+                                                       monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("ACC_TEST_HOME", str(home))
+    sbx = _sandbox(settings, flag_repo, tmp_path, watch=(home,))
+    sbx.exec(f"python3 -c \"open('{home}/.flag', 'w').write('ON')\"")
+    read = sbx.exec("python3 check.py")
+    rec = av.judge(FLAG_ITEMS, FLAG_MET, {}, root=sbx.root, exec_log=sbx.record)
+    sbx.close()
+    assert "FEATURE ON" in read.stdout and read.tainted_by == "E1"
+    assert rec["items"][0]["status"] == "unjudged"
+
+
+def test_a_code_command_that_writes_nothing_taints_nothing(flag_repo, settings, tmp_path):
+    sbx = _sandbox(settings, flag_repo, tmp_path)
+    sbx.exec("python3 -c \"import check\"")              # reads only (no bytecode written)
+    read = sbx.exec("python3 check.py")
+    rec = av.judge(FLAG_ITEMS, 'AC-1: MET — E2 (exit 0) "FEATURE OFF" check.py:5\n'
+                               "ACCEPTANCE: MET", {}, root=sbx.root, exec_log=sbx.record)
+    sbx.close()
+    assert read.tainted_by is None and rec["items"][0]["status"] == "met"
+
+
+# ── BOSSAPP-1318: loopback only to the session's own listeners ──────────────────────────────
+
+def test_the_entrypoint_marks_each_sealed_uids_connections_and_rejects_foreign_replies(tmp_path):
+    result, root, calls = run_entrypoint(tmp_path)
+    assert result.returncode == 0 and (root / ".network-sealed").is_file(), result.stderr
+    for rule in ("iptables -A BOSS_SEALED -o lo -j BOSS_SEALED_OWN",
+                 "iptables -I OUTPUT 1 -o lo -j BOSS_SEALED_REPLY",
+                 "ip6tables -A BOSS_SEALED -o lo -j BOSS_SEALED_OWN",
+                 "ip6tables -I OUTPUT 1 -o lo -j BOSS_SEALED_REPLY"):
+        assert rule in calls, rule
+    rules = subprocess.run(["/bin/sh", "-c", _sealed_rules_script()], capture_output=True,
+                           text=True, check=True).stdout
+    assert ("-A BOSS_SEALED_OWN -m owner --uid-owner 61900 -m conntrack --ctstate NEW "
+            f"-j CONNMARK --set-xmark {0x5EA10000}/0xffffffff") in rules
+    assert (f"-A BOSS_SEALED_REPLY -m connmark --mark {0x5EA10000 + 99}/0xffffffff "
+            "-m owner ! --uid-owner 61999 -j REJECT") in rules
+    assert rules.count("-A BOSS_SEALED_REPLY") == 100
+
+
+def _sealed_rules_script() -> str:
+    src = (Path(__file__).resolve().parents[2] / "scripts/sandbox/entrypoint.sh").read_text()
+    body = src[src.index("sealed_own_rules() {"):src.index("seal_network() {")]
+    return 'SEALED_RANGE=61900-61999\n' + body + "sealed_own_rules\n"
+
+
+@pytest.mark.skipif(not FENCED, reason="no sealed fence on this host")
+def test_another_uids_listener_is_unreachable_and_the_sessions_own_server_answers(
+        repo, settings, tmp_path):
+    import socket
+
+    (repo / "own.py").write_text(
+        "import socket, threading\n"
+        "srv = socket.socket(); srv.bind(('127.0.0.1', 0)); srv.listen(1)\n"
+        "def serve():\n"
+        "    c, _ = srv.accept(); c.sendall(b'OWN-OK'); c.close()\n"
+        "threading.Thread(target=serve, daemon=True).start()\n"
+        "cli = socket.create_connection(srv.getsockname(), 5)\n"
+        "print(cli.recv(16).decode())\n")
+    (repo / "probe.py").write_text(
+        "import socket, sys\n"
+        "try:\n"
+        "    c = socket.create_connection(('127.0.0.1', int(sys.argv[1])), 5)\n"
+        "    print('REACHED', c.recv(16))\n"
+        "except OSError as e:\n"
+        "    print('BLOCKED', type(e).__name__)\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "net probes")
+    other = socket.socket()                     # BOSS's uid: a listener on a random port
+    other.bind(("127.0.0.1", 0))
+    other.listen(1)
+    port = other.getsockname()[1]
+
+    def answer():
+        try:
+            c, _ = other.accept()
+            c.sendall(b"HELLO-OTHER")
+            c.close()
+        except OSError:
+            pass
+    threading.Thread(target=answer, daemon=True).start()
+    with asn.open_sandbox(settings, run_id="crun_lo", source=repo) as sbx:
+        own = sbx.exec("python3 own.py", timeout=30)
+        foreign = sbx.exec(f"python3 probe.py {port}", timeout=30)
+    other.close()
+    assert own.exit == 0 and "OWN-OK" in own.stdout, own
+    assert "BLOCKED" in foreign.stdout and "HELLO-OTHER" not in foreign.stdout, foreign
