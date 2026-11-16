@@ -178,6 +178,9 @@ REVISE_CONSUMED = frozenset({
     # A review stage sent back: the work returns to its worker with the note, or escalates to
     # the responsible person at the stage's max_rounds (execution_policy.on_stage_answered).
     "execution_stage",
+    # A build's plan sent back (AR-24): the build designs again from the note, the new plan is
+    # checked against its brief, and the person is asked again (plan_coverage.on_plan_sent_back).
+    "resume_code_task",
 })
 
 #: A workflow decision step (workflows.py) writes this action and no run id. The runner reads
@@ -915,7 +918,10 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
     if consumes_revision(decision):
         actions.append(_action(
             "revise", "Request changes", "neutral",
-            "Sends the proposal back with your note; nothing is applied until it returns.",
+            ("BOSS plans again from your note, checks the new plan against the brief, and asks "
+             "you again; no code is written until then."
+             if _action_of(decision) == "resume_code_task" else
+             "Sends the proposal back with your note; nothing is applied until it returns."),
             needs="note"))
     actions.append(_delegate())
     return actions

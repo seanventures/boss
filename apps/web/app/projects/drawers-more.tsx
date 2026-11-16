@@ -365,6 +365,9 @@ export function DecisionActs({ ctx, n, onDone }: { ctx: PxCtx; n: NeedsYou; onDo
   const guarded = useGuardedCall();
   const [busy, setBusy] = React.useState(false);
   const [rejecting, setRejecting] = React.useState(false);
+  // REQUEST CHANGES ON A PLAN (AR-24): the build plans again from the note and asks again.
+  const [revising, setRevising] = React.useState(false);
+  const [changes, setChanges] = React.useState("");
   const [reason, setReason] = React.useState("");
   const [said, setSaid] = React.useState<{ text: string; tone?: "red" | "green" }>({ text: "" });
   const id = n.action?.decision_id;
@@ -383,13 +386,16 @@ export function DecisionActs({ ctx, n, onDone }: { ctx: PxCtx; n: NeedsYou; onDo
   // Approve the gate refuses.
   const held = n.held ?? null;
   if (!id) return null;
-  const answer = async (verb: "approve" | "reject") => {
+  const answer = async (verb: "approve" | "reject" | "revise") => {
     setBusy(true); setSaid({ text: "" });
     try {
       if (isPxDemo()) { setSaid({ text: "Sample mode — nothing was sent." }); return; }
-      await guarded(verb === "approve" ? `${actWord(n)}.` : "Reject this.", () =>
-        idPost(`/v1/decisions/${encodeURIComponent(id)}/${verb}`, verb === "reject" ? { note: reason.trim() || "Rejected from the project page." } : approval));
-      setSaid({ text: verb === "approve" ? (n.kind === "merge" ? "Approved — BOSS merges it now." : n.kind === "deploy" ? "Approved — the deploy starts now." : "Approved.") : "Rejected.", tone: "green" });
+      await guarded(verb === "approve" ? `${actWord(n)}.` : verb === "revise" ? "Request changes." : "Reject this.", () =>
+        idPost(`/v1/decisions/${encodeURIComponent(id)}/${verb}`,
+               verb === "reject" ? { note: reason.trim() || "Rejected from the project page." }
+               : verb === "revise" ? { note: changes.trim() } : approval));
+      setSaid({ text: verb === "approve" ? (n.kind === "merge" ? "Approved — BOSS merges it now." : n.kind === "deploy" ? "Approved — the deploy starts now." : "Approved.")
+                : verb === "revise" ? "Sent back — BOSS plans again from your note and asks you again." : "Rejected.", tone: "green" });
       notifyChanged("decision", { id });
       ctx.refreshWork();
       onDone?.();
@@ -429,7 +435,15 @@ export function DecisionActs({ ctx, n, onDone }: { ctx: PxCtx; n: NeedsYou; onDo
   }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: "1 1 100%" }} data-testid="px-drawer-needs-acts">
-      {rejecting ? (
+      {revising ? (
+        <form className="px-row" onSubmit={(e) => { e.preventDefault(); if (changes.trim()) void answer("revise"); }}>
+          <input className="px-input" autoFocus placeholder="What should the plan change?" value={changes} onChange={(e) => setChanges(e.target.value)}
+                 aria-label="What to change" data-testid="px-drawer-needs-changes" />
+          <GatedButton permission="decision:approve" projectId={ctx.projectId} type="submit" className="px-btn" data-size="s" disabled={busy || !changes.trim()}
+                       data-testid="px-drawer-needs-revise-send">Send back</GatedButton>
+          <button type="button" className="px-btn" data-size="s" onClick={() => setRevising(false)}>Cancel</button>
+        </form>
+      ) : rejecting ? (
         <form className="px-row" onSubmit={(e) => { e.preventDefault(); void answer("reject"); }}>
           <input className="px-input" autoFocus placeholder="Why not? (one line)" value={reason} onChange={(e) => setReason(e.target.value)}
                  aria-label="Why reject" data-testid="px-drawer-needs-reason" />
@@ -450,6 +464,11 @@ export function DecisionActs({ ctx, n, onDone }: { ctx: PxCtx; n: NeedsYou; onDo
             {n.kind === "merge" ? <GitMerge size={12} aria-hidden /> : n.kind === "deploy" ? <RocketLaunch size={12} aria-hidden /> : <Check size={12} aria-hidden />} {held ? held.label : actWord(n)}</GatedButton>
           <GatedButton permission="decision:approve" projectId={ctx.projectId} className="px-btn" data-size="s" disabled={busy}
                        data-testid="px-drawer-needs-reject" onClick={() => setRejecting(true)}>Reject</GatedButton>
+          {n.kind === "plan" ? (
+            <GatedButton permission="decision:approve" projectId={ctx.projectId} className="px-btn" data-size="s" disabled={busy}
+                         title="BOSS plans again from your note, checks the plan against the brief, and asks you again"
+                         data-testid="px-drawer-needs-revise" onClick={() => setRevising(true)}>Request changes</GatedButton>
+          ) : null}
           {review ? <PxLink href={changeHref(review) ?? ""} testid="px-drawer-needs-review">{isLocalChangeUrl(review) ? reviewChangeWords(review) ?? "Review the change set" : "Review on GitHub"}</PxLink> : null}
         </div>
       )}
