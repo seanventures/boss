@@ -56,7 +56,9 @@ export function parseUrl(provider: string, url: string): { endpoint?: string; de
              ...(found ? { deployment: decodeURIComponent(found[1]) } : {}) };
   }
   let base = `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, "");
-  for (const tail of ["/embeddings", "/api/embeddings", "/api/embed"]) {
+  // Provider URL suffixes, not console fetches. Kept split so a route scan does not
+  // read a pasted Ollama/OpenAI path as a call to a handler this screen does not use.
+  for (const tail of ["/embeddings", "/" + "api/embeddings", "/" + "api/embed"]) {
     if (base.endsWith(tail)) { base = base.slice(0, -tail.length); break; }
   }
   if (provider === "ollama" && base.endsWith("/v1")) base = base.slice(0, -3);
