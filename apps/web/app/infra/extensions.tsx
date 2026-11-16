@@ -125,6 +125,18 @@ function Webhooks({ id }: { id: string }) {
   );
 }
 
+export function extensionProblemSentence(problems: readonly string[] | null | undefined): string | null {
+  const parts = (problems ?? []).map((problem) => problem.trim()).filter(Boolean);
+  return parts.length ? parts.join("; ") : null;
+}
+
+/** Beside Blocked. More than six words is a paragraph. */
+export function ExtensionProblems({ sentence }: { sentence: string | null }) {
+  if (!sentence) return null;
+  const Tag = sentence.split(/\s+/).filter(Boolean).length > 6 ? "p" : "span";
+  return <Tag data-testid="inf-ext-problems" data-user-text>{sentence}</Tag>;
+}
+
 function ExtensionRowView({ e, projectId, onChanged }: { e: ExtensionRow; projectId: string; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<"" | "hooks" | "settings">("");
@@ -159,7 +171,10 @@ function ExtensionRowView({ e, projectId, onChanged }: { e: ExtensionRow; projec
         </td>
         <td>
           {blocked ? (
-            <span className="inf-notice" data-testid="inf-ext-blocked" title={e.trust.problems.join("\n")}>Blocked</span>
+            <>
+              <span className="inf-notice" data-testid="inf-ext-blocked" title={e.trust.problems.join("\n")}>Blocked</span>
+              <ExtensionProblems sentence={extensionProblemSentence(e.trust.problems)} />
+            </>
           ) : (
             <span className="inf-muted" data-testid="inf-ext-trusted" title={`Approved checksum ${e.trust.approvedChecksum}`}>Checksum OK</span>
           )}

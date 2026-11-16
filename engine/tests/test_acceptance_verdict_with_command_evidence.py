@@ -34,10 +34,10 @@ def record() -> CommandRecord:
     r = CommandRecord()
     r.add(Command(id="E1", cmd="HTTP GET http://127.0.0.1:8081/payments", kind="http",
                   exit=0, status=401, stdout='HTTP 401\n{"error":"missing token"}',
-                  tree_dirty=False))
+                  tree_dirty=False, plain=True))
     r.add(Command(id="E2", cmd="make run-staging", argv=["make", "run-staging"], exit=2,
                   stderr="make: *** No rule to make target 'run-staging'.  Stop.",
-                  tree_dirty=False))
+                  tree_dirty=False, plain=True))
     r.add(Command(id="E3", cmd="git push origin main", refused="git push is not allowed"))
     return r
 
@@ -190,7 +190,7 @@ def test_inline_code_and_printers_are_never_evidence(tree, argv, why):
 def test_a_command_run_on_a_changed_or_unknown_tree_is_not_evidence(tree, dirty, status, why):
     """Write a file, then read it back through a tree command: the agent's own words."""
     rec = _one(Command(id="E1", cmd="make show", argv=["make", "show"], exit=0,
-                       stdout="401 Unauthorized\n", tree_dirty=dirty))
+                       stdout="401 Unauthorized\n", tree_dirty=dirty, plain=True))
     item = av.judge(ITEMS[:1], 'AC-1: MET — E1 (exit 0) "401 Unauthorized"\nACCEPTANCE: MET',
                     {}, root=tree, exec_log=rec)["items"][0]
     assert item["status"] == status and why in item["evidence"]
@@ -204,7 +204,8 @@ def test_a_quote_too_short_to_prove_anything_is_not_evidence(tree, record):
 
 def test_a_tree_command_on_a_clean_tree_is_evidence(tree):
     rec = _one(Command(id="E1", cmd="python3 tools/check.py", argv=["python3", "tools/check.py"],
-                       exit=0, stdout="gateway-ok 401 Unauthorized\n", tree_dirty=False))
+                       exit=0, stdout="gateway-ok 401 Unauthorized\n", tree_dirty=False,
+                       plain=True))
     item = av.judge(ITEMS[:1], 'AC-1: MET — E1 (exit 0) "401 Unauthorized"\nACCEPTANCE: MET',
                     {}, root=tree, exec_log=rec)["items"][0]
     assert item["status"] == "met"
@@ -220,3 +221,50 @@ def test_probes_need_a_tree_file_and_a_known_diff():
     replayed = {"AC-1": {"result": "pass", "changed": True}, "AC-2": {"result": "pass",
                                                                      "changed": False}}
     assert set(ap.carried(replayed)) == {"AC-2"}
+
+
+# ── BOSSAPP-1317: only the interpreter's own options are read ───────────────────────────────
+
+@pytest.mark.parametrize("argv", [
+    ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+    ["python3", "-W", "ignore", "-m", "pytest", "-c", "pytest.ini"],
+    ["python3", "-Wignore", "tools/check.py", "-c", "x"],
+    ["python3", "tools/check.py", "--print", "-e"],
+    ["node", "--require", "ts-node/register", "test.js", "-e"],
+    ["node", "app.js", "-p", "3000"],
+    ["bash", "scripts/check.sh", "-c"],
+    ["ruby", "-I", "lib", "test/run.rb", "-e"],
+    ["php", "-c", "php.ini", "vendor/bin/phpunit"],
+])
+def test_options_after_the_program_are_the_programs_not_inline_code(argv):
+    assert av.inline_code(argv) is None, argv
+    assert av.manufactured(Command(id="E1", cmd=" ".join(argv), argv=argv, exit=0,
+                                   tree_dirty=False, plain=True)) is None
+
+
+@pytest.mark.parametrize("argv", [
+    ["python3", "-c", "print(1)"], ["python3", "-B", "-c", "print(1)"],
+    ["python3", "-Bc", "print(1)"], ["node", "--eval=console.log(1)"], ["node", "-pe", "1"],
+    ["deno", "--print", "1"], ["sh", "-xc", "echo 1"], ["bash", "-o", "pipefail", "-c", "x"],
+    ["php", "-r", "echo 1;"], ["perl", "-E", "say 1"], ["ruby", "-e", "p 1"],
+    ["echo", "401 Unauthorized"],
+])
+def test_code_on_the_interpreters_own_command_line_is_still_refused(argv):
+    assert av.inline_code(argv), argv
+
+
+# ── PR #154 E1: only plain calls into the delivered work are evidence ───────────────────────
+
+@pytest.mark.parametrize("plain,why", [
+    (False, "not a plain call into the delivered work (python runs only a tracked script)"),
+    (None, "BOSS did not classify it as a plain call"),
+])
+def test_a_command_that_is_not_a_plain_call_is_never_evidence(tree, plain, why):
+    """`python3 -m timeit "print('FEATURE WORKS NOW')"` printed the words itself."""
+    argv = ["python3", "-m", "timeit", "print('FEATURE WORKS NOW')"]
+    rec = _one(Command(id="E1", cmd=" ".join(argv), argv=argv, exit=0,
+                       stdout="FEATURE WORKS NOW\n", tree_dirty=False, plain=plain,
+                       not_plain="python runs only a tracked script" if plain is False else None))
+    item = av.judge(ITEMS[:1], 'AC-1: MET — E1 (exit 0) "FEATURE WORKS NOW"\nACCEPTANCE: MET',
+                    {}, root=tree, exec_log=rec)["items"][0]
+    assert item["status"] == "unjudged" and why in item["evidence"]

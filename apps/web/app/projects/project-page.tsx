@@ -292,6 +292,21 @@ export function HealthWhy({ sentence }: { sentence: string | null }) {
     : <span data-testid="px-head-health-why" data-user-text>{sentence}</span>;
 }
 
+/** The deploy chip's reason. A trimmed reason, or nothing when blank. */
+export function deployChipReasonSentence(reason: string | null | undefined): string | null {
+  const trimmed = reason?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** Beside the deploy chip. More than six words is a paragraph. */
+export function DeployChipWhy({ sentence }: { sentence: string | null }) {
+  if (!sentence) return null;
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  return long
+    ? <p data-testid="px-head-deploy-why" data-user-text>{sentence}</p>
+    : <span data-testid="px-head-deploy-why" data-user-text>{sentence}</span>;
+}
+
 function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
   const p = ctx.overview.project;
   const repo = p.repos[0];
@@ -339,13 +354,16 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
               for its approval, or the last one that failed — a link to the Deployments card
               that shows its steps and log live. */}
           {p.deploy && ["deploying", "waiting", "failed"].includes(p.deploy.state) ? (
-            <a className="px-hchip px-hchip-deploy" data-s={p.deploy.state} data-testid="px-head-deploy"
-               href={pxHref(`?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=deployments`)}
-               onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); ctx.tab("deployments"); }}
-               title={[`${p.deploy.app || "The app"} · ${p.deploy.environment || "staging"}`, p.deploy.reason].filter(Boolean).join(": ") + " — opens Deployments"}>
-              {p.deploy.state === "failed" ? <WarningCircle size={11} aria-hidden /> : <CircleNotch size={11} className="px-spin" aria-hidden />}
-              {p.deploy.state === "deploying" ? `Deploying${p.deploy.total ? ` · ${p.deploy.index}/${p.deploy.total}` : ""}`
-                : p.deploy.state === "waiting" ? "Deploy waiting for approval" : "Last deploy failed"}</a>
+            <>
+              <a className="px-hchip px-hchip-deploy" data-s={p.deploy.state} data-testid="px-head-deploy"
+                 href={pxHref(`?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=deployments`)}
+                 onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); ctx.tab("deployments"); }}
+                 title={[`${p.deploy.app || "The app"} · ${p.deploy.environment || "staging"}`, p.deploy.reason].filter(Boolean).join(": ") + " — opens Deployments"}>
+                {p.deploy.state === "failed" ? <WarningCircle size={11} aria-hidden /> : <CircleNotch size={11} className="px-spin" aria-hidden />}
+                {p.deploy.state === "deploying" ? `Deploying${p.deploy.total ? ` · ${p.deploy.index}/${p.deploy.total}` : ""}`
+                  : p.deploy.state === "waiting" ? "Deploy waiting for approval" : "Last deploy failed"}</a>
+              <DeployChipWhy sentence={deployChipReasonSentence(p.deploy.reason)} />
+            </>
           ) : null}
           {/* THE HEALTH CHIP, ON EVERY TAB (12-24): a link to this project's Health tab — the
               environments' word, or "No health yet" before anything is deployed (Health's own

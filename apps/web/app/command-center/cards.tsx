@@ -268,6 +268,39 @@ function daysSince(iso: string | undefined, now: number | null): number {
   return Number.isFinite(t) ? Math.floor((now - t) / 86_400_000) : 0;
 }
 
+/** First line of a finished run's error. A blank line is nothing to say. */
+export function recentRunErrorSentence(error: string | null | undefined): string | null {
+  if (typeof error !== "string") return null;
+  const line = (error.split("\n")[0] ?? "").trim();
+  return line ? line : null;
+}
+
+/** One finished run. The name stays. A failed run's error is said beside it. */
+export function RecentFinishedRun({ r, now, orgId }: {
+  r: RecentRun; now: number | null; orgId?: string | null;
+}) {
+  const ok = r.outcome === "succeeded";
+  const failed = r.outcome === "failed" || r.outcome === "deadlettered";
+  const errorLine = recentRunErrorSentence(r.error);
+  const words = errorLine ? errorLine.split(/\s+/).filter(Boolean).length : 0;
+  return (
+    <li>
+      <a href={runHref(r.runId, orgId)} data-testid="cc2-recent-row" data-outcome={ok ? "ok" : failed ? "failed" : "other"}
+         title={failed && r.error ? `${r.workflowName}, ${r.error.split("\n")[0]}` : `${r.workflowName}, ${r.outcome}`}
+         onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(runPatch(r.runId)); } }}>
+        <span aria-label={ok ? "Succeeded" : failed ? "Failed" : r.outcome}>{ok ? "✓" : failed ? "✕" : "–"}</span>
+        <span data-user-text>{r.name}</span>
+        {failed && errorLine ? (
+          words > 6
+            ? <p data-testid="cc2-recent-error" data-user-text>{errorLine}</p>
+            : <span data-testid="cc2-recent-error" data-user-text>{errorLine}</span>
+        ) : null}
+        <em>{ago(r.finishedAt, now)}</em>
+      </a>
+    </li>
+  );
+}
+
 export function FlightCard({ view, projectId, actor, orgId, now, onRefresh, onStart }: {
   view: CommandCenterView | null; projectId: string; actor: string; orgId?: string | null;
   now: number | null; onRefresh: () => void; onStart: () => void;
@@ -372,21 +405,7 @@ export function FlightCard({ view, projectId, actor, orgId, now, onRefresh, onSt
               {view.today.runsFailed > 0 ? <em className="cc-failed"> · {view.today.runsFailed} failed</em> : null}
             </li>
           ) : null}
-          {recent.slice(0, 3).map((r) => {
-            const ok = r.outcome === "succeeded";
-            const failed = r.outcome === "failed" || r.outcome === "deadlettered";
-            return (
-              <li key={r.runId}>
-                <a href={runHref(r.runId, orgId)} data-testid="cc2-recent-row" data-outcome={ok ? "ok" : failed ? "failed" : "other"}
-                   title={failed && r.error ? `${r.workflowName}, ${r.error.split("\n")[0]}` : `${r.workflowName}, ${r.outcome}`}
-                   onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(runPatch(r.runId)); } }}>
-                  <span aria-label={ok ? "Succeeded" : failed ? "Failed" : r.outcome}>{ok ? "✓" : failed ? "✕" : "–"}</span>
-                  <span data-user-text>{r.name}</span>
-                  <em>{ago(r.finishedAt, now)}</em>
-                </a>
-              </li>
-            );
-          })}
+          {recent.slice(0, 3).map((r) => <RecentFinishedRun key={r.runId} r={r} now={now} orgId={orgId} />)}
         </ul>
       ) : null}
     </section>
