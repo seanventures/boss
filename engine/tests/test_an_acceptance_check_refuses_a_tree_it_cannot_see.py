@@ -9,9 +9,11 @@ The second replaced the first on the run, and the follow-up's brief was built fr
 reviewer had started in the sandbox's empty HOME (test_a_session_reads_the_tree_it_was_sent);
 the branch held 53 Go files.
 
-Now a check whose root holds no project (WRONG FOLDER) or whose reviewer calls every item
-missing because its files are "not there" while the tree holds a project (A BLIND REVIEWER) is
-NOT RUN, never "missing"; and every check's table is kept, a refusal never replacing a judged one.
+Now a check is NOT RUN only on PROOF the reviewer did not see the tree: the files it called
+"not there" ARE in the tree (or its session never started in the tree: engine_contract refuses
+that at the start). Never on wording or on the tree's contents: a correct "go.mod does not
+exist, this is Node" verdict and an empty build are MISSING, and the coder is sent (PR #164
+review E1). Every check's table is kept, a refusal never replacing a judged one.
 """
 from __future__ import annotations
 
@@ -77,13 +79,44 @@ def test_a_blind_reviewer_on_a_real_tree_is_not_run_never_missing(tmp_path):
     assert "MISSING" not in ag.findings_summary(rec)
 
 
-def test_a_root_with_no_project_refuses_to_judge(tmp_path):
-    stale = tmp_path / "schema"
-    stale.mkdir()
-    (stale / "tenant.schema.json").write_text("{}\n")
+def test_an_empty_build_is_missing_and_the_coder_is_sent(tmp_path):
+    """A build that produced nothing: every item really is absent — a CODE problem."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
     rec, _ = ag.run_check(_items(), ask=_ask([("MISSING", w) for w in BLIND]), title="t",
-                          stack={}, root=stale)
-    assert rec["verdict"] == "not_run" and rec["why"].startswith("wrong folder")
+                          stack={}, root=empty)
+    assert rec["verdict"] == "not_met" and not rec.get("refused")
+    assert len(rec["missing"]) == len(CRITERIA)
+
+
+def test_a_node_build_of_a_go_brief_stays_missing(tmp_path):
+    """The reviewer is RIGHT: no go.mod, this is Node. Its evidence names Node files that do
+    exist ("this is Node: package.json, src/server.js") — that is not a claim they are absent."""
+    node = tmp_path / "node"
+    for rel in ("package.json", "src/server.js", "src/gwlint.js"):
+        (node / rel).parent.mkdir(parents=True, exist_ok=True)
+        (node / rel).write_text("{}\n" if rel.endswith(".json") else "export {}\n")
+    answers = [("MISSING", "looked for cmd/northgate-gateway/main.go and a Makefile; absent. "
+                           "The gateway is Node (src/server.js).")] * 5
+    answers.append(("MISSING", "no go.mod exists anywhere in the tree; this is a Node project "
+                               "(package.json, src/server.js)."))
+    rec, _ = ag.run_check(_items(), ask=_ask(answers), title="t", stack={}, root=node)
+    assert rec["verdict"] == "not_met" and not rec.get("refused")
+    assert rec["missing"] == list(range(1, 7))
+    assert "MISSING" in ag.findings_summary(rec)
+
+
+def test_a_session_that_never_started_in_its_tree_is_not_run(tmp_path):
+    """A blind SESSION (its cwd outside the tree) is refused at the start
+    (engine_contract.session_tree_problem): its pass fails, so the check is not run."""
+    from boss_engine.services.engine_contract import EngineSessionFailed
+
+    def ask(prompt):
+        raise EngineSessionFailed("claude not started: the session's tree is outside the run's "
+                                  "sandbox directory")
+    rec, _ = ag.run_check(_items(), ask=ask, title="t", stack={}, root=_go_branch(tmp_path))
+    assert rec["verdict"] == "not_run" and rec["missing"] == []
+    assert "EngineSessionFailed" in rec["why"]
 
 
 def test_a_reviewer_that_sees_the_tree_still_finds_real_gaps(tmp_path):

@@ -331,28 +331,50 @@ def project_files(root: Any) -> dict[str, int]:
     return out
 
 
-def refusal(record: Mapping[str, Any], root: Any) -> Optional[str]:
-    """Why a check must not stand as a verdict on the code, or None (BOSSAPP-1323):
+def _not_there_paths(root: Any, evidence: str) -> list[str]:
+    """The tree paths an answer said were NOT THERE that ARE in the tree: the paths cited in a
+    clause that says so ("no go.mod exists"), or in the clause right before it ("looked for
+    cmd/gwlint/main.go and examples/x.yaml; absent"). A path cited elsewhere in the answer
+    ("this is Node: package.json, src/server.js") is not a claim that it is absent."""
+    parts = [p for p in re.split(r";\s+|\.\s+(?=[A-Z(])|\n", str(evidence or "")) if p.strip()]
+    out: list[str] = []
+    for k, part in enumerate(parts):
+        if not _NOT_THERE.search(part):
+            continue
+        for clause in (part, parts[k - 1] if k else ""):
+            found, _ = evidence_paths(root, clause)
+            out += [f for f in found if f not in out]
+    return out
 
-      WRONG FOLDER — the root it judged holds no project at all (no manifest, no source file):
-        "missing" there says nothing about the branch;
-      A BLIND REVIEWER — every item it answered is MISSING, its evidence says the files are not
-        there, and none of the paths it looked for is checked against a tree that does hold a
-        project (crun_95aca9c7's re-check started in an empty home and called all 30 must-haves
-        missing on a branch with 53 Go files).
-    Such a check is NOT RUN: re-asked, never met, and its table never replaces a judged one."""
-    files = project_files(root)
-    if not files["manifests"] and not files["sources"]:
-        return ("wrong folder: the tree it judged holds no project files (no manifest, no "
-                "source file), so it refused to judge")
-    items = [i for i in record.get("items") or [] if i.get("status") != UNJUDGED]
-    if not items or any(i.get("status") != MISSING for i in items):
+
+def refusal(record: Mapping[str, Any], root: Any) -> Optional[str]:
+    """Why a check must not stand as a verdict on the code, or None (BOSSAPP-1323) — only on
+    PROOF that the reviewer did not see the tree:
+
+      the reviewer called items MISSING because their files were "not there", and those very
+      files ARE in the tree it was sent (crun_95aca9c7's re-check called all 30 must-haves
+      missing — "no go.mod exists anywhere in the tree" — on a branch with go.mod and 53 Go
+      files). Two or more, and at least half of the missing items, so contradicted: the check
+      is NOT RUN.
+
+    Never the words alone, and never the tree's contents: a correct "go.mod does not exist, this
+    is Node" verdict, or an empty build, is a CODE problem — MISSING, and the coder is sent
+    (PR #164 review E1). A session that started outside its tree never answers at all
+    (engine_contract.session_tree_problem refuses it at the start, so its pass fails: not run)."""
+    if root is None:
         return None
-    blind = [i for i in items if _NOT_THERE.search(str(i.get("evidence") or ""))]
-    if len(blind) * 2 >= len(items):
-        return (f"the reviewer did not see the tree: it called all {len(items)} items missing "
-                "because their files were \"not there\", but the tree holds "
-                f"{files['manifests']} manifest(s) and {files['sources']}+ source files")
+    missing = [i for i in record.get("items") or [] if i.get("status") == MISSING]
+    if not missing:
+        return None
+    seen = {i.get("n"): _not_there_paths(root, str(i.get("evidence") or "")) for i in missing}
+    contradicted = {n: p for n, p in seen.items() if p}
+    # At least two such items, and half of the missing ones: a single misread file is one
+    # item's finding to re-ask, not a reviewer that never saw the tree.
+    if len(contradicted) >= 2 and len(contradicted) * 2 >= len(missing):
+        sample = sorted({p for ps in contradicted.values() for p in ps})[:4]
+        return (f"the reviewer did not see the tree: it called {len(contradicted)} of "
+                f"{len(missing)} missing items absent, but the files it said were not there are "
+                f"in the tree ({', '.join(sample)})")
     return None
 
 

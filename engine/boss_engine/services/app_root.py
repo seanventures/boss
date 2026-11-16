@@ -250,7 +250,37 @@ def home_on_tree(root: Path | str, recorded: Any) -> Optional[str]:
         return None
     if _has_manifest(where):
         return rel
-    return None if _has_manifest(base) else rel
+    if not _has_manifest(base):
+        return rel
+    # The root has a manifest. It outranks the record only when it is the manifest OF the
+    # folder's sources (a Go package folder under the module's go.mod: `schema/`); a
+    # tooling-only package.json at the root never resets a recorded app folder of sources in
+    # another language (PR #164 review).
+    langs = _source_languages(where)
+    if not langs:
+        return None
+    return None if any(_root_manifest_for(base, lang) for lang in langs) else rel
+
+
+def _source_languages(folder: Path) -> set[str]:
+    """The languages (stacks.LANGUAGES keys) whose source files the folder holds."""
+    by_ext = {".py": "python", ".go": "go", ".java": "java", ".kt": "java", ".kts": "java",
+              ".js": "node", ".jsx": "node", ".ts": "node", ".tsx": "node", ".mjs": "node",
+              ".cjs": "node"}
+    out = set()
+    for p in folder.rglob("*"):
+        if p.is_file() and p.suffix.lower() in by_ext:
+            out.add(by_ext[p.suffix.lower()])
+            if len(out) > 3:
+                break
+    return out
+
+
+def _root_manifest_for(base: Path, lang: str) -> bool:
+    from . import stacks
+
+    names = getattr(stacks.LANGUAGES.get(lang), "manifests", ()) or ()
+    return any((base / n).is_file() for n in names)
 
 
 def resolve(root: Path | str, *, app_id: Optional[str] = None, recorded: Optional[str] = None,

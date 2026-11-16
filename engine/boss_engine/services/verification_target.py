@@ -875,33 +875,43 @@ def required_stack_dir(app_dir: Path | str, required: str) -> Path:
     return base / best[1] if best is not None else base
 
 
-def continuation_tree_problem(app_dir: Path | str, *, required: str | None,
-                              branch: str = "") -> str | None:
-    """Why a continuation's workspace is not its lineage's app, or None (BOSSAPP-1324).
+def checkout_problem(root: Path | str, *, branch: str = "", owner: str = "",
+                     repo: str = "") -> str | None:
+    """Why a continuation's workspace is not its lineage's CHECKOUT, or None (BOSSAPP-1324):
+    a different repository (its remote names another owner/repo), or not the lineage branch's
+    head (the branch's remote head is not in its history). Never the stack, never an empty or
+    small tree: a follow-up that rewrites Node into Go, a retry of an empty first build, an empty
+    slice branch and a polyglot repo all build on exactly what the branch holds (PR #164 E2).
+    None when git cannot say (no checkout, no remote ref): nothing to prove wrong."""
+    import subprocess
 
-    A follow-up, retry or repair builds on the change branch. Before anyone plans on it, the
-    tree must hold that app: the lineage's required stack's build file in the app's folder (or
-    below it), and project files at all. A tree that does not is the wrong tree — never planned
-    on (crun_bbf93235 planned Go must-haves against an old Node checkout of the same name)."""
-    base = Path(app_dir)
-    where = f" on {branch}" if branch else ""
-    if not base.is_dir():
-        return f"the app folder {base.name or base} is not in the workspace{where}"
-    if required in _REQUIRED_BUILD_FILES:
-        names = _REQUIRED_BUILD_FILES[required]
-        found = required_stack_dir(base, required)
-        if not any((found / n).is_file() for n in names):
-            label = {"go": "Go", "java": "Java", "python": "Python"}.get(required, required)
-            return (f"the workspace{where} does not hold this lineage's {label} app: no "
-                    f"{' or '.join(names)} in the app folder or below it. BOSS stopped before "
-                    "planning on a tree that is not the change.")
+    base = Path(root)
+
+    def git(*args: str) -> str | None:
+        try:
+            got = subprocess.run(["git", "-C", str(base), *args], capture_output=True, text=True,
+                                 timeout=20)
+        except Exception:  # noqa: BLE001
+            return None
+        return got.stdout.strip() if got.returncode == 0 else None
+
+    if git("rev-parse", "--is-inside-work-tree") != "true":
         return None
-    from .acceptance_gate import project_files
+    url = git("remote", "get-url", "origin") or ""
+    if url and owner and repo:
+        import re as _re
 
-    files = project_files(base)
-    if not files["manifests"] and not files["sources"]:
-        return (f"the workspace{where} holds no project files in the app folder; BOSS stopped "
-                "before planning on a tree that is not the change.")
+        m = _re.search(r"[/:]([^/:]+)/([^/]+?)(?:\.git)?/?$", url)
+        if m and (m.group(1).lower(), m.group(2).lower()) != (owner.lower(), repo.lower()):
+            return (f"the workspace is a checkout of {m.group(1)}/{m.group(2)}, not this "
+                    f"lineage's {owner}/{repo}. BOSS stopped before planning on another "
+                    "repository.")
+    if branch:
+        ref = f"refs/remotes/origin/{branch}"
+        if git("rev-parse", "--verify", "--quiet", ref):
+            if git("merge-base", "--is-ancestor", ref, "HEAD") is None:
+                return (f"the workspace is not on {branch}: its history does not hold the "
+                        "branch's head. BOSS stopped before planning on another branch.")
     return None
 
 

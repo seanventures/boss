@@ -12,8 +12,9 @@ package folder holding schema.go and tenant.schema.json, no go.mod):
 guess, so once 8abe wrote `schema` every later build — "Change it" builds included — verified,
 re-checked and previewed inside `schema/`; and the root was never recorded, so nothing could
 supersede it. Now a record stands only where the tree bears it out (app_root.home_on_tree), the
-root is recorded as ".", and a continuation whose tree is not its lineage's app stops before
-planning (verification_target.continuation_tree_problem).
+root is recorded as ".", and a continuation whose workspace is not its lineage's checkout (another
+repository, or not the branch's head) stops before planning (verification_target.
+checkout_problem) — never for the stack or an empty tree (PR #164 review E2).
 """
 from __future__ import annotations
 
@@ -106,18 +107,77 @@ def test_the_pipeline_validates_the_record_and_records_the_root():
     src = inspect.getsource(g)
     assert "_app_root.home_on_tree(root, _app_root.recorded_app_dir(_c, run))" in src
     assert 'if _known.path != Path(root) else "."' in src
-    assert "verification_target.continuation_tree_problem(" in src
+    assert "verification_target.checkout_problem(" in src
+    assert "continuation_tree_problem" not in src
 
 
-def test_a_continuation_on_a_tree_that_is_not_its_app_stops_before_planning(tmp_path):
-    node = tmp_path / "node"
-    for rel in ("package.json", "gateway/src/server.js", "gwlint/src/rules.js"):
-        (node / rel).parent.mkdir(parents=True, exist_ok=True)
-        (node / rel).write_text("{}" if rel.endswith(".json") else "export {}\n")
-    problem = vt.continuation_tree_problem(node, required="go",
-                                           branch="boss/code/crun_24f399769d9f4f5d8fa1")
-    assert problem and "does not hold this lineage's Go app" in problem and "go.mod" in problem
-    assert vt.continuation_tree_problem(_go_branch(tmp_path / "go"), required="go") is None
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    assert "no project files" in vt.continuation_tree_problem(empty, required=None)
+def _git(cwd, *args):
+    import subprocess
+
+    return subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True,
+                          text=True).stdout.strip()
+
+
+def _checkout(path: Path, *, url="https://github.com/acme/northgate-gateway.git",
+              branch="boss/code/crun_24f3", files=None) -> Path:
+    """A clone as the sandbox makes one: the branch checked out, origin/<branch> at its head."""
+    path.mkdir(parents=True)
+    _git(path, "init", "-q", "-b", branch)
+    _git(path, "config", "user.email", "t@example.invalid")
+    _git(path, "config", "user.name", "t")
+    for rel, body in (files or {"package.json": "{}", "src/server.js": "export {}\n"}).items():
+        (path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (path / rel).write_text(body)
+    _git(path, "add", "-A")
+    _git(path, "commit", "-qm", "head", "--allow-empty")
+    _git(path, "remote", "add", "origin", url)
+    _git(path, "update-ref", f"refs/remotes/origin/{branch}", "HEAD")
+    return path
+
+
+def test_a_rewrite_follow_up_on_its_branch_is_never_stopped(tmp_path):
+    """A Node tree on a Go lineage's branch is what a Node-to-Go rewrite builds on; an empty
+    first build's retry, an empty slice branch and a polyglot repo the same: never stopped."""
+    node = _checkout(tmp_path / "node")
+    assert vt.checkout_problem(node, branch="boss/code/crun_24f3", owner="acme",
+                               repo="northgate-gateway") is None
+    empty = _checkout(tmp_path / "empty", files={})
+    assert vt.checkout_problem(empty, branch="boss/code/crun_24f3", owner="Acme",
+                               repo="Northgate-Gateway") is None
+    # A follow-up's own commits on top of the branch head are still the branch.
+    (node / "main.go").write_text("package main\n")
+    _git(node, "add", "-A")
+    _git(node, "commit", "-qm", "rewrite")
+    assert vt.checkout_problem(node, branch="boss/code/crun_24f3", owner="acme",
+                               repo="northgate-gateway") is None
+    assert vt.checkout_problem(tmp_path / "not-a-checkout") is None
+
+
+def test_a_checkout_of_another_repository_is_stopped(tmp_path):
+    other = _checkout(tmp_path / "other", url="git@github.com:acme/old-node-gateway.git")
+    problem = vt.checkout_problem(other, branch="boss/code/crun_24f3", owner="acme",
+                                  repo="northgate-gateway")
+    assert problem and "acme/old-node-gateway" in problem and "acme/northgate-gateway" in problem
+
+
+def test_a_checkout_that_is_not_the_branch_head_is_stopped(tmp_path):
+    co = _checkout(tmp_path / "co")
+    # The branch moved on elsewhere: its head is not in this checkout's history.
+    _git(co, "checkout", "-q", "--orphan", "elsewhere")
+    _git(co, "commit", "-qm", "unrelated", "--allow-empty")
+    _git(co, "update-ref", "refs/remotes/origin/boss/code/crun_24f3", "HEAD")
+    _git(co, "checkout", "-q", "boss/code/crun_24f3")
+    problem = vt.checkout_problem(co, branch="boss/code/crun_24f3", owner="acme",
+                                  repo="northgate-gateway")
+    assert problem and "not on boss/code/crun_24f3" in problem
+
+
+def test_a_recorded_app_folder_of_sources_beats_a_tooling_only_root_manifest(tmp_path):
+    """Low (PR #164 review): a root package.json for tooling never resets a recorded Python
+    service folder; a Go package folder under the module's go.mod still yields to the root."""
+    (tmp_path / "package.json").write_text('{"devDependencies": {"prettier": "3"}}')
+    svc = tmp_path / "service"
+    svc.mkdir()
+    (svc / "main.py").write_text("print('ok')\n")
+    assert app_root.home_on_tree(tmp_path, "service") == "service"
+    assert app_root.home_on_tree(_go_branch(tmp_path / "go"), "schema") is None

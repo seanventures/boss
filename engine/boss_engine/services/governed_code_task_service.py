@@ -7147,20 +7147,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # approve-plan gate is Wire-Phase 2b; for now review plan records a PLAN: OK/REVISE note.)
         design: dict = {}
         do_design = risk_tier >= 2 and not is_web_app and not _seeded
-        # A CONTINUATION PLANS ONLY ON ITS LINEAGE'S APP (BOSSAPP-1324): the tree in front of
-        # the planner must hold the lineage's required stack in the app's folder, or BOSS stops
-        # here, in words, before any model call.
+        # A CONTINUATION PLANS ONLY ON ITS LINEAGE'S CHECKOUT (BOSSAPP-1324): the workspace
+        # must be this lineage's repository on its branch's head, or BOSS stops here, in words,
+        # before any model call. Never for the stack or an empty tree (PR #164 E2): a rewrite,
+        # a retry of an empty build and a polyglot repo build on what the branch holds.
         if _is_repair and not use_microvm and _release_target is None:
             try:
-                with _transaction(engine) as _c:
-                    _lineage_stack = (verification_target.required_app_stack(spec)
-                                      or verification_target.lineage_required_stack(
-                                          _c, str(fctx.get("root_run_id") or "")))
-                _tree_app = _app_root_mod.app_dir(root, app_id=_app_id or _app_scope,
-                                                  recorded=_recorded_app,
-                                                  lineage=_lineage_paths) or Path(root)
-                _wrong_tree = verification_target.continuation_tree_problem(
-                    _tree_app, required=_lineage_stack, branch=str(base_branch or ""))
+                _wrong_tree = verification_target.checkout_problem(
+                    root, branch=str(base_branch or ""), owner=str(spec.get("owner") or ""),
+                    repo=str(spec.get("repo") or ""))
             except Exception:  # noqa: BLE001 — a check that cannot run never blocks the build
                 _log_caught(logger)
                 _wrong_tree = None
