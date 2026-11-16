@@ -5463,6 +5463,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         transient failure at call time retries the SAME stage on the next source at once
         (model_router.failover); Fixed mode is exactly as before."""
         if _recheck and step in _change_recheck.WRITING_STAGES:
+            # A RE-CHECK'S WRITING STAGE STILL HAS A ROUTE (Northgate round 8,
+            # crun_69899a6067014b5883c3): the pipeline reads stage_routes[step] after the stage
+            # (the model it used, whether a resume keeps the same route), so record the
+            # no-write route instead of leaving the stage unknown (KeyError: 'implement').
+            stage_routes[step] = {"engine": "none", "model": None, "recheck": True}
             return _change_recheck.NoWriteAgent(step), None
         eng, model = _take(step, decision)
         agent = _agent_for(eng)
