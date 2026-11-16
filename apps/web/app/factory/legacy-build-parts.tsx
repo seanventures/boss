@@ -1220,6 +1220,33 @@ export async function retireTarget(targetId: string, actor: string): Promise<{ o
   }
 }
 
+/** The unbound history's failure reason. A trimmed reason, or nothing when blank. */
+export function deployHistoryReasonSentence(reason: string | null | undefined): string | null {
+  const trimmed = reason?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** Last deploy status and time, with why beside it. More than six words is a paragraph. */
+export function DeployHistoryLine({ status, reason, sentence, time }: {
+  status: string;
+  reason?: string | null;
+  sentence: string | null;
+  time?: React.ReactNode;
+}) {
+  const why = !sentence ? null : sentence.split(/\s+/).filter(Boolean).length > 6
+    ? <p data-testid="app-deploy-history-why" data-user-text>{sentence}</p>
+    : <span data-testid="app-deploy-history-why" data-user-text>{sentence}</span>;
+  return (
+    <>
+      <span className="detail ct-deploy-history" title={reason ?? undefined}>
+        last deploy: {status}
+        {time}
+      </span>
+      {why}
+    </>
+  );
+}
+
 export function DeploymentLine({ run, projectId, actor, deployable }: {
   run: CodeTaskRun; projectId: string; actor: string;
   /** Has this app produced reviewed code? A blocked or still-building task has nothing to
@@ -1352,10 +1379,12 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
       <div className="ct-deploy-wrap">
       <div className="ct-deploy-line" data-testid="app-deployment-none">
         {latest && loaded && !targetId ? (
-          <span className="detail ct-deploy-history" title={latest.failure_reason ?? undefined}>
-            last deploy: {latest.status}
-            {latest.finished_at ? <>, <ClientRelativeTime iso={latest.finished_at} /></> : null}
-          </span>
+          <DeployHistoryLine
+            status={latest.status}
+            reason={latest.failure_reason}
+            sentence={deployHistoryReasonSentence(latest.failure_reason)}
+            time={latest.finished_at ? <>, <ClientRelativeTime iso={latest.finished_at} /></> : null}
+          />
         ) : null}
         {linked ? (
           <>

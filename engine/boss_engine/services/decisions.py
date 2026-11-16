@@ -60,6 +60,29 @@ def stack_answer(action: str) -> Optional[tuple[str, str]]:
     return None
 
 
+#: The words a surface sends when the person wrote no reason: never a reason to record.
+_NO_REASON_NOTES = frozenset({
+    "", "resolved from the boss console.", "rejected from the project page.", "rejected.",
+})
+
+
+#: A surface's own words naming only WHO and WHERE (chat_channels' "Rejected by Ana from
+#: chat.", Infra's "Rejected from Infra.", the console's): never the person's reason.
+_SURFACE_NOTE = re.compile(
+    r"(?i)^(?:approved|rejected|resolved|declined)(?: by [^.]{1,80}?)?"
+    r" (?:from|in|on|via) (?:the )?(?:chat|infra|boss console|console|project page|"
+    r"command center|slack|teams|telegram|email)\b[^.]{0,40}\.?$")
+
+
+def person_reject_note(note: Optional[str]) -> Optional[str]:
+    """The reason a person wrote when rejecting, or None when they wrote none (a surface's
+    placeholder note — who and where, no why — is not a reason). One line, bounded."""
+    text_value = " ".join(str(note or "").split())
+    if text_value.lower() in _NO_REASON_NOTES or _SURFACE_NOTE.match(text_value):
+        return None
+    return text_value[:1000]
+
+
 #: The actor recorded when a policy, not a person, resolves a gate. Deliberately not a member
 #: of any org: it must be impossible to sign in as, and obvious in an audit trail.
 SYSTEM_ACTOR = "auto_approval"
@@ -928,7 +951,7 @@ class DecisionService:
             self._handle_non_approved_follow_on(
                 connection, refreshed, action="reject", actor=actor, note=note
             )
-            self._handle_rejected_follow_on(connection, refreshed, actor=actor)
+            self._handle_rejected_follow_on(connection, refreshed, actor=actor, note=note)
             # A person said no to what BOSS recommended: kept as a decision example (BOSSAPP-893).
             from .decision_examples import capture_override
 
@@ -1272,6 +1295,33 @@ class DecisionService:
                 str(run_id),
                 {"decision_id": row["id"]},
             )
+        elif action == "retry_when_secret_set":
+            # RETRY ONCE SET (checks_failing.wait_for_person): the person set the secret the
+            # app needs. The waiting build ends (its draft PR stays) and a new attempt runs the
+            # gates again on the same branch and pull request, as the person's own Retry.
+            run_id = str(recommendation.get("run_id") or "")
+            connection.execute(text(
+                "UPDATE code_task_runs SET status = 'completed', phase = 'done', "
+                "updated_at = now() WHERE id = :id AND status = 'waiting_on_person'"),
+                {"id": run_id})
+            settings, jobs = self.settings, self.jobs
+            names = ", ".join(str(n) for n in recommendation.get("needs_secret") or [])
+            note = (f"{names or 'The missing secret'} is set now (a person confirmed it). Run "
+                    "the checks again on this branch; do not code around the secret.")
+            emit_event(connection, row["project_id"], "code_task.secret_retry_requested", actor,
+                       "code_task_run", run_id, {"decision_id": row["id"]})
+
+            def _retry() -> None:
+                from ..db import get_engine
+                from .code_task_service import retry_code_task
+
+                try:
+                    retry_code_task(get_engine(), settings, jobs, run_id, fix_note=note,
+                                    by_person=True)
+                except Exception:  # noqa: BLE001 — the run says so; Retry stays on it
+                    _log.exception("retry once set failed for %s", run_id)
+
+            _spawn_as_this_request(_retry)
         elif action == "review_plan_draft":
             self._queue_pr_proposal_from_plan(connection, row, actor, recommendation)
         elif action == "github.community.dispatch_plan":
@@ -1626,9 +1676,11 @@ class DecisionService:
             raise InvalidDecisionTransitionError(str(refused)) from refused
 
     def _handle_rejected_follow_on(
-        self, connection: Connection, row: dict[str, Any], *, actor: str
+        self, connection: Connection, row: dict[str, Any], *, actor: str,
+        note: Optional[str] = None,
     ) -> None:
-        """What REFUSING releases. Distinct from the revise path: nothing here reads a note.
+        """What REFUSING releases. Distinct from the revise path: a reject's note is only the
+        person's reason, recorded where the refused work is (a rejected plan's build).
 
         A rejected stack deployment closes its ChangeSet and hands back its reservation, so
         the console stops showing it as waiting for somebody.
@@ -1638,20 +1690,36 @@ class DecisionService:
             from .stack_deploy import on_decision_not_approved
 
             on_decision_not_approved(connection, self.settings, row, actor, "rejected")
+        elif rec.get("action") == "retry_when_secret_set" and rec.get("run_id"):
+            # Nobody will set it: the waiting build ends with its draft PR open, saying so.
+            connection.execute(text(
+                "UPDATE code_task_runs SET status = 'completed', phase = 'done', "
+                "error = CONCAT_WS(' ', error, 'A person chose not to set it; the draft pull "
+                "request stays open.'), updated_at = now() "
+                "WHERE id = :id AND status = 'waiting_on_person'"), {"id": str(rec["run_id"])})
         elif rec.get("action") == "resume_code_task" and rec.get("run_id"):
             # A PLAN SOMEBODY SAID NO TO ENDS ITS BUILD (independent re-check): it stayed
             # "Needs you · plan" in the Factory and on the shelf after Reject. The build is
             # stopped the way a person's Stop stops it, and says the plan was rejected.
+            #
+            # THE PERSON'S REASON GOES WITH IT (BOSSAPP-1321): a written reason is the run's
+            # stated outcome ("The plan was rejected: <why>"), which the next attempt's planner
+            # reads as the previous attempt's outcome (retry_code_task), and it is kept on the
+            # run as `plan_rejected_note`.
             from .code_task_service import CancelRefused, cancel_run
 
+            why = person_reject_note(note)
             try:
                 with connection.begin_nested():
                     cancel_run(connection, str(rec["run_id"]), str(row["project_id"]), actor=actor,
-                               reason="The plan was rejected")
+                               reason="The plan was rejected" + (f": {why}" if why else ""))
                     connection.execute(text(
                         "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
-                        "|| jsonb_build_object('plan_rejected', true) WHERE id = :id"),
-                        {"id": str(rec["run_id"])})
+                        "|| jsonb_build_object('plan_rejected', true) "
+                        "|| CASE WHEN CAST(:why AS TEXT) IS NULL THEN '{}'::jsonb ELSE "
+                        "jsonb_build_object('plan_rejected_note', CAST(:why AS TEXT)) END "
+                        "WHERE id = :id"),
+                        {"id": str(rec["run_id"]), "why": why})
             except (CancelRefused, LookupError):
                 pass
         elif (row["recommendation"] or {}).get("action") == "deploy_host":
@@ -1789,6 +1857,12 @@ class DecisionService:
             from .architecture_docs import on_decision_answered
 
             on_decision_answered(connection, row, action=action, actor=actor, note=note)
+        elif recommendation_action == "resume_code_task" and action == "revise":
+            # REQUEST CHANGES ON A PLAN (AR-24): the paused build designs again with the note,
+            # its new plan is checked against its brief, and it asks again (plan_coverage).
+            from .plan_coverage import on_plan_sent_back
+
+            on_plan_sent_back(connection, row, actor=actor, note=note, jobs=self.jobs)
         elif action == "revise" and decision_actions.is_local_review(row):
             # REQUEST CHANGES ON A LOCAL CHANGE (BOSSAPP-948): the fix round on its own branch,
             # with the person's open line comments as required inputs (local_review).

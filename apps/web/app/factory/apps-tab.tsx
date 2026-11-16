@@ -37,10 +37,10 @@ import { parseSetupNeeds, setupChip, type SetupNeeds } from "../../lib/app-conne
 import { LabLinks } from "./lab-links";
 import { useOnScreen } from "../../lib/area-shown";
 
-/** Where "＋ Add a feature" goes (BOSSAPP-989): Project › New work, with this app named — it
- *  builds onto the app's branch. The old composer door (compose=add) is gone. */
-export function addFeatureHref(appKey: string): string {
-  return areaHref(addFeaturePatch(appKey));
+/** Where "＋ Add a feature" goes (BOSSAPP-989): Project › New work in THIS app's project, with
+ *  this app named — it builds onto the app's branch (AR-20). The old composer door is gone. */
+export function addFeatureHref(projectId: string, app: string): string {
+  return areaHref(addFeaturePatch({ projectId, app }));
 }
 
 /** One build of an app. `row` is the full Floor row when the server sends one (walk D21): then
@@ -371,7 +371,7 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew, 
                   </span>
                   {/* ADD A FEATURE, ON THE ROW (the everyday job): on hover, and in the row's menu. */}
                   <span className="fx-app-acts">
-                    <a className="fx-app-add" href={addFeatureHref(opens)} data-testid={`fx-app-add-${a.key}`}
+                    <a className="fx-app-add" href={addFeatureHref(projectId, opens)} data-testid={`fx-app-add-${a.key}`}
                        title="Add a feature to this app: built on its branch, its tests kept"
                        onClick={(e) => e.stopPropagation()}>＋ Add a feature</a>
                     <span className="fx-pop-anchor">
@@ -380,7 +380,7 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew, 
                               onClick={(e) => { e.stopPropagation(); setMenu(menu === a.key ? null : a.key); }}>⋯</button>
                       {menu === a.key ? (
                         <span role="menu" className="fx-ck-menu fx-app-menu" data-testid={`fx-app-menu-${a.key}`}>
-                          <a role="menuitem" href={addFeatureHref(opens)} data-testid={`fx-app-menu-add-${a.key}`}
+                          <a role="menuitem" href={addFeatureHref(projectId, opens)} data-testid={`fx-app-menu-add-${a.key}`}
                              onClick={(e) => e.stopPropagation()}>Add a feature</a>
                           <button type="button" role="menuitem" onClick={(e) => {
                             e.stopPropagation(); setMenu(null);

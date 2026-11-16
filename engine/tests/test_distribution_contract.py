@@ -9,8 +9,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 ENGINE = ROOT / "engine"
-RELEASE_VERSION = "1.0.0-rc.10.25"
-PYTHON_RELEASE_VERSION = "1.0.0rc10.post25"
+RELEASE_VERSION = "1.0.0-rc.10.26"
+PYTHON_RELEASE_VERSION = "1.0.0rc10.post26"
 
 
 def _json(path: Path) -> dict[str, object]:

@@ -161,8 +161,14 @@ export function ProjectPage({ projectId, actor, orgId, homeId }: { projectId: st
     if (p.get("compose") !== "1" || !startGate.allowed) return;
     const k = p.get("compose_kind");
     const words = p.get("compose_text") ?? "";
-    newWork(words || k ? { text: words, kind: k === "feature" || k === "bug" || k === "ticket" ? k : undefined } : null);
-    writePxUrl({ compose: null, compose_text: null, compose_kind: null }, "replace");
+    // AN APP'S DOOR (AR-20): `app` names the app New work builds onto — its branch, its change.
+    const app = p.get("app")?.trim() ?? "";
+    // AN ANSWER CARD'S EDIT WITH LONG WORDS (AR-21): they are not in the link (a URL that long
+    // is refused); the card kept them as New work's draft, which the modal brings back.
+    const cardChars = p.get("compose_from") === "draft" ? Number(p.get("compose_chars")) || 0 : 0;
+    newWork(cardChars ? { fromCard: cardChars, ...(app ? { app } : {}) }
+      : words || k || app ? { text: words || undefined, kind: k === "feature" || k === "bug" || k === "ticket" ? k : undefined, ...(app ? { app } : {}) } : null);
+    writePxUrl({ compose: null, compose_text: null, compose_kind: null, compose_from: null, compose_chars: null, app: null }, "replace");
   }, [url, newWork, startGate.allowed]);
   // N opens it, anywhere on the page but in a box or behind another dialog.
   // Only while this project is the area on screen, so a hidden project does not steal N.

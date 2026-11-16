@@ -1370,7 +1370,20 @@ export function DecisionActions({ decision, projectId, actorId }: {
       {direct.some((a) => a.action === "reject") && !dismiss ? (
         <details className="dq-more dq-why" data-testid="decision-why">
           <summary title="Optional: tell BOSS why, before you reject">Why no?</summary>
-          <div className="dq-more-body"><ReasonChips value={why} onChange={setWhy} /></div>
+          <div className="dq-more-body">
+            <ReasonChips value={why} onChange={setWhy} />
+            {/* THE REASON IN WORDS (BOSSAPP-1321): optional, kept on the decision and, for a
+                plan, on its build, so the next plan reads why this one was refused. */}
+            <textarea
+              aria-label={`Why reject ${decision.id}`}
+              className="textarea decision-note"
+              name="reject_note"
+              rows={2}
+              maxLength={1000}
+              placeholder="Why not? Optional — BOSS keeps it with the decision."
+              data-testid="decision-reject-note"
+            />
+          </div>
         </details>
       ) : null}
       {revise || delegate ? (

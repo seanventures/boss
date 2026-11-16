@@ -96,6 +96,12 @@ function plural(n: number, one: string): string {
   return `${n} ${one}${n === 1 ? "" : "s"}`;
 }
 
+/** Why there is no dashboard link. A trimmed why is the sentence. Blank is nothing. */
+export function dashboardWhySentence(why: string | null | undefined): string | null {
+  const trimmed = why?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
 function Preview({ r }: { r: PackRule }) {
   if (!r.enabled) return <span className="obs-chip" title="This rule is off in the pack">off</span>;
   const tone = r.fired === null ? undefined : r.fired > 0 ? "amber" : "green";
@@ -152,7 +158,7 @@ export function MonitoringPackCard({ pack, onCard = false }: { pack: MonitoringP
           Tuned {plural(pack.tuned.length, "rule")} that would have fired on {pack.environment || "the first environment"}'s healthy traffic
         </span>
       ) : null}
-      <span className="obs-line mp-foot" data-testid="mp-foot">
+      <div className="obs-line mp-foot" data-testid="mp-foot">
         <span>
           {plural(added, pack.adding ? "new rule" : "rule")}{pack.adding ? ` (${plural(pack.rules.length - added, "kept")})` : ""}
           {", "}{plural(pack.runbooks.length, "runbook")}, {plural(pack.panels.length, "dashboard panel")}
@@ -161,8 +167,22 @@ export function MonitoringPackCard({ pack, onCard = false }: { pack: MonitoringP
         {pack.rulesHref ? <a className="inf-link" href={pack.rulesHref} data-testid="mp-rules-link" title="The app's Alerts tab: these rules, repo-managed">Rules ↗</a> : null}
         {pack.dashboardUrl ? (
           <a className="inf-link" href={pack.dashboardUrl} target="_blank" rel="noreferrer noopener" data-testid="mp-dashboard-link" title="The app's Grafana dashboard">Dashboard ↗</a>
-        ) : <span className="inf-faint" data-testid="mp-dashboard-why" title={pack.dashboardWhy ?? undefined}>No dashboard link yet</span>}
-      </span>
+        ) : (
+          <>
+            <span className="inf-faint" data-testid="mp-dashboard-why" title={pack.dashboardWhy ?? undefined}>No dashboard link yet</span>
+            <DashboardWhySaid sentence={dashboardWhySentence(pack.dashboardWhy)} />
+          </>
+        )}
+      </div>
     </div>
   );
+}
+
+/** Beside "No dashboard link yet". More than six words is a paragraph. */
+function DashboardWhySaid({ sentence }: { sentence: string | null }) {
+  if (!sentence) return null;
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  return long
+    ? <p data-testid="mp-dashboard-why-said" data-user-text>{sentence}</p>
+    : <span data-testid="mp-dashboard-why-said" data-user-text>{sentence}</span>;
 }

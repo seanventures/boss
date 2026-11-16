@@ -165,6 +165,34 @@ function Lineage({ one, projectId, actor, onSend, onChanged, onBack }: {
   );
 }
 
+/** Detail beside a refusal, unless it only repeats that refusal. */
+export function refusalDetailSentence(
+  detail: string | null | undefined,
+  refusal: string | null | undefined,
+): string | null {
+  const text = detail?.trim() ?? "";
+  if (!text) return null;
+  const raw = refusal ?? "";
+  if (text === raw.trim() || text === raw.replace(/_/g, " ")) return null;
+  return text;
+}
+
+/** Refusal words, and the detail when it says something else. More than six words is a paragraph. */
+export function RefusedFixNote({ refusal, title, sentence }: {
+  refusal: string;
+  title: string;
+  sentence: string | null;
+}) {
+  const long = !!sentence && sentence.split(/\s+/).filter(Boolean).length > 6;
+  const Why = long ? "p" : "span";
+  return (
+    <>
+      <span className="sfx-sub" title={title}> ({refusal.replace(/_/g, " ")})</span>
+      {sentence ? <Why data-testid="sfx-row-refusal-why" data-user-text>{sentence}</Why> : null}
+    </>
+  );
+}
+
 export function SelfFixesHome({ projectId, actor }: { projectId: string; actor: string }) {
   const live = useConsoleLive();
   const [sfx, setPicked] = useState<string | null>(null);
@@ -239,7 +267,8 @@ export function SelfFixesHome({ projectId, actor }: { projectId: string; actor: 
                           {it.pr?.title || it.class_signature}
                         </button>
                         {chip === "Refused" && it.refusal ? (
-                          <span className="sfx-sub" title={it.refusal_detail || it.refusal}> ({it.refusal.replace(/_/g, " ")})</span>
+                          <RefusedFixNote refusal={it.refusal} title={it.refusal_detail || it.refusal}
+                                          sentence={refusalDetailSentence(it.refusal_detail, it.refusal)} />
                         ) : null}
                       </td>
                       <td>{it.area}</td>

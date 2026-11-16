@@ -54,7 +54,7 @@ function Page() {
   return (
     <>
       <AskBossHero projectId="p1" actor="ceo" orgId="org_1" deploymentAvailable={false} layout="hero" />
-      <Go patch={addFeaturePatch("helpdesk")} orgId="org_1" testId="cc-app-add">+ Add a feature</Go>
+      <Go patch={addFeaturePatch({ projectId: "p1", app: "helpdesk" })} orgId="org_1" testId="cc-app-add">+ Add a feature</Go>
       <Go patch={newProjectPatch()} orgId="org_1" testId="cc-new">New build</Go>
       <DeliveryWorkflows projectId="p1" actor="ceo" />
     </>
@@ -70,8 +70,8 @@ describe("an app card's + Add a feature, clicked", () => {
     await click($("[data-testid=cc-app-add]"));
     await settle();
     // Add a feature is Project › Work with New work open. The hero must not eat compose=1 as a brief.
-    expect([params().get("area"), params().get("tab"), params().get("compose"), params().get("app")])
-      .toEqual(["project", "work", "1", "helpdesk"]);
+    expect([params().get("area"), params().get("project_id"), params().get("tab"), params().get("compose"), params().get("app")])
+      .toEqual(["project", "p1", "work", "1", "helpdesk"]);
     expect(heroBox()?.value ?? "").toBe("");
   });
 

@@ -933,7 +933,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           `${window.location.pathname}${next.toString() ? `?${next}` : ""}${window.location.hash}`);
       } catch { /* non-browser */ }
       if (intent.mode === "add") {
-        setAreaUrl(addFeaturePatch(intent.app), "replace");
+        setAreaUrl(addFeaturePatch({ projectId, app: intent.app }), "replace");
         return;
       }
       openNewProject("idea");

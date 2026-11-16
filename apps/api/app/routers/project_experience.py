@@ -42,6 +42,7 @@ from pydantic import BaseModel, Field
 from boss_engine.config import get_settings
 from boss_engine.db import begin, get_engine
 from boss_engine.identity import P, Scope, authenticated, permit
+from boss_engine.services.project_experience.add_project import MAX_DIRECTIVE
 
 router = APIRouter(tags=["projects"])
 _settings = get_settings()
@@ -139,11 +140,14 @@ def project_work(project_id: str, state: Optional[str] = None, q: Optional[str] 
 @router.get("/v1/projects/{project_id}/work/plan")
 @permit(P.PROJECT_READ, scope=Scope.project(path="project_id"))
 def project_work_plan(project_id: str, kind: str = "feature",
-                      workflow_key: Optional[str] = None, detail: bool = False) -> dict[str, Any]:
+                      workflow_key: Optional[str] = None, detail: bool = False,
+                      app: Optional[str] = None) -> dict[str, Any]:
     """Helm's plan for new work (screen 05): the workflow Start would run for this kind (or the
     one picked with "change"), its real steps as a strip, time and cost from this project's own
     history, and the workflows "change" offers. `detail` (the New work modal): the workflow's
-    steps, each option's steps and estimate, and the issue / target / tell defaults."""
+    steps, each option's steps and estimate, and the issue / target / tell defaults. `app` (an
+    "+ Add a feature" door, AR-20): `anchor` says which app's branch and change Start builds
+    onto, or `anchor_error` why that app is not one of this project's."""
     from boss_engine.services.project_experience import new_work
 
     kind = (kind or "feature").strip().lower()
@@ -153,11 +157,18 @@ def project_work_plan(project_id: str, kind: str = "feature",
     with begin(_engine) as connection:
         _require_project(connection, project_id)
         try:
-            return new_work.plan(connection, project_id, kind, workflow_key or None,
-                                 detail=detail)
+            out = new_work.plan(connection, project_id, kind, workflow_key or None,
+                                detail=detail)
         except LookupError as error:
             raise HTTPException(status_code=422, detail={
                 "error": "unknown_workflow", "message": str(error)}) from None
+        if (app or "").strip():
+            try:
+                out["anchor"] = new_work.app_anchor(connection, project_id, app)
+            except LookupError as error:
+                out["anchor"] = None
+                out["anchor_error"] = str(error)
+        return out
 
 
 @router.get("/v1/projects/{project_id}/work/{work_id}/story")
@@ -215,9 +226,19 @@ def project_work_understand(project_id: str, payload: UnderstandBody,
             brief=payload.brief, hint=payload.hint or "", draft=draft, workflows=workflows)
 
 
+#: THE BRIEF'S LIMIT (AR-21) is the directive's (add_project.MAX_DIRECTIVE): longer words are
+#: refused with a 422 that says so, never cut. The console's New work box reads the same number
+#: (apps/web/lib/new-work.ts MAX_BRIEF_CHARS; a test keeps the two equal).
+_MAX_BRIEF = MAX_DIRECTIVE
+
+
 class NewWorkBody(BaseModel):
     kind: str = Field("feature", description="feature | bug | ticket")
-    text: str = Field(..., description="What to do, in the person's words.")
+    text: str = Field(..., max_length=_MAX_BRIEF, description="What to do, in the person's words.")
+    #: THE APP IT BUILDS ONTO (AR-20): an "+ Add a feature" door's `app` (a build's run id or
+    #: the app's key). Start then continues that app's lineage — its branch, its open PR — as
+    #: the start door's `extends_run_id`; a name that is no app of this project is refused.
+    app: Optional[str] = None
     title: Optional[str] = None
     #: Where the suggestion came from (an onboarding candidate's ref, a roadmap item).
     source_ref: Optional[str] = None
@@ -277,7 +298,7 @@ def _title_of(text_in: str, fallback: str) -> str:
 
 @router.post("/v1/projects/{project_id}/work")
 @permit(P.WORKFLOW_RUN_START, scope=Scope.project(path="project_id"))
-def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
+def project_new_work(project_id: str, payload: NewWorkBody, request: Request) -> dict[str, Any]:
     """New work through THE start door (start_delivery_workflow), exactly as the project page's
     "What should we add?" box starts it: the project's mapped small-feature workflow (or Minor
     Feature) on its repository, or its new-app default when it has none. Consent, readiness and
@@ -329,6 +350,22 @@ def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
         except LookupError as error:
             raise HTTPException(status_code=422, detail={
                 "error": "unknown_workflow", "message": str(error)}) from None
+        # THE APP NAMED BY THE DOOR (AR-20): built onto, or refused — never a fresh build on
+        # the default branch under a modal that said it was adding to the app.
+        try:
+            anchor = new_work.app_anchor(connection, project_id, payload.app)
+        except new_work.AnchorClosed as error:
+            raise HTTPException(status_code=409, detail={
+                "error": "change_closed", "message": str(error)}) from None
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail={
+                "error": "unknown_app", "message": str(error)}) from None
+    if anchor:
+        # BUILDING ONTO AN APP CHANGES THAT APP'S BUILD, its branch and its change: the same
+        # permission Change it needs on it (code_task:steer), beyond starting work here.
+        from apps.api.app.routers.identity_access import require_permission
+
+        require_permission(request, P.CODE_TASK_STEER, project_id, label="new_work.app")
     repo = (page.get("repo") or {}).get("full_name")
     # A TICKET OF A CONNECTED SYSTEM (BOSSAPP-1047) — a Jira/Plane link, or a bare key like
     # LEND-12 of a project the connection knows — is read ONCE, here, before anything starts,
@@ -367,6 +404,10 @@ def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
     run_input: dict[str, Any] = {"title": title, "work_kind": kind, **briefed}
     if repo:
         run_input["repository"] = repo
+    if anchor:
+        run_input["extends_run_id"] = anchor["run_id"]
+        if anchor.get("mode") == "new_change":
+            run_input["extends_from_default"] = True
     if payload.source_ref or link:
         run_input["source_ref"] = str(payload.source_ref or link)[:200]
     if issue:
@@ -396,7 +437,7 @@ def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
            "href": project_href(project_id, tab="work", drawer=f"run:{run_id}") if run_id else
            project_href(project_id, tab="work"),
            "duplicate": bool(((started or {}).get("run") or {}).get("duplicate"))}
-    for key in ("readiness", "precheck", "ignored_input"):
+    for key in ("readiness", "precheck", "ignored_input", "extends"):
         if (started or {}).get(key):
             out[key] = started[key]
     if issue:

@@ -144,6 +144,10 @@
 /* the footer: always in view, on a phone too */
 .px-nw-foot { flex: none; display: flex; align-items: center; gap: 12px; padding: 12px 18px 14px; border-top: 1px solid var(--border); flex-wrap: wrap; background: var(--surface); }
 .px-nw-start { padding: 9px 18px; font-size: var(--fs-row); font-weight: 700; }
+/* The brief's length near its limit, and why Start is held (AR-21 / AR-20). */
+.px-nw-count { font-variant-numeric: tabular-nums; }
+.px-nw-count[data-over] { color: var(--red); font-weight: 600; }
+.px-nw-held { flex-basis: 100%; order: -1; color: var(--red); font-size: var(--fs-meta); }
 
 @media (max-width: 1100px) {
   .px-nw-defs { grid-template-columns: repeat(3, minmax(0, 1fr)); }

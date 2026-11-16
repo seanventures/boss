@@ -432,23 +432,46 @@ def proposal(connection: Connection, project_id: str, *, offers: Iterable[Mappin
     short = shorten(title or said, 6) or shorten(said, 6) or "New work"
     kind = _kind_of(said, offer)
     plan = plan_steps(connection, project_id, kind)
-    body = {"kind": kind, "text": said[:8000], "title": short}
+    # THE BRIEF'S ONE LIMIT (AR-21): the start door's (MAX_DIRECTIVE). The words are never cut:
+    # past the limit the card says so (`over_limit`) and its Start is held until they are
+    # shortened in New work, where the counter shows the same number.
+    from .project_experience.add_project import MAX_DIRECTIVE
+
+    body = {"kind": kind, "text": said, "title": short}
     if message_id:
         body["source_ref"] = f"chat:{message_id}"
-    return {"kind": "new_work", "work_kind": kind, "title": short, "text": said[:8000],
-            "estimate": plan["estimate"], "steps": plan["steps"], "workflow": plan["workflow"],
-            "offer_id": str((offer or {}).get("id") or "") or None,
-            "state": "open",
-            "start": {"href": f"/v1/projects/{project_id}/work", "method": "POST", "body": body},
-            "edit_href": _edit_href(project_id, kind, said)}
+    card: dict[str, Any] = {
+        "kind": "new_work", "work_kind": kind, "title": short, "text": said,
+        "estimate": plan["estimate"], "steps": plan["steps"], "workflow": plan["workflow"],
+        "offer_id": str((offer or {}).get("id") or "") or None,
+        "state": "open",
+        "start": {"href": f"/v1/projects/{project_id}/work", "method": "POST", "body": body},
+        "edit_href": _edit_href(project_id, kind, said)}
+    if len(said) > MAX_DIRECTIVE:
+        card["over_limit"] = {"chars": len(said), "limit": MAX_DIRECTIVE,
+                              "message": f"These words are {len(said) - MAX_DIRECTIVE:,} "
+                                         f"characters over the {MAX_DIRECTIVE:,} limit. Edit "
+                                         "them in New work before starting."}
+    return card
+
+
+#: The most words an Edit link carries in its URL. Longer words would make a URL a proxy refuses
+#: (431: 20,000 characters is ~60 KB encoded), so they travel in the card instead (`text`): the
+#: console's Edit keeps them as New work's draft and the link says `compose_from=draft`.
+EDIT_TEXT_IN_URL = 2000
 
 
 def _edit_href(project_id: str, kind: str, said: str) -> str:
-    """Work tab's composer, prefilled (`compose=` + `kind=`)."""
+    """Work tab's composer, prefilled (`compose=` + `kind=`): the words in the link when they
+    are short, else `compose_from=draft` + `compose_chars` (the console carries the words; a
+    link opened without them says so in New work). Never a cut (AR-21)."""
     from .project_experience.common import href
 
+    if len(said) <= EDIT_TEXT_IN_URL:
+        return href(project_id, area="project", tab="work", compose="1", compose_kind=kind,
+                    compose_text=said)
     return href(project_id, area="project", tab="work", compose="1", compose_kind=kind,
-                compose_text=said[:1500])
+                compose_from="draft", compose_chars=str(len(said)))
 
 
 def for_turn(connection: Connection, project_id: str, *, reply: str,

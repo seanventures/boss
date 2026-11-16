@@ -144,7 +144,7 @@ export function AppComponentsView({ projectId, appKey, onBack }: { projectId: st
         ) : (
           <GatedButton permission="workflow_run:start" className="ag-btn ag-btn-primary" data-testid="mr-cmp-new"
                        title={NEW_BUILD_TIP}
-                       onClick={() => { window.location.assign(areaHref(addFeaturePatch(appKey))); }}>
+                       onClick={() => { window.location.assign(areaHref(addFeaturePatch({ projectId, app: appKey }))); }}>
             New change
           </GatedButton>
         )}

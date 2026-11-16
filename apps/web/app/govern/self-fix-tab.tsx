@@ -36,6 +36,20 @@ const FIELDS: Field[] = [
 const shown = (f: Field, v: number) => (f.unit === "usd" ? Math.round(v) / 100 : v);
 const stored = (f: Field, v: number) => (f.unit === "usd" ? Math.round(v * 100) : Math.round(v));
 
+/** The install refusal, trimmed. Blank is nothing to say. */
+export function installWhySentence(why: string | null | undefined): string | null {
+  const text = why?.trim() ?? "";
+  return text ? text : null;
+}
+
+/** Beside "Can't install here". More than six words is a paragraph. */
+export function InstallWhy({ sentence }: { sentence: string | null }) {
+  if (!sentence) return null;
+  return sentence.split(/\s+/).filter(Boolean).length > 6
+    ? <p data-testid="gv-selffix-cannot-why" data-user-text>{sentence}</p>
+    : <span data-testid="gv-selffix-cannot-why" data-user-text>{sentence}</span>;
+}
+
 export function SelfFixTab({ projectId, actor, paused }: { projectId: string; actor: string; paused: boolean }) {
   const read = usePolledRead<SettingsView>({
     key: projectId, pollMs: 30_000, paused,
@@ -87,7 +101,10 @@ export function SelfFixTab({ projectId, actor, paused }: { projectId: string; ac
         {v.env_off ? <span className="sfx-sub" data-testid="gv-selffix-env-off" title="Set in the install's environment">BOSS_SELF_FIX=off</span>
           : !v.switch.on && v.switch.why ? <span className="sfx-sub" data-testid="gv-selffix-why" title={v.switch.why}>Off ⓘ</span> : null}
         {!v.can_install ? (
-          <span className="sfx-sub tone-amber" data-testid="gv-selffix-cannot" title={v.why_not}>Can&apos;t install here ⓘ</span>
+          <>
+            <span className="sfx-sub tone-amber" data-testid="gv-selffix-cannot" title={v.why_not}>Can&apos;t install here ⓘ</span>
+            <InstallWhy sentence={installWhySentence(v.why_not)} />
+          </>
         ) : null}
       </div>
       <form className="sfx-govern-caps" data-testid="gv-selffix-caps" noValidate

@@ -28,6 +28,7 @@ import { PX_PATHS, isPxDemo, navigateTo, projectHref, pxHref } from "../../lib/p
 import { AgentAvatar } from "../agent-avatar";
 import { askCaptain } from "./project-page";
 import { SearchResults } from "./search-results";
+import { newWorkSearch } from "../../lib/compose-links";
 import "./jump.css";
 
 export type JumpRow = {
@@ -216,7 +217,7 @@ export function JumpResults({ query, projectId, projects, onDone }: {
           </button>
         ) : null}
         <button type="button" className="bx-palette-item pxj-i" data-testid="palette-jump-new-work"
-                onClick={() => { onDone(); navigateTo(projectHref(projectId, { tab: "work", compose: "1" })); }}>
+                onClick={() => { onDone(); navigateTo(pxHref(newWorkSearch({ projectId }))); }}>
           <span className="pxj-ico" aria-hidden><Plus size={14} /></span><span className="pxj-t">New work in this project</span><kbd className="pxj-key">N</kbd>
         </button>
         <button type="button" className="bx-palette-item pxj-i" data-testid="palette-jump-switch" aria-expanded={switching}

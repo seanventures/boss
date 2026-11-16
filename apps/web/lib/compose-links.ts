@@ -10,11 +10,53 @@
  */
 export const COMPOSE_AREA = "delivery_workflows";
 
+/** Where New work opens: the project, and the app it builds onto (a build's run id or the
+ *  app's key). An app is never named without its project — an app's door that dropped the
+ *  project opened New work in whatever project the URL last held, on another repo (AR-20). */
+export type NewWorkTarget = {
+  projectId: string; app?: string | null;
+  /** Prefilled, never sent: the kind and the words (an answer's Edit, Add a project's Add work). */
+  kind?: "feature" | "bug" | "ticket"; words?: string;
+};
+
+/** The most words a link into New work carries (AR-21). Longer words would make a URL proxies
+ *  refuse (431), so they go as the project's New work draft (lib/new-work keepNewWorkDraft) and
+ *  the link says `compose_from=draft&compose_chars=N` — never cut. Same number as the engine's
+ *  turn_cards.EDIT_TEXT_IN_URL. */
+export const WORDS_IN_LINK = 2000;
+
 /** ADDING A FEATURE IS PROJECT › NEW WORK (Add a project v2, c-after-create.html note 3; the
  *  main use case): the door opens the project's Work tab with New work focused (`compose=1`).
- *  Workflows › New build is gone (BOSSAPP-989): every old door lands here or on Add a project. */
-export function addFeaturePatch(appKey?: string | null): { area: "project" } & Record<string, string | null> {
-  return { area: "project", tab: "work", compose: "1", app: appKey ?? null, view: null, role: null, build: null };
+ *  Workflows › New build is gone (BOSSAPP-989): every old door lands here or on Add a project.
+ *
+ *  THE ONE BUILDER for every link into New work (AR-20): it always carries `project_id`, and
+ *  `app` when the door is an app's — New work then builds onto that app's branch and change.
+ *  With no target (a door that is not an app's, e.g. the hero) it keeps the page's project. */
+export function addFeaturePatch(target?: NewWorkTarget | null): { area: "project" } & Record<string, string | null> {
+  const words = target?.words ?? "";
+  return {
+    area: "project", ...(target?.projectId ? { project_id: target.projectId } : {}),
+    tab: "work", compose: "1", app: target?.app || null, view: null, role: null, build: null,
+    ...(target?.kind ? { compose_kind: target.kind } : {}),
+    ...(words && words.length <= WORDS_IN_LINK ? { compose_text: words } : {}),
+    ...(words.length > WORDS_IN_LINK ? { compose_from: "draft", compose_chars: String(words.length) } : {}),
+  };
+}
+
+/** The door laid over a page link that already says where (Add a project's projectPageHref):
+ *  the builder's parameters win. */
+export function withNewWorkDoor(href: string, target: NewWorkTarget): string {
+  const [path, search = ""] = href.split("?");
+  const q = new URLSearchParams(search);
+  for (const [k, v] of Object.entries(addFeaturePatch(target))) { if (v === null) q.delete(k); else q.set(k, v); }
+  return `${path}?${q.toString()}`;
+}
+
+/** The same door as a plain link's query string (`<a href>`), from the one builder. */
+export function newWorkSearch(target: NewWorkTarget): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(addFeaturePatch(target))) if (v !== null) q.set(k, v);
+  return `?${q.toString()}`;
 }
 
 /** Every "New build" door's tooltip. Each door is a GatedButton on workflow_run:start, what the
