@@ -33,7 +33,11 @@ def as_uid(uid: int, script: str, cwd: str = "/", env: dict | None = None) -> bo
 
 
 def can_read(uid: int, path: Path) -> bool:
-    return as_uid(uid, f"cat '{path}' >/dev/null 2>&1 || ls '{path}' >/dev/null 2>&1")
+    """Whether `uid` can read the CONTENT: a file's first byte (`head -c1`), a directory's
+    listing. Never `ls` of a file, which needs only the parent's search bit (BOSSAPP-1327)."""
+    if path.is_dir():
+        return as_uid(uid, f"ls -A '{path}' >/dev/null 2>&1")
+    return as_uid(uid, f"head -c1 '{path}' >/dev/null 2>&1")
 
 
 def plant(directory: Path, name: str = "SECRET") -> Path:

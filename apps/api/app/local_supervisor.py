@@ -20,6 +20,7 @@ opinion from inside the API would fight it, so this refuses to run unless BOSS_E
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -67,8 +68,12 @@ def _spawn() -> subprocess.Popen | None:
     # happily and did nothing at all, so a wrong value must be loud, not inherited in silence.
     env.setdefault("BOSS_CONTROL_PLANE_URL", f"http://127.0.0.1:{os.getenv('PORT', '8000')}")
     logs = Path(os.getenv("BOSS_LOG_DIR", "/tmp/boss-stack"))
-    logs.mkdir(parents=True, exist_ok=True)
-    handle = (logs / "worker.log").open("a")
+    # Owner-only (BOSSAPP-1327): a worker's log carries job payloads; never world-readable.
+    logs.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with contextlib.suppress(OSError):
+        os.chmod(logs, 0o700)
+    handle = os.fdopen(os.open(logs / "worker.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                               0o600), "a")
     try:
         return subprocess.Popen(
             [sys.executable, "-m", _WORKER_MODULE],

@@ -540,7 +540,7 @@ echo BOSS_PROVISIONED
         base = self.diff_base_sha or ""
         listing = f"/tmp/boss-diff-{self.task_id}.lst"
         script = (
-            f"set -e\ncd {q(self.workdir)}\n"
+            f"set -e\numask 077\ncd {q(self.workdir)}\n"
             f"git diff --cached --name-only -z {q(base) if base else ''} > {q(listing)}\n"
             f"tar -czf - --null --ignore-failed-read -T {q(listing)} 2>/dev/null | base64\n"
             f"rm -f {q(listing)}\n"

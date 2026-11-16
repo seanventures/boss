@@ -212,3 +212,76 @@ def test_bosss_git_in_a_workspace_runs_no_hook_the_tree_planted(tmp_path):
     box._git_once(["add", "-A"])                               # noqa: SLF001
     box._git_once(["-c", "user.name=b", "-c", "user.email=b@x", "commit", "-qm", "x"])  # noqa: SLF001
     assert not marker.exists(), "a hook planted in the workspace ran inside BOSS's git"
+
+
+# ── BOSSAPP-1327: a root BOSS cannot write is no root; a mode BOSS cannot set costs nothing ──
+
+def test_a_private_root_boss_cannot_write_falls_back_to_its_own(tmp_path, monkeypatch):
+    """New compose on an older image: Docker makes /var/lib/boss/private (the mount targets'
+    parent) owned by root, so BOSS can neither chmod nor write it."""
+    monkeypatch.delenv(private_dirs.PRIVATE_ROOT_ENV, raising=False)
+    locked = tmp_path / "var-lib-boss-private"
+    (locked / "import").mkdir(parents=True)
+    os.chmod(locked, 0o555)                                    # exists, not writable by BOSS
+    monkeypatch.setattr(private_dirs, "DEFAULT_PRIVATE_ROOT", str(locked))
+    monkeypatch.setattr(private_dirs.tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
+    real = os.chmod
+
+    def not_the_owner(path, mode, *a, **k):                  # root owns it: chmod is refused
+        if Path(path) == locked:
+            raise PermissionError(1, "Operation not permitted")
+        return real(path, mode, *a, **k)
+
+    monkeypatch.setattr(private_dirs.os, "chmod", not_the_owner)
+    try:
+        d = private_dirs.private_dir("kg-index")               # raised PermissionError before
+        assert d == tmp_path / "tmp" / f"boss-private-{os.getuid()}" / "kg-index"
+        assert private_dirs.is_private(d)
+    finally:
+        real(locked, 0o755)
+
+
+def test_a_chmod_the_cache_cannot_take_keeps_the_browsers(tmp_path, monkeypatch):
+    from boss_engine.services import sandbox
+
+    monkeypatch.setattr(sandbox, "_TOOL_CACHE_ROOT", str(tmp_path / "tool-cache"))
+    real = os.chmod
+
+    def refuse(path, mode, *a, **k):
+        if str(path).startswith(str(tmp_path / "tool-cache")):
+            raise PermissionError(1, "Operation not permitted")
+        return real(path, mode, *a, **k)
+
+    monkeypatch.setattr(os, "chmod", refuse)
+    env = sandbox._shared_tool_caches()                        # noqa: SLF001
+    assert env.get("PLAYWRIGHT_BROWSERS_PATH"), env
+
+
+def test_the_escape_probe_reads_content_not_metadata():
+    import inspect
+
+    from tests.helpers import sandbox_escape_probe as probe
+
+    body = inspect.getsource(probe.can_read)
+    assert "head -c1" in body and "cat '" not in body
+
+
+def test_bosss_own_files_in_tmp_are_owner_only(tmp_path, monkeypatch):
+    import subprocess
+
+    from apps.api.app import local_supervisor
+
+    monkeypatch.setenv("BOSS_LOG_DIR", str(tmp_path / "boss-stack"))
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: object())
+    old = os.umask(0o022)
+    try:
+        local_supervisor._spawn()                              # noqa: SLF001
+    finally:
+        os.umask(old)
+    assert _mode(tmp_path / "boss-stack") == 0o700
+    assert _mode(tmp_path / "boss-stack" / "worker.log") == 0o600
+    root = ENGINE.parents[1]
+    for rel in ("engine/boss_engine/infra_plugins/caddy.py",
+                "engine/boss_engine/services/ssh_environment.py"):
+        text = (root / rel).read_text(encoding="utf-8")
+        assert "umask 077" in text, rel

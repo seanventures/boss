@@ -45,9 +45,16 @@ def private_root() -> Path:
     if configured:
         return ensure_private(configured)
     try:
-        return ensure_private(DEFAULT_PRIVATE_ROOT)
+        root = ensure_private(DEFAULT_PRIVATE_ROOT)
+        # MADE IS NOT USABLE (BOSSAPP-1327): with the new compose on an older image, Docker
+        # creates /var/lib/boss/private (the import/selfsrc mount targets' parent) owned by root,
+        # ensure_private cannot chmod it, and every private_dir() under it then raised
+        # PermissionError. A root BOSS cannot write is no root: the per-user fallback.
+        if os.access(root, os.W_OK | os.X_OK) and is_private(root):
+            return root
     except OSError:
-        return ensure_private(Path(tempfile.gettempdir()) / f"boss-private-{os.getuid()}")
+        pass
+    return ensure_private(Path(tempfile.gettempdir()) / f"boss-private-{os.getuid()}")
 
 
 def private_dir(name: str) -> Path:

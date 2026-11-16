@@ -85,9 +85,14 @@ def _shared_tool_caches() -> dict:
         # only the browsers stay readable to it.
         import os as _os_
 
-        _os_.chmod(Path(_TOOL_CACHE_ROOT), 0o711)
-        _os_.chmod(npm, 0o700)
-        _os_.chmod(pw, 0o755)
+        # A mode BOSS cannot set (a volume owned by another uid) never costs the cache: the
+        # browsers' path below is kept either way (BOSSAPP-1327).
+        for _path, _mode in ((Path(_TOOL_CACHE_ROOT), 0o711), (npm, 0o700), (pw, 0o755)):
+            try:
+                _os_.chmod(_path, _mode)
+            except OSError as _exc:
+                _log.warning("sandbox tool cache: could not set %o on %s (%s)", _mode, _path,
+                             _exc)
     except Exception as exc:  # noqa: BLE001
         # An unwritable cache path must not stop a build: fall back to the tool defaults and
         # simply be as slow as before.
