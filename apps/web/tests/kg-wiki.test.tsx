@@ -16,13 +16,14 @@ import React, { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { WikiTab, wikiDraft } from "../app/knowledge/kg-wiki";
+import { primePeople } from "../app/who";
 import { LEAVE_UNSAVED } from "../lib/unsaved-guard";
 import { mockKgFetch } from "./_helpers/kg-fetch";
 import { $, mount, settle, unmount } from "./_helpers/live-render";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }), usePathname: () => "/", useSearchParams: () => new URLSearchParams() }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-afterEach(() => { unmount(); vi.unstubAllGlobals(); });
+afterEach(() => { unmount(); vi.unstubAllGlobals(); primePeople(null); });
 
 const press = async (el: Element | null) => { await act(async () => (el as HTMLElement).click()); await settle(); };
 function type(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
@@ -188,5 +189,17 @@ describe("Wiki › nothing typed is lost silently (BOSSAPP-1037)", () => {
     await settle();
     const listed = [...document.querySelectorAll('[data-testid="wiki-page-link"]')].map((b) => b.textContent);
     expect(listed).toContain("Rota");
+  });
+
+  it("history shows the person's name and keeps the id for the tooltip", async () => {
+    primePeople({});
+    const rev = { ...REV, author_kind: "person", author_id: "usr_wsw5h4abcdef", author_name: "Ada Lovelace" };
+    routes({ "/v1/wiki/pages/deploys/revisions$": { body: { revisions: [{ ...rev, current: true }] } } });
+    await mount(<WikiTab projectId="alpha" actor="ceo" />);
+    await press($('[data-testid="wiki-history-toggle"]'));
+    const row = $('[data-testid="wiki-revision"]');
+    expect(row?.textContent).toContain("Ada Lovelace");
+    expect(row?.textContent).not.toContain("usr_wsw5h4abcdef");
+    expect(row?.querySelector(".who")?.getAttribute("title")).toBe("usr_wsw5h4abcdef");
   });
 });

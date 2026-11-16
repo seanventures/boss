@@ -35,6 +35,16 @@ describe("<Who>", () => {
     expect(el.textContent).not.toBe("");
   });
 
+  it("shows a name carried on the record when the directory is forbidden, and keeps the id", async () => {
+    primePeople({}); // a 403 locks the directory empty; the raw id used to be all that rendered
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 403 })));
+    await render(<p>by <Who id="usr_wsw5h4abcdef" name="Ada Lovelace" testId="who-under-test" /></p>);
+    const el = $('[data-testid="who-under-test"]')!;
+    expect(el.textContent).toContain("Ada Lovelace");
+    expect(el.textContent).not.toContain("usr_wsw5h4abcdef");
+    expect(el.getAttribute("title")).toBe("usr_wsw5h4abcdef");
+  });
+
   it("shows the directory's name with the id in the tooltip", async () => {
     primePeople({ usr_wsw5h4abcdef: "Ada Lovelace" });
     await render(<p>by <Who id="usr_wsw5h4abcdef" testId="who-under-test" /></p>);

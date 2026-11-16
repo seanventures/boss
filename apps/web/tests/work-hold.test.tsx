@@ -7,10 +7,11 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ItemHold } from "../app/projects/work-hold";
+import { primePeople } from "../app/who";
 import { parseNode, planWords } from "../lib/work-items";
 import { $, mount, settle, unmount } from "./_helpers/live-render";
 
-afterEach(() => { unmount(); vi.restoreAllMocks(); });
+afterEach(() => { unmount(); vi.restoreAllMocks(); primePeople(null); });
 
 const PLAN = { hold: { dry_run: true, members: [
   { member_kind: "work_item", member_id: "w1", action: "held" },
@@ -60,5 +61,18 @@ describe("holding a work tree", () => {
     await settle();
     expect(calls[0].url).toBe("/v1/work-holds/hold_1/restore");
     expect(calls[0].body).toMatchObject({ dry_run: true });
+  });
+
+  it("names who held it and keeps the id on the tooltip", async () => {
+    primePeople({});
+    serve([], PLAN);
+    const item = parseNode({ id: "w1", title: "Epic", status: "active", children: [],
+      hold: { id: "hold_1", root_kind: "work_item", root_id: "w1", mode: "pause", status: "active",
+              reason: "spend spike", created_by: "usr_wsw5h4abcdef", created_by_name: "Ada Lovelace" } });
+    await mount(<ItemHold projectId="p1" item={item} demo={false} onChanged={() => {}} />);
+    const banner = $('[data-testid="wt-hold-banner"]');
+    expect(banner?.textContent).toContain("Ada Lovelace");
+    expect(banner?.textContent).not.toContain("usr_wsw5h4abcdef");
+    expect(banner?.querySelector(".who")?.getAttribute("title")).toBe("usr_wsw5h4abcdef");
   });
 });

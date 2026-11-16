@@ -51,6 +51,21 @@ def _lookup(actor: str, connection: Any = None) -> Optional[str]:
     return name
 
 
+def known_name(actor: Any, connection: Any = None) -> Optional[str]:
+    """A display name only for a principal id whose directory name is a real name.
+
+    A party word ("ceo", "agent:pm") is None — the console already has words for those.
+    A display name that is itself an id is None. The stored id is never replaced; a caller
+    that has a name puts it beside the id."""
+    pid = str(actor or "").strip()
+    if not looks_like_an_id(pid):
+        return None
+    name = _lookup(pid, connection)
+    if not name or looks_like_an_id(name):
+        return None
+    return name
+
+
 def principal_name(actor: Any, connection: Any = None) -> Optional[str]:
     """A person's or agent's name for an actor id, or None when there is nothing to name
     (no actor, an automatic approval, a policy)."""

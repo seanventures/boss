@@ -8,14 +8,17 @@ import { aaRead, type ReadResult } from "./ambient";
 import { obsWrite, type WriteResult } from "../app/observability/obs-write";
 
 export type AnchorState = "exact" | "moved" | "fuzzy" | "orphaned";
-export type DocComment = { id: string; author: string; body: string; created_at: string | null };
+export type DocComment = {
+  id: string; author: string; author_name?: string | null; body: string; created_at: string | null;
+};
 export type DocThread = {
   id: string; revision_id: string; quote: string; start: number | null; end: number | null;
   anchor_state: AnchorState; status: "open" | "resolved"; created_by: string; comments: DocComment[];
 };
 export type DocRevision = {
   id: string; revision_no: number; base_revision_id: string | null; author_kind: string;
-  author_id: string; note: string; restored_from: string | null; created_at: string | null; body?: string;
+  author_id: string; author_name?: string | null; note: string; restored_from: string | null;
+  created_at: string | null; body?: string;
 };
 export type Doc = {
   id: string; work_item_id: string | null; kind: string; title: string;
@@ -41,6 +44,7 @@ export function parseRevision(w: unknown): DocRevision {
     id: str(o.id), revision_no: Number(o.revision_no) || 0, base_revision_id: str(o.base_revision_id) || null,
     author_kind: str(o.author_kind) || "person", author_id: str(o.author_id), note: str(o.note),
     restored_from: str(o.restored_from) || null, created_at: str(o.created_at) || null,
+    ...(str(o.author_name) ? { author_name: str(o.author_name) } : {}),
     ...(typeof o.body === "string" ? { body: o.body } : {}),
   };
 }
@@ -51,7 +55,10 @@ export function parseThread(w: unknown): DocThread {
     id: str(o.id), revision_id: str(o.revision_id), quote: str(o.quote), start: num(o.start), end: num(o.end),
     anchor_state: STATES.includes(o.anchor_state as AnchorState) ? o.anchor_state as AnchorState : "exact",
     status: o.status === "resolved" ? "resolved" : "open", created_by: str(o.created_by),
-    comments: arr(o.comments).map(obj).map((c) => ({ id: str(c.id), author: str(c.author), body: str(c.body), created_at: str(c.created_at) || null })),
+    comments: arr(o.comments).map(obj).map((c) => ({
+      id: str(c.id), author: str(c.author), body: str(c.body), created_at: str(c.created_at) || null,
+      ...(str(c.author_name) ? { author_name: str(c.author_name) } : {}),
+    })),
   };
 }
 

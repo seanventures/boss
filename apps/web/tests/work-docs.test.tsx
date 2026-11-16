@@ -8,6 +8,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DocEditor } from "../app/projects/work-docs";
+import { primePeople } from "../app/who";
 import { conflictOf, parseDoc } from "../lib/documents";
 import { $, $$, mount, settle, unmount } from "./_helpers/live-render";
 
@@ -21,7 +22,7 @@ const DOC = { document: {
 } };
 const THEIRS = { id: "r3", revision_no: 3, author_kind: "agent", author_id: "agent:architect", body: "Their text." };
 
-afterEach(() => { unmount(); vi.restoreAllMocks(); });
+afterEach(() => { unmount(); vi.restoreAllMocks(); primePeople(null); });
 
 function serve(calls: { url: string; method: string; body: unknown }[]) {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
@@ -84,5 +85,20 @@ describe("a work item's documents", () => {
     ($('[data-testid="wt-doc-diff-2"]') as HTMLButtonElement).click();
     await settle();
     expect($$('[data-testid="wt-doc-diff"] [data-d]').map((s) => s.dataset.d)).toEqual(["del", "add"]);
+  });
+
+  it("a comment shows the person's name and keeps the id on the tooltip", async () => {
+    primePeople({});
+    const named = { document: { ...DOC.document, threads: [{
+      ...DOC.document.threads[0],
+      comments: [{ id: "c1", author: "usr_wsw5h4abcdef", author_name: "Ada Lovelace", body: "Who owns it?" }],
+    }] } };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(named),
+      { status: 200, headers: { "Content-Type": "application/json" } })));
+    await mount(<DocEditor projectId="p1" id="d1" demo={false} onChanged={() => {}} />);
+    const who = $('[data-testid="wt-thread-t1"] .who');
+    expect(who?.textContent).toContain("Ada Lovelace");
+    expect(who?.textContent).not.toContain("usr_wsw5h4abcdef");
+    expect(who?.getAttribute("title")).toBe("usr_wsw5h4abcdef");
   });
 });

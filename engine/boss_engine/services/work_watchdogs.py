@@ -64,15 +64,23 @@ def _iso(value: Any) -> Any:
     return value.isoformat() if hasattr(value, "isoformat") else value
 
 
-def view(row: Mapping[str, Any]) -> dict[str, Any]:
-    return {"id": row["id"], "project_id": row["project_id"], "root_item_id": row["root_item_id"],
-            "watcher": row["watcher"], "conditions": _json(row.get("conditions"), []),
-            "stall_hours": row.get("stall_hours"), "instructions": row.get("instructions") or "",
-            "contact_point_ids": _json(row.get("contact_point_ids"), []),
-            "enabled": bool(row.get("enabled")), "fired_count": int(row.get("fired_count") or 0),
-            "last_fired_at": _iso(row.get("last_fired_at")),
-            "last_fired": _json(row.get("last_fired"), None),
-            "created_at": _iso(row.get("created_at"))}
+def view(row: Mapping[str, Any], connection: Any = None) -> dict[str, Any]:
+    out = {"id": row["id"], "project_id": row["project_id"], "root_item_id": row["root_item_id"],
+           "watcher": row["watcher"], "conditions": _json(row.get("conditions"), []),
+           "stall_hours": row.get("stall_hours"), "instructions": row.get("instructions") or "",
+           "contact_point_ids": _json(row.get("contact_point_ids"), []),
+           "enabled": bool(row.get("enabled")), "fired_count": int(row.get("fired_count") or 0),
+           "last_fired_at": _iso(row.get("last_fired_at")),
+           "last_fired": _json(row.get("last_fired"), None),
+           "created_at": _iso(row.get("created_at"))}
+    # watcher stays the id (and the audit actor). The name is only what the row shows.
+    if connection is not None:
+        from .people_names import known_name
+
+        name = known_name(row.get("watcher"), connection)
+        if name:
+            out["watcher_name"] = name
+    return out
 
 
 def _conditions(raw: Optional[Iterable[str]]) -> list[str]:
@@ -119,7 +127,7 @@ def attach(connection: Connection, *, project_id: str, root_item_id: str, watche
          "cp": json.dumps(cps), "en": bool(enabled)}).mappings().one()
     emit_event(connection, project_id, "work_item.watchdog_attached", watcher, "work_item",
                root_item_id, {"watchdog_id": row["id"], "conditions": conds})
-    return view(row)
+    return view(row, connection)
 
 
 def detach(connection: Connection, *, project_id: str, watchdog_id: str, actor: str) -> None:
@@ -133,7 +141,7 @@ def detach(connection: Connection, *, project_id: str, watchdog_id: str, actor: 
 
 
 def of_item(connection: Connection, project_id: str, item_id: str) -> list[dict[str, Any]]:
-    return [view(r) for r in connection.execute(text(
+    return [view(r, connection) for r in connection.execute(text(
         "SELECT * FROM work_item_watchdogs WHERE project_id = :p AND root_item_id = :i "
         "ORDER BY created_at, watcher"), {"p": project_id, "i": item_id}).mappings()]
 

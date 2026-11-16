@@ -47,14 +47,16 @@ export type WorkNode = {
   hold?: Hold | null;
 };
 export type Hold = { id: string; root_kind: string; root_id: string; mode: "pause" | "drain";
-  status: string; reason: string; created_by: string; created_at: string | null };
+  status: string; reason: string; created_by: string; created_by_name?: string | null;
+  created_at: string | null };
 export type HoldPlanMember = { member_kind: string; member_id: string; action?: string; restored_action?: string };
 
 export function parseHold(w: unknown): Hold | null {
   const o = obj(w);
   if (!str(o.id)) return null;
   return { id: str(o.id), root_kind: str(o.root_kind), root_id: str(o.root_id), mode: o.mode === "drain" ? "drain" : "pause",
-    status: str(o.status), reason: str(o.reason), created_by: str(o.created_by), created_at: str(o.created_at) || null };
+    status: str(o.status), reason: str(o.reason), created_by: str(o.created_by), created_at: str(o.created_at) || null,
+    ...(str(o.created_by_name) ? { created_by_name: str(o.created_by_name) } : {}) };
 }
 
 /** "Pauses 2 runs · holds 3 items": a hold plan (or a restore plan) in few words. */

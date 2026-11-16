@@ -39,7 +39,7 @@ export function ItemHold({ projectId, item, demo, onChanged }: {
       {hold ? (
         <span className="wt-blocked" data-testid="wt-hold-banner">
           <PauseCircle size={12} aria-hidden /> On hold{hold.root_id !== item.id ? " with the tree above" : ""}
-          {hold.reason ? ` — ${hold.reason}` : ""} · by <Who id={hold.created_by} face={false} />
+          {hold.reason ? ` — ${hold.reason}` : ""} · by <Who id={hold.created_by} name={hold.created_by_name} face={false} />
         </span>
       ) : null}
       {!hold || ownHold ? (

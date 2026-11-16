@@ -22,6 +22,7 @@ export type WikiPageRow = {
 };
 export type WikiRevision = {
   id: string; revision_no: number; title: string; body: string; author_kind: string; author_id: string;
+  author_name?: string | null;
   source_note: string; created_at: string | null; restored_from: string | null; current?: boolean;
 };
 export type WikiPending = { id: string; decision_id: string; requested_by: string; diff: string; created_at: string | null };

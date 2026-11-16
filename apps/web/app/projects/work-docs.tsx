@@ -134,7 +134,7 @@ export function DocEditor({ projectId, id, demo, onChanged }: { projectId: strin
       </div>
       {theirs ? (
         <div className="wt-feedback" role="alert" data-testid="wt-doc-conflict">
-          <p>Revision {theirs.revision_no} by <Who id={theirs.author_id || theirs.author_kind} face={false} />:</p>
+          <p>Revision {theirs.revision_no} by <Who id={theirs.author_id || theirs.author_kind} name={theirs.author_name} face={false} />:</p>
           <pre className="wt-pre">{(theirs.body ?? "").slice(0, 2000)}</pre>
           <div className="wt-line">
             <button type="button" className="px-btn" onClick={takeTheirs} data-testid="wt-doc-take-theirs">Use theirs</button>
@@ -148,7 +148,7 @@ export function DocEditor({ projectId, id, demo, onChanged }: { projectId: strin
             <li key={t.id} data-e={t.status === "resolved" ? "completed" : t.anchor_state === "orphaned" ? "rejected" : "raised"} data-testid={`wt-thread-${t.id}`}>
               <span className="wt-ev" title={ANCHOR_WORDS[t.anchor_state]}>{t.status === "resolved" ? "Resolved" : ANCHOR_WORDS[t.anchor_state]}</span>
               <span className="wt-comment">“{t.quote.slice(0, 80)}”</span>
-              {t.comments.map((c) => <span key={c.id}><Who id={c.author} bold /> {c.body}</span>)}
+              {t.comments.map((c) => <span key={c.id}><Who id={c.author} name={c.author_name} bold /> {c.body}</span>)}
               {t.status === "open" ? (
                 <span className="wt-line">
                   <input className="input" value={reply[t.id] ?? ""} onChange={(e) => setReply({ ...reply, [t.id]: e.target.value })}
@@ -173,7 +173,7 @@ export function DocEditor({ projectId, id, demo, onChanged }: { projectId: strin
           {(doc.revisions ?? []).map((v) => (
             <li key={v.id}>
               <span className="wt-ev">Rev {v.revision_no}</span>
-              <span className="wt-faint"><Who id={v.author_id || v.author_kind} />{v.note ? ` · ${v.note}` : ""}</span>
+              <span className="wt-faint"><Who id={v.author_id || v.author_kind} name={v.author_name} />{v.note ? ` · ${v.note}` : ""}</span>
               {v.revision_no > 1 ? <button type="button" className="px-btn" onClick={() => void showDiff(v.revision_no)} data-testid={`wt-doc-diff-${v.revision_no}`}>Changes</button> : null}
               {v.revision_no !== doc.current_revision_no ? (
                 <GatedButton permission="work_item:manage" projectId={projectId} className="px-btn" disabled={demo}

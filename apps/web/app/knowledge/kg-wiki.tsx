@@ -38,11 +38,13 @@ type Caller = { projectId: string; actor: string };
 
 const NEW_PAGE = { title: "", body: "" };
 /** Who wrote a revision: the graph by name, a person or agent through <Who> (BOSSAPP-1040). */
-function By({ rev, face = false }: { rev: Pick<WikiRevision, "author_kind" | "author_id">; face?: boolean }) {
+function By({ rev, face = false }: {
+  rev: Pick<WikiRevision, "author_kind" | "author_id" | "author_name">; face?: boolean;
+}) {
   if (rev.author_kind === "system") return <>the graph</>;
   const id = (rev.author_id || "").trim() || rev.author_kind;
   const party = rev.author_kind === "agent" && !/^(agent:|agt_)/i.test(id) ? `agent:${id}` : id;
-  return <Who id={party} face={face} />;
+  return <Who id={party} name={rev.author_name} face={face} />;
 }
 
 /** [[slug]] and [[slug|label]] become links that open the page here. */

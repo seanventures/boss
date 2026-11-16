@@ -111,11 +111,11 @@ def _iso(value: Any) -> Optional[str]:
     return value.isoformat() if value is not None and hasattr(value, "isoformat") else value
 
 
-def _revision(row: Any) -> dict[str, Any]:
+def _revision(row: Any, connection: Any = None) -> dict[str, Any]:
     sources = row["sources"]
     if isinstance(sources, str):
         sources = json.loads(sources)
-    return {
+    out = {
         "id": row["id"], "revision_no": int(row["revision_no"]), "title": row["title"],
         "body": row["body"], "content_hash": row["content_hash"],
         "author_kind": row["author_kind"], "author_id": row["author_id"],
@@ -123,6 +123,15 @@ def _revision(row: Any) -> dict[str, Any]:
         "sources": sources or [], "restored_from": row["restored_from"],
         "created_at": _iso(row["created_at"]),
     }
+    # The id stays the audit record. The name is only for the person reading the history.
+    if connection is not None:
+        from .people_names import known_name
+
+        name = known_name(row.get("author_id") if hasattr(row, "get") else row["author_id"],
+                          connection)
+        if name:
+            out["author_name"] = name
+    return out
 
 
 def _page_row(connection: Connection, project_id: str, slug: str,
@@ -142,7 +151,7 @@ def current_revision(connection: Connection, project_id: str,
              "WHERE p.project_id = :p AND p.slug = :s"),
         {"p": project_id, "s": slug},
     ).mappings().first()
-    return _revision(row) if row else None
+    return _revision(row, connection) if row else None
 
 
 def _origin(connection: Connection, project_id: str, actor: str) -> str:
@@ -212,7 +221,8 @@ def list_revisions(connection: Connection, project_id: str, slug: str) -> list[d
         text("SELECT * FROM wiki_revisions WHERE page_id = :i ORDER BY revision_no DESC"),
         {"i": page["id"]},
     ).mappings().all()
-    return [{**_revision(r), "current": r["id"] == page["current_revision_id"]} for r in rows]
+    return [{**_revision(r, connection), "current": r["id"] == page["current_revision_id"]}
+            for r in rows]
 
 
 def get_revision(connection: Connection, project_id: str, slug: str,
@@ -310,7 +320,7 @@ def save_page(
     emit_event(connection, project_id, "wiki.page_saved", actor, "wiki_page", page["id"],
                {"slug": slug, "revision_no": number, "origin": who,
                 **({"consent_id": consent_id} if consent_id else {})})
-    return {"slug": slug, "revision": _revision(row), "changed": True}
+    return {"slug": slug, "revision": _revision(row, connection), "changed": True}
 
 
 def restore(connection: Connection, *, project_id: str, actor: str, slug: str,

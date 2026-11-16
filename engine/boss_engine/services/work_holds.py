@@ -89,7 +89,7 @@ def item_hold(connection: Connection, item_id: str) -> Optional[dict[str, Any]]:
         "  (h.root_kind = 'work_item' AND h.root_id IN (SELECT id FROM up)) OR EXISTS ("
         "  SELECT 1 FROM run_hold_members m WHERE m.hold_id = h.id AND m.member_kind = 'work_item' "
         "  AND m.member_id = :id)) ORDER BY h.created_at LIMIT 1"), {"id": item_id}).mappings().first()
-    return _public(row) if row else None
+    return _public(row, connection) if row else None
 
 
 def held_items(connection: Connection, ids: Iterable[str], *,
@@ -310,16 +310,24 @@ def _hold(connection: Connection, project_id: str, hold_id: str, *, lock: bool =
     return dict(row)
 
 
-def _public(row: Any) -> dict[str, Any]:
-    return {"id": row["id"], "project_id": row["project_id"], "root_kind": row["root_kind"],
-            "root_id": row["root_id"], "mode": row["mode"], "status": row["status"],
-            "reason": row["reason"], "created_by": row["created_by"],
-            "created_at": _iso(row["created_at"]), "restored_by": row.get("restored_by"),
-            "restored_at": _iso(row.get("restored_at"))}
+def _public(row: Any, connection: Any = None) -> dict[str, Any]:
+    out = {"id": row["id"], "project_id": row["project_id"], "root_kind": row["root_kind"],
+           "root_id": row["root_id"], "mode": row["mode"], "status": row["status"],
+           "reason": row["reason"], "created_by": row["created_by"],
+           "created_at": _iso(row["created_at"]), "restored_by": row.get("restored_by"),
+           "restored_at": _iso(row.get("restored_at"))}
+    # created_by stays the id on the hold and in the audit event. The name is for the banner.
+    if connection is not None:
+        from .people_names import known_name
+
+        name = known_name(row.get("created_by"), connection)
+        if name:
+            out["created_by_name"] = name
+    return out
 
 
 def get_hold(connection: Connection, project_id: str, hold_id: str) -> dict[str, Any]:
-    hold = _public(_hold(connection, project_id, hold_id))
+    hold = _public(_hold(connection, project_id, hold_id), connection)
     hold["members"] = [dict(m) for m in connection.execute(text(
         "SELECT member_kind, member_id, prior_status, action, restored_action "
         "FROM run_hold_members WHERE hold_id = :h ORDER BY member_kind, member_id"),
@@ -328,7 +336,7 @@ def get_hold(connection: Connection, project_id: str, hold_id: str) -> dict[str,
 
 
 def list_holds(connection: Connection, project_id: str, *, active_only: bool = True) -> list[dict]:
-    return [_public(r) for r in connection.execute(text(
+    return [_public(r, connection) for r in connection.execute(text(
         "SELECT * FROM run_holds WHERE project_id = :p AND (NOT :a OR status = 'active') "
         "ORDER BY created_at DESC LIMIT 200"), {"p": project_id, "a": active_only}).mappings()]
 

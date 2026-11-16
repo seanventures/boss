@@ -20,12 +20,14 @@ export const WATCH_WORDS: Record<WatchCondition, string> = {
   stopped_unfinished: "Stops unfinished", blocked: "Gets blocked", closed: "Is closed", stalled: "Stalls",
 };
 export type Watchdog = {
-  id: string; watcher: string; conditions: WatchCondition[]; stall_hours: number; instructions: string;
+  id: string; watcher: string; watcher_name?: string | null; conditions: WatchCondition[];
+  stall_hours: number; instructions: string;
   enabled: boolean; fired_count: number; last_fired_at: string | null;
 };
 export function parseWatchdogs(w: unknown): Watchdog[] {
   return arr(obj(w).watchdogs).map(obj).map((d) => ({
     id: str(d.id), watcher: str(d.watcher),
+    ...(str(d.watcher_name) ? { watcher_name: str(d.watcher_name) } : {}),
     conditions: arr(d.conditions).map(str).filter((c): c is WatchCondition => c in WATCH_WORDS),
     stall_hours: Number(d.stall_hours) || 24, instructions: str(d.instructions),
     enabled: d.enabled !== false, fired_count: Number(d.fired_count) || 0,

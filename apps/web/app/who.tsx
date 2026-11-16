@@ -11,6 +11,8 @@
  * fetched ONCE per page and shared by every <Who> on it; agents resolve through
  * lib/agent-identity, the same resolver every agent surface uses. A viewer who may not read the
  * directory, or an id it does not hold, sees the id itself — never a blank, never a guess.
+ * A name the record already carries is shown even when the directory is forbidden; the id
+ * stays in the tooltip.
  */
 import React, { useEffect, useMemo, useState } from "react";
 
@@ -109,19 +111,25 @@ export function useWho(raw: string | null | undefined): WhoView {
  * The name (bold when asked), its initial before it, the raw id in the tooltip. An
  * unresolved id is shown as itself — attribution is never blank and never invented.
  */
-export function Who({ id, bold, face = true, testId }: {
-  id: string | null | undefined; bold?: boolean;
+export function Who({ id, name, bold, face = true, testId }: {
+  id: string | null | undefined;
+  /** A name the record already carries. Shown even when the directory is forbidden. */
+  name?: string | null;
+  bold?: boolean;
   /** No room for the initial (a tight byline): face={false}. */
   face?: boolean; testId?: string;
 }) {
-  const w = useWho(id);
-  const shown = w.name ?? (w.id || "someone");
+  const given = name && !looksLikeAnId(name) ? name.trim() : "";
+  const w = useWho(given ? undefined : id);
+  const resolved = given || w.name;
+  const shown = resolved || w.id || "someone";
   const text = bold ? <b>{shown}</b> : shown;
+  const tip = id && id !== shown ? id : undefined;
   return (
-    <span className="who" title={w.id && w.id !== shown ? w.id : undefined} data-testid={testId} data-user-text>
+    <span className="who" title={tip} data-testid={testId} data-user-text>
       {/* The initial for anyone BOSS can name, person or agent; an unnamed id gets none (its
           "initial" would be a letter of the id, not of anyone). */}
-      {face && w.name ? <Face name={w.name} tone={avatarTone(w.id)} size={22} /> : null}
+      {face && resolved ? <Face name={resolved} tone={avatarTone(id || w.id)} size={22} /> : null}
       {text}
     </span>
   );

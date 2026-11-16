@@ -116,11 +116,23 @@ def _revision(connection: Connection, document_id: str, *, revision_id: Optional
     return dict(row)
 
 
-def _public_revision(row: Mapping[str, Any], *, body: bool = True) -> dict[str, Any]:
+def _author_name(actor: Any, connection: Any) -> Optional[str]:
+    if connection is None:
+        return None
+    from .people_names import known_name
+
+    return known_name(actor, connection)
+
+
+def _public_revision(row: Mapping[str, Any], *, body: bool = True,
+                     connection: Any = None) -> dict[str, Any]:
     out = {"id": row["id"], "revision_no": row["revision_no"],
            "base_revision_id": row.get("base_revision_id"), "author_kind": row["author_kind"],
            "author_id": row["author_id"], "note": row.get("note") or "",
            "restored_from": row.get("restored_from"), "created_at": _iso(row["created_at"])}
+    name = _author_name(row.get("author_id"), connection)
+    if name:
+        out["author_name"] = name
     if body:
         out["body"] = row["body"]
     return out
@@ -143,7 +155,7 @@ def _public(connection: Connection, row: Mapping[str, Any], *, detail: bool) -> 
     if detail:
         current = (_revision(connection, row["id"], revision_id=row["current_revision_id"])
                    if row.get("current_revision_id") else None)
-        out["current"] = _public_revision(current) if current else None
+        out["current"] = _public_revision(current, connection=connection) if current else None
         out["revisions"] = revisions(connection, row["id"])
         out["threads"] = threads(connection, row["id"])
     return out
@@ -169,7 +181,7 @@ def list_documents(connection: Connection, project_id: str, *,
 
 
 def revisions(connection: Connection, document_id: str) -> list[dict[str, Any]]:
-    return [_public_revision(r, body=False) for r in connection.execute(text(
+    return [_public_revision(r, body=False, connection=connection) for r in connection.execute(text(
         "SELECT * FROM document_revisions WHERE document_id = :d ORDER BY revision_no DESC"),
         {"d": document_id}).mappings()]
 
@@ -177,7 +189,8 @@ def revisions(connection: Connection, document_id: str) -> list[dict[str, Any]]:
 def get_revision(connection: Connection, project_id: str, document_id: str,
                  revision_no: int) -> dict[str, Any]:
     _doc(connection, project_id, document_id)
-    return _public_revision(_revision(connection, document_id, revision_no=revision_no))
+    return _public_revision(_revision(connection, document_id, revision_no=revision_no),
+                            connection=connection)
 
 
 def diff(connection: Connection, project_id: str, document_id: str, *, from_no: int,
@@ -293,7 +306,9 @@ def save_revision(connection: Connection, *, project_id: str, document_id: str, 
 def _current(connection: Connection, doc: Mapping[str, Any]) -> dict[str, Any]:
     if not doc.get("current_revision_id"):
         return {}
-    return _public_revision(_revision(connection, doc["id"], revision_id=doc["current_revision_id"]))
+    return _public_revision(
+        _revision(connection, doc["id"], revision_id=doc["current_revision_id"]),
+        connection=connection)
 
 
 def restore(connection: Connection, *, project_id: str, document_id: str, revision_no: int,
@@ -410,6 +425,16 @@ def record_agent_revision(connection: Connection, *, project_id: str, source_ref
 
 # ── anchored comment threads ─────────────────────────────────────────────────────────────────
 
+def _comment(row: Mapping[str, Any], connection: Any = None) -> dict[str, Any]:
+    """A comment as the console reads it. `author` stays the id; `author_name` is beside it."""
+    out = {"id": row["id"], "author": row["author"], "body": row["body"],
+           "created_at": _iso(row.get("created_at"))}
+    name = _author_name(row.get("author"), connection)
+    if name:
+        out["author_name"] = name
+    return out
+
+
 def threads(connection: Connection, document_id: str) -> list[dict[str, Any]]:
     rows = connection.execute(text(
         "SELECT * FROM doc_comment_threads WHERE document_id = :d ORDER BY status, created_at"),
@@ -418,15 +443,19 @@ def threads(connection: Connection, document_id: str) -> list[dict[str, Any]]:
     for c in connection.execute(text(
             "SELECT c.* FROM doc_comments c JOIN doc_comment_threads t ON t.id = c.thread_id "
             "WHERE t.document_id = :d ORDER BY c.created_at"), {"d": document_id}).mappings():
-        comments.setdefault(c["thread_id"], []).append(
-            {"id": c["id"], "author": c["author"], "body": c["body"],
-             "created_at": _iso(c["created_at"])})
-    return [{"id": r["id"], "revision_id": r["revision_id"], "quote": r["quote"],
-             "prefix": r["prefix"], "suffix": r["suffix"], "start": r["start_offset"],
-             "end": r["end_offset"], "anchor_state": r["anchor_state"], "status": r["status"],
-             "created_by": r["created_by"], "resolved_by": r.get("resolved_by"),
-             "created_at": _iso(r["created_at"]), "comments": comments.get(r["id"], [])}
-            for r in rows]
+        comments.setdefault(c["thread_id"], []).append(_comment(c, connection))
+    out = []
+    for r in rows:
+        thread = {"id": r["id"], "revision_id": r["revision_id"], "quote": r["quote"],
+                  "prefix": r["prefix"], "suffix": r["suffix"], "start": r["start_offset"],
+                  "end": r["end_offset"], "anchor_state": r["anchor_state"], "status": r["status"],
+                  "created_by": r["created_by"], "resolved_by": r.get("resolved_by"),
+                  "created_at": _iso(r["created_at"]), "comments": comments.get(r["id"], [])}
+        name = _author_name(r.get("created_by"), connection)
+        if name:
+            thread["created_by_name"] = name
+        out.append(thread)
+    return out
 
 
 def add_thread(connection: Connection, *, project_id: str, document_id: str,
@@ -451,7 +480,7 @@ def add_thread(connection: Connection, *, project_id: str, document_id: str,
         {"id": thread_id, "d": document_id, "p": project_id, "r": revision_id, "q": quote,
          "pre": text_[max(0, start - CONTEXT):start], "suf": text_[end:end + CONTEXT],
          "s": start, "e": end, "a": actor})
-    _comment(connection, project_id, thread_id, body, actor)
+    _insert_comment(connection, project_id, thread_id, body, actor)
     # A thread made on an older revision is carried to the current one straight away.
     if doc.get("current_revision_id") and doc["current_revision_id"] != revision_id:
         reanchor(connection, document_id, doc["current_revision_id"])
@@ -460,7 +489,8 @@ def add_thread(connection: Connection, *, project_id: str, document_id: str,
     return next(t for t in threads(connection, document_id) if t["id"] == thread_id)
 
 
-def _comment(connection: Connection, project_id: str, thread_id: str, body: str, actor: str) -> None:
+def _insert_comment(connection: Connection, project_id: str, thread_id: str, body: str,
+                    actor: str) -> None:
     connection.execute(text(
         "INSERT INTO doc_comments (id, thread_id, project_id, author, body) "
         "VALUES (:id, :t, :p, :a, :b)"),
@@ -483,7 +513,7 @@ def reply(connection: Connection, *, project_id: str, document_id: str, thread_i
     body = str(body or "").strip()
     if not body:
         raise DocumentError("a reply needs some text")
-    _comment(connection, project_id, thread_id, body, actor)
+    _insert_comment(connection, project_id, thread_id, body, actor)
     return next(t for t in threads(connection, document_id) if t["id"] == thread_id)
 
 

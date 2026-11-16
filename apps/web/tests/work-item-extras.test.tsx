@@ -6,13 +6,14 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { primePeople } from "../app/who";
 import { SearchResults } from "../app/projects/search-results";
 import { ItemCards, OutputsSection, StatusCards, WatchSection } from "../app/projects/work-item-extras";
 import { parseSearch, parseWatchdogs } from "../lib/work-ux";
 import { $, mount, settle, unmount } from "./_helpers/live-render";
 
 type Call = { url: string; method: string; body: unknown };
-afterEach(() => { unmount(); vi.restoreAllMocks(); });
+afterEach(() => { unmount(); vi.restoreAllMocks(); primePeople(null); });
 
 function serve(calls: Call[], answer: (url: string, method: string) => unknown) {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
@@ -49,6 +50,18 @@ describe("the watchdog on a work tree", () => {
     ($('[data-testid="wt-unwatch"]') as HTMLButtonElement).click();
     await settle();
     expect(calls.some((c) => c.method === "DELETE" && c.url.startsWith("/v1/work-items/w2/watchdogs/wdg_1?project_id=p1"))).toBe(true);
+  });
+
+  it("names who watches and keeps the id on the tooltip", async () => {
+    primePeople({});
+    const dogs = { watchdogs: [{ ...DOGS.watchdogs[0], watcher: "usr_wsw5h4abcdef", watcher_name: "Ada Lovelace" }] };
+    serve([], () => dogs);
+    await mount(<WatchSection projectId="p1" id="w2" demo={false} />);
+    await settle();
+    const row = $('[data-testid="wt-watchdog-wdg_1"]');
+    expect(row?.textContent).toContain("Ada Lovelace");
+    expect(row?.textContent).not.toContain("usr_wsw5h4abcdef");
+    expect(row?.querySelector(".who")?.getAttribute("title")).toBe("usr_wsw5h4abcdef");
   });
 });
 
