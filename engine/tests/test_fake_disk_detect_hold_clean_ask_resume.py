@@ -235,8 +235,12 @@ def test_fake_disk_detect_hold_clean_ask_resume(pg, world):
     with pg.begin() as c:
         pid = storage_incidents.default_project(c)
         job_id = f"job_fd_{uuid.uuid4().hex[:8]}"
+        # run_after is Postgres now(). The claim compares it to the host clock, which
+        # can sit a few dozen milliseconds behind the container, so a job stamped now()
+        # is not due yet and the hold never sees it. Two seconds covers that skew.
         c.execute(text("INSERT INTO jobs (id, project_id, kind, payload, status, run_after) "
-                       "VALUES (:id, :p, 'meeting.step', '{}'::jsonb, 'queued', now())"), {"id": job_id, "p": pid})
+                       "VALUES (:id, :p, 'meeting.step', '{}'::jsonb, 'queued', "
+                       "now() - interval '2 seconds')"), {"id": job_id, "p": pid})
         assert JobLeaseService(Settings()).claim_job(c, "w_fd", ["meeting.step"], 60) is None
         row = c.execute(text("SELECT last_error FROM jobs WHERE id = :id"), {"id": job_id}).scalar()
         assert row["code"] == "infra_hold" and row["incident_id"] == inc["id"]
@@ -268,8 +272,9 @@ def test_fake_disk_detect_hold_clean_ask_resume(pg, world):
         assert storage_incidents.current_for_host(c, HOST) is None
         assert not work_hold.active(c, fresh=True)
         done = c.execute(text("SELECT * FROM storage_incidents WHERE id = :i"), {"i": inc["id"]}).mappings().one()
-        job = c.execute(text("SELECT run_after <= now() AS due, last_error FROM jobs WHERE id = :id"),
-                        {"id": job_id}).mappings().one()
+        job = c.execute(text(
+            "SELECT run_after <= now() + interval '2 seconds' AS due, last_error "
+            "FROM jobs WHERE id = :id"), {"id": job_id}).mappings().one()
         c.execute(text("DELETE FROM jobs WHERE id = :id"), {"id": job_id})
         rep = done["report"]
         pub = storage_incidents.public(c, dict(done))
