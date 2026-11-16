@@ -2,6 +2,26 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.15]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.15.md](docs/community/RELEASE_NOTES_v1.0-rc10.15.md).
+
+### Added
+
+- Easy Mode asks or blocks personal data before a budget reserve. A closed month refuses spend. One project invite binds that project only. A saved failure can be replayed into a new run. App log search, open work by person, and a stored availability objective.
+
+### Fixed
+
+- Report tables use the page window, and a finished failure is `failed_final` or `deadlettered`. A capped audit export says it is not the whole range. 99.5 is labeled the install default only until a person sets an objective.
+
+### Changed
+
+- The community candidate version is `1.0.0-rc.10.15`.
+
+### Release scope
+
+- This is the git tag of public main after rc10.14. It is not a live host deploy. No image tag or release-gate run is attached. The export record still cites `docs/community/RC9_VALIDATION.md`. A migration approval was not added.
+
 ## [v1.0-rc10.14]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.14.md](docs/community/RELEASE_NOTES_v1.0-rc10.14.md).

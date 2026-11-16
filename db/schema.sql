@@ -16246,3 +16246,18 @@ CREATE TABLE IF NOT EXISTS roster_model_assignments (
 );
 CREATE INDEX IF NOT EXISTS idx_roster_model_assignments_receipt
   ON roster_model_assignments (receipt_id);
+-- RC14 month close (services/month_close.py). One row is one closed calendar
+-- month for one project: who closed it, and which month. Closing it again
+-- finds this row. Spend dated inside the month is refused; an open month is
+-- not a row here and spend is reserved the way it is today.
+CREATE TABLE IF NOT EXISTS month_closes (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  "month" TEXT NOT NULL CHECK ("month" ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'),
+  closed_by TEXT NOT NULL CHECK (length(btrim(closed_by)) > 0),
+  closed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, "month")
+);
+CREATE INDEX IF NOT EXISTS idx_month_closes_org
+  ON month_closes (org_id, "month");

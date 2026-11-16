@@ -11,6 +11,8 @@ Built only from what BOSS already records:
 """
 from __future__ import annotations
 
+import json
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -21,6 +23,10 @@ from .common import as_json, href, iso, project_href, words
 
 #: The availability objective an environment is held to when nobody set one.
 DEFAULT_SLO = 99.5
+#: Said on the card while the number above is still the install default.
+INSTALL_DEFAULT_WORDS = "SLO 99.5% is the install default, not your objective."
+#: project_configurations.config_key. body is {"percent": <number>}.
+_OBJECTIVE_KEY = "availability_objective"
 #: Points in each sparkline.
 POINTS = 30
 
@@ -39,6 +45,68 @@ def env_label(environment: Any) -> str:
 def health_word(status: Any) -> str:
     """deployment_health's verdict → the shared `health` enum."""
     return _HEALTH.get(str(status or ""), "unknown")
+
+
+def _percent_of(body: Any) -> Optional[float]:
+    """The stored percent, or None when the row is missing or not a real objective."""
+    if not isinstance(body, dict):
+        return None
+    raw = body.get("percent")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    number = float(raw)
+    if not math.isfinite(number) or number <= 0 or number > 100:
+        return None
+    return number
+
+
+def _require_percent(percent: Any) -> float:
+    if isinstance(percent, bool) or not isinstance(percent, (int, float)):
+        raise ValueError("an availability objective is a percent")
+    number = float(percent)
+    if not math.isfinite(number) or number <= 0 or number > 100:
+        raise ValueError("an availability objective is a percent above 0 and at most 100")
+    return number
+
+
+def chosen_objective(connection: Connection, project_id: str) -> Optional[float]:
+    """The availability percent a person stored for this project, or None."""
+    found = connection.execute(text(
+        "SELECT body FROM project_configurations WHERE project_id = :p AND config_key = :k"),
+        {"p": project_id, "k": _OBJECTIVE_KEY}).scalar()
+    return _percent_of(as_json(found))
+
+
+def set_availability_objective(connection: Connection, project_id: str, percent: Any, *,
+                               actor: str) -> float:
+    """Store the availability percent this project's environments are held to."""
+    if not isinstance(actor, str) or not actor.strip():
+        raise ValueError("an availability objective names who set it")
+    number = _require_percent(percent)
+    connection.execute(text(
+        "INSERT INTO project_configurations (id, project_id, config_key, body, updated_by) "
+        "VALUES (:id, :p, :k, CAST(:body AS JSONB), :by) "
+        "ON CONFLICT (project_id, config_key) DO UPDATE "
+        "SET body = EXCLUDED.body, updated_by = EXCLUDED.updated_by, updated_at = now()"),
+        {"id": f"cfg_slo_{project_id}", "p": project_id, "k": _OBJECTIVE_KEY,
+         "body": json.dumps({"percent": number}), "by": actor.strip()})
+    return number
+
+
+def _objectives_for(connection: Connection, target_ids: list[str]) -> dict[str, float]:
+    """target id → the project's stored percent. Targets with none are absent."""
+    if not target_ids:
+        return {}
+    out: dict[str, float] = {}
+    for r in connection.execute(text(
+            "SELECT t.id AS t, c.body FROM deployment_targets t "
+            "LEFT JOIN project_configurations c ON c.project_id = t.project_id "
+            "AND c.config_key = :k WHERE t.id = ANY(:ids)"),
+            {"ids": target_ids, "k": _OBJECTIVE_KEY}).mappings():
+        number = _percent_of(as_json(r["body"]))
+        if number is not None:
+            out[str(r["t"])] = number
+    return out
 
 
 def burn(uptime: Optional[float], target: float = DEFAULT_SLO) -> str:
@@ -160,11 +228,13 @@ def target_states(connection: Connection, target_ids: list[str], *,
         newest.setdefault(str(r["t"]), []).append(dict(r))
     window = probe_window(connection, target_ids, now=now)
     fires = firing_alerts(connection, target_ids)
+    objectives = _objectives_for(connection, target_ids)
     out = {}
     for tid in target_ids:
         up = window.get(tid, {}).get("uptime")
         pct = round(up * 100, 2) if up is not None else None
-        state, why = state_of(verdict(newest.get(tid, [])), pct, fires.get(tid, []))
+        held = objectives.get(tid, DEFAULT_SLO)
+        state, why = state_of(verdict(newest.get(tid, [])), pct, fires.get(tid, []), held)
         out[tid] = {"health": state, "health_reason": why, "uptime_pct": pct,
                     "p95_ms": window.get(tid, {}).get("p95_ms")}
     return out
@@ -191,6 +261,8 @@ def environments(connection: Connection, project_id: str, *,
     # numbers Observability's app row prints; the window is said beside them.
     window = probe_window(connection, ids, now=now)
     fires = firing_alerts(connection, ids)
+    chosen = chosen_objective(connection, project_id)
+    held = DEFAULT_SLO if chosen is None else chosen
     hosts = {str(r["id"]): dict(r) for r in connection.execute(text(
         "SELECT t.id, t.host_id, h.address, h.name FROM deployment_targets t "
         "LEFT JOIN deployment_hosts h ON h.id = t.host_id WHERE t.id = ANY(:ids)"),
@@ -207,7 +279,7 @@ def environments(connection: Connection, project_id: str, *,
         latency = [s["ms"] for s in t.get("series") or [] if s.get("ms") is not None][-POINTS:]
         errors = m.get("errors_s") or [0.0 if s.get("ok") else 100.0
                                        for s in t.get("series") or []][-POINTS:]
-        state, why = state_of(t["status"], uptime, fires.get(t["target_id"], []))
+        state, why = state_of(t["status"], uptime, fires.get(t["target_id"], []), held)
         out.append({
             "key": str(t["environment"]), "label": label, "app": t["app_name"],
             "target_id": t["target_id"], "url": told[t["target_id"]]["live_url"],
@@ -219,8 +291,9 @@ def environments(connection: Connection, project_id: str, *,
             # Where the p95 comes from and over what, said with it: BOSS's probe, last 24 h.
             "p95_source": "probe", "window": WINDOW_WORD,
             "series": {"errors": errors, "latency": latency},
-            "slo": {"target": DEFAULT_SLO, "burn": burn(uptime),
-                    "budget_used_pct": budget_used(uptime)},
+            "slo": {"target": held, "burn": burn(uptime, held),
+                    "budget_used_pct": budget_used(uptime, held)},
+            "slo_words": None if chosen is not None else INSTALL_DEFAULT_WORDS,
             "firing": fires.get(t["target_id"], []),
             "last_checked": t.get("last_checked"), "last_error": t.get("last_error"),
             "deployed_commit": (t.get("deployed_commit") or "")[:7] or None,
@@ -691,6 +764,7 @@ def worst(envs: list[dict[str, Any]]) -> tuple[str, Optional[str]]:
     return "unknown", None
 
 
-__all__ = ["DEFAULT_SLO", "WINDOW_WORD", "alerts", "rule_words", "burn", "env_label",
-           "environments", "firing_alerts", "health_word", "incidents", "links",
-           "monitoring_pack", "rollup", "state_of", "target_states", "view", "worst"]
+__all__ = ["DEFAULT_SLO", "INSTALL_DEFAULT_WORDS", "WINDOW_WORD", "alerts", "rule_words",
+           "burn", "chosen_objective", "env_label", "environments", "firing_alerts",
+           "health_word", "incidents", "links", "monitoring_pack", "rollup",
+           "set_availability_objective", "state_of", "target_states", "view", "worst"]
