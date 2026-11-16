@@ -44,6 +44,7 @@ export function ToolCalls({ projectId }: { projectId: string }) {
   const [state, setState] = useState<"loading" | "idle" | "failed">("loading");
   const [error, setError] = useState("");
   const [open, setOpen] = useState<ToolCall | null>(null);
+  const [capNote, setCapNote] = useState("");
   const abort = useRef<AbortController | null>(null);
   const key = useMemo(() => JSON.stringify(filters), [filters]);
 
@@ -75,6 +76,26 @@ export function ToolCalls({ projectId }: { projectId: string }) {
     });
   const active = Object.entries(filters).filter(([, v]) => v) as Array<[ToolCallFilterKey, string]>;
 
+  const exportCalls = async (event: React.MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault();
+    const href = toolCallExportHref(projectId, filters);
+    try {
+      const response = await fetch(href);
+      if (!response.ok) throw new Error(`BOSS answered ${response.status}`);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const file = document.createElement("a");
+      const named = /filename="([^"]+)"/.exec(response.headers.get("content-disposition") ?? "");
+      file.href = url;
+      file.download = named?.[1] || "boss-tool-calls.ndjson";
+      file.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setCapNote(response.headers.get("x-truncated") === "1" ? "The cap hid older rows from this export." : "");
+    } catch {
+      setCapNote("");
+    }
+  };
+
   return (
     <div className="tc" data-testid="tool-calls">
       <header className="tc-head">
@@ -83,11 +104,13 @@ export function ToolCalls({ projectId }: { projectId: string }) {
           {items.length}{next ? "+" : ""} {items.length === 1 && !next ? "call" : "calls"}
         </span>
         <span className="tc-spacer" />
-        <a className="ag-btn" href={toolCallExportHref(projectId, filters)} download
-           title="This filter as NDJSON" data-testid="tc-export">
+        <a className="ag-btn" href={toolCallExportHref(projectId, filters)}
+           title="This filter as NDJSON" data-testid="tc-export"
+           onClick={(event) => { void exportCalls(event); }}>
           <DownloadSimple size={14} aria-hidden /> Export
         </a>
       </header>
+      {capNote ? <p data-testid="tc-export-cap">{capNote}</p> : null}
       <div className="tc-chips" role="group" aria-label="Filters" data-testid="tc-chips">
         {CHIPS.map((c) => (
           <button key={`${c.key}:${c.value}`} type="button" className="tc-chip" title={c.tip}
