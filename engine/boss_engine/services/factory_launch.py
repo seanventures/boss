@@ -4,7 +4,10 @@ Empty prompt picks a concrete spec (the first template file by id, else a built-
 and then runs the same path as a prompt the person wrote. A non-empty prompt is the spec.
 The path creates the project, assigns the resources the spec names, writes the workflows
 the spec names, reserves a budget, writes one receipt, and only then starts the build.
-A result without a project id and a run id is a failure.
+The blurb and the prompt are checked before that reserve. A card number or a national id
+blocks, so nothing is reserved and the build does not start. An email or a phone number
+asks, and nothing is reserved until that ask is allowed. A result without a project id
+and a run id is a failure.
 
 Attachments (BOSSAPP-1275) are stored for the org and folded in by name and text extract.
 A Drive source that is not already connected is refused. Nothing here calls Drive or GitHub.
@@ -23,6 +26,7 @@ from sqlalchemy import text
 from ..multirepo.common import MultiRepoError, norm_repo
 from ..multirepo.registry import NOT_CONNECTED
 from .core import make_id
+from .personal_data_gate import before_builder_reserve
 from .projects import ProjectExists, create as create_project
 from .receipts import ReceiptService
 from .workflows import (
@@ -177,9 +181,11 @@ def launch(
     jobs: Any = None,
     budget: Any = None,
     auth: Any = None,
+    allowed: bool = False,
 ) -> dict[str, Any]:
     """Create the project and start the build. The builder runs only after the budget is reserved
-    and only a result that names a project and a run is returned."""
+    and only a result that names a project and a run is returned. Personal data in the blurb or
+    the prompt is decided before that reserve."""
     ids = [str(item).strip() for item in (attachment_ids or []) if str(item).strip()]
     repo = str(github_repo or "").strip()
     asked = str(mode or "").strip()
@@ -216,8 +222,17 @@ def launch(
                                   actor=actor)
     workflows = _write_workflows(connection, project_id, spec.get("workflows") or [], actor=actor)
 
-    # Before any model or tool spend. A refusal does not start the build.
-    reservation_id = _reserve(connection, settings, project_id, title, budget)
+    # The blurb and the prompt, before any reservation. A block or an unanswered ask stops here.
+    checked = before_builder_reserve(
+        _launch_prompt(spec), allowed=bool(allowed),
+        reserve=lambda: _reserve(connection, settings, project_id, title, budget))
+    if checked["action"] == "block":
+        raise FactoryLaunchError(409, "personal_data_blocked", str(checked["message"]))
+    if checked["action"] != "allow":
+        raise FactoryLaunchError(
+            409, "personal_data_ask",
+            "An email or a phone number has to be allowed before this launch reserves a budget.")
+    reservation_id = str(checked["reservation"])
     if builder is None:
         builder = build_run
     built = builder(
@@ -545,6 +560,15 @@ def _step_spec(steps: list[Any]) -> dict[str, Any]:
         step["next"] = [normalized[index + 1]["id"]]
     # entry_step is required to publish. The first step is the start; next walks the rest.
     return {"entry_step": normalized[0]["id"], "steps": normalized}
+
+
+def _launch_prompt(spec: dict[str, Any]) -> str:
+    """Blurb and prompt together, so a clean blurb cannot hide the prompt."""
+    blurb = str(spec.get("blurb") or "").strip()
+    body = str(spec.get("prompt") or "").strip()
+    if blurb and body and blurb != body:
+        return f"{blurb}\n{body}"
+    return blurb or body
 
 
 def _reserve(connection: Any, settings: Any, project_id: str, title: str, budget: Any) -> str:
