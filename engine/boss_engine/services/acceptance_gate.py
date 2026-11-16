@@ -68,8 +68,8 @@ from .acceptance.verdict import (  # noqa: E402,F401 — re-exported (#136's nam
     MAX_ITEMS, MAX_PASSES, MET, MISSING, PARTIAL, UNJUDGED, _ANSWER, _BARE, _DATA_FILE,
     _DECL_PATH, _DOC_PATH, _KEYWORDS, _LOADED_BY, _PATHISH, _SKIP_DIRS, _STRING, _SUMMARY,
     _TEST_PATH, _advisory, _code_lines, _defines, _extensionless, _item_data_files, _refers_to,
-    _resolve, _walk, batch_summary, evidence_paths, findings_summary, judge, parse_acceptance,
-    passed, wiring_problem)
+    _resolve, _walk, batch_summary, clip, evidence_paths, findings_summary, judge,
+    parse_acceptance, passed, wiring_problem)
 
 
 def items_spec(connection: Any, *, run_id: str, fctx: Mapping[str, Any],
@@ -400,7 +400,8 @@ def keep_history(history: list, record: dict,
                     "counts": dict(record.get("counts") or {}),
                     "refused": bool(record.get("refused")),
                     "items": [{"n": i.get("n"), "status": i.get("status"),
-                               "evidence": str(i.get("evidence") or "")[:300]}
+                               # Never cut mid-sentence; BOSS's reason is kept whole.
+                               "evidence": clip(str(i.get("evidence") or ""), 400)}
                               for i in record.get("items") or []]})
     holder = judged if judged is not None else {}
     # A re-check (`keep_on_not_run`): a check that did not run judges nothing either, so the

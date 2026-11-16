@@ -1,0 +1,929 @@
+{
+ "contract": "acn_4aef727a71cf44d1b3c6",
+ "items": [
+  {
+   "n": 1,
+   "id": "AC-1",
+   "text": "`make run-staging` starts the gateway + mock upstreams; a request with a valid JWT reaches the upstream; without it gets 401; the 11th request in a second gets 429."
+  },
+  {
+   "n": 2,
+   "id": "AC-2",
+   "text": "Editing `config/tenants/lumen-pay.yaml` is picked up without restart; a broken edit is rejected and the previous config keeps serving.",
+   "needs_loader": true
+  },
+  {
+   "n": 3,
+   "id": "AC-3",
+   "text": "`gwlint validate examples/lumen-pay.bad.yaml` exits 1 and names each violation with a line number and a fix; `gwlint --fix` produces a file that then passes except for the rules that need a human, which are listed."
+  },
+  {
+   "n": 4,
+   "id": "AC-4",
+   "text": "`gwlint validate examples/lumen-pay.good.yaml` exits 0."
+  },
+  {
+   "n": 5,
+   "id": "AC-5",
+   "text": "All tests pass; the README quick start works as written."
+  },
+  {
+   "n": 6,
+   "id": "AC-6",
+   "text": "Stack: Go. (gateway and gwlint: one Go module, static binaries)"
+  },
+  {
+   "n": 7,
+   "id": "AC-7",
+   "text": "**Routing:** by host, path prefix and method to named upstreams; path rewrite."
+  },
+  {
+   "n": 8,
+   "id": "AC-8",
+   "text": "**Multi-tenant config:** `config/gateway.yaml` (global) + `config/tenants/<tenant>.yaml` (one per onboarded customer). **Hot reload:** watch the directory; validate the new set; swap atomically; keep the last good config on error and log why.",
+   "needs_loader": true
+  },
+  {
+   "n": 9,
+   "id": "AC-9",
+   "text": "**Authentication per route:** JWT/OAuth2 (issuer, audience, required scopes, JWKS URL with caching), API keys (hashed in config, never plaintext), optional mTLS client certificates. A route with no auth is a configuration error unless explicitly `public: true` with a reason."
+  },
+  {
+   "n": 10,
+   "id": "AC-10",
+   "text": "**Rate limiting:** token bucket per tenant and per route (requests/second + burst)."
+  },
+  {
+   "n": 11,
+   "id": "AC-11",
+   "text": "**CORS** per route; **request size limits**; **request validation** against a JSON Schema or OpenAPI fragment per route.",
+   "needs_loader": true
+  },
+  {
+   "n": 12,
+   "id": "AC-12",
+   "text": "**Resilience:** upstream timeouts, retries with backoff for idempotent methods, a simple circuit breaker."
+  },
+  {
+   "n": 13,
+   "id": "AC-13",
+   "text": "**Headers:** add/remove/rename; propagate a request id."
+  },
+  {
+   "n": 14,
+   "id": "AC-14",
+   "text": "**Observability:** structured JSON access logs with PII redaction (configurable field list), `/healthz`, `/readyz`, Prometheus `/metrics`."
+  },
+  {
+   "n": 15,
+   "id": "AC-15",
+   "text": "**Two environments:** `staging` and `production` are two instances of the same binary with different config directories and ports. Provide `docker-compose.yml` for both plus two tiny mock upstreams so demos run end to end. (Do not depend on anything external.)"
+  },
+  {
+   "n": 16,
+   "id": "AC-16",
+   "text": "**Tests:** unit tests for routing, auth, rate limits, reload; an integration test that boots the gateway with the sample config and exercises a request through auth → rate limit → upstream."
+  },
+  {
+   "n": 17,
+   "id": "AC-17",
+   "text": "A reverse-proxy API gateway, one static binary, configured by YAML.",
+   "needs_loader": true
+  },
+  {
+   "n": 18,
+   "id": "AC-18",
+   "text": "**JSON Schema** for `tenants/<tenant>.yaml` (tenant id, owner + contact, tier, routes, auth, limits, CORS, upstreams, deprecation).",
+   "needs_loader": true
+  },
+  {
+   "n": 19,
+   "id": "AC-19",
+   "text": "**A rulebook, in YAML, readable by non-engineers:** `rules/api-guidelines.yaml`. Each rule has `id`, `severity` (error|warn), `title`, `why`, `fix`. At least 20 rules:",
+   "needs_loader": true
+  },
+  {
+   "n": 20,
+   "id": "AC-20",
+   "text": "**Security:** every route has auth (or an explicit, justified `public`); no wildcard CORS origin together with credentials; upstreams must be `https://`; no secrets inlined (detect API-key/JWT/password-shaped values); rate limits present and within bounds; no `/admin`, `/internal`, `/debug` paths exposed; JWT `audience` set; mTLS required for `tier: partner-sensitive`; request size capped; PII fields declared for redaction; no `*` methods."
+  },
+  {
+   "n": 21,
+   "id": "AC-21",
+   "text": "**API guidelines:** versioned base path (`/v1/...`); kebab-case path segments; only allowed methods; timeouts within bounds; owner and contact present and well-formed; description present; deprecations carry a `sunset` date; consistent naming between tenant id and file name."
+  },
+  {
+   "n": 22,
+   "id": "AC-22",
+   "text": "**`gwlint` CLI** (Go, same repo): `gwlint validate <file|dir>` prints a human report (rule id, YAML line, why, how to fix) or `--json`; exit code **0** pass, **1** violations, **2** invalid YAML/schema. `gwlint --fix <file>` writes a corrected file for the mechanically fixable rules and lists the ones that need a human. Golden tests: one good tenant config; several bad ones each triggering specific rules; a `--fix` round-trip test."
+  },
+  {
+   "n": 23,
+   "id": "AC-23",
+   "text": "`examples/`: `lumen-pay.good.yaml`, `lumen-pay.bad.yaml` (at least 5 violations: a wildcard CORS with credentials, an http upstream, an inlined API key, a missing rate limit, an `/admin` route), and the README that tells a tenant how to onboard (fork/branch → add `tenants/<tenant>.yaml` → open a PR → BOSS validates)."
+  },
+  {
+   "n": 24,
+   "id": "AC-24",
+   "text": "Clean, idiomatic Go; `go vet` and `go test ./...` clean; `make test`, `make run-staging`, `make run-prod`."
+  },
+  {
+   "n": 25,
+   "id": "AC-25",
+   "text": "A README with: what it is, a 5-minute quick start, the YAML reference, the rulebook table (generated from the YAML), and how `gwlint` is meant to run in CI/BOSS.",
+   "needs_loader": true
+  },
+  {
+   "n": 26,
+   "id": "AC-26",
+   "text": "Plain, concise naming. Someone at the customer will read this code.",
+   "judgement": true
+  },
+  {
+   "n": 27,
+   "id": "AC-27",
+   "text": "No external services required to run the demo."
+  },
+  {
+   "n": 28,
+   "id": "AC-28",
+   "text": "`go test -race ./...` passes on the config-swap/reload package."
+  },
+  {
+   "n": 29,
+   "id": "AC-29",
+   "text": "No secret substring appears in any `gwlint` output, human or `--json` (golden test)."
+  },
+  {
+   "n": 30,
+   "id": "AC-30",
+   "text": "`/readyz` returns the correct boolean in all three internal states, with the rejected-reload case logged."
+  }
+ ],
+ "checks": {
+  "acc_b2239214c5bc45a9b4c4": {
+   "run": "crun_673c3dcd34d6447e924b",
+   "recorded": {
+    "met": 25,
+    "missing": 0,
+    "partial": 5,
+    "unjudged": 0
+   },
+   "answers": [
+    {
+     "n": 1,
+     "said": "MET",
+     "evidence": "`internal/proxy/handler.go:ServeHTTP`/`authenticate` (401 path), `internal/ratelimit/limiter.go:AllowRoute` (429 path), proven end-to-end by `cmd/northgate-gateway/integration_test.go:TestGateway_ValidJWT_ReachesUpstream`, `TestGateway_NoJWT_Returns401`, `TestGateway_RateLimit_11thRequestIs429`; `make run-staging` → `docker compose up gateway-staging mock-upstream-staging` (Makefile).",
+     "recorded": "met"
+    },
+    {
+     "n": 2,
+     "said": "MET",
+     "evidence": "LOADED BY `internal/config/watcher.go:Watch`/`ReloadOnce` (polls `config/tenants`, validates via `internal/config/loader.go:Load`, swaps via `internal/config/atomic.go:Store.Swap`, else `MarkRejected`+log and keeps old `Store`); proven by `cmd/northgate-gateway/integration_test.go:TestGateway_HotReload_ValidEditAppliedWithoutRestart` and `TestGateway_HotReload_InvalidEditRejectedKeepsServing`.",
+     "recorded": "partial"
+    },
+    {
+     "n": 3,
+     "said": "MET",
+     "evidence": "`cmd/gwlint/main.go:runValidate`/`runFix`, `internal/lint/report.go:HumanReport` (line+rule+why+fix), `internal/lint/fixer.go:Fix` (mechanical fixes + lists unfixable); tests `cmd/gwlint/gwlint_test.go:TestGwlint_Validate_BadFixture_ExitsOneWithViolations`, `TestGwlint_Fix_RoundTrip_ListsUnfixableAsNeedingHuman`.",
+     "recorded": "met"
+    },
+    {
+     "n": 4,
+     "said": "MET",
+     "evidence": "`cmd/gwlint/gwlint_test.go:TestGwlint_Validate_GoodFixture_ExitsZero` against `examples/lumen-pay.good.yaml`.",
+     "recorded": "met"
+    },
+    {
+     "n": 5,
+     "said": "MET",
+     "evidence": "`go vet ./...` and `go test ./...` run clean across all packages (verified live); README quick-start commands match Makefile/docker-compose targets that exist.",
+     "recorded": "partial"
+    },
+    {
+     "n": 6,
+     "said": "MET",
+     "evidence": "single `go.mod` (`module northgate`) covers `cmd/northgate-gateway`, `cmd/gwlint`, `cmd/gwlintdocs`, `mocks/echo-upstream`; no cgo dependencies (only `gopkg.in/yaml.v3`), `Dockerfile` builds all three via plain `go build`.",
+     "recorded": "met"
+    },
+    {
+     "n": 7,
+     "said": "MET",
+     "evidence": "`internal/proxy/router.go:Match` (host, path/prefix, method) + `rewritePath`; `internal/proxy/router_test.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 8,
+     "said": "MET",
+     "evidence": "LOADED BY `internal/config/loader.go:Load` (reads `config/gateway.yaml` + `config/tenants/*.yaml`), called from `cmd/northgate-gateway/main.go:main`/`internal/config/watcher.go:ReloadOnce`; hot reload/validate/atomic-swap/keep-last-good as in ITEM 2.",
+     "recorded": "met"
+    },
+    {
+     "n": 9,
+     "said": "MET",
+     "evidence": "`internal/auth/jwt.go:VerifyJWT` (issuer/audience/scopes check), `internal/auth/jwks.go:JWKSCache.Get` (caching+stale TTL), `internal/auth/apikey.go:HashAPIKey`/`VerifyAPIKey` (hashed, constant-time compare), `internal/auth/mtls.go:VerifyClientCert`; no-auth-unless-public enforced in `internal/config/loader.go:validateTenant`.",
+     "recorded": "met"
+    },
+    {
+     "n": 10,
+     "said": "MET",
+     "evidence": "`internal/ratelimit/bucket.go:TokenBucket` + `limiter.go:AllowRoute`, both tenant-level and route-level buckets enforced in `internal/proxy/handler.go:ServeHTTP`.",
+     "recorded": "met"
+    },
+    {
+     "n": 11,
+     "said": "MET",
+     "evidence": "`internal/proxy/handler.go:applyCORS` (per-route CORS), `http.MaxBytesReader` size limiting, `internal/validate/jsonschema.go:Against` called from `handler.go:proxy`; tests in `internal/proxy/request_schema_test.go`.",
+     "recorded": "partial"
+    },
+    {
+     "n": 12,
+     "said": "MET",
+     "evidence": "`internal/proxy/handler.go:proxy` (per-upstream `TimeoutMs`), `isIdempotent` + `internal/resilience/backoff.go:Backoff.Delay` (retries gated to idempotent methods), `internal/resilience/breaker.go:Breaker` (open/half-open/closed) wired into `proxy`; `internal/resilience/resilience_test.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 13,
+     "said": "MET",
+     "evidence": "`internal/proxy/handler.go:applyHeaderTransforms` (add/remove/rename) + `requestID()` propagation.",
+     "recorded": "met"
+    },
+    {
+     "n": 14,
+     "said": "MET",
+     "evidence": "`internal/proxy/handler.go:logAccess` (JSON access log), `internal/redact/redact.go:RedactFields` with configurable `pii_fields` from tenant config wired via `cmd/northgate-gateway/main.go:SetPIIFieldsLookup`; `/healthz`,`/readyz` in `cmd/northgate-gateway/main.go`; `internal/metrics/metrics.go` Prometheus-format `/metrics` registered in `main.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 15,
+     "said": "MET",
+     "evidence": "`docker-compose.yml` defines `gateway-staging`/`gateway-production` (same image, different `CONFIG_DIR`/ports) plus `mock-upstream-staging`/`mock-upstream-production` (`mocks/echo-upstream/main.go`, fully self-contained, no external deps).",
+     "recorded": "met"
+    },
+    {
+     "n": 16,
+     "said": "MET",
+     "evidence": "unit tests exist per-package (`internal/proxy/router_test.go`, `internal/auth/auth_test.go`, `internal/ratelimit/limiter_test.go`, `internal/config/atomic_test.go`); integration test `cmd/northgate-gateway/integration_test.go` boots the real binary and exercises auth→rate-limit→upstream.",
+     "recorded": "met"
+    },
+    {
+     "n": 17,
+     "said": "MET",
+     "evidence": "`cmd/northgate-gateway/main.go` is a reverse-proxy gateway built as one binary, configured via `config/gateway.yaml`+tenant YAML, loaded by `internal/config/loader.go:Load`.",
+     "recorded": "met"
+    },
+    {
+     "n": 18,
+     "said": "MET",
+     "evidence": "LOADED BY `schema/schema.go:Validate` (loads embedded `schema/tenant.schema.json`), called from `internal/lint/engine.go:Validate`; covers tenant id/owner/contact/tier/routes/auth/limits/cors/upstreams/deprecation (deprecation optional in schema, not required).",
+     "recorded": "met"
+    },
+    {
+     "n": 19,
+     "said": "MET",
+     "evidence": "LOADED BY `rules/loader.go:Load` (go:embed of `rules/api-guidelines.yaml`), joined by rule ID in `internal/lint/rules.go:Rules`; 23 rules, each with id/severity/title/why/fix (exceeds 20).",
+     "recorded": "met"
+    },
+    {
+     "n": 20,
+     "said": "MET",
+     "evidence": "`internal/lint/rules.go:Rules`/`internal/lint/engine.go:ValidateDoc` implement all 12 sub-checks (auth-required, cors-no-wildcard-with-credentials, upstream-https-required, no-inlined-secrets, rate-limit-required, no-sensitive-paths-exposed, jwt-audience-required, mtls-required-partner-sensitive, request-size-capped, pii-fields-declared, no-wildcard-methods) as live Go logic dispatched by rule ID.",
+     "recorded": "met"
+    },
+    {
+     "n": 21,
+     "said": "MET",
+     "evidence": "same rule set includes `versioned-base-path`, `kebab-case-path`, `allowed-methods-only`, `timeout-within-bounds`, `owner-present`/`contact-well-formed`, `description-present`, `deprecation-sunset-date`, `tenant-id-matches-filename` — all implemented in `internal/lint/rules.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 22,
+     "said": "MET",
+     "evidence": "`cmd/gwlint/main.go:runValidate` (exit 0/1), `runValidate`/schema-error path (exit 2, `cmd/gwlint/schema_test.go:TestGwlint_StructuralSchemaViolation_ExitsTwo`), `--json` via `internal/lint/report.go:JSONReport`, `--fix` via `internal/lint/fixer.go:Fix`; golden tests `cmd/gwlint/gwlint_test.go` (good/bad/fix-roundtrip).",
+     "recorded": "met"
+    },
+    {
+     "n": 23,
+     "said": "MET",
+     "evidence": "`examples/lumen-pay.bad.yaml` contains all 5 named violations (wildcard CORS+credentials, http upstream, inlined API key, missing rate limit, `/admin` route); `examples/lumen-pay.good.yaml` passes; README has an \"Onboarding a new tenant\" section (fork/branch → add tenant YAML → PR → BOSS validates).",
+     "recorded": "met"
+    },
+    {
+     "n": 24,
+     "said": "MET",
+     "evidence": "`go vet ./...` and `go test ./...` clean; `Makefile` targets `test`, `run-staging`, `run-prod` all present and functional.",
+     "recorded": "met"
+    },
+    {
+     "n": 25,
+     "said": "MET",
+     "evidence": "`README.md` has quick start, YAML reference, rulebook table (regenerated by `cmd/gwlintdocs/main.go` via `internal/lint/docs.go:RulebookMarkdownTable`, kept in sync by `internal/lint/docs_test.go:TestReadmeRulebookTableNotStale`), and a CI/BOSS section.",
+     "recorded": "partial"
+    },
+    {
+     "n": 26,
+     "said": "MET",
+     "evidence": "function/identifier names throughout (`ServeHTTP`, `authenticate`, `Match`, `ValidateDoc`, `RenderMetricsHandler`) are plain and self-explanatory.",
+     "recorded": "partial"
+    },
+    {
+     "n": 27,
+     "said": "MET",
+     "evidence": "`mocks/echo-upstream/main.go` self-generates RSA keys/JWKS/TLS certs; `docker-compose.yml` has no external network dependency.",
+     "recorded": "met"
+    },
+    {
+     "n": 28,
+     "said": "MET",
+     "evidence": "`internal/config/atomic_test.go:TestStore_ConcurrentSwapAndRead_NoRace`; `go test -race ./internal/config/...` passes (verified live), and is wired into `Makefile:test`.",
+     "recorded": "met"
+    },
+    {
+     "n": 29,
+     "said": "MET",
+     "evidence": "`cmd/gwlint/gwlint_test.go:TestGwlint_NeverLeaksSecretValue`, backed by `internal/redact/redact.go:Redact` applied in `internal/lint/report.go:HumanReport`/`JSONReport`.",
+     "recorded": "met"
+    },
+    {
+     "n": 30,
+     "said": "MET",
+     "evidence": "`cmd/northgate-gateway/readyz_test.go:TestReadyz_NeverLoaded_Returns503`, `TestReadyz_Loaded_Returns200`, `TestReadyz_RejectedReloadAfterGoodLoad_StaysReady`; rejection logged via `internal/config/watcher.go:logReloadRejected`, verified by `internal/config/reload_metrics_test.go:TestReloadOnce_Rejected_LogsStructuredJSON`.",
+     "recorded": "met"
+    }
+   ]
+  },
+  "acc_2841e1f5536945928a79": {
+   "run": "crun_673c3dcd34d6447e924b",
+   "recorded": {
+    "met": 27,
+    "missing": 0,
+    "partial": 3,
+    "unjudged": 0
+   },
+   "answers": [
+    {
+     "n": 1,
+     "said": "MET",
+     "evidence": "`internal/proxy/handler.go` (`Handler.ServeHTTP`, `authenticate`), `internal/ratelimit/bucket.go`+`limiter.go` (`TokenBucket.Allow`, `AllowRoute`); proven end-to-end by `cmd/northgate-gateway/integration_test.go:TestGateway_ValidJWT_ReachesUpstream`, `TestGateway_NoJWT_Returns401`, `TestGateway_RateLimit_11thRequestIs429` against the compiled binary started via `Makefile:run-staging`/`docker-compose.yml`.",
+     "recorded": "met"
+    },
+    {
+     "n": 2,
+     "said": "MET",
+     "evidence": "LOADED BY `internal/config/watcher.go:Watch` (polls `config/tenants` dir signature, calls `ReloadOnce`) and `internal/config/loader.go:Load` (reads tenant files); rejection-keeps-old-config proven by `internal/config/reload_metrics_test.go:TestReloadOnce_Rejected_IncrementsRejectedReloadMetric_KeepsLastGood`.",
+     "recorded": "partial"
+    },
+    {
+     "n": 3,
+     "said": "MET",
+     "evidence": "`cmd/gwlint/main.go:runValidate` (exit 1, line numbers via `internal/lint/violation.go`+`doc.go:LineOf`, fix text from `rules.go`), `runFix`+`internal/lint/fixer.go:Fix` (rewrites file, lists unfixable \"needs a human\" rules); `cmd/gwlint/gwlint_test.go:TestGwlint_Fix_RoundTrip_ListsUnfixableAsNeedingHuman`.",
+     "recorded": "met"
+    },
+    {
+     "n": 4,
+     "said": "MET",
+     "evidence": "`cmd/gwlint/main.go:runValidate` against `examples/lumen-pay.good.yaml` exits 0; cross-checked against every rule in `internal/lint/rules.go`; `cmd/gwlint/gwlint_test.go:TestGwlint_Validate_GoodFixture_ExitsZero`.",
+     "recorded": "met"
+    },
+    {
+     "n": 5,
+     "said": "MET",
+     "evidence": "`go test ./...` passes cleanly across all packages (confirmed live); README quick start (`README.md:13-67`) commands map exactly onto existing code/config (ports, routes, `readyz`); `docker-compose.yml` healthchecks exist for all 4 services (the stale comment in `docker_compose_healthcheck_test.go` describes an already-fixed gap, not a current defect).",
+     "recorded": "met"
+    },
+    {
+     "n": 6,
+     "said": "MET",
+     "evidence": "`go.mod:module northgate` (single module covering `cmd/northgate-gateway`, `cmd/gwlint`, `mocks/echo-upstream`); `Dockerfile` builds both binaries from `golang:1.23-alpine`, which ships no C compiler, so `CGO_ENABLED` auto-disables and the build is statically linked (confirmed no cgo-requiring dependency exists in `go.mod`, only `gopkg.in/yaml.v3`).",
+     "recorded": "met"
+    },
+    {
+     "n": 7,
+     "said": "MET",
+     "evidence": "`internal/proxy/router.go:Match` (host/path-prefix/method matching), `rewritePath` (path rewrite); `internal/proxy/router_test.go:TestMatchPathPrefixAndRewrite`, `TestMatchHostMismatch`, `TestMatchMethodNotAllowed`.",
+     "recorded": "met"
+    },
+    {
+     "n": 8,
+     "said": "MET",
+     "evidence": "LOADED BY `internal/config/loader.go:Load` (reads `gateway.yaml` by path, `tenants/` dir), `internal/config/atomic.go:Store.Swap` (atomic swap via `atomic.Pointer[Snapshot]`), `internal/config/watcher.go:ReloadOnce`+`logReloadRejected` (keep-last-good + logs why).",
+     "recorded": "met"
+    },
+    {
+     "n": 9,
+     "said": "MET",
+     "evidence": "`internal/auth/jwt.go:VerifyJWT` (issuer/audience/scopes), `jwks.go:JWKSCache.Get` (caching), `apikey.go:HashAPIKey`/`VerifyAPIKey` (SHA-256 + constant-time, never plaintext), `mtls.go:VerifyClientCert`; no-auth-unless-public+reason enforced in `internal/config/loader.go:validateTenant`; tested by `internal/auth/auth_test.go` and `internal/config/loader_public_reason_test.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 10,
+     "said": "MET",
+     "evidence": "`internal/ratelimit/bucket.go:TokenBucket` (real token-bucket), `limiter.go:AllowRoute`; wired twice per request in `internal/proxy/handler.go:ServeHTTP` (tenant-keyed + route-keyed buckets); `internal/ratelimit/limiter_test.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 11,
+     "said": "MET",
+     "evidence": "LOADED BY `internal/config/loader.go:Load` (parses each route's `request_schema` fragment and `cors`/`max_body_bytes` from tenant YAML); enforced by `internal/proxy/handler.go:applyCORS`, `http.MaxBytesReader` wrap, and `internal/validate/jsonschema.go:Against` called from `handler.go:h.proxy`; proven by `internal/proxy/handler_test.go` (CORS/size tests) and `internal/proxy/request_schema_test.go:TestRequestSchema_InvalidBodyRejected_ValidBodyReachesUpstream`.",
+     "recorded": "met"
+    },
+    {
+     "n": 12,
+     "said": "MET",
+     "evidence": "`internal/resilience/backoff.go:Backoff.Delay` (exponential+jitter), `breaker.go:Breaker` (closed/open/half-open); wired in `internal/proxy/handler.go:isIdempotent`+`h.proxy` (retries gated to idempotent methods) and `breakerFor`/`breakerAllows`/`breakerRecord`; `internal/resilience/resilience_test.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 13,
+     "said": "MET",
+     "evidence": "`internal/proxy/handler.go:applyHeaderTransforms` (add/remove/rename), `requestID` (propagated to upstream and response); `internal/proxy/handler_test.go:TestRequestIDThreadedToUpstreamAndResponse`.",
+     "recorded": "met"
+    },
+    {
+     "n": 14,
+     "said": "MET",
+     "evidence": "`internal/proxy/handler.go:logAccess` (structured JSON + `internal/redact/redact.go:RedactFields` with configurable `pii_fields`), `cmd/northgate-gateway/main.go` (`/healthz`, `readyzHandler`, `/metrics`→`internal/metrics/metrics.go:Registry`); `cmd/northgate-gateway/readyz_test.go`, `metrics_domain_test.go`, `integration_test.go:TestGateway_Metrics_PlatformSeriesPresent`.",
+     "recorded": "met"
+    },
+    {
+     "n": 15,
+     "said": "MET",
+     "evidence": "`docker-compose.yml` defines `gateway-staging`/`gateway-production` (same `Dockerfile` image, different `CONFIG_DIR`/`PORT`) plus `mock-upstream-staging`/`mock-upstream-production`; no external image/service dependencies.",
+     "recorded": "met"
+    },
+    {
+     "n": 16,
+     "said": "MET",
+     "evidence": "unit tests for routing (`router_test.go`), auth (`auth_test.go`), rate limits (`limiter_test.go`), reload (`loader_public_reason_test.go`, `reload_metrics_test.go`); full-chain integration test in `cmd/northgate-gateway/integration_test.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 17,
+     "said": "MET",
+     "evidence": "LOADED BY `internal/config/loader.go:Load` (reads `gateway.yaml` by path); reverse-proxy behavior in `internal/proxy/handler.go`; single static binary per ITEM 6 evidence.",
+     "recorded": "met"
+    },
+    {
+     "n": 18,
+     "said": "MET",
+     "evidence": "LOADED BY `schema/schema.go:loadSchema`/`Validate` (`//go:embed tenant.schema.json`), called from `internal/lint/engine.go:Validate`; schema-violations cause exit code 2, proven by `cmd/gwlint/schema_test.go:TestGwlint_StructuralSchemaViolation_ExitsTwo`.",
+     "recorded": "met"
+    },
+    {
+     "n": 19,
+     "said": "MET",
+     "evidence": "LOADED BY `rules/loader.go:Load` (`//go:embed api-guidelines.yaml`), overlaid onto `internal/lint/rules.go:Rules()`; 23 rules in `rules/api-guidelines.yaml`, each with `id`/`severity`(error|warn)/`title`/`why`/`fix`.",
+     "recorded": "met"
+    },
+    {
+     "n": 20,
+     "said": "MET",
+     "evidence": "each sub-check implemented as a distinct `Rule.Check` in `internal/lint/rules.go` (`auth-required`, `cors-no-wildcard-with-credentials`, `upstream-https-required`, `no-inlined-secrets`, `rate-limit-required`, `no-sensitive-paths-exposed`, `jwt-audience-required`, `mtls-required-partner-sensitive`, `request-size-capped`, `pii-fields-declared`, `no-wildcard-methods`), all wired via `internal/lint/engine.go:ValidateDoc`.",
+     "recorded": "met"
+    },
+    {
+     "n": 21,
+     "said": "MET",
+     "evidence": "`versioned-base-path`, `kebab-case-path`, `allowed-methods-only`+`no-wildcard-methods`, `timeout-within-bounds`, `owner-present`, `contact-well-formed`, `description-present`, `deprecation-sunset-date` in `internal/lint/rules.go`; `tenant-id-matches-filename` enforced in `internal/lint/engine.go:ValidateDoc`.",
+     "recorded": "met"
+    },
+    {
+     "n": 22,
+     "said": "MET",
+     "evidence": "`cmd/gwlint/main.go` (`validate <file|dir>`, `--json`, exit 0/1/2, `--fix`); golden tests in `cmd/gwlint/gwlint_test.go`, `schema_test.go`, `schema_alltenants_test.go` (good config, bad fixtures per rule, `--fix` round-trip).",
+     "recorded": "met"
+    },
+    {
+     "n": 23,
+     "said": "MET",
+     "evidence": "`examples/lumen-pay.bad.yaml` contains all 5 required violations (wildcard CORS+credentials, `http://` upstream, inlined `sk_live_...` API key, missing rate limit, `/v1/admin/accounts` route); `examples/lumen-pay.good.yaml` present; onboarding steps documented in `README.md:69-80`.",
+     "recorded": "met"
+    },
+    {
+     "n": 24,
+     "said": "MET",
+     "evidence": "`go vet ./...` and `go test ./...` clean (verified live); `Makefile` has working `test`, `run-staging`, `run-prod` targets.",
+     "recorded": "met"
+    },
+    {
+     "n": 25,
+     "said": "MET",
+     "evidence": "`README.md` has what-it-is, quick start, YAML reference, and a rulebook table generated/enforced by `cmd/gwlintdocs/main.go`→`internal/lint/docs.go:RenderReadme` (reads `rules.Rules()`, 23 rows matching `rules/api-guidelines.yaml`, drift-checked by `internal/lint/docs_test.go`), plus a CI/BOSS section.",
+     "recorded": "partial"
+    },
+    {
+     "n": 26,
+     "said": "MET",
+     "evidence": "naming across `proxy`, `auth`, `ratelimit`, `resilience`, `redact`, `lint` packages is clear, short, and idiomatic Go; no misleading names found.",
+     "recorded": "partial"
+    },
+    {
+     "n": 27,
+     "said": "MET",
+     "evidence": "`mocks/echo-upstream/main.go` self-generates its RSA keypair, JWKS, demo JWT, and self-signed TLS cert; `docker-compose.yml` has no external image/service/network dependency.",
+     "recorded": "met"
+    },
+    {
+     "n": 28,
+     "said": "MET",
+     "evidence": "`internal/config/atomic.go:Store` uses `atomic.Pointer[Snapshot]`, `reload_state.go:ReloadState` uses `sync.Mutex`; `internal/config/atomic_test.go:TestStore_ConcurrentSwapAndRead_NoRace` exercises concurrent writer+readers.",
+     "recorded": "met"
+    },
+    {
+     "n": 29,
+     "said": "MET",
+     "evidence": "`cmd/gwlint/gwlint_test.go:TestGwlint_NeverLeaksSecretValue` extracts the actual secret from the bad fixture and asserts it's absent from both human and `--json` output; redaction via `internal/redact/redact.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 30,
+     "said": "MET",
+     "evidence": "`internal/config/reload_state.go` models never-loaded / loaded / loaded-with-rejected-reload; `cmd/northgate-gateway/main.go:readyzHandler` returns 503/200 correctly; `cmd/northgate-gateway/readyz_test.go` (3 tests) plus `watcher.go:logReloadRejected` logs the rejection reason.",
+     "recorded": "met"
+    }
+   ]
+  },
+  "acc_2c775eb7064541238af1": {
+   "run": "crun_f4360a7195f945a58b62",
+   "recorded": {
+    "met": 24,
+    "missing": 0,
+    "partial": 6,
+    "unjudged": 0
+   },
+   "answers": [
+    {
+     "n": 1,
+     "said": "MET",
+     "evidence": "`Makefile:16-17` (`run-staging` → docker compose up gateway-staging mock-upstream-staging), verified end-to-end by `cmd/northgate-gateway/integration_test.go:TestGateway_ValidJWT_ReachesUpstream`, `TestGateway_NoJWT_Returns401`, `TestGateway_RateLimit_11thRequestIs429`.",
+     "recorded": "met"
+    },
+    {
+     "n": 2,
+     "said": "MET",
+     "evidence": "LOADED BY `internal/config/loader.go:Load` (reads every `tenants/*.yaml` including `lumen-pay.yaml`) combined with `internal/config/watcher.go:Watch`/`ReloadOnce`; proven live by `cmd/northgate-gateway/integration_test.go:TestGateway_HotReload_ValidEditAppliedWithoutRestart` and `TestGateway_HotReload_InvalidEditRejectedKeepsServing`.",
+     "recorded": "partial"
+    },
+    {
+     "n": 3,
+     "said": "MET",
+     "evidence": "`cmd/gwlint/main.go:runValidate`/`runFix`, `internal/lint/fixer.go:Fix`; verified live: `go run ./cmd/gwlint validate examples/lumen-pay.bad.yaml` exits 1 listing rule/line/why/fix; `--fix` writes a corrected file and prints the 5 remaining human-required violations, matching `cmd/gwlint/gwlint_test.go`'s round-trip test.",
+     "recorded": "met"
+    },
+    {
+     "n": 4,
+     "said": "MET",
+     "evidence": "verified live: `go run ./cmd/gwlint validate examples/lumen-pay.good.yaml` → exit 0, \"no violations found.\"",
+     "recorded": "met"
+    },
+    {
+     "n": 5,
+     "said": "MET",
+     "evidence": "`go vet ./...` clean, `go test ./...` all packages pass; README quick start commands correspond to real, wired behavior (confirmed Makefile/docker-compose/mocks exist and match).",
+     "recorded": "partial"
+    },
+    {
+     "n": 6,
+     "said": "MET",
+     "evidence": "`go.mod:1` single module `northgate`; `Dockerfile:6-8` builds `northgate-gateway`, `gwlint`, `echo-upstream` as static Go binaries from one module.",
+     "recorded": "met"
+    },
+    {
+     "n": 7,
+     "said": "MET",
+     "evidence": "`internal/proxy/router.go:Match` (host, line 55), `pathMatches` (prefix/exact), `methodAllowed`, named-upstream lookup, and `rewritePath`; rewritten path actually used in `internal/proxy/handler.go:374` target construction, covered by `internal/proxy/router_test.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 8,
+     "said": "MET",
+     "evidence": "LOADED BY `internal/config/loader.go:Load` (reads `gateway.yaml` + all `tenants/*.yaml`, not hardcoded to one tenant) and `internal/config/watcher.go:Watch`/`ReloadOnce` (validate-then-swap, atomic via `internal/config/atomic.go:Store.Swap` using `atomic.Pointer`, rejection logged via `logReloadRejected`).",
+     "recorded": "met"
+    },
+    {
+     "n": 9,
+     "said": "MET",
+     "evidence": "`internal/auth/jwt.go` (issuer/audience/scope checks), `internal/auth/jwks.go` (cached JWKS fetch with stale fallback), `internal/auth/apikey.go` (`HashAPIKey`/`VerifyAPIKey`, constant-time, config field `APIKeyHashed`), `internal/auth/mtls.go` (`VerifyClientCert`); no-auth-without-public enforced in `internal/config/loader.go:validateTenant`.",
+     "recorded": "met"
+    },
+    {
+     "n": 10,
+     "said": "MET",
+     "evidence": "`internal/ratelimit/bucket.go` (token bucket), `internal/ratelimit/limiter.go:AllowRoute` keyed per tenant and per route, called from `internal/proxy/handler.go` (tenant + route checks before proxying).",
+     "recorded": "met"
+    },
+    {
+     "n": 11,
+     "said": "MET",
+     "evidence": "CORS: `internal/proxy/handler.go:applyCORS`; size limits: `http.MaxBytesReader` keyed on `Route.MaxBodyBytes`; schema validation: `internal/validate/jsonschema.go:Against` called from `handler.go` when `Route.RequestSchema != nil`. LOADED BY `internal/config/loader.go:Load` — confirmed live in `config/tenants/lumen-pay.yaml:39-46` (`request_schema` on `/v1/payments/refunds`), enforcement tested in `internal/proxy/request_schema_test.go`.",
+     "recorded": "partial"
+    },
+    {
+     "n": 12,
+     "said": "MET",
+     "evidence": "`internal/resilience/backoff.go` (jittered exponential backoff), `internal/resilience/breaker.go` (closed/open/half-open breaker); wired in `internal/proxy/handler.go` (`isIdempotent`, retry loop, per-upstream breaker), tested in `internal/resilience/resilience_test.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 13,
+     "said": "MET",
+     "evidence": "`internal/proxy/handler.go:applyHeaderTransforms` (rename→remove→add) driven by `config.Headers`; request id generated and set on both response and upstream request in `handler.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 14,
+     "said": "MET",
+     "evidence": "JSON access logs with PII redaction in `internal/proxy/handler.go:logAccess` + `internal/redact/redact.go:RedactFields` (deny-list + tenant `PIIFields`); `/healthz`, `/readyz`, `/metrics` all registered in `cmd/northgate-gateway/main.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 15,
+     "said": "MET",
+     "evidence": "`docker-compose.yml` defines `gateway-staging`/`gateway-production` (different ports/config dirs) plus `mock-upstream-staging`/`mock-upstream-production`; no external services referenced; `Makefile:run-staging`/`run-prod` drive it.",
+     "recorded": "met"
+    },
+    {
+     "n": 16,
+     "said": "MET",
+     "evidence": "unit tests: `internal/proxy/router_test.go`, `internal/auth/auth_test.go`, `internal/ratelimit/limiter_test.go`, `internal/config/atomic_test.go`/`reload_metrics_test.go`; integration test `cmd/northgate-gateway/integration_test.go:TestGateway_ValidJWT_ReachesUpstream` boots the real binary and exercises auth→rate-limit→upstream.",
+     "recorded": "met"
+    },
+    {
+     "n": 17,
+     "said": "MET",
+     "evidence": "LOADED BY `internal/config/loader.go:Load` (parses `gateway.yaml`/tenant YAML); gateway binary is `cmd/northgate-gateway/main.go`, proxying requests per `internal/proxy/handler.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 18,
+     "said": "MET",
+     "evidence": "LOADED BY `schema/schema.go:loadSchema` (embeds and parses `tenant.schema.json`), consumed by `schema.Validate` called from `internal/lint/engine.go`; tested in `cmd/gwlint/schema_test.go` and `schema_alltenants_test.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 19,
+     "said": "MET",
+     "evidence": "LOADED BY `rules/loader.go:Load` (`//go:embed api-guidelines.yaml`), consumed by `internal/lint/rules.go:Rules` (overlay at lines ~492-501) to set severity/title/why/fix on executable checks; 23 rules present, each with id/severity/title/why/fix (verified by reading the file).",
+     "recorded": "met"
+    },
+    {
+     "n": 20,
+     "said": "MET",
+     "evidence": "each named control has both a rule and a Go check in `internal/lint/rules.go`: `auth-required`, `cors-no-wildcard-with-credentials`, `upstream-https-required`, `no-inlined-secrets`, `rate-limit-required`, `no-sensitive-paths-exposed`, `jwt-audience-required`, `mtls-required-partner-sensitive`, `request-size-capped`, `pii-fields-declared`, `no-wildcard-methods`; verified live against `examples/lumen-pay.bad.yaml`.",
+     "recorded": "met"
+    },
+    {
+     "n": 21,
+     "said": "MET",
+     "evidence": "`versioned-base-path`, `kebab-case-path`, `allowed-methods-only`, `timeout-within-bounds`, `owner-present`, `contact-well-formed`, `description-present`, `deprecation-sunset-date`, `tenant-id-matches-filename` all implemented in `internal/lint/rules.go` and loaded from YAML metadata.",
+     "recorded": "met"
+    },
+    {
+     "n": 22,
+     "said": "MET",
+     "evidence": "`cmd/gwlint/main.go` implements `validate <file|dir>`/`--json`/exit codes 0/1/2, `--fix`; golden tests in `cmd/gwlint/gwlint_test.go` (good fixture exit 0, bad fixture exit 1 with violations, fix round-trip).",
+     "recorded": "met"
+    },
+    {
+     "n": 23,
+     "said": "MET",
+     "evidence": "`examples/lumen-pay.bad.yaml` contains all 5 required violations plus more (confirmed by direct `gwlint validate` run: 8 violations incl. wildcard CORS+credentials, http upstream, inlined key, missing rate limit, `/admin` route); README documents the onboarding flow (fork→add tenant yaml→PR→BOSS validates).",
+     "recorded": "met"
+    },
+    {
+     "n": 24,
+     "said": "MET",
+     "evidence": "`go vet ./...` and `go test ./...` run clean (verified live); `Makefile` has `test`, `run-staging`, `run-prod` targets.",
+     "recorded": "met"
+    },
+    {
+     "n": 25,
+     "said": "MET",
+     "evidence": "LOADED BY `internal/lint/docs.go:RenderReadme` (reads/writes README.md between markers, invoked by `cmd/gwlintdocs/main.go` via `make docs`), staleness enforced by `internal/lint/docs_test.go`; README contains all required sections (what it is, quick start, YAML reference, generated rulebook table, CI/BOSS usage).",
+     "recorded": "partial"
+    },
+    {
+     "n": 26,
+     "said": "MET",
+     "evidence": "naming throughout (`Match`, `pathMatches`, `VerifyJWT`, `TokenBucket`, `Breaker`, `applyCORS`, `RedactFields`) is plain, idiomatic, and readable by someone unfamiliar with the codebase.",
+     "recorded": "partial"
+    },
+    {
+     "n": 27,
+     "said": "MET",
+     "evidence": "`docker-compose.yml` has no dependency on any external service; mocks are self-contained (`mocks/echo-upstream/main.go` generates its own TLS cert and JWKS).",
+     "recorded": "met"
+    },
+    {
+     "n": 28,
+     "said": "MET",
+     "evidence": "verified live: `go test -race ./internal/config/...` passes, including `TestStore_ConcurrentSwapAndRead_NoRace`.",
+     "recorded": "partial"
+    },
+    {
+     "n": 29,
+     "said": "MET",
+     "evidence": "`cmd/gwlint/gwlint_test.go:TestGwlint_NeverLeaksSecretValue` extracts the real inlined secret from `examples/lumen-pay.bad.yaml` and asserts it's absent from both human and `--json` output; backed by `internal/lint/report.go` redacting all rendered fields via `internal/redact`.",
+     "recorded": "met"
+    },
+    {
+     "n": 30,
+     "said": "MET",
+     "evidence": "`cmd/northgate-gateway/readyz_test.go` tests all three states (`TestReadyz_NeverLoaded_Returns503`, `TestReadyz_Loaded_Returns200`, `TestReadyz_RejectedReloadAfterGoodLoad_StaysReady`); rejection logging verified by `internal/config/reload_metrics_test.go:TestReloadOnce_Rejected_LogsStructuredJSON`.",
+     "recorded": "met"
+    }
+   ]
+  },
+  "acc_867e506d842a445ca76c": {
+   "run": "crun_f4360a7195f945a58b62",
+   "recorded": {
+    "met": 24,
+    "missing": 0,
+    "partial": 6,
+    "unjudged": 0
+   },
+   "answers": [
+    {
+     "n": 1,
+     "said": "MET",
+     "evidence": "`cmd/northgate-gateway/integration_test.go:186-286` (`TestGateway_ValidJWT_ReachesUpstream`, `TestGateway_NoJWT_Returns401`, `TestGateway_RateLimit_11thRequestIs429`) build and run the real binary; all pass. `Makefile` `run-staging` → `docker-compose.yml` `gateway-staging`+`mock-upstream-staging`.",
+     "recorded": "met"
+    },
+    {
+     "n": 2,
+     "said": "MET",
+     "evidence": "LOADED BY `internal/config/watcher.go:Watch` (polls `dir`/`tenants` mtimes, calls `ReloadOnce`→`Load`). Broken-edit rejection verified in `TestGateway_HotReload_InvalidEditRejectedKeepsServing` (integration_test.go:348-405) and `internal/config/reload_metrics_test.go`.",
+     "recorded": "partial"
+    },
+    {
+     "n": 3,
+     "said": "MET",
+     "evidence": "ran `go run ./cmd/gwlint validate examples/lumen-pay.bad.yaml` → exit 1, 8 violations w/ line+rule+fix; `--fix` round-trip confirmed live (fixes mechanical rules, lists 5 \"needs a human\"). `internal/lint/fixer.go`, `cmd/gwlint/main.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 4,
+     "said": "MET",
+     "evidence": "ran `go run ./cmd/gwlint validate examples/lumen-pay.good.yaml` → exit 0, \"no violations found\".",
+     "recorded": "met"
+    },
+    {
+     "n": 5,
+     "said": "MET",
+     "evidence": "`go vet ./...` clean, `go test ./...` all packages pass (verified live). README quick start commands correspond 1:1 to actual code paths (verified via integration tests covering the same scenarios).",
+     "recorded": "partial"
+    },
+    {
+     "n": 6,
+     "said": "MET",
+     "evidence": "`go.mod:1` single module `northgate`; `Dockerfile` builds `northgate-gateway`, `gwlint`, `echo-upstream` from one module, zero non-stdlib deps besides `yaml.v3`.",
+     "recorded": "met"
+    },
+    {
+     "n": 7,
+     "said": "MET",
+     "evidence": "`internal/proxy/router.go` `Match()`/`rewritePath()` — host, path-prefix, method matching + rewrite.",
+     "recorded": "met"
+    },
+    {
+     "n": 8,
+     "said": "MET",
+     "evidence": "LOADED BY `internal/config/loader.go:Load` (reads `gateway.yaml` + `tenants/*.yaml`) and `internal/config/watcher.go:Watch`/`ReloadOnce` (validate→`atomic.go:Store.Swap`, reject keeps last-good + `logReloadRejected`).",
+     "recorded": "met"
+    },
+    {
+     "n": 9,
+     "said": "MET",
+     "evidence": "`internal/auth/jwt.go:VerifyJWT` (issuer/audience/scopes), `internal/auth/jwks.go:JWKSCache` (caching), `internal/auth/apikey.go` (SHA256+constant-time compare), `internal/auth/mtls.go`, no-auth-without-public enforced in `internal/config/loader.go:validateTenant`.",
+     "recorded": "met"
+    },
+    {
+     "n": 10,
+     "said": "MET",
+     "evidence": "`internal/ratelimit/bucket.go` (`TokenBucket`), keyed per-tenant and per-route in `internal/proxy/handler.go:182-206`.",
+     "recorded": "met"
+    },
+    {
+     "n": 11,
+     "said": "MET",
+     "evidence": "CORS: `internal/proxy/handler.go:applyCORS`. Size limits: `http.MaxBytesReader` in handler.go:158-162. Schema validation: `internal/proxy/handler.go:404-410` calls `internal/validate/jsonschema.go:Against` against `m.Route.RequestSchema`; README quick start's refunds-schema example matches this code path.",
+     "recorded": "partial"
+    },
+    {
+     "n": 12,
+     "said": "MET",
+     "evidence": "timeouts (`handler.go:379-382`), idempotent-only retries (`isIdempotent`, handler.go:335-342), circuit breaker state machine `internal/resilience/breaker.go:57-78`.",
+     "recorded": "met"
+    },
+    {
+     "n": 13,
+     "said": "MET",
+     "evidence": "`internal/proxy/handler.go:applyHeaderTransforms` (add/remove/rename) + request-id generation/propagation (handler.go:135-136,433,449).",
+     "recorded": "met"
+    },
+    {
+     "n": 14,
+     "said": "MET",
+     "evidence": "structured JSON logs `handler.go:logAccess`; configurable PII redaction `internal/redact/redact.go:RedactFields` fed by `TenantConfig.PIIFields`; `/healthz`,`/readyz`,`/metrics` all registered in `cmd/northgate-gateway/main.go:82-89`, metrics via real Prometheus-text registry `internal/metrics/metrics.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 15,
+     "said": "MET",
+     "evidence": "`docker-compose.yml` defines `gateway-staging`(8080)/`gateway-production`(8081) with separate `CONFIG_DIR`s, plus `mock-upstream-staging`/`mock-upstream-production` (`mocks/echo-upstream/main.go`); no external services.",
+     "recorded": "met"
+    },
+    {
+     "n": 16,
+     "said": "MET",
+     "evidence": "unit tests: `internal/proxy/router_test.go`, `internal/auth/auth_test.go`, `internal/ratelimit/limiter_test.go`, `internal/config/atomic_test.go`/`reload_metrics_test.go`; integration test `cmd/northgate-gateway/integration_test.go` exercises auth→rate-limit→upstream.",
+     "recorded": "met"
+    },
+    {
+     "n": 17,
+     "said": "MET",
+     "evidence": "`cmd/northgate-gateway/main.go` single binary, YAML-configured via `internal/config`.",
+     "recorded": "partial"
+    },
+    {
+     "n": 18,
+     "said": "MET",
+     "evidence": "LOADED BY `schema/schema.go:Validate` (embeds and parses `tenant.schema.json`), invoked from `internal/lint/engine.go:Validate`.",
+     "recorded": "met"
+    },
+    {
+     "n": 19,
+     "said": "MET",
+     "evidence": "LOADED BY `rules/loader.go:Load` (embeds `api-guidelines.yaml`), called from `internal/lint/rules.go:Rules` (overlays metadata onto 23 executable Go checks — confirmed ≥20, all with id/severity/title/why/fix).",
+     "recorded": "met"
+    },
+    {
+     "n": 20,
+     "said": "MET",
+     "evidence": "every sub-check has a live Go rule in `internal/lint/rules.go`: `auth-required`, `cors-no-wildcard-with-credentials`, `upstream-https-required`, `no-inlined-secrets`, `rate-limit-required`, `no-sensitive-paths-exposed`, `jwt-audience-required`, `mtls-required-partner-sensitive`, `request-size-capped`, `pii-fields-declared`, `no-wildcard-methods` — verified live against bad/good fixtures.",
+     "recorded": "met"
+    },
+    {
+     "n": 21,
+     "said": "MET",
+     "evidence": "`versioned-base-path`, `kebab-case-path`, `allowed-methods-only`, `timeout-within-bounds`, `owner-present`, `contact-well-formed`, `description-present`, `deprecation-sunset-date`, `tenant-id-matches-filename` all implemented in `internal/lint/rules.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 22,
+     "said": "MET",
+     "evidence": "exit codes 0/1/2 verified live (`cmd/gwlint/main.go`); human+`--json` reports with rule id/line/why/fix (`internal/lint/report.go`); `--fix` + golden tests in `cmd/gwlint/gwlint_test.go`, `schema_test.go`.",
+     "recorded": "met"
+    },
+    {
+     "n": 23,
+     "said": "MET",
+     "evidence": "`examples/lumen-pay.bad.yaml` confirmed (live run) to trigger wildcard-CORS+credentials, http upstream, inlined API key, missing rate limit, `/admin` path; README documents fork→branch→PR→BOSS-validates onboarding flow.",
+     "recorded": "met"
+    },
+    {
+     "n": 24,
+     "said": "MET",
+     "evidence": "`go vet ./...` and `go test ./...` ran clean live; `Makefile` has `test`, `run-staging`, `run-prod` targets exactly as specified.",
+     "recorded": "met"
+    },
+    {
+     "n": 25,
+     "said": "MET",
+     "evidence": "`README.md` has what-it-is, 5-min quickstart, YAML reference, rulebook table (LOADED BY `cmd/gwlintdocs/main.go` → `internal/lint:RenderReadme`, regenerated via `make docs`, drift-checked by `internal/lint/docs_test.go`), and CI/BOSS section.",
+     "recorded": "partial"
+    },
+    {
+     "n": 26,
+     "said": "MET",
+     "evidence": "naming across `internal/*` packages (`TokenBucket`, `JWKSCache`, `ReloadState`, `applyHeaderTransforms`) is plain and consistent; code reads cleanly for a non-author.",
+     "recorded": "partial"
+    },
+    {
+     "n": 27,
+     "said": "MET",
+     "evidence": "`docker-compose.yml` builds only from local `Dockerfile`; gateway/gwlint have no runtime external dependencies.",
+     "recorded": "met"
+    },
+    {
+     "n": 28,
+     "said": "MET",
+     "evidence": "ran `go test -race ./internal/config/...` live → pass; `internal/config/atomic_test.go:TestStore_ConcurrentSwapAndRead_NoRace`.",
+     "recorded": "met"
+    },
+    {
+     "n": 29,
+     "said": "MET",
+     "evidence": "ran `TestGwlint_NeverLeaksSecretValue` live → pass (extracts real secret from bad fixture, asserts absence in human+`--json` output); redaction in `internal/lint/report.go` via `internal/redact`.",
+     "recorded": "met"
+    },
+    {
+     "n": 30,
+     "said": "MET",
+     "evidence": "`internal/config/reload_state.go:ReloadState.Ready` + `cmd/northgate-gateway/readyz_test.go` cover all 3 states (never-loaded→503, loaded→200, rejected-after-loaded→200) and confirm rejection reason is recorded/logged (`logReloadRejected`).",
+     "recorded": "met"
+    }
+   ]
+  }
+ }
+}

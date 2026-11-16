@@ -710,7 +710,11 @@ _CHECKABLE = re.compile(
     r"|\b(?:https?|wss?|grpc|jwt|jwks|mtls|tls|ssl|oauth2?|oidc|saml|http|rest|cors|json|yaml"
     r"|toml|xml|sql|openapi|get|post|put|patch|delete|head|options)\b"
     r"|(?:^|\s)/[\w{<:\-]"
-    r"|\bmust\b|\bat\s+least\b|\bexit\s+codes?\b", re.I)
+    r"|\bmust\b|\bat\s+least\b|\bexit\s+codes?\b"
+    # NEVER A MATTER OF TASTE (BOSSAPP-1329 review): secrets, logging, retries, auth, errors
+    # and security are facts a check must find, whatever a reader tagged.
+    r"|\bsecrets?\b|\bcredentials?\b|\blog(?:s|ged|ging)?\b|\bretr(?:y|ies|ied)\b"
+    r"|\bauth\w*\b|\berrors?\b|\bsecur\w*\b", re.I)
 #: A data file a program reads to decide what it does (a rulebook, a schema, rules/policy).
 _READ_FILE = re.compile(r"(?i)(?<![\w/.\-])([\w.\-]+(?:/[\w.\-]+)*\.(?:ya?ml|json))(?![\w/])")
 _READ_ROLE = re.compile(r"(?i)\bschema\b|\brule ?book\b|\brules\b|\bguidelines?\b|\bpolic(?:y|ies)\b")
