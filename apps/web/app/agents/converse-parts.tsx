@@ -131,15 +131,31 @@ export function FailureNote({ failure, onRetry }: { failure: ModelFailure; onRet
   );
 }
 
+/** Trimmed message. Nothing when it is blank or already the headline. */
+export function problemMessageSentence(headline: string, message: string): string | null {
+  const text = message.trim();
+  if (!text || text === headline.trim()) return null;
+  return text;
+}
+
+/** More than six words is a paragraph. Shorter stays a span. */
+function ProblemWhy({ sentence }: { sentence: string }) {
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  return long
+    ? <p data-testid="ag-problem-why" data-user-text>{sentence}</p>
+    : <span data-testid="ag-problem-why" data-user-text>{sentence}</span>;
+}
+
 export function ProblemNote({ problem, onClose }: { problem: ConverseProblem; onClose?: () => void }) {
   if (problem.failure) return <FailureNote failure={problem.failure} />;
   const needsModel = problem.code === "needs_model";
+  const headline = needsModel ? "Needs a model" : problem.code === "budget" ? "Budget refused this"
+    : problem.code === "busy" ? "Still answering" : "Not sent";
+  const sentence = problemMessageSentence(headline, problem.message);
   return (
     <div className="ag-fail" role="alert" data-testid="ag-problem" data-code={problem.code ?? ""}>
-      <span className="ag-fail-head" title={problem.message}>
-        {needsModel ? "Needs a model" : problem.code === "budget" ? "Budget refused this"
-          : problem.code === "busy" ? "Still answering" : "Not sent"}
-      </span>
+      <span className="ag-fail-head" title={problem.message}>{headline}</span>
+      {sentence ? <ProblemWhy sentence={sentence} /> : null}
       <span className="ag-fail-acts">
         {needsModel ? <a className="ag-link" href="/?area=setup&focus=models" title={NEEDS_MODEL}>Setup ↗</a> : null}
         {problem.code === "budget" ? <a className="ag-link" href="/?area=budget">Budget ↗</a> : null}
