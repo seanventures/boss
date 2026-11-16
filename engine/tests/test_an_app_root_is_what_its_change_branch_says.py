@@ -160,6 +160,30 @@ def test_a_checkout_of_another_repository_is_stopped(tmp_path):
     assert problem and "acme/old-node-gateway" in problem and "acme/northgate-gateway" in problem
 
 
+def test_a_local_repository_checkout_is_its_own_lineage(tmp_path):
+    """Northgate round 7 (crun_800794b35b804c27bead): a LOCAL repository is named
+    `local_<project>/<repo>` but its file remote ends `<project>/<repo>.git`
+    (local_repo.bare_path). That is the same repository, never 'another repository'; a
+    different local project or repo name still is."""
+    url = "file:///var/lib/boss/repos/northgate-gateway/northgate-gateway.git"
+    co = _checkout(tmp_path / "local", url=url)
+    assert vt.checkout_problem(co, branch="boss/code/crun_24f3",
+                               owner="local_northgate-gateway",
+                               repo="northgate-gateway") is None
+    # The local git-over-HTTP remote names the owner itself: also the same repository.
+    http = _checkout(tmp_path / "http",
+                     url="http://boss-local/local_northgate-gateway/northgate-gateway")
+    assert vt.checkout_problem(http, branch="boss/code/crun_24f3",
+                               owner="local_northgate-gateway",
+                               repo="northgate-gateway") is None
+    other = vt.checkout_problem(co, branch="boss/code/crun_24f3",
+                                owner="local_other-project", repo="northgate-gateway")
+    assert other and "another repository" in other
+    other_repo = vt.checkout_problem(co, branch="boss/code/crun_24f3",
+                                     owner="local_northgate-gateway", repo="old-gateway")
+    assert other_repo and "another repository" in other_repo
+
+
 def test_a_checkout_that_is_not_the_branch_head_is_stopped(tmp_path):
     co = _checkout(tmp_path / "co")
     # The branch moved on elsewhere: its head is not in this checkout's history.
