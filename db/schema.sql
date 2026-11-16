@@ -16142,3 +16142,30 @@ CREATE INDEX IF NOT EXISTS idx_live_action_decisions_project
 CREATE UNIQUE INDEX IF NOT EXISTS uq_live_action_decisions_dedupe
   ON live_action_decisions (project_id, app_key, dedupe_key)
   WHERE dedupe_key IS NOT NULL;
+-- BOSSAPP-1271: approved source addresses for the console and published apps.
+-- An empty ip_allowlist is no restriction, so the console is not locked out.
+-- A request from any other address is refused and one row is written to ip_allow_audit.
+CREATE TABLE IF NOT EXISTS ip_allowlist (
+  id TEXT PRIMARY KEY,
+  cidr TEXT NOT NULL,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE ip_allowlist ADD COLUMN IF NOT EXISTS cidr TEXT;
+ALTER TABLE ip_allowlist ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
+ALTER TABLE ip_allowlist ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ip_allowlist_cidr ON ip_allowlist (cidr);
+
+CREATE TABLE IF NOT EXISTS ip_allow_audit (
+  id TEXT PRIMARY KEY,
+  surface TEXT NOT NULL CHECK (surface IN ('console', 'published_app')),
+  client_ip TEXT NOT NULL,
+  outcome TEXT NOT NULL DEFAULT 'refused' CHECK (outcome = 'refused'),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE ip_allow_audit ADD COLUMN IF NOT EXISTS surface TEXT;
+ALTER TABLE ip_allow_audit ADD COLUMN IF NOT EXISTS client_ip TEXT;
+ALTER TABLE ip_allow_audit ADD COLUMN IF NOT EXISTS outcome TEXT NOT NULL DEFAULT 'refused';
+ALTER TABLE ip_allow_audit ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS idx_ip_allow_audit_created
+  ON ip_allow_audit (created_at DESC);
