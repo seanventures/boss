@@ -151,7 +151,10 @@ def test_the_real_northgate_row_keeps_every_met_the_reviewer_evidenced(tmp_path)
     assert {n for n, i in got.items() if i["status"] == "partial"} == reviewer_partial
 
     rec = ag.judge(ROW["items"], _reply(ROW["answers"]), {}, root=root)
-    assert rec["counts"]["met"] == 27 and rec["partial"] == [9, 13, 30]
+    # Item 6, the Stack line, needs a person: "static binaries" is a build property no recorded
+    # check or explicit CGO_ENABLED=0 build proves here (PR #177 review) — never met, never a gap.
+    assert rec["counts"]["met"] == 26 and rec["partial"] == [9, 13, 30]
+    assert next(i for i in rec["items"] if i["n"] == 6)["status"] == "human"
 
 
 @pytest.mark.parametrize("cited,where", [

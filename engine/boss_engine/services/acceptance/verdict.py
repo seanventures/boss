@@ -933,29 +933,22 @@ class _Definitions:
                 text = p.read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 continue
+            here = p.parent.relative_to(self.root)
+            if "compose" in low:
+                got, unknown = _compose_env(text, here, p.parent, name)
+                if got is not None:
+                    found.extend(got)
+                    unresolved = unresolved or unknown
+                    continue
             # A path inside the image is the tree file a COPY put there (`COPY rates.yaml
             # /app/rates.yaml`), so the value names what the tree holds.
-            copies = _image_copies(text, p.parent.relative_to(self.root))
+            copies = _image_copies(text, here)
             for m in re.finditer(r"(?m)^\s*ENV\s+(.*)$", text):
                 for k, v in re.findall(r"([A-Za-z_]\w*)(?:=|\s+)(\"[^\"]*\"|\S+)", m.group(1)):
                     if k == name:
                         found.append(_image_path(v.strip("\"'"), copies))
-            for m in re.finditer(r"(?m)^\s*-?\s*" + n + r"\s*[:=]\s*(\S.*?)\s*$", text):
-                # compose: a path in the container is the tree directory a bind mount put there
-                # (`./config:/app/config-staging`, Northgate r8b item 2).
-                found.append(_image_path(m.group(1).strip("\"'"), copies))
-            # `env_file:` (compose): the file in the tree is read; one that is not makes the
-            # value unknowable, so the path is unresolved (PR #172 re-review).
-            for m in re.finditer(r"(?ms)^(\s*)env_file\s*:\s*(.*?)(?=^\1\S|\Z)", text):
-                for ref in re.findall(r"[\w./\-]+", m.group(2).split("\n")[0] or "") + \
-                        re.findall(r"(?m)^\s*-\s*(?:path\s*:\s*)?([\w./\-]+)", m.group(2)):
-                    env = (p.parent / ref)
-                    if not env.is_file():
-                        unresolved = True
-                        continue
-                    for em in re.finditer(r"(?m)^\s*(?:export\s+)?" + n + r"\s*=\s*(.*?)\s*$",
-                                          env.read_text(encoding="utf-8", errors="ignore")):
-                        found.append(em.group(1).strip("\"'"))
+            if "compose" in low:                    # a compose file YAML could not read
+                unresolved = unresolved or bool(re.search(r"\b" + n + r"\b", text))
         if unresolved:
             found = [_UNRESOLVED]
         cache[name] = found
@@ -1202,6 +1195,62 @@ _ENV_LOOKUP = re.compile(r"\b(?:os\.(?:Getenv|LookupEnv|getenv)|os\.environ\.get
 _UNRESOLVED = "\x00unresolved"
 
 
+def _compose_env(text: str, here: Path, folder: Path, name: str
+                 ) -> tuple[Optional[list[str]], bool]:
+    """(values, unknown) of environment variable `name` in a compose file, each SERVICE's value
+    mapped back to the tree through THAT service's bind mounts (the service that sets it is the
+    one whose process reads it). `unknown`: a service's `env_file` is not in the tree. (None,
+    False) when the file is not YAML compose can read."""
+    try:
+        import yaml
+
+        doc = yaml.safe_load(text)
+    except Exception:  # noqa: BLE001 — not readable: the caller falls back to plain text
+        return None, False
+    services = (doc or {}).get("services") if isinstance(doc, dict) else None
+    if not isinstance(services, dict):
+        return None, False
+    base = "" if str(here) in ("", ".") else here.as_posix() + "/"
+    values: list[str] = []
+    unknown = False
+    for svc in services.values():
+        if not isinstance(svc, dict):
+            continue
+        mounts: list[tuple[list[str], str]] = []
+        for vol in svc.get("volumes") or []:
+            src = dst = None
+            if isinstance(vol, str) and ":" in vol:
+                parts = vol.split(":")
+                src, dst = parts[0], parts[1]
+            elif isinstance(vol, dict) and vol.get("type", "bind") == "bind":
+                src, dst = vol.get("source"), vol.get("target")
+            if src and dst and (src.startswith((".", "/")) is False or src.startswith(".")) \
+                    and str(dst).startswith("/"):
+                mounts.append(([base + re.sub(r"^\./", "", str(src)).rstrip("/")], str(dst)))
+        env = svc.get("environment") or {}
+        said: list[str] = []
+        if isinstance(env, dict):
+            if name in env and env[name] is not None:
+                said.append(str(env[name]))
+        elif isinstance(env, list):
+            for e in env:
+                k, _, val = str(e).partition("=")
+                if k.strip() == name and _:
+                    said.append(val.strip())
+        files = svc.get("env_file") or []
+        for ref in ([files] if isinstance(files, (str, dict)) else files):
+            path = ref.get("path") if isinstance(ref, dict) else ref
+            env_path = folder / str(path or "")
+            if not path or not env_path.is_file():
+                unknown = True
+                continue
+            for em in re.finditer(r"(?m)^\s*(?:export\s+)?" + re.escape(name) + r"\s*=\s*(.*?)\s*$",
+                                  env_path.read_text(encoding="utf-8", errors="ignore")):
+                said.append(em.group(1))
+        values.extend(_image_path(x.strip("\"'"), mounts) for x in said)
+    return values, unknown
+
+
 def _image_copies(text: str, here: Path) -> list[tuple[list[str], str]]:
     """(tree sources, path in the container) for every Dockerfile `COPY` (relative to its
     WORKDIR) and every compose bind mount (`./config:/app/config-staging`), the sources
@@ -1214,7 +1263,13 @@ def _image_copies(text: str, here: Path) -> list[tuple[list[str], str]]:
         if w:
             workdir = w.group(1) if w.group(1).startswith("/") else workdir.rstrip("/") + "/" + w.group(1)
             continue
-        c = re.match(r"\s*COPY\s+(?!--from)(?:--\S+\s+)*(.+?)\s+(\S+)\s*$", ln, re.I)
+        c = re.match(r"\s*COPY\s+((?:--\S+\s+)*)(.+?)\s+(\S+)\s*$", ln, re.I)
+        if c and not re.search(r"(?i)--from\b", c.group(1)):
+            # A COPY from another stage or image (`--from` among its flags) brings nothing of
+            # the tree.
+            c = re.match(r"\s*COPY\s+(?:--\S+\s+)*(.+?)\s+(\S+)\s*$", ln, re.I)
+        else:
+            c = None
         if c:
             dest = c.group(2)
             if not dest.startswith("/"):

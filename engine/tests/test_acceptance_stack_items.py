@@ -10,15 +10,19 @@ container path was no longer the tree's `config`, so item 2's loader chain broke
 Now:
   * language       the tree has that language's manifest or code;
   * one Go module  exactly one go.mod, with every package the item names under it;
-  * static         a BUILD property, proven by a command BOSS recorded and verified (`ldd` /
-                   `file` / `go build` with CGO_ENABLED=0) or by a Dockerfile build that makes the
-                   binaries static (CGO_ENABLED=0; a Go 1.20+ golang alpine stage with no C
-                   compiler installed; a final stage FROM scratch or distroless/static); never
-                   by the answer's prose;
+  * static         a BUILD property of the NAMED binaries, proven only by a command BOSS
+                   recorded and verified (`ldd` / `file` of one of them, `go build` with
+                   CGO_ENABLED=0 of one of them) or by the Dockerfile that builds them: an
+                   explicit CGO_ENABLED=0 in the stage the final stage copies the binary from,
+                   or a final stage FROM scratch / distroless static copying exactly that
+                   binary. Otherwise a person confirms it (HUMAN) — never met, never a gap
+                   (PR #177 review: no inference from a compiler-less alpine image);
   * dependencies   as acceptance/dependencies.claim reads them;
   * anything else  a part BOSS cannot check, named.
-The item is met only when every part is proven. A container path is mapped back to the tree
-through a Dockerfile COPY (relative to its WORKDIR) or a compose bind mount.
+The item is met only when every part is proven. Northgate's re-check therefore reads 29 met and
+item 6 HUMAN. A container path is mapped back to the tree through a Dockerfile COPY (relative to
+its WORKDIR, never `--from` another stage) or the bind mounts of the compose service that sets it;
+services that disagree resolve nothing.
 
 The fixture is the re-check's real row (each item and each answer as the reviewer gave it) over
 the Northgate tree of acceptance_ar29.
@@ -29,6 +33,7 @@ import json
 from pathlib import Path
 
 import pytest
+from typing import Optional
 
 from boss_engine.services import acceptance_gate as ag
 from boss_engine.services.acceptance import dependencies as deps
@@ -46,23 +51,35 @@ def _reply(answers) -> str:
         + "\nACCEPTANCE: MET\n"
 
 
-def test_the_r8b_recheck_replays_30_of_30():
+def test_the_r8b_recheck_replays_29_met_and_the_stack_line_needs_a_person():
     assert R8B["recorded"] == {"met": 29, "missing": 0, "partial": 1, "unjudged": 0}
     assert [a["n"] for a in R8B["answers"] if a.get("recorded_reason")] == [6]
     rec = ag.judge(R8B["items"], _reply(R8B["answers"]), {}, root=TREE)
-    assert rec["counts"]["met"] == 30 and rec["verdict"] == "met", [
+    assert rec["counts"]["met"] == 29 and not rec["partial"] and not rec["missing"], [
         (i["n"], i["evidence"][-160:]) for i in rec["items"] if i["status"] != "met"]
+    six = next(i for i in rec["items"] if i["n"] == 6)
+    assert six["status"] == "human" and "static binaries: not proven" in six["evidence"]
+    assert [i["n"] for i in rec["items"] if i["status"] == "human"] == [6]
+    assert rec["verdict"] == "not_met"           # a person still confirms it; never a pass
+    from boss_engine.services.acceptance import ledger
+
+    assert ledger._gap_of(six) == "minor"         # never a major gap
 
 
-def test_the_northgate_stack_item_is_proven_part_by_part():
+def test_the_northgate_stack_item_needs_a_person_not_a_pass():
     got = deps.stack_claim(STACK, TREE)
-    assert got[0] == "met", got
-    assert "one Go module (gateway, gwlint)" in got[1] and "static: Dockerfile" in got[1]
+    assert got[0] == "human", got
+    assert "no package named exactly gateway" in got[1]
+    assert "static binaries: not proven by a recorded check" in got[1]
 
 
 # ── a tree to vary ──────────────────────────────────────────────────────────────────────────
 
-def _tree(tmp_path, dockerfile: str, *, mods=("",), cmds=("northgate-gateway", "gwlint")):
+NAMED = "Stack: Go. (northgate-gateway and gwlint: one Go module, static binaries)"
+
+
+def _tree(tmp_path, dockerfile: str = "", *, mods=("",), cmds=("northgate-gateway", "gwlint"),
+          extra: Optional[dict] = None):
     for m in mods:
         (tmp_path / m).mkdir(parents=True, exist_ok=True)
         (tmp_path / m / "go.mod").write_text("module northgate\n\ngo 1.23\n")
@@ -71,60 +88,87 @@ def _tree(tmp_path, dockerfile: str, *, mods=("",), cmds=("northgate-gateway", "
         (tmp_path / "cmd" / c / "main.go").write_text("package main\n\nfunc main() {}\n")
     if dockerfile:
         (tmp_path / "Dockerfile").write_text(dockerfile)
+    for name, text in (extra or {}).items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text)
     return tmp_path
 
 
-PLAIN = ("FROM golang:1.23 AS build\nWORKDIR /src\nCOPY . .\n"
-         "RUN go build -o /out/gw ./cmd/northgate-gateway\nFROM debian:bookworm-slim\n"
-         "COPY --from=build /out/gw /gw\n")
+SHIP = ("FROM debian:bookworm-slim\nCOPY --from=build /out/northgate-gateway /usr/local/bin/\n"
+        "COPY --from=build /out/gwlint /usr/local/bin/\n")
 
 
 @pytest.mark.parametrize("dockerfile", [
-    "FROM golang:1.23 AS build\nRUN CGO_ENABLED=0 go build -o /out/gw ./cmd/northgate-gateway\n"
-    "FROM debian:bookworm-slim\n",
-    "FROM golang:1.23 AS build\nENV CGO_ENABLED=0\nRUN go build -o /out/gw ./cmd/northgate-gateway\n"
-    "FROM debian:bookworm-slim\n",
-    "FROM golang:1.23-alpine AS build\nRUN go build -o /out/gw ./cmd/northgate-gateway\n"
-    "FROM alpine:3.20\n",
-    PLAIN + "FROM scratch\nCOPY --from=build /out/gw /gw\n",
-    PLAIN + "FROM gcr.io/distroless/static-debian12\nCOPY --from=build /out/gw /gw\n",
+    "FROM golang:1.23 AS build\n"
+    "RUN CGO_ENABLED=0 go build -o /out/northgate-gateway ./cmd/northgate-gateway\n"
+    "RUN CGO_ENABLED=0 go build -o /out/gwlint ./cmd/gwlint\n" + SHIP,
+    "FROM golang:1.23 AS build\nENV CGO_ENABLED=0\n"
+    "RUN go build -o /out/northgate-gateway ./cmd/northgate-gateway && \\\n"
+    "    go build -o /out/gwlint ./cmd/gwlint\n" + SHIP,
+    "FROM golang:1.23 AS build\n"
+    "RUN export CGO_ENABLED=0; go build -o /out/northgate-gateway ./cmd/northgate-gateway; "
+    "go build -o /out/gwlint ./cmd/gwlint\n" + SHIP,
 ])
-def test_a_dockerfile_build_that_makes_static_binaries_proves_it(tmp_path, dockerfile):
-    assert deps.stack_claim(STACK, _tree(tmp_path, dockerfile))[0] == "met"
+def test_an_explicit_cgo_off_build_of_the_named_binaries_proves_static(tmp_path, dockerfile):
+    got = deps.stack_claim(NAMED, _tree(tmp_path, dockerfile))
+    assert got[0] == "met", got
 
 
-@pytest.mark.parametrize("dockerfile", [
-    PLAIN,                                                         # cgo on (a C compiler there)
-    "FROM golang:1.23-alpine AS build\nRUN apk add --no-cache build-base\n"
-    "RUN go build -o /out/gw ./cmd/northgate-gateway\nFROM alpine:3.20\n",
-    "FROM golang:1.19-alpine AS build\nRUN go build -o /out/gw ./cmd/northgate-gateway\n"
-    "FROM alpine:3.20\n",                                          # before Go 1.20's default
-    "FROM golang:1.23-alpine AS build\nENV CGO_ENABLED=1\n"
-    "RUN go build -o /out/gw ./cmd/northgate-gateway\nFROM alpine:3.20\n",
-    "FROM golang:1.23 AS build\nRUN CGO_ENABLED=0 go build -o /out/gw ./cmd/northgate-gateway\n"
-    "RUN go build -o /out/lint ./cmd/gwlint\nFROM debian:bookworm-slim\n",   # one of two
-    "",                                                            # no Dockerfile at all
+def test_a_scratch_image_copying_exactly_the_binary_proves_static(tmp_path):
+    item = "Stack: Go. (gwlint: one Go module, static binaries)"
+    for base in ("scratch", "gcr.io/distroless/static-debian12"):
+        root = _tree(tmp_path, "FROM golang:1.23 AS build\nRUN go build -o /out/gwlint ./cmd/gwlint\n"
+                               f"FROM {base}\nCOPY --from=build /out/gwlint /gwlint\n")
+        assert deps.stack_claim(item, root)[0] == "met", base
+
+
+GW = "RUN go build -o /out/northgate-gateway ./cmd/northgate-gateway\nRUN go build -o /out/gwlint ./cmd/gwlint\n"
+
+
+@pytest.mark.parametrize("dockerfile,extra", [
+    # the review's probes: none of these is a static build of the named binaries
+    ("FROM golang:1.23-alpine AS build\nRUN apk add --no-cache \\\n    gcc musl-dev\n" + GW + SHIP, None),
+    ("FROM golang:1.23-alpine AS build\nRUN apk add g++\n" + GW + SHIP, None),
+    ("FROM golang:1.23-alpine AS build\nRUN apk add alpine-sdk\n" + GW + SHIP, None),
+    ("FROM golang:1.23-alpine AS build\n" + GW + SHIP, None),       # no inference from alpine
+    ("FROM golang:1.23 AS build\nRUN make build\n" + SHIP, None),   # built by make
+    ("FROM golang:1.23 AS build\n" + GW + SHIP,                        # another Dockerfile
+     {"mocks/echo/Dockerfile": "FROM golang:1.23 AS b\nRUN CGO_ENABLED=0 go build -o /e ./mocks/echo\n"
+                               "FROM scratch\nCOPY --from=b /e /e\n"}),
+    ("FROM golang:1.23 AS build\nRUN CGO_ENABLED=0 go build -o /out/echo ./mocks/echo-upstream\n"
+     + GW + SHIP, None),                                              # cgo off for another package
+    ("FROM golang:1.23 AS tools\nRUN CGO_ENABLED=0 go build -o /out/gwlint ./cmd/gwlint\n"
+     "FROM golang:1.23 AS build\n" + GW + SHIP, None),               # not the stage it ships
+    ("FROM golang:1.23 AS build\n" + GW + "FROM scratch\nCOPY --from=build /out/ /bin/\n", None),
+    ("", None),
 ])
-def test_prose_alone_never_proves_static_binaries(tmp_path, dockerfile):
-    root = _tree(tmp_path, dockerfile)
+def test_nothing_but_a_check_of_the_named_binaries_proves_static(tmp_path, dockerfile, extra):
+    root = _tree(tmp_path, dockerfile, extra=extra)
     got = v.parse_acceptance(
         "ITEM 1: MET — single go.mod; built binary confirmed statically linked "
-        "(`ldd` → not a dynamic executable)\n", [{"n": 1, "text": STACK}], root=root)[0]
-    assert got["status"] == "partial" and "not proven: static binaries" in got["evidence"], got
+        "(`ldd` → not a dynamic executable)\n", [{"n": 1, "text": NAMED}], root=root)[0]
+    assert got["status"] == "human", got
+    assert "static binaries: not proven by a recorded check" in got["evidence"]
 
 
-@pytest.mark.parametrize("text,mods,cmds,why", [
-    (STACK, ("", "tools"), ("northgate-gateway", "gwlint"), "2 go.mod files"),
-    ("Stack: Go. (gateway and billing: one Go module, static binaries)", ("",),
-     ("northgate-gateway", "gwlint"), "no package for billing"),
-    ("Stack: Rust.", ("",), ("gwlint",), "no rust in the tree"),
-    ("Stack: Go. (one Go module, deployed on Kubernetes)", ("",), ("gwlint",), "cannot check"),
-    ("Stack: Elixir.", ("",), ("gwlint",), "cannot be checked"),
+@pytest.mark.parametrize("text,mods,cmds,extra,status,why", [
+    (NAMED, ("", "tools"), ("northgate-gateway", "gwlint"), None, "false", "2 go.mod files"),
+    ("Stack: Go. (northgate-gateway and billing: one Go module)", ("",),
+     ("northgate-gateway", "gwlint"), None, "false", "no package for billing"),
+    ("Stack: Go. (gateway and gwlint: one Go module)", ("",), ("northgate-gateway", "gwlint"),
+     None, "human", "no package named exactly gateway"),
+    ("Stack: Go. (gwlint and docs: one Go module)", ("",), ("gwlint",),
+     {"cmd/docs/README.md": "no go here\n"}, "false", "no package for docs"),   # no .go files
+    ("Stack: Go. (gwlint: one Go module)", ("",), ("gwlint",),
+     {"go.work": "go 1.23\n\nuse (\n\t.\n\t./tools\n)\n"}, "human", "go.work uses 2"),
+    ("Stack: Rust.", ("",), ("gwlint",), None, "false", "no rust in the tree"),
+    ("Stack: Go. (one Go module, deployed on Kubernetes)", ("",), ("gwlint",), None, "human",
+     "cannot check"),
+    ("Stack: Elixir.", ("",), ("gwlint",), None, "human", "cannot be checked"),
 ])
-def test_every_part_must_hold(tmp_path, text, mods, cmds, why):
-    got = deps.stack_claim(text, _tree(tmp_path, PLAIN.replace("go build", "CGO_ENABLED=0 go build"),
-                                       mods=mods, cmds=cmds))
-    assert got[0] == "false" and why in got[1], got
+def test_every_part_must_hold(tmp_path, text, mods, cmds, extra, status, why):
+    got = deps.stack_claim(text, _tree(tmp_path, mods=mods, cmds=cmds, extra=extra))
+    assert got[0] == status and why in got[1], got
 
 
 def test_a_non_stack_item_is_not_a_stack_item():
@@ -132,29 +176,48 @@ def test_a_non_stack_item_is_not_a_stack_item():
     assert deps.stack_claim("Written in Go", TREE) is None
 
 
-# ── the exercised door: a command BOSS recorded and verified ────────────────────────────────
+# ── the exercised door: a command BOSS recorded and verified, of a NAMED binary ─────────────
 
-def _record(stdout: str) -> CommandRecord:
+def _record(*cmds: Command) -> CommandRecord:
     r = CommandRecord()
-    r.add(Command(id="E1", cmd="ldd /out/northgate-gateway", argv=["ldd", "/out/northgate-gateway"],
-                  exit=1, stdout=stdout, tree_dirty=False, plain=True))
+    for c in cmds:
+        r.add(c)
     return r
 
 
-def test_a_recorded_ldd_proves_static_binaries(tmp_path):
-    root = _tree(tmp_path, PLAIN)
-    reply = 'AC-1: MET — one go.mod; E1 (exit 1) "not a dynamic executable"\n'
-    rows = v.parse_exercised(reply, [{"n": 1, "id": "AC-1", "text": STACK}], root=root,
-                             exec_log=_record("\tnot a dynamic executable\n"))
-    assert rows[0]["status"] == "met", rows
+def _run(tmp_path, reply: str, *cmds: Command):
+    item = "Stack: Go. (gwlint: one Go module, static binaries)"
+    return v.parse_exercised(reply, [{"n": 1, "id": "AC-1", "text": item}],
+                             root=_tree(tmp_path), exec_log=_record(*cmds))[0]
 
 
-def test_a_quote_the_record_does_not_hold_proves_nothing(tmp_path):
-    root = _tree(tmp_path, PLAIN)
-    reply = 'AC-1: MET — one go.mod; E1 (exit 1) "not a dynamic executable"\n'
-    rows = v.parse_exercised(reply, [{"n": 1, "id": "AC-1", "text": STACK}], root=root,
-                             exec_log=_record("\tlinux-vdso.so.1 (0x0000)\n\tlibc.so.6\n"))
-    assert rows[0]["status"] == "partial" and "not proven: static binaries" in rows[0]["evidence"]
+def test_a_recorded_ldd_of_the_named_binary_proves_static(tmp_path):
+    row = _run(tmp_path, 'AC-1: MET — E1 (exit 1) "not a dynamic executable"\n',
+               Command(id="E1", cmd="ldd /out/gwlint", argv=["ldd", "/out/gwlint"], exit=1,
+                       stdout="\tnot a dynamic executable\n", tree_dirty=False, plain=True))
+    assert row["status"] == "met", row
+
+
+def test_a_recorded_cgo_off_go_build_of_the_named_package_proves_static(tmp_path):
+    row = _run(tmp_path, 'AC-1: MET — E1 (exit 0) "built gwlint ok"\n',
+               Command(id="E1", cmd="CGO_ENABLED=0 go build -o /tmp/gwlint ./cmd/gwlint",
+                       exit=0, stdout="built gwlint ok\n", tree_dirty=False, plain=True))
+    assert row["status"] == "met", row
+
+
+@pytest.mark.parametrize("cmd,out", [
+    (Command(id="E1", cmd="file /bin/busybox", argv=["file", "/bin/busybox"], exit=0,
+             stdout="/bin/busybox: ELF 64-bit, statically linked, stripped\n",
+             tree_dirty=False, plain=True), "statically linked"),          # not a named binary
+    (Command(id="E1", cmd="CGO_ENABLED=0 go build -o /tmp/echo ./mocks/echo-upstream", exit=0,
+             stdout="built echo ok\n", tree_dirty=False, plain=True), "built echo ok"),
+    (Command(id="E1", cmd="ldd /out/gwlint", argv=["ldd", "/out/gwlint"], exit=0,
+             stdout="\tlinux-vdso.so.1 (0x0000)\n\tlibc.so.6 => /lib/libc.so.6\n",
+             tree_dirty=False, plain=True), "libc.so.6"),                  # dynamic after all
+])
+def test_a_recorded_check_of_anything_else_proves_nothing(tmp_path, cmd, out):
+    row = _run(tmp_path, f'AC-1: MET — E1 (exit {cmd.exit}) "{out}"\n', cmd)
+    assert row["status"] == "human" and "static binaries: not proven" in row["evidence"], row
 
 
 # ── a container path is the tree path a COPY or a bind mount put there ─────────────────────
@@ -195,3 +258,24 @@ def test_a_container_path_nothing_maps_stays_as_it_is(tmp_path):
         "services:\n  app:\n    environment:\n      - CONFIG_DIR=/etc/northgate\n")})
     assert d.param_value("load.go", "load", "dir") == "/etc/northgate"
     assert not d.body_reads("load.go", "load", ["config/tenants/a.yaml"])
+
+
+def test_each_service_maps_through_its_own_mounts_and_disagreeing_ones_resolve_nothing(tmp_path):
+    d = _env_tree(tmp_path, **{"docker-compose.yml": (
+        "services:\n  app:\n    environment:\n      - CONFIG_DIR=/app/config\n"
+        "  sidecar:\n    volumes:\n      - ./config:/app/config\n")})
+    # the mount is another service's: the app's /app/config is not the tree's config
+    assert d.param_value("load.go", "load", "dir") == "/app/config"
+    (tmp_path / "other").mkdir()
+    d = _env_tree(tmp_path / "x", **{"docker-compose.yml": (
+        "services:\n  a:\n    environment:\n      CONFIG_DIR: /app/c\n    volumes:\n"
+        "      - ./config:/app/c\n  b:\n    environment:\n      CONFIG_DIR: /app/c\n"
+        "    volumes:\n      - ./other:/app/c\n")})
+    assert d.param_value("load.go", "load", "dir") is None
+
+
+def test_a_copy_from_another_stage_is_never_the_tree(tmp_path):
+    d = _env_tree(tmp_path, Dockerfile="FROM alpine\nWORKDIR /app\n"
+                                       "COPY --chown=1000 --from=build /src/config ./config\n"
+                                       "ENV CONFIG_DIR=/app/config\n")
+    assert d.param_value("load.go", "load", "dir") == "/app/config"

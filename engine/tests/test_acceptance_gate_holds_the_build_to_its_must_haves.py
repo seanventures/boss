@@ -919,8 +919,8 @@ def test_the_kan9_repro_a_reader_tagging_real_requirements_judgement_never_passe
     # The floor ADDS needs_loader on the rulebook items (they name a rules YAML).
     assert all(i.get("needs_loader") for i in items if i["text"] in rulebook)
     (tmp_path / "main.go").write_text("package main\n")
-    # The Stack item is proven part by part (one go.mod covering gateway and gwlint, a static
-    # build): a tree that has them, so only the items this repro is about stay partial.
+    # The Stack item is judged part by part (a person confirms what the tree cannot prove, never
+    # a partial): a tree with its module, so only the items this repro is about are partial.
     (tmp_path / "go.mod").write_text("module northgate\n\ngo 1.23\n")
     for c in ("northgate-gateway", "gwlint"):
         (tmp_path / "cmd" / c).mkdir(parents=True)
