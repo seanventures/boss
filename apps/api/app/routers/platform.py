@@ -512,3 +512,66 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .ticket_systems import router as ticket_systems_router
 
     app.include_router(ticket_systems_router)
+
+    # Swarm gap routers. Every include already above stays, including factory_launch_router.
+    # 1241, 1244, 1245 and 1260 are not included: their handlers declare no access, and boot
+    # coverage fails closed on an undeclared route.
+    from .gap_1242 import router as gap_1242_router
+    from .gap_1243 import router as gap_1243_router
+    from .gap_1246 import router as gap_1246_router
+    from .gap_1248 import router as gap_1248_router
+    from .gap_1249 import router as gap_1249_router
+    from .gap_1250 import router as gap_1250_router
+    from .gap_1251 import router as gap_1251_router
+    from .gap_1252 import router as gap_1252_router
+    from .gap_1253 import router as gap_1253_router
+    from .gap_1254 import router as gap_1254_router
+    from .gap_1255 import router as gap_1255_router
+    from .gap_1256 import router as gap_1256_router
+    from .gap_1257 import router as gap_1257_router
+    from .gap_1258 import router as gap_1258_router
+    from .gap_1259 import router as gap_1259_router
+    from .gap_1261 import router as gap_1261_router
+    from .gap_1262 import router as gap_1262_router
+    from .gap_1263 import router as gap_1263_router
+    from .gap_1264 import router as gap_1264_router
+    from .gap_1265 import router as gap_1265_router
+    from .gap_1266 import router as gap_1266_router
+    from .gap_1268 import router as gap_1268_router
+    from .gap_1269 import router as gap_1269_router
+    from .gap_1270 import router as gap_1270_router
+    from .gap_1271 import router as gap_1271_router
+    from .gap_primary_agent import router as gap_primary_agent_router
+    from .gap_roster_bulk import router as gap_roster_bulk_router
+    from .gap_task_voice import router as gap_task_voice_router
+    from .gap_trace_export import router as gap_trace_export_router
+
+    app.include_router(gap_1242_router)
+    app.include_router(gap_1243_router)
+    app.include_router(gap_1246_router)
+    app.include_router(gap_1248_router)
+    app.include_router(gap_1249_router)
+    app.include_router(gap_1250_router)
+    app.include_router(gap_1251_router)
+    app.include_router(gap_1252_router)
+    app.include_router(gap_1253_router)
+    app.include_router(gap_1254_router)
+    app.include_router(gap_1255_router)
+    app.include_router(gap_1256_router)
+    app.include_router(gap_1257_router)
+    app.include_router(gap_1258_router)
+    app.include_router(gap_1259_router)
+    app.include_router(gap_1261_router)
+    app.include_router(gap_1262_router)
+    app.include_router(gap_1263_router)
+    app.include_router(gap_1264_router)
+    app.include_router(gap_1265_router)
+    app.include_router(gap_1266_router)
+    app.include_router(gap_1268_router)
+    app.include_router(gap_1269_router)
+    app.include_router(gap_1270_router)
+    app.include_router(gap_1271_router)
+    app.include_router(gap_primary_agent_router)
+    app.include_router(gap_roster_bulk_router)
+    app.include_router(gap_task_voice_router)
+    app.include_router(gap_trace_export_router)

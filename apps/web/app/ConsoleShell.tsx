@@ -27,6 +27,7 @@ import { useFullPage } from "./workflows/full-page";
 import { ProjectMenu, type ProjectMenuItem } from "./project-menu";
 import { useDetailsDismiss } from "../lib/details-dismiss";
 import { PresencePill } from "./agents/presence-pill";
+import { MOUNTED_NAV, MountedSlice } from "./reconcile-mounts";
 import { NEW_BUILD_TIP, openNewProject } from "../lib/compose-links";
 import { actorWords } from "../lib/actor-words";
 import { setConsoleLive } from "../lib/console-live";
@@ -628,6 +629,7 @@ function ConsoleShellInner({
   const loadedRef = useRef<string[] | undefined>(loadedAreas);
   loadedRef.current = loadedAreas;
   const [areaLoadAsked, setAreaLoadAsked] = useState<{ id: string; at: number } | null>(null);
+  const [mountedSlice, setMountedSlice] = useState<string | null>(null);
 
   // Live auto-refresh: re-fetch server data on an interval so async worker
   // changes (new decisions, budget moves, events) appear without manual reload.
@@ -1583,6 +1585,20 @@ function ConsoleShellInner({
             </div>
           ))}
         </nav>
+        <details className="bx-nav-mounted" data-testid="reconcile-mounts">
+          <summary>Landed slices</summary>
+          {MOUNTED_NAV.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              data-mounted-nav={item.id}
+              aria-pressed={mountedSlice === item.id}
+              onClick={() => setMountedSlice((current) => current === item.id ? null : item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </details>
 
         <div className="bx-sidebar-foot">
           {/* WHO IS SIGNED IN, the person, from the session, never a claimed actor string. */}
@@ -1820,6 +1836,9 @@ function ConsoleShellInner({
               ? <AccessDenied permission={access.permission} page={activeDef.label} />
               : children;
           })() : children}
+          {mountedSlice ? (
+            <MountedSlice id={mountedSlice} projectId={scope.projectId ?? ""} actor={scope.actor} />
+          ) : null}
         </main>
         </ActiveAreaContext.Provider>
         {dockedRun ? (
