@@ -105,10 +105,13 @@ export function LogsDrawer({ projectId, runId, previewId, previewStatus, deployI
         ) : null}
         {tab === "preview" ? (
           previewId
-            ? <pre className="fx-log" data-user-text data-state={preview.state} data-testid="preview-log">
-                {preview.text || (preview.state === "failed" ? "Lost the stream" : preview.state === "ended" ? "No output"
-                  : previewStatus === "running" ? "Live, no output yet" : "Waiting")}
-              </pre>
+            ? <>
+                <p className="fx-muted" data-testid="fx-preview-log-kind">The text is the preview process log, not its requests or jobs.</p>
+                <pre className="fx-log" data-user-text data-state={preview.state} data-testid="preview-log">
+                  {preview.text || (preview.state === "failed" ? "Lost the stream" : preview.state === "ended" ? "No output"
+                    : previewStatus === "running" ? "Live, no output yet" : "Waiting")}
+                </pre>
+              </>
             : <span className="fx-muted">Not running</span>
         ) : null}
         {tab === "deploy" ? (deployId ? <LiveDeployment runId={deployId} /> : <span className="fx-muted">Not set up</span>) : null}
