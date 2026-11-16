@@ -226,7 +226,14 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
       a.download = `boss-log.${format}`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
+      // X-Truncated is only the 50,000-line cap. A cut retention window is a separate fact.
       if (r.headers.get("x-truncated") === "1") showToast("success", "First 50,000 lines exported");
+      if (r.headers.get("x-window-capped") === "1") showToast("success", "The retention window cut this export");
+      const counted = r.headers.get("x-row-count")?.trim() ?? "";
+      if (/^\d+$/.test(counted)) {
+        const n = Number(counted);
+        showToast("success", `${n.toLocaleString("en-US")} ${n === 1 ? "line" : "lines"} exported`);
+      }
     } catch (e) {
       showToast("error", String((e as Error)?.message ?? e));
     } finally {

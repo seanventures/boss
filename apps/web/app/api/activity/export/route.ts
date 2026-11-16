@@ -7,7 +7,8 @@ import { rawRequestUrl } from "../../../../lib/raw-request-url";
 /**
  * The current filter as a file (GET /v1/activity/export): streamed through, never buffered —
  * a 50,000-line export must not sit in this process's memory. Redaction and the cap happen in
- * the API; `X-Truncated` says when the cap was reached.
+ * the API. `X-Truncated` is the 50,000-line cap. `X-Window-Capped` is retention cutting
+ * the asked window, not that cap.
  */
 export const dynamic = "force-dynamic";
 
@@ -29,7 +30,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: `BOSS answered ${r.status}` }, { status: r.status || 502 });
     }
     const headers = new Headers();
-    for (const name of ["content-type", "content-disposition", "x-truncated", "x-row-count"]) {
+    for (const name of ["content-type", "content-disposition", "x-truncated", "x-window-capped", "x-row-count"]) {
       const value = r.headers.get(name);
       if (value) headers.set(name, value);
     }

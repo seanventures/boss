@@ -1771,6 +1771,9 @@ export type ReportWindow = {
   decisions: number;
   decisions_approved: number;
   spend_usd_micros: number;
+  daily?: ReportSummaryResponse["daily"];
+  agents?: ReportSummaryResponse["agents"];
+  included_in_subscription_usd_micros?: number;
 };
 
 export type ReportSummaryResponse = {

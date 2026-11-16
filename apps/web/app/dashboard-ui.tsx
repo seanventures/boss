@@ -59,6 +59,7 @@ export function DashboardPanel({
     <div style={{ display: "grid", gap: 16 }}>
       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
         <span className="detail" style={{ fontFamily: "var(--mono)", fontSize: 11 }}>cursor {s.cursor}</span>
+        <p className="detail">The cursor is the event count and the time of the newest event.</p>
       </div>
 
       {/* KPI strip, one bordered row, hairline-divided cells (not separate cards) */}
@@ -68,7 +69,7 @@ export function DashboardPanel({
         <Kpi label="Open Tasks" value={s.workload.openTasks} hint={`${s.workload.completedTasks} done`} />
         <Kpi label="Running" value={running} color={running > 0 ? "var(--teal)" : undefined} hint={`${s.queue.queued} queued, ${s.queue.retryable} retry`} />
         <Kpi label="1h new reservations, not settled receipts" value={usd(s.spend.runRate1hUsdMicros)} hint={`of ${usd(s.spend.capUsdMicros)} cap`} />
-        <Kpi label="Canary" value={s.canary ? s.canary.status.toUpperCase() : "—"} color={s.canary ? tone(s.canary.status) : undefined} hint={s.canary ? `${s.canary.passed}/${s.canary.failed}/${s.canary.skipped}` : "not run"} />
+        <Kpi label="Canary" value={s.canary ? s.canary.status.toUpperCase() : "—"} color={s.canary ? tone(s.canary.status) : undefined} hint={s.canary ? `${s.canary.passed} passed, ${s.canary.failed} failed, ${s.canary.skipped} skipped` : "not run"} />
       </div>
 
       {/* Health & signals, hairline-divided rows, status as colored mono text */}
@@ -87,7 +88,10 @@ export function DashboardPanel({
             <StatusText label={incidents > 0 ? `${incidents} OPEN` : "NONE"} color={incidents > 0 ? "var(--red)" : "var(--green)"} />
           </div>
           <div className="hairline-row">
-            <span className="detail" style={{ color: "var(--ink-soft)" }}>Ack backlog (no silent drops)</span>
+            <div>
+              <span className="detail" style={{ color: "var(--ink-soft)" }}>Ack backlog (no silent drops)</span>
+              <p className="detail">It counts inbound rows that are not terminal.</p>
+            </div>
             <StatusText label={s.ackBacklog > 0 ? `${s.ackBacklog} PENDING` : "CLEAR"} color={s.ackBacklog > 0 ? "var(--amber)" : "var(--green)"} />
           </div>
           <div className="hairline-row">

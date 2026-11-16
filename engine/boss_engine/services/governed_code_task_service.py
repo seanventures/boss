@@ -174,7 +174,9 @@ def auto_preview_after_pr(engine, settings: Settings, *, project_id: str, run_id
             _built = []
         if not _built:
             _built = [pth for pth in (accumulated or []) if not _is_test_path(pth)]
-        if not any(pth.endswith((".html", ".jsx", ".tsx", ".vue", ".svelte")) for pth in _built):
+        from .preview_service import builds_a_browsable_app as _browsable
+
+        if not _browsable(_built):
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.auto_preview_skipped", "boss",
                            "code_task_run", run_id,
@@ -1012,6 +1014,63 @@ def repair_lost_the_work(expected: list[str], root: Path, *,
             f"{len(wanted)} file(s) the previous attempt produced ({shown}) is in its working "
             "tree, so there is nothing to review or gate. This is BOSS's fault, not the code's: "
             "Retry starts from the work the build kept, or builds it in full when none was kept.")
+
+
+def _app_kind_of(root: Any, verify_cwd: Optional[str]) -> Optional[dict]:
+    """{"kind", "why"} for the app the build verified (its verify folder, else the checkout),
+    from its tree; None when the tree cannot be read."""
+    try:
+        from .preview_service import app_tree_kind
+
+        where = Path(root)
+        if verify_cwd and verify_cwd != "." and not Path(str(verify_cwd)).is_absolute():
+            where = where / str(verify_cwd)
+        kind, why = app_tree_kind(where if where.is_dir() else Path(root))
+        return {"kind": kind, "why": why[:300]}
+    except Exception:  # noqa: BLE001 — unknown is never a service
+        _log_caught(logger)
+        return None
+
+
+def workspace_missing_the_change(expected: list[str], root: Path, *,
+                                 scope: Optional[str] = None, branch: str = "") -> Optional[str]:
+    """A HARNESS VERDICT BEFORE ANY AGENT RUNS: this continuation (a follow-up, a repair, a fix
+    round) was set up on the branch that holds its change, yet its workspace holds none of the
+    change's files (`expected`: what the attempt it continues and the app's lineage wrote), or
+    the app folder BOSS placed it in (`scope`) holds none of them. None when the tree holds the
+    change where the build will verify it, or when nothing is expected.
+
+    northgate-gateway's checks-failing follow-up crun_8abe60c6 (BOSSAPP-1307) cloned
+    boss/code/crun_24f39976 with the whole Go module in it, then verified inside `schema/` — a
+    folder its findings mentioned. `go vet` saw "no packages", all 30 must-haves read "missing",
+    and 53 minutes and $6.34 went on a tree that was not the change. repair_lost_the_work only
+    looked inside that same wrong folder (so it saw nothing to miss) and only after the work had
+    been paid for. This asks before the first model call, over the whole checkout."""
+    from .verification_target import in_app_scope
+
+    wanted = [p for p in dict.fromkeys(str(x) for x in (expected or []) if x)
+              if workspace_keepable(p)]
+    if not wanted:
+        return None
+    base = Path(root)
+    present = [p for p in wanted if (base / p).exists()]
+    on = f" `{branch}`" if branch else " its branch"
+    if not present:
+        shown = ", ".join(wanted[:3]) + (f" and {len(wanted) - 3} more" if len(wanted) > 3 else "")
+        return ("Stopped before any agent ran: the workspace has none of the change's files. "
+                f"This attempt continues{on}, but none of the {len(wanted)} file(s) the change "
+                f"produced ({shown}) is in its checkout, so building, testing or reviewing it would "
+                "judge a tree that is not the change. This is BOSS's fault, not the code's: the "
+                "branch was not cloned with the change's work. Nothing was spent on it.")
+    if scope and not any(in_app_scope(p, scope) for p in present):
+        shown = ", ".join(present[:3]) + (f" and {len(present) - 3} more" if len(present) > 3
+                                          else "")
+        return ("Stopped before any agent ran: the workspace has none of the change's files in "
+                f"the app folder `{scope.strip('/')}/` BOSS placed this build in — the change's "
+                f"files are elsewhere in the checkout ({shown}). Testing and judging that folder "
+                "would judge nothing of the change. This is BOSS's fault, not the code's: the "
+                "app's folder was resolved wrongly. Nothing was spent on it.")
+    return None
 
 
 def seed_workspace(root: Path, files: list[dict]) -> int:
@@ -3595,6 +3654,19 @@ def _spawn_deferred_findings_task(
                "deferred to this task. Fix them on top of the shipped branch, most severe first.")
         heading = "DEFERRED FINDINGS"
     with _transaction(engine) as c:
+        # THE SAME APP. start_code_task stamps an app id from the title when none is given, and
+        # "Follow-up: checks failing — <app>" named a different app than <app>: northgate-gateway's
+        # follow-up crun_8abe60c6 became app_f6ee… beside its parent's app_115e…, so nothing the
+        # app had recorded (its folder, its files) applied to it (BOSSAPP-1307). Inherited exactly
+        # as start_followup_task and retry_code_task inherit it.
+        try:
+            _parent = load_code_task_run(c, parent_run_id) or {}
+        except Exception:  # noqa: BLE001 — the lineage root still names the app
+            _log_caught(logger)
+            _parent = {}
+        _pfctx = (_parent.get("finalize_ctx") if isinstance(_parent, dict) else None) or {}
+        _app_identity = str(_pfctx.get("app_id") or _pfctx.get("root_run_id")
+                            or parent_root or parent_run_id)
         new_run = start_code_task(
             c, project_id=project_id, task_id=task_id,
             title=f"{title_lead} — {parent_title}"[:160],
@@ -3622,6 +3694,10 @@ def _spawn_deferred_findings_task(
             finalize_ctx={"deferred_from_run": parent_run_id, "is_followup": True,
                           "root_run_id": parent_root or parent_run_id,
                           "parent_run_id": parent_run_id,
+                          "app_id": _app_identity,
+                          # Its instructions are findings, never a brief naming a folder
+                          # (verification_target.app_scope; carried by every retry).
+                          "instructions_are_findings": True,
                           # WHERE THE APP CAME FROM IS A PROPERTY OF THE APP.
                           #
                           # `retry_code_task` already carries `origin` forward; a follow-up is
@@ -6241,7 +6317,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         _gate_plan0 = verification_target.resolve_gate_plan(
             spec, title, root, app_id=_app_id, pinned=_pinned_manifest, layout=_stack_layout,
-            lineage=_lineage_paths, recorded=_recorded_app)
+            lineage=_lineage_paths, recorded=_recorded_app,
+            finalize_ctx=fctx)
         # RECORD THE APP'S FOLDER once BOSS knows it, so every later attempt of this app reads it
         # (app_root.recorded_app_dir) instead of re-deriving it from its own diff.
         try:
@@ -6290,7 +6367,47 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # verify will (_changed_paths), not from the base branch alone.
                 _gate_plan0 = verification_target.resolve_gate_plan(
                     spec, title, root, app_id=_app_id, changed=list(_seeded_paths),
-                    pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app)
+                    pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app,
+                    finalize_ctx=fctx)
+        # A CONTINUATION STARTS FROM ITS CHANGE (workspace_missing_the_change): a follow-up,
+        # repair or fix round cloned from the branch holding its change (or seeded with it) must
+        # find that change's files in its tree — and inside the app folder it will verify — or
+        # it stops here, before any model call, in words (BOSSAPP-1307).
+        if (not use_microvm and _is_repair and _release_target is None
+                and (base_branch == work_branch or _seeded)):
+            _expected_change: list[str] = []
+            try:
+                def _load_prev_change(rid: str) -> Optional[dict]:
+                    with _transaction(engine) as c:
+                        return load_code_task_run(c, rid)
+                _expected_change = (previous_attempt_paths(_load_prev_change, fctx)
+                                    + list(_lineage_paths))
+            except Exception:  # noqa: BLE001 — no record of the change: nothing to compare
+                _log_caught(logger)
+            _plan_dir = getattr(_gate_plan0, "cwd", None)
+            _verify_scope = None
+            try:
+                if _plan_dir is not None:
+                    _rel_scope = Path(_plan_dir).resolve().relative_to(Path(root).resolve())
+                    _verify_scope = _app_root_mod.clean_rel(_rel_scope.as_posix())
+            except ValueError:
+                _verify_scope = None
+            _missing = workspace_missing_the_change(
+                _expected_change, Path(root),
+                scope=_verify_scope,
+                branch=str(base_branch or ""))
+            if _missing:
+                with _transaction(engine) as c:
+                    _release(budget, c, project_id, reservation_id,
+                             "workspace without the change", run_id=run_id)
+                    emit_event(c, project_id, "code_task.workspace_missing_the_change", "boss",
+                               "code_task_run", run_id,
+                               {"parent_run_id": fctx.get("parent_run_id"),
+                                "branch": base_branch, "app_scope": _verify_scope or _app_scope,
+                                "recorded_app_dir": _recorded_app,
+                                "expected": len(_expected_change)})
+                    return _fail(c, run_id, project_id, _missing, failure_class="infra",
+                                 reason_code="workspace_missing_the_change")
         # A GATE ONLY A PERSON CAN UNBLOCK stops the build before any service, agent or repair
         # round is paid for (the toolchain it needs is off on this install) — WHEN BOSS KNOWS
         # THE APP'S FOLDER (named, recorded, or the seeded attempt's files). Otherwise this plan
@@ -6561,7 +6678,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             try:
                 plan = verification_target.resolve_gate_plan(
                     spec, title, root, app_id=_app_id, changed=_changed_paths(),
-                    pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app)
+                    pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app,
+                    finalize_ctx=fctx)
                 if plan.runs_steps or plan.source != "default" or plan.error:
                     return []
                 wanted = [c for c in plan.commands
@@ -6599,7 +6717,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 return None
             plan = verification_target.resolve_gate_plan(
                 spec, title, root, app_id=_app_id, changed=_changed_paths(),
-                pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app)
+                pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app,
+                finalize_ctx=fctx)
             if plan.runs_steps:
                 return None
             app_cwd, prep, _note = _prepare_app(plan, plan.cwd)
@@ -6686,7 +6805,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                      timed_out=False, stdout="", stderr=tampered_manifest)
             plan = verification_target.resolve_gate_plan(
                 spec, title, root, app_id=_app_id, changed=_changed_paths(),
-                pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app)
+                pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app,
+                finalize_ctx=fctx)
             # The tree turned into a stack this install cannot gate (an agent wrote a go.mod
             # while Go is off): a person's to fix, so no further repair round runs on it.
             _halt_if_needs_person(plan)
@@ -9272,6 +9392,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # What the repository already declares about how its apps run (a boss.deploy.yaml
             # the build did not write): preview and deploy read it (app_manifest).
             "repo_manifests": _deploy_manifests_in(root),
+            # WHAT THE APP IS, from its own tree (preview_service.app_tree_kind): a service or
+            # library's failed workflow Preview is skipped, never an app's (BOSSAPP-1308).
+            "app_kind": _app_kind_of(root, last_verify_cwd),
             "test_command": test_cmd, "test_exit_code": official_test_exit,
             "verify_cwd": last_verify_cwd,
             "last_verify_output": official_verify_output or last_verify_output,

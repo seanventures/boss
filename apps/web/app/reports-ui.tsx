@@ -60,9 +60,13 @@ export function ReportsView({ report }: { report: ReportFeed }) {
     { label: "Spend", value: money(w.spend_usd_micros), tone: w.spend_usd_micros > 0 ? "amber" : "muted", Icon: I.wallet },
   ];
 
-  const maxDay = Math.max(1, ...d.daily.map((x) => x.succeeded + x.failed + x.tasks));
-  const scorecardAgents = d.agents.slice(0, 12);
-  const agentsNotOnPage = d.agents.length - scorecardAgents.length;
+  const chartDays = Array.isArray(w.daily) ? w.daily : d.daily;
+  const chartTitle = Array.isArray(w.daily) ? WIN_LABEL[win] : "Activity, last 14 days";
+  const maxDay = Math.max(1, ...chartDays.map((x) => x.succeeded + x.failed + x.tasks));
+  const scorecardSource = Array.isArray(w.agents) ? w.agents : d.agents;
+  const scorecardAgents = scorecardSource.slice(0, 12);
+  const agentsNotOnPage = scorecardSource.length - scorecardAgents.length;
+  const included = w.included_in_subscription_usd_micros;
 
   return (
     <div className="rep">
@@ -82,15 +86,18 @@ export function ReportsView({ report }: { report: ReportFeed }) {
             <span className="wf-stat-ic"><s.Icon /></span>
             <span className="wf-stat-val">{s.value}</span>
             <span className="wf-stat-label">{s.label}</span>
+            {s.label === "Spend" && typeof included === "number" ? (
+              <span className="wf-stat-label">{money(included)} included in the subscription</span>
+            ) : null}
           </div>
         ))}
       </div>
 
       {/* activity chart */}
       <div className="bx-card wf-pad">
-        <div className="wf-section-title">Activity, last 14 days</div>
+        <div className="wf-section-title">{chartTitle}</div>
         <div className="rep-chart">
-          {d.daily.map((day) => {
+          {chartDays.map((day) => {
             const total = day.succeeded + day.failed;
             return (
               <div key={day.date} className="rep-col" title={`${day.date}, ${day.tasks} tasks, ${day.succeeded} ok, ${day.failed} failed`}>
@@ -163,7 +170,7 @@ export function ReportsView({ report }: { report: ReportFeed }) {
 
       {/* agent scorecard */}
       <div className="bx-card wf-pad">
-        <div className="wf-section-title"><span className="wf-ic tone-accent"><I.shield /></span> Agent scorecard <span className="wf-count">{d.agents.length} agents</span></div>
+        <div className="wf-section-title"><span className="wf-ic tone-accent"><I.shield /></span> Agent scorecard <span className="wf-count">{scorecardSource.length} agents</span></div>
         <p className="detail" style={{ marginTop: -4 }}>Ranked by violations, then lowest trust, so problem agents surface first. Populates as governance reviews are recorded.</p>
         <div className="rep-agents">
           <div className="rep-agent-head">
@@ -179,7 +186,7 @@ export function ReportsView({ report }: { report: ReportFeed }) {
                 <span>L{a.autonomy_level}</span>
                 <span>{a.successful_runs}</span>
                 <span className={viol > 0 ? "tone-red" : "tone-muted"}>{viol > 0 ? `${viol}` : "0"}</span>
-                <span className="tone-muted">{a.last_reviewed_at ? formatDate(a.last_reviewed_at) : "never"}</span>
+                <span className="tone-muted">{a.last_reviewed_at ? formatDate(a.last_reviewed_at) : "never"}{a.last_violation_at ? ` Last violation ${formatDate(a.last_violation_at)}` : ""}</span>
               </div>
             );
           })}

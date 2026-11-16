@@ -52,6 +52,11 @@ export function dayTime(at: string): string {
     : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+/** Who a history row names. `by_agent` only picks the face. Blank when the engine sent none. */
+export function historyWho(h: { by: string | null; by_agent: boolean }): string {
+  return typeof h.by === "string" ? h.by.trim() : "";
+}
+
 /** "2h ago", "3d ago": how long since, in one short token. */
 export function agoWords(at: string): string {
   const t = new Date(at).getTime();
@@ -132,7 +137,8 @@ export function DeploymentsTab({ ctx }: { ctx: PxCtx }) {
                     <span style={{ minWidth: 0 }}><b className="px-ell" style={{ display: "block" }}>{h.label}
                       {h.state !== "done" ? <> <Tag tone={h.recovered || h.state === "waiting" || h.state === "now" ? "amber" : h.state === "failed" ? "red" : undefined}>
                         {h.recovered ? "Recovered" : h.word || HIST_WORD[h.state] || h.state}</Tag></> : null}</b>
-                      <small>{[h.at ? dayTime(h.at) : "", h.sub, h.state === "waiting" ? "needs your approval" : ""].filter(Boolean).join(" · ")}</small></span>
+                      <small>{[h.at ? dayTime(h.at) : "", h.sub, h.state === "waiting" ? "needs your approval" : ""].filter(Boolean).join(" · ")}</small>
+                      {historyWho(h) ? ` ${historyWho(h)}` : null}</span>
                     {h.by && !h.by_agent ? <span title={`by ${h.by}`}><Face agent={{ name: h.by }} size={20} /></span> : <Face agent={BEACON} size={20} />}
                   </a>
                 )) : <p className="px-faint">No deploys yet. The first one runs after the first merge.</p>}

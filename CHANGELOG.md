@@ -2,6 +2,38 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.20]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.20.md](docs/community/RELEASE_NOTES_v1.0-rc10.20.md).
+
+### Added
+
+- A paused schedule is visible on the collapsed workflow card. Infra Find includes the approver. A deploy row names who approved it. Project deploy history shows the by name. The agent scorecard says when the last violation was. The workflow registry says when a list is longer than the page. Health and the staging tile say whether p95 is probes or the app. A notify policy chip shows the quiet-hours timezone. A command-center app card says how many builders are past the five faces.
+
+### Changed
+
+- The community candidate version is `1.0.0-rc.10.20`.
+
+### Release scope
+
+- This is the git tag of public main after rc10.19. It is not a live host deploy. No image tag or release-gate run is attached. The export record still cites `docs/community/RC9_VALIDATION.md`. A failed deploy phase still has no phase-only retry. A migration approval was not added. Origin already held pull requests 148 and 149; this tag includes that merge.
+
+## [v1.0-rc10.19]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.19.md](docs/community/RELEASE_NOTES_v1.0-rc10.19.md).
+
+### Added
+
+- The reports page draws the selected window's days and agents, and shows subscription-included spend beside the settled figure. An activity export says when retention cut it and how many lines it wrote. The dashboard names the cursor, the ack backlog, and the canary counts. A workflow card shows the last run's status. Recent sends say when returned rows are off the page, and a failed send shows its error word. The activity rail says when it is showing 40 people. A finding path opens that lane's pull request. A tool-call export says when the cap hid older rows. The app Logs control says it opens the Activity log. A change-set lane shows its short commit and its diff counts.
+
+### Changed
+
+- The community candidate version is `1.0.0-rc.10.19`.
+
+### Release scope
+
+- This is the git tag of public main after rc10.18. It is not a live host deploy. No image tag or release-gate run is attached. The export record still cites `docs/community/RC9_VALIDATION.md`. A failed deploy phase still has no phase-only retry. A migration approval was not added.
+
 ## [v1.0-rc10.18]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.18.md](docs/community/RELEASE_NOTES_v1.0-rc10.18.md).

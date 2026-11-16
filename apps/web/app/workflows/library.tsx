@@ -672,11 +672,12 @@ function LibraryCard(p: CardProps) {
           <span title={schedules.map((s) => s.describes + (s.enabled ? "" : " (paused)")).join(", ")}
                 data-testid={`wf-card-scheduled-${w.workflow_key}`}>
             <CalendarBlank size={14} aria-hidden />
+            {schedules.some((s) => !s.enabled) ? " paused" : null}
           </span>
         ) : null}
         {w.last_run ? (
           <span title={`Last run ${w.last_run.status}, ${formatDateTime(w.last_run.at)}`}>
-            <Clock size={14} aria-hidden /> {ageOf(w.last_run.at, p.now)}
+            <Clock size={14} aria-hidden /> {ageOf(w.last_run.at, p.now)} {w.last_run.status}
           </span>
         ) : null}
         {p.liveRuns.has(w.definition_id) ? (
