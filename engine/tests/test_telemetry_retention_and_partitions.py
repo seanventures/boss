@@ -96,15 +96,133 @@ def test_events_retention_is_a_delete_list_unknown_kinds_are_kept():
         assert unknown not in tr.NOISE_EVENT_TYPES and not unknown.endswith(".ticked")
 
 
-_CTID_DELETE = __import__("re").compile(
-    r"(?:DELETE\s+FROM|UPDATE)\s+(?:ONLY\s+)?\"?(\w+)\"?[^;]*?\bctid\b", __import__("re").I | __import__("re").S)
+_CTID_DML = __import__("re").compile(
+    r"(?:DELETE\s+FROM|UPDATE)\s+(?:ONLY\s+)?"
+    r"(?P<table>\{[^}]+\}|%(?:\([^)]+\))?s|\"[^\"]+\"|[A-Za-z_]\w*)"
+    r"[^;]*?\bctid\b",
+    __import__("re").I | __import__("re").S,
+)
+_CTID_ALLOW = __import__("re").compile(r"ctid-allow:\s*([A-Za-z0-9_, \t]+)")
+_CTID_IDENT = __import__("re").compile(r"^[A-Za-z_]\w*$")
+
+
+def _expr_text(node) -> str:
+    import ast
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return "expr"
+
+
+def _sql_pieces(src: str) -> list[tuple[int, str]]:
+    """SQL string literals in `src`, f-strings rendered with `{name}` where the table is computed.
+
+    Pieces are the statements, not the whole file: a later comment that mentions ctid must not
+    attach itself to an earlier `DELETE FROM {table}` that deletes by id.
+    """
+    import ast
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return [(1, src)]
+    parents: dict[int, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[id(child)] = node
+
+    def nested_in_sql(node: ast.AST) -> bool:
+        cur = parents.get(id(node))
+        while cur is not None:
+            if isinstance(cur, ast.JoinedStr):
+                return True
+            if isinstance(cur, ast.BinOp) and isinstance(cur.op, ast.Add):
+                return True
+            cur = parents.get(id(cur))
+        return False
+
+    def render(node: ast.AST) -> str | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.JoinedStr):
+            parts = []
+            for value in node.values:
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    parts.append(value.value)
+                elif isinstance(value, ast.FormattedValue):
+                    parts.append("{" + _expr_text(value.value) + "}")
+                else:
+                    parts.append("{expr}")
+            return "".join(parts)
+        if isinstance(node, ast.Name):
+            return "{" + node.id + "}"
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left, right = render(node.left), render(node.right)
+            if not (isinstance(left, str) and isinstance(right, str)):
+                return None
+            return left + right
+        return None
+
+    pieces = []
+    for node in ast.walk(tree):
+        if nested_in_sql(node):
+            continue
+        rendered = render(node)
+        if rendered and "ctid" in rendered.lower():
+            pieces.append((getattr(node, "lineno", 1), rendered))
+    return pieces
+
+
+def _ctid_offenders(src: str, partitioned: set[str]) -> list[str]:
+    """Partitioned tables named literally, and any ctid target built at runtime.
+
+    A runtime target (`{table}`, `%s`) is an offender unless a `ctid-allow:` comment just above
+    the statement names only tables that are not partitioned. Naming `events` there still flags.
+    """
+    lines = src.splitlines()
+    out = []
+    for lineno, sql in _sql_pieces(src):
+        window = "\n".join(lines[max(0, lineno - 8):lineno - 1])
+        listed = _CTID_ALLOW.findall(window)
+        names = [n.strip().lower() for n in (listed[-1].split(",") if listed else []) if n.strip()]
+        for m in _CTID_DML.finditer(sql):
+            token = m.group("table")
+            literal = token[1:-1] if token.startswith('"') and token.endswith('"') else token
+            runtime = token.startswith("{") or "%" in token or not _CTID_IDENT.match(literal)
+            if not runtime:
+                if literal.lower() in partitioned:
+                    out.append(literal)
+                continue
+            if not names or any(n in partitioned for n in names):
+                out.append(token)
+    return out
+
+
+def test_a_runtime_built_ctid_target_is_flagged_unless_allow_listed():
+    """`DELETE FROM {table} … ctid` never matches the literal-name guard, so a table chosen at
+    runtime can be a partitioned parent. Flag every runtime target unless a `ctid-allow:` comment
+    names only tables that are not partitioned."""
+    dynamic = ('do = f"DELETE FROM {table} WHERE ctid IN '
+               '(SELECT ctid FROM {table} t WHERE created_at < now())"\n')
+    allowed = ("# ctid-allow: owned_resources\n"
+               'do = f"DELETE FROM {table} WHERE ctid IN (SELECT ctid FROM {table} t)"\n')
+    names_a_partition = ("# ctid-allow: events, owned_resources\n"
+                         'do = f"DELETE FROM {table} WHERE ctid IN (SELECT ctid FROM {table} t)"\n')
+    part = {"events", "run_events", "identity_egress_log"}
+    assert _ctid_offenders(dynamic, part) == ["{table}"]
+    assert _ctid_offenders(allowed, part) == []
+    assert _ctid_offenders(names_a_partition, part) == ["{table}"]
+    assert _ctid_offenders("DELETE FROM events WHERE ctid IN (SELECT ctid FROM events)", part) == ["events"]
+    assert _ctid_offenders(
+        "DELETE FROM owned_resources WHERE ctid IN (SELECT ctid FROM owned_resources)", part) == []
 
 
 def test_no_ctid_delete_on_a_partitioned_table():
     """A `ctid IN (SELECT ctid …)` delete on a PARTITIONED table matches the same physical position
     in every partition (resource_reaper deleted live audit events that way, ST-8 review). The class:
     no source file deletes or updates by ctid on a table that is partitioned — by schema.sql or
-    by a runtime conversion (telemetry_retention: events)."""
+    by a runtime conversion (telemetry_retention: events). A target built at runtime
+    (`DELETE FROM {table}`) is the same class unless a `ctid-allow:` comment names only plain tables."""
     import re
     from pathlib import Path
 
@@ -129,9 +247,9 @@ def test_no_ctid_delete_on_a_partitioned_table():
             src = path.read_text(encoding="utf-8", errors="ignore")
             if "ctid" not in src:
                 continue
-            for m in _CTID_DELETE.finditer(src):
-                if m.group(1).lower() in partitioned:
-                    offenders.append(f"{path.relative_to(root)}: {m.group(1)}")
+            rel = path.relative_to(root)
+            for hit in _ctid_offenders(src, partitioned):
+                offenders.append(f"{rel}: {hit}")
     assert not offenders, offenders
 
 
