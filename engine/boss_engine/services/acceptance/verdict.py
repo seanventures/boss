@@ -130,28 +130,90 @@ def evidence_paths(root: Any, why: str, *,
     return list(dict.fromkeys(found)), list(dict.fromkeys(absent))
 
 
-def _code_lines(text: str) -> str:
-    """The text without its comments (line comments `//`, `#`, `--`, `;`, block-comment lines),
-    so a symbol or file named only in a comment is not found. A compiler directive written as a
-    comment (`//go:embed rules`) is code."""
-    out = []
-    block = False
-    for line in text.splitlines():
-        s = line.strip()
-        if block:
-            if "*/" in s:
-                block = False
-            continue
-        if s.startswith("//go:"):
-            out.append(line)
-            continue
-        if s.startswith("/*"):
-            block = "*/" not in s
-            continue
-        if s.startswith(("//", "#", "--", ";", "*")):
-            continue
-        out.append(re.split(r"\s(?://|#)\s", line, maxsplit=1)[0])
-    return "\n".join(out)
+#: One pass over a source file: comments, strings and compiler directives, leftmost first, so a
+#: `/*` opened mid-line, a `//` inside a string and a definition written inside a string are all
+#: read the way the language reads them (AR-23 review: `x := 1 /* …` then `func Hidden()`, and
+#: `"func Fake() {}"`, were taken for definitions).
+_TOKEN_PARTS = (
+    ("tq", r'"""[\s\S]*?(?:"""|\Z)|\'\'\'[\s\S]*?(?:\'\'\'|\Z)'),
+    ("bc", r"/\*[\s\S]*?(?:\*/|\Z)"),
+    ("directive", r"^[ \t]*//go:[^\n]*"),
+    ("lc", r"//[^\n]*"),
+    ("hc", r"\#[^\n]*"),
+    ("dq", r'"(?:\\.|[^"\\\n])*"?'),
+    ("sq", r"'(?:\\.|[^'\\\n])*'?"),
+    ("bt", r"`[^`]*`?"),
+)
+_TOKENS: dict[tuple[bool, bool], "re.Pattern[str]"] = {}
+
+
+def _token_re(slash: bool, hash_: bool) -> "re.Pattern[str]":
+    key = (slash, hash_)
+    if key not in _TOKENS:
+        parts = [f"(?P<{k}>{v})" for k, v in _TOKEN_PARTS
+                 if (k != "lc" or slash) and (k != "hc" or hash_)
+                 and (k != "bc" or slash)]
+        _TOKENS[key] = re.compile("|".join(parts), re.M)
+    return _TOKENS[key]
+
+
+#: Languages whose `#` starts a comment, and those whose `//` does not (Python's floor division).
+_HASH_COMMENTS = frozenset({"py", "pyi", "rb", "sh", "ex", "exs", "pl", "r", ""})
+_NO_SLASH_COMMENTS = frozenset({"py", "pyi", "rb", "sh", "ex", "exs", "pl", "r"})
+#: Languages whose lines starting `--` or `;` are comments.
+_DASH_COMMENTS = frozenset({"lua", "sql", "clj", ""})
+
+
+def _ext(path: str) -> str:
+    name = str(path or "").rsplit("/", 1)[-1]
+    return name.rsplit(".", 1)[-1].lower() if "." in name else ""
+
+
+def _lex(text: str, path: str = "") -> tuple[str, str]:
+    """(the code without its comments, the same with every string literal emptied). A
+    triple-quoted string (a Python docstring, a text block) is documentation or a blob: it is
+    dropped from both. A compiler directive written as a comment (`//go:embed rules`) is code.
+    Line breaks are kept, so line numbers still hold."""
+    ext = _ext(path)
+    kept: list[str] = []
+    bare: list[str] = []
+    pos = 0
+    pattern = _token_re(ext not in _NO_SLASH_COMMENTS, ext in _HASH_COMMENTS)
+    for m in pattern.finditer(text):
+        kind = m.lastgroup
+        tok = m.group(0)
+        kept.append(text[pos:m.start()])
+        bare.append(text[pos:m.start()])
+        pos = m.end()
+        lines = "\n" * tok.count("\n")
+        if kind == "directive":
+            kept.append(tok)
+            bare.append(tok)
+        elif kind in ("dq", "sq", "bt"):
+            kept.append(tok)
+            bare.append(tok[0] * 2 + lines)
+        else:                               # a comment or a triple-quoted string: gone
+            kept.append(lines)
+            bare.append(lines)
+    kept.append(text[pos:])
+    bare.append(text[pos:])
+    out_kept, out_bare = "".join(kept), "".join(bare)
+    if ext in _DASH_COMMENTS:
+        drop = re.compile(r"(?m)^[ \t]*(?:--|;)[^\n]*")
+        out_kept, out_bare = drop.sub("", out_kept), drop.sub("", out_bare)
+    return out_kept, out_bare
+
+
+def _code_lines(text: str, path: str = "") -> str:
+    """The text without its comments (line, block — opened anywhere on a line — and
+    triple-quoted docstrings), string literals kept: what the code says and names. A compiler
+    directive written as a comment (`//go:embed rules`) is code."""
+    return _lex(text, path)[0]
+
+
+def _bare_code(text: str, path: str = "") -> str:
+    """`_code_lines` with every string literal emptied: where a definition can be."""
+    return _lex(text, path)[1]
 
 
 #: Words no loader is named: the languages' own keywords (and anything shorter than 3),
@@ -201,7 +263,8 @@ def _defines(code: str, symbol: str) -> bool:
 
 def _refers_to(code: str, data_file: str) -> bool:
     """Whether `code` names the data file: its path or file name, its folder as a path string
-    (`"rules"`, `"rules/"`, `//go:embed rules`), or a glob string that matches it."""
+    (`"rules"`, `"rules/"`, `//go:embed rules`), or a glob string that matches it. A MENTION,
+    not a read: the wiring check uses `_reads`."""
     import fnmatch
 
     path = Path(data_file)
@@ -215,13 +278,117 @@ def _refers_to(code: str, data_file: str) -> bool:
         if "*" in lit and (fnmatch.fnmatch(data_file, lit) or fnmatch.fnmatch(path.name, lit)
                            or fnmatch.fnmatch(data_file, "*/" + lit)):
             return True
-    for line in code.splitlines():
-        if line.strip().startswith("//go:embed"):
-            for pattern in line.split()[1:]:
-                pattern = pattern.strip("\"`").rstrip("/")
-                if pattern in (folder, data_file) or fnmatch.fnmatch(data_file, pattern):
-                    return True
     return False
+
+
+#: Code that reads a file: open / read / load / parse / decode / glob / walk / embed, in the
+#: spellings of the common languages and their standard libraries.
+_READ_VERB = re.compile(
+    r"\b(?:open|Open\w*|fopen|read\w*|Read\w*|load\w*|Load\w*|safe_load|parse\w*|Parse\w*|"
+    r"[Uu]nmarshal\w*|[Dd]ecode\w*|glob|Glob|iglob|rglob|[Ww]alk\w*|embed|require|"
+    r"getResource\w*|Files\.\w+|fs\.\w+|ioutil\.\w+)\s*[\(.`\"']|//go:embed\b|"
+    r"\bimport\b[^\n]*[\"'][^\"'\n]+\.(?:ya?ml|json|toml|csv)[\"']")
+
+
+def _lit(value: str) -> str:
+    """A string literal as a tree path: no leading `/`, `./` or `../` parts, no trailing `/`."""
+    return re.sub(r"^(?:\.{1,2}/|/)+", "", value.strip()).rstrip("/")
+
+
+def _suffix_of(path: str, part: str) -> bool:
+    """Whether `part` is `path` or a `/`-bounded tail of it."""
+    return bool(part) and (path == part or path.endswith("/" + part))
+
+
+def _reads(code: str, data_file: str, code_path: str = "") -> bool:
+    """Whether `code` (comments already removed, `_code_lines`) READS the data file — embeds,
+    opens, loads or globs it — not only names it (AR-23 review: a lint.go that never read
+    `rules/naming.yaml` was taken for its loader because routes.go had `mux.Handle("/rules")`).
+
+      - `//go:embed` naming the file, its folder or a glob matching it (relative to the code
+        file's own directory, as Go resolves it);
+      - in a file that reads files at all (`_READ_VERB`): a string naming the file (its path,
+        a `/`-bounded tail of it, or its name), or a glob string matching its path;
+      - its FOLDER only through a glob in that same file: a folder string (`"tenants"`,
+        `"config/tenants"`) and a glob string matching the file's name (`"*.yaml"`). A bare
+        folder string alone (a route, a log line) is not a read."""
+    import fnmatch
+
+    path = Path(data_file)
+    name, folder = path.name, path.parent.as_posix()
+    here = Path(code_path).parent.as_posix() if code_path else "."
+    for line in code.splitlines():
+        s = line.strip()
+        if not s.startswith("//go:embed"):
+            continue
+        for pattern in s.split()[1:]:
+            pattern = pattern.strip("\"`").rstrip("/")
+            full = pattern if here in ("", ".") else f"{here}/{pattern}"
+            for cand in (pattern, full):
+                if cand in (data_file, folder) or fnmatch.fnmatch(data_file, cand):
+                    return True
+    if not _READ_VERB.search(code):
+        return False
+    lits = [_lit(m.group(2)) for m in _STRING.finditer(code)]
+    m_lits: dict[str, list[Any]] = {}
+    for m in _STRING.finditer(code):
+        m_lits.setdefault(_lit(m.group(2)), []).append(m)
+    folder_named = False
+    name_glob = False
+    for lit in lits:
+        if not lit:
+            continue
+        if "*" in lit:
+            if "/" in lit and (fnmatch.fnmatch(data_file, lit)
+                               or fnmatch.fnmatch(data_file, "*/" + lit)):
+                return True
+            if "/" not in lit and fnmatch.fnmatch(name, lit):
+                name_glob = True
+            continue
+        if _suffix_of(data_file, lit) and lit.endswith(name):
+            return True
+        if folder != "." and _suffix_of(folder, lit):
+            folder_named = True
+            if _folder_read(code, m_lits.get(lit, [])):
+                return True
+    return folder_named and name_glob
+
+
+def _folder_read(code: str, matches: list[Any]) -> bool:
+    """Whether a folder string is itself READ: it sits inside a read call
+    (`os.ReadDir("rules")`), or it is assigned to a name a read call takes
+    (`const rulesDir = "rules"` … `l.read(rulesDir)`). A folder string anywhere else (a route,
+    a log line, `mux.Handle("/rules", …)`) is not."""
+    for m in matches:
+        line_start = code.rfind("\n", 0, m.start()) + 1
+        line_end = code.find("\n", m.end())
+        line = code[line_start:line_end if line_end >= 0 else len(code)]
+        before = code[line_start:m.start()]
+        if re.search(r"\b" + _READ_FN + r"\s*\([^)\n]*$", before):
+            return True
+        bound = re.search(r"(?:\b(?:const|var|let|val)\s+)?([A-Za-z_]\w*)\s*(?::=|=)\s*$",
+                          before) or re.search(r"\b([A-Za-z_]\w*)\s*=\s*$", before)
+        if bound and line:
+            name = re.escape(bound.group(1))
+            if re.search(r"\b" + _READ_FN + r"\s*\([^)\n]*\b" + name + r"\b", code):
+                return True
+    return False
+
+
+#: The functions that read a file or a folder, as a call (`os.ReadDir(`, `l.read(`, `glob(`).
+_READ_FN = (r"(?:open|Open\w*|read\w*|Read\w*|load\w*|Load\w*|[Ww]alk\w*|glob|Glob|iglob|"
+            r"rglob|listdir|scandir|readdirSync|readdir)")
+
+
+def _reads_data(code: str) -> bool:
+    """Whether `code` reads SOME data or config file (`_reads` for no file in particular):
+    an embed, or a data-file string or data-file glob in code that reads files."""
+    if re.search(r"(?m)^\s*//go:embed\s+\S", code):
+        return True
+    if not _READ_VERB.search(code):
+        return False
+    return any(_DATA_FILE.search(_lit(m.group(2)).replace("*", "x"))
+               for m in _STRING.finditer(code))
 
 
 class _Definitions:
@@ -233,13 +400,16 @@ class _Definitions:
       Python   `module.func`, `Class.method` (file stem `module`, or the file defining Class)
       Java/TS  `Class.method` (the file defining the class, or named after it)
     The qualifier narrows the files (a path part or file stem named after it, or a file that
-    defines it); the last part must be defined there, outside comments, in non-test code."""
+    defines it); the last part must be defined there, outside comments and strings, in non-test
+    code."""
 
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
         self._code: Optional[dict[str, str]] = None
+        self._bare: dict[str, str] = {}
 
     def code(self) -> dict[str, str]:
+        """{path: the file's code without comments, strings kept}."""
         if self._code is None:
             self._code = {}
             for p in _walk(self.root):
@@ -249,10 +419,24 @@ class _Definitions:
                     text = p.read_text(encoding="utf-8", errors="ignore")
                 except OSError:
                     continue
-                self._code[str(p.relative_to(self.root))] = _code_lines(text)
+                rel = str(p.relative_to(self.root))
+                self._code[rel], self._bare[rel] = _lex(text, rel)
                 if len(self._code) >= 4000:
                     break
         return self._code
+
+    def of(self, rel: str) -> tuple[Optional[str], Optional[str]]:
+        """(code, code without strings) of one tree file, read from the walk when it was in it,
+        else from disk (a file past the walk's depth or cap)."""
+        codes = self.code()
+        if rel in codes:
+            return codes[rel], self._bare[rel]
+        try:
+            text = (self.root / rel).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return None, None
+        self._code[rel], self._bare[rel] = _lex(text, rel)
+        return self._code[rel], self._bare[rel]
 
     def symbol_file(self, cited: str) -> Optional[str]:
         """The non-test file defining `cited` (`pkg.Name`, `Type.Method`), or None."""
@@ -265,41 +449,63 @@ class _Definitions:
         name, quals = parts[-1], parts[:-1]
         if len(name) < 2 or name in _KEYWORDS:
             return None
-        for rel, code in self.code().items():
-            if _TEST_PATH.search(rel) or not _defines(code, name):
+        self.code()
+        for rel, bare in list(self._bare.items()):
+            if _TEST_PATH.search(rel) or not _defines(bare, name):
                 continue
             path = Path(rel)
-            if any(q in {*path.parts[:-1], path.stem} or _defines(code, q) for q in quals):
+            if any(q in {*path.parts[:-1], path.stem} or _defines(bare, q) for q in quals):
                 return rel
         return None
 
-    def loader_of(self, data: list[str]) -> Optional[str]:
-        """A non-test code file whose code names one of the data files, or None. A bare
-        "*.yaml" glob is not counted: a config loader's glob is not the rulebook's loader."""
-        for rel, code in self.code().items():
-            if _TEST_PATH.search(rel):
+    def loader_of(self, data: list[str], among: Iterable[str]) -> Optional[str]:
+        """The file that READS one of the data files (`_reads`), looked for only where the
+        evidence points: a cited code file, a file defining a symbol the evidence cites (both
+        already in `among`), or a file defining a qualified function one of those calls
+        (`rules.Load()` called from the cited docs.go). Never any file in the tree that merely
+        mentions the data file or its folder (AR-23 review). None when there is none."""
+        cands = [r for r in dict.fromkeys(among) if _CODE_FILE.search(r)
+                 and not _TEST_PATH.search(r)]
+        hops: list[str] = []
+        for rel in cands:
+            code, _ = self.of(rel)
+            if code is None:
                 continue
-            narrow = _BARE_GLOB.sub('""', code)
-            if any(d != rel and _refers_to(narrow, d) for d in data):
+            if any(d != rel and _reads(code, d, rel) for d in data):
+                return rel
+            for m in list(_CALL.finditer(code))[:40]:
+                hit = self.symbol_file(f"{m.group(1)}.{m.group(2)}")
+                if hit and hit not in cands and hit not in hops:
+                    hops.append(hit)
+        for rel in hops:
+            code, _ = self.of(rel)
+            if code is not None and any(d != rel and _reads(code, d, rel) for d in data):
                 return rel
         return None
 
 
-def _named_loader(root: Path, why: str, data: list[str]) -> Optional[str]:
-    """A `file:Symbol` the evidence cites that is non-test code DEFINING the symbol and, when
-    the item has data files, naming one of them in its code. None when there is no such one."""
+#: A qualified call in code (`rules.Load(`, `loader.read_rules(`).
+_CALL = re.compile(r"\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\(")
+
+
+def _named_loader(root: Path, why: str, data: list[str],
+                  defs: Optional[_Definitions] = None) -> Optional[str]:
+    """A `file:Symbol` the evidence cites that is non-test code DEFINING the symbol and READING
+    one of the item's data files (`_reads`) — or, when the item names no data file, reading
+    some data/config file (`_reads_data`): a defined function alone is not a loader (AR-23
+    review). None when there is no such one."""
+    defs = defs if defs is not None else _Definitions(root)
     for m in _FILE_SYMBOL.finditer(str(why or "")):
         hit = _resolve(root, m.group(1))
         symbol = m.group(2).split(".")[-1]
         if not hit or _TEST_PATH.search(hit) or not _CODE_FILE.search(hit) \
                 or len(symbol) < 3 or symbol in _KEYWORDS:
             continue
-        try:
-            code = _code_lines((root / hit).read_text(encoding="utf-8", errors="ignore"))
-        except OSError:
+        code, bare = defs.of(hit)
+        if code is None or not _defines(bare, symbol):
             continue
-        if _defines(code, symbol) and (not data or any(
-                d != hit and _refers_to(code, d) for d in data)):
+        if (any(d != hit and _reads(code, d, hit) for d in data) if data
+                else _reads_data(code)):
             return hit
     return None
 
@@ -324,26 +530,30 @@ def wiring_problem(root: Any, why: str, *, item_text: str = "",
       - the symbol is a real name (not a language keyword, at least 3 characters);
       - the file is in the tree and is not a test;
       - the file DEFINES the symbol (func/def/function/class/const/var/assignment), outside
-        comments;
-      - the file's code (not its comments) names the data file the item is about — its path or
-        name, its folder as a path string, or a glob that matches it.
+        comments and strings;
+      - the file's code READS the data file the item is about (`_reads`: embeds, opens, loads
+        or globs it — its folder only through a glob in that same file); with no data file in
+        the item, it reads some data/config file.
 
-    An item tagged `needs_loader` at extraction needs such a claim: without one it is PARTIAL
-    ("loader not named"). Any other item's MET stands on its evidence."""
+    An item tagged `needs_loader` at extraction needs such a loader: without a LOADED BY it may
+    still be named as a cited `file:Symbol`, or found among the files the evidence points at
+    (`_Definitions.loader_of`) — never anywhere else in the tree; neither is PARTIAL ("loader
+    not named"). Any other item's MET stands on its evidence. `defs` is the tree, read once per
+    check (parse_acceptance / parse_exercised pass theirs)."""
     if root is None:
         return None
     root = Path(root)
+    defs = defs if defs is not None else _Definitions(root)
     claims = list(_LOADED_BY.finditer(str(why or "")))
     if needs_loader and not claims:
         # NO "LOADED BY", BUT THE EVIDENCE MAY STILL NAME THE LOADER (AR-23): a reviewer who
         # wrote `internal/lint/docs.go:RenderReadme` and confirmed the table is generated from
-        # the YAML said what loads it. A cited `file:Symbol` that is defined there and names the
-        # item's file holds; failing that, any non-test code in the tree that names the file
-        # does (searched, not taken on the reviewer's word). Neither: the loader is not named.
-        defs = defs if defs is not None else _Definitions(root)
+        # the YAML said what loads it. A cited `file:Symbol` that is defined there and reads the
+        # item's file holds; failing that, a file the evidence points at (or one it calls) that
+        # reads it. Neither: the loader is not named.
         found, _absent = evidence_paths(root, why, defs=defs)
         data = _item_data_files(root, item_text, found)
-        if _named_loader(root, why, data) or (data and defs.loader_of(data)):
+        if _named_loader(root, why, data, defs) or (data and defs.loader_of(data, found)):
             return None
         return "loader not named: this item's file must be read by the code (LOADED BY)"
     found, _absent = evidence_paths(root, why, defs=defs) if claims else ([], [])
@@ -357,15 +567,17 @@ def wiring_problem(root: Any, why: str, *, item_text: str = "",
             return f"the loader it names, {cited}, is not in the tree"
         if _TEST_PATH.search(hit):
             return f"the loader it names is a test ({hit}), not the code that loads the file"
-        try:
-            code = _code_lines((root / hit).read_text(encoding="utf-8", errors="ignore"))
-        except OSError:
+        code, bare = defs.of(hit)
+        if code is None:
             return f"the loader it names, {hit}, could not be read"
-        if not _defines(code, symbol):
+        if not _defines(bare, symbol):
             return f"{hit} does not define {symbol} (only in a comment, only called, or absent)"
-        missing = [d for d in data if d != hit and not _refers_to(code, d)]
-        if data and len(missing) == len(data):
-            return f"{hit} does not name {', '.join(missing[:3])} in its code"
+        if data:
+            missing = [d for d in data if d != hit and not _reads(code, d, hit)]
+            if len(missing) == len(data):
+                return f"{hit} does not name {', '.join(missing[:3])} in code that reads it"
+        elif not _reads_data(code):
+            return f"{hit} reads no data or config file"
     return None
 
 
@@ -706,11 +918,12 @@ def verify_command(claim: Mapping[str, Any], exec_log: Any) -> tuple[bool, str]:
     return True, ""
 
 
-def _file_refs(root: Any, why: str) -> tuple[list[dict[str, Any]], str]:
+def _file_refs(root: Any, why: str, *,
+               defs: Optional[_Definitions] = None) -> tuple[list[dict[str, Any]], str]:
     """Verified file evidence of an answer and why there is none: a cited path in the tree that
     is code, configuration or a test (never a document or manifest alone), and a cited
-    `path:line` whose line exists."""
-    found, absent = evidence_paths(root, why)
+    `path:line` whose line exists. `defs`: the tree, read once per check."""
+    found, absent = evidence_paths(root, why, defs=defs)
     code = [f for f in found if not _DOC_PATH.search(f) and not _DECL_PATH.search(f)]
     bad_lines = set()
     for m in _LINE_CITE.finditer(str(why or "")):
@@ -757,6 +970,7 @@ def parse_exercised(reply: str, items: list[dict], *, root: Any, exec_log: Any =
         answers[int(n)] = (m.group(3).lower(), _norm(m.group(4))[:600])
     replay = dict(replay or {})
     out = []
+    defs = _Definitions(Path(root)) if root is not None else None  # the tree, read once
     for it in items:
         key = str(it.get("id") or it["n"])
         it = {**{k: v for k, v in it.items() if k not in _contract.ITEM_TAGS},
@@ -782,7 +996,8 @@ def parse_exercised(reply: str, items: list[dict], *, root: Any, exec_log: Any =
                              "verified": ok, **({"why": problem} if problem else {})})
                 if not ok:
                     failed.append(problem)
-            files, no_file = _file_refs(root, why) if root is not None else ([], "no tree")
+            files, no_file = (_file_refs(root, why, defs=defs) if root is not None
+                              else ([], "no tree"))
             row["evidence_refs"] = refs + files
             reason = ""
             if failed and all(EDITED in f for f in failed):
@@ -800,7 +1015,7 @@ def parse_exercised(reply: str, items: list[dict], *, root: Any, exec_log: Any =
                 reason = f"no verifiable evidence ({no_file})"
             elif files and not refs:
                 wiring = wiring_problem(root, why, item_text=str(it.get("text") or ""),
-                                        needs_loader=bool(it.get("needs_loader")))
+                                        needs_loader=bool(it.get("needs_loader")), defs=defs)
                 if wiring:
                     row["status"], reason = PARTIAL, wiring
             if reason:

@@ -8,7 +8,10 @@ plan-approval card (dec_dcd91e76a6254f9a9939, "touches auth, secret, token") tha
 Approve or Reject. The plan had quietly narrowed its brief, and nothing compared the two.
 
 THE RULE. Every plan the design phase produces is checked against the brief it was written for,
-for every build (not only follow-ups), before the plan-approval gate and before any code:
+before the plan-approval gate and before any code. That is every build that runs the design
+phase (risk tier 2 and up, not a web-app scaffold, a seeded build or the fix lane), follow-ups
+included when they run it. A build that skips the design phase has no plan to check: its brief
+is held to by the acceptance check after the code is written.
 
   * THE ITEMS. Every finding the brief lists in BOSS's own `- [SEVERITY] text` form whose
     severity requires it (a security finding, a blocker, anything HIGH/CRITICAL/MAJOR — a
@@ -69,6 +72,8 @@ class BriefItem:
     kind: str                       # "finding" | "must_have"
     files: list[str] = field(default_factory=list)
     symbols: list[str] = field(default_factory=list)
+    #: A security finding (a `[SECURITY]` block's item, or raised by the security seat).
+    security: bool = False
 
     def label(self) -> str:
         words = " ".join(self.text.split())
@@ -180,7 +185,9 @@ def brief_items(instructions: str, criteria: Any = None) -> list[BriefItem]:
                 continue
             files, symbols = _anchors(part)
             items.append(BriefItem(_item_id(sev, part), sev if sev != "SECURITY" else block_sev,
-                                   part.strip(), "finding", files, symbols))
+                                   part.strip(), "finding", files, symbols,
+                                   security=(block_sev == "SECURITY" or sev == "SECURITY"
+                                             or "(security_check)" in part[:40])))
     for crit in criteria or []:
         crit = str(crit or "").strip()
         if not crit:
@@ -204,16 +211,45 @@ def _norm(text: str) -> str:
 
 
 def _mentions(plan: str, name: str) -> bool:
-    return re.search(r"(?<![\w/.\-])" + re.escape(name) + r"(?![\w\-])", plan) is not None
+    """Whether the plan names a function / identifier `name` (a whole word)."""
+    return re.search(r"(?<![\w.\-])" + re.escape(name) + r"(?![\w\-])", plan) is not None
+
+
+#: A path-shaped token in a plan (`internal/proxy/router.go`, `./proxy/router.go`, `router.go`).
+_PATH_TOKEN = re.compile(r"[\w.\-/]*[\w\-]\.[A-Za-z]\w{0,8}")
+
+
+def _path_key(path: str) -> str:
+    return re.sub(r"^(?:\.{1,2}/|/)+", "", str(path or "").strip("`'\"()[],;:"))
+
+
+def _tail_of(longer: str, shorter: str) -> bool:
+    """Whether `shorter` is `longer` or a `/`-bounded tail of it."""
+    return bool(shorter) and (longer == shorter or longer.endswith("/" + shorter))
+
+
+def names_file(plan: str, path: str) -> bool:
+    """Whether the plan names the file at `path`: the same path, or one a `/`-bounded tail of
+    the other — `internal/proxy/router.go`, `./proxy/router.go` and `router.go` all name a
+    finding anchored at `proxy/router.go` (AR-24 review: the old look-behind refused the first
+    two)."""
+    want = _path_key(path)
+    if not want:
+        return False
+    for m in _PATH_TOKEN.finditer(plan or ""):
+        got = _path_key(m.group(0))
+        if got and (_tail_of(got, want) or _tail_of(want, got)):
+            return True
+    return False
 
 
 def anchored_verdict(item: BriefItem, plan: str) -> Optional[str]:
     """'covered' / 'missing' by the item's identity, or None when it has none to match.
-    A file is named by its path or its file name; a function by its own name."""
+    A file is named by its path, a longer or shorter `/`-bounded form of it, or its file name
+    (`names_file`); a function by its own name."""
     if not item.files:
         return None
-    named_file = any(_mentions(plan, f) or _mentions(plan, f.rsplit("/", 1)[-1])
-                     for f in item.files)
+    named_file = any(names_file(plan, f) for f in item.files)
     if not named_file:
         return "missing"
     if item.symbols and not any(_mentions(plan, s) for s in item.symbols):
@@ -279,7 +315,7 @@ def check(design: Mapping[str, Any], *, instructions: str, criteria: Any = None,
             if det is None:
                 unjudged += 1
         row = {"id": it.id, "severity": it.severity, "kind": it.kind, "item": it.label(),
-               "why": why[:300]}
+               "why": why[:300], "security": it.security}
         if verdict == "missing":
             missing.append(row)
         elif verdict == "skipped":
@@ -297,6 +333,17 @@ def replan_note(coverage: Coverage) -> str:
             "security and blocker findings first, naming the files and functions you will "
             "change — or, for an item you will not do, say so explicitly in the PLAN, naming the "
             "item and why. Do not drop anything the previous plan already covered.")
+
+
+#: A gap at one of these severities is never approved by a delegate (approval_delegations).
+SERIOUS = frozenset({"CRITICAL", "HIGH", "BLOCKER", "SECURITY"})
+
+
+def serious_gaps(coverage: Optional[Mapping[str, Any]]) -> list[dict]:
+    """The missing items a person must see: security findings and HIGH / CRITICAL / BLOCKER."""
+    return [m for m in (coverage or {}).get("missing") or []
+            if isinstance(m, Mapping) and (m.get("security")
+                                           or str(m.get("severity") or "").upper() in SERIOUS)]
 
 
 def gap_words(coverage: Mapping[str, Any]) -> str:
@@ -373,12 +420,16 @@ def on_plan_sent_back(connection: Any, row: Mapping[str, Any], *, actor: str,
     change = {"note": str(note or "").strip()[:4000], "by": actor, "decision_id": row["id"],
               "previous_plan": previous[:6000],
               "rounds": int(((state or {}).get("plan_change_request") or {}).get("rounds") or 0) + 1}
+    # THE PERSON'S NOTE IS KEPT ON THE RUN the way a rejection's is (BOSSAPP-1321,
+    # `plan_rejected_note`): one line, bounded, under `plan_change_note`, beside the request.
     connection.execute(text(
         "UPDATE code_task_runs SET state = (COALESCE(state, '{}'::jsonb) - 'design' "
         "- 'awaiting_plan_approval' - 'plan_interrupt_id') "
         "|| jsonb_build_object('plan_change_request', CAST(:c AS JSONB)), "
+        "finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+        "|| jsonb_build_object('plan_change_note', CAST(:n AS TEXT)), "
         "status = 'running', phase = 'design', updated_at = now() WHERE id = :id"),
-        {"c": json.dumps(change), "id": run_id})
+        {"c": json.dumps(change), "n": " ".join(change["note"].split())[:1000], "id": run_id})
     jobs.create_job(connection, project_id=run["project_id"], task_id=run["task_id"],
                     kind="code.task", priority=JOB_PRIORITY_INTERACTIVE,
                     payload={"run_id": run_id})
@@ -390,7 +441,9 @@ def on_plan_sent_back(connection: Any, row: Mapping[str, Any], *, actor: str,
 
 
 def change_request_brief(state: Mapping[str, Any]) -> str:
-    """The brief addendum a re-plan after Request changes carries, or "" when there is none."""
+    """What the PLANNER is told on a re-plan after Request changes, or "" when there is none.
+    For the design session only: never joined to the brief later stages read, and never checked
+    as brief items (the old plan's bullets are not the task)."""
     change = (state or {}).get("plan_change_request") or {}
     if not isinstance(change, Mapping) or not str(change.get("note") or "").strip():
         return ""
@@ -401,6 +454,7 @@ def change_request_brief(state: Mapping[str, Any]) -> str:
                f"change):\n{prev}" if prev else ""))
 
 
-__all__ = ["BriefItem", "Coverage", "MAX_REPLANS", "anchored_verdict", "brief_items",
+__all__ = ["BriefItem", "Coverage", "MAX_REPLANS", "SERIOUS", "anchored_verdict", "brief_items",
+           "names_file", "serious_gaps",
            "change_request_brief", "check", "ensure_covers", "gap_words", "on_plan_sent_back",
            "replan_note"]

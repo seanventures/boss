@@ -166,7 +166,7 @@ def test_the_design_phase_checks_the_plan_before_it_is_persisted_or_gated():
     check = src.index("design, _cov_cost = _plan_covers_brief(")
     assert src.index("_design_from_approved_prd(\n") < check
     assert check < src.index("# PERSIST THE PLAN THE MOMENT IT EXISTS.")
-    assert check < src.index("if _requires_plan_approval(risk_tier) or _gaps:")
+    assert check < src.index("if _requires_plan_approval(risk_tier) or _gaps or _asked_again:")
     assert "_plan_coverage.change_request_brief(prior_state)" in src
 
 

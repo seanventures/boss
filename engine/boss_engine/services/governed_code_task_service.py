@@ -4534,7 +4534,7 @@ def _guest_engine_fields(
 
 
 def _plan_covers_brief(engine, settings, project_id, run_id, design, *, title, instructions,
-                       criteria, root, route) -> tuple[dict, int]:
+                       criteria, root, route, planner_note: str = "") -> tuple[dict, int]:
     """The design with its plan checked against its brief (plan_coverage.ensure_covers): a
     plan that leaves required items out goes back to the planner — the same read-only plan
     session, told exactly what is missing — at most plan_coverage.MAX_REPLANS times. Returns
@@ -4546,7 +4546,7 @@ def _plan_covers_brief(engine, settings, project_id, run_id, design, *, title, i
         set_llm_context(stage="plan")
         agent, model = route("plan")
         answer = agent.run_role(
-            _ctx_block(title, instructions, criteria)
+            _ctx_block(title, instructions, criteria) + (planner_note or "")
             + "You are the design lead. You wrote the plan below for this change; it was "
             "checked against the brief above.\n\n" + note
             + "\n\nYOUR PREVIOUS PLAN:\n" + str(current.get("plan") or "")[:12000]
@@ -7146,8 +7146,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         elif do_design:
             with _transaction(engine) as c:
                 _phase(c, "design")
-            if _plan_sent_back:
-                instructions = f"{instructions}{_plan_sent_back}"
+            # THE PERSON'S NOTE AND THE PLAN THEY SENT BACK GO TO THE PLANNER ONLY (AR-24
+            # review): joined to `instructions` they became the brief every later stage reads —
+            # the old plan's `[HIGH]` bullets turned into required items, and the writer and
+            # reviewer saw the rejected plan as if it were the task.
+            _design_brief = f"{instructions}{_plan_sent_back}"
             # AN APPROVED PRD IS THE DESIGN (approved_prd_design). HelpDesk AI's SLA-timers build
             # (crun_c8e2a5f8) spent 572 s here re-planning a PRD whose "Proposed Solution" the
             # owner had just approved (dec_13a8cd75). When the origin carries one, a short,
@@ -7155,7 +7158,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # (standards/spec/plan/plan_review/plan_ok/packages). Any doubt — no solution
             # section, an incomplete answer, the repo contradicting the PRD — runs the full
             # design exactly as before, and the event says which path ran and why.
-            design = _design_from_approved_prd(
+            design = None if _plan_sent_back else _design_from_approved_prd(
                 engine, project_id, run_id, fctx, title=title, instructions=instructions,
                 criteria=criteria, root=root, route=_route)
             if design is not None:
@@ -7178,7 +7181,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # separate review session below, so the check never silently disappears.
                 set_llm_context(stage="design")
                 a, m = _route("plan")
-                joint = a.run_role(_design_prompt(title, instructions, criteria), root,
+                joint = a.run_role(_design_prompt(title, _design_brief, criteria), root,
                                    read_only=True, model=m)
                 parts = _split_design(joint.get("summary", ""))
                 d1 = {"summary": parts["standards"], "cost_usd_micros": joint.get("cost_usd_micros")}
@@ -7194,7 +7197,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 if not parts["spec"]:
                     set_llm_context(stage="spec")
                     a, m = _route("spec")
-                    d2 = a.run_role(_spec_prompt(title, instructions, criteria), root,
+                    d2 = a.run_role(_spec_prompt(title, _design_brief, criteria), root,
                                     read_only=True, model=m)
                 if not parts["plan"]:
                     # The plan's own session self-checks too; its sections replace the joint
@@ -7237,7 +7240,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if not _is_not_a_code_task(design.get("plan_review") or ""):
                 design, _cov_cost = _plan_covers_brief(
                     engine, settings, project_id, run_id, design, title=title,
-                    instructions=instructions, criteria=criteria, root=root, route=_route)
+                    instructions=instructions, criteria=criteria, root=root, route=_route,
+                    planner_note=_plan_sent_back)
                 cost += _cov_cost
             # PERSIST THE PLAN THE MOMENT IT EXISTS.
             # `state` was only written when a run FINISHED, so a mid-run death lost the design
@@ -7286,7 +7290,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # So does a plan that still leaves brief items out after its re-plans (AR-24): a
             # person sees the gap and approves, requests changes or rejects — never code first.
             _gaps = not ((design.get("coverage") or {}).get("ok", True))
-            if _requires_plan_approval(risk_tier) or _gaps:
+            # A PLAN A PERSON SENT BACK GOES BACK TO THAT PERSON (AR-24 review): the re-plan is
+            # never approved by the run itself, whatever the tier or the coverage says.
+            _asked_again = bool(prior_state.get("plan_change_request"))
+            if _requires_plan_approval(risk_tier) or _gaps or _asked_again:
                 return _block_for_plan_approval(
                     engine, budget, run_id=run_id, project_id=project_id, task_id=task_id,
                     reservation_id=reservation_id, design=design, risk_tier=max(risk_tier, 2),
