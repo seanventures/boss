@@ -15668,3 +15668,40 @@ CREATE TABLE IF NOT EXISTS visitor_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_visitor_snapshots_audience
   ON visitor_snapshots (project_id, audience, approval_state, created_at DESC);
+-- BOSSAPP-1246: builder turn meter. Elapsed work is the turn clock. Settled spend
+-- is existing cost receipts for that turn, never a guessed dollar. A credit
+-- check-in is stored here before any further reservation. Declined rows have
+-- no reservation_id.
+CREATE TABLE IF NOT EXISTS builder_turns (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  status TEXT NOT NULL DEFAULT 'working',
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_at TIMESTAMPTZ,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_builder_turns_project
+  ON builder_turns (project_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS builder_turn_checkins (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  turn_id TEXT NOT NULL REFERENCES builder_turns(id),
+  request_key TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  amount_usd_micros BIGINT NOT NULL CHECK (amount_usd_micros > 0),
+  status TEXT NOT NULL DEFAULT 'pending',
+  reservation_id TEXT,
+  receipt_id TEXT,
+  error TEXT,
+  deadletter_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  answered_at TIMESTAMPTZ,
+  UNIQUE (project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_builder_turn_checkins_turn
+  ON builder_turn_checkins (project_id, turn_id, created_at DESC);
