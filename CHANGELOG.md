@@ -2,6 +2,22 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.16]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.16.md](docs/community/RELEASE_NOTES_v1.0-rc10.16.md).
+
+### Added
+
+- Cycle time, deploy outcomes, and a shipped-versus-failed split of model spend. The noise report is on the AI SRE page. The notification outbox keeps the body and accepts a window and a text query. The activity log counts people. The reconciliation card imports an invoice and a seat price. Error-budget hours left, a count of silenced firing alerts, and a comparison with the previous window.
+
+### Changed
+
+- The community candidate version is `1.0.0-rc.10.16`. A custom activity window follows retention when that setting is longer than 30 days. The default stays 30 days.
+
+### Release scope
+
+- This is the git tag of public main after rc10.15. It is not a live host deploy. No image tag or release-gate run is attached. The export record still cites `docs/community/RC9_VALIDATION.md`. A migration approval was not added.
+
 ## [v1.0-rc10.15]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.15.md](docs/community/RELEASE_NOTES_v1.0-rc10.15.md).
