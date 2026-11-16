@@ -13,6 +13,7 @@ import { missingInput, okResult, type ActionResult } from "../lib/action-result"
 import { previewWebHref } from "../lib/browser-links";
 import { apiErrorTechnical, detailText } from "../lib/api-error";
 import { declareAction } from "../lib/identity/guarded-action";
+import { stackButtonPost } from "../lib/stack-decision";
 
 export async function setPipelineDefaultAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
@@ -656,12 +657,15 @@ function parseProviderCredentialRefs(formData: FormData): Record<string, string>
 
 export async function resolveDecisionAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const decisionId = formData.get("decision_id");
-  const action = formData.get("action");
+  const rawAction = formData.get("action");
   const note = formData.get("note");
   const delegateTo = formData.get("delegate_to");
   const externalRef = formData.get("external_ref");
   const contentHash = formData.get("content_hash");
   const settleAt = formData.get("settle_at");
+  const rawNote = typeof note === "string" ? note : "";
+  const stackPost = typeof rawAction === "string" ? stackButtonPost(rawAction, rawNote) : null;
+  const action = stackPost?.action ?? rawAction;
 
   if (typeof decisionId != "string" || !decisionId) return missingInput("decisionId");
   if (!isDecisionAction(action)) {
@@ -673,7 +677,7 @@ export async function resolveDecisionAction(formData: FormData): Promise<ActionR
   }
   const target = typeof delegateTo === "string" && delegateTo.trim() ? delegateTo.trim() : "";
   if (action === "delegate" && !target) return missingInput("whoToHandItTo");
-  const said = typeof note === "string" && note.trim() ? note.trim() : "";
+  const said = stackPost ? stackPost.note : (rawNote.trim() ? rawNote.trim() : "");
   if ((action === "revise" || action === "execute") && !said
       && !(action === "execute" && typeof externalRef === "string" && externalRef.trim())) {
     return missingInput("note");

@@ -1315,7 +1315,9 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
                    "website product, a simple page-layout sketch (a Mermaid block or an ASCII "
                    "wireframe of the key screen) so a reader sees the intended structure. Keep "
                    "diagrams accurate to the proposed solution.")
-        state["prd_markdown"] = prd
+        from .stacks import ensure_stack_line
+
+        state["prd_markdown"] = ensure_stack_line(prd, str(run.get("directive") or ""))
         next_phase = "finalize"
     else:
         with begin(engine) as c:
@@ -1329,6 +1331,13 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
         jobs.create_job(c, project_id=run["project_id"], task_id=run["task_id"],
                         kind="meeting.step", priority=JOB_PRIORITY_INTERACTIVE, payload={"run_id": run_id})
     return {"status": "running", "done": False, "phase": next_phase}
+
+
+def prd_blocks_auto_approve(directive: str, prd_markdown: str) -> bool:
+    """A PRD whose stack is not the brief's is not auto-approved into a build."""
+    from .stacks import check_deviation
+
+    return check_deviation(directive, prd_markdown) is not None
 
 
 def _finalize_meeting(connection, settings, run_id) -> dict:
@@ -1398,7 +1407,16 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     # readable on the card, and the audit trail records `auto_approval` as the actor, so a
     # reader can always tell which approvals a human made. The follow-on (start the governed
     # build) is the same code path a human approval runs.
-    if decision_id and getattr(settings, "meeting_prd_auto_approve", False):
+    auto_approve = bool(decision_id and getattr(settings, "meeting_prd_auto_approve", False))
+    # A swapped stack is the blocking question, not a silent start. The spec gate asks
+    # enable / accept / stop; approving the PRD here would build the substitute.
+    if auto_approve and prd_blocks_auto_approve(run.get("directive"), state.get("prd_markdown")):
+        emit_event(connection, project_id, "meeting.prd_stack_deviation", "boss",
+                   "decision", decision_id,
+                   {"why": "The PRD declares a different stack from the brief. "
+                           "Auto-approval did not start the build."})
+        auto_approve = False
+    if auto_approve:
         from .decisions import SYSTEM_ACTOR, DecisionService
 
         try:

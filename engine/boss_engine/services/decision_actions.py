@@ -683,6 +683,32 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "Nothing ships. The pull request stays unmerged."),
             _delegate(),
         ]
+    if kind == "workflow_gate" and isinstance(_rec(decision).get("stack_card"), dict):
+        # THE BRIEF'S STACK WAS SWAPPED. Three answers, and no "Request changes": the runner
+        # reads approved and rejected only. Accept alt approves the PRD's stack. Enable
+        # toolchain and Stop reject the step, so the run does not build the substitute.
+        card = _rec(decision)["stack_card"]
+        effects = {
+            "enable_toolchain": (
+                "Stops the run. The brief's stack stays the one to build once its toolchain "
+                "is turned on. Nothing is swapped."),
+            "accept_alt": "Approves the PRD's stack. The build continues with that stack.",
+            "stop": "Stops the run. The brief's stack is not swapped.",
+        }
+        buttons = []
+        for opt in card.get("options") or []:
+            if not isinstance(opt, dict):
+                continue
+            name = str(opt.get("action") or opt.get("key") or "")
+            label = str(opt.get("label") or "")
+            if not name or not label:
+                continue
+            tone = "approve" if name == "accept_alt" else (
+                "reject" if name == "stop" else "neutral")
+            buttons.append(_action(name, label, tone,
+                                   effects.get(name, "Records this answer on the stack question.")))
+        if buttons:
+            return buttons
     if kind == "workflow_gate":
         # No "Request changes": the workflow runner reads approved, rejected and expired, and
         # a gate parked in revision_requested left its run waiting for ever.

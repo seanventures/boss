@@ -773,15 +773,19 @@ def prompt_block() -> str:
     off = [f"{l['label']} (off on this install: `{l['enable']}`)" for l in caps["languages"]
            if not l["ready"]]
     return (
-        "WHAT BOSS CAN BUILD ON THIS INSTALL (choose only from these): "
+        "WHAT BOSS CAN BUILD ON THIS INSTALL (what is ready here, and what is off): "
         + supported_sentence(caps) + ". "
         "An app may be one service, or a backend in one of those languages plus a Node web "
         "front end, each in its own directory. "
         + (f"Ready now: {', '.join(ready)}. " if ready else "")
         + (f"Not turned on: {'; '.join(off)}. " if off else "")
-        + "Not supported at all: " + ", ".join(caps["not_supported"]) + " — never choose one "
-        "of these; if the brief asks for one, say BOSS cannot build it and propose the closest "
-        "supported stack instead.")
+        + "Not supported at all: " + ", ".join(caps["not_supported"])
+        + " — never choose one of these; if the brief asks for one, say BOSS cannot build it. "
+        "Keep the stack the brief asks for. A language that is not turned on is the blocking "
+        "open question: enable its toolchain, accept another stack, or stop. Do not swap the "
+        "brief's stack for a different one. "
+        "The PRD must contain a line of the form `Stack: <service>=<language>/<framework>` "
+        "for the stack the brief asks for.")
 
 
 # ── Reading a stack out of words ────────────────────────────────────────────────────────────
@@ -1012,6 +1016,138 @@ def _normalise_language(word: str) -> str:
         if word == lang.key or word in {f.key for f in lang.frameworks}:
             return lang.key
     return word
+
+
+def _is_known_language(word: str) -> Optional[str]:
+    cleaned = re.sub(r"^[^a-z0-9#+.]+|[^a-z0-9#+.]+$", "", str(word or "").strip().lower())
+    if not cleaned:
+        return None
+    key = _normalise_language(cleaned)
+    if key in LANGUAGES:
+        return key
+    for item in UNSUPPORTED:
+        if key == item.key or key == item.label.lower():
+            return item.key
+    return None
+
+
+def _language_set(value: Any, *, from_prose: bool) -> set[str]:
+    """Languages a brief or a PRD names. A `Stack:` line wins. Prose is the brief only:
+    a PRD with no line has not declared a stack, and that is not a swap."""
+    if isinstance(value, str):
+        declared = declared_stack(value)
+        if declared:
+            return {key for key in (_is_known_language(item["language"]) for item in declared)
+                    if key}
+        if not from_prose:
+            return set()
+        text = directive_text(value)
+        named = languages_named(text) + unsupported_named(text)
+        return {key for key in (_is_known_language(item) for item in named) if key}
+    if isinstance(value, (list, tuple)):
+        found: set[str] = set()
+        for item in value:
+            if isinstance(item, str):
+                known = _is_known_language(item)
+            elif isinstance(item, dict):
+                known = _is_known_language(str(item.get("language") or ""))
+            else:
+                known = None
+            if known:
+                found.add(known)
+        return found
+    return set()
+
+
+def check_deviation(required: Any, declared: Any) -> Optional[dict[str, list[str]]]:
+    """How `declared` (a PRD, or its stack) differs from `required` (the brief, or its stack).
+
+    None when either side names nothing, or they name the same languages. A Node PRD for a
+    Go brief is a deviation: Go is missing and Node was substituted. Empty declared is not
+    a swap — the PRD has not named a stack yet."""
+    asked = _language_set(required, from_prose=True)
+    got = _language_set(declared, from_prose=False)
+    if not asked or not got or asked == got:
+        return None
+    return {
+        "required": sorted(asked),
+        "declared": sorted(got),
+        "missing": sorted(asked - got),
+        "substituted": sorted(got - asked),
+    }
+
+
+_STACK_CARD_OPTIONS = (
+    {"key": "enable_toolchain", "action": "enable_toolchain", "label": "Enable toolchain"},
+    {"key": "accept_alt", "action": "accept_alt", "label": "Accept alt"},
+    {"key": "stop", "action": "stop", "label": "Stop"},
+)
+
+
+def stack_card(required: Any, declared: Any) -> Optional[dict[str, Any]]:
+    """The blocking question when a PRD's stack is not the brief's, or None when it is."""
+    deviation = check_deviation(required, declared)
+    if not deviation:
+        return None
+    asked = ", ".join(deviation["required"])
+    got = ", ".join(deviation["declared"])
+    return {
+        "question": (
+            f"The brief requires {asked}. The PRD declares {got}. "
+            "The toolchain is the blocking open question: enable it, accept this stack, or stop."
+        ),
+        "options": [dict(option) for option in _STACK_CARD_OPTIONS],
+        "deviation": deviation,
+    }
+
+
+def stack_card_for_context(context: Any) -> Optional[dict[str, Any]]:
+    """The stack card for a workflow run: the brief (or its required_stack) against the PRD."""
+    if not isinstance(context, dict):
+        return None
+    run_input = context.get("input") if isinstance(context.get("input"), dict) else {}
+    required = run_input.get("required_stack") or run_input.get("directive") or ""
+    prd = ""
+    steps = context.get("steps") if isinstance(context.get("steps"), dict) else {}
+    for produced in steps.values():
+        if not isinstance(produced, dict):
+            continue
+        if produced.get("prd_markdown"):
+            prd = str(produced["prd_markdown"])
+            break
+        meeting = produced.get("meeting")
+        if isinstance(meeting, dict) and meeting.get("prd_markdown"):
+            prd = str(meeting["prd_markdown"])
+            break
+    return stack_card(required, prd)
+
+
+def ensure_stack_line(markdown: str, required: Any) -> str:
+    """The PRD's `Stack:` line. An existing line is kept, including one that swaps the stack.
+    A missing line is filled from the brief so `declared_stack` can read what was asked."""
+    text = str(markdown or "")
+    if declared_stack(text):
+        return text
+    if isinstance(required, (list, tuple)):
+        parts = []
+        for item in required:
+            if isinstance(item, dict):
+                lang = _is_known_language(str(item.get("language") or ""))
+                component = re.sub(r"[^a-z0-9._-]", "",
+                                    str(item.get("component") or "app").strip().lower()) or "app"
+            else:
+                lang = _is_known_language(str(item))
+                component = "app"
+            if lang:
+                parts.append(f"{component}={lang}")
+    else:
+        parts = [f"app={lang}" for lang in sorted(_language_set(required, from_prose=True))]
+    if not parts:
+        return text
+    line = "Stack: " + ", ".join(parts)
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return f"{text}{line}\n"
 
 
 def check_architecture(markdown: str) -> StackVerdict:

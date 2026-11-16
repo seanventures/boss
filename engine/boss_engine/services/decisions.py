@@ -39,6 +39,27 @@ class ForceNeedsANote(InvalidDecisionTransitionError, ValueError):
     """A forced merge without its reason. Still a ValueError for the callers that caught it."""
 
 
+#: A stack card's three answers. Accept alt continues the build; the other two stop it.
+_STACK_ANSWERS = {
+    "accept_alt": "approve",
+    "enable_toolchain": "reject",
+    "stop": "reject",
+}
+_STACK_CHOICE_NOTE = re.compile(r"Stack choice:\s*(accept_alt|enable_toolchain|stop)\b")
+
+
+def stack_answer(action: str) -> Optional[tuple[str, str]]:
+    """(status action, choice) for a stack-card button or the note the console posts, else None."""
+    text_value = str(action or "")
+    if text_value in _STACK_ANSWERS:
+        return _STACK_ANSWERS[text_value], text_value
+    found = _STACK_CHOICE_NOTE.search(text_value)
+    if found:
+        choice = found.group(1)
+        return _STACK_ANSWERS[choice], choice
+    return None
+
+
 #: The actor recorded when a policy, not a person, resolves a gate. Deliberately not a member
 #: of any org: it must be impossible to sign in as, and obvious in an audit trail.
 SYSTEM_ACTOR = "auto_approval"
@@ -481,7 +502,11 @@ class DecisionService:
         always_allow: Optional[dict] = None,
         choose: Optional[str] = None,
     ) -> dict:
-        if action not in {"approve", "reject", "revise", "delegate", "execute", "settle"}:
+        stack_choice = None
+        answered = stack_answer(action)
+        if answered is not None and action in _STACK_ANSWERS:
+            action, stack_choice = answered
+        elif action not in {"approve", "reject", "revise", "delegate", "execute", "settle"}:
             raise ValueError(f"Unsupported action: {action}")
         if force and not (note or "").strip():
             # A force merge overrides BOSS's own safety verdict. The reason is the ONLY
@@ -494,6 +519,20 @@ class DecisionService:
         row = self.get_row(connection, decision_id, for_update=True)
         current_status = row["status"]
         timestamp = now_utc()
+        if stack_choice is None:
+            noted = stack_answer(str(note or ""))
+            rec = row.get("recommendation")
+            if isinstance(rec, str):
+                try:
+                    rec = json.loads(rec)
+                except ValueError:
+                    rec = None
+            if noted and isinstance(rec, dict) and isinstance(rec.get("stack_card"), dict):
+                mapped, choice = noted
+                if action != mapped:
+                    raise InvalidDecisionTransitionError(
+                        f"'{choice}' is not answered by {action} on this stack card.")
+                stack_choice = choice
         # AN APPROVAL DELEGATE (identity/approval_delegations.py, IDENTITY.md §6.15) answers FOR a
         # person: its grant, scope, cap and the hard limits are checked here, before anything
         # else, and from here on the actor is the PERSON (approved_by records them; via_delegate
@@ -576,7 +615,10 @@ class DecisionService:
         # member check, so somebody not allowed to decide at all is told that first.
         if not system_policy:
             try:
-                decision_actions.require_allowed(row, action)
+                # A stack card offers enable / accept / stop, not approve / reject. The console
+                # posts those through the approve and reject routes; the choice is what was
+                # allowed. Checked once, so the mapped status is not refused as unoffered.
+                decision_actions.require_allowed(row, stack_choice or action)
             except decision_actions.DecisionActionNotAllowed as refused:
                 raise InvalidDecisionTransitionError(str(refused)) from refused
 
@@ -590,6 +632,20 @@ class DecisionService:
             gone = refusal_to_answer(connection, row)
             if gone:
                 raise InvalidDecisionTransitionError(gone)
+
+        if stack_choice:
+            if stack_answer(str(note or "")) is None:
+                prefix = f"Stack choice: {stack_choice}."
+                note = f"{prefix} {(note or '').strip()}".strip()
+            connection.execute(
+                text("""
+                    UPDATE decisions
+                    SET recommendation = COALESCE(recommendation, '{}'::jsonb)
+                         || jsonb_build_object('stack_choice', CAST(:choice AS TEXT))
+                    WHERE id = :id
+                """),
+                {"choice": stack_choice, "id": decision_id},
+            )
 
         if action in {"approve", "reject", "revise", "delegate", "settle"}:
             # A DEADLINE NOBODY MET MUST NOT ALSO DESTROY THE WORK.

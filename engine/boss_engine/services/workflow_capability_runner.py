@@ -7106,6 +7106,20 @@ def _gate_subject(
 
             if not regulatory_trace.has_open_proposals(connection, project_id, context):
                 return None  # the trace proposed nothing: runs as ordinary work, says why
+        if key == "spec_review" and context is not None:
+            # A PRD THAT SWAPPED THE BRIEF'S STACK IS NOT ADOPTED. Northgate's brief asked for
+            # Go; the panel wrote Node and the approved spec was treated as settled. The stack
+            # card is the question (enable the toolchain, accept the other stack, or stop),
+            # before the panel's own decision is reused.
+            from .stacks import stack_card_for_context
+
+            card = stack_card_for_context(context)
+            if card:
+                return {
+                    "key": key, "label": capability.label, "summary": card["question"],
+                    "risk_tier": max(2, capability.risk_tier), "completes_step": True,
+                    "stack_card": card,
+                }
         if context is not None and _adopted_gate(connection, key, context):
             # Already answered. Returning None sends it down the ordinary path, where
             # execute_step records the approval it was started with.
@@ -7367,6 +7381,12 @@ def _open_gate(
         if str(run.get("workflow_key") or "") == WORKFLOW_KEY:
             recommendation = link_release_and_merge(
                 connection, project_id, recommendation, _build_run_id(run_context))
+    stack_card = subject.get("stack_card")
+    if isinstance(stack_card, dict):
+        recommendation = {**recommendation, "stack_card": stack_card}
+        asked = str(stack_card.get("question") or "").strip()
+        if asked:
+            question = asked
     decision_id = subject.get("decision_id") or open_step_decision(
         connection,
         project_id,
@@ -7380,15 +7400,22 @@ def _open_gate(
         risk_tier=max(2, int(subject["risk_tier"])),
     )
     if not subject.get("decision_id"):
-        # A FIRST APPROVAL IS "Approve" / "Reject". The shared default, "Approve and retry" /
-        # "Keep blocked", is right for an alert about something that failed; nothing has
-        # failed here and approving retries nothing.
+        # A FIRST APPROVAL IS "Approve" / "Reject", except a stack card, whose three answers
+        # are the question. The shared default, "Approve and retry" / "Keep blocked", is right
+        # for an alert about something that failed; nothing has failed here and approving
+        # retries nothing.
+        card = subject.get("stack_card") if isinstance(subject.get("stack_card"), dict) else None
+        options = [
+            {"action": str(opt.get("action") or ""), "label": str(opt.get("label") or "")}
+            for opt in (card or {}).get("options") or []
+            if isinstance(opt, dict) and opt.get("action") and opt.get("label")
+        ] or [
+            {"action": "approve", "label": "Approve"},
+            {"action": "reject", "label": "Reject"},
+        ]
         connection.execute(
             text("UPDATE decisions SET options = CAST(:o AS JSONB) WHERE id = :i"),
-            {"i": decision_id, "o": json.dumps([
-                {"action": "approve", "label": "Approve"},
-                {"action": "reject", "label": "Reject"},
-            ])},
+            {"i": decision_id, "o": json.dumps(options)},
         )
     # The deadline goes on the step, not in a scheduler somewhere else. A timeout you cannot
     # see from the row that is waiting is a timeout nobody can explain when it fires.
