@@ -1,4 +1,4 @@
-"""I'm feeling lucky (BOSSAPP-1274) and its attachments (BOSSAPP-1275).
+"""Easy Mode (BOSSAPP-1274) and its attachments (BOSSAPP-1275).
 
 POST /v1/factory/launch        {prompt, mode, template_id, attachment_ids, github_repo}
 POST /v1/factory/attachments   multipart specs, files and images, or a connected Drive source
@@ -101,7 +101,7 @@ def factory_attachments(
 @router.post("/v1/factory/launch", status_code=201)
 @permit(P.PROJECT_CREATE, scope=Scope.org())
 def factory_launch(payload: LaunchBody, request: Request) -> Any:
-    """Create a project from a prompt, a template, or I'm feeling lucky, and start its build."""
+    """Create a project from a prompt, a template, or Easy Mode, and start its build."""
     from boss_engine.services import factory_launch as launch_service
 
     if not database_is_reachable(_engine):

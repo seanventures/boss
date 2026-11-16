@@ -1,4 +1,4 @@
-"""I'm feeling lucky (BOSSAPP-1274) and the attachments it reads (BOSSAPP-1275).
+"""Easy Mode (BOSSAPP-1274) and the attachments it reads (BOSSAPP-1275).
 
 The three routes are the seam. The builder is a stand-in: no model, no GitHub, no Drive.
 """

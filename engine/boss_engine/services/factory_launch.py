@@ -1,4 +1,4 @@
-"""I'm feeling lucky: one launch creates a project and starts its build (BOSSAPP-1274).
+"""Easy Mode: one launch creates a project and starts its build (BOSSAPP-1274).
 
 Empty prompt picks a concrete spec (the first template file by id, else a built-in spec)
 and then runs the same path as a prompt the person wrote. A non-empty prompt is the spec.
@@ -197,7 +197,7 @@ def launch(
         spec["github_repo"] = repo
     spec["mode"] = asked or origin
 
-    title = str(spec.get("title") or "I'm feeling lucky").strip()[:120]
+    title = str(spec.get("title") or "Easy Mode").strip()[:120]
     description = str(spec.get("blurb") or spec.get("prompt") or "").strip()[:2000] or None
     slug = _project_slug(title, dedupe_key)
     try:
@@ -278,7 +278,7 @@ def build_run(
     owner, _, repo = full.partition("/")
     if not repo:
         owner, repo = "_local", "lucky"
-    title = str(spec.get("title") or "I'm feeling lucky")[:180]
+    title = str(spec.get("title") or "Easy Mode")[:180]
     run_id = start_code_task(
         connection, project_id=project_id, task_id=None, title=title,
         instructions=str(spec.get("prompt") or title),
@@ -379,7 +379,7 @@ def _parse_spec_text(prompt: str) -> Optional[dict[str, Any]]:
 
 def _prose_spec(prompt: str) -> dict[str, Any]:
     line = prompt.strip().splitlines()[0].strip()
-    title = line[:80] if len(line) >= 2 else "I'm feeling lucky"
+    title = line[:80] if len(line) >= 2 else "Easy Mode"
     return {
         "id": "prompt",
         "title": title,
@@ -507,7 +507,7 @@ def _write_workflows(
         try:
             definition = create_definition(
                 connection, project_id=project_id, workflow_key=key, name=name[:200],
-                description="Written by I'm feeling lucky.", actor=actor,
+                description="Written by Easy Mode.", actor=actor,
                 namespace=PRODUCT_NAMESPACE, made_by_boss=True)
             publish_version(
                 connection, project_id=project_id, definition_id=definition["id"],
