@@ -4936,6 +4936,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     spec = run["spec"]
     fctx = run["finalize_ctx"] or {}
     job_id = fctx.get("created_by_job_id")
+    # RE-CHECK THIS CHANGE (change_recheck, BOSSAPP-1326): every gate on the branch head, no
+    # code written — every writing stage gets a NoWriteAgent, no design, no repair round.
+    from . import change_recheck as _change_recheck
+
+    _recheck = _change_recheck.is_recheck(fctx)
     # VAG Phase 0: publish the run's identity so every run_role call below records an
     # llm_calls row with the right attribution (stage is set before each step).
     set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id)
@@ -5457,6 +5462,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         """(agent, model) for a decision. Smart mode wraps the agent so a limit or a
         transient failure at call time retries the SAME stage on the next source at once
         (model_router.failover); Fixed mode is exactly as before."""
+        if _recheck and step in _change_recheck.WRITING_STAGES:
+            return _change_recheck.NoWriteAgent(step), None
         eng, model = _take(step, decision)
         agent = _agent_for(eng)
         if decision.mode != "smart":
@@ -5523,7 +5530,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # (no live exec), and the guest never pushes — only the control plane writes git.
     # Per-run override wins (set by the retry fallback after a micro-VM infra failure, or
     # explicitly on the task); else the project-level setting applies.
-    use_microvm = _resolve_use_microvm(settings, spec)
+    # A re-check judges a host checkout of the branch head: no guest VM writes in its place.
+    use_microvm = _resolve_use_microvm(settings, spec) and not _recheck
     from .execution_substrate import normalize_build_substrate
     # The audit record of where THIS run's working stages execute: the micro-VM
     # lane when selected, else the resolved provider's kind (BOSSAPP-824 —
@@ -7146,7 +7154,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # Spec-driven: the refined spec + plan are fed into the downstream coding steps. (The human
         # approve-plan gate is Wire-Phase 2b; for now review plan records a PLAN: OK/REVISE note.)
         design: dict = {}
-        do_design = risk_tier >= 2 and not is_web_app and not _seeded
+        do_design = risk_tier >= 2 and not is_web_app and not _seeded and not _recheck
         # A CONTINUATION PLANS ONLY ON ITS LINEAGE'S CHECKOUT (BOSSAPP-1324): the workspace
         # must be this lineage's repository on its branch's head, or BOSS stops here, in words,
         # before any model call. Never for the stack or an empty tree (PR #164 E2): a rewrite,
@@ -7379,6 +7387,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "write_tests" in _resume_done or fctx.get("prior_failing_gates"))
         # This run finishing write_tests is direct evidence — it does not need a lineage.
         _own_tests_done = "write_tests" in {str(s) for s in (fctx.get("completed_stages") or [])}
+        if _recheck:
+            # A re-check writes no tests: the branch's own suite is the oracle.
+            do_separate_tests = False
         if do_separate_tests and _seeded:
             # The seeded tree carries the QA-authored suite; it is the frozen oracle (and, being
             # pre-existing now, the existing-tests floor keeps the implementer off it).
@@ -7835,7 +7846,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             + _placed_tests_note(_placed_tpl_tests) \
             + (_test_plan_note((locals().get("r1") or {}).get("summary", ""))
                if do_separate_tests else "")
-        max_repair = max(0, min(5, int(
+        max_repair = 0 if _recheck else max(0, min(5, int(
             spec.get("repair_retries", settings.code_repair_max_retries) or 0)))
         repair_attempts = 0
         repair_log: list[dict] = []
@@ -9102,7 +9113,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _weakened.append(f"{_p} ({_was_n} -> {_now_n} tests)")
         _halt_if_needs_person()
         gates = {
-            "code_written": bool(impl_files) or (_is_repair_iteration and tests_passed),
+            "code_written": (bool(impl_files) or (_is_repair_iteration and tests_passed)
+                             # A re-check writes nothing; the change is the lineage's.
+                             or (_recheck and bool(_lineage_paths))),
             "written_tests_pass": tests_passed,
             # An existing test that was edited or deleted is the one way a green suite can
             # still mean "we broke something" — so this gate holds at tier 0 too.
@@ -9686,6 +9699,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                         template_evidence=_tpl_evidence(),
                                         coder_owned_secrets=_coder_owned_secrets())
             _fix_rounds_run = 0
+            if _recheck:
+                inrun_max = 0          # a re-check reports; it never runs a fix round
             if inrun_max:
               try:  # a convergence failure must DEGRADE to the legacy paths, never kill the run
                 for round_i in range(1, inrun_max + 1):
@@ -10491,6 +10506,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                               else "block")
             # EVERY STOP GOES THROUGH THE OPERATOR'S RULE, whichever branch decided it (the
             # supervisor's stop_report short-circuit skipped it: crun_f5868a67, BOSSAPP-1319).
+            if _recheck and action == "repair":
+                # A RE-CHECK NEVER STARTS A REPAIR ROUND: it reports. A failing gate stops here
+                # and the operator's rule (stop_or_open) labels the PR; the existing follow-up
+                # rules decide the rest.
+                action = "block"
             action = _checks_failing.stop_or_open(action, failing, faults=gate_faults,
                                                   open_pr=_can_ship_pr,
                                                   enabled=_open_when_failing,
@@ -10901,6 +10921,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _pr_files = ([FileChange(path=p, content=content)
                           for p, content in accumulated.items()]
                          if use_microvm else sandbox.diff())
+            if _recheck:
+                # A RE-CHECK COMMITS NOTHING: whatever BOSS's own gate preparation touched in
+                # the checkout stays there; the PR gets the new verdict and card, not a commit.
+                if _pr_files:
+                    emit_event(c, project_id, "code_task.recheck_discarded_changes", "boss",
+                               "code_task_run", run_id,
+                               {"paths": [f.path for f in _pr_files][:40]})
+                _pr_files = []
             _pr_summary = _cf_section(_checks) + _generated_pr_summary(
                 engine, settings, run_id, project_id, title=title, evidence=evidence,
                 gates=gates, paths=[f.path for f in _pr_files], qg_id=qg_id)

@@ -4791,6 +4791,35 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         return {"ok": True, **out}
 
     @reg.tool(
+        "recheck_change",
+        "Re-check a finished build's change: run EVERY gate again (tests, security, review, "
+        "consistency, acceptance) on its branch head as a new attempt of the same lineage, with "
+        "NO code written and no repair round — for after a platform fix, or a check you no longer "
+        "trust. The pull request gets the new verdict and merge card (older cards withdrawn); a "
+        "failing gate is labelled on the PR by the usual rules. Says its estimated cost. Pass "
+        "`dry_run: true` to only see whether it can run and what it would cost.",
+        _obj({"run_id": {"type": "string", "description": "the build (code task run)"},
+              "dry_run": {"type": "boolean",
+                          "description": "only report can/why/estimated cost"}},
+             ["run_id"]),
+        kind="write",
+        reversibility="costs_money", permission="code_task:steer",
+        exposure=Exposure(tags=("reviews", "pr")))
+    def recheck_change(ctx, *, project_id, actor, args):
+        cr = services_module("change_recheck")
+        run_id = str(args.get("run_id") or "").strip()
+        if not run_id:
+            return {"ok": False, "error": "give run_id"}
+        try:
+            if args.get("dry_run"):
+                with ctx.begin() as c:
+                    return {"ok": True, **cr.preview(c, run_id, project_id)}
+            return {"ok": True, **cr.request(ctx.engine, ctx.settings, ctx.jobs, run_id,
+                                             project_id=project_id, actor=actor)}
+        except cr.RecheckRefused as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @reg.tool(
         "watch_code_task",
         "LIVE tool-level feed of what the coding agent is doing RIGHT NOW: each file it "
         "reads or edits, lines written so far, and whether it is exploring or editing. Use "

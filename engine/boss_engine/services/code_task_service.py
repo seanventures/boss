@@ -2028,6 +2028,7 @@ def retry_code_task(
     allow_test_retirement: bool = False, job_priority: Optional[int] = None,
     attempt_ceiling: Optional[int] = None, workflow_version_id: str = "",
     title: Optional[str] = None, automatic: bool = False, by_person: bool = False,
+    recheck: bool = False,
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
@@ -2186,7 +2187,8 @@ def retry_code_task(
     # copy folder kept almost nothing once copies are filtered (crun_953d5879: 5 files after
     # crun_cb6e15f4's 75). Either is skipped instead of rebuilding or repairing a husk.
     seed_files, seed_from = 0, run_id
-    if prev.get("status") != "completed":
+    # A RE-CHECK (change_recheck) judges the BRANCH HEAD, never a saved workspace.
+    if prev.get("status") != "completed" and not recheck:
         # (id, whole-tree files, how far it got) newest first. HOW FAR: tests passed, then the
         # fewest failing gates. A retry continues from the attempt that got FURTHEST, newest
         # breaking ties: crun_053f2098 seeded from a just-cancelled sibling of the older attempt
@@ -2224,7 +2226,7 @@ def retry_code_task(
     # NEVER REPAIR AN EMPTY TREE: a lineage that kept no FILES (lineage_kept_work) is rebuilt in
     # full, whatever stages or design it reached — nothing of its code exists to repair.
     fresh = (prev.get("status") != "completed" and not seed_files and not pr_url
-             and not lineage_kept_work(engine, prev, run_id))
+             and not recheck and not lineage_kept_work(engine, prev, run_id))
     if fresh:
         why = str(prev.get("error") or "it stopped before producing anything").strip()
         augmented = (f"{base_instr}\n\n=== ITERATION FEEDBACK (attempt {attempt}) ===\n"
@@ -2268,6 +2270,9 @@ def retry_code_task(
             base_branch=spec.get("base_branch") or None,
             role_key=spec.get("role_key"),
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
+                          # RE-CHECK THIS CHANGE (change_recheck): every gate on the branch
+                          # head, no code written, no repair round.
+                          **({"recheck_only": True, "recheck_of": run_id} if recheck else {}),
                           # A fresh build of the same brief, not a repair (see `fresh` above).
                           **({"fresh_build": True} if fresh else {}),
                           # AN EXPLICIT CHOICE MAKES THIS A PIECE OF WORK IN ITS OWN RIGHT.
