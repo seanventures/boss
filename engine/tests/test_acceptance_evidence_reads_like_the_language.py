@@ -64,6 +64,11 @@ def test_every_met_the_reviewer_evidenced_stands(check_id):
     downgraded = {a["n"] for a in check["answers"] if a["recorded"] == "partial"}
     assert check["recorded"]["partial"] == len(downgraded) >= 3
     rec = ag.judge(DATA["items"], _reply(check["answers"]), {}, root=TREE)
+    # Item 6, the Stack line, needs a person (PR #177 review): "static binaries" is not proven
+    # by a recorded check or an explicit CGO_ENABLED=0 build in this tree, and "gateway" only
+    # resembles cmd/northgate-gateway. Never met, never a major gap.
+    assert next(i for i in rec["items"] if i["n"] == 6)["status"] == "human"
+    met -= 1
     assert rec["counts"]["met"] == met and rec["partial"] == partial, [
         (i["n"], i["evidence"][-160:]) for i in rec["items"] if i["status"] != "met"]
     for n in partial:
