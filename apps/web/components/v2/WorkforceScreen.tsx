@@ -27,6 +27,11 @@ import { AgentChat } from "./AgentChat";
 const FILTERS = ["ALL", "WORKING", "STUCK", "IDLE"] as const;
 type Filter = (typeof FILTERS)[number];
 
+export function autonomyLevelSentence(level: number | null | undefined): string | null {
+  if (typeof level !== "number") return null;
+  return `Autonomy level ${level}.`;
+}
+
 function ago(seconds: number | null): string {
   if (seconds === null) return "not seen in this window";
   if (seconds < 90) return `${Math.round(seconds)}s ago`;
@@ -260,6 +265,7 @@ function AgentCard({ a, onChat, rank, busiest }:
   // Share of the busiest agent's volume. A floor of 3% keeps a real but tiny contribution
   // visible, a bar of zero width reads as no bar, which is the thing it must not say.
   const share = volume(a) > 0 && busiest > 0 ? volume(a) / busiest : null;
+  const autonomy = autonomyLevelSentence(a.autonomy_level);
   return (
     <li
       className="v2-card"
@@ -422,6 +428,7 @@ function AgentCard({ a, onChat, rank, busiest }:
         <span title="configured trust level, not an observed score">
           trust <b>{a.trust_score}</b> <span className="v2-score-of">set</span>
         </span>
+        {autonomy ? <span>{autonomy}</span> : null}
         {/* Check-in. "42s ago" and "not seen in this window" are different facts. */}
         <span data-testid={`v2-agent-checkin-${a.id}`}>{ago(a.last_seen_seconds)}</span>
       </div>

@@ -70,6 +70,12 @@ export function faceMatches(roleKey: string | null, query: string | undefined): 
   return [roleKey, n.name, n.role, n.callsign ?? ""].some((x) => x.toLowerCase().includes(q));
 }
 
+/** The stopped run's error, as a sentence. Blank is nothing. */
+export function missionErrorSentence(error: string | null | undefined): string | null {
+  const trimmed = error?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
 /** A tooltip of ours stays ≤14 words (walk D20); a long server sentence is clipped. */
 export function clipWords(text: string | null | undefined, max = 14): string | undefined {
   const words = String(text ?? "").trim().split(/\s+/).filter(Boolean);
@@ -131,7 +137,13 @@ export function nowParts(m: Mission, stepSeconds: number | null): { text: string
       return parts({ text: `Waiting on ${who}` }, step);
     }
     case "waiting": return parts({ text: m.waitingOn ? `Waiting, ${m.waitingOn}` : "Waiting" }, step, time);
-    case "stopped": return parts({ text: `Failed, step ${m.stepIndex}`, tip: clipWords(m.error), cls: "ag-mission-failed" });
+    case "stopped": {
+      const sentence = missionErrorSentence(m.error);
+      return parts(
+        { text: `Failed, step ${m.stepIndex}`, tip: clipWords(m.error), cls: "ag-mission-failed" },
+        sentence ? { text: sentence } : null,
+      );
+    }
     case "blocked": return parts({ text: "Blocked", tip: clipWords(m.blockedReason), cls: "ag-mission-blocked" }, step);
     case "stalled": return parts({ text: "Stalled", tip: "No progress for over 7 days. Resume or close it.", cls: "ag-mission-blocked" }, step);
     case "done": return parts({ text: `Finished, ${m.stepCount} steps${m.elapsedSeconds ? `, ${span(m.elapsedSeconds)}` : ""}` });
@@ -285,12 +297,17 @@ export function MissionRow({ mission: m, density = "lane", band = "wide", now, s
       </ol>
 
       <span className="ag-mission-now" title={total !== null ? `Run time ${span(total)}` : undefined}>
-        {parts.map((p, i) => (
-          <React.Fragment key={i}>
-            {i > 0 ? <span aria-hidden>, </span> : null}
-            <span className={p.cls} title={p.tip}>{p.text}</span>
-          </React.Fragment>
-        ))}
+        {parts.map((p, i) => {
+          const long = p.text.trim().split(/\s+/).filter(Boolean).length > 6;
+          return (
+            <React.Fragment key={i}>
+              {i > 0 ? <span aria-hidden>, </span> : null}
+              {long
+                ? <p className={p.cls} title={p.tip}>{p.text}</p>
+                : <span className={p.cls} title={p.tip}>{p.text}</span>}
+            </React.Fragment>
+          );
+        })}
       </span>
 
       {cost ? <span className="ag-mission-cost" title="Metered model spend so far">{cost}</span> : <span className="ag-mission-cost" aria-hidden />}

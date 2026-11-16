@@ -53,6 +53,12 @@ function pctText(v: unknown): string {
   return typeof v === "number" && Number.isFinite(v) ? `${Math.round(v * 100)}%` : "—";
 }
 
+/** tip14 of the action, or nothing when it trims empty. */
+export function savingsActionSentence(action: string | null | undefined): string | null {
+  if (!String(action ?? "").trim()) return null;
+  return tip14(action) ?? null;
+}
+
 export function SpendTab({ projectId, paused }: { projectId: string; paused: boolean }) {
   useIdentityVersion(); // names land when the install's agents load
   const [win, setWin] = useState<(typeof WINDOWS)[number]>("7d");
@@ -151,16 +157,21 @@ export function SpendTab({ projectId, paused }: { projectId: string; paused: boo
             <h3 id="gv-save-h" className="gv-sec-head">SAVINGS</h3>
             {s.savings.length ? (
               <ul className="gv-list">
-                {s.savings.map((x) => (
-                  <li key={x.kind}>
-                    <span className="gv-sev" data-sev={x.severity}>{x.severity ?? "info"}</span>
-                    <span className="gv-finding" data-user-text title={tip14(x.finding)}>{x.finding}</span>
-                    {Number((x as { potential_saving_usd_micros?: number }).potential_saving_usd_micros ?? 0) > 0 ? (
-                      <span>Save ≈ {money(Number((x as { potential_saving_usd_micros?: number }).potential_saving_usd_micros))}</span>
-                    ) : null}
-                    {x.action ? <span className="gv-action" title={tip14(x.action)}>What to do</span> : null}
-                  </li>
-                ))}
+                {s.savings.map((x) => {
+                  const sentence = savingsActionSentence(x.action);
+                  const long = !!sentence && sentence.split(/\s+/).filter(Boolean).length > 6;
+                  return (
+                    <li key={x.kind}>
+                      <span className="gv-sev" data-sev={x.severity}>{x.severity ?? "info"}</span>
+                      <span className="gv-finding" data-user-text title={tip14(x.finding)}>{x.finding}</span>
+                      {Number((x as { potential_saving_usd_micros?: number }).potential_saving_usd_micros ?? 0) > 0 ? (
+                        <span>Save ≈ {money(Number((x as { potential_saving_usd_micros?: number }).potential_saving_usd_micros))}</span>
+                      ) : null}
+                      {x.action ? <span className="gv-action" title={tip14(x.action)}>What to do</span> : null}
+                      {sentence ? (long ? <p>{sentence}</p> : <span>{sentence}</span>) : null}
+                    </li>
+                  );
+                })}
               </ul>
             ) : <span className="gv-muted">No savings found</span>}
           </section>
