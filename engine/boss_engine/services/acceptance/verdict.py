@@ -904,6 +904,8 @@ class _Definitions:
                     configured = self.env_values(strings[0])
                     if configured:
                         distinct = set(configured)
+                        if _UNRESOLVED in distinct:
+                            return None
                         return distinct.pop() if len(distinct) == 1 else None
                     strings = strings[1:]       # the variable's name, then any default
                 values.extend(strings[-1:])
@@ -921,6 +923,7 @@ class _Definitions:
             return cache[name]
         found: list[str] = []
         n = re.escape(name)
+        unresolved = False
         for p in _walk(self.root):
             low = p.name.lower()
             if not (low.startswith("dockerfile") or low.endswith(".dockerfile")
@@ -940,6 +943,20 @@ class _Definitions:
                         found.append(_image_path(v.strip("\"'"), copies))
             for m in re.finditer(r"(?m)^\s*-?\s*" + n + r"\s*[:=]\s*(\S.*?)\s*$", text):
                 found.append(m.group(1).strip("\"'"))
+            # `env_file:` (compose): the file in the tree is read; one that is not makes the
+            # value unknowable, so the path is unresolved (PR #172 re-review).
+            for m in re.finditer(r"(?ms)^(\s*)env_file\s*:\s*(.*?)(?=^\1\S|\Z)", text):
+                for ref in re.findall(r"[\w./\-]+", m.group(2).split("\n")[0] or "") + \
+                        re.findall(r"(?m)^\s*-\s*(?:path\s*:\s*)?([\w./\-]+)", m.group(2)):
+                    env = (p.parent / ref)
+                    if not env.is_file():
+                        unresolved = True
+                        continue
+                    for em in re.finditer(r"(?m)^\s*(?:export\s+)?" + n + r"\s*=\s*(.*?)\s*$",
+                                          env.read_text(encoding="utf-8", errors="ignore")):
+                        found.append(em.group(1).strip("\"'"))
+        if unresolved:
+            found = [_UNRESOLVED]
         cache[name] = found
         return found
 
@@ -1180,6 +1197,10 @@ _ENV_LOOKUP = re.compile(r"\b(?:os\.(?:Getenv|LookupEnv|getenv)|os\.environ\.get
                          r"System\.getenv|getenv|env::var|ENV\.fetch)\s*\(")
 
 
+#: An environment value BOSS cannot know (a compose `env_file:` that is not in the tree).
+_UNRESOLVED = "\x00unresolved"
+
+
 def _image_path(value: str, copies: list[tuple[list[str], str]]) -> str:
     """`value` (a path in the image) as the tree file a Dockerfile COPY placed there, else
     `value` unchanged."""
@@ -1216,8 +1237,48 @@ def near_duplicate(a: Any, b: Any) -> bool:
     """Whether two items say the same thing (the 1↔10 and 2↔11 pairs of FXQuote: "A quote applies
     the pair's spread and rounds half-even" / "A quote correctly applies the pair's configured
     spread and rounds half-even")."""
-    wa, wb = _words(str(a or "")), _words(str(b or ""))
-    return bool(wa and wb) and len(wa & wb) / len(wa | wb) >= NEAR_DUPLICATE
+    ta, tb = str(a or ""), str(b or "")
+    wa, wb = _words(ta), _words(tb)
+    if not (wa and wb) or len(wa & wb) / len(wa | wb) < NEAR_DUPLICATE:
+        return False
+    # NEVER ACROSS OPPOSITE MEANINGS (PR #172 re-review): "Rejects >1 MB with 413" is not
+    # "Accepts >1 MB". Two items that differ in a negation, an opposite verb, or any number
+    # or status code are different items, however many words they share.
+    if _negations(ta) != _negations(tb) or _numbers(ta) != _numbers(tb):
+        return False
+    la, lb = _stems(ta), _stems(tb)
+    return not any((x in la and y in lb) or (y in la and x in lb) for x, y in _OPPOSITES)
+
+
+_NEGATION = re.compile(r"(?i)\b(?:no|not|never|none|nor|without|cannot)\b|n't\b")
+_OPPOSITES = (("accept", "reject"), ("allow", "deny"), ("allow", "block"), ("enable", "disable"),
+              ("include", "exclude"), ("pass", "fail"), ("succeed", "fail"), ("start", "stop"),
+              ("open", "close"), ("lock", "unlock"), ("add", "remove"), ("grant", "revoke"),
+              ("show", "hide"), ("valid", "invalid"), ("permit", "forbid"), ("above", "below"),
+              ("over", "under"), ("more", "less"), ("min", "max"), ("increase", "decrease"),
+              ("encrypt", "decrypt"), ("before", "after"), ("expose", "hide"), ("keep", "drop"))
+
+
+def _negations(text: str) -> list[str]:
+    return sorted(m.group(0).lower() for m in _NEGATION.finditer(text))
+
+
+def _numbers(text: str) -> set[str]:
+    return set(re.findall(r"\d+(?:\.\d+)?", text))
+
+
+def _stems(text: str) -> set[str]:
+    out = set()
+    for w in re.findall(r"[A-Za-z]+", text.lower()):
+        if len(w) > 4 and w.endswith(("ied", "ies")):
+            w = w[:-3] + "y"                    # denied, denies → deny
+        for suffix in ("ing", "ed", "es", "s"):
+            if w.endswith(suffix) and len(w) - len(suffix) >= 3:
+                w = w[:-len(suffix)]
+                break
+        out.add(w[:-1] if w.endswith("e") and len(w) > 4 else w)
+        out.add(w)
+    return out
 
 
 def same_as(answers: Mapping[int, tuple[str, str]], texts: Mapping[int, str], n: int,

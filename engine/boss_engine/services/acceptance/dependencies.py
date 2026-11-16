@@ -81,13 +81,17 @@ def is_dependency_item(item_text: Any, deps: Optional[dict[str, str]] = None) ->
 
 
 def manifests(root: Any) -> dict[str, Any]:
-    """{"files": [manifest paths], "deps": {name: version}, "go_modules": n}: the DIRECT runtime
-    requirements every manifest in the tree declares (go.mod `require` without `// indirect`;
-    package.json `dependencies`; requirements*.txt; pyproject.toml's [project] dependencies and
-    [tool.poetry.dependencies]; pom.xml dependencies not in test scope)."""
+    """{"files", "deps": {name: version}, "go_modules": n, "unreadable": [why]}: every runtime
+    requirement the tree's manifests declare — go.mod `require` (an `// indirect` one too: it
+    is linked into the binary); package.json `dependencies`, `optionalDependencies` and
+    `peerDependencies`; requirements*.txt with its `-r` includes followed; pyproject.toml's
+    [project] dependencies and [tool.poetry.dependencies]; pom.xml outside test scope.
+    `unreadable` names what the parser cannot fully read (`-e git+…`, a URL requirement,
+    `dynamic = ["dependencies"]`, setup.py, setup.cfg, Pipfile): a claim over it needs a person
+    (PR #172 re-review)."""
     import os
 
-    out: dict[str, Any] = {"files": [], "deps": {}, "go_modules": 0}
+    out: dict[str, Any] = {"files": [], "deps": {}, "go_modules": 0, "unreadable": []}
     root = Path(root)
     if not root.is_dir():
         return out
@@ -107,13 +111,22 @@ def manifests(root: Any) -> dict[str, Any]:
                 got = _go_mod(text)
             elif name == "package.json" and "node_modules" not in rel:
                 try:
-                    got = {k: str(v) for k, v in (json.loads(text).get("dependencies") or {}).items()}
+                    pkg = json.loads(text)
+                    got = {}
+                    for key in ("dependencies", "optionalDependencies", "peerDependencies"):
+                        got.update({k: str(v) for k, v in (pkg.get(key) or {}).items()})
                 except (ValueError, AttributeError):
                     got = {}
+                    out["unreadable"].append(f"{rel} is not valid JSON")
             elif low.startswith("requirements") and low.endswith(".txt"):
-                got = _requirements(text)
+                got = _requirements(text, p, out["unreadable"], root)
             elif name == "pyproject.toml":
+                if re.search(r"(?m)^\s*dynamic\s*=\s*\[[^\]]*[\"']dependencies[\"']", text):
+                    out["unreadable"].append(f"{rel} declares its dependencies dynamically")
                 got = _pyproject(text)
+            elif name in ("setup.py", "setup.cfg", "Pipfile"):
+                out["unreadable"].append(f"{rel} (its requirements are not read)")
+                got = {}
             elif name == "pom.xml":
                 got = _pom(text)
             if got is not None:
@@ -129,19 +142,39 @@ def _go_mod(text: str) -> dict[str, str]:
         lines += blk.splitlines()
     lines += re.findall(r"(?m)^\s*require\s+([^\s(].*)$", text)
     for ln in lines:
-        if "// indirect" in ln:
-            continue
         m = re.match(r"\s*(\S+)\s+(\S+)", ln.split("//")[0])
         if m:
             deps[m.group(1)] = m.group(2)
     return deps
 
 
-def _requirements(text: str) -> dict[str, str]:
-    deps = {}
+def _requirements(text: str, path: Optional[Path] = None, unreadable: Optional[list] = None,
+                  root: Optional[Path] = None, seen: Optional[set] = None) -> dict[str, str]:
+    deps: dict[str, str] = {}
+    seen = seen if seen is not None else set()
+    if path is not None:
+        seen.add(path.resolve())
+    where = (path.relative_to(root).as_posix() if path is not None and root is not None
+             else "requirements")
     for ln in text.splitlines():
-        ln = ln.split("#")[0].strip()
-        if not ln or ln.startswith("-"):
+        ln = ln.split(" #")[0].strip() if not ln.lstrip().startswith("#") else ""
+        if not ln:
+            continue
+        inc = re.match(r"(?:-r|--requirement)\s*=?\s*(\S+)", ln)
+        if inc:
+            target = (path.parent / inc.group(1)) if path is not None else None
+            if target is None or not target.is_file():
+                if unreadable is not None:
+                    unreadable.append(f"{where} includes {inc.group(1)}, not in the tree")
+            elif target.resolve() not in seen:
+                deps.update(_requirements(target.read_text(encoding="utf-8", errors="ignore"),
+                                          target, unreadable, root, seen))
+            continue
+        if re.match(r"(?:-e|--editable)\b", ln) or re.search(r"(?i)\b(?:git|hg|svn|bzr)\+|://", ln):
+            if unreadable is not None:
+                unreadable.append(f"{where}: {ln[:60]}")
+            continue
+        if ln.startswith("-"):
             continue
         m = re.match(r"([A-Za-z0-9_.\-]+)(?:\[[^\]]*\])?\s*(?:[=<>!~]=?\s*([\w.*]+))?", ln)
         if m:
@@ -177,6 +210,87 @@ def _pom(text: str) -> dict[str, str]:
     return deps
 
 
+def _belongs(imported: str, dep: str) -> bool:
+    """Whether an imported path or name is provided by the declared dependency `dep`."""
+    i, d = imported.lower(), dep.lower()
+    return i == d or i.startswith(d + "/") or i == d.split(":")[-1]
+
+
+_JS_BUILTINS = frozenset("""assert async_hooks buffer child_process cluster console constants crypto
+dgram diagnostics_channel dns domain events fs http http2 https inspector module net os path
+perf_hooks process punycode querystring readline repl stream string_decoder sys timers tls
+trace_events tty url util v8 vm wasi worker_threads zlib test""".split())
+
+
+def third_party_imports(root: Any, found: Optional[dict] = None) -> list[str]:
+    """What the CODE imports from outside the standard library and the project (non-test files):
+      Go      an import whose first path element has a dot, outside the tree's own module paths;
+      Python  a top-level `import x` / `from x import` not in the standard library and not a
+              module or package of the tree (relative imports skipped);
+      JS/TS   a `require('x')` / `import … from 'x'` of a bare name that is not a Node builtin.
+    """
+    import os
+    import sys
+
+    root = Path(root)
+    own_go: list[str] = []
+    for p in root.rglob("go.mod"):
+        if not any(part in _SKIP for part in p.relative_to(root).parts):
+            m = re.search(r"(?m)^\s*module\s+(\S+)", p.read_text(encoding="utf-8", errors="ignore"))
+            if m:
+                own_go.append(m.group(1))
+    local_py = {p.stem for p in root.glob("*.py")} | {p.name for p in root.iterdir() if p.is_dir()}
+    local_py |= {p.name for p in (root / "src").iterdir() if p.is_dir()} if (root / "src").is_dir() else set()
+    stdlib = set(getattr(sys, "stdlib_module_names", ())) | set(sys.builtin_module_names)
+    out: list[str] = []
+    test = re.compile(r"(?i)(^|/)(tests?|__tests__|testdata|spec)/|_test\.go$|(^|/)test_[^/]*\.py$|"
+                      r"_test\.py$|\.(test|spec)\.[jt]sx?$")
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP and not d.startswith("."))
+        for name in filenames:
+            p = Path(dirpath) / name
+            rel = p.relative_to(root).as_posix()
+            if test.search(rel):
+                continue
+            ext = p.suffix.lower()
+            if ext not in (".go", ".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"):
+                continue
+            try:
+                code = p.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if ext == ".go":
+                specs = [ln for blk in re.findall(r"(?ms)^\s*import\s*\((.*?)\)", code)
+                         for ln in blk.splitlines()]
+                specs += re.findall(r"(?m)^\s*import\s+((?:[\w.]+\s+)?\"[^\"]+\")", code)
+                for spec in specs:
+                    m = re.search(r"\"([^\"]+)\"", spec)
+                    if not m:
+                        continue
+                    path = m.group(1)
+                    if "." in path.split("/")[0] and not any(
+                            path == o or path.startswith(o + "/") for o in own_go):
+                        out.append(path)
+            elif ext == ".py":
+                for m in re.finditer(r"(?m)^\s*(?:from\s+([A-Za-z_][\w.]*)\s+import|"
+                                     r"import\s+([A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)*))", code):
+                    names = [m.group(1)] if m.group(1) else [x.strip() for x in m.group(2).split(",")]
+                    for n in names:
+                        top = n.split(".")[0]
+                        if top and top not in stdlib and top not in local_py and top != "__future__":
+                            out.append(top)
+            else:
+                for m in re.finditer(r"(?:\brequire\s*\(\s*|\bfrom\s+|^\s*import\s+)['\"]([^'\"]+)['\"]",
+                                     code, re.M):
+                    spec = m.group(1)
+                    if spec.startswith((".", "/", "node:")):
+                        continue
+                    pkg = "/".join(spec.split("/")[:2]) if spec.startswith("@") else spec.split("/")[0]
+                    if pkg not in _JS_BUILTINS:
+                        out.append(pkg)
+    return list(dict.fromkeys(out))
+
+
 def _named(deps: dict[str, str], name: str) -> Optional[str]:
     """The declared dependency `name` refers to (exact, or its last path part)."""
     n = name.strip().lower()
@@ -200,6 +314,10 @@ def claim(item_text: Any, root: Any) -> Optional[Claim]:
     files = ", ".join(found["files"][:3]) or "no manifest"
     if not found["files"]:
         return ("human", "no manifest in the tree to settle a dependency claim")
+    if found["unreadable"] and not _LICENCE.search(text):
+        return ("human", "the manifests cannot be fully read: "
+                         + "; ".join(found["unreadable"][:3]))
+    used = third_party_imports(root, found)
     declared = ", ".join(f"{d} {v}".strip() for d, v in sorted(deps.items())) or "nothing"
     problems: list[str] = []
     settled = False
@@ -215,6 +333,10 @@ def claim(item_text: Any, root: Any) -> Optional[Claim]:
             if set(deps) != want:
                 problems.append(f"{files} declares {declared}; the item says exactly "
                                 f"{', '.join(sorted(names))}")
+            stray = [u for u in used if not any(_belongs(u, w) for w in want)]
+            if stray:
+                problems.append(f"the code imports {', '.join(stray[:3])}; the item says "
+                                f"exactly {', '.join(sorted(names))}")
         elif len(deps) != 1:
             problems.append(f"{files} declares {declared}; the item says a single dependency")
     elif _NONE.search(text):
@@ -222,6 +344,9 @@ def claim(item_text: Any, root: Any) -> Optional[Claim]:
         if deps:
             problems.append(f"{files} requires {declared}; the item says standard library "
                             "only / no third-party dependency")
+        if used:
+            problems.append(f"the code imports {', '.join(used[:3])}; the item says standard "
+                            "library only / no third-party dependency")
     for m in _PIN.finditer(text):
         settled = True
         version = m.group(1)
@@ -248,4 +373,4 @@ def claim(item_text: Any, root: Any) -> Optional[Claim]:
     return ("met", f"{files} declares {declared}")
 
 
-__all__ = ["claim", "is_dependency_item", "manifests"]
+__all__ = ["claim", "is_dependency_item", "manifests", "third_party_imports"]

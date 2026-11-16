@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -105,8 +106,9 @@ def test_standard_library_only_holds_on_a_tree_with_no_requires(tmp_path):
 
 
 @pytest.mark.parametrize("files,deps", [
-    ({"package.json": '{"dependencies": {"express": "4.19.2"}, "devDependencies": {"jest": "29"}}'},
-     {"express": "4.19.2"}),
+    ({"package.json": '{"dependencies": {"express": "4.19.2"}, "devDependencies": {"jest": "29"}, '
+                      '"optionalDependencies": {"fsevents": "2"}, "peerDependencies": {"react": "18"}}'},
+     {"express": "4.19.2", "fsevents": "2", "react": "18"}),
     ({"requirements.txt": "flask==3.0.0\n# comment\nrequests>=2\n"},
      {"flask": "3.0.0", "requests": "2"}),
     ({"pyproject.toml": '[project]\nname = "x"\ndependencies = ["httpx==0.27", "pydantic"]\n'},
@@ -116,7 +118,7 @@ def test_standard_library_only_holds_on_a_tree_with_no_requires(tmp_path):
                  "<artifactId>junit</artifactId><scope>test</scope></dependency>"
                  "</dependencies></project>"}, {"g:a": "1.0"}),
     ({"go.mod": "module m\n\nrequire (\n\tgithub.com/a/b v1.2.3\n\tgithub.com/c/d v0.1.0 // indirect\n)\n"},
-     {"github.com/a/b": "v1.2.3"}),
+     {"github.com/a/b": "v1.2.3", "github.com/c/d": "v0.1.0"}),     # an indirect one links in
 ])
 def test_each_manifest_is_read_for_its_direct_runtime_requirements(tmp_path, files, deps):
     for name, text in files.items():
@@ -288,3 +290,132 @@ def test_a_path_the_environment_configures_is_not_the_code_default(tmp_path):
                                                  "      RATES: /etc/other.yaml\n")
     d = v._Definitions(tmp_path)
     assert d.param_value("load.go", "load", "p") is None               # they disagree
+
+
+# ── PR #172 re-review: "standard library only" never passes on a gap in the reading ─────────
+
+STDLIB = "Standard library only, no external modules"
+
+
+def _go_tree(tmp_path, go_mod="module github.com/acme/app\n\ngo 1.23\n", imports=()):
+    (tmp_path / "go.mod").write_text(go_mod)
+    block = "".join(f'\t"{i}"\n' for i in imports)
+    (tmp_path / "main.go").write_text(f"package main\n\nimport (\n\t\"fmt\"\n{block})\n\n"
+                                      "func main() { fmt.Println() }\n")
+    return tmp_path
+
+
+def test_stdlib_only_holds_on_a_clean_go_tree_and_its_own_packages(tmp_path):
+    assert _one(STDLIB, _go_tree(tmp_path, imports=["github.com/acme/app/internal/rates"]))[
+        "status"] == "met"
+
+
+@pytest.mark.parametrize("case", ["indirect", "import", "single_x_but_imports_y"])
+def test_stdlib_only_counts_indirect_requires_and_the_codes_imports(tmp_path, case):
+    if case == "indirect":
+        root = _go_tree(tmp_path, "module github.com/acme/app\n\nrequire github.com/c/d v0.1.0 // indirect\n")
+        assert "requires github.com/c/d" in _one(STDLIB, root)["evidence"]
+    elif case == "import":
+        root = _go_tree(tmp_path, imports=["github.com/spf13/cobra"])
+        got = _one(STDLIB, root)
+        assert got["status"] == "partial" and "imports github.com/spf13/cobra" in got["evidence"]
+    else:
+        root = _go_tree(tmp_path, "module github.com/acme/app\n\nrequire gopkg.in/yaml.v3 v3.0.1\n",
+                        imports=["gopkg.in/yaml.v3", "github.com/spf13/cobra"])
+        got = _one("Single dependency `gopkg.in/yaml.v3`", root)
+        assert got["status"] == "partial" and "imports github.com/spf13/cobra" in got["evidence"]
+    assert _one(STDLIB, root)["status"] == "partial"
+
+
+@pytest.mark.parametrize("files,why", [
+    ({"requirements.txt": "-r base.txt\n", "base.txt": "flask==3.0.0\n"}, "flask"),
+    ({"package.json": '{"optionalDependencies": {"fsevents": "2"}}'}, "fsevents"),
+    ({"package.json": '{"peerDependencies": {"react": "18"}}'}, "react"),
+    ({"requirements.txt": "", "app.py": "import requests\n"}, "imports requests"),
+    ({"package.json": "{}", "index.js": "const _ = require('lodash');\n"}, "imports lodash"),
+    ({"package.json": "{}", "index.ts": "import { z } from 'zod';\n"}, "imports zod"),
+])
+def test_stdlib_only_is_false_on_what_other_ecosystems_declare_or_import(tmp_path, files, why):
+    for name, text in files.items():
+        (tmp_path / name).write_text(text)
+    got = _one(STDLIB, tmp_path)
+    assert got["status"] == "partial" and why in got["evidence"], got
+
+
+def test_stdlib_and_local_imports_are_not_third_party(tmp_path):
+    (tmp_path / "requirements.txt").write_text("")
+    (tmp_path / "rates").mkdir()
+    (tmp_path / "rates" / "__init__.py").write_text("")
+    (tmp_path / "app.py").write_text("import os, json\nfrom rates import load\nfrom . import x\n")
+    (tmp_path / "package.json").write_text("{}")
+    (tmp_path / "index.js").write_text("const fs = require('fs');\nimport p from 'node:path';\n"
+                                       "import x from './x';\n")
+    assert _deps.third_party_imports(tmp_path) == []
+    assert _one(STDLIB, tmp_path)["status"] == "met"
+
+
+@pytest.mark.parametrize("files", [
+    {"requirements.txt": "-e git+https://github.com/acme/lib.git#egg=lib\n"},
+    {"requirements.txt": "lib @ https://example.test/lib.whl\n"},
+    {"requirements.txt": "-r missing.txt\n"},
+    {"pyproject.toml": '[project]\nname = "x"\ndynamic = ["dependencies", "version"]\n'},
+    {"setup.py": "from setuptools import setup\nsetup(install_requires=['x'])\n"},
+    {"setup.cfg": "[options]\ninstall_requires = x\n"},
+    {"Pipfile": "[packages]\nx = '*'\n"},
+])
+def test_what_the_parser_cannot_fully_read_needs_a_person(tmp_path, files):
+    for name, text in files.items():
+        (tmp_path / name).write_text(text)
+    got = _one(STDLIB, tmp_path)
+    assert got["status"] == "human" and "cannot be fully read" in got["evidence"], got
+
+
+# ── PR #172 re-review: no evidence across opposite meanings ─────────────────────────────────
+
+@pytest.mark.parametrize("a,b", [
+    ("Rejects request bodies over 1 MB with 413", "Accepts request bodies over 1 MB"),
+    ("Returns 400 for an unknown currency", "Does not return 400 for an unknown currency"),
+    ("A quote id is valid for 30 seconds", "A quote id is valid for 60 seconds"),
+    ("An expired quote id returns 410", "An expired quote id returns 404"),
+    ("Admins are allowed to export the ledger", "Admins are denied the ledger export"),
+])
+def test_opposite_items_are_never_near_duplicates(a, b):
+    assert not v.near_duplicate(a, b) and not v.near_duplicate(b, a)
+
+
+def test_same_as_across_opposite_meanings_is_not_judged(tmp_path):
+    items = [{"n": 1, "text": "Rejects request bodies over 1 MB with 413"},
+             {"n": 2, "text": "Accepts request bodies over 1 MB"}]
+    reply = "ITEM 1: MET — quote.go:3 `Quote`\nITEM 2: MET — same as ITEM 1.\n"
+    got = {i["n"]: i for i in v.parse_acceptance(reply, items, root=_tree(tmp_path))}
+    assert got[2]["status"] == "unjudged" and "cites another item's evidence" in got[2]["evidence"]
+
+
+# ── PR #172 re-review: a compose env_file ───────────────────────────────────────────────────
+
+def _env_tree(tmp_path, compose: str, env: Optional[str] = None):
+    (tmp_path / "rates.yaml").write_text("pairs: {}\n")
+    (tmp_path / "load.go").write_text(
+        "package main\n\nimport \"os\"\n\nfunc load(p string) ([]byte, error) { return os.ReadFile(p) }\n")
+    (tmp_path / "main.go").write_text(
+        "package main\n\nimport \"os\"\n\nfunc main() {\n\tcfg := os.Getenv(\"RATES\")\n"
+        "\tif cfg == \"\" {\n\t\tcfg = \"rates.yaml\"\n\t}\n\tload(cfg)\n}\n")
+    (tmp_path / "docker-compose.yml").write_text(compose)
+    if env is not None:
+        (tmp_path / "prod.env").write_text(env)
+    return v._Definitions(tmp_path)
+
+
+def test_a_compose_env_file_in_the_tree_is_read(tmp_path):
+    d = _env_tree(tmp_path, "services:\n  app:\n    env_file: prod.env\n", "RATES=prod.yaml\n")
+    assert d.param_value("load.go", "load", "p") == "prod.yaml"
+
+
+@pytest.mark.parametrize("compose", [
+    "services:\n  app:\n    env_file: secrets.env\n",
+    "services:\n  app:\n    env_file:\n      - prod.env\n      - secrets.env\n",
+])
+def test_a_compose_env_file_not_in_the_tree_leaves_the_path_unresolved(tmp_path, compose):
+    d = _env_tree(tmp_path, compose, "OTHER=1\n")
+    assert d.param_value("load.go", "load", "p") is None
+    assert not d.body_reads("load.go", "load", ["rates.yaml"])
