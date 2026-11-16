@@ -46,11 +46,39 @@ function useDebounced<T>(value: T, ms: number): T {
   return v;
 }
 
+/** Trimmed paused-day names, blanks dropped, first time each name is seen. */
+export function pausedDayNames(groups: readonly (readonly string[])[]): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const group of groups) {
+    for (const raw of group) {
+      const name = raw.trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+/** Those names, joined. A line of more than six words is a paragraph. */
+export function PausedDayNames({ groups }: { groups: readonly (readonly string[])[] }) {
+  const text = pausedDayNames(groups).join(", ");
+  if (!text) return null;
+  const long = text.split(/\s+/).filter(Boolean).length > 6;
+  return long
+    ? <p data-testid="gv-paused-day-names" data-user-text>{text}</p>
+    : <span data-testid="gv-paused-day-names" data-user-text>{text}</span>;
+}
+
 /** Days the typed caps would have paused work on, from the server's replays (month and day). */
-function usePausedDays(projectId: string, month: number | null, day: number | null): number | null {
+function usePausedDays(projectId: string, month: number | null, day: number | null): {
+  count: number;
+  groups: readonly (readonly string[])[];
+} | null {
   const m = useDebounced(month, 300);
   const d = useDebounced(day, 300);
-  const [n, setN] = useState<number | null>(null);
+  const [replay, setReplay] = useState<{ count: number; groups: readonly (readonly string[])[] } | null>(null);
   useEffect(() => {
     let alive = true;
     const ask = (period: "month" | "day", cap: number | null) => (cap === null ? Promise.resolve(null)
@@ -59,11 +87,14 @@ function usePausedDays(projectId: string, month: number | null, day: number | nu
     void Promise.all([ask("month", m), ask("day", d)]).then((got) => {
       if (!alive) return;
       const known = got.filter((p): p is CapPreviewData => !!p && !p.not_enough_history);
-      setN(known.length ? new Set(known.flatMap((p) => p.stopped_days ?? [])).size : null);
+      if (!known.length) { setReplay(null); return; }
+      const groups = known.map((p) => p.stopped_days ?? []);
+      // One unique set: blanks are dropped, so a blank in both replays is not a day.
+      setReplay({ count: pausedDayNames(groups).length, groups });
     });
     return () => { alive = false; };
   }, [projectId, m, d]);
-  return n;
+  return replay;
 }
 
 function MoneyField({ id, label, value, onChange, error, hint, testid, inputRef, perMin }: {
@@ -174,7 +205,8 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
   const burstErr = burst !== start.burst ? burstN.error : null;
   const allowanceErr = allowance !== start.allowance ? allowanceN.error : null;
   const invalid = Boolean(monthErr || dayErr || burstErr || allowanceErr || Object.values(rowErrors).some(Boolean));
-  const paused = usePausedDays(projectId, monthN.value, dayN.value);
+  const replay = usePausedDays(projectId, monthN.value, dayN.value);
+  const paused = replay?.count ?? null;
 
   const monthPeriod = view?.meter.periods.find((p) => p.period === "month");
   const dayPeriod = view?.meter.periods.find((p) => p.period === "day");
@@ -318,11 +350,14 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
 
       <div className="gv-save-row">
         {paused !== null ? (
+          <>
           <span className="gv-paused-line" data-warn={paused > 0 || undefined} data-testid="gv-paused-days"
                 title="Replays the last 30 days of real spend">
             {paused > 0 ? `With these limits, last month would have paused work on ${paused} day${paused === 1 ? "" : "s"}`
               : "With these limits, last month would have paused work on no days"}
           </span>
+          <PausedDayNames groups={replay?.groups ?? []} />
+          </>
         ) : null}
         <span className="gv-spacer" />
         <GatedButton permission="budget:manage" type="submit" className="ag-btn ag-btn-primary" data-testid="gv-save-limits"

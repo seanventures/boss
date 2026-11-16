@@ -53,6 +53,21 @@ export function hostShareSentence(count: number | null | undefined): string | nu
   return `Shared by ${count} projects.`;
 }
 
+/** Why this environment's health is what it is. A blank reason is nothing. */
+export function deployHealthReasonSentence(reason: string | null | undefined): string | null {
+  const trimmed = reason?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** Beside the health tag. More than six words is a paragraph; six or fewer is a span. */
+export function DeployHealthWhy({ sentence, envKey }: { sentence: string | null; envKey: string }) {
+  if (!sentence) return null;
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  return long
+    ? <p data-testid={`px-env-health-why-${envKey}`} data-user-text>{sentence}</p>
+    : <span data-testid={`px-env-health-why-${envKey}`} data-user-text>{sentence}</span>;
+}
+
 /** "14:00" in the viewer's zone. */
 const hourLocal = (iso: string) => { try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { return iso; } };
 
@@ -235,7 +250,10 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
             <span data-testid={`px-env-state-${e.key}`}>{e.deploy.word}</span></Tag>
         ) : null}
         {!e.deploy || e.deploy.live ? (
-          <Tag tone={HEALTH_TONE[e.health]} title={e.health_reason || undefined}><span className="px-dot" data-s={e.health} data-round aria-hidden />{HEALTH_WORD[e.health]}</Tag>
+          <>
+            <Tag tone={HEALTH_TONE[e.health]} title={e.health_reason || undefined}><span className="px-dot" data-s={e.health} data-round aria-hidden />{HEALTH_WORD[e.health]}</Tag>
+            <DeployHealthWhy sentence={deployHealthReasonSentence(e.health_reason)} envKey={e.key} />
+          </>
         ) : null}
         <span className="px-spacer" />
         {e.target_id && e.last_deploy ? (
