@@ -2,6 +2,22 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.26]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.26.md](docs/community/RELEASE_NOTES_v1.0-rc10.26.md).
+
+### Added
+
+- The last test says its summary. The workforce says why the control plane is unreachable. The send sheet says why that channel. The experiment says why that verdict. The pack says why there is no dashboard. The old deploy line says why it failed. The govern switch says why install is refused. A refused fix says the detail. The problem note says the message. The paused rule says why.
+
+### Changed
+
+- The community candidate version is `1.0.0-rc.10.26`.
+
+### Release scope
+
+- This is the git tag of public main after rc10.25, including pull requests 155, 156, and 158 which were already on main. It is not a live host deploy. No image tag or release-gate run is attached. The export record still cites `docs/community/RC9_VALIDATION.md`. A failed deploy phase still has no phase-only retry. A migration approval was not added. A second change-set blocked sentence was not added, because that reason is already on the page.
+
 ## [v1.0-rc10.25]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.25.md](docs/community/RELEASE_NOTES_v1.0-rc10.25.md).
