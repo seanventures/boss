@@ -155,6 +155,9 @@ sealed_own_rules() {
   while [ $((low + i)) -le "$high" ]; do
     mark=$((0x5EA10000 + i))
     echo "-A BOSS_SEALED_OWN -m owner --uid-owner $((low + i)) -m conntrack --ctstate NEW -j CONNMARK --set-xmark $mark/0xffffffff"
+    # Inbound (N3): a sealed uid never answers a connection it did not open itself — another
+    # uid connecting to the session's listener never completes the handshake.
+    echo "-A BOSS_SEALED_OWN -m owner --uid-owner $((low + i)) -m connmark ! --mark $mark/0xffffffff -j REJECT"
     echo "-A BOSS_SEALED_REPLY -m connmark --mark $mark/0xffffffff -m owner ! --uid-owner $((low + i)) -j REJECT"
     i=$((i + 1))
   done
@@ -173,7 +176,8 @@ seal_network() {
   # The link gateway's ports (one per cross-app link): never from the acceptance sandbox.
   iptables -A BOSS_SEALED -p tcp --dport "$LINK_PORTS" -j REJECT || return 1
   iptables -A BOSS_SEALED -o lo -j BOSS_SEALED_OWN || return 1
-  iptables -A BOSS_SEALED -o lo -d 127.0.0.0/8 -j ACCEPT || return 1
+  # TCP only (N2): a one-way UDP datagram needs no reply, so the reply rule cannot stop it.
+  iptables -A BOSS_SEALED -o lo -d 127.0.0.0/8 -p tcp -j ACCEPT || return 1
   iptables -A BOSS_SEALED -j REJECT || return 1
   iptables -I OUTPUT 1 -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED || return 1
   iptables -I OUTPUT 1 -o lo -j BOSS_SEALED_REPLY || return 1
@@ -191,7 +195,7 @@ seal_network() {
     ip6tables -A BOSS_SEALED -p tcp -m multiport --dports "$PORTS" -j REJECT || return 1
     ip6tables -A BOSS_SEALED -p tcp --dport "$LINK_PORTS" -j REJECT || return 1
     ip6tables -A BOSS_SEALED -o lo -j BOSS_SEALED_OWN || return 1
-    ip6tables -A BOSS_SEALED -o lo -d ::1/128 -j ACCEPT || return 1
+    ip6tables -A BOSS_SEALED -o lo -d ::1/128 -p tcp -j ACCEPT || return 1
     ip6tables -A BOSS_SEALED -j REJECT || return 1
     ip6tables -I OUTPUT 1 -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED || return 1
     ip6tables -I OUTPUT 1 -o lo -j BOSS_SEALED_REPLY || return 1

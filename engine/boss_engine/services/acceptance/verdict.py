@@ -590,6 +590,12 @@ def manufactured(cmd: Any) -> Optional[str]:
     made = inline_code(argv)
     if made:
         return made
+    plain = _field(cmd, "plain")
+    if plain is False:
+        return ("not a plain call into the delivered work"
+                + (f" ({_field(cmd, 'not_plain')})" if _field(cmd, "not_plain") else ""))
+    if plain is None:
+        return "BOSS did not classify it as a plain call into the delivered work"
     dirty = _field(cmd, "tree_dirty")
     if dirty is None:
         return "BOSS could not tell whether the session had changed the clone"

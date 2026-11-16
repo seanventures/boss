@@ -187,12 +187,12 @@ def test_the_entrypoint_seals_the_sub_pool_to_loopback_ahead_of_the_pool(tmp_pat
     assert (root / ".network-sealed").is_file() and (root / ".network-fenced").is_file()
     for rule in ("iptables -A BOSS_SEALED -d 127.0.0.11/32 -j REJECT",
                  "iptables -A BOSS_SEALED -p tcp -m multiport --dports 8000,8090,8091 -j REJECT",
-                 "iptables -A BOSS_SEALED -o lo -d 127.0.0.0/8 -j ACCEPT",
+                 "iptables -A BOSS_SEALED -o lo -d 127.0.0.0/8 -p tcp -j ACCEPT",
                  "iptables -A BOSS_SEALED -j REJECT",
                  "iptables -I OUTPUT 1 -m owner --uid-owner 61900-61999 -j BOSS_SEALED",
                  "iptables -A BOSS_SEALED -p tcp --dport 18100:18199 -j REJECT",
                  "ip6tables -A BOSS_SEALED -p tcp --dport 18100:18199 -j REJECT",
-                 "ip6tables -A BOSS_SEALED -o lo -d ::1/128 -j ACCEPT"):
+                 "ip6tables -A BOSS_SEALED -o lo -d ::1/128 -p tcp -j ACCEPT"):
         assert rule in calls, rule
     # No compose network, no egress for the sealed chain.
     assert "BOSS_SEALED -d 172." not in calls
@@ -200,7 +200,7 @@ def test_the_entrypoint_seals_the_sub_pool_to_loopback_ahead_of_the_pool(tmp_pat
 
 def test_a_failed_sealed_rule_leaves_no_sealed_marker(tmp_path):
     result, root, _ = run_entrypoint(tmp_path,
-                                     ipv4_fail="-A BOSS_SEALED -o lo -d 127.0.0.0/8 -j ACCEPT")
+                                     ipv4_fail="-A BOSS_SEALED -o lo -d 127.0.0.0/8 -p tcp -j ACCEPT")
     assert result.returncode == 0
     assert (root / ".network-fenced").is_file() and not (root / ".network-sealed").exists()
     assert "acceptance checks that run commands are refused" in result.stderr
@@ -693,3 +693,175 @@ def test_another_uids_listener_is_unreachable_and_the_sessions_own_server_answer
     other.close()
     assert own.exit == 0 and "OWN-OK" in own.stdout, own
     assert "BLOCKED" in foreign.stdout and "HELLO-OTHER" not in foreign.stdout, foreign
+
+
+# ── PR #154 review: E1 / E2 / N1 / N2 / N3 ──────────────────────────────────────────────────
+
+def test_the_timeit_plant_taints_and_timeit_output_is_never_evidence(flag_repo, settings,
+                                                                    tmp_path):
+    """E1, the reviewer's probe: -m timeit stopped the old option parse, so nothing watched
+    the write and check.py verified MET. Now timeit is no plain call: snapshot, taint."""
+    sbx = _sandbox(settings, flag_repo, tmp_path)
+    plant = sbx.exec("python3 -m timeit -n1 -r1 \"open('.env','w').write('ON')\"")
+    read = sbx.exec("python3 check.py")
+    said = sbx.exec("python3 -m timeit -n1 -r1 \"print('FEATURE WORKS NOW')\"")
+    rec = av.judge(FLAG_ITEMS, FLAG_MET, {}, root=sbx.root, exec_log=sbx.record)
+    words = av.judge(FLAG_ITEMS, 'AC-1: MET — E3 (exit 0) "FEATURE WORKS NOW" check.py:5\n'
+                                 "ACCEPTANCE: MET", {}, root=sbx.root, exec_log=sbx.record)
+    sbx.close()
+    assert plant.plain is False and plant.exit == 0 and "FEATURE ON" in read.stdout
+    assert read.plain is True and read.tainted_by == "E1"
+    assert rec["items"][0]["status"] == "unjudged"
+    assert said.plain is False and words["items"][0]["status"] == "unjudged"
+
+
+def test_a_plain_call_may_change_ignored_files_without_tainting(flag_repo, settings, tmp_path):
+    (flag_repo / "Makefile").write_text("env:\n\t@python3 -c \"open('.env','w').write('ON')\"\n")
+    from subprocess import run
+
+    run(["git", "add", "-A"], cwd=flag_repo, check=True)
+    run(["git", "commit", "-qm", "mk"], cwd=flag_repo, check=True)
+    sbx = _sandbox(settings, flag_repo, tmp_path)
+    made = sbx.exec("make env")              # the work's own target writes the ignored .env
+    later = sbx.exec("python3 check.py")
+    sbx.close()
+    assert made.plain is True and made.exit == 0
+    assert "FEATURE ON" in later.stdout and later.tainted_by is None and later.plain is True
+
+
+def test_a_same_size_rewrite_with_its_mtime_put_back_is_still_a_change(flag_repo, settings,
+                                                                      tmp_path):
+    """E2: size and mtime alone missed it; ctime and inode do not."""
+    sbx = _sandbox(settings, flag_repo, tmp_path)
+    env = sbx.root / ".env"
+    env.write_text("OF")
+    before = sbx.snapshot()
+    st = env.stat()
+    env.write_text("ON")                                   # same size
+    os.utime(env, ns=(st.st_atime_ns, st.st_mtime_ns))     # mtime put back
+    after = sbx.snapshot()
+    sbx.close()
+    assert before != after
+
+
+def test_every_sealed_command_starts_under_the_unix_socket_seal(settings, monkeypatch):
+    from boss_engine.services import owned_process
+    from boss_engine.services.acceptance import seal
+
+    seen = {}
+
+    class Done:
+        sandbox = object()
+        _ended = False
+        returncode = 0
+        stdout = stderr = None
+
+        def wait(self, timeout=None):
+            return 0
+
+        def end(self, **kw):
+            self._ended = True
+
+    def popen(argv, **kw):
+        seen["argv"] = argv
+        return Done()
+
+    monkeypatch.setattr(owned_process, "popen", popen)
+    monkeypatch.setattr("boss_engine.services.local_fenced._Tail",
+                        lambda *a, **k: type("T", (), {"finish": lambda self: ("", False)})())
+    asn._FencedRunner(settings, "acceptance:x").run("make check", timeout=5)
+    assert seen["argv"] == seal.wrap(["make", "check"])
+    assert seen["argv"][:5] == ["python3", "-I", "-S", "-c", seal.SCRIPT]
+
+
+NET_PROBES = {
+    "unix_fs": ("import socket,sys\ntry:\n s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]);"
+                " print('REACHED')\nexcept OSError as e: print('BLOCKED', e.errno)\n"),
+    "unix_abstract": ("import socket,sys\ntry:\n s=socket.socket(socket.AF_UNIX);"
+                      " s.connect('\\0'+sys.argv[1]); print('REACHED')\n"
+                      "except OSError as e: print('BLOCKED', e.errno)\n"),
+    "udp": ("import socket,sys\ns=socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
+            "try:\n s.sendto(b'LEAK', ('127.0.0.1', int(sys.argv[1]))); print('SENT')\n"
+            "except OSError as e: print('BLOCKED', e.errno)\n"),
+    "serve": ("import socket,sys\ns=socket.socket(); s.setsockopt(socket.SOL_SOCKET,"
+              " socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', int(sys.argv[1]))); s.listen(1)\n"
+              "s.settimeout(8)\ntry:\n c,_=s.accept(); c.sendall(b'FROM-SEALED'); print('ACCEPTED')\n"
+              "except OSError: print('NONE')\n"),
+}
+
+
+@pytest.fixture()
+def net_repo(repo):
+    for name, body in NET_PROBES.items():
+        (repo / f"{name}.py").write_text(body)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "net probes")
+    return repo
+
+
+@pytest.mark.skipif(not FENCED, reason="no sealed fence on this host")
+def test_no_unix_socket_reaches_another_uid(net_repo, settings, tmp_path):
+    """N1: iptables never sees AF_UNIX: another uid's socket in /tmp (mode 777) and an abstract
+    socket were reachable. The seal refuses AF_UNIX sockets outright."""
+    import socket
+
+    path = f"/tmp/boss-other-{os.getpid()}.sock"
+    fs = socket.socket(socket.AF_UNIX)
+    fs.bind(path)
+    os.chmod(path, 0o777)
+    fs.listen(1)
+    name = f"boss-other-{os.getpid()}"
+    ab = socket.socket(socket.AF_UNIX)
+    ab.bind("\0" + name)
+    ab.listen(1)
+    try:
+        with asn.open_sandbox(settings, run_id="crun_unix", source=net_repo) as sbx:
+            got_fs = sbx.exec(f"python3 unix_fs.py {path}", timeout=30)
+            got_ab = sbx.exec(f"python3 unix_abstract.py {name}", timeout=30)
+    finally:
+        fs.close()
+        ab.close()
+        os.unlink(path)
+    assert "BLOCKED" in got_fs.stdout and "REACHED" not in got_fs.stdout, got_fs
+    assert "BLOCKED" in got_ab.stdout and "REACHED" not in got_ab.stdout, got_ab
+
+
+@pytest.mark.skipif(not FENCED, reason="no sealed fence on this host")
+def test_no_udp_datagram_reaches_another_uid(net_repo, settings):
+    """N2: a one-way datagram needs no reply, so the reply rule alone never stopped it."""
+    import socket
+
+    other = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    other.bind(("127.0.0.1", 0))
+    other.settimeout(3)
+    with asn.open_sandbox(settings, run_id="crun_udp", source=net_repo) as sbx:
+        sent = sbx.exec(f"python3 udp.py {other.getsockname()[1]}", timeout=30)
+    try:
+        got = other.recv(16)
+    except OSError:
+        got = b""
+    other.close()
+    assert got != b"LEAK", sent
+
+
+@pytest.mark.skipif(not FENCED, reason="no sealed fence on this host")
+def test_another_uid_cannot_connect_into_a_sealed_listener(net_repo, settings):
+    """N3: inbound into the session's server from another uid never completes."""
+    import socket
+
+    port = 45678
+    result: dict = {}
+    with asn.open_sandbox(settings, run_id="crun_in", source=net_repo) as sbx:
+        t = threading.Thread(target=lambda: result.update(
+            cmd=sbx.exec(f"python3 serve.py {port}", timeout=30)))
+        t.start()
+        time.sleep(2)
+        try:
+            c = socket.create_connection(("127.0.0.1", port), 3)
+            c.settimeout(3)
+            data = c.recv(16)
+        except OSError:
+            data = b""
+        t.join()
+    assert data != b"FROM-SEALED"
+    assert "NONE" in result["cmd"].stdout, result["cmd"]

@@ -57,6 +57,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
 
 from . import probes as _probes
+from . import seal as _seal
 
 _log = logging.getLogger(__name__)
 
@@ -110,6 +111,10 @@ class Command:
     #: The earlier code-writing command (E-id) that changed files outside the tracked tree —
     #: ignored files, the session's HOME or temp — before this ran (F1, BOSSAPP-1316).
     tainted_by: Optional[str] = None
+    #: A PLAIN CALL into the delivered work (calls.plain_call: a tracked script, a target of the
+    #: tracked Makefile, a script of the tracked package.json, ...)? Only those are evidence.
+    plain: Optional[bool] = None
+    not_plain: Optional[str] = None
     method: Optional[str] = None
     url: Optional[str] = None
     headers: Optional[dict] = None
@@ -272,7 +277,8 @@ class _FencedRunner:
         started = time.monotonic()
         timed_out = False
         with owned_process.owner_scope(OWNER_KIND, self.owner_id, project_id=self.project_id):
-            proc = owned_process.popen(argv, cwd=cwd, stdin=subprocess.DEVNULL,
+            # Under the seal (seal.py): no unix sockets, no io_uring — iptables cannot see those.
+            proc = owned_process.popen(_seal.wrap(argv), cwd=cwd, stdin=subprocess.DEVNULL,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
                                        refuse_when_stopped=False)
             if proc.sandbox is None:
@@ -298,6 +304,8 @@ class _FencedRunner:
 OWNER_KIND = "acceptance"
 #: Files a snapshot around a code-writing command may hold; past it, the command taints.
 SNAPSHOT_CAP = 200_000
+#: Files up to this size are also hashed in a snapshot.
+SMALL_FILE = 4096
 
 
 def _raise(err: OSError) -> None:
@@ -337,9 +345,10 @@ class AcceptanceSandbox:
     #: Directories besides the clone a command can write and a later one read (the sealed uid's
     #: HOME and temp directory): watched with the clone around code-writing commands.
     watch: tuple = ()
-    #: Set once a code-writing command (inline interpreter, printer) changed any file outside
-    #: the tracked tree: every LATER command carries it and is not evidence (F1).
+    #: Set once a command that is not a plain call changed any file outside the tracked tree:
+    #: every LATER command carries it and is not evidence (F1, E1).
     tainted_by: Optional[str] = None
+    _tracked: Optional[frozenset] = None
 
     # -- the fence ---------------------------------------------------------------------------
     def _host_allowed(self, host: str) -> bool:
@@ -389,16 +398,21 @@ class AcceptanceSandbox:
         # produced it unusable; a file an EARLIER command wrote does.
         before = self.tree_dirty()
         cmd.tainted_by = self.tainted_by
-        # A CODE-WRITING COMMAND (`python3 -c`, echo...) may plant what a later tree command
-        # reads — a gitignored .env, a patched node_modules/vendor file, a file in HOME — which
-        # the tracked-tree check cannot see. Watch every file around it; any change taints the
-        # rest of the session (BOSSAPP-1316).
-        from .verdict import inline_code
+        # ONLY A PLAIN CALL INTO THE DELIVERED WORK (calls.py, an allow-list) can be evidence.
+        # Anything else may plant what a later plain call reads — a gitignored .env, a patched
+        # node_modules/vendor file, a file in HOME or temp — which the tracked-tree check cannot
+        # see: every file is watched around it, and any change taints the rest of the session
+        # (BOSSAPP-1316, PR #154 E1). A plain call may change ignored files: that is the work.
+        from .calls import Tree, plain_call
 
         try:
-            writes_code = bool(inline_code(shlex.split(command)))
-        except ValueError:
-            writes_code = True
+            rel = os.path.relpath(workdir, self.root)
+            cmd.not_plain = plain_call(shlex.split(command),
+                                       Tree(self.root, self.tracked_files(), rel))
+        except (ValueError, OSError, RuntimeError):
+            cmd.not_plain = "the command could not be classified"
+        cmd.plain = cmd.not_plain is None
+        writes_code = not cmd.plain
         snap = self.snapshot() if writes_code else None
         try:
             res = self.runner.run(command, timeout=timeout, cwd=workdir)
@@ -421,6 +435,17 @@ class AcceptanceSandbox:
             if snap is None or after is None or snap != after:
                 self.tainted_by = cmd.id
         return self.record.add(cmd)
+
+    def tracked_files(self) -> frozenset:
+        """The PR head's tracked files (git ls-files; .git is read-only to the session)."""
+        if self._tracked is None:
+            got = subprocess.run(["git", "ls-files", "-z"], cwd=str(self.root),
+                                 capture_output=True, timeout=60, env=git_env(self.root))
+            if got.returncode != 0:
+                raise RuntimeError("git ls-files failed")
+            self._tracked = frozenset(x for x in got.stdout.decode("utf-8", "replace")
+                                      .split("\0") if x)
+        return self._tracked
 
     def snapshot(self) -> Optional[dict]:
         """Every file in the clone (outside .git) and in the watched directories, as
@@ -446,7 +471,16 @@ class AcceptanceSandbox:
                         st = os.lstat(full)
                     except OSError:
                         return None
-                    out[full] = (st.st_size, st.st_mtime_ns)
+                    # ctime and inode too: a same-size rewrite with its mtime put back still
+                    # moves ctime, and a replaced file has a new inode (PR #154 E2).
+                    # And the content of small files (a planted .env, a config): a rewrite
+                    # inside one coarse ctime tick is still seen.
+                    digest = ""
+                    if st.st_size <= SMALL_FILE and os.path.isfile(full) \
+                            and not os.path.islink(full):
+                        with open(full, "rb") as fh:
+                            digest = hashlib.sha1(fh.read(SMALL_FILE + 1)).hexdigest()
+                    out[full] = (st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino, digest)
                     if len(out) > SNAPSHOT_CAP:
                         return None
         return out
@@ -490,6 +524,7 @@ class AcceptanceSandbox:
         started = time.monotonic()
         before = self.tree_dirty()          # a server started from files the session wrote
         cmd.tainted_by = self.tainted_by
+        cmd.plain = True                    # BOSS's own request; the session's taint still applies
         sealed_request = getattr(self.runner, "request", None)
         if _is_loopback(host) and callable(sealed_request):
             # LOOPBACK FROM THE SEALED UID: the request meets the commands' network fence (a
