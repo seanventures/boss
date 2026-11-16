@@ -60,6 +60,21 @@ def stack_answer(action: str) -> Optional[tuple[str, str]]:
     return None
 
 
+#: The words a surface sends when the person wrote no reason: never a reason to record.
+_NO_REASON_NOTES = frozenset({
+    "", "resolved from the boss console.", "rejected from the project page.", "rejected.",
+})
+
+
+def person_reject_note(note: Optional[str]) -> Optional[str]:
+    """The reason a person wrote when rejecting, or None when they wrote none (a surface's
+    placeholder note is not a reason). One line, bounded."""
+    text_value = " ".join(str(note or "").split())
+    if text_value.lower() in _NO_REASON_NOTES:
+        return None
+    return text_value[:1000]
+
+
 #: The actor recorded when a policy, not a person, resolves a gate. Deliberately not a member
 #: of any org: it must be impossible to sign in as, and obvious in an audit trail.
 SYSTEM_ACTOR = "auto_approval"
@@ -928,7 +943,7 @@ class DecisionService:
             self._handle_non_approved_follow_on(
                 connection, refreshed, action="reject", actor=actor, note=note
             )
-            self._handle_rejected_follow_on(connection, refreshed, actor=actor)
+            self._handle_rejected_follow_on(connection, refreshed, actor=actor, note=note)
             # A person said no to what BOSS recommended: kept as a decision example (BOSSAPP-893).
             from .decision_examples import capture_override
 
@@ -1626,9 +1641,11 @@ class DecisionService:
             raise InvalidDecisionTransitionError(str(refused)) from refused
 
     def _handle_rejected_follow_on(
-        self, connection: Connection, row: dict[str, Any], *, actor: str
+        self, connection: Connection, row: dict[str, Any], *, actor: str,
+        note: Optional[str] = None,
     ) -> None:
-        """What REFUSING releases. Distinct from the revise path: nothing here reads a note.
+        """What REFUSING releases. Distinct from the revise path: a reject's note is only the
+        person's reason, recorded where the refused work is (a rejected plan's build).
 
         A rejected stack deployment closes its ChangeSet and hands back its reservation, so
         the console stops showing it as waiting for somebody.
@@ -1642,16 +1659,25 @@ class DecisionService:
             # A PLAN SOMEBODY SAID NO TO ENDS ITS BUILD (independent re-check): it stayed
             # "Needs you · plan" in the Factory and on the shelf after Reject. The build is
             # stopped the way a person's Stop stops it, and says the plan was rejected.
+            #
+            # THE PERSON'S REASON GOES WITH IT (BOSSAPP-1321): a written reason is the run's
+            # stated outcome ("The plan was rejected: <why>"), which the next attempt's planner
+            # reads as the previous attempt's outcome (retry_code_task), and it is kept on the
+            # run as `plan_rejected_note`.
             from .code_task_service import CancelRefused, cancel_run
 
+            why = person_reject_note(note)
             try:
                 with connection.begin_nested():
                     cancel_run(connection, str(rec["run_id"]), str(row["project_id"]), actor=actor,
-                               reason="The plan was rejected")
+                               reason="The plan was rejected" + (f": {why}" if why else ""))
                     connection.execute(text(
                         "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
-                        "|| jsonb_build_object('plan_rejected', true) WHERE id = :id"),
-                        {"id": str(rec["run_id"])})
+                        "|| jsonb_build_object('plan_rejected', true) "
+                        "|| CASE WHEN CAST(:why AS TEXT) IS NULL THEN '{}'::jsonb ELSE "
+                        "jsonb_build_object('plan_rejected_note', CAST(:why AS TEXT)) END "
+                        "WHERE id = :id"),
+                        {"id": str(rec["run_id"]), "why": why})
             except (CancelRefused, LookupError):
                 pass
         elif (row["recommendation"] or {}).get("action") == "deploy_host":

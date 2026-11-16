@@ -107,6 +107,24 @@ def may_open(failing: Iterable[str], *, faults: Optional[Mapping[str, str]] = No
     return not (set(failing) & HELD_GATES)
 
 
+def stop_or_open(action: str, failing: Iterable[str], *,
+                 faults: Optional[Mapping[str, str]] = None, open_pr: bool = True,
+                 enabled: bool = True) -> str:
+    """THE ONE EXIT FROM A GATE STOP (BOSSAPP-1319). Whatever decided to stop the build — the
+    gate disposition (resolve_gate_failure_action), the run supervisor's stop_report at its
+    round cap, an inconclusive check whose escalations are spent — a ``"block"`` that
+    `may_open` allows becomes ``ACTION``: the PR opens with its checks failing and a follow-up
+    starts for them. Any other action is returned unchanged.
+
+    crun_f5868a67 (northgate-gateway, 2026-11-16): its fourth round failed only acceptance_met,
+    the supervisor's round cap judged stop_report, and that short-circuit set "block" without
+    ever reaching this rule, so the build parked at awaiting_gate_override with no follow-up,
+    while the two rounds before it (under the cap) each opened one."""
+    if action == "block" and enabled and may_open(failing, faults=faults, open_pr=open_pr):
+        return ACTION
+    return action
+
+
 def _gate_label(gate: str) -> str:
     from .factory_view import gate_label
 

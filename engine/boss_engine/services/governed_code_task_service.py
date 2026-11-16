@@ -1488,12 +1488,10 @@ def resolve_gate_failure_action(
         max_repair_rounds=max_repair_rounds, open_pr=open_pr, never_block=never_block,
         faults=faults, template_repair_max=template_repair_max, blockers=blockers,
         fix_round_ran=fix_round_ran)
-    if action == "block" and open_pr_when_failing:
-        from .checks_failing import ACTION, may_open
+    from .checks_failing import stop_or_open
 
-        if may_open(failing, faults=faults, open_pr=open_pr):
-            return ACTION
-    return action
+    return stop_or_open(action, failing, faults=faults, open_pr=open_pr,
+                        enabled=open_pr_when_failing)
 
 
 def _gate_failure_action(
@@ -10322,10 +10320,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     action = ("ship_with_dissent"
                               if (bool(getattr(settings, "code_gate_never_block", True))
                                   and _can_ship_pr)
-                              else _checks_failing.ACTION
-                              if (_open_when_failing and _checks_failing.may_open(
-                                  failing, faults=gate_faults, open_pr=_can_ship_pr))
                               else "block")
+            # EVERY STOP GOES THROUGH THE OPERATOR'S RULE, whichever branch decided it (the
+            # supervisor's stop_report short-circuit skipped it: crun_f5868a67, BOSSAPP-1319).
+            action = _checks_failing.stop_or_open(action, failing, faults=gate_faults,
+                                                  open_pr=_can_ship_pr,
+                                                  enabled=_open_when_failing)
             if action == "ship" and failing and advisory_gate:
                 # ADVISORY first pass: surface the failing checks (their verdicts are already
                 # recorded on the run, so the UI shows exactly which failed) but PROCEED to open the

@@ -356,6 +356,45 @@ def withdraw_superseded_pr_questions(connection, run_id: str, *, actor: str = "b
                                f"Superseded by attempt {run['attempt']}", actor=actor,
                                why={"code_task_run_id": run_id, "superseded_by": run["decision_id"]}):
             out.append(str(decision_id))
+    if run["pull_request_url"]:
+        out += withdraw_superseded_merge_cards(
+            connection, str(run["project_id"]), str(run["pull_request_url"]),
+            str(run["decision_id"]), run_id=run_id, actor=actor)
+    return out
+
+
+def withdraw_superseded_merge_cards(connection, project_id: str, pull_request_url: str,
+                                    new_decision_id: str, *, run_id: Optional[str] = None,
+                                    actor: str = "boss") -> list[str]:
+    """A NEWER BUILD'S MERGE CARD SUPERSEDES EVERY OLDER ONE FOR THAT PULL REQUEST (BOSSAPP-1320).
+
+    Keyed on the card itself (its `pull_request_url`), not on the run that happens to point at
+    it: a `[partial]` rescue card and a checks-failing card are never written to
+    code_task_runs.decision_id, so the run-keyed sweep above missed them and northgate-gateway's
+    change #2 had three merge cards pending at once (dec_6e13d604, dec_29974abe, dec_81fa4797),
+    each speaking for a different build. Each older open card is withdrawn with a note naming
+    the card that replaces it."""
+    if not (pull_request_url and new_decision_id):
+        return []
+    older = connection.execute(
+        text("SELECT id FROM decisions WHERE project_id = :p AND id <> :d "
+             "AND recommendation->>'action' = 'review_pull_request' "
+             "AND recommendation->>'pull_request_url' = :u AND status IN :open "
+             # Only OLDER cards: a sweep from an earlier build never withdraws a newer one.
+             "AND created_at <= (SELECT created_at FROM decisions WHERE id = :d) "
+             "ORDER BY created_at").bindparams(bindparam("open", expanding=True)),
+        {"p": project_id, "d": new_decision_id, "u": pull_request_url,
+         "open": list(UNANSWERED)}).scalars().all()
+    out: list[str] = []
+    for decision_id in older:
+        note = (f"Superseded by {new_decision_id}"
+                + (f" (build {run_id})" if run_id else "")
+                + ": a newer build of this pull request asks for the merge; decide there.")
+        if _withdraw_with_note(connection, str(decision_id), project_id, note, actor=actor,
+                               why={"code_task_run_id": run_id,
+                                    "superseded_by": new_decision_id,
+                                    "pull_request_url": pull_request_url}):
+            out.append(str(decision_id))
     return out
 
 

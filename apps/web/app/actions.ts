@@ -658,7 +658,10 @@ function parseProviderCredentialRefs(formData: FormData): Record<string, string>
 export async function resolveDecisionAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const decisionId = formData.get("decision_id");
   const rawAction = formData.get("action");
-  const note = formData.get("note");
+  // A REJECT'S WRITTEN REASON (BOSSAPP-1321) has its own field on the card, so the Request
+  // changes note beside it is never sent as a rejection's reason, nor the other way round.
+  const rejectNote = String(formData.get("reject_note") ?? "").trim();
+  const note = rawAction === "reject" && rejectNote ? rejectNote : formData.get("note");
   const delegateTo = formData.get("delegate_to");
   const externalRef = formData.get("external_ref");
   const contentHash = formData.get("content_hash");

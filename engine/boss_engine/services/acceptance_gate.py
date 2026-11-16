@@ -467,9 +467,10 @@ def pr_section(record: Optional[Mapping[str, Any]]) -> str:
 # The lineage, for the merge card
 # ---------------------------------------------------------------------------------------------
 
-#: Gates a later build judges on the WHOLE tree, so its pass clears an earlier failure.
-#: Judgment seats (review, security, consistency) re-judge only a follow-up's own delta and do
-#: not; `acceptance_met` clears only by a check against the ROOT's items (see lineage_failures).
+#: Gates every later build judges on the WHOLE tree, so its pass clears an earlier failure.
+#: Judgment seats (review, security, consistency) clear only from a build that re-judged the
+#: whole change, never from a follow-up, which judges its own delta; `acceptance_met` clears
+#: only by a check against the ROOT's items (see lineage_failures).
 WHOLE_TREE_GATES = frozenset({"nothing_broke", "app_serves", "existing_tests_intact"})
 
 
@@ -501,9 +502,14 @@ def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = No
 
     Scoped to the pull request (`pr_url`; the current run is always in): an earlier, merged PR
     of the same lineage is not this one. A run that went on to a repair child never shipped and
-    is not counted. A WHOLE_TREE_GATES failure clears when a later build of the PR passed that
-    gate; `acceptance_met` clears only when the latest acceptance check AGAINST THE ROOT'S ITEMS
-    met them; a judgment seat's failure never clears (a follow-up re-judges its own delta)."""
+    is not counted. A gate's failure clears when a later build of the PR re-ran that gate over
+    the whole change and passed it (its quality gate lists it passed): the card reports the
+    latest build's checks, and an earlier failure counts only while no later build re-ran that
+    check (BOSSAPP-1320: dec_81fa4797 listed Security clean, Review passed and Consistent as
+    failing "by an earlier build" although the build it spoke for had passed all three). A
+    follow-up's judgment seats judge only its own delta, so from a follow-up only the
+    WHOLE_TREE_GATES clear. `acceptance_met` clears only when the latest acceptance check
+    AGAINST THE ROOT'S ITEMS met them."""
     from sqlalchemy import text
 
     row = connection.execute(text(
@@ -543,14 +549,20 @@ def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = No
                 if r["id"] not in runs:
                     runs.append(r["id"])
                 failed_at[g] = idx
-            for g in _gates_passed(r["gates_passed"]) & WHOLE_TREE_GATES:
+            # THE LATEST BUILD'S VERDICT ON A CHECK IS THE PR'S (BOSSAPP-1320): a gate a later
+            # build of this PR re-ran over the whole change and passed clears its earlier
+            # failure. A follow-up's judgment seats read only its own delta (its base is the
+            # shipped branch), so from a follow-up only the WHOLE_TREE_GATES clear.
+            rejudged = (WHOLE_TREE_GATES if fctx.get("is_followup")
+                        else _gates_passed(r["gates_passed"]) - {GATE})
+            for g in _gates_passed(r["gates_passed"]) & rejudged:
                 passed_after[g] = idx
         acc = _spec_of(r["acc"])
         if (acc.get("verdict") in ("met", "not_met") and not this
                 and (acc.get("source") or {"root": True}).get("root")):
             checks.append((r["id"], acc))
     for g in list(gates):
-        if g in WHOLE_TREE_GATES and passed_after.get(g, -1) > failed_at.get(g, 10 ** 9):
+        if g != GATE and passed_after.get(g, -1) > failed_at.get(g, 10 ** 9):
             gates.pop(g)
     if cur_ok:
         checks.append((run_id, cur))
