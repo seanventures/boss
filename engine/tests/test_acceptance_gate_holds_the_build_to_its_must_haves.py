@@ -777,7 +777,7 @@ def test_a_directory_embed_loader_is_met(tmp_path):
     # The named function exists only in a comment of the cited file.
     ("internal/lint/lint.go",
      "package lint\n// TODO: LoadRulebook reads rules/api-guidelines.yaml\nfunc Check() {}\n",
-     "internal/lint/lint.go:LoadRulebook", "LoadRulebook is not in the code"),
+     "internal/lint/lint.go:LoadRulebook", "does not define LoadRulebook"),
     # The named loader file is not in the tree.
     ("internal/lint/lint.go", "package lint\n", "internal/lint/rules.go:LoadRulebook",
      "is not in the tree"),
@@ -789,21 +789,82 @@ def test_a_wiring_claim_that_does_not_hold_is_partial(tmp_path, loader_file, bod
     assert got["status"] == "partial" and reason in got["evidence"]
 
 
-def test_a_judgement_item_is_reported_and_advisory(tmp_path):
+def test_judgement_is_the_contracts_tag_never_the_reviewers(tmp_path):
+    """THE FAIL-OPEN (re-review of #143): "ITEM 1: MISSING (judgement) — no JWKS" read as met.
+    A judgement call is a property of the contract item, set at extraction; the reviewer's own
+    tag is ignored, and a MISSING is never advisory."""
     (tmp_path / "a.go").write_text("package a\n")
-    items = [{"n": 1, "text": "Plain, concise naming.", "source": "ticket"},
-             {"n": 2, "text": "Written in Go", "source": "ticket"}]
-    reply = ("ITEM 1: PARTIAL (judgement) — a few long names in a.go\nITEM 2: MET — a.go\n"
-             "ACCEPTANCE: MET\n")
-    rec = ag.judge(items, reply, {}, root=tmp_path)
+    jwks = {"n": 1, "text": "JWT/OAuth2 (issuer, audience, required scopes, JWKS URL with "
+                            "caching)", "source": "ticket"}
+    go = {"n": 2, "text": "Written in Go", "source": "ticket"}
+    reply = "ITEM 1: MISSING (judgement) — no JWKS\nITEM 2: MET — a.go\nACCEPTANCE: MET\n"
+    rec = ag.judge([jwks, go], reply, {}, root=tmp_path)
+    assert rec["verdict"] == "not_met" and rec["missing"] == [1] and rec["advisory"] == []
+    assert not ag.passed(rec) and "MAJOR — Must-have 1 MISSING" in ag.findings_summary(rec)
+    partial = reply.replace("MISSING (judgement) — no JWKS", "PARTIAL (judgement) — HS256 only")
+    rec = ag.judge([jwks, go], partial, {}, root=tmp_path)
+    assert rec["verdict"] == "not_met" and rec["partial"] == [1]
+    # Tagged at extraction: a PARTIAL is advisory; a MISSING still fails.
+    naming = {"n": 1, "text": "Plain, concise naming.", "source": "ticket", "judgement": True}
+    rec = ag.judge([naming, go], "ITEM 1: PARTIAL — a few long names in a.go\n"
+                   "ITEM 2: MET — a.go\nACCEPTANCE: MET\n", {}, root=tmp_path)
     assert rec["verdict"] == "met" and rec["advisory"] == [1] and rec["partial"] == []
     assert "(judgement, advisory)" in ag.must_have_table(rec)
     assert "1 judgement (advisory)" in ag.headline(rec)
     assert "MAJOR" not in ag.findings_summary(rec)
-    # A checkable item marked judgement-free stays a failure; a judgement tag never makes MET.
-    rec2 = ag.judge(items, reply.replace("ITEM 2: MET — a.go", "ITEM 2: MISSING — none"), {},
-                    root=tmp_path)
-    assert rec2["verdict"] == "not_met" and rec2["missing"] == [2]
+    rec = ag.judge([naming, go], "ITEM 1: MISSING — none\nITEM 2: MET — a.go\n"
+                   "ACCEPTANCE: MET\n", {}, root=tmp_path)
+    assert rec["verdict"] == "not_met" and rec["missing"] == [1]
+    # The reviewer is told which items are judgement calls; it is never asked to tag them.
+    prompt = ag.acceptance_prompt([naming, go], title="t", stack={}, tree="")
+    assert "ITEM 1 [ticket, judgement]" in prompt and "(judgement)" not in prompt
+
+
+@pytest.mark.parametrize("body,claim,reason", [
+    # A language keyword or a too-short name is not a loader.
+    ("package lint\nfunc LoadRulebook() { os.ReadFile(\"rules/api-guidelines.yaml\") }\n",
+     "internal/lint/rules.go:func", "is not a function or variable name"),
+    ("package lint\nfunc LoadRulebook() { os.ReadFile(\"rules/api-guidelines.yaml\") }\n",
+     "internal/lint/rules.go:ld", "is not a function or variable name"),
+    # Only CALLED there, defined nowhere in it.
+    ("package lint\nfunc Check() { LoadRulebook(\"rules/api-guidelines.yaml\") }\n",
+     "internal/lint/rules.go:LoadRulebook", "does not define LoadRulebook"),
+    # Defined, but its code never names the rulebook (only a comment does).
+    ("package lint\n// reads rules/api-guidelines.yaml\nfunc LoadRulebook() []Rule "
+     "{ return builtin }\n", "internal/lint/rules.go:LoadRulebook",
+     "does not name rules/api-guidelines.yaml"),
+])
+def test_a_loader_claim_must_define_the_function_and_name_the_file(tmp_path, body, claim, reason):
+    _rulebook_tree(tmp_path, "internal/lint/rules.go", body)
+    got = _one(RULEBOOK_ITEM, f"ITEM 1: MET — rules/api-guidelines.yaml; LOADED BY {claim}\n",
+               tmp_path)
+    assert got["status"] == "partial" and reason in got["evidence"], got["evidence"]
+
+
+@pytest.mark.parametrize("body", [
+    "package lint\nfunc LoadRulebook() ([]Rule, error) {\n"
+    "\tfiles, _ := filepath.Glob(\"rules/*.yaml\")\n\treturn parse(files)\n}\n",
+    "package lint\nconst rulesDir = \"rules\"\nfunc (l *Linter) LoadRulebook() error "
+    "{ return l.read(rulesDir) }\n",
+])
+def test_a_loader_that_reads_the_file_by_glob_or_folder_is_met(tmp_path, body):
+    _rulebook_tree(tmp_path, "internal/lint/rules.go", body)
+    got = _one(RULEBOOK_ITEM, "ITEM 1: MET — rules/api-guidelines.yaml; LOADED BY "
+               "internal/lint/rules.go:LoadRulebook\n", tmp_path)
+    assert got["status"] == "met", got["evidence"]
+
+
+def test_an_item_that_needs_a_loader_is_partial_without_one(tmp_path):
+    _rulebook_tree(tmp_path, "internal/lint/lint.go", "package lint\nfunc Check() {}\n")
+    items = [{"n": 1, "text": RULEBOOK_ITEM, "source": "ticket", "needs_loader": True}]
+    got = ag.parse_acceptance("ITEM 1: MET — rules/api-guidelines.yaml (24 rules), "
+                              "internal/lint/lint.go\n", items, root=tmp_path)[0]
+    assert got["status"] == "partial" and "loader not named" in got["evidence"]
+    # The same answer on an item not tagged at extraction stands on its evidence.
+    plain = [{**items[0], "needs_loader": False}]
+    assert ag.parse_acceptance("ITEM 1: MET — rules/api-guidelines.yaml, internal/lint/lint.go\n",
+                               plain, root=tmp_path)[0]["status"] == "met"
+    assert "must be loaded" in ag.acceptance_prompt(items, title="t", stack={}, tree="")
 
 
 def test_reviewer_passes_are_capped_and_the_rest_is_never_met(tmp_path):

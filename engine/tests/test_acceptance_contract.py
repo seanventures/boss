@@ -455,13 +455,15 @@ def test_a_contract_frozen_from_the_acceptance_list_alone_takes_in_the_whole_tic
 class ProseReader:
     """A scripted prose reader: answers the given items (copied or not) and counts its calls."""
 
-    def __init__(self, *texts):
+    def __init__(self, *texts, judgement=(), needs_loader=()):
         self.texts, self.calls, self.prompts = list(texts), 0, []
+        self.judgement, self.needs_loader = list(judgement), list(needs_loader)
 
     def __call__(self, prompt):
         self.calls += 1
         self.prompts.append(prompt)
-        body = json.dumps({"items": [{"text": t, "why": "stated"} for t in self.texts]})
+        body = json.dumps({"items": [{"text": t, "why": "stated"} for t in self.texts],
+                           "judgement": self.judgement, "needs_loader": self.needs_loader})
         return f"Reading.\n{ac._PROSE_OPEN}\n{body}\n{ac._PROSE_CLOSE}\n"
 
 
@@ -616,3 +618,99 @@ def test_the_gates_prepare_step_asks_its_agent_outside_any_transaction(eng, proj
             assert any(i["text"] == INTRO for i in ac.latest(c, root_run_id=root)["items"])
     finally:
         _cleanup_project(eng, project)
+
+
+# ---------------------------------------------------------------------------------------------
+# Re-review of #143: tags are set at extraction; bug layout; contained items; reader version
+# ---------------------------------------------------------------------------------------------
+
+NAMING = "Plain, concise naming. Someone at the customer will read this code."
+
+
+def _rulebook_items(ng):
+    return [i for i in ac.ticket_items(ng.ticket()) if "`rules/api-guidelines.yaml`" in i]
+
+
+def test_judgement_and_loader_tags_are_set_at_extraction_and_reach_the_gate(eng, project, ng):
+    """The reader tags items when the contract is made; the tags ride on the contract items
+    into the gate's items (acceptance_items), where only they decide advisory / loader."""
+    rulebook = _rulebook_items(ng)
+    reader = NoTransactionReader(judgement=[NAMING, "not an item of this ticket"],
+                                 needs_loader=rulebook[:1])
+    with eng.begin() as c:
+        root = _run(c, project, spec=ng.spec(), fctx={"ticket": ng.ticket()})
+    try:
+        ac.prepare_for_run(eng, run_id=root, fctx={"ticket": ng.ticket()}, own_spec=ng.spec(),
+                           ask=reader)
+        with eng.begin() as c:
+            v = ac.latest(c, root_run_id=root)
+            spec, _ = ag.items_spec(c, run_id=root, fctx={"ticket": ng.ticket()},
+                                    own_spec=ng.spec())
+        tagged = {i["text"]: i for i in v["items"]}
+        assert tagged[NAMING].get("judgement") is True
+        assert tagged[rulebook[0]].get("needs_loader") is True
+        assert sum(1 for i in v["items"] if i.get("judgement")) == 1     # the stray one ignored
+        gate = {i["text"]: i for i in ag.acceptance_items(spec)}
+        assert gate[NAMING]["judgement"] and gate[rulebook[0]]["needs_loader"]
+        assert not gate[rulebook[1]].get("needs_loader")
+    finally:
+        _cleanup_project(eng, project)
+
+
+def test_a_new_reader_reads_again_and_a_reading_that_changes_nothing_is_no_new_version(
+        eng, project, ng):
+    with eng.begin() as c:
+        root = _run(c, project, spec=ng.spec(), fctx={"ticket": ng.ticket()})
+    try:
+        first = NoTransactionReader(judgement=[NAMING])
+        ac.prepare_for_run(eng, run_id=root, fctx={"ticket": ng.ticket()}, own_spec=ng.spec(),
+                           ask=first, model="model-a")
+        same = NoTransactionReader(judgement=[NAMING])
+        ac.prepare_for_run(eng, run_id=root, fctx={"ticket": ng.ticket()}, own_spec=ng.spec(),
+                           ask=same, model="model-a")
+        assert (first.calls, same.calls) == (1, 0)
+        # Another model: read again; the same answer is bookkeeping, not a version.
+        other = NoTransactionReader(judgement=[NAMING])
+        ac.prepare_for_run(eng, run_id=root, fctx={"ticket": ng.ticket()}, own_spec=ng.spec(),
+                           ask=other, model="model-b")
+        assert other.calls == 1
+        with eng.begin() as c:
+            v = ac.latest(c, root_run_id=root)
+        assert v["version"] == 1
+        src = next(x for x in v["sources"] if x["kind"] == "ticket")
+        assert src["prose_digest"] == ac.prose_digest(ng.ticket(), model="model-b")
+        # A reader that tags differently re-tags the items: a new version, every id kept.
+        retag = NoTransactionReader(judgement=[])
+        ac.prepare_for_run(eng, run_id=root, fctx={"ticket": ng.ticket()}, own_spec=ng.spec(),
+                           ask=retag, model="model-c")
+        with eng.begin() as c:
+            v2 = ac.latest(c, root_run_id=root)
+        assert v2["version"] == 2 and not any(i.get("judgement") for i in v2["items"])
+        assert [i["id"] for i in v2["items"]] == [i["id"] for i in v["items"]]
+    finally:
+        _cleanup_project(eng, project)
+
+
+def test_the_digest_holds_the_readers_prompt_and_model(ng):
+    t = ng.ticket()
+    assert ac.prose_digest(t, model="a") != ac.prose_digest(t, model="b")
+    assert ac.prose_digest(t) == ac.prose_digest(dict(t))
+    assert ac.reader_version("a") != ac.reader_version("b")
+
+
+def test_a_bug_is_known_by_its_layout_not_only_its_type():
+    body = (PROSE / "bug_short.md").read_text(encoding="utf-8")
+    assert ac._is_bug({"body": body})                                  # Steps / Expected / Actual
+    assert ac._is_bug({"body": "## Steps to reproduce\n1. x\n\n## Expected result\nY\n"})
+    assert not ac._is_bug({"body": "## Expected load\nWe expect a lot of traffic.\n"})
+    assert not ac._is_bug({"body": (PROSE / "story_description_only.md").read_text()})
+
+
+def test_an_item_wholly_inside_another_is_held_once():
+    ticket = {"body": "", "acceptance_criteria": [
+        "The response must be JSON.",
+        "The response must be JSON and must never include another tenant's numbers.",
+        "Tests pass."]}
+    assert ac.ticket_items(ticket) == [
+        "The response must be JSON and must never include another tenant's numbers.",
+        "Tests pass."]

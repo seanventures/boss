@@ -187,6 +187,10 @@ def _raw_items(spec: Mapping[str, Any]) -> list[tuple[str, str]]:
 
 def _items_and_dropped(spec: Mapping[str, Any]) -> tuple[list[dict[str, Any]], int]:
     raw = _raw_items(spec)
+    union = _spec_of(spec).get(UNION_KEY)
+    tags = {re.sub(r"\W+", " ", _norm(i.get("text")).lower()).strip():
+            {t: True for t in ("judgement", "needs_loader") if i.get(t)}
+            for i in (union if isinstance(union, list) else []) if isinstance(i, Mapping)}
     seen: set[str] = set()
     items: list[dict[str, Any]] = []
     dropped = 0
@@ -198,7 +202,8 @@ def _items_and_dropped(spec: Mapping[str, Any]) -> tuple[list[dict[str, Any]], i
         if len(items) >= MAX_TOTAL_ITEMS:
             dropped += 1
             continue
-        items.append({"n": len(items) + 1, "text": item[:MAX_ITEM_CHARS], "source": source})
+        items.append({"n": len(items) + 1, "text": item[:MAX_ITEM_CHARS], "source": source,
+                      **tags.get(key, {})})
     return items, dropped
 
 
@@ -285,7 +290,16 @@ def ticket_items(ticket: Optional[Mapping[str, Any]], *,
         if w and _key(w) not in seen:
             seen.add(_key(w))
             out.append(w)
-    return out
+    return _drop_contained(out)
+
+
+def _drop_contained(items: list[str]) -> list[str]:
+    """Without an item whose words are wholly inside another item (the prose reader citing a
+    clause of a sentence the structure already holds): the longer item holds it."""
+    keys = [f" {_key(w)} " for w in items]
+    return [w for i, w in enumerate(items)
+            if not any(j != i and len(keys[j]) > len(keys[i]) and keys[i] in keys[j]
+                       for j in range(len(items)))]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -485,8 +499,20 @@ def _body_of(ticket: Mapping[str, Any]) -> str:
     return str(body or "")
 
 
+#: A bug report's own parts, as a heading or a labelled line ("Steps to reproduce:", "## Expected").
+_BUG_PART = re.compile(r"(?im)^\s{0,3}(?:#{1,6}\s*|\*\*)?\s*(steps\s+to\s+reproduce|repro(?:duction)?"
+                       r"(?:\s+steps)?|expected(?:\s+(?:result|behaviou?r))?|actual(?:\s+(?:result|"
+                       r"behaviou?r))?)\s*\**\s*(?::|$)")
+
+
 def _is_bug(ticket: Mapping[str, Any]) -> bool:
-    return "bug" in str(ticket.get("type") or ticket.get("issue_type") or "").lower()
+    """A bug report: its type says so, or its description is laid out as one (at least two of
+    steps-to-reproduce / expected / actual, as headings or labelled lines)."""
+    if "bug" in str(ticket.get("type") or ticket.get("issue_type") or "").lower():
+        return True
+    parts = {re.sub(r"\W.*", "", m.group(1).lower())[:6] for m in _BUG_PART.finditer(
+        _body_of(ticket))}
+    return len(parts & {"steps", "repro", "expect", "actual"}) >= 2
 
 
 def _plain(text: Any) -> str:
@@ -527,17 +553,23 @@ def prose_prompt(ticket: Mapping[str, Any], text: str, listed: list[str]) -> str
         "report the steps to reproduce and the actual behaviour are context; the EXPECTED "
         "behaviour is the requirement.\n"
         "- Leave out what is already listed below.\n"
-        f"- At most {MAX_PROSE_ITEMS} items.\n\n"
+        f"- At most {MAX_PROSE_ITEMS} items.\n"
+        "THEN, over EVERY requirement (the ones listed below and yours), copy exactly:\n"
+        "- `judgement`: the ones that are a matter of taste with no objective check (naming "
+        "style, clarity, 'clean' or 'idiomatic' code). A behaviour, a file, a command, a "
+        "language, a limit or a test is never one.\n"
+        "- `needs_loader`: the ones that name a data file the program itself must READ to "
+        "deliver them (a rulebook, a schema, a config the code loads) — not a file that is the "
+        "deliverable on its own (a compose file, an example, a CI workflow, a Makefile).\n\n"
         "ALREADY LISTED:\n" + ("\n".join(f"- {x}" for x in listed) or "(none)") + "\n\n"
-        "THE TEXT:\n" + text[:MAX_PROSE_CHARS] + "\n\n"
+        "THE TEXT:\n" + (text[:MAX_PROSE_CHARS] or "(no further text)") + "\n\n"
         "Answer ONLY with a JSON object between these two lines:\n" + _PROSE_OPEN + "\n"
-        '{"items": [{"text": "<the words, copied>", "why": "<why it is a requirement>"}]}\n'
+        '{"items": [{"text": "<the words, copied>", "why": "<why it is a requirement>"}], '
+        '"judgement": ["<a requirement, copied>"], "needs_loader": ["<a requirement, copied>"]}\n'
         + _PROSE_CLOSE + "\n")
 
 
-def parse_prose(reply: Any, text: str) -> list[str]:
-    """The reader's items that are the text's own words (each checked against `text`), deduped,
-    at most MAX_PROSE_ITEMS. A reply that cannot be read is no items, never invented ones."""
+def _reply_json(reply: Any) -> dict[str, Any]:
     body = str(reply or "")
     if _PROSE_OPEN in body:
         body = body.split(_PROSE_OPEN, 1)[1].split(_PROSE_CLOSE, 1)[0]
@@ -545,8 +577,28 @@ def parse_prose(reply: Any, text: str) -> list[str]:
     try:
         data = json.loads(m.group(0)) if m else {}
     except ValueError:
-        return []
-    raw = data.get("items") if isinstance(data, Mapping) else None
+        return {}
+    return dict(data) if isinstance(data, Mapping) else {}
+
+
+def parse_tags(reply: Any, candidates: Iterable[str]) -> dict[str, list[str]]:
+    """{judgement, needs_loader}: the requirements the reader tagged, each one of `candidates`
+    word for word (case and punctuation folded); anything else is ignored."""
+    by_key = {_key(c): c for c in candidates if _key(c)}
+    data = _reply_json(reply)
+    out: dict[str, list[str]] = {}
+    for tag in ("judgement", "needs_loader"):
+        raw = data.get(tag)
+        picked = [by_key[_key(t)] for t in (raw if isinstance(raw, list) else [])
+                  if isinstance(t, str) and _key(t) in by_key]
+        out[tag] = list(dict.fromkeys(picked))
+    return out
+
+
+def parse_prose(reply: Any, text: str) -> list[str]:
+    """The reader's items that are the text's own words (each checked against `text`), deduped,
+    at most MAX_PROSE_ITEMS. A reply that cannot be read is no items, never invented ones."""
+    raw = _reply_json(reply).get("items")
     plain_text = _plain(text)
     out: list[str] = []
     seen: set[str] = set()
@@ -581,16 +633,32 @@ def _transaction_open() -> bool:
         return False
 
 
-def prose_digest(ticket: Optional[Mapping[str, Any]]) -> Optional[str]:
-    """The digest of what the prose reader must read for this ticket; None when nothing."""
-    text = prose_input(ticket)
-    if not text.strip() or not isinstance(ticket, Mapping):
+def reader_version(model: Optional[str] = None) -> str:
+    """The reader's prompt (its wording, hashed) and model: part of the digest, so a new prompt
+    or a different model reads the ticket again."""
+    return _digest(["reader", prose_prompt({"title": ""}, "", []), str(model or "")])
+
+
+def prose_digest(ticket: Optional[Mapping[str, Any]], *,
+                 model: Optional[str] = None) -> Optional[str]:
+    """The digest of what the reader reads for this ticket (its whole description: the reader
+    also tags every item), with the reader's version; None when there is nothing to read."""
+    if not isinstance(ticket, Mapping) or not _body_of(ticket).strip():
         return None
-    return _digest(["prose", "bug" if _is_bug(ticket) else "", text])
+    return _digest(["prose", reader_version(model), "bug" if _is_bug(ticket) else "",
+                    _body_of(ticket)])
+
+
+_PROSE_KEYS = ("prose_digest", "prose_items", "judgement_items", "loader_items")
+
+
+def _no_prose() -> dict[str, Any]:
+    return {"prose_digest": None, "prose_items": [], "judgement_items": [], "loader_items": []}
 
 
 def ticket_prose(ticket: Optional[Mapping[str, Any]], *, ask: Any = None,
-                 held: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+                 held: Optional[Mapping[str, Any]] = None,
+                 model: Optional[str] = None) -> dict[str, Any]:
     """{prose_digest, prose_items}: what the prose reader found in this ticket. The reader is
     asked ONCE per distinct prose: `held` (the contract's stored ticket source) answers for the
     same digest, so a check never re-asks and a contract never flaps on a second opinion.
@@ -600,11 +668,11 @@ def ticket_prose(ticket: Optional[Mapping[str, Any]], *, ask: Any = None,
     refused — an error under BOSS_STRICT_TRANSACTION_GUARD, a warning otherwise). Without an
     ask (or when it fails, or is refused) what the contract already holds stands: `held`'s
     items for a changed text until the reader runs again, nothing for a new one."""
-    digest = prose_digest(ticket)
+    digest = prose_digest(ticket, model=model)
     if digest is None or not isinstance(ticket, Mapping):
-        return {"prose_digest": None, "prose_items": []}
-    kept = {"prose_digest": (held or {}).get("prose_digest"),
-            "prose_items": list((held or {}).get("prose_items") or [])}
+        return _no_prose()
+    kept = {**_no_prose(), **{k: (held or {}).get(k) for k in _PROSE_KEYS
+                              if (held or {}).get(k) is not None}}
     if held and held.get("prose_digest") == digest:
         return kept
     if ask is None:
@@ -622,7 +690,26 @@ def ticket_prose(ticket: Optional[Mapping[str, Any]], *, ask: Any = None,
     except Exception as exc:  # noqa: BLE001 — the structural items still stand
         _log.warning("acceptance contract: the prose reader failed (%s)", type(exc).__name__)
         return kept
-    return {"prose_digest": digest, "prose_items": parse_prose(reply, text)}
+    found = parse_prose(reply, text)
+    tags = parse_tags(reply, ticket_items(ticket, prose=found))
+    return {"prose_digest": digest, "prose_items": found,
+            "judgement_items": tags["judgement"], "loader_items": tags["needs_loader"]}
+
+
+def _tagged(ticket_words: Iterable[str], prose: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The ticket's items as source items, each with the tags the reader gave it at
+    extraction (judgement: advisory in the gate; needs_loader: a MET must name its loader)."""
+    judgement = {_key(t) for t in prose.get("judgement_items") or []}
+    loader = {_key(t) for t in prose.get("loader_items") or []}
+    out = []
+    for w in ticket_words:
+        it: dict[str, Any] = {"source": "ticket", "text": w}
+        if _key(w) in judgement:
+            it["judgement"] = True
+        if _key(w) in loader:
+            it["needs_loader"] = True
+        out.append(it)
+    return out
 
 
 def _ticket_and_held(connection: Any, *, run_id: str, fctx: Optional[Mapping[str, Any]]
@@ -641,7 +728,8 @@ def _ticket_and_held(connection: Any, *, run_id: str, fctx: Optional[Mapping[str
 
 
 def prepare_for_run(db_engine: Any, *, run_id: str, fctx: Optional[Mapping[str, Any]],
-                    own_spec: Mapping[str, Any], ask: Any) -> Optional[dict[str, Any]]:
+                    own_spec: Mapping[str, Any], ask: Any,
+                    model: Optional[str] = None) -> Optional[dict[str, Any]]:
     """Read the ticket's prose (a model call) and store it with the contract — BEFORE the
     gate's transaction opens, never inside one (BOSSAPP-1232/1233):
 
@@ -655,10 +743,10 @@ def prepare_for_run(db_engine: Any, *, run_id: str, fctx: Optional[Mapping[str, 
 
     with begin(db_engine) as c:
         project_id, ticket, held = _ticket_and_held(c, run_id=run_id, fctx=fctx)
-    digest = prose_digest(ticket)
+    digest = prose_digest(ticket, model=model)
     if not ticket or digest is None or (held and held.get("prose_digest") == digest):
         return None
-    prose = ticket_prose(ticket, ask=ask, held=held)
+    prose = ticket_prose(ticket, ask=ask, held=held, model=model)
     if prose.get("prose_digest") != digest:
         return None                       # the reader did not answer: nothing new to store
     with begin(db_engine) as c:
@@ -692,7 +780,7 @@ def gather_sources(spec: Mapping[str, Any], *, ticket: Optional[Mapping[str, Any
             out.append({"kind": "ticket", "ref": _ticket_ref(ticket), "url": ticket.get("url"),
                         "provider": ticket.get("provider"),
                         "updated_at": ticket.get("updated_at"), **prose,
-                        "items": [{"source": "ticket", "text": w} for w in words]})
+                        "items": _tagged(words, prose)})
     # The build's own items, in the order the gate reads them (_raw_items: the brief's
     # must-haves, the PRD's gating list, the run's acceptance criteria), one source per kind.
     by_kind: dict[str, list[dict[str, str]]] = {}
@@ -720,6 +808,12 @@ def _src(source: str, kind: str, ref: str) -> dict[str, str]:
     return {"source": source, "source_kind": kind, "source_ref": ref}
 
 
+#: Properties an item gets AT EXTRACTION (the reader, ticket_prose), never from a reviewer's
+#: answer: `judgement` (a matter of taste: a PARTIAL on it is advisory, a MISSING never is) and
+#: `needs_loader` (it names a data file the program must read: a MET must name its loader).
+ITEM_TAGS = ("judgement", "needs_loader")
+
+
 def build_items(sources: Iterable[Mapping[str, Any]], *, start: int = 1) -> list[dict[str, Any]]:
     """Numbered items AC-<start>.. from the sources, in order, deduplicated by their words. No
     cap on count or length (the gate applies its own when it reads them).
@@ -737,14 +831,16 @@ def build_items(sources: Iterable[Mapping[str, Any]], *, start: int = 1) -> list
             if not key:
                 continue
             origin = _src(str(it.get("source") or kind or "criterion"), kind, ref)
+            tags = {t: True for t in ITEM_TAGS if it.get(t)}
             if key in by_key:
                 held = by_key[key]["sources"]
                 if origin not in held:
                     held.append(origin)
+                by_key[key].update(tags)
                 continue
             n = start + len(items)
             item = {"id": f"AC-{n}", "n": n, "text": _verbatim(it["text"]), **origin,
-                    "sources": [origin], "priority": "must", "check_hint": None}
+                    "sources": [origin], "priority": "must", "check_hint": None, **tags}
             by_key[key] = item
             items.append(item)
     return items
@@ -877,7 +973,7 @@ def _source_rows(sources: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     out = []
     for s in sources:
         row = {k: s.get(k) for k in ("kind", "ref", "url", "provider", "updated_at", "digest",
-                                     "prose_digest", "prose_items")
+                                     *_PROSE_KEYS)
                if s.get(k) is not None}
         row["count"] = len(s.get("items") or [])
         out.append(row)
@@ -991,6 +1087,16 @@ def revise(connection: Any, contract_id: str, *, added: Iterable[Any] = (),
                         added=[i["id"] for i in joined], removed=sorted(gone))
 
 
+def _record_reading(connection: Any, cur: Mapping[str, Any], prose: Mapping[str, Any]) -> None:
+    from sqlalchemy import text
+
+    sources = [dict(x, **{k: prose.get(k) for k in _PROSE_KEYS})
+               if x.get("kind") == "ticket" else x for x in cur["sources"]]
+    connection.execute(text("UPDATE acceptance_contracts SET sources = CAST(:s AS JSONB) "
+                            "WHERE id = :i"), {"s": json.dumps(sources, default=str),
+                                               "i": cur["id"]})
+
+
 def revise_from_ticket(connection: Any, contract: Mapping[str, Any],
                        ticket: Optional[Mapping[str, Any]], *,
                        actor: str = "boss",
@@ -1013,8 +1119,18 @@ def revise_from_ticket(connection: Any, contract: Mapping[str, Any],
         return dict(contract)
     ref = _ticket_ref(ticket)
     now_keys = {_key(w) for w in now}
+    want = {_key(t["text"]): {g: True for g in ITEM_TAGS if t.get(g)}
+            for t in _tagged(now, prose)}
     held_keys = {_key(i["text"]) for i in cur["items"] if _from_ticket(i)}
-    if held_keys == now_keys:
+    held_tags = {_key(i["text"]): {g: True for g in ITEM_TAGS if i.get(g)}
+                 for i in cur["items"] if _from_ticket(i)}
+    if held_keys == now_keys and all(held_tags.get(k) == want.get(k) for k in now_keys):
+        if held_src is not None and prose.get("prose_digest") and \
+                prose.get("prose_digest") != held_src.get("prose_digest"):
+            # Read again (a new prompt or model, or a first read) and nothing changed: keep the
+            # reading's digest, so the next check does not ask again. Bookkeeping, not a version.
+            _record_reading(connection, cur, prose)
+            return _newest(connection, cur["id"])
         return cur
     origin = _src("ticket", "ticket", ref)
     items: list[dict[str, Any]] = []
@@ -1023,6 +1139,13 @@ def revise_from_ticket(connection: Any, contract: Mapping[str, Any],
         i = dict(i)
         srcs = item_sources(i)
         k = _key(i["text"])
+        if k in now_keys and (_from_ticket(i) or k in want):
+            tags = want.get(k) or {}
+            if any(bool(i.get(g)) != bool(tags.get(g)) for g in ITEM_TAGS):
+                for g in ITEM_TAGS:
+                    i.pop(g, None)
+                i.update(tags)
+                retagged.append(i["id"])
         if _from_ticket(i) and k not in now_keys:
             rest = [x for x in srcs if x.get("source") != "ticket"]
             if not rest:
@@ -1042,10 +1165,12 @@ def revise_from_ticket(connection: Any, contract: Mapping[str, Any],
             continue
         have.add(_key(w))
         items.append({"id": f"AC-{n}", "n": n, "text": _verbatim(w), **origin,
-                      "sources": [origin], "priority": "must", "check_hint": None})
+                      "sources": [origin], "priority": "must", "check_hint": None,
+                      **want.get(_key(w), {})})
         added.append(f"AC-{n}")
         n += 1
     n_add, n_rm = len(added), len(removed)
+    retagged = list(dict.fromkeys(retagged))
     words = ", ".join(x for x in (f"{n_add} item{'s' * (n_add != 1)} added" if n_add else "",
                                   f"{n_rm} removed" if n_rm else "",
                                   f"{len(retagged)} re-sourced" if retagged else "") if x)
@@ -1144,5 +1269,6 @@ def ensure_for_run(connection: Any, *, run_id: str, fctx: Optional[Mapping[str, 
 def gate_items(contract: Mapping[str, Any]) -> list[dict[str, str]]:
     """The contract's items in the gate's union shape ({source, text}): what items_spec hands
     the in-build check, so the inner seat is held to the same list (LLD §3)."""
-    return [{"source": str(i.get("source") or "criterion"), "text": str(i["text"])}
+    return [{"source": str(i.get("source") or "criterion"), "text": str(i["text"]),
+             **{t: True for t in ITEM_TAGS if i.get(t)}}
             for i in contract.get("items") or []]

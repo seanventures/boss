@@ -143,7 +143,7 @@ def test_a_rules_file_nothing_loads_is_not_the_rulebook_delivered(ng, tree, tmp_
     reply = f"ITEM 1: {case['reply']}\nACCEPTANCE: MET\n"
     got = ag.parse_acceptance(reply, items, root=work)[0]
     assert got["status"] == case["verdict"] == "partial"
-    assert "loadRulebook is not in the code of gwlint/src/rules.js" in got["evidence"]
+    assert "gwlint/src/rules.js does not define loadRulebook" in got["evidence"]
     # Wired: code that loads the file makes the same answer stand.
     with open(work / case["wired"]["path"], "a", encoding="utf-8") as fh:
         fh.write(case["wired"]["append"])
