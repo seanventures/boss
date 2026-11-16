@@ -143,7 +143,7 @@ class CaddyPlugin(OfficialPlugin):
                     ca = proc.stdout
                     break
                 time.sleep(1)
-        script = ('cat > /tmp/ca.pem; set -- "$@"; '
+        script = ('umask 077; cat > /tmp/ca.pem; set -- "$@"; '
                   'exec curl -sS -o /dev/null -D - --max-time 10 "$@"')
         args = route + ((["--cacert", "/tmp/ca.pem"]) if ca else []) + [target]
         status, header, detail = 0, False, ""

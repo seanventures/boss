@@ -20,8 +20,11 @@ from __future__ import annotations
 
 import contextlib
 import os
+import stat
 import tempfile
+import threading
 from pathlib import Path
+from typing import Optional
 
 #: Where BOSS keeps shared clones, indexes and caches (owner-only).
 PRIVATE_ROOT_ENV = "BOSS_PRIVATE_ROOT"
@@ -45,9 +48,53 @@ def private_root() -> Path:
     if configured:
         return ensure_private(configured)
     try:
-        return ensure_private(DEFAULT_PRIVATE_ROOT)
+        root = ensure_private(DEFAULT_PRIVATE_ROOT)
+        # MADE IS NOT USABLE (BOSSAPP-1327): with the new compose on an older image, Docker
+        # creates /var/lib/boss/private (the import/selfsrc mount targets' parent) owned by root,
+        # ensure_private cannot chmod it, and every private_dir() under it then raised
+        # PermissionError. A root BOSS cannot write is no root: the per-user fallback.
+        if os.access(root, os.W_OK | os.X_OK) and is_private(root):
+            return root
     except OSError:
-        return ensure_private(Path(tempfile.gettempdir()) / f"boss-private-{os.getuid()}")
+        pass
+    return _fallback_root()
+
+
+#: This process's own mkdtemp root, when the per-uid name in the temp dir is not ours.
+_MKDTEMP_ROOT: Optional[Path] = None
+_MKDTEMP_LOCK = threading.Lock()
+
+
+def owned_private_dir(path: Path | str) -> bool:
+    """Whether `path` is a real directory (not a symlink) owned by THIS uid and owner-only.
+    `is_private` alone says nothing about WHO the owner is."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return (stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode)
+            and st.st_uid == os.getuid() and is_private(path))
+
+
+def _fallback_root() -> Path:
+    """The per-uid directory in the temp dir, ONLY if it is ours (PR #166 review).
+
+    /tmp is everyone's: another uid can pre-create /tmp/boss-private-<uid> (0777, or a symlink
+    into its own tree) before BOSS starts, and BOSS then kept every project's clones in a
+    directory that uid owns — a probe did exactly that. So after ensure_private the directory is
+    lstat'ed: a real directory, owned by this uid, owner-only. Anything else is never used, and
+    BOSS takes a fresh `mkdtemp` (0700, unguessable) for the life of the process instead."""
+    global _MKDTEMP_ROOT
+    candidate = Path(tempfile.gettempdir()) / f"boss-private-{os.getuid()}"
+    if not os.path.islink(candidate):
+        with contextlib.suppress(OSError):
+            ensure_private(candidate)
+        if owned_private_dir(candidate):
+            return candidate
+    with _MKDTEMP_LOCK:
+        if _MKDTEMP_ROOT is None or not owned_private_dir(_MKDTEMP_ROOT):
+            _MKDTEMP_ROOT = Path(tempfile.mkdtemp(prefix="boss-private-"))
+        return _MKDTEMP_ROOT
 
 
 def private_dir(name: str) -> Path:
@@ -64,4 +111,4 @@ def is_private(path: Path | str) -> bool:
 
 
 __all__ = ["DEFAULT_PRIVATE_ROOT", "PRIVATE_ROOT_ENV", "ensure_private", "is_private",
-           "private_dir", "private_root"]
+           "owned_private_dir", "private_dir", "private_root"]
