@@ -366,10 +366,17 @@ def run_bundled_tool(context: Any, skill_id: str, inputs: dict[str, Any]) -> dic
     # THE PROJECT IS THE RUN'S, never the model's: a write tool's schema still names project_id.
     args = {k: v for k, v in inputs.items()
             if k not in (BUNDLE_TOOL_KEY, "project_id") and not str(k).startswith("_")}
+    # THE SAME FILTER AS EVERY OTHER DOOR (registry.schema_args): a bundle call cannot set a
+    # key the tool's schema does not list.
+    from ..tools.registry import schema_args
+
+    args, ignored = schema_args(spec, args)
     ctx = EngineContext(settings=context.settings, engine=context.connection.engine)
     out = spec.handler(ctx, project_id=context.project_id, actor=context.actor, args=args)
-    return {"tool": tool, "result": redact_for_agent(out if isinstance(out, dict)
-                                                     else {"value": out})}
+    out = out if isinstance(out, dict) else {"value": out}
+    if ignored:
+        out = {**out, "ignored_args": out.get("ignored_args") or ignored}
+    return {"tool": tool, "result": redact_for_agent(out)}
 
 
 def propose(context: Any, inputs: dict[str, Any]) -> dict[str, Any]:

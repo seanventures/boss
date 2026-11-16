@@ -216,9 +216,10 @@ def _propose_label(tool: str, args: dict) -> str:
         key = str((args or {}).get("workflow_key") or "").strip()
         name = key.replace("_", " ").title() if key else "Workflow"
         return f"{name}: {title}"[:70] if title else f"Start {name}"
-    from ..services.offer_label import fallback_label
+    from ..services.offer_label import button_label
 
-    return fallback_label(tool, args)
+    # button_label: a forcing `decide` reads FORCE_MERGE_LABEL, never a softer fallback.
+    return button_label("", tool, args)
 
 def _report_from_trace(trace: list[dict]) -> str:
     """What BOSS established, when the model would not write it up.
@@ -1343,6 +1344,14 @@ class EngineAgent:
         # These flags are dropped unless the operator's own words asked for them. Dropped, not
         # refused: the tool still runs in its ordinary form, and if the gentle form is genuinely
         # blocked the tool says so and the operator can ask for force in as many words.
+        # A force merge is never offered by a model, even when asked for in words: the
+        # person types the reason in the console's merge sheet (offer_label.offerable_args).
+        from ..services.offer_label import offerable_args
+
+        if name == "decide" and "force" in args:
+            args = offerable_args(name, args)
+            self._notes.append("dropped force from decide: a force merge is the person's, "
+                               "from the console's merge sheet")
         escalated = _escalation_flags(args)
         if escalated and not _asked_for_force(self._operator_text):
             args = {k: v for k, v in args.items() if k not in escalated}

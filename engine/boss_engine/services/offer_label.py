@@ -63,9 +63,26 @@ def _bare(label: str, tool: str) -> bool:
     return not norm(label) or norm(label) == norm(tool)
 
 
+#: A FORCE MERGE IS A PERSON'S, TYPED IN THE CONSOLE'S MERGE SHEET (PR #161 review). `decide`
+#: with force=True merges over BOSS's own failing checks; the sheet is where the person reads
+#: the failures and types why. A model or agent offer never carries it: `offerable_args` drops
+#: it, and should one ever arrive anyway, its button says what it does, not what the model wrote.
+FORCE_MERGE_LABEL = "Force merge over failing checks"
+
+
+def offerable_args(tool: str, args: Optional[dict]) -> dict:
+    """The arguments an offer written by a model or agent may carry: `decide` loses `force`."""
+    out = dict(args or {})
+    if str(tool or "") == "decide":
+        out.pop("force", None)
+    return out
+
+
 def button_label(label: Any, tool: str, args: Optional[dict] = None) -> str:
     """The model's label when it wrote one, else the call said in words — never blank, never
-    just the tool's name."""
+    just the tool's name. A `decide` that forces says so, whatever the label says."""
+    if str(tool or "") == "decide" and (args or {}).get("force") is True:
+        return FORCE_MERGE_LABEL
     text = " ".join(str(label or "").split())
     if text and not _bare(text, tool):
         return text

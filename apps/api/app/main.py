@@ -27907,8 +27907,9 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
         extends["preview_id"] = preview_id
     # THE CONTRACT ITEMS THIS CHANGE REPLACES (a picker's ids, never read from the words):
     # only with extends_run_id, only a person allowed to revise (BOSSAPP-1322, PR #161 C1).
-    replaces = run_input.pop("replaces", None)
-    if replaces:
+    picked_items = run_input.pop("replaces", None)
+    checked_items: list[str] = []
+    if picked_items:
         from boss_engine.services.acceptance.contract import (ContractRevisionRefused,
                                                               checked_replaces)
 
@@ -27916,7 +27917,8 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
             raise HTTPException(status_code=422,
                                 detail="replaces names items of an existing app's contract")
         try:
-            run_input["replaces"] = checked_replaces(project_id, actor, replaces)
+            # Recorded by start_run under a key no caller can write (CHECKED_REPLACES_KEY).
+            checked_items = checked_replaces(project_id, actor, picked_items)
         except ContractRevisionRefused as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
         except ValueError as error:
@@ -28009,6 +28011,7 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
         try:
             run = workflow_runtime.start_run(
                 connection, project_id=project_id, actor=actor, input_data=run_input,
+                checked_replaces=checked_items or None,
                 # IDEMPOTENT WHEN THE CALLER SAYS SO: the same dedupe_key returns the run it
                 # already started. The console sends one per intent ("replace run X"), so a
                 # second press of Stop-and-run-again cannot start a second workflow.

@@ -230,6 +230,12 @@ class ToolSpec:
     #: is a lint failure (test_every_write_tool_declares_an_idempotency_class), and the kernel
     #: reads silence as irreversible.
     idempotency: Optional[str] = None
+    #: ARGUMENTS WHOSE SCHEMA LIVES ELSEWHERE. True for a tool whose valid top-level arguments
+    #: also include ones only the target declares (start_workflow: the workflow version's
+    #: input_schema, brec_6025901347b6445eb9c1). `schema_args` lets the unlisted NON-underscore
+    #: keys through, and the handler keeps only what that schema declares and names the rest
+    #: in `ignored_args`. BOSS's underscore keys are still never a caller's.
+    handler_checks_extra_args: bool = False
 
     def permission_for(self, args: Optional[dict]) -> Optional[str]:
         """The permission THIS call needs (see `permission_by_arg`)."""
@@ -341,6 +347,7 @@ class ToolRegistry:
         offer_note: str = "",
         exposure: Optional[Exposure] = None,
         idempotency: Optional[str] = None,
+        handler_checks_extra_args: bool = False,
     ) -> Callable[[ToolHandler], ToolHandler]:
         """Decorator form: @registry.tool("list_x", "…", {...}, kind="read")."""
 
@@ -366,6 +373,7 @@ class ToolRegistry:
                     offer_note=offer_note,
                     exposure=exposure,
                     idempotency=idempotency,
+                    handler_checks_extra_args=handler_checks_extra_args,
                 )
             )
             return fn
@@ -552,8 +560,14 @@ class ToolRegistry:
             result = {"result": result}
         result.setdefault("ok", True)
         result.setdefault("tool", name)
-        if ignored:
-            result.setdefault("ignored_args", ignored)
+        if ignored or result.get("ignored_args") == []:
+            # A handler that checks its own extra args names what IT dropped; both lists show.
+            own = result.get("ignored_args") if isinstance(result.get("ignored_args"), list) else []
+            merged = sorted(set(own) | set(ignored))
+            if merged:
+                result["ignored_args"] = merged
+            else:
+                result.pop("ignored_args", None)
         return result
 
 
@@ -695,7 +709,8 @@ def schema_args(spec: "ToolSpec", args: Optional[dict]) -> tuple[dict, list[str]
     schema = spec.parameters or {}
     # A schema that declares no properties at all is OPEN (JSON Schema: any key): it filters
     # nothing but BOSS's own underscore keys.
-    open_schema = "properties" not in schema and schema.get("additionalProperties") is not False
+    open_schema = (("properties" not in schema and schema.get("additionalProperties") is not False)
+                   or bool(getattr(spec, "handler_checks_extra_args", False)))
     props = set((schema.get("properties") or {}).keys())
     kept, ignored = {}, []
     for key, value in dict(args or {}).items():

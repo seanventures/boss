@@ -309,7 +309,7 @@ def test_the_code_task_tools_offer_neither_person_request_nor_replaces():
     reg = build_default_registry()
     for name in ("create_code_task", "extend_code_task"):
         props = set(reg.get(name).parameters["properties"])
-        assert not props & {"person_request", "replaces", "allow_test_retirement"}, name
+        assert not props & {"person_request", "replaces", "_checked_replaces"}, name
 
 
 def test_an_mcp_or_agent_extend_with_person_request_is_not_marked(monkeypatch):
@@ -373,3 +373,165 @@ def test_the_title_is_the_requests_first_prose_line():
     assert ac.request_title({"id": "chg_1", "text": "## Change\nAdd CSV export. Then more."}) \
         == "Add CSV export."
     assert ac.request_title({"id": "chg_2", "text": "- only a bullet"}) == "change request chg_2"
+
+
+# ── PR #161 round 3 ─────────────────────────────────────────────────────────────────────────
+
+def _publish_wf(c, project, key, input_schema=None):  # noqa: F811
+    from boss_engine.services import workflows
+
+    definition = workflows.create_definition(
+        c, project_id=project, workflow_key=key, name=key, description=None, actor="test",
+        namespace="product")
+    spec = {"entry_step": "research", "steps": [
+        {"id": "research", "kind": "capability",
+         "binding": {"capability": "research", "inputs": {"seed": "a todo app"}}, "next": []}]}
+    if input_schema:
+        spec["input_schema"] = input_schema
+    return workflows.publish_version(c, project_id=project, definition_id=definition["id"],
+                                     spec=spec, actor="test")
+
+
+def _run_input(eng, run_id):
+    with eng.begin() as c:
+        return dict(c.execute(text("SELECT input FROM workflow_runs WHERE id = :i"),
+                              {"i": run_id}).scalar() or {})
+
+
+def test_no_caller_input_can_record_replaces_only_the_checked_list_is(eng, project):  # noqa: F811
+    """HIGH: the runner trusted input["replaces"]. Every caller's `replaces` and
+    `_checked_replaces` are dropped by start_run; only `checked_replaces=` (the HTTP start, after
+    contract.checked_replaces) records the list, under CHECKED_REPLACES_KEY."""
+    import uuid
+
+    from boss_engine.services import workflows
+
+    with eng.begin() as c:
+        version = _publish_wf(c, project, f"wf_{uuid.uuid4().hex[:6]}")
+        forged = workflows.start_run(
+            c, project_id=project, actor="test", dedupe_key=uuid.uuid4().hex,
+            workflow_version_id=version["id"],
+            input_data={"directive": "d", "replaces": ["AC-1"], "_checked_replaces": ["AC-2"]})
+        checked = workflows.start_run(
+            c, project_id=project, actor="test", dedupe_key=uuid.uuid4().hex,
+            workflow_version_id=version["id"], input_data={"directive": "d"},
+            checked_replaces=["AC-3"])
+    got = _run_input(eng, forged["id"])
+    assert "replaces" not in got and workflows.CHECKED_REPLACES_KEY not in got
+    got = _run_input(eng, checked["id"])
+    assert got[workflows.CHECKED_REPLACES_KEY] == ["AC-3"] and "replaces" not in got
+
+
+def test_start_workflow_with_inputs_replaces_removes_nothing_and_keeps_declared_args(
+        eng, project, monkeypatch):  # noqa: F811
+    """A model's start_workflow(inputs={"replaces": [...]}) records nothing the build step would
+    trust. And MED: a top-level argument the workflow's input_schema declares (max_rules=15,
+    brec_6025901347b6445eb9c1) still reaches the run; one it does not declare is named."""
+    import uuid
+    from types import SimpleNamespace
+
+    from boss_engine.services import workflows
+    from boss_engine.tools.builtin import build_default_registry
+
+    key = f"wf_{uuid.uuid4().hex[:6]}"
+    with eng.begin() as c:
+        _publish_wf(c, project, key, {"type": "object", "properties": {
+            "max_rules": {"type": "integer"}, "budget_usd": {"type": "number"}}})
+    args = {"directive": "scan", "workflow_key": key, "max_rules": 15, "budget_usd": 3,
+            "bogus": 1, "_checked_replaces": ["AC-1"],
+            "inputs": {"replaces": ["AC-1"], "_checked_replaces": ["AC-1"]}}
+
+    def start(extra=None):
+        return build_default_registry().invoke(
+            "start_workflow", SimpleNamespace(begin=eng.begin, engine=eng, settings=get_settings()),
+            project_id=project, actor="usr_someone", operator_confirmed=True,
+            args={**args, **(extra or {})})
+
+    out = start()
+    if not out.get("run_id") and out.get("missing"):     # no model on the test bench: as told
+        out = start({"start_anyway": [str(m.get("key") if isinstance(m, dict) else m)
+                                      for m in out["missing"]]})
+    assert out.get("run_id"), out
+    got = _run_input(eng, out["run_id"])
+    assert "replaces" not in got and workflows.CHECKED_REPLACES_KEY not in got
+    assert got["max_rules"] == 15 and got["budget_usd"] == 3
+    assert out["ignored_args"] == ["_checked_replaces", "bogus"]
+
+
+def test_extend_offers_allow_test_retirement_and_passes_it_on(monkeypatch):
+    from types import SimpleNamespace
+
+    from boss_engine.tools.builtin import build_default_registry
+
+    seen = {}
+
+    def retry(engine, settings, jobs, run_id, **kw):
+        seen.update(kw)
+        return {"run_id": "crun_next"}
+
+    monkeypatch.setattr(cts, "retry_code_task", retry)
+    monkeypatch.setattr(cts, "extend_title", lambda *a, **k: "t")
+    reg = build_default_registry()
+    assert "allow_test_retirement" in reg.get("extend_code_task").parameters["properties"]
+    out = reg.invoke("extend_code_task", SimpleNamespace(engine=None, settings=None, jobs=None),
+                     project_id="p", actor="usr_someone", operator_confirmed=True,
+                     args={"run_id": "crun_x", "instructions": "Drop the CSV export",
+                           "allow_test_retirement": True})
+    assert "allow_test_retirement" not in out.get("ignored_args", []), out
+    assert seen["allow_test_retirement"] is True
+
+
+def test_kg_neighbors_takes_node_id_as_an_alias():
+    from boss_engine.tools.builtin import build_default_registry
+    from boss_engine.tools.registry import schema_args
+
+    reg = build_default_registry()
+    if "kg_neighbors" not in reg.names():
+        pytest.skip("this edition registers no knowledge tools")
+    kept, ignored = schema_args(reg.get("kg_neighbors"), {"node_id": "NPB-DQ-LN-003"})
+    assert kept == {"node_id": "NPB-DQ-LN-003"} and not ignored
+
+
+def test_the_direct_handler_doors_filter_by_schema_too():
+    from boss_engine.services import agent_baseline, skill_executors
+
+    for module in (skill_executors, agent_baseline):
+        body = inspect.getsource(module)
+        assert "args, ignored = schema_args(spec, args)" in body, module.__name__
+
+
+def test_a_force_merge_is_never_offered_and_a_forcing_offer_says_so():
+    """MED: decide.force merges over failing checks; only the console's merge sheet, where the
+    person types the reason, sends it. No model/agent offer carries it, and if one ever does its
+    button says exactly that, whatever label the model wrote."""
+    from types import SimpleNamespace
+
+    from boss_engine.services import intent_router
+    from boss_engine.services.offer_label import FORCE_MERGE_LABEL, button_label, offerable_args
+    from boss_engine.tools.builtin import build_default_registry
+
+    assert offerable_args("decide", {"decision_id": "dec_1", "action": "approve",
+                                     "note": "n", "force": True}) == {
+        "decision_id": "dec_1", "action": "approve", "note": "n"}
+    assert button_label("Approve the fix", "decide",
+                        {"decision_id": "dec_1", "action": "approve", "force": True}) \
+        == FORCE_MERGE_LABEL
+    assert button_label("Approve the fix", "decide", {"decision_id": "dec_1"}) == "Approve the fix"
+
+    out = build_default_registry().invoke(
+        "propose_action", SimpleNamespace(), project_id="p", actor="usr_someone",
+        args={"tool": "decide", "label": "Approve the fix",
+              "args": {"decision_id": "dec_1", "action": "approve", "note": "ok",
+                       "force": True}})
+    assert out.get("proposed") is True, out
+    assert "force" not in out["args"] and out["label"] == "Approve the fix"
+
+    proposed: list = []
+    intent_router.remember_offer(proposed, {
+        "id": "act_1", "tool": "decide", "label": "Merge it",
+        "args": {"decision_id": "dec_1", "action": "approve", "note": "x", "force": True}})
+    assert "force" not in proposed[0]["args"]
+
+    from boss_engine.agent import engine_agent
+
+    assert "offerable_args(name, args)" in inspect.getsource(engine_agent)

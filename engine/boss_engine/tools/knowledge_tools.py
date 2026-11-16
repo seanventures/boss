@@ -372,10 +372,13 @@ def register_knowledge_tools(reg) -> None:
          "edge_kinds narrows the edges followed.",
          {"type": "object", "properties": {
              "node": {"type": "string", "description": "A node id, key or exact name."},
+             # The name kg_callers / kg_why / kg_blast_radius use: one of the two is required
+             # (the handler refuses neither), so a model reusing node_id is not stripped.
+             "node_id": {"type": "string", "description": "Same as node (an alias)."},
              "hops": {"type": "integer", "minimum": 1, "maximum": 2},
              "edge_kinds": {"type": "array", "items": {"type": "string"}},
              "limit": {"type": "integer", "minimum": 1, "maximum": 60}},
-          "required": ["node"], "additionalProperties": False},
+          "additionalProperties": False},
          _neighbors, "read"),
         ("kg_symbol", "Look up a code symbol by name.", _props("name"), _symbol, "read"),
         ("kg_callers", "List symbols that call a node, directly or by dispatch through a supertype.", _props("node_id"), _callers, "read"),

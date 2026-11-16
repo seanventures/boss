@@ -1192,8 +1192,8 @@ def _build_onto_existing_app(ctx, cts, pid: str, actor: str, args: dict, extends
         # RE-CHECKED against what the start endpoint recorded (checked_replaces, as the person):
         # the governing run's own input, nothing else.
         with ctx.begin() as c:
-            recorded = c.execute(text("SELECT input->'replaces' FROM workflow_runs WHERE id = :r "
-                                      "AND project_id = :p"),
+            recorded = c.execute(text("SELECT input->'_checked_replaces' FROM workflow_runs "
+                                      "WHERE id = :r AND project_id = :p"),
                                  {"r": str(finalize_ctx.get("workflow_run_id") or ""),
                                   "p": pid}).scalar()
         if not isinstance(recorded, list) or sorted(map(str, recorded)) != sorted(replaces):
@@ -1589,6 +1589,10 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 "title": {"type": "string",
                           "description": "what this pass is, in two or three words (e.g. "
                                          "'More tests'); the work's own name follows it"},
+                "allow_test_retirement": {
+                    "type": "boolean",
+                    "description": "the change removes behaviour on purpose, so tests that "
+                                   "pinned it may be retired. Only when the operator said so"},
             },
             ["run_id", "instructions"],
         ),
@@ -2337,7 +2341,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         ),
         kind="write",
         reversibility="costs_money", permission="workflow_run:start",
-        exposure=Exposure(tags=("workflows",)))
+        exposure=Exposure(tags=("workflows",)), handler_checks_extra_args=True)
     def start_workflow(ctx, *, project_id, actor, args):
         from uuid import uuid4
 
@@ -2384,9 +2388,13 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 {"v": version_id}).scalar()
             if isinstance(declared, dict):
                 for name in declared:
-                    if name in args and name not in run_input and name not in (
-                            "directive", "title", "workflow_key", "project_id", "inputs"):
+                    if name in args and name not in run_input and name not in _START_WORKFLOW_ARGS:
                         run_input[name] = args[name]
+            # The registry let unlisted keys through for this check (handler_checks_extra_args):
+            # one the version does not declare either is named, not silently carried or lost.
+            unknown_args = sorted(k for k in args if k not in _START_WORKFLOW_ARGS
+                                  and not str(k).startswith("_")
+                                  and not (isinstance(declared, dict) and k in declared))
             run_input.update({"directive": directive, "title": title})
             # A MODEL DOES NOT GET TO SAY THE WORK ALREADY HAPPENED. `adopt_*` keys in `inputs`
             # were copied straight into the run, so an agent could make a run build on research
@@ -2457,6 +2465,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 "project_id": pid, "title": title,
                 **({"built_on_research": adopted} if adopted else {}),
                 **({"ignored_input": ignored} if ignored else {}),
+                "ignored_args": unknown_args,
                 **({"started_without": readiness.get("started_anyway")}
                    if readiness.get("started_anyway") else {})}
 
@@ -3290,7 +3299,11 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
     def propose_action(ctx, *, project_id, actor, args):
         """Records an offer. Executing it is the operator's click, not this call."""
         name = ToolRegistry.canonical_tool_name(str(args.get("tool") or ""))
-        call_args = dict(args.get("args") or {})
+        from ..services.offer_label import offerable_args
+
+        # A force merge is never offered: the person types its reason in the merge sheet.
+        call_args = offerable_args(name, args.get("args") if isinstance(args.get("args"), dict)
+                                   else {})
         if name not in _DISCUSS_OPERATIONS_TOOLS:
             # A workflow is not a directly runnable tool: all workflow work goes through the one
             # generic tool start_workflow(workflow_key=…). The names an agent actually reaches for
@@ -5723,6 +5736,12 @@ def _slim_run(r: dict) -> dict:
             "created_at", "task_id")
     out = {k: r.get(k) for k in keys if k in r}
     return _json_safe(out)
+
+
+#: start_workflow's own arguments (its schema): never carried into the run as workflow inputs.
+_START_WORKFLOW_ARGS = frozenset({"directive", "workflow_key", "title", "from_discovery", "inputs",
+                                  "start_anyway", "allow_unsupported_stack", "project_id",
+                                  PROJECT_ARG})
 
 
 def _offer_button_label(label: Any, tool: str, args: Any) -> str:

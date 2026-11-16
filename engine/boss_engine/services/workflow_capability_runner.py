@@ -4008,8 +4008,10 @@ def _perform_capability(
                 # (TRUSTED_STEP_ARGS); `replaces` is what the start endpoint recorded after
                 # checked_replaces, and the tool re-checks it against the run's input.
                 trusted_step = {"person_request": True,
-                                **({"replaces": list((context.get("input") or {})["replaces"])}
-                                   if (context.get("input") or {}).get("replaces") else {})}
+                                **({"replaces": list((context.get("input") or {})[
+                                    workflows.CHECKED_REPLACES_KEY])}
+                                   if (context.get("input") or {}).get(
+                                       workflows.CHECKED_REPLACES_KEY) else {})}
 
     # WHAT THE PANEL IS BEING CONVENED FOR.
     #

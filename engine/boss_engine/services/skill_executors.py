@@ -1866,8 +1866,16 @@ def execute_repo_read(context: "SkillExecutorContext", inputs: dict[str, Any]) -
                 {"p": context.project_id, "r": repo}).first():
             raise SkillExecutorConfigurationError(f"{repo} is not a repository of this project.")
     ctx = EngineContext(settings=context.settings, engine=context.connection.engine)
+    # THE SAME FILTER AS EVERY OTHER DOOR (registry.schema_args): only what the tool's schema
+    # lists reaches the handler, so a step's inputs cannot set a key the tool never offered.
+    from ..tools.registry import schema_args
+
+    args, ignored = schema_args(spec, args)
     out = spec.handler(ctx, project_id=context.project_id, actor=context.actor, args=args)
-    return {"tool": tool, "result": out if isinstance(out, dict) else {"value": out}}
+    out = out if isinstance(out, dict) else {"value": out}
+    if ignored:
+        out = {**out, "ignored_args": out.get("ignored_args") or ignored}
+    return {"tool": tool, "result": out}
 
 
 @register_executor("ci.status")
