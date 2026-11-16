@@ -14,7 +14,7 @@ from boss_engine.services.factory_launch import MAX_ATTACHMENT_BYTES
 
 _CONNECT = (
     "Connect GitHub first: a new project reaches a repository through the "
-    "organisation's GitHub App (Repo and models › GitHub)."
+    "organisation's GitHub App (Setup › GitHub)."
 )
 _DRIVE = (
     "That Drive source is not connected. No Google account is connected for this "
