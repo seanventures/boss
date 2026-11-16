@@ -140,7 +140,33 @@ PY
 # compose network, not boss-egress or its CONNECT proxy, not Docker's DNS (127.0.0.11, a way out
 # by name), not any app preview. The API refuses a sealed sandbox without .network-sealed.
 SEALED_RANGE="$(( ${UID_RANGE%%-*} + 900 ))-${UID_RANGE##*-}"
+# LOOPBACK ONLY TO ITS OWN LISTENERS (BOSSAPP-1318). A per-session network namespace would be
+# cleanest, but Docker's default seccomp refuses unshare(CLONE_NEWNET) without CAP_SYS_ADMIN. So
+# every loopback connection a sealed uid OPENS is marked with that uid (BOSS_SEALED_OWN,
+# CONNMARK), and any packet sent on a marked connection by ANOTHER socket owner — another run's
+# dev server, a runtime service, BOSS itself answering — is rejected (BOSS_SEALED_REPLY). The
+# session's own server (same uid) still answers; a listener of any other uid never completes.
+sealed_own_rules() {
+  low=${SEALED_RANGE%%-*}; high=${SEALED_RANGE##*-}
+  echo "*filter"
+  echo ":BOSS_SEALED_OWN - [0:0]"
+  echo ":BOSS_SEALED_REPLY - [0:0]"
+  i=0
+  while [ $((low + i)) -le "$high" ]; do
+    mark=$((0x5EA10000 + i))
+    echo "-A BOSS_SEALED_OWN -m owner --uid-owner $((low + i)) -m conntrack --ctstate NEW -j CONNMARK --set-xmark $mark/0xffffffff"
+    # Inbound (N3): a sealed uid never answers a connection it did not open itself — another
+    # uid connecting to the session's listener never completes the handshake.
+    echo "-A BOSS_SEALED_OWN -m owner --uid-owner $((low + i)) -m connmark ! --mark $mark/0xffffffff -j REJECT"
+    echo "-A BOSS_SEALED_REPLY -m connmark --mark $mark/0xffffffff -m owner ! --uid-owner $((low + i)) -j REJECT"
+    i=$((i + 1))
+  done
+  echo "COMMIT"
+}
+
 seal_network() {
+  sealed_own_rules | iptables-restore --noflush || return 1
+  iptables -D OUTPUT -o lo -j BOSS_SEALED_REPLY 2>/dev/null || true
   iptables -N BOSS_SEALED 2>/dev/null || iptables -F BOSS_SEALED || return 1
   iptables -D OUTPUT -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED 2>/dev/null || true
   iptables -A BOSS_SEALED -d 127.0.0.11/32 -j REJECT || return 1
@@ -149,21 +175,31 @@ seal_network() {
   iptables -A BOSS_SEALED -p tcp -m multiport --dports "$PORTS" -j REJECT || return 1
   # The link gateway's ports (one per cross-app link): never from the acceptance sandbox.
   iptables -A BOSS_SEALED -p tcp --dport "$LINK_PORTS" -j REJECT || return 1
-  iptables -A BOSS_SEALED -o lo -d 127.0.0.0/8 -j ACCEPT || return 1
+  iptables -A BOSS_SEALED -o lo -j BOSS_SEALED_OWN || return 1
+  # TCP only (N2): a one-way UDP datagram needs no reply, so the reply rule cannot stop it.
+  iptables -A BOSS_SEALED -o lo -d 127.0.0.0/8 -p tcp -j ACCEPT || return 1
   iptables -A BOSS_SEALED -j REJECT || return 1
   iptables -I OUTPUT 1 -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED || return 1
+  iptables -I OUTPUT 1 -o lo -j BOSS_SEALED_REPLY || return 1
+  iptables -C OUTPUT -o lo -j BOSS_SEALED_REPLY || return 1
+  iptables -C BOSS_SEALED -o lo -j BOSS_SEALED_OWN || return 1
   iptables -C BOSS_SEALED -p tcp --dport "$LINK_PORTS" -j REJECT || return 1
   iptables -C BOSS_SEALED -j REJECT || return 1
   iptables -C OUTPUT -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED || return 1
   if ! ipv6_unavailable; then
+    sealed_own_rules | ip6tables-restore --noflush || return 1
+    ip6tables -D OUTPUT -o lo -j BOSS_SEALED_REPLY 2>/dev/null || true
     ip6tables -N BOSS_SEALED 2>/dev/null || ip6tables -F BOSS_SEALED || return 1
     ip6tables -D OUTPUT -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED 2>/dev/null || true
     ip6tables -A BOSS_SEALED -p tcp --dport "$PREVIEW_PORTS" -j REJECT || return 1
     ip6tables -A BOSS_SEALED -p tcp -m multiport --dports "$PORTS" -j REJECT || return 1
     ip6tables -A BOSS_SEALED -p tcp --dport "$LINK_PORTS" -j REJECT || return 1
-    ip6tables -A BOSS_SEALED -o lo -d ::1/128 -j ACCEPT || return 1
+    ip6tables -A BOSS_SEALED -o lo -j BOSS_SEALED_OWN || return 1
+    ip6tables -A BOSS_SEALED -o lo -d ::1/128 -p tcp -j ACCEPT || return 1
     ip6tables -A BOSS_SEALED -j REJECT || return 1
     ip6tables -I OUTPUT 1 -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED || return 1
+    ip6tables -I OUTPUT 1 -o lo -j BOSS_SEALED_REPLY || return 1
+    ip6tables -C OUTPUT -o lo -j BOSS_SEALED_REPLY || return 1
     ip6tables -C OUTPUT -m owner --uid-owner "$SEALED_RANGE" -j BOSS_SEALED || return 1
   fi
 }

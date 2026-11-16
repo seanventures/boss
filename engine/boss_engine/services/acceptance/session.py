@@ -57,6 +57,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
 
 from . import probes as _probes
+from . import seal as _seal
 
 _log = logging.getLogger(__name__)
 
@@ -107,6 +108,13 @@ class Command:
     #: Had the session changed the clone (a write, a new file) when this ran? None: unknown.
     #: Evidence from a changed tree is not accepted (verdict.verify_command).
     tree_dirty: Optional[bool] = None
+    #: The earlier code-writing command (E-id) that changed files outside the tracked tree —
+    #: ignored files, the session's HOME or temp — before this ran (F1, BOSSAPP-1316).
+    tainted_by: Optional[str] = None
+    #: A PLAIN CALL into the delivered work (calls.plain_call: a tracked script, a target of the
+    #: tracked Makefile, a script of the tracked package.json, ...)? Only those are evidence.
+    plain: Optional[bool] = None
+    not_plain: Optional[str] = None
     method: Optional[str] = None
     url: Optional[str] = None
     headers: Optional[dict] = None
@@ -263,11 +271,14 @@ class _FencedRunner:
         from ..local_fenced import _Tail, skill_environment
         from ..sandbox import CommandResult, SandboxError
 
-        env = {**skill_environment(), "CI": "1"}
+        # No bytecode written by imports: a .pyc in the tree is then always something a
+        # command wrote on purpose (and a code-writing command's write taints the session).
+        env = {**skill_environment(), "CI": "1", "PYTHONDONTWRITEBYTECODE": "1"}
         started = time.monotonic()
         timed_out = False
         with owned_process.owner_scope(OWNER_KIND, self.owner_id, project_id=self.project_id):
-            proc = owned_process.popen(argv, cwd=cwd, stdin=subprocess.DEVNULL,
+            # Under the seal (seal.py): no unix sockets, no io_uring — iptables cannot see those.
+            proc = owned_process.popen(_seal.wrap(argv), cwd=cwd, stdin=subprocess.DEVNULL,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
                                        refuse_when_stopped=False)
             if proc.sandbox is None:
@@ -291,6 +302,32 @@ class _FencedRunner:
 
 
 OWNER_KIND = "acceptance"
+#: Files a snapshot around a code-writing command may hold; past it, the command taints.
+SNAPSHOT_CAP = 200_000
+#: Files up to this size are also hashed in a snapshot.
+SMALL_FILE = 4096
+
+
+def _raise(err: OSError) -> None:
+    raise err
+
+
+def _sig(full: str, st: Any = None) -> Optional[tuple]:
+    """A file's signature: size, mtime, ctime, inode (a same-size rewrite with its mtime put
+    back still moves ctime; a replaced file has a new inode, PR #154 E2) and, for small files,
+    a content hash (a rewrite inside one coarse ctime tick). None when it does not exist."""
+    try:
+        st = st or os.lstat(full)
+    except OSError:
+        return None
+    digest = ""
+    if st.st_size <= SMALL_FILE and os.path.isfile(full) and not os.path.islink(full):
+        try:
+            with open(full, "rb") as fh:
+                digest = hashlib.sha1(fh.read(SMALL_FILE + 1)).hexdigest()
+        except OSError:
+            digest = "unreadable"
+    return (st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino, digest)
 #: Output a test run writes in any Python repo, ignored or not (bytecode, pytest's cache): it
 #: never makes the tree "changed" — running the tests is not editing the work.
 TOOL_OUTPUT = ("__pycache__/", "*.pyc", ".pytest_cache/")
@@ -323,6 +360,21 @@ class AcceptanceSandbox:
     owner: Any = None                       # the EphemeralSandbox, when it made the clone
     scratch: Optional[Path] = None          # the directory to delete at close
     identity_owner: Optional[str] = None    # the sealed uid's owner id, released at close
+    #: Directories besides the clone a command can write and a later one read (the sealed uid's
+    #: HOME and temp directory): watched with the clone around code-writing commands.
+    watch: tuple = ()
+    #: Set once a command that is not a plain call changed any file outside the tracked tree:
+    #: every LATER command carries it and is not evidence (F1, E1).
+    tainted_by: Optional[str] = None
+    #: Why the session is tainted (the command and what it changed).
+    tainted_why: Optional[str] = None
+    #: Places OUTSIDE the clone where the session's uid can create files (/tmp, /var/tmp,
+    #: /dev/shm, its HOME): any file `writer_uid` creates or changes there taints (PR #154).
+    outside: tuple = ()
+    writer_uid: Optional[int] = None
+    #: The session's own TMPDIR: writes there never taint (it is the session's scratch).
+    own_tmp: Optional[Path] = None
+    _tracked: Optional[frozenset] = None
 
     # -- the fence ---------------------------------------------------------------------------
     def _host_allowed(self, host: str) -> bool:
@@ -371,6 +423,31 @@ class AcceptanceSandbox:
         # cache, `go build -o bin/`, target/, node_modules) never makes the command that
         # produced it unusable; a file an EARLIER command wrote does.
         before = self.tree_dirty()
+        cmd.tainted_by = self.tainted_by
+        # ONLY A PLAIN CALL INTO THE DELIVERED WORK (calls.py, an allow-list) can be evidence.
+        # Anything else may plant what a later plain call reads — a gitignored .env, a patched
+        # node_modules/vendor file, a file in HOME or temp — which the tracked-tree check cannot
+        # see: every file is watched around it, and any change taints the rest of the session
+        # (BOSSAPP-1316, PR #154 E1). A plain call may change ignored files: that is the work.
+        from .calls import Tree, plain_call
+
+        try:
+            rel = os.path.relpath(workdir, self.root)
+            cmd.not_plain = plain_call(shlex.split(command),
+                                       Tree(self.root, self.tracked_files(), rel))
+        except (ValueError, OSError, RuntimeError):
+            cmd.not_plain = "the command could not be classified"
+        cmd.plain = cmd.not_plain is None
+        writes_code = not cmd.plain
+        snap = self.snapshot() if writes_code else None
+        # A PLAIN CALL is watched too (PR #154 review): it may write a gitignored file it was
+        # NAMED (`pytest --junitxml=.env`), or anything outside the clone (`--basetemp=/tmp/x`).
+        try:
+            named = self._named_paths(shlex.split(command), workdir)
+        except (ValueError, RuntimeError):
+            named = []
+        named_before = {p: _sig(p) for p in named}
+        since = time.time()
         try:
             res = self.runner.run(command, timeout=timeout, cwd=workdir)
         except SandboxError as exc:
@@ -387,7 +464,113 @@ class AcceptanceSandbox:
         cmd.output_sha256 = hashlib.sha256((out + "\0" + err).encode()).hexdigest()
         cmd.stdout, cmd.stderr = _trim(out), _trim(err)
         cmd.tree_dirty = before
+        if not self.tainted_by:
+            why = None
+            if writes_code:
+                after = self.snapshot()
+                if snap is None or after is None or snap != after:
+                    why = "changed files outside the tracked tree"
+            changed = [p for p in named if _sig(p) != named_before[p]]
+            if why is None and changed:
+                why = ("changed an untracked file it named: "
+                       + os.path.relpath(changed[0], self.root))
+            if why is None:
+                outside = self._outside_writes(since)
+                if outside:
+                    why = f"wrote outside the clone: {outside}"
+            if why:
+                self.tainted_by, self.tainted_why = cmd.id, why
         return self.record.add(cmd)
+
+    def _named_paths(self, argv: list, workdir: str) -> list:
+        """The untracked paths INSIDE the clone that a command names in its arguments (a bare
+        path, or the value of `--opt=path`), as absolute paths."""
+        out: list = []
+        root = os.path.realpath(self.root)
+        tracked = self.tracked_files()
+        for a in [str(x) for x in argv[1:]]:
+            for word in ([a.split("=", 1)[1]] if "=" in a else []) + [a]:
+                if not word or word.startswith("-"):
+                    continue
+                real = os.path.realpath(os.path.join(workdir, word))
+                if real != root and real.startswith(root + os.sep):
+                    rel = os.path.relpath(real, root)
+                    if rel not in tracked and not rel.startswith(".git" + os.sep):
+                        out.append(real)
+        return list(dict.fromkeys(out))
+
+    def _outside_writes(self, since: float) -> Optional[str]:
+        """A file (or directory) the session's uid created or changed since `since` outside the
+        clone and its own TMPDIR, or None. Past SNAPSHOT_CAP entries it says so (fail closed)."""
+        if not self.outside or self.writer_uid is None:
+            return None
+        skip = {os.path.realpath(self.root)}
+        if self.own_tmp:
+            skip.add(os.path.realpath(self.own_tmp))
+        seen = 0
+        for base in self.outside:
+            if not os.path.isdir(base):
+                continue
+            for dirpath, dirnames, filenames in os.walk(base):
+                dirnames[:] = [d for d in dirnames
+                               if os.path.realpath(os.path.join(dirpath, d)) not in skip]
+                for n in dirnames + filenames:
+                    seen += 1
+                    if seen > SNAPSHOT_CAP:
+                        return f"more than {SNAPSHOT_CAP} entries under {base} (not checked)"
+                    full = os.path.join(dirpath, n)
+                    try:
+                        st = os.lstat(full)
+                    except OSError:
+                        continue
+                    if st.st_uid == self.writer_uid and max(st.st_ctime,
+                                                            st.st_mtime) >= since - 1:
+                        return full
+        return None
+
+    def tracked_files(self) -> frozenset:
+        """The PR head's tracked files (git ls-files; .git is read-only to the session)."""
+        if self._tracked is None:
+            got = subprocess.run(["git", "ls-files", "-z"], cwd=str(self.root),
+                                 capture_output=True, timeout=60, env=git_env(self.root))
+            if got.returncode != 0:
+                raise RuntimeError("git ls-files failed")
+            self._tracked = frozenset(x for x in got.stdout.decode("utf-8", "replace")
+                                      .split("\0") if x)
+        return self._tracked
+
+    def snapshot(self) -> Optional[dict]:
+        """Every file in the clone (outside .git) and in the watched directories, as
+        {path: (size, mtime_ns)}; None past SNAPSHOT_CAP entries or when a directory cannot be
+        read (fail closed: an unknown is a change)."""
+        try:
+            return self._snapshot()
+        except OSError:
+            return None
+
+    def _snapshot(self) -> Optional[dict]:
+        out: dict = {}
+        for base in (self.root, *[Path(w) for w in self.watch or ()]):
+            if not Path(base).exists():
+                continue
+            for dirpath, dirnames, filenames in os.walk(base, onerror=_raise):
+                if Path(dirpath) == self.root:
+                    dirnames[:] = [d for d in dirnames if d != ".git"]
+                for n in filenames + [d for d in dirnames
+                                      if os.path.islink(os.path.join(dirpath, d))]:
+                    full = os.path.join(dirpath, n)
+                    try:
+                        st = os.lstat(full)
+                    except OSError:
+                        return None
+                    # ctime and inode too: a same-size rewrite with its mtime put back still
+                    # moves ctime, and a replaced file has a new inode (PR #154 E2).
+                    # And the content of small files (a planted .env, a config): a rewrite
+                    # inside one coarse ctime tick is still seen.
+                    out[full] = _sig(full, st)
+                    if len(out) > SNAPSHOT_CAP:
+                        return None
+        return out
 
     def tree_dirty(self) -> Optional[bool]:
         """Has the session changed the clone: a tracked file modified or deleted (`git diff
@@ -427,6 +610,8 @@ class AcceptanceSandbox:
             return self.record.add(cmd)
         started = time.monotonic()
         before = self.tree_dirty()          # a server started from files the session wrote
+        cmd.tainted_by = self.tainted_by
+        cmd.plain = True                    # BOSS's own request; the session's taint still applies
         sealed_request = getattr(self.runner, "request", None)
         if _is_loopback(host) and callable(sealed_request):
             # LOOPBACK FROM THE SEALED UID: the request meets the commands' network fence (a
@@ -611,7 +796,10 @@ def open_sandbox(settings: Any, *, run_id: str, source: Any = None, head_sha: Op
         protect_clone(root)
         return AcceptanceSandbox(root=root, head_sha=head, egress=egress, target_hosts=targets,
                                  runner=_FencedRunner(settings, owner_id, project_id),
-                                 owner=eph, identity_owner=owner_id)
+                                 owner=eph, identity_owner=owner_id,
+                                 watch=(ident.home, ident.tmp),
+                                 outside=("/tmp", "/var/tmp", "/dev/shm", str(ident.home)),
+                                 writer_uid=int(ident.uid), own_tmp=ident.tmp)
     except Exception:
         if eph is not None:
             eph.teardown()

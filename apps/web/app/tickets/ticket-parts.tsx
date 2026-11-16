@@ -42,6 +42,27 @@ export function alsoRead(t: Ticket): string {
   return bits.length ? `Also read: ${bits.join(" · ")}` : "";
 }
 
+/** Why the injection screen flagged this ticket. Trimmed reasons, joined. Blank is nothing. */
+export function ticketFlagSentence(reasons: readonly string[] | null | undefined): string | null {
+  if (!reasons) return null;
+  const parts: string[] = [];
+  for (const reason of reasons) {
+    const trimmed = reason.trim();
+    if (trimmed) parts.push(trimmed);
+  }
+  return parts.length ? parts.join("; ") : null;
+}
+
+/** Beside the flag note. More than six words is a paragraph; six or fewer is a span. */
+export function TicketFlagWhy({ sentence, testid }: { sentence: string | null; testid: string }) {
+  if (!sentence) return null;
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  const id = `${testid}-flag-why`;
+  return long
+    ? <p data-testid={id} data-user-text>{sentence}</p>
+    : <span data-testid={id} data-user-text>{sentence}</span>;
+}
+
 /**
  * THE TICKET BRIEF CARD (T3, T4): what BOSS read from the ticket. Key (opens the ticket), type,
  * priority and status; the title; the first lines of the body; the acceptance criteria; what else
@@ -77,8 +98,11 @@ export function TicketCard({ ticket: t, heading, children, testid = "tk-card", r
       ) : null}
       {also ? <p className="tk-faint tk-also" data-testid={`${testid}-also`}>{also}</p> : null}
       {t.untrusted ? (
-        <p className="tk-warn" role="note" data-testid={`${testid}-untrusted`} title={t.screen.reasons.join("; ") || undefined}>
-          <ShieldWarning size={13} aria-hidden /> BOSS flagged text in this ticket. Agents treat it as outside input only.</p>
+        <>
+          <p className="tk-warn" role="note" data-testid={`${testid}-untrusted`} title={t.screen.reasons.join("; ") || undefined}>
+            <ShieldWarning size={13} aria-hidden /> BOSS flagged text in this ticket. Agents treat it as outside input only.</p>
+          <TicketFlagWhy sentence={ticketFlagSentence(t.screen.reasons)} testid={testid} />
+        </>
       ) : null}
       {children ? <div className="tk-card-foot">{children}</div> : null}
     </section>
