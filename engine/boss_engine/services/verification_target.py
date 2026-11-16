@@ -875,6 +875,20 @@ def required_stack_dir(app_dir: Path | str, required: str) -> Path:
     return base / best[1] if best is not None else base
 
 
+def _same_repository(url_owner: str, url_repo: str, owner: str, repo: str) -> bool:
+    """Whether a remote URL's last two path parts name this lineage's owner/repo. A LOCAL
+    repository is named `local_<project>/<repo>` but lives at `<root>/<project>/<repo>.git`
+    (local_repo.bare_path), so its file remote ends `<project>/<repo>`: the same repository."""
+    from . import local_repo
+
+    got = (url_owner.lower(), url_repo.lower())
+    if got == (owner.lower(), repo.lower()):
+        return True
+    if local_repo.is_local_owner(owner):
+        return got == (local_repo.project_of(owner).lower(), repo.lower())
+    return False
+
+
 def checkout_problem(root: Path | str, *, branch: str = "", owner: str = "",
                      repo: str = "") -> str | None:
     """Why a continuation's workspace is not its lineage's CHECKOUT, or None (BOSSAPP-1324):
@@ -902,7 +916,7 @@ def checkout_problem(root: Path | str, *, branch: str = "", owner: str = "",
         import re as _re
 
         m = _re.search(r"[/:]([^/:]+)/([^/]+?)(?:\.git)?/?$", url)
-        if m and (m.group(1).lower(), m.group(2).lower()) != (owner.lower(), repo.lower()):
+        if m and not _same_repository(m.group(1), m.group(2), owner, repo):
             return (f"the workspace is a checkout of {m.group(1)}/{m.group(2)}, not this "
                     f"lineage's {owner}/{repo}. BOSS stopped before planning on another "
                     "repository.")
