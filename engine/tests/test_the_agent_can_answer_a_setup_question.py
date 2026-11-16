@@ -144,9 +144,12 @@ def test_a_clone_uses_the_credential_the_project_connected():
     from boss_engine.tools.builtin import _repo_root
 
     assert "token" in inspect.signature(_repo_root).parameters
+    # One resolver (repo_access, BOSSAPP-1338) under the build's rule: the project's own binding.
+    from boss_engine.services import repo_access
+
     source = inspect.getsource(github_token_for)
-    assert "github_connections" in source or "GitHubConnectionService" in source
-    assert "token_for_repository" in source
+    assert "repo_access" in source and "bound_only=True" in source
+    assert "token_for_repository" in inspect.getsource(repo_access._binding_candidates)
 
 
 def test_the_preview_clone_uses_it_too():

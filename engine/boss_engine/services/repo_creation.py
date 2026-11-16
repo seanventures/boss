@@ -143,7 +143,7 @@ class Candidate:
         return {"kind": self.kind, "label": self.label, "token_kind": self.token_kind,
                 "can_create": self.can_create, "words": self.words, "fix": self.fix,
                 "missing": list(self.missing), "account_login": self.account_login or None,
-                "connection_id": self.connection_id}
+                "connection_id": self.connection_id, "project_id": self.project_id}
 
 
 @dataclass
@@ -273,10 +273,20 @@ def _env_app_candidates(settings: Any, owner: str, owner_type: str = "") -> list
                       words="the installation accepted Administration: Read and write", mint=mint)]
 
 
-def _connection_rows(db: Any, project_id: Optional[str]) -> list[dict[str, Any]]:
-    """Personal-access-token connections, this project's first, then the rest of its org's."""
+def _connection_rows(db: Any, project_id: Optional[str],
+                     actor: Optional[str] = None) -> list[dict[str, Any]]:
+    """Personal-access-token connections, this project's first, then the rest of its org's.
+
+    ANOTHER PROJECT'S TOKEN IS A PERSON'S (#179 review): it is used here only when its owner
+    (`created_by`) is the person acting, or when the connection was explicitly shared with the
+    organisation (metadata `shared_with_org`). Each row says whether the acting person may see
+    whose it is (`visible`: a member of its project, or its owner); a row they may not is named
+    "a token from another project", never by its project or login."""
     sql = ("SELECT c.id, c.project_id, c.connection_label, c.account_login, c.api_base_url, c.status, "
-           "       c.granted_permissions, c.missing_permissions, c.last_test_status, p.name AS project_name "
+           "       c.granted_permissions, c.missing_permissions, c.last_test_status, p.name AS project_name, "
+           "       c.created_by, COALESCE(c.metadata->>'shared_with_org', '') = 'true' AS shared, "
+           "       EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = c.project_id "
+           "               AND m.member_id = :a AND m.status = 'active') AS actor_member "
            "  FROM github_connections c JOIN projects p ON p.id = c.project_id "
            " WHERE c.auth_method = 'personal_access_token' AND c.status IN ('configured', 'active') "
            "   AND c.account_login IS NOT NULL ")
@@ -287,9 +297,47 @@ def _connection_rows(db: Any, project_id: Optional[str]) -> list[dict[str, Any]]
     else:
         sql += "ORDER BY c.last_tested_at DESC NULLS LAST, c.created_at"
     try:
-        return [dict(r) for r in db.execute(text(sql), {"p": project_id}).mappings().all()]
+        rows = [dict(r) for r in db.execute(text(sql), {"p": project_id, "a": actor or ""}).mappings().all()]
     except Exception:  # noqa: BLE001 — an older schema
         return []
+    out = []
+    for r in rows:
+        own = project_id is not None and str(r.get("project_id")) == str(project_id)
+        mine = bool(actor) and str(r.get("created_by") or "") == str(actor)
+        if not (own or mine or r.get("shared")):
+            continue
+        r["own"] = own
+        r["visible"] = own or mine or bool(r.get("actor_member"))
+        out.append(r)
+    return out
+
+
+def token_label(row: dict[str, Any]) -> str:
+    """A token connection's name as the acting person may read it."""
+    login = str(row.get("account_login") or "")
+    if row.get("own"):
+        return f"{login} (access token, this project)"
+    if not row.get("visible"):
+        return "a token from another project"
+    return f"{login} (access token from project {row.get('project_name') or row.get('connection_label')})"
+
+
+_ABILITIES: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+ABILITIES_TTL_S = 300.0
+
+
+def _abilities_cached(token: str, api_base: str) -> dict[str, Any]:
+    """pat_abilities, remembered for ABILITIES_TTL_S per token (by digest, never the token)."""
+    import hashlib
+    import time
+
+    key = (hashlib.sha256(token.encode()).hexdigest()[:24], api_base)
+    hit = _ABILITIES.get(key)
+    if hit and time.monotonic() < hit[0]:
+        return hit[1]
+    got = pat_abilities(token, api_base=api_base)
+    _ABILITIES[key] = (time.monotonic() + ABILITIES_TTL_S, got)
+    return got
 
 
 def _org_member(token: str, owner: str, api_base: str) -> bool:
@@ -300,7 +348,8 @@ def _org_member(token: str, owner: str, api_base: str) -> bool:
 
 
 def _connection_candidates(db: Any, settings: Any, owner: str, project_id: Optional[str], *,
-                           owner_type: str = "", probe: bool = True) -> list[Candidate]:
+                           owner_type: str = "", probe: bool = True,
+                           actor: Optional[str] = None) -> list[Candidate]:
     """Project connections whose token creates in `owner`: its own user, or an organisation it
     is an active member of (checked at GitHub, only for an organisation owner, and only when
     `probe`: the owner picker reads no secrets and asks GitHub nothing)."""
@@ -308,14 +357,15 @@ def _connection_candidates(db: Any, settings: Any, owner: str, project_id: Optio
 
     service = GitHubConnectionService(settings)
     out: list[Candidate] = []
-    for row in _connection_rows(db, project_id):
+    for row in _connection_rows(db, project_id, actor):
         login = str(row.get("account_login") or "")
         same = login.lower() == owner.lower()
         if not same and owner_type != "Organization":
             # Another account's token creates only in an ORGANISATION it belongs to — and only
             # when BOSS knows `owner` is one (the App's installations say); never a guess.
             continue
-        label = f"{login} (access token, {row.get('project_name') or row.get('connection_label')})"
+        # WHOSE IT IS (BOSSAPP-1338), as far as the acting person may know (#179 review).
+        label = token_label(row)
         granted = [str(p) for p in (row.get("granted_permissions") or [])]
         missing = [str(p) for p in (row.get("missing_permissions") or [])]
         api_base = str(row.get("api_base_url") or getattr(settings, "github_api_base_url", "") or "https://api.github.com")
@@ -332,6 +382,16 @@ def _connection_candidates(db: Any, settings: Any, owner: str, project_id: Optio
             can, words = False, "its token lacks the repo scope (missing: administration)"
         elif row.get("last_test_status"):
             can, words = None, "a fine-grained token: GitHub tells at the attempt whether it may create repositories"
+        elif probe and row.get("own"):
+            # TEST IT NOW, it is one GET /user (BOSSAPP-1338) — only this project's own token,
+            # and once per 5 minutes (#179 review): never every connection on every probe.
+            token = mint()
+            tested = _abilities_cached(token, api_base) if token else {"ok": False, "words": "its secret could not be read"}
+            if not tested.get("ok"):
+                can, words = False, f"its token did not pass a check ({tested.get('words') or 'GitHub rejected it'})"
+            else:
+                can = tested.get("can_create")
+                words = str(tested.get("words") or "its token's scopes were checked")
         else:
             can, words = None, "its token's scopes are not checked yet: press Test all in Setup"
         if not same:
@@ -346,11 +406,18 @@ def _connection_candidates(db: Any, settings: Any, owner: str, project_id: Optio
                 words += f"; whether {login} may create in {owner} is checked when you press Create"
             if can is not False:
                 can = None
+        seen = row.get("visible", True)
+        if not seen:
+            words = words.replace(login, "its owner") if login else words
         out.append(Candidate("connection", label, "user", can, words=words,
-                             fix=(f"Replace the token for {login} with one holding the repo scope (Setup)"
+                             fix=((f"Replace the token for {login} with one holding the repo scope (Setup)"
+                                   if row.get("visible", True) else
+                                   "Replace that token with one holding the repo scope (in its project's Setup)")
                                   if can is False else ""),
-                             missing=["administration"] if can is False else [], account_login=login,
-                             account_type="User", connection_id=str(row["id"]), project_id=str(row["project_id"]),
+                             missing=["administration"] if can is False else [],
+                             account_login=login if row.get("visible", True) else "",
+                             account_type="User", connection_id=str(row["id"]) if seen else None,
+                             project_id=str(row["project_id"]) if seen else None,
                              mint=mint))
     return out
 
@@ -364,12 +431,14 @@ def _install_candidates(settings: Any) -> list[Candidate]:
 
 
 def candidates(db: Any, settings: Any, owner: str, *, project_id: Optional[str] = None,
+               actor: Optional[str] = None,
                owner_type: str = "", probe: bool = True) -> list[Candidate]:
     """Every credential BOSS holds that might create in `owner`, in the order they are tried.
     `probe=False` (the owner picker): nothing reads a secret or asks GitHub about memberships."""
     out: list[Candidate] = []
     for source in (lambda: _identity_app_candidates(db, owner), lambda: _env_app_candidates(settings, owner, owner_type),
-                   lambda: _connection_candidates(db, settings, owner, project_id, owner_type=owner_type, probe=probe),
+                   lambda: _connection_candidates(db, settings, owner, project_id, owner_type=owner_type,
+                                                  probe=probe, actor=actor),
                    lambda: _install_candidates(settings)):
         try:
             out.extend(source())
@@ -386,6 +455,7 @@ _NO_CREDENTIAL = ("BOSS has no GitHub credential that can create repositories in
 
 
 def repo_creation_credential(db: Any, settings: Any, owner: str, *, project_id: Optional[str] = None,
+                             actor: Optional[str] = None,
                              mint: bool = True, owner_type: str = "") -> RepoCreationCredential:
     """THE credential that creates `owner/<name>`, and why — or the precise reason none can.
 
@@ -394,7 +464,8 @@ def repo_creation_credential(db: Any, settings: Any, owner: str, *, project_id: 
     the server token) is used when no confirmed one exists. `mint=False` decides without minting
     a token (the owner picker asks about many owners at once)."""
     owner = str(owner or "").strip()
-    found = candidates(db, settings, owner, project_id=project_id, owner_type=owner_type, probe=mint)
+    found = candidates(db, settings, owner, project_id=project_id, owner_type=owner_type, probe=mint,
+                       actor=actor)
     summaries = [c.summary() for c in found]
     for want in (True, None):
         for picked in (c for c in found if c.can_create is want):
@@ -419,7 +490,7 @@ def repo_creation_credential(db: Any, settings: Any, owner: str, *, project_id: 
                                   words=words, fixes=fixes, candidates=summaries)
 
 
-def known_owners(db: Any, project_id: Optional[str]) -> list[dict[str, str]]:
+def known_owners(db: Any, project_id: Optional[str], actor: Optional[str] = None) -> list[dict[str, str]]:
     """The GitHub accounts BOSS holds a credential for: the App's installations and the token
     connections' logins. [{login, type}] with the login's case as GitHub gave it."""
     from ..identity import github_setup
@@ -439,16 +510,18 @@ def known_owners(db: Any, project_id: Optional[str]) -> list[dict[str, str]]:
                 add(row.get("account_login"), row.get("account_type"))
     except Exception:  # noqa: BLE001
         pass
-    for row in _connection_rows(db, project_id):
-        add(row.get("account_login"), "User")
+    for row in _connection_rows(db, project_id, actor):
+        if row.get("visible"):
+            add(row.get("account_login"), "User")
     return list(out.values())
 
 
-def creating_owners(db: Any, settings: Any, project_id: str, owners: Optional[list[str]] = None) -> list[dict[str, Any]]:
+def creating_owners(db: Any, settings: Any, project_id: str, owners: Optional[list[str]] = None,
+                    actor: Optional[str] = None) -> list[dict[str, Any]]:
     """Every owner the new-repo picker may list, each with its creating credential or its fixes:
     [{login, type, can_create, verified, via, via_kind, words, fixes}]. `owners`: logins the
     caller already shows (the registry's), kept in the answer even when BOSS has nothing for them."""
-    known = known_owners(db, project_id)
+    known = known_owners(db, project_id, actor)
     types = {k["login"].lower(): k["type"] for k in known}
     logins: list[str] = [k["login"] for k in known]
     for extra in owners or []:
@@ -457,7 +530,7 @@ def creating_owners(db: Any, settings: Any, project_id: str, owners: Optional[li
             logins.append(name)
     out: list[dict[str, Any]] = []
     for login in logins:
-        got = repo_creation_credential(db, settings, login, project_id=project_id, mint=False,
+        got = repo_creation_credential(db, settings, login, project_id=project_id, mint=False, actor=actor,
                                        owner_type=types.get(login.lower(), ""))
         out.append({"login": login, "type": types.get(login.lower()) or None, "can_create": got.ok,
                     "verified": got.verified, "via": got.label or None, "via_kind": got.kind or None,

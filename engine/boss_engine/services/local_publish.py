@@ -195,7 +195,10 @@ def check_repository(*, owner: str, name: str, token: Optional[str], purpose: st
             return {**out, "reason": "failed", "words": f"GitHub did not answer ({found.status_code}); try again."}
         if purpose == "existing":
             return {**out, "reason": "not_found",
-                    "words": f"There is no {full} on GitHub that BOSS can see."}
+                    "words": (f"{via or 'The credential BOSS used'} cannot see {full}: it may exist, "
+                              "and GitHub shows a repository only to a credential with access to it. "
+                              "Give the BOSS GitHub App's installation (or a token) access to it in "
+                              "Setup › GitHub access.")}
         account = own.get(f"{base}/users/{owner}", headers=headers)
         if account.status_code == 404:
             return {**out, "reason": "not_allowed", "words": f"There is no GitHub account {owner}."}
@@ -218,6 +221,60 @@ def check_repository(*, owner: str, name: str, token: Optional[str], purpose: st
             own.close()
 
 
+def registry_refusal(c: Any, project_id: str, full_name: str) -> Optional[str]:
+    """Words when the organisation's repository registry was told NOT to use `full_name` by a
+    person (unticked in Repositories), else None. A repository the registry merely has not
+    allowed yet is allowed by publishing to it (registry.register_binding: picking it is the
+    allow), so it never blocks the publish silently (BOSSAPP-1338)."""
+    try:
+        from ..multirepo import registry as repo_registry
+
+        org_id = repo_registry.org_of_project(c, project_id)
+        if not org_id:
+            return None
+        with c.begin_nested():
+            row = c.execute(text(
+                "SELECT allowed, allowed_by, archived FROM github_repos WHERE org_id = :o AND "
+                "lower(full_name) = lower(:f)"), {"o": org_id, "f": full_name}).mappings().first()
+    except Exception:  # noqa: BLE001 — no registry on this schema
+        return None
+    if row is None or row["allowed"]:
+        return None
+    if row.get("archived"):
+        return f"{full_name} is archived on GitHub: BOSS cannot publish into it."
+    if row.get("allowed_by"):
+        return (f"{full_name} is switched off in Repositories (by {row['allowed_by']}): tick it there "
+                "to let BOSS use it, then publish.")
+    return None
+
+
+def check_existing(c: Any, settings: Any, project_id: str, *, owner: str, name: str,
+                   client: Optional[httpx.Client] = None,
+                   actor: Optional[str] = None) -> dict[str, Any]:
+    """Publish INTO an existing repository: can BOSS reach AND push to `owner/name`, and with
+    which credential (repo_access.resolve: the App's installation, this project's binding, the
+    token connections, the server token)? Never "there is no" when the truth is "cannot see"
+    (BOSSAPP-1338): the words name every credential tried and the fix."""
+    from .repo_access import resolve
+
+    full = f"{owner}/{name}"
+    out: dict[str, Any] = {"ok": False, "full_name": full, "reason": "", "words": "",
+                           "exists": False, "owner_type": None, "via": None, "tried": []}
+    if not _OWNER.match(owner or "") or not _NAME.match(name or ""):
+        return {**out, "reason": "not_allowed",
+                "words": "A GitHub owner is letters, digits and hyphens; a repository name is "
+                         "letters, digits, '.', '_' and '-'."}
+    got = resolve(c, settings, project_id, owner, name, need="push", client=client, actor=actor)
+    out.update(tried=got.tried, via=got.label or None, exists=bool(got.exists))
+    if not got.ok:
+        return {**out, "reason": got.reason or "not_visible", "words": got.words}
+    refused = registry_refusal(c, project_id, full)
+    if refused:
+        return {**out, "reason": "registry_off", "words": refused}
+    return {**out, "ok": True,
+            "words": f"{full} exists: BOSS publishes into it if it is empty, as {got.label}."}
+
+
 # ── how BOSS reaches GitHub for this project ─────────────────────────────────────────────────
 
 @dataclass
@@ -236,6 +293,9 @@ class GitHubReach:
     create_label: str = ""
     create_words: str = ""
     create_reason: str = ""
+    #: Words when no credential reaches owner/repo to push (repo_access), else "" — None: not
+    #: asked (a caller's own reach).
+    reach_words_for: Optional[Callable[[str, str], str]] = None
 
 
 def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Optional[str] = None,
@@ -249,8 +309,28 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
     from .repo_creation import repo_creation_credential
     from .repo_host import git_access
 
+    reached: dict[tuple[str, str], Any] = {}
+
+    def resolved(o: str, r: str) -> Any:
+        """The resolver's answer for o/r, asked once per reach (#179 review): the push, the pull
+        requests and the words all read the same answer."""
+        key = (o.lower(), r.lower())
+        if key not in reached:
+            from .repo_access import resolve
+
+            try:
+                reached[key] = resolve(c, settings, project_id, o, r, need="push", actor=actor)
+            except Exception:  # noqa: BLE001 — the bound credential below
+                log.debug("repo access: the resolver failed", exc_info=True)
+                reached[key] = None
+        return reached[key]
+
     def token(o: str, r: str) -> str:
-        return github_token_for(c, settings, project_id, o, r) or ""
+        """The credential that REACHES o/r to push and open pull requests (repo_access.resolve),
+        else the project's bound one: never the creating credential borrowed for a read or a
+        push (BOSSAPP-1338)."""
+        got = resolved(o, r)
+        return (getattr(got, "token", None) or "") or github_token_for(c, settings, project_id, o, r) or ""
 
     def adapter(o: str, r: str) -> Any:
         return GitHubAdapter(settings, owner=o, repo=r, token=token(o, r) or None)
@@ -258,7 +338,7 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
     create_token, kind, label, words, reason = None, "app", "", "", ""
     if owner:
         try:
-            got = repo_creation_credential(c, settings, owner, project_id=project_id)
+            got = repo_creation_credential(c, settings, owner, project_id=project_id, actor=actor)
             create_token, kind, label, words, reason = got.token, got.token_kind, got.label, got.words, got.reason
         except Exception:  # noqa: BLE001 — said at the repository step
             log.debug("repo creation: the credential resolver failed", exc_info=True)
@@ -271,7 +351,13 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
             conn_id = _connection_for(c, settings, project_id, actor, owner=owner, repo=repo)
         except Exception:  # noqa: BLE001 — said at the switch step
             conn_id = None
-    return GitHubReach(adapter_for=adapter,
+    def reach_words(o: str, r: str) -> str:
+        if token(o, r):
+            return ""
+        got = resolved(o, r)
+        return (getattr(got, "words", "") or f"BOSS holds no GitHub credential that reaches {o}/{r}.")
+
+    return GitHubReach(adapter_for=adapter, reach_words_for=reach_words,
                        access_for=lambda o, r: git_access("github", o, r, token(o, r)),
                        create_token=create_token, create_token_kind=kind,
                        api_base_url=str(getattr(settings, "github_api_base_url", "")
@@ -351,7 +437,16 @@ def publish(c: Any, settings: Any, project_id: str, *, owner: str, repo: str,
         state["step"] = "repository"
         _save(path, state)
 
-    # 2. push every branch and tag (never forced)
+    # 2. push every branch and tag (never forced) — with the credential that reaches the
+    #    repository (the App's installation, the project's binding, a token that can push),
+    #    never an anonymous URL when none does: the person reads which were tried and the fix.
+    refused = registry_refusal(c, project_id, target)
+    if refused and state.get("step") in ("repository", None):
+        raise PublishError(refused, 409, "registry_off", "push")
+    if reach.reach_words_for is not None and state.get("step") in ("repository", None):
+        cannot = reach.reach_words_for(owner, repo)
+        if cannot:
+            raise PublishError(cannot, 409, "github_not_reachable", "push")
     access = reach.access_for(owner, repo)
     env = access.boss_environ() if hasattr(access, "boss_environ") else dict(getattr(access, "env", {}) or {})
     if state.get("step") in ("repository", None):
@@ -492,5 +587,5 @@ def publish(c: Any, settings: Any, project_id: str, *, owner: str, repo: str,
             "words": f"Published to {target}." if steps else f"Already published to {target}."}
 
 
-__all__ = ["CreateRepoResult", "GitHubReach", "NO_CREDENTIAL_WORDS", "PublishError", "check_repository",
-           "create_repository", "default_reach", "publish"]
+__all__ = ["CreateRepoResult", "GitHubReach", "NO_CREDENTIAL_WORDS", "PublishError", "check_existing",
+           "check_repository", "create_repository", "default_reach", "publish", "registry_refusal"]

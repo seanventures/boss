@@ -63,7 +63,7 @@ def _wire(monkeypatch, *, app=(), env=(), conns=(), install=()):
     monkeypatch.setattr(repo_creation, "_identity_app_candidates", lambda db, owner: list(app))
     monkeypatch.setattr(repo_creation, "_env_app_candidates", lambda settings, owner, owner_type="": list(env))
     monkeypatch.setattr(repo_creation, "_connection_candidates",
-                        lambda db, settings, owner, project_id, owner_type="", probe=True: list(conns))
+                        lambda db, settings, owner, project_id, owner_type="", probe=True, actor=None: list(conns))
     monkeypatch.setattr(repo_creation, "_install_candidates", lambda settings: list(install))
 
 
@@ -191,7 +191,7 @@ def test_a_connection_for_the_owner_is_found_with_its_recorded_scopes(monkeypatc
         c.execute(text("UPDATE github_connections SET account_login = 'paramg', granted_permissions = "
                        "'[\"pull\",\"push\",\"administration\",\"contents\",\"pull_requests\"]'::jsonb WHERE id = :c"), {"c": cid})
         c.execute(text("UPDATE github_connections SET account_login = 'paramg-kaapppu', missing_permissions = "
-                       "'[\"administration\"]'::jsonb WHERE id = :c"), {"c": cid2})
+                       "'[\"administration\"]'::jsonb, created_by = 'usr_kaapppu' WHERE id = :c"), {"c": cid2})
     from boss_engine.services.github_connections import GitHubConnectionService
 
     monkeypatch.setattr(GitHubConnectionService, "token_for_connection",
@@ -201,15 +201,22 @@ def test_a_connection_for_the_owner_is_found_with_its_recorded_scopes(monkeypatc
     with engine.begin() as c:
         got = repo_creation.repo_creation_credential(c, settings, "paramg", project_id=pid)
         assert got.ok and got.kind == "connection" and got.token == f"ghp_for_{cid}" and got.verified
-        assert "paramg (access token, Acme Shop)" in got.words
-        no = repo_creation.repo_creation_credential(c, settings, "paramg-kaapppu", project_id=pid)
+        # this project's own token says so (BOSSAPP-1338: which project a credential is from)
+        assert "paramg (access token, this project)" in got.words
+        # ANOTHER PROJECT'S TOKEN IS ITS OWNER'S (#179 review): not considered for anyone else …
+        stranger = repo_creation.repo_creation_credential(c, settings, "paramg-kaapppu", project_id=pid,
+                                                          actor="usr_someone")
+        assert not stranger.ok and not stranger.candidates and "paramg-kaapppu (access" not in stranger.words
+        # … and used for the person who made it.
+        no = repo_creation.repo_creation_credential(c, settings, "paramg-kaapppu", project_id=pid,
+                                                    actor="usr_kaapppu")
         assert not no.ok and "missing: administration" in no.words and no.fixes
         assert "paramg-kaapppu" in no.fixes[0] and "repo scope" in no.fixes[0]
         # Case does not matter for a GitHub login; a stranger gets the no-credential words.
         assert repo_creation.repo_creation_credential(c, settings, "PARAMG", project_id=pid).ok
-        owners = repo_creation.creating_owners(c, settings, pid, ["someone-else"])
+        owners = repo_creation.creating_owners(c, settings, pid, ["someone-else"], actor="usr_kaapppu")
     by = {o["login"]: o for o in owners}
-    assert by["paramg"]["can_create"] and by["paramg"]["via"] == "paramg (access token, Acme Shop)" and by["paramg"]["verified"]
+    assert by["paramg"]["can_create"] and by["paramg"]["via"] == "paramg (access token, this project)" and by["paramg"]["verified"]
     assert not by["paramg-kaapppu"]["can_create"] and by["paramg-kaapppu"]["fixes"]
     assert not by["someone-else"]["can_create"] and "no GitHub credential" in by["someone-else"]["words"]
 
@@ -221,7 +228,7 @@ def test_default_reach_creates_with_the_resolved_credential(monkeypatch):
     world = make_world(engine)
     pid = world["projects"][0]
     monkeypatch.setattr(repo_creation, "repo_creation_credential",
-                        lambda db, settings, owner, project_id=None, mint=True, owner_type="": RepoCreationCredential(
+                        lambda db, settings, owner, project_id=None, mint=True, owner_type="", actor=None: RepoCreationCredential(
                             owner, True, token="ghp_pat", token_kind="user", kind="connection",
                             label="paramg (access token, Acme Shop)", verified=True,
                             words="Will create as paramg (access token, Acme Shop): its token has the repo scope."))
@@ -230,7 +237,7 @@ def test_default_reach_creates_with_the_resolved_credential(monkeypatch):
     assert reach.create_token == "ghp_pat" and reach.create_token_kind == "user"
     assert reach.create_label == "paramg (access token, Acme Shop)" and reach.create_reason == ""
     monkeypatch.setattr(repo_creation, "repo_creation_credential",
-                        lambda db, settings, owner, project_id=None, mint=True, owner_type="": RepoCreationCredential(
+                        lambda db, settings, owner, project_id=None, mint=True, owner_type="", actor=None: RepoCreationCredential(
                             owner, False, reason="no_github_credential",
                             words="BOSS has no GitHub credential that can create repositories in paramg. "
                                   "boss-localhost App: a GitHub App cannot create repositories in a personal account. "

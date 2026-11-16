@@ -124,7 +124,8 @@ def test_test_all_records_whether_the_token_can_create_repos(engine, world, monk
     assert r.status_code == 200, r.text
     owners = {o["login"]: o for o in r.json()["owners"]}
     assert owners["paramg"]["can_create"] and owners["paramg"]["verified"]
-    assert owners["paramg"]["via"] == f"paramg (access token, {world.project_a})"
+    # this project's own token, said as such (BOSSAPP-1338)
+    assert owners["paramg"]["via"] == "paramg (access token, this project)"
     assert not owners["paramg-kaapppu"]["can_create"]
     assert owners["paramg-kaapppu"]["fixes"] == ["Replace the token for paramg-kaapppu with one holding the repo scope (Setup)"]
     assert not owners["someone-else"]["can_create"] and "no GitHub credential" in owners["someone-else"]["words"]
