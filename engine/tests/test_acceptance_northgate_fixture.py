@@ -4,7 +4,7 @@ The Acceptance Agent is proved on the case that made it necessary: Northgate v1 
 Node prototype of a Go gateway that shipped with "Automated checks: passed" while a person's
 acceptance check found twelve things to change. These tests prove the FIXTURE is right — that it
 loads, that its tree is that commit's, that every gap it lists is a real gap on that tree, that
-the contract it implies is today's 23 items, and that the scoring rule the replay will be held to
+the contract it implies is today's 23 items (48 with its ticket, BOSSAPP-1233), and that the scoring rule the replay will be held to
 (>= 11 of 12 caught, the five required catches among them, no false MET) means what it says.
 The replay itself is AA-G's gate. A HelpDesk known-good app is the positive control.
 """
@@ -115,12 +115,43 @@ def test_with_its_ticket_the_contract_leads_with_the_tickets_acceptance_list(ng)
     assert [s["kind"] for s in sources] == ["ticket", "brief", "prd", "criteria"]
     items = ac.build_items(sources)
     ticket = [i for i in items if i["source"] == "ticket"]
-    assert len(ticket) == 5 and ticket[0]["id"] == "AC-1"
+    exp = ng.expected["with_ticket"]
+    # BOSSAPP-1233: every requirement the ticket states, its "Acceptance" list first.
+    assert len(ticket) == exp["ticket_items"] == 26 and ticket[0]["id"] == "AC-1"
     assert ticket[0]["text"].startswith("`make run-staging` starts the gateway")
     # The ticket's "gwlint validate examples/lumen-pay.good.yaml exits 0" is the PRD's word for
     # word: held once, under the ticket (the first source that said it).
-    assert len(items) == 23 + 5 - 1
+    assert len(items) == 23 + 26 - 1 == exp["items"]
     assert sum(1 for i in items if "lumen-pay.good.yaml` exits 0" in i["text"]) == 1
+    # The three things the 2026-11-15 run never checked are items, word for word.
+    for words in exp["word_for_word"]:
+        assert any(words in i["text"] and i["source"] == "ticket" for i in items), words
+    # All judged: the gate's passes of MAX_ITEMS cover every item.
+    assert -(-len(items) // ag.MAX_ITEMS) == 2
+
+
+def test_a_rules_file_nothing_loads_is_not_the_rulebook_delivered(ng, tree, tmp_path):
+    """BOSSAPP-1233: the reviewer's MET on the rulebook item stands only when code in the tree
+    loads the file; a rules YAML beside hard-coded checks reads PARTIAL."""
+    case = ng.expected["unwired_evidence"]
+    item = next(i for i in ac.ticket_items(ng.ticket()) if case["item_contains"] in i)
+    items = [{"n": 1, "text": item, "source": "ticket"}]
+    work = tmp_path / "tree"
+    shutil.copytree(tree, work, ignore=shutil.ignore_patterns(".git"))
+    (work / case["plant"]).parent.mkdir(parents=True, exist_ok=True)
+    (work / case["plant"]).write_text("rules:\n  - id: SEC-001\n", encoding="utf-8")
+    reply = f"ITEM 1: {case['reply']}\nACCEPTANCE: MET\n"
+    got = ag.parse_acceptance(reply, items, root=work)[0]
+    assert got["status"] == case["verdict"] == "partial"
+    assert "gwlint/src/rules.js does not define loadRulebook" in got["evidence"]
+    # Wired: code that loads the file makes the same answer stand.
+    with open(work / case["wired"]["path"], "a", encoding="utf-8") as fh:
+        fh.write(case["wired"]["append"])
+    assert ag.parse_acceptance(reply, items, root=work)[0]["status"] == case["wired_verdict"]
+    # The reviewer is told to show the wiring.
+    prompt = ag.acceptance_prompt(items, title="t", stack={}, tree="")
+    assert "WIRED" in prompt and "rules YAML the linter never reads" in prompt
+    assert "LOADED BY <file>:<function>" in prompt
 
 
 def test_the_scoring_rule_means_what_it_says(ng):

@@ -8867,6 +8867,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _stack: dict = {}
                 _source: dict = {"root": True}
                 try:
+                    # The ticket's prose is read by a model BEFORE the check's transaction
+                    # opens (BOSSAPP-1233): no model call inside an open transaction (1232).
+                    set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
+                                    run_id=run_id, stage=_acceptance_gate.SEAT)
+                    _acceptance_gate.prepare_contract(engine, run_id=run_id, fctx=fctx,
+                                                      own_spec=spec, agent=consistency_agent,
+                                                      model=consistency_model)
                     with _transaction(engine) as c:
                         _acc_spec, _source = _acceptance_gate.items_spec(
                             c, run_id=run_id, fctx=fctx, own_spec=spec)

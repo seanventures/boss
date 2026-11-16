@@ -25,6 +25,32 @@ contract:
   items: 23
   from_brief: 6
   from_prd: 17
+# BOSSAPP-1233: with its ticket, the contract holds EVERY requirement the ticket states (its
+# "Acceptance" list first, then the Stack: line, each "What to build" bullet and sub-bullet, the
+# demo content, the quality bar) — not only the 5 "Acceptance" lines a real run was judged on.
+with_ticket:
+  ticket_items: 26
+  items: 48
+  word_for_word:
+  - '**A rulebook, in YAML, readable by non-engineers:** `rules/api-guidelines.yaml`.'
+  - JWKS URL with caching
+  - JWT `audience` set
+  - 'Stack: Go. (gateway and gwlint: one Go module, static binaries)'
+# BOSSAPP-1233: a file named after a requirement is not its delivery. The reviewer names the
+# loader ("LOADED BY <file>:<function>") and BOSS checks the function is in that file's code: a
+# rules YAML beside gwlint's hard-coded checks, with a loader that is not there, reads PARTIAL;
+# once the named function exists and reads the file, the same answer stands.
+unwired_evidence:
+  item_contains: '`rules/api-guidelines.yaml`'
+  plant: rules/api-guidelines.yaml
+  reply: 'MET — rules/api-guidelines.yaml holds 24 rules (id, severity, title, why, fix); LOADED BY
+    gwlint/src/rules.js:loadRulebook'
+  verdict: partial
+  wired:
+    path: gwlint/src/rules.js
+    append: "function loadRulebook() { return require('fs').readFileSync(require('path').join(__dirname,
+      '../../rules/api-guidelines.yaml'), 'utf8'); }\n"
+  wired_verdict: met
 verdict: not_met
 catch_threshold: 11
 required_catches:
