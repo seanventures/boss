@@ -78,6 +78,10 @@ class CodeTaskFeedbackBody(OpenRequestBody):
     severity: str | None = None
     selected_element: str | None = None
     screenshot_url: str | None = None
+    #: The path the person chose (a workflow version), and the profile the change runs on
+    #: (lean | balanced | strict; empty = the lineage's own, AR-22).
+    workflow_version_id: str | None = None
+    profile: str | None = None
 
 
 class PrdDecomposeBody(ProjectBody):

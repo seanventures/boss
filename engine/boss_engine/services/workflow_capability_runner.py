@@ -3975,6 +3975,10 @@ def _perform_capability(
         if extends:
             inputs = {**inputs, "extends_run_id": extends}
             # The preview the operator was looking at (validated by the start endpoint).
+            # THE APP'S CHANGE WAS MERGED (New work's anchor): a new change from the default
+            # branch, never a push onto the merged branch.
+            if (context.get("input") or {}).get("extends_from_default") is True:
+                inputs = {**inputs, "extends_from_default": True}
             preview = str((context.get("input") or {}).get("preview_id") or "").strip()
             if preview:
                 inputs = {**inputs, "preview_id": preview}

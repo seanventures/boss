@@ -39,6 +39,20 @@ export const CHANGE_CHIPS: { key: string; label: string; tip: string; message: s
 
 type Workflow = { id: string; name: string; active_version_id?: string | null };
 
+/** THE PROFILES A CHANGE CAN RUN ON (AR-22): the sheet's choice, sent with the proposal. */
+export const CHANGE_PROFILES: { key: "lean" | "balanced" | "strict"; label: string; tip: string }[] = [
+  { key: "lean", label: "Lean", tip: "Fastest: one pass, tests first, minimal review" },
+  { key: "balanced", label: "Balanced", tip: "Tests, an independent review and the usual gates" },
+  { key: "strict", label: "Strict", tip: "Every check, the full review chain" },
+];
+
+/** The profile the sheet opens on: the app's own (its lineage's), else balanced. A lean app's
+ *  change was started "balanced" whatever it ran on, with no way to say otherwise. */
+export function defaultChangeProfile(lineage: string | null | undefined): "lean" | "balanced" | "strict" {
+  const v = String(lineage ?? "").trim().toLowerCase();
+  return v === "lean" || v === "strict" || v === "balanced" ? v : "balanced";
+}
+
 /** Two ways through that spec the change first with a panel (the old card's `Add a feature`
  *  and `Rebuild with a fresh spec`): a PRD, then a build. Picked in `Run through`. */
 export const SPEC_FIRST = { feature: "@panel-feature", rebuild: "@panel-rebuild" } as const;
@@ -80,8 +94,10 @@ function useWorkflows(projectId: string): Workflow[] {
   return items;
 }
 
-export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = "", repo = "", previewId = null, initialMessage = "" }: {
+export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = "", repo = "", previewId = null, initialMessage = "", profile = "" }: {
   projectId: string; runId: string; actor: string; onClose: () => void;
+  /** The profile the app's builds run on (its lineage's): the sheet's default (AR-22). */
+  profile?: string | null;
   /** The app and its repo, for a spec-first change (the panel is told which app it is). */
   app?: string; repo?: string;
   /** A live preview: the change is anchored to it, as the old feedback form did. */
@@ -101,6 +117,10 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = ""
   const [message, setMessage] = useState(initialMessage);
   const [expected, setExpected] = useState("");
   const [through, setThrough] = useState("");
+  const [runOn, setRunOn] = useState(() => defaultChangeProfile(profile));
+  // Untouched, the engine decides (the lineage's profile, strict for a full rerun); a person's
+  // pick is sent as theirs.
+  const [profilePicked, setProfilePicked] = useState(false);
   const [busy, setBusy] = useState(false);
   const [proposal, setProposal] = useState<FeedbackActionResult | null>(null);
   const [error, setError] = useState("");
@@ -142,6 +162,7 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = ""
     form.set("message", message);
     form.set("expected", expected);
     form.set("workflow_version_id", through);
+    form.set("profile", profilePicked ? runOn : "");
     form.set("actor", actor);
     if (previewId) form.set("anchor", `/v1/previews/${previewId}/web/`);
     const r = await callAction(submitCodeTaskFeedbackAction, undefined, "code_task:steer")(null, form);
@@ -222,6 +243,17 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = ""
                 {workflows.map((w) => <option key={w.id} value={w.active_version_id as string}>{w.name}</option>)}
                 <option value={SPEC_FIRST.feature} title="A panel specs the feature, then it is built onto this app">Spec it first</option>
                 <option value={SPEC_FIRST.rebuild} title="A panel writes a new PRD, then the app is rebuilt from it">Fresh spec, rebuild</option>
+              </select>
+            </label>
+            <label className="fx-ck-field">
+              <span title="How much checking the change gets. It opens on this app's own profile.">Profile</span>
+              <select className="mr-select" value={runOn} data-testid="fx-change-profile"
+                      onChange={(e) => { setRunOn(defaultChangeProfile(e.target.value)); setProfilePicked(true); }}>
+                {CHANGE_PROFILES.map((x) => (
+                  <option key={x.key} value={x.key} title={x.tip}>
+                    {x.label}{x.key === defaultChangeProfile(profile) && profile ? " (this app's)" : ""}
+                  </option>
+                ))}
               </select>
             </label>
             {proposal?.question ? <span className="fx-ask" data-user-text title="The agent needs this answered">{proposal.question}</span> : null}

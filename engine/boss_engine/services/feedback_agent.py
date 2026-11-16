@@ -89,14 +89,45 @@ def _observed(fix_note: str) -> str:
     return ""
 
 
+#: The profiles a person picks on Change it (AR-22). `vag` is an internal profile and is kept
+#: when a lineage already runs on it, never offered.
+CHOOSABLE_PROFILES = ("lean", "balanced", "strict")
+
+
+def change_profile(spec: Optional[dict], classification: str, chosen: str = "") -> str:
+    """THE PROFILE A CHANGE RUNS ON (AR-22): the person's pick on the sheet; else the lineage's
+    own (a lean app's change stays lean — it was started "balanced" whatever the app ran on);
+    else what the change's size suggests, as before. A pick that is no profile is refused.
+
+    STRICT IS THE FLOOR FOR A FULL RERUN when nobody picked: a redesign, a schema change or a
+    rewrite (classification `full_rerun`) of a lean app still gets every check, as the size rule
+    always gave it. This applies to every caller (Change it, preview feedback, MCP); only a
+    person's explicit pick goes under it."""
+    from .pipeline_profiles import PROFILES
+
+    chosen = (chosen or "").strip().lower()
+    if chosen:
+        if chosen not in CHOOSABLE_PROFILES:
+            raise ValueError(f"profile is one of {', '.join(CHOOSABLE_PROFILES)}")
+        return chosen
+    if classification == "full_rerun":
+        return "strict"
+    lineage = str((spec or {}).get("profile") or "").strip().lower()
+    if lineage in PROFILES:
+        return lineage
+    return "balanced"
+
+
 def submit_feedback(
     engine, run_id: str, *, message: str, expected: str = "", anchor: str = "",
     severity: str = "normal", selected_element: str = "", screenshot_url: str = "",
-    workflow_version_id: str = "",
+    workflow_version_id: str = "", profile: str = "",
 ) -> dict:
     message = message.strip()
     if not message:
         raise ValueError("feedback message is required")
+    if (profile or "").strip() and profile.strip().lower() not in CHOOSABLE_PROFILES:
+        raise ValueError(f"profile is one of {', '.join(CHOOSABLE_PROFILES)}")
     with begin(engine) as connection:
         run = load_code_task_run(connection, run_id)
         if run is None:
@@ -148,7 +179,7 @@ def submit_feedback(
             "fix_note": fix_note,
             # What the operator asked for, in their words: the new attempt is named for it.
             "change": message,
-            "profile": "strict" if classification == "full_rerun" else "balanced",
+            "profile": change_profile(run.get("spec"), classification, profile),
             "repair_retries": 2 if classification == "full_rerun" else 1,
             # THE PATH THE OPERATOR CHOSE FOR THIS CHANGE. Carried on the proposal because the
             # choice is made when the change is described and acted on when it is confirmed —
@@ -282,4 +313,5 @@ def submit_preview_feedback(engine, preview_id: str, payload: dict) -> dict:
         severity=str(payload.get("severity") or "normal"),
         selected_element=str(payload.get("selected_element") or ""),
         screenshot_url=str(payload.get("screenshot_url") or ""),
+        profile=str(payload.get("profile") or ""),
     )

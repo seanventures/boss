@@ -37,7 +37,7 @@ async function mount(builders: string[]): Promise<void> {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
-  await act(async () => { root!.render(<AppsShelf apps={[card(builders)]} orgId="org_1" />); });
+  await act(async () => { root!.render(<AppsShelf apps={[card(builders)]} orgId="org_1" projectId="p1" />); });
 }
 
 afterEach(() => {

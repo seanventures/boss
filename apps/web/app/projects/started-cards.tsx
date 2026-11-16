@@ -27,6 +27,7 @@ import { consoleHref } from "../console-href";
 import { changeWords, projectIsLocal } from "../../lib/repo-links";
 import { Face, Ico, Tag } from "./kit";
 import type { PxCtx } from "./project-page";
+import { addFeaturePatch } from "../../lib/compose-links";
 import "./started.css";
 
 type Node = { key: string; label: string; type: string; state: "done" | "now" | "you" | "todo" | "failed"; agent?: { name: string; role_key?: string } | null };
@@ -134,7 +135,7 @@ export function StartedCards({ ctx }: { ctx: PxCtx }) {
           <div className="px-card-h"><Ico icon={Plus} c="blue" /><h2 id="px-st-add">Add a feature lives here</h2></div>
           <p className="px-row px-wrap" style={{ margin: "0 0 10px" }}>
             <s className="px-faint">Workflows › New build › Add a feature</s> <span aria-hidden>→</span>
-            <button type="button" className="px-btn" data-kind="primary" data-testid="px-started-new-work" onClick={() => ctx.tab("work", { compose: "1" })}><Rocket size={12} aria-hidden /> New work</button>
+            <button type="button" className="px-btn" data-kind="primary" data-testid="px-started-new-work" onClick={() => ctx.tab("work", addFeaturePatch({ projectId: ctx.projectId }))}><Rocket size={12} aria-hidden /> New work</button>
           </p>
           <p className="px-faint" style={{ margin: 0 }}>Builds onto the app’s branch · Feature · Bug · Ticket, with Helm’s plan before Start.</p>
         </section>
@@ -168,7 +169,7 @@ function NotStarted({ ctx, said, onStarted }: { ctx: PxCtx; said: NonNullable<St
         <GatedButton permission="workflow_run:start" projectId={ctx.projectId} className="px-btn" data-kind="primary" disabled={busy}
                      data-testid="px-started-start" onClick={() => void start()}>
           <Rocket size={12} aria-hidden /> {busy ? "Starting…" : "Start"}</GatedButton>
-      ) : <button type="button" className="px-btn" onClick={() => ctx.tab("work", { compose: "1" })}>Start work from Work</button>}
+      ) : <button type="button" className="px-btn" onClick={() => ctx.tab("work", addFeaturePatch({ projectId: ctx.projectId }))}>Start work from Work</button>}
       {error ? <p role="alert" className="px-faint" style={{ margin: "8px 0 0" }} data-testid="px-started-start-error">{error}</p> : null}
     </section>
   );

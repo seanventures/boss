@@ -633,6 +633,114 @@ def plan(connection: Connection, project_id: str, kind: str = "feature",
     return out
 
 
-__all__ = ["KINDS", "WAS_SIZE", "choose", "create_issue", "defaults", "estimate", "issue_of",
-           "options", "plan", "round_minutes", "steps", "strip", "targets", "tell",
+class AnchorClosed(LookupError):
+    """The app's change was closed without merging: New work does not reopen or build on it."""
+
+
+def _lineage_newest_built(connection: Connection, project_id: str, root: str
+                          ) -> Optional[str]:
+    """The newest COMPLETED build of a lineage (the run a change continues: its spec, its title,
+    its parent) — the same build the app-name path picks (templates.apply.resolve_app)."""
+    return connection.execute(text(
+        "SELECT id FROM code_task_runs WHERE project_id = :p "
+        "AND (id = :root OR finalize_ctx->>'root_run_id' = :root) "
+        "AND status IN ('completed', 'succeeded') ORDER BY created_at DESC LIMIT 1"),
+        {"p": project_id, "root": root}).scalar()
+
+
+def _change_state(connection: Connection, run: Mapping[str, Any]) -> Optional[str]:
+    """open | merged | closed for the lineage's change (pr_merge.state: merged only from a merge
+    on record); an approved-but-unmerged change is still open."""
+    from .. import pr_merge
+
+    decision: dict[str, Any] = {}
+    if run.get("decision_id"):
+        row = connection.execute(text("SELECT id, status FROM decisions WHERE id = :d"),
+                                 {"d": run["decision_id"]}).mappings().first()
+        if row:
+            decision = dict(row)
+            sha = pr_merge.merged_shas(connection, str(run["project_id"]), [str(row["id"])])
+            if sha.get(str(row["id"])):
+                decision["merged_sha"] = sha[str(row["id"])]
+    state = pr_merge.state(run, decision)
+    if state is None:
+        return None
+    return state if state in (pr_merge.MERGED, pr_merge.CLOSED) else "open"
+
+
+def app_anchor(connection: Connection, project_id: str, app: Optional[str]
+               ) -> Optional[dict[str, Any]]:
+    """THE APP NEW WORK BUILDS ONTO (AR-20): every "+ Add a feature" door names the app (`app=`,
+    a build's run id or the app's key), and New work then builds onto THAT app's lineage — its
+    branch and its open pull request, as the build page's Change it does — instead of a fresh
+    build on the default branch. None when no app is named; LookupError when the name is no app
+    of this project (never a silent fall-back to main).
+
+    Either handle lands on the lineage's NEWEST COMPLETED build (a run id of an older or failed
+    attempt included), so the change's parent, spec and title are the app's latest.
+
+    WHICH CHANGE (pr_state): `open` (or no change yet) continues the lineage branch and its open
+    change (`mode: continue`); `merged` starts a NEW change for the app from the default branch
+    (`mode: new_change`, `branch` is that base) — the merged branch is history, not a place to
+    push; `closed` without merging is refused (AnchorClosed) rather than built on.
+
+    {run_id, app, branch, pr_number, pr_url, pr_state, mode}."""
+    from ..code_task_service import load_code_task_run, work_branch_for
+    from ..factory_view import app_name
+
+    handle = (app or "").strip()
+    if not handle:
+        return None
+    run: Optional[dict[str, Any]] = None
+    if handle.startswith("crun_"):
+        run = load_code_task_run(connection, handle)
+        if run is None or str(run.get("project_id")) != project_id:
+            raise LookupError("that app is not in this project")
+        root = str((run.get("finalize_ctx") or {}).get("root_run_id") or run["id"])
+        newest = _lineage_newest_built(connection, project_id, root)
+        if newest and newest != run["id"]:
+            run = load_code_task_run(connection, newest) or run
+    else:
+        from ...templates.apply import TemplateError, resolve_app
+
+        try:
+            found = resolve_app(connection, project_id, app_key=handle)
+        except TemplateError:
+            raise LookupError("no app by that name has a finished build in this project") from None
+        run = load_code_task_run(connection, found["run_id"])
+        if run is None:
+            raise LookupError("no app by that name has a finished build in this project")
+    fctx = run.get("finalize_ctx") or {}
+    root = str(fctx.get("root_run_id") or run["id"])
+    pr_id = connection.execute(text(
+        "SELECT id FROM code_task_runs "
+        "WHERE project_id = :p AND (id = :root OR finalize_ctx->>'root_run_id' = :root) "
+        "AND pull_request_url IS NOT NULL ORDER BY created_at DESC LIMIT 1"),
+        {"p": project_id, "root": root}).scalar()
+    pr = load_code_task_run(connection, pr_id) if pr_id else None
+    number = (pr or {}).get("pull_request_number")
+    if number is None and pr and pr.get("pull_request_url"):
+        tail = re.search(r"/(\d+)/?$", str(pr["pull_request_url"]))
+        number = int(tail.group(1)) if tail else None
+    state = _change_state(connection, pr) if pr else None
+    name = app_name(run)
+    if state == "closed":
+        raise AnchorClosed(
+            f"{name}'s change #{number or ''} was closed without merging, so there is no open "
+            "change to build onto. Reopen it, or start the work as a new app.".replace(" # ", " "))
+    if state == "merged":
+        root_run = load_code_task_run(connection, root) or run
+        base = str(((root_run.get("spec") or {}).get("base_branch")) or "").strip()
+        if not base or base.startswith("boss/code/"):
+            base = "main"
+        branch, mode = base, "new_change"
+    else:
+        branch, mode = work_branch_for(run), "continue"
+    return {"run_id": run["id"], "app": name, "branch": branch,
+            "pr_number": number, "pr_url": (pr or {}).get("pull_request_url"),
+            "pr_state": state, "mode": mode}
+
+
+__all__ = ["KINDS", "WAS_SIZE", "AnchorClosed", "app_anchor", "choose", "create_issue", "defaults", "estimate",
+           "issue_of", "options", "plan", "round_minutes", "steps", "strip", "targets", "tell",
            "ticket_link", "ticket_title", "tracker"]

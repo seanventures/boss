@@ -11470,6 +11470,8 @@ def submit_code_task_feedback_endpoint(run_id: str, payload: CodeTaskFeedbackBod
             # added and this endpoint dropped it, so every change ran inline whatever was
             # chosen — the picker had never worked.
             workflow_version_id=str(payload.get("workflow_version_id") or ""),
+            # THE PROFILE PICKED ON THE SHEET (AR-22); empty runs on the lineage's own.
+            profile=str(payload.get("profile") or ""),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -27874,6 +27876,14 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
             raise HTTPException(
                 status_code=422,
                 detail="that build is a simulated fixture — there is no code to build onto")
+        # BUILDING ONTO AN APP CHANGES THAT APP'S BUILD (its branch, its change): every path
+        # that accepts `extends_run_id` asks for what Change it asks for — code_task:steer —
+        # beyond starting a workflow (PR #156 review B2). Here for the start door and every
+        # route that goes through it (New work, Add to an existing app, a template applied to
+        # an app); the MCP create_code_task path asks in the tool (_build_onto_existing_app).
+        from .routers.identity_access import require_permission as _require_permission
+
+        _require_permission(None, P.CODE_TASK_STEER, project_id, label="extends_run_id")
         run_input["extends_run_id"] = extends_run_id
         extends = {"run_id": extends_run_id, "app": app_name(parent),
                    "branch": work_branch_for(parent)}
