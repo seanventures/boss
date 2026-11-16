@@ -139,6 +139,9 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "agent.captain_authority",
     # instance admins (BOSSAPP-872, identity/instance_admin.py): who named or removed one
     "instance_admin.granted", "instance_admin.revoked",
+    # BOSSAPP-1248: one row per builder prompt, and the commit a publish put on the live URL.
+    # A publish with no commit still uses publish.live; the details say so. No new hash step.
+    "builder.prompt", "publish.live",
 })
 
 #: hash of "no previous event" for the first row of an org's chain.
