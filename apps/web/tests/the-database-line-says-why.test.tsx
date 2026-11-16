@@ -54,8 +54,9 @@ async function show(why: readonly string[]): Promise<HTMLElement> {
   document.body.appendChild(host);
   root = createRoot(host);
   const sentence = databaseWhySentence!(why);
+  const Line = DatabaseWhyLine!;
   await act(async () => {
-    root!.render(<DatabaseWhyLine why={why} sentence={sentence} />);
+    root!.render(<Line why={why} sentence={sentence} />);
   });
   return host;
 }
