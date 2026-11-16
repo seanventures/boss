@@ -86,6 +86,82 @@ def _resolve(root: Path, cited: str) -> Optional[str]:
     return str(hits[0].relative_to(root)) if len(hits) == 1 else None
 
 
+_GO_PATTERN = re.compile(r"^\.?/?((?:[\w.\-]+/)*?)\.\.\.$")
+
+
+def _has_source(folder: Path) -> bool:
+    """Whether `folder` (or below it) holds a source file of any language BOSS builds."""
+    if not folder.is_dir():
+        return False
+    return any(_CODE_FILE.search(p.name) for p in _walk(folder, max_depth=4))
+
+
+def _command_target(root: Path, cited: str, before: str) -> Optional[list[str]]:
+    """What a command's package or module argument names, or None when `cited` is a path:
+      Go     `./...`, `./internal/config/...` → the folder (when it holds code);
+      Python `-m pkg.mod` → pkg/mod.py or the package folder;
+      Maven  `-pl module` → the module folder.
+    An empty list: a command argument that names nothing in the tree — not evidence, and not
+    a missing path either."""
+    go = _GO_PATTERN.match(cited)
+    if go is not None:
+        folder = go.group(1).rstrip("/") or "."
+        return [folder] if _has_source(root / folder) else []
+    flag = before.rstrip()
+    if flag.endswith("-m") and re.fullmatch(r"[A-Za-z_][\w.]*", cited):
+        mod = cited.replace(".", "/")
+        for cand in (f"{mod}.py", f"{mod}/__init__.py", f"{mod}/__main__.py"):
+            hit = _resolve(root, cand)
+            if hit:
+                return [hit]
+        return [mod] if _has_source(root / mod) else []
+    if flag.endswith(("-pl", "--projects")):
+        return [cited.strip("/")] if _has_source(root / cited.strip("/")) else []
+    return None
+
+
+def _listed_parts(root: Path, cited: str) -> list[str]:
+    """`Makefile/docker-compose/mocks` written as one token: each part that is a file (by name
+    or by stem, uniquely), or a folder holding code. Empty unless EVERY part is one."""
+    if "/" not in cited or "." in cited.rsplit("/", 1)[-1]:
+        return []
+    out = []
+    files = {p.name: p for p in _walk(root, max_depth=2)}
+    for part in cited.split("/"):
+        hit = _resolve(root, part)
+        if not hit:
+            stems = [n for n in files if n.split(".", 1)[0] == part]
+            hit = (str(files[stems[0]].relative_to(root)) if len(stems) == 1
+                   else part if _has_source(root / part) or (root / part).is_dir() else None)
+        if not hit:
+            return []
+        out.append(hit)
+    return out
+
+
+def clip(text: Any, limit: int) -> str:
+    """`text` within `limit` characters, never cut mid-sentence (BOSSAPP-1329): at the last
+    sentence end (or `;`) inside the limit, else the last word, marked with "…". A trailing
+    parenthesised reason BOSS appended — "(loader not named: …)" — is always kept whole."""
+    text = str(text or "")
+    if len(text) <= limit:
+        return text
+    reason = ""
+    m = re.search(r"\s(\([^()]*(?:\([^()]*\)[^()]*)*\))\s*$", text)
+    if m and len(m.group(1)) < limit // 2:
+        reason, text = m.group(1), text[:m.start()]
+    room = max(40, limit - len(reason) - 3)
+    if len(text) > room:
+        head = text[:room]
+        cut = max(head.rfind(". "), head.rfind("; "), head.rfind(".\n"))
+        if cut >= room // 2:
+            head = head[:cut + 1]
+        else:
+            head = head.rsplit(" ", 1)[0]
+        text = head.rstrip() + " …"
+    return f"{text} {reason}".strip() if reason else text
+
+
 def _extensionless(root: Path) -> dict[str, list[str]]:
     """The tree's files with no extension (Makefile, Dockerfile, LICENSE), by name."""
     out: dict[str, list[str]] = {}
@@ -104,14 +180,28 @@ def evidence_paths(root: Any, why: str, *,
         return [], []
     found, absent = [], []
     defs = defs if defs is not None else _Definitions(Path(root))
-    for m in _PATHISH.finditer(str(why or "")):
+    text_ = str(why or "")
+    for m in _PATHISH.finditer(text_):
         cited = m.group(1)
         if re.fullmatch(r"\d+(\.\d+)*", cited):
+            continue
+        # NOT A FILE (BOSSAPP-1329): a package pattern or a module a command names — Go's
+        # `./...` and `./internal/config/...`, Python's `-m pkg.mod`, Maven's `-pl module` —
+        # is the code it names, never a missing path; a slash-joined list of names
+        # ("Makefile/docker-compose/mocks") is its parts.
+        named = _command_target(Path(root), cited, text_[max(0, m.start() - 8):m.start()])
+        if named is not None:
+            found.extend(named)
             continue
         # A path, else a symbol the way its language writes it (`auth.VerifyJWT`,
         # `Store.Swap`, `module.func`): the file that DEFINES it is the evidence (AR-23 —
         # "cited paths not in the tree: auth.VerifyJWT" marked real Go evidence partial).
         hit = _resolve(Path(root), cited) or defs.symbol_file(cited)
+        if not hit:
+            parts = _listed_parts(Path(root), cited)
+            if parts:
+                found.extend(parts)
+                continue
         (found if hit else absent).append(hit or cited)
     for m in _QUALIFIED.finditer(str(why or "")):
         # A qualified name too long to look like a path (`proxy.pathMatches`,
@@ -349,9 +439,23 @@ def _reads(code: str, data_file: str, code_path: str = "") -> bool:
             return True
         if folder != "." and _suffix_of(folder, lit):
             folder_named = True
-            if _folder_read(code, m_lits.get(lit, [])):
+            if _folder_read(code, m_lits.get(lit, [])) and _pattern_admits(lits, name):
                 return True
     return folder_named and name_glob
+
+
+def _pattern_admits(lits: list[str], name: str) -> bool:
+    """Whether a folder read takes the item's file: the code's extension filter (a `".yaml"`
+    suffix, a `"*.yaml"` glob) admits the file's name, or the code filters by no extension at
+    all (every file of the folder is read)."""
+    import fnmatch
+
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    family = {"yaml": {"yaml", "yml"}, "yml": {"yaml", "yml"}}.get(ext, {ext})
+    filters = [lit for lit in lits if re.fullmatch(r"\*?\.[A-Za-z0-9]{1,8}", lit)]
+    if not filters:
+        return True
+    return any(lit.lstrip("*.").lower() in family or fnmatch.fnmatch(name, lit) for lit in filters)
 
 
 def _folder_read(code: str, matches: list[Any]) -> bool:
@@ -366,8 +470,13 @@ def _folder_read(code: str, matches: list[Any]) -> bool:
         before = code[line_start:m.start()]
         if re.search(r"\b" + _READ_FN + r"\s*\([^)\n]*$", before):
             return True
-        bound = re.search(r"(?:\b(?:const|var|let|val)\s+)?([A-Za-z_]\w*)\s*(?::=|=)\s*$",
-                          before) or re.search(r"\b([A-Za-z_]\w*)\s*=\s*$", before)
+        # Bound to a name directly (`rulesDir = "rules"`) or through a path join on the same
+        # line (`tenantsDir := filepath.Join(dir, "tenants")`, BOSSAPP-1329).
+        bound = (re.search(r"(?:\b(?:const|var|let|val)\s+)?([A-Za-z_]\w*)\s*(?::=|=)\s*$",
+                           before)
+                 or re.search(r"\b([A-Za-z_]\w*)\s*=\s*$", before)
+                 or re.search(r"^\s*(?:(?:const|var|let|val)\s+)?([A-Za-z_]\w*)\s*(?::=|=)"
+                              r"\s*[\w.]*(?:[Jj]oin|resolve|Path|path)\w*\s*\(", before))
         if bound and line:
             name = re.escape(bound.group(1))
             if re.search(r"\b" + _READ_FN + r"\s*\([^)\n]*\b" + name + r"\b", code):
@@ -495,6 +604,92 @@ class _Definitions:
                 return rel
         return None
 
+    def file_reads(self, rel: str, data: list[str]) -> bool:
+        """Whether the non-test file `rel` reads one of `data` (`_reads`), or with no data file
+        named, some data or config file (`_reads_data`)."""
+        if _TEST_PATH.search(rel) or not _CODE_FILE.search(rel):
+            return False
+        code, _ = self.of(rel)
+        if code is None:
+            return False
+        return (any(d != rel and _reads(code, d, rel) for d in data) if data
+                else _reads_data(code))
+
+    def package_files(self, rel: str) -> list[str]:
+        """The non-test code files of `rel`'s package: its directory for Go, itself otherwise."""
+        if _ext(rel) != "go":
+            return [rel]
+        here = Path(rel).parent
+        self.code()
+        return [r for r in self._bare if Path(r).parent == here and r.endswith(".go")
+                and not _TEST_PATH.search(r)]
+
+    def local_def(self, rel: str, name: str) -> Optional[str]:
+        """The file of `rel`'s package that defines `name` (an unqualified call's target)."""
+        if len(name) < 2 or name in _KEYWORDS:
+            return None
+        for r in self.package_files(rel):
+            _, bare = self.of(r)
+            if bare is not None and _defines(bare, name):
+                return r
+        return None
+
+    def reaches(self, data: list[str], starts: Iterable[tuple[str, Optional[str]]],
+                *, depth: int = 4, cap: int = 60) -> Optional[str]:
+        """The file that reads the item's data (`file_reads`), reached from where the evidence
+        points (BOSSAPP-1329): each start is a cited file (read whole) and, with a symbol, that
+        symbol's BODY, from which BOSS follows — at most `depth` calls deep —
+          * a qualified call whose qualifier is an import (its alias resolved to the package)
+            or a type (`rulesyaml.Load()`, `config.ReloadOnce(…)`);
+          * an unqualified call to a function of the same package (`ReloadOnce(…)` → `Load`);
+          * a config type the body takes (`c config.CORS`): a type with yaml/json-tagged fields
+            in a package whose files read the data — the code consumes the loaded config.
+        A cited `package main` file with no symbol starts from its `main`. Never a call outside
+        a cited body (dead code), a local variable's method, or a file the evidence does not
+        lead to. None when nothing reached reads it."""
+        queue: list[tuple[str, Optional[str], int]] = [(r, s, 0) for r, s in starts]
+        seen: set[tuple[str, Optional[str]]] = set()
+        while queue:
+            rel, sym, level = queue.pop(0)
+            if (rel, sym) in seen or len(seen) >= cap or _TEST_PATH.search(rel):
+                continue
+            seen.add((rel, sym))
+            if self.file_reads(rel, data):
+                return rel
+            if level >= depth:
+                continue
+            code, bare = self.of(rel)
+            if code is None:
+                continue
+            symbols = [sym] if sym else (
+                ["main"] if _ext(rel) == "go" and re.search(r"(?m)^package\s+main\b", bare)
+                else [])
+            imports = _import_map(code, rel)
+            for s in symbols:
+                body = _body_of(bare, bare, s, rel)
+                for m in list(_CALL.finditer(body))[:60]:
+                    qual, name = m.group(1), m.group(2)
+                    pkg = imports.get(qual) or (qual if self.is_type(qual) else None)
+                    if not pkg:
+                        continue
+                    hit = self.symbol_file(f"{pkg}.{name}")
+                    if hit:
+                        queue.append((hit, name, level + 1))
+                for m in list(_LOCAL_CALL.finditer(body))[:60]:
+                    hit = self.local_def(rel, m.group(1))
+                    if hit and m.group(1) != s:
+                        queue.append((hit, m.group(1), level + 1))
+                for m in list(_TYPE_REF.finditer(body))[:30]:
+                    pkg = imports.get(m.group(1))
+                    if not pkg:
+                        continue
+                    hit = self.symbol_file(f"{pkg}.{m.group(2)}")
+                    if hit and _defines_type(self.of(hit)[1] or "", m.group(2)) \
+                            and _TAGGED_FIELD.search(self.of(hit)[0] or ""):
+                        for r in self.package_files(hit):
+                            queue.append((r, None, level + 1))
+        return None
+
     def is_type(self, name: str) -> bool:
         """Whether a non-test file of the tree defines `name` as a type (class, struct, …)."""
         self.code()
@@ -508,6 +703,27 @@ def _defines_type(code: str, name: str) -> bool:
     e = re.escape(name)
     return re.search(r"\b(?:class|struct|interface|enum|trait|object|record|type)\s+" + e
                      + r"\b", code) is not None
+
+
+def _import_map(code: str, path: str = "") -> dict[str, str]:
+    """{qualifier: the package it names}: a Go import alias resolves to the imported package's
+    own name (`rulesyaml "northgate/rules"` → rules), every other import to itself."""
+    out: dict[str, str] = {}
+    if _ext(path) == "go":
+        blocks = re.findall(r"(?ms)^\s*import\s*\((.*?)\)", code)
+        singles = re.findall(r"(?m)^\s*import\s+((?:[A-Za-z_]\w*\s+)?\"[^\"]+\")", code)
+        for spec in [ln for blk in blocks for ln in blk.splitlines()] + singles:
+            m = re.match(r"\s*(?:([A-Za-z_]\w*)\s+)?\"([^\"]+)\"", spec)
+            if not m:
+                continue
+            parts = m.group(2).rstrip("/").split("/")
+            last = re.sub(r"\.v\d+$", "", parts[-1])
+            if re.fullmatch(r"v\d+", last) and len(parts) > 1:
+                last = parts[-2]
+            pkg = re.sub(r"[^\w]", "_", last)
+            out[m.group(1) or pkg] = pkg
+        return out
+    return {n: n for n in _import_names(code, path)}
 
 
 def _import_names(code: str, path: str = "") -> set[str]:
@@ -576,6 +792,14 @@ def _body_of(code: str, bare: str, symbol: str, path: str = "") -> str:
     return "\n".join(lines[start:])
 
 
+#: An unqualified call (`ReloadOnce(dir, …)`), not a method (`x.F(`) nor a definition.
+_LOCAL_CALL = re.compile(r"(?<![\w.])(?<!func )(?<!def )([A-Za-z_]\w*)\s*\(")
+#: A qualified type reference that is not a call (`c config.CORS`, `*config.Snapshot`).
+_TYPE_REF = re.compile(r"\b([A-Za-z_]\w*)\.([A-Z]\w*)\b(?!\s*\()")
+#: A struct field bound to a config key (Go struct tags).
+_TAGGED_FIELD = re.compile(r"`[^`\n]*\b(?:yaml|json|toml|mapstructure):\"")
+
+
 #: A qualified call in code (`rules.Load(`, `loader.read_rules(`).
 _CALL = re.compile(r"\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\(")
 
@@ -592,7 +816,29 @@ def _cited_symbols(root: Path, why: str, defs: _Definitions) -> dict[str, list[s
         hit = defs.symbol_file(m.group(1))
         if hit:
             out.setdefault(hit, []).append(m.group(1).split(".")[-1])
+    for m in _DIR_SYMBOL.finditer(str(why or "")):
+        # A package and a symbol (`internal/lint:RenderReadme`): the package file defining it.
+        folder = m.group(1).strip("./")
+        if folder and (root / folder).is_dir():
+            for rel, bare in list(defs._bare.items()) if defs.code() is not None else []:
+                if Path(rel).parent.as_posix() == folder and not _TEST_PATH.search(rel) \
+                        and _defines(bare, m.group(2)):
+                    out.setdefault(rel, []).append(m.group(2))
+                    break
     return {k: list(dict.fromkeys(v)) for k, v in out.items()}
+
+
+#: `package/dir:Symbol` (a Go package, a Python package folder) — no file extension.
+_DIR_SYMBOL = re.compile(r"`?((?:[\w.\-]+/)*[\w.\-]+):`?([A-Za-z_]\w*)")
+
+
+def _starts(found: Iterable[str], cited: Mapping[str, Iterable[str]]
+            ) -> list[tuple[str, Optional[str]]]:
+    """Where a loader search starts: each cited symbol's body, and each cited code file."""
+    out: list[tuple[str, Optional[str]]] = [(rel, s) for rel, syms in cited.items()
+                                            for s in syms]
+    out += [(rel, None) for rel in found if _CODE_FILE.search(rel)]
+    return list(dict.fromkeys(out))
 
 
 def _named_loader(root: Path, why: str, data: list[str],
@@ -663,6 +909,10 @@ def wiring_problem(root: Any, why: str, *, item_text: str = "",
         if _named_loader(root, why, data, defs) or (
                 data and defs.loader_of(data, found, _cited_symbols(root, why, defs))):
             return None
+        # FOLLOWED FROM THE CITED CODE (BOSSAPP-1329): the watcher that calls the loader, the
+        # generator whose package reads the rulebook, the handler that takes the loaded config.
+        if defs.reaches(data, _starts(found, _cited_symbols(root, why, defs))):
+            return None
         return "loader not named: this item's file must be read by the code (LOADED BY)"
     found, _absent = evidence_paths(root, why, defs=defs) if claims else ([], [])
     data = _item_data_files(root, item_text, found) if claims else []
@@ -680,12 +930,14 @@ def wiring_problem(root: Any, why: str, *, item_text: str = "",
             return f"the loader it names, {hit}, could not be read"
         if not _defines(bare, symbol):
             return f"{hit} does not define {symbol} (only in a comment, only called, or absent)"
+        # The claim holds when the named code reads the file, or the code it calls does
+        # (`Watch` → `ReloadOnce` → `Load`, BOSSAPP-1329) — followed from its body only.
+        if defs.reaches(data, [(hit, symbol)]):
+            continue
         if data:
             missing = [d for d in data if d != hit and not _reads(code, d, hit)]
-            if len(missing) == len(data):
-                return f"{hit} does not name {', '.join(missing[:3])} in code that reads it"
-        elif not _reads_data(code):
-            return f"{hit} reads no data or config file"
+            return f"{hit} does not name {', '.join(missing[:3])} in code that reads it"
+        return f"{hit} reads no data or config file"
     return None
 
 
@@ -706,7 +958,7 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any, exec_log: Any 
         return parse_exercised(reply, items, root=root, exec_log=exec_log, replay=replay)
     answers: dict[int, tuple[str, str]] = {}
     for m in _ANSWER.finditer(str(reply or "")):
-        answers[int(m.group(1))] = (m.group(2).lower(), _norm(m.group(4))[:600])
+        answers[int(m.group(1))] = (m.group(2).lower(), clip(_norm(m.group(4)), 600))
     out = []
     defs = _Definitions(Path(root)) if root is not None else None  # the tree, read once
     for it in items:
@@ -718,7 +970,11 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any, exec_log: Any 
             found, absent = evidence_paths(root, why, defs=defs)
             code = [f for f in found if not _DOC_PATH.search(f) and not _DECL_PATH.search(f)]
             reason = ""
-            if not code:
+            if not code and it.get("judgement"):
+                # A JUDGEMENT ABOUT THE WHOLE CODEBASE (naming, readability — the contract's
+                # `judgement` tag, never a keyword) needs no file citation (BOSSAPP-1329).
+                reason = ""
+            elif not code:
                 reason = ("only manifests/lockfiles cited" if found and all(
                               _DECL_PATH.search(f) for f in found)
                           else "only documents cited" if found
@@ -1139,7 +1395,7 @@ def parse_exercised(reply: str, items: list[dict], *, root: Any, exec_log: Any =
         n = by_id.get(f"AC-{m.group(1)}") if m.group(1) else int(m.group(2))
         if n is None and m.group(1):
             n = int(m.group(1))
-        answers[int(n)] = (m.group(3).lower(), _norm(m.group(4))[:600])
+        answers[int(n)] = (m.group(3).lower(), clip(_norm(m.group(4)), 600))
     replay = dict(replay or {})
     out = []
     defs = _Definitions(Path(root)) if root is not None else None  # the tree, read once

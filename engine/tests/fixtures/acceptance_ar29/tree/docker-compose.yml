@@ -1,0 +1,17 @@
+services:
+  mock-upstream-staging:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["echo-upstream"]
+    environment:
+      - PORT=9001
+      - UPSTREAM_NAME=lumen-pay-core-staging
+      - TLS_HOSTNAME=mock-upstream-staging
+      - CERT_OUT_FILE=/certs/mock-upstream-staging.pem
+    ports:
+      - "9001:9001"
+    volumes:
+      - certs-staging:/certs
+    healthcheck:
+      

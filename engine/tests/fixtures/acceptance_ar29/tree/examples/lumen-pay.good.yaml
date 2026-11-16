@@ -1,0 +1,15 @@
+tenant: lumen-pay
+owner: "Lumen Pay Platform Team"
+contact: "platform@lumenpay.example"
+tier: standard
+data_classification: pii
+pii_fields: ["merchant_id", "customer_email"]
+routes:
+  - path: /v1/payments
+    description: "List recent payments for the authenticated merchant."
+    methods: ["GET"]
+    upstream: lumen-pay-core
+    max_body_bytes: 65536
+    auth:
+      type: jwt
+      issuer: "https:

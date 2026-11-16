@@ -1,0 +1,122 @@
+# Northgate API guidelines, enforced by gwlint.
+#
+# Each rule here mirrors an executable check in internal/lint/rules.go,
+# matched by id. This file is the human-readable source of truth: anyone
+# (including a non-engineer reviewing a tenant onboarding PR) should be able
+# to read "why" and "fix" and understand the requirement without reading Go.
+rules:
+  - id: auth-required
+    severity: error
+    title: Every route must require auth, or be explicitly public
+    why: An unauthenticated route is the default way tenant data leaks; a reviewer must see the decision, not infer it.
+    fix: "Add an auth block (type: jwt|api_key|mtls) to the route, or set public: true with a public_reason explaining why."
+  - id: cors-no-wildcard-with-credentials
+    severity: error
+    title: CORS must not combine a wildcard origin with credentials
+    why: A wildcard origin plus allow_credentials:true lets any website replay a user's cookies/tokens against this tenant's API.
+    fix: "List explicit allowed origins, or set allow_credentials: false."
+  - id: upstream-https-required
+    severity: error
+    title: Upstream URLs must use https://
+    why: A plaintext http upstream exposes every request (including auth tokens) to anyone on the network path.
+    fix: "Change the upstream url to https://."
+  - id: no-inlined-secrets
+    severity: error
+    title: No API keys, tokens or passwords inlined in plaintext
+    why: A secret committed to a config repo is permanently compromised, it lives in git history even after deletion.
+    fix: "Remove the plaintext value; store a hash (api_key_hashed) or reference a secret manager entry instead."
+  - id: rate-limit-required
+    severity: error
+    title: Every route must declare a rate limit within bounds
+    why: Without a rate limit a single tenant (or a bug) can exhaust shared gateway capacity for everyone.
+    fix: "Add rate_limit.rps and rate_limit.burst (e.g. rps: 10, burst: 10)."
+  - id: no-sensitive-paths-exposed
+    severity: error
+    title: Routes must not expose /admin, /internal or /debug paths
+    why: These path segments are a strong signal of an operational surface that should never be reachable from the public gateway.
+    fix: "Remove the route, or move the admin/internal surface behind a separate, non-tenant-facing deployment."
+  - id: jwt-audience-required
+    severity: error
+    title: JWT auth must declare an audience
+    why: Without a checked audience, a token minted for a different API can be replayed against this tenant's routes.
+    fix: "Add auth.audience to the route."
+  - id: mtls-required-partner-sensitive
+    severity: error
+    title: partner-sensitive tenants must require mTLS
+    why: partner-sensitive tier implies data whose exposure affects a business partner, not just the tenant; bearer auth alone is not enough.
+    fix: "Add a route (or tenant-wide policy) requiring auth.type: mtls for this tenant."
+  - id: jwt-scopes-required
+    severity: warn
+    title: JWT routes should declare required scopes
+    why: An empty scope list means any valid token for the issuer can call the route, regardless of what it was actually granted for.
+    fix: "Add auth.scopes listing the scopes this route requires."
+  - id: no-wildcard-methods
+    severity: error
+    title: Routes must not allow all methods with a wildcard
+    why: A wildcard method list usually means someone will get write access to a route meant to be read-only.
+    fix: 'List the exact methods needed, e.g. methods: ["GET"].'
+  - id: versioned-base-path
+    severity: error
+    title: Route paths must start with a version prefix (/v1/...)
+    why: An unversioned path can never change shape without silently breaking every existing tenant integration.
+    fix: "Prefix the path with /v1/ (or the current API version)."
+  - id: kebab-case-path
+    severity: warn
+    title: Path segments must be kebab-case
+    why: Mixed naming conventions across tenants make generated SDKs and docs inconsistent.
+    fix: "Rewrite path segments in lowercase-with-hyphens (e.g. /v1/payment_methods -> /v1/payment-methods)."
+  - id: allowed-methods-only
+    severity: error
+    title: Routes may only use standard HTTP methods
+    why: A typo'd or non-standard method silently makes a route unreachable, or reachable in a way no client expects.
+    fix: "Use one of GET, POST, PUT, PATCH, DELETE."
+  - id: timeout-within-bounds
+    severity: warn
+    title: Upstream timeouts must be between 100ms and 30000ms
+    why: A missing or huge timeout lets one slow upstream hold a connection (and a tenant's request budget) indefinitely.
+    fix: "Set upstreams.<name>.timeout_ms to a value between 100 and 30000."
+  - id: owner-present
+    severity: error
+    title: Tenant must declare an owner
+    why: When a route misbehaves at 3am, on-call needs to know who to page; an empty owner field means no one does.
+    fix: "Set owner to the name of the team or person accountable for this tenant integration."
+  - id: contact-well-formed
+    severity: error
+    title: Tenant contact must be a well-formed email address
+    why: A broken contact address means onboarding notifications and security advisories go nowhere.
+    fix: "Set contact to a valid email address, e.g. platform@example.com."
+  - id: description-present
+    severity: warn
+    title: Routes should carry a human-readable description
+    why: Generated API docs are unreadable without a description; it also tells a reviewer what the route is for.
+    fix: "Add a description field to the route."
+  - id: deprecation-sunset-date
+    severity: error
+    title: A deprecated route must carry a sunset date
+    why: A deprecation with no sunset date never actually gets removed, and clients have no deadline to migrate by.
+    fix: "Add a sunset: YYYY-MM-DD date to the deprecated route."
+  - id: tenant-id-matches-filename
+    severity: error
+    title: The tenant id must match its file name
+    why: A mismatched id/filename is how one tenant's edits silently get applied to a different tenant's routes.
+    fix: "Rename the file to <tenant-id>.yaml, or fix the tenant: field to match the file name."
+  - id: cors-origins-not-empty
+    severity: error
+    title: A CORS block must list at least one explicit origin
+    why: An empty allow_origins list with a CORS block present usually means the intended origin was never filled in.
+    fix: "List the tenant's actual frontend origin(s) in cors.allow_origins."
+  - id: data-classification-tier-match
+    severity: error
+    title: Sensitive data classifications require partner-sensitive tier
+    why: A tenant handling phi/pci/pii-minors data must not be able to understate its tier and skip the stronger controls that tier requires.
+    fix: "Set tier: partner-sensitive for this tenant."
+  - id: request-size-capped
+    severity: error
+    title: Every route must declare a request body size cap
+    why: Without a per-route max_body_bytes, a single request can consume unbounded memory on the gateway before any other control sees it.
+    fix: "Add max_body_bytes to the route, e.g. max_body_bytes: 1048576."
+  - id: pii-fields-declared
+    severity: warn
+    title: Tenants handling PII should declare which fields to redact
+    why: A tenant whose data_classification names personal data but leaves pii_fields empty gets no redaction in access logs by name, only the gateway's fixed baseline.
+    fix: "Add pii_fields listing the request fields (e.g. query parameters) that carry personal data for this tenant."

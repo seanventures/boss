@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Northgate tenant onboarding config",
+  "type": "object",
+  "required": ["tenant", "owner", "contact", "tier", "routes", "upstreams"],
+  "properties": {
+    "tenant": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+    "owner": { "type": "string", "minLength": 1 },
+    "contact": { "type": "string", "format": "email" },
+    "tier": { "type": "string", "enum": ["standard", "partner-sensitive"] },
+    "data_classification": {
+      "type": "string",
+      "enum": ["none", "pii", "pci", "phi", "pii-minors"]
+    },
+    "pii_fields": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "routes": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/route" }
+    },
+    "upstreams": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/definitions/upstream" }
+    }
+  },
+  "definitions": {
+    "route": {
+      "type": "object",
+      "required": ["path", "methods", "upstream"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^/v[0-9]+/" },
+        "description": { "type": "string" },
+        "methods": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] }
+        },
+        "upstream": { "type": "string" },
+        "public": { "type": "boolean" },
+        "public_reason": { "type": "string" },
+        "deprecated": { "type": "boolean" },
+        "sunset": { "type": "string", "format": "date" },
+        "auth": { "$ref": "#/definitions/auth" },
+        "rate_limit": { "$ref": "#/definitions/rate_limit" },
+        "cors": { "$ref": "#/definitions/cors" },
+        "max_body_bytes": { "type": "integer", "minimum": 1 },
+        "request_schema": { "type": "object" }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["jwt", "api_key", "mtls"] },
+        "issuer": { "type": "string" },
+        "audience": { "type": "string" },
+        "scopes": { "type": "array", "items": { "type": "string" } },
+        "jwks_url": { "type": "string", "format": "uri" },
+        "api_key_hashed": { "type": "string" }
+      }
+    },
+    "rate_limit": {
+      "type": "object",
+      "properties": {
+        "rps": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "burst": { "type": "integer", "minimum": 1, "maximum": 10000 }
+      }
+    },
+    "cors": {
+      "type": "object",
+      "properties": {
+        "allow_origins": { "type": "array", "items": { "type": "string" } },
+        "allow_credentials": { "type": "boolean" }
+      }
+    },
+    "upstream": {
+      "type": "object",
+      "required": ["url", "timeout_ms"],
+      "properties": {
+        "url": { "type": "string", "format": "uri" },
+        "timeout_ms": { "type": "integer", "minimum": 100, "maximum": 30000 }
+      }
+    }
+  }
+}

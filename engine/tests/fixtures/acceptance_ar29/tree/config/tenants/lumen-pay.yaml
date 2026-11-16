@@ -1,0 +1,50 @@
+tenant: lumen-pay
+owner: "Lumen Pay Platform Team"
+contact: "platform@lumenpay.example"
+tier: standard
+data_classification: pii
+pii_fields: ["merchant_id", "customer_email"]
+routes:
+  - path: /v1/payments
+    description: "List recent payments for the authenticated merchant."
+    methods: ["GET"]
+    upstream: lumen-pay-core
+    max_body_bytes: 65536
+    auth:
+      type: jwt
+      issuer: "https://issuer.lumenpay.example"
+      audience: "northgate"
+      scopes: ["payments.read"]
+      jwks_url: "https://mock-upstream-staging:9001/.well-known/jwks.json"
+    rate_limit:
+      rps: 10
+      burst: 10
+    cors:
+      allow_origins: ["https://app.lumenpay.example"]
+      allow_credentials: false
+  - path: /v1/payments/refunds
+    description: "Issue a refund for a prior payment; body is validated against request_schema before it reaches the upstream."
+    methods: ["POST"]
+    upstream: lumen-pay-core
+    max_body_bytes: 65536
+    auth:
+      type: jwt
+      issuer: "https://issuer.lumenpay.example"
+      audience: "northgate"
+      scopes: ["payments.write"]
+      jwks_url: "https://mock-upstream-staging:9001/.well-known/jwks.json"
+    rate_limit:
+      rps: 5
+      burst: 5
+    request_schema:
+      type: object
+      required: ["payment_id", "amount"]
+      properties:
+        payment_id:
+          type: string
+        amount:
+          type: number
+upstreams:
+  lumen-pay-core:
+    url: "https://mock-upstream-staging:9001"
+    timeout_ms: 2000
