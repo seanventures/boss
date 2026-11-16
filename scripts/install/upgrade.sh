@@ -435,7 +435,40 @@ else
   echo 'Disk check skipped (--skip-disk-check / BOSS_DISK_CHECK=off).'
 fi
 
+# THE TEST POSTGRES STAYS UP (BOSSAPP-1335). db-test (profile `dev`) holds only test databases;
+# an upgrade that stopped it killed every agent's bench-DB test run mid-suite. The installer
+# never names the `dev` profile and the backup leaves kind=test services running, so db-test is
+# untouched — unless its own definition or image changed, which `test_db_after` then applies.
+test_db_compose() {
+  local d=(docker)
+  docker info >/dev/null 2>&1 || d=(sudo -n docker)
+  "${d[@]}" compose -f "$INSTALL_DIR/scripts/install/community-compose.yml" \
+    --env-file "$INSTALL_DIR/.env" --profile dev "$@"
+}
+test_db_running() {
+  test_db_compose ps -q --status running db-test 2>/dev/null </dev/null || true
+}
+test_db_after() {
+  local before="$1" after
+  [[ -n "$before" ]] || return 0
+  # Recreated by Compose ONLY when db-test's definition or image changed; otherwise a no-op.
+  if ! test_db_compose up -d --no-build --no-deps db-test </dev/null >/dev/null 2>&1; then
+    echo 'The test Postgres (db-test) could not be brought up to date; start it with: boss dev up' >&2
+    return 0
+  fi
+  after="$(test_db_running)"
+  if [[ "$after" == "$before" ]]; then
+    echo 'Left the test Postgres (db-test) running: its definition and image did not change.'
+  else
+    echo 'Recreated the test Postgres (db-test): its definition or image changed.'
+  fi
+  return 0
+}
+TEST_DB_BEFORE=""
 if [[ "$DRY_RUN" -eq 1 ]]; then
+  if [[ -n "$(test_db_running)" ]]; then
+    echo 'Would leave the test Postgres (db-test) running (recreated only if its definition or image changes).'
+  fi
   printf 'Would keep the running images as prev-%s (for boss rollback).\n' "$(image_tag)"
   printf 'Would back up %s, then rerun the installer from %s (%s → %s).\n' "$INSTALL_DIR" "$REF" "$OLD_COMMIT" "$NEW_COMMIT"
   exit 0
@@ -518,4 +551,8 @@ if [[ -f "$INSTALL_DIR/scripts/install/steward.py" ]] && command -v python3 >/de
   python3 "$INSTALL_DIR/scripts/install/steward.py" --install-dir "$INSTALL_DIR" --relabel-volumes </dev/null ||
     echo 'BOSS volume labels were not checked; the Infra Agent lists any it cannot judge.' >&2
 fi
+# Read only now: the installer and its backup never touch db-test, so this is the container
+# that ran through the upgrade (and a failed upgrade makes no Docker call for it at all).
+TEST_DB_BEFORE="$(test_db_running)"
+test_db_after "$TEST_DB_BEFORE"
 printf 'Upgrade complete: %s → %s (%s)\n' "$OLD_COMMIT" "$NEW_COMMIT" "$REF"

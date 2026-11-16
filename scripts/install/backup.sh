@@ -109,6 +109,24 @@ fi
 export BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-${COMPOSE_PROJECT_NAME:-boss-community}}"
 COMPOSE=("${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" --profile web --profile secrets)
 RUNNING="$("${COMPOSE[@]}" ps --status running --services)"
+# The services that hold only test data (label kind=test, e.g. db-test): never paused or
+# restarted for a backup or a rollback. db-test is named too, in case the config cannot be read.
+test_services() {
+  printf 'db-test\n'
+  "${COMPOSE[@]}" --profile dev config --format json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    services = json.load(sys.stdin).get("services") or {}
+except ValueError:
+    services = {}
+for name, svc in services.items():
+    labels = svc.get("labels") or {}
+    if isinstance(labels, list):
+        labels = dict(item.split("=", 1) for item in labels if "=" in item)
+    if labels.get("kind") == "test":
+        print(name)
+' 2>/dev/null || true
+}
 was_running() { [[ $'\n'"$RUNNING"$'\n' == *$'\n'"$1"$'\n'* ]]; }
 EXISTING="$("${COMPOSE[@]}" ps --all --services)"
 was_created() { [[ $'\n'"$EXISTING"$'\n' == *$'\n'"$1"$'\n'* ]]; }
@@ -223,9 +241,19 @@ else
   fi
 fi
 
+# THE TEST POSTGRES IS NOT A BOSS WRITER (BOSSAPP-1335). db-test (compose profile `dev`, label
+# kind=test) holds only test databases, never BOSS's data, and pausing it killed every agent's
+# bench-DB test run mid-suite on each upgrade (five times on 2026-11-16). It — and any service
+# labelled kind=test — keeps running through the backup.
+TEST_SERVICES="$(test_services)"
 PAUSED=()
 while IFS= read -r service; do
-  [[ -z "$service" || "$service" == db ]] || PAUSED+=("$service")
+  [[ -z "$service" || "$service" == db ]] && continue
+  if [[ $'\n'"$TEST_SERVICES"$'\n' == *$'\n'"$service"$'\n'* ]]; then
+    echo "Left the test Postgres ($service) running: it holds no BOSS data." >&2
+    continue
+  fi
+  PAUSED+=("$service")
 done <<< "$RUNNING"
 DB_STARTED_FOR_BACKUP=0
 
