@@ -142,13 +142,14 @@ def _binding_candidates(db: Any, settings: Any, project_id: str, owner: str,
                       project_id=project_id, project_name=_project_name(db, project_id), mint=mint)]
 
 
-def _connection_candidates(db: Any, settings: Any, project_id: str) -> list[Candidate]:
+def _connection_candidates(db: Any, settings: Any, project_id: str,
+                           actor: Optional[str] = None) -> list[Candidate]:
     from .github_connections import GitHubConnectionService
-    from .repo_creation import _connection_rows
+    from .repo_creation import _connection_rows, token_label
 
     service = GitHubConnectionService(settings)
     out: list[Candidate] = []
-    for row in _connection_rows(db, project_id):
+    for row in _connection_rows(db, project_id, actor):
         def mint(row=row) -> Optional[str]:
             try:
                 return service.token_for_connection(db, project_id=str(row["project_id"]),
@@ -156,12 +157,12 @@ def _connection_candidates(db: Any, settings: Any, project_id: str) -> list[Cand
             except Exception:  # noqa: BLE001
                 return None
 
-        own = str(row.get("project_id")) == str(project_id)
-        project = str(row.get("project_name") or row.get("project_id") or "")
-        out.append(Candidate("connection",
-                             f"{row.get('account_login')}'s access token "
-                             f"({'this project' if own else 'from project ' + project})",
-                             project_id=str(row.get("project_id")), project_name=project, mint=mint))
+        # Named only as far as the acting person may know whose it is (#179 review).
+        visible = bool(row.get("visible"))
+        out.append(Candidate("connection", token_label(row),
+                             project_id=str(row.get("project_id")) if visible else None,
+                             project_name=str(row.get("project_name") or "") if visible else "",
+                             mint=mint))
     return out
 
 
@@ -173,7 +174,7 @@ def _install_candidates(settings: Any) -> list[Candidate]:
 
 
 def candidates(db: Any, settings: Any, project_id: str, owner: str, repo: str, *,
-               bound_only: bool = False) -> list[Candidate]:
+               bound_only: bool = False, actor: Optional[str] = None) -> list[Candidate]:
     """Every credential that might reach owner/repo, in the order they are tried."""
     if bound_only:
         env = str(getattr(settings, "github_token", "") or "").strip()
@@ -182,7 +183,7 @@ def candidates(db: Any, settings: Any, project_id: str, owner: str, repo: str, *
     out: list[Candidate] = []
     for source in (lambda: _app_candidates(db, owner, repo),
                    lambda: _binding_candidates(db, settings, project_id, owner, repo),
-                   lambda: _connection_candidates(db, settings, project_id),
+                   lambda: _connection_candidates(db, settings, project_id, actor),
                    lambda: _install_candidates(settings)):
         try:
             out.extend(source())
@@ -191,9 +192,35 @@ def candidates(db: Any, settings: Any, project_id: str, owner: str, repo: str, *
     return out
 
 
+_PROBES: dict[tuple[str, str, str], tuple[float, tuple[str, Optional[bool]]]] = {}
+#: How long one (credential, repository) answer is reused (#179 review): the check, the publish
+#: and its words ask the same question within seconds.
+PROBE_TTL_S = 300.0
+
+
+def reset_probe_cache() -> None:
+    _PROBES.clear()
+
+
 def _probe(token: str, owner: str, repo: str, api_base: str,
            client: Optional[httpx.Client]) -> tuple[str, Optional[bool]]:
-    """("reaches" | "read_only" | "not_visible" | "rejected" | "failed:<n>", can_push)."""
+    """("reaches" | "read_only" | "not_visible" | "rejected" | "failed:<n>", can_push), cached
+    for PROBE_TTL_S per (credential digest, repository, API) — a failure to answer is not."""
+    import hashlib
+    import time
+
+    key = (hashlib.sha256(token.encode()).hexdigest()[:24], f"{owner}/{repo}".lower(), api_base)
+    hit = _PROBES.get(key)
+    if hit and time.monotonic() < hit[0]:
+        return hit[1]
+    got = _probe_once(token, owner, repo, api_base, client)
+    if not got[0].startswith("failed"):
+        _PROBES[key] = (time.monotonic() + PROBE_TTL_S, got)
+    return got
+
+
+def _probe_once(token: str, owner: str, repo: str, api_base: str,
+                client: Optional[httpx.Client]) -> tuple[str, Optional[bool]]:
     own = client or httpx.Client(timeout=15)
     try:
         got = own.get(f"{api_base.rstrip('/')}/repos/{owner}/{repo}",
@@ -229,6 +256,7 @@ _OUTCOME_WORDS = {
 
 def resolve(db: Any, settings: Any, project_id: str, owner: str, repo: str, *,
             need: str = "push", bound_only: bool = False, verify: bool = True,
+            actor: Optional[str] = None,
             client: Optional[httpx.Client] = None,
             api_base_url: Optional[str] = None) -> RepoAccess:
     """THE credential that reaches owner/repo for `need` ("read" | "push"), and why — or every
@@ -237,7 +265,7 @@ def resolve(db: Any, settings: Any, project_id: str, owner: str, repo: str, *,
     owner, repo = str(owner or "").strip(), str(repo or "").strip()
     api = str(api_base_url or getattr(settings, "github_api_base_url", "") or "https://api.github.com")
     out = RepoAccess(owner, repo, False)
-    found = candidates(db, settings, project_id, owner, repo, bound_only=bound_only)
+    found = candidates(db, settings, project_id, owner, repo, bound_only=bound_only, actor=actor)
     read_only: Optional[tuple[Candidate, str]] = None
     for cand in found:
         token = cand.mint() if cand.mint else None

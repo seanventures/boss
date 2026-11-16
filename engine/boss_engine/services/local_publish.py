@@ -249,7 +249,8 @@ def registry_refusal(c: Any, project_id: str, full_name: str) -> Optional[str]:
 
 
 def check_existing(c: Any, settings: Any, project_id: str, *, owner: str, name: str,
-                   client: Optional[httpx.Client] = None) -> dict[str, Any]:
+                   client: Optional[httpx.Client] = None,
+                   actor: Optional[str] = None) -> dict[str, Any]:
     """Publish INTO an existing repository: can BOSS reach AND push to `owner/name`, and with
     which credential (repo_access.resolve: the App's installation, this project's binding, the
     token connections, the server token)? Never "there is no" when the truth is "cannot see"
@@ -263,7 +264,7 @@ def check_existing(c: Any, settings: Any, project_id: str, *, owner: str, name: 
         return {**out, "reason": "not_allowed",
                 "words": "A GitHub owner is letters, digits and hyphens; a repository name is "
                          "letters, digits, '.', '_' and '-'."}
-    got = resolve(c, settings, project_id, owner, name, need="push", client=client)
+    got = resolve(c, settings, project_id, owner, name, need="push", client=client, actor=actor)
     out.update(tried=got.tried, via=got.label or None, exists=bool(got.exists))
     if not got.ok:
         return {**out, "reason": got.reason or "not_visible", "words": got.words}
@@ -308,24 +309,28 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
     from .repo_creation import repo_creation_credential
     from .repo_host import git_access
 
-    reached: dict[tuple[str, str], str] = {}
+    reached: dict[tuple[str, str], Any] = {}
 
-    def token(o: str, r: str) -> str:
-        """The credential that REACHES o/r to push and open pull requests (repo_access.resolve),
-        else the project's bound one: never the creating credential borrowed for a read or a
-        push (BOSSAPP-1338)."""
+    def resolved(o: str, r: str) -> Any:
+        """The resolver's answer for o/r, asked once per reach (#179 review): the push, the pull
+        requests and the words all read the same answer."""
         key = (o.lower(), r.lower())
         if key not in reached:
             from .repo_access import resolve
 
             try:
-                got = resolve(c, settings, project_id, o, r, need="push")
-                reached[key] = got.token or ""
+                reached[key] = resolve(c, settings, project_id, o, r, need="push", actor=actor)
             except Exception:  # noqa: BLE001 — the bound credential below
                 log.debug("repo access: the resolver failed", exc_info=True)
-                reached[key] = ""
-            reached[key] = reached[key] or github_token_for(c, settings, project_id, o, r) or ""
+                reached[key] = None
         return reached[key]
+
+    def token(o: str, r: str) -> str:
+        """The credential that REACHES o/r to push and open pull requests (repo_access.resolve),
+        else the project's bound one: never the creating credential borrowed for a read or a
+        push (BOSSAPP-1338)."""
+        got = resolved(o, r)
+        return (getattr(got, "token", None) or "") or github_token_for(c, settings, project_id, o, r) or ""
 
     def adapter(o: str, r: str) -> Any:
         return GitHubAdapter(settings, owner=o, repo=r, token=token(o, r) or None)
@@ -333,7 +338,7 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
     create_token, kind, label, words, reason = None, "app", "", "", ""
     if owner:
         try:
-            got = repo_creation_credential(c, settings, owner, project_id=project_id)
+            got = repo_creation_credential(c, settings, owner, project_id=project_id, actor=actor)
             create_token, kind, label, words, reason = got.token, got.token_kind, got.label, got.words, got.reason
         except Exception:  # noqa: BLE001 — said at the repository step
             log.debug("repo creation: the credential resolver failed", exc_info=True)
@@ -349,12 +354,8 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
     def reach_words(o: str, r: str) -> str:
         if token(o, r):
             return ""
-        from .repo_access import resolve
-
-        try:
-            return resolve(c, settings, project_id, o, r, need="push").words
-        except Exception:  # noqa: BLE001
-            return f"BOSS holds no GitHub credential that reaches {o}/{r}."
+        got = resolved(o, r)
+        return (getattr(got, "words", "") or f"BOSS holds no GitHub credential that reaches {o}/{r}.")
 
     return GitHubReach(adapter_for=adapter, reach_words_for=reach_words,
                        access_for=lambda o, r: git_access("github", o, r, token(o, r)),

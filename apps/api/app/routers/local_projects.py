@@ -619,7 +619,8 @@ def check_github_repository(project_id: str, request: Request, owner: str, repo:
             # PUBLISH INTO IT: checked with the credential that REACHES it (BOSSAPP-1338), not
             # the creating one borrowed from another project.
             return local_publish.check_existing(connection, _settings, project_id,
-                                                owner=owner.strip(), name=repo.strip())
+                                                owner=owner.strip(), name=repo.strip(),
+                                                actor=_actor(request))
         reach = local_publish.default_reach(connection, _settings, project_id, actor=_actor(request),
                                             owner=owner.strip(), repo=repo.strip())
     return local_publish.check_repository(
@@ -631,7 +632,8 @@ def check_github_repository(project_id: str, request: Request, owner: str, repo:
 
 @router.get("/v1/projects/{project_id}/github-repository/owners")
 @permit(P.REPOSITORY_READ, scope=Scope.project(path="project_id"))
-def github_repository_owners(project_id: str, owners: Optional[str] = None) -> dict[str, Any]:
+def github_repository_owners(project_id: str, request: Request,
+                             owners: Optional[str] = None) -> dict[str, Any]:
     """The GitHub accounts a new repository can be made in, each with the credential that will
     create it ("will create as …") or the exact fix per owner (BOSSAPP-1160). Reads only; mints
     nothing. `owners`: comma-separated logins the sheet already shows (the registry's), kept in
@@ -642,7 +644,8 @@ def github_repository_owners(project_id: str, owners: Optional[str] = None) -> d
     with begin(_engine) as connection:
         _require(connection, project_id)
         return {"project_id": project_id,
-                "owners": repo_creation.creating_owners(connection, _settings, project_id, given)}
+                "owners": repo_creation.creating_owners(connection, _settings, project_id, given,
+                                                        actor=_actor(request))}
 
 
 @router.get("/v1/projects/{project_id}/local-folders")

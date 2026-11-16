@@ -54,11 +54,18 @@ def _sources(monkeypatch, *, app: str | None, own: str | None, borrowed: str | N
     if borrowed is not None:
         conns.append(Candidate("connection", "paramg's access token (from project BOSS dogfood)",
                                project_id="boss-dogfood", mint=lambda: borrowed))
-    monkeypatch.setattr(repo_access, "_connection_candidates", lambda db, s, p: conns)
+    monkeypatch.setattr(repo_access, "_connection_candidates", lambda db, s, p, a=None: conns)
     monkeypatch.setattr(repo_access, "_install_candidates", lambda s: [])
 
 
 SETTINGS = types.SimpleNamespace(github_token="", github_api_base_url="https://api.github.test")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_probe_cache():
+    repo_access.reset_probe_cache()
+    yield
+    repo_access.reset_probe_cache()
 
 
 def _check(monkeypatch, reaches, *, registry=None):
@@ -199,7 +206,8 @@ def test_the_build_lookup_is_the_same_resolver_and_stays_bound(monkeypatch):
 def test_an_owner_credential_says_which_project_it_comes_from(monkeypatch, own, label):
     from boss_engine.services import github_connections, repo_creation
 
-    monkeypatch.setattr(repo_creation, "_connection_rows", lambda db, p: [{
+    monkeypatch.setattr(repo_creation, "_connection_rows", lambda db, p, a=None: [{
+        "own": own, "visible": True,
         "id": "ghconn_1", "project_id": "fxquote" if own else "boss-dogfood",
         "project_name": "FXQuote" if own else "BOSS dogfood", "connection_label": "x",
         "account_login": "paramg", "api_base_url": "https://api.github.test",
@@ -208,7 +216,112 @@ def test_an_owner_credential_says_which_project_it_comes_from(monkeypatch, own, 
                         lambda s: types.SimpleNamespace(token_for_connection=lambda *a, **k: "pat"))
     monkeypatch.setattr(repo_creation, "pat_abilities", lambda token, **k: {
         "ok": True, "can_create": True, "words": "can create repositories under its own account (repo scope)"})
+    repo_creation._ABILITIES.clear()
     got = repo_creation._connection_candidates(object(), SETTINGS, "paramg", "fxquote", probe=True)
     assert got[0].label == label
-    # an unchecked token is tested now, not left at "press Test all"
-    assert got[0].can_create is True and "Test all" not in got[0].words
+    if own:
+        # this project's unchecked token is tested now, not left at "press Test all"
+        assert got[0].can_create is True and "Test all" not in got[0].words
+    else:
+        # another project's token is never scope-tested on a probe (#179 review)
+        assert got[0].can_create is None
+
+
+# ── #179 review: another project's token is a person's; probes are cached ─────────────────────
+
+class _Rows:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def execute(self, *a, **k):
+        rows = self.rows
+
+        class _R:
+            def mappings(self):
+                return self
+
+            def all(self):
+                return rows
+        return _R()
+
+
+def _row(**k):
+    base = {"id": "c", "project_id": "other", "project_name": "Teammate's app", "connection_label": "x",
+            "account_login": "teammate", "api_base_url": None, "status": "active",
+            "granted_permissions": [], "missing_permissions": [], "last_test_status": None,
+            "created_by": "usr_teammate", "shared": False, "actor_member": False}
+    return {**base, **k}
+
+
+def test_another_projects_token_is_used_only_by_its_owner_or_when_shared():
+    from boss_engine.services import repo_creation
+
+    rows = [_row(id="own", project_id="fxquote", created_by="usr_teammate"),
+            _row(id="private"),                                   # a teammate's, not shared
+            _row(id="mine", created_by="usr_me"),                 # the acting person's own
+            _row(id="shared", shared=True)]                       # shared with the org
+    got = {r["id"]: r for r in repo_creation._connection_rows(_Rows(rows), "fxquote", "usr_me")}
+    assert set(got) == {"own", "mine", "shared"}, "a teammate's private token is never borrowed"
+    assert got["own"]["visible"] and got["mine"]["visible"]
+    assert not got["shared"]["visible"]
+    assert repo_creation.token_label(got["shared"]) == "a token from another project"
+    assert repo_creation.token_label(got["mine"]) == "teammate (access token from project Teammate's app)"
+    member = repo_creation._connection_rows(_Rows([_row(id="shared", shared=True, actor_member=True)]),
+                                            "fxquote", "usr_me")
+    assert member[0]["visible"], "a member of that project may read whose token it is"
+
+
+def test_the_check_never_reveals_a_teammates_access(monkeypatch):
+    from boss_engine.services import repo_creation
+
+    monkeypatch.setattr(repo_access, "_app_candidates", lambda db, o, r: [])
+    monkeypatch.setattr(repo_access, "_binding_candidates", lambda *a, **k: [])
+    monkeypatch.setattr(repo_access, "_install_candidates", lambda s: [])
+    monkeypatch.setattr(repo_creation, "_connection_rows", lambda db, p, a=None: [
+        {**_row(id="shared", shared=True), "own": False, "visible": False}])
+    from boss_engine.services import github_connections
+
+    monkeypatch.setattr(github_connections, "GitHubConnectionService",
+                        lambda s: types.SimpleNamespace(token_for_connection=lambda *a, **k: "t-shared"))
+    got = _check(monkeypatch, {})
+    assert "a token from another project" in got["words"]
+    assert "teammate" not in got["words"] and "Teammate's app" not in got["words"]
+    assert all(t["project_id"] is None for t in got["tried"])
+
+
+def test_a_probe_is_asked_of_github_once_per_credential_and_repository(monkeypatch):
+    _sources(monkeypatch, app="app-token", own=None, borrowed=None)
+    calls = []
+
+    def handle(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json={"full_name": f"{OWNER}/{REPO}"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handle))
+    for _ in range(3):
+        assert repo_access.resolve(object(), SETTINGS, "fxquote", OWNER, REPO, client=client).ok
+    assert len(calls) == 1
+
+
+def test_the_publish_reach_asks_the_resolver_once(monkeypatch):
+    from boss_engine.services import repo_creation
+
+    monkeypatch.setattr(repo_creation, "repo_creation_credential", lambda *a, **k: types.SimpleNamespace(
+        token=None, token_kind="app", label="", words="", reason="no_github_credential"))
+    asked = []
+
+    def fake(*a, **k):
+        asked.append(k.get("actor"))
+        return repo_access.RepoAccess(OWNER, REPO, False, words="None of the credentials …")
+
+    monkeypatch.setattr(repo_access, "resolve", fake)
+    from boss_engine.services import github_connections
+
+    monkeypatch.setattr(github_connections, "github_token_for", lambda *a, **k: "")
+    monkeypatch.setattr(local_publish, "github_token_for", lambda *a, **k: "", raising=False)
+    reach = local_publish.default_reach(object(), SETTINGS, "fxquote", owner=OWNER, repo=REPO,
+                                        connection_id="c", actor="usr_me")
+    assert reach.reach_words_for(OWNER, REPO) == "None of the credentials …"
+    reach.access_for(OWNER, REPO)
+    reach.reach_words_for(OWNER, REPO)
+    assert asked == ["usr_me"], "one resolve per repository, as the acting person"
