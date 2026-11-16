@@ -431,6 +431,10 @@ def _generic_decide_label(label: Any) -> bool:
     return text in _GENERIC_DECIDE or text.startswith("decide:")
 
 
+#: The button of a release approval that carries force (the card needs a reason, given).
+from .offer_label import RELEASE_OVER_FAILING_CHECKS  # noqa: E402
+
+
 def chat_approval_offer(entry: dict[str, Any], recommendation: Any,
                         question: Any = None) -> dict[str, Any]:
     """A typed approve of a release, as the button the operator still has to click.
@@ -461,7 +465,14 @@ def chat_approval_offer(entry: dict[str, Any], recommendation: Any,
         args["force"] = True
     else:
         args.pop("force", None)
-    label = "Approve the release" if _generic_decide_label(entry.get("label")) else entry.get("label")
+    if args.get("force") is True:
+        # The note is the person's own typed reason, so the release-with-reason path stays; the
+        # button must not hide what it does, whatever label the model wrote (PR #161 review).
+        label = RELEASE_OVER_FAILING_CHECKS
+    elif _generic_decide_label(entry.get("label")):
+        label = "Approve the release"
+    else:
+        label = entry.get("label")
     return {**entry, "args": args, "label": label}
 
 

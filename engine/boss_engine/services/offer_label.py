@@ -68,6 +68,9 @@ def _bare(label: str, tool: str) -> bool:
 #: the failures and types why. A model or agent offer never carries it: `offerable_args` drops
 #: it, and should one ever arrive anyway, its button says what it does, not what the model wrote.
 FORCE_MERGE_LABEL = "Force merge over failing checks"
+#: The one other forcing button: a release approval whose card needs a reason, carrying the
+#: person's typed note (release_scope.chat_approval_offer). Its label also says what it does.
+RELEASE_OVER_FAILING_CHECKS = "Approve the release over failing checks"
 
 
 def offerable_args(tool: str, args: Optional[dict]) -> dict:
@@ -82,7 +85,8 @@ def button_label(label: Any, tool: str, args: Optional[dict] = None) -> str:
     """The model's label when it wrote one, else the call said in words — never blank, never
     just the tool's name. A `decide` that forces says so, whatever the label says."""
     if str(tool or "") == "decide" and (args or {}).get("force") is True:
-        return FORCE_MERGE_LABEL
+        said = " ".join(str(label or "").split())
+        return said if said == RELEASE_OVER_FAILING_CHECKS else FORCE_MERGE_LABEL
     text = " ".join(str(label or "").split())
     if text and not _bare(text, tool):
         return text
