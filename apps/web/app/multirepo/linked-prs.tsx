@@ -42,12 +42,18 @@ function FindingCard({ f, i, lane }: { f: Finding; i: number; lane: Lane }) {
   const blocking = isBlocking(f);
   const fixed = isFixed(f);
   const who = f.author || "Reviewer";
+  const where = f.path ? `${f.path}${f.line ? `:${f.line}` : ""}` : null;
+  const prUrl = typeof lane.pr_url === "string" && lane.pr_url.length > 0 ? lane.pr_url : null;
   return (
     <div className="mr-cmt" data-blocking={blocking || undefined} data-fixed={fixed || undefined} data-testid={`mr-finding-${lane.order}-${i}`}>
       <div className="mr-cmt-who">
         <span className="mr-ui-gh sm" aria-hidden style={{ fontWeight: 700, fontSize: "0.66rem" }}>{who.charAt(0).toUpperCase()}</span>
         <b data-user-text>{who}</b>
-        {f.path ? <span className="mr-ui-mono mr-ui-dim" data-user-text>{f.path}{f.line ? `:${f.line}` : ""}</span> : null}
+        {where && prUrl ? (
+          <a className="mr-ui-mono mr-ui-dim" data-user-text href={changeHref(prUrl)} {...linkTarget(prUrl)} title="Opens the pull request">{where}</a>
+        ) : where ? (
+          <span className="mr-ui-mono mr-ui-dim" data-user-text>{where}</span>
+        ) : null}
         <span className="mr-ui-spacer" />
         <span className="mr-ui-pill" data-tone={SEVERITY_TONE[sev] ?? "muted"} title={blocking ? "Blocks the whole set until fixed" : undefined}>{cap(sev)}</span>
         {fixed ? <span className="mr-ui-pill" data-tone="muted">fixed</span> : null}

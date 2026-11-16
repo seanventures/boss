@@ -121,4 +121,28 @@ describe("linked pull requests (screen 6)", () => {
     await click(tid("mr-csc-tab-prs"));
     expect(new URLSearchParams(window.location.search).get("tab")).toBe("prs");
   });
+
+  it("a finding's path:line opens that pull request, not the line", async () => {
+    api(blockedSetFixture());
+    await mount();
+    const card = tid("mr-finding-2-0");
+    const path = card?.querySelector("a");
+    expect(path?.textContent).toBe("handlers/saved.go:48");
+    expect(path?.getAttribute("href")).toBe((tid("mr-pr-open-2") as HTMLAnchorElement).getAttribute("href"));
+    expect(path?.getAttribute("href")).toBe("/changes/github/acme/api/412");
+    expect(path?.title).toBe("Opens the pull request");
+    expect(path?.title).not.toMatch(/line|saved\.go/i);
+    expect(path?.getAttribute("href")).not.toMatch(/saved\.go|#L|blob\//);
+    expect(card?.querySelector("textarea, form")).toBeNull();
+  });
+
+  it("a finding's path stays text when the lane has no pull request", async () => {
+    const cs = blockedSetFixture();
+    cs.lanes[1] = { ...cs.lanes[1], pr_url: null };
+    api(cs);
+    await mount();
+    const card = tid("mr-finding-2-0")!;
+    expect(card.textContent).toContain("handlers/saved.go:48");
+    expect(card.querySelector("a")).toBeNull();
+  });
 });
