@@ -81,7 +81,8 @@ def _schema(connection) -> None:
           policy_violation_count INTEGER,
           scope_violation_count INTEGER,
           last_reviewed_at TIMESTAMPTZ,
-          last_violation_at TIMESTAMPTZ
+          last_violation_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         );
         """
     ))

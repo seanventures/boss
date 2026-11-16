@@ -59,6 +59,8 @@ class ReportService:
             "by_kind": self._by_kind(connection, project_id, since),
             "by_model": self._by_model(connection, project_id, since),
             "llm_spend": self._llm_spend(connection, project_id, since),
+            "daily": self._daily(connection, project_id, since),
+            "agents": self._agents(connection, project_id, since),
             "decision_latency": self._decision_latency(connection, project_id, since),
         }
 
@@ -84,19 +86,24 @@ class ReportService:
         ).mappings().one()
         return {k: int(v) for k, v in row.items()}
 
-    def _daily(self, connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    def _daily(self, connection: Connection, project_id: str,
+               since: str | None = None) -> list[dict[str, Any]]:
+        # Absent since is the fixed 14-day chart. A since opens on that window's first day.
+        bound = _created_since(since)
+        start = (f"date_trunc('day', {since})" if since
+                 else "date_trunc('day', now()) - interval '13 days'")
         rows = connection.execute(
             text(
                 f"""
                 SELECT to_char(d, 'YYYY-MM-DD') AS date,
                   (SELECT count(*) FROM tasks
-                     WHERE project_id=:p AND date_trunc('day', created_at)=d) AS tasks,
+                     WHERE project_id=:p AND date_trunc('day', created_at)=d{bound}) AS tasks,
                   (SELECT count(*) FROM jobs
-                     WHERE project_id=:p AND date_trunc('day', created_at)=d AND status='succeeded') AS succeeded,
+                     WHERE project_id=:p AND date_trunc('day', created_at)=d AND status='succeeded'{bound}) AS succeeded,
                   (SELECT count(*) FROM jobs
-                     WHERE project_id=:p AND date_trunc('day', created_at)=d AND status IN {FINISHED_FAILURES}) AS failed
+                     WHERE project_id=:p AND date_trunc('day', created_at)=d AND status IN {FINISHED_FAILURES}{bound}) AS failed
                 FROM generate_series(
-                  date_trunc('day', now()) - interval '13 days',
+                  {start},
                   date_trunc('day', now()),
                   interval '1 day'
                 ) AS d
@@ -227,14 +234,15 @@ class ReportService:
             },
         }
 
-    def _agents(self, connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    def _agents(self, connection: Connection, project_id: str,
+                since: str | None = None) -> list[dict[str, Any]]:
         rows = connection.execute(
             text(
-                """
+                f"""
                 SELECT role_key, display_name, trust_score, autonomy_level, successful_runs,
                        policy_violation_count, scope_violation_count,
                        last_reviewed_at, last_violation_at
-                FROM roles WHERE project_id=:p
+                FROM roles WHERE project_id=:p{_created_since(since)}
                 ORDER BY (policy_violation_count + scope_violation_count) DESC, trust_score ASC, role_key
                 """
             ),
