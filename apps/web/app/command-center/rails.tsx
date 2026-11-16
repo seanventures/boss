@@ -234,6 +234,7 @@ export function AppsShelf({ apps, attention = [], orgId }: {
           // The card opens what waits on you, else the latest build, the chip's own rule.
           const target = need?.runId ?? a.openRunId;
           const idea = templateFor(a.app);
+          // Five faces. The count is who did not fit; the name lists every builder.
           const builders = a.builders.slice(0, 5);
           return (
             <div key={a.key} className="cc-app" data-state={state}>
@@ -246,8 +247,9 @@ export function AppsShelf({ apps, attention = [], orgId }: {
                 <span className="cc-app-body">
                   <b data-user-text>{a.app}</b>
                   <span className="cc-app-meta">
-                    <span className="cc-minis" aria-label={builders.map((k) => nameOf(k).name).join(", ")}>
+                    <span className="cc-minis" aria-label={a.builders.map((k) => nameOf(k).name).join(", ")}>
                       {builders.map((k) => <span key={k} className="cc-mini"><AgentAvatar agent={k} size={22} aiBadge={false} /></span>)}
+                      {a.builders.length > 5 ? <span>+{a.builders.length - 5}</span> : null}
                     </span>
                     <span>{a.builds} build{a.builds === 1 ? "" : "s"}, {a.costUsd > 0 ? dollars(a.costUsd) : a.included ? "Included" : "$0"}</span>
                   </span>
