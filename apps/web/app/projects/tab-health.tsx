@@ -175,6 +175,7 @@ function EnvCard({ e, ctx }: { e: Env; ctx: PxCtx }) {
             <span style={{ width: `${Math.max(3, used ?? 0)}%`, background: `var(--${burnTone})` }} /></span>
           <span className="px-row" style={{ gap: 6 }}><Tag tone={burnTone}>{e.slo.burn === "ok" ? "OK" : e.slo.burn === "warning" ? "Burning" : "Breached"}</Tag>
             {used !== null ? <small className="px-faint" data-testid={`px-h-env-budget-${e.key}`}>{used}% of budget used</small> : null}</span>
+          {e.slo.budget_words ? <small className="px-faint" data-testid={`px-h-env-hours-${e.key}`}>{e.slo.budget_words}</small> : null}
         </div>
       </div>
     </section>

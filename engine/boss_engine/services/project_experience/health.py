@@ -131,6 +131,26 @@ def budget_used(uptime: Optional[float], target: float = DEFAULT_SLO) -> Optiona
     return int(round(min(100.0, max(0.0, (100.0 - float(uptime)) * 100.0 / allowed))))
 
 
+def hours_left(uptime: Optional[float], target: Optional[float]) -> dict[str, Any]:
+    """Hours of the 24 h error budget still left, and the sentence that says so.
+
+    An unused budget is not the whole allowance. A spent one is 0 hours. No uptime,
+    or no target, says nothing.
+    """
+    if uptime is None or target is None:
+        return {"hours_left": None, "budget_words": None}
+    used_pct = budget_used(uptime, target)
+    if used_pct is None:
+        return {"hours_left": None, "budget_words": None}
+    if used_pct == 0:
+        return {"hours_left": None, "budget_words": "The budget is not being used."}
+    if used_pct >= 100:
+        return {"hours_left": 0, "budget_words": "0 hours left."}
+    allowed_hours = 24 * (100 - target) / 100
+    hours = round(allowed_hours * (100 - used_pct) / 100, 2)
+    return {"hours_left": hours, "budget_words": f"{hours} hours left."}
+
+
 def _metrics(connection: Connection, target_ids: list[str], since: datetime
              ) -> dict[str, dict[str, Any]]:
     """Per target: the app's own error rate (%) and p95 over 24 h, and the newest points."""
@@ -292,7 +312,8 @@ def environments(connection: Connection, project_id: str, *,
             "p95_source": "probe", "window": WINDOW_WORD,
             "series": {"errors": errors, "latency": latency},
             "slo": {"target": held, "burn": burn(uptime, held),
-                    "budget_used_pct": budget_used(uptime, held)},
+                    "budget_used_pct": budget_used(uptime, held),
+                    **hours_left(uptime, held)},
             "slo_words": None if chosen is not None else INSTALL_DEFAULT_WORDS,
             "firing": fires.get(t["target_id"], []),
             "last_checked": t.get("last_checked"), "last_error": t.get("last_error"),
