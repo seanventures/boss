@@ -35,7 +35,7 @@ from .repo_files import MAX_SCAN_BYTES, RepoFileRefused, RepoFiles
 from .agent_turns import StreamParser, capture_enabled, parse_stream
 from .llm_telemetry import get_llm_context, record_agent_turns, record_llm_call
 from . import harness_failures
-from .engine_contract import EngineCapabilities
+from .engine_contract import PARTIAL_SUBTYPES, EngineCapabilities, partial_stop_reason
 
 
 _log = logging.getLogger(__name__)
@@ -1492,15 +1492,15 @@ class ClaudeCodeAgent:
             detail = (proc.stderr or proc.stdout or "")[:300]
             data = _parse_cli_output(proc.stdout)
             if isinstance(data, dict):
-                if data.get("subtype") == "error_max_turns":
-                    # Ran out of turns ≠ failed: it's a PARTIAL attempt. Return it like a
-                    # normal result so (a) the spend is recorded instead of vanishing from
-                    # the ledger, and (b) the governed repair loop can run the authoritative
-                    # tests, gather evidence, and RESUME this session to finish the work.
-                    data.setdefault(
-                        "result",
-                        "(ran out of turns before finishing — partial attempt; resume to continue)",
-                    )
+                if data.get("subtype") in PARTIAL_SUBTYPES:
+                    # Ran out of turns — or reached the session's spend ceiling
+                    # (`--max-budget-usd`, error_max_budget_usd) — ≠ failed: it's a PARTIAL
+                    # attempt. Return it like a normal result so (a) the spend is recorded
+                    # instead of vanishing from the ledger (a budget-killed session's
+                    # total_cost_usd used to be lost with the RuntimeError, crun_9a9a535c),
+                    # (b) what it answered is kept (an acceptance pass's ACCEPTANCE lines), and
+                    # (c) the governed repair loop can RESUME this session to finish the work.
+                    data.setdefault("result", PARTIAL_SUBTYPES[data["subtype"]])
                     # Its turns were written live too: the batch fallback re-wrote all 321 of a
                     # HelpDesk session's turns at its turn cap (crun_566f8767, 05:41).
                     _mark_live(data, live_written)
@@ -1632,7 +1632,9 @@ class ClaudeCodeAgent:
             "turns": turns,
             "model": model or usage.get("model"),
             "session_id": data.get("session_id"),
-            "stop_reason": ("turn_cap" if data.get("subtype") == "error_max_turns" else "done"),
+            "stop_reason": partial_stop_reason(data.get("subtype")),
+            **({"budget_ceiling_usd": float(max_budget_usd)}
+               if max_budget_usd is not None else {}),
         }
 
     def _plain_adapter(self, model: Optional[str]):
@@ -2638,9 +2640,16 @@ def make_code_agent(
 
 
 def _standing_session_ceiling(settings: Settings):
-    """The default per-session ceiling in dollars (None when the install sets no task budget)."""
-    micros = int(getattr(settings, "code_task_budget_usd_micros", 0) or 0)
-    return lambda: (micros / 1e6) if micros > 0 else None
+    """The default per-session ceiling in dollars (None when the install sets no session budget).
+
+    A SESSION'S CEILING IS SIZED TO A SESSION (build_budget.session_budget_usd), never the
+    per-task money budget: that $2 task budget, used as a per-session cap at list price, killed
+    a medium repo's implement, acceptance and re-review sessions mid-answer (Northgate,
+    2026-11-16). The governed pipeline replaces this with the build's own ceiling."""
+    from .build_budget import session_budget_usd
+
+    ceiling = session_budget_usd(settings)
+    return lambda: ceiling
 
 
 def _bind_lane_credentials(

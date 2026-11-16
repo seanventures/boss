@@ -261,7 +261,7 @@ def test_a_session_that_hit_its_turn_cap_is_not_rewritten_at_the_end():
     from boss_engine.services.code_agent import ClaudeCodeAgent, _mark_live
 
     src = inspect.getsource(ClaudeCodeAgent._invoke)
-    cap = src[src.index('if data.get("subtype") == "error_max_turns":'):]
+    cap = src[src.index('if data.get("subtype") in PARTIAL_SUBTYPES:'):]
     assert cap.index("_mark_live(data, live_written)") < cap.index("return data")
     capped = {"subtype": "error_max_turns", "_turns": ["t"] * 321}
     _mark_live(capped, {"rows": 321})

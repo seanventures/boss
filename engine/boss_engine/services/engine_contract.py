@@ -153,15 +153,55 @@ def normalise_turn(turn: Mapping[str, Any]) -> dict[str, Any]:
 RESULT_KEYS = ("summary", "usage", "cost_usd_micros", "cost_unreported", "turns", "tool_calls",
                "model", "session_id", "stop_reason", "engine")
 
-#: Why a session stopped. "turn_cap" and "deadline" are partial attempts, never verdicts.
+#: Why a session stopped. "turn_cap", "budget_cap" and "deadline" are partial attempts, never
+#: verdicts. "budget_cap" is a session that reached its spend ceiling (`max_budget_usd`):
+#: its spend is recorded and what it said is kept, like a turn cap's.
 #: "awaiting_approval" is a build-agent tool call that is waiting, not a finished session
 #: and not a failure (tool_gateway): normalise must not rewrite it to "done".
-STOP_REASONS = ("done", "turn_cap", "deadline", "error", "awaiting_approval")
+STOP_REASONS = ("done", "turn_cap", "budget_cap", "deadline", "error", "awaiting_approval")
+
+#: The stop reasons that are a PARTIAL attempt (resumable, never a verdict).
+PARTIAL_STOPS = ("turn_cap", "budget_cap", "deadline")
+
+#: The phrase every partial attempt carries, whatever stopped it. `check_is_inconclusive` reads it.
+PARTIAL_PHRASE = "partial attempt; resume to continue"
 
 #: THE ONE PHRASE a partial attempt carries, whatever engine made it. The pipeline's
 #: `check_is_inconclusive` and the implement continuation read it; before this, only Claude's
 #: own words were recognised and a native engine's turn cap read as a finished judgement.
 PARTIAL_MARKER = "(ran out of turns before finishing — partial attempt; resume to continue)"
+#: The same for a session stopped at its spend ceiling.
+BUDGET_PARTIAL_MARKER = ("(stopped at the session spend ceiling before finishing — partial "
+                         "attempt; resume to continue)")
+
+#: A Claude CLI / Agent SDK result `subtype` that is a partial attempt, and the words it gets
+#: when it carries none. `error_max_budget_usd` used to raise, so the session's spend never
+#: reached `llm_calls` and an acceptance pass's answers were dropped (crun_9a9a535c).
+PARTIAL_SUBTYPES = {"error_max_turns": PARTIAL_MARKER,
+                    "error_max_budget_usd": BUDGET_PARTIAL_MARKER}
+
+
+def partial_stop_reason(subtype: Any) -> str:
+    """The common stop reason of a Claude result `subtype`."""
+    return {"error_max_turns": "turn_cap",
+            "error_max_budget_usd": "budget_cap"}.get(str(subtype or ""), "done")
+
+
+def stop_words(result: Mapping[str, Any]) -> str:
+    """Why a session stopped short, in a few plain words ("" for a finished session)."""
+    stop = str((result or {}).get("stop_reason") or "")
+    if stop == "budget_cap":
+        ceiling = (result or {}).get("budget_ceiling_usd")
+        try:
+            return (f"stopped at the ${float(ceiling):.2f} session ceiling" if ceiling is not None
+                    else "stopped at its session spend ceiling")
+        except (TypeError, ValueError):
+            return "stopped at its session spend ceiling"
+    if stop == "turn_cap":
+        return "ran out of turns"
+    if stop == "deadline":
+        return "reached its time limit"
+    return ""
 
 #: The usage fields the ledger, the profile and the gates read.
 USAGE_KEYS = ("model", "prompt_tokens", "completion_tokens", "cache_read_tokens",
@@ -205,9 +245,12 @@ def normalise_result(result: Any, *, engine: str, model: Optional[str] = None,
     summary = str(r.get("summary") or "").strip()
     stop = str(r.get("stop_reason") or "").strip()
     if stop not in STOP_REASONS:
-        stop = "turn_cap" if "ran out of turns before finishing" in summary.lower() else "done"
-    if stop in ("turn_cap", "deadline") and "ran out of turns before finishing" not in summary.lower():
-        summary = (summary + "\n" if summary else "") + PARTIAL_MARKER
+        stop = ("budget_cap" if "session spend ceiling before finishing" in summary.lower()
+                else "turn_cap" if "ran out of turns before finishing" in summary.lower()
+                else "done")
+    if stop in PARTIAL_STOPS and PARTIAL_PHRASE not in summary.lower():
+        summary = (summary + "\n" if summary else "") + (
+            BUDGET_PARTIAL_MARKER if stop == "budget_cap" else PARTIAL_MARKER)
     r["stop_reason"] = stop
     r["summary"] = summary or f"({engine} produced no summary)"
     return r
@@ -453,6 +496,10 @@ class ContractedAgent:
             if copy is not None:
                 shutil.rmtree(copy.parent, ignore_errors=True)
         result = normalise_result(raw, engine=self.engine, model=model, caps=caps)
+        if kwargs.get("max_budget_usd") is not None:
+            # THE CEILING THIS SESSION RAN UNDER, on its result: a session stopped by it says
+            # which limit bound it (stop_words), and an escalation can lift THAT limit.
+            result.setdefault("budget_ceiling_usd", float(kwargs["max_budget_usd"]))
         if result["stop_reason"] == "error":
             # A FAILED SESSION IS A FAILURE ON EVERY ENGINE. Claude's driver raises on a non-zero
             # exit; a generic CLI used to hand its error text on as if it were the agent's

@@ -1631,6 +1631,21 @@ class Settings(BaseSettings):
     code_task_budget_usd_micros: int = Field(
         default=2_000_000, alias="BOSS_CODE_TASK_BUDGET_USD_MICROS"
     )
+    # ONE AGENT SESSION'S SPEND CEILING, at LIST price (the CLI's `--max-budget-usd` counts list
+    # price whatever the billing), for a medium repo at an ordinary risk tier. Scaled up for a
+    # high-risk task or a large repo (build_budget.session_budget_usd). Never the per-task money
+    # budget above: that $2, used as a per-session cap, killed a medium Go repo's implement,
+    # acceptance and re-review sessions mid-answer (Northgate, 2026-11-16). 0 = no ceiling.
+    code_agent_session_budget_usd: float = Field(
+        default=5.0, alias="BOSS_CODE_AGENT_SESSION_BUDGET_USD", ge=0
+    )
+    # A WHOLE BUILD'S LIST-PRICE ALLOWANCE across its sessions (included + money, scaled like the
+    # session ceiling): the runaway guard a subscription build had none of, since its money is
+    # $0. A session's ceiling never exceeds what is left of it. Money caps are still enforced at
+    # every stage boundary (build_budget.cap_reached). 0 = no allowance.
+    code_agent_run_list_budget_usd: float = Field(
+        default=60.0, alias="BOSS_CODE_AGENT_RUN_LIST_BUDGET_USD", ge=0
+    )
     # Reactive documentation work is deliberately bounded to one small drafting call.
     # The handler reserves this envelope before invoking a model or writing to GitHub.
     docs_update_budget_usd_micros: int = Field(

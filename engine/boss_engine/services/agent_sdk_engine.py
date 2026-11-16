@@ -43,6 +43,8 @@ import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Optional
 
+from . import engine_contract as ec
+
 log = logging.getLogger(__name__)
 
 ENGINE = "claude_agent_sdk"
@@ -623,12 +625,11 @@ def build_agent_class():
                     data.setdefault("_rate_limit", parser.rate_limit)
                 ca._mark_live(data, written)
                 data["_billing"] = getattr(self, "_billing", "")
-                if data.get("subtype") == "error_max_turns":
-                    # Ran out of turns: a partial attempt the repair loop resumes, as with
-                    # claude_code — spend recorded, not lost.
-                    data["result"] = data.get("result") or (
-                        "(ran out of turns before finishing — partial attempt; resume to "
-                        "continue)")
+                if data.get("subtype") in ec.PARTIAL_SUBTYPES:
+                    # Ran out of turns, or reached the session's spend ceiling: a partial
+                    # attempt the repair loop resumes, as with claude_code — spend recorded,
+                    # not lost.
+                    data["result"] = data.get("result") or ec.PARTIAL_SUBTYPES[data["subtype"]]
                     return data
                 if data.get("is_error"):
                     reason = str(data.get("result") or "; ".join(data.get("errors") or [])

@@ -535,7 +535,10 @@ def test_an_unanswered_reviewer_is_asked_again_before_anything_ships():
     src = inspect.getsource(g)
     block = src[src.index('evidence["review_escalated_turns"] = escalated'):]
     block = block[:block.index("gate_faults = classify_gate_faults")]
-    assert "_run_acceptance_check(max_turns=escalated)" in block
+    # Re-asked under a plan that lifts the limit that bound it (escalation_plan), never blind.
+    assert "_acceptance_gate.escalation_plan(" in block
+    assert "_run_acceptance_check(**_plan)" in block
+    assert "if _plan is None:" in block
 
 
 def test_an_advisory_ship_queues_its_major_findings_not_only_the_minor_ones():

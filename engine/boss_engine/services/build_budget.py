@@ -116,6 +116,81 @@ def unsettled_money(connection: Any, project_id: str, run_id: Optional[str]) -> 
     return max(0, gross - settled)
 
 
+# ── ONE SESSION'S CEILING ─────────────────────────────────────────────────────────────────────
+#
+# The Claude CLI's `--max-budget-usd` counts LIST price, whatever the billing. It was handed the
+# per-task MONEY budget ($2) less the run's money — and a subscription's money is $0, so every
+# session of a build got $2 at list price: a medium repo's implement, acceptance check and
+# re-review were killed mid-answer (Northgate, crun_24f39976 / crun_9a9a535c). A session's ceiling
+# is now sized to a session (scaled by risk tier and repo size) and bounded by what is left of
+# the build's LIST-PRICE allowance — the same units the CLI counts.
+
+#: Repo size (tracked files) → ceiling multiplier. Below the first bound is a small/medium repo.
+REPO_SIZE_SCALE = ((10_000, 2.0), (2_000, 1.5))
+#: Risk tier → ceiling multiplier (tiers 0-1 are 1.0).
+RISK_TIER_SCALE = {2: 1.5, 3: 2.0}
+
+
+def session_scale(risk_tier: Optional[int] = None, repo_files: Optional[int] = None) -> float:
+    """How much larger than a medium, ordinary-risk session's this build's sessions may be."""
+    scale = 1.0
+    try:
+        scale *= RISK_TIER_SCALE.get(int(risk_tier), 1.0) if risk_tier is not None else 1.0
+    except (TypeError, ValueError):
+        pass
+    if repo_files:
+        for bound, factor in REPO_SIZE_SCALE:
+            if int(repo_files) >= bound:
+                scale *= factor
+                break
+    return scale
+
+
+def session_budget_usd(settings: Any, *, risk_tier: Optional[int] = None,
+                       repo_files: Optional[int] = None) -> Optional[float]:
+    """One session's list-price ceiling in dollars, or None when the install sets none."""
+    base = float(getattr(settings, "code_agent_session_budget_usd", 0) or 0)
+    if base <= 0:
+        return None
+    return round(base * session_scale(risk_tier, repo_files), 2)
+
+
+def run_list_budget_usd(settings: Any, *, risk_tier: Optional[int] = None,
+                        repo_files: Optional[int] = None) -> Optional[float]:
+    """A whole build's list-price allowance in dollars, or None when the install sets none."""
+    base = float(getattr(settings, "code_agent_run_list_budget_usd", 0) or 0)
+    if base <= 0:
+        return None
+    return round(base * session_scale(risk_tier, repo_files), 2)
+
+
+def list_price_spend(connection: Any, run_id: Optional[str]) -> int:
+    """The build's spend at LIST price in micros: every `llm_calls` row of the run, money AND
+    included (a subscription row keeps its list price as `cost_usd_micros`). 0 without a ledger."""
+    if not run_id or not hasattr(connection, "execute") or hasattr(connection, "save_run"):
+        return 0
+    from sqlalchemy import text
+
+    return int(connection.execute(
+        text("SELECT COALESCE(SUM(COALESCE(cost_usd_micros, 0)), 0) FROM llm_calls "
+             "WHERE code_task_run_id = :r"), {"r": run_id}).scalar() or 0)
+
+
+def session_ceiling_usd(settings: Any, *, list_spent_micros: int,
+                        risk_tier: Optional[int] = None,
+                        repo_files: Optional[int] = None) -> Optional[float]:
+    """The next session's ceiling: the session budget, never more than what is left of the
+    build's list-price allowance (floored at a cent by engine_contract._default_ceiling).
+    None when neither is set."""
+    session = session_budget_usd(settings, risk_tier=risk_tier, repo_files=repo_files)
+    allowance = run_list_budget_usd(settings, risk_tier=risk_tier, repo_files=repo_files)
+    left = (None if allowance is None
+            else max(allowance - max(int(list_spent_micros or 0), 0) / 1e6, 0.0))
+    if session is None:
+        return None if left is None else round(left, 2)
+    return round(session if left is None else min(session, left), 2)
+
+
 def settle_or_release(budget: Any, connection: Any, project_id: str,
                       reservation_id: Optional[str], reason: str,
                       run_id: Optional[str] = None) -> Optional[str]:

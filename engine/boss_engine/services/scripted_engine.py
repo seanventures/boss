@@ -38,6 +38,10 @@ turn, to exercise the fix rounds:
     crash_on_start  the first implement writes a server that exits on start
     acceptance_missing  the first acceptance check answers item 1 MISSING
     crash           every session raises (an engine that cannot run at all)
+    acceptance_budget_cap  an acceptance pass stops at its spend ceiling (stop_reason budget_cap,
+                    a cost, only its first half of items answered, no summary line) — and again
+                    on every re-ask whose ceiling is not ABOVE the one that stopped it, the way
+                    a real session under the same `--max-budget-usd` would
 
 SELF-FIX STAGES (`self_fix_*`, BOSSAPP-571) play the scripts of self_fix_scripts.py, chosen by
 BOSS_SCRIPTED_SELF_FIX=<script>:<fixture dir>.
@@ -110,6 +114,8 @@ class _RunState:
     def __init__(self) -> None:
         self.fired: set[str] = set()
         self.calls: list[dict[str, Any]] = []
+        #: The spend ceiling an `acceptance_budget_cap` pass stopped at (None: none yet).
+        self.budget_bound: Optional[float] = None
 
 
 _STATES: dict[str, _RunState] = {}
@@ -171,7 +177,8 @@ class ScriptedEngine:
         stage = str(ctx.get("stage") or "").strip().lower() or _stage_from_prompt(prompt)
         state = run_state(ctx.get("run_id"))
         state.calls.append({"stage": stage, "read_only": read_only, "resumed": resume_session_id,
-                            "max_turns": max_turns, "prompt_head": (prompt or "")[:4000],
+                            "max_turns": max_turns,
+                            "max_budget_usd": _extra.get("max_budget_usd"), "prompt_head": (prompt or "")[:4000],
                             # The whole prompt, so a conformance test can see what reached it.
                             "full_prompt": prompt or ""})
         if "crash" in self.faults:
@@ -182,6 +189,18 @@ class ScriptedEngine:
         app = self._app_root(prompt)
         turns: list[dict[str, Any]] = []
         summary, written = self._play(stage, prompt, root, app, read_only, state, turns)
+        cost, stop = 0, "done"
+        ceiling = _extra.get("max_budget_usd")
+        if ("acceptance_budget_cap" in self.faults
+                and (stage == "acceptance_check" or "ACCEPTANCE REVIEWER" in (prompt or ""))):
+            bound = getattr(state, "budget_bound", None)
+            if bound is None or ceiling is None or float(ceiling) <= bound:
+                state.fired.add("acceptance_budget_cap")
+                state.budget_bound = float(ceiling) if ceiling is not None else 0.0
+                lines = [ln for ln in summary.splitlines() if ln.startswith("ITEM ")]
+                summary = "\n".join(lines[:max(1, len(lines) // 2)])
+                stop = "budget_cap"
+                cost = int(float(ceiling or 1.0) * 1e6)
         for i, t in enumerate(turns):
             t["turn_index"] = i
         turns.append({"direction": "completion", "content": summary, "turn_index": len(turns)})
@@ -189,12 +208,12 @@ class ScriptedEngine:
         usage = {"model": MODEL, "prompt_tokens": len(prompt) // 4,
                  "completion_tokens": len(summary) // 4, "cache_read_tokens": 0,
                  "cache_write_tokens": 0, "billing": "local"}
-        record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=0, latency_ms=1,
+        record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost, latency_ms=1,
                         turns=1)
         return {
             "summary": summary,
             "usage": usage,
-            "cost_usd_micros": 0,
+            "cost_usd_micros": cost,
             "cost_unreported": not self.capabilities.reports_cost,
             "turns": 1,
             "tool_calls": len(written),
@@ -204,7 +223,8 @@ class ScriptedEngine:
             # REUSED the builder's session instead of cold-starting (BOSSAPP-1001).
             "session_id": ((resume_session_id or f"scr-{uuid.uuid4().hex[:12]}")
                            if self.capabilities.resume else None),
-            "stop_reason": "done",
+            "stop_reason": stop,
+            **({"budget_ceiling_usd": float(ceiling)} if ceiling is not None else {}),
         }
 
     def run_plain(self, prompt: str, *, model: Optional[str] = None, **_extra: Any) -> dict:
