@@ -1631,6 +1631,13 @@ class Settings(BaseSettings):
     code_task_budget_usd_micros: int = Field(
         default=2_000_000, alias="BOSS_CODE_TASK_BUDGET_USD_MICROS"
     )
+    # ONE BUILD'S MONEY BUDGET on a money-billed (API key) lane: what a build reserves (at its
+    # marginal cost — $0 on a subscription, build_budget.reservation_estimate) and the most its
+    # sessions may spend in money (build_budget.session_ceiling_usd). A medium build costs $9-13;
+    # the $2 per-task figure above was a fraction of one session. 0 = use the per-task budget.
+    code_task_build_money_budget_usd: float = Field(
+        default=15.0, alias="BOSS_CODE_TASK_BUILD_MONEY_BUDGET_USD", ge=0
+    )
     # ONE AGENT SESSION'S SPEND CEILING, at LIST price (the CLI's `--max-budget-usd` counts list
     # price whatever the billing), for a medium repo at an ordinary risk tier. Scaled up for a
     # high-risk task or a large repo (build_budget.session_budget_usd). Never the per-task money

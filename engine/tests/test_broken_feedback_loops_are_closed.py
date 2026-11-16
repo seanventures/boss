@@ -164,11 +164,12 @@ def test_the_governed_pipeline_binds_a_session_sized_ceiling_on_list_price():
     import boss_engine.services.governed_code_task_service as gov
 
     source = inspect.getsource(gov)
-    assert "budget_ceiling = _session_budget_ceiling" in source
-    block = source[source.index("def _session_budget_ceiling"):]
+    assert "budget_ceiling = (lambda _a=a: _session_budget_ceiling(_a))" in source
+    block = source[source.index("def _money_billed"):]
     block = block[:block.index("def _agent_for_locked")]
     assert "list_price_spend(" in block and "session_ceiling_usd(" in block
-    assert "unsettled_money" not in block
+    # money (unsettled_money) bounds only a MONEY-billed lane, beside the cap headroom
+    assert block.index("if money:") < block.index("unsettled_money(")
 
 
 # ── the typed risk tier and the repair default ───────────────────────────────────────────────

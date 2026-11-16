@@ -688,14 +688,17 @@ CEILING_ESCALATION = 2.0
 
 
 def escalation_plan(record: Optional[Mapping[str, Any]], *, max_turns: int,
-                    default_ceiling_usd: Optional[float] = None) -> Optional[dict[str, Any]]:
+                    default_ceiling_usd: Optional[float] = None,
+                    clamp: Optional[Any] = None) -> Optional[dict[str, Any]]:
     """How to re-ask a check that left items unanswered, LIFTING THE LIMIT THAT BOUND IT.
 
     A pass stopped at its spend ceiling is re-asked with a raised ceiling AND half the batch;
     a turn-capped pass with `max_turns` (the caller's escalated turns). Returns
     {"max_turns", "max_budget_usd" (None = the session default), "batch_size"} — or None when
     the re-ask would run under the very limit that stopped it (refused: it would fail the
-    same way, crun_9a9a535c)."""
+    same way, crun_9a9a535c). `clamp(usd) -> usd` bounds the raised ceiling (the pipeline's
+    build_budget.lifted_ceiling_usd: at most MAX_LIFT x the session budget and within every
+    run-level allowance), so repeated escalations never compound."""
     record = record or {}
     stops = list(record.get("stops") or [])
     batch = int(record.get("batch_size") or MAX_ITEMS)
@@ -706,10 +709,17 @@ def escalation_plan(record: Optional[Mapping[str, Any]], *, max_turns: int,
     previous = max(bound) if bound else (float(default_ceiling_usd)
                                          if default_ceiling_usd else None)
     ceiling = round(previous * CEILING_ESCALATION, 2) if previous else None
+    if ceiling is not None and clamp is not None:
+        ceiling = round(float(clamp(ceiling)), 2)
+    if ceiling is not None and previous and ceiling <= previous:
+        ceiling = None   # the clamp leaves no lift: only a smaller batch can change anything
     smaller = max(1, batch // 2)
-    if (ceiling is None or ceiling <= (previous or 0)) and smaller >= batch:
+    if ceiling is None and smaller >= batch:
         return None   # neither the ceiling nor the batch can change: the same limit again
-    return {"max_turns": int(max_turns), "max_budget_usd": ceiling, "batch_size": smaller}
+    return {"max_turns": int(max_turns),
+            # No lift left: re-ask under the ceiling that bound it, with the smaller batch.
+            "max_budget_usd": ceiling if ceiling is not None else previous,
+            "batch_size": smaller}
 
 
 def passed(record: Optional[Mapping[str, Any]]) -> bool:

@@ -274,10 +274,13 @@ _INCONCLUSIVE_PHRASES = (
 )
 
 
-def _lifted_ceiling(previous: Optional[dict], default_ceiling: Optional[float]) -> dict:
+def _lifted_ceiling(previous: Optional[dict], default_ceiling: Optional[float],
+                    clamp=None) -> dict:
     """`max_budget_usd` for a re-ask of a session stopped at its spend ceiling: the ceiling that
-    bound it, raised (acceptance_gate.CEILING_ESCALATION). {} when the last session was not
-    stopped by its ceiling — the re-ask runs under the session's own."""
+    bound it, raised (acceptance_gate.CEILING_ESCALATION) and clamped by `clamp` (the build's
+    lifted_ceiling_usd: at most MAX_LIFT x the session budget, within every allowance). {} when
+    the last session was not stopped by its ceiling, or the clamp leaves no lift — the re-ask
+    then runs under the session's own ceiling."""
     from .acceptance_gate import CEILING_ESCALATION
 
     previous = previous or {}
@@ -286,7 +289,10 @@ def _lifted_ceiling(previous: Optional[dict], default_ceiling: Optional[float]) 
     bound = previous.get("budget_ceiling_usd") or default_ceiling
     if not bound:
         return {}
-    return {"max_budget_usd": round(float(bound) * CEILING_ESCALATION, 2)}
+    lifted = round(float(bound) * CEILING_ESCALATION, 2)
+    if clamp is not None:
+        lifted = round(float(clamp(lifted)), 2)
+    return {"max_budget_usd": lifted} if lifted > float(bound) else {}
 
 
 def check_is_inconclusive(summary: str, verdict: Optional[str] = None) -> bool:
@@ -4999,24 +5005,59 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _repo_files_seen.append(n or None)
         return _repo_files_seen[0]
 
-    def _session_budget_ceiling():
+    def _money_billed(agent=None) -> bool:
+        """Whether the build's sessions spend MONEY (an API key, a metered gateway): the agent's
+        own billing stamp once it has one, else the project's routed source. Unknown is money."""
+        billing = str(getattr(agent, "_billing", "") or "") if agent is not None else ""
+        if billing:
+            from .included_spend import INCLUDED_BILLING
+
+            return billing.strip().lower() not in INCLUDED_BILLING
+        try:
+            from .model_routing import call_is_included
+
+            with _transaction(engine) as c:
+                return not call_is_included(c, settings, project_id, None)
+        except Exception:  # noqa: BLE001 — unknown is money, the safe side
+            return True
+
+    def _ceiling_inputs(agent=None) -> dict:
+        """What every ceiling of this build is measured against, read now: its list-price spend
+        (money AND included — what the CLI's --max-budget-usd counts), and on a money-billed lane
+        its money spent and the tightest period cap's headroom."""
+        money = _money_billed(agent)
+        out = {"list_spent_micros": 0, "money": money, "build_money_spent_micros": 0,
+               "period_headroom_micros": None, "risk_tier": risk_tier,
+               "repo_files": _repo_file_count()}
+        try:
+            with _transaction(engine) as c:
+                out["list_spent_micros"] = _build_budget.list_price_spend(c, run_id)
+                if money:
+                    out["build_money_spent_micros"] = _build_budget.unsettled_money(
+                        c, project_id, run_id)
+                    out["period_headroom_micros"] = _build_budget.money_headroom(
+                        budget, c, project_id, run_id=run_id)
+        except Exception:  # noqa: BLE001 — an unreadable ledger must not unbound the session
+            _log_caught(logger)
+        return out
+
+    def _session_budget_ceiling(agent=None):
         """THIS SESSION'S spend ceiling, in dollars, asked before each session.
 
         Sized to a SESSION (`code_agent_session_budget_usd`, scaled by the risk tier and the
-        repo's size) and never more than what is left of the build's LIST-PRICE allowance —
-        list price, money AND included, because that is what the CLI's `--max-budget-usd`
-        counts. It used to be the per-task MONEY budget less the run's money: $2 at list price
-        on every session of a subscription build, which killed a medium repo's implement and
-        acceptance sessions mid-answer. Money caps stay enforced at every stage boundary
-        (build_budget.cap_reached). None when the install sets neither."""
-        try:
-            with _transaction(engine) as c:
-                spent = _build_budget.list_price_spend(c, run_id)
-        except Exception:  # noqa: BLE001 — an unreadable ledger must not unbound the session
-            spent = 0
-        return _build_budget.session_ceiling_usd(settings, list_spent_micros=spent,
-                                                 risk_tier=risk_tier,
-                                                 repo_files=_repo_file_count())
+        repo's size), never more than what is left of the build's LIST-PRICE allowance — and on
+        a MONEY-billed lane never more than the build's money budget left or the tightest period
+        cap's headroom, so one session cannot overshoot a cap that is only checked between
+        stages (build_budget.session_ceiling_usd). It used to be the per-task MONEY budget less
+        the run's money: $2 at list price on every session of a subscription build, which killed
+        a medium repo's implement and acceptance sessions mid-answer. None when nothing is set."""
+        return _build_budget.session_ceiling_usd(settings, **_ceiling_inputs(agent))
+
+    def _lift_ceiling(requested, agent=None):
+        """An escalation's raised ceiling, clamped (build_budget.lifted_ceiling_usd): at most
+        MAX_LIFT x the session budget and never past any run-level limit — never compounding."""
+        return _build_budget.lifted_ceiling_usd(settings, float(requested),
+                                                **_ceiling_inputs(agent))
 
     def _agent_for_locked(engine_name: str):
         a = agents.get(engine_name)
@@ -5034,7 +5075,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # EVERY SESSION OF EVERY STAGE RUNS UNDER THE BUILD'S REMAINING BUDGET
             # (engine_contract._default_ceiling): set once here, enforced by the engine itself
             # where it can be (budget_limit), at the stage boundary where it cannot.
-            a.budget_ceiling = _session_budget_ceiling
+            a.budget_ceiling = (lambda _a=a: _session_budget_ceiling(_a))
             agents[engine_name] = a
         # BOSS-407: give the native lane's `bash` tool the SAME runner BOSS uses for
         # verification, so an agent-run command gets the sandbox's tool caches, the
@@ -5671,6 +5712,26 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             raise BuildBudgetStopped(
                 f"{reached['message']} The build stopped before {where.removeprefix('phase->')}"
                 "; its work so far is kept, and Retry continues it.")
+        # THE BUILD'S OWN ALLOWANCE (build_budget.allowance_reached): a build that used its
+        # list-price allowance — or, on an API key, its money budget — stops here in its own
+        # words, instead of handing every later session a one-cent ceiling.
+        try:
+            inputs = _ceiling_inputs(next(iter(agents.values()), None))
+            with _transaction(engine) as c:
+                override = _build_budget.override_money(c, project_id, run_id)
+            used = _build_budget.allowance_reached(
+                settings, list_spent_micros=inputs["list_spent_micros"], money=inputs["money"],
+                build_money_spent_micros=inputs["build_money_spent_micros"],
+                override_micros=override, risk_tier=inputs["risk_tier"],
+                repo_files=inputs["repo_files"])
+        except Exception:  # noqa: BLE001 — never let the check itself break a run
+            _log_caught(logger)
+            return
+        if used:
+            raise BuildBudgetStopped(
+                f"{used} The build stopped before {where.removeprefix('phase->')}; its work so "
+                "far is kept, and Retry continues it once a person approves more (a budget "
+                "override) or raises the allowance.")
 
     def _stop_on_harness_failure(where: str) -> None:
         """Raise the run's harness failure, if a session of this run found its engine cannot
@@ -9917,7 +9978,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         change_block = _change_block_with_integrity(_review_change)
                         # LIFT THE LIMIT THAT BOUND THE LAST REVIEW: one stopped at its spend
                         # ceiling is re-asked with a raised ceiling, not only more turns.
-                        _rev_ceiling = _lifted_ceiling(r3, _session_budget_ceiling())
+                        _rev_ceiling = _lifted_ceiling(
+                            r3, _session_budget_ceiling(review_agent),
+                            clamp=lambda usd: _lift_ceiling(usd, review_agent))
                         rr, _hollow = _judge_seat("review_code", lambda pre: review_agent.run_role(
                             pre + _review_prompt(title, criteria, instructions=instructions,
                                                  ui=ui_task, change=change_block,
@@ -9966,7 +10029,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         # same $2 ceiling and it failed identically (crun_9a9a535c).
                         _plan = _acceptance_gate.escalation_plan(
                             _acceptance_record, max_turns=escalated,
-                            default_ceiling_usd=_session_budget_ceiling())
+                            default_ceiling_usd=_session_budget_ceiling(consistency_agent),
+                            clamp=lambda usd: _lift_ceiling(usd, consistency_agent))
                         if _plan is None:
                             evidence["acceptance_escalation_refused"] = (
                                 "the re-ask would run under the same limit that stopped it")
