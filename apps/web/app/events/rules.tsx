@@ -51,6 +51,20 @@ function editingOf(rule: Rule | null, chat: boolean, agents: Agent[], budget: nu
 }
 function browserZone(): string { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; } }
 
+/** Visible pause reason beside the list switch. Blank is nothing. */
+export function pausedReasonSentence(reason: string | null | undefined): string | null {
+  const text = reason?.trim() ?? "";
+  return text ? text : null;
+}
+
+/** Beside the rules list switch. More than six words is a paragraph. */
+export function PausedReason({ id, sentence }: { id: string; sentence: string | null }) {
+  if (!sentence) return null;
+  return sentence.split(/\s+/).filter(Boolean).length > 6
+    ? <p data-testid={`ev-rule-paused-why-${id}`} data-user-text>{sentence}</p>
+    : <span data-testid={`ev-rule-paused-why-${id}`} data-user-text>{sentence}</span>;
+}
+
 export function RulesTab() {
   const { projectId, actor, conns, agents } = useEv();
   const { list, picked } = useConnPick();
@@ -161,6 +175,7 @@ export function RulesTab() {
                     </button>
                     <button type="button" role="switch" className="ev-switch" aria-checked={r.on} aria-label={r.name || words} data-testid={`ev-rule-switch-${r.id}`}
                             title={r.paused_reason || (r.on ? "On" : "Off")} {...lifecycle.props} onClick={lifecycle.guard(() => void flip(r))} />
+                    <PausedReason id={r.id} sentence={pausedReasonSentence(r.paused_reason)} />
                   </div>
                 );
               })}
