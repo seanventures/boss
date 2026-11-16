@@ -2,6 +2,22 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.17]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.17.md](docs/community/RELEASE_NOTES_v1.0-rc10.17.md).
+
+### Added
+
+- The error page links its page digest to the Activity log and says that id is not a stored row. The first-week card links the Activity log and Govern. The Activity rail lists people. Recent sends can be found by subject or body. The deploy drawer names the recorded approver. A change-set lane opens its build. The build story marks lines newer than the last open. A latency objective can be stored in milliseconds.
+
+### Changed
+
+- The community candidate version is `1.0.0-rc.10.17`. The one-hour dashboard figure is labeled new reservations, not settled receipts. The number is unchanged.
+
+### Release scope
+
+- This is the git tag of public main after rc10.16, including the session spend ceiling already on main as pull request 145. It is not a live host deploy. No image tag or release-gate run is attached. The export record still cites `docs/community/RC9_VALIDATION.md`. A failed deploy phase still has no phase-only retry. A migration approval was not added.
+
 ## [v1.0-rc10.16]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.16.md](docs/community/RELEASE_NOTES_v1.0-rc10.16.md).
