@@ -672,6 +672,7 @@ function LibraryCard(p: CardProps) {
           <span title={schedules.map((s) => s.describes + (s.enabled ? "" : " (paused)")).join(", ")}
                 data-testid={`wf-card-scheduled-${w.workflow_key}`}>
             <CalendarBlank size={14} aria-hidden />
+            {schedules.some((s) => !s.enabled) ? " paused" : null}
           </span>
         ) : null}
         {w.last_run ? (
