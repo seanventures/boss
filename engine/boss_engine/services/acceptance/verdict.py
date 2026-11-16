@@ -95,18 +95,31 @@ def _extensionless(root: Path) -> dict[str, list[str]]:
     return out
 
 
-def evidence_paths(root: Any, why: str) -> tuple[list[str], list[str]]:
+def evidence_paths(root: Any, why: str, *,
+                   defs: Optional["_Definitions"] = None) -> tuple[list[str], list[str]]:
     """(cited paths that exist in the tree, cited paths that do not). A bare extensionless
-    name (Makefile) counts when exactly one file of that name is in the tree."""
+    name (Makefile) counts when exactly one file of that name is in the tree. A cited symbol
+    (`auth.VerifyJWT`, `Store.Swap`) counts as the file that defines it (_Definitions)."""
     if root is None:
         return [], []
     found, absent = [], []
+    defs = defs if defs is not None else _Definitions(Path(root))
     for m in _PATHISH.finditer(str(why or "")):
         cited = m.group(1)
         if re.fullmatch(r"\d+(\.\d+)*", cited):
             continue
-        hit = _resolve(Path(root), cited)
+        # A path, else a symbol the way its language writes it (`auth.VerifyJWT`,
+        # `Store.Swap`, `module.func`): the file that DEFINES it is the evidence (AR-23 —
+        # "cited paths not in the tree: auth.VerifyJWT" marked real Go evidence partial).
+        hit = _resolve(Path(root), cited) or defs.symbol_file(cited)
         (found if hit else absent).append(hit or cited)
+    for m in _QUALIFIED.finditer(str(why or "")):
+        # A qualified name too long to look like a path (`proxy.pathMatches`,
+        # `session.createSession`): evidence when the tree defines it, never "absent".
+        if m.group(1) not in absent:
+            hit = defs.symbol_file(m.group(1))
+            if hit:
+                found.append(hit)
     bare = None
     for m in _BARE.finditer(str(why or "")):
         if bare is None:
@@ -141,13 +154,32 @@ def _code_lines(text: str) -> str:
     return "\n".join(out)
 
 
-#: Words no loader is named: the languages' own keywords (and anything shorter than 3).
+#: Words no loader is named: the languages' own keywords (and anything shorter than 3),
+#: compared as written. A plain name (`Load`, `read`, `main`) is a real function in every
+#: language: whether it loads the file is what `_defines` and `_refers_to` check. Rejecting
+#: `Load` here marked four MET items of the Go Northgate gateway partial (AR-23).
 _KEYWORDS = frozenset("""
 func function def class return var let const val if else elif for while do switch case break
 continue import from package new this self true false null nil none undefined async await
 export default public private protected static void final struct interface type enum try
 catch except finally raise throw throws with yield lambda pass go defer select chan map range
-string int bool float main init load read open file""".split())
+string int bool float""".split())
+#: Source files a definition can live in (a symbol citation is resolved against these only).
+_CODE_FILE = re.compile(r"(?i)\.(go|py|pyi|java|kt|kts|scala|groovy|ts|tsx|js|jsx|mjs|cjs|rb|"
+                        r"rs|cs|php|swift|c|cc|cpp|h|hpp|m|ex|exs|clj|dart|lua|sh)$")
+#: Extensions a `name.ext` citation means as a FILE, never as `qualifier.Symbol`.
+_FILE_EXTS = frozenset("""
+go py pyi java kt kts scala ts tsx js jsx mjs cjs rb rs cs php swift c cc cpp h hpp md rst txt
+yaml yml json toml ini cfg conf csv xml html css scss sql sh mod sum lock proto env tf hcl
+gradle properties adoc lua dart ex exs clj""".split())
+_IDENT = re.compile(r"[A-Za-z_$][\w$]*")
+#: A qualified name (`proxy.pathMatches`, `Store.Swap`) where it is not part of a path.
+_QUALIFIED = re.compile(r"(?<![\w/.\-$])([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+)(?![\w/$])")
+#: `file:Symbol` (`internal/config/loader.go:Load`, `atomic.go:Store.Swap`): a citation of a
+#: definition in a named file, whether or not the reviewer wrote LOADED BY in front of it.
+_FILE_SYMBOL = re.compile(r"`?([\w.\-/]+\.[A-Za-z]\w{0,8}):`?([A-Za-z_$][\w.$]*)")
+#: A bare "*.yaml" glob string: it names every YAML in the tree, never one file.
+_BARE_GLOB = re.compile(r"""(["'`])\*\.[\w]+\1""")
 _DATA_FILE = re.compile(r"(?i)\.(ya?ml|json|toml|ini|cfg|conf|csv|xml)$")
 _STRING = re.compile(r"""(["'`])((?:(?!\1).){1,200})\1""")
 
@@ -192,6 +224,86 @@ def _refers_to(code: str, data_file: str) -> bool:
     return False
 
 
+class _Definitions:
+    """The tree's code files, read once per check, and where a symbol is DEFINED.
+
+    A cited symbol is resolved the way its language spells it:
+      Go       `auth.VerifyJWT` (package dir `auth`), `Store.Swap` (method on a type),
+               unexported `proxy.pathMatches`
+      Python   `module.func`, `Class.method` (file stem `module`, or the file defining Class)
+      Java/TS  `Class.method` (the file defining the class, or named after it)
+    The qualifier narrows the files (a path part or file stem named after it, or a file that
+    defines it); the last part must be defined there, outside comments, in non-test code."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = Path(root)
+        self._code: Optional[dict[str, str]] = None
+
+    def code(self) -> dict[str, str]:
+        if self._code is None:
+            self._code = {}
+            for p in _walk(self.root):
+                if not _CODE_FILE.search(p.name):
+                    continue
+                try:
+                    text = p.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+                self._code[str(p.relative_to(self.root))] = _code_lines(text)
+                if len(self._code) >= 4000:
+                    break
+        return self._code
+
+    def symbol_file(self, cited: str) -> Optional[str]:
+        """The non-test file defining `cited` (`pkg.Name`, `Type.Method`), or None."""
+        cited = str(cited or "").strip("`'\",;:()[]").rstrip(".")
+        parts = cited.split(".")
+        if "/" in cited or len(parts) < 2 or not all(_IDENT.fullmatch(x) for x in parts):
+            return None
+        if len(parts) == 2 and parts[1].lower() in _FILE_EXTS:
+            return None                      # `loader.go`, `gateway.yaml`: a file, not a name
+        name, quals = parts[-1], parts[:-1]
+        if len(name) < 2 or name in _KEYWORDS:
+            return None
+        for rel, code in self.code().items():
+            if _TEST_PATH.search(rel) or not _defines(code, name):
+                continue
+            path = Path(rel)
+            if any(q in {*path.parts[:-1], path.stem} or _defines(code, q) for q in quals):
+                return rel
+        return None
+
+    def loader_of(self, data: list[str]) -> Optional[str]:
+        """A non-test code file whose code names one of the data files, or None. A bare
+        "*.yaml" glob is not counted: a config loader's glob is not the rulebook's loader."""
+        for rel, code in self.code().items():
+            if _TEST_PATH.search(rel):
+                continue
+            narrow = _BARE_GLOB.sub('""', code)
+            if any(d != rel and _refers_to(narrow, d) for d in data):
+                return rel
+        return None
+
+
+def _named_loader(root: Path, why: str, data: list[str]) -> Optional[str]:
+    """A `file:Symbol` the evidence cites that is non-test code DEFINING the symbol and, when
+    the item has data files, naming one of them in its code. None when there is no such one."""
+    for m in _FILE_SYMBOL.finditer(str(why or "")):
+        hit = _resolve(root, m.group(1))
+        symbol = m.group(2).split(".")[-1]
+        if not hit or _TEST_PATH.search(hit) or not _CODE_FILE.search(hit) \
+                or len(symbol) < 3 or symbol in _KEYWORDS:
+            continue
+        try:
+            code = _code_lines((root / hit).read_text(encoding="utf-8", errors="ignore"))
+        except OSError:
+            continue
+        if _defines(code, symbol) and (not data or any(
+                d != hit and _refers_to(code, d) for d in data)):
+            return hit
+    return None
+
+
 def _item_data_files(root: Path, item_text: str, found: Iterable[str]) -> list[str]:
     """The data files an item's wiring is about: the cited ones, and those the item names."""
     out = [f for f in found if _DATA_FILE.search(f) and not _DECL_PATH.search(f)]
@@ -204,7 +316,8 @@ def _item_data_files(root: Path, item_text: str, found: Iterable[str]) -> list[s
 
 
 def wiring_problem(root: Any, why: str, *, item_text: str = "",
-                   needs_loader: bool = False) -> Optional[str]:
+                   needs_loader: bool = False,
+                   defs: Optional[_Definitions] = None) -> Optional[str]:
     """Why a MET's wiring does not hold, or None (BOSSAPP-1233: a rules YAML the linter never
     read was cited as MET). Every "LOADED BY <file>:<symbol>" the reviewer wrote must hold:
 
@@ -222,12 +335,22 @@ def wiring_problem(root: Any, why: str, *, item_text: str = "",
     root = Path(root)
     claims = list(_LOADED_BY.finditer(str(why or "")))
     if needs_loader and not claims:
+        # NO "LOADED BY", BUT THE EVIDENCE MAY STILL NAME THE LOADER (AR-23): a reviewer who
+        # wrote `internal/lint/docs.go:RenderReadme` and confirmed the table is generated from
+        # the YAML said what loads it. A cited `file:Symbol` that is defined there and names the
+        # item's file holds; failing that, any non-test code in the tree that names the file
+        # does (searched, not taken on the reviewer's word). Neither: the loader is not named.
+        defs = defs if defs is not None else _Definitions(root)
+        found, _absent = evidence_paths(root, why, defs=defs)
+        data = _item_data_files(root, item_text, found)
+        if _named_loader(root, why, data) or (data and defs.loader_of(data)):
+            return None
         return "loader not named: this item's file must be read by the code (LOADED BY)"
-    found, _absent = evidence_paths(root, why) if claims else ([], [])
+    found, _absent = evidence_paths(root, why, defs=defs) if claims else ([], [])
     data = _item_data_files(root, item_text, found) if claims else []
     for m in claims:
         cited, symbol = m.group(1), m.group(2).split(".")[-1]
-        if len(symbol) < 3 or symbol.lower() in _KEYWORDS:
+        if len(symbol) < 3 or symbol in _KEYWORDS:
             return f"the loader it names, {symbol!r}, is not a function or variable name"
         hit = _resolve(root, cited)
         if not hit:
@@ -265,13 +388,14 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any, exec_log: Any 
     for m in _ANSWER.finditer(str(reply or "")):
         answers[int(m.group(1))] = (m.group(2).lower(), _norm(m.group(4))[:600])
     out = []
+    defs = _Definitions(Path(root)) if root is not None else None  # the tree, read once
     for it in items:
         status, why = answers.get(int(it["n"]), (UNJUDGED, ""))
         # The contract's tags under the floor (contract.floor_tags): what this check acts on.
         it = {**{k: v for k, v in it.items() if k not in _contract.ITEM_TAGS},
               **_contract.floor_tags(it.get("text"), it, where="gate")}
         if status == MET:
-            found, absent = evidence_paths(root, why)
+            found, absent = evidence_paths(root, why, defs=defs)
             code = [f for f in found if not _DOC_PATH.search(f) and not _DECL_PATH.search(f)]
             reason = ""
             if not code:
@@ -283,7 +407,7 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any, exec_log: Any 
             else:
                 reason = wiring_problem(
                     root, why, item_text=str(it.get("text") or ""),
-                    needs_loader=bool(it.get("needs_loader"))) or ""
+                    needs_loader=bool(it.get("needs_loader")), defs=defs) or ""
             if reason:
                 status, why = PARTIAL, f"{why} ({reason})".strip()
         out.append({**it, "status": status, "evidence": why})
