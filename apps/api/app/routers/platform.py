@@ -254,6 +254,10 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .add_project import router as add_project_router
 
     app.include_router(add_project_router)
+    # I'm feeling lucky (BOSSAPP-1274): launch a project, with attachments (BOSSAPP-1275).
+    from .factory_launch import router as factory_launch_router
+
+    app.include_router(factory_launch_router)
 
     # BOSSAPP-768 — Rules review: the business rules agents propose, approved by a person
     try:

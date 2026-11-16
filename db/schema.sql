@@ -15624,3 +15624,19 @@ ALTER TABLE mcp_tool_catalog ADD COLUMN IF NOT EXISTS schema_sha256 TEXT;
 ALTER TABLE mcp_tool_catalog ADD COLUMN IF NOT EXISTS description_sha256 TEXT;
 CREATE INDEX IF NOT EXISTS idx_mcp_tool_catalog_server
   ON mcp_tool_catalog (project_id, server_id);
+
+-- I'm feeling lucky attachments (BOSSAPP-1275). Org-scoped: a launch reads them by id
+-- before the project exists. Text extracts only — a Drive source is a connected id, not bytes.
+CREATE TABLE IF NOT EXISTS factory_launch_attachments (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  kind TEXT NOT NULL CHECK (kind IN ('spec', 'file', 'image', 'drive')),
+  name TEXT NOT NULL,
+  media_type TEXT NOT NULL DEFAULT '',
+  byte_size INTEGER NOT NULL DEFAULT 0,
+  text_extract TEXT NOT NULL DEFAULT '',
+  drive_source_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_factory_launch_attachments_org
+  ON factory_launch_attachments (org_id, created_at DESC);
