@@ -2391,6 +2391,14 @@ def retry_code_task(
             automatic_retry=automatic,
             outcome=started,
         )
+        if pr_url and new_id:
+            # A NEWER BUILD OF THE CHANGE makes every "Fix these" card of its PR a stale
+            # snapshot (change_recheck, BOSSAPP-1328): withdrawn, naming this attempt.
+            from .run_decisions import withdraw_fix_cards
+
+            withdraw_fix_cards(c, prev["project_id"], str(pr_url),
+                               note=f"Superseded: a newer build of this change ({new_id}) "
+                                    "decides what is left to fix.")
         if pr_url:
             emit_event(
                 c, prev["project_id"], "code_task.branch_refresh_not_requested",

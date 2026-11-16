@@ -1325,12 +1325,16 @@ class DecisionService:
         elif action == "start_recheck_followup":
             # FIX THESE (change_recheck, #168 review R1): a re-check never starts a build on its
             # own; a person with the steer permission starts the follow-up here.
-            from .change_recheck import may_start_fix, start_fix
+            from .change_recheck import fix_refusal, may_start_fix, start_fix
 
-            if not may_start_fix(connection, str(row["project_id"])):
+            if not may_start_fix(connection, str(row["project_id"]), actor):
                 raise InvalidDecisionTransitionError(
-                    "Starting the fix needs the Steer builds permission (code_task:steer) on "
-                    "this project.")
+                    "Starting the fix is a person's call: it needs a person with the Steer "
+                    "builds permission (code_task:steer) on this project, never an agent or a "
+                    "worker.")
+            stale = fix_refusal(connection, recommendation, str(row["project_id"]))
+            if stale:
+                raise InvalidDecisionTransitionError(stale)
             settings, jobs = self.settings, self.jobs
             rec_copy, pid, tid = dict(recommendation), str(row["project_id"]), row.get("task_id")
             emit_event(connection, pid, "code_task.recheck_fix_started", actor, "decision",
