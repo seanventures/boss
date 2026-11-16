@@ -106,12 +106,14 @@ def test_pressing_a_card_after_the_fix_starts_nothing(eng, project, monkeypatch)
             c.execute(text("UPDATE findings SET status = 'fixed' WHERE project_id = :p"),
                       {"p": project})
         before = _runs(eng, project)
-        with pytest.raises(dmod.InvalidDecisionTransitionError, match="Nothing is open"), \
-                eng.begin() as c:
-            dmod.DecisionService(get_settings()).transition(c, card, action="approve",
-                                                            actor="ceo", note="go")
+        with eng.begin() as c:
+            row = dmod.DecisionService(get_settings()).transition(c, card, action="approve",
+                                                                  actor="ceo", note="go")
         assert _runs(eng, project) == before
-        assert _status(eng, card)["status"] == "pending"
+        # A STALE CARD STOPS ASKING (#169 review): withdrawn with the refusal's own words.
+        got = _status(eng, card)
+        assert row["status"] == got["status"] == "withdrawn"
+        assert got["resolution_note"].startswith("Nothing is open")
         with eng.begin() as c:
             assert {r["status"] for r in c.execute(text(
                 "SELECT status FROM findings WHERE project_id = :p"),
@@ -164,3 +166,77 @@ def test_an_agent_or_worker_can_never_press_it(eng, project, actor, kind):  # no
             assert cr.may_start_fix(c, project, "ceo") is True
     finally:
         _cleanup(eng, project)
+
+
+def test_pressing_a_card_a_newer_build_superseded_withdraws_it_in_words(eng, project, monkeypatch):  # noqa: F811
+    """#169 review: the press refused ("a newer build exists") but left the card pending, so it
+    kept asking for a press that could never do anything. It is withdrawn with those words."""
+    monkeypatch.setattr(dmod, "_spawn_as_this_request", lambda fn: fn())
+    try:
+        root, _recheck, card = _lineage_with_card(eng, project)
+        with eng.begin() as c:
+            newer = _run(c, project, fctx={"root_run_id": root})
+        before = _runs(eng, project)
+        with eng.begin() as c:
+            dmod.DecisionService(get_settings()).transition(c, card, action="approve",
+                                                            actor="ceo", note="go")
+        got = _status(eng, card)
+        assert got["status"] == "withdrawn" and newer in got["resolution_note"]
+        assert "Nothing was started" in got["resolution_note"]
+        assert _runs(eng, project) == before
+        with eng.begin() as c:
+            assert c.execute(text("SELECT count(*) FROM events WHERE entity_id = :d AND "
+                                  "event_type = 'decision.withdrawn'"), {"d": card}).scalar() == 1
+    finally:
+        _cleanup(eng, project)
+
+
+def test_a_press_without_steer_leaves_even_a_stale_card_pending(eng, project, monkeypatch):  # noqa: F811
+    """Only "not a person / no steer" keeps the card: someone who may press it still can."""
+    from boss_engine.identity import lineage
+
+    monkeypatch.setattr(lineage, "request_enforced", lambda: True)
+    monkeypatch.setattr(lineage, "current_context", lambda: None)   # no steer in this request
+    try:
+        root, _recheck, card = _lineage_with_card(eng, project)
+        with eng.begin() as c:
+            _run(c, project, fctx={"root_run_id": root})          # stale, too
+        with pytest.raises(dmod.InvalidDecisionTransitionError, match="Steer builds"), \
+                eng.begin() as c:
+            dmod.DecisionService(get_settings()).transition(c, card, action="approve",
+                                                            actor="ceo", note="go")
+        assert _status(eng, card)["status"] == "pending"
+    finally:
+        _cleanup(eng, project)
+
+
+# ── PR #170 review: every surface says the card was withdrawn, never "Approved" ────────────
+
+def test_the_decide_tool_reports_withdrawn_not_approved(monkeypatch):
+    import boss_engine.tools.builtin as builtin
+    from boss_engine.tools import build_default_registry
+
+    from .test_a_typed_release_approval_is_a_button import _Conn, _Ctx
+
+    note = "Nothing is open: the findings this card listed were fixed since. Nothing was started."
+
+    class _Svc:
+        def __init__(self, settings):
+            pass
+
+        def transition(self, connection, decision_id, **kw):
+            return {"id": decision_id, "status": "withdrawn", "resolution_note": note}
+
+    class _DecMod:
+        DecisionService = _Svc
+
+    real = builtin.services_module
+    monkeypatch.setattr(builtin, "services_module",
+                        lambda name: _DecMod if name == "decisions" else real(name))
+    out = build_default_registry().invoke(
+        "decide", _Ctx(_Conn({"id": "dec_fix", "project_id": "p", "status": "pending"})),
+        project_id="p", actor="sean", operator_confirmed=True,
+        args={"decision_id": "dec_fix", "action": "approve", "note": "go"})
+    assert out["ok"] is False and out["status"] == "withdrawn", out
+    assert out["error"] == f"withdrawn: {note}"
+

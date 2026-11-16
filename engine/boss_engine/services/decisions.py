@@ -813,6 +813,26 @@ class DecisionService:
                     "What this step would send changed while you were reviewing it, so this "
                     "approval was not recorded. Reload, read the updated preview, and approve "
                     "again if it is still right.")
+            # A STALE FIX CARD IS WITHDRAWN, NOT LEFT PENDING (#169 review). Pressing "Fix these"
+            # on a card a newer build superseded, or whose findings were all fixed since, can
+            # never start anything: the card is closed here with the refusal's own words, so it
+            # stops asking. Only a press that is not a person's (no steer permission) leaves it
+            # pending, for someone who may press it. Before anything is recorded.
+            if (recommendation or {}).get("action") == "start_recheck_followup":
+                from .change_recheck import fix_refusal, may_start_fix
+                from .run_decisions import _withdraw_with_note
+
+                if not may_start_fix(connection, str(row["project_id"]), actor):
+                    raise InvalidDecisionTransitionError(
+                        "Starting the fix is a person's call: it needs a person with the Steer "
+                        "builds permission (code_task:steer) on this project, never an agent or "
+                        "a worker.")
+                stale = fix_refusal(connection, recommendation, str(row["project_id"]))
+                if stale:
+                    _withdraw_with_note(connection, decision_id, str(row["project_id"]), stale,
+                                        actor=actor, why={"refused": stale,
+                                                          "pressed_by": actor})
+                    return self.get_row(connection, decision_id)
             if identity_ctx is not None:
                 from ..identity import approvals as _approvals
 
