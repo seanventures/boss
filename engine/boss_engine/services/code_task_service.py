@@ -1996,7 +1996,7 @@ def retry_code_task(
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
     allow_test_retirement: bool = False, job_priority: Optional[int] = None,
     attempt_ceiling: Optional[int] = None, workflow_version_id: str = "",
-    title: Optional[str] = None, automatic: bool = False,
+    title: Optional[str] = None, automatic: bool = False, by_person: bool = False,
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
@@ -2009,7 +2009,13 @@ def retry_code_task(
       (identity.consent.carry_retry_authority(by_boss=True)) — or is not started at all;
     * never retries a build that failed before this BOSS started (an upgrade or a restart in
       between): that build is a person's to restart.
-    Either refusal raises RetryNeedsPerson, writes nothing, and leaves the build failed with Retry."""
+    Either refusal raises RetryNeedsPerson, writes nothing, and leaves the build failed with Retry.
+
+    `by_person=True`: a PERSON pressed Retry (a workflow step's Retry, the code task's own).
+    That is the explicit "I know, proceed" the infra circuit breaker below waits for, exactly as
+    a fix note is: northgate-gateway's build died twice on a BOSS bug fixed since, the person
+    retried the step, and the breaker refused it for want of a note — so the step started
+    nothing and was dead-lettered (wfr_b4dbf0868f224963b793, 2026-11-16)."""
     with _transaction(engine) as c:
         prev = load_code_task_run(c, run_id)
         prev_gates_failed = _recorded_failed_gates(c, run_id) if prev is not None else []
@@ -2075,12 +2081,13 @@ def retry_code_task(
         substrate_fallback_note = (
             "NOTE: the previous attempt failed with an infrastructure error on the micro-VM "
             "substrate; this attempt runs on the local substrate (degraded mode).")
-    elif prev_infra and prev_substrate == "local_subprocess" and attempt >= 3 and not fix_note:
+    elif (prev_infra and prev_substrate == "local_subprocess" and attempt >= 3
+          and not fix_note and not (by_person and not automatic)):
         raise ValueError(
             f"circuit breaker: {attempt - 1} attempts in this lineage have failed with "
             f"infrastructure errors (last: {str(prev.get('error') or '')[:200]!r}) and the run is "
             "already on the local substrate. A blind retry will fail the same way — fix the "
-            "platform issue (see the error above) or pass an explicit fix_note to proceed.")
+            "platform issue (see the error above), then press Retry or retry with a note.")
 
     work_branch = f"boss/code/{root}"
     pr_url = prev.get("pull_request_url")

@@ -181,6 +181,7 @@ def install(engine, *, service: str) -> Optional[ActivityLogHandler]:
         try:
             handler = ActivityLogHandler(engine, service)
             handler.setFormatter(logging.Formatter("%(message)s"))
+            _keep_the_container_log(logging.getLogger())
             logging.getLogger().addHandler(handler)
             # A HANDLER ON THE ROOT LOGGER IS NOT ENOUGH.
             #
@@ -209,6 +210,23 @@ def install(engine, *, service: str) -> Optional[ActivityLogHandler]:
             return handler
         except Exception:  # noqa: BLE001
             return None
+
+
+def _keep_the_container_log(root: logging.Logger) -> None:
+    """WARNING and worse still reach the container log once this handler is on the root.
+
+    With no handler on the root logger, Python prints WARNING+ to stderr itself (its "last
+    resort"). Adding ours ended that: in the API, whose root had no handler of its own, every
+    warning went to `app_logs` only, and `docker logs` showed none — "workflow step … failed on
+    the database: …" was nowhere a person looking at the server log could find it (northgate-
+    gateway, 2026-11-16). A service that already logs to a stream keeps its own handler."""
+    if any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
+           for h in root.handlers):
+        return
+    stream = logging.StreamHandler()          # stderr, where the last resort wrote
+    stream.setLevel(logging.WARNING)
+    stream.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    root.addHandler(stream)
 
 
 def installed() -> Optional[ActivityLogHandler]:

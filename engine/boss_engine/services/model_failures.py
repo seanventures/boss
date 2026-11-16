@@ -9,8 +9,13 @@ the next step, and every surface that shows model work uses it.
 """
 from __future__ import annotations
 
+import logging
 import re
+import threading
+import traceback
 from typing import Any, Mapping, Optional
+
+log = logging.getLogger(__name__)
 
 #: Where an operator fixes a model connection.
 SETUP_HREF = "/?area=setup&focus=models"
@@ -203,18 +208,30 @@ def confirm_login_rejection(call, *, sleep=None):
     return call()
 
 
-#: A database failure, as text (a recorded last_error) — SQLAlchemy/psycopg's own wording.
+#: A database failure, as text (a recorded last_error) — SQLAlchemy/psycopg's own wording, AT
+#: THE START of the text (after at most one "IntegrityError: " class name, the shape a step's
+#: generic failure takes). Anywhere else it is a QUOTE: northgate-gateway's circuit breaker said
+#: "circuit breaker: 2 attempts … have failed (last: '(psycopg.errors.IdleInTransaction…')" — a
+#: refusal that quoted an old build's error — and the step read it as BOSS's database failing,
+#: retried itself three times in a second and was dead-lettered (2026-11-16).
 _STORAGE_TEXT = re.compile(
-    r"\((?:psycopg2?|sqlalchemy)\.(?:errors|exc)\.\w+\)|\[SQL: |sqlalche\.me/e/"
+    r"^\s*(?:[A-Za-z_]\w*: )?"
+    r"(?:\((?:psycopg2?|sqlalchemy)\.(?:errors|exc)\.\w+\)"
+    r"|\([\w.]+\) [^\n]*\n\[SQL: "        # str(sqlalchemy DBAPIError) with any driver's error
     r"|duplicate key value violates unique constraint"
-    r"|violates (?:foreign key|not-null|check|exclusion) constraint"
-    r"|current transaction is aborted|could not serialize access|deadlock detected",
+    r"|(?:insert or update on table \S+ |update or delete on table \S+ |null value in column \S+ )?"
+    r"(?:violates (?:foreign key|not-null|check|exclusion) constraint)"
+    r"|current transaction is aborted|could not serialize access|deadlock detected)",
     re.I,
 )
 
 
 def is_storage_failure(error: object) -> bool:
-    """A failure of BOSS's own database — not the model, not the operator's setup."""
+    """A failure of BOSS's own database — not the model, not the operator's setup.
+
+    An exception is one when it, or what it was raised from, is SQLAlchemy's or psycopg's; text
+    (and an exception's own message) only when it BEGINS with the database's wording — a sentence
+    that merely quotes a database error (a refusal naming a build's last error) is not one."""
     seen = 0
     current = error
     while isinstance(current, BaseException) and seen < 5:
@@ -224,6 +241,78 @@ def is_storage_failure(error: object) -> bool:
         current = current.__cause__
         seen += 1
     return bool(_STORAGE_TEXT.search(str(error or "")))
+
+
+#: How much of a failure's message and stack is kept on a step, a dead letter or a log line.
+_RECORD_MESSAGE_LIMIT = 2000
+_RECORD_STACK_LIMIT = 6000
+
+
+def _scrubbed(value: str) -> str:
+    """No credential leaves in a record: secrets and URL userinfo masked (redaction), and a
+    statement's bound values dropped — a row's data is not a diagnosis."""
+    from .redaction import mask_url_credentials, redact_secrets
+
+    try:
+        value = re.sub(r"\[parameters: [^\n]*", "[parameters: not recorded]", value)
+        return mask_url_credentials(redact_secrets(value))
+    except Exception:  # noqa: BLE001 — a record must never fail; keep nothing rather than risk it
+        return "[unavailable: the text could not be redacted]"
+
+
+def failure_record(error: object) -> dict:
+    """THE FAILURE ITSELF, for an operator: {type, message, stack?} — secrets redacted.
+
+    A person reads one sentence ("BOSS couldn't save this to its database."); this is what that
+    sentence stands for, stored next to it (the step's output, the dead letter) and logged, so
+    the cause is never only in a message that was rewritten away. `stack` is the traceback of a
+    live exception (its chain included); a recorded string has none."""
+    if isinstance(error, BaseException):
+        record: dict[str, Any] = {
+            "type": f"{type(error).__module__}.{type(error).__qualname__}",
+            "message": _scrubbed(str(error))[:_RECORD_MESSAGE_LIMIT],
+        }
+        if error.__traceback__ is not None or error.__cause__ is not None:
+            stack = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            # The END of a long stack is where it broke: keep that part.
+            record["stack"] = _scrubbed(stack)[-_RECORD_STACK_LIMIT:]
+        return record
+    return {"type": "text", "message": _scrubbed(str(error or ""))[:_RECORD_MESSAGE_LIMIT]}
+
+
+#: Recorded failures (text) already logged by this process — a re-shown last_error is logged once.
+_LOGGED_TEXT: dict[str, None] = {}
+_LOGGED_LOCK = threading.Lock()
+_LOGGED_KEEP = 512
+
+
+def log_failure(error: object, *, where: str = "", said: str = "") -> dict:
+    """Log a failure that is being turned into a person-facing sentence, WITH its type, message
+    and stack (secrets redacted), and return its failure_record.
+
+    The sentence a person sees may point at "the log"; this makes that true. A live exception
+    is logged every time (each is a new failure); a recorded string once per process, so a
+    screen re-explaining a stored last_error does not flood the log."""
+    record = failure_record(error)
+    if isinstance(error, BaseException):
+        if getattr(error, "_boss_failure_logged", False):
+            return record          # already logged where it happened, with its context
+        try:
+            error._boss_failure_logged = True  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 — an exception that takes no attributes is logged again
+            pass
+    else:
+        key = record["message"]
+        with _LOGGED_LOCK:
+            if key in _LOGGED_TEXT:
+                return record
+            _LOGGED_TEXT[key] = None
+            while len(_LOGGED_TEXT) > _LOGGED_KEEP:
+                _LOGGED_TEXT.pop(next(iter(_LOGGED_TEXT)))
+    log.warning("%s%s: %s%s%s", f"{where}: " if where else "", record["type"],
+                record["message"], f" (shown as: {said})" if said else "",
+                f"\n{record['stack']}" if record.get("stack") else "")
+    return record
 
 
 def technical_summary(error: object) -> str:
@@ -268,10 +357,14 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
     # BOSS'S OWN DATABASE, before every text check below: a statement naming a table such as
     # `reconciliations` or `budget_caps` would otherwise read as that kind of failure.
     if is_storage_failure(error):
+        headline = "BOSS couldn't save this to its database."
+        # THE LOG HOLDS IT BECAUSE IT IS WRITTEN HERE: the sentence below points at the
+        # Activity Log, so the failure is logged (type, message, stack; redacted) before it is.
+        log_failure(error, where="storage failure", said=headline)
         return {
             "kind": "storage",
-            "headline": "BOSS couldn't save this to its database.",
-            "action": "Try again. If it keeps happening, the details are in the server log.",
+            "headline": headline,
+            "action": "Try again. If it keeps happening, what broke is in BOSS's Activity Log.",
             "href": None, "retry": True,
             "detail": technical_summary(error),
         }
