@@ -2,6 +2,22 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.24]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.24.md](docs/community/RELEASE_NOTES_v1.0-rc10.24.md).
+
+### Added
+
+- The stop pill says why agents are stopped. The merge button says why it is held. A plugin row says why it is blocked. An extension row says why it is blocked. A fix card says its confidence reasons. A recent finished run says its error. A ticket says why it was flagged. A call row says its error. An ask action says why. A takeover row says why.
+
+### Changed
+
+- The community candidate version is `1.0.0-rc.10.24`.
+
+### Release scope
+
+- This is the git tag of public main after rc10.23, including pull request 154 which was already on main. It is not a live host deploy. No image tag or release-gate run is attached. The export record still cites `docs/community/RC9_VALIDATION.md`. A failed deploy phase still has no phase-only retry. A migration approval was not added.
+
 ## [v1.0-rc10.23]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.23.md](docs/community/RELEASE_NOTES_v1.0-rc10.23.md).

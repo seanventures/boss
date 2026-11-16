@@ -60,6 +60,27 @@ type ProposedAction = {
   why?: string;
 };
 
+/** Why an Ask BOSS action is offered. A trimmed why is the sentence. Blank is nothing. */
+export function askActionWhySentence(why: string | null | undefined): string | null {
+  const trimmed = why?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** Beside the action label. More than six words is a paragraph; six or fewer is a span. */
+export function AskActionWhy({ sentence, id, tool }: {
+  sentence: string | null;
+  id?: string | null;
+  tool?: string | null;
+}) {
+  if (!sentence) return null;
+  const key = id || tool || "action";
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  const testId = `askboss-why-${key}`;
+  return long
+    ? <p data-testid={testId} data-user-text>{sentence}</p>
+    : <span data-testid={testId} data-user-text>{sentence}</span>;
+}
+
 /** Openers that demonstrate the range: read, diagnose, act. Each is a real request. */
 const OPENERS = [
   { badge: "ST", tone: "accent", text: "What changed, what is blocked, and what should I do next?" },
@@ -2298,19 +2319,21 @@ export function AskBossHero({
                title="BOSS can do this for you, nothing runs until you choose.">BOSS can do this:</p>
             <div className="askboss-actions-row">
               {proposed.map((a) => (
-                <GatedButton
-                  key={a.id}
-                  permission="assistant:chat"
-                  type="button"
-                  className="button agent-proposal-btn"
-                  disabled={busy}
-                  data-running={ranAction === a.id}
-                  title={a.why}
-                  onClick={() => accept(a)}
-                  data-testid={`askboss-action-${a.tool}`}
-                >
-                  {ranAction === a.id ? "…" : a.label}
-                </GatedButton>
+                <React.Fragment key={a.id || a.tool}>
+                  <GatedButton
+                    permission="assistant:chat"
+                    type="button"
+                    className="button agent-proposal-btn"
+                    disabled={busy}
+                    data-running={ranAction === a.id}
+                    title={a.why}
+                    onClick={() => accept(a)}
+                    data-testid={`askboss-action-${a.tool}`}
+                  >
+                    {ranAction === a.id ? "…" : a.label}
+                  </GatedButton>
+                  <AskActionWhy sentence={askActionWhySentence(a.why)} id={a.id} tool={a.tool} />
+                </React.Fragment>
               ))}
             </div>
           </div>
