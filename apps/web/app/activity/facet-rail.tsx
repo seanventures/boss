@@ -149,6 +149,7 @@ export function FacetRail({ facets, tokens, showVerbose, onTokens, onVerbose }: 
           <RailRow key={a.actor} k="actor" value={a.actor} pressed={has("actor", a.actor)} exact={exact} loaded={facets !== null} onToggle={() => toggle("actor", a.actor)} n={a.n} testid={`lx-actor-${a.actor}`}
                label={<span data-user-text>{a.actor}</span>} />
         ))}
+        {facets?.actors.length === 40 ? <li className="lx-rail-none">Showing 40 people.</li> : null}
       </Section>
       <Section id="run" label="RUN" {...sec("run")}>
         {(facets?.runs ?? []).slice(0, moreRuns ? 40 : RUNS_SHOWN).map((r) => {
