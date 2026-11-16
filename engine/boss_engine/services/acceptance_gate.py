@@ -628,38 +628,98 @@ def batch_summary(replies: list[Optional[str]]) -> Optional[str]:
 
 
 def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, Any], root: Any,
-              source: Optional[Mapping[str, Any]] = None, dropped: int = 0
-              ) -> tuple[dict[str, Any], int]:
-    """Judge EVERY item: one reviewer pass per MAX_ITEMS batch (`ask(prompt) -> run_role
-    result`), the item numbers global across passes. A pass that fails leaves its items
-    unjudged, so the check is not_run — never met. Returns (record, cost in micros)."""
+              source: Optional[Mapping[str, Any]] = None, dropped: int = 0,
+              batch_size: Optional[int] = None) -> tuple[dict[str, Any], int]:
+    """Judge EVERY item: one reviewer pass per `batch_size` (default MAX_ITEMS) batch
+    (`ask(prompt) -> run_role result`), the item numbers global across passes. A pass that fails
+    leaves its items unjudged, so the check is not_run — never met. A pass stopped short (its
+    turn or spend ceiling) keeps what it answered. EVERY pass that did not finish is recorded
+    with WHY (`stops`), so the record's `why` and the card say what bound it — "pass 1: stopped
+    at the $2.00 session ceiling", never only "30 of 30 items were not answered".
+    Returns (record, cost in micros)."""
     import logging
+
+    from .engine_contract import stop_words
 
     tree = tree_listing(root)
     replies: list[Optional[str]] = []
+    stops: list[dict[str, Any]] = []
     cost = 0
     model = None
+    size = max(1, int(batch_size or MAX_ITEMS))
     cap = MAX_PASSES * MAX_ITEMS
     over = max(0, len(items) - cap)
     items = items[:cap]
-    for start in range(0, len(items), MAX_ITEMS):
-        batch = items[start:start + MAX_ITEMS]
+    for start in range(0, len(items), size):
+        batch = items[start:start + size]
+        n = len(replies) + 1
         try:
             rr = ask(acceptance_prompt(batch, title=title, stack=stack, tree=tree)) or {}
         except Exception as exc:  # noqa: BLE001 — this pass's items stay unjudged (not_run)
             logging.getLogger(__name__).warning("acceptance pass failed (%s)",
                                                 type(exc).__name__)
+            # The class only: an exception's text can carry a connection URL.
+            stops.append({"pass": n, "stop": "error", "items": len(batch),
+                          "words": f"failed ({type(exc).__name__})"})
             replies.append(None)
             continue
         cost += int(rr.get("cost_usd_micros") or 0)
         model = model or rr.get("model") or (rr.get("usage") or {}).get("model")
+        words = stop_words(rr)
+        if words:
+            stops.append({"pass": n, "stop": str(rr.get("stop_reason")), "items": len(batch),
+                          "ceiling_usd": rr.get("budget_ceiling_usd"), "words": words})
         replies.append(str(rr.get("summary") or ""))
     rec = judge(items, "\n".join(r or "" for r in replies), stack, root=root, source=source,
                 dropped=dropped, summary_line=batch_summary(replies), over_cap=over)
     rec["passes"] = len(replies)
+    rec["batch_size"] = size
+    rec["stops"] = stops
+    if stops and rec.get("verdict") != "met":
+        said = "; ".join(f"pass {x['pass']}: {x['words']}" for x in stops)
+        rec["why"] = f"{rec['why']} ({said})" if rec.get("why") else said
     rec["model"] = model
     rec["reply"] = "\n".join(r or "" for r in replies)[:6000]
     return rec, cost
+
+
+#: How much an escalation raises a spend ceiling that bound a pass.
+CEILING_ESCALATION = 2.0
+
+
+def escalation_plan(record: Optional[Mapping[str, Any]], *, max_turns: int,
+                    default_ceiling_usd: Optional[float] = None,
+                    clamp: Optional[Any] = None) -> Optional[dict[str, Any]]:
+    """How to re-ask a check that left items unanswered, LIFTING THE LIMIT THAT BOUND IT.
+
+    A pass stopped at its spend ceiling is re-asked with a raised ceiling AND half the batch;
+    a turn-capped pass with `max_turns` (the caller's escalated turns). Returns
+    {"max_turns", "max_budget_usd" (None = the session default), "batch_size"} — or None when
+    the re-ask would run under the very limit that stopped it (refused: it would fail the
+    same way, crun_9a9a535c). `clamp(usd) -> usd` bounds the raised ceiling (the pipeline's
+    build_budget.lifted_ceiling_usd: at most MAX_LIFT x the session budget and within every
+    run-level allowance), so repeated escalations never compound."""
+    record = record or {}
+    stops = list(record.get("stops") or [])
+    batch = int(record.get("batch_size") or MAX_ITEMS)
+    budget = [x for x in stops if x.get("stop") == "budget_cap"]
+    if not budget:
+        return {"max_turns": int(max_turns), "max_budget_usd": None, "batch_size": batch}
+    bound = [float(x["ceiling_usd"]) for x in budget if x.get("ceiling_usd") is not None]
+    previous = max(bound) if bound else (float(default_ceiling_usd)
+                                         if default_ceiling_usd else None)
+    ceiling = round(previous * CEILING_ESCALATION, 2) if previous else None
+    if ceiling is not None and clamp is not None:
+        ceiling = round(float(clamp(ceiling)), 2)
+    if ceiling is not None and previous and ceiling <= previous:
+        ceiling = None   # the clamp leaves no lift: only a smaller batch can change anything
+    smaller = max(1, batch // 2)
+    if ceiling is None and smaller >= batch:
+        return None   # neither the ceiling nor the batch can change: the same limit again
+    return {"max_turns": int(max_turns),
+            # No lift left: re-ask under the ceiling that bound it, with the smaller batch.
+            "max_budget_usd": ceiling if ceiling is not None else previous,
+            "batch_size": smaller}
 
 
 def passed(record: Optional[Mapping[str, Any]]) -> bool:
