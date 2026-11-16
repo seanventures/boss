@@ -16083,4 +16083,25 @@ CREATE TABLE IF NOT EXISTS field_acl_records (
   app_id TEXT PRIMARY KEY REFERENCES field_acl_apps(id) ON DELETE CASCADE,
   values JSONB NOT NULL DEFAULT '{}'::jsonb,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+-- BOSSAPP-1269: a builder freezes a file or a data table so an agent write to
+-- that path is refused and the stored bytes stay as they were. An unfrozen
+-- path can change. File bytes stay on disk. Table bytes stay in
+-- freeze_table_bytes. freeze_paths is the hold itself.
+CREATE TABLE IF NOT EXISTS freeze_paths (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('file', 'table')),
+  path TEXT NOT NULL,
+  frozen_by TEXT NOT NULL DEFAULT 'builder',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, kind, path)
+);
+CREATE INDEX IF NOT EXISTS idx_freeze_paths_project
+  ON freeze_paths (project_id, kind);
+CREATE TABLE IF NOT EXISTS freeze_table_bytes (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  body BYTEA NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, path)
 );
