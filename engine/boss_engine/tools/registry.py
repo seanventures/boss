@@ -773,6 +773,19 @@ def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str],
             "error": body.get("error", "forbidden"), "permission": needs, "message": message}
 
 
+def extra_permission_refusal(tool: str, permission: str, project_id: Optional[str], *,
+                             auth: Any = None) -> Optional[dict]:
+    """A handler's SECOND permission for one kind of call, decided exactly as the tool's own
+    (`identity_gate`: same mode, same caller, same refusal shape). For a key a call needs only
+    sometimes — create_code_task needs code_task:steer only when it builds onto an app
+    (`extends_run_id`), which `also_requires` (every call) cannot say. None to proceed."""
+    from types import SimpleNamespace
+
+    spec = SimpleNamespace(name=tool, permission=permission, confine=(), production=None)
+    return identity_gate(spec, auth if auth is not None else CURRENT_TOOL_AUTH.get(),
+                         project_id, {})
+
+
 def permission_refusal_words(tool: str, permission: Optional[str], *,
                              never_delegable: bool = False) -> str:
     """A refused tool call, said the way a person reads it.

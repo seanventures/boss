@@ -287,7 +287,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
       // The person's words go along as the work: an idea's words, or the lines under a repo.
       const words = (kind === "idea" ? text : text.split("\n").slice(1).join("\n")).trim();
       // Long words ride as the project's New work draft, never in the URL and never cut (AR-21).
-      if (words.length > WORDS_IN_LINK) keepNewWorkDraft(pid, words, "feature");
+      if (words.length > WORDS_IN_LINK && !keepNewWorkDraft(pid, words, "feature")) return;
       go(withNewWorkDoor(projectPageHref(pid, homeId), { projectId: pid, kind: "feature", words }));
     },
     shared,

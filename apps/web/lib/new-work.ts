@@ -295,9 +295,15 @@ function DEMO_UNDERSTANDING(body: UnderstandBody): R {
 /** A NEW WORK DOOR'S WORDS, KEPT WHOLE (AR-21): written as this project's New work draft, which
  *  the modal brings back. Every door whose words may be too long for a link calls this before it
  *  navigates (lib/compose-links WORDS_IN_LINK). */
-export function keepNewWorkDraft(projectId: string, text: string, kind: WorkKind = "feature"): void {
+export function keepNewWorkDraft(projectId: string, text: string, kind: WorkKind = "feature",
+                                 ask: (question: string) => boolean = (q) => (typeof window === "undefined" ? false : window.confirm(q))): boolean {
+  // NEVER OVER A PERSON'S UNSENT DRAFT without asking (PR #156 review B3): an Edit replaced it.
+  const had = readDraft(projectId);
+  if (had && had.text.trim() && had.text !== text
+      && !ask("You have an unsent New work draft in this project. Replace it with these words?")) return false;
   writeDraft(projectId, {
     id: newDraftId(), kind, text, chat: [], brief: null, confirmed: false, priority: null,
     notify: "", issue: { mode: "none" }, workflow: "", at: Date.now(),
   });
+  return true;
 }

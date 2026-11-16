@@ -325,6 +325,24 @@ describe("an answer's New work card", () => {
     expect(readDraft(P)?.text).toBe(long);
   });
 
+  it("a short answer's Edit never touches the person's draft (its link carries the words)", () => {
+    keepNewWorkDraft(P, "my unsent words", "feature", () => true);
+    const short = { ...card("Add a route"), edit_href: `?project_id=${P}&area=project&tab=work&compose=1&compose_text=Add+a+route` };
+    expect(keepCardDraft(P, short, () => { throw new Error("must not ask"); })).toBe(true);
+    expect(readDraft(P)?.text).toBe("my unsent words");
+  });
+
+  it("a long answer's Edit asks before replacing an unsent draft, and keeps it on no", () => {
+    keepNewWorkDraft(P, "my unsent words", "feature", () => true);
+    const long = "y".repeat(5000);
+    const asked: string[] = [];
+    expect(keepCardDraft(P, card(long), (q) => { asked.push(q); return false; })).toBe(false);
+    expect(asked).toHaveLength(1);
+    expect(readDraft(P)?.text).toBe("my unsent words");
+    expect(keepCardDraft(P, card(long), () => true)).toBe(true);
+    expect(readDraft(P)?.text).toBe(long);
+  });
+
   it("over the limit, Start is held and the card says why — the words are not cut", async () => {
     const calls = stubFetch(() => ({ body: {} }));
     const host = document.createElement("div");

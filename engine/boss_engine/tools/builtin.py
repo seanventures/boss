@@ -1166,6 +1166,21 @@ def _build_onto_existing_app(ctx, cts, pid: str, actor: str, args: dict, extends
     any of that. Only the workflow's own bookkeeping (the governing run, who started it, which
     agent builds) travels with it.
     """
+    # BUILDING ONTO AN APP CHANGES THAT APP'S BUILD: the caller needs code_task:steer, as Change
+    # it does (PR #156 review B2). A workflow's build step was asked at its start door
+    # (start_delivery_workflow checks it whenever `extends_run_id` is accepted), so only a
+    # direct call (MCP, an agent's turn) is decided here. "A workflow step" is the dispatch path
+    # (the runner's step authority, a context the caller cannot set), never a workflow_run_id
+    # argument a caller names. A step whose workflow picks the app itself (a security review's
+    # fix) builds what the person approved at that workflow's gate.
+    from ..services.workflow_capability_runner import _IN_STEP_AUTHORITY
+
+    if not _IN_STEP_AUTHORITY.get():
+        from .registry import extra_permission_refusal
+
+        refused = extra_permission_refusal("create_code_task", "code_task:steer", pid)
+        if refused is not None:
+            return refused
     with ctx.begin() as c:
         parent = _code_task_in_project(c, extends, pid)
         if parent is None:

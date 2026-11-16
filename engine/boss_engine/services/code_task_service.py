@@ -1232,14 +1232,18 @@ def start_followup_task(
         "requested_by": actor,
     }
     if new_change:
-        # Its own lineage (its run id is its root, so its own branch), still the same app.
-        child_fctx.pop("root_run_id")
-        child_fctx["after_merged_run_id"] = root
+        # THE FIRST BUILD OF A NEW LINEAGE of the same app (its run id is its root, so its own
+        # branch and PR). NOT a follow-up: a follow-up is held to its lineage's builds' items
+        # (acceptance_gate.items_spec), skips the deferred-findings follow-up and is stamped as
+        # one — a new change after a merge is held to its OWN brief, like any first build. Only
+        # which app it is (app_id) and which merged change it follows (after_merged_run_id).
+        child_fctx = {"requested_by": actor, "after_merged_run_id": root,
+                      "app_id": fctx.get("app_id") or fctx.get("root_run_id") or parent_run_id}
     # Where the outcome BEGAN, carried forward. root_run_id says which attempts are the same
     # work; origin says which panel or dossier it came from. A follow-up that keeps the first
     # and drops the second becomes an orphan on screen -- one app reading as several, which is
     # the state this linkage exists to remove.
-    if fctx.get("origin"):
+    if fctx.get("origin") and not new_change:
         child_fctx["origin"] = fctx["origin"]
     # WHICH APP this is. Assigned once and inherited by every retry and follow-up, so all the
     # attempts at one app group together — and a deliberate rebuild from scratch, which starts
@@ -1249,9 +1253,10 @@ def start_followup_task(
     child_fctx["app_id"] = fctx.get("app_id") or fctx.get("root_run_id") or parent_run_id
     # Official canaries must stay official across follow-up. Dropping
     # qa_benchmark made /report 404 and broke the 5/5 lineage.
-    if fctx.get("official"):
+    # (A new change after a merge carries none of the lineage's marks: see above.)
+    if fctx.get("official") and not new_change:
         child_fctx["official"] = True
-    bench = fctx.get("qa_benchmark")
+    bench = fctx.get("qa_benchmark") if not new_change else None
     if isinstance(bench, dict) and bench:
         try:
             from .benchmark_apps import hydrate_official_benchmark
@@ -1259,7 +1264,7 @@ def start_followup_task(
             child_fctx["qa_benchmark"] = hydrate_official_benchmark(bench)
         except Exception:  # noqa: BLE001 — catalog miss must not drop lineage
             child_fctx["qa_benchmark"] = dict(bench)
-    parent_design = (run.get("state") or {}).get("design")
+    parent_design = (run.get("state") or {}).get("design") if not new_change else None
     if isinstance(parent_design, dict) and str(parent_design.get("plan") or "").strip():
         # A NEW CHANGE PLANS ITSELF. Inheriting the parent's design makes the build skip its
         # standards, spec, plan and plan review (code_task.design_resumed) and implement the

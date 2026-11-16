@@ -315,3 +315,33 @@ def test_an_answer_card_never_cuts_and_never_puts_long_words_in_its_link(engine)
                                     message="build it")
     assert "over_limit" not in small
     assert "compose_text=" in small["edit_href"]
+
+
+# ── review B1: a new change after a merge is held to its OWN brief ──────────────────────────
+
+def test_a_new_change_after_a_merge_is_held_to_its_own_must_haves(engine):
+    """Not a follow-up: the acceptance gate holds it to the brief it was started with, never to
+    nothing (a follow-up looks for its lineage's builds — a new lineage has none)."""
+    from apps.api.app.main import jobs
+    from boss_engine.services import acceptance_gate as ag
+    from boss_engine.services.code_task_service import load_code_task_run, start_followup_task
+    from boss_engine.services.project_experience import add_project
+
+    _the_app(engine)
+    _merge(engine, RUN)
+    brief = add_project.render_brief(add_project.shape_brief({
+        "title": "Gateway exports", "problem": "Operators need the routing table offline.",
+        "must_haves": ["Export to CSV", "Filter by date"]}), "Add exports.")
+    with engine.begin() as connection:
+        started = start_followup_task(connection, parent_run_id=RUN, instructions=brief,
+                                      jobs=jobs, new_change=True)
+        child = load_code_task_run(connection, started["run_id"])
+        fctx = child["finalize_ctx"]
+        assert not fctx.get("is_followup") and not fctx.get("root_run_id")
+        assert fctx["app_id"] == "app_northgate" and fctx["after_merged_run_id"] == ROOT
+        spec, source = ag.items_spec(connection, run_id=child["id"], fctx=fctx,
+                                     own_spec=child["spec"])
+    texts = [i["text"] for i in ag.acceptance_items(spec)]
+    assert any("Export to CSV" in t for t in texts), texts
+    assert any("Filter by date" in t for t in texts), texts
+    assert source["run_id"] == child["id"] and source["root"] is True
