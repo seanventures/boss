@@ -259,6 +259,29 @@ export function AlertBadges({ a }: { a: Alert }) {
   );
 }
 
+/** What an alert is about, when that is not already the label. Description wins, then summary. */
+export function alertWhatSentence(
+  description: string | null | undefined,
+  summary: string | null | undefined,
+  label: string | null | undefined,
+): string | null {
+  const shown = label?.trim() ?? "";
+  const detail = description?.trim() ?? "";
+  if (detail && detail !== shown) return detail;
+  const rest = summary?.trim() ?? "";
+  if (rest && rest !== shown) return rest;
+  return null;
+}
+
+/** Beside the label span. More than six words is a paragraph. */
+export function View({ id, sentence }: { id: string; sentence: string | null }) {
+  if (!sentence) return null;
+  const testId = `obs-alert-why-${id}`;
+  return sentence.split(/\s+/).filter(Boolean).length > 6
+    ? <p data-testid={testId} data-user-text>{sentence}</p>
+    : <span data-testid={testId} data-user-text>{sentence}</span>;
+}
+
 /** The status chip with its times: Resolved 07:11, 6 min; Acknowledged, Param (until 16:00). */
 export function AlertStatus({ a }: { a: Alert }) {
   const lt = useLocalTime();
@@ -320,7 +343,10 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
           <button type="button" className="inf-link obs-strong obs-alert-what" data-testid="obs-alert-rule"
                   title={`${a.alertname}: its rule (Respond automatically, Triage, Silence, Edit)`} onClick={() => setRuleOpen("switches")}>
             {a.label}</button>
-        ) : <span className="obs-strong obs-alert-what" title={a.description ?? a.summary} data-user-text>{a.label}</span>}
+        ) : <>
+          <span className="obs-strong obs-alert-what" title={a.description ?? a.summary} data-user-text>{a.label}</span>
+          <View id={a.id} sentence={alertWhatSentence(a.description, a.summary, a.label)} />
+        </>}
         {!plainNames && a.alertname && a.alertname !== a.label ? <span className="inf-mono inf-faint" data-testid="obs-alert-rulename" data-copy="data">{a.alertname}</span> : null}
         <span className="inf-num" data-copy="data">{a.valueWord}</span>
         {a.thresholdWord ? <span className="inf-faint">(rule {a.thresholdWord})</span> : null}
