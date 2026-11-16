@@ -134,6 +134,12 @@ export function weekLine(w: Week): string {
           `${big(w.tokens)} tokens`, `${w.modelHours.toFixed(1)} model hours`].join(", ");
 }
 
+/** Five agents stay on the page. A longer list is said, not drawn. */
+export function pulseTopRestSentence(count: number): string | null {
+  if (count <= 5) return null;
+  return `5 agents are on this page. ${count - 5} more are not.`;
+}
+
 export function PulseRow({ pulse, week, prsOpen, now, orgId }: {
   pulse: Pulse | null; week?: Week | null; prsOpen: number | null; now: number | null; orgId?: string | null;
 }) {
@@ -141,6 +147,7 @@ export function PulseRow({ pulse, week, prsOpen, now, orgId }: {
   if (!pulse) return null;
   const top = pulse.top.slice(0, 5);
   const most = top[0]?.n ?? 1;
+  const rest = pulseTopRestSentence(pulse.top.length);
   return (
     <section className="cc-pulse" aria-label="Your team's pulse" data-testid="cc-pulse">
       <div className="cc-card">
@@ -191,6 +198,7 @@ export function PulseRow({ pulse, week, prsOpen, now, orgId }: {
                     );
                   })}
                 </div>
+                {rest ? <p>{rest}</p> : null}
               </>
             ) : null}
           </>
