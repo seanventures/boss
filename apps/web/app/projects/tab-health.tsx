@@ -148,6 +148,19 @@ export function LatencyObjectiveLine({ e }: { e: Env }) {
   return <small className="px-faint" data-testid={`px-h-env-latency-${e.key}`}>{line}</small>;
 }
 
+/** App and probe only. Any other source, including none, stays off the card. */
+export function p95SourceSentence(source: string | null | undefined): string | null {
+  if (source === "app") return "From the app's requests.";
+  if (source === "probe") return "From health probes.";
+  return null;
+}
+
+export function P95SourceLine({ e }: { e: { key: string; p95_source?: string | null } }) {
+  const line = p95SourceSentence(e.p95_source);
+  if (line === null) return null;
+  return <small className="px-faint" data-testid={`px-h-env-p95-source-${e.key}`}>{line}</small>;
+}
+
 /** One environment: the four numbers that answer "is it OK?". The ring and the sparks open the
  *  environment's drawer with its full charts. */
 function EnvCard({ e, ctx }: { e: Env; ctx: PxCtx }) {
@@ -180,6 +193,7 @@ function EnvCard({ e, ctx }: { e: Env; ctx: PxCtx }) {
         <button type="button" className="px-h-num" onClick={open} data-testid={`px-h-env-p95-${e.key}`} title="Full charts">
           <span className="px-lbl" title={P95_SOURCE[e.p95_source || "probe"]}>p95 latency</span>
           <span className="px-num px-mono">{e.p95_ms ?? "—"}<small className="px-faint"> ms</small></span>
+          <P95SourceLine e={e} />
           <LatencyObjectiveLine e={e} />
           <Spark series={e.series.latency} tone="teal" label="p95 latency, last 24 hours" />
         </button>

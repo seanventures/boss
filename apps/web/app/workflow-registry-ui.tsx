@@ -71,6 +71,9 @@ export function WorkflowRegistryView({
             ))}
           </div>
         )}
+        {definitions.length > 8 ? (
+          <p className="detail">8 workflows are on this page. {definitions.length - 8} more are not.</p>
+        ) : null}
         <div className="workflow-registry-mapping-summary">
           <strong>{mappings.length}</strong>
           <span className="detail">deterministic work-class mappings</span>
@@ -103,6 +106,9 @@ export function WorkflowRegistryView({
             ))}
           </div>
         )}
+        {runs.length > 8 ? (
+          <p className="detail">8 runs are on this page. {runs.length - 8} more are not.</p>
+        ) : null}
       </article>
 
       <article className="stack-card workflow-run-timeline">
@@ -144,6 +150,9 @@ export function WorkflowRegistryView({
                 </div>
               ))}
             </div>
+            {selectedRun.timeline.length > 10 ? (
+              <p className="detail">10 events are on this page. {selectedRun.timeline.length - 10} more are not.</p>
+            ) : null}
           </>
         )}
       </article>

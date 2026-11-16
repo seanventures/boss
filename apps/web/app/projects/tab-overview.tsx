@@ -47,6 +47,14 @@ const CREW_VERB: Record<string, string> = {
 
 const WORK_TONE: Record<string, string> = { running: "var(--teal)", stalled: "color-mix(in srgb, var(--amber) 55%, var(--surface-3))", needs_you: "var(--amber)", planned: "var(--quiet)", done: "var(--green)", failed: "var(--red)" };
 
+/** Beside the staging tile's p95 number: where that number was measured. The long sentence stays on the number's title. */
+export function StagingP95Source({ p95_ms, p95_source }: { p95_ms: number | null; p95_source?: string | null }) {
+  if (p95_ms === null || p95_ms === undefined) return null;
+  const words = p95_source === "app" ? "From the app's requests." : p95_source === "probe" ? "From health probes." : null;
+  if (words === null) return null;
+  return <span className="px-faint" style={{ fontSize: ".58rem", marginLeft: 6 }} data-testid="px-tile-staging-p95-source">{words}</span>;
+}
+
 /** 04-15 the cost delta tag: green when the week costs less than last week, red when more, and
  *  "first week" (idle) when last week cost nothing, so there is no % to show. */
 function CostDelta({ pct, first, what }: { pct: number | null; first?: boolean; what: string }) {
@@ -140,7 +148,8 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
                   {t.staging.uptime_pct ?? "—"}</Ring>
                 <div><div style={{ color: `var(--${t.staging.health === "healthy" ? "green" : t.staging.health === "down" ? "red" : t.staging.health === "degraded" ? "amber" : "muted"})`, fontWeight: 600 }}
                            title={t.staging.health_reason || undefined} data-testid="px-tile-staging-health">{HEALTH_WORD[t.staging.health]}</div>
-                  {t.staging.p95_ms !== null ? <span className="px-mono px-faint" style={{ fontSize: ".58rem" }} title={P95_SOURCE[t.staging.p95_source ?? ""] ?? undefined} data-testid="px-tile-staging-p95">{p95Words(t.staging.p95_ms, t.staging.window)}</span> : null}</div>
+                  {t.staging.p95_ms !== null ? <span className="px-mono px-faint" style={{ fontSize: ".58rem" }} title={P95_SOURCE[t.staging.p95_source ?? ""] ?? undefined} data-testid="px-tile-staging-p95">{p95Words(t.staging.p95_ms, t.staging.window)}</span> : null}
+                  <StagingP95Source p95_ms={t.staging.p95_ms} p95_source={t.staging.p95_source} /></div>
               </div>
               <Spark series={t.staging.series} tone="green" label="Staging latency, last 24 hours" />
             </>
