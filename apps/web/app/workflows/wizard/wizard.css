@@ -1,0 +1,220 @@
+/* Build a workflow. Studio tokens only. The lane is the one mark: work on the accent, a gate in amber. */
+
+.wfw-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dialog);
+  display: flex;
+  justify-content: flex-end;
+  background: color-mix(in srgb, var(--bg) 42%, transparent);
+}
+
+.wfw-sheet {
+  display: flex;
+  flex-direction: column;
+  width: min(26rem, 100%);
+  height: 100%;
+  min-width: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--sans);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  animation: wfw-in 160ms ease-out;
+}
+
+.wfw-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px 8px;
+}
+
+.wfw-title {
+  flex: 1;
+  margin: 0;
+  min-width: 0;
+  font-family: var(--display);
+  font-size: var(--fs-page);
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.wfw-beats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 0;
+  padding: 0 8px;
+  list-style: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.wfw-beats li {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 8px 4px;
+  text-align: center;
+  color: var(--faint);
+  font-size: var(--fs-tag);
+  font-weight: 600;
+  line-height: 1.2;
+  border-bottom: 2px solid transparent;
+}
+
+.wfw-beats li[aria-current="step"] {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+.wfw-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 16px 8px;
+}
+
+.wfw-name {
+  margin: 0 0 10px;
+  font-family: var(--display);
+  font-size: var(--fs-page);
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.wfw-note,
+.wfw-quiet {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  line-height: 1.4;
+}
+
+.wfw-starts {
+  margin: 0 0 12px;
+  color: var(--ink);
+  font-size: var(--fs-body);
+  line-height: 1.4;
+}
+
+.wfw-lane {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.wfw-node {
+  display: grid;
+  grid-template-columns: 0.85rem minmax(0, 1fr);
+  column-gap: 10px;
+}
+
+.wfw-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.wfw-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft, var(--surface-2));
+  flex: none;
+}
+
+.wfw-node[data-kind="gate"] .wfw-dot { background: var(--amber); }
+
+.wfw-stem {
+  flex: 1;
+  width: 1px;
+  min-height: 12px;
+  background: var(--border);
+}
+
+.wfw-node:last-child .wfw-stem { visibility: hidden; }
+
+.wfw-node-body {
+  min-width: 0;
+  padding-bottom: 14px;
+}
+
+.wfw-node-title {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.wfw-node-meta {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.wfw-node-body .wf-link { margin-top: 4px; }
+
+.wfw-status {
+  margin: 0 0 6px;
+  color: var(--green);
+  font-size: var(--fs-meta);
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.wfw-key {
+  margin: 6px 0 14px;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.wfw-error {
+  margin: 0;
+  color: var(--red);
+  font-size: var(--fs-meta);
+  line-height: 1.4;
+}
+
+.wfw-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.wfw-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wfw-sheet button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 719px) {
+  .wfw-sheet { width: 100%; border-left: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wfw-sheet { animation: none; }
+}
+
+@keyframes wfw-in {
+  from { transform: translateX(0.75rem); }
+  to { transform: none; }
+}

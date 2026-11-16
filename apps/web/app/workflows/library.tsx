@@ -11,8 +11,8 @@
  *   - your workflows come first, then a thin Standards divider and what BOSS ships;
  *   - two or more copies of one source collapse behind "+n copies" on the source card, so they
  *     can be seen and deleted without burying your own work;
- *   - a card opens the editor (`&wf=`), Start opens the Runs composer, and nothing here
- *     writes a workflow: Duplicate and New open an unsaved draft, and only the editor saves.
+ *   - a card opens the editor (`&wf=`). Start opens the Runs composer. Duplicate and New
+ *     open an unsaved draft. Build a workflow publishes through the same publishSpec.
  *
  * Words are labels; anything explanatory is a tooltip (spec section 4).
  */
@@ -38,6 +38,7 @@ import {
 } from "./studio-parts";
 import type { CustomStep } from "../delivery-workflows-ui";
 import { useAreaKeydown } from "../../lib/area-keys";
+import { WorkflowWizard } from "./wizard/workflow-wizard";
 
 /* ── Schedules (moved here with the Yours tab they lived on) ─────────────────────── */
 
@@ -309,6 +310,7 @@ export function Library(props: LibraryProps) {
   // THE CLOCK IS READ AFTER MOUNT, never during render: the server and the browser would print
   // different ages and React would tear the card out on hydration.
   const [now, setNow] = useState<number | null>(null);
+  const [building, setBuilding] = useState(false);
   useEffect(() => {
     setNow(Date.now());
     const t = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -433,6 +435,10 @@ export function Library(props: LibraryProps) {
                 })}>
           <Sparkle size={14} aria-hidden /> Ask BOSS
         </button>
+        <button type="button" className="wf-btn" data-testid="wf-wizard-open"
+                onClick={() => setBuilding(true)}>
+          Build a workflow
+        </button>
         <button type="button" className="wf-btn wf-btn-primary" data-testid="wf-lib-new"
                 title="New workflow (N)" onClick={onNew}>
           <Plus size={14} aria-hidden /> New workflow
@@ -520,6 +526,10 @@ export function Library(props: LibraryProps) {
           ) : null}
         </>
       )}
+      {building ? (
+        <WorkflowWizard projectId={projectId} onClose={() => setBuilding(false)}
+                        onOpen={(key) => { setBuilding(false); props.onOpen(key); }} />
+      ) : null}
     </div>
   );
 }
