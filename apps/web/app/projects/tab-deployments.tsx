@@ -68,6 +68,21 @@ export function DeployHealthWhy({ sentence, envKey }: { sentence: string | null;
     : <span data-testid={`px-env-health-why-${envKey}`} data-user-text>{sentence}</span>;
 }
 
+/** Why this deploy is not live. A blank reason is nothing. */
+export function deployStateReasonSentence(reason: string | null | undefined): string | null {
+  const trimmed = reason?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** Beside the deploy tag's word. More than six words is a paragraph; six or fewer is a span. */
+export function DeployStateWhy({ sentence, envKey }: { sentence: string | null; envKey: string }) {
+  if (!sentence) return null;
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  return long
+    ? <p data-testid={`px-env-deploy-why-${envKey}`} data-user-text>{sentence}</p>
+    : <span data-testid={`px-env-deploy-why-${envKey}`} data-user-text>{sentence}</span>;
+}
+
 /** "14:00" in the viewer's zone. */
 const hourLocal = (iso: string) => { try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { return iso; } };
 
@@ -245,9 +260,13 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
             where the deploy is ("Setting up · 3/7", "Last deploy failed", "Not deployed yet"),
             never "Unknown". */}
         {e.deploy && e.deploy.state !== "live" ? (
-          <Tag tone={DEPLOY_TONE[e.deploy.state]} title={e.deploy.reason || undefined}>
-            <span className="px-dot" data-s={e.deploy.state === "failed" ? "down" : "unknown"} data-round aria-hidden />
-            <span data-testid={`px-env-state-${e.key}`}>{e.deploy.word}</span></Tag>
+          <>
+            <Tag tone={DEPLOY_TONE[e.deploy.state]} title={e.deploy.reason || undefined}>
+              <span className="px-dot" data-s={e.deploy.state === "failed" ? "down" : "unknown"} data-round aria-hidden />
+              <span data-testid={`px-env-state-${e.key}`}>{e.deploy.word}</span>
+            </Tag>
+            <DeployStateWhy sentence={deployStateReasonSentence(e.deploy.reason)} envKey={e.key} />
+          </>
         ) : null}
         {!e.deploy || e.deploy.live ? (
           <>
