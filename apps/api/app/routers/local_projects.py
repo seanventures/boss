@@ -615,6 +615,11 @@ def check_github_repository(project_id: str, request: Request, owner: str, repo:
 
     with begin(_engine) as connection:
         _require(connection, project_id)
+        if purpose == "existing":
+            # PUBLISH INTO IT: checked with the credential that REACHES it (BOSSAPP-1338), not
+            # the creating one borrowed from another project.
+            return local_publish.check_existing(connection, _settings, project_id,
+                                                owner=owner.strip(), name=repo.strip())
         reach = local_publish.default_reach(connection, _settings, project_id, actor=_actor(request),
                                             owner=owner.strip(), repo=repo.strip())
     return local_publish.check_repository(

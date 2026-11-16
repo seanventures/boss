@@ -2032,14 +2032,15 @@ def github_token_for(connection: Connection, settings: Settings, project_id: str
     working unchanged. No token is a legitimate answer — a public repository clones without
     one, and for a private one the clone's own error is the honest report.
     """
-    configured = str(getattr(settings, "github_token", "") or "").strip()
-    if configured:
-        return configured
+    # THE ONE RESOLVER (repo_access, BOSSAPP-1338) under the build's rule: the environment
+    # token, else this project's own binding of owner/repo — never another repository's token,
+    # and nothing asked of GitHub.
     try:
-        service = GitHubConnectionService(settings)
-        token = service.token_for_repository(
-            connection, project_id=project_id, owner=owner, repo=repo)
-        return token or ""
+        from .repo_access import resolve
+
+        got = resolve(connection, settings, project_id, owner, repo, bound_only=True,
+                      verify=False)
+        return got.token or ""
     except Exception:  # noqa: BLE001 — no token is an answer; the clone reports it
         logger.debug("no usable GitHub credential for %s", project_id, exc_info=True)
         return ""

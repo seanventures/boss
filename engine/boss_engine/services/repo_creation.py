@@ -143,7 +143,7 @@ class Candidate:
         return {"kind": self.kind, "label": self.label, "token_kind": self.token_kind,
                 "can_create": self.can_create, "words": self.words, "fix": self.fix,
                 "missing": list(self.missing), "account_login": self.account_login or None,
-                "connection_id": self.connection_id}
+                "connection_id": self.connection_id, "project_id": self.project_id}
 
 
 @dataclass
@@ -315,7 +315,10 @@ def _connection_candidates(db: Any, settings: Any, owner: str, project_id: Optio
             # Another account's token creates only in an ORGANISATION it belongs to — and only
             # when BOSS knows `owner` is one (the App's installations say); never a guess.
             continue
-        label = f"{login} (access token, {row.get('project_name') or row.get('connection_label')})"
+        # WHOSE IT IS (BOSSAPP-1338): a token borrowed from another project says so.
+        own = project_id is not None and str(row.get("project_id")) == str(project_id)
+        label = (f"{login} (access token, this project)" if own else
+                 f"{login} (access token from project {row.get('project_name') or row.get('connection_label')})")
         granted = [str(p) for p in (row.get("granted_permissions") or [])]
         missing = [str(p) for p in (row.get("missing_permissions") or [])]
         api_base = str(row.get("api_base_url") or getattr(settings, "github_api_base_url", "") or "https://api.github.com")
@@ -332,6 +335,16 @@ def _connection_candidates(db: Any, settings: Any, owner: str, project_id: Optio
             can, words = False, "its token lacks the repo scope (missing: administration)"
         elif row.get("last_test_status"):
             can, words = None, "a fine-grained token: GitHub tells at the attempt whether it may create repositories"
+        elif probe:
+            # TEST IT NOW, it is one GET /user (BOSSAPP-1338): an unchecked token is not left
+            # "press Test all" when BOSS is about to use it anyway.
+            token = mint()
+            tested = pat_abilities(token, api_base=api_base) if token else {"ok": False, "words": "its secret could not be read"}
+            if not tested.get("ok"):
+                can, words = False, f"its token did not pass a check ({tested.get('words') or 'GitHub rejected it'})"
+            else:
+                can = tested.get("can_create")
+                words = str(tested.get("words") or "its token's scopes were checked")
         else:
             can, words = None, "its token's scopes are not checked yet: press Test all in Setup"
         if not same:

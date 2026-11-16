@@ -201,7 +201,8 @@ def test_a_connection_for_the_owner_is_found_with_its_recorded_scopes(monkeypatc
     with engine.begin() as c:
         got = repo_creation.repo_creation_credential(c, settings, "paramg", project_id=pid)
         assert got.ok and got.kind == "connection" and got.token == f"ghp_for_{cid}" and got.verified
-        assert "paramg (access token, Acme Shop)" in got.words
+        # this project's own token says so (BOSSAPP-1338: which project a credential is from)
+        assert "paramg (access token, this project)" in got.words
         no = repo_creation.repo_creation_credential(c, settings, "paramg-kaapppu", project_id=pid)
         assert not no.ok and "missing: administration" in no.words and no.fixes
         assert "paramg-kaapppu" in no.fixes[0] and "repo scope" in no.fixes[0]
@@ -209,7 +210,7 @@ def test_a_connection_for_the_owner_is_found_with_its_recorded_scopes(monkeypatc
         assert repo_creation.repo_creation_credential(c, settings, "PARAMG", project_id=pid).ok
         owners = repo_creation.creating_owners(c, settings, pid, ["someone-else"])
     by = {o["login"]: o for o in owners}
-    assert by["paramg"]["can_create"] and by["paramg"]["via"] == "paramg (access token, Acme Shop)" and by["paramg"]["verified"]
+    assert by["paramg"]["can_create"] and by["paramg"]["via"] == "paramg (access token, this project)" and by["paramg"]["verified"]
     assert not by["paramg-kaapppu"]["can_create"] and by["paramg-kaapppu"]["fixes"]
     assert not by["someone-else"]["can_create"] and "no GitHub credential" in by["someone-else"]["words"]
 
