@@ -19,6 +19,12 @@ function tone(status: string): string {
   return "blue";
 }
 
+/** Visible description. Blank is nothing. A sentence over six words is a paragraph. */
+export function definitionDescriptionSentence(description: string | null | undefined): string | null {
+  const trimmed = description?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
 export function WorkflowRegistryView({
   apiReachable,
   blockedReason,
@@ -57,18 +63,23 @@ export function WorkflowRegistryView({
           <p className="detail">No workflow definitions have been published for this project.</p>
         ) : (
           <div className="workflow-registry-list">
-            {definitions.slice(0, 8).map((definition) => (
-              <div className="workflow-registry-row" key={definition.id}>
-                <div>
-                  <strong>{definition.name}</strong>
-                  <p className="detail mono-soft">{definition.workflow_key}</p>
+            {definitions.slice(0, 8).map((definition) => {
+              const description = definitionDescriptionSentence(definition.description);
+              const long = !!description && description.split(/\s+/).filter(Boolean).length > 6;
+              return (
+                <div className="workflow-registry-row" key={definition.id}>
+                  <div>
+                    <strong>{definition.name}</strong>
+                    <p className="detail mono-soft">{definition.workflow_key}</p>
+                    {description ? (long ? <p>{description}</p> : <span>{description}</span>) : null}
+                  </div>
+                  <div className="workflow-registry-meta">
+                    <span className={`badge tone-${tone(definition.status)}`}>{definition.status}</span>
+                    <span className="detail">{definition.version_count ?? 0} versions</span>
+                  </div>
                 </div>
-                <div className="workflow-registry-meta">
-                  <span className={`badge tone-${tone(definition.status)}`}>{definition.status}</span>
-                  <span className="detail">{definition.version_count ?? 0} versions</span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
         {definitions.length > 8 ? (

@@ -147,6 +147,18 @@ function PlanCard({ ctx, plan, onChanged }: { ctx: PxCtx; plan: Plan; onChanged:
   );
 }
 
+/** The row's full title, when the trimmed title says more than the label. */
+export function planTitleSentence(label: string, title: string): string | null {
+  const text = title.trim();
+  if (!text || text === label.trim()) return null;
+  return text;
+}
+
+function PlanTitle({ text }: { text: string }) {
+  if (text.split(/\s+/).filter(Boolean).length > 6) return <p>{text}</p>;
+  return <span>{text}</span>;
+}
+
 function PlanRow({ ctx, w, lane, onDrag, onDropBefore, onMove, onStart, dragging }: {
   ctx: PxCtx; w: PlanCard; lane: "now" | PlanLane; dragging: string | null;
   onDrag: (on: boolean) => void; onDropBefore?: (id: string) => void; onMove?: () => void; onStart?: () => void;
@@ -154,6 +166,7 @@ function PlanRow({ ctx, w, lane, onDrag, onDropBefore, onMove, onStart, dragging
   const needs = w.state === "needs_you";
   const running = w.state === "running";
   const open = () => (lane === "now" ? ctx.open("work", w.id) : ctx.open("rec", w.id));
+  const sentence = planTitleSentence(w.label, w.title);
   return (
     <div className="px-rm-row" data-s={w.state} data-testid={`px-rm-item-${w.id}`} draggable={lane !== "now"}
          onDragStart={lane !== "now" ? (e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", w.id); onDrag(true); } : undefined}
@@ -163,6 +176,7 @@ function PlanRow({ ctx, w, lane, onDrag, onDropBefore, onMove, onStart, dragging
       <span className="px-rm-glyph" data-s={needs ? "you" : running ? "now" : w.state === "stalled" ? "stalled" : "todo"} role="img"
             aria-label={needs ? "needs you" : running ? "running" : w.state === "stalled" ? "stalled" : "planned"}>{needs ? "!" : null}</span>
       <button type="button" className="px-rm-t px-ell" onClick={open} title={w.title}>{w.label}</button>
+      {sentence ? <PlanTitle text={sentence} /> : null}
       {lane === "now" ? (
         needs ? <Face agent={{ name: "You" }} size={20} /> : w.agent ? <Face agent={w.agent} size={20} state={running ? "working" : "idle"} /> : <span />
       ) : (

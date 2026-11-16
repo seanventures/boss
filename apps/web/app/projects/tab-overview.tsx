@@ -47,6 +47,20 @@ const CREW_VERB: Record<string, string> = {
 
 const WORK_TONE: Record<string, string> = { running: "var(--teal)", stalled: "color-mix(in srgb, var(--amber) 55%, var(--surface-3))", needs_you: "var(--amber)", planned: "var(--quiet)", done: "var(--green)", failed: "var(--red)" };
 
+/** Visible staging health reason. A blank reason is nothing. */
+export function stagingHealthReasonSentence(reason: string | null | undefined): string | null {
+  const trimmed = reason?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** A sentence over six words is a paragraph; shorter text is a span. */
+function StagingHealthReason({ reason }: { reason: string | null | undefined }) {
+  const sentence = stagingHealthReasonSentence(reason);
+  if (!sentence) return null;
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  return long ? <p>{sentence}</p> : <span>{sentence}</span>;
+}
+
 /** Beside the staging tile's p95 number: where that number was measured. The long sentence stays on the number's title. */
 export function StagingP95Source({ p95_ms, p95_source }: { p95_ms: number | null; p95_source?: string | null }) {
   if (p95_ms === null || p95_ms === undefined) return null;
@@ -148,6 +162,7 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
                   {t.staging.uptime_pct ?? "—"}</Ring>
                 <div><div style={{ color: `var(--${t.staging.health === "healthy" ? "green" : t.staging.health === "down" ? "red" : t.staging.health === "degraded" ? "amber" : "muted"})`, fontWeight: 600 }}
                            title={t.staging.health_reason || undefined} data-testid="px-tile-staging-health">{HEALTH_WORD[t.staging.health]}</div>
+                  <StagingHealthReason reason={t.staging.health_reason} />
                   {t.staging.p95_ms !== null ? <span className="px-mono px-faint" style={{ fontSize: ".58rem" }} title={P95_SOURCE[t.staging.p95_source ?? ""] ?? undefined} data-testid="px-tile-staging-p95">{p95Words(t.staging.p95_ms, t.staging.window)}</span> : null}
                   <StagingP95Source p95_ms={t.staging.p95_ms} p95_source={t.staging.p95_source} /></div>
               </div>

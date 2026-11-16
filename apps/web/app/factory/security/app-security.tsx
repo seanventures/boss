@@ -28,6 +28,12 @@ import { SevPill, errorWords } from "./security-bits";
 const POLL_MS = 8000;
 /** Why Accept and False positive are disabled before a reason is typed. */
 export const NEEDS_REASON = "Say why first: a few words, kept on the finding";
+
+/** Visible step error. Blank is nothing. A sentence over six words is a paragraph. */
+export function stepErrorSentence(error: string | null | undefined): string | null {
+  const trimmed = error?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
 const SEV_SHORT: Record<string, string> = { critical: "Crit", high: "High", medium: "Med", low: "Low", info: "Info" };
 
 export type AppSecurityProps = { projectId: string; appKey: string; appName?: string };
@@ -135,12 +141,17 @@ export function AppSecurity({ projectId, appKey, appName }: AppSecurityProps) {
             ) : null}
           </div>
           <ol className="sec-steps" aria-label="Steps">
-            {review.steps.map((s) => (
-              <li key={s.id} className="sec-step" data-state={stepWord(s)} title={`${STEP_TIP[s.id] ?? s.id}${s.note ? `, ${s.note}` : ""}${s.error ? `, ${s.error}` : ""}`}>
-                <span className="sec-step-name">{STEP_LABEL[s.id] ?? s.id}</span>
-                <span className="sec-step-word">{stepWord(s)}</span>
-              </li>
-            ))}
+            {review.steps.map((s) => {
+              const said = stepErrorSentence(s.error);
+              const long = !!said && said.split(/\s+/).filter(Boolean).length > 6;
+              return (
+                <li key={s.id} className="sec-step" data-state={stepWord(s)} title={`${STEP_TIP[s.id] ?? s.id}${s.note ? `, ${s.note}` : ""}${s.error ? `, ${s.error}` : ""}`}>
+                  <span className="sec-step-name">{STEP_LABEL[s.id] ?? s.id}</span>
+                  <span className="sec-step-word">{stepWord(s)}</span>
+                  {said ? (long ? <p>{said}</p> : <span>{said}</span>) : null}
+                </li>
+              );
+            })}
           </ol>
           {review.awaitingChoice ? (
             <ReviewChecklist projectId={projectId} runId={review.runId} onDone={() => setTick((t) => t + 1)} />
