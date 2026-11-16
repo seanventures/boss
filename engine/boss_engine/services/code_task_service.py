@@ -2287,6 +2287,11 @@ def retry_code_task(
                           # another, and boss-platform grew chains titled "Follow-up: checks
                           # failing — Follow-up: checks failing — Follow-up: …" (2026-10-28..11-03).
                           **({"is_followup": True} if fctx_prev.get("is_followup") else {}),
+                          # ITS INSTRUCTIONS ARE STILL FINDINGS, NOT A BRIEF (BOSSAPP-1307):
+                          # verification_target.app_scope never reads a folder out of them.
+                          **({"instructions_are_findings": True}
+                             if fctx_prev.get("instructions_are_findings")
+                             or fctx_prev.get("deferred_from_run") else {}),
                           # The same BUILDER across every attempt (runs.code_task_builder): the
                           # agent the parent ran as, which the carried grant names.
                           **({"agent": fctx_prev["agent"]} if fctx_prev.get("agent") else {}),
