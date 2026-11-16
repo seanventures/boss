@@ -14,7 +14,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   ArrowSquareOut, ArrowsClockwise, Bell, Copy, Crown, Eye, EyeSlash, GearSix, GitBranch, GitMerge, GithubLogo, HandWaving, HardDrives, Headset, Info,
-  Key, LockKey, PencilSimple, Plus, Siren, SlidersHorizontal, SteeringWheel, Ticket, User, UserCircle,
+  Key, LockKey, Package, PencilSimple, Plus, Siren, SlidersHorizontal, SteeringWheel, Ticket, User, UserCircle,
   type Icon,
 } from "@phosphor-icons/react";
 
@@ -39,6 +39,7 @@ import { isLocalRepo, repoHostLabel, repoHref } from "../../lib/repo-links";
 import { LocalCodePanel } from "./publish-sheet";
 import { ToolchainImageCard } from "./toolchain-image";
 import { TicketSystemCard } from "./ticket-system-settings";
+import { PortabilityCard } from "./portability-card";
 
 /** The section nav and card icons, in the wireframe's order and colours (13-01). */
 const SECTION_ICON: Record<string, { icon: Icon; c: Tone | "grey" }> = {
@@ -154,6 +155,10 @@ export function SettingsTab({ ctx }: { ctx: PxCtx }) {
                   <button type="button" onClick={() => document.querySelector("[data-testid='px-set-tickets']")?.scrollIntoView?.({ block: "start", behavior: "smooth" })}
                           data-testid="px-set-nav-tickets"><Ticket size={14} aria-hidden />Ticket system</button>
                 ) : null}
+                {!ctx.demo ? (
+                  <button type="button" onClick={() => document.querySelector("[data-testid='pc-portability']")?.scrollIntoView?.({ block: "start", behavior: "smooth" })}
+                          data-testid="px-set-nav-portability"><Package size={14} aria-hidden />Move</button>
+                ) : null}
               </nav>
               <div className="px-stack">
                 {card("demo_logins")}
@@ -166,6 +171,8 @@ export function SettingsTab({ ctx }: { ctx: PxCtx }) {
                 {!ctx.demo ? <TicketSystemCard projectId={ctx.projectId} /> : null}
                 {/* BOSSAPP-825: the project's own build image (setup session → Capture → chip). */}
                 {!ctx.demo ? <ToolchainImageCard projectId={ctx.projectId} actor={ctx.actor} /> : null}
+                {/* BOSSAPP-836: export (secrets empty), import, backup health, upgrade rollback. */}
+                {!ctx.demo ? <PortabilityCard projectId={ctx.projectId} actor={ctx.actor} /> : null}
                 {/* THE DANGER ZONE, quiet at the foot: Archive (nothing deleted) and Delete project. */}
                 {!ctx.demo ? <DangerZone projectId={ctx.projectId} name={ctx.overview.project.name} home={!!ctx.homeId && ctx.homeId === ctx.projectId} /> : null}
               </div>
