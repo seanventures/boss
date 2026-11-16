@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable, Mapping, Optional
 
+from .verdict import clip
+
 LAYERS = ("build_gate", "step")
 MODES = ("static", "exercise", "environment")
 VERDICTS = ("met", "not_met", "not_run", "no_items")
@@ -38,7 +40,8 @@ def _items(record: Mapping[str, Any]) -> list[dict[str, Any]]:
         if isinstance(row.get("text"), str):
             row["text"] = row["text"][:2000]
         if isinstance(row.get("evidence"), str):
-            row["evidence"] = row["evidence"][:1200]
+            # Never cut mid-sentence; BOSS's appended reason kept whole (verdict.clip).
+            row["evidence"] = clip(row["evidence"], 1200)
         out.append(row)
     return out
 

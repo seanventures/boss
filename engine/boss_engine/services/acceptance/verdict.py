@@ -56,6 +56,15 @@ _ANSWER = re.compile(
 _SUMMARY = re.compile(r"(?im)^[\s>*`]*ACCEPTANCE\s*:\s*\**\s*(NOT\s+MET|MET)\b")
 _PATHISH = re.compile(r"(?<![\w/.-])([\w.\-]+(?:/[\w.\-]+)+|[\w\-]+\.[A-Za-z][\w]{0,8})"
                       r"(?::\d+)?(?![\w/])")
+#: A file name with more than one dot (`boss.deploy.yaml`, `docker-compose.override.yml`,
+#: `jest.config.js`): `_PATHISH` reads only its first two parts (BOSSAPP-1333: "only documents
+#: cited" when the answer named README.md AND boss.deploy.yaml). Evidence only when the tree
+#: has the file; otherwise the shorter reading stands, so `cfg.Routes.Match` is unchanged.
+_MULTIDOT = re.compile(r"(?<![\w/.-])([\w\-]+(?:\.[\w\-]+)+\.[A-Za-z]\w{0,8})(?::\d+(?:-\d+)?)?"
+                       r"(?![\w/])")
+#: "same as ITEM 1", "see AC-3", "as in item 2": an answer that points at another item's.
+_SAME_AS = re.compile(r"(?i)\b(?:same(?:\s+(?:evidence|code|as\s+for))?\s+as|see(?:\s+also)?|"
+                      r"as\s+(?:in|for|with)|per|cf\.?|identical\s+to)\s+(?:ITEM\s*#?\s*|AC-)(\d+)\b")
 #: A bare word that may be an extensionless file (Makefile, Dockerfile, LICENSE, Procfile): it
 #: counts as evidence only when a file of exactly that name is in the tree.
 _BARE = re.compile(r"(?<![\w/.\-])([A-Za-z][\w\-]{2,})(?![\w/.\-])")
@@ -185,8 +194,16 @@ def evidence_paths(root: Any, why: str, *,
     found, absent = [], []
     defs = defs if defs is not None else _Definitions(Path(root))
     text_ = str(why or "")
+    whole: list[tuple[int, int]] = []
+    for m in _MULTIDOT.finditer(text_):
+        hit = _resolve(Path(root), m.group(1))
+        if hit:
+            found.append(hit)
+            whole.append((m.start(1), m.end(1)))
     for m in _PATHISH.finditer(text_):
         cited = m.group(1)
+        if any(a <= m.start(1) < b for a, b in whole):
+            continue                    # part of a multi-dot name already found whole
         if re.fullmatch(r"\d+(\.\d+)*", cited):
             continue
         # NOT A FILE (BOSSAPP-1329): a package pattern or a module a command names — Go's
@@ -654,12 +671,17 @@ class _Definitions:
         if not body:
             return False
         binds = dict(bindings or {})
-        for name in _join_bases(body):
+        read_args = _read_args(body)
+        for name in _join_bases(body) + read_args:
             if name not in binds:
                 value = self.param_value(rel, sym, name)
                 if value is not None:
                     binds[name] = value
         text = _bind_joins(_top_level_strings(code, rel) + "\n" + body, binds)
+        # THE PATH ITS CALLERS HAND IT (BOSSAPP-1333): `loadRateTable(cfgPath)` reads
+        # `os.ReadFile(cfgPath)`, and every caller resolves cfgPath to "rates.yaml" (main's
+        # env lookup with its default). The bound value is read as the string it is.
+        text += "".join(f'\n"{binds[n]}"' for n in read_args if n in binds)
         if (any(d != rel and _reads(text, d, rel) for d in data) if data
                 else _reads_data(text)):
             return True
@@ -706,7 +728,12 @@ class _Definitions:
         """Every call of `rel`'s `sym` in the tree's non-test code — unqualified within its
         package, qualified by an import of its package elsewhere — as (file, enclosing
         function, arguments)."""
-        pkg = Path(rel).parent.name
+        # A Go file's package is its `package` clause: a module's root package (fxquote.go,
+        # `package fxquote`, imported as "fxquote") has no directory name (BOSSAPP-1333).
+        _, own_bare = self.of(rel)
+        clause = (re.search(r"(?m)^\s*package\s+([A-Za-z_]\w*)", own_bare or "")
+                  if _ext(rel) == "go" else None)
+        pkg = clause.group(1) if clause else Path(rel).parent.name
         here = Path(rel).parent
         out: list[tuple[str, Optional[str], Optional[list[str]]]] = []
         self.code()
@@ -857,11 +884,23 @@ class _Definitions:
             return None
         code, bare = self.of(rel)
         body = _body_of(code or "", bare or "", func, rel)
-        assign = re.search(r"(?m)^\s*(?:var\s+)?" + re.escape(expr)
-                           + r"\s*(?::=|=)\s*(.+)$", body)
-        if assign:
-            strings = re.findall(r"\"([^\"\n]*)\"", assign.group(1))
-            return strings[-1] if strings else None
+        assigns = list(re.finditer(r"(?m)^\s*(?:var\s+)?" + re.escape(expr)
+                                   + r"\s*(?::=|=)\s*(.+)$", body))
+        if assigns:
+            # EVERY assignment, and an environment lookup's NAME is never the value
+            # (BOSSAPP-1333: `cfgPath := os.Getenv("FXQUOTE_CONFIG")` then `cfgPath =
+            # "rates.yaml"` resolved to "FXQUOTE_CONFIG"). A lookup's default
+            # (`os.environ.get("X", "rates.yaml")`) is a value; one value, or none.
+            values: list[str] = []
+            for a in assigns:
+                rhs = a.group(1)
+                strings = re.findall(r"\"([^\"\n]*)\"|'([^'\n]*)'", rhs)
+                strings = [x or y for x, y in strings]
+                if _ENV_LOOKUP.search(rhs) and strings:
+                    strings = strings[1:]       # the variable's name, then any default
+                values.extend(strings[-1:])
+            distinct = set(values)
+            return distinct.pop() if len(distinct) == 1 else None
         return self.param_value(rel, func, expr, depth)
 
     def defining_file(self, name: str) -> Optional[str]:
@@ -1094,6 +1133,91 @@ def _embedded(code: str) -> dict[str, list[str]]:
 
 
 _JOIN = re.compile(r"\b(?:filepath|path|os\.path|Paths)\.(?:[Jj]oin|get|resolve)\s*\(")
+
+
+#: An environment lookup whose first string is the variable's NAME, not a value.
+_ENV_LOOKUP = re.compile(r"\b(?:os\.(?:Getenv|LookupEnv|getenv)|os\.environ\.get|environ\.get|"
+                         r"System\.getenv|getenv|env::var|ENV\.fetch)\s*\(")
+
+
+def _read_args(body: str) -> list[str]:
+    """The identifiers a read call takes as its first argument (`os.ReadFile(cfgPath)` →
+    cfgPath, `open(path)` → path): a path the function was handed, not one it names."""
+    out = []
+    for m in re.finditer(r"(?<![\w])(?:[A-Za-z_][\w]*\.)*" + _READ_FN + r"\s*\(", body):
+        args = _call_args(body, m.end() - 1) or []
+        if args and re.fullmatch(r"[A-Za-z_]\w*", args[0].strip()):
+            out.append(args[0].strip())
+    return list(dict.fromkeys(out))
+
+
+#: What an item about the project's DEPENDENCIES is about: a qualified dependency noun ("one Go
+#: module", "standard library only", "single pinned dependency", "no other third-party runtime
+#: dependency", "licences of every dependency"), or a pin/upgrade to a version.
+_DEP_NOUN = (r"(?:dependenc(?:y|ies)|deps|modules?|packages?|librar(?:y|ies)|imports?|"
+             r"requirements?|versions?|licen[cs]es?|lockfiles?|go\.(?:mod|sum)|"
+             r"package(?:-lock)?\.json|requirements\.txt|pyproject\.toml|cargo\.toml|pom\.xml)")
+_DEP_QUAL = (r"(?:single|one|only|no|zero|pinned|pin|third[- ]party|external|runtime|direct|"
+             r"transitive|vendored|standard|stdlib|upstream|allowed|approved|declared|exact|"
+             r"locked|minimum|supported|other|every|all|licensed|open[- ]source)")
+_DEP_SUBJECT = re.compile(
+    r"(?i)\b" + _DEP_QUAL + r"\b(?:[\s\-]+[\w.\-]+){0,2}?[\s\-]+" + _DEP_NOUN + r"\b"
+    r"|\b" + _DEP_NOUN + r"\b[\s\w]{0,20}?\b(?:only|pinned|locked)\b"
+    r"|\bstandard[\s\-]+library\b|\bstdlib\b"
+    r"|\b(?:upgrade|bump|pin|update)\w*\b[^.;]{0,40}\bto\s+v?\d"
+    r"|\blicen[cs]e[ds]?\b")
+#: What an item about BEHAVIOUR names: a status code, an endpoint, a verb the program does.
+_BEHAVIOUR = re.compile(
+    r"(?i)\b[1-5]\d\d\b|\b(?:GET|POST|PUT|PATCH|DELETE)\s+/|/[a-z][\w/{}-]*\b|"
+    r"\b(?:returns?|responds?|serves?|loads?|reads?|renders?|computes?|calculates?|applies|"
+    r"apply|derives?|rejects?|accepts?|converts?|rounds?|validates?|sends?|writes?|stores?|"
+    r"handles?|exposes?|emits?|logs?|parses?|retries|caches?)\b")
+
+
+def declares_dependencies(item_text: Any) -> bool:
+    """Whether the item is ABOUT what the project depends on — its modules, dependencies,
+    versions or licences — so the manifest and lockfile that declare them (go.mod, go.sum,
+    package.json, …) ARE its evidence (BOSSAPP-1333: "Stack: Go. (one Go module, standard
+    library only)" and "Single pinned dependency … confirmed via go.sum" were marked "only
+    manifests/lockfiles cited").
+
+    Read from the item's subject, not a keyword: the dependency noun must be QUALIFIED as the
+    thing the item constrains ("one module", "standard library only", "no other third-party
+    dependency", "pinned to v3"), and the item must not be about behaviour — a status code, an
+    endpoint or a verb the program does ("loads rates from YAML", "returns 400"), which a
+    manifest can never show. Backticked code is not read as the subject."""
+    text = re.sub(r"`[^`]*`", " ", str(item_text or ""))
+    return bool(_DEP_SUBJECT.search(text)) and not _BEHAVIOUR.search(text)
+
+
+def code_evidence(found: list[str], item_text: Any) -> list[str]:
+    """The cited files that evidence the item: code, configuration or tests — never a document,
+    and a manifest or lockfile only for an item about the dependencies it declares."""
+    deps = declares_dependencies(item_text)
+    return [f for f in found if not _DOC_PATH.search(f)
+            and (deps or not _DECL_PATH.search(f))]
+
+
+def same_as(answers: Mapping[int, tuple[str, str]], n: int, why: str) -> str:
+    """`why` with the answer of every item it points at ("same as ITEM 1") appended, followed
+    up to three hops and never back to itself: the evidence the reviewer gave THERE is this
+    item's too, and it is verified here as this item's (BOSSAPP-1333: "same as ITEM 1. (no file
+    evidence cited)" on a near-duplicate item whose referenced item was met on fxquote.go)."""
+    out, seen, frontier = [why], {n}, [why]
+    for _ in range(3):
+        nxt = []
+        for text_ in frontier:
+            for m in _SAME_AS.finditer(text_ or ""):
+                ref = int(m.group(1))
+                if ref in seen or ref not in answers:
+                    continue
+                seen.add(ref)
+                status, other = answers[ref]
+                if status == MET and other:
+                    out.append(other)
+                    nxt.append(other)
+        frontier = nxt
+    return " ".join(out)
 
 
 def _join_bases(body: str) -> list[str]:
@@ -1431,9 +1555,11 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any, exec_log: Any 
         it = {**{k: v for k, v in it.items() if k not in _contract.ITEM_TAGS},
               **_contract.floor_tags(it.get("text"), it, where="gate")}
         if status == MET:
-            found, absent = evidence_paths(root, why, defs=defs,
+            # "same as ITEM 1": that item's answer is evidence here too, verified here.
+            cited_why = same_as(answers, int(it["n"]), why)
+            found, absent = evidence_paths(root, cited_why, defs=defs,
                                            item_text=str(it.get("text") or ""))
-            code = [f for f in found if not _DOC_PATH.search(f) and not _DECL_PATH.search(f)]
+            code = code_evidence(found, it.get("text"))
             reason = ""
             if not code and it.get("judgement") and defs is not None:
                 # A JUDGEMENT ABOUT THE CODEBASE still stands only on evidence (BOSSAPP-1329
@@ -1453,7 +1579,7 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any, exec_log: Any 
                           else "no file evidence cited")
             else:
                 reason = wiring_problem(
-                    root, why, item_text=str(it.get("text") or ""),
+                    root, cited_why, item_text=str(it.get("text") or ""),
                     needs_loader=bool(it.get("needs_loader")), defs=defs) or ""
             if reason:
                 status, why = PARTIAL, f"{why} ({reason})".strip()
@@ -1856,7 +1982,7 @@ def _file_refs(root: Any, why: str, *, defs: Optional[_Definitions] = None,
     is code, configuration or a test (never a document or manifest alone), and a cited
     `path:line` whose line exists. `defs`: the tree, read once per check."""
     found, absent = evidence_paths(root, why, defs=defs, item_text=item_text)
-    code = [f for f in found if not _DOC_PATH.search(f) and not _DECL_PATH.search(f)]
+    code = code_evidence(found, item_text)
     bad_lines = set()
     for m in _LINE_CITE.finditer(str(why or "")):
         hit = _resolve(Path(root), m.group(1)) if root is not None else None
@@ -1928,7 +2054,8 @@ def parse_exercised(reply: str, items: list[dict], *, root: Any, exec_log: Any =
                              "verified": ok, **({"why": problem} if problem else {})})
                 if not ok:
                     failed.append(problem)
-            files, no_file = (_file_refs(root, why, defs=defs,
+            cited_why = same_as(answers, int(it["n"]), why)
+            files, no_file = (_file_refs(root, cited_why, defs=defs,
                                          item_text=str(it.get("text") or ""))
                               if root is not None
                               else ([], "no tree"))
@@ -1948,7 +2075,7 @@ def parse_exercised(reply: str, items: list[dict], *, root: Any, exec_log: Any =
                 row.update(status=UNJUDGED, unverified=True)
                 reason = f"no verifiable evidence ({no_file})"
             elif files and not refs:
-                wiring = wiring_problem(root, why, item_text=str(it.get("text") or ""),
+                wiring = wiring_problem(root, cited_why, item_text=str(it.get("text") or ""),
                                         needs_loader=bool(it.get("needs_loader")), defs=defs)
                 if wiring:
                     row["status"], reason = PARTIAL, wiring

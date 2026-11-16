@@ -34,6 +34,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Optional
 
+from .verdict import clip
+
 _log = logging.getLogger(__name__)
 
 SEVERITIES = ("nit", "minor", "major", "blocker")
@@ -577,7 +579,7 @@ def observe_check(connection: Any, *, project_id: str, lineage: str, check: Mapp
         fp = _gap_key(item, item_id)
         status = str(item.get("status") or "")
         refs = list(item.get("evidence_refs") or []) or (
-            [{"kind": "answer", "text": str(item.get("evidence") or "")[:600]}]
+            [{"kind": "answer", "text": clip(str(item.get("evidence") or ""), 600)}]
             if item.get("evidence") else [])
         if status == "met":
             live = _live(connection, project_id, lineage, fp)
