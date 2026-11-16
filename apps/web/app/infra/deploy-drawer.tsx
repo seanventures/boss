@@ -27,6 +27,25 @@ const STEP_GLYPH: Record<StepState, string> = { done: "✓", running: "◐", fai
 const LOG_LINES = 200;
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+/** Visible preflight detail beside the label. Blank, or the same as the label, is nothing. */
+export function preflightDetailSentence(
+  detail: string | null | undefined,
+  remedy: string | null | undefined,
+  label: string | null | undefined,
+): string | null {
+  const text = detail?.trim() || remedy?.trim() || "";
+  if (!text || text === (label?.trim() ?? "")) return null;
+  return text;
+}
+
+/** Beside the preflight label. More than six words is a paragraph. */
+export function View({ id, sentence }: { id: string | number; sentence: string | null }) {
+  if (!sentence) return null;
+  return sentence.split(/\s+/).filter(Boolean).length > 6
+    ? <p data-testid={`inf-deploy-preflight-why-${id}`} data-user-text>{sentence}</p>
+    : <span data-testid={`inf-deploy-preflight-why-${id}`} data-user-text>{sentence}</span>;
+}
+
 /** The actor is the person. A role key alone is the role that approved, not a person we invent. */
 function approvalWords(approver: DeployRow["approver"], viewer: string): string {
   const person = approver?.actor?.trim() ?? "";
@@ -228,6 +247,7 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
               <li key={i} data-ok={f.ok ? "1" : "0"}>
                 <span aria-label={f.ok ? "Passed" : "Failed"}>{f.ok ? "✓" : "✗"}</span>
                 <span className="inf-trunc" data-copy="data" title={f.detail ?? f.remedy ?? undefined}>{f.label}</span>
+                <View id={f.kind || i} sentence={preflightDetailSentence(f.detail, f.remedy, f.label)} />
               </li>
             ))}
           </ul>

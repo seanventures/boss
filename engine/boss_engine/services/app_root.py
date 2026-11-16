@@ -234,6 +234,55 @@ def clean_rel(value: Any) -> Optional[str]:
     return rel
 
 
+def home_on_tree(root: Path | str, recorded: Any) -> Optional[str]:
+    """The recorded app folder, IF this checkout bears it out: the folder exists and holds an
+    app manifest — or it exists and the root holds none either. A record is a memory of an
+    earlier attempt, and a tree is the truth: northgate-gateway's lineage recorded `schema/`
+    (a Go package folder a findings follow-up was misled into, before BOSSAPP-1307) and every
+    later build of the Go module at the root verified, judged and previewed inside `schema/`
+    (BOSSAPP-1323). None for the root, no record, or a record the tree contradicts."""
+    rel = clean_rel(recorded)
+    if not rel:
+        return None
+    base = Path(root)
+    where = base / rel
+    if not where.is_dir():
+        return None
+    if _has_manifest(where):
+        return rel
+    if not _has_manifest(base):
+        return rel
+    # The root has a manifest. It outranks the record only when it is the manifest OF the
+    # folder's sources (a Go package folder under the module's go.mod: `schema/`); a
+    # tooling-only package.json at the root never resets a recorded app folder of sources in
+    # another language (PR #164 review).
+    langs = _source_languages(where)
+    if not langs:
+        return None
+    return None if any(_root_manifest_for(base, lang) for lang in langs) else rel
+
+
+def _source_languages(folder: Path) -> set[str]:
+    """The languages (stacks.LANGUAGES keys) whose source files the folder holds."""
+    by_ext = {".py": "python", ".go": "go", ".java": "java", ".kt": "java", ".kts": "java",
+              ".js": "node", ".jsx": "node", ".ts": "node", ".tsx": "node", ".mjs": "node",
+              ".cjs": "node"}
+    out = set()
+    for p in folder.rglob("*"):
+        if p.is_file() and p.suffix.lower() in by_ext:
+            out.add(by_ext[p.suffix.lower()])
+            if len(out) > 3:
+                break
+    return out
+
+
+def _root_manifest_for(base: Path, lang: str) -> bool:
+    from . import stacks
+
+    names = getattr(stacks.LANGUAGES.get(lang), "manifests", ()) or ()
+    return any((base / n).is_file() for n in names)
+
+
 def resolve(root: Path | str, *, app_id: Optional[str] = None, recorded: Optional[str] = None,
             changed: Optional[Iterable[str]] = None,
             lineage: Optional[Iterable[str]] = None) -> AppDir:
@@ -251,7 +300,7 @@ def resolve(root: Path | str, *, app_id: Optional[str] = None, recorded: Optiona
     aid = clean_rel(app_id)
     if aid:
         return AppDir(base / aid, "named")
-    rec = clean_rel(recorded)
+    rec = home_on_tree(base, recorded)
     if rec:
         return AppDir(base / rec, "recorded")
     multi = is_multi_app(base)
@@ -382,11 +431,16 @@ def recorded_app_dir(connection: Any, run: dict) -> Optional[str]:
 def remember_app_dir(connection: Any, run_id: str, rel: Optional[str]) -> bool:
     """Record the app's folder on the run (finalize_ctx.app_dir) once it is known, so every later
     attempt of the app reads it (recorded_app_dir) instead of re-deriving it from its own diff.
-    Only a subfolder is recorded: the root needs no record."""
+    The root is recorded as "." (it supersedes an older subfolder record); None records
+    nothing."""
     from sqlalchemy import text
 
-    rel = clean_rel(rel)
-    if not rel or not run_id:
+    if not run_id or rel is None:
+        return False
+    # THE ROOT IS RECORDED TOO ("."), so a later attempt reads the app at the root instead of an
+    # older run's stale subfolder record (recorded_app_dir reads the newest record of the app).
+    rel = clean_rel(rel) or ("." if str(rel).strip().strip("/") in ("", ".") else None)
+    if not rel:
         return False
     connection.execute(text(
         "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "

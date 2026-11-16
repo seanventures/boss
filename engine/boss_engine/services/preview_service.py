@@ -1737,6 +1737,13 @@ def local_preview_command(workdir: Path, changed: Optional[list[str]] = None,
     from .app_root import clean_rel
 
     rel = clean_rel(named)
+    if rel and not (workdir / rel).is_dir():
+        rel = None
+    elif rel:
+        # A recorded folder this tree contradicts is not the app (app_root.home_on_tree).
+        from .app_root import home_on_tree
+
+        rel = home_on_tree(workdir, rel) or None
     app = workdir / rel if rel else None
     if rel and app is not None and (app / "package.json").is_file():
         command = _detect_command(app, _changed_inside(changed, rel))

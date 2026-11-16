@@ -33,6 +33,24 @@ export function pluginProblemSentence(problems: readonly string[] | null | undef
   return kept.length ? kept.join("; ") : null;
 }
 
+/** Description beside the name. Blank, or the same words as the name, is nothing. */
+export function pluginDescriptionSentence(
+  description: string | null | undefined,
+  name: string | null | undefined,
+): string | null {
+  const text = description?.trim() ?? "";
+  if (!text || text === (name ?? "").trim()) return null;
+  return text;
+}
+
+/** Beside the name. More than six words is a paragraph. */
+export function View({ id, sentence }: { id: string; sentence: string | null }) {
+  if (!sentence) return null;
+  return sentence.split(/\s+/).filter(Boolean).length > 6
+    ? <p data-testid={`inf-plugin-desc-${id}`} data-user-text>{sentence}</p>
+    : <span data-testid={`inf-plugin-desc-${id}`} data-user-text>{sentence}</span>;
+}
+
 function PluginRowView({ p, onChanged }: { p: PluginRow; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -58,7 +76,7 @@ function PluginRowView({ p, onChanged }: { p: PluginRow; onChanged: () => void }
     <>
       <tr data-testid={`inf-plugin-row-${p.id}`} data-on={p.enabled ? "1" : undefined}>
         <td>
-          <div title={p.description || undefined}><strong data-copy="data">{p.name}</strong></div>
+          <div title={p.description || undefined}><strong data-copy="data">{p.name}</strong><View id={p.id} sentence={pluginDescriptionSentence(p.description, p.name)} /></div>
           <div className="inf-faint" data-copy="data">{p.id}, {p.version}</div>
         </td>
         <td><span className="inf-chip" data-testid="inf-plugin-level" title={lvl.tip + claimed}>{lvl.label}</span></td>

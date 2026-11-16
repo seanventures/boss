@@ -259,6 +259,29 @@ export function AlertBadges({ a }: { a: Alert }) {
   );
 }
 
+/** What an alert is about, when that is not already the label. Description wins, then summary. */
+export function alertWhatSentence(
+  description: string | null | undefined,
+  summary: string | null | undefined,
+  label: string | null | undefined,
+): string | null {
+  const shown = label?.trim() ?? "";
+  const detail = description?.trim() ?? "";
+  if (detail && detail !== shown) return detail;
+  const rest = summary?.trim() ?? "";
+  if (rest && rest !== shown) return rest;
+  return null;
+}
+
+/** Beside the label span. More than six words is a paragraph. */
+export function View({ id, sentence }: { id: string; sentence: string | null }) {
+  if (!sentence) return null;
+  const testId = `obs-alert-why-${id}`;
+  return sentence.split(/\s+/).filter(Boolean).length > 6
+    ? <p data-testid={testId} data-user-text>{sentence}</p>
+    : <span data-testid={testId} data-user-text>{sentence}</span>;
+}
+
 /** The status chip with its times: Resolved 07:11, 6 min; Acknowledged, Param (until 16:00). */
 export function AlertStatus({ a }: { a: Alert }) {
   const lt = useLocalTime();
@@ -290,7 +313,7 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
   return (
     <li className="obs-alert" data-testid={`obs-alert-${a.id}`} data-state={a.state} data-open={isOpen ? "1" : "0"}
         data-attention={a.needsAttention ? "1" : undefined}>
-      <span className="obs-line">
+      <div className="obs-line">
         {onSelect ? (
           <input type="checkbox" checked={Boolean(selected)} aria-label={`Select ${a.label} on ${a.app}`} data-testid="obs-alert-select"
                  onChange={(e) => onSelect(e.target.checked)} />
@@ -320,7 +343,10 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
           <button type="button" className="inf-link obs-strong obs-alert-what" data-testid="obs-alert-rule"
                   title={`${a.alertname}: its rule (Respond automatically, Triage, Silence, Edit)`} onClick={() => setRuleOpen("switches")}>
             {a.label}</button>
-        ) : <span className="obs-strong obs-alert-what" title={a.description ?? a.summary} data-user-text>{a.label}</span>}
+        ) : <>
+          <span className="obs-strong obs-alert-what" title={a.description ?? a.summary} data-user-text>{a.label}</span>
+          <View id={a.id} sentence={alertWhatSentence(a.description, a.summary, a.label)} />
+        </>}
         {!plainNames && a.alertname && a.alertname !== a.label ? <span className="inf-mono inf-faint" data-testid="obs-alert-rulename" data-copy="data">{a.alertname}</span> : null}
         <span className="inf-num" data-copy="data">{a.valueWord}</span>
         {a.thresholdWord ? <span className="inf-faint">(rule {a.thresholdWord})</span> : null}
@@ -353,7 +379,7 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
         <button type="button" className="ag-icon-btn" aria-expanded={open} aria-label={open ? "Hide details" : "Show details"}
                 data-testid="obs-alert-open" title={open ? "Hide details" : "PromQL, value, Explore, runbook, triage"}
                 onClick={() => setOpen((v) => !v)}>{open ? "▾" : "▸"}</button>
-      </span>
+      </div>
       {open ? <AlertDetail a={a} targetId={targetId || a.targetId} projectId={projectId} actor={actor} onDone={onDone} /> : null}
       {ruleOpen ? <RuleOfAlert ruleId={a.ruleId} alertname={a.alertname} targetId={targetId || a.subjectId || a.targetId} projectId={projectId}
                                actor={actor} start={ruleOpen} onClose={() => { setRuleOpen(false); onDone(); }} /> : null}

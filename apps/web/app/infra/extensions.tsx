@@ -137,6 +137,23 @@ export function ExtensionProblems({ sentence }: { sentence: string | null }) {
   return <Tag data-testid="inf-ext-problems" data-user-text>{sentence}</Tag>;
 }
 
+/** Description beside the name. Blank, or a repeat of the name, is nothing. */
+export function extensionDescriptionSentence(
+  description: string | null | undefined,
+  name: string | null | undefined,
+): string | null {
+  const text = description?.trim() ?? "";
+  if (!text || text === (name?.trim() ?? "")) return null;
+  return text;
+}
+
+/** Beside the name. More than six words is a paragraph. */
+export function View({ id, sentence }: { id: string; sentence: string | null }) {
+  if (!sentence) return null;
+  const Tag = sentence.split(/\s+/).filter(Boolean).length > 6 ? "p" : "span";
+  return <Tag data-testid={`inf-ext-desc-${id}`} data-user-text>{sentence}</Tag>;
+}
+
 function ExtensionRowView({ e, projectId, onChanged }: { e: ExtensionRow; projectId: string; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<"" | "hooks" | "settings">("");
@@ -159,6 +176,7 @@ function ExtensionRowView({ e, projectId, onChanged }: { e: ExtensionRow; projec
       <tr data-testid={`inf-ext-row-${e.id}`} data-on={e.enabled ? "1" : undefined}>
         <td>
           <div title={e.description || undefined}><strong data-copy="data">{e.name}</strong></div>
+          <View id={e.id} sentence={extensionDescriptionSentence(e.description, e.name)} />
           <div className="inf-faint" data-copy="data">{e.id}, {e.version}</div>
         </td>
         <td>

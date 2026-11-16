@@ -2,6 +2,22 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.27]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.27.md](docs/community/RELEASE_NOTES_v1.0-rc10.27.md).
+
+### Added
+
+- The preflight line says the detail. The learned row says the detail. The journey says the detail. The gateway test says the detail. The alert says what it is about. The custom step says its summary. The plugin says its description. The starter says its description. The backlog row says the detail. The extension says its description.
+
+### Changed
+
+- The community candidate version is `1.0.0-rc.10.27`. The alert line and the backlog label cell are divs so a long sentence can be a paragraph.
+
+### Release scope
+
+- This is the git tag of public main after rc10.26. It is not a live host deploy. No image tag or release-gate run is attached. The export record still cites `docs/community/RC9_VALIDATION.md`. A failed deploy phase still has no phase-only retry. A migration approval was not added. The journey timeline stays title-only. The alert rule button was not given a second sentence.
+
 ## [v1.0-rc10.26]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.26.md](docs/community/RELEASE_NOTES_v1.0-rc10.26.md).
