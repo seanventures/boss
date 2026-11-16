@@ -244,6 +244,16 @@ class SandboxIdentity:
                         "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "/bin/false",
                         "SSH_ASKPASS": "/bin/false", "NO_PROXY": "*", "no_proxy": "*"})
             out.pop("SSH_AUTH_SOCK", None)
+            # Tool caches in the session's own TMPDIR, never its HOME: a write outside the clone
+            # and TMPDIR taints an acceptance session (acceptance/session.py), and a package
+            # cache filling HOME is not a reason to.
+            for name in ("XDG_CACHE_HOME", "npm_config_cache", "GOCACHE", "GOMODCACHE",
+                         "GOPATH", "GRADLE_USER_HOME", "CARGO_HOME", "PIP_CACHE_DIR"):
+                value = out.get(name)
+                if value and str(value).startswith(home):
+                    out[name] = tmp + str(value)[len(home):]
+            out.setdefault("PIP_CACHE_DIR", f"{tmp}/.cache/pip")
+            out.setdefault("MAVEN_OPTS", f"-Dmaven.repo.local={tmp}/.m2")
             return out
         proxy = (os.environ.get(EGRESS_CONNECT_ENV) or "").strip()
         if proxy:

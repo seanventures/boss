@@ -37,12 +37,14 @@ def tree(tmp_path_factory) -> Tree:
         (root / name).parent.mkdir(parents=True, exist_ok=True)
         (root / name).write_text(body)
     (root / ".env").write_text("planted\n")                          # NOT tracked
-    return Tree(root, TRACKED)
+    return Tree(root, TRACKED, is_ignored=lambda rel: rel.startswith(("bin/", "build/")))
 
 
 @pytest.mark.parametrize("cmd", [
-    "python3 check.py", "python3 -u -W ignore check.py --flag -c x", "python3 -m pytest -q -p x",
+    "python3 check.py", "python3 -u -W ignore check.py --flag -c x", "python3 -m pytest -q -p no:cacheprovider",
     "python3 -m unittest discover", "python3 -m app", "python3 -m app.__main__", "pytest -q",
+    "pytest -v -x -s -k ok -m unit --tb=short -p no:cacheprovider check.py",
+    "python3 -m pytest -q check.py::test_ok app", "go test -coverprofile=build/c.out ./...",
     "node server.js", "node --test test/app.test.js", "bash run.sh", "make", "make check",
     "make -s -j4 build test", "npm test", "npm run lint", "npm ci", "yarn lint", "pnpm run test",
     "go test ./...", "go vet ./cmd/...", "go build -o bin/gw ./cmd/gw", "go test -run=TestX -v .",
@@ -78,3 +80,22 @@ def test_a_call_from_a_subdirectory_resolves_its_paths(tree):
     assert plain_call(["python3", "__main__.py"], sub) is None
     assert plain_call(["python3", "../check.py"], sub) is None
     assert plain_call(["python3", "../../etc/x.py"], sub)
+
+
+@pytest.mark.parametrize("argv", [
+    # The reviewer's probe: junit XML written into the gitignored .env, its suite name "ON".
+    ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", "--junitxml=.env", "-o",
+     "junit_suite_name=ON"],
+    ["pytest", "--basetemp=/tmp/x"], ["pytest", "-o", "addopts="], ["pytest", "--override-ini=x"],
+    ["pytest", "-c", "other.ini"], ["pytest", "--rootdir=/"], ["pytest", "--confcutdir=/"],
+    ["pytest", "-p", "evil_plugin"], ["pytest", "-pevil"], ["pytest", "--junit-xml=out.xml"],
+    ["pytest", "missing_test.py"], ["pytest", "--result-log=.env"],
+    ["go", "build", "-o", ".env", "./cmd/gw"], ["go", "build", "-o", "/tmp/gw", "./cmd/gw"],
+    ["go", "test", "-coverprofile=check.py", "./..."], ["go", "build", "-o", "../gw", "./cmd/gw"],
+])
+def test_pytest_and_go_options_that_write_files_are_not_plain_calls(tree, argv):
+    assert plain_call(argv, tree), argv
+
+
+def test_go_may_write_into_an_ignored_build_directory(tree):
+    assert plain_call(["go", "build", "-o", "bin/gw", "./cmd/gw"], tree) is None

@@ -28,7 +28,7 @@ import json
 import posixpath
 import re
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 _PY = re.compile(r"^(python[\d.]*|pypy[\d.]*)$")
 _SHELL = re.compile(r"^(sh|bash|dash|zsh|ksh|ash)$")
@@ -44,6 +44,14 @@ _GO_SUBS = frozenset({"test", "vet", "build", "run"})
 _GO_FLAGS = frozenset({"-v", "-race", "-short", "-cover", "-failfast", "-json", "-x"})
 _GO_VALUE = frozenset({"-count", "-run", "-timeout", "-o", "-p", "-tags", "-bench",
                        "-coverprofile", "-skip"})
+#: go flags that WRITE a file: only into an ignored build directory of the clone.
+_GO_OUTPUT = frozenset({"-o", "-coverprofile"})
+#: pytest options that change only what runs and how it reports to the terminal. Everything
+#: else is refused: -o/--override-ini, --junitxml, --basetemp, -c, --rootdir, --confcutdir,
+#: any -p plugin but no:cacheprovider — each can write a file or load code (PR #154 review).
+_PYTEST_FLAGS = frozenset({"-q", "-qq", "-v", "-vv", "-x", "-s", "--quiet", "--verbose",
+                           "--exitfirst", "-rA", "-ra", "--no-header", "--disable-warnings"})
+_PYTEST_VALUE = frozenset({"-k", "-m", "--tb"})
 _MVN_PHASES = frozenset({"validate", "compile", "test-compile", "test", "package", "verify",
                          "install", "clean"})
 _MVN_FLAGS = frozenset({"-q", "--quiet", "-B", "--batch-mode", "-e", "--errors", "-o",
@@ -61,10 +69,19 @@ class Tree:
     """The delivered tree as the classifier sees it: the TRACKED files (git ls-files at the PR
     head) and the directory a command runs in, both relative to the clone's root."""
 
-    def __init__(self, root: Path, tracked: Iterable[str], cwd: str = "."):
+    def __init__(self, root: Path, tracked: Iterable[str], cwd: str = ".",
+                 is_ignored: Optional[Callable[[str], bool]] = None):
         self.root = Path(root)
         self.tracked = frozenset(tracked)
         self.cwd = posixpath.normpath(cwd or ".")
+        #: Whether a root-relative path is ignored by the tree's own .gitignore (a build dir).
+        self.is_ignored = is_ignored or (lambda rel: False)
+
+    def ignored_output(self, path: str) -> bool:
+        """An output path a build may write: inside the clone, not tracked, and ignored by the
+        tree's own .gitignore (bin/, build/, target/ ...)."""
+        rel = self.rel(path)
+        return bool(rel) and rel != "." and rel not in self.tracked and self.is_ignored(rel)
 
     def rel(self, path: str) -> Optional[str]:
         """`path` (as a command names it) relative to the root, or None outside it."""
@@ -102,7 +119,7 @@ def plain_call(argv: list, tree: Tree) -> Optional[str]:
     if _PY.match(prog):
         return _python(args, tree)
     if prog in ("pytest", "py.test"):
-        return None
+        return _pytest(args, tree)
     if prog in ("node", "nodejs"):
         return _node(args, tree)
     if prog in ("bun", "deno"):
@@ -139,6 +156,8 @@ def _python(args: list[str], tree: Tree) -> Optional[str]:
             i += 1
         elif a == "-m":
             mod = args[i + 1] if i + 1 < len(args) else ""
+            if mod == "pytest":
+                return _pytest(args[i + 2:], tree)
             if mod in _PY_MODULES or _tree_module(mod, tree):
                 return None
             return why
@@ -147,6 +166,32 @@ def _python(args: list[str], tree: Tree) -> Optional[str]:
         else:
             return None if a.endswith(".py") and tree.has(a) else why
     return why
+
+
+def _pytest(args: list[str], tree: Tree) -> Optional[str]:
+    """pytest on the tree's own tests, with an allow-list of options (PR #154 review): the
+    probe was `python3 -m pytest -q -p no:cacheprovider --junitxml=.env -o junit_suite_name=ON`,
+    which wrote "ON" into a gitignored .env that check.py then read."""
+    i = 0
+    while i < len(args):
+        a = args[i]
+        name = a.split("=", 1)[0]
+        if a in _PYTEST_FLAGS:
+            i += 1
+        elif name in _PYTEST_VALUE:
+            i += 1 if "=" in a else 2
+        elif a == "-p" and i + 1 < len(args) and args[i + 1] == "no:cacheprovider":
+            i += 2
+        elif a == "-pno:cacheprovider":
+            i += 1
+        elif a.startswith("-"):
+            return f"pytest {name} is not allowed (it can write files or load code)"
+        else:
+            node = a.split("::", 1)[0]
+            if not (tree.has(node) or tree.has_dir(node)):
+                return f"pytest path {a} is not in the tree"
+            i += 1
+    return None
 
 
 def _tree_module(mod: str, tree: Tree) -> bool:
@@ -234,6 +279,10 @@ def _go(args: list[str], tree: Tree) -> Optional[str]:
         if a in _GO_FLAGS:
             i += 1
         elif name in _GO_VALUE:
+            value = a.split("=", 1)[1] if "=" in a else (args[i + 1] if i + 1 < len(args) else "")
+            if name in _GO_OUTPUT and not tree.ignored_output(value):
+                return (f"go {name} must write into a build directory the tree ignores "
+                        f"(not {value!r})")
             i += 1 if "=" in a else 2
         elif a.startswith("-"):
             return f"go {a} is not allowed"

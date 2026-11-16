@@ -865,3 +865,55 @@ def test_another_uid_cannot_connect_into_a_sealed_listener(net_repo, settings):
         t.join()
     assert data != b"FROM-SEALED"
     assert "NONE" in result["cmd"].stdout, result["cmd"]
+
+
+# ── PR #154 review P1: pytest options and plain calls that write ────────────────────────────
+
+@pytest.fixture()
+def writer_repo(flag_repo):
+    (flag_repo / "tools").mkdir()
+    (flag_repo / "tools" / "write.py").write_text(
+        "import sys\nopen(sys.argv[1], 'w').write('ON')\nprint('wrote')\n")
+    (flag_repo / "test_flag.py").write_text("def test_ok():\n    assert True\n")
+    _git(flag_repo, "add", "-A")
+    _git(flag_repo, "commit", "-qm", "writer")
+    return flag_repo
+
+
+def test_the_reviewers_junitxml_probe_taints_the_session(writer_repo, settings, tmp_path):
+    """`pytest --junitxml=.env -o junit_suite_name=ON` wrote "ON" into the gitignored .env
+    with no taint, and check.py then verified. Its options are not a plain call now."""
+    sbx = _sandbox(settings, writer_repo, tmp_path)
+    probe = sbx.exec("python3 -m pytest -q -p no:cacheprovider --junitxml=.env "
+                     "-o junit_suite_name=ON test_flag.py")
+    read = sbx.exec("python3 check.py")
+    rec = av.judge(FLAG_ITEMS, 'AC-1: MET — E2 (exit 0) "FEATURE" check.py:5\n'
+                               "ACCEPTANCE: MET", {}, root=sbx.root, exec_log=sbx.record)
+    sbx.close()
+    assert probe.plain is False and "--junitxml" in probe.not_plain
+    assert read.tainted_by == "E1" and rec["items"][0]["status"] == "unjudged"
+
+
+def test_a_plain_call_that_writes_an_ignored_file_it_names_taints(writer_repo, settings,
+                                                                  tmp_path):
+    sbx = _sandbox(settings, writer_repo, tmp_path)
+    wrote = sbx.exec("python3 tools/write.py .env")
+    read = sbx.exec("python3 check.py")
+    sbx.close()
+    assert wrote.plain is True and "FEATURE ON" in read.stdout
+    assert read.tainted_by == "E1" and "named: .env" in sbx.tainted_why
+
+
+def test_a_plain_call_that_writes_outside_the_clone_taints(writer_repo, settings, tmp_path):
+    outside = tmp_path / "shared-tmp"
+    own = outside / "own-tmpdir"
+    own.mkdir(parents=True)
+    sbx = _sandbox(settings, writer_repo, tmp_path, outside=(str(outside),),
+                   writer_uid=os.getuid(), own_tmp=own)
+    sbx.exec(f"python3 tools/write.py {own}/scratch")            # its own TMPDIR: fine
+    clean = sbx.exec("python3 check.py")
+    sbx.exec(f"python3 tools/write.py {outside}/x")               # --basetemp=/tmp/x style
+    after = sbx.exec("python3 check.py")
+    sbx.close()
+    assert clean.tainted_by is None
+    assert after.tainted_by == "E3" and "wrote outside the clone" in sbx.tainted_why
