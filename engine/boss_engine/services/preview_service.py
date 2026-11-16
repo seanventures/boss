@@ -1565,6 +1565,63 @@ def _detect_command(workdir: Path, changed: Optional[list[str]] = None) -> Optio
     return plan.command
 
 
+def named_app_directory(run: Optional[dict], connection=None) -> Optional[str]:
+    """The app folder the project already names, or None when the root is the app.
+
+    The brief or pinned benchmark, else the folder recorded on the run, else the
+    component path stored for the app. "." is not a named folder.
+    """
+    if not run:
+        return None
+    from .app_root import clean_rel, recorded_app_dir
+    from .verification_target import app_scope
+
+    spec = run.get("spec") if isinstance(run.get("spec"), dict) else {}
+    fctx = run.get("finalize_ctx") if isinstance(run.get("finalize_ctx"), dict) else {}
+    named = clean_rel(app_scope(spec, fctx)) or clean_rel(fctx.get("app_dir"))
+    if named or connection is None:
+        return named
+    return recorded_app_dir(connection, run)
+
+
+def _changed_inside(changed: Optional[list[str]], rel: str) -> list[str]:
+    prefix = rel.rstrip("/") + "/"
+    inside: list[str] = []
+    for raw in changed or []:
+        path = str(raw or "").lstrip("./")
+        if path.startswith(prefix):
+            rest = path[len(prefix):]
+            if rest:
+                inside.append(rest)
+    return inside
+
+
+def local_preview_command(workdir: Path, changed: Optional[list[str]] = None,
+                          named: Optional[str] = None) -> Optional[list[str]]:
+    """The preview command. Install and run in the app directory the project names.
+
+    launch_app's cwd is the sandbox root. A monorepo root with its own start script is
+    otherwise the directory npm install runs in, and a nested app (apps/<name>) is invisible
+    to one-level discovery. The copy stays the whole workspace; only the command changes.
+    """
+    from .app_root import clean_rel
+
+    rel = clean_rel(named)
+    app = workdir / rel if rel else None
+    if rel and app is not None and (app / "package.json").is_file():
+        command = _detect_command(app, _changed_inside(changed, rel))
+        if command:
+            if command[:2] == ["sh", "-lc"] and len(command) == 3:
+                inner = command[2]
+            else:
+                inner = shlex.join(command)
+            prefix = f"cd {shlex.quote(rel)} && "
+            if not inner.startswith(prefix):
+                inner = prefix + inner
+            return ["sh", "-lc", inner]
+    return _detect_command(workdir, changed)
+
+
 def _detect_command_in(workdir: Path, changed: Optional[list[str]] = None) -> Optional[list[str]]:
     """Detect the declared preview command for ONE app directory."""
     configured = _declared_command_in(workdir)
@@ -2998,7 +3055,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     # `impl_files` is what THIS task built — prefer its entrypoint over any
     # pre-existing app already in the repo.
     _changed = lineage_impl_files(engine, run)
-    command = _detect_command(workdir, _changed)
+    command = local_preview_command(workdir, _changed, named_app_directory(run))
     if not command:
         # No web server, but a library still has a way to 'run it' — its tests. Prefer the test
         # command the pipeline already recorded on the run, else detect one from the repo.
@@ -3518,12 +3575,13 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
             _release_preview_sandbox(preview_id)
             return
         _changed = lineage_impl_files(engine, {"id": row["run_id"]})
-        command = _detect_command(workdir, _changed)
+        with begin(engine) as c:
+            _run = load_code_task_run(c, row["run_id"]) if row.get("run_id") else None
+        command = local_preview_command(
+            workdir, _changed, named_app_directory(_run) if _run else None)
         if not command:
             _release_preview_sandbox(preview_id)
             return
-        with begin(engine) as c:
-            _run = load_code_task_run(c, row["run_id"]) if row.get("run_id") else None
         if provision_preview_database(engine, _run, preview_id, workdir):
             _release_preview_sandbox(preview_id)
             return
