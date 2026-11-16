@@ -242,7 +242,14 @@ def _attach_grant(world: World, resources: dict) -> str:
         person = c.execute(text(
             "SELECT id FROM identity_principals WHERE kind = 'user' AND status = 'active' "
             "AND org_id = :o ORDER BY created_at LIMIT 1"), {"o": world.org}).scalar()
-        assert person, "needs a person to own the grant"
+        if not person:
+            # The host bench world has an org and a job, and no person. The grant row
+            # requires one. This person owns the grant and is not the run's on_behalf_of.
+            person = f"usr_{uuid.uuid4().hex[:12]}"
+            c.execute(text(
+                "INSERT INTO identity_principals (id, org_id, kind, status, display_name) "
+                "VALUES (:i, :o, 'user', 'active', 'Grant owner')"),
+                {"i": person, "o": world.org})
         c.execute(text(
             "INSERT INTO identity_delegation_grants (id, org_id, user_principal_id, agent_ids, "
             "project_ids, resources, status, expires_at) VALUES (:i, :o, :u, :a, :p, "
