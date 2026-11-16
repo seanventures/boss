@@ -220,6 +220,13 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
   );
 }
 
+/** App and probe only. Any other source, including none, stays off the drawer. */
+export function drawerP95SourceSentence(source: string | null | undefined): string | null {
+  if (source === "app") return "From the app's requests.";
+  if (source === "probe") return "From health probes.";
+  return null;
+}
+
 function DeployDrawer({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kind: string; id: string }; onClose: () => void }) {
   const read = usePxRead<Deployments>(PX_PATHS.deployments(ctx.projectId), parseDeployments, { everyMs: 15_000, demo: () => parseDeployments(FX_DEPLOYMENTS) });
   const d = read.data;
@@ -228,12 +235,13 @@ function DeployDrawer({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kind: st
   const env = d.environments.find((e) => e.target_id === drawer.id) ?? d.environments.find((e) => e.key === drawer.id);
   const hist = d.history.find((h) => h.id === drawer.id);
   if (env) {
+    const p95Source = drawerP95SourceSentence(env.p95_source);
     return (
       <Drawer title={env.label} icon={<Ico icon={RocketLaunch} c="green" />} onClose={onClose} testid="px-drawer-env" sub={<Tag tone="green">{HEALTH_WORD[env.health]}</Tag>}>
         {env.url ? <a className="px-env-url" href={env.url} target="_blank" rel="noreferrer noopener"><Globe size={12} aria-hidden />{env.url} ↗</a> : null}
         <dl className="px-kv">
           {env.uptime_pct !== null ? <><dt>Uptime</dt><dd>{env.uptime_pct}%</dd></> : null}
-          {env.p95_ms !== null ? <><dt>p95</dt><dd>{env.p95_ms}ms</dd></> : null}
+          {env.p95_ms !== null ? <><dt>p95</dt><dd>{env.p95_ms}ms{p95Source ? <span data-testid="px-drawer-env-p95-source">{p95Source}</span> : null}</dd></> : null}
           <dt>Deploys</dt><dd>{env.policy === "auto" ? "automatically after merge" : "when a person approves"}</dd>
           {env.host ? <><dt>Server</dt><dd><PxLink href={env.host_href || "?area=infra&view=fleet"} testid="px-drawer-env-host" title={env.host}>runs on {env.host_name || env.host}</PxLink></dd></> : null}
           {env.last_deploy ? <><dt>Last deploy</dt><dd>{env.last_deploy.label} · {whenLocal(env.last_deploy.at)} · {env.last_deploy.by}</dd></> : null}
