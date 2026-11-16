@@ -29,10 +29,10 @@ const CHIPS: { key: string | null; label: string; count: "needsYou" | "live" | "
   { key: "live", label: "Live", count: "live" }, { key: "failed", label: "Failed", count: "failed" },
 ];
 
-/** Find narrows the rows on screen by app, env, sha, host or account. */
-function matches(row: DeployRow, q: string): boolean {
+/** Find narrows the rows on screen by app, env, sha, host, account, word, or who approved it. */
+export function matches(row: DeployRow, q: string): boolean {
   if (!q.trim()) return true;
-  const hay = [row.app, row.env, row.sha7, row.refName, row.host?.name, row.account, row.word].filter(Boolean).join(" ").toLowerCase();
+  const hay = [row.app, row.env, row.sha7, row.refName, row.host?.name, row.account, row.word, row.approver?.actor, row.approver?.roleKey].filter(Boolean).join(" ").toLowerCase();
   return q.toLowerCase().split(/\s+/).filter(Boolean).every((w) => hay.includes(w));
 }
 
