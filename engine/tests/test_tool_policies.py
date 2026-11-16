@@ -51,7 +51,8 @@ def _projects(engine):
         c.execute(text("INSERT INTO orgs (id, name) VALUES ('org_tpl', 'o') ON CONFLICT DO NOTHING"))
         c.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES ('ws_tpl', 'org_tpl', "
                        "'w') ON CONFLICT DO NOTHING"))
-        for name in ("p-grant", "p-second", "p-revoke", "p-missing", "p-mine", "p-other"):
+        for name in ("p-grant", "p-second", "p-revoke", "p-missing", "p-mine", "p-other",
+                     "p-live"):
             c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) VALUES "
                            "(:p, 'ws_tpl', :p, :p) ON CONFLICT DO NOTHING"),
                       {"p": _project(name)})
@@ -144,6 +145,54 @@ def test_revoke_of_an_unknown_id_raises_lookup_error(engine):
                 project_id=_project("p-missing"),
                 policy_id="tpl_does_not_exist",
             )
+
+
+def test_the_live_allow_read_consults_an_active_always_allow_row(engine):
+    """The allow/ask/off read follows an active always-allow row. Off, a revoked row, and a
+    pin on a different schema do not."""
+    from boss_engine.services.mcp_registry import tool_policy
+
+    project_id = _project("p-live")
+    server = {
+        "id": "srv-live",
+        "name": "files",
+        "project_id": project_id,
+        "risk_tier": 1,
+        "tool_policy": {"note": "ask"},
+        "tools": [{"name": "note", "schema_sha256": "hash-note"}],
+    }
+    with engine.begin() as connection:
+        assert tool_policy(server, "note", connection=connection, project_id=project_id) == "ask"
+        row_id = grant_always_allow(
+            connection,
+            project_id=project_id,
+            server_id="srv-live",
+            tool="note",
+            schema_sha256="hash-note",
+            source_decision_id="dec-live",
+        )
+        assert tool_policy(server, "note", connection=connection, project_id=project_id) == "allow"
+        revoke_always_allow(connection, project_id=project_id, policy_id=row_id)
+        assert tool_policy(server, "note", connection=connection, project_id=project_id) == "ask"
+        grant_always_allow(
+            connection,
+            project_id=project_id,
+            server_id="srv-live",
+            tool="note",
+            schema_sha256="other-hash",
+            source_decision_id="dec-stale",
+        )
+        assert tool_policy(server, "note", connection=connection, project_id=project_id) == "ask"
+        off = {**server, "tool_policy": {"note": "off"}}
+        grant_always_allow(
+            connection,
+            project_id=project_id,
+            server_id="srv-live",
+            tool="note",
+            schema_sha256="hash-note",
+            source_decision_id="dec-off",
+        )
+        assert tool_policy(off, "note", connection=connection, project_id=project_id) == "off"
 
 
 def test_another_projects_row_is_not_listed(engine):

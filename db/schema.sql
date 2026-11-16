@@ -15607,3 +15607,20 @@ BEGIN
     );
 END
 $bossapp_1231$;
+
+-- BOSSAPP-818: durable tool catalog. A reachable probe writes one row per tool so the schema
+-- and description hashes survive when the process that computed them is gone. CREATE TABLE
+-- IF NOT EXISTS does not add columns to a table that already exists; the ALTERs do.
+CREATE TABLE IF NOT EXISTS mcp_tool_catalog (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+  tool TEXT NOT NULL,
+  schema_sha256 TEXT,
+  description_sha256 TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, server_id, tool)
+);
+ALTER TABLE mcp_tool_catalog ADD COLUMN IF NOT EXISTS schema_sha256 TEXT;
+ALTER TABLE mcp_tool_catalog ADD COLUMN IF NOT EXISTS description_sha256 TEXT;
+CREATE INDEX IF NOT EXISTS idx_mcp_tool_catalog_server
+  ON mcp_tool_catalog (project_id, server_id);

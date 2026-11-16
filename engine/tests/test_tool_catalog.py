@@ -336,8 +336,8 @@ def project(eng):
                        "VALUES (:i, :w, 'quarantine test', :s)"), {"i": pid, "w": wid, "s": pid})
     yield pid
     with eng.begin() as c:
-        for table in ("tool_call_audit", "receipts", "mcp_servers", "events", "decisions",
-                      "project_members"):
+        for table in ("tool_call_audit", "receipts", "mcp_tool_catalog", "mcp_servers",
+                      "events", "decisions", "project_members"):
             try:
                 with c.begin_nested():
                     c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
@@ -376,6 +376,27 @@ def _approver(eng, project):
             "CAST(:r AS JSONB), CAST(:perm AS JSONB)) ON CONFLICT DO NOTHING"),
             {"i": f"pm_{project}_ceo", "p": project,
              "r": json.dumps(["ceo"]), "perm": json.dumps(["decision_resolve"])})
+
+
+def test_a_reachable_probe_persists_schema_and_description_hashes(eng, project):
+    """tool_catalog hashes in memory. A reachable probe writes those hashes to the catalog
+    table; an unreachable probe does not replace them."""
+    sid = _server(eng, project)
+    with eng.begin() as c:
+        row = c.execute(text(
+            "SELECT schema_sha256, description_sha256 FROM mcp_tool_catalog "
+            "WHERE project_id = :p AND server_id = :s AND tool = 'write_file'"),
+            {"p": project, "s": sid}).mappings().first()
+    assert row is not None
+    assert row["schema_sha256"] == schema_sha256(_WRITE_V1.get("inputSchema"))
+    assert row["description_sha256"] == description_sha256(_WRITE_V1.get("description"))
+    with eng.begin() as c:
+        reg.record_reachability(c, project, sid, reachable=False, error="down")
+        kept = c.execute(text(
+            "SELECT description_sha256 FROM mcp_tool_catalog "
+            "WHERE project_id = :p AND server_id = :s AND tool = 'write_file'"),
+            {"p": project, "s": sid}).scalar()
+    assert kept == description_sha256(_WRITE_V1.get("description"))
 
 
 def test_the_quarantine_persists_across_probes_and_opens_one_card(eng, project):

@@ -2,8 +2,9 @@
 
 The hashes travel on the probe summary. A same-named tool whose schema or
 description digest changed is quarantined to ask. A first sight is not a
-change. This does not write the catalog table or open a decision: it marks
-a copy of the observed list and names the decision a reachable probe opens.
+change. Comparing a list does not open a decision: it marks a copy of the
+observed list and names the decision a reachable probe opens. The hashes
+themselves are written by :func:`persist_catalog` when a probe stores them.
 
 THE MARK LASTS UNTIL A PERSON CLEARS IT (BOSSAPP-818). A probe after the change
 sees the stored hash equal the observed one, so :func:`compare_catalog` alone
@@ -37,6 +38,29 @@ REVIEW_KEYS = ("reviewed_by", "reviewed_at")
 
 #: A diff the decision carries is cut here (question and recommendation alike).
 DIFF_LIMIT = 4000
+
+
+def persist_catalog(connection: Any, project_id: str, server_id: str, tools: Any) -> None:
+    """Replace this server's catalog rows with the hashes on ``tools``.
+
+    ``compare_catalog`` only sees the list it is handed. A reachable probe calls this so the
+    schema and description hashes are still there after the process is gone. An empty list
+    clears the server's rows.
+    """
+    from sqlalchemy import text
+
+    connection.execute(
+        text("DELETE FROM mcp_tool_catalog WHERE project_id = :p AND server_id = :s"),
+        {"p": project_id, "s": server_id})
+    for tool in tools or []:
+        if not isinstance(tool, dict) or not tool.get("name"):
+            continue
+        connection.execute(
+            text("INSERT INTO mcp_tool_catalog "
+                 "(project_id, server_id, tool, schema_sha256, description_sha256) "
+                 "VALUES (:p, :s, :t, :schema, :descr)"),
+            {"p": project_id, "s": server_id, "t": str(tool["name"]),
+             "schema": _schema_hash(tool), "descr": _description_hash(tool)})
 
 
 def schema_sha256(schema: Any) -> str:

@@ -474,7 +474,7 @@ def test_mcp_json_never_carries_a_boss_credential(monkeypatch):
                {"name": "docs", "url": "https://docs.example/mcp", "tools": [{"name": "t"}]}]
     monkeypatch.setattr(agents_mod, "held_mcp_servers", lambda c, p, r: servers)
     monkeypatch.setattr(mcp_registry, "needs_person", lambda s: False)
-    monkeypatch.setattr(mcp_registry, "tool_policy", lambda s, t: "allow")
+    monkeypatch.setattr(mcp_registry, "tool_policy", lambda s, t, *a, **k: "allow")
     monkeypatch.setattr(mcp_registry, "auth_headers", lambda c, st, p, s: (
         {"Authorization": "Bearer boss_pat_" + "a" * 40} if s["name"] == "boss-self" else {"Authorization": "Bearer up"}))
     planned = code_task_mcp.plan(None, None, "p", "forge")

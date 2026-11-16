@@ -379,14 +379,18 @@ def _bundle_tool_permission(skill_id: str, tool: str) -> str:
         return "skill:invoke"
 
 
-def _mcp_tool_policy(server: dict[str, Any], tool: dict[str, Any]) -> str:
+def _mcp_tool_policy(server: dict[str, Any], tool: dict[str, Any], *,
+                     connection: Any = None, project_id: Optional[str] = None,
+                     arguments: Any = None, role_key: Optional[str] = None) -> str:
     """Allow / Ask / Off for one offered tool: mcp_registry.tool_policy, the one statement."""
     from .mcp_registry import tool_policy
 
     annotations = tool.get("annotations") or {}
     return tool_policy(server, str(tool.get("name") or ""),
                        declared=tool.get("risk_tier", annotations.get("risk_tier")
-                                         if isinstance(annotations, dict) else None))
+                                         if isinstance(annotations, dict) else None),
+                       connection=connection, project_id=project_id,
+                       arguments=arguments, role_key=role_key)
 
 
 def _mcp_tool_risk(server: dict[str, Any], tool: dict[str, Any]) -> int:
@@ -2149,6 +2153,64 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
         return {"status": run["status"], "run_id": run_id}
     project_id = run["project_id"]
     pending = run["pending"] or {}
+    released: dict = {}
+
+    def _binding_refusal() -> Optional[dict]:
+        # Governance invariant: deferred high-risk tools only execute after the linked
+        # Decision is approved. The HTTP resume endpoint is worker-facing and historically
+        # had no actor check — without this gate, anyone who knew a suspended run_id could
+        # POST /v1/agent-runs/{id}/resume and execute the pending tool as if approved.
+        # Pending args can be replaced after the person approved a different call.
+        # No digest on an unstamped decision means an older one; that resume is unchanged. A v2
+        # decision needs its digest and signature (argument_binding.binding_holds, BOSSAPP-816).
+        decision_id = str(pending.get("decision_id") or "").strip()
+        if not decision_id:
+            return {
+                "status": "denied",
+                "run_id": run_id,
+                "reason": "missing approval decision for suspended run",
+            }
+        decision = connection.execute(
+            text(
+                "SELECT status, recommendation FROM decisions "
+                "WHERE id = :id AND project_id = :project_id"
+            ),
+            {"id": decision_id, "project_id": project_id},
+        ).mappings().first()
+        if decision is None or decision["status"] != "approved":
+            return {
+                "status": "denied",
+                "run_id": run_id,
+                "decision_id": decision_id,
+                "reason": (
+                    "decision not approved"
+                    if decision is not None
+                    else "approval decision not found"
+                ),
+                "decision_status": None if decision is None else decision["status"],
+            }
+        recommendation = decision["recommendation"]
+        if isinstance(recommendation, str):
+            try:
+                recommendation = json.loads(recommendation)
+            except ValueError:
+                recommendation = {}
+        if not isinstance(recommendation, dict):
+            recommendation = {}
+        tool_name = recommendation.get("tool") or pending.get("tool") or ""
+        if not isinstance(tool_name, str):
+            tool_name = str(tool_name)
+        if not binding_holds(tool_name, pending.get("args"), recommendation):
+            return {
+                "status": "denied",
+                "run_id": run_id,
+                "decision_id": decision_id,
+                "reason": CHANGED,
+            }
+        released["recommendation"] = recommendation
+        released["decision_id"] = decision_id
+        return None
+
     if _on_kernel(run) and _waits_on_a_subagent(pending):
         # AP-P7: A SUB-AGENT'S INTERRUPT, carried by this run's `task` call. Its approval binds
         # the CHILD's held call (which this run does not hold); the kernel hands every answer —
@@ -2170,57 +2232,11 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
         # no held call to check; the typed answer replaces the parked result and arrives as a
         # structured user message.
         return resume_with_answer(connection, settings, run)
-    # Governance invariant: deferred high-risk tools only execute after the linked
-    # Decision is approved. The HTTP resume endpoint is worker-facing and historically
-    # had no actor check — without this gate, anyone who knew a suspended run_id could
-    # POST /v1/agent-runs/{id}/resume and execute the pending tool as if approved.
-    decision_id = str(pending.get("decision_id") or "").strip()
-    if not decision_id:
-        return {
-            "status": "denied",
-            "run_id": run_id,
-            "reason": "missing approval decision for suspended run",
-        }
-    decision = connection.execute(
-        text(
-            "SELECT status, recommendation FROM decisions "
-            "WHERE id = :id AND project_id = :project_id"
-        ),
-        {"id": decision_id, "project_id": project_id},
-    ).mappings().first()
-    if decision is None or decision["status"] != "approved":
-        return {
-            "status": "denied",
-            "run_id": run_id,
-            "decision_id": decision_id,
-            "reason": (
-                "decision not approved"
-                if decision is not None
-                else "approval decision not found"
-            ),
-            "decision_status": None if decision is None else decision["status"],
-        }
-    # Pending args can be replaced after the person approved a different call.
-    # No digest on an unstamped decision means an older one; that resume is unchanged. A v2
-    # decision needs its digest and signature (argument_binding.binding_holds, BOSSAPP-816).
-    recommendation = decision["recommendation"]
-    if isinstance(recommendation, str):
-        try:
-            recommendation = json.loads(recommendation)
-        except ValueError:
-            recommendation = {}
-    if not isinstance(recommendation, dict):
-        recommendation = {}
-    tool_name = recommendation.get("tool") or pending.get("tool") or ""
-    if not isinstance(tool_name, str):
-        tool_name = str(tool_name)
-    if not binding_holds(tool_name, pending.get("args"), recommendation):
-        return {
-            "status": "denied",
-            "run_id": run_id,
-            "decision_id": decision_id,
-            "reason": CHANGED,
-        }
+    refused = _binding_refusal()
+    if refused is not None:
+        return refused
+    recommendation = released["recommendation"]
+    decision_id = released["decision_id"]
     if _on_kernel(run):
         # K4: a run the kernel drove resumes on the kernel — the held call runs down the same
         # governed tool chain, bound again to the approval's argument digest
@@ -3544,7 +3560,10 @@ class AgentStepToolSet:
             policy = next_write_must_ask(
                 {"untrusted": screen_hold},
                 write=risk >= 2,
-                policy=_mcp_tool_policy(server, tool),
+                policy=_mcp_tool_policy(
+                    server, tool, connection=connection, project_id=project_id,
+                    arguments=args if isinstance(args, dict) else None,
+                    role_key=_run_role(finalize_ctx) or None),
             )
             asks = policy == "ask"
             if risk > threshold or unreviewed or asks:

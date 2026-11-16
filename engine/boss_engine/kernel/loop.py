@@ -265,6 +265,19 @@ def run(spec: RunSpec) -> KernelResult:
     return drive.drive()
 
 
+def _approval_refusal(state: Any, decision: Optional[dict]) -> str:
+    """Why ``decision`` does not release the call ``state`` holds, or "" when it does.
+
+    The resume door calls this before the held tool runs. A v2 binding needs its HMAC;
+    different arguments refuse. An unstamped decision keeps the lenient rule.
+    """
+    if isinstance(state, dict):
+        pending = state.get("pending")
+    else:
+        pending = getattr(state, "pending", None)
+    return approval_refusal(pending if isinstance(pending, dict) else {}, decision)
+
+
 def resume(spec: RunSpec, *, decision: Optional[dict] = None,
            answers: Optional[dict] = None) -> KernelResult:
     """Continue the suspended run `spec.run_id` from its checkpoint.
@@ -319,7 +332,7 @@ def resume(spec: RunSpec, *, decision: Optional[dict] = None,
                                     error="that answer is not to the question this run asked",
                                     usage=state.usage, steps=state.step)
         else:
-            refusal = approval_refusal(pending, decision)
+            refusal = _approval_refusal(state, decision)
             if refusal:
                 return KernelResult(status="denied", run_id=state.run_id, pending=state.pending,
                                     error=refusal, usage=state.usage, steps=state.step)

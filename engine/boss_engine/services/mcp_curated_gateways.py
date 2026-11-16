@@ -322,9 +322,10 @@ def _profile_entries(connection: Connection, gateway: dict[str, Any]
     return out
 
 
-def _runs_unattended(server: dict[str, Any], entry: dict[str, Any], tool: str) -> bool:
+def _runs_unattended(server: dict[str, Any], entry: dict[str, Any], tool: str, *,
+                    connection: Any = None, project_id: Optional[str] = None) -> bool:
     """Would this tool run through the gateway with nobody present? The cap, then the
-    registry's own review and Allow/Ask/Off (read, never re-decided here)."""
+    registry's own review and Allow/Ask/Off, including an active always-allow row."""
     from .mcp_registry import needs_person, tool_policy, tool_quarantined
 
     if entry.get("caps", {}).get(tool) == "off":
@@ -336,7 +337,9 @@ def _runs_unattended(server: dict[str, Any], entry: dict[str, Any], tool: str) -
         return False
     declared = next((t.get("risk_tier") for t in server.get("tools") or []
                      if isinstance(t, dict) and t.get("name") == tool), None)
-    return tool_policy(server, tool, declared) == "allow" and not tool_quarantined(server, tool)
+    return (tool_policy(server, tool, declared, connection=connection,
+                        project_id=project_id) == "allow"
+            and not tool_quarantined(server, tool))
 
 
 def exposed_tools(connection: Connection, gateway: dict[str, Any]) -> list[dict[str, Any]]:
@@ -346,7 +349,9 @@ def exposed_tools(connection: Connection, gateway: dict[str, Any]) -> list[dict[
         for tool in server.get("tools") or []:
             if not isinstance(tool, dict) or not tool.get("name"):
                 continue
-            if not _runs_unattended(server, entry, str(tool["name"])):
+            if not _runs_unattended(server, entry, str(tool["name"]),
+                                    connection=connection,
+                                    project_id=str(gateway.get("project_id") or "") or None):
                 continue
             out.append({
                 "name": f"{server['name']}{SEPARATOR}{tool['name']}",

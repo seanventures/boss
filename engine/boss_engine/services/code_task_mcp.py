@@ -140,7 +140,8 @@ def plan(connection: Connection, settings: Any, project_id: str, role_key: str,
         granted = set(server.get("granted_tools") or [])
         known = [str(t.get("name")) for t in server.get("tools") or [] if t.get("name")]
         for tool in known:
-            policy = tool_policy(server, tool)
+            policy = tool_policy(server, tool, connection=connection,
+                                 project_id=project_id, role_key=role_key)
             if (granted and tool not in granted) or (
                     policy == "off" if gateway else policy != "allow"):
                 disallowed.append(f"mcp__{name}__{tool}")

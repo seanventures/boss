@@ -130,7 +130,7 @@ def held(monkeypatch):
                         lambda s: not (s.get("provenance") or {}).get("trusted"))
     policies = {"read": "allow", "write": "ask", "wipe": "off", "secret": "allow",
                 "look": "allow"}
-    monkeypatch.setattr(mcp_registry, "tool_policy", lambda s, t, *a: policies[t])
+    monkeypatch.setattr(mcp_registry, "tool_policy", lambda s, t, *a, **k: policies[t])
     monkeypatch.setattr(mcp_registry, "auth_headers",
                         lambda c, st, p, s: {"Authorization": "Bearer upstream-own"})
     return servers

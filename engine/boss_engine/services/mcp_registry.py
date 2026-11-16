@@ -541,19 +541,79 @@ def tool_quarantined(server: dict[str, Any], tool_name: str) -> bool:
                for t in server.get("tools") or [])
 
 
-def tool_policy(server: dict[str, Any], tool_name: str, declared: Any = None) -> str:
+def tool_policy(server: dict[str, Any], tool_name: str, declared: Any = None, *,
+                connection: Any = None, project_id: Optional[str] = None,
+                arguments: Any = None, role_key: Optional[str] = None) -> str:
     """The effective policy of one MCP tool on one server.
 
     THE ONE STATEMENT every road reads (call_tool_with_receipt, call_tool_unattended, the agent
     loop's offer, code_task_mcp, the Kit, the MCP gateway's tool_policy_verdict), so a
     QUARANTINED tool answers Ask here whatever its stored policy says (BOSSAPP-818): a tool set
     to Allow whose definition changed under it must not keep running unattended. Off stays Off.
+
+    With a ``connection``, an active always-allow row for this tool (BOSSAPP-817) turns Ask into
+    Allow. Off, the tier floor, a quarantine, a stale schema pin, and a row that does not match
+    these arguments stay as they were.
     """
     chosen = (server.get("tool_policy") or {}).get(tool_name)
-    policy = effective_policy(tool_tier(server, tool_name, declared), chosen)
+    tier = tool_tier(server, tool_name, declared)
+    policy = effective_policy(tier, chosen)
     if policy == "allow" and tool_quarantined(server, tool_name):
         return "ask"
+    if (connection is not None and policy == "ask" and policy_floor(tier) != "ask"
+            and not tool_quarantined(server, tool_name)
+            and _always_allow_matches(connection, server, tool_name,
+                                      project_id=project_id, arguments=arguments,
+                                      role_key=role_key)):
+        return "allow"
     return policy
+
+
+def _schema_pin(server: dict[str, Any], tool_name: str) -> Optional[str]:
+    for tool in server.get("tools") or []:
+        if not isinstance(tool, dict) or tool.get("name") != tool_name:
+            continue
+        stored = tool.get("schema_sha256")
+        if isinstance(stored, str) and stored:
+            return stored
+        schema = tool.get("inputSchema")
+        if schema is None or isinstance(schema, dict):
+            from .tool_catalog import schema_sha256
+
+            return schema_sha256(schema if isinstance(schema, dict) else None)
+    return None
+
+
+def _always_allow_matches(connection: Any, server: dict[str, Any], tool_name: str, *,
+                          project_id: Optional[str], arguments: Any,
+                          role_key: Optional[str]) -> bool:
+    """True when an active always-allow rule covers this call. A read that fails stays Ask."""
+    from .tool_policy_engine import PolicyContext, load_rules, rule_matches
+
+    project = project_id or (str(server["project_id"]) if server.get("project_id") else None)
+    if not project:
+        return False
+    current = _schema_pin(server, tool_name)
+    ctx = PolicyContext(
+        server=str(server.get("name") or server.get("id") or ""),
+        tool=str(tool_name or ""),
+        arguments=dict(arguments) if isinstance(arguments, dict) else {},
+        project=project, role=role_key or None,
+        server_id=str(server["id"]) if server.get("id") else None,
+        schema_sha256=current, base="ask")
+    try:
+        rules = load_rules(connection, project)
+    except Exception:  # noqa: BLE001 — no readable row, so the stored Ask stands
+        return False
+    for rule in rules:
+        if rule.get("source") != "decision" or rule.get("effect") != "allow":
+            continue
+        pin = rule.get("schema_sha256")
+        if pin and pin != current:
+            continue
+        if rule_matches(rule, ctx):
+            return True
+    return False
 
 
 def set_tool_policy(connection: Connection, project_id: str, server_id: str, tool_name: str,
@@ -1572,6 +1632,11 @@ def record_reachability(
         {"r": bool(reachable), "e": None if reachable else (error or "no answer")[:500],
          "t": json.dumps(stored), "id": server_id, "p": project_id},
     )
+    if reachable:
+        # The in-memory compare does not keep the hashes. The catalog table does (BOSSAPP-818).
+        from .tool_catalog import persist_catalog
+
+        persist_catalog(connection, project_id, server_id, stored)
     return stored if reachable else None
 
 
