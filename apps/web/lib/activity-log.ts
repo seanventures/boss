@@ -75,6 +75,8 @@ export type ActivityFacets = {
   services: Record<string, number>;
   agents: { roleKey: string; n: number }[];
   agentsMore: number;
+  /** People in the window. A blank name is not one. */
+  actors: { actor: string; n: number }[];
   /** The real kinds in the window (D13: `kind:` autocomplete), most common first. */
   kinds: { kind: string; n: number }[];
   runs: { id: string; label: string; n: number }[];
@@ -175,6 +177,8 @@ export function mapActivityFacets(payload: unknown): ActivityFacets | null {
     agents: agents.filter(isPlainObject).map((a) => ({ roleKey: asText(a.role_key), n: asFiniteNumber(a.n) ?? 0 }))
       .filter((a) => a.roleKey),
     agentsMore: asFiniteNumber(payload.agents_more) ?? 0,
+    actors: (Array.isArray(payload.actors) ? payload.actors : []).filter(isPlainObject)
+      .map((a) => ({ actor: asText(a.actor), n: asFiniteNumber(a.n) ?? 0 })).filter((a) => a.actor),
     kinds: (Array.isArray(payload.kinds) ? payload.kinds : []).filter(isPlainObject)
       .map((k) => ({ kind: asText(k.kind), n: asFiniteNumber(k.n) ?? 0 })).filter((k) => k.kind),
     runs: runs.filter(isPlainObject).map((r) => ({ id: asText(r.id), label: asText(r.label), n: asFiniteNumber(r.n) ?? 0 }))

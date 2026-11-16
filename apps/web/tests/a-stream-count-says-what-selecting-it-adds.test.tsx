@@ -22,7 +22,7 @@ afterEach(() => { act(() => root?.unmount()); host?.remove(); root = null; host 
 const FACETS: ActivityFacets = {
   levels: { error: 0, warn: 0, info: 6, verbose: 0 },
   sources: { event: 15, job: 1, deployment: 6, receipt: 0 },
-  statuses: {}, services: {}, agents: [], agentsMore: 0, kinds: [], runs: [], total: 22, exact: true,
+  statuses: {}, services: {}, agents: [], agentsMore: 0, actors: [], kinds: [], runs: [], total: 22, exact: true,
 };
 
 function mount(tokens: { key: string; value: string }[]) {

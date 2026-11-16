@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The facet rail (spec §4.2.5): LEVEL, STREAM, AGENT, RUN, PROCESS, STATUS, each value with the
+ * The facet rail (spec §4.2.5): LEVEL, STREAM, AGENT, ACTOR, RUN, PROCESS, STATUS, each value with the
  * SERVER's count for the current query (a facet ignores its own selection, so a count says how
  * many lines picking it would show). The agent list used to be built from the 200 rows on
  * screen; these are counted over the whole window. A click adds or removes the value's token in
@@ -143,6 +143,12 @@ export function FacetRail({ facets, tokens, showVerbose, onTokens, onVerbose }: 
             +{(facets!.agents.length - AGENTS_SHOWN) + (facets!.agentsMore || 0)} more
           </button></li>
         ) : null}
+      </Section>
+      <Section id="actor" label="ACTOR" {...sec("actor")}>
+        {(facets?.actors ?? []).map((a) => (
+          <RailRow key={a.actor} k="actor" value={a.actor} pressed={has("actor", a.actor)} exact={exact} loaded={facets !== null} onToggle={() => toggle("actor", a.actor)} n={a.n} testid={`lx-actor-${a.actor}`}
+               label={<span data-user-text>{a.actor}</span>} />
+        ))}
       </Section>
       <Section id="run" label="RUN" {...sec("run")}>
         {(facets?.runs ?? []).slice(0, moreRuns ? 40 : RUNS_SHOWN).map((r) => {

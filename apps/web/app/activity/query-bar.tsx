@@ -26,6 +26,7 @@ function suggestions(key: LogTokenKey, negate: boolean, typed: string, facets: A
       case "level": return LEVELS.map((l) => ({ token: { key, value: l.key }, label: l.label, count: facets?.levels[l.key] }));
       case "src": return STREAMS.map((s) => ({ token: { key, value: s.key }, label: s.label, count: facets?.sources[s.key] }));
       case "agent": return (facets?.agents ?? []).map((a) => ({ token: { key, value: a.roleKey }, label: nameOf(a.roleKey).name, count: a.n }));
+      case "actor": return (facets?.actors ?? []).map((a) => ({ token: { key, value: a.actor }, label: a.actor, count: a.n }));
       case "status": return STATUSES.map((s) => ({ token: { key, value: s.key }, label: s.label, count: facets?.statuses[s.key] }));
       case "kind": {
         // The server's prefix answer first (any kind in the window), then the facets' top kinds.
