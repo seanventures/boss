@@ -31,8 +31,10 @@ WHAT CHANGED, AND THE INCIDENTS BEHIND IT
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import threading
 import time
 from typing import Any, Callable, ContextManager, Optional
 from urllib.parse import urlparse
@@ -1417,11 +1419,60 @@ def _said(error: BaseException) -> str:
     return f"{type(error).__name__}: {error}"
 
 
+#: Save & test and the register that follows it are two requests. The probe stays in this
+#: process only, long enough to be written onto the new row, and is never a tool list the
+#: client sent. A miss (another worker, a register with no test) leaves the row unchecked.
+_REMEMBERED: dict[tuple[str, str, str], tuple[float, dict[str, Any]]] = {}
+_REMEMBER_FOR = 120.0
+_REMEMBER_LOCK = threading.Lock()
+
+
+def _probe_key(project_id: str, url: str, auth: dict[str, Any]) -> tuple[str, str, str]:
+    kind = str(auth.get("type") or "none")
+    secret = str(auth.get("secret") or "")
+    header = str(auth.get("header_name") or "")
+    static = auth.get("headers") if isinstance(auth.get("headers"), dict) else {}
+    extra = "\n".join(f"{k}:{static[k]}" for k in sorted(static))
+    oauth = auth.get("oauth") if isinstance(auth.get("oauth"), dict) else {}
+    client = str(oauth.get("client_id") or "")
+    digest = hashlib.sha256(f"{kind}\n{header}\n{client}\n{secret}\n{extra}".encode()).hexdigest()
+    return (str(project_id), str(url or "").strip(), digest)
+
+
+def remember_probe(project_id: str, url: str, auth: Optional[dict[str, Any]],
+                   found: dict[str, Any]) -> None:
+    """Hold one probe for the register of this project, URL and sign-in."""
+    checked = _validated_auth(auth)
+    now = time.monotonic()
+    key = _probe_key(project_id, url, checked)
+    with _REMEMBER_LOCK:
+        for stale in [k for k, (at, _) in _REMEMBERED.items() if now - at > _REMEMBER_FOR]:
+            _REMEMBERED.pop(stale, None)
+        _REMEMBERED[key] = (now, found)
+
+
+def take_remembered_probe(project_id: str, url: str,
+                          auth: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """The probe held for this register, once. None when there is none or it has expired."""
+    try:
+        checked = _validated_auth(auth)
+    except McpServerError:
+        return None
+    now = time.monotonic()
+    with _REMEMBER_LOCK:
+        item = _REMEMBERED.pop(_probe_key(project_id, url, checked), None)
+    if item is None or now - item[0] > _REMEMBER_FOR:
+        return None
+    return item[1]
+
+
 def test_entered(settings: Any, connection: Optional[Connection], project_id: str, url: str,
-                 auth: Optional[dict[str, Any]], *, timeout: float = 15.0) -> dict[str, Any]:
+                 auth: Optional[dict[str, Any]], *, timeout: float = 15.0,
+                 remember: bool = False) -> dict[str, Any]:
     """Probe the URL and sign-in an operator TYPED, before anything is stored (Save & test).
 
-    The token is used for this one call and dropped; nothing is written."""
+    The token is used for this one call and dropped; nothing is written. `remember` keeps the
+    full probe in this process for the register that follows."""
     transport = "stdio" if str(url or "").startswith("stdio://") else "http"
     _validated_server_identity("test", url, transport)
     if transport == "stdio":
@@ -1439,6 +1490,8 @@ def test_entered(settings: Any, connection: Optional[Connection], project_id: st
     elif secret and checked["type"] == "header":
         headers[str(checked["header_name"])] = secret
     found = probe(settings, url, timeout=timeout, headers=headers)
+    if remember:
+        remember_probe(project_id, url, checked, found)
     return {"ok": bool(found["reachable"]),
             "tools": [{"name": t["name"], "description": t["description"]}
                       for t in found["tools"]],

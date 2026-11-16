@@ -865,11 +865,14 @@ from .services.mcp_registry import (
     McpServerConflict,
     McpServerInUse,
     delete_mcp_server,
+    get_mcp_server,
     list_mcp_servers,
     mcp_server_references,
+    record_reachability,
     register_mcp_server,
     servers_with_tools,
     set_mcp_enabled,
+    take_remembered_probe,
     update_mcp_server,
 )
 from .services.skill_packaging import (
@@ -7144,7 +7147,7 @@ def register_mcp(payload: McpServerRegisterRequest):
             require_project_actor(
                 connection, payload.project_id, payload.actor, "pack_manage"
             )
-            return register_mcp_server(
+            row = register_mcp_server(
                 connection,
                 payload.project_id,
                 payload.name,
@@ -7160,6 +7163,18 @@ def register_mcp(payload: McpServerRegisterRequest):
                 auth=payload.auth,
                 settings=get_settings(),
             )
+            # The console's Save & test just probed this URL. Write that result onto the new
+            # row. No remembered probe (import, OAuth, a register on its own): do not probe.
+            found = take_remembered_probe(payload.project_id, payload.url, payload.auth)
+            if found and found.get("reachable") and row is not None:
+                record_reachability(
+                    connection, payload.project_id, row["id"],
+                    reachable=True, tools=found.get("tools") or [],
+                )
+                fresh = get_mcp_server(connection, payload.project_id, row["id"])
+                if fresh is not None:
+                    row = fresh
+            return row
         except McpServerConflict as error:
             # 409: the name is taken — a double-pressed Register used to make a second server
             # whose tools silently replaced the first's in every agent's tool list.

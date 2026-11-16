@@ -87,6 +87,46 @@ def test_save_and_test_a_typed_token_stores_nothing(client, fake_server):
     assert len(after) == len(before)
 
 
+def test_a_server_added_from_the_console_keeps_the_tools_the_test_found(client, fake_server):
+    """Save & test, then register, is how the console adds one remote server. The tools that
+    test found are what the drawer reads back, with no second probe and no live server."""
+    name = f"orders_{uuid.uuid4().hex[:6]}"
+    url = "https://mcp.example/mcp"
+    tested = client.post("/v1/mcp/servers/test", json={
+        "project_id": PROJECT, "actor": "ceo", "url": url,
+        "auth": {"type": "bearer", "secret": SECRET}})
+    assert tested.status_code == 200
+    assert [t["name"] for t in tested.json()["tools"]] == ["list_issues"]
+    probed = len(fake_server)
+    made = client.post("/v1/mcp/servers", json={
+        "project_id": PROJECT, "actor": "ceo", "name": name, "url": url,
+        "auth": {"type": "bearer", "secret": SECRET}})
+    assert made.status_code == 201, made.text
+    assert [t["name"] for t in made.json()["tools"]] == ["list_issues"]
+    assert made.json()["reachable"] is True
+    listed = client.get("/v1/mcp/servers", params={"project_id": PROJECT, "check": "none"})
+    row = next(s for s in listed.json()["items"] if s["name"] == name)
+    assert [t["name"] for t in row["tools"]] == ["list_issues"]
+    assert row["reachable"] is True
+    assert len(fake_server) == probed, "register probed the server again"
+    assert SECRET not in made.text and SECRET not in listed.text
+
+
+def test_registering_without_a_passing_test_does_not_invent_tools(client, fake_server):
+    name = f"quiet_{uuid.uuid4().hex[:6]}"
+    url = "https://mcp.example/never-tested"
+    made = client.post("/v1/mcp/servers", json={
+        "project_id": PROJECT, "actor": "ceo", "name": name, "url": url,
+        "auth": {"type": "bearer", "secret": SECRET}})
+    assert made.status_code == 201, made.text
+    assert made.json()["tools"] == []
+    assert made.json()["reachable"] is None
+    listed = client.get("/v1/mcp/servers", params={"project_id": PROJECT, "check": "none"})
+    row = next(s for s in listed.json()["items"] if s["name"] == name)
+    assert row["tools"] == []
+    assert fake_server == []
+
+
 def test_a_url_change_voids_the_review_and_a_review_records_who(client, fake_server):
     made = client.post("/v1/mcp/servers", json={
         "project_id": PROJECT, "actor": "ceo", "name": f"t_{uuid.uuid4().hex[:6]}",

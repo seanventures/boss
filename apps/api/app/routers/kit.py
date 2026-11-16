@@ -336,7 +336,10 @@ def build_kit_router(
     @router.post("/v1/mcp/servers/test")
     @permit(P.MCP_SERVER_REGISTER, scope=Scope.project(body="project_id"))
     def test_mcp(body: McpTestBody) -> dict[str, Any]:
-        """Test a URL and sign-in as TYPED. Stores nothing (Save & test, then register)."""
+        """Test a URL and sign-in as TYPED. Writes no row (Save & test, then register).
+
+        The probe is kept in this process so the register that follows can store the tools
+        without asking the server a second time."""
         from boss_engine.services.mcp_registry import test_entered
 
         # A WRITER'S CHECK, not a reader's: it makes the API call a URL somebody typed, which is
@@ -344,7 +347,8 @@ def build_kit_router(
         with begin(engine) as connection:
             require_write_actor(connection, body.project_id, body.actor, "pack_manage")
         try:
-            return test_entered(settings(), None, body.project_id, body.url, body.auth)
+            return test_entered(settings(), None, body.project_id, body.url, body.auth,
+                                remember=True)
         except McpServerError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
