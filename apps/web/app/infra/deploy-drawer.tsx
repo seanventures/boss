@@ -12,7 +12,9 @@ import React, { useState } from "react";
 import { RateIt } from "../improve/rate-it";
 
 import { showToast } from "../client-forms";
-import { buildHref, changeHref, deployLogsHref, useDeployDetail, type DeployDetail, type StepState } from "../../lib/infra-view";
+import { actorWords } from "../../lib/actor-words";
+import { buildHref, changeHref, deployLogsHref, useDeployDetail, type DeployDetail, type DeployRow, type StepState } from "../../lib/infra-view";
+import { roleWords } from "../agents/chain-model";
 import { goConsole } from "./deploy-actions";
 import { StepDots, shownWord, useVerdict } from "./deploy-row";
 import { afterWrite, decideDeploy, deployTarget, redeployDelivery, rollbackDeploy, runHealthCheck } from "./infra-actions";
@@ -24,6 +26,15 @@ export { DeployRail, DeployRowView } from "./deploy-row";
 const STEP_GLYPH: Record<StepState, string> = { done: "✓", running: "◐", failed: "✗", pending: "○", skipped: "–" };
 const LOG_LINES = 200;
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** The actor is the person. A role key alone is the role that approved, not a person we invent. */
+function approvalWords(approver: DeployRow["approver"], viewer: string): string {
+  const person = approver?.actor?.trim() ?? "";
+  const roleKey = approver?.roleKey?.trim() ?? "";
+  if (person) return `Approved by ${actorWords(person, null, viewer)}.`;
+  if (roleKey) return `Approved by the ${roleWords(roleKey)} role.`;
+  return "The approval was not recorded.";
+}
 
 /** A console href followed in place (keeps the org). */
 function ConsoleLink({ href, children, testId, tip }: { href: string; children: React.ReactNode; testId?: string; tip?: string }) {
@@ -145,6 +156,7 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
         <StateWord w={shownWord(row, verdict)} />{" "}
         <span data-copy="data">{verdict === "approve" ? "Approved. Starting the deploy." : row.sentence}</span>
       </div>
+      <p className="inf-muted" data-testid="inf-deploy-approver" data-copy="data">{approvalWords(row.approver, actor)}</p>
       {verdict === null && (row.can.approve || row.can.reject) ? (
         <DrawerSection label="Needs you" testId="inf-deploy-needs">
           <div className="inf-actions">
