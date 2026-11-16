@@ -4,10 +4,10 @@
  * The build bench on the default overview (BOSSAPP-1273).
  *
  * Same jobs as a studio home: a status line, a headline, one composer, an add menu,
- * a mode, a microphone when the browser can dictate, "I'm feeling lucky", chips, and
+ * a mode, a microphone when the browser can dictate, "Easy Mode", chips, and
  * a template gallery. Drawn as a job ticket in the console's own type and tokens.
  *
- * Chips only fill the sentence. Lucky is the only control that starts a build, and an
+ * Chips only fill the sentence. Easy Mode is the only control that starts a build, and an
  * empty sentence is allowed — the server invents the spec. A refused launch never
  * shows a project or a run.
  */
@@ -502,7 +502,7 @@ export function BuildHome() {
               aria-busy={busy || uploading}
               onClick={() => void lucky()}
             >
-              I&apos;m feeling lucky
+              Easy Mode
             </button>
           </div>
           <input

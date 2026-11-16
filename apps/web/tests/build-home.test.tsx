@@ -94,7 +94,7 @@ describe("the build bench is the default overview", () => {
     await renderHome();
     const prompt = document.querySelector<HTMLTextAreaElement>("[data-testid=build-prompt]");
     expect(prompt?.placeholder).toBe("Describe an app and let BOSS do the rest");
-    expect(document.querySelector("[data-testid=build-lucky]")?.textContent).toBe("I'm feeling lucky");
+    expect(document.querySelector("[data-testid=build-lucky]")?.textContent).toBe("Easy Mode");
     expect(document.body.textContent).toContain("Build with BOSS");
     expect(document.body.textContent).not.toMatch(/gemini/i);
     await press("[data-testid=build-add]");
@@ -111,7 +111,7 @@ describe("the build bench is the default overview", () => {
   });
 });
 
-describe("I'm feeling lucky", () => {
+describe("Easy Mode", () => {
   it("posts the body, including an empty prompt", async () => {
     const calls = install();
     await renderHome();
