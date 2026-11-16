@@ -14,7 +14,9 @@ import {
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
+import { callAction } from "../../lib/call-action";
 import { PX_PATHS, isPxDemo, parseDeployments, pxHref, usePxRead, type Deployments, type Environment } from "../../lib/project-experience";
+import { promoteDeploymentAction } from "../actions";
 import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
 import { deployTarget } from "../infra/infra-actions";
 import { EngineNotReady, Face, Flow, HEALTH_TONE, HEALTH_WORD, Ico, PxLink, ReadGate, Ring, Said, Tag } from "./kit";
@@ -143,6 +145,17 @@ export function DeploymentsTab({ ctx }: { ctx: PxCtx }) {
   );
 }
 
+/** Statuses POST /v1/deployments/{id}/promote already accepts on a staging deployment run. */
+const PROMOTABLE_RUN = new Set(["succeeded", "deployed", "completed"]);
+
+/** A deployment_runs id already on this card. Empty unless the payload names a staging run the
+ *  existing promote action can send. A stack deployment id is not one. */
+export function stagingRunToPromote(e: Environment): string {
+  const attempt = e.deploy?.attempt;
+  if (e.key !== "staging" || !attempt || attempt.kind !== "registry" || !PROMOTABLE_RUN.has(attempt.status)) return "";
+  return attempt.id;
+}
+
 /** What the Redeploy sheet says, in rows: what, where, which commit, who approves (08-05). */
 export function redeployRows(e: Environment): { label: string; value: string; mono?: boolean }[] {
   const where = [e.host_name || e.host, e.url].filter(Boolean).join(" · ");
@@ -174,6 +187,18 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
     ctx.refreshWork();
     return null;
   };
+  const promoteId = stagingRunToPromote(e);
+  const promote = async (): Promise<void> => {
+    if (!promoteId) return;
+    if (isPxDemo()) { setSaid({ text: "Sample mode — nothing was sent.", ok: true }); return; }
+    const fd = new FormData();
+    fd.set("deployment_run_id", promoteId);
+    fd.set("actor", ctx.actor);
+    const r = await callAction(promoteDeploymentAction, undefined, "deployment:production")(null, fd);
+    if (!r.ok) { setSaid({ text: `Not promoted: ${r.error || "The promote was refused."}`, ok: false }); return; }
+    setSaid({ text: "Promotion started.", ok: true });
+    ctx.refreshWork();
+  };
   const host = e.host_name || e.host;
   const url = e.url ? (/^https?:/.test(e.url) ? e.url : `http://${e.url}`) : "";
   return (
@@ -196,6 +221,12 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
           <GatedButton permission="deployment:create" projectId={ctx.projectId} className="px-btn" data-size="s" data-testid={`px-env-redeploy-${e.key}`}
                        title="Plan this commit again on this environment (asks for approval like any deploy)" onClick={() => setAsking(true)}>
             <ArrowCounterClockwise size={12} aria-hidden /> Redeploy</GatedButton>
+        ) : null}
+        {promoteId ? (
+          <GatedButton permission="deployment:production" projectId={ctx.projectId} className="px-btn" data-size="s"
+                       data-testid={`px-env-promote-${e.key}`} data-deployment-run-id={promoteId}
+                       title="Promote this succeeded staging deployment to production" onClick={() => void promote()}>
+            <RocketLaunch size={12} aria-hidden /> Promote</GatedButton>
         ) : null}
       </div>
       {url ? <a className="px-env-url" href={url} target="_blank" rel="noreferrer noopener" data-testid={`px-env-url-${e.key}`}>
