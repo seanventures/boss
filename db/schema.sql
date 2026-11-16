@@ -16184,3 +16184,27 @@ CREATE TABLE IF NOT EXISTS person_primary_agents (
 );
 CREATE INDEX IF NOT EXISTS idx_person_primary_agents_agent
   ON person_primary_agents (agent_id);
+-- PAPERCLIP-TRACE: Codex and Claude Code run logs leave only when the company
+-- names a Braintrust or OTLP endpoint. No row means no outbound call. A failed
+-- POST keeps the spans and writes one visible attempt.
+CREATE TABLE IF NOT EXISTS trace_export_destinations (
+  org_id TEXT PRIMARY KEY REFERENCES orgs(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('braintrust', 'otlp')),
+  endpoint TEXT NOT NULL CHECK (length(btrim(endpoint)) > 0),
+  updated_by TEXT NOT NULL DEFAULT 'operator',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS trace_export_attempts (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL,
+  engine TEXT NOT NULL CHECK (engine IN ('claude_code', 'codex')),
+  trace_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('sent', 'failed')),
+  span_count INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_trace_export_attempts_project
+  ON trace_export_attempts (project_id, created_at DESC);
