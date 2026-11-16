@@ -10,6 +10,10 @@ Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.16.md](docs/community/RELEASE_NOT
 
 - Cycle time, deploy outcomes, and a shipped-versus-failed split of model spend. The noise report is on the AI SRE page. The notification outbox keeps the body and accepts a window and a text query. The activity log counts people. The reconciliation card imports an invoice and a seat price. Error-budget hours left, a count of silenced firing alerts, and a comparison with the previous window.
 
+### Fixed
+
+- `field_acl_records` in `db/schema.sql` closes, so a fresh schema applies. That close was already on main as pull request 146.
+
 ### Changed
 
 - The community candidate version is `1.0.0-rc.10.16`. A custom activity window follows retention when that setting is longer than 30 days. The default stays 30 days.

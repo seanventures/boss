@@ -16,6 +16,7 @@ This is a test candidate. Cutting the tag does not deploy a host, publish an ima
 - Error-budget hours left are for the last 24 hours. An unused budget says it is not being used. A spent budget is 0 hours. 99.5 stays the install default until a person stores an objective.
 - Firing alerts that are silenced or held back are counted. Zero held back is not a claim that the system is healthy.
 - Finished failures and decision approvals compare this window with the previous window of the same length. A previous count of zero has no percentage.
+- A fresh schema applies. `field_acl_records` was missing its closing parenthesis, so the next table failed to parse. That close was already on main as pull request 146.
 
 ## Not in this tag
 
