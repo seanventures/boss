@@ -1059,6 +1059,67 @@ def _language_set(value: Any, *, from_prose: bool) -> set[str]:
     return set()
 
 
+def image_languages() -> set[str]:
+    """Languages the build image provides. Python and Node are always in it. Java and Go
+    are in it only when the toolchain manifest names them — an empty manifest is an image
+    that was not built with those stages, which is not the same as a stage waiting to be
+    turned on."""
+    have = toolchains.installed()
+    return {lang.key for lang in LANGUAGES.values()
+            if lang.toolchain is None or lang.toolchain in have}
+
+
+def image_stack_block(*texts: Any, required_stack: Any = None) -> Optional[dict[str, Any]]:
+    """A stack this build image cannot compile, or None when every asked language is in it.
+
+    Asked means a `Stack:` line (including "Stack: Go", which is not a bare word "go"),
+    a language the prose names, a required_stack entry, or a stack adapter id such as
+    go-service. A language the image does not carry is refused here, before a project or
+    a run exists. The fix is to add it to the build image or to choose Node. The start
+    door's "boss toolchains enable" sentence is a different case and is not this one.
+    Rust and the other unsupported languages are left for that door."""
+    asked: set[str] = set()
+    for text in texts:
+        raw = str(text or "").strip()
+        if not raw:
+            continue
+        if " " not in raw and "\n" not in raw and len(raw) <= 40:
+            lone = _is_known_language(raw)
+            if lone in LANGUAGES:
+                asked.add(lone)
+        declared = declared_stack(raw)
+        if declared:
+            for item in declared:
+                key = _is_known_language(item.get("language") or "")
+                if key in LANGUAGES:
+                    asked.add(key)
+                    continue
+                found = adapter(str(item.get("language") or ""))
+                if found:
+                    asked.update(lang for lang in found.languages if lang in LANGUAGES)
+        asked.update(key for key in languages_named(raw) if key in LANGUAGES)
+        for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,80}", raw):
+            found = adapter(token)
+            if found:
+                asked.update(lang for lang in found.languages if lang in LANGUAGES)
+    if required_stack is not None:
+        asked.update(key for key in _language_set(required_stack, from_prose=False)
+                     if key in LANGUAGES)
+    provided = image_languages()
+    missing = [lang.key for lang in LANGUAGES.values()
+               if lang.key in asked and lang.key not in provided]
+    if not missing:
+        return None
+    label = LANGUAGES[missing[0]].label
+    return {
+        "error": "stack_not_in_image",
+        "language": missing[0],
+        "provided": sorted(provided),
+        "message": (f"This build image does not provide {label}. "
+                    f"Fix: add {label} to the build image, or choose Node."),
+    }
+
+
 def check_deviation(required: Any, declared: Any) -> Optional[dict[str, list[str]]]:
     """How `declared` (a PRD, or its stack) differs from `required` (the brief, or its stack).
 

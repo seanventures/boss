@@ -572,6 +572,19 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
     for permission, step in _needs(body, kind):
         _need(request, permission, step, body.project_id or None)
     brief = _confirmed_brief(body)
+    # Before the project row and before phase 2 starts a run (BOSSAPP-1161). Start anyway
+    # does not skip this: the image either has the language or it does not.
+    from boss_engine.services import stacks
+
+    image_block = stacks.image_stack_block(
+        body.words,
+        add_project.render_brief(brief) if brief else "",
+        f"Stack: {body.stack}." if body.stack else "",
+        body.stack_language or "",
+        required_stack=brief.get("required_stack"),
+    )
+    if image_block:
+        raise Refused("stack", 409, image_block)
     steps: list[dict[str, Any]] = []
     run_input: dict[str, Any] = {}
     staged = None

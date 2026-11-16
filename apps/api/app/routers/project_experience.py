@@ -297,6 +297,27 @@ def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
     if not said:
         raise HTTPException(status_code=422, detail={
             "error": "text_required", "message": "Say what to do."})
+    # Before a tracker issue or the start door (BOSSAPP-1161). The image's manifest, not
+    # the opt-in enable sentence.
+    from boss_engine.services import stacks
+
+    feature_brief = payload.brief if isinstance(payload.brief, dict) else {}
+    prose = [said]
+    for key in ("title", "problem", "who_uses", "done_when"):
+        value = feature_brief.get(key)
+        if isinstance(value, str) and value.strip():
+            prose.append(value)
+        elif isinstance(value, list):
+            prose.extend(str(item) for item in value if str(item).strip())
+    must = feature_brief.get("must_haves")
+    if isinstance(must, list):
+        prose.extend(str(item) for item in must if str(item).strip())
+    elif isinstance(must, str) and must.strip():
+        prose.append(must)
+    image_block = stacks.image_stack_block(
+        *prose, required_stack=feature_brief.get("required_stack"))
+    if image_block:
+        raise HTTPException(status_code=409, detail=image_block)
     with begin(_engine) as connection:
         page = None
         try:
