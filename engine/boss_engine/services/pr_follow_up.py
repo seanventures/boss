@@ -14,6 +14,9 @@ THE RULE.
   * After it merged, a fix is a FOLLOW-UP: the branch is put back on its base holding only what
     changed after the merge (GitHubAdapter.restack_after_merge), and the pull request and its
     merge question are named "Fix: <work> after #236" with a one-line reason.
+  * A retry whose every file already matches that base changes nothing: the merged pull request
+    stays the work, and no second one is opened (same_as_merged). A file that differs is the
+    named follow-up above.
   * A merge question for a pull request that merely repeats a merged one withdraws itself; one
     that carries a real change is relabelled as the follow-up it is (reconsider, on the tick).
 """
@@ -97,6 +100,56 @@ def prepare_branch(github: Any, branch_name: str, *, base: Optional[str] = None,
     return out
 
 
+def same_as_merged(github: Any, branch_name: str, files: Iterable[tuple[str, str]] = (), *,
+                   base: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """The merged pull request when this proposal is that same work, else None.
+
+    None when a pull request is still open (that one is updated), the host cannot tell, no
+    pull request from this branch has merged, or any proposed file differs from the base.
+    An empty proposal after a merge is the same work. A differing file is a real follow-up
+    and stays None so the named pull request still opens. Never raises."""
+    opened = getattr(github, "open_pull_request_for", None)
+    merged_of = getattr(github, "last_merged_pull_request", None)
+    if not callable(opened) or not callable(merged_of) or not branch_name:
+        return None
+    try:
+        if opened(branch_name):
+            return None
+        merged = merged_of(branch_name)
+    except Exception:  # noqa: BLE001 — unread: the pull request opens as before
+        log.debug("pr_follow_up_same_unread", exc_info=True)
+        return None
+    if not merged:
+        return None
+    pairs = [(str(path), content if isinstance(content, str) else str(content or ""))
+             for path, content in (files or [])]
+    if not pairs:
+        return dict(merged)
+    read = getattr(github, "read_text_file", None)
+    if not callable(read):
+        return None
+    if not base:
+        default = getattr(github, "default_branch_sha", None)
+        if not callable(default):
+            return None
+        try:
+            base = default()[0]
+        except Exception:  # noqa: BLE001
+            log.debug("pr_follow_up_same_base_unread", exc_info=True)
+            return None
+    try:
+        for path, content in pairs:
+            # Every proposed body has to match. A later write of the same path that differs
+            # is a real change, not the squash again.
+            on_base = read(base, path)
+            if on_base is None or on_base != content:
+                return None
+    except Exception:  # noqa: BLE001 — unread: the pull request opens as before
+        log.debug("pr_follow_up_same_files_unread", exc_info=True)
+        return None
+    return dict(merged)
+
+
 def merged_before(connection: Any, decision: Mapping[str, Any]) -> Optional[dict[str, Any]]:
     """The earlier merge question of the SAME work branch whose pull request is merged on
     record (a different pull request than this one's), or None: {decision_id, number, url,
@@ -169,4 +222,4 @@ def relabel(connection: Any, decision: Mapping[str, Any], merged_number: int,
 
 
 __all__ = ["FOLLOW_UP_KEY", "follow_up_reason", "follow_up_title", "merged_before",
-           "prepare_branch", "relabel", "work_name"]
+           "prepare_branch", "relabel", "same_as_merged", "work_name"]

@@ -82,6 +82,40 @@ def _item(engine, key: str) -> dict:
 
 # ── 1. merged on record → every surface says merged ─────────────────────────────────────────
 
+
+class _GitHubMerged:
+    """GitHub already merged the pull request. BOSS has not written a sha yet."""
+
+    def pull_request(self, number):
+        return {"number": number, "merged": True, "state": "closed",
+                "merge_commit_sha": "squash236"}
+
+
+def test_a_github_merge_shows_merged_in_the_work_drawer(engine, monkeypatch):
+    """Opening the work drawer asks GitHub. A merge it finds is merged, not Ready to merge."""
+    monkeypatch.setattr("boss_engine.services.ci_gate.reader_for_project",
+                        lambda *a, **k: _GitHubMerged())
+    branch = f"boss/code/crun_{uuid4().hex[:8]}"
+    did = _decision(engine, n=236, branch=branch)
+    root = _build(engine, n=236, did=did, merged=False)
+    from boss_engine.services.project_experience import work
+    from boss_engine.services.project_experience.work_story import story
+
+    with engine.begin() as c:
+        item = next(w for w in work.view(c, _pid())["items"] if str(w["id"]) == root)
+        told = story(c, _pid(), root)
+    assert item["state"] != "needs_you"
+    assert item["action_label"] in (None, "")
+    assert item["links"]["merge_pr"] is None
+    assert item["links"]["merged_pr"]["number"] == 236
+    sub = next(s for s in told["stages"] if s["key"] == "pr")["sub"]
+    assert "merged" in sub.lower()
+    with engine.begin() as c:
+        sha = c.execute(text(
+            "SELECT finalize_ctx->'merge'->>'sha' FROM code_task_runs WHERE id = :i"),
+            {"i": root}).scalar()
+    assert sha == "squash236"
+
 def test_a_merged_pr_never_waits_on_a_merge_whichever_attempt_still_asks(engine):
     branch = f"boss/code/crun_{uuid4().hex[:8]}"
     first = _decision(engine, n=236, branch=branch, status="executed")

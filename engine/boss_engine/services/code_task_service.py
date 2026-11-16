@@ -1690,9 +1690,20 @@ def refuse_finished_retry(prev: dict, fix_note: str = "") -> None:
     failure (an advisory-gate repair), and extend_code_task passes the change it wants as
     `fix_note`, so both keep working.
     """
-    if str(prev.get("status") or "") != "completed" or str(fix_note or "").strip():
-        return
+    note = str(fix_note or "").strip()
     fctx = prev.get("finalize_ctx") or {}
+    merge = fctx.get("merge") if isinstance(fctx, dict) else None
+    # A pull request already merged is not a failed build to retry: that click opened a
+    # second pull request for the same work (Hello World #237 after #236). A note is a new
+    # change after the merge and still goes through.
+    if isinstance(merge, dict) and str(merge.get("sha") or "").strip() and not note:
+        raise RetryRefused(
+            "This build's pull request is already merged, so a retry would open a second "
+            "pull request for the same work. To change it after the merge, retry with a "
+            "note saying what to change."
+        )
+    if str(prev.get("status") or "") != "completed" or note:
+        return
     if fctx.get("advisory_failing_gates") or fctx.get("failing_gates"):
         return
     raise RetryRefused(

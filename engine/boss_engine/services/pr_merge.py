@@ -17,6 +17,7 @@ the gate asked for is said as such (`manual_merge_pending`).
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Iterable, Mapping, Optional
 
 from sqlalchemy import text
@@ -222,6 +223,65 @@ def observe(connection: Any, settings: Any, project_id: str, run_id: str, *,
     if st == MERGE_PENDING:
         out["manual"] = manual_merge_pending(connection, project_id, run.get("decision_id"))
     return out
+
+
+#: An open pull request is asked of GitHub at most this often from a page read. A merge that
+#: was recorded is not asked again (the sha is on the run). Keyed by (project, run).
+_ASK_SECONDS = 60.0
+_ASKED: dict[tuple[str, str], float] = {}
+
+
+def notice_github_merges(connection: Any, project_id: str, *, run_id: Optional[str] = None,
+                         ) -> None:
+    """Record a merge GitHub already made, before a page says the pull request is still open.
+
+    The work drawer and the build cockpit read the record. A merge done on GitHub stayed
+    "Ready to merge" until a worker tick noticed it (or never, when the tick did not). Asks
+    only runs whose merge sha is still empty. Without `run_id`, only a pull request whose
+    merge question is still open — an unmerged one is asked at most once a minute. Never
+    raises, and a host that cannot be read leaves the record as it was."""
+    now = time.monotonic()
+    params: dict[str, Any] = {"p": project_id}
+    sql = ("SELECT c.id FROM code_task_runs c "
+           "WHERE c.project_id = :p AND c.pull_request_number IS NOT NULL "
+           "AND COALESCE(c.finalize_ctx->'merge'->>'sha', '') = '' ")
+    if run_id:
+        sql += "AND c.id = :i "
+        params["i"] = run_id
+    else:
+        sql += ("AND EXISTS (SELECT 1 FROM decisions d WHERE d.id = c.decision_id "
+                "AND d.status IN ('pending', 'delegated')) ")
+    sql += "ORDER BY c.updated_at DESC NULLS LAST LIMIT 25"
+    try:
+        ids = [str(i) for i in connection.execute(text(sql), params).scalars().all()]
+    except Exception:  # noqa: BLE001 — the page still draws from the record
+        log.debug("pr_merge_notice_unread", exc_info=True)
+        return
+    settings = None
+    for rid in ids:
+        key = (str(project_id), rid)
+        asked = _ASKED.get(key)
+        if asked is not None and now - asked < _ASK_SECONDS:
+            continue
+        if settings is None:
+            try:
+                from ..config import get_settings
+
+                settings = get_settings()
+            except Exception:  # noqa: BLE001
+                log.debug("pr_merge_notice_no_settings", exc_info=True)
+                return
+        try:
+            out = observe(connection, settings, project_id, rid)
+        except Exception:  # noqa: BLE001
+            log.debug("pr_merge_notice_failed", exc_info=True)
+            _ASKED[key] = now
+            continue
+        # A sha written here lives in this transaction. Cache only the asks that found
+        # nothing, so a rolled-back merge is asked again and an open pull request is not
+        # asked on every poll.
+        if not out.get("sha"):
+            _ASKED[key] = now
 
 
 def sentence(observed: Mapping[str, Any]) -> str:

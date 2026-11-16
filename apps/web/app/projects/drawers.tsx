@@ -150,7 +150,9 @@ function AskBox({ ctx, about, placeholder }: { ctx: PxCtx; about: string; placeh
 function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () => void }) {
   const l = w.links;
   // The PR a merge waits on: the engine's merge_pr; an older payload's "Merge" row its pr.
-  const mp = l.merge_pr ?? (w.action_label === "Merge" && l.pr ? { ...l.pr, follow_up_of: null, failed: "" } : null);
+  // A pull request already merged is not that wait (merged_pr), even when the row still says Merge.
+  const mp = l.merge_pr ?? (w.action_label === "Merge" && l.pr && !l.merged_pr
+    ? { ...l.pr, follow_up_of: null, failed: "" } : null);
   const story = useWorkStory(ctx, w.id).data;
   const full = l.build || l.workflow_run;
   return (
@@ -183,6 +185,11 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
             <small className="px-faint" style={{ display: "block" }}>{w.why?.words || "Nothing is working on it. Open the build to retry or stop it."}</small></span>
           {l.build ? <PxLink href={l.build} className="px-btn" testid="px-drawer-work-stalled-open">Open build</PxLink> : null}
         </div>
+      ) : null}
+      {l.merged_pr && w.state !== "needs_you" ? (
+        <p className="px-faint" data-testid="px-drawer-work-merged" style={{ margin: 0 }}>
+          Merged · {changeRef(l.merged_pr.external_url, l.merged_pr.number)}
+        </p>
       ) : null}
       {/* What its build waits for, and what the Shepherd found when it stopped (stuck_work). */}
       {w.why && w.state !== "stalled" && !(w.state === "needs_you" && w.why.who === "you") ? (

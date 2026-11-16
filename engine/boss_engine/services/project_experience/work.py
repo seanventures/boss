@@ -1155,6 +1155,11 @@ def counts(found: list[dict[str, Any]]) -> dict[str, int]:
 
 def view(connection: Connection, project_id: str, *, state: Optional[str] = None,
          q: Optional[str] = None, now: Optional[datetime] = None) -> dict[str, Any]:
+    # A merge GitHub already made is on the record before the drawer says "Ready to merge"
+    # (pr_merge.notice_github_merges). The list itself stays a read of the record.
+    from ..pr_merge import notice_github_merges
+
+    notice_github_merges(connection, project_id)
     found = everything(connection, project_id, now=now)
     return {"items": matching(found, state=state, q=q), "counts": counts(found), "state": state or None, "q": q or None,
             "new_work": {"href": f"/v1/projects/{project_id}/work",

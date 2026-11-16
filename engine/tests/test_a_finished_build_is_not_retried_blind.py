@@ -33,5 +33,15 @@ def test_extending_a_finished_build_says_what_to_change_and_is_allowed():
                           fix_note="add a CSV export")
 
 
+def test_a_merged_pull_request_is_not_retried_into_a_second_one():
+    merged = {"status": "failed", "finalize_ctx": {"merge": {"sha": "squash236"}}}
+    with pytest.raises(RetryRefused) as refused:
+        refuse_finished_retry(merged)
+    assert "already merged" in str(refused.value)
+    assert "second" in str(refused.value)
+    # A note is a new change after the merge, not a blind retry of the same work.
+    refuse_finished_retry(merged, fix_note="the deploy missed the health check")
+
+
 def test_the_refusal_is_a_value_error_so_existing_callers_still_catch_it():
     assert issubclass(RetryRefused, ValueError)

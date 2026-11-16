@@ -2784,6 +2784,15 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
     run = load_code_task_run(connection, run_id)
     if not run or run.get("project_id") != project_id:
         return None
+    # A merge GitHub already made is recorded before this page says "Ready to merge".
+    try:
+        from . import pr_merge
+
+        if run.get("pull_request_number") and not pr_merge.recorded_sha(run):
+            pr_merge.notice_github_merges(connection, project_id, run_id=str(run_id))
+            run = load_code_task_run(connection, run_id) or run
+    except Exception:  # noqa: BLE001 — the page still draws from the record
+        pass
     overlay_stop_requests(connection, [run])
     facts = load_facts(connection, project_id, [run], gates=True, tool_calls=True)
     acts = facts.acts.get(run_id, [])

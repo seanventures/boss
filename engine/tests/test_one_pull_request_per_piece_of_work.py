@@ -139,6 +139,34 @@ def test_a_host_that_cannot_tell_opens_the_pr_as_before():
         pass
 
     assert pr_follow_up.prepare_branch(Bare(), BRANCH) is None
+    assert pr_follow_up.same_as_merged(Bare(), BRANCH, [("a.py", "x")]) is None
+
+
+def test_a_retry_of_work_already_merged_does_not_open_a_second_pull_request():
+    """The same files as the squash: a retry must keep #236, never POST #238."""
+    body = "print('hello')\n"
+    gh = FakeGitHub(closed_prs=[MERGED_236], files={("main", "hello.py"): body})
+    kept = pr_follow_up.same_as_merged(gh, BRANCH, [("hello.py", body)])
+    assert kept["number"] == 236
+    assert not [c for c in gh.calls if c[0] == "POST" and str(c[1]).endswith("/pulls")]
+
+
+def test_a_real_change_after_the_merge_is_not_treated_as_the_same_work():
+    gh = FakeGitHub(closed_prs=[MERGED_236], files={("main", "hello.py"): "print('hello')\n"})
+    assert pr_follow_up.same_as_merged(
+        gh, BRANCH, [("hello.py", "print('hello')\n"), ("hello.py", "print('fixed')\n")]) is None
+
+
+def test_propose_checks_the_merged_work_before_it_writes_or_opens_a_pull_request():
+    """The gate has to run inside propose, before any commit or a second POST."""
+    import inspect
+
+    from boss_engine.services.software_factory import SoftwareFactoryService
+
+    src = inspect.getsource(SoftwareFactoryService.propose_pull_request)
+    gate = src.index("same_as_merged(")
+    assert gate < src.index("commit_change(")
+    assert gate < src.index("create_pull_request(")
 
 
 def test_merging_a_pr_github_already_merged_is_a_no_op_with_its_sha():

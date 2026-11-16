@@ -2081,6 +2081,30 @@ class SoftwareFactoryService:
                 **plane_fields,
             }
 
+        # THE SAME WORK, ALREADY MERGED (pr_follow_up.same_as_merged): a retry that re-proposes
+        # the files the squash already put on the base must not open a second pull request
+        # (Hello World #237 after #236). A file that differs falls through to the named follow-up.
+        from . import pr_follow_up
+
+        same = pr_follow_up.same_as_merged(
+            self.github, branch_name, [(file.path, file.content) for file in files], base=pr_base)
+        if same:
+            number = int(same["number"])
+            url = same.get("url") or None
+            message = (f"Pull request #{number} is already merged and this retry "
+                       "changes nothing.")
+            kept = {
+                "status": "reused",
+                "receipt_id": pr_receipt["id"],
+                "pull_request_url": url,
+                "pull_request_number": number,
+                "branch_name": branch_name,
+                "message": message,
+            }
+            self.receipts.mark_succeeded(connection, pr_receipt["id"], url, kept)
+            self.budget.release(connection, project_id, reservation_id, message)
+            return {**kept, **plane_fields}
+
         review_text = self._review_packet_markdown(
             connection,
             project_id=project_id,

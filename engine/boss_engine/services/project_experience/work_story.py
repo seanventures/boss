@@ -11,8 +11,9 @@ few words, with the link that proves it:
   Staging        "Auto after merge" / "Live" · the deploy
 
 plus the run's number in its project ("Run #4"), how long it took, the preview and the cost
-split Plan · Build · Review (the build's recorded stage costs). Facts on record only: never a
-model call, never a GitHub call. Times are ISO; the console words them in the viewer's zone.
+split Plan · Build · Review (the build's recorded stage costs). Facts on record, after one look
+at whether an open merge question's pull request already merged (pr_merge.notice_github_merges):
+never a model call. Times are ISO; the console words them in the viewer's zone.
 """
 from __future__ import annotations
 
@@ -106,8 +107,11 @@ def _cost_parts(builds: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def story(connection: Connection, project_id: str, work_id: str) -> dict[str, Any]:
     """The work drawer's story for a workflow run, a build, or one attempt of either."""
+    from ..pr_merge import notice_github_merges
     from . import work as work_service
 
+    # Opening the drawer asks GitHub about a merge it has not recorded yet, then reads it.
+    notice_github_merges(connection, project_id)
     items = work_service.everything(connection, project_id)
     item = next((w for w in items if str(w["id"]) == work_id), None)
     if item is None:
