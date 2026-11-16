@@ -15845,3 +15845,35 @@ CREATE TABLE IF NOT EXISTS project_suite_publishes (
 );
 CREATE INDEX IF NOT EXISTS idx_project_suite_publishes_project
   ON project_suite_publishes (project_id, created_at DESC);
+-- BOSSAPP-1254: a workspace design system (name, colors, type, spacing).
+-- A new app in the workspace reads this row and keeps the spec it read.
+-- Another org's read finds nothing. One system per workspace.
+CREATE TABLE IF NOT EXISTS workspace_design_systems (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  name TEXT NOT NULL,
+  colors JSONB NOT NULL,
+  type_roles JSONB NOT NULL,
+  spacing JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id)
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_design_systems_org
+  ON workspace_design_systems (org_id, workspace_id);
+
+CREATE TABLE IF NOT EXISTS workspace_design_apps (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  name TEXT NOT NULL,
+  design_system_id TEXT NOT NULL REFERENCES workspace_design_systems(id),
+  read_name TEXT NOT NULL,
+  read_colors JSONB NOT NULL,
+  read_type JSONB NOT NULL,
+  read_spacing JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_design_apps_scope
+  ON workspace_design_apps (org_id, workspace_id, created_at DESC);
