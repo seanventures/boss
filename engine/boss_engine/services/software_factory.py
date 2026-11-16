@@ -2600,6 +2600,20 @@ class SoftwareFactoryService:
             {},
             "merge_decision_required",
         )
+        if decision_id:
+            # THE NEWEST BUILD'S CARD IS THE PR'S ONE CARD (BOSSAPP-1320): the older cards for
+            # this pull request are withdrawn, each with a note naming this one.
+            from .run_decisions import withdraw_superseded_merge_cards
+
+            try:
+                with connection.begin_nested():
+                    withdraw_superseded_merge_cards(connection, project_id, pr.url,
+                                                    decision_id, run_id=run_id)
+            except Exception:  # noqa: BLE001 — the new card stands; one_question_per_pull_request
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "superseded merge cards not withdrawn for %s", pr.url)
         if run_id and not set_member:
             # A single-repo run is a one-PR change (observer only: its own approval and merge
             # stay exactly as they are), so an app's Recent changes read one table.

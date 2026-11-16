@@ -77,6 +77,8 @@ REFUSAL_ACTIONS = REFUSAL_REASONS
 #: The enforcing test reads that function and fails when this set and it disagree.
 CARRIED_OUT_ON_APPROVAL = frozenset({
     "execute_agent_tool",
+    # Retry once set (checks_failing.wait_for_person): the build's gates run again.
+    "retry_when_secret_set",
     "resume_agent_run",
     "resume_code_task",
     "review_plan_draft",
@@ -749,6 +751,16 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "Returns the work to whoever did it, with your comment. After "
                     f"{rec.get('max_rounds') or 3} rounds it escalates to the responsible person.",
                     needs="note"),
+            _delegate(),
+        ]
+    if _action_of(decision) == "retry_when_secret_set":
+        # A BUILD WAITING ON A SECRET ONLY A PERSON CAN SET (checks_failing.wait_for_person).
+        return [
+            _action("approve", "Retry once set", "approve",
+                    "Runs the build's checks again on the same branch and pull request, now "
+                    "that the secret is set."),
+            _action("reject", "Stop waiting", "reject",
+                    "The build stops waiting; its draft pull request stays open."),
             _delegate(),
         ]
     if _action_of(decision) == "answer_form":

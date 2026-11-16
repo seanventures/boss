@@ -107,6 +107,120 @@ def may_open(failing: Iterable[str], *, faults: Optional[Mapping[str, str]] = No
     return not (set(failing) & HELD_GATES)
 
 
+#: Supervisor stop reasons whose failures a follow-up build would only hit again.
+NO_FOLLOWUP_REASONS = ("environment_only", "refusal")
+_STOP_WORDS = {"environment_only": "environment problem", "refusal": "an agent refused",
+               "person": "needs a person"}
+#: The decision a person-stopped build waits on: "Retry once set" re-runs its gates on the same
+#: branch and pull request (decisions: approve → retry_code_task, by the person).
+SECRET_RETRY_ACTION = "retry_when_secret_set"
+
+
+def environment_stop(failing: Iterable[str], *, faults: Optional[Mapping[str, str]] = None,
+                     reason: Optional[str] = None) -> Optional[str]:
+    """Why a stop must NOT queue a follow-up, or None: the run supervisor stopped for
+    `environment_only` or `refusal`, or every failing gate's fault is the environment
+    (HARNESS) or a person's act (PERSON). A follow-up would hit the same broken environment or
+    wait on the same person; `repeated_failure` and `stalled` still get their one follow-up."""
+    if reason in NO_FOLLOWUP_REASONS:
+        return str(reason)
+    failing = [str(g) for g in failing or ()]
+    kinds = {(faults or {}).get(g) for g in failing}
+    if failing and kinds and kinds <= {"HARNESS", "PERSON"}:
+        return "refusal" if kinds == {"PERSON"} else "environment_only"
+    return None
+
+
+def stopped_record(reason: str, failing: Iterable[str], *,
+                   needs: Optional[Iterable[str]] = None,
+                   why: Optional[str] = None) -> dict[str, Any]:
+    """What the PR and its card say about such a stop, in the words a person acts on:
+
+      a secret only a person can set (`needs`, the app_serves check's `needs_secret`) —
+        "stopped: needs a person, App starts. Set STRIPE_KEY for environments … in the app's
+        Secrets, then press Retry …" (reason `person`: the build waits for that person);
+      an agent refusing — "stopped: an agent refused: <its reason>";
+      the environment — "stopped: environment problem, <gates>"."""
+    labels = ", ".join(_gate_label(g) for g in _ordered(failing))
+    needs = [str(n) for n in (needs or ()) if str(n).strip()]
+    if needs:
+        from ..templates.run_env import needs_secret_action
+
+        action = needs_secret_action(needs)
+        return {"reason": "person", "no_followup": True, "needs_secret": needs,
+                "action": action, "words": f"stopped: needs a person, {labels}. {action}"}
+    if reason == "refusal":
+        said = " ".join(str(why or "").split())[:300] or labels
+        return {"reason": reason, "no_followup": True,
+                "words": f"stopped: an agent refused: {said}"}
+    return {"reason": reason, "no_followup": True,
+            "words": f"stopped: {_STOP_WORDS.get(reason, reason)}, {labels}"}
+
+
+def wait_for_person(connection: Any, *, run_id: str, project_id: str, task_id: Optional[str],
+                    record: Mapping[str, Any], pull_request_url: Optional[str]) -> Optional[str]:
+    """A build stopped on a secret only a person can set has opened its draft PR; it now WAITS
+    for that person instead of ending: status `waiting_on_person` (phase `awaiting_secret`) and
+    one card saying what to set and where, whose "Retry once set" runs the gates again on the
+    same branch and pull request. Returns the card's id (None when there is nothing to set)."""
+    from sqlalchemy import text
+
+    from .core import create_blocking_decision, emit_event
+
+    stopped = dict((record or {}).get("stopped") or {})
+    needs = list(stopped.get("needs_secret") or [])
+    if stopped.get("reason") != "person" or not needs:
+        return None
+    action = str(stopped.get("action") or "")
+    names = ", ".join(needs)
+    decision_id = create_blocking_decision(
+        connection, project_id, task_id,
+        f"Set {names}, then retry the build" + (" (its draft pull request is open)"
+                                               if pull_request_url else ""),
+        {"action": SECRET_RETRY_ACTION, "run_id": run_id, "needs_secret": needs,
+         "next_step": action, "pull_request_url": pull_request_url,
+         "summary": f"{action} The build's checks run again on the same branch and pull "
+                    "request when you press Retry once set."},
+        {"phase": "app_serves"}, f"{stopped.get('words') or ''}", risk_tier=1)
+    connection.execute(text(
+        "UPDATE decisions SET deadline_at = NULL WHERE id = :d"), {"d": decision_id})
+    connection.execute(text(
+        "UPDATE code_task_runs SET status = 'waiting_on_person', phase = 'awaiting_secret', "
+        "error = :e, finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+        "|| jsonb_build_object('secret_wait_decision_id', CAST(:d AS TEXT)), updated_at = now() "
+        "WHERE id = :id"),
+        {"e": f"Waiting for a person: {action}"[:2000], "d": decision_id, "id": run_id})
+    emit_event(connection, project_id, "code_task.waiting_for_secret", "boss", "code_task_run",
+               run_id, {"needs_secret": needs, "decision_id": decision_id,
+                        "pull_request_url": pull_request_url})
+    return decision_id
+
+
+def stop_or_open(action: str, failing: Iterable[str], *,
+                 faults: Optional[Mapping[str, str]] = None, open_pr: bool = True,
+                 enabled: bool = True, reason: Optional[str] = None) -> str:
+    """THE ONE EXIT FROM A GATE STOP (BOSSAPP-1319). Whatever decided to stop the build — the
+    gate disposition (resolve_gate_failure_action), the run supervisor's stop_report at its
+    round cap, an inconclusive check whose escalations are spent — a ``"block"`` that
+    `may_open` allows becomes ``ACTION``: the PR opens with its checks failing and a follow-up
+    starts for them. Any other action is returned unchanged.
+
+    crun_f5868a67 (northgate-gateway, 2026-11-16): its fourth round failed only acceptance_met,
+    the supervisor's round cap judged stop_report, and that short-circuit set "block" without
+    ever reaching this rule, so the build parked at awaiting_gate_override with no follow-up,
+    while the two rounds before it (under the cap) each opened one."""
+    if action == "block" and enabled and may_open(failing, faults=faults, open_pr=open_pr):
+        return ACTION
+    # AN ENVIRONMENT OR REFUSAL STOP STILL OPENS THE PR (the operator's rule: a PR always opens),
+    # labelled, with no follow-up (environment_stop); held gates still hold.
+    failing = [str(g) for g in failing or ()]
+    if (action == "block" and enabled and open_pr and failing
+            and not (set(failing) & HELD_GATES)
+            and environment_stop(failing, faults=faults, reason=reason)):
+        return ACTION
+    return action
+
+
 def _gate_label(gate: str) -> str:
     from .factory_view import gate_label
 
@@ -205,9 +319,14 @@ def pr_section(record: Optional[Mapping[str, Any]], *, followup_run_id: Optional
              "",
              "BOSS's checks still fail after the build's repair rounds. This pull request is "
              "open so the work can be read; it is a draft and labelled `checks failing`, and "
-             "BOSS merges it only when a person decides to, with a reason. The failing gates "
-             "and findings are queued as a follow-up build.",
+             "BOSS merges it only when a person decides to, with a reason. "
+             + ("No follow-up build is queued: it would hit the same problem."
+                if (record.get("stopped") or {}).get("no_followup")
+                else "The failing gates and findings are queued as a follow-up build."),
              ""]
+    if record.get("stopped"):
+        said = str(record["stopped"].get("words") or "")
+        lines += [f"**{said[:1].upper()}{said[1:].rstrip('.')}.**", ""]
     if record.get("security"):
         lines += ["**Security:** a security check is failing. Read the security findings "
                   "first.", ""]
@@ -258,6 +377,11 @@ def decision_summary(record: Optional[Mapping[str, Any]]) -> str:
         return ""
     sec = (" Security finding open: read the security findings first."
            if record.get("security") else "")
+    stopped = record.get("stopped") or {}
+    if stopped.get("no_followup"):
+        return (f"CHECKS FAILING ({stopped.get('words')}).{sec} The pull request opened anyway; "
+                "no follow-up build is queued, since it would hit the same problem. Merging it "
+                "is your decision: say why when you merge.")
     return (f"CHECKS FAILING: {headline(record)}.{sec} The pull request opened anyway after "
             "the repair rounds; the failing checks are queued as a follow-up build. Merging "
             "it is your decision: say why when you merge.")
