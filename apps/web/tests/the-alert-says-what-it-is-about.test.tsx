@@ -136,6 +136,9 @@ describe("the alert says what it is about", () => {
     expect(src.slice(close, close + 240)).toContain(
       "<View id={a.id} sentence={alertWhatSentence(a.description, a.summary, a.label)}",
     );
+    const viewAt = src.indexOf("<View id={a.id} sentence={alertWhatSentence(a.description, a.summary, a.label)}");
+    const lineAt = src.lastIndexOf("className=\"obs-line\"", viewAt);
+    expect(src.slice(lineAt - 5, lineAt)).toBe("<div ");
 
     const ruleAt = src.indexOf('data-testid="obs-alert-rule"');
     const ruleOpen = src.lastIndexOf("<button", ruleAt);

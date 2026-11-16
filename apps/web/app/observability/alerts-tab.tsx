@@ -313,7 +313,7 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
   return (
     <li className="obs-alert" data-testid={`obs-alert-${a.id}`} data-state={a.state} data-open={isOpen ? "1" : "0"}
         data-attention={a.needsAttention ? "1" : undefined}>
-      <span className="obs-line">
+      <div className="obs-line">
         {onSelect ? (
           <input type="checkbox" checked={Boolean(selected)} aria-label={`Select ${a.label} on ${a.app}`} data-testid="obs-alert-select"
                  onChange={(e) => onSelect(e.target.checked)} />
@@ -379,7 +379,7 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
         <button type="button" className="ag-icon-btn" aria-expanded={open} aria-label={open ? "Hide details" : "Show details"}
                 data-testid="obs-alert-open" title={open ? "Hide details" : "PromQL, value, Explore, runbook, triage"}
                 onClick={() => setOpen((v) => !v)}>{open ? "▾" : "▸"}</button>
-      </span>
+      </div>
       {open ? <AlertDetail a={a} targetId={targetId || a.targetId} projectId={projectId} actor={actor} onDone={onDone} /> : null}
       {ruleOpen ? <RuleOfAlert ruleId={a.ruleId} alertname={a.alertname} targetId={targetId || a.subjectId || a.targetId} projectId={projectId}
                                actor={actor} start={ruleOpen} onClose={() => { setRuleOpen(false); onDone(); }} /> : null}
