@@ -16032,3 +16032,55 @@ CREATE INDEX IF NOT EXISTS idx_app_data_rows_live
 CREATE INDEX IF NOT EXISTS idx_app_data_rows_trash
   ON app_data_rows (project_id, app_key, deleted_at)
   WHERE deleted_at IS NOT NULL;
+-- BOSSAPP-1268: a builder sets who can read or change each field. Opening the app
+-- as a user returns only fields that user can read. A write uses those same grants.
+-- The opener's grants are not added. Change is stored only when read is allowed.
+CREATE TABLE IF NOT EXISTS field_acl_apps (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_field_acl_apps_project
+  ON field_acl_apps (project_id, created_at);
+
+CREATE TABLE IF NOT EXISTS field_acl_fields (
+  id TEXT PRIMARY KEY,
+  app_id TEXT NOT NULL REFERENCES field_acl_apps(id) ON DELETE CASCADE,
+  field_key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  position INT NOT NULL DEFAULT 0,
+  UNIQUE (app_id, field_key)
+);
+CREATE INDEX IF NOT EXISTS idx_field_acl_fields_app
+  ON field_acl_fields (app_id, position);
+
+CREATE TABLE IF NOT EXISTS field_acl_grants (
+  id TEXT PRIMARY KEY,
+  app_id TEXT NOT NULL REFERENCES field_acl_apps(id) ON DELETE CASCADE,
+  field_key TEXT NOT NULL,
+  subject_kind TEXT NOT NULL CHECK (subject_kind IN ('user', 'role')),
+  subject_id TEXT NOT NULL,
+  can_read BOOLEAN NOT NULL DEFAULT FALSE,
+  can_change BOOLEAN NOT NULL DEFAULT FALSE,
+  UNIQUE (app_id, field_key, subject_kind, subject_id),
+  CHECK (can_read OR NOT can_change),
+  FOREIGN KEY (app_id, field_key)
+    REFERENCES field_acl_fields (app_id, field_key) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_field_acl_grants_app
+  ON field_acl_grants (app_id, field_key);
+
+CREATE TABLE IF NOT EXISTS field_acl_members (
+  app_id TEXT NOT NULL REFERENCES field_acl_apps(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  roles JSONB NOT NULL DEFAULT '[]'::jsonb,
+  PRIMARY KEY (app_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS field_acl_records (
+  app_id TEXT PRIMARY KEY REFERENCES field_acl_apps(id) ON DELETE CASCADE,
+  values JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
