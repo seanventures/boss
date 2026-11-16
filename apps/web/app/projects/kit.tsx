@@ -79,6 +79,21 @@ function nodeGlyph(n: Node, i: number, small: boolean): React.ReactNode {
   return n.state === "now" ? <ArrowsClockwise size={13} weight="bold" /> : i + 1;
 }
 
+/** The journey detail, unless it is blank or already the label or the sub. */
+export function journeyDetailSentence(detail: string | null | undefined, label: string | null | undefined, sub: string | null | undefined): string | null {
+  const text = detail?.trim() ?? "";
+  if (!text || text === (label?.trim() ?? "") || text === (sub?.trim() ?? "")) return null;
+  return text;
+}
+
+/** After the journey button. More than six words is a paragraph. */
+export function View({ id, sentence }: { id: string | number; sentence: string | null }) {
+  if (!sentence) return null;
+  return sentence.split(/\s+/).filter(Boolean).length > 6
+    ? <p data-testid={`px-journey-why-${id}`} data-user-text>{sentence}</p>
+    : <span data-testid={`px-journey-why-${id}`} data-user-text>{sentence}</span>;
+}
+
 /** THE JOURNEY STRIP: the project's life as one diagram. Each node opens what happened there. */
 export function Journey({ nodes: given, size, onOpen, testid = "px-journey" }: { nodes: Node[]; size?: "s"; onOpen?: (n: Node) => void; testid?: string }) {
   // Days in the viewer's zone (04-02): a dated node's sub and tooltip, written after mount.
@@ -97,6 +112,7 @@ export function Journey({ nodes: given, size, onOpen, testid = "px-journey" }: {
             <span className="px-jr-cap">{n.label}</span>
             {n.sub && size !== "s" ? <span className="px-jr-meta">{n.sub}</span> : null}
           </button>
+          <View id={n.key || i} sentence={journeyDetailSentence(n.detail, n.label, n.sub)} />
         </React.Fragment>
       ))}
     </div>

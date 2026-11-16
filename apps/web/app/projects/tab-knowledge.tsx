@@ -511,16 +511,39 @@ function GraphCard({ ctx, k, fallbackHref, onStarted }: { ctx: PxCtx; k: Knowled
 
 // ── learned on the job ───────────────────────────────────────────────────────────────────────
 
+/** Visible detail beside a learned row. Blank, or the same as the label or the sub, is nothing. */
+export function learnedDetailSentence(
+  detail: string | null | undefined,
+  label: string | null | undefined,
+  sub: string | null | undefined,
+): string | null {
+  const text = detail?.trim() ?? "";
+  if (!text || text === (label?.trim() ?? "") || text === (sub?.trim() ?? "")) return null;
+  return text;
+}
+
+/** Beside the learned row. More than six words is a paragraph. */
+export function View({ id, sentence }: { id: string; sentence: string | null }) {
+  if (!sentence) return null;
+  const testId = `px-kn-learned-why-${id}`;
+  return sentence.split(/\s+/).filter(Boolean).length > 6
+    ? <p data-testid={testId} data-user-text>{sentence}</p>
+    : <span data-testid={testId} data-user-text>{sentence}</span>;
+}
+
 function Learned({ k }: { k: Knowledge }) {
   return (
     <section className="px-card" aria-labelledby="px-kn-learned" data-testid="px-kn-learned">
       <div className="px-card-h"><Ico icon={Brain} c="green" /><h2 id="px-kn-learned">Learned on the job</h2></div>
       {k.learned.length ? k.learned.map((l) => (
-        <a key={l.id || l.label} className="px-li px-kn-learned-row" href={pxHref(l.href)} data-testid={`px-kn-learned-${l.id || l.label}`} title={l.detail}>
-          <Face agent={l.agent ?? { name: "Helm", role_key: "engineering_captain" }} size={24} />
-          <span style={{ minWidth: 0 }}><b className="px-ell" style={{ display: "block" }}>{l.label}</b><small>{l.sub}</small></span>
-          <Tag tone={l.state === "used" ? "green" : "idle"}>{l.state === "used" ? "used" : "new"}</Tag>
-        </a>
+        <React.Fragment key={l.id || l.label}>
+          <a className="px-li px-kn-learned-row" href={pxHref(l.href)} data-testid={`px-kn-learned-${l.id || l.label}`} title={l.detail}>
+            <Face agent={l.agent ?? { name: "Helm", role_key: "engineering_captain" }} size={24} />
+            <span style={{ minWidth: 0 }}><b className="px-ell" style={{ display: "block" }}>{l.label}</b><small>{l.sub}</small></span>
+            <Tag tone={l.state === "used" ? "green" : "idle"}>{l.state === "used" ? "used" : "new"}</Tag>
+          </a>
+          <View id={l.id || l.label} sentence={learnedDetailSentence(l.detail, l.label, l.sub)} />
+        </React.Fragment>
       )) : (
         <Empty icon={Brain} tone="green" title="Nothing learned yet"
                line="When an agent hits a snag and finds the way through, the lesson lands here, and later runs reuse it." />

@@ -484,6 +484,24 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
   );
 }
 
+/** The starter's description, when it says more than the name. Blank, or a repeat of the name, is nothing. */
+export function starterDescriptionSentence(
+  description: string | null | undefined,
+  name: string | null | undefined,
+): string | null {
+  const text = description?.trim() ?? "";
+  if (!text || text === (name?.trim() ?? "")) return null;
+  return text;
+}
+
+/** Beside the name. More than six words is a paragraph. */
+export function View({ id, sentence }: { id: string; sentence: string | null }) {
+  if (!sentence) return null;
+  return sentence.split(/\s+/).filter(Boolean).length > 6
+    ? <p data-testid={id} data-user-text>{sentence}</p>
+    : <span data-testid={id} data-user-text>{sentence}</span>;
+}
+
 /** Shipped templates, and Studio definitions no agent answers to yet. */
 function TemplatePicker({ projectId, actor, orphans, existing, onCreated, onBorn }: {
   projectId: string; actor: string; orphans: StudioAgent[]; existing: Set<string>;
@@ -576,7 +594,10 @@ function TemplatePicker({ projectId, actor, orphans, existing, onCreated, onBorn
       <ul className="aq-template-list">
         {shownOrphans.map((a) => (
           <li key={a.id} data-testid={`aq-orphan-${a.agent_key}`}>
-            <span title={a.description || undefined}><b>{a.name}</b> <span className="wf-tag">Profile</span></span>
+            <div>
+              <span title={a.description || undefined}><b>{a.name}</b> <span className="wf-tag">Profile</span></span>
+              <View id={`aq-orphan-why-${a.agent_key}`} sentence={starterDescriptionSentence(a.description, a.name)} />
+            </div>
             <GatedButton permission="agent:create" type="button" className="wf-btn" disabled={!!working}
                     title="A profile with no agent yet" onClick={() => void adopt(a)}>
               {working === a.id ? "Adding…" : "Add"}
@@ -587,7 +608,10 @@ function TemplatePicker({ projectId, actor, orphans, existing, onCreated, onBorn
           const have = existing.has(t.role_key);
           return (
             <li key={t.id} data-testid={`aq-template-${t.id}`}>
-              <span title={t.description || undefined}><b>{t.name}</b> <span className="detail">{t.category}</span></span>
+              <div>
+                <span title={t.description || undefined}><b>{t.name}</b> <span className="detail">{t.category}</span></span>
+                <View id={`aq-template-why-${t.id}`} sentence={starterDescriptionSentence(t.description, t.name)} />
+              </div>
               <GatedButton permission="agent:publish" type="button" className="wf-btn" disabled={!!working || (have && t.installed)}
                       onClick={() => void install(t)}>
                 {have && t.installed ? "Added" : working === t.id ? "Adding…" : "Add"}

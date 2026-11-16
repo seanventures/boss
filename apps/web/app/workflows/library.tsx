@@ -964,6 +964,21 @@ function asStepDef(c: CustomStep): CustomStepDef {
   };
 }
 
+/** Visible step summary beside the label. Blank, or the same as the label, is nothing. */
+export function stepSummarySentence(summary: string | null | undefined, label: string | null | undefined): string | null {
+  const text = summary?.trim() ?? "";
+  if (!text || text === (label ?? "").trim()) return null;
+  return text;
+}
+
+/** Beside the custom-step label. More than six words is a paragraph. */
+export function View({ id, sentence }: { id: string; sentence: string | null }) {
+  if (!sentence) return null;
+  return sentence.split(/\s+/).filter(Boolean).length > 6
+    ? <p data-testid={`wf-step-why-${id}`} data-user-text>{sentence}</p>
+    : <span data-testid={`wf-step-why-${id}`} data-user-text>{sentence}</span>;
+}
+
 function StepsTable({ projectId, customSteps, riskFloor, busy, onRemoveStep, onStepsChanged, usedIn }:
     LibraryProps & { usedIn: Map<string, number> }) {
   const [modal, setModal] = useState<{ edit?: CustomStep } | null>(null);
@@ -991,6 +1006,7 @@ function StepsTable({ projectId, customSteps, riskFloor, busy, onRemoveStep, onS
                   </td>
                   <td className="wf-libsteps-label" title={c.summary || undefined} data-user-text>
                     {c.label}
+                    <View id={c.step_key} sentence={stepSummarySentence(c.summary, c.label)} />
                   </td>
                   <td>
                     <span className="wf-tag" title={c.binding_kind === "skill" ? "Skill" : "MCP tool"}>
