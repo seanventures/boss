@@ -346,16 +346,29 @@ class EgressProxy:
                 return answer(401, "handle_revoked")
             if not row.live():
                 return answer(401, "handle_expired")
+            deployment_id = (h.get("x-boss-deployment") or "").strip()
             why = None
             if row.org_id and row.org_id != host.org_id:
                 why = "another_org"
             else:
-                if row.vm_id is None:
-                    row.vm_id = egress_handles.bind_vm(db, row.token_hash, vm_id)
-                if row.vm_id != vm_id:
-                    why = "another_vm"
-                elif row.run_id != run_word:
-                    why = "another_run"
+                from boss_engine.services.fleet import BindingRefused, prove_host_binding
+
+                try:
+                    # An unbound handle is bound only to a VM this host holds. A VM that
+                    # disagrees with an already-bound handle stays a replay, not an ownership miss.
+                    if row.vm_id is None:
+                        prove_host_binding(db, host.host_id, vm_id=vm_id,
+                                           deployment_id=deployment_id or None)
+                        row.vm_id = egress_handles.bind_vm(db, row.token_hash, vm_id)
+                    if row.vm_id != vm_id:
+                        why = "another_vm"
+                    elif row.run_id != run_word:
+                        why = "another_run"
+                    else:
+                        prove_host_binding(db, host.host_id, vm_id=vm_id,
+                                           deployment_id=deployment_id or None)
+                except BindingRefused as exc:
+                    return answer(exc.status, exc.reason)
             if why:
                 egress_handles.revoke(db, row.token_hash, f"handle_replay:{why}")
                 try:
@@ -390,12 +403,9 @@ class EgressProxy:
                                  f"run_token_{exc.reason}")
                 return answer(401, f"run_token_{exc.reason}")
             if claims is None:
-                # A host that predates S13: the run's egress token must have been handed over
-                # server to server (runs.register_egress), as on the local lane.
-                with runs._lock:  # noqa: SLF001
-                    claims = runs._EGRESS.get(row.token_hash)  # noqa: SLF001
-                if claims is None or claims.task.run_id != row.run_id:
-                    return answer(401, "egress_not_registered")
+                # Nothing registers a VM handle into the in-process egress table, so a host
+                # that predates S13 and attaches no boss:egress token fails closed.
+                return answer(401, "egress_not_registered")
             # 3. THE ROUTE: a host egress injects for, or a refusal that names it (D19).
             if not provider:
                 reason = ("strict_secrets_git_host_refused" if _strict()

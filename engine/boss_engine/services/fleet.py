@@ -60,6 +60,39 @@ class FleetError(ValueError):
         self.status, self.code = status, code
 
 
+class BindingRefused(Exception):
+    """A host forward named no VM or deployment this host holds (BOSSAPP-1177)."""
+
+    def __init__(self, status: int, reason: str = "binding_not_owned") -> None:
+        super().__init__(reason)
+        self.status = status
+        self.reason = reason
+
+
+def prove_host_binding(connection: Any, host_id: str, *, vm_id: Optional[str] = None,
+                       deployment_id: Optional[str] = None) -> None:
+    """The proving host holds the `X-Boss-Vm` or `X-Boss-Deployment` it is asked to act on.
+
+    Missing both is 400. Each id that is present must match a replica on this host, and when
+    both are present one row must match both. An empty string is not an id."""
+    vm = str(vm_id or "").strip()
+    dep = str(deployment_id or "").strip()
+    if not vm and not dep:
+        raise BindingRefused(400)
+    where = ["host_id = :h"]
+    params: dict = {"h": host_id}
+    if vm:
+        where.append("vm_id = :vm")
+        params["vm"] = vm
+    if dep:
+        where.append("deployment_id = :dep")
+        params["dep"] = dep
+    found = connection.execute(text(
+        "SELECT 1 FROM agent_replicas WHERE " + " AND ".join(where) + " LIMIT 1"), params).first()
+    if found is None:
+        raise BindingRefused(403)
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -810,7 +843,8 @@ def get_host(connection: Any, org_id: str, host_id: str) -> Optional[dict]:
     return out
 
 
-__all__ = ["ATTESTATION", "FleetError", "HEARTBEAT_SECONDS", "JOIN_TOKEN_PREFIX", "ROUTES",
+__all__ = ["ATTESTATION", "BindingRefused", "FleetError", "HEARTBEAT_SECONDS", "JOIN_TOKEN_PREFIX",
+           "ROUTES", "prove_host_binding",
            "UNREACHABLE_SECONDS", "desired", "endpoints", "enrol", "get_host", "heartbeat",
            "host_event", "host_events_ingest", "ingest_guest_calls", "issue_join_token", "list_hosts", "observed",
            "put_replicas", "renew", "revoke", "revoke_join_token", "set_cordon", "watch"]

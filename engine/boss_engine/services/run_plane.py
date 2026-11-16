@@ -346,11 +346,46 @@ def _guest_handles(connection: Any, settings: Any, job: dict, run_id: str, repli
     return handles
 
 
+def _repo_names(value: Any) -> tuple:
+    return tuple(dict.fromkeys(str(v).strip() for v in (value or [])
+                               if isinstance(v, str) and "/" in v and str(v).strip()))
+
+
+def _grant_git_names(connection: Any, job: dict) -> tuple:
+    """`(github repos, bitbucket repos)` on the run's grant. Empty when the job names none."""
+    grant_id = job.get("grant_id") or None
+    if not grant_id and job.get("id"):
+        grant_id = connection.execute(text(
+            "SELECT grant_id FROM jobs WHERE id = :j"), {"j": job["id"]}).scalar()
+    if not grant_id:
+        return (), ()
+    from ..identity import grants
+
+    grant = grants.load(str(grant_id), db=connection)
+    if grant is None:
+        return (), ()
+    block = (grant.resources or {}).get("bitbucket") or {}
+    bitbucket = block.get("repos") if isinstance(block, dict) else None
+    return _repo_names(grants.github_resources(grant).get("repos")), _repo_names(bitbucket)
+
+
+def _project_repo_names(connection: Any, project_id: str) -> tuple:
+    """Active repository bindings of the project (GitHub and local). Not an install-wide list."""
+    if not project_id:
+        return ()
+    rows = connection.execute(text(
+        "SELECT full_name FROM github_repository_bindings WHERE project_id = :p "
+        "AND status = 'active' ORDER BY created_at"), {"p": project_id}).scalars().all()
+    return _repo_names(rows)
+
+
 def run_git_scope(connection: Any, job: dict, deployment_id: Optional[str]) -> dict:
     """What the run's `boss:egress` token may reach in git (P8b S11): `repos` (GitHub
     `owner/repo`), `bitbucket_repos` (`workspace/repo_slug`, D19) and `github_needs`. The job's
     payload names them for one run; otherwise the deployment's `metadata` does for all its runs.
-    Nothing named → nothing reachable: every git call is `repo_outside_run`."""
+    A key neither names comes from the run's grant (`jobs.grant_id`: `github.repos` and
+    `bitbucket.repos`). GitHub still empty then comes from the project's repository bindings
+    (BOSSAPP-1178). An explicit empty list stays empty. Nothing named → nothing reachable."""
     payload = job.get("payload") or {}
     if isinstance(payload, str):
         payload = json.loads(payload or "{}")
@@ -365,14 +400,24 @@ def run_git_scope(connection: Any, job: dict, deployment_id: Optional[str]) -> d
         except Exception:  # noqa: BLE001 — no scope read: the token names no repository
             meta = {}
 
-    def names(key: str) -> tuple:
-        value = payload.get(key) if payload.get(key) is not None else meta.get(key)
-        return tuple(dict.fromkeys(str(v).strip() for v in (value or [])
-                                   if isinstance(v, str) and "/" in v and str(v).strip()))
+    def chosen(key: str):
+        if payload.get(key) is not None:
+            return _repo_names(payload.get(key))
+        if meta.get(key) is not None:
+            return _repo_names(meta.get(key))
+        return None
 
+    repos = chosen("repos")
+    bitbucket = chosen("bitbucket_repos")
+    if repos is None or bitbucket is None:
+        grant_repos, grant_bitbucket = _grant_git_names(connection, job)
+        if repos is None:
+            repos = grant_repos or _project_repo_names(connection, str(job.get("project_id") or ""))
+        if bitbucket is None:
+            bitbucket = grant_bitbucket
     needs = payload.get("github_needs") if payload.get("github_needs") is not None \
         else meta.get("github_needs")
-    return {"repos": names("repos"), "bitbucket_repos": names("bitbucket_repos"),
+    return {"repos": repos or (), "bitbucket_repos": bitbucket or (),
             "github_needs": {str(k): str(v) for k, v in needs.items()}
             if isinstance(needs, dict) else None}
 

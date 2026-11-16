@@ -185,6 +185,18 @@ def test_only_the_providers_inference_paths_and_the_runs_models_are_allowed():
         assert ok.status_code == 200 and len(up.calls) == 1
 
 
+def test_a_host_forward_without_a_vm_or_deployment_is_refused():
+    """BOSSAPP-1177: the model gateway acts only on an X-Boss-Vm or X-Boss-Deployment the
+    host names. Neither header is a missing id, and it is refused."""
+    gw = _gateway(FakeUpstream([b"x"]))
+    headers = {"authorization": "BossHost fake-proof", smg.HANDLE_HEADER: HANDLE,
+               smg.RUN_HEADER: "run_1", smg.EPOCH_HEADER: "3"}
+    with TestClient(_app(gw)) as client:
+        resp = client.post("/anthropic/v1/messages", json={"model": "m"}, headers=headers)
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "binding_not_owned"
+
+
 def test_a_host_proof_is_required_unless_the_direct_lane_is_on():
     up = FakeUpstream([b"x"])
     gw = _gateway(up)

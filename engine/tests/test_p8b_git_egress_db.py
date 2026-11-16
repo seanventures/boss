@@ -233,8 +233,62 @@ def _scope(world: World, repos: list) -> None:
                    "d": world.dep["id"]})
 
 
+def _attach_grant(world: World, resources: dict) -> str:
+    """The run's grant (jobs.grant_id), without making the run on-behalf-of anyone."""
+    import uuid
+
+    gid = f"dlg_{uuid.uuid4().hex[:12]}"
+    with world.eng.begin() as c:
+        person = c.execute(text(
+            "SELECT id FROM identity_principals WHERE kind = 'user' AND status = 'active' "
+            "AND org_id = :o ORDER BY created_at LIMIT 1"), {"o": world.org}).scalar()
+        assert person, "needs a person to own the grant"
+        c.execute(text(
+            "INSERT INTO identity_delegation_grants (id, org_id, user_principal_id, agent_ids, "
+            "project_ids, resources, status, expires_at) VALUES (:i, :o, :u, :a, :p, "
+            "CAST(:r AS JSONB), 'active', now() + interval '1 day')"),
+            {"i": gid, "o": world.org, "u": person, "a": ["agt_scope"], "p": [world.project],
+             "r": __import__("json").dumps(resources)})
+        c.execute(text("UPDATE agent_deployments SET metadata = '{}'::jsonb WHERE id = :d"),
+                  {"d": world.dep["id"]})
+        # The column is the scope. Clearing on_behalf_of keeps a shadow-stamped host run
+        # autonomous: pairing sys_worker with a grant makes the mint look up that principal.
+        c.execute(text(
+            "UPDATE jobs SET grant_id = :g, on_behalf_of = NULL WHERE id = :j"),
+            {"g": gid, "j": world.work["job_id"]})
+    return gid
+
+
+def _bind_project_repo(world: World, full_name: str) -> None:
+    import uuid
+
+    owner, name = full_name.split("/", 1)
+    cid, bid = f"ghc_{uuid.uuid4().hex[:10]}", f"ghb_{uuid.uuid4().hex[:10]}"
+    with world.eng.begin() as c:
+        c.execute(text(
+            "INSERT INTO github_connections (id, project_id, connection_label, auth_method, "
+            "credential_ref, status, created_by) VALUES (:i, :p, :l, 'github_app', "
+            "'secret:none', 'active', 'test')"),
+            {"i": cid, "p": world.project, "l": cid})
+        c.execute(text(
+            "INSERT INTO github_repository_bindings (id, project_id, connection_id, owner, name, "
+            "full_name, role, status, created_by) VALUES (:i, :p, :c, :o, :n, :f, 'primary', "
+            "'active', 'test')"),
+            {"i": bid, "p": world.project, "c": cid, "o": owner, "n": name, "f": full_name})
+
+
 @pytest.fixture()
 def rig(world, tmp_path, monkeypatch):
+    yield from _open_rig(world, tmp_path, monkeypatch, grant=False)
+
+
+@pytest.fixture()
+def granted_rig(world, tmp_path, monkeypatch):
+    """BOSSAPP-1178: the deployment names no repository. The run's grant does."""
+    yield from _open_rig(world, tmp_path, monkeypatch, grant=True)
+
+
+def _open_rig(world, tmp_path, monkeypatch, *, grant: bool):
     if shutil.which("git") is None:
         pytest.skip("no git")
     if world.give_the_agent_a_passport() is None:
@@ -261,7 +315,12 @@ def rig(world, tmp_path, monkeypatch):
 
     run = world.work["run_id"]
     assert world.work["handles"]["egr"].startswith("boss_egr_")
-    _scope(world, ["acme/web"])
+    if grant:
+        # Nothing on the deployment. The run's grant is the only name for these repositories.
+        _attach_grant(world, {"github": {"repos": ["acme/web"]},
+                              "bitbucket": {"repos": ["ws/app"]}})
+    else:
+        _scope(world, ["acme/web"])
     # The install's Bitbucket registry (identity/repo_scope.py): ws/app only. The metadata ALSO
     # names ws/secret — a request, not authority — so it never enters the run's token.
     monkeypatch.delenv("BOSS_TARGET_BITBUCKET_WORKSPACE", raising=False)
@@ -524,3 +583,123 @@ def test_a_bitbucket_repo_the_payload_names_but_no_grant_allows_is_refused(rig, 
             "SELECT path_template, deny_reason FROM identity_egress_log WHERE run_id = :r "
             "AND provider = 'bitbucket' AND decision = 'denied'"), {"r": run}).all()
     assert {r[1] for r in denied} == {"repo_outside_run"}, denied
+
+
+def _proxy_call(world, headers: dict, *, path: str = "/git/github.com/acme/web.git/info/refs"):
+    from apps.egress.boss_egress.proxy import EgressProxy, EgressRequest, EgressResponse
+
+    proxy = EgressProxy(world.eng, upstream=lambda *a, **k: EgressResponse(200, {}, b"ok"))
+    base = {k.lower(): v for k, v in world.host.headers("GET", path).items()}
+    base.update({"x-boss-handle": world.work["handles"]["egr"], "x-boss-vm": world.vm_id,
+                 "x-boss-run": world.work["run_id"],
+                 "x-boss-fence-epoch": str(world.work["epoch"])})
+    base.update(headers)
+    return proxy.handle(EgressRequest(method="GET", path=path, query="service=git-upload-pack",
+                                      headers=base, peer="10.9.9.9", url=EGRESS_BASE + path))
+
+
+def test_a_host_route_refuses_a_vm_or_deployment_it_does_not_hold(world):
+    """BOSSAPP-1177: the proving host must own the X-Boss-Vm or X-Boss-Deployment it names.
+    A foreign id is refused. The model gateway uses the same check."""
+    from boss_engine.services import streaming_model_gateway as smg
+
+    foreign_dep = _proxy_call(world, {"x-boss-deployment": "dep_not_on_this_host"})
+    assert foreign_dep.status == 403 and _reason(foreign_dep) == "binding_not_owned"
+    # A VM the handle is not bound to stays a replay (the existing test). A deployment this
+    # host does hold does not excuse a VM it does not: checked once the VM agrees with the handle.
+    gw = smg.ModelGateway(world.eng, settings=None, upstream=None, keys=None, budget=False,
+                          audit=smg.AuditQueue(world.eng, interval=3600), ledger=False,
+                          verify_host=lambda *a, **k: (world.host.host_id, world.org))
+    with pytest.raises(smg.Refused) as refused:
+        gw.caller_of({"authorization": "BossHost proof", "x-boss-vm": "vm_not_on_this_host",
+                      "x-boss-run": world.work["run_id"], "x-boss-deployment": world.dep["id"]},
+                     method="POST", path="/anthropic/v1/messages")
+    assert (refused.value.status, refused.value.reason) == (403, "binding_not_owned")
+
+
+def test_the_in_process_egress_table_does_not_admit_a_pre_s13_host(world):
+    """BOSSAPP-1177: nothing registers a VM handle into runs._EGRESS. A planted row must not
+    let a host that attached no boss:egress token through."""
+    import time
+
+    from boss_engine.identity import runs
+    from boss_engine.identity.principal import ActorChain, RunMode, RunTokenClaims, TaskBinding
+    from boss_engine.services import fleet
+
+    with world.eng.begin() as c:
+        loaded = egress_handles.load(c, world.work["handles"]["egr"])
+        c.execute(text("UPDATE agent_hosts SET host_tokens = false WHERE id = :h"),
+                  {"h": world.host.host_id})
+    fleet._HOST_TOKENS_CACHE.clear()
+    now = int(time.time())
+    runs._EGRESS[loaded.token_hash] = RunTokenClaims(
+        iss="boss", aud=delegation.AUD_EGRESS, sub="agt_x", org_id=world.org,
+        mode=RunMode.AUTONOMOUS, chain=ActorChain(()), grant_id=None,
+        task=TaskBinding(run_id=world.work["run_id"], project_id=world.project),
+        scope=frozenset(), cnf_jkt="jkt", jti="jti", parent_jti=None, iat=now, exp=now + 600)
+    try:
+        resp = _proxy_call(world, {})
+    finally:
+        runs._EGRESS.pop(loaded.token_hash, None)
+        fleet._HOST_TOKENS_CACHE.clear()
+    assert resp.status == 401 and _reason(resp) == "egress_not_registered"
+
+
+def _job_row(world: World) -> dict:
+    with world.eng.begin() as c:
+        return dict(c.execute(text(
+            "SELECT id, project_id, payload FROM jobs WHERE id = :j"),
+            {"j": world.work["job_id"]}).mappings().one())
+
+
+def test_a_host_run_fills_git_scope_from_its_grant_not_an_empty_list(world):
+    """BOSSAPP-1178: payload and deployment name nothing, so the run's grant fills repos and
+    bitbucket_repos. An explicit empty list is not filled back in."""
+    from boss_engine.services.run_plane import run_git_scope
+
+    _attach_grant(world, {"github": {"repos": ["acme/web"]}, "bitbucket": {"repos": ["ws/app"]}})
+    with world.eng.begin() as c:
+        scope = run_git_scope(c, _job_row(world), world.dep["id"])
+    assert scope["repos"] == ("acme/web",)
+    assert scope["bitbucket_repos"] == ("ws/app",)
+    with world.eng.begin() as c:
+        c.execute(text("UPDATE agent_deployments SET metadata = CAST(:m AS JSONB) WHERE id = :d"),
+                  {"m": '{"repos": ["acme/kept"], "bitbucket_repos": []}', "d": world.dep["id"]})
+        named = run_git_scope(c, _job_row(world), world.dep["id"])
+    assert named["repos"] == ("acme/kept",)
+    assert named["bitbucket_repos"] == ()
+
+
+def test_github_scope_comes_from_the_project_when_the_grant_names_none(world):
+    """BOSSAPP-1178: a grant that names no GitHub repository leaves repos to the project's
+    bindings. Bitbucket still comes only from the grant."""
+    from boss_engine.services.run_plane import run_git_scope
+
+    _attach_grant(world, {"bitbucket": {"repos": ["ws/app"]}})
+    _bind_project_repo(world, "acme/web")
+    with world.eng.begin() as c:
+        scope = run_git_scope(c, _job_row(world), world.dep["id"])
+    assert scope["repos"] == ("acme/web",)
+    assert scope["bitbucket_repos"] == ("ws/app",)
+
+
+def test_a_granted_repo_fetches_and_pushes_its_own_branch(granted_rig):
+    """BOSSAPP-1178: a host run whose deployment names no repository still fetches and pushes
+    the repo its grant names, on its own branch."""
+    rig = granted_rig
+    payload = rig["tokens"][delegation.AUD_EGRESS]["access_token"].split(".")[1]
+    claims = __import__("json").loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    assert claims["boss_task"]["resources"].get("github") == ["acme/web"]
+    assert claims["boss_task"]["resources"].get("bitbucket") == ["ws/app"]
+    env, tmp, run = rig["env"], rig["tmp"], rig["run"]
+    work = tmp / "granted"
+    _git(env, tmp, "clone", "-q", "https://github.com/acme/web.git", str(work))
+    (work / "change.txt").write_text("x\n")
+    _git(env, work, "add", "-A")
+    _git(env, work, "commit", "-q", "-m", "change")
+    safe = run.replace(":", "-").replace("/", "-").replace("#", "-")
+    _git(env, work, "push", "-q", "origin", f"HEAD:refs/heads/boss/{safe}-grant")
+    _git(env, work, "fetch", "-q", "origin")
+    listed = _git(env, tmp, "-C", str(rig["bare"]), "branch", "--list", f"boss/{safe}-grant").stdout
+    assert f"boss/{safe}-grant" in listed
+    _git(env, tmp, "clone", "-q", "https://bitbucket.org/ws/app.git", str(tmp / "granted-bb"))

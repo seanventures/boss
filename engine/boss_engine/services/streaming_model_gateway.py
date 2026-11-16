@@ -1166,6 +1166,21 @@ class ModelGateway:
                             run_id=(h.get(RUN_HEADER) or "").strip() or None, epoch=epoch,
                             deployment_id=(h.get(DEPLOYMENT_HEADER) or "").strip() or None,
                             trace_id=(h.get(TRACE_HEADER) or "").strip() or None)
+            # BOSSAPP-1177: a host forward names the VM or the deployment it acts on, and this
+            # host holds it. The same check the egress host route uses.
+            if not caller.vm_id and not caller.deployment_id:
+                raise Refused(400, "binding_not_owned",
+                              "a host forward names the VM or the deployment it acts on")
+            if self.engine is not None:
+                from .fleet import BindingRefused, prove_host_binding
+
+                try:
+                    with self.engine.begin() as connection:
+                        prove_host_binding(connection, host_id, vm_id=caller.vm_id,
+                                           deployment_id=caller.deployment_id)
+                except BindingRefused as exc:
+                    raise Refused(exc.status, exc.reason,
+                                  "the host does not hold the VM or deployment it named") from None
             self._cross_check_assertion(h.get(ASSERTION_HEADER), caller)
             return caller, raw
         if self.direct:
