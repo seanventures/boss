@@ -31865,6 +31865,49 @@ def code_task_review_pr_again_endpoint(run_id: str, payload: ReviewPrAgainBody) 
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+class RecheckBody(BaseModel):
+    actor: str
+
+
+@app.get("/v1/code-tasks/{run_id}/recheck")
+@permit(P.CODE_TASK_STEER, scope=Scope.of("code_task", path="run_id"))
+def code_task_recheck_preview_endpoint(run_id: str) -> dict:
+    """Can this change be re-checked, and what it costs (services/change_recheck.py)."""
+    from boss_engine.services import change_recheck
+
+    with begin(engine) as connection:
+        owner = require_code_task_reader(connection, run_id)
+        try:
+            return change_recheck.preview(connection, run_id, owner)
+        except change_recheck.RecheckRefused as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/v1/code-tasks/{run_id}/recheck")
+@permit(P.CODE_TASK_STEER, scope=Scope.of("code_task", path="run_id"))
+def code_task_recheck_endpoint(run_id: str, payload: RecheckBody) -> dict:
+    """Re-check this change: every gate again (tests, security, review, consistency,
+    acceptance) on its branch head as a new attempt of the lineage, with no code written
+    (services/change_recheck.py). Returns the new attempt and the estimated cost."""
+    from boss_engine.services import change_recheck
+    from boss_engine.services.agent_identity import is_person
+
+    actor = payload.actor.strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        owner = require_code_task_reader(connection, run_id)
+        require_project_actor(connection, owner, actor, "task_create")
+        by_person = is_person(actor, connection, owner)
+    try:
+        return change_recheck.request(engine, settings, jobs, run_id, project_id=owner,
+                                      actor=actor, by_person=by_person)
+    except change_recheck.RecheckRefused as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.post("/v1/code-tasks/{run_id}/review-pr-again/run")
 @permit(P.WORKER_LEASE)
 def code_task_review_pr_again_run_endpoint(run_id: str, payload: dict) -> dict:

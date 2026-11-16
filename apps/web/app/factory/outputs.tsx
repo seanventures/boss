@@ -29,7 +29,7 @@ import { ApprovePreview } from "../previews-ui";
 import { WaiveSheet } from "./waive-sheet";
 import { AgFaceStack } from "../agents/agent-face";
 import { nameOf, RunFace } from "../agents/run-face";
-import { fetchCalls, resolveComment, reviewPrAgain, stopPreview, type ModelCall } from "./cockpit-actions";
+import { fetchCalls, recheckChange, recheckPreview, resolveComment, reviewPrAgain, stopPreview, type ModelCall, type RecheckPreview } from "./cockpit-actions";
 import { areaHref, costWord, kilo, money, secondsWord, whoName } from "./cockpit-util";
 import { localWith } from "../../lib/local-time";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
@@ -206,6 +206,41 @@ export function PrReviewLine({ c, actor, onRefresh }: { c: Cockpit; actor: strin
         </GatedButton>
       </span>
       {review?.reason ? <span className="fx-err" role="note" data-user-text data-testid="fx-pr-review-reason">{review.reason}</span> : null}
+      {error ? <span className="fx-err" role="alert" data-user-text>{error}</span> : null}
+      <RecheckLine c={c} actor={actor} onRefresh={onRefresh} />
+    </span>
+  );
+}
+
+/** "Re-check this change": every gate again on the branch head, no code written, its
+ *  estimated cost on the button (services/change_recheck.py, BOSSAPP-1326). */
+export function RecheckLine({ c, actor, onRefresh }: { c: Cockpit; actor: string; onRefresh?: () => void }) {
+  const [info, setInfo] = useState<RecheckPreview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [started, setStarted] = useState("");
+  useEffect(() => {
+    let live = true;
+    void recheckPreview(c.run.id).then((p) => { if (live) setInfo(p); });
+    return () => { live = false; };
+  }, [c.run.id]);
+  if (!info) return null;
+  const cost = `about $${info.estimate.usd.toFixed(2)}`;
+  const go = async () => {
+    setBusy(true); setError("");
+    const r = await recheckChange(c.run.id, actor);
+    setBusy(false);
+    if (r.ok) { setStarted(r.data?.run_id ?? ""); showToast("success", "Re-checking the change"); notifyChanged("code-tasks"); onRefresh?.(); }
+    else setError(r.error ?? "");
+  };
+  return (
+    <span className="fx-out-links" data-testid="fx-recheck-line">
+      <GatedButton permission="code_task:steer" type="button" className="ag-btn" disabled={busy || !info.can || !!started}
+                   data-testid="fx-recheck" onClick={() => void go()}
+                   title={info.can ? `Runs every check again (${info.gates.join(", ")}) on this change's branch, writes no code. Estimated ${cost} (${info.estimate.basis}).` : info.why}>
+        {started ? "Re-check started" : busy ? "Starting…" : `Re-check this change · ${cost}`}
+      </GatedButton>
+      {!info.can && info.why ? <span className="fx-muted" data-testid="fx-recheck-why">{info.why}</span> : null}
       {error ? <span className="fx-err" role="alert" data-user-text>{error}</span> : null}
     </span>
   );

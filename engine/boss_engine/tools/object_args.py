@@ -69,6 +69,7 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "run_security_scan": {"workflow_run_id": "workflow_run"},
     "resolve_review_comment": {"run_id": CODE_TASK},
     "review_pull_request_again": {"run_id": CODE_TASK},
+    "recheck_change": {"run_id": CODE_TASK},
     "retarget_app": {"target_id": "deployment_target", "host_id": "deployment_host"},
     "retry_code_task": {"run_id": CODE_TASK},
     "retry_workflow_step": {"run_id": "workflow_run"},

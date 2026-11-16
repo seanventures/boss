@@ -71,6 +71,25 @@ export function reviewPrAgain(runId: string, actor: string): Promise<Posted<{ st
   return postJson(`${run(runId)}/review-pr-again`, { actor });
 }
 
+/** What a re-check of this change would run and cost (GET, no effect). */
+export type RecheckPreview = { can: boolean; why: string; gates: string[]; estimate: { usd: number; basis: string } };
+export async function recheckPreview(runId: string): Promise<RecheckPreview | null> {
+  try {
+    const r = await fetch(`${run(runId)}/recheck`, { cache: "no-store" });
+    if (!r.ok) return null;
+    const p = (await r.json()) as Partial<RecheckPreview> | null;
+    // Only an answer of the re-check's own shape: anything else draws no button.
+    if (!p || typeof p.can !== "boolean" || typeof p.estimate?.usd !== "number") return null;
+    return { can: p.can, why: String(p.why ?? ""), gates: Array.isArray(p.gates) ? p.gates : [],
+             estimate: { usd: p.estimate.usd, basis: String(p.estimate.basis ?? "") } };
+  } catch { return null; }
+}
+
+/** Re-check this change: every gate again on its branch head, no code written (BOSSAPP-1326). */
+export function recheckChange(runId: string, actor: string): Promise<Posted<{ run_id?: string; estimate?: { usd: number } }>> {
+  return postJson(`${run(runId)}/recheck`, { actor });
+}
+
 export function stopPreview(previewId: string, actor: string): Promise<Posted> {
   return postJson(`/v1/previews/${encodeURIComponent(previewId)}/stop`, { actor });
 }
@@ -144,6 +163,8 @@ declareAction(steerBuild, "code_task:steer");
 declareAction(retryBuild, "code_task:retry");
 declareAction(resolveComment, "code_task:steer");
 declareAction(reviewPrAgain, "code_task:steer");
+declareAction(recheckPreview, "code_task:steer");
+declareAction(recheckChange, "code_task:steer");
 declareAction(stopPreview, "preview:manage");
 declareAction(fetchTools, "code_task:read");
 declareAction(fetchBuildLog, "code_task:read");
