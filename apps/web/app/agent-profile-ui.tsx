@@ -43,6 +43,15 @@ export function agentDescriptionSentence(description: string | null | undefined)
   return trimmed ? trimmed : null;
 }
 
+/** Visible check issues. Errors first, then warnings. Blank is nothing. */
+export function validationIssueSentence(
+  errors: readonly string[] | null | undefined,
+  warnings: readonly string[] | null | undefined,
+): string | null {
+  const parts = [...(errors ?? []), ...(warnings ?? [])].map((item) => item.trim()).filter(Boolean);
+  return parts.length ? parts.join("; ") : null;
+}
+
 /** The Studio definitions that describe this role. Keyed by role_key, the thing a workflow
  *  step's `captain` names, so the agent page, the roster and the editor agree. */
 export function profilesFor(feed: Pick<AgentStudioFeed, "agents">, roleKey: string): StudioAgent[] {
@@ -124,6 +133,8 @@ export function ProfileRow({ agent, feed, actor }: { agent: StudioAgent; feed: A
   const lastTest = feed.tests.find((t) => t.agent_name === agent.name);
   const description = agentDescriptionSentence(agent.description);
   const descriptionLong = !!description && description.split(/\s+/).filter(Boolean).length > 6;
+  const issues = validationIssueSentence(validation.errors, validation.warnings);
+  const issuesLong = !!issues && issues.split(/\s+/).filter(Boolean).length > 6;
   return (
     <div className="wf-ag-profile" data-testid={`agent-profile-${agent.agent_key}`}>
       <div className="wf-ag-profile-head">
@@ -161,7 +172,13 @@ export function ProfileRow({ agent, feed, actor }: { agent: StudioAgent; feed: A
           <div><dt>Data</dt><dd>{words(version.scopes?.data_boundary)}</dd></div>
           <div><dt>Checks</dt><dd title={[...(validation.errors ?? []), ...(validation.warnings ?? [])].join(" ") || undefined}>
             {validation.valid ? "Passed" : "Pending"}
-          </dd></div>
+          </dd>
+          {issues
+            ? (issuesLong
+              ? <p data-testid={`agent-profile-checks-${agent.agent_key}`} data-user-text>{issues}</p>
+              : <span data-testid={`agent-profile-checks-${agent.agent_key}`} data-user-text>{issues}</span>)
+            : null}
+          </div>
           {lastTest ? (
             <div><dt>Last test</dt><dd title={lastTest.result?.summary}>{words(lastTest.status)}</dd></div>
           ) : null}

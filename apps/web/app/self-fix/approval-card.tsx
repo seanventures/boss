@@ -51,6 +51,27 @@ function ConfidenceReasonsWhy({ sentence }: { sentence: string | null }) {
   return <Tag data-testid="sfx-card-confidence-why" data-user-text>{sentence}</Tag>;
 }
 
+/** Visible rejected guesses. Each guess joins a trimmed hypothesis and why; blank is nothing. */
+export function rejectedGuessSentence(
+  rejected: ReadonlyArray<{ hypothesis?: string; why?: string }> | null | undefined,
+): string | null {
+  const parts: string[] = [];
+  for (const item of rejected ?? []) {
+    const hypothesis = item.hypothesis?.trim() ?? "";
+    const why = item.why?.trim() ?? "";
+    if (hypothesis && why) parts.push(`${hypothesis}, ${why}`);
+    else if (hypothesis || why) parts.push(hypothesis || why);
+  }
+  return parts.length ? parts.join("; ") : null;
+}
+
+/** Beside the rejected-guess words. More than six words is a paragraph. */
+function RejectedGuessWhy({ sentence }: { sentence: string | null }) {
+  if (!sentence) return null;
+  const Tag = sentence.split(/\s+/).filter(Boolean).length > 6 ? "p" : "span";
+  return <Tag data-testid="sfx-card-rejected-why" data-user-text>{sentence}</Tag>;
+}
+
 export function SelfFixCard({ card, projectId, selfFixId }: { card: Card; projectId: string; selfFixId?: string }) {
   const [diff, setDiff] = useState<DiffView | null>(null);
   const [diffError, setDiffError] = useState("");
@@ -98,6 +119,7 @@ export function SelfFixCard({ card, projectId, selfFixId }: { card: Card; projec
               {" "}First guess rejected ⓘ
             </span>
           ) : null}
+          <RejectedGuessWhy sentence={rejectedGuessSentence(rejected)} />
         </dd>
         <dt>Confidence</dt>
         <dd data-testid="sfx-card-confidence" title={(card.confidence?.reasons ?? []).join(", ")}>

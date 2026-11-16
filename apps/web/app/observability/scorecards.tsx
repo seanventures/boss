@@ -197,6 +197,21 @@ const STOP: Record<string, string> = {
   stopped_by_operator: "Stopped by a person",
 };
 
+/** Why a promote is short of evidence. A blank reason is nothing. */
+export function promoteWhySentence(why: string | null | undefined): string | null {
+  const trimmed = why?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+/** Beside "Not enough evidence". More than six words is a paragraph. */
+export function PromoteWhy({ sentence }: { sentence: string | null }) {
+  if (!sentence) return null;
+  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
+  return long
+    ? <p data-testid="sc-promote-why" data-user-text="">{sentence}</p>
+    : <span data-testid="sc-promote-why" data-user-text="">{sentence}</span>;
+}
+
 function PromoteSheet({ e, arm, projectId, actor, onClose, onDone }: {
   e: Experiment; arm: "a" | "b"; projectId: string; actor: string; onClose: () => void; onDone: () => void;
 }) {
@@ -223,6 +238,7 @@ function PromoteSheet({ e, arm, projectId, actor, onClose, onDone }: {
         {plan && !plan.enough ? (
           <>
             <span className="im-err" role="status" data-testid="sc-promote-short" title={plan.why_not}>Not enough evidence</span>
+            <PromoteWhy sentence={promoteWhySentence(plan.why_not)} />
             <label className="im-muted">
               <input type="checkbox" checked={anyway} onChange={(ev) => setAnyway(ev.target.checked)}
                      data-testid="sc-promote-anyway" /> Promote anyway

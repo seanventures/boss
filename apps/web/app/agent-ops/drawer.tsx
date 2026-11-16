@@ -65,6 +65,32 @@ function EvidenceList({ items, orgId }: { items: Evidence[]; orgId?: string | nu
 
 const bodyText = (m: Message) => String(m.body.summary ?? m.body.reason ?? m.body.vote ?? m.body.position ?? m.body.action ?? "");
 
+/** Visible why a rejected option lost. Blank is nothing. "Not chosen" is only the title. */
+export function optionWhySentence(why: string | null | undefined): string | null {
+  const trimmed = why?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+export function DecisionOptions({ d }: { d: Pick<Decision, "chosen" | "options" | "rejected"> }) {
+  return (
+    <div className="aa-options">
+      <span className="aa-opt" data-chosen="true" title="Chosen">✓ {d.options.find((o) => o.key === d.chosen)?.label || d.chosen}</span>
+      {d.rejected.map((r) => {
+        const sentence = optionWhySentence(r.why);
+        const long = !!sentence && sentence.split(/\s+/).filter(Boolean).length > 6;
+        const Tag = long ? "p" : "span";
+        const label = d.options.find((o) => o.key === r.option)?.label || r.option;
+        return (
+          <React.Fragment key={r.option}>
+            <span className="aa-opt" title={r.why || "Not chosen"}>✕ {label}</span>
+            {sentence ? <Tag data-testid={`aa-opt-why-${r.option}`} data-user-text>{sentence}</Tag> : null}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
 function Thread({ messages, graph }: { messages: Message[]; graph: Graph }) {
   if (!messages.length) return null;
   return (
@@ -96,12 +122,7 @@ function DecisionView({ d, projectId, orgId, onChanged }: { d: Decision; project
   return (
     <div className="aa-decision" data-testid="aa-drawer-decision">
       <p className="aa-q" data-user-text>{d.question}</p>
-      <div className="aa-options">
-        <span className="aa-opt" data-chosen="true" title="Chosen">✓ {d.options.find((o) => o.key === d.chosen)?.label || d.chosen}</span>
-        {d.rejected.map((r) => (
-          <span key={r.option} className="aa-opt" title={r.why || "Not chosen"}>✕ {d.options.find((o) => o.key === r.option)?.label || r.option}</span>
-        ))}
-      </div>
+      <DecisionOptions d={d} />
       <dl className="aa-facts">
         <dt>Decided by</dt><dd><Face who={d.decided_by} size={18} /> {d.decider_kind}</dd>
         {d.autonomy_level ? <><dt>Allowed at</dt><dd>{d.autonomy_level}, {LEVEL_WORDS[d.autonomy_level] ?? ""}</dd></> : null}

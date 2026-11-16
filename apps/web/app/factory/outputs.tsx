@@ -286,6 +286,25 @@ function ChecksBody({ c, projectId, actor, onRefresh }: { c: Cockpit; projectId:
   );
 }
 
+/** Visible database reasons. Trimmed non-empty strings joined with "; ". Nothing when none. */
+export function databaseWhySentence(why: readonly string[] | null | undefined): string | null {
+  const kept = (why ?? []).map((part) => part.trim()).filter(Boolean);
+  return kept.length ? kept.join("; ") : null;
+}
+
+/** Postgres for this build, with why beside it. Blank is nothing. More than six words is a paragraph. */
+export function DatabaseWhyLine({ why, sentence }: { why: readonly string[]; sentence: string | null }) {
+  const text = !sentence ? null : sentence.split(/\s+/).filter(Boolean).length > 6
+    ? <p data-testid="fx-brief-database-why" data-user-text>{sentence}</p>
+    : <span data-testid="fx-brief-database-why" data-user-text>{sentence}</span>;
+  return (
+    <span className="fx-kv" data-testid="fx-brief-database" title={why.join("; ")} data-tip={why.join("; ")}>
+      <span className="fx-out-sub">Database</span><span>Postgres for this build ✓</span>
+      {text}
+    </span>
+  );
+}
+
 /** What the build was asked to do and how it was built: the old page's contract and meta rows. */
 function BriefBody({ c }: { c: Cockpit }) {
   const b = c.brief;
@@ -306,10 +325,7 @@ function BriefBody({ c }: { c: Cockpit }) {
         </span>
       ) : null}
       {b.database?.postgres ? (
-        <span className="fx-kv" data-testid="fx-brief-database" title={b.database.why.join("; ")}
-              data-tip={b.database.why.join("; ")}>
-          <span className="fx-out-sub">Database</span><span>Postgres for this build ✓</span>
-        </span>
+        <DatabaseWhyLine why={b.database.why} sentence={databaseWhySentence(b.database.why)} />
       ) : null}
       {b.repo ? (
         <span className="fx-kv"><span className="fx-out-sub">Repo</span>
