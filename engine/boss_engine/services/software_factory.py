@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import json
 import re
 from typing import Any, Optional
@@ -160,6 +161,22 @@ def _adapter_for(settings: Settings, owner: Optional[str], repo: Optional[str]) 
 
         return LocalGitAdapter(settings, owner=str(owner), repo=str(repo))
     return GitHubAdapter(settings, owner=owner, repo=repo)
+
+
+def _host_writes_on_caller(method):
+    """Run `method(self, connection, …)` with every local change-set read and write on
+    `connection` (local_repo_host.writes_on): the pull request's own writes join the caller's
+    transaction instead of waiting on its row locks from a second connection
+    (crun_ce0f6332, 2026-11-15). A GitHub host is untouched."""
+
+    @functools.wraps(method)
+    def wrapper(self, connection, *args, **kwargs):
+        from . import local_repo_host
+
+        with local_repo_host.writes_on(connection):
+            return method(self, connection, *args, **kwargs)
+
+    return wrapper
 
 
 class SoftwareFactoryService:
@@ -1834,6 +1851,7 @@ class SoftwareFactoryService:
             title=title, summary=summary, files=files, error="empty review packet"
         )
 
+    @_host_writes_on_caller
     def propose_pull_request(
         self,
         connection: Any,
@@ -1855,6 +1873,7 @@ class SoftwareFactoryService:
         pr_base: Optional[str] = None,
         monitoring_removals: Optional[list[str]] = None,
         settle_run_id: Optional[str] = None,
+        rescue_of_run: Optional[str] = None,
     ) -> dict:
         """Open the change's pull request and its merge decision.
 
@@ -1873,7 +1892,13 @@ class SoftwareFactoryService:
         ``checks_failing`` (services/checks_failing.py): the build's checks still fail after
         its repair rounds. The pull request is then a draft where the host has drafts, carries
         the `checks failing` label, and its merge card says what is failing (security first)
-        and merges only on a person's stated reason (decisions.transition)."""
+        and merges only on a person's stated reason (decisions.transition).
+
+        ``rescue_of_run``: a [partial] PR for a build that already failed or stopped
+        (governed_code_task_service._rescue_pr). Its money was spent and is settled ONCE by the
+        build's own exit (build_budget.settle_or_release), so the rescue needs no active
+        reservation and never settles or releases one: the waiver is recorded as
+        `software_factory.rescue_pr_without_reservation`, never a blocking card."""
         # Prefer Mission Control primary binding credentials when present (P0-6).
         # Surface github_plane on every return path so dual-path is never silent.
         plane = self.bind_project_github(
@@ -1890,10 +1915,26 @@ class SoftwareFactoryService:
             ),
         }
 
-        reservation = self.budget.assert_active_reservation(
-            connection, project_id, reservation_id
-        )
-        if not reservation:
+        reservation = (self.budget.assert_active_reservation(connection, project_id, reservation_id)
+                       if reservation_id else None)
+        if rescue_of_run and not self._is_rescue_of(connection, project_id, rescue_of_run,
+                                                    reservation_id):
+            # Not this project's build, or not its hold: no waiver, the ordinary rule below.
+            self.events.emit(
+                connection, project_id, "software_factory.rescue_pr_refused", "coding_worker",
+                "code_task_run", rescue_of_run,
+                {"reservation_id": reservation_id,
+                 "why": "the rescue names no build of this project holding this reservation"})
+            rescue_of_run = None
+        if rescue_of_run:
+            # THE RESCUE TOUCHES NO HOLD: the build's exit settles its money on its reservation.
+            self.events.emit(
+                connection, project_id, "software_factory.rescue_pr_without_reservation",
+                "coding_worker", "code_task_run", rescue_of_run,
+                {"reservation_id": reservation_id, "reservation_active": bool(reservation),
+                 "why": "a partial PR for a stopped build; its exit settles the money"})
+            reservation_id = None
+        elif not reservation:
             decision_id = self.decisions.create_blocking(
                 connection,
                 project_id,
@@ -1913,7 +1954,7 @@ class SoftwareFactoryService:
             "coding_worker",
         )
         if boundary_block:
-            self.budget.release(
+            self._release_hold(
                 connection,
                 project_id,
                 reservation_id,
@@ -1937,7 +1978,7 @@ class SoftwareFactoryService:
             ),
         )
         if route.get("blocked"):
-            self.budget.release(
+            self._release_hold(
                 connection,
                 project_id,
                 reservation_id,
@@ -1963,7 +2004,7 @@ class SoftwareFactoryService:
             created_by_job_id=created_by_job_id,
         )
         if not created and pr_receipt["status"] == "succeeded":
-            self.budget.release(
+            self._release_hold(
                 connection,
                 project_id,
                 reservation_id,
@@ -2066,7 +2107,7 @@ class SoftwareFactoryService:
             self.receipts.mark_failed(
                 connection, pr_receipt["id"], {"message": str(error)}
             )
-            self.budget.release(
+            self._release_hold(
                 connection,
                 project_id,
                 reservation_id,
@@ -2094,7 +2135,7 @@ class SoftwareFactoryService:
             self.receipts.mark_failed(
                 connection, pr_receipt["id"], {"message": str(error)}
             )
-            self.budget.release(
+            self._release_hold(
                 connection,
                 project_id,
                 reservation_id,
@@ -2515,7 +2556,9 @@ class SoftwareFactoryService:
         )
         self.receipts.mark_succeeded(connection, pr_receipt["id"], pr.url, result)
         build_run = settle_run_id or run_id
-        if build_run:
+        if rescue_of_run:
+            pass  # the build's exit settles it (settle_or_release), once
+        elif build_run:
             from .build_budget import settle_on_pull_request
 
             settle_on_pull_request(self.budget, connection, project_id, reservation_id,
@@ -2621,8 +2664,11 @@ class SoftwareFactoryService:
         ready = getattr(self.github, "mark_ready_for_review", None)
         if ready is None:
             return
+        from . import local_repo_host
+
         try:
-            done = ready(number)
+            with local_repo_host.writes_on(connection):
+                done = ready(number)
         except Exception as error:  # noqa: BLE001 — the merge then says GitHub's refusal
             done = False
             self.events.emit(connection, project_id, "software_factory.draft_ready_failed",
@@ -2634,6 +2680,30 @@ class SoftwareFactoryService:
                              "release_manager", "receipt", receipt_id,
                              {"pull_request_number": number, "decision_id": decision_id,
                               "why": "a person decided to merge it with its checks failing"})
+
+    @staticmethod
+    def _is_rescue_of(connection: Any, project_id: str, run_id: str,
+                      reservation_id: Optional[str]) -> bool:
+        """`run_id` is a build of this project, and `reservation_id` (when given) is its hold:
+        the one it started with, or one it renewed to open its PR (code_task.reservation_renewed)."""
+        row = connection.execute(
+            sql("SELECT reservation_id FROM code_task_runs WHERE id = :r AND project_id = :p"),
+            {"r": run_id, "p": project_id}).mappings().first()
+        if row is None:
+            return False
+        if not reservation_id or str(row["reservation_id"] or "") == str(reservation_id):
+            return True
+        return bool(connection.execute(
+            sql("SELECT 1 FROM events WHERE project_id = :p AND entity_id = :r "
+                "AND event_type = 'code_task.reservation_renewed' "
+                "AND data->>'reservation_id' = :res LIMIT 1"),
+            {"p": project_id, "r": run_id, "res": str(reservation_id)}).first())
+
+    def _release_hold(self, connection: Any, project_id: str, reservation_id: Optional[str],
+                      note: str) -> None:
+        """Release the PR step's hold; a rescue PR has none (propose_pull_request)."""
+        if reservation_id:
+            self.budget.release(connection, project_id, reservation_id, note)
 
     def _flag_checks_failing(self, connection: Any, project_id: str, number: int, url: str,
                              checks_failing: dict, receipt_id: str) -> None:
@@ -2657,6 +2727,7 @@ class SoftwareFactoryService:
                           "failing_gates": _checks_failing.gate_names(checks_failing),
                           "security": bool(checks_failing.get("security")), **posted})
 
+    @_host_writes_on_caller
     def merge_pull_request(
         self,
         connection: Any,
