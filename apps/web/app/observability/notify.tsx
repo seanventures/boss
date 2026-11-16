@@ -167,12 +167,31 @@ export function sendsQuery(typed: string): { q: string } | undefined {
   return q ? { q } : undefined;
 }
 
+/** How many of the rows this response returned are on the page, and how many are not. Same 15 as the slice. */
+function sendsNotOnPage(returned: number): string | null {
+  const onPage = Math.min(15, returned);
+  const hidden = returned - onPage;
+  if (hidden <= 0) return null;
+  const more = hidden === 1 ? "1 more is not." : `${hidden} more are not.`;
+  return `${onPage} sends are on this page. ${more}`;
+}
+
+/** The server's error word, only for a failed or dead send. A sentence over six words is a paragraph. */
+function SendError({ status, errorWord }: { status: string; errorWord: string | null }) {
+  if ((status !== "failed" && status !== "dead") || !errorWord?.trim()) return null;
+  const long = errorWord.trim().split(/\s+/).filter(Boolean).length > 6;
+  return long
+    ? <p data-testid="obs-send-error" data-copy="data">{errorWord}</p>
+    : <span data-testid="obs-send-error" data-copy="data">{errorWord}</span>;
+}
+
 function ContactPoints({ projectId, actor, cps, refresh }: Zone & { cps: ReturnType<typeof useContactPoints>; refresh: () => void }) {
   const lt = useLocalTime();
   const [adding, setAdding] = useState(false);
   const [sends, setSends] = useState(false);
   const [q, setQ] = useState("");
   const outbox = useNotifications(sends ? projectId : "", sendsQuery(q));
+  const leftOff = outbox.data ? sendsNotOnPage(outbox.data.length) : null;
   return (
     <section className="obs-zone" aria-labelledby="obs-cp-head" data-testid="obs-cps">
       <ZoneHead id="obs-cp-head" label="CONTACT POINTS" count={cps.data?.length} tip="Where BOSS sends what fired">
@@ -210,9 +229,11 @@ function ContactPoints({ projectId, actor, cps, refresh }: Zone & { cps: ReturnT
                   <span className="ag-spacer" />
                   <span className="obs-chip" data-tone={n.status === "sent" ? "green" : n.status === "failed" || n.status === "dead" ? "red" : undefined}
                         title={n.errorWord ?? `${n.attempts} attempt${n.attempts === 1 ? "" : "s"}`}>{n.status}</span>
+                  <SendError status={n.status} errorWord={n.errorWord} />
                 </li>
               ))}
             </ul>
+            {leftOff ? <p data-testid="obs-sends-more">{leftOff}</p> : null}
             {outbox.data.capped ? <p data-testid="obs-sends-capped">This list is the newest matches. Older matches are not on this page.</p> : null}
           </>
           )}
