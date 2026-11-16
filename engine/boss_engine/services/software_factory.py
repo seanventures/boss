@@ -1851,6 +1851,51 @@ class SoftwareFactoryService:
             title=title, summary=summary, files=files, error="empty review packet"
         )
 
+    _DEAD_RUN_STATUSES = frozenset({"failed", "cancelled", "canceled"})
+    _DEAD_JOB_STATUSES = frozenset({"deadlettered", "dead", "failed", "cancelled", "canceled"})
+
+    def _proposal_subject_is_dead(
+        self,
+        connection: Any,
+        project_id: str,
+        run_id: Optional[str],
+        job_id: Optional[str],
+    ) -> bool:
+        """True when the fix run or the job driving it is already dead.
+
+        A missing reservation on a live run still opens a decision. On a failed,
+        cancelled, or deadlettered subject that decision can never be resolved.
+        A lookup that cannot be read is not dead — a live block must still open.
+        """
+        def status_of(statement: str, params: dict) -> Optional[str]:
+            try:
+                row = connection.execute(sql(statement), params).mappings().first()
+            except Exception:  # noqa: BLE001 — an unreadable row is not proof the run is dead
+                return None
+            if not isinstance(row, dict) and not hasattr(row, "get"):
+                return None
+            try:
+                got = row.get("status")
+            except Exception:  # noqa: BLE001
+                return None
+            return got if isinstance(got, str) else None
+
+        if run_id:
+            run_status = status_of(
+                "SELECT status FROM code_task_runs WHERE id = :id AND project_id = :p",
+                {"id": run_id, "p": project_id},
+            )
+            if run_status in self._DEAD_RUN_STATUSES:
+                return True
+        if job_id:
+            job_status = status_of(
+                "SELECT status FROM jobs WHERE id = :id AND project_id = :p",
+                {"id": job_id, "p": project_id},
+            )
+            if job_status in self._DEAD_JOB_STATUSES:
+                return True
+        return False
+
     @_host_writes_on_caller
     def propose_pull_request(
         self,
@@ -1935,6 +1980,12 @@ class SoftwareFactoryService:
                  "why": "a partial PR for a stopped build; its exit settles the money"})
             reservation_id = None
         elif not reservation:
+            # A dead fix run cannot answer this decision, so it must not stay pending
+            # (BOSSAPP-984). A live run that is actually missing a hold still blocks.
+            if self._proposal_subject_is_dead(
+                connection, project_id, run_id or settle_run_id, created_by_job_id
+            ):
+                return {"status": "blocked", "reason": "run_dead", **plane_fields}
             decision_id = self.decisions.create_blocking(
                 connection,
                 project_id,

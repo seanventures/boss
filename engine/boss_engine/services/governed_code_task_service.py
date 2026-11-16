@@ -5716,10 +5716,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # A RESCUE NEEDS NO FRESH RESERVATION (rescue_of_run): the money was spent, and
                 # this exit settles it on the build's own hold. Passing None here used to
                 # raise a blocking "Missing active reservation" card on every failure and never
-                # open the partial PR (since rc.1).
+                # open the partial PR (since rc.1). run_id is named so a refused rescue can
+                # still see that the fix run is dead and leave no reservation decision
+                # (BOSSAPP-984).
                 pr = sf.propose_pull_request(
                     c, project_id, task_id, reservation_id=reservation_id,
-                    rescue_of_run=run_id,
+                    rescue_of_run=run_id, run_id=run_id,
                     dedupe_key=f"code:task:{run_id}", title=f"[partial] {title}",
                     branch_name=work_branch,
                     summary=("INCOMPLETE — this run did not finish.\n\n"
