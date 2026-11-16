@@ -1308,13 +1308,33 @@ def check_engine(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]]
 
 # ── Budget ────────────────────────────────────────────────────────────────────────────────────
 
-def step_reservation(settings: Any, step: Mapping[str, Any]) -> int:
-    """What the step reserves when it starts (CapabilityPrecheck.reserves), in micros."""
+#: The `reserves` attribute a build step declares: it reserves what a BUILD reserves
+#: (build_budget.reservation_estimate), not the raw setting — so "ready" here is what the
+#: build's own reservation will find.
+BUILD_RESERVES = "code_task_budget_usd_micros"
+
+
+def step_reservation(settings: Any, step: Mapping[str, Any],
+                     ctx: Optional["Context"] = None) -> int:
+    """What the step reserves when it starts (CapabilityPrecheck.reserves), in micros. A build
+    step asks build_budget.reservation_estimate — the real build cost at its marginal price,
+    clamped to the cap's room — the same call the build makes; offline, the full build cost."""
     declared = precheck_for(_cap_key(step)).reserves
     if not declared:
         return 0
     attr, times = declared
-    return int(getattr(settings, attr, 0) or 0) * max(1, int(times))
+    times = max(1, int(times))
+    if attr == BUILD_RESERVES:
+        from . import build_budget
+
+        amount = None
+        if ctx is not None and ctx.connection is not None:
+            amount = ctx.savepoint(lambda: build_budget.reservation_estimate(
+                ctx.connection, settings, ctx.project_id), default=None)
+        if amount is None:
+            amount = build_budget.build_money_budget_micros(settings)
+        return int(amount) * times
+    return int(getattr(settings, attr, 0) or 0) * times
 
 
 def _parallel_groups(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -1343,7 +1363,7 @@ def _budget_snapshot(ctx: Context) -> Optional[dict[str, Any]]:
 
 @_check("budget.headroom", "The day's cap holds this step's reservation alongside other work")
 def check_budget(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]]:
-    amount = step_reservation(ctx.settings, step)
+    amount = step_reservation(ctx.settings, step, ctx)
     if not amount:
         return None
     snapshot = _budget_snapshot(ctx)

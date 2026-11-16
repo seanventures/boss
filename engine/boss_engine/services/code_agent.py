@@ -1103,6 +1103,29 @@ class ClaudeCodeAgent:
             env["MAX_THINKING_TOKENS"] = str(cap)
         return env
 
+    def billing_for_next_session(self) -> str:
+        """Who pays for the NEXT session, decided by the same resolution `_child_env` makes —
+        BEFORE the session starts. `_billing` is stamped only while the child env is built,
+        which is after the session's spend ceiling was computed, so reading it classed each
+        session by the PREVIOUS session's credential: a subscription -> API key switch (the
+        credential order, a spend-cap failover, a pool change) ran its first key session under
+        subscription-only limits. Order as `_child_env`: an LLM gateway (metered), a pool
+        member (subscription), else the resolved credential. Raises when no credential
+        resolves; the caller treats that as money (the safe side)."""
+        from . import llm_gateway
+
+        if llm_gateway.for_harness("claude_code", self.settings) is not None:
+            from .claude_credential import BILLING_METERED
+
+            return BILLING_METERED
+        from . import subscription_pools
+
+        if subscription_pools.assignment_for("claude_code", self.settings) is not None:
+            from .included_spend import BILLING_SUBSCRIPTION
+
+            return BILLING_SUBSCRIPTION
+        return str(self._resolve_credential().billing or "")
+
     def _resolve_credential(self):
         """Which Anthropic credential this engine's child runs on (claude_credential): the
         job's own pick for this launch ("sub:"/"key:" on its model), else the operator's order.

@@ -5006,20 +5006,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         return _repo_files_seen[0]
 
     def _money_billed(agent=None) -> bool:
-        """Whether the build's sessions spend MONEY (an API key, a metered gateway): the agent's
-        own billing stamp once it has one, else the project's routed source. Unknown is money."""
-        billing = str(getattr(agent, "_billing", "") or "") if agent is not None else ""
-        if billing:
-            from .included_spend import INCLUDED_BILLING
-
-            return billing.strip().lower() not in INCLUDED_BILLING
-        try:
+        """Whether the NEXT session spends MONEY (build_budget.next_session_is_money): resolved
+        now by the engine's own credential resolution, never the previous session's stamp."""
+        def _routed_included() -> bool:
             from .model_routing import call_is_included
 
             with _transaction(engine) as c:
-                return not call_is_included(c, settings, project_id, None)
-        except Exception:  # noqa: BLE001 — unknown is money, the safe side
-            return True
+                return call_is_included(c, settings, project_id, None)
+        return _build_budget.next_session_is_money(agent, _routed_included)
 
     def _ceiling_inputs(agent=None) -> dict:
         """What every ceiling of this build is measured against, read now: its list-price spend

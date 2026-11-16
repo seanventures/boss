@@ -389,3 +389,77 @@ def test_the_pipeline_bounds_money_lanes_by_the_caps():
     assert "money_headroom(" in block and "unsettled_money(" in block
     assert "list_price_spend(" in block and "lifted_ceiling_usd(" in block
     assert "a.budget_ceiling = (lambda _a=a: _session_budget_ceiling(_a))" in src
+
+
+# ── RE-REVIEW #145: the next session's billing, and the precheck's reservation ────────────────
+
+def _switching_agent(monkeypatch):
+    """A claude_code agent whose credential order answers subscription, then an API key."""
+    from boss_engine.services import code_agent, llm_gateway, subscription_pools
+    from boss_engine.services.included_spend import BILLING_METERED, BILLING_SUBSCRIPTION
+
+    monkeypatch.setattr(llm_gateway, "for_harness", lambda *_a, **_k: None)
+    monkeypatch.setattr(subscription_pools, "assignment_for", lambda *_a, **_k: None)
+    order = [BILLING_SUBSCRIPTION, BILLING_METERED]
+
+    class _Switching(code_agent.ClaudeCodeAgent):
+        def _resolve_credential(self):
+            return SimpleNamespace(billing=order[0])
+
+    agent = ec.contracted(_Switching(get_settings()))
+    return agent, order
+
+
+def test_a_lane_switching_to_a_key_is_money_bounded_on_its_first_key_session(monkeypatch):
+    agent, order = _switching_agent(monkeypatch)
+    routed = lambda: True  # noqa: E731 — the project's route says subscription throughout
+    s = Settings(_env_file=None)
+    # Session 1 on the subscription: stamped like _child_env stamps it.
+    assert bb.next_session_is_money(agent, routed) is False
+    agent._billing = order[0]
+    # The credential order now answers the API key (a failover). The stamp is still the
+    # subscription's — the NEXT session must be classed by the resolver, as money.
+    order.pop(0)
+    assert agent._billing == "subscription"
+    money = bb.next_session_is_money(agent, routed)
+    assert money is True
+    ceiling = bb.session_ceiling_usd(s, list_spent_micros=0, money=money,
+                                     period_headroom_micros=1_200_000, risk_tier=3,
+                                     repo_files=12_000)
+    assert ceiling == 1.2, "held to the cap's headroom, not the $20 subscription ceiling"
+
+
+def test_an_unresolvable_credential_or_unknown_engine_is_money():
+    def boom():
+        raise RuntimeError("no login")
+    assert bb.next_session_is_money(SimpleNamespace(billing_for_next_session=boom),
+                                    lambda: True) is True
+    assert bb.next_session_is_money(SimpleNamespace(), lambda: True) is False
+    assert bb.next_session_is_money(SimpleNamespace(), lambda: False) is True
+    assert bb.next_session_is_money(None, boom) is True
+    src = inspect.getsource(g)
+    block = src[src.index("def _money_billed"):src.index("def _ceiling_inputs")]
+    assert "next_session_is_money(" in block and "_billing" not in block.replace(
+        "_build_budget", "")
+
+
+def test_the_precheck_reserves_what_a_build_reserves(monkeypatch):
+    from boss_engine.services import workflow_precheck as wp
+
+    s = Settings(_env_file=None)
+    key = next(k for k, v in wp.CAPABILITY_PRECHECKS.items()
+               if v.reserves and v.reserves[0] == wp.BUILD_RESERVES)
+    step = {"id": "build", "capability": key}
+    monkeypatch.setattr(wp, "_cap_key", lambda st: key)
+    # Offline: the full build cost, never the old $2.
+    assert wp.step_reservation(s, step) == 15_000_000
+    seen = {}
+
+    def estimate(c, st, p, amount=None):
+        seen["args"] = (c, p, amount)
+        return 4_000_000
+    monkeypatch.setattr(bb, "reservation_estimate", estimate)
+    ctx = SimpleNamespace(connection=object(), project_id="p",
+                          savepoint=lambda f, default=None: f())
+    assert wp.step_reservation(s, step, ctx) == 4_000_000
+    assert seen["args"][1] == "p"

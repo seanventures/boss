@@ -36,6 +36,7 @@ from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, Program
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from boss_engine.ports import configure_engine_ports
+from boss_engine.services.build_budget import build_money_budget_micros as _build_money_budget_micros
 from boss_engine.identity.authn import AuthnError
 from boss_engine.services.coordination_read_model import (
     CoordinationSnapshot,
@@ -12868,7 +12869,7 @@ def repair_policy_endpoint(payload: Optional[dict] = None):
     est_attempt_cost?, max_retries?, escalate_after?, cheap_tier?, strong_tier?, verified_count?}."""
     from .services import repair_policy as rp
     payload = payload or {}
-    budget = payload.get("budget_usd_micros", settings.code_task_budget_usd_micros)
+    budget = payload.get("budget_usd_micros", _build_money_budget_micros(settings))
     est = payload.get("est_attempt_cost", settings.repair_est_attempt_cost_usd_micros)
     max_retries = payload.get("max_retries", settings.code_repair_max_retries)
     escalate_after = payload.get("escalate_after", settings.repair_escalate_after)
@@ -12936,7 +12937,7 @@ def design_routing_endpoint(payload: Optional[dict] = None):
                                             default_engine=settings.code_agent_engine,
                                             overrides=payload.get("overrides"))}
     return dr.design_pass_plan(
-        payload.get("budget_usd_micros", settings.code_task_budget_usd_micros),
+        payload.get("budget_usd_micros", _build_money_budget_micros(settings)),
         design_fraction=settings.design_pass_budget_fraction,
         est_design_pass_cost=settings.design_est_pass_cost_usd_micros,
         max_design_passes=settings.design_max_passes)

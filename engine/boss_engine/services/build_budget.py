@@ -211,6 +211,32 @@ def build_money_budget_micros(settings: Any) -> int:
     return int(getattr(settings, "code_task_budget_usd_micros", 0) or 0)
 
 
+def next_session_is_money(agent: Any, routed_included: Any) -> bool:
+    """Whether the NEXT session of `agent` spends MONEY (an API key, a metered gateway).
+
+    Resolved now, by the engine's own credential resolution (`billing_for_next_session`, the
+    order its child env uses) — never the `_billing` stamp, which is written while the child env
+    is built, AFTER the session's ceiling was computed: reading it classed each session by the
+    PREVIOUS session's credential, so the first session after a subscription -> API key switch
+    (credential order, spend-cap failover, pool change) ran under subscription-only limits.
+    An engine without the resolver: `routed_included()` (the project's routed source).
+    Unknown, or a resolution that fails, is money — the safe side."""
+    from .included_spend import INCLUDED_BILLING
+
+    resolve = getattr(agent, "billing_for_next_session", None) if agent is not None else None
+    if callable(resolve):
+        try:
+            billing = str(resolve() or "").strip().lower()
+        except Exception:  # noqa: BLE001 — no credential resolves: money
+            return True
+        if billing:
+            return billing not in INCLUDED_BILLING
+    try:
+        return not bool(routed_included())
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _run_bounds(settings: Any, *, list_spent_micros: int, money: bool,
                 build_money_spent_micros: int, period_headroom_micros: Optional[int],
                 risk_tier: Optional[int], repo_files: Optional[int]) -> list[float]:
