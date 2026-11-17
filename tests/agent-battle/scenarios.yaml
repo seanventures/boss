@@ -356,3 +356,25 @@
     - say BOSS has no connector to pull a ticket by ID
     - ask the person to paste the ticket before looking it up
 
+
+- id: workflow-authoring-ask-refused-as-unknown-action
+  origin: operator 2026-11-17, Command Center › Talk to BOSS (northgate-gateway), BOSSAPP-1351
+  surface: talk_to_boss
+  context: >-
+    The project has repositories, deployment targets and the capabilities config_deploy,
+    promote_config, contract_test, release_approval and smoke_test. The person asked in prose for
+    an "API onboarding" workflow. BOSS answered "I couldn't start that work: unknown action
+    'deploy'" (or "unknown role 'contract'") because the ask went to the role-handoff process
+    compiler, whose closed vocabulary refuses delivery words.
+  input: >-
+    Create an API onboarding workflow: validate a tenant config with gwlint, reject with a report
+    and suggested fix, open a fix PR, deploy to staging, run contract tests, a person approves,
+    promote to production, then a smoke check.
+  expected: >-
+    Treats it as authoring: maps each step to a real capability (an agent or custom step for
+    gwlint, fix_pr, config_deploy, contract_test, release_approval, promote_config, smoke_test)
+    and offers draft_workflow as a button. Nothing is started.
+  must_not:
+    - reply "unknown action" or "unknown role"
+    - start a run, a build or a deploy
+    - refuse without saying what BOSS can do instead
