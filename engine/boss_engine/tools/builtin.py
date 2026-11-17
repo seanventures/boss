@@ -1727,7 +1727,15 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         _obj(
             {
                 "workflow_key": {"type": "string",
-                                 "description": "lower_snake_case identifier, stable"},
+                                 "description": "lower_snake_case identifier, stable. Pass the "
+                                                "key of a workflow that EXISTS to publish its "
+                                                "next version (or version_of); a new key that "
+                                                "collides with an existing workflow is "
+                                                "refused. Nothing is renamed for you."},
+                "version_of": {"type": "string",
+                               "description": "the key of an existing workflow this publishes "
+                                              "the next version of; refused if it does not "
+                                              "exist."},
                 "name": {"type": "string"},
                 "description": {"type": "string"},
                 "work_class": {"type": "string",
@@ -1749,9 +1757,17 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "stops for a person; {id, wait_seconds} pauses. `captain` "
                                    "is one of the project's agents. `approval` is 'manual' or "
                                    "'auto' — a capability at or above the risk floor is forced "
-                                   "manual whatever you ask for. You do NOT wire inputs: a "
-                                   "step's required input is connected to the nearest earlier "
-                                   "step that produces it.",
+                                   "manual whatever you ask for. ANY step may carry input: "
+                                   "{name: value} — a literal (e.g. contract_test cases: "
+                                   "[{name, method, path, expect_status}], a deployment "
+                                   "target_id for a deploy / promote step; "
+                                   "deployment_target: <id> is the same), a reference to an "
+                                   "earlier step {from_step: <id>, field: <field it produces>} "
+                                   "(the field may differ from the input's name: smoke_test "
+                                   "url from deploy's deployed_url), or {from_input: <name>} "
+                                   "for something the operator types. An input you leave out "
+                                   "is connected to the nearest earlier step that produces a "
+                                   "field of that name.",
                     "items": {"type": "object"},
                 },
                 "inputs": {
@@ -1773,7 +1789,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 },
                 "project_id": {"type": "string"},
             },
-            ["workflow_key", "name", "steps"],
+            ["name", "steps"],
         ),
         kind="write",
         reversibility="safe", permission="workflow:publish",
@@ -1782,16 +1798,54 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         wf = services_module("workflows")
         caps = services_module("workflow_capabilities")
         pid = args.get("project_id") or project_id
-        key = re.sub(r"[^a-z0-9_]+", "_", str(args.get("workflow_key") or "").strip().lower())
+        # THE KEY IS THE WORKFLOW'S IDENTITY, and nothing here renames it. A key that is not
+        # lower_snake_case is refused (saying why), not tidied into a different workflow. A new
+        # version of an existing workflow is asked for by NAMING that workflow (`workflow_key`
+        # or `version_of`, which must exist); a key that collides with one is refused with the
+        # existing key named, so the button always shows exactly what it will publish.
+        asked_key = str(args.get("workflow_key") or "").strip()
+        version_of = str(args.get("version_of") or "").strip()
+        if version_of and asked_key and version_of != asked_key:
+            return {"ok": False, "error": f"version_of {version_of!r} and workflow_key "
+                                          f"{asked_key!r} name different workflows. Pass one."}
+        key = asked_key or version_of
+        derived = False
+        if not key:
+            key = re.sub(r"_+", "_", re.sub(r"[^a-z0-9_]+", "_",
+                                            str(args.get("name") or "").strip().lower())).strip("_")
+            derived = True
         if not re.fullmatch(r"[a-z][a-z0-9_]{2,60}", key or ""):
-            return {"ok": False, "error": "workflow_key must be lower_snake_case, 3-61 chars"}
+            return {"ok": False,
+                    "error": f"workflow_key {(asked_key or version_of or key)!r} must be "
+                             "lower_snake_case, 3-61 characters, starting with a letter. To "
+                             "publish a new version of a workflow that exists, pass ITS key "
+                             "(describe_workflow lists them)."}
         spec = _spec_from_steps(args.get("steps") or [], args)
         if isinstance(spec, dict) and spec.get("ok") is False:
             return spec
         with ctx.begin() as c:
-            # VALIDATE BEFORE CREATING ANYTHING. A definition row for a spec that cannot publish
-            # leaves a workflow in the catalogue that does not work, and the operator has to go
-            # and delete it.
+            def _exists(k: str) -> bool:
+                return bool(c.execute(
+                    _text("SELECT 1 FROM workflow_definitions WHERE project_id=:p AND "
+                          "workflow_key=:k"), {"p": pid, "k": k}).first())
+
+            if version_of and not _exists(version_of):
+                return {"ok": False,
+                        "error": f"version_of {version_of!r} is not a workflow in this project; "
+                                 "describe_workflow lists them. Pass workflow_key for a new one."}
+            versioned = re.fullmatch(r"(.+?)_v\d+", key)
+            if derived and _exists(key):
+                return {"ok": False,
+                        "error": f"the name {args.get('name')!r} gives the key {key!r}, which "
+                                 "is already a workflow here. To publish its next version "
+                                 f"pass workflow_key={key!r}; for a different workflow pass a "
+                                 "different workflow_key."}
+            if versioned and not _exists(key) and _exists(versioned.group(1)):
+                return {"ok": False,
+                        "error": f"{versioned.group(1)!r} already exists, so {key!r} would be a "
+                                 "second workflow. To publish a new version of it pass "
+                                 f"workflow_key={versioned.group(1)!r}; for a different "
+                                 "workflow pick an unrelated key."}
             try:
                 caps_by_key = {x["key"]: x for x in caps.palette()}
                 # A STEP THAT NAMES A REAL SKILL IS NOT A MISTAKE TO REFUSE.
@@ -1821,7 +1875,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     problems += [p["detail"] for p in shape + blocked
                                  if p["detail"] not in problems]
                 if problems:
-                    return {"ok": False, "error": "; ".join(problems[:4])}
+                    return {"ok": False,
+                            "error": "; ".join(_how_to_set(p) for p in problems[:4])}
                 existing = c.execute(
                     _text("SELECT id, COALESCE(is_catalogue, false) AS is_catalogue "
                           "FROM workflow_definitions "
@@ -1872,6 +1927,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     mapped = {"note": f"published, but not mapped: {str(error)[:160]}"}
         return {"status": "published", "workflow_key": key, "definition_id": definition_id,
                 "version": published.get("version"), "steps": len(spec["steps"]),
+                **({"note": f"published as version {published.get('version')} of the existing "
+                            f"workflow {key}"} if existing else {}),
                 # Named, because a step BOSS defined on the operator's behalf is something they
                 # should be able to find and change afterwards.
                 **({"defined_steps": made} if made else {}),
@@ -3393,6 +3450,12 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                         "available": sorted(_DISCUSS_OPERATIONS_TOOLS)}
             name = "start_workflow"
             call_args["workflow_key"] = workflow_key
+        if name == "draft_workflow" and not (str(call_args.get("workflow_key") or "").strip()
+                                             or str(call_args.get("version_of") or "").strip()):
+            return {"ok": False, "proposed": False,
+                    "error": "a draft_workflow button must name its workflow_key (or version_of "
+                             "for a new version of an existing one) so the button shows exactly "
+                             "what it will publish."}
         unavailable = action_unavailable(name, getattr(ctx, "settings", None))
         if unavailable:
             return {"ok": False,
@@ -5701,10 +5764,10 @@ def _draft_problems(connection, project_id: str, spec: dict, caps_by_key: dict,
             continue
         kind = str(binding.get("capability") or "")
         if kind not in caps_by_key:
-            near = ", ".join(sorted(caps_by_key)[:8])
+            near = ", ".join(sorted(caps_by_key))
             problems.append(
                 f"step '{entry.get('id')}' asks for '{kind}', which is not a capability. "
-                f"Available kinds include: {near}.")
+                f"Valid capabilities: {near}.")
             continue
         capability = caps_by_key[kind]
         if (capability.get("approval_forced_manual")
@@ -5718,6 +5781,19 @@ def _draft_problems(connection, project_id: str, spec: dict, caps_by_key: dict,
     problems.extend(services_module("step_agents").assignment_problems(
         connection, project_id, spec))
     return problems
+
+
+def _how_to_set(problem: str) -> str:
+    """A "needs 'x', which is not set" sentence, with the three ways to set it."""
+    found = re.search(r"step '([^']+)'.*? needs '([^']+)', which is not set", problem)
+    if not found or "Set it" in problem:
+        return problem
+    step, name = found.group(1), found.group(2)
+    return (f"{problem.rstrip('.')}. Set it one of three ways: a literal on that step "
+            f"(\"input\": {{\"{name}\": <value>}}), from an earlier step "
+            f"(\"input\": {{\"{name}\": {{\"from_step\": \"<step id>\", \"field\": "
+            f"\"<field it produces>\"}}}}; the field need not be named {name}), or from the "
+            f"operator (add \"{name}\" to the workflow's `inputs`).")
 
 
 def _text(sql: str):

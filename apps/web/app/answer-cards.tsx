@@ -31,6 +31,10 @@ export type Proposal = {
   start: { href: string; method: string; body: Record<string, unknown> };
   edit_href: string; offer_id?: string | null; state?: "open" | "started" | "dismissed";
   run_id?: string; href?: string;
+  /** A card for a NAMED workflow: its key, the inputs it was given, and any it still needs (Start held). */
+  workflow_key?: string; workflow_version?: number | null; inputs?: Record<string, unknown>;
+  missing_inputs?: { names: string[]; message: string } | null;
+  ignored_inputs?: { names: string[]; message: string } | null;
   /** The words are past the brief's limit (AR-21): Start is held; Edit to shorten them. */
   over_limit?: { chars: number; limit: number; message: string } | null;
 };
@@ -121,10 +125,12 @@ export function ProposalCard({ projectId, threadId, messageId, proposal, onOutco
   const start = async () => {
     if (busy) return;
     if (card.over_limit) { setSaid(card.over_limit.message); return; }
+    if (card.missing_inputs) { setSaid(card.missing_inputs.message); return; }
     setBusy(true); setSaid("");
     const b = card.start.body;
     const res = await startWork(projectId, toWorkKind(b.kind), str(b.text) || card.text, {
       ...(str(b.title) ? { title: str(b.title) } : {}), ...(str(b.source_ref) ? { source_ref: str(b.source_ref) } : {}),
+      ...(str(b.workflow_key) ? { workflow_key: str(b.workflow_key), inputs: obj(b.inputs) } : {}),
     });
     setBusy(false);
     if (!res.ok) {
@@ -151,7 +157,7 @@ export function ProposalCard({ projectId, threadId, messageId, proposal, onOutco
     <div className="ac-act" data-testid="agent-proposal-card" data-state={card.state ?? "open"}>
       <div className="ac-act-h">
         <span className="ac-ico" aria-hidden><Sparkle size={14} weight="fill" /></span>
-        <b className="ac-act-t" title={card.text}>New work · {card.title}</b>
+        <b className="ac-act-t" title={card.text}>{card.workflow_key ? "Run" : "New work"} · {card.title}</b>
         <span className="ac-spacer" />
         {est?.usd ? <span className="ac-cost" title={`Cost ${est.basis ? `· ${est.basis}` : ""}`} data-testid="agent-proposal-usd">≈ {dollars(est.usd)}</span> : null}
         {est?.minutes ? <span className="ac-cost" title={`Time to the pull request ${est.basis ? `· ${est.basis}` : ""}`} data-testid="agent-proposal-time">≈ {minutes(est.minutes)}</span> : null}
@@ -175,7 +181,7 @@ export function ProposalCard({ projectId, threadId, messageId, proposal, onOutco
         </div>
       ) : (
         <div className="ac-act-row">
-          <button type="button" className="ac-btn" data-kind="primary" disabled={busy || Boolean(card.over_limit)} title={card.over_limit?.message}
+          <button type="button" className="ac-btn" data-kind="primary" disabled={busy || Boolean(card.over_limit) || Boolean(card.missing_inputs)} title={card.over_limit?.message ?? card.missing_inputs?.message}
                   onClick={() => void start()} data-testid="agent-proposal-start">
             <Play size={12} weight="fill" aria-hidden /> {busy ? "Starting…" : "Start"}</button>
           <a className="ac-btn" href={pxHref(card.edit_href)} data-testid="agent-proposal-edit" title="Open it in New work to change the words, the kind or the workflow"
@@ -183,7 +189,7 @@ export function ProposalCard({ projectId, threadId, messageId, proposal, onOutco
           <button type="button" className="ac-btn" data-kind="ghost" onClick={() => void dismiss()} data-testid="agent-proposal-dismiss">Not now</button>
         </div>
       )}
-      {said || card.over_limit ? <p className="ac-said" role="status" data-testid="agent-proposal-said">{said || card.over_limit?.message}</p> : null}
+      {said || card.over_limit || card.missing_inputs || card.ignored_inputs ? <p className="ac-said" role="status" data-testid="agent-proposal-said">{said || card.over_limit?.message || card.missing_inputs?.message || card.ignored_inputs?.message}</p> : null}
     </div>
   );
 }
