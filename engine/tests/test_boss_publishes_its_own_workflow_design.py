@@ -306,3 +306,46 @@ def test_describe_workflow_reports_exactly_the_stored_schema(eng, project):
     assert described["you_must_supply"] == stored["required"] == ["tenant_name"]
     assert {i["name"]: i["required"] for i in described["inputs"]} == {
         "tenant_name": True, "tenant_yaml_path": False}
+
+
+# -- the console's one-shot Describe path ----------------------------------------------------
+
+
+def _describe_with(eng, project, monkeypatch, replies):
+    import json
+
+    from boss_engine.services import workflow_drafting as wd
+
+    prompts: list[str] = []
+    queue = list(replies)
+    monkeypatch.setattr(wd, "model_connected", lambda *a, **k: True)
+
+    def ask(_c, _s, _p, prompt):
+        prompts.append(prompt)
+        return json.dumps(queue.pop(0))
+
+    monkeypatch.setattr(wd, "_ask_model", ask)
+    return wd.draft_from_description(eng, None, project, "lint then notify"), prompts
+
+
+def test_describe_drops_commentary_keys_silently(eng, project, monkeypatch):
+    out, prompts = _describe_with(eng, project, monkeypatch, [{
+        "name": "Lint", "steps": [{"id": "lint", "agent": True, "instructions": "lint it",
+                                   "why": "because", "rationale": "x", "note": "y"}]}])
+    assert out["spec"]["steps"][0]["binding"]["agent_work"] is True and len(prompts) == 1
+
+
+def test_describe_retries_once_with_the_error_then_succeeds(eng, project, monkeypatch):
+    out, prompts = _describe_with(eng, project, monkeypatch, [
+        {"name": "Lint", "steps": [{"id": "lint", "instructions": "lint it"}]},
+        {"name": "Lint", "steps": [{"id": "lint", "agent": True, "instructions": "lint it"}]}])
+    assert len(prompts) == 2 and "was refused" in prompts[1] and "lint" in prompts[1]
+    assert out["spec"]["steps"][0]["binding"]["agent_work"] is True
+
+
+def test_describe_surfaces_the_error_after_the_one_retry(eng, project, monkeypatch):
+    from boss_engine.services.workflow_drafting import DraftError
+
+    bad = {"name": "Lint", "steps": [{"id": "lint", "instructions": "lint it"}]}
+    with pytest.raises(DraftError):
+        _describe_with(eng, project, monkeypatch, [bad, bad])

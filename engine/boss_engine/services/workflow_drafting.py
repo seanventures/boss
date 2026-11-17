@@ -20,7 +20,7 @@ from sqlalchemy.engine import Connection
 from .._compat import services_module
 
 
-def _spec_from_steps(steps: Any, args: dict) -> Any:
+def _spec_from_steps(steps: Any, args: dict, lenient: bool = False) -> Any:
     """A workflow spec from the plain list a model can actually produce.
 
     The runtime's spec format carries `next`, `on_failure`, binding snapshots and per-step
@@ -34,7 +34,7 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
     if len(steps) > 24:
         return {"ok": False, "error": "24 steps is the most a workflow may have"}
     try:
-        steps = [_normalise_step(item) for item in steps]
+        steps = [_normalise_step(item, lenient) for item in steps]
     except DraftRefusal as refusal:
         return {"ok": False, "error": str(refusal)}
     explicit: set[str] = set()
@@ -275,7 +275,12 @@ class DraftRefusal(ValueError):
     """A drafted step that cannot be read; the message says which step and what to change."""
 
 
-def _normalise_step(raw: Any) -> Any:
+#: Words a model adds to explain a step. Dropped, on the console's one-shot Describe path only.
+_COMMENTARY_KEYS = ("why", "note", "notes", "rationale", "reason", "comment", "comments",
+                    "explanation", "description")
+
+
+def _normalise_step(raw: Any, lenient: bool = False) -> Any:
     """The one shape `_spec_from_steps` reads, from the several a model writes.
 
     A model told to describe a step writes what it saw in the runtime's own spec — a nested
@@ -287,6 +292,9 @@ def _normalise_step(raw: Any) -> Any:
     if not isinstance(raw, dict):
         return raw
     out = dict(raw)
+    if lenient:
+        for word in _COMMENTARY_KEYS:
+            out.pop(word, None)
     binding = out.pop("binding", None)
     if isinstance(binding, dict):
         if binding.get("agent_work") and "agent" not in out:
@@ -1019,16 +1027,32 @@ def draft_from_description(engine: Any, settings: Any, project_id: str,
         }
         prompt = _draft_prompt(said, palette)
         connection.rollback()
-    with engine.connect() as connection:
-        answer = _only_json(_ask_model(connection, settings, project_id, prompt))
-        connection.rollback()
-    steps = answer.get("steps")
-    spec = _spec_from_steps(steps if isinstance(steps, list) else [], {
-        "inputs": answer.get("inputs") if isinstance(answer.get("inputs"), list) else [],
-        "input_details": answer.get("input_details")
-        if isinstance(answer.get("input_details"), dict) else None})
-    if isinstance(spec, dict) and spec.get("ok") is False:
-        raise DraftError(f"The draft could not be used: {spec.get('error')}.")
+    # ONE RETRY, with the error fed back: this path is a single shot with no agent to read a
+    # refusal and try again. Strict reading stays for the agent's own draft_workflow tool.
+    spec: Any = None
+    for attempt in (1, 2):
+        with engine.connect() as connection:
+            reply = _ask_model(connection, settings, project_id, prompt)
+            connection.rollback()
+        try:
+            answer = _only_json(reply)
+        except DraftError as unreadable:
+            if attempt == 2:
+                raise
+            prompt = (f"{prompt}\n\nYour previous answer was refused: {unreadable}\n"
+                      "Reply again with ONE JSON object.")
+            continue
+        steps = answer.get("steps")
+        spec = _spec_from_steps(steps if isinstance(steps, list) else [], {
+            "inputs": answer.get("inputs") if isinstance(answer.get("inputs"), list) else [],
+            "input_details": answer.get("input_details")
+            if isinstance(answer.get("input_details"), dict) else None}, lenient=True)
+        if not (isinstance(spec, dict) and spec.get("ok") is False):
+            break
+        if attempt == 2:
+            raise DraftError(f"The draft could not be used: {spec.get('error')}.")
+        prompt = (f"{prompt}\n\nYour previous answer was refused: {spec.get('error')}\n"
+                  "Reply again with ONE corrected JSON object.")
     with engine.connect() as connection:
         _bind_named_tools(connection, project_id, spec)
         # A step naming a workflow this project does not have keeps an empty pin, for the

@@ -34,6 +34,7 @@ export type Proposal = {
   /** A card for a NAMED workflow: its key, the inputs it was given, and any it still needs (Start held). */
   workflow_key?: string; workflow_version?: number | null; inputs?: Record<string, unknown>;
   missing_inputs?: { names: string[]; message: string } | null;
+  ignored_inputs?: { names: string[]; message: string } | null;
   /** The words are past the brief's limit (AR-21): Start is held; Edit to shorten them. */
   over_limit?: { chars: number; limit: number; message: string } | null;
 };
@@ -188,7 +189,7 @@ export function ProposalCard({ projectId, threadId, messageId, proposal, onOutco
           <button type="button" className="ac-btn" data-kind="ghost" onClick={() => void dismiss()} data-testid="agent-proposal-dismiss">Not now</button>
         </div>
       )}
-      {said || card.over_limit || card.missing_inputs ? <p className="ac-said" role="status" data-testid="agent-proposal-said">{said || card.over_limit?.message || card.missing_inputs?.message}</p> : null}
+      {said || card.over_limit || card.missing_inputs || card.ignored_inputs ? <p className="ac-said" role="status" data-testid="agent-proposal-said">{said || card.over_limit?.message || card.missing_inputs?.message || card.ignored_inputs?.message}</p> : null}
     </div>
   );
 }

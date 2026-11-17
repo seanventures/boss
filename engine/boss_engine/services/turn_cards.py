@@ -469,8 +469,16 @@ def _named_card_body(connection: Connection, project_id: str, key: str,
         spec = json.loads(spec or "{}")
     args = (offer or {}).get("args") if isinstance((offer or {}).get("args"), Mapping) else {}
     supplied = args.get("inputs") if isinstance(args.get("inputs"), Mapping) else {}
-    inputs = {str(k): v for k, v in supplied.items()}
-    properties = ((spec or {}).get("input_schema") or {}).get("properties")
+    from .workflows import declared_input_names
+
+    schema = (spec or {}).get("input_schema")
+    properties = schema.get("properties") if isinstance(schema, Mapping) else None
+    declared = ({str(n) for n in properties} if isinstance(properties, Mapping)
+                else set(declared_input_names(schema)))
+    # ONLY WHAT THE WORKFLOW DECLARES: Start would be refused (422) for an undeclared one, so
+    # the card drops it and says so rather than offering a button that cannot work.
+    inputs = {str(k): v for k, v in supplied.items() if str(k) in declared}
+    ignored = sorted(str(k) for k in supplied if str(k) not in declared)
     for name in (properties if isinstance(properties, Mapping) else {}):
         if name in args and name not in inputs and name not in ("directive", "title", "inputs",
                                                                    "workflow_key"):
@@ -498,6 +506,11 @@ def _named_card_body(connection: Connection, project_id: str, key: str,
         "offer_id": str((offer or {}).get("id") or "") or None, "state": "open",
         "start": {"href": f"/v1/projects/{project_id}/work", "method": "POST", "body": body},
         "edit_href": _edit_href(project_id, "feature", said or name)}
+    if ignored:
+        card["ignored_inputs"] = {
+            "names": ignored,
+            "message": f"ignored: {', '.join(ignored)} ({name} does not take "
+                       f"{'it' if len(ignored) == 1 else 'them'})"}
     if missing:
         card["missing_inputs"] = {
             "names": missing,

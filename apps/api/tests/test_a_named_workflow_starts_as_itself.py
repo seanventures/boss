@@ -139,6 +139,23 @@ def test_a_named_workflow_missing_inputs_says_which(engine, helpdesk, monkeypatc
     assert "tenant_yaml_path" in card["missing_inputs"]["message"]
 
 
+def test_undeclared_offer_inputs_are_dropped_and_listed_on_the_card(engine, helpdesk,
+                                                                  monkeypatch):
+    pid = helpdesk["id"]
+    _publish_api_onboarding(engine, pid)
+    offer = {"id": "act_offer_x", "tool": "start_workflow", "label": "Start",
+             "args": {"workflow_key": "api_onboarding", "directive": "Onboard",
+                      "inputs": {"tenant_name": "Lumen Pay", "tenant_yaml_path": "t.yaml",
+                                 "ticket": {"key": "X-1"}, "colour": "red"}}}
+    _stub(monkeypatch, "Offered.", [offer], decision={"action": "new_code_change"})
+    card = _turn(engine, pid, "start api_onboarding")["proposal"]
+    assert card["start"]["body"]["inputs"] == {"tenant_name": "Lumen Pay",
+                                               "tenant_yaml_path": "t.yaml"}
+    assert card["ignored_inputs"]["names"] == ["colour", "ticket"]
+    assert card["ignored_inputs"]["message"].startswith("ignored: colour, ticket")
+    assert "missing_inputs" not in card
+
+
 def test_prose_alone_never_picks_a_workflow(engine, helpdesk, monkeypatch):
     pid = helpdesk["id"]
     _publish_api_onboarding(engine, pid)
