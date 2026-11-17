@@ -1246,3 +1246,37 @@
       checks: {never_calls: [ticket_get]}
       expected: "A feature about a leave category named after COVID-19; no ticket lookup."
 
+
+- id: author-a-workflow
+  covers: [workflow-authoring-ask-refused-as-unknown-action]
+  surface: talk_to_boss
+  checks:
+    any_of: [draft_workflow]
+    never_execute: [start_workflow, deploy_app, redeploy, create_code_task]
+    no_writes: true
+  expected: >-
+    The decision is author_workflow. The agent reads list_capabilities (and skills), maps each
+    described step to a real capability (config_deploy, promote_config, contract_test,
+    release_approval, smoke_test, fix_pr; an agent or custom step for gwlint) and OFFERS
+    draft_workflow as a button with one line on which step maps to which capability. A step with
+    no capability gets "BOSS has no step that does X; closest: …" and a custom-step offer.
+  must_not:
+    - reply "unknown action" or "unknown role", or any refusal that names no alternative
+    - start a workflow run, a build or a deployment
+    - author the workflow without offering it
+  phrasings:
+    - "Create an API onboarding workflow: validate a tenant config with gwlint, reject with a report and suggested fix, open a fix PR, deploy to staging, run contract tests, a person approves, promote to production, then a smoke check."
+    - "design a workflow where we deploy to staging and promote to production after a person approves"
+    - "make me a workflow: lint config -> fix PR -> staging deploy -> contract tests -> human approval -> promote -> smoke test"
+    - "new workflow pls. check the tenant config, if bad send back a report, then deploy it to staging, test, ask someone to sign off, then production"
+    - "workflow for onboarding an API"
+    - "I want a repeatable way to bring a new customer's API onto the gateway. Somebody checks their setup, if it is wrong we tell them what to change, and once it is right it goes live after a manager agrees. Can you set that up as a workflow?"
+    - "Can you author a release workflow: build, ship to staging, run the contract tests, release approval, publish to prod and a smoke check at the end"
+    - "edit our onboarding workflow to add a contract test step before the approval"
+  negatives:
+    - input: "why did the last deploy to staging fail?"
+      checks: {no_writes: true, never_offer: [draft_workflow]}
+      expected: "Answers from the run record about the failed deploy; does not offer to draft a workflow."
+    - input: "deploy northgate to staging"
+      checks: {never_offer: [draft_workflow]}
+      expected: "Does the deploy (or offers it as a button with deploy_app/redeploy); this is doing something now, not authoring a workflow, so no draft_workflow."
