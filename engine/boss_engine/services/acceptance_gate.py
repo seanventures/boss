@@ -464,6 +464,16 @@ def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, An
                 dropped=dropped, summary_line=batch_summary(replies), over_cap=over,
                 checks=checks)
     refused = refusal(rec, root) if items else None
+    if items and not refused:
+        # THE JUDGE'S TOOLS COULD NOT RUN (BOSSAPP-1350: bwrap, 30 items "could not be
+        # verified"): nothing was read, so the items are unjudged, never partial.
+        from . import review_tools
+
+        blind = (review_tools.blocked_reason("\n".join(r or "" for r in replies))
+                 or ("every item says it could not be verified"
+                     if review_tools.all_unverified(rec.get("items") or []) else None))
+        if blind:
+            refused = review_tools.not_run(blind)
     if refused:
         # NOT A VERDICT ON THE CODE: not run (re-asked, never met), its items unjudged so no
         # "missing" reaches the card, the ledger or a follow-up's brief.

@@ -50,6 +50,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
+from . import readonly_guard
+
 log = logging.getLogger(__name__)
 
 # ── Tool names: one vocabulary for every engine ───────────────────────────────────────────────
@@ -466,6 +468,14 @@ def session_tree_problem(cwd: Path) -> Optional[str]:
 
 # ── The wrapper every engine runs in ──────────────────────────────────────────────────────────
 
+#: Said to a read-only seat of a local repository (no pull request on GitHub exists for it).
+LOCAL_TREE_NOTE = (
+    "\n\nThis repository is LOCAL to BOSS: there is no GitHub repository or pull request to "
+    "read, and any http://boss-local/ link is only a label. Do not use a GitHub connector or "
+    "fetch anything over the network for it. The change is in the working tree you are in and in "
+    "the text above: read it with your file and shell tools.\n")
+
+
 class EngineSessionFailed(RuntimeError):
     """An engine's session failed (it exited non-zero, or said it errored)."""
 
@@ -543,16 +553,32 @@ class ContractedAgent:
             copy = _isolated_copy(work)
             work = copy
             kwargs["_contract_read_only_copy"] = True
+        if read_only and getattr(self._inner, "local_repo", False):
+            # A LOCAL REPOSITORY HAS NO GITHUB (BOSSAPP-1350): its change set's URL is
+            # http://boss-local/..., and a reviewer that went to the connector for it got a 404
+            # and judged nothing. The tree it was handed is the whole change.
+            run_prompt = run_prompt + LOCAL_TREE_NOTE
+        guard = None
+        if copy is not None:
+            # BOSS HOLDS READ-ONLY ITSELF for a seat that runs without an inner sandbox: the
+            # live tree is recorded before the turn and checked after (readonly_guard).
+            guard = readonly_guard.snapshot(Path(cwd))
         problem = session_tree_problem(work)
         if problem:
             if copy is not None:
                 shutil.rmtree(copy.parent, ignore_errors=True)
             raise EngineSessionFailed(f"{self.engine} not started: {problem}")
+        touched: list[str] = []
         try:
             raw = _call(self._inner.run_role, run_prompt, work, kwargs)
         finally:
             if copy is not None:
                 shutil.rmtree(copy.parent, ignore_errors=True)
+            touched = readonly_guard.enforce(Path(cwd), guard)
+        if touched:
+            raise EngineSessionFailed(
+                f"{self.engine} review seat changed the tree it was only to read "
+                f"({', '.join(touched[:6])}); reverted, and the seat did not count")
         result = normalise_result(raw, engine=self.engine, model=model, caps=caps)
         if kwargs.get("max_budget_usd") is not None:
             # THE CEILING THIS SESSION RAN UNDER, on its result: a session stopped by it says

@@ -5436,6 +5436,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # where it can be (budget_limit), at the stage boundary where it cannot.
             a.budget_ceiling = (lambda _a=a: _session_budget_ceiling(_a))
             agents[engine_name] = a
+        # A LOCAL REPOSITORY'S reviewers read the tree, never a GitHub connector (BOSSAPP-1350).
+        a.local_repo = _is_local_owner_early(owner)
         # BOSS-407: give the native lane's `bash` tool the SAME runner BOSS uses for
         # verification, so an agent-run command gets the sandbox's tool caches, the
         # repo-local node_modules/.bin on PATH and the process-group kill — not a second,

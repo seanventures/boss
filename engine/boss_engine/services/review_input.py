@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 import re
 from typing import Callable, Iterable, Optional
 
-from . import review_comments
+from . import review_comments, review_tools
 
 #: The words a failed review gate carries when the reviewer never saw the change.
 HOLLOW_GATE_REASON = "review did not see the change"
@@ -186,6 +186,11 @@ def hollow_reason(summary: str, changed_paths: Iterable[str]) -> Optional[str]:
     n = len(paths)
     if not text:
         return f"the reviewer returned nothing for a change of {n} file(s)"
+    # ITS TOOLS COULD NOT RUN (BOSSAPP-1350): not a review of any kind, so NOT RUN with the
+    # reason, never a verdict the model made up while blind.
+    blocked = review_tools.blocked_reason(text)
+    if blocked:
+        return review_tools.not_run(blocked)
     if review_comments.parse_findings(text):
         return None
     if _NOTHING_TO_REVIEW.search(text):

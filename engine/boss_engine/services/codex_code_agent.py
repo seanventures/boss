@@ -149,8 +149,13 @@ class CodexStreamParser:
 class CodexCodeAgent(GenericCliCodeAgent):
     """`codex exec` with sessions, a transcript, usage and effort (see the module docstring)."""
 
-    capabilities = EngineCapabilities(resume=True, read_only=True, effort=True,
-                                      reports_cost=True, streams_turns=True)
+    # `read_only_shell`: Codex's own read-only sandbox needs user namespaces a container does
+    # not grant (`bwrap: No permissions to create a new namespace`, BOSSAPP-1350), so every
+    # command a reviewer tried failed and it judged blind. Review seats run on a throwaway copy
+    # with no inner sandbox, as write mode already does, and BOSS holds read-only itself
+    # (engine_contract + readonly_guard).
+    capabilities = EngineCapabilities(resume=True, read_only=True, read_only_shell=True,
+                                      effort=True, reports_cost=True, streams_turns=True)
 
     def _usage(self, parser: CodexStreamParser, model: str, *,
                metered: bool) -> tuple[dict[str, Any], int]:
@@ -178,7 +183,7 @@ class CodexCodeAgent(GenericCliCodeAgent):
         return usage, cost
 
     def _codex_argv(self, *, read_only: bool, model: Optional[str], resume: Optional[str],
-                    final_path: str) -> list[str]:
+                    final_path: str, by_copy: bool = False) -> list[str]:
         from .code_agent import _current_effort
 
         binary = self._resolve_binary()
@@ -193,7 +198,9 @@ class CodexCodeAgent(GenericCliCodeAgent):
         effort = EFFORT_TO_CODEX.get(str(_current_effort() or "").lower())
         if effort:
             common += ["-c", f'model_reasoning_effort="{effort}"']
-        mode = "read-only" if read_only else "danger-full-access"
+        # A reviewer on BOSS's throwaway copy runs unsandboxed, as the writer does: the copy and
+        # readonly_guard are the boundary, Codex's own cannot start in a container.
+        mode = "read-only" if read_only and not by_copy else "danger-full-access"
         if resume:
             # `exec resume` takes no --sandbox flag; the same policy goes in as config.
             return [binary, "exec", "resume", *common, "-c", f'sandbox_mode="{mode}"',
@@ -257,7 +264,8 @@ class CodexCodeAgent(GenericCliCodeAgent):
         def _attempt(resume_id: Optional[str],
                      text: Optional[str] = None) -> subprocess.CompletedProcess:
             argv = self._codex_argv(read_only=read_only, model=model, resume=resume_id,
-                                    final_path=final_path)
+                                    final_path=final_path,
+                                    by_copy=bool(_ignored.get("_contract_read_only_copy")))
             child = owned_process.popen(
                 low_priority(argv), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, text=True, cwd=str(cwd), env=env)
