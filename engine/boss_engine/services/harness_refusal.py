@@ -35,10 +35,11 @@ CARD_ACTION = "sign_in_to_subscription_again"
 
 #: What the provider's own CLI says on its STDERR when its login is refused. Deliberately narrow:
 #: the CLIs' own markers only (a bare provider URL + 401 is any app's HTTP client log). Generic "failed to authenticate" / "authentication_error" are an app's
-#: words as often as a provider's, so they count for nothing here.
+#: words as often as a provider's, so they count for nothing here — and so does a bare "invalid api key"
+#: (Stripe/OpenAI SDKs print it); Claude's own "Invalid API key · Please run /login" matches on /login.
 _PROVIDER_TRANSPORT = re.compile(
     r"codex_api::|responses_websocket|/v1/responses\b|invalidated oauth token|"
-    r"please run /login|invalid api key", re.I)
+    r"please run /login", re.I)
 
 
 def is_provider_refusal(verdict: Any) -> bool:
