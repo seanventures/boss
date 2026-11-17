@@ -184,6 +184,28 @@ def mark_revoked(error: str) -> None:
     _record(config_dir(), state=REFRESH_FAILED, error=str(error)[:200])
 
 
+def failure_stands(home: Optional[str] = None, now: Optional[float] = None) -> bool:
+    """Does the recorded refresh_failed still describe THIS login?
+
+    A failure is a fact about one login. Signing in again installs a newer login (its
+    `last_refresh` is newer than the failure's timestamp), and the old verdict must not outlive
+    it: the state file was sticky, and on the laptop (2026-11-17) a http_401 recorded on 7 Nov
+    kept every run's sandbox from being seeded after the operator signed in afresh, while the
+    Setup proof (which reads the control plane's file directly) passed. Runs then started with no
+    login and failed 401 on wss://api.openai.com/v1/responses."""
+    st = _read_state(home)
+    if st.get("state") != REFRESH_FAILED:
+        return False
+    try:
+        failed_at = datetime.fromisoformat(str(st.get("at") or "")).timestamp()
+    except ValueError:
+        return True
+    age = _last_refresh_age(_read_doc(home), failed_at)
+    # `age` is how old the login was when the failure was recorded; negative = the login was
+    # issued AFTER the failure, so the failure belongs to a login that no longer exists.
+    return not (age is not None and age < 0)
+
+
 def status(now: Optional[float] = None) -> dict[str, Any]:
     """What the login looks like right now, with no secret: {state, seconds_left, expires_at,
     error}."""
@@ -192,7 +214,7 @@ def status(now: Optional[float] = None) -> dict[str, Any]:
         return {"state": ABSENT}
     left = seconds_left(tokens, now)
     st = _read_state()
-    failed = st.get("state") == REFRESH_FAILED
+    failed = failure_stands()
     if left is not None and left <= 0:
         state = EXPIRED
     elif failed:
