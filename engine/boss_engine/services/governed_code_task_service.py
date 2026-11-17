@@ -6723,6 +6723,25 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _log_caught(logger)
             return block
 
+        _suspect_seats: dict[str, str] = {}
+
+        def _note_suspect(stage: str, rr: dict) -> None:
+            """The live tree changed while a seat sat (readonly_guard): reported, never acted
+            on; a change no concurrent verify explains marks the verdict suspect."""
+            changed = rr.get("live_tree_changed")
+            if not changed:
+                return
+            if rr.get("verdict_suspect"):
+                _suspect_seats[stage] = str(rr["verdict_suspect"])
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.review_live_tree_changed", "boss",
+                           "code_task_run", run_id,
+                           {"stage": stage, "paths": changed.get("paths"),
+                            "unexplained": changed.get("unexplained"),
+                            "head_moved": changed.get("head_moved"),
+                            "overflow": changed.get("overflow"),
+                            "suspect": bool(rr.get("verdict_suspect"))})
+
         def _judge_seat(stage: str, ask) -> tuple[dict, Optional[str]]:
             """Run one reviewer seat, and ask it again once if its review did not see the change.
 
@@ -6730,7 +6749,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             answer is returned with its reason: the caller records the seat as not having
             reviewed (never a pass), and the gate fails as review_input.HOLLOW_GATE_REASON."""
             rr = ask("") or {}
-            reason = review_input.hollow_reason(rr.get("summary", ""), _review_change.paths)
+            reason = review_tools.unseen_reason(rr, review_input.hollow_reason(
+                rr.get("summary", ""), _review_change.paths))
+            _note_suspect(stage, rr)
             if not reason:
                 return rr, None
             with _transaction(engine) as c:
@@ -6740,7 +6761,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             again = ask(review_input.retry_preface(reason, _review_change)) or {}
             again = {**again, "cost_usd_micros": int(again.get("cost_usd_micros") or 0)
                      + int(rr.get("cost_usd_micros") or 0)}
-            reason = review_input.hollow_reason(again.get("summary", ""), _review_change.paths)
+            reason = review_tools.unseen_reason(again, review_input.hollow_reason(
+                again.get("summary", ""), _review_change.paths))
+            _note_suspect(stage, again)
             if reason:
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.review_hollow", "boss",
@@ -9618,6 +9641,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # Seats whose review did not see the change (review_input), and why. Their gates
             # fail as HOLLOW_GATE_REASON and the check is re-run, never the coder.
             "review_hollow": dict(_hollow_seats),
+            # Seats whose verdict is suspect: the live tree changed while they sat and no
+            # concurrent verify explains it (readonly_guard).
+            "review_suspect": dict(_suspect_seats),
             # BOSSAPP-1000: the LLM seats sat ONE session (which seats, and any that fell
             # back to their own); absent = the pre-merge shape (refute panel / fix lane).
             **({"review_panel_merged": dict(_merged_record)} if _merged_record else {}),

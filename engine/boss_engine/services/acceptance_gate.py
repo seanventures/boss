@@ -475,7 +475,7 @@ def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, An
 
         blind = next((b for b in blocked if b), None) or (
             "the judge cited no file and line for any item"
-            if review_tools.reads_nothing(rec.get("items") or []) else None)
+            if review_tools.reads_nothing(rec.get("items") or [], root) else None)
         if blind:
             refused = review_tools.not_run(blind)
     if refused:

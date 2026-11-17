@@ -234,3 +234,41 @@ def test_a_clean_review_that_mentions_namespaces_stays_survived():
     said = ("REVIEWED: a.py\nThe change unshares the user namespace and installs a seccomp "
             "filter correctly.\nVERDICT: SURVIVED")
     assert review_input.hollow_reason(said, ["a.py"]) is None
+
+
+def test_a_blocked_seat_that_says_refuted_is_not_run_never_refuted():
+    result = {"summary": "Nothing ran.\nVERDICT: REFUTED", "tools_blocked": "tools died (bwrap)"}
+    reason = review_tools.unseen_reason(result, review_input.hollow_reason(
+        result["summary"], ["a.py"]))
+    assert reason.startswith(review_tools.NOT_RUN)
+    # a seat that still anchored a finding read something: its own verdict stands
+    anchored = {**result, "summary": "1. **FINDING: MAJOR a.py:8** wrong\nVERDICT: REFUTED"}
+    assert review_tools.unseen_reason(anchored, None) is None
+
+
+def test_the_pipeline_wires_the_seat_signals():
+    from pathlib import Path
+
+    from boss_engine.services import governed_code_task_service as gov
+
+    src = Path(gov.__file__).read_text()
+    for needle in ("review_tools.unseen_reason", "code_task.review_live_tree_changed",
+                   '"review_suspect"'):
+        assert needle in src
+
+
+def test_a_genuine_partial_that_names_a_real_file_stays_partial(tmp_path):
+    (tmp_path / "orders").mkdir()
+    (tmp_path / "orders" / "handler.go").write_text("package orders\n")
+    rec = _judge(tmp_path, 2, lambda i: "PARTIAL — orders/handler.go creates orders; "
+                                       "cancel endpoint is not implemented")
+    assert rec["verdict"] != "not_run" and rec["counts"]["partial"] == 2
+
+
+def test_one_command_printing_the_signature_is_the_apps_own_output():
+    def ev(out):
+        return json.dumps({"type": "item.completed", "item": {
+            "type": "command_execution", "exit_code": 1, "aggregated_output": out}})
+    stream = "\n".join([ev("runner_test.go:40: bwrap: setting up uid map"), ev("ok pkg 0.1s")])
+    assert review_tools.blocked_by_transport("", stream) is None
+    assert review_tools.blocked_by_transport("", "\n".join([ev(BWRAP), ev(BWRAP)]))

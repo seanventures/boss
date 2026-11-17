@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Optional
+from typing import Any, Optional
 
 #: The words a seat's record starts with when its tools could not run.
 NOT_RUN = "NOT RUN"
@@ -43,11 +43,14 @@ def _hit(text: Optional[str]) -> Optional[str]:
 def blocked_by_transport(stderr: Optional[str], stdout: Optional[str] = None) -> Optional[str]:
     """Why the engine's tools could not run, from the CLI's own output only, or None.
 
-    `stderr` is read whole. `stdout` is the CLI's JSON event stream: only a command's recorded
-    output (`command_execution` events) is read — never an `agent_message`, which is the model
-    talking."""
+    `stderr` is the CLI's own and is read whole. `stdout` is its JSON event stream: only the
+    recorded output of commands (`command_execution` events) is read — never an
+    `agent_message`, which is the model talking — and only when EVERY command failed with the
+    signature. One command printing it is the app's own test output (`runner_test.go:40: bwrap:
+    setting up uid map`), not a sandbox that cannot start."""
     said = _hit(stderr)
     if not said:
+        outputs = []
         for line in str(stdout or "").splitlines():
             if "command_execution" not in line:
                 continue
@@ -56,20 +59,43 @@ def blocked_by_transport(stderr: Optional[str], stdout: Optional[str] = None) ->
             except ValueError:
                 continue
             if item.get("type") == "command_execution":
-                said = _hit(item.get("aggregated_output") or item.get("output"))
-                if said:
-                    break
+                outputs.append(item.get("aggregated_output") or item.get("output"))
+        hits = [_hit(o) for o in outputs]
+        if hits and all(hits):
+            said = hits[0]
     return f"the reviewer's tools could not run ({said})" if said else None
 
 
-def reads_nothing(items: list[dict]) -> bool:
-    """A judge that cited no file:line anywhere and claimed nothing missing or met: every item
-    partial/unjudged and none with evidence. Never when any item is MISSING (a finding)."""
+def reads_nothing(items: list[dict], root: Any = None) -> bool:
+    """A judge that cited nothing it could have read, and claimed nothing missing or met: every
+    item partial/unjudged, none citing a file:line or a path that is in the tree (`root`). Never
+    when any item is MISSING (a finding)."""
     if not items:
         return False
     if any(str((i or {}).get("status")) not in ("partial", "unjudged") for i in items):
         return False
-    return not any(_CITES.search(str((i or {}).get("evidence") or "")) for i in items)
+    for i in items:
+        why = str((i or {}).get("evidence") or "")
+        if _CITES.search(why):
+            return False
+        if root is not None:
+            from .acceptance.verdict import evidence_paths
+
+            if evidence_paths(root, why)[0]:
+                return False
+    return True
+
+
+def unseen_reason(result: dict, hollow: Optional[str]) -> Optional[str]:
+    """Why a review seat's session did not review: its tools could not run (the ENGINE's
+    report, `tools_blocked`) unless the seat still anchored findings, else `hollow`
+    (review_input.hollow_reason). NOT RUN — never a refuted or failed verdict."""
+    from . import review_comments
+
+    blocked = (result or {}).get("tools_blocked")
+    if blocked and not review_comments.parse_findings(str((result or {}).get("summary") or "")):
+        return not_run(str(blocked))
+    return hollow
 
 
 def not_run(reason: str) -> str:
