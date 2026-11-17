@@ -116,11 +116,14 @@ _DEFAULT_TEST_CMD = "python3 -m unittest discover -v"
 
 
 
-def _command_cannot_run(command: str, root: Any, cwd: Any) -> bool:
+def _command_cannot_run(command: str, root: Any, cwd: Any, use_microvm: bool = False) -> bool:
     """A recorded npm command with no package.json where it ran can never have been `ok`
     (a Go app recorded `npm install && npm run build` as passing, AR-54)."""
-    if not str(command or "").startswith("npm "):
-        return False
+    if use_microvm or not str(command or "").startswith("npm "):
+        return False       # a micro-VM's tree is in its guest; nothing to look at here
+    if any(verification_target.names_its_directory(c.strip())
+           for c in str(command).split("&&")):
+        return False       # `npm --prefix app …` runs where it names, not at the verify cwd
     try:
         where = Path(root) / (cwd if cwd and cwd != "." else "")
         return not (where / "package.json").is_file()
@@ -6563,14 +6566,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # files in a repository BOSS already built an app in (a workflow's build step that
         # carried no base branch cloned the README-only mainline) fails here with the branches
         # that hold it, before any model call.
-        if not use_microvm and not fctx.get("fresh_build") and root_run == run_id \
-                and not fctx.get("seed_workspace_from"):
+        if not use_microvm and not _is_repair and not fctx.get("seed_workspace_from"):
             from . import build_checkout as _build_checkout
 
             with _transaction(engine) as c:
                 _no_app = _build_checkout.problem(
-                    c, root, project_id=project_id, owner=owner, repo=repo, run_id=run_id,
-                    base_branch=str(base_branch or ""))
+                    c, root, owner=owner, repo=repo, run_id=run_id, root_run=root_run,
+                    base_branch=str(base_branch or ""),
+                    branch_exists=getattr(sf.github, "branch_exists", None))
             if _no_app:
                 with _transaction(engine) as c:
                     _release(budget, c, project_id, reservation_id, "no app in the checkout",
@@ -9964,7 +9967,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     "exit_code": test_exit_code,
                     "timed_out": False,
                     "ok": bool(tests_passed) and not _command_cannot_run(
-                        last_verify_command or test_cmd, root, last_verify_cwd),
+                        last_verify_command or test_cmd, root, last_verify_cwd, use_microvm),
                     **({"failed_check": _failed_check[0]}
                        if _failed_check[0] and not tests_passed else {}),
                 }]
@@ -11440,7 +11443,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # by — in its OWN transaction, committed first, never nested inside the one the
         # terminal write runs in.
         _close_phase()
+        # THE COMMIT THIS RUN SHIPPED, recorded with it (finalize_ctx.final_head_sha): what a
+        # config deploy of this build reads its files at (config_deploy.files_from_build), never the
+        # lineage branch's tip, which a later run may have moved.
+        _final_head = ""
+        try:
+            _snap = sf.github.branch_snapshot(str(proposal.get("branch_name") or work_branch))
+            _final_head = str(_snap.get("sha") or _snap.get("commit_sha") or "")
+        except Exception:  # noqa: BLE001 — unrecorded: a config deploy of this run then refuses
+            _log_caught(logger)
         with _transaction(engine) as c:
+            if _final_head:
+                c.execute(sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, "
+                              "'{}'::jsonb) || jsonb_build_object('final_head_sha', CAST(:h AS text)) "
+                              "WHERE id = :id"), {"h": _final_head, "id": run_id})
             _ok = _fenced_status(
                 "completed",
                 "phase='done', pull_request_url=:u, pull_request_number=:n, decision_id=:d",

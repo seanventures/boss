@@ -1323,6 +1323,26 @@ def _build_run_id(context: dict[str, Any]) -> Optional[str]:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def _nearest_build_run_id(connection: Connection, context: dict[str, Any],
+                          step: Optional[dict[str, Any]]) -> Optional[str]:
+    """The build step NEAREST BEFORE `step` in the run's spec (a workflow may build twice); the
+    run-wide `_build_run_id` only when the spec cannot say."""
+    try:
+        steps = workflows._run_spec(connection, str(context.get("run_id") or "")).get("steps") or []
+        ids = [str(s.get("id")) for s in steps]
+        mine = str((step or {}).get("id") or "")
+        if mine in ids:
+            for before in reversed(ids[:ids.index(mine)]):
+                produced = (context.get("steps") or {}).get(before)
+                if isinstance(produced, dict):
+                    value = produced.get("code_task_run_id")
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return _build_run_id(context)
+
+
 def release_base_for(connection: Connection, context: dict[str, Any]) -> Optional[str]:
     """The serving commit a release-targeting build is cut from, or None for any other build:
     the run input's `release_base_sha`, else, for an incident's run, the commit its
@@ -4248,7 +4268,7 @@ def _perform_capability(
             and not inputs.get("files") and not inputs.get("produced_artifacts"):
         # A CONFIG DEPLOY AFTER A BUILD SHIPS THAT BUILD'S FILES (BOSSAPP-1377): with no explicit
         # run, the step takes the preceding build step's, as a catalogue deploy does.
-        built = _build_run_id(context)
+        built = _nearest_build_run_id(connection, context, step)
         if built:
             inputs = {**inputs, "code_task_run_id": built}
     if key == "promote_config":

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy import text
 
@@ -46,29 +46,44 @@ def app_files(root: Path | str) -> Optional[list[str]]:
     return out
 
 
-def earlier_builds(connection, *, project_id: str, owner: str, repo: str,
-                   run_id: str) -> list[dict[str, Any]]:
-    """Earlier builds of this repository in this project that produced files: newest first."""
+def earlier_builds(connection, *, owner: str, repo: str, run_id: str, root_run: str,
+                   branch_exists: Optional[Callable[[str], bool]] = None) -> list[dict[str, Any]]:
+    """Completed builds of this repository (any project that works in it) that produced files
+    and whose branch still exists, newest first. Not this build's own lineage."""
     rows = connection.execute(text(
         "SELECT id, COALESCE(finalize_ctx->>'root_run_id', id) AS root, pull_request_url "
-        "FROM code_task_runs WHERE project_id = :p AND id <> :r "
+        "FROM code_task_runs WHERE id <> :r AND status = 'completed' "
+        "AND COALESCE(finalize_ctx->>'root_run_id', id) <> :root "
         "AND spec->>'owner' = :o AND spec->>'repo' = :n "
         "AND jsonb_typeof(state->'impl_files') = 'array' "
         "AND jsonb_array_length(state->'impl_files') > 0 "
         "ORDER BY created_at DESC LIMIT 20"),
-        {"p": project_id, "r": run_id, "o": owner, "n": repo}).mappings().all()
-    return [dict(r) for r in rows]
+        {"r": run_id, "root": root_run or run_id, "o": owner, "n": repo}).mappings().all()
+    out = []
+    for row in rows:
+        branch = f"boss/code/{row['root']}"
+        try:
+            if branch_exists is not None and not branch_exists(branch):
+                continue
+        except Exception:  # noqa: BLE001 — cannot tell: it counts
+            pass
+        out.append(dict(row))
+    return out
 
 
-def problem(connection, root: Path | str, *, project_id: str, owner: str, repo: str,
-            run_id: str, base_branch: str) -> Optional[str]:
-    """Why this checkout cannot be built on, or None. Words a person can act on."""
+def problem(connection, root: Path | str, *, owner: str, repo: str, run_id: str,
+            base_branch: str, root_run: str = "",
+            branch_exists: Optional[Callable[[str], bool]] = None) -> Optional[str]:
+    """Why this checkout cannot be built on, or None. Words a person can act on.
+
+    Follow-ups (not handled here): a micro-VM stage clones inside its guest, and a multi-repo
+    change set clones several repositories; neither runs this check yet."""
     found = app_files(root)
     if found is None or found:
         return None
     try:
-        earlier = earlier_builds(connection, project_id=project_id, owner=owner, repo=repo,
-                                 run_id=run_id)
+        earlier = earlier_builds(connection, owner=owner, repo=repo, run_id=run_id,
+                                 root_run=root_run, branch_exists=branch_exists)
     except Exception:  # noqa: BLE001 — a check that cannot read the history never blocks
         return None
     if not earlier:

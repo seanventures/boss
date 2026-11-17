@@ -9738,21 +9738,43 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                     "first."}
         per_request = _turn_seconds(int(args.get("timeout_s") or 10))
         # SECRET REFERENCES BECOME VALUES HERE, at run time, and nowhere that is recorded.
-        from ..services.contract_tests import resolve_header_secrets
+        from ..services.contract_tests import (HeaderSecretRefused, http_auth_problem,
+                                               resolve_header_secrets)
         from ..services.secret_backends import resolve_secret_ref
 
         def _resolve(ref_id: str) -> str:
-            with ctx.begin() as db:
-                return resolve_secret_ref(db, ref_id, ctx.settings, project_id)
+            # A refused or failed resolution is audited by `resolve_secret_ref` inside the
+            # transaction it raises from, which rolls back: so the refusal is written again,
+            # in a transaction of its own, before the error leaves.
+            from ..services import secret_access_log as _access
+            from ..services.secret_backends import SecretUnavailable
 
-        cases, shared_headers, bad = resolve_header_secrets(
+            try:
+                with ctx.begin() as db:
+                    problem = http_auth_problem(db, ref_id, project_id)
+                    if problem:
+                        raise HeaderSecretRefused(problem)
+                    return resolve_secret_ref(db, ref_id, ctx.settings, project_id)
+            except (SecretUnavailable, HeaderSecretRefused) as exc:
+                try:
+                    with ctx.begin() as db:
+                        _access.record_access(
+                            db, secret_ref_id=ref_id, project_id=project_id, outcome="refused",
+                            who=_access.who_is_accessing(db, project_id),
+                            reason=f"contract_test header: {str(exc)[:120]}")
+                except Exception:  # noqa: BLE001 — the audit never changes the refusal
+                    pass
+                raise
+
+        cases, shared_headers, bad, secret_headers = resolve_header_secrets(
             args.get("cases"), args.get("headers"), _resolve)
         if bad:
             return {"ok": False, "error": bad}
         return run_cases(cases, base_url=str(args.get("base_url") or ""),
                          timeout_s=per_request, headers=shared_headers,
                          allowed_private=allowed, deadline_s=_turn_seconds(300),
-                         project_only=project_only, origins=origins)
+                         project_only=project_only, origins=origins,
+                         secret_headers=secret_headers)
 
     @reg.tool(
         "git_history",
