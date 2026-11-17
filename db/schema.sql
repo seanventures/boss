@@ -13745,6 +13745,17 @@ CREATE TABLE IF NOT EXISTS subscription_pool_members (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (pool_id, label)
 );
+-- 1343: a pool is the ORG's (scope 'org': org_id set, anchored on the org's home project, applies to
+-- every project in the org) or one project's (scope 'project': overrides the org's for it alone).
+ALTER TABLE subscription_pools ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'project';
+ALTER TABLE subscription_pools ADD COLUMN IF NOT EXISTS org_id TEXT;
+ALTER TABLE subscription_pools DROP CONSTRAINT IF EXISTS subscription_pools_project_id_engine_key;
+CREATE UNIQUE INDEX IF NOT EXISTS subscription_pools_project_scope_uq
+  ON subscription_pools (project_id, engine) WHERE scope = 'project';
+CREATE UNIQUE INDEX IF NOT EXISTS subscription_pools_org_scope_uq
+  ON subscription_pools (org_id, engine) WHERE scope = 'org';
+-- the last proof of the account's login (ok, at, error: the refusal in words; never a credential)
+ALTER TABLE subscription_pool_members ADD COLUMN IF NOT EXISTS last_proof JSONB;
 -- 1343: one member per pool may be the PRIMARY (leads while it has plenty of room).
 ALTER TABLE subscription_pool_members ADD COLUMN IF NOT EXISTS is_primary BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE TABLE IF NOT EXISTS subscription_pool_pins (

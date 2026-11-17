@@ -31,8 +31,8 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Optional
+from datetime import datetime, timezone
+from typing import Any, Callable, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -114,22 +114,46 @@ def _member_row(row: Any) -> dict[str, Any]:
     return {"id": row["id"], "pool_id": row["pool_id"], "label": row["label"],
             "secret_name": row["secret_name"], "account_key": row["account_key"],
             "position": int(row["position"]), "status": row["status"],
+            "proof": row.get("last_proof") if isinstance(row.get("last_proof"), dict) else None,
             "primary": bool(row.get("is_primary")),
             "last_assigned_at": iso(row["last_assigned_at"]), "created_by": row["created_by"],
             "created_at": iso(row["created_at"])}
 
 
-def get_pool(connection: Connection, project_id: str, engine: str) -> Optional[dict[str, Any]]:
+def _org(connection: Connection, project_id: str) -> Optional[str]:
+    from .org_models import org_of
+
+    return org_of(connection, project_id)
+
+
+def _owns(connection: Connection, project_id: str, alias: str = "s") -> tuple[str, dict[str, Any]]:
+    """SQL for "this pool is visible to the project": its own project pool, or its ORG's pool."""
+    return (f"({alias}.project_id = :p OR ({alias}.scope = 'org' AND {alias}.org_id = :org))",
+            {"p": project_id, "org": _org(connection, project_id)})
+
+
+def get_pool(connection: Connection, project_id: str, engine: str,
+             scope: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """The pool a project's runs use for `engine`: its OWN pool when it has one (an override for
+    that project alone), else its org's. `scope` asks for exactly the project's or the org's."""
+    where, args = _owns(connection, project_id)
+    if scope in ("project", "org"):
+        where += " AND s.scope = :sc"
+        args["sc"] = scope
     pool = connection.execute(text(
-        "SELECT * FROM subscription_pools WHERE project_id = :p AND engine = :e"),
-        {"p": project_id, "e": engine}).mappings().first()
+        f"SELECT s.* FROM subscription_pools s WHERE s.engine = :e AND {where} "
+        "ORDER BY (s.scope = 'project') DESC LIMIT 1"), {**args, "e": engine}).mappings().first()
+    return _load_pool(connection, pool)
+
+
+def _load_pool(connection: Connection, pool: Any) -> Optional[dict[str, Any]]:
     if pool is None:
         return None
     members = connection.execute(text(
         "SELECT * FROM subscription_pool_members WHERE pool_id = :i ORDER BY position, created_at"),
         {"i": pool["id"]}).mappings().all()
     return {"id": pool["id"], "project_id": pool["project_id"], "engine": pool["engine"],
-            "name": pool["name"], "status": pool["status"],
+            "scope": pool["scope"], "name": pool["name"], "status": pool["status"],
             "members": [_member_row(m) for m in members]}
 
 
@@ -147,10 +171,12 @@ def headroom_of(connection: Connection, members: list[dict[str, Any]], engine: s
 def describe(connection: Connection, project_id: str) -> list[dict[str, Any]]:
     """Every pool of the project with each member's headroom — metadata only, never a login."""
     out = []
-    for engine in ENGINES:
-        pool = get_pool(connection, project_id, engine)
-        if pool is None:
-            continue
+    where, args = _owns(connection, project_id)
+    found = [_load_pool(connection, r) for r in connection.execute(text(
+        f"SELECT s.* FROM subscription_pools s WHERE {where} ORDER BY s.engine, "
+        "(s.scope = 'project') DESC"), args).mappings().all()]
+    for pool in found:
+        engine = pool["engine"]
         rooms = headroom_of(connection, pool["members"], engine)
         for m in pool["members"]:
             h = rooms.get(m["id"])
@@ -167,35 +193,52 @@ def describe(connection: Connection, project_id: str) -> list[dict[str, Any]]:
 # ── writing ──────────────────────────────────────────────────────────────────────────────────
 
 def create_pool(connection: Connection, project_id: str, *, engine: str, name: str,
-                actor: str, settings: Any = None) -> dict[str, Any]:
+                actor: str, settings: Any = None, scope: str = "project") -> dict[str, Any]:
+    """`scope="org"` makes the ORG's pool (every project in the org uses it); "project" makes this
+    project's own, which overrides the org's for it alone. An org pool is anchored on the org's
+    model home project (where the install's login lives), else on this project."""
     if engine not in ENGINES:
         raise PoolError(f"engine must be one of: {', '.join(ENGINES)}")
+    if scope not in ("project", "org"):
+        raise PoolError("scope must be org or project")
     label = " ".join(str(name or "").split())[:80] or f"{engine} pool"
-    if get_pool(connection, project_id, engine) is not None:
-        raise PoolError(f"this project already has a {engine} pool; add accounts to it")
+    org = _org(connection, project_id)
+    if scope == "org" and not org:
+        scope = "project"
+    if get_pool(connection, project_id, engine, scope=scope) is not None:
+        raise PoolError(f"this {'org' if scope == 'org' else 'project'} already has a {engine} "
+                        "pool; add accounts to it")
+    anchor = project_id
+    if scope == "org":
+        from .org_models import home_project
+
+        anchor = home_project(connection, org) or project_id
     pid = make_id("spool")
     connection.execute(text(
-        "INSERT INTO subscription_pools (id, project_id, engine, name, created_by) "
-        "VALUES (:i, :p, :e, :n, :a)"), {"i": pid, "p": project_id, "e": engine, "n": label,
-                                         "a": actor})
-    emit_event(connection, project_id, "subscription_pool.created", actor, "subscription_pool",
-               pid, {"engine": engine, "name": label})
+        "INSERT INTO subscription_pools (id, project_id, engine, name, created_by, scope, org_id) "
+        "VALUES (:i, :p, :e, :n, :a, :sc, :o)"),
+        {"i": pid, "p": anchor, "e": engine, "n": label, "a": actor, "sc": scope,
+         "o": org if scope == "org" else None})
+    emit_event(connection, anchor, "subscription_pool.created", actor, "subscription_pool",
+               pid, {"engine": engine, "name": label, "scope": scope})
     if settings is not None:
-        adopt_install_login(connection, settings, project_id, engine)   # account 1, the primary
-    return get_pool(connection, project_id, engine)
+        adopt_install_login(connection, settings, project_id, engine, scope=scope)
+    return get_pool(connection, project_id, engine, scope=scope)
 
 
 def _pool_by_id(connection: Connection, project_id: str, pool_id: str) -> dict[str, Any]:
+    where, args = _owns(connection, project_id)
     row = connection.execute(text(
-        "SELECT engine FROM subscription_pools WHERE id = :i AND project_id = :p"),
-        {"i": pool_id, "p": project_id}).first()
+        f"SELECT s.* FROM subscription_pools s WHERE s.id = :i AND {where}"),
+        {**args, "i": pool_id}).mappings().first()
     if row is None:
         raise LookupError(f"no pool {pool_id!r} in this project")
-    return get_pool(connection, project_id, row[0])
+    return _load_pool(connection, row)
 
 
 def add_member(connection: Connection, settings: Any, project_id: str, pool_id: str, *,
-               label: str, credential: str, actor: str) -> dict[str, Any]:
+               label: str, credential: str, actor: str, status: str = "active"
+               ) -> dict[str, Any]:
     """Store one account's login (the store only — never this table, never a response) and add it."""
     pool = _pool_by_id(connection, project_id, pool_id)
     engine = pool["engine"]
@@ -212,9 +255,9 @@ def add_member(connection: Connection, settings: Any, project_id: str, pool_id: 
     try:
         connection.execute(text(
             "INSERT INTO subscription_pool_members (id, pool_id, label, secret_name, account_key, "
-            "position, created_by) VALUES (:i, :pool, :l, :s, :k, :pos, :a)"),
+            "position, created_by, status) VALUES (:i, :pool, :l, :s, :k, :pos, :a, :st)"),
             {"i": mid, "pool": pool_id, "l": name, "s": secret,
-             "k": f"{engine}:pool:{mid}", "pos": position, "a": actor})
+             "k": f"{engine}:pool:{mid}", "pos": position, "a": actor, "st": status})
     except Exception:
         try:
             _store(settings).delete(_store_key(secret))
@@ -223,13 +266,14 @@ def add_member(connection: Connection, settings: Any, project_id: str, pool_id: 
         raise
     emit_event(connection, project_id, "subscription_pool.member_added", actor,
                "subscription_pool", pool_id, {"member_id": mid, "label": name, "engine": engine})
-    member = next(m for m in get_pool(connection, project_id, engine)["members"] if m["id"] == mid)
+    member = next(m for m in _pool_by_id(connection, project_id, pool_id)["members"]
+                  if m["id"] == mid)
     member.pop("secret_name", None)
     return member
 
 
 def adopt_install_login(connection: Connection, settings: Any, project_id: str,
-                        engine: str) -> Optional[dict[str, Any]]:
+                        engine: str, scope: Optional[str] = None) -> Optional[dict[str, Any]]:
     """MIGRATION: the install's single login (`claude_code:install` — the one stored under the
     plain subscription name) becomes ACCOUNT 1 of the engine's pool, and the primary. Nothing is
     copied: the member points at the SAME store key and keeps the install's rate windows
@@ -238,7 +282,7 @@ def adopt_install_login(connection: Connection, settings: Any, project_id: str,
     from .cli_harness import stored_credential
     from .model_router import accounts
 
-    pool = get_pool(connection, project_id, engine)
+    pool = get_pool(connection, project_id, engine, scope=scope)
     if pool is None:
         return None
     base = BASE_SECRET[engine]
@@ -273,20 +317,24 @@ def adopt_install_login(connection: Connection, settings: Any, project_id: str,
     emit_event(connection, project_id, "subscription_pool.member_added", "system",
                "subscription_pool", pool["id"],
                {"member_id": mid, "label": label, "engine": engine, "adopted_install_login": True})
-    return next(m for m in get_pool(connection, project_id, engine)["members"] if m["id"] == mid)
+    return next(m for m in _pool_by_id(connection, project_id, pool["id"])["members"]
+                if m["id"] == mid)
 
 
 def add_signed_in_account(connection: Connection, settings: Any, project_id: str, engine: str,
-                          credential: str, *, actor: str,
-                          label: Optional[str] = None) -> dict[str, Any]:
-    """The server-side Sign in's "add another account": the pool is made if the project has none,
-    the install's existing login is adopted as account 1 first (so adding never replaces it), then
-    the NEW login is stored as its own member. The sign-in exposes no email or plan, so the
-    label is "Account N" unless the person named it; they can rename it in Setup."""
-    if get_pool(connection, project_id, engine) is None:
-        create_pool(connection, project_id, engine=engine, name="", actor=actor)
-    adopt_install_login(connection, settings, project_id, engine)
-    pool = get_pool(connection, project_id, engine)
+                          credential: str, *, actor: str, label: Optional[str] = None,
+                          scope: str = "org") -> dict[str, Any]:
+    """The server-side Sign in's "add another account": the pool (the ORG's by default) is made
+    if there is none, the install's existing login is adopted as account 1 first (so adding never
+    replaces it), then the NEW login is stored as its own member. It starts `needs_reauth`: out
+    of routing until its Connect proof passes (prove_member). The sign-in exposes no email or
+    plan, so the label is "Account N" unless named; rename it in Setup."""
+    if get_pool(connection, project_id, engine, scope=scope) is None:
+        create_pool(connection, project_id, engine=engine, name="", actor=actor,
+                    scope=scope)
+    pool = get_pool(connection, project_id, engine, scope=scope)
+    adopt_install_login(connection, settings, project_id, engine, scope=scope)
+    pool = get_pool(connection, project_id, engine, scope=scope)
     taken = {m["label"].lower() for m in pool["members"]}
     name = " ".join(str(label or "").split())[:80]
     n = len(pool["members"]) + 1
@@ -294,25 +342,148 @@ def add_signed_in_account(connection: Connection, settings: Any, project_id: str
         name = f"Account {n}"
         n += 1
     return add_member(connection, settings, project_id, pool["id"], label=name,
-                      credential=credential, actor=actor)
+                      credential=credential, actor=actor, status="needs_reauth")
+
+
+# ── the Connect proof for an added account ───────────────────────────────────────────────────
+
+def _run_proof(settings: Any, engine: str, credential: str) -> dict[str, Any]:
+    """One tiny real turn on THIS account's login (never the install's): the CLI answers
+    BOSS_OK or it does not. Metadata only comes back — the credential never leaves here."""
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+
+    from .setup_service import PROOF_REPLY, cli_auth_failed
+
+    binary = shutil.which("claude" if engine == "claude_code" else "codex")
+    if binary is None:
+        return {"ok": False, "error": f"the {engine} CLI is not installed on the BOSS server"}
+    prompt = f"Reply with exactly: {PROOF_REPLY}. Do not create or modify any file."
+    with tempfile.TemporaryDirectory(prefix="boss-pool-proof-") as work:
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY")}
+        if engine == "claude_code":
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = credential
+            argv = [binary, "-p", prompt, "--tools", ""]
+        else:
+            home = os.path.join(work, "codex-home")
+            os.makedirs(home)
+            with open(os.path.join(home, "auth.json"), "w") as fh:
+                fh.write(credential)
+            os.chmod(os.path.join(home, "auth.json"), 0o600)
+            env["CODEX_HOME"] = home
+            argv = [binary, "exec", "--skip-git-repo-check", "--color", "never",
+                    "--sandbox", "read-only", prompt]
+        try:
+            done = subprocess.run(argv, cwd=work, env=env, capture_output=True, text=True,
+                                  timeout=90)
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "the proof timed out after 90 s"}
+        except OSError as exc:
+            return {"ok": False, "error": f"the proof could not start ({type(exc).__name__})"}
+    said = f"{done.stdout or ''}\n{done.stderr or ''}"
+    if credential and credential in said:
+        said = said.replace(credential, "[redacted]")
+    if done.returncode == 0 and PROOF_REPLY in said:
+        return {"ok": True}
+    if cli_auth_failed(said):
+        return {"ok": False, "error": "the provider refused this account's sign-in: sign in "
+                                      "to it again"}
+    return {"ok": False, "error": (said.strip()[:200] or "the proof got no reply")}
+
+
+def prove_member(db_engine: Any, settings: Any, project_id: str, member_id: str, actor: str, *,
+                 prove: Optional[Callable[[str, str], dict[str, Any]]] = None,
+                 proof_runner: Optional[Callable[..., dict[str, Any]]] = None) -> dict[str, Any]:
+    """The Connect proof an added account must pass before it is Working: one tiny call on its
+    OWN login, run through the governed proof (reservation, lease, receipt) like the main row's.
+    Pass -> active and routed. Fail -> stays out of routing (needs_reauth) with the refusal on
+    its row. `prove(engine, credential)` and `proof_runner` exist for tests. Returns
+    {"ok", "error"}; never raises, never carries the credential."""
+    from ..db import begin
+    from .cli_harness import stored_credential
+
+    with begin(db_engine) as c:
+        row = c.execute(text(
+            "SELECT m.id, m.secret_name, m.label, s.engine FROM subscription_pool_members m "
+            "JOIN subscription_pools s ON s.id = m.pool_id WHERE m.id = :i"),
+            {"i": member_id}).mappings().first()
+    if row is None:
+        return {"ok": False, "error": "no such account"}
+    result: dict[str, Any]
+    try:
+        credential = stored_credential(settings, row["secret_name"], strict=True,
+                                       include_env=False) or ""
+        if not credential:
+            result = {"ok": False, "error": "the account has no stored login"}
+        else:
+            run = prove or (lambda eng, cred: _run_proof(settings, eng, cred))
+            if proof_runner is None:
+                from .setup_service import governed_proof as proof_runner  # type: ignore
+            outcome = proof_runner(
+                db_engine, settings, project_id, row["engine"], actor,
+                prove=lambda: run(row["engine"], credential),
+                candidate=_proof_candidate(row["engine"]),
+                capacity_group=f"{row['engine']}:pool:{member_id}",
+                intent=f"pool-proof-{member_id}")
+            result = {"ok": bool(outcome.get("ok")),
+                      "error": None if outcome.get("ok") else str(
+                          outcome.get("error") or outcome.get("headline")
+                          or "the proof did not pass")[:240]}
+    except Exception as exc:  # noqa: BLE001 — a proof that could not run is not a pass
+        result = {"ok": False, "error": f"the proof could not run ({type(exc).__name__})"}
+    stamp = {"ok": result["ok"], "at": datetime.now(timezone.utc).isoformat(),
+             "error": result["error"]}
+    with begin(db_engine) as c:
+        c.execute(text(
+            "UPDATE subscription_pool_members SET last_proof = CAST(:pr AS JSONB), "
+            "status = CASE WHEN :ok THEN 'active' ELSE 'needs_reauth' END WHERE id = :i"),
+            {"pr": json.dumps(stamp), "ok": result["ok"], "i": member_id})
+        emit_event(c, project_id, "subscription_pool.member_proved", actor, "subscription_pool",
+                   member_id, {"label": row["label"], "ok": result["ok"],
+                               "error": result["error"]})
+    return result
+
+
+def _proof_candidate(engine: str) -> dict[str, Any]:
+    from .entitlements import WORKSPACE_OPERATOR_ID
+
+    return {"provider": "anthropic" if engine == "claude_code" else "openai",
+            "source_kind": "official_cli", "entitlement_kind": "subscription",
+            "owner_type": "workspace_operator", "owner_id": WORKSPACE_OPERATOR_ID,
+            "cost_mode": "subscription", "auth_method": "official_cli_oauth",
+            "connection_status": "connected", "status": "active", "runtime_supported": True,
+            "observed_capacity": {"credential_present": True}, "supported_models": [engine],
+            "workload_classes_allowed": ["owner_sandbox"], "risk_tier_max": 1,
+            "limit_shape": {"max_concurrent": 1}}
 
 
 def sign_in_store(db_engine: Any, settings: Any, project_id: str, actor: str, engine: str,
-                  label: Optional[str] = None):
+                  label: Optional[str] = None, scope: str = "org", *,
+                  prove: Optional[Callable[..., dict[str, Any]]] = None,
+                  proof_runner: Optional[Callable[..., dict[str, Any]]] = None):
     """The `store` the server-side Sign in hands the printed token to when the person chose
     "Add another account" (subscription_sign_in.start(store=…)): the token becomes a NEW pool
-    member, in its own transaction. Account 1 is never touched."""
+    member, then passes its Connect proof before it is routed. Account 1 is never touched. A
+    failed proof is the sign-in's refusal, and shows on the account's row."""
     def store(token: str, *, valid_days: Optional[int] = None) -> None:  # noqa: ARG001
         from ..db import begin
+        from .subscription_sign_in import StoreRefused
 
         try:
             with begin(db_engine) as connection:
-                add_signed_in_account(connection, settings, project_id, engine,
-                                      (token or "").strip(), actor=actor, label=label)
+                member = add_signed_in_account(connection, settings, project_id, engine,
+                                               (token or "").strip(), actor=actor, label=label,
+                                               scope=scope)
         except PoolError as exc:
-            from .subscription_sign_in import StoreRefused
-
             raise StoreRefused(str(exc)) from None
+        proof = prove_member(db_engine, settings, project_id, member["id"], actor,
+                             prove=prove, proof_runner=proof_runner)
+        if not proof["ok"]:
+            raise StoreRefused(f"{member['label']} signed in but did not pass its check, so it "
+                               f"is not in use: {proof['error']}")
     return store
 
 
@@ -322,8 +493,8 @@ def update_member(connection: Connection, settings: Any, project_id: str, member
                   label: Optional[str] = None) -> dict[str, Any]:
     row = connection.execute(text(
         "SELECT m.*, s.engine FROM subscription_pool_members m JOIN subscription_pools s "
-        "ON s.id = m.pool_id WHERE m.id = :i AND s.project_id = :p"),
-        {"i": member_id, "p": project_id}).mappings().first()
+        "ON s.id = m.pool_id WHERE m.id = :i AND " + _owns(connection, project_id)[0]),
+        {**_owns(connection, project_id)[1], "i": member_id}).mappings().first()
     if row is None:
         raise LookupError(f"no pool account {member_id!r} in this project")
     if status is not None and status not in MEMBER_STATUSES:
@@ -364,8 +535,9 @@ def remove_member(connection: Connection, settings: Any, project_id: str, member
                   actor: str) -> dict[str, Any]:
     row = connection.execute(text(
         "SELECT m.id, m.pool_id, m.secret_name FROM subscription_pool_members m JOIN "
-        "subscription_pools s ON s.id = m.pool_id WHERE m.id = :i AND s.project_id = :p"),
-        {"i": member_id, "p": project_id}).mappings().first()
+        "subscription_pools s ON s.id = m.pool_id WHERE m.id = :i AND "
+        + _owns(connection, project_id)[0]),
+        {**_owns(connection, project_id)[1], "i": member_id}).mappings().first()
     if row is None:
         raise LookupError(f"no pool account {member_id!r} in this project")
     connection.execute(text("DELETE FROM subscription_pool_members WHERE id = :i"),
@@ -389,7 +561,7 @@ def set_pool_status(connection: Connection, project_id: str, pool_id: str, *, st
         {"s": status, "i": pool_id})
     emit_event(connection, project_id, "subscription_pool.status", actor, "subscription_pool",
                pool_id, {"status": status})
-    return get_pool(connection, project_id, pool["engine"])
+    return _pool_by_id(connection, project_id, pool_id)
 
 
 def delete_pool(connection: Connection, project_id: str, pool_id: str, *,
@@ -404,8 +576,7 @@ def delete_pool(connection: Connection, project_id: str, pool_id: str, *,
         raise PoolError(
             f"remove its {n} account{'s' if n != 1 else ''} first — each Remove also deletes "
             "that account's stored login; then the empty pool can go")
-    connection.execute(text("DELETE FROM subscription_pools WHERE id = :i AND project_id = :p"),
-                       {"i": pool_id, "p": project_id})
+    connection.execute(text("DELETE FROM subscription_pools WHERE id = :i"), {"i": pool_id})
     emit_event(connection, project_id, "subscription_pool.deleted", actor, "subscription_pool",
                pool_id, {"engine": pool["engine"]})
     return {"deleted": pool_id}
@@ -419,8 +590,15 @@ def assign(connection: Connection, project_id: str, engine: str, task_ref: Optio
     Raises PoolExhausted when every active member is at its limit."""
     from .model_router.headroom import EXHAUSTED, PLENTY
 
-    pool = get_pool(connection, project_id, engine)
-    if pool is None or pool["status"] != "active":
+    # PROJECT POOL -> ORG POOL -> (None: the single install login). A project's own pool
+    # overrides the org's for that project; a paused one hands over to the org's.
+    pool = None
+    for scope in ("project", "org"):
+        candidate = get_pool(connection, project_id, engine, scope=scope)
+        if candidate is not None and candidate["status"] == "active":
+            pool = candidate
+            break
+    if pool is None:
         return None
     live = [m for m in pool["members"] if m["status"] == "active"]
     if not live:
@@ -496,9 +674,10 @@ def assignment_for(engine: str, settings: Any = None) -> Optional[Assignment]:
         engine_db = ctx.get("db_engine") or get_engine(settings)
         with begin(engine_db) as c:
             with c.begin_nested():
+                where, args = _owns(c, project_id)
                 exists = c.execute(text(
-                    "SELECT 1 FROM subscription_pools WHERE project_id = :p AND engine = :e "
-                    "AND status = 'active'"), {"p": project_id, "e": engine}).first()
+                    f"SELECT 1 FROM subscription_pools s WHERE s.engine = :e AND {where} "
+                    "AND s.status = 'active'"), {**args, "e": engine}).first()
             if not exists:
                 return None
             chosen = assign(c, project_id, engine, task_ref)
@@ -525,3 +704,26 @@ def mark_needs_reauth(settings: Any, member_id: str) -> None:
     except Exception:  # noqa: BLE001
         _log.warning("could not mark pool account %s as needing a new login", member_id)
 
+
+
+def mark_refused_from_context() -> bool:
+    """A run's engine was refused its login (harness_failures kind auth_refused): when that run
+    was spending on a pool member (its account key rides on the LLM context), THAT member goes
+    out of rotation (needs_reauth) and the pool's other accounts carry on. Covers every engine
+    and launcher, so it needs no per-launcher wiring. Never raises; True when a member was marked."""
+    try:
+        from .llm_telemetry import get_llm_context
+
+        ctx = get_llm_context() or {}
+        key = ctx.get("pool_account")
+        db = ctx.get("db_engine")
+        if not key or db is None:
+            return False
+        with db.begin() as c:
+            done = c.execute(text(
+                "UPDATE subscription_pool_members SET status = 'needs_reauth' "
+                "WHERE account_key = :k AND status = 'active'"), {"k": key})
+            return bool(done.rowcount)
+    except Exception:  # noqa: BLE001
+        _log.warning("could not take a refused pool account out of rotation", exc_info=True)
+        return False
