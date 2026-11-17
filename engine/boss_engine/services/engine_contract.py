@@ -50,6 +50,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
+from . import readonly_guard
+
 log = logging.getLogger(__name__)
 
 # ── Tool names: one vocabulary for every engine ───────────────────────────────────────────────
@@ -466,6 +468,14 @@ def session_tree_problem(cwd: Path) -> Optional[str]:
 
 # ── The wrapper every engine runs in ──────────────────────────────────────────────────────────
 
+#: Said to a read-only seat of a local repository (no pull request on GitHub exists for it).
+LOCAL_TREE_NOTE = (
+    "\n\nThis repository is LOCAL to BOSS: there is no GitHub repository or pull request to "
+    "read, and any http://boss-local/ link is only a label. Do not use a GitHub connector or "
+    "fetch anything over the network for it. The change is in the working tree you are in and in "
+    "the text above: read it with your file and shell tools.\n")
+
+
 class EngineSessionFailed(RuntimeError):
     """An engine's session failed (it exited non-zero, or said it errored)."""
 
@@ -533,7 +543,8 @@ class ContractedAgent:
                 kwargs["max_budget_usd"] = ceiling
         work = Path(cwd)
         copy: Optional[Path] = None
-        if read_only and (not caps.read_only or caps.read_only_shell):
+        if read_only and (not caps.read_only or caps.read_only_shell) and (
+                readonly_guard.is_repo(work) or work.resolve() != Path.cwd().resolve()):
             # NO (TRUSTWORTHY) READ-ONLY MODE: the reviewer judges a copy; nothing it writes
             # reaches the build. The engine is told it is a review (its review prompt, timeout
             # and argv) and that BOSS holds the read-only invariant by isolation, so it must
@@ -543,6 +554,16 @@ class ContractedAgent:
             copy = _isolated_copy(work)
             work = copy
             kwargs["_contract_read_only_copy"] = True
+        if read_only and getattr(self._inner, "local_repo", False):
+            # A LOCAL REPOSITORY HAS NO GITHUB (BOSSAPP-1350): its change set's URL is
+            # http://boss-local/..., and a reviewer that went to the connector for it got a 404
+            # and judged nothing. The tree it was handed is the whole change.
+            run_prompt = run_prompt + LOCAL_TREE_NOTE
+        guard = None
+        if copy is not None:
+            # A seat with no inner sandbox: the live tree is fingerprinted before the turn and
+            # compared after, and a difference is REPORTED, never acted on (readonly_guard).
+            guard = readonly_guard.snapshot(Path(cwd))
         problem = session_tree_problem(work)
         if problem:
             if copy is not None:
@@ -566,6 +587,13 @@ class ContractedAgent:
                 f"{self.engine} failed: {result['summary'][:300]}")
         if copy is not None:
             result["read_only_by"] = "copy"
+            # REPORT-ONLY (readonly_guard): never a revert, never a failed seat.
+            changed = readonly_guard.compare(guard)
+            if changed:
+                log.warning("%s: %s", self.engine, readonly_guard.words(changed))
+                result["live_tree_changed"] = changed
+                if changed["unexplained"] or changed["head_moved"]:
+                    result["verdict_suspect"] = readonly_guard.words(changed)
         sid = result.get("session_id")
         if not sid or not caps.resume:
             # A session id for every session, whatever the engine: the pipeline's warm paths

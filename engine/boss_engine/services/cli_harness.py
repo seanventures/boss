@@ -40,7 +40,7 @@ import tomllib
 from typing import Callable, Optional
 
 from . import model_proxy as _model_proxy
-from . import owned_process
+from . import owned_process, review_tools
 from .harness_delivery import delivers_kit
 from .harness_registry import FailurePattern, RuntimeBinary
 from .workspace_perms import tidies_workspace
@@ -1598,7 +1598,8 @@ class GenericCliCodeAgent:
         by BOSS's fallbacks; a reviewer on a CLI without read-only mode judges a copy."""
         from .engine_contract import EngineCapabilities
 
-        return EngineCapabilities(read_only=self.spec.supports_read_only())
+        return EngineCapabilities(read_only=self.spec.supports_read_only(),
+                                  read_only_shell=self.spec.name == "codex")
 
     # -- process ------------------------------------------------------
     def _resolve_binary(self) -> str:
@@ -1679,13 +1680,18 @@ class GenericCliCodeAgent:
                 raise CliHarnessUnavailable(str(refused)) from refused
         return _model_proxy.shield_env(env, settings=self.settings)
 
-    def _argv(self, prompt: str, *, read_only: bool, model: Optional[str]) -> list[str]:
+    def _argv(self, prompt: str, *, read_only: bool, model: Optional[str],
+              by_copy: bool = False) -> list[str]:
         argv = [self._resolve_binary(), *self.spec.args]
         # Mode-specific argv rather than one list: codex takes `--sandbox read-only` vs
         # `--sandbox workspace-write` on the SAME flag, so appending a read-only suffix to a
         # list that already carried the write value would leave two copies and let argument
         # order decide whether a reviewer can edit the code it is reviewing.
-        argv += list(self.spec.read_only_args if read_only else self.spec.write_args)
+        # A codex reviewer on BOSS's throwaway copy runs unsandboxed (BOSSAPP-1350: its own
+        # read-only sandbox cannot start in a container); the copy is the boundary.
+        unsandboxed = by_copy and self.spec.name == "codex"
+        argv += list(self.spec.read_only_args if read_only and not unsandboxed
+                     else self.spec.write_args)
         if self.spec.name == "claude_code":
             from .claude_credential import split_pick
 
@@ -2083,7 +2089,8 @@ class GenericCliCodeAgent:
         import re as _re
         import tempfile
 
-        argv = self._argv(prompt, read_only=read_only, model=model)
+        argv = self._argv(prompt, read_only=read_only, model=model,
+                          by_copy=bool(_ignored.get("_contract_read_only_copy")))
         final_path = None
         if self.spec.final_message_flag:
             fd, final_path = tempfile.mkstemp(prefix="boss-cli-final-", suffix=".txt")
@@ -2206,6 +2213,9 @@ class GenericCliCodeAgent:
             "model": model or "",
             "exit_code": proc.returncode,
             "stop_reason": "done" if ok else "error",
+            # The CLI's own stderr, never the model's words (review_tools).
+            **({"tools_blocked": blocked} if (blocked := review_tools.blocked_by_transport(
+                proc.stderr)) else {}),
         }
 
     def run(self, spec, repo, sandbox):

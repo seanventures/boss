@@ -129,6 +129,8 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
     hollow = evidence.get("review_hollow") or {}
     for stage, why in hollow.items():
         out.append(f"- ⚠ {SEAT_LABELS.get(stage, stage)} did not see the change ({why}).")
+    for stage, why in (evidence.get("review_suspect") or {}).items():
+        out.append(f"- ⚠ {SEAT_LABELS.get(stage, stage)} verdict is suspect ({why}).")
     # L1 baseline-aware verification: failures the change did not cause, named as such.
     if baseline:
         from . import baseline_verify
