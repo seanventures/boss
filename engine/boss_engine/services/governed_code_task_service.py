@@ -35,6 +35,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Optional, Sequence
 
 from . import build_budget as _build_budget
+from . import brief_items as _brief_items
 from . import brief_tests as _brief_tests
 from .work_hold import PauseAtCheckpoint as _PauseAtCheckpoint
 from . import repair_findings
@@ -3666,6 +3667,55 @@ def advisory_followup_findings(failing, evidence: dict, deferred: list) -> list[
         seen.add(key)
         out.append(f)
     return out
+
+
+def _tree_snapshot(root) -> Optional[str]:
+    """The working tree as a git tree object (a temporary index: the real index is untouched),
+    or None when it cannot be taken. Includes every non-ignored file, binaries too."""
+    import subprocess
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            env = {**os.environ, "GIT_INDEX_FILE": str(Path(d) / "index")}
+            for cmd in (["git", "add", "-A"], ["git", "write-tree"]):
+                done = subprocess.run(cmd, cwd=str(root), env=env, capture_output=True,
+                                      text=True, timeout=120)
+                if done.returncode != 0:
+                    return None
+            return done.stdout.strip() or None
+    except Exception:  # noqa: BLE001 — no snapshot: the caller does not rework
+        _log_caught(logger)
+        return None
+
+
+def _tree_restore(root, tree: str) -> bool:
+    """Put the working tree back EXACTLY as the snapshot: its files rewritten (a deleted or
+    edited one included), and every file the snapshot did not have removed."""
+    import subprocess
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            env = {**os.environ, "GIT_INDEX_FILE": str(Path(d) / "index")}
+            run = lambda cmd: subprocess.run(  # noqa: E731
+                cmd, cwd=str(root), env=env, capture_output=True, text=True, timeout=120)
+            if run(["git", "read-tree", tree]).returncode != 0:
+                return False
+            # The snapshot's files FIRST (its .gitignore included), so what counts as "not in
+            # the snapshot" is read against the snapshot's ignore rules, never the rework's.
+            if run(["git", "checkout-index", "-a", "-f"]).returncode != 0:
+                return False
+            extra = run(["git", "ls-files", "-o", "--exclude-standard", "-z"])
+            for rel in filter(None, extra.stdout.split("\0")):
+                try:
+                    (Path(root) / rel).unlink()
+                except OSError:
+                    pass
+            return True
+    except Exception:  # noqa: BLE001
+        _log_caught(logger)
+        return False
 
 
 def _ledger_followup(engine, *, project_id: str, parent_run_id: str, parent_root: str,
@@ -7601,6 +7651,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # author is told them, and the gate `brief_tests_written` holds the build to them.
         _named_tests = _brief_tests.named(
             instructions, (design or {}).get("spec"), (design or {}).get("plan"))
+        # THE ITEMS A FOLLOW-UP BRIEF LISTS (BOSSAPP-1355): every one is addressed, the frozen
+        # tests are only a floor. The test writer covers or excuses each; the implementer reports
+        # each; a skipped one sends it back once.
+        _items = [] if _recheck else _brief_items.parse(instructions)
+        _items_note = _brief_items.coverage_note(_items)
         if do_separate_tests:
             # STEP write tests (qa), tests only.
             _abort_if_cancelled("write_tests")
@@ -7619,7 +7674,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 prompt = _qa_prompt(
                     title, instructions, criteria, test_cmd,
                     iac=iac_task, web=_web_verify, app_root=_app_id, stack_note=_stack_note,
-                ) + _placed_tests_note(_placed_tpl_tests) + _brief_tests.brief_note(_named_tests)
+                ) + _placed_tests_note(_placed_tpl_tests) + _brief_tests.brief_note(_named_tests) \
+                    + _items_note
                 # AUGMENT, DON'T RE-AUTHOR. On a repair the prior attempt's tests are ALREADY in
                 # the working tree (the retry clones the lineage branch), and the review names the
                 # exact gap — e.g. "the defects are all in app.js, which no test covers". Sending
@@ -7661,7 +7717,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 "nothing.\n\n"
                                 f"TASK CONTEXT: {title}\n\nRun `{test_cmd}` and leave the "
                                 "whole suite green. Touch as few files as possible."
-                                + _brief_tests.brief_note(_named_tests))
+                                + _brief_tests.brief_note(_named_tests) + _items_note)
                         else:
                             prompt = (
                                 "This is a REPAIR iteration. A working test suite ALREADY "
@@ -7673,7 +7729,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 "natural home).\n\n"
                                 f"GAP TO CLOSE:\n{gap[:6000]}\n\n"
                                 f"TASK CONTEXT: {title}\n\nRun `{test_cmd}` and leave the "
-                                "whole suite green. Touch as few files as possible.")
+                                "whole suite green. Touch as few files as possible."
+                                + _items_note)
                 if escalate:
                     prompt = (
                         "Your previous attempt produced NO recognizable test files. Author "
@@ -7933,7 +7990,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 iac=iac_task, web=_web_verify, app_root=_app_id)) + _stack_note \
             + _placed_tests_note(_placed_tpl_tests) \
             + (_test_plan_note((locals().get("r1") or {}).get("summary", ""))
-               if do_separate_tests else "")
+               if do_separate_tests else "") \
+            + _brief_items.checklist_note(_items)
         max_repair = 0 if _recheck else max(0, min(5, int(
             spec.get("repair_retries", settings.code_repair_max_retries) or 0)))
         repair_attempts = 0
@@ -8242,7 +8300,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 if resume_sid:
                     try:
                         r2 = a.run_role(
-                            (_cross_run_resume_prompt(_repair_evidence, max(1, attempt))
+                            (_cross_run_resume_prompt(
+                                _repair_evidence + _brief_items.checklist_note(_items),
+                                max(1, attempt))
                              + (_guidance_block(_steer) if _steer else "")
                              if _carried_resume
                              else _repair_resume_prompt(evidence_text, attempt)), root,
@@ -8540,6 +8600,92 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                       "budget_minutes": _impl_budget_s // 60,
                                       "failing_tests": failing_tests(fail_output)}),
                      "id": run_id})
+        # THE BRIEF'S ITEMS, CHECKED AGAINST WHAT CHANGED (BOSSAPP-1355). The frozen tests are a
+        # floor: the implementer's FINAL report is read against the files it actually changed. A
+        # FIXED no changed file backs, or no line at all, sends it back ONCE — after the loop, so
+        # the send-back never spends a repair slot or escalates, and a rework that breaks the
+        # tests is reverted to the passing tree. Whatever is still not fixed (also with no repair
+        # rounds, also after the send-back) is recorded and handed to review and acceptance.
+        _items_record: dict = {}
+        _items_judge_note = ""
+        _items_uncovered: list[str] = []
+        _items_excused: list = []
+        if _items:
+            _final_report = str(r2.get("summary") or "")
+            _asm = _brief_items.assess(_items, _final_report, impl_files)
+            _sent_back = _reworked = _reverted = False
+            _snap_tree = (_tree_snapshot(root) if (
+                _asm.send_back and tests_passed and impl_files and tests_untouched
+                and not use_microvm and not _impl_over_budget(final=True)) else None)
+            if (not _snap_tree and _asm.send_back and tests_passed and impl_files
+                    and tests_untouched and not use_microvm
+                    and not _impl_over_budget(final=True)):
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.brief_items_send_back_skipped", "boss",
+                               "code_task_run", run_id,
+                               {"why": "the tree could not be snapshotted, so a rework could "
+                                       "not be undone",
+                                "unaddressed": [i.key for i in _asm.send_back][:80]})
+            if _snap_tree:      # no snapshot to come back to, no rework
+                _sent_back = True
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.brief_items_sent_back", "boss",
+                               "code_task_run", run_id,
+                               {"items": len(_items),
+                                "unaddressed": [i.key for i in _asm.send_back][:80]})
+                _note = _brief_items.sendback_note(_asm.send_back)
+                try:
+                    set_llm_context(stage="implement" if do_separate_tests else "solo")
+                    _ra, _rm = _route("implement")
+                    if impl_session_id:
+                        _rr = _ra.run_role(_repair_resume_prompt(_note, 1), root, model=_rm,
+                                           resume_session_id=impl_session_id)
+                    else:
+                        _rr = _ra.run_role(_repair_prompt(base_impl_prompt, _note, 1), root,
+                                           model=_rm)
+                    cost += int(_rr.get("cost_usd_micros") or 0)
+                    impl_session_id = _rr.get("session_id") or impl_session_id
+                    _final_report = str(_rr.get("summary") or "") + "\n" + _final_report
+                    _untouched = (not do_separate_tests
+                                  or tests_before == _hash_files(root, test_files))
+                    _tr = _run_verify()
+                    if _tr.ok and _untouched:
+                        _reworked = True
+                        tests_passed, test_exit_code = True, _tr.exit_code
+                        impl_files = [fc.path for fc in sandbox.diff()
+                                      if not _is_test_path(fc.path)] or impl_files
+                    else:
+                        _reverted = True
+                except StackUnsupportedError:
+                    raise
+                except Exception:  # noqa: BLE001 — the passing tree stands
+                    _log_caught(logger)
+                    _reverted = True
+                if _reverted:
+                    if not _tree_restore(root, _snap_tree):
+                        logger.warning("brief items: the tree could not be restored for %s",
+                                       run_id)
+                    _tr = _run_verify()     # the evidence is the passing tree's again
+                    tests_passed, test_exit_code = bool(_tr.ok), _tr.exit_code
+                if _reverted:
+                    _final_report = str(r2.get("summary") or "")   # the rework is not in the tree
+                _asm = _brief_items.assess(_items, _final_report, impl_files)
+            # The test writer's side: every item tested or excused, an empty report covers
+            # nothing (the gate fails closed).
+            if do_separate_tests:
+                _qa_said = str((locals().get("r1") or {}).get("summary") or "")
+                _have = _brief_tests.defined(root, _all_test_paths(root))
+                _items_uncovered = [i.key for i in _brief_items.uncovered(_items, _qa_said, _have)]
+                _items_excused = _brief_items.excused(_items, _qa_said, _have)
+            _items_judge_note = _brief_items.judge_block(_asm.not_done, _items_excused)
+            instructions = instructions + _items_judge_note
+            _items_record = {"items": len(_items), **_asm.record(),
+                             "excused": [i.key for i in _items_excused],
+                             "sent_back": _sent_back, "reworked": _reworked,
+                             "reverted": _reverted}
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.brief_items_judged", "boss",
+                           "code_task_run", run_id, _items_record)
         # Freeze implement-time verify so later panel/mutation probes cannot
         # replace the official /report evidence.
         official_verify_output = last_verify_output
@@ -9454,6 +9600,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     emit_event(c, project_id, "code_task.brief_tests_missing", "boss",
                                "code_task_run", run_id,
                                {"named": _named_tests[:40], "missing": _brief_missing[:40]})
+        if _items and do_separate_tests and _items_uncovered:
+            # EVERY BRIEF ITEM IS TESTED OR EXCUSED (BOSSAPP-1355): a test that exists, or the
+            # test writer's word that no unit test can judge it (never for a source-code finding).
+            gates["brief_tests_written"] = False
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.brief_items_uncovered", "boss",
+                           "code_task_run", run_id,
+                           {"items": len(_items), "uncovered": _items_uncovered[:80]})
         # BOUND BEFORE THE BRANCH THAT FILLS IT.
         #
         # This was declared inside `if do_review:` and read at the bottom of the function
@@ -9551,7 +9705,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         checks=([{"command": test_cmd, "ok": True}]
                                 if test_cmd and tests_passed else []),
                         ask=lambda prompt: consistency_agent.run_role(
-                            prompt, review_root, read_only=True, model=consistency_model,
+                            prompt + _items_judge_note, review_root, read_only=True,
+                            model=consistency_model,
                             max_turns=_turns, **_ceiling))
                 except Exception as exc:  # noqa: BLE001 — a check that could not run is not a pass
                     _log_caught(logger)
@@ -9704,7 +9859,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "sandbox_task_ids": guest_vm_ids,
             "test_author_independent": do_separate_tests,
             # The tests the brief names and the ones the suite lacks (BOSSAPP-1330).
-            "brief_tests": {"named": _named_tests[:40], "missing": _brief_missing[:40]},
+            "brief_tests": {"named": _named_tests[:40], "missing": _brief_missing[:40],
+                            "items": len(_items), "items_uncovered": _items_uncovered[:80]},
+            "brief_items": _items_record,
             # MEASURED, NOT ASSERTED (BOSSAPP-960): this flag used to be `do_review` — "a
             # review ran" — which read as independence on gates and dashboards while the
             # reviewer was the builder's own model. It now says what is true: a review ran AND

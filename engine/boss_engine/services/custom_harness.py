@@ -33,6 +33,8 @@ as the summary and transcript and is never trusted for pass/fail.
 """
 from __future__ import annotations
 
+from . import brief_items as _brief_items
+
 import json
 import logging
 import os
@@ -169,7 +171,7 @@ class _CustomAgentBase:
                                engine_name=self.engine, model=model or "", prompt=prompt)
         except Exception:  # noqa: BLE001 — a transcript never fails a build
             pass
-        out = {"summary": report["summary"][:8000] or f"({self.engine} produced no output)",
+        out = {"summary": _brief_items.clip_summary(report["summary"]) or f"({self.engine} produced no output)",
                "usage": usage, "cost_usd_micros": cost, "cost_unreported": cost == 0,
                "turns": max(1, len(calls)), "tool_calls": len(calls), "model": model or "",
                "session_id": report.get("session_id"), "stop_reason": report["status"]}

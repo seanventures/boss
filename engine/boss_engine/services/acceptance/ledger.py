@@ -202,7 +202,7 @@ def _emit(connection: Any, project_id: str, event: str, row: Mapping[str, Any],
 
 
 _WORK_STATUS = {"open": "todo", "in_progress": "active", "fixed": "done", "waived": "cancelled",
-                "wont_fix": "cancelled", "duplicate": "cancelled"}
+                "wont_fix": "cancelled", "duplicate": "cancelled", "superseded": "cancelled"}
 
 
 def _sync_work_item(connection: Any, row: Mapping[str, Any]) -> None:
@@ -951,6 +951,77 @@ def hold(connection: Any, ids: Iterable[str], *, followup_run_id: str) -> int:
     return len(got)
 
 
+#: A check that did not judge: what it saw is no finding (BOSSAPP-1355).
+BLIND_VERDICTS = ("not_run", "no_items")
+
+
+def stale_rows(connection: Any, rows: Iterable[Mapping[str, Any]], *, project_id: str,
+               lineage: str) -> dict[str, str]:
+    """Which open rows a follow-up must NOT carry, and why (BOSSAPP-1355): {row id: reason}.
+      - a row only checks that did not run (`not_run`/`no_items`) ever observed: nothing judged it;
+      - a pipeline gate line (`gate:acceptance_met`) whose run's check did not run, or that a
+        LATER judged check of the lineage superseded — one that recorded `ac:` rows of its own
+        (a check that judged everything missing is a judgement, never dropped by its counts);
+      - a second row with the same fingerprint (the newest wins)."""
+    from sqlalchemy import text
+
+    rows = list(rows or [])
+    out: dict[str, str] = {}
+    seen: dict[str, Mapping[str, Any]] = {}
+    for r in rows:
+        fp = str(r.get("fingerprint") or "")
+        if fp and fp in seen:
+            older = r if int(r.get("number") or 0) < int(seen[fp].get("number") or 0) else seen[fp]
+            out[older["id"]] = "duplicate fingerprint"
+        if fp and (fp not in seen or int(r.get("number") or 0) > int(seen[fp].get("number") or 0)):
+            seen[fp] = r
+        obs = connection.execute(text(
+            "SELECT o.check_id, o.run_id, c.verdict, rc.verdict AS run_verdict "
+            "FROM finding_observations o LEFT JOIN acceptance_checks c ON c.id = o.check_id "
+            "LEFT JOIN acceptance_checks rc ON rc.code_task_run_id = o.run_id "
+            "AND rc.lineage_root_run_id = :l WHERE o.finding_id = :f"),
+            {"f": r["id"], "l": lineage}).mappings().all()
+        if fp == "gate:acceptance_met":
+            if obs and any(o["run_verdict"] in BLIND_VERDICTS for o in obs) and not any(
+                    o["run_verdict"] in ("met", "not_met") for o in obs):
+                out[r["id"]] = "its check was blind (not_run)"
+                continue
+            later = connection.execute(text(
+                "SELECT 1 FROM acceptance_checks c WHERE c.project_id = :p "
+                "AND c.lineage_root_run_id = :l AND c.verdict IN ('met', 'not_met') "
+                "AND c.created_at > :since AND EXISTS (SELECT 1 FROM finding_observations o "
+                "JOIN findings f ON f.id = o.finding_id WHERE o.check_id = c.id "
+                "AND f.fingerprint LIKE 'ac:%') LIMIT 1"),
+                {"p": project_id, "l": lineage,
+                 "since": r.get("updated_at") or r.get("created_at")}).first()
+            if later:
+                out[r["id"]] = "superseded by a later judged check"
+            continue
+        if obs and all(o["check_id"] and o["verdict"] in BLIND_VERDICTS for o in obs):
+            out[r["id"]] = "its source check did not run"
+    return out
+
+
+def drop_stale(connection: Any, rows: Iterable[Mapping[str, Any]], *, project_id: str,
+               lineage: str) -> dict[str, str]:
+    """`stale_rows`, and each moved to the terminal `superseded` state with its reason (once:
+    only a row still open or held moves), so counts, estimates and badges stop including it."""
+    from sqlalchemy import text
+
+    why = stale_rows(connection, rows, project_id=project_id, lineage=lineage)
+    for fid, reason in why.items():
+        got = connection.execute(text(
+            "UPDATE findings SET status = 'superseded', waive_reason = :w, "
+            "followup_run_id = NULL, updated_at = now() "
+            "WHERE id = :i AND status IN ('open', 'in_progress') RETURNING id"),
+            {"w": reason, "i": fid}).scalar()
+        if got:
+            row = get(connection, fid)
+            if row:
+                _sync_work_item(connection, row)
+    return why
+
+
 def followup_line(row: Mapping[str, Any]) -> str:
     """One open row as the follow-up's finding line: its key, what it is, where, the proof
     that would close it."""
@@ -983,6 +1054,8 @@ def followup_spec(connection: Any, *, project_id: str, lineage: str,
     if only is not None:
         keep = set(only)
         rows = [r for r in rows if r["id"] in keep]
+    stale = drop_stale(connection, rows, project_id=project_id, lineage=lineage)
+    rows = [r for r in rows if r["id"] not in stale]
     contract = _contract.latest(connection, root_run_id=lineage, project_id=project_id)
     open_items = {r.get("contract_item_id"): r for r in open_for(
         connection, project_id=project_id, lineage=lineage)
@@ -1009,7 +1082,7 @@ def followup_spec(connection: Any, *, project_id: str, lineage: str,
 __all__ = [
     "KINDS", "LIVE", "LedgerDelta", "SEVERITIES", "by_key", "followup_line", "followup_spec",
     "gap_fingerprint", "get", "held_by_live_followup", "hold", "human_key", "lineage_of",
-    "mark_fixed", "merge_into", "observations", "observe_check", "observe_findings",
+    "drop_stale", "mark_fixed", "merge_into", "stale_rows", "observations", "observe_check", "observe_findings",
     "observe_review", "open_for", "release_dead_holds", "review_fingerprint", "title_of",
     "transition", "upsert",
 ]

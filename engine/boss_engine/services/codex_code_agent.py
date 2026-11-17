@@ -28,6 +28,8 @@ build.
 """
 from __future__ import annotations
 
+from . import brief_items as _brief_items
+
 import json
 import logging
 import os
@@ -339,7 +341,7 @@ class CodexCodeAgent(GenericCliCodeAgent):
             detail = parser.error or (proc.stdout or "")[-300:]
             raise CliHarnessUnavailable(f"codex exited {proc.returncode}: {detail[:300]}")
         return {
-            "summary": summary[:8000] or "(codex produced no summary)",
+            "summary": _brief_items.clip_summary(summary) or "(codex produced no summary)",
             "usage": usage,
             "cost_usd_micros": cost,
             "cost_unreported": False,

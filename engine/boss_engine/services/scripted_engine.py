@@ -37,6 +37,9 @@ turn, to exercise the fix rounds:
     blocker         the first review_code answers with a BLOCKER finding
     crash_on_start  the first implement writes a server that exits on start
     acceptance_missing  the first acceptance check answers item 1 MISSING
+    break_on_rework the send-back's rework (brief_items) breaks slug.js: the pipeline reverts it
+    skip_items      a follow-up's first implementer reports only the first of its brief's items
+                    (brief_items.py); the send-back is what answers the rest
     crash           every session raises (an engine that cannot run at all)
     acceptance_budget_cap  an acceptance pass stops at its spend ceiling (stop_reason budget_cap,
                     a cost, only its first half of items answered, no summary line) — and again
@@ -189,6 +192,8 @@ class ScriptedEngine:
         app = self._app_root(prompt)
         turns: list[dict[str, Any]] = []
         summary, written = self._play(stage, prompt, root, app, read_only, state, turns)
+        if not read_only:
+            summary += self._items_report(prompt or "", summary, state, root, turns)
         cost, stop = 0, "done"
         ceiling = _extra.get("max_budget_usd")
         if ("acceptance_budget_cap" in self.faults
@@ -442,6 +447,48 @@ class ScriptedEngine:
                 state.fired.add("failing_test")
                 return rel
         return None
+
+    def _items_report(self, prompt: str, summary: str, state: _RunState, root: Path,
+                      turns: list) -> str:
+        """The brief-items lines a follow-up's writing seats end with (brief_items.py): the test
+        writer's COVERAGE (a source-code item by a test it wrote, the rest not unit-testable) and
+        the implementer's ITEM report. The implementer really changes the file an item names (a
+        source file is already written by the app; any other gets a line) and reports FIXED with
+        it. The `skip_items` fault makes the first implementer address only the first item, once,
+        so the send-back is what answers the rest."""
+        found = re.findall(r"(?m)^\s+(?:\d+\.|-)\s+(F-\d+):\s*(?:F-\d+\s+)?([^\s:]+)", prompt)
+        if not found:
+            return ""
+        paths = dict(found)
+        keys = list(paths)
+        if "COVERAGE <key>:" in prompt:
+            name = (re.findall(r"- [^:\n]+: (.+)", summary) or ["slug"])[0].strip()
+            return "\n" + "\n".join(
+                f"COVERAGE {k}: {name}" if re.search(r"\.(js|py|go)$", paths[k])
+                else f"COVERAGE {k}: not unit-testable \u2014 verified by acceptance/review"
+                for k in keys)
+        if "ITEM <key>:" in prompt or "unaddressed" in prompt:
+            if "skip_items" in self.faults and "skip_items" not in state.fired:
+                state.fired.add("skip_items")
+                keys = keys[:1]
+            if "break_on_rework" in self.faults and "unaddressed" in prompt:
+                for hit in root.rglob("slug.js"):    # the send-back's rework breaks the tests
+                    self._write(root, str(hit.relative_to(root)), _BROKEN_SLUG, turns, [])
+                # ...and damages base files the builder never touched: one edited, one deleted
+                if (root / "README.md").exists():
+                    self._write(root, "README.md", "REWORKED\n", turns, [])
+                (root / "NOTES.md").unlink(missing_ok=True)
+            lines = []
+            for k in keys:
+                rel = paths[k]
+                if not re.search(r"\.(js|py|go|mjs)$", rel):
+                    target = root / rel
+                    body = target.read_text() if target.exists() else ""
+                    if f"addressed {k}" not in body:
+                        self._write(root, rel, body + f"\naddressed {k}\n", turns, [])
+                lines.append(f"ITEM {k}: FIXED {rel}:1")
+            return "\n" + "\n".join(lines)
+        return ""
 
     @staticmethod
     def _test_plan(tests: dict[str, str]) -> str:

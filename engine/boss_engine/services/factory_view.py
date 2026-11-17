@@ -2382,8 +2382,10 @@ def gate_reason(name: str, ok: bool, evidence: Mapping[str, Any],
         return None if ok else "coder edited tests"
     if name == "brief_tests_written":
         gone = list(((ev.get("brief_tests") or {}).get("missing")) or [])
+        left = list(((ev.get("brief_tests") or {}).get("items_uncovered")) or [])
         return None if ok else (f"missing: {', '.join(map(str, gone))}"[:60] if gone
-                                else "a named test is missing")
+                                else f"no test or reason for: {', '.join(map(str, left))}"[:60]
+                                if left else "a named test is missing")
     if name == "web_package_honest":
         contract = ev.get("web_package_contract") if isinstance(ev.get("web_package_contract"),
                                                                dict) else {}

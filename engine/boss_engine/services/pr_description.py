@@ -126,6 +126,9 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
     deferred = list(deferred or [])
     if deferred:
         out.append(f"- Deferred as follow-up work: {len(deferred)}")
+    from . import brief_items as _brief_items
+
+    out += _brief_items.pr_lines(evidence.get("brief_items"))
     hollow = evidence.get("review_hollow") or {}
     for stage, why in hollow.items():
         out.append(f"- ⚠ {SEAT_LABELS.get(stage, stage)} did not see the change ({why}).")

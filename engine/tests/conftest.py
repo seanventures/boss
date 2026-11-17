@@ -297,3 +297,38 @@ def _fresh_model_router():
     store.invalidate()
     accounts.reset_caches()
     breaker.reset()
+
+
+# ── no test reaches a real model CLI ─────────────────────────────────────────────────────────
+class RealModelCliBlocked(RuntimeError):
+    """A test tried to start the real `claude` or `codex` CLI."""
+
+
+_MODEL_CLIS = ("claude", "codex")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_model_cli(request, monkeypatch):
+    """A test never spends a real model: starting `claude` or `codex` (however it is reached —
+    a decider's CLI fallback, an adapter, a subprocess) raises. A test that truly needs the CLI
+    opts in with @pytest.mark.real_model_cli."""
+    if request.node.get_closest_marker("real_model_cli"):
+        return
+    import subprocess
+
+    real_init = subprocess.Popen.__init__
+
+    def guarded(self, args, *a, **k):
+        argv = args if isinstance(args, (list, tuple)) else str(args).split()
+        first = os.path.basename(str(argv[0])) if argv else ""
+        if first in _MODEL_CLIS:
+            raise RealModelCliBlocked(
+                f"a test tried to start the real `{first}` CLI; stub the model seat, or mark "
+                "the test @pytest.mark.real_model_cli")
+        return real_init(self, args, *a, **k)
+
+    monkeypatch.setattr(subprocess.Popen, "__init__", guarded)
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "real_model_cli: the test may start the real claude/codex CLI")

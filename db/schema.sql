@@ -15636,6 +15636,12 @@ CREATE TABLE IF NOT EXISTS findings (
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, number)
 );
+-- A row no follow-up should carry (its check did not run, or a later check superseded it) is
+-- moved here with its reason, once (ledger.drop_stale), so counts and badges stop including it.
+ALTER TABLE findings DROP CONSTRAINT IF EXISTS findings_status_check;
+ALTER TABLE findings ADD CONSTRAINT findings_status_check
+  CHECK (status IN ('open', 'in_progress', 'fixed', 'waived', 'wont_fix', 'duplicate',
+                    'superseded'));
 CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_live_fingerprint
   ON findings (project_id, lineage_root_run_id, fingerprint)
   WHERE status IN ('open', 'in_progress');
