@@ -1848,6 +1848,10 @@ _RUNNER = re.compile(r"(?i)^(?:go\s+(?:vet|test|build)|(?:python3?\s+-m\s+)?pyte
                      r"mvn\s+(?:-\S+\s+)*\w+|gradle\s+\w+|cargo\s+\w+|make\s+\w[\w\-]*)")
 
 
+_SHELL_WORDS = frozenset("if then else elif fi for while until do done case esac in function "
+                         "{ } ! [[ ]]".split())
+
+
 def recorded_command_evidence(why: str, item_text: str, checks: Any) -> list[str]:
     """The commands an answer cites (`go vet ./...`) that BOSS itself recorded passing in this
     run's checks (`checks`: [{command, ok}]; exact match with a recorded command or one part of a plain
@@ -1857,11 +1861,16 @@ def recorded_command_evidence(why: str, item_text: str, checks: Any) -> list[str
     something else (AR-31: "`go vet ./...` and `go test ./...` run clean" read as no evidence)."""
     ran: set[str] = set()
     for chk in checks or []:
-        command = _ws(chk.get("command"))
+        raw = str(chk.get("command") or "")
+        command = _ws(raw)
         # STRICT, NOT A SHELL PARSER: only a passed command with nothing that can hide or
         # ignore a part (a comment, `;`, `||`, a pipe, `&`, a subshell, a substitution, a
-        # redirection, a newline) credits anything; a recorded `... || true` credits nothing.
-        if not chk.get("ok") or not command or re.search(r"[#;|&`()<>\n]|\$\(", command.replace("&&", " ")):
+        # redirection, a quote, a backslash, a newline) credits anything; a recorded
+        # `... || true` credits nothing. The checks read the RAW command, before whitespace is
+        # normalised, and a part that starts with a shell reserved word is compound syntax.
+        if (not chk.get("ok") or not command
+                or re.search(r"[#;|&`()<>'\"\\\n\r]|\$\(", raw.replace("&&", " "))
+                or any(p.split()[:1] and p.split()[0] in _SHELL_WORDS for p in command.split("&&"))):
             continue
         ran.add(command)
         ran.update(_ws(p) for p in command.split("&&") if p.strip())

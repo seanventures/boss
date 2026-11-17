@@ -146,3 +146,14 @@ def test_citing_the_whole_hiding_command_credits_nothing_either(tree):
             "evidence": "`go vet ./... || true` run clean"}
     got = _judge(tree, [item], checks=[{"command": "go vet ./... || true", "ok": True}])
     assert got["AC-1"]["status"] == v.PARTIAL
+
+
+@pytest.mark.parametrize("recorded", ['printf "ignored && go vet ./... && "',
+                                      "if false\nthen true && go vet ./... && true\nfi",
+                                      "false\n&& go vet ./...", "echo 'x && go vet ./... && y'",
+                                      "if true && go vet ./... && true", "! go vet ./..."])
+def test_quoted_text_compound_words_and_newlines_credit_nothing(tree, recorded):
+    item = {"n": 1, "id": "AC-1", "text": "`go vet` is clean.",
+            "evidence": "`go vet ./...` run clean in this tree"}
+    assert _judge(tree, [item], checks=[{"command": recorded, "ok": True}])["AC-1"]["status"] \
+        == v.PARTIAL
