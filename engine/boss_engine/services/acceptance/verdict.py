@@ -594,6 +594,13 @@ def _reads_data(code: str) -> bool:
                for m in _STRING.finditer(code))
 
 
+#: An item about what a command is given (`gwlint validate <file|dir>`, "the CLI", "--json").
+_CLI_ITEM = re.compile(r"(?i)\bCLI\b|command[- ]line|\bargv\b|<(?:file|path|dir)|\barguments?\b|"
+                       r"\bflags?\b|(?<![\w-])--[a-z][\w-]+")
+#: Code that reads the command line.
+_CLI_ARGS = re.compile(r"\bos\.Args\b|\bflag\.\w+|\bpflag\b|\bcobra\b|\bargv\b|\bargparse\b|"
+                       r"\bclick\b|\bsys\.argv\b|\bprocess\.argv\b|\bclap\b|\bOptionParser\b")
+
 #: A DIRECTORY READ, qualified: `os.ReadDir`, `filepath.Glob`, `os.listdir`, `fs.readdirSync`,
 #: `Files.list`, a pathlib `.iterdir()` / `.glob()`. A bare `list(` or `walk(` is any function.
 _DIR_READ = re.compile(
@@ -744,6 +751,8 @@ class _Definitions:
         self._code: Optional[dict[str, str]] = None
         self._bare: dict[str, str] = {}
         self._wiring: Optional[list[str]] = None
+        #: Whether the item being checked is about command-line input (`wiring_problem`).
+        self.cli_item = False
 
     def code(self) -> dict[str, str]:
         """{path: the file's code without comments, strings kept}."""
@@ -849,8 +858,10 @@ class _Definitions:
         # A CLI-ONLY READER (BOSSAPP-1353, `lint.LoadDoc(path)`): the item names no file, and the
         # function reads the PATH ITS CALLER GIVES IT (a read call on its own parameter) and some
         # non-test code calls it — what it reads is whatever the command line passes.
-        if not data and set(read_args) & set(_params_of(bare, sym)) and any(
-                not _TEST_PATH.search(c) for c, _f, _a in self.call_sites(rel, sym)):
+        # It holds only for an item that IS about command-line input (`cli_item`), and only when
+        # a caller sits in a main package / cmd dir or takes its value from the command line.
+        if not data and self.cli_item and set(read_args) & set(_params_of(bare, sym)) and any(
+                self._cli_caller(c) for c, _f, _a in self.call_sites(rel, sym)):
             return True
         here = Path(rel).parent.as_posix()
         for var, patterns in _embedded(code).items():
@@ -1212,6 +1223,17 @@ class _Definitions:
                             carried[p] = v
                     queue.append((hit, name, level + 1, carried))
         return None
+
+    def _cli_caller(self, crel: str) -> bool:
+        """Whether code file `crel` is a command: in a main package / `cmd/` folder, or reading
+        the command line (os.Args, flag, argv, argparse, click, cobra ...)."""
+        if _TEST_PATH.search(crel):
+            return False
+        code, bare = self.of(crel)
+        if code is None:
+            return False
+        return bool("cmd" in Path(crel).parts[:-1] or re.search(r"(?m)^\s*package\s+main\b", bare)
+                    or _CLI_ARGS.search(bare))
 
     # ── A FILE REACHED WITHOUT BEING NAMED (BOSSAPP-1353) ─────────────────────────────────
     def wired_elsewhere(self, data: list[str], rel: str) -> bool:
@@ -1957,6 +1979,7 @@ def wiring_problem(root: Any, why: str, *, item_text: str = "",
         return None
     root = Path(root)
     defs = defs if defs is not None else _Definitions(root)
+    defs.cli_item = bool(_CLI_ITEM.search(str(item_text or "")))
     claims = list(_LOADED_BY.finditer(str(why or "")))
     if needs_loader and not claims:
         # NO "LOADED BY", BUT THE EVIDENCE MAY STILL NAME THE LOADER (AR-23): a reviewer who

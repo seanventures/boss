@@ -655,7 +655,9 @@ def observe_review(connection: Any, *, project_id: str, lineage: str, run_id: Op
                    comments: Iterable[Any], check_id: Optional[str] = None,
                    pr_url: Optional[str] = None, stage: Optional[str] = None,
                    seats: Iterable[str] = (), reviewed_paths: Iterable[str] = (),
-                   blind_seats: Iterable[str] = ()) -> LedgerDelta:
+                   blind_seats: Iterable[str] = (),
+                   na_answers: Optional[Mapping[str, tuple[str, str, str]]] = None
+                   ) -> LedgerDelta:
     """Reviewer findings (review_comments.ReviewComment, any severity, advisory or not) into
     the ledger: `rv:` fingerprint dedupe; "same as F-n" merges into F-n only when F-n is a live
     row of this lineage AND plausibly the same problem (close_enough: the same file, or a word
@@ -727,8 +729,10 @@ def observe_review(connection: Any, *, project_id: str, lineage: str, run_id: Op
     delta.add(fixed_by_review(connection, project_id=project_id, lineage=lineage, run_id=run_id,
                               seats=seats, reviewed_paths=reviewed_paths, reported=reported,
                               check_id=check_id))
-    confirm_not_applicable(connection, project_id=project_id, lineage=lineage, run_id=run_id,
-                           comments=comments, seats=seats, check_id=check_id)
+    if na_answers:
+        confirm_not_applicable(connection, project_id=project_id, lineage=lineage, run_id=run_id,
+                               answers={k: v for k, v in na_answers.items() if v[0] not in blind},
+                               reviewed_paths=reviewed_paths, check_id=check_id)
     return delta
 
 
@@ -752,32 +756,87 @@ def declare_not_applicable(connection: Any, *, project_id: str, lineage: str,
     return ids
 
 
+_NA_ANSWER = re.compile(
+    r"(?im)^[\s>*\-`]*NA\s+`?([A-Za-z][\w.\-]*\d[\w.\-]*)`?\s*:\s*\**(CONFIRMED|REFUTED)\**"
+    r"\s*(?:[\u2014\u2013:\-]+\s*(.*))?$")
+
+
+def parse_na_answers(summaries: Mapping[str, str]) -> dict[str, tuple[str, str, str]]:
+    """{KEY: (seat, CONFIRMED|REFUTED, why)} from the reviewing seats' replies (`NA F-42:
+    CONFIRMED` / `NA F-42: REFUTED — why`). A REFUTED from any seat wins over a CONFIRMED."""
+    out: dict[str, tuple[str, str, str]] = {}
+    for seat, text_ in (summaries or {}).items():
+        for m in _NA_ANSWER.finditer(str(text_ or "")):
+            key, verdict = m.group(1).upper(), m.group(2).upper()
+            if key not in out or (verdict == "REFUTED" and out[key][1] != "REFUTED"):
+                out[key] = (seat, verdict, " ".join(str(m.group(3) or "").split())[:300])
+    return out
+
+
 def confirm_not_applicable(connection: Any, *, project_id: str, lineage: str,
-                           run_id: Optional[str], comments: Iterable[Any],
-                           seats: Iterable[str], check_id: Optional[str] = None) -> list[str]:
-    """Close the pending not-applicable checks a seat that REVIEWED did not refute; one a
-    finding of that seat names stays open (the reason does not hold). Returns the closed ids."""
+                           run_id: Optional[str], answers: Mapping[str, tuple[str, str, str]],
+                           reviewed_paths: Iterable[str] = (), check_id: Optional[str] = None
+                           ) -> dict[str, list[str]]:
+    """The review seats' POSITIVE answers to the planner's pending not-applicable checks:
+
+      CONFIRMED  closes the `na:<key>` row AND the original <key> row (superseded, "confirmed
+                 not applicable by <seat>") — unless the original cites a file this run changed:
+                 that is addressed by the change, not "not applicable";
+      REFUTED    closes the check and REOPENS <key> as a normal open item (the reason is carried);
+      no answer  the check stays open: it goes to the next brief as a normal item.
+    Silence is never a confirmation."""
     from sqlalchemy import text
 
-    seats = [s for s in seats or [] if s]
-    if not seats:
-        return []
+    out: dict[str, list[str]] = {"confirmed": [], "refuted": []}
+    paths = {_fold(p).lstrip("./") for p in reviewed_paths or [] if p}
     rows = connection.execute(text(
         "SELECT id, fingerprint FROM findings WHERE project_id = :p AND lineage_root_run_id = :l "
         "AND status IN ('open', 'in_progress') AND fingerprint LIKE 'na:%'"),
         {"p": project_id, "l": lineage}).mappings().all()
-    bodies = [str((c.get("body") if isinstance(c, Mapping) else getattr(c, "body", "")) or "")
-              for c in comments or []]
-    closed = []
     for r in rows:
-        key = r["fingerprint"][3:]
-        if any(re.search(r"(?<![\w-])" + re.escape(key) + r"(?![\w-])", b, re.I) for b in bodies):
+        key = r["fingerprint"][3:].upper()
+        got = (answers or {}).get(key)
+        if not got:
             continue
-        if mark_fixed(connection, r["id"], check_id=check_id, run_id=run_id, stage="re-review",
-                      evidence=[{"kind": "re-review", "ref": run_id, "seats": seats,
-                                 "confirmed": "not applicable"}]):
-            closed.append(r["id"])
-    return closed
+        seat, verdict, why = got
+        original = by_key(connection, project_id, key) if re.fullmatch(r"F-\d+", key) else None
+        if verdict == "CONFIRMED":
+            if original and original.get("path") and _fold(original["path"]).lstrip("./") in paths:
+                original = None                    # the change touched it: addressed, not N/A
+                done = "addressed by this run's change"
+            else:
+                done = f"confirmed not applicable by {seat}"
+            mark_fixed(connection, r["id"], check_id=check_id, run_id=run_id, stage="re-review",
+                       evidence=[{"kind": "re-review", "ref": run_id, "seat": seat,
+                                  "confirmed": "not applicable"}])
+            if original and original["status"] in LIVE:
+                connection.execute(text(
+                    "UPDATE findings SET status = 'superseded', waive_reason = :w, "
+                    "followup_run_id = NULL, updated_at = now() WHERE id = :i"),
+                    {"w": done, "i": original["id"]})
+                row = get(connection, original["id"])
+                if row:
+                    _sync_work_item(connection, row)
+            out["confirmed"].append(r["id"])
+        else:
+            connection.execute(text(
+                "UPDATE findings SET status = 'superseded', waive_reason = :w, "
+                "followup_run_id = NULL, updated_at = now() WHERE id = :i"),
+                {"w": f"{seat} refuted it: {why}"[:300], "i": r["id"]})
+            if original and original["status"] not in LIVE:
+                connection.execute(text(
+                    "UPDATE findings SET status = 'open', waive_reason = NULL, "
+                    "reopened_count = reopened_count + 1, updated_at = now() WHERE id = :i"),
+                    {"i": original["id"]})
+                row = get(connection, original["id"])
+                if row:
+                    _sync_work_item(connection, row)
+            if original is not None:
+                _observe(connection, original["id"], check_id=check_id, run_id=run_id,
+                         stage=seat, status_seen="open",
+                         evidence=[{"kind": "said", "text": f"not applicable REFUTED: {why}"}])
+            out["refuted"].append(r["id"])
+    return out
 
 
 def fixed_by_review(connection: Any, *, project_id: str, lineage: str, run_id: Optional[str],

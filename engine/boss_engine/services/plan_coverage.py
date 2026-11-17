@@ -344,13 +344,13 @@ def check(design: Mapping[str, Any], *, instructions: str, criteria: Any = None,
         na = declared.get(item_key(it)) or declared.get(it.id.upper())
         # A SECURITY finding or a BLOCKER is never waved off by the planner: it stays missing,
         # and so goes to the human plan gate.
-        if na and not (it.security or it.severity in ("BLOCKER", "SECURITY")):
+        if na and not (it.security or it.severity in SERIOUS):
             # THE PLANNER SAID IT DOES NOT APPLY (BOSSAPP-1360): stale, a false positive, or
             # already done. Not sent back, not escalated: it goes on to review and acceptance
             # as an item to VERIFY (`not_applicable`), where a reader can refute the reason.
             skipped.append({"id": it.id, "severity": it.severity, "kind": it.kind,
                             "item": it.label(), "why": na, "security": it.security,
-                            "not_applicable": True})
+                            "not_applicable": True, "key": item_key(it) or it.id})
             continue
         if det == "missing":
             # The plan does not name where the finding is: covered is not an answer a model can
@@ -382,7 +382,7 @@ def replan_note(coverage: Coverage) -> str:
     return ("YOUR PLAN DOES NOT COVER EVERYTHING THE BRIEF REQUIRES. These items are missing "
             "from it:\n" + lines + "\n\nRewrite the PLAN so it covers every item above — "
             "security and blocker findings first, naming the files and functions you will "
-            "change — or, for an item you will not do (stale, a false positive, already done; never a security finding or a blocker), "
+            "change — or, for an item you will not do (stale, a false positive, already done; never a security, critical, high or blocker finding), "
             "write one line in the PLAN: `ITEM <key>: NOT APPLICABLE — <reason>` (the key as the "
             "item names it, e.g. F-42 or AC-3). Review will verify each such reason. Do not drop "
             "anything the previous plan already covered.")
@@ -390,15 +390,16 @@ def replan_note(coverage: Coverage) -> str:
 
 def verify_block(coverage: Optional[Mapping[str, Any]]) -> str:
     """The items the planner declared not applicable, as a block for the review and acceptance
-    that follow: each is an item to VERIFY (is the reason true?), never a silent pass."""
+    that follow: each reviewing seat answers each one, positively (silence confirms nothing)."""
     rows = [r for r in (coverage or {}).get("skipped") or []
             if isinstance(r, Mapping) and r.get("not_applicable")]
     if not rows:
         return ""
-    return ("\n\nPLAN ITEMS DECLARED NOT APPLICABLE (verify each reason against the code; an "
-            "item whose reason does not hold is still owed):\n"
-            + "\n".join(f"- {r['item']} — planner: {r.get('why') or 'no reason'}"
-                         for r in rows[:20]))
+    return ("\n\nPLAN ITEMS DECLARED NOT APPLICABLE. Check each reason against the code and "
+            "answer EACH on its own line: `NA <key>: CONFIRMED` (the reason holds) or "
+            "`NA <key>: REFUTED — <why>` (it is still owed). No answer leaves it open:\n"
+            + "\n".join(f"- {r.get('key') or r['id']}: {r['item']} — planner: "
+                         f"{r.get('why') or 'no reason'}" for r in rows[:20]))
 
 
 #: A gap at one of these severities is never approved by a delegate (approval_delegations).

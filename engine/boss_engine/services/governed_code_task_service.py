@@ -2752,7 +2752,7 @@ def _generated_pr_summary(engine, settings, run_id: str, project_id: str, *, tit
 
 def _ledger_review(engine, run_id: str, project_id: str, comments: list, *,
                    seats: tuple = (), reviewed_paths: tuple = (),
-                   blind_seats: tuple = ()) -> None:
+                   blind_seats: tuple = (), na_answers=None) -> None:
     """The review's findings into the findings ledger (acceptance/ledger.py, BOSSAPP-1216), in
     their own transaction after the review's model calls. Never fails the build: bookkeeping."""
     from .acceptance import ledger as _ledger
@@ -2764,7 +2764,7 @@ def _ledger_review(engine, run_id: str, project_id: str, comments: list, *,
                 _ledger.observe_review(c, project_id=project_id, lineage=lin["lineage"],
                                        run_id=run_id, comments=comments, pr_url=lin["pr_url"],
                                        seats=seats, reviewed_paths=reviewed_paths,
-                                       blind_seats=blind_seats)
+                                       blind_seats=blind_seats, na_answers=na_answers)
     except Exception as exc:  # noqa: BLE001
         _log_caught(logger)
         # The class only: a driver error can carry the connection URL.
@@ -2851,9 +2851,15 @@ def _record_review_comments(engine, run_id: str, project_id: str, evidence: dict
                        str(evidence.get(key) or ""))))
     _paths = tuple(str(p) for k in ("impl_files", "test_files")
                    for p in (evidence.get(k) if isinstance(evidence.get(k), list) else []))
-    if fresh or (_seats and _paths):
+    from .acceptance import ledger as _ledger_mod
+
+    _na = _ledger_mod.parse_na_answers({
+        stage: evidence.get(key) or "" for stage, key in (
+            ("review_code", "review_summary"), ("security_check", "security_summary"),
+            ("consistency_check", "consistency_summary")) if stage not in _blind})
+    if fresh or (_seats and _paths) or _na:
         _ledger_review(engine, run_id, project_id, fresh, seats=_seats, reviewed_paths=_paths,
-                       blind_seats=_blind)
+                       blind_seats=_blind, na_answers=_na)
     if not fresh:
         return 0
     try:

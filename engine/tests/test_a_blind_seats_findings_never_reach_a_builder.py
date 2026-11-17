@@ -106,29 +106,66 @@ def test_the_prose_rule_never_touches_a_seat_that_ran_or_a_security_row(
         assert al.stale_rows(c, [sec], project_id=p, lineage=root) == {}
 
 
-def test_a_not_applicable_declaration_is_a_pending_check_a_review_confirms_or_refutes(
+def test_a_not_applicable_declaration_closes_only_on_a_positive_answer(
         eng, ledger_project):  # noqa: F811
     p = ledger_project
     with eng.begin() as c:
         root = _run(c, p, fctx={})
-        rows = [{"key": "F-42", "id": "bi_x", "severity": "HIGH", "why": "stale", "item": "F-42 x"},
-                {"key": "F-43", "id": "bi_y", "severity": "HIGH", "why": "done", "item": "F-43 y"}]
-        ids = al.declare_not_applicable(c, project_id=p, lineage=root, run_id=root, rows=rows)
-        assert len(ids) == 2 and all(al.get(c, i)["status"] == "open" for i in ids)
-        refuting = {"stage": "review_code", "body": "F-43 is NOT done: router.go still joins"}
-        assert al.confirm_not_applicable(c, project_id=p, lineage=root, run_id=root,
-                                         comments=[refuting], seats=[]) == []
-        closed = al.confirm_not_applicable(c, project_id=p, lineage=root, run_id=root,
-                                           comments=[refuting], seats=["review_code"])
-        assert closed == [ids[0]]
-        assert al.get(c, ids[1])["status"] == "open", "a refuted declaration stays a finding"
+
+        def orig(fp, title, path=None):
+            r, _ = al.upsert(c, project_id=p, lineage=root, kind="review", severity="major",
+                             fingerprint=fp, title=title, body=title, path=path,
+                             line=3 if path else None, stage="review_code", run_id=root)
+            return r
+
+        a, b, d, e = (orig("rv:a", "stale a"), orig("rv:b", "stale b"),
+                      orig("rv:d", "stale d"), orig("rv:e", "cites a changed file", "x.go"))
+        rows = [{"key": f"F-{r['number']}", "id": f"bi_{i}", "severity": "MAJOR",
+                 "why": "stale", "item": r["title"]} for i, r in enumerate((a, b, d, e))]
+        na = al.declare_not_applicable(c, project_id=p, lineage=root, run_id=root, rows=rows)
+        assert all(al.get(c, i)["status"] == "open" for i in na)
+        ka, kb, ke = (f"F-{a['number']}", f"F-{b['number']}", f"F-{e['number']}")
+        answers = al.parse_na_answers({
+            "review_code": f"NA {ka}: CONFIRMED\nNA {kb}: REFUTED — router.go still joins\n"
+                           f"NA {ke}: CONFIRMED"})
+        assert answers[kb][1] == "REFUTED" and "router.go" in answers[kb][2]
+        # Silence (F-d: no answer) confirms nothing.
+        done = al.confirm_not_applicable(c, project_id=p, lineage=root, run_id=root,
+                                         answers=answers, reviewed_paths=["x.go"])
+        assert len(done["confirmed"]) == 2 and len(done["refuted"]) == 1
+        assert al.get(c, na[0])["status"] == "fixed"
+        got = al.get(c, a["id"])
+        assert got["status"] == "superseded" and "confirmed not applicable by review_code" \
+            in got["waive_reason"]
+        assert al.get(c, b["id"])["status"] == "open", "a refuted one stays an open item"
+        assert al.get(c, na[1])["status"] == "superseded"
+        assert al.get(c, na[2])["status"] == "open", "no answer: the check stays open"
+        assert al.get(c, d["id"])["status"] == "open"
+        # A changed file: addressed by the change, never "not applicable".
+        assert al.get(c, e["id"])["status"] == "open"
+
+
+def test_a_refuted_declaration_reopens_a_closed_original(eng, ledger_project):  # noqa: F811
+    p = ledger_project
+    with eng.begin() as c:
+        root = _run(c, p, fctx={})
+        o, _ = al.upsert(c, project_id=p, lineage=root, kind="review", severity="major",
+                         fingerprint="rv:o", title="o", body="o", stage="review_code",
+                         run_id=root)
+        c.execute(text("UPDATE findings SET status = 'superseded' WHERE id = :i"), {"i": o["id"]})
+        key = f"F-{o['number']}"
+        al.declare_not_applicable(c, project_id=p, lineage=root, run_id=root, rows=[
+            {"key": key, "id": "bi_z", "severity": "MAJOR", "why": "done", "item": "o"}])
+        al.confirm_not_applicable(c, project_id=p, lineage=root, run_id=root,
+                                  answers={key: ("review_code", "REFUTED", "not done")})
+        assert al.get(c, o["id"])["status"] == "open"
 
 
 # ── plan coverage: NOT APPLICABLE ────────────────────────────────────────────────────────────
 
 BRIEF = ("FAILING CHECKS AND OPEN FINDINGS:\n"
          "- [HIGH] F-7 internal/proxy/router.go (`Match`) — dot segments are not cleaned\n"
-         "- [HIGH] F-42: stale finding about the sandbox, nothing to change in the app\n"
+         "- [MAJOR] F-42: stale finding about the sandbox, nothing to change in the app\n"
          "\nFix ONLY these.")
 
 
@@ -141,7 +178,7 @@ def test_an_explicit_not_applicable_with_a_reason_is_skipped_not_missing():
     assert [s["not_applicable"] for s in cov.skipped] == [True]
     assert "sandbox" in cov.skipped[0]["why"]
     block = pc.verify_block({"skipped": cov.skipped})
-    assert "NOT APPLICABLE" in block and "verify" in block
+    assert "NOT APPLICABLE" in block and "CONFIRMED" in block and "REFUTED" in block
 
 
 class _Says:
@@ -165,6 +202,17 @@ def test_not_applicable_needs_a_reason_and_only_covers_the_item_it_names():
              "ITEM F-99: NOT APPLICABLE — stale, already done\n")
     assert not pc.check({"plan": other}, instructions=BRIEF, decider=_Says("missing")).ok
     assert "NOT APPLICABLE" in pc.replan_note(cov)
+
+
+def test_every_serious_severity_is_never_not_applicable():
+    brief = "- [CRITICAL] F-1: crash on boot\n- [HIGH] F-2: path traversal in router\n"
+    plan = ("Change cmd/main.go.\nITEM F-1: NOT APPLICABLE — stale, fixed upstream\n"
+            "ITEM F-2: NOT APPLICABLE — stale, fixed upstream\n")
+    cov = pc.check({"plan": plan}, instructions=brief, decider=_Says("missing"))
+    assert not cov.ok and not cov.skipped
+    ok = pc.check({"plan": "Do X.\nITEM F-5: NOT APPLICABLE — stale, fixed upstream\n"},
+                  instructions="- [MAJOR] F-5: a stale thing\n", decider=_Says("missing"))
+    assert ok.ok and "CONFIRMED" in pc.verify_block({"skipped": ok.skipped})
 
 
 def test_a_security_finding_or_blocker_is_never_not_applicable():

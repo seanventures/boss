@@ -198,3 +198,18 @@ def test_a_bare_list_or_walk_call_is_not_a_directory_read(tmp_path):
     why = "config/tenants/lumen-pay.yaml; LOADED BY internal/config/loader.go:Load"
     got = _problem(root, why, ITEM_T)
     assert got and "does not name" in got, got
+
+
+def test_a_cli_reader_needs_an_item_about_the_command_line(tmp_path):
+    # The item names no file and is not about command-line input: LoadDoc reading a path its
+    # callers pass proves nothing about "the rules YAML".
+    got = _fx(f"Rate limit rules apply. {LINT_LOAD}", "Rate limit rules come from the rules YAML.")
+    assert got and "reads no data or config file" in got, got
+    # A reader nothing in a command calls (only tests / library code) is no CLI reader either.
+    root = _tree(tmp_path, {"internal/lint/doc.go": LINT_DOC,
+                            "internal/lint/engine.go": "package lint\n\nfunc Run(p string) {"
+                                                       " LoadDoc(p) }\n"})
+    got = v.wiring_problem(root, f"`gwlint validate <file>`; {LINT_LOAD}",
+                           item_text="**`gwlint` CLI**: `gwlint validate <file|dir>`.",
+                           needs_loader=True)
+    assert got and "reads no data or config file" in got, got
