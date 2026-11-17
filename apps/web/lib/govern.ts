@@ -85,6 +85,8 @@ export type TokenPolicy = {
 export type GovernView = {
   project_id: string;
   meter: Meter;
+  /** BOSSAPP-1342: each connected plan's windows and alerts (one read opens Govern). */
+  subscriptions?: SubscriptionsView;
   controls: Control[];
   thresholds: { key: string; label: string; pct: number; passed: boolean }[];
   token_guides: { advisory: boolean; enforced: Enforced; default: TokenPolicy | null; per_step: TokenPolicy[];
@@ -157,8 +159,26 @@ export type GovernRead<T> =
   | { ok: true; notModified: true; etag: string | null; data?: undefined }
   | { ok: false; status: number; error: string };
 
+/** Govern › Subscriptions (BOSSAPP-1342): GET /v1/govern/subscriptions. */
+export type SubscriptionWindow = {
+  kind: string; label: string; left_pct: number | null; state: string; state_label: string;
+  resets_at: string | null; observed_at: string | null;
+};
+export type SubscriptionSource = {
+  key: string; engine: string; engine_label: string; label: string;
+  left_pct: number | null; state: "plenty" | "tight" | "near_limit" | "exhausted"; state_label: string;
+  resets_at: string | null; basis: string;
+  login: { state: string; words: string; tip: string };
+  at_limit: { does: string; words: string };
+  windows: SubscriptionWindow[]; jobs: string[];
+  freshness: { as_of: string | null; stale: boolean };
+  pool: { id: string; name: string; position: number; size: number } | null;
+};
+export type SubscriptionAlert = { id: string; kind: string; severity: string; title: string; detail: string };
+export type SubscriptionsView = { project_id: string; sources: SubscriptionSource[]; alerts: SubscriptionAlert[] };
+
 export async function readGovern<T>(projectId: string,
-                                    view: "limits" | "spend" | "envelopes" | "daily" | "project_limits",
+                                    view: "limits" | "spend" | "envelopes" | "daily" | "project_limits" | "subscriptions",
                                     extra: Record<string, string> = {},
                                     opts: { etag?: string | null; signal?: AbortSignal } = {}): Promise<GovernRead<T>> {
   const q = new URLSearchParams({ project_id: projectId, view, ...extra });

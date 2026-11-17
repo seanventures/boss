@@ -277,6 +277,11 @@ def observe(connection: Any, settings: Any, project_id: Optional[str], engine: s
             from .store import invalidate
 
             invalidate()
+            # BOSSAPP-1342: the account's alert (banner, card, event) is raised or lifted now,
+            # not at the doctor's next tick, so a run that hit the limit shows it at once.
+            from ..subscription_headroom import observe_hook
+
+            observe_hook(connection, settings, project_id, key, engine)
         return {**patch, **{k: {"cleared": True} for k in cleared}}
     except Exception:  # noqa: BLE001 — bookkeeping never fails the call it observes
         log.warning("headroom observation failed (non-fatal)", exc_info=True)

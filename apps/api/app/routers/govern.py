@@ -7,6 +7,7 @@ GET  /v1/govern/envelopes          allocations, FinOps, reconciliations, initiat
 GET  /v1/budget/daily              money per UTC day (the caps' own definition)
 POST /v1/budget/cap/preview        "would have stopped N days" for a proposed cap (read-only)
 POST /v1/budget/intensity/preview  exactly what Pace would write (read-only)
+GET  /v1/govern/subscriptions      each subscription account: windows, % left, resets, alerts
 GET  /v1/govern/project-limits     each readable project's monthly limit and month spend
 POST /v1/govern/limits             the caps (month, day, burst) and the at-limit choice, one save
 POST /v1/govern/project-limit      a project's monthly limit (a project budget envelope)
@@ -177,6 +178,22 @@ def post_intensity_preview(body: IntensityPreviewBody) -> dict[str, Any]:
             connection, body.project_id, period="day",
             cap_usd_micros=envelope["daily_cap_usd_micros"])
     return {"envelope": envelope, "preview": preview}
+
+
+@router.get("/v1/govern/subscriptions")
+@permit(P.BUDGET_READ, scope=Scope.project(query="project_id"))
+def get_subscriptions(request: Request, project_id: str = Query(...)) -> Response:
+    """Govern › Subscriptions (BOSSAPP-1342): each connected subscription account's 5-hour and
+    weekly windows, % left, reset, status, how old the reading is, the jobs routed there and what
+    BOSS does at the limit — the numbers Setup's headroom strip shows (one source) — plus the
+    open alerts (Tight, Near limit, Limit reached) raised for them."""
+    from boss_engine.services import subscription_headroom
+
+    main = _main()
+    with begin(main.engine) as connection:
+        main.require_project_reader(connection, project_id)
+        view = subscription_headroom.govern_payload(connection, main.settings, project_id)
+    return JSONResponse(content=jsonable_encoder(view), headers={"Cache-Control": "no-cache"})
 
 
 @router.get("/v1/govern/project-limits")
