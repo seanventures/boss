@@ -40,6 +40,31 @@ def _hit(text: Optional[str]) -> Optional[str]:
     return found.group(0).strip()[:120] if found else None
 
 
+def is_tooling_failure(text: Optional[str], path: Optional[str] = None) -> bool:
+    """A finding that only describes BOSS's own tooling failing (BOSSAPP-1360, F-42: "every
+    command failed before execution because the BOSS command sandbox could not create a
+    namespace (`bwrap: ...`)"). It is about the reviewer's sandbox, never the app's code: no
+    file anchors it, and it carries the sandbox's own signature. A finding anchored to a file
+    (a real review of a sandbox feature) is never one."""
+    return not path and bool(_hit(text))
+
+
+def drop_tooling_failures(comments: Any, hollow: Any = None) -> list:
+    """`comments` (ReviewComment objects or mappings) without those a blind seat raised (`hollow`:
+    {stage: reason}, the seats recorded not_run / hollow / tools_blocked) and without those that
+    only describe a tooling failure. What is left may go to the ledger and to a builder."""
+    blind = set(hollow or {})
+    out = []
+    for c in comments or []:
+        get = c.get if isinstance(c, dict) else (lambda k, d=None, _c=c: getattr(_c, k, d))
+        if str(get("stage") or "") in blind:
+            continue
+        if is_tooling_failure(str(get("body") or get("text") or ""), get("path")):
+            continue
+        out.append(c)
+    return out
+
+
 def blocked_by_transport(stderr: Optional[str], stdout: Optional[str] = None) -> Optional[str]:
     """Why the engine's tools could not run, from the CLI's own output only, or None.
 

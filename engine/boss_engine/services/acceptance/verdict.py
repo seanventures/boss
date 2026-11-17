@@ -593,6 +593,50 @@ def _reads_data(code: str) -> bool:
                for m in _STRING.finditer(code))
 
 
+#: A directory read, in the spellings of the common languages.
+_DIR_READ = re.compile(
+    r"\b(?:ReadDir|Glob|WalkDir|Walk|walk|listdir|scandir|iterdir|glob|iglob|rglob|readdir|"
+    r"readdirSync|opendir|newDirectoryStream|list|walkSync|globSync)\s*\(")
+#: A Python import of the reader's module.
+_PY_IMPORT = r"(?m)^\s*(?:from\s+[\w.]*\b{stem}\b|import\s+[\w.]*\b{stem}\b)"
+#: A file that runs code by command (not source): its lines hand files to a reader.
+_WIRING_FILE = re.compile(
+    r"(?i)(^|/)(makefile[^/]*|[^/]*\.mk|docker-compose[^/]*\.ya?ml|compose[^/]*\.ya?ml|"
+    r"dockerfile[^/]*|package\.json|justfile|taskfile\.ya?ml|[^/]*\.sh|"
+    r"\.github/workflows/[^/]+|\.gitlab-ci\.ya?ml|tox\.ini)$")
+
+
+def _foreign_root(scope: str, lit: str) -> bool:
+    """Whether every line of `scope` that holds the folder string `lit` joins it onto a temp,
+    cache or home root."""
+    lines = [ln for ln in scope.splitlines() if re.search(r"[\"'`]" + re.escape(lit) + r"/?[\"'`]", ln)]
+    return bool(lines) and all(re.search(r"(?i)temp|tmp|cache|home", ln) for ln in lines)
+
+
+def _logical_lines(text: str) -> list[str]:
+    """The text's lines with backslash continuations joined (a multi-line shell command)."""
+    return re.sub(r"\\\n\s*", " ", text).splitlines()
+
+
+def _hands_over(text: str, data_file: str) -> bool:
+    """Whether `text` names the data file as an argument: its path, a `/`-bounded tail, its bare
+    name, a glob matching it, or its folder. A path with a different folder does not."""
+    import fnmatch
+
+    name, folder = Path(data_file).name, Path(data_file).parent.as_posix()
+    for tok in re.findall(r"[\w./*\-]+", text):
+        lit = _lit(tok)
+        if not lit:
+            continue
+        if "*" in lit:
+            if fnmatch.fnmatch(data_file, lit) or fnmatch.fnmatch(data_file, "*/" + lit):
+                return True
+        elif lit == name or _suffix_of(data_file, lit) or (
+                folder not in ("", ".") and (lit == folder or "/" in lit and folder.endswith("/" + lit))):
+            return True
+    return False
+
+
 class _Definitions:
     """The tree's code files, read once per check, and where a symbol is DEFINED.
 
@@ -609,6 +653,7 @@ class _Definitions:
         self.root = Path(root)
         self._code: Optional[dict[str, str]] = None
         self._bare: dict[str, str] = {}
+        self._wiring: Optional[list[str]] = None
 
     def code(self) -> dict[str, str]:
         """{path: the file's code without comments, strings kept}."""
@@ -1071,6 +1116,121 @@ class _Definitions:
                             carried[p] = v
                     queue.append((hit, name, level + 1, carried))
         return None
+
+    # ── A FILE REACHED WITHOUT BEING NAMED (BOSSAPP-1353) ─────────────────────────────────
+    def wired_elsewhere(self, data: list[str], rel: str) -> bool:
+        """Whether one of `data` is reached by the reader `rel` through a path no source line
+        names literally, in either of the two ways real programs do it:
+
+          (a) `rel` READS THE FILE'S DIRECTORY: a directory read (ReadDir, Glob, WalkDir,
+              listdir, scandir, iterdir, readdirSync, Files.list ...) in `rel`, on a folder it
+              names (the file's parent, a tail of it, or a glob into it) whose extension filter
+              admits the file: the gateway loading every file of `config/tenants`;
+          (b) THE FILE IS PASSED TO THE READER as an argument: a test, a Makefile/compose/CI/
+              shell line, a package.json script or a README command that names the file
+              together with the reader (its folder, its binary name or its file stem):
+              `gwlint validate examples/x.yaml`.
+
+        Never "mentioned anywhere": a file no reader's directory read covers and no command or
+        test hands to the reader is not wired."""
+        if _TEST_PATH.search(rel) or not _CODE_FILE.search(rel):
+            return False
+        return any(d != rel and (self._dir_read_covers(rel, d) or self._passed_to(rel, d))
+                   for d in data)
+
+    def _dir_read_covers(self, rel: str, data_file: str) -> bool:
+        import fnmatch
+
+        code, _ = self.of(rel)
+        if not code:
+            return False
+        path = Path(data_file)
+        folder, name = path.parent.as_posix(), path.name
+        if folder in ("", "."):
+            return False
+        for m in _DIR_READ.finditer(code):
+            scope = _scope_at(code, m.start())
+            lits = [_lit(x.group(2)) for x in _STRING.finditer(scope)]
+            named = False
+            for lit in lits:
+                if not lit:
+                    continue
+                if "*" in lit:
+                    if "/" in lit and (fnmatch.fnmatch(data_file, lit)
+                                       or fnmatch.fnmatch(data_file, "*/" + lit)):
+                        named = True
+                elif lit == folder or lit.endswith("/" + folder):
+                    named = True
+                elif folder.endswith("/" + lit) and not _foreign_root(scope, lit):
+                    # `Join(dir, "tenants")`: the base is the caller's config dir, unless it is
+                    # a temp/cache/home root (a cache folder called tenants is not config/tenants).
+                    named = True
+            if named and _pattern_admits(lits, name):
+                return True
+        return False
+
+    def _readers(self, rel: str) -> tuple[set[str], set[str]]:
+        """(folders, names) a command or test uses to reach reader `rel`: its own folder, the
+        folders of the code that imports it (the CLI wrapping a library), their last parts, and
+        the file stem."""
+        here = Path(rel).parent.as_posix()
+        stem = Path(rel).stem
+        dirs = {here}
+        for other, code in self.code().items():
+            if other == rel or _TEST_PATH.search(other):
+                continue
+            if _ext(other) == "go" and here not in ("", "."):
+                if re.search(r'"[^"\n]*' + re.escape(here) + r'"', code):
+                    dirs.add(Path(other).parent.as_posix())
+            elif _ext(other) == "py" and re.search(_PY_IMPORT.format(stem=re.escape(stem)), code):
+                dirs.add(Path(other).parent.as_posix())
+        names = {Path(d).name for d in dirs if d not in ("", ".")} | {stem}
+        return dirs, {n for n in names if len(n) >= 3}
+
+    def _passed_to(self, rel: str, data_file: str) -> bool:
+        dirs, names = self._readers(rel)
+        stem = Path(rel).stem
+        real_dirs = [d for d in dirs if d not in ("", ".")]
+        for other in self._wiring_files():
+            text = self._text(other)
+            if not text or other == rel:
+                continue
+            if _TEST_PATH.search(other) and _CODE_FILE.search(other):
+                imports_reader = any(re.search(r'"[^"\n]*' + re.escape(d) + r'"', text)
+                                     for d in real_dirs)
+                if _ext(other) == "py":
+                    imports_reader = imports_reader or bool(
+                        re.search(_PY_IMPORT.format(stem=re.escape(stem)), text))
+                if (Path(other).parent.as_posix() in dirs or imports_reader) \
+                        and _hands_over(text, data_file):
+                    return True
+                continue
+            for line in _logical_lines(text):
+                if _hands_over(line, data_file) and (
+                        any(re.search(r"(?<![\w-])" + re.escape(n) + r"(?![\w-])", line)
+                            for n in names) or any(d in line for d in real_dirs)):
+                    return True
+        return False
+
+    def _wiring_files(self) -> list[str]:
+        """Tests and the files that run code: Makefiles, compose/CI files, Dockerfiles, shell
+        scripts, package.json, READMEs and other docs (a quick-start command)."""
+        if self._wiring is None:
+            self._wiring = []
+            for p in _walk(self.root):
+                rel = str(p.relative_to(self.root))
+                if (_WIRING_FILE.search(rel) or _DOC_PATH.search(rel)
+                        or (_TEST_PATH.search(rel) and _CODE_FILE.search(p.name))):
+                    self._wiring.append(rel)
+                if len(self._wiring) >= 1500:
+                    break
+        return self._wiring
+
+    def _text(self, rel: str) -> str:
+        try:
+            return (self.root / rel).read_text(encoding="utf-8", errors="ignore")[:400_000]
+        except OSError:
+            return ""
 
     def is_type(self, name: str) -> bool:
         """Whether a non-test file of the tree defines `name` as a type (class, struct, …)."""
@@ -1701,6 +1861,9 @@ def wiring_problem(root: Any, why: str, *, item_text: str = "",
         if any(defs.fed_by_loader(data, rel, s) for rel, syms in cited.items() for s in syms
                if not _TEST_PATH.search(rel)):
             return None
+        if data and any(defs.wired_elsewhere(data, r)
+                        for r in list(dict.fromkeys([*found, *cited]))):
+            return None
         return "loader not named: this item's file must be read by the code (LOADED BY)"
     found, _absent = evidence_paths(root, why, defs=defs) if claims else ([], [])
     data = _item_data_files(root, item_text, found) if claims else []
@@ -1722,6 +1885,8 @@ def wiring_problem(root: Any, why: str, *, item_text: str = "",
         # (`Watch` → `ReloadOnce` → `Load`, BOSSAPP-1329) — followed from its body only.
         if defs.reaches(data, [(hit, symbol)]):
             continue
+        if data and defs.wired_elsewhere(data, hit):
+            continue                  # reached by a directory read or handed in (BOSSAPP-1353)
         if data:
             return (f"{hit} does not name {', '.join(data[:3])} in code that reads it "
                     f"({symbol}'s own body, or the code it calls)")

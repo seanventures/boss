@@ -2751,7 +2751,8 @@ def _generated_pr_summary(engine, settings, run_id: str, project_id: str, *, tit
 
 
 def _ledger_review(engine, run_id: str, project_id: str, comments: list, *,
-                   seats: tuple = (), reviewed_paths: tuple = ()) -> None:
+                   seats: tuple = (), reviewed_paths: tuple = (),
+                   blind_seats: tuple = ()) -> None:
     """The review's findings into the findings ledger (acceptance/ledger.py, BOSSAPP-1216), in
     their own transaction after the review's model calls. Never fails the build: bookkeeping."""
     from .acceptance import ledger as _ledger
@@ -2762,7 +2763,8 @@ def _ledger_review(engine, run_id: str, project_id: str, comments: list, *,
             if lin:
                 _ledger.observe_review(c, project_id=project_id, lineage=lin["lineage"],
                                        run_id=run_id, comments=comments, pr_url=lin["pr_url"],
-                                       seats=seats, reviewed_paths=reviewed_paths)
+                                       seats=seats, reviewed_paths=reviewed_paths,
+                                       blind_seats=blind_seats)
     except Exception as exc:  # noqa: BLE001
         _log_caught(logger)
         # The class only: a driver error can carry the connection URL.
@@ -2829,6 +2831,12 @@ def _record_review_comments(engine, run_id: str, project_id: str, evidence: dict
                        ("security_check", "security_summary"),
                        ("consistency_check", "consistency_summary")):
         fresh += review_comments.parse_findings(evidence.get(key) or "", stage=stage)
+    # A BLIND SEAT SAYS NOTHING ABOUT THE CODE (BOSSAPP-1360): findings a seat recorded as
+    # not_run / hollow / tools_blocked raised, and findings that only describe BOSS's own tooling
+    # failing (F-42: "every command failed ... bwrap"), are neither comments nor ledger rows,
+    # and never reach an app builder.
+    _blind = tuple(k for k, v in (evidence.get("review_hollow") or {}).items() if v)
+    fresh = review_tools.drop_tooling_failures(fresh, {k: True for k in _blind})
     # THE FINDINGS LEDGER (BOSSAPP-1216): every finding of every severity — advisory under the
     # fast lane or not — is a ledger row the moment the review produced it, whatever the gate
     # then decides to block on, defer or drop. A seat that reviewed this round's files and no
@@ -2844,7 +2852,8 @@ def _record_review_comments(engine, run_id: str, project_id: str, evidence: dict
     _paths = tuple(str(p) for k in ("impl_files", "test_files")
                    for p in (evidence.get(k) if isinstance(evidence.get(k), list) else []))
     if fresh or (_seats and _paths):
-        _ledger_review(engine, run_id, project_id, fresh, seats=_seats, reviewed_paths=_paths)
+        _ledger_review(engine, run_id, project_id, fresh, seats=_seats, reviewed_paths=_paths,
+                       blind_seats=_blind)
     if not fresh:
         return 0
     try:
@@ -7479,7 +7488,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 instructions = f"{instructions}{approved_prd_design.brief_addendum(instructions, design)}"
             else:
                 instructions = (f"{instructions}\n\nREFINED SPEC:\n{design.get('spec', '')}"
-                                f"\n\nTECHNICAL PLAN:\n{design.get('plan', '')}")
+                                f"\n\nTECHNICAL PLAN:\n{design.get('plan', '')}"
+                                + _plan_coverage.verify_block(design.get("coverage")))
             # HUMAN APPROVE-PLAN GATE (Wire-Phase 2b): top risk pauses for sign-off before code.
             # So does a plan that still leaves brief items out after its re-plans (AR-24): a
             # person sees the gap and approves, requests changes or rejects — never code first.

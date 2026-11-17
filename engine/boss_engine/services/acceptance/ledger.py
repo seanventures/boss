@@ -654,8 +654,8 @@ def _count(delta: LedgerDelta, row: Mapping[str, Any], what: str) -> None:
 def observe_review(connection: Any, *, project_id: str, lineage: str, run_id: Optional[str],
                    comments: Iterable[Any], check_id: Optional[str] = None,
                    pr_url: Optional[str] = None, stage: Optional[str] = None,
-                   seats: Iterable[str] = (), reviewed_paths: Iterable[str] = ()
-                   ) -> LedgerDelta:
+                   seats: Iterable[str] = (), reviewed_paths: Iterable[str] = (),
+                   blind_seats: Iterable[str] = ()) -> LedgerDelta:
     """Reviewer findings (review_comments.ReviewComment, any severity, advisory or not) into
     the ledger: `rv:` fingerprint dedupe; "same as F-n" merges into F-n only when F-n is a live
     row of this lineage AND plausibly the same problem (close_enough: the same file, or a word
@@ -665,9 +665,16 @@ def observe_review(connection: Any, *, project_id: str, lineage: str, run_id: Op
     `seats` / `reviewed_paths` (L4): the seats that reviewed this round and the files it
     changed. A live review row a seat raised earlier, on one of those files, that the same seat
     did not report again this round is FIXED BY THAT RE-REVIEW (`fixed_by_review`), so a
-    follow-up stops resending what a repair round already fixed."""
+    follow-up stops resending what a repair round already fixed.
+
+    `blind_seats` (BOSSAPP-1360): seats recorded not_run / hollow / tools_blocked. What a blind
+    seat said, and any finding that only describes BOSS's own tooling failure, is never a row."""
+    from .. import review_tools
+
     delta = LedgerDelta()
     reported: set[str] = set()
+    blind = set(blind_seats or ())
+    comments = review_tools.drop_tooling_failures(comments, {s: True for s in blind})
     for c in comments or []:
         get_ = (c.get if isinstance(c, Mapping) else (lambda k, d=None, _c=c: getattr(_c, k, d)))
         body = str(get_("body") or get_("text") or "").strip()
@@ -968,8 +975,16 @@ def stale_rows(connection: Any, rows: Iterable[Mapping[str, Any]], *, project_id
     rows = list(rows or [])
     out: dict[str, str] = {}
     seen: dict[str, Mapping[str, Any]] = {}
+    from .. import review_tools
+
     for r in rows:
         fp = str(r.get("fingerprint") or "")
+        # A finding about BOSS's own tooling failing (a blind seat's "every command failed",
+        # `bwrap: ...`) is no finding about the app: never carried to a builder (BOSSAPP-1360).
+        if r.get("kind") != "acceptance_gap" and review_tools.is_tooling_failure(
+                f"{r.get('title') or ''} {r.get('body') or ''}", r.get("path")):
+            out[r["id"]] = "describes BOSS's own tooling failure (a blind review seat)"
+            continue
         if fp and fp in seen:
             older = r if int(r.get("number") or 0) < int(seen[fp].get("number") or 0) else seen[fp]
             out[older["id"]] = "duplicate fingerprint"
