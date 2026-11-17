@@ -11926,13 +11926,21 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: open_bodies.Co
     looks_like_ip = all(part.isdigit() for part in address.split(".")) and address.count(".") == 3
     scheme = "http" if (looks_like_ip or ":" in address) else "https"
 
+    # THE APP SAYS WHERE IT IS HEALTHY (its boss.deploy.yaml), not a hard-coded "/".
+    from boss_engine.services.deployment_fleet import resolve_health_path
+
+    with begin(engine) as connection:
+        health_path, _health_source = resolve_health_path(
+            connection, project_id=run["project_id"], repo=repo, app_name=app_name,
+            health_path=payload.get("health_path"))
+
     created = register_deployment_target({
         "project_id": run["project_id"],
         "app_name": app_name,
         "repo": repo,
         "environment": environment,
         "target_kind": "ssh",
-        "health_checks": [{"kind": "http", "scheme": scheme, "path": "/",
+        "health_checks": [{"kind": "http", "scheme": scheme, "path": health_path,
                            "expect": 200, "expect_status": 200}],
         # Replaced immediately by `attach_target`, which derives it from the host record so the
         # address has exactly one writable home.
@@ -27534,6 +27542,10 @@ def prepare_delivery_deploy_target(run_id: str, payload: WorkflowDeployTargetBod
                     status_code=409,
                     detail=f"host '{host['name']}' has no free port between {low} and {high}.")
             target_id = make_id("deptgt")
+            from boss_engine.services.deployment_fleet import resolve_health_path
+
+            _health_path, _ = resolve_health_path(
+                connection, project_id=project_id, repo=str(repo or ""), app_name=app_name)
             connection.execute(text("""
                 INSERT INTO deployment_targets
                   (id, project_id, app_name, repo, environment, target_kind, target_ref,
@@ -27546,7 +27558,7 @@ def prepare_delivery_deploy_target(run_id: str, payload: WorkflowDeployTargetBod
                 "env": environment,
                 "ref": f"{host['ssh_user'] or 'root'}@{host['address']}:{host['ssh_port'] or 22}",
                 "dom": json.dumps([f"{host['address']}:{port}"]),
-                "hc": json.dumps([{"kind": "http", "path": "/", "expect": 200,
+                "hc": json.dumps([{"kind": "http", "path": _health_path, "expect": 200,
                                    "scheme": "http"}]),
                 "by": actor,
             })

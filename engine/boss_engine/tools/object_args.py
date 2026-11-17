@@ -71,6 +71,7 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "review_pull_request_again": {"run_id": CODE_TASK},
     "recheck_change": {"run_id": CODE_TASK},
     "retarget_app": {"target_id": "deployment_target", "host_id": "deployment_host"},
+    "update_deployment_target": {"target_id": "deployment_target", "host_id": "deployment_host"},
     "retry_code_task": {"run_id": CODE_TASK},
     "retry_workflow_step": {"run_id": "workflow_run"},
     "search_code": {"run_id": CODE_TASK},

@@ -1118,6 +1118,247 @@ def _first_free_port(connection, address: str, *, start: int = 3000,
     return None
 
 
+#: Where a service commonly answers "I am up", in the order they are tried when nothing declares one.
+COMMON_HEALTH_PATHS: tuple[str, ...] = ("/healthz", "/readyz", "/health")
+#: Words that mean "this machine" rather than a registered host's name.
+_LOCAL_WORDS = frozenset({"local", "locally", "localhost", "this machine", "this laptop",
+                          "laptop", "my machine", "my laptop", "this computer"})
+_LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1", "0.0.0.0"})
+
+
+def health_path_from_manifest(manifest_text: Any) -> Optional[str]:
+    """The path of the first health check the app's own boss.deploy.yaml declares, or None."""
+    from .app_deploy_manifest import ManifestError, load_manifest
+    from .preview_service import health_url_path
+
+    if not str(manifest_text or "").strip():
+        return None
+    try:
+        manifest = load_manifest(str(manifest_text))
+    except (ManifestError, TypeError, ValueError):
+        return None
+    for check in manifest.health:
+        path = health_url_path(check.url)
+        if path:
+            return path
+    return None
+
+
+def resolve_health_path(connection, *, project_id: str, repo: str, app_name: str,
+                        health_path: Optional[str] = None,
+                        manifest_text: Optional[str] = None) -> tuple[str, str]:
+    """(path, source) for a NEW target's health check. The app says where it is healthy; "/" is
+    the last resort and says so, because an API with no root page fails a "/" check forever.
+
+    Order: the path the caller names, the manifest text it passes, the manifest of the newest
+    stack deployment of this repository, the path a sibling target of the same app already
+    uses, then "/" (source "default")."""
+    from .naming import identity_key
+
+    path = str(health_path or "").strip()
+    if path:
+        return (path if path.startswith("/") else "/" + path), "given"
+    path = health_path_from_manifest(manifest_text)
+    if path:
+        return path, "manifest"
+    if repo:
+        try:
+            row = connection.execute(
+                sql("SELECT manifest_text FROM stack_deployments WHERE project_id = :p "
+                    "AND repository LIKE :r AND COALESCE(manifest_text, '') <> '' "
+                    "ORDER BY created_at DESC LIMIT 1"),
+                {"p": project_id, "r": f"%/{repo}"}).mappings().first()
+        except Exception:  # noqa: BLE001 - an unreadable history is "no declaration"
+            row = None
+        path = health_path_from_manifest(row["manifest_text"]) if row else None
+        if path:
+            return path, "manifest"
+    wanted = identity_key(app_name)
+    for row in connection.execute(
+            sql("SELECT app_name, health_checks FROM deployment_targets "
+                "WHERE project_id = :p AND status <> 'retired' ORDER BY created_at DESC"),
+            {"p": project_id}).mappings().all():
+        if identity_key(str(row["app_name"] or "")) != wanted:
+            continue
+        for check in row["health_checks"] or []:
+            p = str((check or {}).get("path") or "")
+            if p and p != "/":
+                return p, "sibling_target"
+    return "/", "default"
+
+
+def no_host_matches(connection, project_id: str, hint: str) -> Optional[dict[str, Any]]:
+    """None when `hint` ("local", a host's name or address) names a registered host. Otherwise the
+    plain refusal: what is registered, and how to get what was asked for."""
+    wanted = str(hint or "").strip().lower()
+    if not wanted:
+        return None
+    hosts = [dict(h) for h in list_hosts(connection, project_id)]
+    local = wanted in _LOCAL_WORDS
+    for h in hosts:
+        name, address = str(h.get("name") or "").lower(), str(h.get("address") or "").lower()
+        if wanted in (name, address, str(h.get("id") or "").lower()):
+            return None
+        if local and address in _LOOPBACK:
+            return None
+    offer = ("register this machine as a deployment host (Infra > Add host), verify it, then "
+             "create the target on it" if local else
+             "register that host (Infra > Add host) and verify it, or pick one of the "
+             "registered hosts")
+    return {"ok": False, "no_matching_host": True, "asked_for": hint,
+            "error": f"no host matches {hint!r}: nothing registered for this project is "
+                     f"{'this machine' if local else hint!r}. Registered: "
+                     f"{', '.join(str(h['name']) for h in hosts) or 'none'}. Nothing was created.",
+            "offer": offer,
+            "hosts": [{"host_id": h["id"], "name": h["name"], "address": h["address"],
+                       "status": h["status"]} for h in hosts]}
+
+
+def health_path_findings(target: dict[str, Any], *, probe: Any = None) -> list[dict[str, Any]]:
+    """Probe each http health check of a target; a 404 is reported with the common paths that DO
+    answer. `probe(url) -> status|None` is injectable; the default is one GET with a short
+    timeout. Read-only. Returns [{path, status, warning?, suggest?}]."""
+    import urllib.error
+    import urllib.request
+
+    def default_probe(url: str) -> Optional[int]:
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:  # noqa: S310
+                return int(resp.status)
+        except urllib.error.HTTPError as exc:
+            return int(exc.code)
+        except Exception:  # noqa: BLE001 - unreachable is a result, not an error
+            return None
+
+    ask = probe or default_probe
+    domains = target.get("domains") or []
+    base_host = str(domains[0]).split(":")[0] if domains else ""
+    out: list[dict[str, Any]] = []
+    for check in target.get("health_checks") or []:
+        if not isinstance(check, dict) or str(check.get("kind") or "http") != "http":
+            continue
+        scheme = str(check.get("scheme") or "http")
+        port = check.get("port")
+        path = str(check.get("path") or "/")
+        if not base_host:
+            continue
+        origin = f"{scheme}://{base_host}" + (f":{port}" if port else "")
+        status = ask(origin + path)
+        item: dict[str, Any] = {"path": path, "status": status}
+        if status == 404:
+            item["warning"] = (f"the health path {path!r} returns 404: the app has no page "
+                               "there, so this check can never pass.")
+            for candidate in COMMON_HEALTH_PATHS:
+                if candidate != path and ask(origin + candidate) == 200:
+                    item["suggest"] = candidate
+                    item["warning"] += (f" {candidate} answers 200; use "
+                                        "update_deployment_target to point the check at it.")
+                    break
+        out.append(item)
+    return out
+
+
+
+def update_deployment_target(
+    connection, *, project_id: str, target_id: str, health_path: Optional[str] = None,
+    health_expected_status: Optional[int] = None, port: Optional[int] = None,
+    host_id: Optional[str] = None, env: Optional[dict[str, str]] = None,
+    actor: str = "boss",
+) -> dict[str, Any]:
+    """Change a deployment target in place: its health check (path, expected status), port,
+    host, and environment variables BY REFERENCE (name -> a secret ref id, never a value).
+
+    Writes nothing until called; the agent reaches it as a proposal the operator accepts. The
+    API's PATCH /v1/deployment-targets/{id} is the other door to the same row."""
+    row = connection.execute(
+        sql("SELECT id, host_id, domains, health_checks, required_resources, secret_refs "
+            "FROM deployment_targets WHERE id = :i AND project_id = :p FOR UPDATE"),
+        {"i": target_id, "p": project_id}).mappings().first()
+    if row is None:
+        return {"ok": False, "error": f"no deployment target {target_id} in this project"}
+    changed: dict[str, Any] = {}
+
+    if host_id and host_id != row["host_id"]:
+        try:
+            usable_host(connection, host_id, project_id)
+        except HostNotUsable as refused:
+            return {"ok": False, "error": f"{refused.headline} {refused.action}"}
+        attach_target(connection, target_id=target_id, host_id=host_id)
+        changed["host_id"] = host_id
+    host = get_host(connection, host_id or row["host_id"]) if (host_id or row["host_id"]) else None
+
+    checks = [dict(c) for c in (row["health_checks"] or []) if isinstance(c, dict)]
+    if health_path is not None or health_expected_status is not None or port:
+        if not checks:
+            checks = [{"kind": "http", "scheme": "http", "path": "/", "expect_status": 200}]
+        for check in checks:
+            if str(check.get("kind") or "http") != "http":
+                continue
+            if health_path is not None:
+                path = str(health_path).strip()
+                check["path"] = path if path.startswith("/") else "/" + path
+                changed["health_path"] = check["path"]
+            if health_expected_status is not None:
+                check["expect_status"] = int(health_expected_status)
+                check["expect"] = int(health_expected_status)
+                changed["health_expected_status"] = int(health_expected_status)
+            if port:
+                check["port"] = int(port)
+        connection.execute(
+            sql("UPDATE deployment_targets SET health_checks = CAST(:h AS JSONB), "
+                "updated_at = now() WHERE id = :i"),
+            {"h": json.dumps(checks), "i": target_id})
+
+    if port:
+        if host is None:
+            return {"ok": False, "error": "the target has no host, so a port cannot be set"}
+        taken = _ports_assigned_on(connection, str(host["address"]))
+        if int(port) in taken and taken[int(port)] != row_app_name(connection, target_id):
+            return {"ok": False,
+                    "error": f"port {port} on {host['address']} is already assigned to "
+                             f"{taken[int(port)]!r}."}
+        resources = [r for r in (row["required_resources"] or [])
+                     if not (isinstance(r, dict) and r.get("kind") == "app_port")]
+        resources.append({"kind": "app_port", "name": str(int(port))})
+        connection.execute(
+            sql("UPDATE deployment_targets SET required_resources = CAST(:r AS JSONB), "
+                "domains = CAST(:d AS JSONB), updated_at = now() WHERE id = :i"),
+            {"r": json.dumps(resources), "d": json.dumps([f"{host['address']}:{int(port)}"]),
+             "i": target_id})
+        changed["port"] = int(port)
+
+    if env:
+        bindings = [b for b in (row["secret_refs"] or [])
+                    if not (isinstance(b, dict) and b.get("name") in env)]
+        for name, ref in sorted(env.items()):
+            ref = str(ref or "").strip()
+            exists = connection.execute(
+                sql("SELECT 1 FROM secret_refs WHERE id = :r AND project_id = :p"),
+                {"r": ref, "p": project_id}).first()
+            if not exists:
+                return {"ok": False,
+                        "error": f"env {name!r}: {ref!r} is not a secret reference of this "
+                                 "project. Pass the id of an existing reference, never a value."}
+            bindings.append({"name": str(name), "secret_ref_id": ref})
+        connection.execute(
+            sql("UPDATE deployment_targets SET secret_refs = CAST(:s AS JSONB), "
+                "updated_at = now() WHERE id = :i"),
+            {"s": json.dumps(bindings), "i": target_id})
+        changed["env"] = sorted(env)
+
+    if not changed:
+        return {"ok": True, "target_id": target_id, "changed": {}, "note": "nothing to change"}
+    emit_event(connection, project_id, "deployment.target_updated", actor,
+               "deployment_target", target_id, {"changed": changed})
+    return {"ok": True, "target_id": target_id, "changed": changed,
+            "note": "the target is updated; nothing was deployed. Redeploy to use it."}
+
+
+def row_app_name(connection, target_id: str) -> str:
+    return str(connection.execute(sql("SELECT app_name FROM deployment_targets WHERE id = :i"),
+                                  {"i": target_id}).scalar() or "")
+
+
 def suggest_port(connection, host: dict[str, Any], *, project_id: str = "",
                  app_name: str = "") -> Optional[int]:
     """The port a new target on this host should get: the app's own earlier port when nobody
@@ -1139,7 +1380,8 @@ def suggest_port(connection, host: dict[str, Any], *, project_id: str = "",
 def create_deployment_target(
     connection, *, project_id: str, app_name: str, environment: str = "staging",
     repo: Optional[str] = None, host_id: Optional[str] = None, port: Optional[int] = None,
-    actor: str = "boss",
+    actor: str = "boss", host: Optional[str] = None, health_path: Optional[str] = None,
+    manifest_text: Optional[str] = None,
 ) -> dict[str, Any]:
     """Give an app somewhere to be deployed to.
 
@@ -1208,6 +1450,19 @@ def create_deployment_target(
                 "note": f"{app!r} already has a {environment} target; using it rather than "
                         "creating a second one."}
 
+    if host and not host_id:
+        # ASKED FOR A PLACE THAT IS NOT REGISTERED ("local staging" with only a remote host):
+        # say so and offer the path, never quietly build somewhere else.
+        refusal = no_host_matches(connection, project_id, host)
+        if refusal:
+            return refusal
+        for h in list_hosts(connection, project_id):
+            if str(host).strip().lower() in (str(h.get("name") or "").lower(),
+                                             str(h.get("address") or "").lower()) or (
+                    str(host).strip().lower() in _LOCAL_WORDS
+                    and str(h.get("address") or "").lower() in _LOOPBACK):
+                host_id = str(h["id"])
+                break
     hosts = [dict(h) for h in list_hosts(connection, project_id)]
     verified = [h for h in hosts if h.get("status") == "verified"]
     if host_id:
@@ -1282,6 +1537,11 @@ def create_deployment_target(
     looks_like_ip = address.count(".") == 3 and all(p.isdigit() for p in address.split("."))
     scheme = "http" if (looks_like_ip or ":" in address) else "https"
 
+    # THE APP SAYS WHERE IT IS HEALTHY. A hard-coded "/" failed every API with no root page.
+    check_path, check_source = resolve_health_path(
+        connection, project_id=project_id, repo=repo, app_name=app,
+        health_path=health_path, manifest_text=manifest_text)
+
     target_id = _target_id()
     connection.execute(
         sql("INSERT INTO deployment_targets "
@@ -1295,7 +1555,7 @@ def create_deployment_target(
         {"i": target_id, "p": project_id, "a": app, "r": repo, "e": environment,
          "rr": json.dumps([{"kind": "app_port", "name": str(port)}]),
          "ref": target_ref_for(host), "dom": json.dumps([f"{address}:{port}"]),
-         "hc": json.dumps([{"kind": "http", "scheme": scheme, "path": "/",
+         "hc": json.dumps([{"kind": "http", "scheme": scheme, "path": check_path,
                             "expect_status": 200, "port": port}]),
          "by": actor})
     attached = attach_target(connection, target_id=target_id, host_id=host["id"])
@@ -1308,5 +1568,10 @@ def create_deployment_target(
             "host": host["name"], "address": address, "port": port,
             "domain": f"{address}:{port}", "target_ref": attached.get("target_ref"),
             "arch": attached.get("arch"), "repo": repo,
-            "health_check": f"{scheme}://{address}:{port}/ expecting 200",
+            "health_check": f"{scheme}://{address}:{port}{check_path} expecting 200",
+            "health_path": check_path, "health_path_source": check_source,
+            **({"health_note": "no boss.deploy.yaml health path was found, so the check is "
+                               "'/'. If the app has no root page, set the real path with "
+                               "update_deployment_target (or pass health_path)."}
+               if check_source == "default" else {}),
             "next": "Nothing has been deployed yet. Deploy the build to it with deploy_app."}
