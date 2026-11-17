@@ -470,3 +470,28 @@ def test_a_discovery_run_with_no_project_in_the_context_still_flips_its_source(c
         assert _broken(conn, "openai_codex_chatgpt") is True
     finally:
         llm_telemetry.set_llm_context()
+
+
+def test_a_bare_provider_url_401_in_a_log_is_not_a_refusal():
+    line = 'HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 401 Unauthorized"'
+    assert harness_refusal.is_provider_refusal(_verdict("x", transport=line)) is False
+
+
+def test_the_code_agent_engine_error_path_flips_claude_codes_row(hook):
+    """code_agent / agent_sdk_engine hand the CLI's own final error to note_engine_error (a
+    refused login is only ever classified on that path; the live stderr stream never sees it)."""
+    from boss_engine.services import harness_failures
+
+    _source(hook, "anthropic_claude_code", "anthropic_claude_code")
+    harness_failures.note_engine_error("Invalid API key \u00b7 Please run /login",
+                                       engine="claude_code")
+    assert _broken(hook, "anthropic_claude_code") is True
+    assert len(_cards(hook)) == 1
+
+
+def test_the_engine_error_path_flips_codexs_row(hook):
+    from boss_engine.services import harness_failures
+
+    _source(hook, "openai_codex_chatgpt", "openai_codex_chatgpt")
+    harness_failures.note_engine_error(PROVIDER_401, engine="codex")
+    assert _broken(hook, "openai_codex_chatgpt") is True

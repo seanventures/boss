@@ -34,13 +34,11 @@ _log = logging.getLogger("boss.harness_refusal")
 CARD_ACTION = "sign_in_to_subscription_again"
 
 #: What the provider's own CLI says on its STDERR when its login is refused. Deliberately narrow:
-#: transport words only. Generic "failed to authenticate" / "authentication_error" are an app's
+#: the CLIs' own markers only (a bare provider URL + 401 is any app's HTTP client log). Generic "failed to authenticate" / "authentication_error" are an app's
 #: words as often as a provider's, so they count for nothing here.
 _PROVIDER_TRANSPORT = re.compile(
-    r"codex_api::|responses_websocket|invalidated oauth token|please run /login|"
-    r"(?:api\.openai\.com|api\.anthropic\.com|chatgpt\.com)[^\n]{0,120}\b401\b|"
-    r"\b401\b[^\n]{0,120}(?:api\.openai\.com|api\.anthropic\.com|chatgpt\.com)",
-    re.I)
+    r"codex_api::|responses_websocket|/v1/responses\b|invalidated oauth token|"
+    r"please run /login|invalid api key", re.I)
 
 
 def is_provider_refusal(verdict: Any) -> bool:
