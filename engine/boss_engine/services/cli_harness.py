@@ -2045,6 +2045,15 @@ class GenericCliCodeAgent:
 
                     verdict = dataclasses.replace(verdict,
                                                   message=f"{verdict.message} [{said}]")
+            if verdict.kind == "auth_refused":
+                import dataclasses
+
+                # The CLI's own stderr, kept apart from the summary: the one thing that can
+                # tell a provider refusal from an app's own 401 (harness_refusal).
+                verdict = dataclasses.replace(verdict, transport_text=(stderr or "")[-4000:])
+                if getattr(self, "_pool", None) is not None:
+                    verdict = dataclasses.replace(
+                        verdict, source_id=f"pool:{self._pool.member_id}")
             raise harness_failures.trip(verdict)
 
     def _versioned_model(self, model: Optional[str]) -> Optional[str]:

@@ -36,7 +36,7 @@ import contextvars
 import json
 import re
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterator, Mapping, Optional
 
 from .harness_registry import FailurePattern
@@ -91,6 +91,12 @@ class HarnessVerdict:
     message: str
     fix: str
     where: str
+    #: Which account was refused, when the run knows ("pool:<member id>" for a pool account);
+    #: empty = the engine's one default login. Keyed by account so several accounts compose.
+    source_id: str = ""
+    #: The CLI's OWN stderr (never the agent's summary), read only to tell a provider-transport
+    #: refusal from an app's 401. Never persisted, never in as_dict()/repr.
+    transport_text: str = field(default="", repr=False, compare=False)
 
     def sentence(self) -> str:
         return f"BOSS could not run {self.engine}: {self.message}; fix: {self.fix}."
@@ -309,6 +315,15 @@ def trip(verdict: HarnessVerdict) -> HarnessFailure:
             _TRIPPED.setdefault(run_id, verdict)
             while len(_TRIPPED) > _KEEP:
                 _TRIPPED.pop(next(iter(_TRIPPED)))
+    if verdict.kind == "auth_refused":
+        # THE ONE PLACE every harness refusal passes (a build, a review seat, a workflow step, a
+        # discovery): Setup learns of a refused login wherever it was seen (BOSSAPP-1347).
+        try:
+            from .harness_refusal import note
+
+            note(verdict, run_id)
+        except Exception:  # noqa: BLE001 — recording never masks the failure itself
+            pass
     return HarnessFailure(verdict)
 
 
@@ -366,11 +381,22 @@ def check_turn(turn: Mapping[str, Any], *, engine: Optional[str]) -> None:
         raise trip(verdict)
 
 
+def _with_transport(verdict: HarnessVerdict, text: object) -> HarnessVerdict:
+    """Attach the CLI/engine's OWN output (stderr line, engine error) as the verdict's transport
+    text, for harness_refusal to tell a provider refusal from an app's words. Not for tool
+    results: those are the agent's output."""
+    import dataclasses
+
+    if verdict.kind != "auth_refused":
+        return verdict
+    return dataclasses.replace(verdict, transport_text=str(text or "")[-4000:])
+
+
 def check_stream(text: object, *, engine: Optional[str]) -> None:
     """Raise HarnessFailure when the engine CLI's own output (stderr, live) says it cannot run."""
     verdict = classify(text, engine=engine, where="stream")
     if verdict is not None:
-        raise trip(verdict)
+        raise trip(_with_transport(verdict, text))
 
 
 def note_engine_error(text: object, *, engine: Optional[str]) -> Optional[HarnessVerdict]:
@@ -382,7 +408,7 @@ def note_engine_error(text: object, *, engine: Optional[str]) -> Optional[Harnes
     except Exception:  # noqa: BLE001 — a reading of an error never replaces the error
         return None
     if verdict is not None:
-        trip(verdict)
+        trip(_with_transport(verdict, text))
     return verdict
 
 
