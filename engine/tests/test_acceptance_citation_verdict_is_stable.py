@@ -157,3 +157,19 @@ def test_quoted_text_compound_words_and_newlines_credit_nothing(tree, recorded):
             "evidence": "`go vet ./...` run clean in this tree"}
     assert _judge(tree, [item], checks=[{"command": recorded, "ok": True}])["AC-1"]["status"] \
         == v.PARTIAL
+
+
+@pytest.mark.parametrize("recorded", ["exit 0 && go vet ./...", "exec true && go vet ./...",
+                                      "set -n && go vet ./...", "make -n test && go vet ./...",
+                                      "env false && go vet ./...", "go vet -n ./... && go test ./..."])
+def test_a_chain_with_a_non_runner_part_or_a_dry_run_credits_no_part(tree, recorded):
+    item = {"n": 1, "id": "AC-1", "text": "`go vet` is clean.",
+            "evidence": "`go vet ./...` run clean in this tree"}
+    assert _judge(tree, [item], checks=[{"command": recorded, "ok": True}])["AC-1"]["status"] \
+        == v.PARTIAL
+
+
+def test_the_northgate_chain_still_credits_both_parts(tree):
+    both = {"n": 1, "id": "AC-1", "text": "`go vet` and `go test ./...` clean.",
+            "evidence": "`go vet ./...` and `go test ./...` run clean"}
+    assert _judge(tree, [both], checks=RECORDED)["AC-1"]["status"] == v.MET

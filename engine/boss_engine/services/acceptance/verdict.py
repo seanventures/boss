@@ -1848,6 +1848,11 @@ _RUNNER = re.compile(r"(?i)^(?:go\s+(?:vet|test|build)|(?:python3?\s+-m\s+)?pyte
                      r"mvn\s+(?:-\S+\s+)*\w+|gradle\s+\w+|cargo\s+\w+|make\s+\w[\w\-]*)")
 
 
+#: First words of the commands a build/test chain is made of (the allowlist for splitting one).
+_RUNNERS = frozenset("""go npm npx pnpm yarn bun node deno pytest python python3 uv poetry tox make
+    cargo mvn ./mvnw gradle ./gradlew dotnet tsc eslint ruff mypy golangci-lint gofmt rustc swift
+    bundle rake rspec php composer phpunit mix java javac""".split())
+_DRY_RUN = re.compile(r"(?:^|\s)(?:-n|--dry-run|--just-print|--recon)(?:\s|$)")
 _SHELL_WORDS = frozenset("if then else elif fi for while until do done case esac in function "
                          "{ } ! [[ ]]".split())
 
@@ -1872,8 +1877,16 @@ def recorded_command_evidence(why: str, item_text: str, checks: Any) -> list[str
                 or re.search(r"[#;|&`()<>'\"\\\n\r]|\$\(", raw.replace("&&", " "))
                 or any(p.split()[:1] and p.split()[0] in _SHELL_WORDS for p in command.split("&&"))):
             continue
+        parts = [_ws(p) for p in command.split("&&") if p.strip()]
+        # A dry run ran nothing (`make -n`, `--dry-run`, `--just-print`, `--recon`, go's `-n`).
+        if any(_DRY_RUN.search(p) for p in parts):
+            continue
         ran.add(command)
-        ran.update(_ws(p) for p in command.split("&&") if p.strip())
+        # Its PARTS are credited only when every part starts with a known build/test runner: a
+        # builtin or wrapper (`exit 0 &&`, `exec true &&`, `set -n &&`, `eval`, `env`, `sh -c`...)
+        # can end or neuter the chain, so such a chain credits only as a whole.
+        if all(p.split()[0] in _RUNNERS for p in parts):
+            ran.update(parts)
     if not ran:
         return []
     out = []
