@@ -54,8 +54,8 @@ export function JobCard({ job }: { job: Job }) {
           <Icon size={16} aria-hidden /> {job.label}
         </Tip>
         {r ? (r.pill ? <Pill pill={r.pill} testid={`su-who-pill-${job.job}`} />
-          : <span className="su-pill su-tone-green" title="Connected and working."
-                  data-testid={`su-who-health-${job.job}`}><Dot tone="green" />Working</span>)
+          : <span className="su-pill su-tone-grey" title="No health check has reported for this job yet."
+                  data-testid={`su-who-health-${job.job}`}><Dot tone="grey" />Not checked</span>)
           : <span className="su-pill su-tone-amber" title="Nothing can do this job yet."
                   data-testid={`su-who-health-${job.job}`}><Dot tone="amber" />Not set up</span>}
       </div>
