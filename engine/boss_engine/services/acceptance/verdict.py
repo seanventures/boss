@@ -1785,7 +1785,7 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any, exec_log: Any 
                 # the answer's own test run over the packages is its evidence. Only then — a
                 # `go test ./...` never evidences anything else (BOSSAPP-1329 review).
                 code = ["(test run)"]
-            if not code and recorded_command_evidence(
+            if not code and not absent and recorded_command_evidence(
                     cited_why, str(it.get("text") or ""), checks):
                 # A COMMAND THE RUN RECORDED PASSING, about which the item is: its evidence.
                 code = ["(recorded check)"]
@@ -1858,9 +1858,15 @@ def recorded_command_evidence(why: str, item_text: str, checks: Any) -> list[str
     for chk in checks or []:
         if not chk.get("ok"):
             continue
-        for part in re.split(r"\s*(?:&&|;)\s*", str(chk.get("command") or "")):
-            if part.strip():
-                ran.add(_ws(part))
+        command = _ws(chk.get("command"))
+        if not command:
+            continue
+        ran.add(command)
+        # A PASSED `a && b` chain ran every part. Anything else (`;`, `||`, a pipe, a
+        # background `&`, a subshell, a substitution) may have skipped or ignored a part, so
+        # only the whole command is credited: when in doubt, do not credit.
+        if not re.search(r"\|\||;|\||(?<!&)&(?!&)|[\n`()]|\$\(", command):
+            ran.update(_ws(p) for p in command.split("&&") if p.strip())
     if not ran:
         return []
     out = []

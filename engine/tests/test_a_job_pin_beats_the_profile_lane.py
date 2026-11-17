@@ -131,3 +131,20 @@ def test_only_a_knob_that_was_set_is_a_pin():
         assert setup_job_pins(Conn(), "p1") == {"review": ("codex", "gpt-6-sol")}
     finally:
         project_settings.get_all = original
+
+
+def test_smart_escalation_runs_on_the_hard_problems_pin(monkeypatch):
+    pins = {"build": ("claude_code", "sonnet"), "hard": ("codex", "gpt-6-sol")}
+    router = _router("balanced", "smart", pins, monkeypatch)
+    first = router.route("implement")
+    assert (first.engine, first.model) == ("claude_code", "sonnet")
+    d = router.route("implement", signal="final_attempt")
+    assert d.escalation, d.reason
+    assert (d.engine, d.model) == ("codex", "gpt-6-sol"), d.reason
+    assert "hard problems → codex · gpt-6-sol" in d.reason.lower()
+
+
+def test_smart_escalation_without_a_hard_pin_keeps_the_build_pin(monkeypatch):
+    router = _router("balanced", "smart", {"build": ("claude_code", "sonnet")}, monkeypatch)
+    d = router.route("implement", signal="final_attempt")
+    assert (d.engine, d.model) == ("claude_code", "sonnet")

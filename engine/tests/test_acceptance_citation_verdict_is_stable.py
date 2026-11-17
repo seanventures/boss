@@ -104,3 +104,28 @@ def test_a_cited_path_that_is_not_in_the_tree_stays_partial(tree):
 def test_a_folder_style_path_without_an_extension_that_is_missing_stays_absent(tree):
     _, absent = v.evidence_paths(tree, "wired in internal/router/tenant")
     assert absent == ["internal/router/tenant"]
+
+
+@pytest.mark.parametrize("recorded", ["false && go vet ./...; true", "go vet ./... || true",
+                                      "true; go vet ./...", "go test ./... | tee out",
+                                      "(go vet ./...)"])
+def test_a_chain_that_may_not_have_run_a_part_credits_only_the_whole(tree, recorded):
+    item = {"n": 1, "id": "AC-1", "text": "`go vet` is clean.",
+            "evidence": "`go vet ./...` run clean in this tree"}
+    got = _judge(tree, [item], checks=[{"command": recorded, "ok": True}])["AC-1"]
+    assert got["status"] == v.PARTIAL
+
+
+def test_a_passed_and_chain_credits_each_part_and_the_whole(tree):
+    item = {"n": 1, "id": "AC-1", "text": "`go vet` is clean.",
+            "evidence": "`go vet ./...` run clean in this tree"}
+    for ran in ("go vet ./... && go test ./...", "go vet ./..."):
+        assert _judge(tree, [item], checks=[{"command": ran, "ok": True}])["AC-1"]["status"] == v.MET
+
+
+def test_command_evidence_never_excuses_a_cited_path_that_is_missing(tree):
+    item = {"n": 1, "id": "AC-1", "text": "`go vet` is clean.",
+            "evidence": "`go vet ./...` clean; wired in src/imaginary.go"}
+    got = _judge(tree, [item], checks=RECORDED)["AC-1"]
+    assert got["status"] == v.PARTIAL
+    assert "src/imaginary.go" in got["evidence"]

@@ -234,8 +234,9 @@ class StageRouter:
             self.ledger.record(step, signal)
         escalated_legacy = signal in ("no_output", "final_attempt")
         with self._tx() as connection:
-            job_pin = None if task_pin(self.spec, step) else \
-                pin_for_step(self._setup_pins(connection), step)
+            pins = self._setup_pins(connection)
+            job_pin = None if task_pin(self.spec, step) else pin_for_step(pins, step)
+            hard = None if task_pin(self.spec, step) else pins.get("hard")
         request = RouteRequest(
             kind="build_stage", step=step, project_id=self.project_id, unit_id=self.run_id,
             role=self.spec.get("role_key") or None,
@@ -246,6 +247,9 @@ class StageRouter:
             task_pin=task_pin(self.spec, step),
             job_pin=Target(job_pin[0], job_pin[1]) if job_pin else None,
             job_pin_label=job_pin[2] if job_pin else "",
+            hard_pin=Target(hard[0], hard[1]) if hard else None,
+            hard_pin_label=(f"Hard problems → {hard[0]}" + (f" · {hard[1]}" if hard[1] else "")
+                            if hard else ""),
             legacy=lambda: self.legacy(step, escalated=escalated_legacy, budget=budget,
                                        previous=previous),
             mode_override=self.mode_override,

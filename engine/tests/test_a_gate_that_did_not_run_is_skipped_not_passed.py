@@ -97,3 +97,14 @@ def test_the_pipeline_decides_skips_through_seat_policy_only():
     source = inspect.getsource(svc)
     assert "_seat_policy.skip_reason(" in source
     assert "does not include this seat" not in source
+
+
+def test_a_lean_runs_review_rounds_do_not_turn_a_skipped_gate_into_a_failure():
+    """As the pipeline records round 0 for a lean run: omitted seats are `not_run`."""
+    rounds = [{"seats": {"review_code": {"verdict": "survived"},
+                         "security_check": {"verdict": "not_run"},
+                         "consistency_check": {"verdict": "not_run"}}}]
+    gates = {"code_review_passed": True, "security_clean": True, "consistent": True}
+    body = pr_description.render(title="t", evidence=dict(STATE), gates=gates, rounds=rounds)
+    assert "1 passed, 0 failed, 2 skipped." in body
+    assert "❌" not in body.split("### Checks")[1].split("### Review")[0]
