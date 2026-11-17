@@ -21,6 +21,7 @@ import pytest
 from sqlalchemy import text
 
 from boss_engine.services import brief_items
+from boss_engine.services import governed_code_task_service as g
 from boss_engine.services.acceptance import checks as acc_checks
 from boss_engine.services.acceptance import ledger as al
 
@@ -265,3 +266,32 @@ def test_an_implementer_that_addresses_every_item_is_not_sent_back(pipeline):  #
     assert sorted(rec["fixed"]) == ["F-1", "F-2", "F-3"] and rec["excused"] == ["F-2", "F-3"]
     first = [w for w in out["writes"] if w["stage"] == "write_tests"][0]
     assert "COVERAGE <key>:" in first["full_prompt"], "the test writer was handed the items"
+
+
+def test_a_revert_reads_the_snapshots_ignore_rules_not_the_reworks(tmp_path):
+    import subprocess
+
+    def git(*a):
+        subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True,
+                       env={**__import__("os").environ, "GIT_AUTHOR_NAME": "t",
+                            "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                            "GIT_COMMITTER_EMAIL": "t@t"})
+
+    git("init", "-q")
+    (tmp_path / ".gitignore").write_text(".env\n")
+    (tmp_path / "a.txt").write_text("base\n")
+    (tmp_path / ".env").write_text("SECRET=1\n")           # ignored, untracked
+    (tmp_path / "bin.dat").write_bytes(b"\x00\x01\x02")
+    tree = g._tree_snapshot(tmp_path)
+    assert tree
+    # The rework drops the ignore rule, edits a file, deletes a binary, adds a new one.
+    (tmp_path / ".gitignore").write_text("")
+    (tmp_path / "a.txt").write_text("changed\n")
+    (tmp_path / "bin.dat").unlink()
+    (tmp_path / "new.txt").write_text("new\n")
+    assert g._tree_restore(tmp_path, tree)
+    assert (tmp_path / ".env").read_text() == "SECRET=1\n", "the covered file survives"
+    assert (tmp_path / ".gitignore").read_text() == ".env\n"
+    assert (tmp_path / "a.txt").read_text() == "base\n"
+    assert (tmp_path / "bin.dat").read_bytes() == b"\x00\x01\x02"
+    assert not (tmp_path / "new.txt").exists()

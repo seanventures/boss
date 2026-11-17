@@ -3702,13 +3702,17 @@ def _tree_restore(root, tree: str) -> bool:
                 cmd, cwd=str(root), env=env, capture_output=True, text=True, timeout=120)
             if run(["git", "read-tree", tree]).returncode != 0:
                 return False
+            # The snapshot's files FIRST (its .gitignore included), so what counts as "not in
+            # the snapshot" is read against the snapshot's ignore rules, never the rework's.
+            if run(["git", "checkout-index", "-a", "-f"]).returncode != 0:
+                return False
             extra = run(["git", "ls-files", "-o", "--exclude-standard", "-z"])
             for rel in filter(None, extra.stdout.split("\0")):
                 try:
                     (Path(root) / rel).unlink()
                 except OSError:
                     pass
-            return run(["git", "checkout-index", "-a", "-f"]).returncode == 0
+            return True
     except Exception:  # noqa: BLE001
         _log_caught(logger)
         return False
@@ -8613,6 +8617,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _snap_tree = (_tree_snapshot(root) if (
                 _asm.send_back and tests_passed and impl_files and tests_untouched
                 and not use_microvm and not _impl_over_budget(final=True)) else None)
+            if (not _snap_tree and _asm.send_back and tests_passed and impl_files
+                    and tests_untouched and not use_microvm
+                    and not _impl_over_budget(final=True)):
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.brief_items_send_back_skipped", "boss",
+                               "code_task_run", run_id,
+                               {"why": "the tree could not be snapshotted, so a rework could "
+                                       "not be undone",
+                                "unaddressed": [i.key for i in _asm.send_back][:80]})
             if _snap_tree:      # no snapshot to come back to, no rework
                 _sent_back = True
                 with _transaction(engine) as c:
