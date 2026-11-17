@@ -70,6 +70,9 @@ class Assignment:
     secret_name: str
     account_key: str
     pinned: bool
+    #: Why this member, when it is not the plain choice: a run moved off an account that hit its
+    #: limit says so here (and on the run's LLM context, and as an event). "" otherwise.
+    reason: str = ""
 
 
 def secret_name_for(engine: str, member_id: str) -> str:
@@ -111,6 +114,7 @@ def _member_row(row: Any) -> dict[str, Any]:
     return {"id": row["id"], "pool_id": row["pool_id"], "label": row["label"],
             "secret_name": row["secret_name"], "account_key": row["account_key"],
             "position": int(row["position"]), "status": row["status"],
+            "primary": bool(row.get("is_primary")),
             "last_assigned_at": iso(row["last_assigned_at"]), "created_by": row["created_by"],
             "created_at": iso(row["created_at"])}
 
@@ -150,6 +154,8 @@ def describe(connection: Connection, project_id: str) -> list[dict[str, Any]]:
         rooms = headroom_of(connection, pool["members"], engine)
         for m in pool["members"]:
             h = rooms.get(m["id"])
+            m["adopted_install_login"] = m["account_key"].endswith(":install") \
+                or m["secret_name"] == BASE_SECRET[engine]
             m["headroom"] = {"state": h.state, "left": h.left,
                              "resets_at": h.resets_at.isoformat() if h.resets_at else None,
                              "detail": h.detail} if h else None
@@ -161,7 +167,7 @@ def describe(connection: Connection, project_id: str) -> list[dict[str, Any]]:
 # ── writing ──────────────────────────────────────────────────────────────────────────────────
 
 def create_pool(connection: Connection, project_id: str, *, engine: str, name: str,
-                actor: str) -> dict[str, Any]:
+                actor: str, settings: Any = None) -> dict[str, Any]:
     if engine not in ENGINES:
         raise PoolError(f"engine must be one of: {', '.join(ENGINES)}")
     label = " ".join(str(name or "").split())[:80] or f"{engine} pool"
@@ -174,6 +180,8 @@ def create_pool(connection: Connection, project_id: str, *, engine: str, name: s
                                          "a": actor})
     emit_event(connection, project_id, "subscription_pool.created", actor, "subscription_pool",
                pid, {"engine": engine, "name": label})
+    if settings is not None:
+        adopt_install_login(connection, settings, project_id, engine)   # account 1, the primary
     return get_pool(connection, project_id, engine)
 
 
@@ -220,9 +228,98 @@ def add_member(connection: Connection, settings: Any, project_id: str, pool_id: 
     return member
 
 
+def adopt_install_login(connection: Connection, settings: Any, project_id: str,
+                        engine: str) -> Optional[dict[str, Any]]:
+    """MIGRATION: the install's single login (`claude_code:install` — the one stored under the
+    plain subscription name) becomes ACCOUNT 1 of the engine's pool, and the primary. Nothing is
+    copied: the member points at the SAME store key and keeps the install's rate windows
+    (account_key), so the single-login path and the pool read one login. Idempotent: a pool that
+    already holds it, or an install with no stored login, changes nothing (returns None)."""
+    from .cli_harness import stored_credential
+    from .model_router import accounts
+
+    pool = get_pool(connection, project_id, engine)
+    if pool is None:
+        return None
+    base = BASE_SECRET[engine]
+    if any(m["secret_name"] == base for m in pool["members"]):
+        return None
+    try:
+        held = stored_credential(settings, base, include_env=False)
+    except Exception:  # noqa: BLE001 — an unreadable store adopts nothing
+        held = None
+    if not held:
+        return None
+    from .llm_telemetry import get_llm_context
+
+    ctx = get_llm_context() or {}
+    key = accounts.account_key(connection, settings, project_id, engine) \
+        if not ctx.get("pool_account") else f"{engine}:install"
+    if key.startswith(f"{engine}:pool:"):
+        key = f"{engine}:install"
+    label = "Account 1"
+    taken = {m["label"].lower() for m in pool["members"]}
+    n = 1
+    while label.lower() in taken:
+        n += 1
+        label = f"Account {n}"
+    mid = make_id("spm")
+    position = min([m["position"] for m in pool["members"]] + [1]) - 1 if pool["members"] else 0
+    connection.execute(text(
+        "INSERT INTO subscription_pool_members (id, pool_id, label, secret_name, account_key, "
+        "position, is_primary, created_by) VALUES (:i, :pool, :l, :s, :k, :pos, :pr, 'system')"),
+        {"i": mid, "pool": pool["id"], "l": label, "s": base, "k": key, "pos": position,
+         "pr": not any(m["primary"] for m in pool["members"])})
+    emit_event(connection, project_id, "subscription_pool.member_added", "system",
+               "subscription_pool", pool["id"],
+               {"member_id": mid, "label": label, "engine": engine, "adopted_install_login": True})
+    return next(m for m in get_pool(connection, project_id, engine)["members"] if m["id"] == mid)
+
+
+def add_signed_in_account(connection: Connection, settings: Any, project_id: str, engine: str,
+                          credential: str, *, actor: str,
+                          label: Optional[str] = None) -> dict[str, Any]:
+    """The server-side Sign in's "add another account": the pool is made if the project has none,
+    the install's existing login is adopted as account 1 first (so adding never replaces it), then
+    the NEW login is stored as its own member. The sign-in exposes no email or plan, so the
+    label is "Account N" unless the person named it; they can rename it in Setup."""
+    if get_pool(connection, project_id, engine) is None:
+        create_pool(connection, project_id, engine=engine, name="", actor=actor)
+    adopt_install_login(connection, settings, project_id, engine)
+    pool = get_pool(connection, project_id, engine)
+    taken = {m["label"].lower() for m in pool["members"]}
+    name = " ".join(str(label or "").split())[:80]
+    n = len(pool["members"]) + 1
+    while not name or name.lower() in taken:
+        name = f"Account {n}"
+        n += 1
+    return add_member(connection, settings, project_id, pool["id"], label=name,
+                      credential=credential, actor=actor)
+
+
+def sign_in_store(db_engine: Any, settings: Any, project_id: str, actor: str, engine: str,
+                  label: Optional[str] = None):
+    """The `store` the server-side Sign in hands the printed token to when the person chose
+    "Add another account" (subscription_sign_in.start(store=…)): the token becomes a NEW pool
+    member, in its own transaction. Account 1 is never touched."""
+    def store(token: str, *, valid_days: Optional[int] = None) -> None:  # noqa: ARG001
+        from ..db import begin
+
+        try:
+            with begin(db_engine) as connection:
+                add_signed_in_account(connection, settings, project_id, engine,
+                                      (token or "").strip(), actor=actor, label=label)
+        except PoolError as exc:
+            from .subscription_sign_in import StoreRefused
+
+            raise StoreRefused(str(exc)) from None
+    return store
+
+
 def update_member(connection: Connection, settings: Any, project_id: str, member_id: str, *,
                   actor: str, status: Optional[str] = None, position: Optional[int] = None,
-                  credential: Optional[str] = None) -> dict[str, Any]:
+                  credential: Optional[str] = None, primary: Optional[bool] = None,
+                  label: Optional[str] = None) -> dict[str, Any]:
     row = connection.execute(text(
         "SELECT m.*, s.engine FROM subscription_pool_members m JOIN subscription_pools s "
         "ON s.id = m.pool_id WHERE m.id = :i AND s.project_id = :p"),
@@ -236,14 +333,26 @@ def update_member(connection: Connection, settings: Any, project_id: str, member
         _store(settings).put(_store_key(row["secret_name"]),
                              _validate_credential(row["engine"], credential))
         status = status or "active"
+    new_label = " ".join(str(label or "").split())[:80] or None
+    if new_label and connection.execute(text(
+            "SELECT 1 FROM subscription_pool_members WHERE pool_id = :p AND id <> :i "
+            "AND lower(label) = lower(:l)"),
+            {"p": row["pool_id"], "i": member_id, "l": new_label}).first():
+        raise PoolError(f"the pool already has an account named {new_label!r}")
+    if primary:
+        # ONE primary per pool: marking one unmarks the rest. A paused account cannot lead.
+        connection.execute(text("UPDATE subscription_pool_members SET is_primary = FALSE "
+                                "WHERE pool_id = :p"), {"p": row["pool_id"]})
     connection.execute(text(
         "UPDATE subscription_pool_members SET status = COALESCE(:s, status), "
-        "position = COALESCE(:pos, position) WHERE id = :i"),
-        {"s": status, "pos": position, "i": member_id})
+        "position = COALESCE(:pos, position), label = COALESCE(:l, label), "
+        "is_primary = COALESCE(CAST(:pr AS BOOLEAN), is_primary) WHERE id = :i"),
+        {"s": status, "pos": position, "l": new_label, "pr": primary, "i": member_id})
     emit_event(connection, project_id, "subscription_pool.member_changed", actor,
                "subscription_pool", row["pool_id"],
                {"member_id": member_id, "status": status, "position": position,
-                "login_replaced": credential is not None})
+                "login_replaced": credential is not None, "primary": primary,
+                "label": new_label})
     out = _member_row(connection.execute(text(
         "SELECT * FROM subscription_pool_members WHERE id = :i"), {"i": member_id}
     ).mappings().one())
@@ -308,7 +417,7 @@ def assign(connection: Connection, project_id: str, engine: str, task_ref: Optio
            now: Optional[datetime] = None) -> Optional[Assignment]:
     """The member this run spends on, or None when the project has no active pool for `engine`.
     Raises PoolExhausted when every active member is at its limit."""
-    from .model_router.headroom import EXHAUSTED
+    from .model_router.headroom import EXHAUSTED, PLENTY
 
     pool = get_pool(connection, project_id, engine)
     if pool is None or pool["status"] != "active":
@@ -327,15 +436,30 @@ def assign(connection: Connection, project_id: str, engine: str, task_ref: Optio
             + ". Add an account to the pool, or wait.", earliest)
     ref = str(task_ref or "").strip()
     pinned = None
+    pin = None
     if ref:
         pin = connection.execute(text(
             "SELECT member_id FROM subscription_pool_pins WHERE pool_id = :p AND task_ref = :t"),
             {"p": pool["id"], "t": ref}).scalar()
         pinned = next((m for m in usable if m["id"] == pin), None)
-    chosen = pinned or sorted(
+    # THE PRIMARY LEADS while it has plenty of room; otherwise the most headroom wins.
+    primary = next((m for m in usable if m.get("primary")
+                    and rooms[m["id"]].state == PLENTY), None)
+    chosen = pinned or primary or sorted(
         usable, key=lambda m: (-(rooms[m["id"]].left if rooms[m["id"]].left is not None else 1.0),
                                m["position"], m["last_assigned_at"] or ""))[0]
+    reason = ""
     if ref and pinned is None:
+        old = next((m for m in live if m["id"] == pin), None) if pin else None
+        if old is not None and old["id"] != chosen["id"]:
+            reason = (f"moved off {old['label']} (at its limit"
+                      + (f", resets {rooms[old['id']].resets_at.isoformat()}"
+                         if rooms[old['id']].resets_at else "")
+                      + f") to {chosen['label']}")
+            emit_event(connection, project_id, "subscription_pool.moved", "system",
+                       "subscription_pool", pool["id"],
+                       {"task_ref": ref, "from": old["label"], "to": chosen["label"],
+                        "engine": engine, "reason": reason})
         connection.execute(text(
             "INSERT INTO subscription_pool_pins (pool_id, task_ref, member_id) VALUES (:p, :t, :m) "
             "ON CONFLICT (pool_id, task_ref) DO UPDATE SET member_id = EXCLUDED.member_id, "
@@ -345,7 +469,8 @@ def assign(connection: Connection, project_id: str, engine: str, task_ref: Optio
         {"i": chosen["id"]})
     return Assignment(pool_id=pool["id"], member_id=chosen["id"], label=chosen["label"],
                       engine=engine, secret_name=chosen["secret_name"],
-                      account_key=chosen["account_key"], pinned=pinned is not None)
+                      account_key=chosen["account_key"], pinned=pinned is not None,
+                      reason=reason)
 
 
 def assignment_for(engine: str, settings: Any = None) -> Optional[Assignment]:
@@ -383,7 +508,8 @@ def assignment_for(engine: str, settings: Any = None) -> Optional[Assignment]:
         _log.debug("pool lookup failed; using the single login", exc_info=True)
         return None
     if chosen is not None:
-        set_llm_context(pool_account=chosen.account_key, pool_engine=engine)
+        set_llm_context(pool_account=chosen.account_key, pool_engine=engine,
+                        pool_route_reason=chosen.reason or None)
     return chosen
 
 

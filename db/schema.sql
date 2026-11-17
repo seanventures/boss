@@ -13745,6 +13745,8 @@ CREATE TABLE IF NOT EXISTS subscription_pool_members (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (pool_id, label)
 );
+-- 1343: one member per pool may be the PRIMARY (leads while it has plenty of room).
+ALTER TABLE subscription_pool_members ADD COLUMN IF NOT EXISTS is_primary BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE TABLE IF NOT EXISTS subscription_pool_pins (
   pool_id TEXT NOT NULL REFERENCES subscription_pools(id) ON DELETE CASCADE,
   task_ref TEXT NOT NULL,
