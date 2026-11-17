@@ -115,6 +115,22 @@ from .workspace_perms import write_text as _ws_write
 _DEFAULT_TEST_CMD = "python3 -m unittest discover -v"
 
 
+
+def _command_cannot_run(command: str, root: Any, cwd: Any, use_microvm: bool = False) -> bool:
+    """A recorded npm command with no package.json where it ran can never have been `ok`
+    (a Go app recorded `npm install && npm run build` as passing, AR-54)."""
+    if use_microvm or not str(command or "").startswith("npm "):
+        return False       # a micro-VM's tree is in its guest; nothing to look at here
+    if any(verification_target.names_its_directory(c.strip())
+           for c in str(command).split("&&")):
+        return False       # `npm --prefix app …` runs where it names, not at the verify cwd
+    try:
+        where = Path(root) / (cwd if cwd and cwd != "." else "")
+        return not (where / "package.json").is_file()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _resolve_use_microvm(settings, spec: dict) -> bool:
     """Substrate selection for the working stages. A per-run `spec.substrate` override wins —
     it's how the retry fallback moves a run OFF a broken micro-VM path (degraded mode) without
@@ -6546,6 +6562,27 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            {"brief_said": _stack_ctx["verdict"].message[:300],
                             "repository_ok": True})
         root = sandbox.path
+        # NEVER BUILD A SECOND APP FROM SCRATCH (AR-54, build_checkout): a checkout with no app
+        # files in a repository BOSS already built an app in (a workflow's build step that
+        # carried no base branch cloned the README-only mainline) fails here with the branches
+        # that hold it, before any model call.
+        if not use_microvm and not _is_repair and not fctx.get("seed_workspace_from"):
+            from . import build_checkout as _build_checkout
+
+            with _transaction(engine) as c:
+                _no_app = _build_checkout.problem(
+                    c, root, owner=owner, repo=repo, run_id=run_id, root_run=root_run,
+                    base_branch=str(base_branch or ""),
+                    branch_exists=getattr(sf.github, "branch_exists", None))
+            if _no_app:
+                with _transaction(engine) as c:
+                    _release(budget, c, project_id, reservation_id, "no app in the checkout",
+                             run_id=run_id)
+                    emit_event(c, project_id, "code_task.wrong_tree", "boss",
+                               "code_task_run", run_id,
+                               {"branch": base_branch, "why": _no_app})
+                    return _fail(c, run_id, project_id, _no_app, failure_class="infra",
+                                 reason_code="app_missing")
         # BOSS-410: with the docker command runtime selected, agent-authored commands run in
         # a network-less container with the workspace bind-mounted, rather than as a
         # subprocess in the control plane's own container. One container per task. A failure
@@ -6746,6 +6783,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         ) and not _gate_plan0.runs_steps and _stack_layout is None and not _manifest_governs
         last_verify_cwd = None
         last_verify_output = ""
+        # The command(s) the LAST verify really ran (the plan resolved on the tree as it then
+        # stood), recorded instead of the plan made on the still-empty tree (AR-54).
+        last_verify_command = ""
 
         def _changed_paths() -> list[str]:
             """Every path this run has changed: what is checkpointed plus the live tree."""
@@ -7090,7 +7130,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             return result
 
         def _run_verify_once(*, record: bool = True):
-            nonlocal last_verify_cwd, last_verify_output
+            nonlocal last_verify_cwd, last_verify_output, last_verify_command
             tampered_manifest = verification_target.verify_manifest_tampered(
                 _pinned_manifest, root)
             if tampered_manifest:
@@ -7116,6 +7156,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # while Go is off): a person's to fix, so no further repair round runs on it.
             _halt_if_needs_person(plan)
             _last_stack_plan[0] = plan.stack if plan.source == "stack" else None
+            if record:
+                last_verify_command = (plan.description if plan.runs_steps
+                                       else " && ".join(plan.commands)) or last_verify_command
             cwd = plan.cwd
             try:
                 last_verify_cwd = str(cwd.relative_to(root)) if cwd != root else "."
@@ -9920,10 +9963,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "last_verify_output": official_verify_output or last_verify_output,
             "tests": (
                 [{
-                    "command": test_cmd,
+                    "command": last_verify_command or test_cmd,
                     "exit_code": test_exit_code,
                     "timed_out": False,
-                    "ok": bool(tests_passed),
+                    "ok": bool(tests_passed) and not _command_cannot_run(
+                        last_verify_command or test_cmd, root, last_verify_cwd, use_microvm),
                     **({"failed_check": _failed_check[0]}
                        if _failed_check[0] and not tests_passed else {}),
                 }]
@@ -11399,7 +11443,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # by — in its OWN transaction, committed first, never nested inside the one the
         # terminal write runs in.
         _close_phase()
+        # THE COMMIT THIS RUN SHIPPED, recorded with it (finalize_ctx.final_head_sha): what a
+        # config deploy of this build reads its files at (config_deploy.files_from_build), never the
+        # lineage branch's tip, which a later run may have moved.
+        _final_head = ""
+        try:
+            _snap = sf.github.branch_snapshot(str(proposal.get("branch_name") or work_branch))
+            _final_head = str(_snap.get("sha") or _snap.get("commit_sha") or "")
+        except Exception:  # noqa: BLE001 — unrecorded: a config deploy of this run then refuses
+            _log_caught(logger)
         with _transaction(engine) as c:
+            if _final_head:
+                c.execute(sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, "
+                              "'{}'::jsonb) || jsonb_build_object('final_head_sha', CAST(:h AS text)) "
+                              "WHERE id = :id"), {"h": _final_head, "id": run_id})
             _ok = _fenced_status(
                 "completed",
                 "phase='done', pull_request_url=:u, pull_request_number=:n, decision_id=:d",

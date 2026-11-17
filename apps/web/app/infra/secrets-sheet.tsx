@@ -44,6 +44,7 @@ export function SecretsSheet({ projectId, actor, onClose, canWrite = true }: {
   const [kind, setKind] = useState("api_token");
   const [backend, setBackend] = useState("platform_secret_store");
   const [value, setValue] = useState("");
+  const [httpAuth, setHttpAuth] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [publicKey, setPublicKey] = useState<string | null>(null);
@@ -62,7 +63,7 @@ export function SecretsSheet({ projectId, actor, onClose, canWrite = true }: {
   const upload = async () => {
     if (!name.trim() || !value) { setError("Name and value"); return; }
     setBusy("upload"); setError(null); setPublicKey(null);
-    const r = await putSecret(projectId, actor, { name: name.trim(), value, secret_kind: kind, backend });
+    const r = await putSecret(projectId, actor, { name: name.trim(), value, secret_kind: kind, backend, ...(httpAuth ? { http_auth: true } : {}) });
     setValue("");   // written through: never kept in the browser
     setBusy(null);
     if (!r.ok) { setError(r.error); return; }
@@ -108,6 +109,10 @@ export function SecretsSheet({ projectId, actor, onClose, canWrite = true }: {
             <span>Value</span>
             <input type="password" value={value} onChange={(e) => setValue(e.target.value)} autoComplete="off"
                    data-testid="inf-secret-value" placeholder="Never shown again" />
+          </label>
+          <label className="inf-field" title="Lets a contract test send this secret as a request header. Never shown.">
+            <span><input type="checkbox" checked={httpAuth} onChange={(e) => setHttpAuth(e.target.checked)}
+                         data-testid="inf-secret-http-auth" /> Use as an HTTP auth header</span>
           </label>
           <div className="inf-actions">
             <GatedButton permission="secret:manage" type="submit" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-secret-upload">

@@ -3291,6 +3291,14 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "produced_artifacts": {"type": "object",
                                      "description": "a CLI step's produced_artifacts: name → art_ id",
                                      "additionalProperties": True},
+              "code_task_run_id": {"type": "string",
+                                   "description": "a finished build: ship its files FROM ITS "
+                                                  "BRANCH (at its head commit), not the default "
+                                                  "branch. A workflow wires the build step's "
+                                                  "code_task_run_id here."},
+              "source_paths": {"description": "with code_task_run_id: the files (or folders "
+                                              "ending in /) the build wrote — a list of repo "
+                                              "paths, or {destination: repo path}"},
               "approval_decision_id": {"type": "string",
                                        "description": "set by a workflow's step only; leave empty"},
               "person_required": {"type": "boolean",
@@ -3314,6 +3322,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             approval_decision_id=(str(args["approval_decision_id"])
                                   if args.get("approval_decision_id") else None),
             person_required=args.get("person_required") is True,
+            code_task_run_id=(str(args["code_task_run_id"]) if args.get("code_task_run_id") else None),
+            source_paths=args.get("source_paths"),
             # Which run deployed it, set by the runner on the server (never an argument), so a
             # promotion can be checked against the run that staged it (AMEX-G9).
             workflow_run_id=WORKFLOW_RUN_ID.get() or None)
@@ -9648,6 +9658,14 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
     # a method, headers, a body, an expected status and a few JSON fields — a case — and the
     # step runs the list and reports a table. Same edition rule as http_probe: Community has no
     # project-bound destination for a URL yet, so it refuses rather than probe anywhere.
+    #: A header value: a literal string, or a SECRET REFERENCE resolved when the step runs, so an
+    #: authenticated case never carries a token in the spec.
+    _SECRET_HEADER = {"oneOf": [
+        {"type": "string"},
+        {"type": "object", "properties": {"secret_ref": {"type": "string"},
+                                          "prefix": {"type": "string"}},
+         "required": ["secret_ref"], "additionalProperties": False}],
+        "description": "a string, or {secret_ref: <secret ref id>, prefix?: 'Bearer '}"}
     _CONTRACT_CASE = {
         "type": "object",
         "properties": {
@@ -9656,7 +9674,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                        "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]},
             "url": {"type": "string", "description": "a full URL; or give path + base_url"},
             "path": {"type": "string", "description": "joined onto base_url"},
-            "headers": {"type": "object", "additionalProperties": {"type": "string"}},
+            "headers": {"type": "object", "additionalProperties": _SECRET_HEADER},
             "json": {"description": "a JSON body (sets Content-Type: application/json)"},
             "body": {"type": "string", "description": "a raw body, when not JSON"},
             "expect_status": {"description": "an HTTP status, or a list of acceptable ones; "
@@ -9684,8 +9702,9 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                         "maxItems": 100},
               "base_url": {"type": "string",
                            "description": "prefix for cases that give a path"},
-              "headers": {"type": "object", "additionalProperties": {"type": "string"},
-                          "description": "headers every case sends (a case's own win)"},
+              "headers": {"type": "object", "additionalProperties": _SECRET_HEADER,
+                          "description": "headers every case sends (a case's own win); a token "
+                                         "is a secret reference, never pasted"},
               "timeout_s": {"type": "integer", "minimum": 1, "maximum": 60, "default": 10}},
              ["cases"]),
         # IRREVERSIBLE for a resumed run: a case may POST or DELETE, so a call whose outcome was
@@ -9718,10 +9737,44 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                     "project has none. A person creates the target (with its health URL) "
                     "first."}
         per_request = _turn_seconds(int(args.get("timeout_s") or 10))
-        return run_cases(args.get("cases"), base_url=str(args.get("base_url") or ""),
-                         timeout_s=per_request, headers=args.get("headers"),
+        # SECRET REFERENCES BECOME VALUES HERE, at run time, and nowhere that is recorded.
+        from ..services.contract_tests import (HeaderSecretRefused, http_auth_problem,
+                                               resolve_header_secrets)
+        from ..services.secret_backends import resolve_secret_ref
+
+        def _resolve(ref_id: str) -> str:
+            # A refused or failed resolution is audited by `resolve_secret_ref` inside the
+            # transaction it raises from, which rolls back: so the refusal is written again,
+            # in a transaction of its own, before the error leaves.
+            from ..services import secret_access_log as _access
+            from ..services.secret_backends import SecretUnavailable
+
+            try:
+                with ctx.begin() as db:
+                    problem = http_auth_problem(db, ref_id, project_id)
+                    if problem:
+                        raise HeaderSecretRefused(problem)
+                    return resolve_secret_ref(db, ref_id, ctx.settings, project_id)
+            except (SecretUnavailable, HeaderSecretRefused) as exc:
+                try:
+                    with ctx.begin() as db:
+                        _access.record_access(
+                            db, secret_ref_id=ref_id, project_id=project_id, outcome="refused",
+                            who=_access.who_is_accessing(db, project_id),
+                            reason=f"contract_test header: {str(exc)[:120]}")
+                except Exception:  # noqa: BLE001 — the audit never changes the refusal
+                    pass
+                raise
+
+        cases, shared_headers, bad, secret_headers = resolve_header_secrets(
+            args.get("cases"), args.get("headers"), _resolve)
+        if bad:
+            return {"ok": False, "error": bad}
+        return run_cases(cases, base_url=str(args.get("base_url") or ""),
+                         timeout_s=per_request, headers=shared_headers,
                          allowed_private=allowed, deadline_s=_turn_seconds(300),
-                         project_only=project_only, origins=origins)
+                         project_only=project_only, origins=origins,
+                         secret_headers=secret_headers)
 
     @reg.tool(
         "git_history",

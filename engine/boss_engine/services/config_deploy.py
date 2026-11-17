@@ -425,6 +425,162 @@ def bundle_from_inputs(connection: Connection, project_id: str, *,
     return [out[k] for k in sorted(out)]
 
 
+def build_source(connection: Connection, settings: Any, project_id: str, run_id: str) -> dict[str, Any]:
+    """What a build shipped, for a config deployment of it (BOSSAPP-1377): the finished run, the
+    branch it worked on (its release-fix or pushed-change branch when it had one, else the
+    lineage branch), THE COMMIT RECORDED FOR THAT RUN (`finalize_ctx.final_head_sha`, written when
+    it opened its PR; never the branch's tip, which a later run on the lineage may have moved),
+    its pull request, and why a person must look at it (failing/advisory gates, an unmerged PR).
+    Raises ConfigDeployError for a build that did not finish or recorded no commit."""
+    from . import release_scope
+    from .code_task_service import work_branch_for
+
+    run = connection.execute(
+        text("SELECT id, project_id, status, spec, finalize_ctx, pull_request_url, "
+             "pull_request_number FROM code_task_runs WHERE id = :i AND project_id = :p"),
+        {"i": run_id, "p": project_id}).mappings().first()
+    if not run:
+        raise ConfigDeployError(f"No build {run_id!r} in this project.",
+                                "Name the build step's code_task_run_id.")
+    if str(run["status"]) not in ("completed", "succeeded", "passed"):
+        raise ConfigDeployError(f"Build {run_id} is {run['status']!r}, not a successful build.",
+                                "Config is deployed from a build that finished.")
+    from .run_fencing import build_not_passed
+
+    held = build_not_passed(connection, run_id)
+    if held:
+        raise ConfigDeployError(held, "Config is deployed from a build that passed.")
+    spec = _loads(run["spec"], {}) or {}
+    fctx = _loads(run["finalize_ctx"], {}) or {}
+    owner, repo = str(spec.get("owner") or ""), str(spec.get("repo") or "")
+    if not (owner and repo):
+        raise ConfigDeployError(f"Build {run_id} names no repository.", "")
+    sha = str(fctx.get("final_head_sha") or "").strip()
+    if not sha:
+        raise ConfigDeployError(
+            f"Build {run_id} has no recorded commit, so BOSS cannot tell which version of the "
+            "files it shipped.", "Run the build again (it records its commit when it opens its "
+            "pull request).")
+    rb = release_scope.of_run(fctx)
+    branch = (rb or {}).get("branch") or str(fctx.get("local_change_branch") or "") \
+        or work_branch_for({"id": run_id, "finalize_ctx": fctx})
+    gates = [str(g) for g in (fctx.get("advisory_failing_gates") or []) + (fctx.get("failing_gates") or [])]
+    from . import pr_merge
+
+    merge = pr_merge.observe(connection, None, project_id, run_id, reader=_NoReader())
+    unmerged = pr_merge.sentence(merge)
+    return {"code_task_run_id": run_id, "owner": owner, "repo": repo, "branch": branch,
+            "head_sha": sha, "short_sha": sha[:12],
+            "pull_request_url": run.get("pull_request_url"),
+            "pull_request_number": run.get("pull_request_number"),
+            "failing_gates": gates, "unmerged": unmerged}
+
+
+class _NoReader:
+    """pr_merge.observe reads GitHub through a reader; a config deploy asks only BOSS's record."""
+
+    def pull_request(self, number: int) -> dict[str, Any]:
+        raise RuntimeError("not asked")
+
+
+def quality_problem(source: dict[str, Any], environment: str) -> Optional[str]:
+    """Why this build may not be shipped as configuration to `environment` without a person's
+    look, or None. PRODUCTION always asks: it is refused when the build's gates were failing or
+    advisory or its PR is not merged (the production check of the quality bar —
+    `quality_bar.production_refusal` when this install has it, PR #191 — decides first). Staging
+    ships, but only with a person's approval and these reasons on the card."""
+    reasons = []
+    if source.get("failing_gates"):
+        reasons.append("the build's checks were failing or advisory (" +
+                       ", ".join(source["failing_gates"][:6]) + ")")
+    if source.get("unmerged"):
+        reasons.append("its pull request is not merged")
+    from ..identity.object_rules import is_production_environment
+
+    if is_production_environment(environment):
+        try:
+            from .quality_bar import production_refusal  # PR #191; absent until it merges
+        except Exception:  # noqa: BLE001
+            production_refusal = None
+        if production_refusal is not None:
+            why = production_refusal(source)
+            if why:
+                return str(why)
+        if reasons:
+            return "Not shipped to production: " + "; ".join(reasons) + "."
+    return None
+
+
+def staging_needs_a_person(source: dict[str, Any]) -> Optional[str]:
+    """Staging is where a build is tried BEFORE it merges, so an open PR alone asks nothing (the
+    card still says so); a build whose checks failed or were advisory needs a person's look."""
+    if source.get("failing_gates"):
+        return ("the build's checks were failing or advisory ("
+                + ", ".join(source["failing_gates"][:6]) + ")")
+    return None
+
+
+def files_from_build(connection: Connection, settings: Any, project_id: str, source: dict[str, Any],
+                     source_paths: Any) -> dict[str, dict[str, str]]:
+    """The files a build shipped, read AT THE COMMIT RECORDED FOR THAT RUN (`build_source`).
+    `source_paths` is a list of repo paths (a path ending in `/` is a folder, whose files land
+    directly in the target directory) or {destination: repo path}. Every path is confined
+    (safe_relative_path); a file that is not UTF-8 text is refused. Returns {destination:
+    {"text": body}} — an object, so text that starts with 'art_' is never taken for an artifact id."""
+    owner, repo, ref = source["owner"], source["repo"], source["head_sha"]
+    from .local_repo import is_local_owner
+
+    if is_local_owner(owner):
+        from .local_repo_host import adapter_for
+
+        adapter = adapter_for(settings, owner, repo)
+    else:
+        from .github_actions import adapter_for_repository
+
+        adapter = adapter_for_repository(connection, settings, project_id, f"{owner}/{repo}").adapter
+
+    def confined(path: str, what: str) -> str:
+        try:
+            return safe_relative_path(path)
+        except ValueError as exc:
+            raise ConfigDeployError(f"{what} {path!r}: {exc}", "Name a path inside the repository.") from exc
+
+    wanted: dict[str, str] = {}
+    if isinstance(source_paths, Mapping):
+        for dest, src in source_paths.items():
+            wanted[confined(str(dest), "destination")] = confined(str(src), "source path")
+    else:
+        listing = None
+        for entry in (source_paths if isinstance(source_paths, (list, tuple)) else [source_paths]):
+            entry = str(entry or "").strip()
+            if not entry:
+                continue
+            if entry.endswith("/"):
+                folder = confined(entry.rstrip("/"), "source folder") + "/"
+                listing = listing if listing is not None else adapter.list_paths(ref)
+                for path in listing:
+                    if path.startswith(folder):
+                        wanted[confined(path[len(folder):], "file")] = confined(path, "file")
+            else:
+                src = confined(entry, "source path")
+                wanted[src] = src
+    if not wanted:
+        raise ConfigDeployError("Nothing to deploy from the build: no source_paths matched.",
+                                "Name the files (or folders ending in /) the build wrote.")
+    out: dict[str, dict[str, str]] = {}
+    for dest, src in wanted.items():
+        try:
+            body = adapter.read_text_file(ref, src)
+        except UnicodeDecodeError as exc:
+            raise ConfigDeployError(f"{src} is not UTF-8 text.", "Config files shipped from a "
+                                    "build must be text.") from exc
+        if body is None:
+            raise ConfigDeployError(f"{src} is not in commit {ref[:12]} (build {source['code_task_run_id']}).",
+                                    "Name a file the build committed.")
+        out[dest] = {"text": body}
+    return out
+
+
 def bundle_sha256(files: list[Mapping[str, Any]]) -> str:
     h = hashlib.sha256()
     for f in sorted(files, key=lambda f: str(f["path"])):
@@ -519,7 +675,8 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
                            files: list[dict[str, Any]], bundle_artifact_id: str, actor: str,
                            approval_decision_id: Optional[str] = None, person_required: bool = False,
                            promoted_from: Optional[str] = None, trigger: str = "manual",
-                           workflow_run_id: Optional[str] = None) -> dict[str, Any]:
+                           workflow_run_id: Optional[str] = None,
+                           source: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Record a deployment of `files` into `target`, held for a person's approval — or running
     under the approval it already has (the released gate, or the environment's policy)."""
     from datetime import timedelta
@@ -596,6 +753,7 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
         "rollback_to": ({"deployment_run_id": previous["id"], "bundle_sha256": previous.get("commit_ref")}
                         if previous else None),
         "promoted_from": promoted_from, "surface_ownership": ownership_guard,
+        **({"build": source} if source else {}),
     }
     rollback_plan = [f"Restore the previous version of each file from {desired['previous_versions']}",
                      "Run the reload again", "Check the health URL"]
@@ -614,6 +772,7 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
         "app_name": cfg.app_name, "environment": cfg.environment, "host": where,
         "directory": cfg.directory, "files": manifest, "bundle_sha256": release,
         "reload": reload, "health_url": cfg.health_url, "promoted_from": promoted_from,
+        **({"build": source} if source else {}),
         "steps": ["Check the directory (read-only)", "Keep the previous versions",
                   "Write each file to a temp name and rename it into place", "Reload",
                   "Health check; roll back on failure"],
@@ -622,7 +781,10 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
                  "note": "Your own host: no provider cost."},
     }
     question = (f"{'Promote' if promoted_from else 'Deploy'} config for {cfg.app_name} to {where} "
-                f"· {cfg.environment}")
+                f"· {cfg.environment}"
+                + (f" · from build {source['code_task_run_id']} @ {source['short_sha']}"
+                   + (f" ({source['pull_request_url']})" if source.get("pull_request_url") else "")
+                   if source else ""))
     recommendation = {**review, "action": governed.DECISION_ACTION,
                       "deployment_run_id": deployment_run_id, "changeset_id": changeset["id"],
                       "target_id": cfg.id, "kind": PACKET_KIND}
@@ -654,6 +816,7 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
               "directory": cfg.directory, "transport": cfg.transport, "reload": reload,
               "health": {"url": cfg.health_url, "expected_status": cfg.health_expected},
               "promoted_from": promoted_from, "workflow_run_id": workflow_run_id,
+              **({"build": source} if source else {}),
               "surface_ownership": ownership_guard, "governed": True, "plan_review": review}
     connection.execute(
         text("""
@@ -712,8 +875,12 @@ def deploy_files(engine: Any, settings: Settings, *, project_id: str, actor: str
                  target_id: Optional[str] = None, app_name: Optional[str] = None,
                  environment: Optional[str] = None, approval_decision_id: Optional[str] = None,
                  person_required: bool = False, workflow_run_id: Optional[str] = None,
-                 created_by_job_id: Optional[str] = None) -> dict[str, Any]:
-    """`deploy_config`: plan a deployment of these files to a config_dir target."""
+                 created_by_job_id: Optional[str] = None,
+                 code_task_run_id: Optional[str] = None,
+                 source_paths: Any = None) -> dict[str, Any]:
+    """`deploy_config`: plan a deployment of these files to a config_dir target. With
+    `code_task_run_id` the files are read from THAT BUILD'S branch (`source_paths`), at its head
+    commit, and the plan records the run, branch, SHA and pull request."""
     from ..db import begin
     from .resource_plane import ResourcePlaneService
 
@@ -723,6 +890,24 @@ def deploy_files(engine: Any, settings: Settings, *, project_id: str, actor: str
             target = find_target(c, project_id, target_id=target_id, app_name=app_name,
                                  environment=environment or ("staging" if not target_id else None))
             cfg = read_target(target)
+            source = None
+            if code_task_run_id:
+                if not source_paths:
+                    raise ConfigDeployError(
+                        "A config deployment from a build needs source_paths: the files the "
+                        "build wrote.", "Name them, e.g. source_paths: [\"tenants/\"].")
+                source = build_source(c, settings, project_id, str(code_task_run_id))
+                refused = quality_problem(source, cfg.environment)
+                if refused:
+                    raise ConfigDeployError(refused, "Fix the build's failing checks and merge it, "
+                                            "or deploy a build that passed.")
+                ask = staging_needs_a_person(source)
+                if ask:
+                    person_required = True       # a person looks, with these reasons on the card
+                    approval_decision_id = None   # no earlier gate pre-approves it (as production)
+                    source = {**source, "needs_a_person": ask}
+                built = files_from_build(c, settings, project_id, source, source_paths)
+                files = {**dict(files or {}), **built}
             bundle = bundle_from_inputs(c, project_id, files=files, produced_artifacts=produced_artifacts)
             artifact_id = store_bundle(
                 c, settings, project_id=project_id, files=bundle,
@@ -732,8 +917,9 @@ def deploy_files(engine: Any, settings: Settings, *, project_id: str, actor: str
                 rp, c, project_id=project_id, target=target, files=bundle,
                 bundle_artifact_id=artifact_id, actor=actor,
                 approval_decision_id=approval_decision_id, person_required=person_required,
-                trigger="manual", workflow_run_id=workflow_run_id)
-            return _planned(run)
+                trigger="manual", workflow_run_id=workflow_run_id, source=source)
+            planned = _planned(run)
+            return {**planned, "source": source} if source else planned
     except ConfigDeployError as exc:
         return {"status": "failed", "reason": str(exc), "headline": exc.headline, "next": exc.action}
 

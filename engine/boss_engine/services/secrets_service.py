@@ -83,8 +83,12 @@ def put_secret(connection, settings: Settings, *, project_id: str, name: str,
                value: str, secret_kind: str = "api_token",
                backend: str = "platform_secret_store",
                scope_type: str = "project", scope_id: Optional[str] = None,
-               actor: str = "operator") -> dict[str, Any]:
-    """Write a value THROUGH to a backend and record the reference. Returns metadata only."""
+               actor: str = "operator", http_auth: Optional[bool] = None) -> dict[str, Any]:
+    """Write a value THROUGH to a backend and record the reference. Returns metadata only.
+
+    `http_auth` marks the reference as usable as an HTTP auth header (a contract test's
+    `{secret_ref}` header, contract_tests.http_auth_problem). None leaves the flag as it was:
+    a re-save of a rotated value never clears it."""
     scope_id = scope_id or project_id
     stored_kind = _KIND_MAP.get(secret_kind, "api_token")
     key = ref_key_for(scope_id, name)
@@ -92,7 +96,8 @@ def put_secret(connection, settings: Settings, *, project_id: str, name: str,
     impl = backend_for(backend, settings)
     impl.put(key, value)          # the value leaves BOSS here and is not retained
 
-    meta = _metadata(value, secret_kind)
+    meta = _metadata(value, secret_kind,
+                     {"http_auth": bool(http_auth)} if http_auth is not None else None)
     ref_id = make_id("sref")
     row = connection.execute(
         sql("""INSERT INTO secret_refs
@@ -102,7 +107,7 @@ def put_secret(connection, settings: Settings, *, project_id: str, name: str,
                VALUES (:id,:p,:st,:si,:rk,:key,:prov,:sk,:sb,'active',CAST(:m AS JSONB),:by,
                        now(),now())
                ON CONFLICT (project_id, ref_kind, ref_key) DO UPDATE
-                 SET metadata = EXCLUDED.metadata, status = 'active',
+                 SET metadata = secret_refs.metadata || EXCLUDED.metadata, status = 'active',
                      storage_backend = EXCLUDED.storage_backend, updated_at = now()
                RETURNING id"""),
         {"id": ref_id, "p": project_id, "st": scope_type, "si": scope_id,
