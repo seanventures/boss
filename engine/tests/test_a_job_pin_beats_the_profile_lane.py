@@ -148,3 +148,13 @@ def test_smart_escalation_without_a_hard_pin_keeps_the_build_pin(monkeypatch):
     router = _router("balanced", "smart", {"build": ("claude_code", "sonnet")}, monkeypatch)
     d = router.route("implement", signal="final_attempt")
     assert (d.engine, d.model) == ("claude_code", "sonnet")
+
+
+@pytest.mark.parametrize("mode", ["fixed", "smart"])
+def test_a_model_in_the_profile_step_map_is_not_a_task_pin(mode, monkeypatch):
+    custom = {**PROFILES["balanced"], "name": "custom",
+              "model": {"default": "strong", "review_code": "claude_code:sonnet"}}
+    monkeypatch.setitem(PROFILES, "custom", custom)
+    router = _router("custom", mode, {"review": ("codex", "gpt-6-sol")}, monkeypatch)
+    d = router.route("review_code")
+    assert (d.engine, d.model) == ("codex", "gpt-6-sol"), d.reason

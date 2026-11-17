@@ -196,7 +196,10 @@ class StageRouter:
         r = route_for_step(self.profile, step, self.spec.get("model_config"))
         # THE OPERATOR'S JOB PIN beats the profile's lane for every stage the job covers. Only a
         # task's own pin (spend-cap failover, an experiment) is above it.
-        job_pin = None if (r.get("engine") or r.get("model")) else \
+        # Precedence, the same in Smart: the task's own model_config > Setup job pin > the
+        # profile's step/lane model > defaults. A model in the PROFILE's step map is not a pin.
+        own = route_for_step({}, step, self.spec.get("model_config"))
+        job_pin = None if (own.get("engine") or own.get("model")) else \
             pin_for_step(self._pins or {}, step)
         if job_pin:
             from .compat import fits

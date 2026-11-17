@@ -1850,23 +1850,21 @@ _RUNNER = re.compile(r"(?i)^(?:go\s+(?:vet|test|build)|(?:python3?\s+-m\s+)?pyte
 
 def recorded_command_evidence(why: str, item_text: str, checks: Any) -> list[str]:
     """The commands an answer cites (`go vet ./...`) that BOSS itself recorded passing in this
-    run's checks (`checks`: [{command, ok}], `&&`/`;` chains split into their commands), when the
+    run's checks (`checks`: [{command, ok}]; exact match with a recorded command or one part of a plain
+    `&&` chain, arguments included), when the
     ITEM is about that command (its runner, "go vet", is in the item's words): a recorded run is
     evidence, a command nobody ran is not, and a `go test` never evidences an item about
     something else (AR-31: "`go vet ./...` and `go test ./...` run clean" read as no evidence)."""
     ran: set[str] = set()
     for chk in checks or []:
-        if not chk.get("ok"):
-            continue
         command = _ws(chk.get("command"))
-        if not command:
+        # STRICT, NOT A SHELL PARSER: only a passed command with nothing that can hide or
+        # ignore a part (a comment, `;`, `||`, a pipe, `&`, a subshell, a substitution, a
+        # redirection, a newline) credits anything; a recorded `... || true` credits nothing.
+        if not chk.get("ok") or not command or re.search(r"[#;|&`()<>\n]|\$\(", command.replace("&&", " ")):
             continue
         ran.add(command)
-        # A PASSED `a && b` chain ran every part. Anything else (`;`, `||`, a pipe, a
-        # background `&`, a subshell, a substitution) may have skipped or ignored a part, so
-        # only the whole command is credited: when in doubt, do not credit.
-        if not re.search(r"\|\||;|\||(?<!&)&(?!&)|[\n`()]|\$\(", command):
-            ran.update(_ws(p) for p in command.split("&&") if p.strip())
+        ran.update(_ws(p) for p in command.split("&&") if p.strip())
     if not ran:
         return []
     out = []

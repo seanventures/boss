@@ -129,3 +129,20 @@ def test_command_evidence_never_excuses_a_cited_path_that_is_missing(tree):
     got = _judge(tree, [item], checks=RECORDED)["AC-1"]
     assert got["status"] == v.PARTIAL
     assert "src/imaginary.go" in got["evidence"]
+
+
+@pytest.mark.parametrize("recorded", ["true # && go vet ./...", "go vet ./... || true",
+                                      "go vet ./... || :", "go vet ./... ; true",
+                                      "go vet ./... > out.txt", "go vet ./cmd/..."])
+def test_a_recorded_command_that_hides_a_part_or_is_narrower_credits_nothing(tree, recorded):
+    item = {"n": 1, "id": "AC-1", "text": "`go vet` is clean.",
+            "evidence": "`go vet ./...` run clean in this tree"}
+    assert _judge(tree, [item], checks=[{"command": recorded, "ok": True}])["AC-1"]["status"] \
+        == v.PARTIAL
+
+
+def test_citing_the_whole_hiding_command_credits_nothing_either(tree):
+    item = {"n": 1, "id": "AC-1", "text": "`go vet` is clean.",
+            "evidence": "`go vet ./... || true` run clean"}
+    got = _judge(tree, [item], checks=[{"command": "go vet ./... || true", "ok": True}])
+    assert got["AC-1"]["status"] == v.PARTIAL
