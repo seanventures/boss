@@ -199,7 +199,7 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
     // unauthenticated local server is Local › Other URL), so Connect never offers that 422.
     ready = ready && !!secret.trim()
             && (provider !== "custom" || !!baseUrl.trim())
-            && (!fields.includes("model") || !!model.trim());
+            && (!fields.includes("model") || entry?.model_optional || !!model.trim());
   } else {
     ready = ready && !!model.trim() && (provider === "ollama" || !!baseUrl.trim());
   }
@@ -221,7 +221,7 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
     if (tile === "api_key") {
       if (provider === "custom" && !baseUrl.trim()) return "Add the base URL first";
       if (!secret.trim()) return "Paste a key first";
-      if (fields.includes("model") && !model.trim()) return "Name the model first";
+      if (fields.includes("model") && !entry?.model_optional && !model.trim()) return "Name the model first";
       return "";
     }
     if (!model.trim()) return "Name the model first";
@@ -387,9 +387,12 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
         ) : null}
         {tile !== "subscription" && fields.includes("model") ? (
           <label className="su-field">
-            <span className="su-field-label">Model</span>
+            <span className="su-field-label">{entry?.model_optional ? "Model (optional)" : "Model"}</span>
             <input list="su-model-options" value={model} data-testid="su-model-name"
-                   aria-label="Model" onChange={(e) => setModel(e.target.value)} />
+                   aria-label="Model"
+                   placeholder={entry?.model_optional ? "Leave empty: the provider picks" : undefined}
+                   title={entry?.model_optional ? "Empty uses the provider's own routing. Each job's model is chosen in Who does what." : undefined}
+                   onChange={(e) => setModel(e.target.value)} />
             <datalist id="su-model-options">
               {models.map((m) => <option key={m} value={m} />)}
             </datalist>

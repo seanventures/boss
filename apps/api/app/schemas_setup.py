@@ -97,6 +97,9 @@ class CatalogueEntry(_Open):
     kind: Literal["subscription", "api_key", "local"]
     key_url: Optional[str] = None
     example_model: Optional[str] = None
+    # OpenRouter: the model is optional; empty means the provider's own routing (default_model).
+    model_optional: Optional[bool] = None
+    default_model: Optional[str] = None
     # Local › Ollama: where this BOSS looks when the URL is left empty (OLLAMA_BASE_URL).
     example_base_url: Optional[str] = None
     fields: list[Literal["api_key", "token", "file", "base_url", "model"]]
