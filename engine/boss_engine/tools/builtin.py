@@ -1727,7 +1727,10 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         _obj(
             {
                 "workflow_key": {"type": "string",
-                                 "description": "lower_snake_case identifier, stable"},
+                                 "description": "lower_snake_case identifier, stable. Pass the "
+                                                "key of a workflow that EXISTS to publish its "
+                                                "next version; never invent a new key to get "
+                                                "one. Left out, it is made from the name."},
                 "name": {"type": "string"},
                 "description": {"type": "string"},
                 "work_class": {"type": "string",
@@ -1749,9 +1752,17 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "stops for a person; {id, wait_seconds} pauses. `captain` "
                                    "is one of the project's agents. `approval` is 'manual' or "
                                    "'auto' — a capability at or above the risk floor is forced "
-                                   "manual whatever you ask for. You do NOT wire inputs: a "
-                                   "step's required input is connected to the nearest earlier "
-                                   "step that produces it.",
+                                   "manual whatever you ask for. ANY step may carry input: "
+                                   "{name: value} — a literal (e.g. contract_test cases: "
+                                   "[{name, method, path, expect_status}], a deployment "
+                                   "target_id for a deploy / promote step; "
+                                   "deployment_target: <id> is the same), a reference to an "
+                                   "earlier step {from_step: <id>, field: <field it produces>} "
+                                   "(the field may differ from the input's name: smoke_test "
+                                   "url from deploy's deployed_url), or {from_input: <name>} "
+                                   "for something the operator types. An input you leave out "
+                                   "is connected to the nearest earlier step that produces a "
+                                   "field of that name.",
                     "items": {"type": "object"},
                 },
                 "inputs": {
@@ -1773,7 +1784,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 },
                 "project_id": {"type": "string"},
             },
-            ["workflow_key", "name", "steps"],
+            ["name", "steps"],
         ),
         kind="write",
         reversibility="safe", permission="workflow:publish",
@@ -1782,13 +1793,36 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         wf = services_module("workflows")
         caps = services_module("workflow_capabilities")
         pid = args.get("project_id") or project_id
-        key = re.sub(r"[^a-z0-9_]+", "_", str(args.get("workflow_key") or "").strip().lower())
+        asked_key = str(args.get("workflow_key") or "").strip()
+        # THE KEY IS THE WORKFLOW'S IDENTITY, not something the agent must get exactly right.
+        # Spelled loosely ("API Onboarding", "api-onboarding", a leading digit, too long) it is
+        # tidied; left out, it comes from the name. Publishing a key that EXISTS publishes its
+        # next version, so an agent never needs a new key to get a new version.
+        key = re.sub(r"[^a-z0-9_]+", "_", (asked_key or str(args.get("name") or "")).lower())
+        key = re.sub(r"_+", "_", key).strip("_")
+        if key and not key[0].isalpha():
+            key = "wf_" + key
+        key = key[:61].rstrip("_")
         if not re.fullmatch(r"[a-z][a-z0-9_]{2,60}", key or ""):
-            return {"ok": False, "error": "workflow_key must be lower_snake_case, 3-61 chars"}
+            return {"ok": False,
+                    "error": f"workflow_key {asked_key!r} cannot be made into a lower_snake_case "
+                             "key of 3-61 characters. To publish a new version of a workflow "
+                             "that exists, pass ITS key (describe_workflow lists them); "
+                             "otherwise pass a short key such as 'api_onboarding'."}
         spec = _spec_from_steps(args.get("steps") or [], args)
         if isinstance(spec, dict) and spec.get("ok") is False:
             return spec
         with ctx.begin() as c:
+            # `api_onboarding_v2` for a workflow that already has `api_onboarding` is a request
+            # for its next version, not a second workflow.
+            versioned = re.fullmatch(r"(.+?)_v\d+", key)
+            if versioned and not c.execute(
+                    _text("SELECT 1 FROM workflow_definitions WHERE project_id=:p AND "
+                          "workflow_key=:k"), {"p": pid, "k": key}).first() \
+                    and c.execute(
+                    _text("SELECT 1 FROM workflow_definitions WHERE project_id=:p AND "
+                          "workflow_key=:k"), {"p": pid, "k": versioned.group(1)}).first():
+                key = versioned.group(1)
             # VALIDATE BEFORE CREATING ANYTHING. A definition row for a spec that cannot publish
             # leaves a workflow in the catalogue that does not work, and the operator has to go
             # and delete it.
@@ -1821,7 +1855,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     problems += [p["detail"] for p in shape + blocked
                                  if p["detail"] not in problems]
                 if problems:
-                    return {"ok": False, "error": "; ".join(problems[:4])}
+                    return {"ok": False,
+                            "error": "; ".join(_how_to_set(p) for p in problems[:4])}
                 existing = c.execute(
                     _text("SELECT id, COALESCE(is_catalogue, false) AS is_catalogue "
                           "FROM workflow_definitions "
@@ -1872,6 +1907,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     mapped = {"note": f"published, but not mapped: {str(error)[:160]}"}
         return {"status": "published", "workflow_key": key, "definition_id": definition_id,
                 "version": published.get("version"), "steps": len(spec["steps"]),
+                **({"note": f"published as version {published.get('version')} of the existing "
+                            f"workflow {key}"} if existing else {}),
                 # Named, because a step BOSS defined on the operator's behalf is something they
                 # should be able to find and change afterwards.
                 **({"defined_steps": made} if made else {}),
@@ -5645,6 +5682,19 @@ def _draft_problems(connection, project_id: str, spec: dict, caps_by_key: dict,
     problems.extend(services_module("step_agents").assignment_problems(
         connection, project_id, spec))
     return problems
+
+
+def _how_to_set(problem: str) -> str:
+    """A "needs 'x', which is not set" sentence, with the three ways to set it."""
+    found = re.search(r"step '([^']+)'.*? needs '([^']+)', which is not set", problem)
+    if not found or "Set it" in problem:
+        return problem
+    step, name = found.group(1), found.group(2)
+    return (f"{problem.rstrip('.')}. Set it one of three ways: a literal on that step "
+            f"(\"input\": {{\"{name}\": <value>}}), from an earlier step "
+            f"(\"input\": {{\"{name}\": {{\"from_step\": \"<step id>\", \"field\": "
+            f"\"<field it produces>\"}}}}; the field need not be named {name}), or from the "
+            f"operator (add \"{name}\" to the workflow's `inputs`).")
 
 
 def _text(sql: str):

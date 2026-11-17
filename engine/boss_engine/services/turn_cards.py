@@ -414,6 +414,97 @@ def _steps_of(connection: Connection, project_id: str, start: Mapping[str, Any]
     return out
 
 
+def _named_key(connection: Connection, project_id: str, offer: Optional[Mapping[str, Any]],
+               message: str) -> Optional[str]:
+    """The project workflow this turn names, if it names one: the key a `start_workflow` offer
+    carries, else (new work decided, nothing offered) a workflow of this project whose key or
+    name the person's words contain. A name is a lookup against the project's own workflows,
+    never a guess at intent; BOSS's own catalogue workflows are not matched in prose, because
+    "a feature" must keep meaning the default path."""
+    args = (offer or {}).get("args") if isinstance((offer or {}).get("args"), Mapping) else {}
+    if offer and str(offer.get("tool") or "") == "start_workflow":
+        return str((args or {}).get("workflow_key") or "").strip() or None
+    if offer:
+        return None
+    low = " " + re.sub(r"[^a-z0-9]+", " ", str(message or "").lower()) + " "
+    rows = connection.execute(text(
+        "SELECT workflow_key, name FROM workflow_definitions WHERE project_id = :p "
+        "AND status = 'active' AND namespace = 'product' AND COALESCE(is_catalogue, false) = false "
+        "AND active_version_id IS NOT NULL"), {"p": project_id}).mappings().all()
+    best: Optional[tuple[int, str]] = None
+    for row in rows:
+        for name in (str(row["workflow_key"]), str(row["name"] or "")):
+            tidy = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
+            if len(tidy) >= 4 and f" {tidy} " in low and (best is None or len(tidy) > best[0]):
+                best = (len(tidy), str(row["workflow_key"]))
+    return best[1] if best else None
+
+
+def _named_card(connection: Connection, project_id: str, key: str,
+                offer: Optional[Mapping[str, Any]], said: str, title: str,
+                message_id: Optional[str]) -> Optional[dict[str, Any]]:
+    """THE CARD FOR A NAMED WORKFLOW: its name, its own steps, its declared inputs as values.
+
+    A card for "run api_onboarding" showed the generic Build path (Plan, You approve, Build,
+    Review, PR) and Start made a Minor Feature run with the inputs only in prose. The workflow
+    the person named is the workflow that runs; if it cannot start yet the card says which
+    inputs it still needs rather than starting something else."""
+    import json
+
+    from .project_experience import new_work
+    from .workflows import missing_required_inputs
+
+    try:
+        with connection.begin_nested():
+            got = new_work.plan(connection, project_id, "feature", key)
+            row = connection.execute(text(
+                "SELECT v.version, v.spec FROM workflow_definitions d JOIN workflow_versions v "
+                "ON v.id = d.active_version_id WHERE d.project_id = :p AND d.workflow_key = :k"),
+                {"p": project_id, "k": key}).mappings().first()
+    except LookupError:
+        return None
+    spec = row["spec"] if row else {}
+    if isinstance(spec, str):
+        spec = json.loads(spec or "{}")
+    args = (offer or {}).get("args") if isinstance((offer or {}).get("args"), Mapping) else {}
+    supplied = args.get("inputs") if isinstance(args.get("inputs"), Mapping) else {}
+    inputs = {str(k): v for k, v in supplied.items()}
+    properties = ((spec or {}).get("input_schema") or {}).get("properties")
+    for name in (properties if isinstance(properties, Mapping) else {}):
+        if name in args and name not in inputs and name not in ("directive", "title", "inputs",
+                                                                   "workflow_key"):
+            inputs[str(name)] = args[name]
+    missing = missing_required_inputs(spec or {}, inputs)
+    flow = got.get("workflow") or {}
+    name = str(flow.get("name") or key)
+    steps = [{"key": st.get("id"), "label": st.get("label"),
+              "type": "you" if st.get("you") else "agent" if st.get("agent") else "todo",
+              **({"role_key": st["agent"].get("role_key")} if isinstance(st.get("agent"), Mapping)
+                 and st["agent"].get("role_key") else {}),
+              **({"agent": st["agent"]} if st.get("agent") else {})}
+             for st in got.get("steps") or []]
+    from .project_experience.titles import shorten
+
+    short = shorten(title, 6) if title else name
+    body: dict[str, Any] = {"kind": "feature", "text": said or name, "title": short,
+                            "workflow_key": key, "inputs": inputs}
+    if message_id:
+        body["source_ref"] = f"chat:{message_id}"
+    card: dict[str, Any] = {
+        "kind": "new_work", "work_kind": "feature", "title": short, "text": said or name,
+        "estimate": None, "steps": steps, "workflow": name, "workflow_key": key,
+        "workflow_version": row["version"] if row else None, "inputs": inputs,
+        "offer_id": str((offer or {}).get("id") or "") or None, "state": "open",
+        "start": {"href": f"/v1/projects/{project_id}/work", "method": "POST", "body": body},
+        "edit_href": _edit_href(project_id, "feature", said or name)}
+    if missing:
+        card["missing_inputs"] = {
+            "names": missing,
+            "message": f"{name} needs {', '.join(missing)} before it can start. Say "
+                       f"{'it' if len(missing) == 1 else 'them'} and I will set the card up again."}
+    return card
+
+
 def proposal(connection: Connection, project_id: str, *, offers: Iterable[Mapping[str, Any]],
              decision: Optional[Mapping[str, Any]], message: str,
              message_id: Optional[str] = None) -> Optional[dict[str, Any]]:
@@ -421,6 +512,16 @@ def proposal(connection: Connection, project_id: str, *, offers: Iterable[Mappin
     from .project_experience.titles import shorten
 
     offer = next((o for o in offers or [] if str(o.get("tool") or "") in _WORK_TOOLS), None)
+    named = None
+    if offer or str((decision or {}).get("action") or "") == "new_code_change":
+        named = _named_key(connection, project_id, offer, message)
+    if named:
+        title0, said0 = _offer_words(offer) if offer else ("", str(message or "").strip())
+        card = _named_card(connection, project_id, named, offer,
+                           said0 or str((offer or {}).get("label") or "").strip(), title0,
+                           message_id)
+        if card:
+            return card
     title, said = _offer_words(offer) if offer else ("", "")
     if not offer:
         if str((decision or {}).get("action") or "") != "new_code_change":

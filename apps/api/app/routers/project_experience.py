@@ -249,6 +249,10 @@ class NewWorkBody(BaseModel):
     source_url: Optional[str] = None
     #: "change" on Helm's plan: another active product workflow of this project.
     workflow_key: Optional[str] = None
+    #: The named workflow's own declared inputs, as values (a card for "run api_onboarding" sends
+    #: them here rather than burying them in the words). Used only with `workflow_key`; the run's
+    #: own title / directive / repository are never replaced by them.
+    inputs: Optional[dict[str, Any]] = None
     #: The console's readiness sheet: start although these are missing (the start door's own).
     start_anyway: Optional[list[str]] = None
     accept: Optional[list[str]] = None
@@ -410,6 +414,8 @@ def project_new_work(project_id: str, payload: NewWorkBody, request: Request) ->
         if issue:
             link = issue["external_url"]
     run_input: dict[str, Any] = {"title": title, "work_kind": kind, **briefed}
+    if payload.workflow_key and isinstance(payload.inputs, dict):
+        run_input = {**{str(k): v for k, v in payload.inputs.items()}, **run_input}
     if repo:
         run_input["repository"] = repo
     if anchor:

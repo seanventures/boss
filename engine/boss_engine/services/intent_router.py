@@ -185,7 +185,11 @@ _DECIDED_MEANS = {
     "new_code_change": ("a request for NEW work. Offer it: create_code_task for one scoped "
                         "change, start_workflow for a whole delivery — both come back as a "
                         "button the person presses; say it is offered, not started. Do not "
-                        "retry or redeploy existing work in its place."),
+                        "retry or redeploy existing work in its place. When they ask to run a "
+                        "workflow BY NAME (one this project has — describe_workflow lists them), "
+                        "offer start_workflow with THAT workflow_key and its declared inputs as "
+                        "`inputs` values; never substitute the default Build path for it, and "
+                        "if an input is missing say which."),
 }
 
 
@@ -2013,7 +2017,8 @@ class IntentRouter:
                          "change a setting, cancel, prioritise (expensive or destructive tools "
                          "still come back as buttons for them to press)"),
             C("new_code_change", "start NEW code work on an app: a new app, a feature or a "
-                                 "change to an app's code (offered as a button for them to start)"),
+                                 "change to an app's code, or running a NAMED project workflow with its "
+                                 "inputs (offered as a button for them to start)"),
             C("author_workflow", "author, create, design or edit a WORKFLOW — a sequence of "
                                  "steps such as validate, fix PR, deploy, test, approve, "
                                  "promote — from capabilities BOSS has; staged as a draft the "

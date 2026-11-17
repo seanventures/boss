@@ -33,6 +33,7 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
         return {"ok": False, "error": "steps must be a non-empty list"}
     if len(steps) > 24:
         return {"ok": False, "error": "24 steps is the most a workflow may have"}
+    steps = [_normalise_step(item) for item in steps]
     # Ids are reserved up front only when a typed decision names later steps as its arms.
     # Otherwise the loop below assigns them exactly as it always has.
     branching = any(
@@ -81,7 +82,11 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
                     "error": f"step {index + 1} typed_decision must be an object"}
         capability = _draft_capability(raw)
         if not capability:
-            return {"ok": False, "error": f"step {index + 1} has no capability"}
+            return {"ok": False, "error": (
+                f"step {index + 1} ('{raw.get('id') or '?'}') says what it does in none of the "
+                "ways a step can: capability=<key from list_capabilities>, agent=true with "
+                "instructions, skill=<custom step key>, mcp_tool={server, tool}, gate={question}, "
+                "wait_seconds, or run_workflow=<key>.")}
         if branching:
             step_id = planned[index]
         else:
@@ -179,6 +184,9 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
     # What the OPERATOR supplies when they start this workflow. Declared, never guessed: see
     # `_wire_inputs`.
     declared = set(_drafted_input_details(args.get("inputs"), args.get("input_details")))
+    refusal = _check_bindings(built)
+    if refusal:
+        return {"ok": False, "error": refusal}
     _wire_inputs(built, declared)
     for entry in built:
         entry.pop("_capability", None)
@@ -203,7 +211,13 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
     # and failed three steps in. Every name here is read with `from_input` by some step, so each
     # IS required; one the model marked `required: false` is offered and not demanded.
     described = _drafted_input_details(args.get("inputs"), args.get("input_details"))
-    bound: list[str] = []
+    # A workflow with an AGENT step reads the run's inputs in prose (its instructions name
+    # `tenant_yaml_path`), so what the model listed is the start form even where no step binds
+    # it with `from_input`; dropping it left the form blank for exactly the inputs the operator
+    # was meant to type. Without an agent step a listed input nothing consumes stays off the
+    # form: the operator would fill in a value the run ignores.
+    has_agent = any((e.get("binding") or {}).get("agent_work") for e in built)
+    bound: list[str] = list(described) if has_agent else []
     for entry in built:
         for value in ((entry.get("binding") or {}).get("inputs") or {}).values():
             if isinstance(value, dict) and value.get("from_input"):
@@ -233,6 +247,112 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
             "properties": properties,
         }
     return spec
+
+
+_INPUT_KEYS = ("input", "inputs", "with", "values", "defaults", "set")
+_STEP_REF = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def _normalise_step(raw: Any) -> Any:
+    """The one shape `_spec_from_steps` reads, from the several a model writes.
+
+    A model told to describe a step writes what it saw in the runtime's own spec — a nested
+    `binding`, `agent_work: true`, `inputs` for `input`, `deployment_target` for the target —
+    and each of those was refused as "has no capability". Everything the console's builder can
+    draw is accepted under the words a person would use for it, so the refusal that remains is
+    one about the design, never about the spelling.
+    """
+    if not isinstance(raw, dict):
+        return raw
+    out = dict(raw)
+    binding = out.pop("binding", None)
+    if isinstance(binding, dict):
+        if binding.get("agent_work") and "agent" not in out:
+            out["agent"] = True
+        for key in ("capability", "custom_step", "skills", "mcp", "produces", "agents",
+                    "max_steps"):
+            if binding.get(key) and key not in out:
+                out["skill" if key == "custom_step" else key] = binding[key]
+        if isinstance(binding.get("inputs"), dict):
+            out["input"] = {**binding["inputs"], **(out.get("input") or {})} \
+                if isinstance(out.get("input"), dict) else dict(binding["inputs"])
+    work = out.get("agent_work")
+    if work and out.get("agent") is not True:
+        out["agent"] = True
+        if isinstance(work, dict):
+            for key, value in work.items():
+                out.setdefault(key, value)
+        elif isinstance(work, str) and not out.get("instructions"):
+            out["instructions"] = work
+    out.pop("agent_work", None) if "agent" in out else None
+    if str(out.get("kind") or out.get("type") or "").strip().lower() in _AGENT_STEP_WORDS:
+        out["agent"] = True
+    # Any of the usual words for "the values this step is given" become `input`.
+    merged: dict[str, Any] = {}
+    for key in _INPUT_KEYS:
+        value = out.pop(key, None)
+        if isinstance(value, dict):
+            merged.update(value)
+    for key in ("deployment_target", "target", "deployment_target_id"):
+        target = out.pop(key, None)
+        if target and "target_id" not in merged:
+            merged["target_id"] = target
+    if merged:
+        out["input"] = merged
+    if out.get("input") is not None:
+        out["input"] = {str(k): _clean_value(v, str(k)) for k, v in out["input"].items()}
+    # A step that names nothing but whose id IS a capability ("contract_test") is that capability.
+    if not _draft_capability(out) and out.get("id"):
+        caps = services_module("workflow_capabilities")
+        wanted = str(out["id"]).strip().lower()
+        if wanted in caps.CAPABILITY_KEYS:
+            out["capability"] = wanted
+    if out.get("instructions") and not _draft_capability(out):
+        out["agent"] = True
+    return out
+
+
+def _clean_value(value: Any, name: str) -> Any:
+    """A step input as the runtime reads it: a literal, `{from_step, field}` or `{from_input}`.
+
+    Accepts `{"from_step": "deploy", "field": "deployed_url"}` (the runtime's own),
+    `{"step": "deploy", "field": ...}`, `{"from": "deploy.deployed_url"}` and
+    `{"from_step": "deploy.deployed_url"}`. A bare string is a literal, always.
+    """
+    if not isinstance(value, dict):
+        return value
+    if value.get("from_input"):
+        return {"from_input": str(value["from_input"])}
+    step = value.get("from_step") or value.get("step")
+    field = value.get("field")
+    dotted = value.get("from") if value.get("from") else None
+    if dotted and not step:
+        step = dotted
+    if isinstance(step, str) and "." in step and not field:
+        step, field = step.split(".", 1)
+    if step:
+        return {"from_step": str(step).strip(), "field": str(field or name).strip()}
+    return value
+
+
+def _check_bindings(built: list[dict[str, Any]]) -> Optional[str]:
+    """A `from_step` must name an EARLIER step of this workflow. Says which step, which input,
+    and the three ways to set it."""
+    seen: set[str] = set()
+    for entry in built:
+        step_id = str(entry.get("id"))
+        inputs = (entry.get("binding") or {}).get("inputs")
+        for name, value in (inputs.items() if isinstance(inputs, dict) else ()):
+            if isinstance(value, dict) and value.get("from_step"):
+                source = str(value["from_step"])
+                if source not in seen:
+                    return (f"step '{step_id}' input '{name}' reads from step '{source}', which "
+                            "is not an earlier step of this workflow. Earlier steps: "
+                            f"{', '.join(sorted(seen)) or '(none)'}. Set an input with a "
+                            "literal (input: {name: value}), from an earlier step "
+                            "({from_step, field}), or from the operator (inputs: [name]).")
+        seen.add(step_id)
+    return None
 
 
 #: Words a model uses for "let an agent work it out". All mean binding.agent_work.
@@ -342,6 +462,8 @@ def _agent_step_binding(raw: dict[str, Any]) -> dict[str, Any]:
     start it", the shape almost every one of these has — and a literal pins it.
     """
     said = raw.get("instructions")
+    if said is None and (raw.get("input") or {}).get("instructions") not in (None, ""):
+        said = raw["input"]["instructions"]
     if said is None or (isinstance(said, str) and not said.strip()):
         said = {"from_input": "instructions"}
     binding: dict[str, Any] = {
@@ -729,8 +851,10 @@ STEP_SHAPES = (
     "{id, typed_decision: {question, options, min_confidence?}, state, true_value, on_true, "
     "on_false} asks one question and then branches. true_value is the option key that takes "
     "on_true; on_true and on_false name other steps in this list. min_confidence is optional. "
-    "`captain` is one of the project's agents. `approval` is 'manual' or 'auto'. Do NOT wire "
-    "inputs: a step's required input is connected to the nearest earlier step that makes it."
+    "`captain` is one of the project's agents. `approval` is 'manual' or 'auto'. Any step may carry "
+    "input: {name: literal | {from_step, field} | {from_input}} (deployment_target: <id> sets a "
+    "deploy step's target); an input left out is connected to the nearest earlier step that "
+    "makes it."
 )
 
 
