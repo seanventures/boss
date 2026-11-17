@@ -181,7 +181,15 @@ def mark_revoked(error: str) -> None:
     was revoked" from a run, the proof turn, or our own refresh attempt) flip the state to
     refresh_failed immediately — a 401 from Codex is a credential problem for a person to fix,
     never retried as if it were transient."""
-    _record(config_dir(), state=REFRESH_FAILED, error=str(error)[:200])
+    home = config_dir()
+    # The same lock the refresher holds while it writes the state file, so a refresh finishing
+    # at this moment cannot interleave with (and lose) this record. Best effort on a timeout:
+    # a dead credential must still be recorded.
+    try:
+        with _flock(home, fcntl.LOCK_EX, 5.0):
+            _record(home, state=REFRESH_FAILED, error=str(error)[:200])
+    except OSError:
+        _record(home, state=REFRESH_FAILED, error=str(error)[:200])
 
 
 def failure_stands(home: Optional[str] = None, now: Optional[float] = None) -> bool:
@@ -197,9 +205,10 @@ def failure_stands(home: Optional[str] = None, now: Optional[float] = None) -> b
     if st.get("state") != REFRESH_FAILED:
         return False
     try:
-        failed_at = datetime.fromisoformat(str(st.get("at") or "")).timestamp()
+        at = datetime.fromisoformat(str(st.get("at") or ""))
+        failed_at = (at if at.tzinfo else at.replace(tzinfo=timezone.utc)).timestamp()
     except ValueError:
-        return True
+        return True          # no usable timestamp: the failure stands (never assume it healed)
     age = _last_refresh_age(_read_doc(home), failed_at)
     # `age` is how old the login was when the failure was recorded; negative = the login was
     # issued AFTER the failure, so the failure belongs to a login that no longer exists.

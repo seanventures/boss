@@ -91,6 +91,9 @@ class HarnessVerdict:
     message: str
     fix: str
     where: str
+    #: Which account was refused, when the run knows ("pool:<member id>" for a pool account);
+    #: empty = the engine's one default login. Keyed by account so several accounts compose.
+    source_id: str = ""
 
     def sentence(self) -> str:
         return f"BOSS could not run {self.engine}: {self.message}; fix: {self.fix}."
@@ -309,6 +312,15 @@ def trip(verdict: HarnessVerdict) -> HarnessFailure:
             _TRIPPED.setdefault(run_id, verdict)
             while len(_TRIPPED) > _KEEP:
                 _TRIPPED.pop(next(iter(_TRIPPED)))
+    if verdict.kind == "auth_refused":
+        # THE ONE PLACE every harness refusal passes (a build, a review seat, a workflow step, a
+        # discovery): Setup learns of a refused login wherever it was seen (BOSSAPP-1347).
+        try:
+            from .harness_refusal import note
+
+            note(verdict, run_id)
+        except Exception:  # noqa: BLE001 — recording never masks the failure itself
+            pass
     return HarnessFailure(verdict)
 
 

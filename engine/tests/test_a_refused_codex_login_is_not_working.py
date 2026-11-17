@@ -202,12 +202,12 @@ def _cards(c):
                      {"p": c.project_id}).scalars().all()
 
 
-def test_a_401_on_a_run_flips_setup_and_offers_reconnect_or_a_fallback(conn):
+def test_a_401_on_a_run_flips_setup_and_raises_one_card(conn):
     _source(conn, "openai_codex_chatgpt", "openai_codex_chatgpt")
     _source(conn, "anthropic_claude_code", "anthropic_claude_code")
-    assert setup_service.last_check_broken(
-        _row(conn, "openai_codex_chatgpt")["connection_metadata"],
-        _row(conn, "openai_codex_chatgpt")["observed_capacity"]) is False
+    row = _row(conn, "openai_codex_chatgpt")
+    assert setup_service.last_check_broken(row["connection_metadata"],
+                                           row["observed_capacity"]) is False
 
     card = harness_refusal.on_auth_refused(conn, conn.project_id, "crun_1", "codex", Settings())
 
@@ -216,23 +216,95 @@ def test_a_401_on_a_run_flips_setup_and_offers_reconnect_or_a_fallback(conn):
                                            row["observed_capacity"]) is True
     assert card
     rec = _cards(conn)[0]
-    assert rec["action"] == harness_refusal.CARD_ACTION
-    ids = [o["id"] for o in rec["options"]]
-    assert ids == ["reconnect", "use_fallback"]
+    assert rec["action"] == "sign_in_to_subscription_again"
     assert rec["fallback_engine"] == "claude_code"
-    # Setup's engine list now offers codex as not working.
     found = setup_service.connected_engines(conn, Settings(), conn.project_id)
     assert found["codex"]["working"] is False
-    # A second refusal does not stack a second card.
     assert harness_refusal.on_auth_refused(conn, conn.project_id, "crun_2", "codex",
                                            Settings()) is None
     assert len(_cards(conn)) == 1
 
 
-def test_without_a_fallback_the_card_offers_reconnect_only(conn):
+def test_the_keepalive_and_the_run_share_one_card_per_dead_login(conn):
+    from boss_engine.services import subscription_keepalive
+
     _source(conn, "openai_codex_chatgpt", "openai_codex_chatgpt")
-    harness_refusal.on_auth_refused(conn, conn.project_id, "crun_1", "codex", Settings())
-    assert [o["id"] for o in _cards(conn)[0]["options"]] == ["reconnect"]
+    subscription_keepalive._raise_login_card(conn, conn.project_id, "openai_codex_chatgpt",
+                                             "codex")
+    assert harness_refusal.on_auth_refused(conn, conn.project_id, "crun_1", "codex",
+                                           Settings()) is None
+    assert len(_cards(conn)) == 1
+
+
+def test_the_card_action_is_registered_and_worded():
+    from boss_engine.services import decision_actions, decision_words
+
+    assert harness_refusal.CARD_ACTION in decision_actions.KNOWN_ACTIONS
+    assert harness_refusal.CARD_ACTION in decision_words._BY_ACTION
+
+
+# -- the real hook: harness_failures.trip, provider vs app 401 ----------------------------------
+
+class _Db:
+    def __init__(self, c):
+        self.c = c
+
+    def begin(self):
+        from contextlib import nullcontext
+        return nullcontext(self.c)
+
+
+@pytest.fixture
+def hook(conn, monkeypatch):
+    from boss_engine.services import llm_telemetry
+
+    harness_refusal._NOTED.clear()
+    llm_telemetry.set_llm_context(db_engine=_Db(conn), project_id=conn.project_id)
+    yield conn
+    llm_telemetry.set_llm_context()
+
+
+PROVIDER_401 = ("2026-11-17T02:00:27Z ERROR codex_api::endpoint::responses_websocket: failed to "
+                "connect to websocket: HTTP error: 401 Unauthorized, url: "
+                "wss://api.openai.com/v1/responses")
+
+
+def _verdict(message, *, where="engine", source_id=""):
+    from boss_engine.services.harness_failures import HarnessVerdict
+
+    return HarnessVerdict("codex", "auth_refused", message, "reconnect", where, source_id)
+
+
+def _broken(c, sid):
+    r = _row(c, sid)
+    return setup_service.last_check_broken(r["connection_metadata"], r["observed_capacity"])
+
+
+def test_a_provider_401_through_trip_flips_the_source(hook):
+    from boss_engine.services import harness_failures
+
+    _source(hook, "openai_codex_chatgpt", "openai_codex_chatgpt")
+    harness_failures.trip(_verdict(PROVIDER_401))
+    assert _broken(hook, "openai_codex_chatgpt") is True
+    assert len(_cards(hook)) == 1
+
+
+def test_an_apps_own_401_in_a_summary_does_not_flip_the_source(hook):
+    from boss_engine.services import harness_failures
+
+    _source(hook, "openai_codex_chatgpt", "openai_codex_chatgpt")
+    harness_failures.trip(_verdict("the test failed: expected 200, got 401 Unauthorized"))
+    assert _broken(hook, "openai_codex_chatgpt") is False
+    assert _cards(hook) == []
+
+
+def test_a_refused_pool_account_does_not_flip_the_default_source(hook):
+    from boss_engine.services import harness_failures
+
+    _source(hook, "openai_codex_chatgpt", "openai_codex_chatgpt")
+    harness_failures.trip(_verdict(PROVIDER_401, source_id="pool:abc"))
+    assert _broken(hook, "openai_codex_chatgpt") is False
+    assert _cards(hook)[0]["source_id"] == "pool:abc"
 
 
 # -- the same class for Claude Code, and for a named account -----------------------------------
@@ -276,3 +348,49 @@ def test_a_claude_failure_belongs_to_one_login_too(tmp_path, monkeypatch):
     (home / claude_login.STATE_NAME).write_text(json.dumps(
         {"state": "refresh_failed", "error": "http_401", "for_expires_at": exp - 99999}))
     assert claude_login.status()["state"] != claude_login.REFRESH_FAILED
+
+
+# -- failure_stands edges, and the lock ---------------------------------------------------------
+
+def _state(home, at):
+    body = {"state": "refresh_failed", "error": "http_401"}
+    if at is not None:
+        body["at"] = at
+    (home / codex_login.STATE_NAME).write_text(json.dumps(body))
+
+
+def test_a_failure_with_no_timestamp_stands(tmp_path, monkeypatch):
+    home = _home(tmp_path, monkeypatch, last_refresh=_iso(60))
+    _state(home, None)
+    assert codex_login.failure_stands() is True
+
+
+def test_a_naive_timestamp_is_read_as_utc(tmp_path, monkeypatch):
+    home = _home(tmp_path, monkeypatch, last_refresh=_iso(3600))
+    naive_after = (datetime.now(timezone.utc) - timedelta(seconds=60)).replace(tzinfo=None)
+    _state(home, naive_after.isoformat())
+    assert codex_login.failure_stands() is True      # failed after the login was issued
+    naive_before = (datetime.now(timezone.utc) - timedelta(days=3)).replace(tzinfo=None)
+    _state(home, naive_before.isoformat())
+    assert codex_login.failure_stands() is False
+
+
+def test_equal_timestamps_stand(tmp_path, monkeypatch):
+    stamp = "2026-11-17T03:03:00+00:00"
+    home = _home(tmp_path, monkeypatch, last_refresh=stamp)
+    _state(home, stamp)
+    assert codex_login.failure_stands() is True
+
+
+def test_mark_revoked_takes_the_refreshers_lock(tmp_path, monkeypatch):
+    _home(tmp_path, monkeypatch, last_refresh=_iso(60))
+    taken = []
+    real = codex_login._flock
+
+    def spy(home, kind, timeout):
+        taken.append(kind)
+        return real(home, kind, timeout)
+
+    monkeypatch.setattr(codex_login, "_flock", spy)
+    codex_login.mark_revoked("invalidated oauth token")
+    assert taken and codex_login.failure_stands() is True

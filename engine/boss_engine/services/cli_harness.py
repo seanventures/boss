@@ -2045,6 +2045,11 @@ class GenericCliCodeAgent:
 
                     verdict = dataclasses.replace(verdict,
                                                   message=f"{verdict.message} [{said}]")
+            if verdict.kind == "auth_refused" and getattr(self, "_pool", None) is not None:
+                import dataclasses
+
+                verdict = dataclasses.replace(verdict,
+                                              source_id=f"pool:{self._pool.member_id}")
             raise harness_failures.trip(verdict)
 
     def _versioned_model(self, model: Optional[str]) -> Optional[str]:

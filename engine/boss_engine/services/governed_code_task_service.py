@@ -11415,12 +11415,6 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                "code_task_run", run_id,
                                {**harness.as_dict(), "phase": _current_phase_name(engine, run_id),
                                 "retryable_after_fix": True})
-                    if harness.kind == "auth_refused":
-                        # SETUP MUST NOT KEEP SAYING "Working" (BOSSAPP-1347): mark the source
-                        # rejected and offer Reconnect / a fallback engine.
-                        from .harness_refusal import on_auth_refused
-                        on_auth_refused(c, project_id, run_id, harness.engine, settings,
-                                        task_id=task_id)
             except Exception:  # noqa: BLE001 — the record must never mask the failure itself
                 _log_caught(logger)
         if isinstance(exc, StackUnsupportedError):
