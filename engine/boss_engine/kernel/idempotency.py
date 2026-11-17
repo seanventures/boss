@@ -122,6 +122,7 @@ _declare(IDEMPOTENT,
          "register_repository", "remove_project_repository", "reopen_local_change",
          "resolve_review_comment",
          "restore_project", "retarget_app", "retry_workflow_step", "set_job_priority",
+         "update_deployment_target",
          # a fix PR converges: the branch exists, the file is at this content, the PR is open
          "github_open_fix_pr",
          "set_ontology_pack", "set_project_setting", "set_project_team", "skip_workflow_step",

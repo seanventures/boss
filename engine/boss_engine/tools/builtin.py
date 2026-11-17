@@ -3084,7 +3084,14 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "connection details from the host record. An app that already has a target for that "
         "environment adopts it instead of growing a second one. It creates the DESTINATION and "
         "ships nothing — deploy with deploy_app afterwards. Never write this row with SQL: the "
-        "table has columns this sets that a hand-written INSERT does not know about.",
+        "table has columns this sets that a hand-written INSERT does not know about. "
+        "HEALTH CHECK: it comes from the app's own boss.deploy.yaml health path, never a guess "
+        "of '/': when you can read the manifest (read_code), pass health_path; the result says "
+        "where the path came from. WHERE: when the operator asks for a place (\"local\", a "
+        "named machine), pass it as `host`. If no registered host matches, this REFUSES with "
+        "'no host matches ...' and an offer (e.g. register this machine as a deployment host); "
+        "tell the operator that plainly and offer the path — never create the target somewhere "
+        "else and say nothing.",
         _obj({"app_name": {"type": "string",
                            "description": "the app's NAME, e.g. 'Change Calendar' — not the "
                                           "directive it was built from"},
@@ -3092,6 +3099,13 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "host_id": {"type": "string",
                           "description": "optional dh_ — only needed when the project deploys "
                                          "to more than one host"},
+              "host": {"type": "string",
+                       "description": "the place the operator asked for in words: 'local', a "
+                                      "host's name or address. Refused when none matches."},
+              "health_path": {"type": "string",
+                              "description": "the app's health path from its boss.deploy.yaml "
+                                             "(e.g. /healthz); found from the last deploy's "
+                                             "manifest when unset"},
               "port": {"type": "integer",
                        "description": "optional; leave unset and a free one is chosen"}},
              required=["app_name"]),
@@ -3106,9 +3120,47 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 c, project_id=project_id, app_name=str(args.get("app_name") or ""),
                 environment=str(args.get("environment") or "staging"),
                 host_id=(str(args["host_id"]) if args.get("host_id") else None),
+                host=(str(args["host"]) if args.get("host") else None),
+                health_path=(str(args["health_path"]) if args.get("health_path") else None),
                 port=(int(args["port"]) if args.get("port") else None),
                 actor=actor,
             )
+
+    @reg.tool(
+        "update_deployment_target",
+        "Change an existing deployment target in place: its health check (health_path, "
+        "health_expected_status), port, host, or environment variables BY REFERENCE (env: "
+        "NAME -> an existing secret reference id; never a value). Use it when the target's "
+        "health path returns 404 (preflight_deployment_target says so) or the operator asks to "
+        "change a target. Offer it with propose_action so nothing is written until the operator "
+        "accepts. It does not deploy.",
+        _obj({"target_id": {"type": "string"},
+              "health_path": {"type": "string", "description": "e.g. /healthz"},
+              "health_expected_status": {"type": "integer"},
+              "port": {"type": "integer"},
+              "host_id": {"type": "string", "description": "rebind to this dh_ host"},
+              "env": {"type": "object", "additionalProperties": {"type": "string"},
+                      "description": "NAME -> secret reference id (sref_...)"}},
+             required=["target_id"]),
+        kind="write",
+        # OPERATOR ONLY: rebinding or re-checking a target (production included) is the
+        # operator's press on a proposal, never the model's direct call.
+        reversibility="safe", permission="deployment_target:manage", operator_only=True,
+        exposure=Exposure(tags=("deploy", "hosts")))
+    def update_deployment_target(ctx, *, project_id, actor, args):
+        from ..services.deployment_fleet import update_deployment_target as _update
+
+        env = args.get("env") if isinstance(args.get("env"), dict) else None
+        with ctx.begin() as c:
+            return _update(
+                c, project_id=args.get("project_id") or project_id,
+                target_id=str(args["target_id"]),
+                health_path=(str(args["health_path"]) if args.get("health_path") else None),
+                health_expected_status=(int(args["health_expected_status"])
+                                        if args.get("health_expected_status") else None),
+                port=(int(args["port"]) if args.get("port") else None),
+                host_id=(str(args["host_id"]) if args.get("host_id") else None),
+                env=env, actor=actor)
 
     @reg.tool(
         "create_config_target",
@@ -3268,10 +3320,31 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         kind="read", permission="deployment:read",
         exposure=Exposure(tags=("deploy", "hosts")))
     def preflight_deployment_target(ctx, *, project_id, actor, args):
+        from ..services.deployment_fleet import health_path_findings
         from ..services.shepherd_service import _act_on_deployment
-        return {"run_id": args["run_id"],
-                "result": _act_on_deployment(
-                    ctx.engine, ctx.settings, str(args["run_id"]), "preflight_target", actor)}
+
+        out = {"run_id": args["run_id"],
+               "result": _act_on_deployment(
+                   ctx.engine, ctx.settings, str(args["run_id"]), "preflight_target", actor)}
+        # THE HEALTH PATH IS PART OF "CAN THIS BE DEPLOYED TO": a check on a page the app does
+        # not serve fails every deploy. Probe it; a 404 is a warning with the path that answers.
+        try:
+            with ctx.begin() as c:
+                target = c.execute(_text(
+                    "SELECT t.id, t.domains, t.health_checks FROM deployment_runs r "
+                    "JOIN deployment_targets t ON t.id = r.deployment_target_id "
+                    "WHERE r.release_packet->>'code_task_run_id' = :i "
+                    "ORDER BY r.created_at DESC LIMIT 1"),
+                    {"i": str(args["run_id"])}).mappings().first()
+            findings = health_path_findings(dict(target)) if target else []
+        except Exception:  # noqa: BLE001 - the probe must never break the preflight
+            findings = []
+        if findings:
+            out["health"] = findings
+            warnings = [f["warning"] for f in findings if f.get("warning")]
+            if warnings:
+                out["warnings"] = warnings
+        return out
 
     @reg.tool(
         "propose_action",
@@ -10089,6 +10162,9 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # Somewhere to deploy TO. Without this the only route to a first deployment was write_db
     # with hand-composed SQL — which BOSS took, against a schema it had to guess at.
     "create_deployment_target",
+    # Changing one: health path, port, host, env by reference. Offered as a proposal; the write
+    # happens when the operator accepts. BOSS said "I have no tool to edit a target" for this.
+    "update_deployment_target",
     # Queue and run state
     "cancel_job",
     "set_job_priority",
