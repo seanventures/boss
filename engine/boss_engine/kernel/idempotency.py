@@ -140,7 +140,9 @@ _declare(KEYED,
          "offer_options", "open_incident", "propose_hire", "propose_secret", "record_learning",
          "register_mcp_server", "remember", "report_friction", "request_budget_override",
          "request_tool_access", "run_security_scan", "schedule_work", "send_feedback",
-         "steer_code_task", "watch", "watch_work_item", "wiki_propose")
+         "steer_code_task", "watch", "watch_work_item", "wiki_propose",
+         # a proposal for a person: the same exact change is found waiting, not filed twice
+         "confluence_publish_page")
 
 
 def declared(name: str) -> Optional[str]:

@@ -46,7 +46,9 @@ _SKIP_KEYS = frozenset(
 _FETCH_TOKENS = ("fetch_page", "study_site", "search_web", "fetch_link", "fetch_image",
                  # Ticket text is written outside BOSS (BOSSAPP-1047 B2): the ticket read tools,
                  # and the tickets.read skill that offers them to workflow agents.
-                 "ticket_get", "ticket_search", "ticket_browse", "tickets.read")
+                 "ticket_get", "ticket_search", "ticket_browse", "tickets.read",
+                 # Confluence pages are written outside BOSS too (BOSSAPP-1384).
+                 "confluence_search", "confluence_read_page", "confluence.read")
 
 #: Skills that send arguments to something outside BOSS, or that write.
 _EXTERNAL_SKILL = (
@@ -63,6 +65,8 @@ _EXTERNAL_SKILL = (
     "issue.update",
     # Ticket writes go to the team's own ticket system (BOSSAPP-1047 B2).
     "tickets.write",
+    # A page for Confluence (a proposal a person approves; BOSSAPP-1384).
+    "confluence.publish",
 )
 _WRITE_SKILL = ("code.write", "docs.draft", "knowledge.propose")
 

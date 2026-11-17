@@ -44,6 +44,7 @@ import { HarnessAdaptersRow } from "./harness-adapters-row";
 import { GatewaysRow } from "./gateways-row";
 import { PoolsRow } from "./pools-row";
 import { TicketSystemsRow } from "./ticket-systems-row";
+import { ConfluenceRow } from "./confluence-row";
 import { SetupSection } from "./setup-section";
 import { accountsOf } from "./setup-blocks";
 import { EventsRow } from "../events/events-row";
@@ -458,6 +459,8 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
         </ModelsRow>
         {/* TICKET SYSTEMS (BOSSAPP-1047 T1): the one place Jira, Plane, GitHub Issues… connect. */}
         <div ref={ref("ticket_systems")}><TicketSystemsRow projectId={projectId} focused={focus === "ticket_systems"} /></div>
+        {/* CONFLUENCE (BOSSAPP-1384): the org's one Confluence, beside Jira. */}
+        <div><ConfluenceRow projectId={projectId} /></div>
         {/* EVENTS (P9a-7): what wakes the agents; the way into Setup › Events. */}
         <div><EventsRow projectId={projectId} /></div>
         {/* NO TRY IT HERE (operator, 2026-11-04: "Why trying out sample project is in Repos and
@@ -569,6 +572,8 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
                         tone={ticketWords.includes("not shared") ? "amber" : ticketWords === "None yet" ? "grey" : "green"}
                         focused={focus === "ticket_systems"}>
             <div ref={ref("ticket_systems")}><TicketSystemsRow projectId={projectId} focused={focus === "ticket_systems"} onSummary={setTicketWords} /></div>
+            {/* CONFLUENCE (BOSSAPP-1384): the org's one Confluence, beside Jira. */}
+            <div><ConfluenceRow projectId={projectId} /></div>
           </SetupSection>
           <SetupSection id="events" title="Events" icon={<Lightning size={16} />} summary="Slack, GitHub or a webhook wakes an agent"
                         focused={focus === "events"}>

@@ -125,6 +125,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # Approving an agent's (or the maintainer's) wiki change writes exactly that page onto the
     # revision it was proposed against (wiki.apply_for_decision, BOSSAPP-891).
     "apply_wiki_patch",
+    # Approving an agent's Confluence page writes exactly that page, as a versioned update
+    # (confluence_publish.apply_for_decision, BOSSAPP-1384).
+    "apply_confluence_publish",
     # Approving a "Tool changed" card clears the MCP tool's quarantine and accepts the new
     # definition (mcp_registry.accept_tool_change); rejecting turns it Off (BOSSAPP-818).
     "review_tool_change",

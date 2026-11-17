@@ -1,0 +1,315 @@
+"""Confluence end to end on a real database and recorded HTTP (BOSSAPP-1384): the org-wide
+connection stored by reference, the agent tools (publish is a proposal), the approval that writes
+a versioned page (and refuses a moved one), and the knowledge sync with provenance."""
+from __future__ import annotations
+
+import base64
+import json
+import os
+
+import pytest
+from sqlalchemy import text
+
+os.environ.setdefault("BOSS_MASTER_KEY",
+                      base64.b64encode(b"p29a-test-master-key-32-bytes!!!").decode())
+
+from boss_engine.connectors.tickets import http as ticket_http  # noqa: E402
+from boss_engine.identity import vault  # noqa: E402
+from boss_engine.services import confluence_knowledge, confluence_publish, docs_connections as docs  # noqa: E402
+from boss_engine.services.decisions import InvalidDecisionTransitionError  # noqa: E402
+
+from .._ops2_support import decide, fresh_engine, make_project  # noqa: E402
+from .fake_confluence import EMAIL, SITE, TOKEN, FakeConfluence  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def eng():
+    engine, drop = fresh_engine("confl")
+    vault.reset_master_key_cache()
+    yield engine
+    drop()
+
+
+@pytest.fixture()
+def fake(monkeypatch):
+    transport = FakeConfluence()
+    monkeypatch.setattr(ticket_http, "TRANSPORT", transport)
+    monkeypatch.setattr(ticket_http, "SLEEP", lambda s: None)
+    return transport
+
+
+@pytest.fixture()
+def project(eng):
+    return make_project(eng)
+
+
+def _settings():
+    from boss_engine.config import get_settings
+
+    return get_settings()
+
+
+class Ctx:
+    def __init__(self, engine):
+        self.engine, self.settings = engine, _settings()
+
+    def begin(self):
+        return self.engine.begin()
+
+
+def _connect(eng, project, token=TOKEN, **kw):
+    with eng.begin() as c:
+        config, tok = docs.prepare(c, _settings(), project_id=project, base_url=SITE,
+                                   email=EMAIL, token=token, **kw)
+    outcome = docs.run_test(config, tok)
+    with eng.begin() as c:
+        return docs.store(c, _settings(), project_id=project, config=config, token=tok,
+                          outcome=outcome, actor="ceo", default_spaces=["ENG"])
+
+
+def _tool(name):
+    from boss_engine.tools import build_default_registry
+
+    return build_default_registry().get(name).handler
+
+
+def _decision(eng, decision_id):
+    with eng.begin() as c:
+        return c.execute(text("SELECT status, question, recommendation FROM decisions WHERE id = :i"),
+                         {"i": decision_id}).mappings().one()
+
+
+@pytest.fixture(autouse=True)
+def _clean(eng):
+    yield
+    with eng.begin() as c:
+        c.execute(text("DELETE FROM docs_connections"))
+
+
+# ---- the connection -------------------------------------------------------------------------
+
+def test_the_connection_is_org_wide_and_keeps_only_a_reference(eng, fake, project):
+    row = _connect(eng, project)
+    cfg = row["configuration"]
+    assert cfg["secret_ref_id"] and cfg["last4"] == TOKEN[-4:] and cfg["acts_as"] == "BOSS Bot"
+    assert TOKEN not in json.dumps(cfg, default=str)
+    with eng.begin() as c:
+        stored = c.execute(text("SELECT configuration FROM docs_connections")).scalar()
+        events = c.execute(text("SELECT data FROM events WHERE project_id = :p"),
+                           {"p": project}).scalars().all()
+        sibling = make_project(eng)
+        other_org = "org_other_confl"
+        c.execute(text("INSERT INTO orgs (id, name) VALUES (:o, 'x') ON CONFLICT DO NOTHING"),
+                  {"o": other_org})
+        c.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES ('ws_other_confl', :o, "
+                       "'x') ON CONFLICT DO NOTHING"), {"o": other_org})
+        c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) VALUES "
+                       "('p_other_confl', 'ws_other_confl', 'o', 'p_other_confl')"
+                       " ON CONFLICT DO NOTHING"))
+    assert TOKEN not in json.dumps(stored, default=str)
+    assert TOKEN not in json.dumps(events, default=str)
+    with eng.begin() as c:
+        # another project of the SAME org reads through it; another org's project does not
+        _row, client = docs.client_for(c, _settings(), sibling)
+        assert client.search("x")
+        with pytest.raises(docs.ConfluenceNotConnected):
+            docs.client_for(c, _settings(), "p_other_confl")
+        view = docs.public_view(c, docs.get_row(c, sibling), sibling, can_manage=False)
+    assert view["reach"] == "org" and view["last4"] is None and view["home_project"]["id"] == project
+
+
+def test_connect_refuses_in_words_and_stores_nothing(eng, fake, project):
+    with eng.begin() as c:
+        for kw, snippet in (
+            ({"deployment": "datacenter", "base_url": SITE, "email": EMAIL, "token": TOKEN}, "Data Center"),
+            ({"base_url": "http://x.atlassian.net", "email": EMAIL, "token": TOKEN}, "https"),
+            ({"base_url": SITE, "email": "", "token": TOKEN}, "email"),
+            ({"base_url": SITE, "email": EMAIL, "use_jira_credential": True}, "No Jira"),
+        ):
+            with pytest.raises(docs.DocsConnectionError) as caught:
+                docs.prepare(c, _settings(), project_id=project, **kw)
+            assert snippet in str(caught.value)
+    with pytest.raises(docs.DocsConnectionError) as caught:
+        docs.run_test({"base_url": SITE, "email": EMAIL, "auth_method": "basic"}, "wrong-token")
+    assert caught.value.code == "auth_failed" and "Reconnect Confluence in Setup" in str(caught.value)
+    with eng.begin() as c:
+        assert c.execute(text("SELECT count(*) FROM docs_connections")).scalar() == 0
+
+
+def test_the_jira_credential_can_be_reused_by_choice(eng, fake, project):
+    from boss_engine.services.secret_backends import default_secret_backend
+    from boss_engine.services.secrets_service import put_secret
+
+    with eng.begin() as c:
+        ref = put_secret(c, _settings(), project_id=project, name="ticket_jira_token", value=TOKEN,
+                         backend=default_secret_backend(_settings()), actor="ceo")["secret_ref_id"]
+        cfg = {"base_url": "https://acme.atlassian.net", "email": EMAIL, "ticket_system": True,
+               "secret_ref_id": ref, "project_key": "KAN"}
+        c.execute(text("INSERT INTO work_tracker_providers (id, project_id, provider_key, "
+                       "display_name, status, is_default, configuration, created_by) VALUES "
+                       "('trk_confl1', :p, 'jira', 'Jira', 'active', true, CAST(:c AS JSONB), 't')"),
+                  {"p": project, "c": json.dumps(cfg)})
+    row = _connect(eng, project, token="", use_jira_credential=True)
+    assert row["configuration"]["credential_from"] == "jira"
+    assert row["configuration"]["base_url"] == SITE and row["configuration"]["email"] == EMAIL
+    with eng.begin() as c:   # its own vault entry: usable when Jira is gone
+        c.execute(text("DELETE FROM work_tracker_providers WHERE id = 'trk_confl1'"))
+        _r, client = docs.client_for(c, _settings(), project)
+        assert client.read(page_id="101").title == "Deploy Runbook"
+
+
+def test_disconnect_removes_the_reference_and_agents_are_told_to_connect(eng, fake, project):
+    row = _connect(eng, project)
+    with eng.begin() as c:
+        docs.disconnect(c, row, "ceo")
+        after = docs.get_row(c, project, include_disconnected=True)
+    assert after["status"] == "disconnected" and "secret_ref_id" not in after["configuration"]
+    assert after["configuration"]["default_spaces"] == ["ENG"]      # kept for a reconnect
+    fake.requests.clear()
+    got = _tool("confluence_search")(Ctx(eng), project_id=project, actor="agent:pm",
+                                     args={"query": "deploy"})
+    assert got["ok"] is False and got["error"] == "not_connected"
+    assert "Connect Confluence in Setup › Connections" in got["message"]
+    assert fake.requests == []
+
+
+# ---- agent tools ----------------------------------------------------------------------------
+
+def test_search_and_read_tools_use_default_spaces_and_the_screen(eng, fake, project):
+    _connect(eng, project)
+    got = _tool("confluence_search")(Ctx(eng), project_id=project, actor="agent:pm",
+                                     args={"query": "deploy", "limit": 3})
+    assert got["ok"] and got["count"] == 3 and got["spaces"] == ["ENG"]
+    assert got["pages"][0]["url"].startswith(SITE)
+    assert 'space in ("ENG")' in [r for r in fake.requests if "search" in r["path"]][0]["query"]["cql"]
+    page = _tool("confluence_read_page")(Ctx(eng), project_id=project, actor="agent:pm",
+                                         args={"page_id": "101", "include": ["attachments", "tree"]})
+    assert page["ok"] and page["page"]["version"] == 4 and "# Deploy Runbook" in page["page"]["body_markdown"]
+    assert page["attachments"][0]["name"] == "diagram.png" and len(page["tree"]) == 2
+    nothing = _tool("confluence_read_page")(Ctx(eng), project_id=project, actor="a", args={})
+    assert nothing["ok"] is False and nothing["error"] == "invalid_request"
+
+
+def test_publish_is_a_proposal_nothing_is_written_until_approved(eng, fake, project):
+    from boss_engine.tools import build_default_registry
+
+    spec = build_default_registry().get("confluence_publish_page")
+    assert spec.kind == "write" and spec.queues_for_review and spec.reversibility == "safe"
+    assert spec.permission == "integration:read"
+    _connect(eng, project)
+    got = _tool("confluence_publish_page")(
+        Ctx(eng), project_id=project, actor="agent:docs_writer",
+        args={"space": "ENG", "title": "Deploy Runbook", "body": "# Deploy Runbook\n\nNew steps.\n",
+              "note": "the steps changed"})
+    assert got["ok"] and got["status"] == "pending" and got["operation"] == "update"
+    assert "NOT published" in got["note"]
+    assert fake.pages_created == [] and fake.pages_updated == []        # no write happened
+    decision = _decision(eng, got["decision_id"])
+    assert decision["recommendation"]["action"] == "apply_confluence_publish"
+    assert "Update Confluence page 'Deploy Runbook'" in decision["question"]
+    assert "the steps changed" in decision["question"] and decision["status"] == "pending"
+    again = _tool("confluence_publish_page")(
+        Ctx(eng), project_id=project, actor="agent:docs_writer",
+        args={"space": "ENG", "title": "Deploy Runbook", "body": "# Deploy Runbook\n\nNew steps.\n"})
+    assert again["decision_id"] == got["decision_id"] and again.get("duplicate")
+    decide(eng, got["decision_id"], "approve")
+    assert len(fake.pages_updated) == 1
+    sent = fake.pages_updated[0]
+    assert sent["version"]["number"] == 5 and "<p>New steps.</p>" in sent["body"]["value"]
+    with eng.begin() as c:
+        consent = c.execute(text("SELECT status FROM change_consents WHERE decision_id = :d"),
+                            {"d": got["decision_id"]}).scalar()
+        event = c.execute(text("SELECT data FROM events WHERE project_id = :p AND "
+                               "event_type = 'docs.confluence_published'"), {"p": project}).scalar()
+    assert consent == "consumed" and event["version"] == 5 and event["op"] == "update"
+
+
+def test_a_page_that_moved_since_the_proposal_refuses_the_approval(eng, fake, project):
+    _connect(eng, project)
+    got = _tool("confluence_publish_page")(
+        Ctx(eng), project_id=project, actor="agent:docs_writer",
+        args={"page_id": "101", "space": "ENG", "body": "mine"})
+    assert got["status"] == "pending"
+    fake.versions["101"] = 7                 # a person edited the page in Confluence meanwhile
+    with pytest.raises(InvalidDecisionTransitionError) as caught:
+        decide(eng, got["decision_id"], "approve")
+    assert "version 7" in str(caught.value) and "new proposal" in str(caught.value)
+    assert fake.pages_updated == []
+    assert _decision(eng, got["decision_id"])["status"] == "pending"
+    with eng.begin() as c:
+        assert c.execute(text("SELECT status FROM change_consents WHERE decision_id = :d"),
+                         {"d": got["decision_id"]}).scalar() == "pending"
+
+
+def test_create_a_new_page_under_a_parent_on_approval(eng, fake, project):
+    _connect(eng, project)
+    got = _tool("confluence_publish_page")(
+        Ctx(eng), project_id=project, actor="agent:docs_writer",
+        args={"space": "ENG", "title": "Brand New", "body": "Hello", "parent_id": "101"})
+    assert got["operation"] == "create" and fake.pages_created == []
+    decide(eng, got["decision_id"], "approve")
+    assert fake.pages_created[0]["parentId"] == "101" and fake.pages_created[0]["title"] == "Brand New"
+
+
+def test_a_refused_proposal_writes_nothing_and_cannot_be_spent(eng, fake, project):
+    _connect(eng, project)
+    got = _tool("confluence_publish_page")(
+        Ctx(eng), project_id=project, actor="agent:docs_writer",
+        args={"page_id": "101", "space": "ENG", "body": "mine"})
+    decide(eng, got["decision_id"], "reject")
+    with eng.begin() as c:
+        assert c.execute(text("SELECT status FROM change_consents WHERE decision_id = :d"),
+                         {"d": got["decision_id"]}).scalar() == "rejected"
+    assert fake.pages_updated == [] and fake.pages_created == []
+
+
+def test_publish_refuses_without_a_connection_and_unchanged_bodies(eng, fake, project):
+    got = _tool("confluence_publish_page")(Ctx(eng), project_id=project, actor="a",
+                                           args={"space": "ENG", "title": "T", "body": "x"})
+    assert got["ok"] is False and got["error"] == "not_connected"
+    _connect(eng, project)
+    page = _tool("confluence_read_page")(Ctx(eng), project_id=project, actor="a",
+                                         args={"page_id": "101", "max_chars": 60000})
+    same = _tool("confluence_publish_page")(Ctx(eng), project_id=project, actor="a", args={
+        "page_id": "101", "body": page["page"]["body_markdown"]})
+    assert same["status"] == "unchanged"
+
+
+# ---- knowledge ------------------------------------------------------------------------------
+
+def test_sync_indexes_pages_with_provenance_and_resyncs_only_what_changed(eng, fake, project):
+    _connect(eng, project)
+    with eng.begin() as c:
+        docs.update_settings(c, docs.get_row(c, project), actor="ceo", knowledge_spaces=["ENG"])
+    with eng.begin() as c:
+        first = confluence_knowledge.sync(c, _settings(), project_id=project, actor="ceo")
+    # the fake's search returns pages 101, 102, 103; only 101 has a page body fixture
+    space = first["spaces"][0]
+    assert space["indexed"] == 1 and len(space["failed"]) == 2 and space["seen"] == 3
+    with eng.begin() as c:
+        node = c.execute(text("SELECT name, attrs, source, trust_tier FROM kg_nodes WHERE "
+                              "project_id = :p AND node_key = 'confluence:acme.atlassian.net:101'"),
+                         {"p": project}).mappings().one()
+        capture = c.execute(text("SELECT source_kind, source_id FROM kg_captures WHERE "
+                                 "project_id = :p"), {"p": project}).mappings().all()
+    attrs = node["attrs"]
+    assert node["name"] == "Deploy Runbook" and node["source"] == "confluence"
+    assert attrs["space"] == "ENG" and attrs["page_id"] == "101" and attrs["version"] == 4
+    assert attrs["url"] == f"{SITE}/spaces/ENG/pages/101/Deploy+Runbook" and attrs["labels"] == ["runbook", "prod"]
+    assert attrs["last_modified"] and [c["source_kind"] for c in capture] == ["confluence"]
+    with eng.begin() as c:
+        again = confluence_knowledge.sync(c, _settings(), project_id=project, actor="ceo")
+    assert again["spaces"][0]["unchanged"] == 1 and again["spaces"][0]["indexed"] == 0
+    fake.versions["101"] = 5
+    with eng.begin() as c:
+        third = confluence_knowledge.sync(c, _settings(), project_id=project, actor="ceo", full=True)
+        v = c.execute(text("SELECT attrs->>'version' FROM kg_nodes WHERE project_id = :p AND "
+                           "node_key = 'confluence:acme.atlassian.net:101'"), {"p": project}).scalar()
+    assert third["spaces"][0]["updated"] == 1 and v == "5"
+
+
+def test_sync_needs_spaces_picked_first(eng, fake, project):
+    _connect(eng, project)
+    with eng.begin() as c, pytest.raises(docs.DocsConnectionError) as caught:
+        confluence_knowledge.sync(c, _settings(), project_id=project)
+    assert "Pick the Confluence spaces" in str(caught.value)

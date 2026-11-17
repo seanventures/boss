@@ -1,7 +1,9 @@
 """Enterprise source ingest.
 
 ADR folders are read from a local path. Confluence, Jira, and Slack connectors
-accept already-fetched documents and refuse to open a network themselves.
+accept already-fetched documents and refuse to open a network themselves. The Confluence sync
+(services/confluence_knowledge.py, BOSSAPP-1384) fetches through the org's connection and hands each
+page to ``accept_connector_document`` here.
 """
 from __future__ import annotations
 

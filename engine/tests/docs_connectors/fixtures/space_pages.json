@@ -1,0 +1,57 @@
+{
+  "results": [
+    {
+      "id": "10",
+      "title": "Home",
+      "spaceId": "98",
+      "parentId": null,
+      "version": {
+        "number": 1,
+        "createdAt": "2026-01-01T00:00:00Z"
+      },
+      "_links": {
+        "webui": "/spaces/ENG/pages/10/Home"
+      }
+    },
+    {
+      "id": "101",
+      "title": "Deploy Runbook",
+      "spaceId": "98",
+      "parentId": "10",
+      "version": {
+        "number": 4,
+        "createdAt": "2026-11-10T09:00:00Z"
+      },
+      "_links": {
+        "webui": "/spaces/ENG/pages/101/Deploy+Runbook"
+      }
+    },
+    {
+      "id": "103",
+      "title": "Rollback Guide",
+      "spaceId": "98",
+      "parentId": "101",
+      "version": {
+        "number": 2,
+        "createdAt": "2026-11-11T09:00:00Z"
+      },
+      "_links": {
+        "webui": "/spaces/ENG/pages/103/Rollback+Guide"
+      }
+    },
+    {
+      "id": "20",
+      "title": "Postmortems",
+      "spaceId": "98",
+      "parentId": "10",
+      "version": {
+        "number": 1,
+        "createdAt": "2026-02-01T00:00:00Z"
+      },
+      "_links": {
+        "webui": "/spaces/ENG/pages/20/Postmortems"
+      }
+    }
+  ],
+  "_links": {}
+}

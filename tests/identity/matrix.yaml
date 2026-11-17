@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2411 operations.
+# 2421 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -524,6 +524,8 @@
 "POST /v1/code-tasks/{run_id}/origin": ["permit code_task:steer @ code_task(path=run_id)", "OAP"]
 "POST /v1/code-tasks/{run_id}/override": ["permit code_task:override @ code_task(path=run_id)", "OA"]
 "POST /v1/code-tasks/{run_id}/preview": ["permit preview:manage @ code_task(path=run_id)", "OAP"]
+"GET /v1/code-tasks/{run_id}/recheck": ["permit code_task:steer @ code_task(path=run_id)", "OAP"]
+"POST /v1/code-tasks/{run_id}/recheck": ["permit code_task:steer @ code_task(path=run_id)", "OAP"]
 "POST /v1/code-tasks/{run_id}/redelivered": ["permit worker:lease @ org", "-"]
 "GET /v1/code-tasks/{run_id}/result-review": ["permit code_task:read @ code_task(path=run_id)", "OAPVU"]
 "POST /v1/code-tasks/{run_id}/result-review": ["permit code_task:steer @ code_task(path=run_id)", "OAP"]
@@ -762,6 +764,14 @@
 "POST /v1/discoveries/{run_id}/deepen": ["permit discovery:create @ discovery_run(path=run_id)", "OAP"]
 "POST /v1/discoveries/{run_id}/execute": ["permit worker:lease @ org", "-"]
 "POST /v1/discoveries/{run_id}/promote": ["permit discovery:create @ discovery_run(path=run_id)", "OAP"]
+"DELETE /v1/docs-connections": ["permit integration:manage @ project(query=project_id)", "OA"]
+"GET /v1/docs-connections": ["permit integration:read @ project(query=project_id)", "OAPVU"]
+"PATCH /v1/docs-connections": ["permit integration:manage @ project(body=project_id)", "OA"]
+"POST /v1/docs-connections": ["permit integration:manage @ project(body=project_id)", "OA"]
+"GET /v1/docs-connections/catalog": ["permit integration:read @ org", "OAPVU"]
+"GET /v1/docs-connections/spaces": ["permit integration:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/docs-connections/sync": ["permit knowledge:manage @ project(body=project_id)", "OA"]
+"POST /v1/docs-connections/test": ["permit integration:manage @ project(body=project_id)", "OA"]
 "POST /v1/docs/update": ["permit system:operate @ project(body=project_id)", "OA"]
 "POST /v1/docs/update/execute": ["permit worker:lease @ org", "-"]
 "GET /v1/documents": ["permit work_item:read @ project(query=project_id)", "OAPVU"]

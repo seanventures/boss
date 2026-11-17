@@ -195,7 +195,9 @@ passport_presets:
   - key: writer
     name: Writer and publisher
     agents: [quill, herald, splice, scribe]
-    permissions: [knowledge:read, artifact:read, artifact:rebuild, discovery:read, comms:read, comms:send, memory:read,
+    # integration:read: the documentation writer (quill) reads Confluence and proposes pages a
+    # person approves (confluence.read / confluence.publish, BOSSAPP-1384). Reads only.
+    permissions: [knowledge:read, integration:read, artifact:read, artifact:rebuild, discovery:read, comms:read, comms:send, memory:read,
                   spend:reserve, workflow_run:read,
                   agent:read, code_task:read, decision:read, deployment:read, github:read, host:read, meeting:read, observability:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read, ticket:read]
     external_ceiling: {}

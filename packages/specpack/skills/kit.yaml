@@ -159,6 +159,48 @@ skills:
       requires_receipt: false
       tools: [ticket_import, ticket_comment, ticket_transition]
 
+  # CONFLUENCE (BOSSAPP-1384): the org's Confluence through one connection (Setup › Connections).
+  # confluence.read is granted to the roles that read tickets and to the documentation writer;
+  # confluence.publish only to the documentation writer. Page text is outside text: results are
+  # screened and marked low-trust. Publishing is a QUEUED proposal: a person approves the diff.
+  - id: confluence.read
+    kind: engine_read
+    risk_tier: 0
+    mock_mode: false
+    load: eager
+    description: Search and read the team's Confluence pages — CQL search with space and label filters, one page as markdown with its version and labels, a space's page tree.
+    data_boundary: internal
+    input_schema:
+      bundle_tool: string
+    output_schema: { result: object }
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [kit_try]
+      required_permissions: [repo_read]
+    policy:
+      requires_receipt: false
+      tools: [confluence_search, confluence_read_page]
+
+  - id: confluence.publish
+    kind: engine_read
+    risk_tier: 1
+    mock_mode: false
+    load: eager
+    description: Propose a Confluence page — create one or update one from markdown. Nothing is written until a person approves exactly that change.
+    data_boundary: internal
+    input_schema:
+      bundle_tool: string
+    output_schema: { result: object }
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [kit_try]
+      required_permissions: [repo_read]
+    policy:
+      requires_receipt: false
+      tools: [confluence_publish_page]
+
   # PROPOSE A FIX: every agent holds this too. The agent proposes a BOSS action with exact
   # arguments; a person approves it (a hold-default decision in a run, a button in chat) and it
   # runs under THEIR authority. Proposing runs nothing, so it is tier 0; the decision it raises

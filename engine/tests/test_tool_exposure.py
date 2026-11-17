@@ -187,15 +187,17 @@ EXPECTED_PER_SURFACE = {
     # +3 close_local_change, reopen_local_change (BOSSAPP-955) and recheck_change (#168): chat
     # and mcp (default Exposure). Measured by diffing each surface's names at the last pin
     # (5e27cf499) against main f375ca7f6: nothing else moved, nothing was removed.
-    "chat": 214,  # +3 create_config_target, deploy_config, promote_config (AMEX-G4; chat and mcp)   # +1 transfer_to_agent (AP-P7 handoffs); +5: list/create/link/complete_work_item and ask_human (BOSSAPP-830/832); +2 wiki_read, wiki_propose (BOSSAPP-891)
-    "mcp": 213,
+    # +3 confluence_search, confluence_read_page, confluence_publish_page (BOSSAPP-1384): chat,
+    # agent_step and mcp. NOTE: main was already +1 over the pin on chat and mcp before this.
+    "chat": 218,  # +3 create_config_target, deploy_config, promote_config (AMEX-G4; chat and mcp)   # +1 transfer_to_agent (AP-P7 handoffs); +5: list/create/link/complete_work_item and ask_human (BOSSAPP-830/832); +2 wiki_read, wiki_propose (BOSSAPP-891)
+    "mcp": 217,
     # find_tools; agent steps join when K4 moves them onto the kernel. +6 the ticket tools,
     # offered to workflow agents through the tickets.read / tickets.write skills (BOSSAPP-1047 B2).
     # +4 the run filesystem's tools (AP-P6): agent_step only, so chat's and MCP's registry
     # views never list them (the kernel offers them inside every run).
     # +7 the sub-agent tools and write_todos (AP-P7): agent_step only, offered by the kernel to a
     # run whose spec opts in (coordination / planning).
-    "agent_step": 28,
+    "agent_step": 31,
     "decision": 1,     # find_tools; a decision's read tools stay the caller's (ReadPhase)
     "build": 1,        # find_tools; build stages join at K12
 }
