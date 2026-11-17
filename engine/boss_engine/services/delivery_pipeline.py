@@ -394,6 +394,12 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
         if target.get("paused"):
             return {"status": "failed",
                     "reason": f"target {target['id']} is paused; un-pause it first"}
+        from . import quality_bar as _quality_bar
+
+        if _quality_bar.is_production(target.get("environment")):
+            refused = _quality_bar.production_refusal(c, code_task_run_id=run_id)
+            if refused:
+                return {"status": "failed", "reason": refused, "quality_bar": "production"}
 
         from .resource_plane import ResourcePlaneService
 

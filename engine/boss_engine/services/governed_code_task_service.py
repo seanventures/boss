@@ -1653,9 +1653,10 @@ def _gate_failure_action(
     return "ship_with_dissent" if (never_block and open_pr) else "block"
 
 
-def _bar_for_run(engine, settings, project_id, spec, fctx) -> tuple[str, dict]:
-    """(the quality bar, its per-gate overrides) for this build (quality_bar.resolve_for_run).
-    An unreadable bar is the default bar, never a failed build."""
+def _bar_for_run(engine, settings, project_id, spec, fctx) -> tuple[str, dict, dict]:
+    """(the quality bar, its per-gate overrides, {source, lowered_by, review_severity}) for this
+    build (quality_bar.resolve_for_run). An unreadable bar is the default bar, never a failed
+    build."""
     try:
         with _transaction(engine) as _qc:
             return _quality_bar.resolve_for_run(
@@ -1663,7 +1664,7 @@ def _bar_for_run(engine, settings, project_id, spec, fctx) -> tuple[str, dict]:
                 workflow_run_id=(fctx or {}).get("workflow_run_id"))
     except Exception:  # noqa: BLE001
         _log_caught(logger)
-        return _quality_bar.DEFAULT, {}
+        return _quality_bar.DEFAULT, {}, {}
 
 
 def _record_quality_gate(connection, *, run_id, project_id, task_id, job_id, evidence, gates):
@@ -7087,27 +7088,32 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if _needs_person[0] is not None:
                 raise _needs_person[0]
 
-        # FLAKY TESTS NEVER BLOCK (quality_bar.py): a suite that fails and then passes on an
-        # immediate retry is reported as a follow-up, never a failure. At most two retries a run:
-        # a real failure costs one more run of the suite, and only the first two pay it.
+        # FLAKY TESTS NEVER BLOCK (quality_bar.py): a suite that fails, then passes on TWO
+        # immediate re-runs (the test failed 1 of 3), is reported — the failing tests named — as
+        # a follow-up, never a failure. One re-run that fails again is a real failure. The
+        # retries are per verify call: a repair round's failure is judged the same way.
         _flaky_tests: list[str] = []
-        _flake_retries = [2]
 
         def _run_verify(*, record: bool = True):
             """Authoritative test command, scoped to the official app directory. BOSS's own
             install (NPM_INSTALL_CMD, the one every gate runs) is its first step."""
             _halt_if_needs_person()
             result = _run_verify_once(record=record)
-            if (record and not result.ok and _flake_retries[0] > 0
-                    and not verification_target.install_failure(result)
+            if (record and not result.ok and not verification_target.install_failure(result)
                     and not getattr(result, "timed_out", False)):
-                _flake_retries[0] -= 1
-                _fc = verification_target.failed_check(result) or {}
-                _failed_first = (f"{_fc.get('command') or 'the test suite'}: "
-                                 f"{_fc.get('line') or 'failed, then passed on retry'}")
+                _first_names = [n for n in failing_tests(last_verify_output or "", limit=20)
+                                if not str(n).rstrip().endswith(":")]
+                if not _first_names:
+                    _fc = verification_target.failed_check(result) or {}
+                    _first_names = [f"{_fc.get('command') or 'the test suite'}: "
+                                    f"{_fc.get('line') or 'failed'}"]
                 _again = _run_verify_once(record=record)
                 if _again.ok:
-                    _flaky_tests.append(_failed_first[:300])
+                    _third = _run_verify_once(record=record)
+                    if _third.ok:
+                        _flaky_tests.extend(n[:300] for n in _first_names)
+                    result = _third
+                else:
                     result = _again
             env = None
             if record and not result.ok:
@@ -7574,7 +7580,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # THE QUALITY BAR: a prototype needs no plan sign-off (a plan a person sent back
             # still goes back to them). Standard and production keep it.
             _plan_signoff = _quality_bar.plan_signoff_required(
-                _bar_for_run(engine, settings, project_id, spec, fctx)[0])
+                _bar_for_run(engine, settings, project_id, spec, fctx)[0], risk_tier,
+                bool(sensitive_markers_in({**spec, "title": title})))
             if _requires_plan_approval(risk_tier) or _gaps or _asked_again:
               if _plan_signoff or _asked_again:
                 return _block_for_plan_approval(
@@ -9486,8 +9493,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # THE QUALITY BAR (quality_bar.py): from here every assignment to `gates` goes through
         # the bar, so a gate that fails but does not block at this bar is a follow-up, never a
         # failure, at the first judgement and at every re-judgement after a fix round.
-        _qbar, _qover = _bar_for_run(engine, settings, project_id, spec, fctx)
+        _qbar, _qover, _qinfo = _bar_for_run(engine, settings, project_id, spec, fctx)
         gates = _quality_bar.BarGates(_qbar, _qover, gates)
+        gates.info = dict(_qinfo)
+        if _qinfo.get("lowered_by"):
+            # A bar BELOW the project's (or a per-gate map) was granted at the start door to a
+            # person with settings:update: on the run's record, never silent.
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "quality_bar.lowered", "boss", "code_task_run", run_id,
+                           {"bar": _qbar, "source": _qinfo.get("source"),
+                            "by": _qinfo.get("lowered_by"), "gate_overrides": dict(_qover)})
         gates.flaky_ref = _flaky_tests
 
         def _set_acceptance_gate(rec) -> None:
@@ -9498,6 +9513,19 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             gates.set_bar_aware(_acceptance_gate.GATE, _ok, _soft)
             if _ok and isinstance(rec, dict) and not _acceptance_gate.passed(rec):
                 rec["bar"] = {"bar": gates.bar, "nonblocking": True}
+
+        def _set_nothing_broke(ok_) -> None:
+            # BROKEN EXISTING TESTS at this bar (quality_bar.broken_tests_block): standard blocks
+            # when a failing test is on a P0/P1 path or touches the changed area; prototype only
+            # for P0 (startup, auth, health); production always. The rest is a follow-up.
+            if ok_:
+                gates["nothing_broke"] = True
+                return
+            _names = failing_tests(official_verify_output or last_verify_output or "", limit=40)
+            _blocks, _why = _quality_bar.broken_tests_block(
+                gates.bar, _names, list(changed_files or []),
+                [str(c) for c in (spec.get("acceptance_criteria") or []) if c])
+            gates.set_bar_aware("nothing_broke", not _blocks, [_why] if not _blocks else [])
 
         def _set_consistent(verdict_, summary_) -> None:
             _ok, _follow = _quality_bar.consistency_passes(gates.bar, verdict_, summary_)
@@ -9732,7 +9760,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # task after the PR opens, so nothing the reviewer caught is lost.
             _rev_pass, _blocking, _deferred = _review_gate_from_findings(
                 r3.get("summary", ""), verdict,
-                _quality_bar.review_block_severity(_qbar))
+                _quality_bar.review_block_severity(_qbar, _qinfo.get("review_severity")))
             deferred_findings = _deferred
             gates["code_review_passed"] = _rev_pass
             gates["security_clean"] = sec_verdict == "clean"
@@ -9760,7 +9788,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if mutation_caught is not None and not _strength_advisory:
                 gates["tests_strong_enough"] = mutation_caught
             if regressions_ok is not None:
-                gates["nothing_broke"] = regressions_ok
+                _set_nothing_broke(regressions_ok)
             # block on explicit drift, and on a check that never saw the change (review_input)
             _set_consistent(cons_verdict, r6.get("summary", ""))
 
@@ -10250,7 +10278,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     official_verify_output = last_verify_output
                     gates["written_tests_pass"] = tests_passed
                     if "nothing_broke" in gates:
-                        gates["nothing_broke"] = tests_passed
+                        _set_nothing_broke(tests_passed)
                     if tests_passed and "app_serves" in gates:
                         # Green again: re-prove the app against the code as it now stands.
                         app_serves_record = _check_app_serves(
@@ -10392,7 +10420,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         review_confidence = 1.0 if verdict == "survived" else 0.0
                         _rev_pass, _blocking, _deferred = _review_gate_from_findings(
                             rr.get("summary", ""), verdict,
-                            _quality_bar.review_block_severity(_qbar))
+                            _quality_bar.review_block_severity(_qbar, _qinfo.get("review_severity")))
                         deferred_findings = _deferred
                         # Materialise the panel's findings as comments NOW, before any fix
                         # round runs, so the implementer and the pull request read the
@@ -10607,7 +10635,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     if "written_tests_pass" in gates:
                         gates["written_tests_pass"] = tests_passed
                     if "nothing_broke" in gates:
-                        gates["nothing_broke"] = tests_passed
+                        _set_nothing_broke(tests_passed)
                 if "serve" in _rj and "app_serves" in gates:
                     app_serves_record = _rj["serve"]
                     gates["app_serves"] = bool(app_serves_record.get("ok"))
@@ -10834,7 +10862,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         r3 = rr
                         _rev_pass, _blocking, _deferred = _review_gate_from_findings(
                             rr.get("summary", ""), verdict,
-                            _quality_bar.review_block_severity(_qbar))
+                            _quality_bar.review_block_severity(_qbar, _qinfo.get("review_severity")))
                         deferred_findings = _deferred
                         # Materialise the panel's findings as comments NOW, before any fix
                         # round runs, so the implementer and the pull request read the
@@ -11178,9 +11206,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # THE QUALITY BAR'S FOLLOW-UPS are never dropped: what the bar let through (a gate that
         # did not block, a flaky test) joins the deferred findings, so the PR body, the Pass 2
         # hand-off and the follow-up build carry one list.
-        # (A flaky test is reported on the evidence and the PR, never a build of its own.)
         _bar_followups = _quality_bar.followup_findings(
-            _quality_bar.followups_of(gates), evidence)
+            _quality_bar.followups_of(gates), evidence, flaky=_flaky_tests)
         if _bar_followups:
             _have = {" ".join(str(f.get("text") or "").split()).lower()
                      for f in deferred_findings}

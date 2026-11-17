@@ -92,6 +92,8 @@ export type Gate = {
   station: StationKey | null; evidence?: string; waivable: boolean; reason?: string;
   /** The check did not run (a seat the profile did not convene): neither passed nor failed. */
   skipped?: boolean;
+  /** Did not pass, and the quality bar lets it through: a follow-up, not a failure. */
+  followup?: boolean;
 };
 export type ChecksOutput = { word: string; tip?: string; advisory: boolean; gates: Gate[] };
 export type TestCommand = { command: string; exitCode: number | null; ok: boolean; timedOut: boolean; durationMs?: number };

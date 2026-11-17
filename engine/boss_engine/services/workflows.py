@@ -3307,7 +3307,12 @@ def checked_capability_inputs(connection: Connection, project_id: str, spec: dic
 #: written only by start_run's `checked_replaces`.
 CHECKED_REPLACES_KEY = "_checked_replaces"
 #: Input keys no caller may set: dropped from every caller's input by start_run.
-SERVER_ONLY_INPUTS = frozenset({"replaces", CHECKED_REPLACES_KEY})
+#: The quality bar's keys are server-only too (quality_bar.py): a caller's `quality_bar`,
+#: `quality_bar_gates` and `_quality_bar_by` are dropped, so an agent's start_workflow inputs can
+#: never lower (or set) a bar; only `quality_bar_override`, filled by the start door after its
+#: permission check, writes them.
+SERVER_ONLY_INPUTS = frozenset({"replaces", CHECKED_REPLACES_KEY, "quality_bar",
+                                "quality_bar_gates", "_quality_bar_by"})
 
 
 def start_run(
@@ -3329,8 +3334,13 @@ def start_run(
     allow_live: Optional[list[str]] = None,
     rerun_of: Optional[dict[str, Any]] = None,
     checked_replaces: Optional[list[str]] = None,
+    quality_bar_override: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Start a run.
+
+    `quality_bar_override` ({bar?, gates?, by}): a quality bar / per-gate map a PERSON with
+    settings:update asked for at the start door (quality_bar.check_override_permission, already
+    checked). Written under keys no caller can write; the build resolves its bar from them.
 
     `checked_replaces`: the contract items a PERSON picked to replace, already checked by the
     HTTP start endpoint (acceptance.contract.checked_replaces, under their request). Recorded
@@ -3369,6 +3379,15 @@ def start_run(
                   and str(k) != PRECHECK_KEY and str(k) not in SERVER_ONLY_INPUTS}
     if checked_replaces:
         input_data[CHECKED_REPLACES_KEY] = [str(x) for x in checked_replaces]
+    if quality_bar_override and quality_bar_override.get("by"):
+        from . import quality_bar as _qb
+
+        if _qb.normalize(quality_bar_override.get("bar")):
+            input_data[_qb.SETTING] = _qb.normalize(quality_bar_override["bar"])
+        if isinstance(quality_bar_override.get("gates"), dict):
+            input_data[_qb.OVERRIDES_KEY] = {str(k): str(v) for k, v in
+                                             quality_bar_override["gates"].items()}
+        input_data[_qb.BY_KEY] = str(quality_bar_override["by"])
     if precheck_record:
         input_data[PRECHECK_KEY] = dict(precheck_record)
     for key, value in (adopted or {}).items():

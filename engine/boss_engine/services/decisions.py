@@ -2282,7 +2282,8 @@ class DecisionService:
         gate = connection.execute(
             text(
                 """
-                SELECT q.gates_passed, q.gates_failed, q.code_task_run_id
+                SELECT q.gates_passed, q.gates_failed, q.code_task_run_id,
+                       q.evidence->'quality_bar'->'followups' AS followups
                 FROM quality_gates q
                 JOIN code_task_runs r ON r.id = q.code_task_run_id
                 WHERE q.project_id = :p
@@ -2307,7 +2308,15 @@ class DecisionService:
                 passed = json.loads(passed)
             except Exception:  # noqa: BLE001
                 passed = []
+        followups = gate.get("followups") or {}
+        if isinstance(followups, str):
+            try:
+                followups = json.loads(followups)
+            except Exception:  # noqa: BLE001
+                followups = {}
+        # `followups`: gates the quality bar let through; they are not in passed or failed.
         return {"passed": list(passed), "failed": list(failed),
+                "followups": sorted(followups) if isinstance(followups, dict) else [],
                 "run_id": gate["code_task_run_id"]}
 
     def _pull_request_ci_gate(

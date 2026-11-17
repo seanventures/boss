@@ -90,13 +90,23 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
         # Only ever downgrades: a recorded failure stays a failure.
         if gate in gates and verdict and gate not in skipped:
             gates[gate] = bool(gates[gate]) and verdict in good
-    passed = [k for k, v in gates.items() if v and k not in skipped]
+    # A gate the quality bar let through is a THIRD bucket, never passed (quality_bar.py): it
+    # did not pass, and at this bar it does not fail the build.
+    followups = {g: lines for g, lines in
+                 ((evidence.get("quality_bar") or {}).get("followups") or {}).items()
+                 if g in gates}
+    passed = [k for k, v in gates.items() if v and k not in skipped and k not in followups]
     failed = [k for k, v in gates.items() if not v and k not in skipped]
     out += ["", "### Checks"]
     if gates:
-        out.append(f"{len(passed)} passed, {len(failed)} failed"
+        out.append(f"{len(passed)} passed"
+                   + (f", {len(followups)} follow-ups" if followups else "")
+                   + f", {len(failed)} failed"
                    + (f", {len(skipped)} skipped." if skipped else "."))
         out += [f"- ❌ {_gate(g)}" for g in failed]
+        out += [f"- 🔸 {_gate(g)} — follow-up (quality bar: "
+                f"{(evidence.get('quality_bar') or {}).get('bar') or 'standard'})"
+                for g in followups]
         out += [f"- ✅ {_gate(g)}" for g in passed]
         out += [f"- ⏭ {_gate(g)} — skipped: {why}" for g, why in skipped.items()]
     else:

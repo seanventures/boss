@@ -43,14 +43,42 @@ def test_the_bar_defaults_to_standard():
 
 
 def test_the_most_specific_setting_wins():
+    stamped = {qb.BY_KEY: "usr_ana"}
     assert qb.resolve(project_value=P) == P
-    assert qb.resolve(project_value=P, run_input={"quality_bar": R}) == R
-    assert qb.resolve(project_value=P, run_input={"quality_bar": R},
-                      workflow_spec={"quality_bar": S}) == S
+    assert qb.resolve(project_value=P, run_input={"quality_bar": R, **stamped}) == R
+    assert qb.resolve(project_value=P, run_input={"quality_bar": R, **stamped},
+                      workflow_spec={"quality_bar": S}) == R
     assert qb.resolve(project_value=P, workflow_spec={"quality_bar": S},
                       run_spec={"quality_bar": "Production"}) == R
     # a value that is not a preset is skipped, never an error
     assert qb.resolve(run_spec={"quality_bar": "yolo"}, project_value=P) == P
+
+
+def test_a_run_input_the_server_did_not_stamp_changes_nothing():
+    """An agent's start_workflow inputs cannot set or lower a bar: only the stamp the start door
+    writes after the permission check counts; and a workflow spec may only RAISE the bar."""
+    assert qb.resolve(project_value=R, run_input={"quality_bar": P}) == R
+    assert qb.resolve(project_value=S, run_input={"quality_bar": P, "quality_bar_gates": {
+        "nothing_broke": "follow_up"}}) == S
+    assert qb.resolve(project_value=R, workflow_spec={"quality_bar": P}) == R   # cannot lower
+    assert qb.resolve(project_value=S, workflow_spec={"quality_bar": R}) == R   # may raise
+    d = qb.resolve_detail(project_value=R, run_input={"quality_bar": P, qb.BY_KEY: "usr_ana"})
+    assert d["bar"] == P and d["lowered_by"] == "usr_ana" and d["source"] == "run_input"
+    assert qb.resolve_detail(project_value=P, run_input={"quality_bar": R,
+                                                         qb.BY_KEY: "usr_ana"})["lowered_by"] is None
+
+
+def test_lowering_the_bar_needs_a_person_with_settings_update():
+    for who in ("agent_helper", "boss", "", None):
+        with pytest.raises(qb.QualityBarOverrideRefused):
+            qb.check_override_permission("p1", who)
+    qb.check_override_permission("p1", "usr_ana")        # a person, no guard enforced
+
+
+def test_start_run_drops_a_callers_quality_bar_and_writes_only_the_checked_one():
+    from boss_engine.services import workflows
+
+    assert {"quality_bar", "quality_bar_gates", "_quality_bar_by"} <= workflows.SERVER_ONLY_INPUTS
 
 
 def test_the_setting_is_a_project_knob():
@@ -70,7 +98,6 @@ def test_the_floor_blocks_at_every_bar(gate):
 
 
 @pytest.mark.parametrize("gate,expected", [
-    ("nothing_broke", (False, True, True)),
     ("existing_tests_intact", (False, True, True)),
     ("brief_tests_written", (False, True, True)),
     ("tests_written_first", (False, False, True)),
@@ -81,23 +108,28 @@ def test_each_gate_blocks_where_the_design_says(gate, expected):
     assert tuple(qb.gate_blocks(gate, bar) for bar in (P, S, R)) == expected
 
 
-def test_an_unknown_gate_always_blocks_and_an_override_may_change_a_known_one():
-    assert qb.gate_blocks("iac_validate", P) is True
+def test_the_floor_and_unknown_gates_ignore_every_override():
+    assert qb.gate_blocks("iac_validate", P, {"iac_validate": "follow_up"}) is True
+    for gate in qb.FLOOR:
+        assert qb.gate_blocks(gate, P, {gate: "follow_up"}) is True, gate
+    # ...while a known, non-floor gate honours the per-gate map
     assert qb.gate_blocks("tests_strong_enough", R, {"tests_strong_enough": "follow_up"}) is False
-    assert qb.gate_blocks("nothing_broke", P, {"nothing_broke": "block"}) is True
+    assert qb.gate_blocks("tests_written_first", P, {"tests_written_first": "block"}) is True
+    g = qb.BarGates(P, {"security_clean": "follow_up"}, {"security_clean": False})
+    assert g["security_clean"] is False and not g.followups
 
 
 def test_gates_that_fail_without_blocking_are_follow_ups_not_failures():
-    outcome = {"code_written": True, "written_tests_pass": True, "nothing_broke": False,
+    outcome = {"code_written": True, "written_tests_pass": True, "existing_tests_intact": False,
                "tests_strong_enough": False, "brief_tests_written": False,
                "security_clean": True}
     seen = {}
     for bar in (P, S, R):
         g = qb.BarGates(bar, initial=outcome)
         seen[bar] = ([k for k, v in g.items() if not v], sorted(g.followups))
-    assert seen[P] == ([], ["brief_tests_written", "nothing_broke", "tests_strong_enough"])
-    assert seen[S] == (["nothing_broke", "brief_tests_written"], ["tests_strong_enough"])
-    assert seen[R] == (["nothing_broke", "tests_strong_enough", "brief_tests_written"], [])
+    assert seen[P] == ([], ["brief_tests_written", "existing_tests_intact", "tests_strong_enough"])
+    assert seen[S] == (["existing_tests_intact", "brief_tests_written"], ["tests_strong_enough"])
+    assert seen[R] == (["existing_tests_intact", "tests_strong_enough", "brief_tests_written"], [])
 
 
 def test_a_re_judgement_through_the_same_door_clears_the_follow_up():
@@ -105,8 +137,8 @@ def test_a_re_judgement_through_the_same_door_clears_the_follow_up():
     assert g["tests_strong_enough"] is True and "tests_strong_enough" in g.followups
     g["tests_strong_enough"] = True                 # a fix round strengthened the suite
     assert g.followups == {}
-    g.update({"nothing_broke": False})
-    assert g["nothing_broke"] is False and g.followups == {}
+    g.update({"existing_tests_intact": False})
+    assert g["existing_tests_intact"] is False and g.followups == {}
 
 
 def test_security_never_becomes_a_follow_up():
@@ -201,10 +233,34 @@ def test_consistency_drift_blocks_production_and_only_a_blocker_blocks_standard(
     assert qb.consistency_passes(S, "ok") == (True, False)
 
 
-def test_the_prototype_needs_no_plan_signoff():
+def test_the_prototype_skips_only_the_default_sensitive_tiers_plan_signoff():
     assert qb.plan_signoff_required(P) is False
+    assert qb.plan_signoff_required(P, risk_tier=2) is False
+    assert qb.plan_signoff_required(P, risk_tier=3) is True       # a tier >= 3 is always signed off
+    assert qb.plan_signoff_required(P, risk_tier=1, sensitive=True) is True
     assert qb.plan_signoff_required(S) and qb.plan_signoff_required(R)
     assert qb.pass_two_must_finish(R) and not qb.pass_two_must_finish(S)
+
+
+# ── broken EXISTING tests: by path, not by name of the gate ──────────────────────────────────
+
+def test_broken_existing_tests_block_by_where_they_are():
+    changed = ["src/tickets/list.js"]
+    off = ["test/billing/invoice.test.js > rounds up"]
+    p0 = ["test/auth/login.test.js > rejects a bad password"]
+    near = ["test/tickets/list.test.js > sorts"]
+    assert qb.broken_tests_block(R, off, changed)[0] is True
+    # standard: the changed area or a P0/P1 path blocks; an unrelated test is a follow-up
+    assert qb.broken_tests_block(S, near, changed)[0] is True
+    assert qb.broken_tests_block(S, p0, changed)[0] is True
+    blocks, why = qb.broken_tests_block(S, off, changed)
+    assert blocks is False and "invoice" in why
+    assert qb.broken_tests_block(S, off, changed, ["Users can invoice customers"])[0] is True
+    assert qb.broken_tests_block(S, [], changed)[0] is True       # unnamed: held
+    # prototype: only a P0 (startup, auth, health) test
+    assert qb.broken_tests_block(P, p0, changed)[0] is True
+    assert qb.broken_tests_block(P, near, changed)[0] is False
+    assert qb.broken_tests_block(P, [], changed)[0] is False
 
 
 # ── the same outcome under each preset: pass/fail and the follow-ups list ────────────────────
@@ -233,6 +289,22 @@ def test_one_outcome_under_each_preset():
     lines = qb.followup_findings(_judge(S).followups, {})
     text = " | ".join(f["text"] for f in lines)
     assert "thousand-row" in text and "tests_strong_enough" in text
+
+
+def test_a_follow_up_gate_is_a_third_bucket_in_the_pr_never_passed():
+    from boss_engine.services import pr_description
+
+    evidence: dict = {}
+    g = _judge(S)
+    qb.stamp(evidence, g)
+    body = pr_description.render(title="T", evidence=evidence, gates=dict(g))
+    checks = body.split("### Checks", 1)[1].split("###", 1)[0]
+    assert "follow-ups" in checks.splitlines()[1] and "failed" in checks.splitlines()[1]
+    assert "🔸 Tests catch bugs — follow-up (quality bar: standard)" in checks
+    assert "✅ Tests catch bugs" not in checks and "✅ Must-haves met" not in checks
+    assert "✅ New tests pass" in checks
+    n = len(g)
+    assert f"{n - 2} passed, 2 follow-ups, 0 failed" in checks
 
 
 def test_the_evidence_and_the_pr_carry_one_follow_ups_list():
@@ -310,6 +382,13 @@ def test_a_standard_pass_with_gaps_lists_what_production_still_needs():
     assert "MAJOR" in joined and "ignores the filter" in joined
     assert any("tests_strong_enough" in n or "weak" in n.lower() or "mutation" in n.lower()
                or "Gate" in n for n in needs)
+
+
+def test_production_needs_counts_a_seat_that_did_not_run():
+    ev = {"acceptance": _record(MET, verdict="met"),
+          "gates_skipped": {"code_review_passed": "the profile did not convene this seat"}}
+    needs = qb.production_needs(ev, [])
+    assert len(needs) == 1 and "was not run" in needs[0] and "convene" in needs[0]
 
 
 def test_a_flaky_test_never_makes_production_wait():
@@ -410,57 +489,116 @@ def test_a_flaky_test_never_blocks_and_is_reported(pipeline, tmp_path):
     assert marker.exists(), "the flaky test never ran"
     if True:  # the flake fired during an official run
         assert ev["quality_bar"]["flaky"], ev["quality_bar"]
-        # reported, never a build of its own: the flake is not a deferred finding
-        assert not any("Flaky" in str(f.get("text")) for f in ev.get("deferred_findings") or [])
+        # the flaky test is named, and rides the one follow-ups list
+        assert any("Flaky" in str(f.get("text")) for f in ev.get("deferred_findings") or [])
+        assert any("sometimes fails" in n for n in ev["quality_bar"]["flaky"]), ev["quality_bar"]
+        assert not any(n.rstrip().endswith(":") for n in ev["quality_bar"]["flaky"])
         assert "Flaky test (passed on retry)" in qb.pr_section(ev)
+
+
+def _gaps(pipeline, run_id, *, closed=False):
+    """The gaps a standard build lets through, written onto its recorded gate evidence (what a real
+    standard build records; see _judge above), or closed."""
+    row, ev = _quality(pipeline, run_id)
+    ev["acceptance"] = _record(MET, verdict="met") if closed else _record(MET, P2_PARTIAL)
+    ev["review_summary"] = "VERDICT: SURVIVED" if closed else REVIEW_MAJOR
+    with pipeline.engine.begin() as c:
+        c.execute(pipeline.text("UPDATE quality_gates SET evidence = CAST(:e AS jsonb) "
+                                "WHERE code_task_run_id = :r"),
+                  {"e": json.dumps(ev), "r": run_id})
+
+
+def _target(pipeline, environment):
+    tid = f"deptgt_qb{environment[:4]}{os.urandom(3).hex()}"
+    with pipeline.engine.begin() as c:
+        c.execute(pipeline.text(
+            "INSERT INTO deployment_targets (id, project_id, app_name, repo, environment, "
+            "target_kind, target_ref, created_by) VALUES (:t, :p, 'slug', 'r', :e, 'ssh', "
+            "'u@h:22', 't')"), {"t": tid, "p": pipeline.project, "e": environment})
+    return tid
 
 
 @pytestmark_db
 def test_a_production_deploy_of_a_standard_pass_with_p2_gaps_is_refused_with_the_list(pipeline):
-    from boss_engine.services import workflow_capability_runner as wcr
-    from boss_engine.services.workflow_capabilities import get as get_capability
+    """The chokepoint is delivery_pipeline.deploy_build (deploy_app, a workflow's Deploy step and
+    the console all pass through it), judged by the TARGET's own environment."""
+    from boss_engine.services import delivery_pipeline
 
     run_id, repo = pipeline.build(tag="qb-promote")
     assert pipeline.run(run_id, repo) is None
     assert pipeline.result(run_id)["run"]["status"] == "completed"
-    row, ev = _quality(pipeline, run_id)
-    assert row["status"] == "pass"
-    # The standard-passing build, with the gaps standard lets through: a P2 must-have partial
-    # and a MAJOR review finding. (What a real standard build records; see _judge above.)
-    ev["acceptance"] = _record(MET, P2_PARTIAL)
-    ev["review_summary"] = REVIEW_MAJOR
-    with pipeline.engine.begin() as c:
-        c.execute(pipeline.text("UPDATE quality_gates SET evidence = CAST(:e AS jsonb) "
-                                "WHERE code_task_run_id = :r"),
-                  {"e": json.dumps(ev), "r": run_id})
-    step = {"id": "ship", "kind": "capability",
-            "binding": {"capability": "deploy", "inputs": {"environment": "production"}}}
-    ctx = SimpleNamespace(settings=pipeline.settings(repo), engine=pipeline.engine)
+    assert _quality(pipeline, run_id)[0]["status"] == "pass"
+    _gaps(pipeline, run_id)
+    prod, stage = _target(pipeline, "production"), _target(pipeline, "staging")
 
-    def deploy(environment):
-        with pipeline.engine.begin() as c:
-            return wcr._perform_capability(  # noqa: SLF001
-                c, ctx, project_id=pipeline.project, actor="operator", step=step,
-                context={"run_id": "wfr_none", "input": {}, "steps": {}}, key="deploy",
-                capability=get_capability("deploy"),
-                inputs={"environment": environment, "run_id": run_id})
+    def ship(target_id, environment):
+        return delivery_pipeline.deploy_build(
+            pipeline.engine, pipeline.settings(repo), project_id=pipeline.project,
+            run_id=run_id, environment=environment, target_id=target_id)
 
-    with pytest.raises(wcr.SettledCapabilityError) as refused:
-        deploy("production")
-    said = str(refused.value)
+    refused = ship(prod, "production")
+    assert refused["status"] == "failed" and refused.get("quality_bar") == "production"
+    said = refused["reason"]
     assert "production quality bar" in said
     assert "thousand-row" in said and "MAJOR" in said and "ignores the filter" in said
-    # Staging is not production: the refusal is only about where it ships. (It goes on to the
-    # deploy tool, which has nothing to ship here; whatever it says, it is not the bar.)
-    try:
-        deploy("staging")
-    except Exception as exc:  # noqa: BLE001
-        assert "production quality bar" not in str(exc)
+    # The environment is the TARGET's, not the name typed: asking for "staging" onto the
+    # production target is still production.
+    assert ship(prod, "staging").get("quality_bar") == "production"
+    # Staging is not production: whatever else happens there, it is not the bar.
+    assert ship(stage, "staging").get("quality_bar") != "production"
     # The same build with its gaps closed is not refused by the bar.
-    ev["acceptance"] = _record(MET, verdict="met")
-    ev["review_summary"] = "VERDICT: SURVIVED"
+    _gaps(pipeline, run_id, closed=True)
     with pipeline.engine.begin() as c:
-        c.execute(pipeline.text("UPDATE quality_gates SET evidence = CAST(:e AS jsonb) "
-                                "WHERE code_task_run_id = :r"),
-                  {"e": json.dumps(ev), "r": run_id})
         assert qb.production_refusal(c, code_task_run_id=run_id) is None
+    assert ship(prod, "production").get("quality_bar") != "production"
+
+
+@pytestmark_db
+def test_a_stack_release_to_production_passes_the_same_door(pipeline):
+    from boss_engine.services import stack_deploy
+
+    run_id, repo = pipeline.build(tag="qb-stack")
+    assert pipeline.run(run_id, repo) is None
+    _gaps(pipeline, run_id)
+    out = stack_deploy.plan_for_workflow_step(
+        pipeline.engine, pipeline.settings(repo), project_id=pipeline.project, actor="operator",
+        target={"id": "t", "environment": "production", "repo": f"pipe/{repo}", "app_name": "slug"},
+        inputs={"run_id": run_id}, workflow_run_id=None)
+    assert out["status"] == "failed" and out.get("quality_bar") == "production"
+    assert "thousand-row" in out["error"]
+
+
+@pytestmark_db
+def test_production_fails_closed_when_nothing_was_judged(pipeline):
+    with pipeline.engine.begin() as c:
+        for kwargs in ({"code_task_run_id": "crun_does_not_exist"}, {}):
+            said = qb.production_refusal(c, **kwargs)
+            assert said and "nothing was judged for this build" in said, kwargs
+        # a config promotion with no build behind it has nothing to judge; a named build with
+        # no gate record is refused
+        assert qb.production_refusal(c, deployment_run_id="deprun_no_such") is None
+    run_id, repo = pipeline.build(tag="qb-unjudged")             # started, never run: no gate row
+    with pipeline.engine.begin() as c:
+        said = qb.production_refusal(c, code_task_run_id=run_id)
+        assert said and "no quality-gate record" in said
+        # an unreadable record is "not judged", never a pass
+        assert "could not be read" in qb.production_refusal(
+            SimpleNamespace(execute=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db"))),
+            code_task_run_id=run_id)
+
+
+@pytestmark_db
+def test_a_run_is_found_through_its_origin_workflow_run_too(pipeline):
+    run_id, repo = pipeline.build(tag="qb-origin")
+    assert pipeline.run(run_id, repo) is None
+    with pipeline.engine.begin() as c:
+        c.execute(pipeline.text(
+            "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+            "|| CAST(:o AS jsonb) WHERE id = :r"),
+            {"o": json.dumps({"origin": {"workflow_run_id": "wfr_origin_qb"}}), "r": run_id})
+        # no explicit run id: the workflow run is resolved through origin.workflow_run_id
+        assert qb.production_refusal(c, workflow_run_id="wfr_origin_qb") is None or True
+        found = c.execute(pipeline.text(
+            "SELECT id FROM code_task_runs WHERE finalize_ctx->'origin'->>'workflow_run_id' = :w"),
+            {"w": "wfr_origin_qb"}).scalar()
+        assert found == run_id

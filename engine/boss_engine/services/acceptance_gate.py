@@ -744,6 +744,7 @@ def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = No
     except Exception:  # noqa: BLE001 — no contract: nothing was removed
         removed = set()
     open_failures = _unresolved(checks, removed)
+    bar_followups = _unresolved(checks, removed, bar_accepted=True)
     if open_failures:
         runs = gates.setdefault(GATE, [])
         for rid, _ in open_failures:
@@ -761,6 +762,7 @@ def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = No
             latest = {**latest, "verdict": "not_checked",
                       "why": f"not checked since {checks[-1][0]}"}
     return {"gates": gates, "acceptance": latest,
+            "followups": [rid for rid, _ in bar_followups],
             "regressed": regressed_vs_parent(checks, run_id=run_id, parent_run_id=parent_run)}
 
 
@@ -802,18 +804,21 @@ def regression_card(reg: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _unresolved(checks: list[tuple[str, dict]],
-                removed: Iterable[str] = ()) -> list[tuple[str, dict]]:
+                removed: Iterable[str] = (), *,
+                bar_accepted: bool = False) -> list[tuple[str, dict]]:
     """The not_met checks no LATER met check covered: a met clears a failure only when it
     judged at least the failed check's items (`source.item_keys`). Slice 3 meeting its own
     items never clears slice 2's gaps; a follow-up held to the union of every slice clears all.
     `removed`: item keys a person has since replaced or removed from the contract — a later
-    check need not judge those to clear the failure (PR #161 review C3)."""
+    check need not judge those to clear the failure (PR #161 review C3).
+    `bar_accepted`: the OTHER list — the unmet checks the quality bar let through (their gaps are
+    follow-ups, shown as such on the card, never hidden and never counted as failures)."""
     out = []
     gone = set(removed or ())
     for i, (rid, acc) in enumerate(checks):
         if acc.get("verdict") != "not_met":
             continue
-        if (acc.get("bar") or {}).get("nonblocking"):
+        if bool((acc.get("bar") or {}).get("nonblocking")) != bar_accepted:
             continue          # the quality bar let this record through (follow-ups, not a failure)
         keys = set((acc.get("source") or {}).get("item_keys") or []) - gone
         cleared = any(later.get("verdict") == "met"
@@ -874,6 +879,8 @@ def merge_card_checks(connection: Any, *, run_id: Optional[str], evidence: Any,
         acceptance = lineage.get("acceptance") or (
             acceptance if isinstance(acceptance, Mapping) else None)
         reg = lineage.get("regressed")
+        if lineage.get("followups") and isinstance(acceptance, Mapping):
+            acceptance = {**acceptance, "bar_followups": list(lineage["followups"])}
         if reg and isinstance(acceptance, Mapping):
             # BOTH VERDICTS ON THE CARD (BOSSAPP-1330): the worse one leads, said as a
             # regression, and the parent's better one stays beside it.
@@ -895,11 +902,23 @@ def card_words(card: Optional[Mapping[str, Any]], acceptance: Optional[Mapping[s
 
     if card:
         return f"Automated checks: failing ({cf.headline(card)}); CI {validation_status}"
+    if (acceptance or {}).get("verdict") == "not_met" and (
+            (acceptance or {}).get("bar") or {}).get("nonblocking"):
+        gaps = len([i for i in acceptance.get("items") or []
+                    if isinstance(i, Mapping) and i.get("status") != "met"])
+        return (f"Automated checks: {validation_status}; must-haves: {gaps} gap"
+                f"{'s' if gaps != 1 else ''} are follow-ups at the "
+                f"{acceptance['bar'].get('bar') or 'standard'} quality bar (not blocking)")
     if not acceptance or acceptance.get("verdict") not in ("met", "no_items"):
         why = headline(acceptance) if acceptance else "Must-haves: not checked"
         return f"Automated checks: CI {validation_status}; {why}"
     n = len((acceptance or {}).get("advisory") or [])
-    return f"Automated checks: {validation_status}" + (f", {n} advisory" if n else "")
+    gaps = len([i for i in (acceptance or {}).get("items") or []
+                if isinstance(i, Mapping) and i.get("status") != "met"]) if (
+        (acceptance or {}).get("bar") or {}).get("nonblocking") else 0
+    return (f"Automated checks: {validation_status}" + (f", {n} advisory" if n else "")
+            + (f", {gaps} must-have follow-up{'s' if gaps != 1 else ''} (quality bar)"
+               if gaps else ""))
 
 
 __all__ = [

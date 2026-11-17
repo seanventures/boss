@@ -3708,6 +3708,16 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
         run = connection.execute(
             text("SELECT spec, pull_request_number, status FROM code_task_runs WHERE id = :i"),
             {"i": run_id}).mappings().first() if run_id else None
+        # THE BAR FOLLOWS WHERE IT SHIPS (quality_bar.py): the one door every stack release
+        # passes (deploy_build, a workflow's Deploy step), judged by the TARGET's environment.
+        from . import quality_bar as _quality_bar
+
+        if _quality_bar.is_production(target.get("environment")):
+            refused = _quality_bar.production_refusal(connection, code_task_run_id=run_id or None,
+                                                      workflow_run_id=workflow_run_id)
+            if refused:
+                return {"capability": "deploy", "tool": None, "status": "failed",
+                        "error": refused, "quality_bar": "production"}
     if run is None:
         return {"capability": "deploy", "tool": None, "status": "failed",
                 "error": "this deploy step names no build, so there is no commit to deploy."}

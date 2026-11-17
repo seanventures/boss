@@ -1676,6 +1676,9 @@ def _observed_from_the_build(
         "code_task_run_id": run_id,
         "gates_passed": passed,
         "gates_failed": failed,
+        # Let through by the quality bar (neither passed nor failed): reported, never "passed".
+        "gates_followup": [g for g in (((evidence.get("quality_bar") or {}).get("followups")) or {})
+                           if g in gate_names],
         "risk_tier": row["risk_tier"],
         "seats": evidence.get("steps_run") or [],
     }
@@ -1692,6 +1695,8 @@ def _observed_from_the_build(
         detail["note"] = (
             f"{', '.join(passed) if passed else 'nothing'} passed on the build "
             f"(risk tier {row['risk_tier']})."
+            + (f" Follow-ups (quality bar): {', '.join(detail['gates_followup'])}."
+               if detail["gates_followup"] else "")
         )
         return detail
 
@@ -3749,20 +3754,6 @@ def _perform_capability(
                                                   monitoring_pack.run_gate(connection, run_id))
         if refused:
             raise SettledCapabilityError(refused)
-    if key in ("deploy", "promote_config"):
-        # THE BAR FOLLOWS WHERE IT SHIPS (quality_bar.py): a production deploy or promotion
-        # applies the PRODUCTION bar to the run at this step. A build that passed at a lighter
-        # bar is refused with the list of what is still needed (the follow-up path fixes it).
-        from . import quality_bar
-
-        _environment = str(inputs.get("environment") or "").strip() or deploy_environment(
-            step, context.get("input"))
-        if quality_bar.is_production(_environment):
-            refused = quality_bar.production_refusal(
-                connection, code_task_run_id=str(inputs.get("run_id") or "") or None,
-                workflow_run_id=str(context.get("run_id") or "") or None)
-            if refused:
-                raise SettledCapabilityError(refused)
     if extend or capability.tool is None:
         # EVERY IN-PROCESS DISPATCH RUNS UNDER THE RUN'S RECORDED AUTHORITY, like a tool step.
         # These returned from here bare, as whoever advanced the run (the worker), so under

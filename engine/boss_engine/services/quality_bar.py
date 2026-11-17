@@ -57,7 +57,7 @@ _BLOCKS: dict[str, tuple[bool, bool, bool]] = {
     "web_package_honest": (True, True, True),
     "written_tests_pass": (True, True, True),        # the build's own tests (P0)
     "coder_did_not_edit_tests": (True, True, True),  # integrity, not polish
-    "nothing_broke": (False, True, True),            # existing tests on the changed area
+    "nothing_broke": (True, True, True),             # computed: broken_tests_block (by path)
     "existing_tests_intact": (False, True, True),
     "brief_tests_written": (False, True, True),      # P1 tests the brief names
     "tests_written_first": (False, False, True),
@@ -74,27 +74,108 @@ def normalize(value: Any) -> Optional[str]:
     return word if word in PRESETS else None
 
 
+#: Written ONLY by the server (workflows.start_run, after the permission check at the start door).
+#: A caller's own copy of these input keys is dropped there, so an agent's start_workflow inputs
+#: can set neither a bar nor a per-gate map.
+BY_KEY = "_quality_bar_by"
+OVERRIDE_PERMISSION = "settings:update"
+RANK = {PROTOTYPE: 0, STANDARD: 1, PRODUCTION: 2}
+
+#: The gates no override may relax, at any bar: the build, the app starting, the tests the build
+#: wrote, their integrity, security, secrets and an applied template. (Unknown gates block too.)
+FLOOR = frozenset({"code_written", "app_serves", "template_tests", "no_committed_secrets",
+                   "security_clean", "web_package_honest", "written_tests_pass",
+                   "coder_did_not_edit_tests"})
+
+
+class QualityBarOverrideRefused(PermissionError):
+    """Lowering the bar (or overriding single gates) needs a person with settings:update."""
+
+
+def check_override_permission(project_id: str, actor: Any) -> None:
+    """Who may start a run below the project's bar, or with a per-gate map: a PERSON holding
+    `settings:update` at the project (an agent, a job or 'boss' never). Checked where the run
+    is started; the grant is recorded on the run (`_quality_bar_by`, an event, the evidence)."""
+    who = str(actor or "").strip()
+    if not who.startswith("usr_"):
+        raise QualityBarOverrideRefused("only a person may change a run's quality bar")
+    from ..identity import lineage, viewer
+
+    allowed = viewer.decide(project_id, OVERRIDE_PERMISSION)
+    if allowed is None:
+        return                      # no guard enforced this call (a script, a test)
+    principal = getattr(lineage.current_context(), "principal", None)
+    if (not allowed or principal is None or not principal.is_person
+            or str(principal.id) != who):
+        raise QualityBarOverrideRefused(
+            f"changing a run's quality bar needs {OVERRIDE_PERMISSION} at this project")
+
+
+def normalize(value: Any) -> Optional[str]:
+    """A preset name, or None for anything that is not one."""
+    word = str(value or "").strip().lower()
+    return word if word in PRESETS else None
+
+
+def resolve_detail(*, run_spec: Any = None, workflow_spec: Any = None, run_input: Any = None,
+                   project_value: Any = None) -> dict[str, Any]:
+    """{bar, source, lowered_by, overrides} for a run. Order: the RUN SPEC (server-owned), the
+    run input (only when the server stamped it: BY_KEY, after the permission check), the
+    WORKFLOW spec (it may only RAISE the project's bar), the project setting, `standard`.
+    A value that is not a preset is skipped, never an error. The per-gate map is honoured only
+    from the run spec or a stamped run input, never from a workflow spec."""
+    project_bar = normalize(project_value) or DEFAULT
+    spec = run_spec if isinstance(run_spec, Mapping) else {}
+    inp = run_input if isinstance(run_input, Mapping) else {}
+    wf = workflow_spec if isinstance(workflow_spec, Mapping) else {}
+    stamped = bool(str(inp.get(BY_KEY) or "").strip())
+    by = str(spec.get(BY_KEY) or inp.get(BY_KEY) or "").strip() or None
+    bar, source = project_bar, "project" if normalize(project_value) else "default"
+    if normalize(spec.get(SETTING)):
+        bar, source = normalize(spec.get(SETTING)), "run_spec"
+    elif stamped and normalize(inp.get(SETTING)):
+        bar, source = normalize(inp.get(SETTING)), "run_input"
+    elif normalize(wf.get(SETTING)) and RANK[normalize(wf.get(SETTING))] >= RANK[project_bar]:
+        bar, source = normalize(wf.get(SETTING)), "workflow"
+    overrides: dict[str, str] = {}
+    for src_ok, src in ((True, spec), (stamped, inp)):
+        if src_ok and isinstance(src.get(OVERRIDES_KEY), Mapping):
+            for gate, how in src[OVERRIDES_KEY].items():
+                if str(how) in ("block", "follow_up"):
+                    overrides.setdefault(str(gate), str(how))
+    lowered = RANK[bar] < RANK[project_bar] or any(
+        how == "follow_up" for how in overrides.values())
+    return {"bar": bar, "source": source, "overrides": overrides,
+            "lowered_by": (by or "server") if lowered else None}
+
+
 def resolve(*, run_spec: Any = None, workflow_spec: Any = None, run_input: Any = None,
             project_value: Any = None) -> str:
-    """The bar for a run: run spec -> workflow spec -> run input -> project setting -> standard.
-    A value that is not a preset is skipped, never an error."""
-    for source in (run_spec, workflow_spec, run_input):
-        if isinstance(source, Mapping):
-            found = normalize(source.get(SETTING))
-            if found:
-                return found
-    return normalize(project_value) or DEFAULT
+    return resolve_detail(run_spec=run_spec, workflow_spec=workflow_spec, run_input=run_input,
+                          project_value=project_value)["bar"]
+
+
+def _configured_review_severity(settings: Any) -> Optional[str]:
+    """BOSS_CODE_REVIEW_BLOCK_SEVERITY, when it was set explicitly (never the default): it may
+    only make the review stricter than the bar says (review_block_severity)."""
+    try:
+        if "code_review_block_severity" not in getattr(settings, "model_fields_set", ()):
+            return None
+        word = str(getattr(settings, "code_review_block_severity", "") or "").strip().lower()
+    except Exception:  # noqa: BLE001
+        return None
+    return word if word in ("nit", "minor", "major", "blocker") else None
 
 
 def resolve_for_run(connection: Any, settings: Any, project_id: Optional[str], *,
                     spec: Any = None, workflow_run_id: Optional[str] = None
-                    ) -> tuple[str, dict[str, str]]:
-    """(the bar, the per-gate overrides) for a build, reading the workflow run's own spec and
-    input and the project setting. Never raises: what cannot be read is the default."""
+                    ) -> tuple[str, dict[str, str], dict[str, Any]]:
+    """(the bar, the per-gate overrides, {source, lowered_by, review_severity}) for a build,
+    reading the workflow run's own spec and input and the project setting. Never raises: what
+    cannot be read is the default."""
     workflow_spec: Any = None
     run_input: Any = None
     project_value: Any = None
-    overrides: dict[str, str] = {}
     try:
         if connection is not None and workflow_run_id:
             from . import workflows
@@ -124,37 +205,52 @@ def resolve_for_run(connection: Any, settings: Any, project_id: Optional[str], *
             project_value = getattr(settings, SETTING, None)
     except Exception:  # noqa: BLE001
         project_value = getattr(settings, SETTING, None)
-    for source in (spec, workflow_spec, run_input):
-        if isinstance(source, Mapping) and isinstance(source.get(OVERRIDES_KEY), Mapping):
-            for gate, how in source[OVERRIDES_KEY].items():
-                if str(how) in ("block", "follow_up"):
-                    overrides.setdefault(str(gate), str(how))
-    return (resolve(run_spec=spec, workflow_spec=workflow_spec, run_input=run_input,
-                    project_value=project_value), overrides)
+    found = resolve_detail(run_spec=spec if isinstance(spec, Mapping) else None,
+                           workflow_spec=workflow_spec, run_input=run_input,
+                           project_value=project_value)
+    info = {"source": found["source"], "lowered_by": found["lowered_by"],
+            "review_severity": _configured_review_severity(settings)}
+    return found["bar"], found["overrides"], info
 
 
 def gate_blocks(gate: str, bar: str, overrides: Optional[Mapping[str, str]] = None) -> bool:
-    """Does a failing `gate` block at `bar`? An unknown gate always blocks (fail closed)."""
+    """Does a failing `gate` block at `bar`? An unknown gate and the FLOOR always block: no
+    override relaxes them. Other known gates honour a per-gate override."""
+    row = _BLOCKS.get(gate)
+    if row is None or gate in FLOOR:
+        return True
     how = (overrides or {}).get(gate)
     if how == "block":
         return True
     if how == "follow_up":
         return False
-    row = _BLOCKS.get(gate)
-    if row is None:
-        return True
     return row[PRESETS.index(normalize(bar) or DEFAULT)]
 
 
-def review_block_severity(bar: str) -> str:
+_SEVERITY_RANK = ("nit", "minor", "major", "blocker", "none")
+
+
+def review_block_severity(bar: str, configured: Optional[str] = None) -> str:
     """The lowest review severity that blocks: BLOCKER at standard, MAJOR at production, none
-    at prototype (security is a separate gate and always blocks)."""
-    return {PROTOTYPE: "none", PRODUCTION: "major"}.get(normalize(bar) or DEFAULT, "blocker")
+    at prototype (security is a separate gate and always blocks). `configured` is an explicit
+    BOSS_CODE_REVIEW_BLOCK_SEVERITY: it can only make this stricter, never looser."""
+    base = {PROTOTYPE: "none", PRODUCTION: "major"}.get(normalize(bar) or DEFAULT, "blocker")
+    if configured in _SEVERITY_RANK and _SEVERITY_RANK.index(configured) < _SEVERITY_RANK.index(base):
+        return configured
+    return base
 
 
-def plan_signoff_required(bar: str) -> bool:
-    """Prototypes need no plan sign-off; standard and production keep it."""
-    return normalize(bar) != PROTOTYPE
+#: From this risk tier up, a plan is signed off by a person at every bar.
+SIGNOFF_TIER = 3
+
+
+def plan_signoff_required(bar: str, risk_tier: Optional[int] = None,
+                          sensitive: bool = False) -> bool:
+    """Prototypes skip the plan sign-off of the DEFAULT sensitive tier only: risk tier >= 3, or
+    work with sensitive markers, is signed off at every bar. Standard and production keep it."""
+    if normalize(bar) != PROTOTYPE:
+        return True
+    return bool(sensitive) or int(risk_tier or 0) >= SIGNOFF_TIER
 
 
 def pass_two_must_finish(bar: str) -> bool:
@@ -227,6 +323,55 @@ def acceptance_verdict(record: Optional[Mapping[str, Any]], bar: str) -> tuple[b
         # beyond the reviewer's passes): not a P2 gap, so it holds.
         return False, []
     return True, soft
+
+
+#: A failing test whose name or path says it guards the critical path (P0): startup, health,
+#: sign-in/authorization. Matched on the test's own words, like quality_bar.floor_tier.
+P0_TEST_WORDS = ("startup", "start-up", "boot", "health", "auth", "login", "log-in", "signin",
+                 "sign-in", "sign_in", "session", "password", "serves", "smoke")
+
+
+def _words(text: Any) -> set[str]:
+    import re
+
+    return {w for w in re.split(r"[^a-z0-9]+", str(text or "").lower()) if len(w) >= 5}
+
+
+def broken_tests_block(bar: str, failing: Iterable[str], changed: Iterable[str],
+                       p1_words: Iterable[str] = ()) -> tuple[bool, str]:
+    """(does a broken EXISTING test block at `bar`, why it did not when it does not).
+
+    production: always. standard: when a failing test is on a P0/P1 path (its name or file marks
+    startup/health/auth/sign-in, or names one of the brief's own P1 features) or its file or name
+    overlaps the changed files; else a follow-up. prototype: only a P0 test (startup, auth,
+    health). Failing tests that cannot be named block at standard and production (nothing says
+    they are off the critical path) and are a follow-up at prototype."""
+    bar = normalize(bar) or DEFAULT
+    if bar == PRODUCTION:
+        return True, ""
+    names = [str(n) for n in failing or () if str(n).strip()]
+    if not names:
+        return (bar == STANDARD), ("failing existing tests could not be named; not a P0 at the "
+                                   "prototype bar")
+    low = [n.lower() for n in names]
+    p0 = any(w in n for n in low for w in P0_TEST_WORDS)
+    if bar == PROTOTYPE:
+        return p0, (f"{len(names)} existing test(s) failing, none on a P0 path "
+                    f"(startup, auth, health): {'; '.join(names[:5])}")
+    stems = set()
+    import os
+
+    for path in changed or ():
+        base = os.path.splitext(os.path.basename(str(path)))[0].lower()
+        if len(base) >= 3:
+            stems.add(base)
+        stems.update(w for w in _words(os.path.dirname(str(path))) if len(w) >= 5)
+    overlaps = any(stem in n for n in low for stem in stems)
+    p1 = any(w in n for n in low for w in {x for t in p1_words for x in _words(t)})
+    if p0 or overlaps or p1:
+        return True, ""
+    return False, (f"{len(names)} existing test(s) failing outside the changed area and the "
+                   f"P0/P1 paths: {'; '.join(names[:5])}")
 
 
 def consistency_passes(bar: str, verdict: str, summary: str = "") -> tuple[bool, bool]:
@@ -337,8 +482,11 @@ def stamp(evidence: dict, gates: Any, *, flaky: Iterable[str] = ()) -> dict:
     """Record the bar, its follow-ups and flaky tests on the evidence (gate evidence, PR body,
     run state). Returns the stamp."""
     followups = followups_of(gates)
+    info = dict(getattr(gates, "info", None) or {})
     record = {"bar": getattr(gates, "bar", DEFAULT), "followups": followups,
-              "flaky": [str(x) for x in flaky]}
+              "flaky": [str(x) for x in flaky],
+              "source": info.get("source"), "lowered_by": info.get("lowered_by"),
+              "overrides": dict(getattr(gates, "overrides", None) or {})}
     evidence[KEY] = record
     gates_followup = {g: (lines or ["did not pass; non-blocking at this quality bar"])
                       for g, lines in followups.items()}
@@ -367,11 +515,18 @@ def pr_section(evidence: Optional[Mapping[str, Any]]) -> str:
 # The bar follows where it ships: the production rule at a deploy/promote step
 # ---------------------------------------------------------------------------------------------
 
-PRODUCTION_ENVIRONMENTS = frozenset({"production", "prod"})
-
-
 def is_production(environment: Any) -> bool:
-    return str(environment or "").strip().lower() in PRODUCTION_ENVIRONMENTS
+    """Is this environment a production one: the same answer the identity layer gives
+    (object_rules.is_production_environment). Callers pass the TARGET's own environment, not the
+    name a step or a caller typed."""
+    from ..identity.object_rules import is_production_environment
+
+    return is_production_environment(environment)
+
+
+NOT_JUDGED = ("This is a production release, so the production quality bar applies, and nothing "
+              "was judged for this build ({why}). Run the build's checks (a re-check) and "
+              "release again.")
 
 
 def production_needs(evidence: Optional[Mapping[str, Any]],
@@ -379,6 +534,7 @@ def production_needs(evidence: Optional[Mapping[str, Any]],
     """What this run still needs to pass the PRODUCTION bar, from its recorded evidence (empty =
     it passes). Pure: the quality gate row's evidence and failed gates in, a list out."""
     from . import checks_failing as _cf
+    from . import seat_policy as _seat_policy
     from .acceptance import verdict as _v
     from .review_comments import parse_findings
 
@@ -386,6 +542,10 @@ def production_needs(evidence: Optional[Mapping[str, Any]],
     needs: list[str] = []
     for g in gates_failed or ():
         needs.append(f"Gate '{g}' ({_cf._gate_label(g)}) failed.")  # noqa: SLF001
+    # A check that did not run is not a pass: a seat the profile did not convene is needed.
+    for g, why in _seat_policy.skipped_gates(evidence).items():
+        needs.append(f"Gate '{g}' ({_cf._gate_label(g)}) was not run ({why}); "  # noqa: SLF001
+                     "production needs it.")
     rec = evidence.get(KEY) or {}
     followups = dict(rec.get("followups") or evidence.get("gates_followup") or {})
     for g, lines in followups.items():
@@ -405,8 +565,7 @@ def production_needs(evidence: Optional[Mapping[str, Any]],
             if c.severity in ("blocker", "major") and not _resolved(evidence, c):
                 needs.append(f"{label} finding ({c.severity.upper()}) {c.location()}: "
                              f"{c.body}"[:600])
-    for t in rec.get("flaky") or []:
-        pass          # flaky tests are reported, never required
+    # (A flaky test is reported, never required: it already passed its re-runs, see the build.)
     return list(dict.fromkeys(needs))
 
 
@@ -416,46 +575,75 @@ def _resolved(evidence: Mapping[str, Any], finding: Any) -> bool:
     return body in {" ".join(str(x).split()) for x in evidence.get("resolved_findings") or []}
 
 
-def production_refusal(connection: Any, *, code_task_run_id: Optional[str],
-                       project_id: Optional[str] = None,
-                       workflow_run_id: Optional[str] = None) -> Optional[str]:
-    """The words refusing a production deploy/promotion, or None when the run passes the
-    production bar (or has no recorded gates to judge). Never raises: a check that cannot be
-    read does not refuse a release the operator approved."""
-    needs: list[str] = []
+def _workflow_run_of(fctx: Any) -> Optional[str]:
+    fctx = fctx if isinstance(fctx, Mapping) else {}
+    origin = fctx.get("origin") if isinstance(fctx.get("origin"), Mapping) else {}
+    return str(fctx.get("workflow_run_id") or origin.get("workflow_run_id") or "") or None
+
+
+def production_refusal(connection: Any, *, code_task_run_id: Optional[str] = None,
+                       workflow_run_id: Optional[str] = None,
+                       deployment_run_id: Optional[str] = None) -> Optional[str]:
+    """The words refusing a production release, or None when the build passes the production
+    bar. FAIL CLOSED: no build to judge, no gate record, or a record that cannot be read is
+    "nothing was judged for this build" and refuses.
+
+    The build is named by `code_task_run_id`, or found from `deployment_run_id` (a config
+    promotion: the deployment's release packet names its build or its workflow run), or from
+    `workflow_run_id`. A config promotion with NO build behind it at all (a config-only workflow)
+    has nothing for the bar to judge and is not refused here; a build that IS behind it must
+    have been judged."""
+    import json
+
+    from sqlalchemy import text
+
+    config_only_ok = False
     try:
-        import json
-
-        from sqlalchemy import text
-
-        row = None
+        if not code_task_run_id and deployment_run_id:
+            config_only_ok = True
+            dep = connection.execute(text(
+                "SELECT release_packet FROM deployment_runs WHERE id = :i"),
+                {"i": deployment_run_id}).scalar()
+            packet = json.loads(dep) if isinstance(dep, str) else (dep or {})
+            code_task_run_id = str(packet.get("code_task_run_id") or "") or None
+            workflow_run_id = workflow_run_id or (str(packet.get("workflow_run_id") or "") or None)
         if not code_task_run_id and workflow_run_id:
-            # The build this workflow run shipped: its newest code task run with gates recorded.
             code_task_run_id = connection.execute(text(
-                "SELECT r.id FROM code_task_runs r JOIN quality_gates q "
-                "ON q.code_task_run_id = r.id WHERE r.finalize_ctx->>'workflow_run_id' = :w "
-                "ORDER BY r.created_at DESC LIMIT 1"), {"w": workflow_run_id}).scalar()
-        if code_task_run_id:
-            row = connection.execute(text(
-                "SELECT status, gates_failed, evidence FROM quality_gates "
-                "WHERE code_task_run_id = :r ORDER BY created_at DESC LIMIT 1"),
-                {"r": code_task_run_id}).mappings().first()
-        if row is not None:
-            evidence = row["evidence"]
-            if isinstance(evidence, str):
-                evidence = json.loads(evidence or "{}")
-            failed = row["gates_failed"]
-            if isinstance(failed, str):
-                failed = json.loads(failed or "[]")
-            needs = production_needs(evidence, failed or [])
-    except Exception:  # noqa: BLE001
-        logger.warning("quality bar: production rule not evaluated", exc_info=True)
-        return None
+                "SELECT id FROM code_task_runs WHERE project_id IS NOT NULL AND "
+                "(finalize_ctx->>'workflow_run_id' = :w OR finalize_ctx->'origin'->>'workflow_run_id' = :w) "
+                "ORDER BY created_at DESC LIMIT 1"), {"w": workflow_run_id}).scalar()
+        if not code_task_run_id:
+            return None if config_only_ok else NOT_JUDGED.format(why="no build could be found")
+        run = connection.execute(text(
+            "SELECT finalize_ctx FROM code_task_runs WHERE id = :i"),
+            {"i": code_task_run_id}).mappings().first()
+        if run is None:
+            return NOT_JUDGED.format(why=f"build {code_task_run_id} was not found")
+        fctx = run["finalize_ctx"]
+        fctx = json.loads(fctx) if isinstance(fctx, str) else (fctx or {})
+        workflow_run_id = workflow_run_id or _workflow_run_of(fctx)
+        row = connection.execute(text(
+            "SELECT status, gates_failed, evidence FROM quality_gates "
+            "WHERE code_task_run_id = :r ORDER BY created_at DESC LIMIT 1"),
+            {"r": code_task_run_id}).mappings().first()
+        if row is None:
+            return NOT_JUDGED.format(why="it has no quality-gate record")
+        evidence = row["evidence"]
+        if isinstance(evidence, str):
+            evidence = json.loads(evidence or "{}")
+        failed = row["gates_failed"]
+        if isinstance(failed, str):
+            failed = json.loads(failed or "[]")
+        needs = production_needs(evidence, failed or [])
+    except Exception:  # noqa: BLE001 — unreadable evidence is not evidence of a pass
+        logger.warning("quality bar: production rule could not be evaluated", exc_info=True)
+        return NOT_JUDGED.format(why="its quality-gate record could not be read")
     try:
         with connection.begin_nested():
             needs += pass_two_needs(connection, workflow_run_id)
-    except Exception:  # noqa: BLE001 — the gates' own needs stand; pass 2's could not be read
+    except Exception:  # noqa: BLE001
         logger.warning("quality bar: pass 2 not read", exc_info=True)
+        needs.append("Pass 2 (More tests) could not be read; production waits for it.")
     if not needs:
         return None
     listed = "\n".join(f"- {n}" for n in needs[:40])

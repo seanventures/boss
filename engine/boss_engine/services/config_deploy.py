@@ -805,6 +805,18 @@ def promote(engine: Any, settings: Settings, *, project_id: str, actor: str,
             # PRODUCTION IS A PERSON'S ANSWER: no environment policy and no gate passed in by a
             # step answers a promotion to production; a person approves this very deployment.
             to_production = is_production_environment(str(target.get("environment") or ""))
+            if to_production:
+                # THE BAR FOLLOWS WHERE IT SHIPS (quality_bar.py): the build behind this
+                # deployment (named by its release packet or its workflow run) must pass the
+                # production bar. A config-only deployment with no build behind it has nothing
+                # for the bar to judge; a build that is behind it must have been judged.
+                from . import quality_bar as _quality_bar
+
+                refused = _quality_bar.production_refusal(
+                    c, deployment_run_id=str(src["id"]),
+                    workflow_run_id=workflow_run_id or None)
+                if refused:
+                    raise ConfigDeployError(refused, "Fix what is listed, then promote again.")
             run = plan_config_deployment(
                 rp, c, project_id=project_id, target=target, files=bundle,
                 bundle_artifact_id=artifact_id, actor=actor,
