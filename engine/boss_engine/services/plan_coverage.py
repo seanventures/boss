@@ -61,6 +61,13 @@ _FILE = re.compile(
     r"(?<![\w/.\-])((?:[\w.\-]+/)*[\w\-]+\.(?:go|py|pyi|ts|tsx|js|jsx|mjs|java|kt|scala|rb|rs|"
     r"cs|php|swift|c|cc|cpp|h|hpp|sql|sh|tf|ya?ml|json|toml))(?::[\d\-]+)?(?![\w/])")
 _TICKED_NAME = re.compile(r"`([A-Za-z_][\w.]*)(?:\(\))?`")
+#: The planner's explicit "this item does not apply" (BOSSAPP-1360): `ITEM F-42: NOT APPLICABLE —
+#: <reason>` (stale, a false positive, already done), one line per item, the reason required.
+_NOT_APPLICABLE = re.compile(
+    r"(?im)^[\s>*\-\u2022`]*ITEM\s+`?([A-Za-z][\w.\-]*\d[\w.\-]*|bi_[0-9a-f]{6,})`?\s*[:\-]\s*"
+    r"\**NOT[\s_]+APPLICABLE\**\s*(?:[\u2014\u2013:\-]+\s*)?(.*)$")
+#: The id a brief item leads with (a ledger finding `F-42`, a contract item `AC-3`).
+_ITEM_KEY = re.compile(r"^\W*(?:\[[A-Za-z /_-]{2,30}\]\s*)?(?:\(\w+\)\s*)?([A-Z]{1,6}-\d+)\b")
 _RESTATED = re.compile(r"^\s*(?:Fixed|Deferred finding addressed)\s*:\s*", re.I)
 
 
@@ -270,6 +277,25 @@ def anchored_verdict(item: BriefItem, plan: str) -> Optional[str]:
     return "covered"
 
 
+def item_key(item: BriefItem) -> str:
+    """The id the brief gave the item (`F-42`, `AC-3`), or ''."""
+    m = _ITEM_KEY.match(item.text or "")
+    return m.group(1).upper() if m else ""
+
+
+def declared_not_applicable(*texts: str) -> dict[str, str]:
+    """{item key or id (upper-cased): reason} for every `ITEM <key>: NOT APPLICABLE — <reason>`
+    the planner wrote in its PLAN (never its self-review). A line with no reason is not a
+    declaration: the plan still owes the item."""
+    out: dict[str, str] = {}
+    for text in texts:
+        for m in _NOT_APPLICABLE.finditer(str(text or "")):
+            reason = " ".join(m.group(2).split())
+            if len(reason) >= 6:
+                out.setdefault(m.group(1).upper(), reason[:300])
+    return out
+
+
 def _questions(items: list[BriefItem]):
     from .typed_decisions import Question
 
@@ -296,6 +322,7 @@ def check(design: Mapping[str, Any], *, instructions: str, criteria: Any = None,
     if not items:
         return Coverage(ok=True, items=0)
     anchored = [anchored_verdict(it, plan) for it in items]
+    declared = declared_not_applicable(plan)
     answers: dict[str, Any] = {}
     by = "deterministic"
     if decider is not None:
@@ -314,6 +341,17 @@ def check(design: Mapping[str, Any], *, instructions: str, criteria: Any = None,
         d = answers.get(f"i{k}")
         said = getattr(d, "answer", None)
         reason = str(getattr(d, "reason", "") or "")
+        na = declared.get(item_key(it)) or declared.get(it.id.upper())
+        # A SECURITY finding or a BLOCKER is never waved off by the planner: it stays missing,
+        # and so goes to the human plan gate.
+        if na and not (it.security or it.severity in SERIOUS):
+            # THE PLANNER SAID IT DOES NOT APPLY (BOSSAPP-1360): stale, a false positive, or
+            # already done. Not sent back, not escalated: it goes on to review and acceptance
+            # as an item to VERIFY (`not_applicable`), where a reader can refute the reason.
+            skipped.append({"id": it.id, "severity": it.severity, "kind": it.kind,
+                            "item": it.label(), "why": na, "security": it.security,
+                            "not_applicable": True, "key": item_key(it) or it.id})
+            continue
         if det == "missing":
             # The plan does not name where the finding is: covered is not an answer a model can
             # give it; an explicit skip still is.
@@ -344,8 +382,24 @@ def replan_note(coverage: Coverage) -> str:
     return ("YOUR PLAN DOES NOT COVER EVERYTHING THE BRIEF REQUIRES. These items are missing "
             "from it:\n" + lines + "\n\nRewrite the PLAN so it covers every item above — "
             "security and blocker findings first, naming the files and functions you will "
-            "change — or, for an item you will not do, say so explicitly in the PLAN, naming the "
-            "item and why. Do not drop anything the previous plan already covered.")
+            "change — or, for an item you will not do (stale, a false positive, already done; never a security, critical, high or blocker finding), "
+            "write one line in the PLAN: `ITEM <key>: NOT APPLICABLE — <reason>` (the key as the "
+            "item names it, e.g. F-42 or AC-3). Review will verify each such reason. Do not drop "
+            "anything the previous plan already covered.")
+
+
+def verify_block(coverage: Optional[Mapping[str, Any]]) -> str:
+    """The items the planner declared not applicable, as a block for the review and acceptance
+    that follow: each reviewing seat answers each one, positively (silence confirms nothing)."""
+    rows = [r for r in (coverage or {}).get("skipped") or []
+            if isinstance(r, Mapping) and r.get("not_applicable")]
+    if not rows:
+        return ""
+    return ("\n\nPLAN ITEMS DECLARED NOT APPLICABLE. Check each reason against the code and "
+            "answer EACH on its own line: `NA <key>: CONFIRMED` (the reason holds) or "
+            "`NA <key>: REFUTED — <why>` (it is still owed). No answer leaves it open:\n"
+            + "\n".join(f"- {r.get('key') or r['id']}: {r['item']} — planner: "
+                         f"{r.get('why') or 'no reason'}" for r in rows[:20]))
 
 
 #: A gap at one of these severities is never approved by a delegate (approval_delegations).

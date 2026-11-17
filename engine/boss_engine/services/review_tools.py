@@ -40,6 +40,29 @@ def _hit(text: Optional[str]) -> Optional[str]:
     return found.group(0).strip()[:120] if found else None
 
 
+def is_tooling_failure(text: Optional[str], path: Optional[str] = None) -> bool:
+    """Whether a finding's words are BOSS's own sandbox failing (BOSSAPP-1360, F-42: "every
+    command failed before execution because the BOSS command sandbox could not create a
+    namespace (`bwrap: ...`)"): no file anchors it and it carries the sandbox's signature.
+
+    ONLY A SIGNATURE: never the reason to drop a finding by itself. Callers apply it to what a
+    seat recorded hollow / not_run / tools_blocked said (`drop_blind`, `ledger.stale_rows`) —
+    a security finding, or a seat that ran, is never judged by its prose."""
+    return not path and bool(_hit(text))
+
+
+def drop_blind(comments: Any, hollow: Any = None) -> list:
+    """`comments` (ReviewComment objects or mappings) without those a BLIND seat raised
+    (`hollow`: {stage: reason}, the seats recorded not_run / hollow / tools_blocked)."""
+    blind = set(hollow or {})
+    out = []
+    for c in comments or []:
+        get = c.get if isinstance(c, dict) else (lambda k, d=None, _c=c: getattr(_c, k, d))
+        if str(get("stage") or "") not in blind:
+            out.append(c)
+    return out
+
+
 def blocked_by_transport(stderr: Optional[str], stdout: Optional[str] = None) -> Optional[str]:
     """Why the engine's tools could not run, from the CLI's own output only, or None.
 
