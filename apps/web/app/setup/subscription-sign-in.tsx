@@ -50,8 +50,11 @@ function Stopped({ tone, headline, fix, state }: {
   );
 }
 
-export function SubscriptionSignIn({ provider, label, autoStart = false, fresh = false, onSession }: {
+export function SubscriptionSignIn({ provider, label, autoStart = false, fresh = false, addAccount = false, onSession }: {
   provider: string; label: string;
+  /** BOSSAPP-1343: sign in as an ADDITIONAL account of the provider's pool; never replaces the
+   *  one already signed in (the server stores it as its own pool member). */
+  addAccount?: boolean;
   /** Opened from a row's Sign in: start at once (one press, one effect). */
   autoStart?: boolean;
   /** Replace the CLI's current session: BOSS signs it out and starts a new login even if the
@@ -89,7 +92,8 @@ export function SubscriptionSignIn({ provider, label, autoStart = false, fresh =
     if (opensTab) popup.current = window.open("", "_blank");
     try {
       const started = await setupWrite<SignInSession>(projectId, "sign_in_start",
-                                                      fresh ? { provider, fresh: true } : { provider },
+                                                      addAccount ? { provider, fresh: true, add_account: true }
+                                                 : fresh ? { provider, fresh: true } : { provider },
                                                       { label: "Sign in" });
       if (alive.current) setSession(started);
       if (popup.current && started.verification_url && !navigated.current) {

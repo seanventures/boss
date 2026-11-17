@@ -255,6 +255,10 @@ class SignInBody(_Body):
     Login expired)."""
     provider: str
     fresh: bool = False
+    #: BOSSAPP-1343: sign in as an ADDITIONAL account of the provider's pool (never replaces the
+    #: one already signed in). `account_label` names it; empty is "Account N".
+    add_account: bool = False
+    account_label: Optional[str] = Field(default=None, max_length=80)
 
 
 class SignInCodeBody(_Body):

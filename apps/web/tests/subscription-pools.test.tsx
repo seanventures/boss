@@ -127,3 +127,28 @@ describe("subscription pools", () => {
     expect(codex.querySelector('input[type="password"]')?.getAttribute("aria-label")).toBe("auth.json");
   });
 });
+
+describe("several Claude accounts (BOSSAPP-1343)", () => {
+  it("marks the primary, offers Make primary on the others, and sign-in adds rather than replaces", async () => {
+    const calls: { url: string; method: string; body: Record<string, unknown> }[] = [];
+    const list = { pools: [{ id: "spool_1", engine: "claude_code", name: "seats", status: "active", members: [
+      { id: "spm_a", label: "Account 1", status: "active", position: 0, primary: true, headroom: { state: "plenty" } },
+      { id: "spm_b", label: "Account 2", status: "active", position: 1, primary: false, headroom: { state: "exhausted" } },
+    ] }] };
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const method = String(init?.method ?? "GET");
+      calls.push({ url: String(url), method, body: init?.body ? JSON.parse(String(init.body)) : {} });
+      return json(method === "GET" ? list : { member: {} });
+    }));
+    await mount(<PoolsRow projectId="p1" />);
+    await settle();
+    expect($('[data-testid="pool-primary-spm_a"]')).not.toBeNull();
+    expect($('[data-testid="pool-member-primary-spm_a"]')).toBeNull();
+    expect($('[data-testid="pool-room-spm_b"]')?.textContent).toBe("At limit");
+    ($('[data-testid="pool-member-primary-spm_b"]') as HTMLButtonElement).click();
+    await settle();
+    expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ project_id: "p1", primary: true });
+    expect($('[data-testid="pool-signin-open-claude_code"]')).not.toBeNull();
+    expect($('[data-testid="pool-signin-open-codex"]')).toBeNull();
+  });
+});

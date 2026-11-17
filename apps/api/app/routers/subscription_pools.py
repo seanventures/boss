@@ -47,6 +47,8 @@ class MemberPatchBody(Body):
     status: Optional[str] = Field(default=None, pattern="^(active|disabled|needs_reauth)$")
     position: Optional[int] = Field(default=None, ge=0, le=1000)
     credential: Optional[str] = Field(default=None, max_length=20000, repr=False)
+    primary: Optional[bool] = None
+    label: Optional[str] = Field(default=None, max_length=80)
 
 
 def build_subscription_pools_router(*, engine, settings: Callable[[], Any],
@@ -77,7 +79,8 @@ def build_subscription_pools_router(*, engine, settings: Callable[[], Any],
     @permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(body="project_id"))
     def create_pool(payload: PoolBody) -> dict:
         return {"pool": _write(payload.project_id, payload.actor, lambda c, actor: sp.create_pool(
-            c, payload.project_id, engine=payload.engine, name=payload.name, actor=actor))}
+            c, payload.project_id, engine=payload.engine, name=payload.name, actor=actor,
+            settings=settings()))}
 
     @router.patch("/v1/subscription-pools/{pool_id}")
     @permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(body="project_id"))
@@ -101,7 +104,8 @@ def build_subscription_pools_router(*, engine, settings: Callable[[], Any],
                                  sp.update_member(c, settings(), payload.project_id, member_id,
                                                   actor=actor, status=payload.status,
                                                   position=payload.position,
-                                                  credential=payload.credential))}
+                                                  credential=payload.credential,
+                                                  primary=payload.primary, label=payload.label))}
 
     @router.delete("/v1/subscription-pools/members/{member_id}")
     @permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(query="project_id"))
