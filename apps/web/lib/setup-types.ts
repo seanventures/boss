@@ -133,6 +133,8 @@ export type RoutingHeadroom = {
   engine: string; source_label: string; state: "plenty" | "tight" | "near_limit" | "exhausted";
   label: string; left: number | null; resets_at: string | null; basis: string;
   exhausted_models: string[]; describe: string; detail?: string;
+  /** When the newest number was heard, and whether it is too old to pass for current. */
+  as_of?: string | null; age_label?: string | null; stale?: boolean;
 };
 export type HeadroomRule = { source: string; when: string; tiers: Tier[]; to: string };
 export type Routing = {

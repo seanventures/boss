@@ -22,7 +22,7 @@ from typing import Any, Mapping, Optional
 
 PLENTY, TIGHT, NEAR_LIMIT, EXHAUSTED = "plenty", "tight", "near_limit", "exhausted"
 STATE_LABELS = {PLENTY: "Plenty", TIGHT: "Tight", NEAR_LIMIT: "Near limit",
-                EXHAUSTED: "Exhausted"}
+                EXHAUSTED: "Limit reached"}
 
 WEEKLY, SESSION, MONTHLY, MINUTE = "seven_day", "five_hour", "monthly", "minute"
 #: Model-family windows: an Opus limit leaves Sonnet and Haiku running.
@@ -53,6 +53,8 @@ class Window:
     resets_at: Optional[datetime] = None
     status: str = "allowed"
     source: str = "cli"
+    #: When BOSS last heard this window's number (a CLI event or a limit message).
+    observed_at: Optional[datetime] = None
 
     @property
     def spent(self) -> bool:
@@ -64,7 +66,23 @@ class Window:
     def to_dict(self) -> dict[str, Any]:
         return {"used": round(self.used, 4),
                 "resets_at": self.resets_at.isoformat() if self.resets_at else None,
-                "status": self.status, "source": self.source}
+                "status": self.status, "source": self.source,
+                "observed_at": self.observed_at.isoformat() if self.observed_at else None}
+
+
+#: A reading older than this says how old it is instead of passing for current (BOSSAPP-1342).
+STALE_AFTER_S = 2 * 3600
+
+
+def age_words(seconds: float) -> str:
+    s = max(0, int(seconds))
+    if s < 90:
+        return "just now"
+    if s < 3600:
+        return f"{s // 60} min ago"
+    if s < 36 * 3600:
+        return f"{round(s / 3600)} h ago"
+    return f"{round(s / 86400)} d ago"
 
 
 @dataclass(frozen=True)
@@ -91,8 +109,20 @@ class Headroom:
             return "headroom unknown"
         return f"{round(self.left * 100)}% left ({STATE_LABELS[self.state].lower()})"
 
+    def freshness(self, now: Optional[datetime] = None) -> dict[str, Any]:
+        """When the newest number was heard, how old that is, and whether it is too old to pass
+        for current. Nothing heard (the estimate, or no data) is not 'stale': basis says so."""
+        now = now or datetime.now(timezone.utc)
+        seen = [w.observed_at for w in self.windows.values() if w.observed_at is not None]
+        if not seen:
+            return {"as_of": None, "age_s": None, "age_label": None, "stale": False}
+        newest = max(seen)
+        age = (now - newest).total_seconds()
+        return {"as_of": newest.isoformat(), "age_s": int(age), "age_label": age_words(age),
+                "stale": age >= STALE_AFTER_S}
+
     def to_dict(self) -> dict[str, Any]:
-        return {"engine": self.engine, "state": self.state,
+        return {**self.freshness(), "engine": self.engine, "state": self.state,
                 "left": None if self.left is None else round(self.left, 4),
                 "resets_at": self.resets_at.isoformat() if self.resets_at else None,
                 "basis": self.basis, "exhausted_models": sorted(self.exhausted_models),
@@ -349,7 +379,7 @@ def _windows(capacity: Mapping[str, Any], now: datetime) -> dict[str, Window]:
             continue
         out[str(kind)] = Window(str(kind), max(0.0, min(1.0, used)), resets,
                                 str(body.get("status") or "allowed"),
-                                str(body.get("source") or "cli"))
+                                str(body.get("source") or "cli"), seen)
     return out
 
 

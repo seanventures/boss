@@ -17,9 +17,12 @@ model_router.store.snapshot (the windows the CLI reported on its own calls, the 
 the estimate) and a pool's members from subscription_pools.describe — nothing here asks a
 provider anything, and no new polling exists.
 
-WARNINGS (`warnings_due`): at 20%, 10% and 5% left, once per threshold per reset window, as a
-card in the Command Center and a message on the project's chat channels (system_doctor raises
-them on its tick, from `install_accounts`).
+ALERTS (BOSSAPP-1342). When an account is Tight, Near limit or at its Limit, BOSS says so where
+people govern, not only in Anthropic's settings: a system finding per account (`findings_for`;
+Govern's banner and, at the limit, a card in the Command Center saying what BOSS will do), and
+one `subscription.headroom_changed` event on each change of state. `observe_hook` raises them
+the moment a run's call reports the limit (model_router.accounts.observe), and system_doctor's
+tick keeps them true. A reading older than `headroom.STALE_AFTER_S` says how old it is.
 """
 from __future__ import annotations
 
@@ -32,8 +35,6 @@ from sqlalchemy import text
 
 log = logging.getLogger("boss.subscription_headroom")
 
-#: Percent left at which people are told, most urgent last.
-THRESHOLDS = (20, 10, 5)
 #: Builds this week below which no per-build estimate is made (too few to say a pace).
 MIN_BUILDS_FOR_ESTIMATE = 3
 
@@ -44,14 +45,6 @@ def _iso(value: Any) -> Optional[str]:
 
 def _pct(left: Optional[float]) -> Optional[int]:
     return None if left is None else max(0, min(100, int(round(float(left) * 100))))
-
-
-def threshold_for(left_pct: Optional[int]) -> Optional[int]:
-    """The deepest warning threshold `left_pct` is at or under (5, 10 or 20), else None."""
-    if left_pct is None:
-        return None
-    hit = [t for t in THRESHOLDS if left_pct <= t]
-    return min(hit) if hit else None
 
 
 def account_label(engine_label: str, account_key: str, member_label: str = "") -> str:
@@ -201,13 +194,15 @@ def project_view(connection: Any, settings: Any, project_id: str, *,
                     "pool": {"id": pool["id"], "name": pool["name"], "position": m["position"],
                              "size": len(members)},
                     "taking_new_work": best is not None and best["id"] == m["id"],
-                    "left_pct": left, "state": state, "state_label": STATE_LABELS.get(state, state),
+                    "left_pct": left, "state": state, "state_label": ("Sign-in expired" if seat_login["state"] == "expired"
+                                    else STATE_LABELS.get(state, state)),
                     "resets_at": resets, "basis": "cli" if left is not None else "unknown",
                     "login": seat_login,
                     "at_limit": _at_limit(alts, others[0] if others else None, resets, label),
                     "builds_left": None,
                     "builds_basis": "per-account builds are not counted separately yet",
-                    "threshold": threshold_for(left),
+                    "windows": [], "jobs": _jobs(snap, engine),
+                    "freshness": {"as_of": None, "age_s": None, "age_label": None, "stale": False},
                 })
             continue
         h = state.headroom
@@ -222,27 +217,74 @@ def project_view(connection: Any, settings: Any, project_id: str, *,
         sources.append({
             "key": key, "engine": engine, "engine_label": label,
             "label": account_label(label, key), "pool": None, "taking_new_work": True,
-            "left_pct": left, "state": st, "state_label": STATE_LABELS.get(st, st),
+            "left_pct": left, "state": st, "state_label": ("Sign-in expired" if login["state"] == "expired"
+                            else STATE_LABELS.get(st, st)),
             "resets_at": resets, "basis": h.basis, "login": login,
             "at_limit": _at_limit(alts, None, resets, label),
-            "builds_left": n, "builds_basis": why, "threshold": threshold_for(left),
+            "builds_left": n, "builds_basis": why,
+            "windows": _windows_rows(h, snap.policy.thresholds), "jobs": _jobs(snap, engine),
+            "freshness": h.freshness(now),
         })
     order = {"exhausted": 0, "near_limit": 1, "tight": 2, "plenty": 3}
     worst = min(sources, key=lambda s: (order.get(s["state"], 4),
                                         s["left_pct"] if s["left_pct"] is not None else 101),
                 default=None)
     return {"project_id": project_id, "sources": sources, "worst": worst,
-            "thresholds": list(THRESHOLDS),
             "at": (now or datetime.now(timezone.utc)).isoformat()}
 
 
-# ── warnings ─────────────────────────────────────────────────────────────────────────────────
+# ── alerts ───────────────────────────────────────────────────────────────────────────────────
+
+#: The states that raise an alert, with the finding's severity.
+ALERT_SEVERITY = {"tight": "info", "near_limit": "warn", "exhausted": "critical"}
+KIND_PREFIX = "subscription_limit:"
+
+
+def _windows_rows(h: Any, thresholds: Any) -> list[dict[str, Any]]:
+    """The 5-hour and weekly windows, each with its own % left, state and reset — the numbers
+    the headroom strip is made of, one row per window the CLI or a limit message reported."""
+    from .model_router.headroom import (SESSION, STATE_LABELS, WEEKLY, EXHAUSTED, state_for)
+
+    names = {SESSION: "5-hour", WEEKLY: "Weekly", "seven_day_opus": "Weekly (Opus)",
+             "seven_day_sonnet": "Weekly (Sonnet)"}
+    rows = []
+    for kind in (SESSION, WEEKLY, "seven_day_opus", "seven_day_sonnet"):
+        w = (h.windows or {}).get(kind)
+        if w is None:
+            continue
+        left = None if w.spent else 1.0 - w.used
+        st = EXHAUSTED if w.spent else state_for(left, thresholds or {})
+        rows.append({"kind": kind, "label": names[kind], "left_pct": _pct(0.0 if w.spent else left),
+                     "state": st, "state_label": STATE_LABELS[st],
+                     "resets_at": _iso(w.resets_at),
+                     "observed_at": _iso(w.observed_at)})
+    return rows
+
+
+def _jobs(snap: Any, engine: str) -> list[str]:
+    """Which jobs route to this source: the ones pinned to it in Setup, and — under Smart
+    routing — the tiers whose targets name it."""
+    from .model_router.tiers import TIER_LABELS, TIERS
+
+    out = []
+    for job, (pinned, _model) in sorted((getattr(snap, "job_pins", None) or {}).items()):
+        if pinned == engine:
+            out.append(job.capitalize())
+    try:
+        if snap.policy.mode == "smart":
+            for tier in TIERS:
+                if any(t.engine == engine for t in snap.policy.targets(tier)):
+                    out.append(f"{TIER_LABELS[tier]} tier")
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
 
 def install_accounts(connection: Any, *, now: Optional[datetime] = None) -> list[dict[str, Any]]:
     """Every subscription account BOSS has seen a window for, install-wide (an account's week is
     the account's, not a project's), with its headroom — the router's own rows
     (subscription_accounts) and assessment, no provider call."""
-    from .model_router.headroom import assess
+    from .model_router.headroom import STATE_LABELS, assess
     from .model_router.selection import engine_label
 
     try:
@@ -251,46 +293,126 @@ def install_accounts(connection: Any, *, now: Optional[datetime] = None) -> list
                 "SELECT a.account_key, a.engine, a.windows, a.learned_weekly_allowance_usd, "
                 "m.label AS member_label FROM subscription_accounts a LEFT JOIN "
                 "subscription_pool_members m ON m.account_key = a.account_key")).mappings().all()
-    except Exception:  # noqa: BLE001 — an older schema: nothing to warn about
+    except Exception:  # noqa: BLE001 — an older schema: nothing to alert about
         return []
     out = []
     for r in rows:
         windows = r["windows"] if isinstance(r["windows"], dict) else json.loads(r["windows"] or "{}")
         h = assess(str(r["engine"]), {"windows": windows}, thresholds={}, now=now)
-        left = _pct(h.left)
         out.append({"account_key": str(r["account_key"]), "engine": str(r["engine"]),
                     "label": account_label(engine_label(str(r["engine"])), str(r["account_key"]),
                                            str(r["member_label"] or "")),
-                    "left_pct": left, "state": h.state, "resets_at": _iso(h.resets_at),
-                    "threshold": threshold_for(left)})
+                    "left_pct": _pct(h.left), "state": h.state,
+                    "state_label": STATE_LABELS.get(h.state, h.state),
+                    "resets_at": _iso(h.resets_at), "detail": h.detail})
     return out
 
 
-def warning_key(account: dict[str, Any]) -> Optional[str]:
-    """One key per account, threshold and reset window: a warning is said once for each."""
-    if account.get("threshold") is None:
-        return None
-    window = str(account.get("resets_at") or "")[:13] or "unknown"
-    return f"{account['account_key']}|{account['threshold']}|{window}"
+def _reset_words(resets: Optional[str]) -> str:
+    try:
+        return f" It resets {datetime.fromisoformat(str(resets)):%a %d %b %H:%M} UTC." if resets else ""
+    except ValueError:
+        return ""
 
 
-def warning_words(account: dict[str, Any]) -> tuple[str, str]:
-    """(title, detail) for one warning."""
-    left = account.get("left_pct")
-    resets = account.get("resets_at")
-    when = ""
-    if resets:
-        try:
-            at = datetime.fromisoformat(str(resets))
-            when = f" It resets {at:%a %d %b %H:%M} UTC."
-        except ValueError:
-            when = ""
-    title = f"{account['label']}: {left}% of this week's subscription left"
-    detail = (f"{account['label']} has {left}% of its weekly window left.{when} BOSS keeps "
-              "routing work by the project's rules: at the limit it moves work to the next "
-              "account or source, or pauses it until the reset. See Govern for each source.")
-    return title, detail
+def findings_for(accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """system_doctor findings for the accounts at Tight / Near limit / Limit reached: a banner
+    for the first two, and a card with the choices at the limit."""
+    out = []
+    for a in accounts:
+        severity = ALERT_SEVERITY.get(a.get("state") or "")
+        if severity is None:
+            continue
+        label, state = a["label"], a["state"]
+        when = _reset_words(a.get("resets_at"))
+        if state == "exhausted":
+            title = f"{label}: limit reached"
+            detail = (f"{label} has no subscription window left.{when} BOSS keeps work moving by "
+                      "the routing rules: it moves new work to the next account or another "
+                      "connected source when there is one, and otherwise pauses new work on it "
+                      "until the reset. Nothing running was stopped.")
+            options = [
+                {"key": "limit_see_govern", "label": "See subscriptions",
+                 "tip": "Opens Govern: every account, its windows and what BOSS does at the limit."},
+                {"key": "limit_open_setup", "label": "Choose another model",
+                 "tip": "Opens Setup, where each job picks its model."},
+                {"key": "keep_going", "label": "Remind me in an hour", "tip": "BOSS asks again."}]
+        else:
+            title = f"{label}: {a['state_label'].lower()}, {a.get('left_pct')}% of the week left"
+            detail = (f"{label} has {a.get('left_pct')}% of its weekly window left.{when} BOSS "
+                      "keeps routing by the project's rules and moves work away before it runs out.")
+            options = []
+        out.append({"kind": KIND_PREFIX + a["account_key"], "severity": severity, "title": title,
+                    "detail": detail, "options": options, "needs_choice": state == "exhausted",
+                    "evidence": {"account_key": a["account_key"], "engine": a["engine"],
+                                 "state": state, "left_pct": a.get("left_pct"),
+                                 "resets_at": a.get("resets_at")}, "auto": []})
+    return out
 
 
-__all__ = ["THRESHOLDS", "account_label", "install_accounts", "project_view", "threshold_for",
-           "warning_key", "warning_words"]
+def observe_hook(connection: Any, settings: Any, project_id: Optional[str], account_key: str,
+                 engine: str) -> None:
+    """Called when an account's state moved (a run's call reported a window, a limit, or a
+    success cleared one): the alert is raised or lifted at once and, when the state changed,
+    ONE event says so. Never raises."""
+    try:
+        with connection.begin_nested():
+            _raise(connection, settings, project_id, account_key, engine)
+    except Exception:  # noqa: BLE001 — bookkeeping never fails the call it observes
+        log.warning("subscription headroom alert failed (non-fatal)", exc_info=True)
+
+
+def _raise(connection: Any, settings: Any, project_id: Optional[str], account_key: str,
+           engine: str) -> None:
+    if True:
+        from .core import emit_event
+        from .system_doctor import raise_findings, resolve_finding
+
+        mine = [a for a in install_accounts(connection) if a["account_key"] == account_key]
+        if not mine:
+            return
+        kind = KIND_PREFIX + account_key
+        found = findings_for(mine)
+        if not found:
+            resolve_finding(connection, kind)
+            return
+        changed = raise_findings(connection, found)
+        if changed and project_id:
+            a = mine[0]
+            did = {}
+            try:
+                view = project_view(connection, settings, project_id)
+                did = next((s["at_limit"] for s in view["sources"] if s["key"] == account_key), {})
+            except Exception:  # noqa: BLE001 — the event still says the state
+                did = {}
+            emit_event(connection, project_id, "subscription.headroom_changed", "boss",
+                       "subscription_account", account_key,
+                       {"engine": engine, "label": a["label"], "state": a["state"],
+                        "state_label": a["state_label"], "left_pct": a["left_pct"],
+                        "resets_at": a["resets_at"], "boss_will": did.get("words"),
+                        "does": did.get("does")})
+
+
+def govern_payload(connection: Any, settings: Any, project_id: str, *,
+                   cacheable: bool = False) -> dict[str, Any]:
+    """Govern's Subscriptions: project_view plus the open alerts raised for these accounts.
+    `cacheable` drops what changes every second (`at`, the reading's age) so `/v1/govern`'s ETag
+    still matches while nothing real moved; the console computes ages from `as_of`."""
+    from . import system_doctor
+
+    view = project_view(connection, settings, project_id)
+    keys = {s["key"] for s in view["sources"]}
+    view["alerts"] = [f for f in system_doctor.open_findings(connection)
+                      if str(f["kind"]).startswith(KIND_PREFIX)
+                      and str(f["kind"])[len(KIND_PREFIX):] in keys]
+    if cacheable:
+        view.pop("at", None)
+        for src in view["sources"]:
+            src["freshness"] = {"as_of": src["freshness"]["as_of"], "stale": src["freshness"]["stale"]}
+        for alert in view["alerts"]:
+            for k in ("first_seen", "last_seen", "snoozed_until"):
+                alert.pop(k, None)
+    return view
+
+
+__all__ = ["govern_payload", "account_label", "findings_for", "install_accounts", "observe_hook", "project_view"]

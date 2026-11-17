@@ -71,6 +71,7 @@ OFFERED_OPTIONS = frozenset({
     "docker_memory_guide", "dismiss_today", "free_disk_now", "remind_at_90", "restart_step",
     "cancel_build", "wait_15", "hold_updates", "keep_updating", "build_one_at_a_time",
     "use_bigger_place", "acknowledge", "answer_escalation", "claude_sign_in",
+    "limit_see_govern", "limit_open_setup",
 })
 DESTRUCTIVE = frozenset({"pause_largest_build", "cancel_build", "restart_step",
                          "free_disk_now"})
@@ -110,6 +111,9 @@ class Signals:
     backup: dict[str, Any] = field(default_factory=dict)
     #: agent_health.failing_bots(): triggers whose runs failed three times in a row (AP-P3).
     failing_bots: list[dict[str, Any]] = field(default_factory=list)
+    #: subscription_headroom.install_accounts(): each subscription account's window state
+    #: (BOSSAPP-1342) — Tight / Near limit / Limit reached raise a finding.
+    subscription_accounts: list[dict[str, Any]] = field(default_factory=list)
 
 
 _VM_LAST: dict[str, Any] = {}
@@ -252,6 +256,12 @@ def collect(engine: Any) -> Signals:
                 sig.failing_bots = agent_health.failing_bots(c)
         except Exception:  # noqa: BLE001 — an install before AP-P3 has no triggers table
             sig.failing_bots = []
+        try:
+            from . import subscription_headroom
+
+            sig.subscription_accounts = subscription_headroom.install_accounts(c)
+        except Exception:  # noqa: BLE001 — no account table yet: nothing to alert about
+            sig.subscription_accounts = []
     from .resource_reaper import docker_available
 
     sig.docker = docker_available()
@@ -496,6 +506,13 @@ def diagnose(sig: Signals) -> list[dict[str, Any]]:
             "needs_choice": True, "auto": [],
         })
 
+    # A SUBSCRIPTION ACCOUNT IS RUNNING OUT (BOSSAPP-1342): a banner in Govern at Tight and Near
+    # limit, a card with the choices at the limit.
+    if sig.subscription_accounts:
+        from . import subscription_headroom
+
+        out.extend(subscription_headroom.findings_for(sig.subscription_accounts))
+
     # SCHEDULED SELF-BACKUPS (BOSSAPP-838): the last one failed, none is recent, or none was
     # ever taken. BOSS keeps trying on its own; this tells a person their safety net has a hole.
     backup = sig.backup or {}
@@ -589,27 +606,32 @@ def target_level(sig: Signals, previous: dict[str, Any], now: float) -> dict[str
 # persistence
 # ------------------------------------------------------------------------------------------ #
 
-def _upsert_findings(connection: Any, found: list[dict[str, Any]],
-                     now: datetime) -> dict[str, str]:
-    """Open/refresh one row per kind; start the clear clock on the ones not seen; resolve after
-    two clear minutes. Returns {kind: id} for what is open."""
-    kinds = {f["kind"] for f in found}
+def _write_findings(connection: Any, found: list[dict[str, Any]]
+                    ) -> tuple[dict[str, str], list[str]]:
+    """Open or refresh one row per finding. Returns ({kind: id}, kinds that are NEW or whose
+    state evidence changed) — the ones worth an event."""
     ids: dict[str, str] = {}
+    changed: list[str] = []
     for f in found:
         row = connection.execute(text(
-            "SELECT id, status, snoozed_until FROM system_findings WHERE kind = :k AND status "
-            "IN ('open', 'snoozed')"), {"k": f["kind"]}).mappings().first()
+            "SELECT id, status, snoozed_until, evidence FROM system_findings WHERE kind = :k "
+            "AND status IN ('open', 'snoozed')"), {"k": f["kind"]}).mappings().first()
         payload = {"t": f["title"][:300], "d": (f.get("detail") or "")[:1000],
                    "e": json.dumps(f.get("evidence") or {}, default=str),
                    "o": json.dumps(f.get("options") or []), "n": bool(f.get("needs_choice")),
                    "s": f.get("severity") or "warn"}
         if row is None:
+            changed.append(f["kind"])
             fid = f"sf_{uuid.uuid4().hex[:16]}"
             connection.execute(text(
                 "INSERT INTO system_findings (id, kind, severity, title, detail, evidence, "
                 "options, needs_choice) VALUES (:id, :k, :s, :t, :d, CAST(:e AS JSONB), "
                 "CAST(:o AS JSONB), :n)"), {"id": fid, "k": f["kind"], **payload})
         else:
+            before = row["evidence"] if isinstance(row["evidence"], dict) else json.loads(
+                row["evidence"] or "{}")
+            if (before or {}).get("state") != (f.get("evidence") or {}).get("state"):
+                changed.append(f["kind"])
             fid = str(row["id"])
             connection.execute(text(
                 "UPDATE system_findings SET severity = :s, title = :t, detail = :d, "
@@ -619,6 +641,27 @@ def _upsert_findings(connection: Any, found: list[dict[str, Any]],
                 "AND snoozed_until <= now() THEN 'open' ELSE status END WHERE id = :id"),
                 {"id": fid, **payload})
         ids[f["kind"]] = fid
+    return ids, changed
+
+
+def raise_findings(connection: Any, found: list[dict[str, Any]]) -> list[str]:
+    """Raise findings now, between ticks, without clearing any other (a run's call hit a
+    limit). Returns the kinds that are new or changed state."""
+    return _write_findings(connection, found)[1]
+
+
+def resolve_finding(connection: Any, kind: str) -> None:
+    connection.execute(text(
+        "UPDATE system_findings SET status = 'resolved', resolved_at = now() WHERE kind = :k "
+        "AND status IN ('open', 'snoozed')"), {"k": kind})
+
+
+def _upsert_findings(connection: Any, found: list[dict[str, Any]],
+                     now: datetime) -> dict[str, str]:
+    """Open/refresh one row per kind; start the clear clock on the ones not seen; resolve after
+    two clear minutes. Returns {kind: id} for what is open."""
+    kinds = {f["kind"] for f in found}
+    ids, _ = _write_findings(connection, found)
     for row in connection.execute(text(
             "SELECT id, kind, clear_since FROM system_findings WHERE status IN "
             "('open', 'snoozed')")).mappings():
@@ -1273,6 +1316,8 @@ _CHOICES: dict[str, Callable[..., dict[str, Any]]] = {
     "docker_memory_guide": _guide(DOCKER_MEMORY_GUIDE, "Opened the Docker Desktop guide."),
     "use_bigger_place": _guide("?area=places", "Opened Places."),
     "claude_sign_in": _guide("?area=setup", "Opened Setup: press Sign in on Claude Code."),
+    "limit_see_govern": _guide("?area=budget&tab=subscriptions", "Opened Govern › Subscriptions."),
+    "limit_open_setup": _guide("?area=setup", "Opened Setup: pick the model each job uses."),
     "free_disk_now": _free_disk,
     "restart_step": _restart_step,
     "cancel_build": _cancel_build,

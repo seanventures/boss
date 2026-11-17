@@ -312,7 +312,20 @@ def build(connection: Connection, settings: Any, project_id: str, *,
         # BOSSAPP-869: spend BOSS cannot price (unpriced_policy), as reserve() reads it.
         "unpriced": unpriced_view(connection, settings, project_id),
         "versions": {"budget": budget_version},
+        # BOSSAPP-1342: each connected plan's windows and alerts (never breaks the board).
+        "subscriptions": _subscriptions(connection, settings, project_id),
     }
+
+
+def _subscriptions(connection: Connection, settings: Any, project_id: str) -> dict[str, Any]:
+    from . import subscription_headroom
+
+    try:
+        with connection.begin_nested():
+            return subscription_headroom.govern_payload(connection, settings, project_id,
+                                                        cacheable=True)
+    except Exception:  # noqa: BLE001 — the limits board still renders
+        return {"project_id": project_id, "sources": [], "alerts": []}
 
 
 def ledger_for(connection: Connection, project_id: str, status: dict[str, Any]) -> dict[str, int]:
