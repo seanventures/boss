@@ -602,3 +602,59 @@ def test_a_run_is_found_through_its_origin_workflow_run_too(pipeline):
             "SELECT id FROM code_task_runs WHERE finalize_ctx->'origin'->>'workflow_run_id' = :w"),
             {"w": "wfr_origin_qb"}).scalar()
         assert found == run_id
+
+
+# ── the start door: only a checked override reaches a run's input ────────────────────────────
+
+if os.environ.get("BOSS_TEST_DATABASE_URL"):
+    from .test_a_caller_cannot_claim_work_happened import (  # noqa: F401
+        _stored_input, _version, eng, project)
+
+
+@pytestmark_db
+def test_start_run_drops_a_callers_bar_and_writes_only_the_checked_override(eng, project):
+    import uuid
+
+    from boss_engine.services import workflows
+
+    def start(**kw):
+        with eng.begin() as c:
+            _, version = _version(c, project)
+            run = workflows.start_run(
+                c, project_id=project, actor="test", dedupe_key=f"dk_{uuid.uuid4().hex[:8]}",
+                workflow_version_id=version["id"], **kw)
+            return _stored_input(c, run["id"])
+
+    # an agent's start_workflow inputs: dropped, including a forged stamp
+    forged = start(input_data={"directive": "x", "quality_bar": "prototype",
+                               "quality_bar_gates": {"nothing_broke": "follow_up"},
+                               "_quality_bar_by": "usr_forged"})
+    assert not {"quality_bar", "quality_bar_gates", "_quality_bar_by"} & set(forged)
+    # the start door's checked override: written under the server's keys
+    ok = start(input_data={"directive": "x"},
+               quality_bar_override={"bar": "prototype", "by": "usr_ana",
+                                     "gates": {"nothing_broke": "follow_up"}})
+    assert ok["quality_bar"] == "prototype" and ok["_quality_bar_by"] == "usr_ana"
+    assert ok["quality_bar_gates"] == {"nothing_broke": "follow_up"}
+    # without a person behind it, nothing is written
+    assert "quality_bar" not in start(input_data={"directive": "x"},
+                                      quality_bar_override={"bar": "prototype"})
+    # and the build reads it: stamped input lowers, the project bar otherwise stands
+    assert qb.resolve(project_value=R, run_input=ok) == P
+    assert qb.resolve(project_value=R, run_input=forged) == R
+
+
+def test_the_start_door_checks_the_permission_before_passing_an_override():
+    src = (os.path.join(os.path.dirname(__file__), "..", "..", "apps", "api", "app", "main.py"))
+    text_ = open(src, encoding="utf-8").read()
+    i = text_.index("_quality_bar.check_override_permission(project_id, actor)")
+    assert "raise HTTPException(status_code=403" in text_[i:i + 300]
+    assert "quality_bar_override=bar_override" in text_
+
+
+def test_the_console_renders_a_follow_up_gate_as_its_own_pill():
+    root = os.path.join(os.path.dirname(__file__), "..", "..", "apps", "web")
+    out = open(os.path.join(root, "app", "factory", "outputs.tsx"), encoding="utf-8").read()
+    assert 'g.followup ? "follow-up"' in out and '>Follow-up</span>' in out
+    assert "followup?: boolean" in open(os.path.join(root, "lib", "cockpit.ts"),
+                                        encoding="utf-8").read()
