@@ -31,7 +31,11 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "label": "OpenRouter",
         "base_url": "https://openrouter.ai/api/v1",
         "api": "openai",
-        "example_model": "anthropic/claude-sonnet-4.5",
+        # NO PRE-FILLED MODEL (BOSSAPP-1340): the field is optional; empty means OpenRouter's own
+        # auto routing. Which model a job uses is chosen per job in Who does what.
+        "example_model": "",
+        "model_optional": True,
+        "default_model": "openrouter/auto",
         "key_url": "https://openrouter.ai/keys",
         "kind": "api_key",
     },
@@ -186,7 +190,7 @@ def model_key_details(*, provider: str, base_url: str = "", model: str = "") -> 
     url_base = (base_url or spec.get("base_url") or "").strip().rstrip("/")
     if not url_base:
         raise SetupError("a base URL is required for a custom provider.")
-    name = (model or spec.get("example_model") or "").strip()
+    name = (model or spec.get("example_model") or spec.get("default_model") or "").strip()
     if not name:
         raise SetupError("a model name is required.")
     suffix = "/messages" if spec.get("api") == "anthropic" else "/chat/completions"

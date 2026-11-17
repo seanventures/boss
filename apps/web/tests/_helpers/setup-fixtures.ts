@@ -32,7 +32,7 @@ const CATALOGUE: SetupView["catalogue"] = [
   { provider: "codex", label: "Codex", kind: "subscription", fields: [] },
   { provider: "grok", label: "Grok Build", kind: "subscription", fields: [] },
   { provider: "openrouter", label: "OpenRouter", kind: "api_key", fields: ["api_key", "model"],
-    key_url: "https://openrouter.ai/keys", example_model: "anthropic/claude-sonnet-4.5" },
+    key_url: "https://openrouter.ai/keys", example_model: "", model_optional: true, default_model: "openrouter/auto" },
   { provider: "openai", label: "OpenAI", kind: "api_key", fields: ["api_key", "model"],
     key_url: "https://platform.openai.com/api-keys", example_model: "gpt-4o" },
   { provider: "anthropic", label: "Anthropic", kind: "api_key", fields: ["api_key", "model"],
