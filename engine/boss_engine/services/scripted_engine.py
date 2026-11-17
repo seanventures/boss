@@ -37,6 +37,8 @@ turn, to exercise the fix rounds:
     blocker         the first review_code answers with a BLOCKER finding
     crash_on_start  the first implement writes a server that exits on start
     acceptance_missing  the first acceptance check answers item 1 MISSING
+    skip_items      a follow-up's first implementer reports only the first of its brief's items
+                    (brief_items.py); the send-back is what answers the rest
     crash           every session raises (an engine that cannot run at all)
     acceptance_budget_cap  an acceptance pass stops at its spend ceiling (stop_reason budget_cap,
                     a cost, only its first half of items answered, no summary line) — and again
@@ -189,6 +191,8 @@ class ScriptedEngine:
         app = self._app_root(prompt)
         turns: list[dict[str, Any]] = []
         summary, written = self._play(stage, prompt, root, app, read_only, state, turns)
+        if not read_only:
+            summary += self._items_report(prompt or "", summary, state)
         cost, stop = 0, "done"
         ceiling = _extra.get("max_budget_usd")
         if ("acceptance_budget_cap" in self.faults
@@ -442,6 +446,28 @@ class ScriptedEngine:
                 state.fired.add("failing_test")
                 return rel
         return None
+
+    def _items_report(self, prompt: str, summary: str, state: _RunState) -> str:
+        """The brief-items lines a follow-up's writing seats end with (brief_items.py): the test
+        writer's COVERAGE (the first item by a test it wrote, the rest not unit-testable) and the
+        implementer's ITEM report (every item FIXED). The `skip_items` fault makes the first
+        implementer report only the first item, once, so the send-back is what answers the rest."""
+        keys = re.findall(r"(?m)^\s+(?:\d+\.|-)\s+(F-\d+):", prompt)
+        if not keys:
+            return ""
+        keys = list(dict.fromkeys(keys))
+        if "COVERAGE <key>:" in prompt:
+            name = (re.findall(r"- [^:\n]+: (.+)", summary) or ["slug"])[0].strip()
+            return "\n" + "\n".join(
+                f"COVERAGE {k}: {name}" if i == 0
+                else f"COVERAGE {k}: not unit-testable \u2014 verified by acceptance/review"
+                for i, k in enumerate(keys))
+        if "ITEM <key>:" in prompt or "unaddressed" in prompt:
+            if "skip_items" in self.faults and "skip_items" not in state.fired:
+                state.fired.add("skip_items")
+                keys = keys[:1]
+            return "\n" + "\n".join(f"ITEM {k}: FIXED src/slug.js:1" for k in keys)
+        return ""
 
     @staticmethod
     def _test_plan(tests: dict[str, str]) -> str:

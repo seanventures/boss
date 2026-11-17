@@ -107,7 +107,8 @@ class Pipeline:
         return dict(line.split(" ", 1) for line in out.splitlines() if line.strip())
 
     # -- starting and running work -------------------------------------------------------------
-    def build(self, *, faults: str = "", tag: str = "build") -> tuple[str, str]:
+    def build(self, *, faults: str = "", tag: str = "build",
+              brief_extra: str = "") -> tuple[str, str]:
         """A small fresh build, started as the API starts one. Returns (run_id, repo)."""
         from boss_engine.services import code_task_service
 
@@ -120,7 +121,7 @@ class Pipeline:
                 instructions=("Build a tiny plain Node ESM service at the repository root: "
                               "slug(text) in src/slug.js and an HTTP server in src/server.js "
                               "answering GET /?q=<text> with {\"slug\": ...} on $PORT. Tests "
-                              "under node --test."),
+                              "under node --test.") + brief_extra,
                 acceptance_criteria=["slug lowercases and joins words with hyphens",
                                      "GET /?q= answers the slug as JSON"],
                 test_commands=["npm test"], owner=OWNER, repo=repo, base_branch="main",

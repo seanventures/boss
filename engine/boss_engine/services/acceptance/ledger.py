@@ -951,6 +951,53 @@ def hold(connection: Any, ids: Iterable[str], *, followup_run_id: str) -> int:
     return len(got)
 
 
+#: A check that did not judge: what it saw is no finding (BOSSAPP-1355).
+BLIND_VERDICTS = ("not_run", "no_items")
+#: The gate line a blind acceptance check wrote ("Must-haves: 0 met, 0 partial, 30 missing"): a
+#: reviewer that could not read the tree answers every item "missing".
+_BLIND_COUNTS = re.compile(r"(?i)\b0 met,\s*0 partial,\s*\d+ missing")
+
+
+def stale_rows(connection: Any, rows: Iterable[Mapping[str, Any]], *, project_id: str,
+               lineage: str) -> dict[str, str]:
+    """Which open rows a follow-up must NOT carry, and why (BOSSAPP-1355): {row id: reason}.
+      - a row only checks that did not run (`not_run`/`no_items`) ever observed: nothing judged it;
+      - the acceptance-met gate line of a blind check ("0 met, 0 partial, N missing"), or that
+        gate line once a later check of the lineage DID judge (its items are the `ac:` rows);
+      - a second row with the same fingerprint (the newest wins)."""
+    from sqlalchemy import text
+
+    rows = list(rows or [])
+    out: dict[str, str] = {}
+    if not rows:
+        return out
+    judged_later = connection.execute(text(
+        "SELECT 1 FROM acceptance_checks WHERE project_id = :p AND lineage_root_run_id = :r "
+        "AND verdict IN ('met', 'not_met') LIMIT 1"), {"p": project_id, "r": lineage}).first()
+    seen: dict[str, Mapping[str, Any]] = {}
+    for r in rows:
+        fp = str(r.get("fingerprint") or "")
+        if fp and fp in seen:
+            older = r if int(r.get("number") or 0) < int(seen[fp].get("number") or 0) else seen[fp]
+            out[older["id"]] = "duplicate fingerprint"
+        if fp:
+            if fp not in seen or int(r.get("number") or 0) > int(seen[fp].get("number") or 0):
+                seen[fp] = r
+        if fp == "gate:acceptance_met":
+            if _BLIND_COUNTS.search(str(r.get("body") or "")):
+                out[r["id"]] = "its check was blind (0 met, 0 partial)"
+            elif judged_later:
+                out[r["id"]] = "superseded by a later judged check"
+            continue
+        obs = connection.execute(text(
+            "SELECT o.check_id, c.verdict FROM finding_observations o "
+            "LEFT JOIN acceptance_checks c ON c.id = o.check_id WHERE o.finding_id = :f"),
+            {"f": r["id"]}).mappings().all()
+        if obs and all(o["check_id"] and o["verdict"] in BLIND_VERDICTS for o in obs):
+            out[r["id"]] = "its source check did not run"
+    return out
+
+
 def followup_line(row: Mapping[str, Any]) -> str:
     """One open row as the follow-up's finding line: its key, what it is, where, the proof
     that would close it."""
@@ -983,6 +1030,8 @@ def followup_spec(connection: Any, *, project_id: str, lineage: str,
     if only is not None:
         keep = set(only)
         rows = [r for r in rows if r["id"] in keep]
+    stale = stale_rows(connection, rows, project_id=project_id, lineage=lineage)
+    rows = [r for r in rows if r["id"] not in stale]
     contract = _contract.latest(connection, root_run_id=lineage, project_id=project_id)
     open_items = {r.get("contract_item_id"): r for r in open_for(
         connection, project_id=project_id, lineage=lineage)
@@ -1009,7 +1058,7 @@ def followup_spec(connection: Any, *, project_id: str, lineage: str,
 __all__ = [
     "KINDS", "LIVE", "LedgerDelta", "SEVERITIES", "by_key", "followup_line", "followup_spec",
     "gap_fingerprint", "get", "held_by_live_followup", "hold", "human_key", "lineage_of",
-    "mark_fixed", "merge_into", "observations", "observe_check", "observe_findings",
+    "mark_fixed", "merge_into", "stale_rows", "observations", "observe_check", "observe_findings",
     "observe_review", "open_for", "release_dead_holds", "review_fingerprint", "title_of",
     "transition", "upsert",
 ]

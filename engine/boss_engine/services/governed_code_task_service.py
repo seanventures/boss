@@ -35,6 +35,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Optional, Sequence
 
 from . import build_budget as _build_budget
+from . import brief_items as _brief_items
 from . import brief_tests as _brief_tests
 from .work_hold import PauseAtCheckpoint as _PauseAtCheckpoint
 from . import repair_findings
@@ -7601,6 +7602,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # author is told them, and the gate `brief_tests_written` holds the build to them.
         _named_tests = _brief_tests.named(
             instructions, (design or {}).get("spec"), (design or {}).get("plan"))
+        # THE ITEMS A FOLLOW-UP BRIEF LISTS (BOSSAPP-1355): every one is addressed, the frozen
+        # tests are only a floor. The test writer covers or excuses each; the implementer reports
+        # each; a skipped one sends it back once.
+        _items = [] if _recheck else _brief_items.parse(instructions)
+        _items_note = _brief_items.coverage_note(_items)
         if do_separate_tests:
             # STEP write tests (qa), tests only.
             _abort_if_cancelled("write_tests")
@@ -7619,7 +7625,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 prompt = _qa_prompt(
                     title, instructions, criteria, test_cmd,
                     iac=iac_task, web=_web_verify, app_root=_app_id, stack_note=_stack_note,
-                ) + _placed_tests_note(_placed_tpl_tests) + _brief_tests.brief_note(_named_tests)
+                ) + _placed_tests_note(_placed_tpl_tests) + _brief_tests.brief_note(_named_tests) \
+                    + _items_note
                 # AUGMENT, DON'T RE-AUTHOR. On a repair the prior attempt's tests are ALREADY in
                 # the working tree (the retry clones the lineage branch), and the review names the
                 # exact gap — e.g. "the defects are all in app.js, which no test covers". Sending
@@ -7661,7 +7668,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 "nothing.\n\n"
                                 f"TASK CONTEXT: {title}\n\nRun `{test_cmd}` and leave the "
                                 "whole suite green. Touch as few files as possible."
-                                + _brief_tests.brief_note(_named_tests))
+                                + _brief_tests.brief_note(_named_tests) + _items_note)
                         else:
                             prompt = (
                                 "This is a REPAIR iteration. A working test suite ALREADY "
@@ -7673,7 +7680,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 "natural home).\n\n"
                                 f"GAP TO CLOSE:\n{gap[:6000]}\n\n"
                                 f"TASK CONTEXT: {title}\n\nRun `{test_cmd}` and leave the "
-                                "whole suite green. Touch as few files as possible.")
+                                "whole suite green. Touch as few files as possible."
+                                + _items_note)
                 if escalate:
                     prompt = (
                         "Your previous attempt produced NO recognizable test files. Author "
@@ -7933,7 +7941,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 iac=iac_task, web=_web_verify, app_root=_app_id)) + _stack_note \
             + _placed_tests_note(_placed_tpl_tests) \
             + (_test_plan_note((locals().get("r1") or {}).get("summary", ""))
-               if do_separate_tests else "")
+               if do_separate_tests else "") \
+            + _brief_items.checklist_note(_items)
+        _items_sent_back = [False]   # the one send-back for items the report skipped
+        _sendback_text = [""]
         max_repair = 0 if _recheck else max(0, min(5, int(
             spec.get("repair_retries", settings.code_repair_max_retries) or 0)))
         repair_attempts = 0
@@ -8163,7 +8174,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            or _hist[-1].get("fix_note")
                            or "(see the iteration feedback in the task instructions)")
                 impl_prompt = _repair_prompt(base_impl_prompt, _ev, max(1, attempt))
-                _repair_evidence = _ev
+                _repair_evidence = _ev + _brief_items.checklist_note(_items)
             if use_microvm:
                 res2 = _guest_stage(
                     "implement", "implement" if do_separate_tests else "solo", impl_prompt,
@@ -8414,6 +8425,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                "code_task_run", run_id,
                                {"step": "implement", "recovered_by": "frontier_retry",
                                 "attempt": attempt})
+            _sendback_text[0] = ""
+            if (ok and _items and not _items_sent_back[0] and attempt <= max_repair
+                    and not _impl_over_budget()):
+                # DONE MEANS EVERY ITEM ADDRESSED (BOSSAPP-1355): passing the frozen tests is not
+                # it. An item the report skipped sends the implementer back once, named.
+                _skipped = _brief_items.unaddressed(_items, r2.get("summary"))
+                if _skipped:
+                    _items_sent_back[0] = True
+                    _sendback_text[0] = _brief_items.sendback_note(_skipped)
+                    ok = False
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.brief_items_sent_back", "boss",
+                                   "code_task_run", run_id,
+                                   {"attempt": attempt, "items": len(_items),
+                                    "unaddressed": [i.key for i in _skipped][:80]})
             if ok or attempt == max_repair + 1 or _warm_fix_ran[0]:
                 break
             _can_warm_fix = (not use_microvm and bool(impl_session_id)
@@ -8463,8 +8489,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             repair_attempts += 1
             # Evidence for the router: the next implement boundary may move up a tier
             # (Smart mode's escalation rules; Fixed mode ignores the ledger).
-            stage_router.signal("implement", "tests_failed")
-            if not impl_files:
+            if not _sendback_text[0]:
+                stage_router.signal("implement", "tests_failed")
+            if _sendback_text[0]:
+                evidence_text = _sendback_text[0]
+            elif not impl_files:
                 evidence_text = ("No implementation file was produced. You must create or modify "
                                  "implementation source file(s) (never the test files) so the "
                                  "frozen tests can pass.")
@@ -9454,6 +9483,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     emit_event(c, project_id, "code_task.brief_tests_missing", "boss",
                                "code_task_run", run_id,
                                {"named": _named_tests[:40], "missing": _brief_missing[:40]})
+        _items_uncovered: list[str] = []
+        _qa_said = str((locals().get("r1") or {}).get("summary") or "")
+        if _items and do_separate_tests and _qa_said.strip():
+            # EVERY BRIEF ITEM IS TESTED OR EXCUSED (BOSSAPP-1355): a test that exists, or the
+            # test writer's word that no unit test can judge it. Docs and config items pass on
+            # the second; a code item cannot be skipped.
+            _items_uncovered = [i.key for i in _brief_items.uncovered(
+                _items, _qa_said, _brief_tests.defined(root, _all_test_paths(root)))]
+            if _items_uncovered:
+                gates["brief_tests_written"] = False
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.brief_items_uncovered", "boss",
+                               "code_task_run", run_id,
+                               {"items": len(_items), "uncovered": _items_uncovered[:80]})
         # BOUND BEFORE THE BRANCH THAT FILLS IT.
         #
         # This was declared inside `if do_review:` and read at the bottom of the function
@@ -9704,7 +9747,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "sandbox_task_ids": guest_vm_ids,
             "test_author_independent": do_separate_tests,
             # The tests the brief names and the ones the suite lacks (BOSSAPP-1330).
-            "brief_tests": {"named": _named_tests[:40], "missing": _brief_missing[:40]},
+            "brief_tests": {"named": _named_tests[:40], "missing": _brief_missing[:40],
+                            "items": len(_items), "items_uncovered": _items_uncovered[:80]},
             # MEASURED, NOT ASSERTED (BOSSAPP-960): this flag used to be `do_review` — "a
             # review ran" — which read as independence on gates and dashboards while the
             # reviewer was the builder's own model. It now says what is true: a review ran AND
