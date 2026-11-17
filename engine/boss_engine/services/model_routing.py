@@ -408,6 +408,9 @@ def adapter_for(choice: ModelChoice, connection: Any, settings: Any,
         if model and engine in ("openrouter", "groq", "deepseek", "gemini", "xai", "vllm",
                                 "ollama"):
             lane = lane.model_copy(update={"openai_model": model})
+        elif engine == "openrouter":
+            # No model named: OpenRouter's own auto routing, never another lane's default.
+            lane = lane.model_copy(update={"openai_model": "openrouter/auto"})
         return OpenAIAdapter(lane, provider=engine)
     if model and engine == "native" and hasattr(bound, "model_copy"):
         bound = bound.model_copy(update={"openai_model": model})

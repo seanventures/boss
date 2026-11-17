@@ -49,7 +49,7 @@ CATALOGUE: tuple[dict[str, Any], ...] = (
      "command": "boss connect grok"},
     {"provider": "openrouter", "label": "OpenRouter", "kind": "api_key",
      "fields": ["api_key", "model"], "key_url": "https://openrouter.ai/keys",
-     "example_model": "anthropic/claude-sonnet-4.5",
+     "example_model": "", "model_optional": True, "default_model": "openrouter/auto",
      "billing_url": "https://openrouter.ai/settings/credits"},
     {"provider": "openai", "label": "OpenAI", "kind": "api_key", "fields": ["api_key", "model"],
      "key_url": "https://platform.openai.com/api-keys", "example_model": "gpt-4o",

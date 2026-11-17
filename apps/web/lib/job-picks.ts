@@ -65,3 +65,13 @@ export function pickFor(entry: MenuEntry, current: Pick | null): Pick | null {
   if (current && entry.picks.includes(current)) return current;
   return entry.picks.includes("sub") ? "sub" : entry.picks[0];
 }
+
+/** HOW A JOB IS PAID, for any engine (BOSSAPP-1349): the job's own pick when it carries one,
+ *  else what the server resolved (`metered` = an API key, billed per call). One word, so a
+ *  Codex or Grok job reads the same as a Claude Code one. */
+export function payWay(job: Pick_Job): Pick {
+  const pick = splitPick(job.resolved?.model ?? job.choice?.model).pick;
+  if (pick) return pick;
+  return job.metered ? "key" : "sub";
+}
+type Pick_Job = { resolved: Job["resolved"]; choice: Job["choice"]; metered: boolean };
