@@ -3669,6 +3669,51 @@ def advisory_followup_findings(failing, evidence: dict, deferred: list) -> list[
     return out
 
 
+def _tree_snapshot(root) -> Optional[str]:
+    """The working tree as a git tree object (a temporary index: the real index is untouched),
+    or None when it cannot be taken. Includes every non-ignored file, binaries too."""
+    import subprocess
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            env = {**os.environ, "GIT_INDEX_FILE": str(Path(d) / "index")}
+            for cmd in (["git", "add", "-A"], ["git", "write-tree"]):
+                done = subprocess.run(cmd, cwd=str(root), env=env, capture_output=True,
+                                      text=True, timeout=120)
+                if done.returncode != 0:
+                    return None
+            return done.stdout.strip() or None
+    except Exception:  # noqa: BLE001 — no snapshot: the caller does not rework
+        _log_caught(logger)
+        return None
+
+
+def _tree_restore(root, tree: str) -> bool:
+    """Put the working tree back EXACTLY as the snapshot: its files rewritten (a deleted or
+    edited one included), and every file the snapshot did not have removed."""
+    import subprocess
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            env = {**os.environ, "GIT_INDEX_FILE": str(Path(d) / "index")}
+            run = lambda cmd: subprocess.run(  # noqa: E731
+                cmd, cwd=str(root), env=env, capture_output=True, text=True, timeout=120)
+            if run(["git", "read-tree", tree]).returncode != 0:
+                return False
+            extra = run(["git", "ls-files", "-o", "--exclude-standard", "-z"])
+            for rel in filter(None, extra.stdout.split("\0")):
+                try:
+                    (Path(root) / rel).unlink()
+                except OSError:
+                    pass
+            return run(["git", "checkout-index", "-a", "-f"]).returncode == 0
+    except Exception:  # noqa: BLE001
+        _log_caught(logger)
+        return False
+
+
 def _ledger_followup(engine, *, project_id: str, parent_run_id: str, parent_root: str,
                      findings: list) -> Optional[dict]:
     """What a follow-up carries, from the findings ledger (acceptance/ledger.followup_spec):
@@ -8565,14 +8610,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _final_report = str(r2.get("summary") or "")
             _asm = _brief_items.assess(_items, _final_report, impl_files)
             _sent_back = _reworked = _reverted = False
-            if (_asm.send_back and tests_passed and impl_files and tests_untouched
-                    and not use_microvm and not _impl_over_budget(final=True)):
+            _snap_tree = (_tree_snapshot(root) if (
+                _asm.send_back and tests_passed and impl_files and tests_untouched
+                and not use_microvm and not _impl_over_budget(final=True)) else None)
+            if _snap_tree:      # no snapshot to come back to, no rework
                 _sent_back = True
-                _snap: dict = {}
-                for _fc in sandbox.diff():
-                    if not _is_test_path(_fc.path):
-                        _pf = root / _fc.path
-                        _snap[_fc.path] = _pf.read_bytes() if _pf.is_file() else None
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.brief_items_sent_back", "boss",
                                "code_task_run", run_id,
@@ -8607,23 +8649,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _log_caught(logger)
                     _reverted = True
                 if _reverted:
-                    for _fc in sandbox.diff():
-                        if not _is_test_path(_fc.path) and _fc.path not in _snap:
-                            try:
-                                (root / _fc.path).unlink()
-                            except OSError:
-                                pass
-                    for _p, _bytes in _snap.items():
-                        try:
-                            if _bytes is None:
-                                (root / _p).unlink(missing_ok=True)
-                            else:
-                                (root / _p).write_bytes(_bytes)
-                        except OSError:
-                            pass
-                    if do_separate_tests:
-                        for _p, _c in tests_orig.items():
-                            _ws_write(root / _p, _c)
+                    if not _tree_restore(root, _snap_tree):
+                        logger.warning("brief items: the tree could not be restored for %s",
+                                       run_id)
                     _tr = _run_verify()     # the evidence is the passing tree's again
                     tests_passed, test_exit_code = bool(_tr.ok), _tr.exit_code
                 if _reverted:

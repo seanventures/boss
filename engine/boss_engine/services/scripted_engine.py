@@ -474,6 +474,10 @@ class ScriptedEngine:
             if "break_on_rework" in self.faults and "unaddressed" in prompt:
                 for hit in root.rglob("slug.js"):    # the send-back's rework breaks the tests
                     self._write(root, str(hit.relative_to(root)), _BROKEN_SLUG, turns, [])
+                # ...and damages base files the builder never touched: one edited, one deleted
+                if (root / "README.md").exists():
+                    self._write(root, "README.md", "REWORKED\n", turns, [])
+                (root / "NOTES.md").unlink(missing_ok=True)
             lines = []
             for k in keys:
                 rel = paths[k]

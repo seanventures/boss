@@ -108,13 +108,13 @@ class Pipeline:
 
     # -- starting and running work -------------------------------------------------------------
     def build(self, *, faults: str = "", tag: str = "build",
-              brief_extra: str = "") -> tuple[str, str]:
+              brief_extra: str = "", seed: Optional[dict] = None) -> tuple[str, str]:
         """A small fresh build, started as the API starts one. Returns (run_id, repo)."""
         from boss_engine.services import code_task_service
 
         self._engine_env(faults)
         repo = f"pipe-{tag}-{uuid.uuid4().hex[:6]}"
-        self.repos[repo] = self.hub.seed(OWNER, repo, {"README.md": f"# {repo}\n"})
+        self.repos[repo] = self.hub.seed(OWNER, repo, {"README.md": f"# {repo}\n", **(seed or {})})
         with self.engine.begin() as c:
             run_id = code_task_service.start_code_task(
                 c, project_id=self.project, task_id=None, title=f"Slug service ({tag})",

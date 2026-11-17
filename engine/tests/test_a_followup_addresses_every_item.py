@@ -225,7 +225,7 @@ def test_an_implementer_that_fixes_only_the_tested_item_is_sent_back_with_the_re
 def test_a_rework_that_breaks_the_tests_is_reverted_and_the_items_are_recorded(
         pipeline):  # noqa: F811
     run_id, repo = pipeline.build(faults="skip_items,break_on_rework", tag="items-revert",
-                                  brief_extra=BRIEF)
+                                  brief_extra=BRIEF, seed={"NOTES.md": "base notes\n"})
     assert pipeline.run(run_id, repo) is None
     out = pipeline.result(run_id)
     assert out["run"]["status"] == "completed", (out["run"]["status"], out["run"].get("error"))
@@ -235,6 +235,23 @@ def test_a_rework_that_breaks_the_tests_is_reverted_and_the_items_are_recorded(
     # No repair slot was spent on the send-back.
     assert not _events(pipeline, run_id, "code_task.step_escalating")
     assert out["writes"], "the passing tree was kept"
+    # The reverted rework had edited README.md and deleted NOTES.md, base files the builder never
+    # touched: the branch that reached the remote holds both as they were, and the builder's work.
+    import subprocess
+
+    heads = pipeline.branch_heads(repo)
+    work = next(b for b in heads if b != "main")
+    git = ["git", "--git-dir", str(pipeline.repos[repo])]
+
+    def show(path):
+        done = subprocess.run(git + ["show", f"{work}:{path}"], capture_output=True, text=True)
+        return done.stdout if done.returncode == 0 else None
+
+    assert show("README.md") == f"# {repo}\n"
+    assert show("NOTES.md") == "base notes\n"
+    assert any("slug.js" in f for f in subprocess.run(
+        git + ["ls-tree", "-r", "--name-only", work], capture_output=True, text=True
+    ).stdout.splitlines()), "the builder's own work is intact"
 
 
 def test_an_implementer_that_addresses_every_item_is_not_sent_back(pipeline):  # noqa: F811
