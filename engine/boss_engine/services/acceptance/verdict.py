@@ -17,6 +17,7 @@ it every function behaves as the inner gate always did.
 from __future__ import annotations
 
 import os
+import json
 import re
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
@@ -593,48 +594,137 @@ def _reads_data(code: str) -> bool:
                for m in _STRING.finditer(code))
 
 
-#: A directory read, in the spellings of the common languages.
+#: A DIRECTORY READ, qualified: `os.ReadDir`, `filepath.Glob`, `os.listdir`, `fs.readdirSync`,
+#: `Files.list`, a pathlib `.iterdir()` / `.glob()`. A bare `list(` or `walk(` is any function.
 _DIR_READ = re.compile(
-    r"\b(?:ReadDir|Glob|WalkDir|Walk|walk|listdir|scandir|iterdir|glob|iglob|rglob|readdir|"
-    r"readdirSync|opendir|newDirectoryStream|list|walkSync|globSync)\s*\(")
+    r"(?:\b(?:os|filepath|ioutil|fs|fsp|path|glob|Files|Paths)\.(?:ReadDir|Glob|WalkDir|Walk|"
+    r"listdir|scandir|walk|iglob|glob|readdirSync|readdir|list|walk|sync)"
+    r"|(?<=\w)\.(?:iterdir|rglob|glob|listFiles)|\b(?:readdirSync|globSync|newDirectoryStream))"
+    r"\s*\(")
 #: A Python import of the reader's module.
 _PY_IMPORT = r"(?m)^\s*(?:from\s+[\w.]*\b{stem}\b|import\s+[\w.]*\b{stem}\b)"
-#: A file that runs code by command (not source): its lines hand files to a reader.
-_WIRING_FILE = re.compile(
-    r"(?i)(^|/)(makefile[^/]*|[^/]*\.mk|docker-compose[^/]*\.ya?ml|compose[^/]*\.ya?ml|"
-    r"dockerfile[^/]*|package\.json|justfile|taskfile\.ya?ml|[^/]*\.sh|"
-    r"\.github/workflows/[^/]+|\.gitlab-ci\.ya?ml|tox\.ini)$")
+#: Files whose COMMANDS hand files to a reader (docs are read separately, fenced blocks only).
+_COMMAND_FILE = re.compile(
+    r"(?i)(^|/)(makefile[^/]*|[^/]*\.mk|justfile|dockerfile[^/]*|package\.json|"
+    r"docker-compose[^/]*\.ya?ml|compose[^/]*\.ya?ml|taskfile\.ya?ml|\.gitlab-ci\.ya?ml|"
+    r"\.github/workflows/[^/]+\.ya?ml|[^/]*\.sh)$")
+_COMMAND_KEYS = frozenset({"command", "entrypoint", "run", "script", "scripts", "cmd", "args",
+                           "before_script", "after_script", "healthcheck", "test"})
+
+
+def _reader_token(tok: str, names: set[str], dirs: list[str]) -> bool:
+    """Whether a command word is the reader: a binary or package named like it, or a path into
+    its folder (`./cmd/gwlint`, `gwlint`, `python -m tools.lint`)."""
+    t = tok.lstrip("./")
+    return any(t == n or t.endswith("/" + n) or t.split(".")[-1] == n for n in names) or any(
+        t == d or t.startswith(d + "/") or t.endswith("/" + d) for d in dirs)
 
 
 def _foreign_root(scope: str, lit: str) -> bool:
     """Whether every line of `scope` that holds the folder string `lit` joins it onto a temp,
     cache or home root."""
-    lines = [ln for ln in scope.splitlines() if re.search(r"[\"'`]" + re.escape(lit) + r"/?[\"'`]", ln)]
+    lines = [ln for ln in scope.splitlines()
+             if re.search(r"[\"'`]" + re.escape(lit) + r"/?[\"'`]", ln)]
     return bool(lines) and all(re.search(r"(?i)temp|tmp|cache|home", ln) for ln in lines)
 
 
-def _logical_lines(text: str) -> list[str]:
-    """The text's lines with backslash continuations joined (a multi-line shell command)."""
-    return re.sub(r"\\\n\s*", " ", text).splitlines()
+def _doc_commands(text: str) -> list[str]:
+    """The command lines of a document: inside fenced code blocks, or after a `$ ` prompt.
+    Prose ("nothing reads config/legacy/old.yaml") is never a command."""
+    out, fenced = [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+            continue
+        s = line.strip()
+        if fenced and s and not s.startswith("#"):
+            out.append(s)
+        elif s.startswith("$ "):
+            out.append(s[2:])
+    return _join_continuations(out)
 
 
-def _hands_over(text: str, data_file: str) -> bool:
-    """Whether `text` names the data file as an argument: its path, a `/`-bounded tail, its bare
-    name, a glob matching it, or its folder. A path with a different folder does not."""
+def _join_continuations(lines: list[str]) -> list[str]:
+    out, cur = [], ""
+    for ln in lines:
+        if ln.endswith("\\"):
+            cur += ln[:-1] + " "
+        else:
+            out.append(cur + ln)
+            cur = ""
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _yaml_commands(text: str) -> list[str]:
+    """The command fields of a compose / CI file (`command:`, `run:`, `script:` ...)."""
+    try:
+        import yaml
+
+        doc = yaml.safe_load(text)
+    except Exception:  # noqa: BLE001 — unparseable: no commands read
+        return []
+    out: list[str] = []
+
+    def walk(node: Any, under: bool = False) -> None:
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, under or str(k) in _COMMAND_KEYS)
+        elif isinstance(node, list):
+            strs = [x for x in node if isinstance(x, str)]
+            if under and strs and len(strs) == len(node) and not any(" " in x for x in strs[:1]):
+                out.append(" ".join(strs))          # an exec-form argv
+            for x in node:
+                walk(x, under)
+        elif isinstance(node, str) and under:
+            out.extend(node.splitlines())
+
+    walk(doc)
+    return _join_continuations([ln.strip() for ln in out if ln.strip()])
+
+
+def _commands_of(rel: str, text: str) -> list[str]:
+    """Command lines of one wiring file."""
+    name = Path(rel).name.lower()
+    if name == "package.json":
+        try:
+            scripts = (json.loads(text) or {}).get("scripts") or {}
+        except ValueError:
+            return []
+        return [str(v) for v in scripts.values() if isinstance(v, str)]
+    if name.startswith("dockerfile"):
+        return [ln.split(None, 1)[1] for ln in _join_continuations(text.splitlines())
+                if re.match(r"(?i)\s*(RUN|CMD|ENTRYPOINT)\s", ln)]
+    if name.startswith(("makefile", "justfile")) or name.endswith(".mk"):
+        return _join_continuations([ln.strip() for ln in text.splitlines()
+                                    if ln.startswith(("\t", "    ")) and ln.strip()])
+    if name.endswith((".yml", ".yaml")):
+        return _yaml_commands(text)
+    if name.endswith(".sh"):
+        return _join_continuations([ln.strip() for ln in text.splitlines()
+                                    if ln.strip() and not ln.strip().startswith("#")])
+    return _doc_commands(text)
+
+
+def _names_file(lit: str, data_file: str, *, directory_ok: bool) -> bool:
+    """Whether ONE argument or string literal names the data file: its path or a `/`-bounded
+    tail of it, its real file name, a glob WITH a folder part that matches it, or (when the
+    reader takes directories) its folder. A bare `*`, a glob with no folder, or a stem is not."""
     import fnmatch
 
+    lit = _lit(lit.strip("\"'`"))
+    if not lit or lit == "*":
+        return False
     name, folder = Path(data_file).name, Path(data_file).parent.as_posix()
-    for tok in re.findall(r"[\w./*\-]+", text):
-        lit = _lit(tok)
-        if not lit:
-            continue
-        if "*" in lit:
-            if fnmatch.fnmatch(data_file, lit) or fnmatch.fnmatch(data_file, "*/" + lit):
-                return True
-        elif lit == name or _suffix_of(data_file, lit) or (
-                folder not in ("", ".") and (lit == folder or "/" in lit and folder.endswith("/" + lit))):
-            return True
-    return False
+    if "*" in lit:
+        return "/" in lit and (fnmatch.fnmatch(data_file, lit)
+                               or fnmatch.fnmatch(data_file, "*/" + lit))
+    if lit == name or (("/" in lit) and _suffix_of(data_file, lit)):
+        return True
+    return bool(directory_ok and folder not in ("", ".") and "/" in folder
+                and (lit == folder or lit == folder + "/"))
+
 
 
 class _Definitions:
@@ -755,6 +845,12 @@ class _Definitions:
         text += "".join(f'\n"{binds[n]}"' for n in read_args if n in binds)
         if (any(d != rel and _reads(text, d, rel) for d in data) if data
                 else _reads_data(text)):
+            return True
+        # A CLI-ONLY READER (BOSSAPP-1353, `lint.LoadDoc(path)`): the item names no file, and the
+        # function reads the PATH ITS CALLER GIVES IT (a read call on its own parameter) and some
+        # non-test code calls it — what it reads is whatever the command line passes.
+        if not data and set(read_args) & set(_params_of(bare, sym)) and any(
+                not _TEST_PATH.search(c) for c, _f, _a in self.call_sites(rel, sym)):
             return True
         here = Path(rel).parent.as_posix()
         for var, patterns in _embedded(code).items():
@@ -1122,17 +1218,18 @@ class _Definitions:
         """Whether one of `data` is reached by the reader `rel` through a path no source line
         names literally, in either of the two ways real programs do it:
 
-          (a) `rel` READS THE FILE'S DIRECTORY: a directory read (ReadDir, Glob, WalkDir,
-              listdir, scandir, iterdir, readdirSync, Files.list ...) in `rel`, on a folder it
-              names (the file's parent, a tail of it, or a glob into it) whose extension filter
-              admits the file: the gateway loading every file of `config/tenants`;
-          (b) THE FILE IS PASSED TO THE READER as an argument: a test, a Makefile/compose/CI/
-              shell line, a package.json script or a README command that names the file
-              together with the reader (its folder, its binary name or its file stem):
-              `gwlint validate examples/x.yaml`.
+          (a) `rel` READS THE FILE'S DIRECTORY: a qualified directory read (os.ReadDir,
+              filepath.Glob, os.listdir, readdirSync, Files.list ...) whose arguments (or a name
+              bound to them) name the file's folder, with the read's own extension filter
+              admitting the file: the gateway loading every file of `config/tenants`;
+          (b) THE FILE IS PASSED TO THE READER as an argument: a string literal of a test in
+              the reader's package (or of a test importing it), or an argument of a COMMAND — a
+              Makefile recipe, a compose/CI command field, a package.json script, a Dockerfile
+              RUN/CMD, a shell line, a fenced or `$ ` command of a README — that also names the
+              reader (its folder, its binary name or its file stem).
 
-        Never "mentioned anywhere": a file no reader's directory read covers and no command or
-        test hands to the reader is not wired."""
+        Never "mentioned anywhere": prose, comments and a bare `*` name nothing; a file no
+        reader's directory read covers and no command or test hands to the reader is not wired."""
         if _TEST_PATH.search(rel) or not _CODE_FILE.search(rel):
             return False
         return any(d != rel and (self._dir_read_covers(rel, d) or self._passed_to(rel, d))
@@ -1150,7 +1247,15 @@ class _Definitions:
             return False
         for m in _DIR_READ.finditer(code):
             scope = _scope_at(code, m.start())
-            lits = [_lit(x.group(2)) for x in _STRING.finditer(scope)]
+            args = _call_args(code, m.end() - 1) or []
+            arg_text = ",".join(args)
+            # The folder is named by the call's own arguments, or by a name they take that is
+            # assigned a string naming it (`dir := Join(root, "tenants")`, `_folder_read`).
+            texts = [arg_text]
+            for ident in re.findall(r"[A-Za-z_]\w*", _blank_strings(arg_text)):
+                for a in re.finditer(r"(?m)\b" + re.escape(ident) + r"\s*(?::=|=)\s*(.*)$", scope):
+                    texts.append(a.group(1))
+            lits = [_lit(x.group(2)) for t in texts for x in _STRING.finditer(t)]
             named = False
             for lit in lits:
                 if not lit:
@@ -1161,11 +1266,13 @@ class _Definitions:
                         named = True
                 elif lit == folder or lit.endswith("/" + folder):
                     named = True
-                elif folder.endswith("/" + lit) and not _foreign_root(scope, lit):
+                elif folder.endswith("/" + lit) and not _foreign_root(
+                        "\n".join(texts), lit):
                     # `Join(dir, "tenants")`: the base is the caller's config dir, unless it is
                     # a temp/cache/home root (a cache folder called tenants is not config/tenants).
                     named = True
-            if named and _pattern_admits(lits, name):
+            scope_lits = [_lit(x.group(2)) for x in _STRING.finditer(scope)]
+            if named and _pattern_admits(scope_lits, name):
                 return True
         return False
 
@@ -1191,35 +1298,45 @@ class _Definitions:
         dirs, names = self._readers(rel)
         stem = Path(rel).stem
         real_dirs = [d for d in dirs if d not in ("", ".")]
+        rcode, _ = self.of(rel)
+        reader_lits = [_lit(x.group(2)) for x in _STRING.finditer(rcode or "")]
+        dir_ok = _pattern_admits(reader_lits, Path(data_file).name)
         for other in self._wiring_files():
-            text = self._text(other)
-            if not text or other == rel:
+            if other == rel:
                 continue
             if _TEST_PATH.search(other) and _CODE_FILE.search(other):
-                imports_reader = any(re.search(r'"[^"\n]*' + re.escape(d) + r'"', text)
+                # A test: the STRING LITERALS of its code (comments are not code) name the file.
+                tcode, _ = self.of(other)
+                if not tcode:
+                    continue
+                imports_reader = any(re.search(r'"[^"\n]*' + re.escape(d) + r'"', tcode)
                                      for d in real_dirs)
                 if _ext(other) == "py":
                     imports_reader = imports_reader or bool(
-                        re.search(_PY_IMPORT.format(stem=re.escape(stem)), text))
-                if (Path(other).parent.as_posix() in dirs or imports_reader) \
-                        and _hands_over(text, data_file):
+                        re.search(_PY_IMPORT.format(stem=re.escape(stem)), tcode))
+                if (Path(other).parent.as_posix() in dirs or imports_reader) and any(
+                        _names_file(x.group(2), data_file, directory_ok=dir_ok)
+                        for x in _STRING.finditer(tcode)):
                     return True
                 continue
-            for line in _logical_lines(text):
-                if _hands_over(line, data_file) and (
-                        any(re.search(r"(?<![\w-])" + re.escape(n) + r"(?![\w-])", line)
-                            for n in names) or any(d in line for d in real_dirs)):
+            for cmd in _commands_of(other, self._text(other)):
+                toks = [t.strip("\"',;()") for t in re.split(r"\s+", cmd) if t]
+                naming = [t for t in toks if _names_file(t, data_file, directory_ok=dir_ok)]
+                if not naming:
+                    continue
+                rest = [t for t in toks if t not in naming]
+                if any(_reader_token(t, names, real_dirs) for t in rest):
                     return True
         return False
 
     def _wiring_files(self) -> list[str]:
-        """Tests and the files that run code: Makefiles, compose/CI files, Dockerfiles, shell
-        scripts, package.json, READMEs and other docs (a quick-start command)."""
+        """Tests, and the files that run code: Makefiles, compose/CI files, Dockerfiles, shell
+        scripts, package.json, READMEs and other docs (their fenced commands)."""
         if self._wiring is None:
             self._wiring = []
             for p in _walk(self.root):
                 rel = str(p.relative_to(self.root))
-                if (_WIRING_FILE.search(rel) or _DOC_PATH.search(rel)
+                if (_COMMAND_FILE.search(rel) or _DOC_PATH.search(rel)
                         or (_TEST_PATH.search(rel) and _CODE_FILE.search(p.name))):
                     self._wiring.append(rel)
                 if len(self._wiring) >= 1500:

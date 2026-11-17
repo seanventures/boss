@@ -285,7 +285,8 @@ def item_key(item: BriefItem) -> str:
 
 def declared_not_applicable(*texts: str) -> dict[str, str]:
     """{item key or id (upper-cased): reason} for every `ITEM <key>: NOT APPLICABLE — <reason>`
-    the planner wrote. A line with no reason is not a declaration: the plan still owes the item."""
+    the planner wrote in its PLAN (never its self-review). A line with no reason is not a
+    declaration: the plan still owes the item."""
     out: dict[str, str] = {}
     for text in texts:
         for m in _NOT_APPLICABLE.finditer(str(text or "")):
@@ -321,7 +322,7 @@ def check(design: Mapping[str, Any], *, instructions: str, criteria: Any = None,
     if not items:
         return Coverage(ok=True, items=0)
     anchored = [anchored_verdict(it, plan) for it in items]
-    declared = declared_not_applicable(plan, review)
+    declared = declared_not_applicable(plan)
     answers: dict[str, Any] = {}
     by = "deterministic"
     if decider is not None:
@@ -341,7 +342,9 @@ def check(design: Mapping[str, Any], *, instructions: str, criteria: Any = None,
         said = getattr(d, "answer", None)
         reason = str(getattr(d, "reason", "") or "")
         na = declared.get(item_key(it)) or declared.get(it.id.upper())
-        if na:
+        # A SECURITY finding or a BLOCKER is never waved off by the planner: it stays missing,
+        # and so goes to the human plan gate.
+        if na and not (it.security or it.severity in ("BLOCKER", "SECURITY")):
             # THE PLANNER SAID IT DOES NOT APPLY (BOSSAPP-1360): stale, a false positive, or
             # already done. Not sent back, not escalated: it goes on to review and acceptance
             # as an item to VERIFY (`not_applicable`), where a reader can refute the reason.
@@ -379,7 +382,7 @@ def replan_note(coverage: Coverage) -> str:
     return ("YOUR PLAN DOES NOT COVER EVERYTHING THE BRIEF REQUIRES. These items are missing "
             "from it:\n" + lines + "\n\nRewrite the PLAN so it covers every item above — "
             "security and blocker findings first, naming the files and functions you will "
-            "change — or, for an item you will not do (stale, a false positive, already done), "
+            "change — or, for an item you will not do (stale, a false positive, already done; never a security finding or a blocker), "
             "write one line in the PLAN: `ITEM <key>: NOT APPLICABLE — <reason>` (the key as the "
             "item names it, e.g. F-42 or AC-3). Review will verify each such reason. Do not drop "
             "anything the previous plan already covered.")

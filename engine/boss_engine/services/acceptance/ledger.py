@@ -674,7 +674,8 @@ def observe_review(connection: Any, *, project_id: str, lineage: str, run_id: Op
     delta = LedgerDelta()
     reported: set[str] = set()
     blind = set(blind_seats or ())
-    comments = review_tools.drop_tooling_failures(comments, {s: True for s in blind})
+    comments = review_tools.drop_blind(comments, {s: True for s in blind})
+    seats = [s for s in seats or [] if s not in blind]       # a blind seat re-reviewed nothing
     for c in comments or []:
         get_ = (c.get if isinstance(c, Mapping) else (lambda k, d=None, _c=c: getattr(_c, k, d)))
         body = str(get_("body") or get_("text") or "").strip()
@@ -726,7 +727,57 @@ def observe_review(connection: Any, *, project_id: str, lineage: str, run_id: Op
     delta.add(fixed_by_review(connection, project_id=project_id, lineage=lineage, run_id=run_id,
                               seats=seats, reviewed_paths=reviewed_paths, reported=reported,
                               check_id=check_id))
+    confirm_not_applicable(connection, project_id=project_id, lineage=lineage, run_id=run_id,
+                           comments=comments, seats=seats, check_id=check_id)
     return delta
+
+
+def declare_not_applicable(connection: Any, *, project_id: str, lineage: str,
+                           run_id: Optional[str], rows: Iterable[Mapping[str, Any]]) -> list[str]:
+    """The planner's `ITEM <key>: NOT APPLICABLE — <reason>` (plan_coverage) as PENDING CHECKS
+    (BOSSAPP-1360): one open row each, which a review seat must confirm — it closes when a seat
+    that reviewed does not refute the reason, and stays open (a finding) when it does."""
+    ids = []
+    for r in rows or []:
+        key = str(r.get("key") or r.get("id") or "")
+        if not key:
+            continue
+        row, _what = upsert(
+            connection, project_id=project_id, lineage=lineage, kind="review",
+            severity=_sev(str(r.get("severity") or "minor").lower()),
+            fingerprint=f"na:{key}", title=f"Planner says {key} is not applicable: verify"[:300],
+            body=f"The plan declares {key} NOT APPLICABLE: {r.get('why') or ''}. "
+                 f"Item: {r.get('item') or ''}", stage="plan_check", run_id=run_id)
+        ids.append(row["id"])
+    return ids
+
+
+def confirm_not_applicable(connection: Any, *, project_id: str, lineage: str,
+                           run_id: Optional[str], comments: Iterable[Any],
+                           seats: Iterable[str], check_id: Optional[str] = None) -> list[str]:
+    """Close the pending not-applicable checks a seat that REVIEWED did not refute; one a
+    finding of that seat names stays open (the reason does not hold). Returns the closed ids."""
+    from sqlalchemy import text
+
+    seats = [s for s in seats or [] if s]
+    if not seats:
+        return []
+    rows = connection.execute(text(
+        "SELECT id, fingerprint FROM findings WHERE project_id = :p AND lineage_root_run_id = :l "
+        "AND status IN ('open', 'in_progress') AND fingerprint LIKE 'na:%'"),
+        {"p": project_id, "l": lineage}).mappings().all()
+    bodies = [str((c.get("body") if isinstance(c, Mapping) else getattr(c, "body", "")) or "")
+              for c in comments or []]
+    closed = []
+    for r in rows:
+        key = r["fingerprint"][3:]
+        if any(re.search(r"(?<![\w-])" + re.escape(key) + r"(?![\w-])", b, re.I) for b in bodies):
+            continue
+        if mark_fixed(connection, r["id"], check_id=check_id, run_id=run_id, stage="re-review",
+                      evidence=[{"kind": "re-review", "ref": run_id, "seats": seats,
+                                 "confirmed": "not applicable"}]):
+            closed.append(r["id"])
+    return closed
 
 
 def fixed_by_review(connection: Any, *, project_id: str, lineage: str, run_id: Optional[str],
@@ -962,6 +1013,28 @@ def hold(connection: Any, ids: Iterable[str], *, followup_run_id: str) -> int:
 BLIND_VERDICTS = ("not_run", "no_items")
 
 
+def _raised_blind(connection: Any, finding_id: str) -> bool:
+    """Whether every sighting of the row came from a seat its run recorded as not having
+    reviewed (finalize_ctx.review_rounds[].seats[stage].hollow)."""
+    from sqlalchemy import text
+
+    obs = connection.execute(text(
+        "SELECT run_id, stage FROM finding_observations WHERE finding_id = :f "
+        "AND status_seen = 'open'"), {"f": finding_id}).mappings().all()
+    if not obs:
+        return False
+    for o in obs:
+        ctx = connection.execute(text(
+            "SELECT finalize_ctx FROM code_task_runs WHERE id = :r"),
+            {"r": o["run_id"]}).scalar() if o["run_id"] else None
+        rounds = (ctx or {}).get("review_rounds") if isinstance(ctx, dict) else None
+        if not any(isinstance((rd or {}).get("seats"), dict)
+                   and ((rd["seats"].get(o["stage"]) or {}).get("hollow"))
+                   for rd in rounds or [] if isinstance(rd, dict)):
+            return False
+    return True
+
+
 def stale_rows(connection: Any, rows: Iterable[Mapping[str, Any]], *, project_id: str,
                lineage: str) -> dict[str, str]:
     """Which open rows a follow-up must NOT carry, and why (BOSSAPP-1355): {row id: reason}.
@@ -981,8 +1054,11 @@ def stale_rows(connection: Any, rows: Iterable[Mapping[str, Any]], *, project_id
         fp = str(r.get("fingerprint") or "")
         # A finding about BOSS's own tooling failing (a blind seat's "every command failed",
         # `bwrap: ...`) is no finding about the app: never carried to a builder (BOSSAPP-1360).
-        if r.get("kind") != "acceptance_gap" and review_tools.is_tooling_failure(
-                f"{r.get('title') or ''} {r.get('body') or ''}", r.get("path")):
+        # Only a row a seat recorded hollow / not_run / tools_blocked raised, and never a
+        # security row: a seat that ran, or a security finding, is not judged by its prose.
+        if r.get("kind") not in ("acceptance_gap", "security") and review_tools.is_tooling_failure(
+                f"{r.get('title') or ''} {r.get('body') or ''}", r.get("path")) \
+                and _raised_blind(connection, r["id"]):
             out[r["id"]] = "describes BOSS's own tooling failure (a blind review seat)"
             continue
         if fp and fp in seen:

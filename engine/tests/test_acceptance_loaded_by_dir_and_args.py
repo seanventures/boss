@@ -147,3 +147,54 @@ def test_the_real_fixture_tenant_is_loaded_by_the_gateways_directory_read():
     fx = Path(__file__).parent / "fixtures" / "acceptance_ar29" / "tree"
     why = "config/tenants/lumen-pay.yaml; LOADED BY internal/config/loader.go:Load"
     assert _problem(fx, why, ITEM_T) is None
+
+
+# ── the replayed shape (a real gateway project: BOSSAPP-1353 review) ─────────────────────────
+
+FIXTURE = Path(__file__).parent / "fixtures" / "acceptance_loaded_by" / "tree"
+GW_LOAD = "LOADED BY internal/config/loader.go:Load"
+LINT_LOAD = "LOADED BY internal/lint/doc.go:LoadDoc"
+
+
+def _fx(why, item):
+    return v.wiring_problem(FIXTURE, why, item_text=item, needs_loader=True)
+
+
+def test_the_replayed_tree_passes_what_is_really_wired():
+    assert _fx(f"config/tenants/lumen-pay.yaml; {GW_LOAD}", ITEM_T) is None
+    assert _fx(f"examples/lumen-pay.bad.yaml; {LINT_LOAD}", ITEM_E) is None     # a test hands it
+    assert _fx(f"examples/lumen-pay.good.yaml; {LINT_LOAD}",
+               "An example `examples/lumen-pay.good.yaml`.") is None            # Makefile + README
+    # AC-22: an item naming no file; the CLI reader reads the path its caller gives it.
+    assert _fx(f"`cmd/gwlint/main.go` runs it; {LINT_LOAD}",
+               "**`gwlint` CLI**: `gwlint validate <file|dir>` prints a report.") is None
+
+
+def test_the_replayed_trees_unread_files_all_fail():
+    for f, ld in (("config/legacy/old.yaml", GW_LOAD),      # only README prose / a comment
+                  ("config/tenants/ghost.json", GW_LOAD),   # the loader's filter is .yaml
+                  ("data/unread.yaml", GW_LOAD), ("data/unread.yaml", LINT_LOAD),
+                  ("examples/unused.yaml", LINT_LOAD), ("config/legacy/old.yaml", LINT_LOAD)):
+        got = _fx(f"{f}; {ld}", f"`{f}` is loaded.")
+        assert got and "does not name" in got, (f, ld, got)
+
+
+def test_a_bare_glob_a_comment_and_a_folder_alone_wire_nothing(tmp_path):
+    files = {**BASE,
+             "Makefile": "lint:\n\tgo run ./cmd/gwlint validate *\n\tgo run ./cmd/gwlint *.yaml\n"
+                         "\tgo run ./cmd/gwlint examples\n",
+             "cmd/gwlint/gwlint_test.go": "package main\n// examples/lumen-pay.bad.yaml\n"
+                                          "func TestX() {}\n"}
+    root = _tree(tmp_path, files)
+    why = "examples/lumen-pay.bad.yaml; LOADED BY internal/lint/doc.go:LoadDoc"
+    got = _problem(root, why, ITEM_E)
+    assert got and "does not name" in got, got
+
+
+def test_a_bare_list_or_walk_call_is_not_a_directory_read(tmp_path):
+    loader = ("package config\n\nfunc Load(dir string) error {\n\tx := list(\"tenants\")\n"
+              "\twalk(\"tenants\")\n\treturn nil\n}\n")
+    root = _tree(tmp_path, {**BASE, "internal/config/loader.go": loader})
+    why = "config/tenants/lumen-pay.yaml; LOADED BY internal/config/loader.go:Load"
+    got = _problem(root, why, ITEM_T)
+    assert got and "does not name" in got, got

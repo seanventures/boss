@@ -2836,7 +2836,7 @@ def _record_review_comments(engine, run_id: str, project_id: str, evidence: dict
     # failing (F-42: "every command failed ... bwrap"), are neither comments nor ledger rows,
     # and never reach an app builder.
     _blind = tuple(k for k, v in (evidence.get("review_hollow") or {}).items() if v)
-    fresh = review_tools.drop_tooling_failures(fresh, {k: True for k in _blind})
+    fresh = review_tools.drop_blind(fresh, {k: True for k in _blind})
     # THE FINDINGS LEDGER (BOSSAPP-1216): every finding of every severity — advisory under the
     # fast lane or not — is a ledger row the moment the review produced it, whatever the gate
     # then decides to block on, defer or drop. A seat that reviewed this round's files and no
@@ -2846,9 +2846,9 @@ def _record_review_comments(engine, run_id: str, project_id: str, evidence: dict
     _seats = tuple(stage for stage, key in (("review_code", "review_summary"),
                                             ("security_check", "security_summary"),
                                             ("consistency_check", "consistency_summary"))
-                   if any(c.stage == stage for c in fresh) or re.search(
+                   if stage not in _blind and (any(c.stage == stage for c in fresh) or re.search(
                        r"(?im)^\W*VERDICT\s*:\W*(SURVIVED|CLEAN|CONSISTENT|PASS(ED)?)\b",
-                       str(evidence.get(key) or "")))
+                       str(evidence.get(key) or ""))))
     _paths = tuple(str(p) for k in ("impl_files", "test_files")
                    for p in (evidence.get(k) if isinstance(evidence.get(k), list) else []))
     if fresh or (_seats and _paths):
@@ -4668,6 +4668,26 @@ def _guest_engine_fields(
             "azure_key": key("azure_openai_key")}
 
 
+def _declare_not_applicable(engine, run_id: str, coverage) -> None:
+    """The planner's NOT APPLICABLE declarations as pending checks in the findings ledger: a
+    review seat confirms them (they close) or refutes them (they stay open). Bookkeeping."""
+    from .acceptance import ledger as _ledger
+
+    rows = [{**r, "key": next(iter(re.findall(r"(?<![\w-])[A-Z]{1,6}-\d+", r.get("item") or "")),
+                              r.get("id"))}
+            for r in (coverage or {}).get("skipped") or [] if r.get("not_applicable")]
+    if not rows:
+        return
+    try:
+        with _transaction(engine) as c:
+            lin = _ledger.lineage_of(c, run_id)
+            if lin:
+                _ledger.declare_not_applicable(c, project_id=lin.get("project_id") or "",
+                                               lineage=lin["lineage"], run_id=run_id, rows=rows)
+    except Exception:  # noqa: BLE001
+        _log_caught(logger)
+
+
 def _plan_covers_brief(engine, settings, project_id, run_id, design, *, title, instructions,
                        criteria, root, route, planner_note: str = "") -> tuple[dict, int]:
     """The design with its plan checked against its brief (plan_coverage.ensure_covers): a
@@ -4724,6 +4744,7 @@ def _plan_covers_brief(engine, settings, project_id, run_id, design, *, title, i
         out, _cov = _plan_coverage.ensure_covers(
             dict(design), instructions=instructions, criteria=criteria, decider=decider,
             replan=_replan, on_round=_record)
+        _declare_not_applicable(engine, run_id, out.get("coverage"))
         return out, spent[0]
     except Exception:  # noqa: BLE001 — never fail a build on its own bookkeeping
         _log_caught(logger)
@@ -7485,7 +7506,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         reason_code="not_a_code_task")
             # feed the refined spec + plan forward so write-tests/implement are spec-driven
             if design.get("source") == "approved_prd":
-                instructions = f"{instructions}{approved_prd_design.brief_addendum(instructions, design)}"
+                instructions = (f"{instructions}{approved_prd_design.brief_addendum(instructions, design)}"
+                                + _plan_coverage.verify_block(design.get("coverage")))
             else:
                 instructions = (f"{instructions}\n\nREFINED SPEC:\n{design.get('spec', '')}"
                                 f"\n\nTECHNICAL PLAN:\n{design.get('plan', '')}"
