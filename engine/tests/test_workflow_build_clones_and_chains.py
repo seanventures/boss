@@ -518,3 +518,69 @@ def test_a_finished_run_records_the_commit_it_shipped():
     source = inspect.getsource(governed._run_governed_code_task)
     assert "'final_head_sha'" in source and "_final_head = str(" in source
     assert source.index("'final_head_sha'") < source.index('"phase=\'done\', pull_request_url=:u')
+
+
+def test_an_earlier_approved_gate_never_pre_approves_a_build_with_failing_gates(
+        eng, project, gateway, dirs, built, monkeypatch):  # noqa: F811
+    from boss_engine.services import deploy_policy
+
+    settings = _fresh_settings()
+    _staging(eng, settings, project, dirs, gateway, approval_free=False)
+    from boss_engine.services.core import create_blocking_decision
+
+    with eng.begin() as c:
+        earlier = create_blocking_decision(c, project, None, "earlier gate", {}, {}, "test",
+                                           risk_tier=1, default_action="hold")
+    monkeypatch.setattr(deploy_policy, "_gate_approval", lambda c, p, d: {
+        "source": "gate", "decision_id": d, "approved_by": PERSON})
+
+    def deploy():
+        return config_deploy.deploy_files(
+            eng, settings, project_id=project, actor=PERSON, app_name="Northgate Gateway",
+            environment="staging", code_task_run_id=LINEAGE, source_paths=["tenants/lumen-pay.yaml"],
+            approval_decision_id=earlier)
+
+    with eng.begin() as c:        # control: with no ask the earlier gate would have counted
+        assert deploy_policy.pre_approval(c, project, "staging", gate_decision_id=earlier)["source"] == "gate"
+        c.execute(text("UPDATE code_task_runs SET finalize_ctx = finalize_ctx || "
+                       "'{\"failing_gates\": [\"security_clean\"]}'::jsonb WHERE id = :i"), {"i": LINEAGE})
+    asked = deploy()
+    assert asked["status"] == "planned" and asked["approval"] is None
+    assert "security_clean" in asked["source"]["needs_a_person"]
+    with eng.begin() as c:
+        question = c.execute(text("SELECT d.status FROM decisions d JOIN deployment_runs r ON r.decision_id = d.id "
+                                  "WHERE r.id = :i"), {"i": asked["deployment_run_id"]}).scalar_one()
+    assert question == "pending"          # a card is raised for a person, with the reasons
+
+
+def test_the_http_auth_flag_is_set_on_save_and_kept_when_the_value_is_saved_again(eng, project, monkeypatch):  # noqa: F811
+    from boss_engine.services import contract_tests as ct
+    from boss_engine.services import secrets_service
+
+    settings = Settings()
+
+    class Store:
+        def put(self, key, value):
+            pass
+
+    monkeypatch.setattr(secrets_service, "backend_for", lambda backend, s: Store())
+    name = f"gw_{uuid.uuid4().hex[:6]}"
+    try:
+        with eng.begin() as c:
+            first = secrets_service.put_secret(c, settings, project_id=project, name=name,
+                                               value="value-one-1234", backend="database")
+            ref = first["secret_ref_id"]
+            assert ct.http_auth_problem(c, ref, project)           # not marked: refused
+            secrets_service.put_secret(c, settings, project_id=project, name=name,
+                                       value="value-one-1234", backend="database", http_auth=True)
+            assert ct.http_auth_problem(c, ref, project) is None   # marked: usable as a header
+            # the rotated value is saved again WITHOUT the option: the flag stays
+            secrets_service.put_secret(c, settings, project_id=project, name=name,
+                                       value="rotated-value-5678", backend="database")
+            assert ct.http_auth_problem(c, ref, project) is None
+            secrets_service.put_secret(c, settings, project_id=project, name=name,
+                                       value="rotated-value-5678", backend="database", http_auth=False)
+            assert ct.http_auth_problem(c, ref, project)           # explicitly cleared
+    finally:
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM secret_refs WHERE project_id = :p"), {"p": project})

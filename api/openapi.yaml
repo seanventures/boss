@@ -59670,6 +59670,11 @@ components:
           - type: string
           - type: 'null'
           title: Scope Id
+        http_auth:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Http Auth
       additionalProperties: true
       type: object
       required:

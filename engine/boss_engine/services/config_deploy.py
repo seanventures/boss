@@ -904,6 +904,7 @@ def deploy_files(engine: Any, settings: Settings, *, project_id: str, actor: str
                 ask = staging_needs_a_person(source)
                 if ask:
                     person_required = True       # a person looks, with these reasons on the card
+                    approval_decision_id = None   # no earlier gate pre-approves it (as production)
                     source = {**source, "needs_a_person": ask}
                 built = files_from_build(c, settings, project_id, source, source_paths)
                 files = {**dict(files or {}), **built}
