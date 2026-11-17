@@ -17,7 +17,7 @@ import { GatedButton, useGate } from "../../components/gated";
 import { SectionLabel } from "../section-label";
 import {
   connectDocs, disconnectDocs, docsSummary, readDocsConnections, readDocsSpaces, saveDocsSpaces, siteHost,
-  syncDocsKnowledge, testDocs, type DocsConnection, type DocsRead, type DocsSpace,
+  readDocsSync, syncDocsKnowledge, syncLine, testDocs, type DocsConnection, type DocsRead, type DocsSpace,
 } from "../../lib/docs-connections";
 import { RowMenu } from "./parts";
 
@@ -91,10 +91,20 @@ export function ConfluenceRow({ projectId, onSummary }: { projectId: string; onS
   const sync = async () => {
     setSaid(null); setBusy("sync");
     const r = await syncDocsKnowledge(projectId);
+    if (!r.ok) { setBusy(""); setSaid({ text: r.error ?? "The sync did not start.", tone: "red" }); return; }
+    // ONE background job: poll its state until it is no longer running.
+    for (let i = 0; i < 400; i += 1) {
+      const j = await readDocsSync(projectId);
+      if (!j.ok) { setSaid({ text: j.error, tone: "red" }); break; }
+      const job = j.data;
+      if (job.status === "running") { setSaid({ text: `Syncing… ${syncLine(job)}`, tone: "green" }); await new Promise((res) => setTimeout(res, 1500)); continue; }
+      const rows = Object.values(job.spaces);
+      const sum = (k: "indexed" | "updated" | "unchanged") => rows.reduce((n, x) => n + x[k], 0);
+      setSaid(job.status === "done" ? { text: `Synced: ${sum("indexed")} new, ${sum("updated")} updated, ${sum("unchanged")} unchanged.`, tone: "green" }
+        : { text: `The sync ${job.status === "stalled" ? "stalled" : "failed"}${job.error ? `: ${job.error}` : ""}. Press Sync now to resume.`, tone: "red" });
+      break;
+    }
     setBusy("");
-    const rows = (r.body?.spaces as { indexed?: number; updated?: number; unchanged?: number }[] | undefined) ?? [];
-    const sum = (k: "indexed" | "updated" | "unchanged") => rows.reduce((n, x) => n + (x[k] ?? 0), 0);
-    setSaid(r.ok ? { text: `Synced: ${sum("indexed")} new, ${sum("updated")} updated, ${sum("unchanged")} unchanged.`, tone: "green" } : { text: r.error ?? "The sync failed.", tone: "red" });
     void load();
   };
 

@@ -51,9 +51,10 @@ def test_the_skills_offer_exactly_the_tools_and_only_the_write_is_a_write_bundle
 def test_publish_is_a_queued_proposal_and_the_reads_are_reads():
     reg = build_default_registry()
     for name in ("confluence_search", "confluence_read_page"):
-        assert reg.get(name).kind == "read" and reg.get(name).permission == "integration:read"
+        assert reg.get(name).kind == "read" and reg.get(name).permission == "docs:read"
     publish = reg.get("confluence_publish_page")
     assert publish.kind == "write" and publish.queues_for_review and publish.reversibility == "safe"
+    assert publish.permission == "docs:publish"
     assert publish.exposure and "agent_step" in publish.exposure.surfaces
 
 
@@ -71,3 +72,17 @@ def test_a_confluence_credential_only_reaches_atlassian():
     binding = env_refs.provider_binding("confluence")
     assert set(binding.hosts) == {"*.atlassian.net", "api.atlassian.com"}
     assert env_refs.OPERATOR_BASE_URLS["confluence"] == ("CONFLUENCE_BASE_URL",)
+
+
+def test_only_the_documentation_preset_may_publish_and_the_writers_hold_no_integration_read():
+    cat = yaml.safe_load((ROOT / "packages/identity/catalogue.yaml").read_text())
+    presets = {p["key"]: p for p in cat["passport_presets"]}
+    holders = {k for k, p in presets.items() if "docs:publish" in p["permissions"]}
+    assert holders == {"documentation"} and presets["documentation"]["agents"] == ["quill"]
+    assert "docs:read" in presets["documentation"]["permissions"]
+    assert "quill" not in presets["writer"]["agents"]
+    for key in ("writer", "documentation"):
+        assert "integration:read" not in presets[key]["permissions"]
+    for key in ("builder", "planner", "operator_agent"):
+        assert "docs:read" in presets[key]["permissions"]
+        assert "docs:publish" not in presets[key]["permissions"]

@@ -191,7 +191,7 @@ def jira_credential(db: Connection, app_settings: Any, project_id: str
         token = ticket_intake.stored_token(db, app_settings, row)
         if token and config.get("base_url") and config.get("email"):
             return {"base_url": str(config["base_url"]), "email": str(config["email"]),
-                    "token": token}
+                    "token": token, "home_project": str(row.get("project_id") or "")}
     return None
 
 
@@ -200,8 +200,8 @@ def jira_credential(db: Connection, app_settings: Any, project_id: str
 
 def prepare(db: Connection, app_settings: Any, *, project_id: str, base_url: str = "",
             auth_method: str = "basic", deployment: str = "cloud", email: str = "",
-            token: str = "", use_jira_credential: bool = False
-            ) -> tuple[dict[str, Any], str]:
+            token: str = "", use_jira_credential: bool = False,
+            may_use_jira: Optional[Any] = None) -> tuple[dict[str, Any], str]:
     """(configuration without the token, the token) from a connect request, validated."""
     deployment = (deployment or "cloud").strip().lower()
     if deployment not in DEPLOYMENTS:
@@ -223,8 +223,11 @@ def prepare(db: Connection, app_settings: Any, *, project_id: str, base_url: str
             raise DocsConnectionError(
                 "not_connected", "No Jira is connected to reuse. Connect Jira in Setup first, or "
                                  "enter the Confluence email and API token.", 424)
-        base_url = base_url or jira["base_url"]
-        email, token, auth_method = email or jira["email"], token or jira["token"], "basic"
+        # Using Jira's credential needs integration:manage where Jira lives, and the site is
+        # Jira's own: the token is never sent to a host the caller picked.
+        if may_use_jira is not None and jira["home_project"]:
+            may_use_jira(jira["home_project"])
+        base_url, email, token, auth_method = jira["base_url"], jira["email"], jira["token"], "basic"
         credential_from = "jira"
     try:
         site = validate_site(base_url, deployment)
@@ -341,9 +344,14 @@ def update_settings(db: Connection, row: dict[str, Any], *, actor: str,
     return dict(row, configuration={**row["configuration"], **patch})
 
 
-def disconnect(db: Connection, row: dict[str, Any], actor: str) -> None:
+def disconnect(db: Connection, row: dict[str, Any], actor: str, app_settings: Any = None) -> None:
     """Disconnect: the row stays (spaces and sync state are kept for a reconnect), with its token
-    reference removed. Knowledge already synced stays in the graph."""
+    reference removed AND the vault secret this connection stored revoked and deleted (a copy of
+    Jira's credential is its own entry; Jira's is never touched). Knowledge already synced stays."""
+    from .ticket_intake import _retire_secret_ref
+
+    _retire_secret_ref(db, app_settings, str(row["configuration"].get("secret_ref_id") or ""),
+                       actor=actor)
     db.execute(text(
         "UPDATE docs_connections SET status = 'disconnected', configuration = configuration "
         "- 'secret_ref_id' - 'last4' - 'fingerprint' - 'acts_as', last_test_ok = NULL, "
@@ -363,10 +371,6 @@ def client_for(db: Connection, app_settings: Any, project_id: str) -> tuple[dict
     if not is_connected(row):
         raise ConfluenceNotConnected(NOT_CONNECTED, provider=PROVIDER)
     assert row is not None
-    config = row["configuration"]
-    try:
-        client = ConfluenceClient(
-            config, lambda: stored_token(db, app_settings, row))
-    except ConfluenceError:
-        raise
-    return row, client
+    # The token is resolved HERE, once, so the caller can close its transaction before any HTTP.
+    token = stored_token(db, app_settings, row)
+    return row, ConfluenceClient(row["configuration"], lambda: token)

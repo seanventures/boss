@@ -98,6 +98,24 @@ export const saveDocsSpaces = (projectId: string, patch: { default_spaces?: stri
   obsWrite("/v1/docs-connections", { project_id: projectId, ...patch }, press("spaces", "Save"), "PATCH");
 export const disconnectDocs = (projectId: string): Promise<WriteResult> =>
   obsWrite(`/v1/docs-connections?project_id=${enc(projectId)}`, {}, press("off", "Disconnect"), "DELETE");
-/** Sync the chosen spaces into this project's knowledge now. */
+/** Start (or resume) the sync of the chosen spaces: ONE background job, answered at once (202). */
 export const syncDocsKnowledge = (projectId: string, full = false): Promise<WriteResult> =>
   obsWrite("/v1/docs-connections/sync", { project_id: projectId, full }, press("sync", "Sync"));
+
+export type SyncSpace = { status: string; seen: number; indexed: number; updated: number; unchanged: number; failed: number };
+export type SyncJob = { status: "running" | "done" | "failed" | "stalled" | "none"; error: string; spaces: Record<string, SyncSpace> };
+export const parseSyncJob = (v: unknown): SyncJob => {
+  const j = o(o(v).job), sp = o(j.spaces);
+  const n = (x: unknown) => (typeof x === "number" ? x : 0);
+  return {
+    status: (["running", "done", "failed", "stalled"].includes(s(j.status)) ? s(j.status) : "none") as SyncJob["status"], error: s(j.error),
+    spaces: Object.fromEntries(Object.entries(sp).map(([k, val]) => {
+      const x = o(val);
+      return [k, { status: s(x.status), seen: n(x.seen), indexed: n(x.indexed), updated: n(x.updated), unchanged: n(x.unchanged), failed: a(x.failed).length }];
+    })),
+  };
+};
+export const readDocsSync = (projectId: string) => docsRead(`/v1/docs-connections/sync?project_id=${enc(projectId)}`, parseSyncJob);
+/** "ENG 3/12 · OPS waiting": a running job's progress in a line. */
+export const syncLine = (j: SyncJob) =>
+  Object.entries(j.spaces).map(([k, v]) => (v.status === "done" ? `${k} done` : v.status === "running" ? `${k} ${v.indexed + v.updated + v.unchanged}/${v.seen}` : `${k} waiting`)).join(" · ");

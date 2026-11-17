@@ -34,7 +34,8 @@ function api(over: (url: string, method: string, body: Record<string, unknown>) 
     if (url.startsWith("/v1/docs-connections/spaces")) return json({ spaces: [{ id: "98", key: "ENG", name: "Engineering" }, { id: "99", key: "OPS", name: "Operations" }] });
     if (url.startsWith("/v1/docs-connections?project_id=") && method === "GET") return json({ connections: list });
     if (url === "/v1/docs-connections/test") return json({ connection: CONN, test: { ok: true, account: "BOSS Bot" } });
-    if (url === "/v1/docs-connections/sync") return json({ ok: true, spaces: [{ space: "ENG", indexed: 2, updated: 1, unchanged: 9 }] });
+    if (url === "/v1/docs-connections/sync") return json({ job: { status: "running", spaces: { ENG: { status: "waiting" } } } }, 202);
+    if (url.startsWith("/v1/docs-connections/sync?")) return json({ job: { status: "done", spaces: { ENG: { status: "done", seen: 12, indexed: 2, updated: 1, unchanged: 9, failed: [] } } } });
     if (method === "POST" && url === "/v1/docs-connections") return json({ connection: CONN, test: { ok: true, account: "BOSS Bot" } }, 201);
     return json({ connection: CONN });
   }));

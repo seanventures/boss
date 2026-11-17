@@ -130,14 +130,28 @@ def connect_docs_system(payload: DocsConnectBody) -> dict:
         existing = docs.get_row(connection, payload.project_id)
         if existing is not None and existing["home_project_id"] != payload.project_id:
             _also("integration:manage", existing["home_project_id"], "docs_connection")
+        base_url, email = payload.base_url, str(payload.fields.get("email") or "")
+        auth_method = payload.auth_method
         if not token and not payload.use_jira_credential and docs.is_connected(existing):
+            # A reconnect without a token keeps the stored one, for the SAME site and email only.
+            kept = existing["configuration"]
+            try:
+                same_site = not base_url or docs.validate_site(base_url) == kept.get("base_url")
+            except docs.ConfluenceError:
+                same_site = False
+            if not same_site or (email and email != kept.get("email")):
+                raise _refuse(docs.DocsConnectionError(
+                    "invalid_request", "Changing the site or the email needs the API token "
+                                       "entered again; the stored one is not sent to a new address."))
+            base_url, email = kept.get("base_url", ""), kept.get("email", "")
+            auth_method = kept.get("auth_method", "basic")
             token = docs.stored_token(connection, settings, existing)
         try:
             config, token = docs.prepare(
-                connection, settings, project_id=payload.project_id, base_url=payload.base_url,
-                auth_method=payload.auth_method, deployment=payload.deployment,
-                email=str(payload.fields.get("email") or ""), token=token,
-                use_jira_credential=payload.use_jira_credential)
+                connection, settings, project_id=payload.project_id, base_url=base_url,
+                auth_method=auth_method, deployment=payload.deployment, email=email, token=token,
+                use_jira_credential=payload.use_jira_credential,
+                may_use_jira=lambda home: _also("integration:manage", home, "docs_connection"))
         except docs.DocsConnectionError as error:
             raise _refuse(error) from None
     try:
@@ -208,7 +222,7 @@ def disconnect_docs_connection(project_id: str, actor: Optional[str] = None) -> 
     knowledge already synced stays."""
     with begin(get_engine()) as connection:
         row, who = _row_for_manage(connection, project_id, actor)
-        docs.disconnect(connection, row, who)
+        docs.disconnect(connection, row, who, _settings())
         fresh = docs.get_row(connection, project_id, include_disconnected=True)
         return {"connection": docs.public_view(connection, fresh, project_id, can_manage=True)}
 
@@ -218,28 +232,39 @@ def disconnect_docs_connection(project_id: str, actor: Optional[str] = None) -> 
 def docs_spaces(project_id: str, limit: int = Query(100, ge=1, le=500)) -> dict:
     """The spaces the connection's account can see (for the space picker)."""
     settings = _settings()
-    with begin(get_engine()) as connection:
-        _reader(connection, project_id)
-        try:
+    try:
+        with begin(get_engine()) as connection:
+            _reader(connection, project_id)
             _row, client = docs.client_for(connection, settings, project_id)
-            return {"spaces": client.list_spaces(limit)}
-        except Exception as error:  # noqa: BLE001 — typed refusal, never a trace
-            raise _refuse(error) from None
+        return {"spaces": client.list_spaces(limit)}          # HTTP with no transaction open
+    except HTTPException:
+        raise
+    except Exception as error:  # noqa: BLE001 — typed refusal, never a trace
+        raise _refuse(error) from None
 
 
-@router.post("/v1/docs-connections/sync")
+@router.post("/v1/docs-connections/sync", status_code=202)
 @permit(P.KNOWLEDGE_MANAGE, scope=Scope.project(body="project_id"))
 def sync_confluence_knowledge(payload: DocsSyncBody) -> dict:
-    """Index the chosen spaces' pages into this project's knowledge (changed pages only after the
-    first sync). Each page keeps its space, id, version and URL."""
+    """Start (or resume) the sync as ONE background job and answer at once with its state. Poll
+    ``GET /v1/docs-connections/sync``: status running|done|failed|stalled and per-space progress.
+    Only changed pages are re-read after the first sync; a failed or stalled job resumes."""
     from apps.api.app.main import require_project_write_actor
 
-    settings = _settings()
     with begin(get_engine()) as connection:
-        who = require_project_write_actor(connection, payload.project_id, payload.actor,
-                                          MANAGE)
-        try:
-            return confluence_knowledge.sync(connection, settings, project_id=payload.project_id,
-                                             spaces=payload.spaces, full=payload.full, actor=who)
-        except Exception as error:  # noqa: BLE001
-            raise _refuse(error) from None
+        who = require_project_write_actor(connection, payload.project_id, payload.actor, MANAGE)
+    try:
+        return {"job": confluence_knowledge.start(
+            get_engine(), _settings(), project_id=payload.project_id, spaces=payload.spaces,
+            full=payload.full, actor=who)}
+    except Exception as error:  # noqa: BLE001
+        raise _refuse(error) from None
+
+
+@router.get("/v1/docs-connections/sync")
+@permit(P.KNOWLEDGE_MANAGE, scope=Scope.project(query="project_id"))
+def sync_status(project_id: str) -> dict:
+    """The sync job's state (empty when none ran)."""
+    with begin(get_engine()) as connection:
+        _reader(connection, project_id)
+        return {"job": confluence_knowledge.status(connection, project_id)}

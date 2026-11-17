@@ -41,20 +41,33 @@ synced stays.
   per call); a page by id, by URL (`/pages/<id>/`, `viewpage.action?pageId=`) or title + space, as
   markdown with links kept, its version, labels and last-modified; attachments metadata; a space's
   page tree. A body is cut at `max_chars` (default 20 000, hard cap 60 000) and says `truncated`.
-* **Publish** never writes. `confluence_publish_page` parks the exact change as a diff-bound consent
-  and an "Approve a Confluence page" decision. Approving it does a *versioned* update: the consent
-  records the version the author read; a page that moved since, or a 409 from Confluence, refuses the
-  approval (`VersionConflict`) and nothing is overwritten. Creating a page takes a space and an
+* **Publish** never writes, and needs `docs:publish` (only the `documentation` preset, `quill`, holds
+  it; reads need `docs:read`, held by the roles that read tickets and by `quill`). `confluence_publish_page` parks the exact change as a diff-bound consent
+  and an "Approve a Confluence page" decision. Approving records the intent and COMMITS; the
+  write follows after the commit (never inside the decision's transaction) as a *versioned* update:
+  the consent records the version the author read, and a page that moved since, or a 409 from
+  Confluence, is not overwritten. The failure is recorded on the consent (rejected) and as
+  `docs.confluence_publish_failed`. A write that was claimed but never finished is re-claimed after
+  ten minutes, and each sync start catches up unfinished writes. Creating a page takes a space and an
   optional parent.
 * **Knowledge**: each page becomes a `spec` node `confluence:<site>:<page id>` with `space`,
-  `page_id`, `version`, `url`, `last_modified`, `labels`; its scrubbed text is captured. A sync asks
-  Confluence only for pages modified since the last sync and skips a page whose version is already
-  held.
+  `page_id`, `version`, `url`, `last_modified`, `labels`; its scrubbed text is captured. Sync is ONE
+  background job (`POST /v1/docs-connections/sync` answers 202; `GET` polls status and per-space
+  progress). Every database step is its own short transaction. A stalled or failed job resumes
+  (finished spaces are skipped); only pages modified since the last sync are asked for, and a page
+  whose version is already held is skipped. Synced text is returned from knowledge search marked
+  untrusted, like the live read.
 * **Egress**: every request goes through the ticket-connector HTTP helper, which sends only to the
   connection's own site host (https), after a host check; the site must be `*.atlassian.net` unless
   the operator allows another host (`BOSS_CREDENTIAL_HOSTS=confluence=<host>`). A `confluence`
   provider binding (`*.atlassian.net`, `api.atlassian.com`) keeps a host credential from going
   anywhere else.
+* **Redirects and plain http**: the shared HTTP path never follows a redirect to another host (or
+  from https), so a credential is never forwarded; a credentialed call over plain http is refused
+  off loopback. This covers Jira too.
+* **Jira credential reuse** needs `integration:manage` where Jira lives and always uses Jira's own
+  site; a reconnect without a token keeps the stored token only for the same site and email.
+  Disconnect revokes and deletes the vault entry this connection stored.
 * **Secrets**: the token is resolved only when a request is sent; it is never in settings, events,
   logs, errors or API answers.
 * **Page text is outside text**: results pass the tool-result screen and the low-trust ledger, so a

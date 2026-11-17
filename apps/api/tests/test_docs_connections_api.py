@@ -39,6 +39,14 @@ def fake(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _manual(monkeypatch):
+    from boss_engine.services import confluence_knowledge, confluence_publish
+
+    monkeypatch.setattr(confluence_knowledge, "DISPATCH", "manual")
+    monkeypatch.setattr(confluence_publish, "DISPATCH", "manual")
+
+
+@pytest.fixture(autouse=True)
 def _clean(engine):
     yield
     with engine.begin() as db:
@@ -106,6 +114,9 @@ def test_bad_requests_are_refused_in_words(world, client, fake):
 
 
 def test_the_connection_is_org_wide_test_settings_and_disconnect(world, client, fake, engine):
+    from boss_engine.config import get_settings
+    from boss_engine.services import confluence_knowledge
+
     with world.acting_as(world.ctx(world.owner)):
         assert client.get("/v1/docs-connections", params={"project_id": world.project_b}).json()["connections"] == []
         assert _connect(client, world.project_a).status_code == 201
@@ -121,10 +132,14 @@ def test_the_connection_is_org_wide_test_settings_and_disconnect(world, client, 
             "project_id": world.project_a, "default_spaces": ["ENG", "OPS"], "knowledge_spaces": ["ENG"]})
         assert changed.status_code == 200 and changed.json()["connection"]["knowledge_spaces"] == ["ENG"]
         assert client.patch("/v1/docs-connections", json={"project_id": world.project_a}).status_code == 422
-        synced = client.post("/v1/docs-connections/sync", json={"project_id": world.project_b,
-                                                                  "actor": "dc-owner"})
-        assert synced.status_code == 200, synced.text
-        assert synced.json()["spaces"][0]["indexed"] == 1
+        started = client.post("/v1/docs-connections/sync", json={"project_id": world.project_b,
+                                                                   "actor": "dc-owner"})
+        assert started.status_code == 202, started.text          # a job, not a long request
+        job = started.json()["job"]
+        assert job["status"] == "running" and job["spaces"] == {"ENG": {"status": "waiting"}}
+        confluence_knowledge.run(engine, get_settings(), world.project_b, job["id"])
+        polled = client.get("/v1/docs-connections/sync", params={"project_id": world.project_b}).json()["job"]
+        assert polled["status"] == "done" and polled["spaces"]["ENG"]["indexed"] == 1
         gone = client.delete("/v1/docs-connections", params={"project_id": world.project_a})
         assert gone.status_code == 200 and gone.json()["connection"]["status"] == "disconnected"
         again = client.post("/v1/docs-connections/test", json={"project_id": world.project_a})
@@ -134,6 +149,21 @@ def test_the_connection_is_org_wide_test_settings_and_disconnect(world, client, 
     with engine.begin() as db:
         cfg = db.execute(text("SELECT configuration FROM docs_connections")).scalar()
     assert "secret_ref_id" not in cfg and cfg["default_spaces"] == ["ENG", "OPS"]
+
+
+def test_a_reconnect_without_a_token_never_sends_the_stored_one_to_a_new_address(world, client, fake):
+    with world.acting_as(world.ctx(world.owner)):
+        assert _connect(client, world.project_a).status_code == 201
+        before = len(fake.requests)
+        same = client.post("/v1/docs-connections", json={"project_id": world.project_a})
+        assert same.status_code == 201, same.text            # same site and email: stored token kept
+        moved = client.post("/v1/docs-connections", json={
+            "project_id": world.project_a, "base_url": "https://other.atlassian.net/wiki"})
+        other_email = client.post("/v1/docs-connections", json={
+            "project_id": world.project_a, "fields": {"email": "someone@else.test"}})
+    for refused in (moved, other_email):
+        assert refused.status_code == 422 and "token entered again" in refused.json()["detail"]["message"]
+    assert all(r["host"] == "acme.atlassian.net" for r in fake.requests[before:])
 
 
 def test_who_may_do_what(world, client, fake):

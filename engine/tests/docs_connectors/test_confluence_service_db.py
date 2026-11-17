@@ -38,6 +38,22 @@ def fake(monkeypatch):
     return transport
 
 
+@pytest.fixture(autouse=True)
+def _manual(monkeypatch):
+    """Publish and sync run in the background in production; tests drive them themselves."""
+    monkeypatch.setattr(confluence_publish, "DISPATCH", "manual")
+    monkeypatch.setattr(confluence_knowledge, "DISPATCH", "manual")
+
+
+def _reconcile(eng, project):
+    return confluence_publish.reconcile_pending(eng, _settings(), project_id=project)
+
+
+def _sync(eng, project, **kw):
+    job = confluence_knowledge.start(eng, _settings(), project_id=project, actor="ceo", **kw)
+    return confluence_knowledge.run(eng, _settings(), project, job["id"])
+
+
 @pytest.fixture()
 def project(eng):
     return make_project(eng)
@@ -161,8 +177,11 @@ def test_the_jira_credential_can_be_reused_by_choice(eng, fake, project):
 def test_disconnect_removes_the_reference_and_agents_are_told_to_connect(eng, fake, project):
     row = _connect(eng, project)
     with eng.begin() as c:
-        docs.disconnect(c, row, "ceo")
+        ref = row["configuration"]["secret_ref_id"]
+        docs.disconnect(c, row, "ceo", _settings())
         after = docs.get_row(c, project, include_disconnected=True)
+        revoked = c.execute(text("SELECT status FROM secret_refs WHERE id = :i"), {"i": ref}).scalar()
+    assert revoked == "revoked"      # the vault entry this connection stored is gone
     assert after["status"] == "disconnected" and "secret_ref_id" not in after["configuration"]
     assert after["configuration"]["default_spaces"] == ["ENG"]      # kept for a reconnect
     fake.requests.clear()
@@ -195,7 +214,7 @@ def test_publish_is_a_proposal_nothing_is_written_until_approved(eng, fake, proj
 
     spec = build_default_registry().get("confluence_publish_page")
     assert spec.kind == "write" and spec.queues_for_review and spec.reversibility == "safe"
-    assert spec.permission == "integration:read"
+    assert spec.permission == "docs:publish"
     _connect(eng, project)
     got = _tool("confluence_publish_page")(
         Ctx(eng), project_id=project, actor="agent:docs_writer",
@@ -213,6 +232,13 @@ def test_publish_is_a_proposal_nothing_is_written_until_approved(eng, fake, proj
         args={"space": "ENG", "title": "Deploy Runbook", "body": "# Deploy Runbook\n\nNew steps.\n"})
     assert again["decision_id"] == got["decision_id"] and again.get("duplicate")
     decide(eng, got["decision_id"], "approve")
+    assert fake.pages_updated == []          # approving only records the intent and commits...
+    with eng.begin() as c:
+        assert c.execute(text("SELECT status FROM change_consents WHERE decision_id = :d"),
+                         {"d": got["decision_id"]}).scalar() == "approved"
+    done = _reconcile(eng, project)                   # ...the write follows, outside any transaction
+    assert done[0]["ok"] and done[0]["version"] == 5
+    assert _reconcile(eng, project) == []             # nothing left to do, and nothing done twice
     assert len(fake.pages_updated) == 1
     sent = fake.pages_updated[0]
     assert sent["version"]["number"] == 5 and "<p>New steps.</p>" in sent["body"]["value"]
@@ -224,21 +250,61 @@ def test_publish_is_a_proposal_nothing_is_written_until_approved(eng, fake, proj
     assert consent == "consumed" and event["version"] == 5 and event["op"] == "update"
 
 
-def test_a_page_that_moved_since_the_proposal_refuses_the_approval(eng, fake, project):
+def test_a_page_that_moved_since_the_proposal_is_not_overwritten(eng, fake, project):
     _connect(eng, project)
     got = _tool("confluence_publish_page")(
         Ctx(eng), project_id=project, actor="agent:docs_writer",
         args={"page_id": "101", "space": "ENG", "body": "mine"})
     assert got["status"] == "pending"
     fake.versions["101"] = 7                 # a person edited the page in Confluence meanwhile
-    with pytest.raises(InvalidDecisionTransitionError) as caught:
-        decide(eng, got["decision_id"], "approve")
-    assert "version 7" in str(caught.value) and "new proposal" in str(caught.value)
+    decide(eng, got["decision_id"], "approve")
+    done = _reconcile(eng, project)
+    assert done[0]["ok"] is False and "version 7" in done[0]["error"] and "new proposal" in done[0]["error"]
     assert fake.pages_updated == []
-    assert _decision(eng, got["decision_id"])["status"] == "pending"
     with eng.begin() as c:
         assert c.execute(text("SELECT status FROM change_consents WHERE decision_id = :d"),
-                         {"d": got["decision_id"]}).scalar() == "pending"
+                         {"d": got["decision_id"]}).scalar() == "rejected"
+        failed = c.execute(text("SELECT data FROM events WHERE project_id = :p AND "
+                                "event_type = 'docs.confluence_publish_failed'"), {"p": project}).scalar()
+    assert "version 7" in failed["error"]
+
+
+def test_the_write_is_not_made_inside_the_decisions_transaction(eng, fake, project, monkeypatch):
+    """The approval commits first; a failure to reach Confluence cannot roll the decision back."""
+    _connect(eng, project)
+    got = _tool("confluence_publish_page")(
+        Ctx(eng), project_id=project, actor="agent:docs_writer",
+        args={"page_id": "101", "space": "ENG", "body": "mine"})
+    fake.requests.clear()
+    decide(eng, got["decision_id"], "approve")
+    assert fake.requests == []               # no HTTP at all during the approval
+    assert _decision(eng, got["decision_id"])["status"] == "approved"
+
+
+def test_an_unfinished_claim_is_taken_over_after_it_goes_stale(eng, fake, project):
+    _connect(eng, project)
+    got = _tool("confluence_publish_page")(
+        Ctx(eng), project_id=project, actor="a", args={"page_id": "101", "space": "ENG", "body": "mine"})
+    decide(eng, got["decision_id"], "approve")
+    cid = got["consent_id"]
+    with eng.begin() as c:       # a worker claimed it and died
+        c.execute(text("UPDATE change_consents SET proposed = jsonb_set(proposed, '{_meta,claimed_at}', "
+                       "to_jsonb(now()::text)) WHERE id = :i"), {"i": cid})
+    assert _reconcile(eng, project) == []
+    with eng.begin() as c:
+        c.execute(text("UPDATE change_consents SET proposed = jsonb_set(proposed, '{_meta,claimed_at}', "
+                       "to_jsonb((now() - interval '1 hour')::text)) WHERE id = :i"), {"i": cid})
+    assert _reconcile(eng, project)[0]["ok"] is True
+
+
+def test_a_rename_shows_old_and_new_title_in_the_diff(eng, fake, project):
+    _connect(eng, project)
+    got = _tool("confluence_publish_page")(
+        Ctx(eng), project_id=project, actor="a",
+        args={"page_id": "101", "space": "ENG", "title": "Deploy Handbook", "body": "# Deploy Runbook\n\nx"})
+    with eng.begin() as c:
+        q = c.execute(text("SELECT question FROM decisions WHERE id = :i"), {"i": got["decision_id"]}).scalar()
+    assert "title: 'Deploy Runbook' -> 'Deploy Handbook'" in q
 
 
 def test_create_a_new_page_under_a_parent_on_approval(eng, fake, project):
@@ -248,6 +314,7 @@ def test_create_a_new_page_under_a_parent_on_approval(eng, fake, project):
         args={"space": "ENG", "title": "Brand New", "body": "Hello", "parent_id": "101"})
     assert got["operation"] == "create" and fake.pages_created == []
     decide(eng, got["decision_id"], "approve")
+    assert _reconcile(eng, project)[0]["ok"]
     assert fake.pages_created[0]["parentId"] == "101" and fake.pages_created[0]["title"] == "Brand New"
 
 
@@ -281,35 +348,106 @@ def test_sync_indexes_pages_with_provenance_and_resyncs_only_what_changed(eng, f
     _connect(eng, project)
     with eng.begin() as c:
         docs.update_settings(c, docs.get_row(c, project), actor="ceo", knowledge_spaces=["ENG"])
-    with eng.begin() as c:
-        first = confluence_knowledge.sync(c, _settings(), project_id=project, actor="ceo")
+    first = _sync(eng, project)
     # the fake's search returns pages 101, 102, 103; only 101 has a page body fixture
-    space = first["spaces"][0]
+    space = first["spaces"]["ENG"]
+    assert first["status"] == "done" and space["status"] == "done"
     assert space["indexed"] == 1 and len(space["failed"]) == 2 and space["seen"] == 3
     with eng.begin() as c:
         node = c.execute(text("SELECT name, attrs, source, trust_tier FROM kg_nodes WHERE "
                               "project_id = :p AND node_key = 'confluence:acme.atlassian.net:101'"),
                          {"p": project}).mappings().one()
-        capture = c.execute(text("SELECT source_kind, source_id FROM kg_captures WHERE "
-                                 "project_id = :p"), {"p": project}).mappings().all()
+        capture = c.execute(text("SELECT source_kind FROM kg_captures WHERE project_id = :p"),
+                            {"p": project}).mappings().all()
     attrs = node["attrs"]
     assert node["name"] == "Deploy Runbook" and node["source"] == "confluence"
     assert attrs["space"] == "ENG" and attrs["page_id"] == "101" and attrs["version"] == 4
     assert attrs["url"] == f"{SITE}/spaces/ENG/pages/101/Deploy+Runbook" and attrs["labels"] == ["runbook", "prod"]
     assert attrs["last_modified"] and [c["source_kind"] for c in capture] == ["confluence"]
-    with eng.begin() as c:
-        again = confluence_knowledge.sync(c, _settings(), project_id=project, actor="ceo")
-    assert again["spaces"][0]["unchanged"] == 1 and again["spaces"][0]["indexed"] == 0
+    again = _sync(eng, project, full=True)
+    assert again["spaces"]["ENG"]["unchanged"] == 1 and again["spaces"]["ENG"]["indexed"] == 0
     fake.versions["101"] = 5
+    third = _sync(eng, project, full=True)
     with eng.begin() as c:
-        third = confluence_knowledge.sync(c, _settings(), project_id=project, actor="ceo", full=True)
         v = c.execute(text("SELECT attrs->>'version' FROM kg_nodes WHERE project_id = :p AND "
                            "node_key = 'confluence:acme.atlassian.net:101'"), {"p": project}).scalar()
-    assert third["spaces"][0]["updated"] == 1 and v == "5"
+    assert third["spaces"]["ENG"]["updated"] == 1 and v == "5"
+
+
+def test_the_sync_is_one_job_with_progress_and_it_resumes(eng, fake, project):
+    _connect(eng, project)
+    with eng.begin() as c:
+        docs.update_settings(c, docs.get_row(c, project), actor="ceo", knowledge_spaces=["ENG", "OPS"])
+    job = confluence_knowledge.start(eng, _settings(), project_id=project, actor="ceo")
+    assert job["status"] == "running" and set(job["spaces"]) == {"ENG", "OPS"}
+    second = confluence_knowledge.start(eng, _settings(), project_id=project, actor="ceo")
+    assert second["already_running"] and second["id"] == job["id"]     # one job at a time
+    with eng.begin() as c:
+        assert confluence_knowledge.status(c, project)["status"] == "running"
+    # the worker died after ENG finished: heartbeat goes stale; the next start RESUMES
+    with eng.begin() as c:
+        cfg = docs.get_row(c, project)["configuration"]["sync_job"]
+        cfg["spaces"]["ENG"] = {"status": "done", "seen": 3, "indexed": 1, "updated": 0, "unchanged": 0, "failed": []}
+        cfg["heartbeat"] = "2020-01-01T00:00:00+00:00"
+        c.execute(text("UPDATE docs_connections SET configuration = configuration || "
+                       "jsonb_build_object('sync_job', CAST(:j AS JSONB))"), {"j": json.dumps(cfg)})
+        assert confluence_knowledge.status(c, project)["status"] == "stalled"
+    fake.requests.clear()
+    resumed = confluence_knowledge.start(eng, _settings(), project_id=project, actor="ceo")
+    assert resumed["resumed"] and resumed["spaces"]["ENG"]["status"] == "done" and resumed["id"] != job["id"]
+    done = confluence_knowledge.run(eng, _settings(), project, resumed["id"])
+    assert done["status"] == "done" and done["spaces"]["OPS"]["status"] == "done"
+    spaces_searched = {r["query"]["cql"] for r in fake.requests if "search" in r["path"]}
+    assert all('space in ("OPS")' in q for q in spaces_searched)       # ENG was not read again
 
 
 def test_sync_needs_spaces_picked_first(eng, fake, project):
     _connect(eng, project)
-    with eng.begin() as c, pytest.raises(docs.DocsConnectionError) as caught:
-        confluence_knowledge.sync(c, _settings(), project_id=project)
+    with pytest.raises(docs.DocsConnectionError) as caught:
+        confluence_knowledge.start(eng, _settings(), project_id=project)
     assert "Pick the Confluence spaces" in str(caught.value)
+
+
+def test_synced_text_stays_low_trust_when_read_back_from_knowledge(eng, fake, project):
+    _connect(eng, project)
+    with eng.begin() as c:
+        docs.update_settings(c, docs.get_row(c, project), actor="ceo", knowledge_spaces=["ENG"])
+    _sync(eng, project)
+    from boss_engine.tools.knowledge_tools import _search as kg_search
+
+    hit_result = kg_search(Ctx(eng), project_id=project, actor="a", args={"query": "rollback guide deploy runbook"})
+    hits = [h for h in hit_result.get("hits", []) if str(h.get("name")) == "Deploy Runbook"]
+    assert hits and hits[0]["untrusted"] is True and hits[0]["trust_origin"] == "document"
+    from boss_engine.services import low_trust
+
+    assert low_trust._marked(hit_result)
+
+
+def test_the_jira_credential_needs_manage_at_jiras_home_and_forces_jiras_site(eng, fake, project):
+    from boss_engine.services.secret_backends import default_secret_backend
+    from boss_engine.services.secrets_service import put_secret
+
+    with eng.begin() as c:
+        ref = put_secret(c, _settings(), project_id=project, name="ticket_jira_token", value=TOKEN,
+                         backend=default_secret_backend(_settings()), actor="ceo")["secret_ref_id"]
+        cfg = {"base_url": "https://acme.atlassian.net", "email": EMAIL, "ticket_system": True,
+               "secret_ref_id": ref, "project_key": "KAN"}
+        c.execute(text("INSERT INTO work_tracker_providers (id, project_id, provider_key, "
+                       "display_name, status, is_default, configuration, created_by) VALUES "
+                       "('trk_confl2', :p, 'jira', 'Jira', 'active', true, CAST(:c AS JSONB), 't')"),
+                  {"p": project, "c": json.dumps(cfg)})
+        asked = []
+
+        def deny(home):
+            asked.append(home)
+            raise PermissionError("no manage at the Jira home")
+
+        with pytest.raises(PermissionError):
+            docs.prepare(c, _settings(), project_id=project, base_url="https://evil.example",
+                         use_jira_credential=True, may_use_jira=deny)
+        assert asked == [project]
+        config, token = docs.prepare(c, _settings(), project_id=project, base_url="https://evil.atlassian.net",
+                                     email="someone@else.test", use_jira_credential=True,
+                                     may_use_jira=lambda home: None)
+        c.execute(text("DELETE FROM work_tracker_providers WHERE id = 'trk_confl2'"))
+    assert config["base_url"] == "https://acme.atlassian.net/wiki" and config["email"] == EMAIL

@@ -15,6 +15,9 @@ from .scrub import scrub
 from .store import PostgresKnowledgeStore
 
 LIVE_CONNECTORS = frozenset({"confluence", "jira", "slack"})
+#: Node sources whose text was written OUTSIDE BOSS: a search that returns one marks the hit
+#: untrusted (low-trust ledger), exactly as the live read of the same page is.
+OUTSIDE_SOURCES = frozenset({"confluence"})
 
 
 def ingest_adr_dir(

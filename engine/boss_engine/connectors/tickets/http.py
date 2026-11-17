@@ -52,6 +52,20 @@ class Response:
         return json.loads(text)
 
 
+class _SameHostRedirects(urllib.request.HTTPRedirectHandler):
+    """A redirect is followed only to the SAME host and scheme (https stays https). urllib's default
+    would resend the Authorization header to wherever a 302 points; here a cross-host (or
+    downgrading) hop is not followed at all, so the credential never leaves the host the
+    connection was checked against. The 3xx comes back to the caller as the response."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        old, new = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+        if (new.hostname or "").lower() != (old.hostname or "").lower() or \
+                new.scheme != old.scheme or new.port != old.port:
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _urllib_transport(method: str, url: str, headers: dict[str, str], data: Optional[bytes],
                       timeout: float, context: Optional[ssl.SSLContext]) -> Response:
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
@@ -59,7 +73,10 @@ def _urllib_transport(method: str, url: str, headers: dict[str, str], data: Opti
         kwargs: dict[str, Any] = {"timeout": timeout}
         if url.lower().startswith("https://"):
             kwargs["context"] = context or ssl.create_default_context()
-        with urllib.request.urlopen(request, **kwargs) as response:  # noqa: S310 — host checked
+        opener = urllib.request.build_opener(
+            _SameHostRedirects(),
+            *([urllib.request.HTTPSHandler(context=kwargs["context"])] if "context" in kwargs else []))
+        with opener.open(request, timeout=timeout) as response:  # noqa: S310 — host checked
             return Response(response.status, {k.lower(): v for k, v in response.headers.items()},
                             response.read())
     except urllib.error.HTTPError as error:
@@ -82,6 +99,15 @@ def _host_matches(host: str, pattern: str) -> bool:
 
 def _host_of(url: str) -> str:
     return (urllib.parse.urlsplit(url or "").hostname or "").lower().rstrip(".")
+
+
+def _loopback(host: str) -> bool:
+    if host in ("localhost",):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _link_local(host: str) -> bool:
@@ -115,6 +141,9 @@ def check_host(url: str, official: tuple[str, ...], configured: tuple[str, ...],
         raise HostNotAllowed(f"{provider}: not an http(s) URL", provider=provider)
     if host in _BLOCKED_HOSTS or _link_local(host):
         raise HostNotAllowed(f"{provider}: {host} is never a ticket system", provider=provider)
+    if scheme == "http" and not _loopback(host):
+        raise HostNotAllowed(f"{provider}: refusing a plain-http request to {host}; a credential "
+                             "is only sent over https.", provider=provider)
     if any(_host_matches(host, p) for p in configured):
         return
     if scheme == "https" and any(_host_matches(host, p) for p in official):
@@ -212,6 +241,11 @@ class TicketHttp:
                     provider=self.provider) from None
             status = response.status
             self._record(method, safe_path, status)
+            if 300 <= status < 400 and status not in ok_statuses and status != 304:
+                raise TicketSystemError(
+                    f"{self.provider}: {method} {safe_path} was redirected ({status}); BOSS does "
+                    "not follow a redirect with a credential attached.", status=status,
+                    provider=self.provider)
             if status < 400 or status in ok_statuses:
                 return response
             retryable = status == 429 or status >= 500

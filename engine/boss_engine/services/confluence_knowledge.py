@@ -9,11 +9,20 @@ Pages are scrubbed (services/knowledge/scrub) before they are stored, exactly li
 connector document, and written as ``spec`` nodes with trust tier ``observed`` (they are
 somebody's words, not governed facts). The first sync of a space reads everything (up to the page
 cap); later syncs ask Confluence only for pages modified since the last one.
+
+THE SYNC IS A BACKGROUND JOB, never a request: :func:`start` claims the one job of the org's
+connection (``configuration.sync_job``: status, a heartbeat, per-space progress) and runs it in a
+thread (:func:`run`) whose every database step is its own short transaction, with the Confluence
+HTTP calls made between them. A job whose heartbeat stopped (a restart) is taken over by the next
+``start``, which RESUMES: spaces already done are skipped, and pages already held at their
+version are skipped inside the rest.
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import threading
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -22,12 +31,19 @@ from sqlalchemy.engine import Connection
 
 from ..connectors.tickets.contract import TicketSystemError
 from . import docs_connections
+from .core import make_id
 from .knowledge.sources import accept_connector_document
 from .knowledge.store import PostgresKnowledgeStore
 
 SOURCE = "confluence"
 MAX_PAGES_PER_SPACE = 300
 NODE_BODY_CHARS = 4000
+
+
+logger = logging.getLogger(__name__)
+#: "thread": the job runs in a background thread. "manual": the caller runs :func:`run` (tests).
+DISPATCH = "thread"
+STALE = "5 minutes"
 
 
 def node_key(site: str, page_id: str) -> str:
@@ -49,20 +65,142 @@ def _held_version(db: Connection, project_id: str, key: str) -> Optional[int]:
         return None
 
 
-def sync_space(db: Connection, store: PostgresKnowledgeStore, client: Any, *, project_id: str,
-               space: str, since: Optional[str], limit: int = MAX_PAGES_PER_SPACE) -> dict[str, Any]:
+def _save(engine: Any, row_id: str, job: dict[str, Any]) -> None:
+    job["heartbeat"] = datetime.now(timezone.utc).isoformat()
+    with engine.begin() as db:
+        db.execute(text("UPDATE docs_connections SET configuration = configuration || "
+                        "jsonb_build_object('sync_job', CAST(:j AS JSONB)), updated_at = now() "
+                        "WHERE id = :i"), {"j": json.dumps(job), "i": row_id})
+
+
+def status(db: Connection, project_id: str) -> dict[str, Any]:
+    """The sync job of the org's connection as this project sees it (or {} when none ran)."""
+    row = docs_connections.get_row(db, project_id, include_disconnected=True)
+    job = dict((row or {}).get("configuration", {}).get("sync_job") or {})
+    if job.get("status") == "running":
+        beat = job.get("heartbeat")
+        stale = db.execute(text(f"SELECT CAST(:b AS timestamptz) < now() - interval '{STALE}'"),
+                           {"b": beat}).scalar() if beat else True
+        if stale:
+            job["status"] = "stalled"
+    return job
+
+
+def start(engine: Any, app_settings: Any, *, project_id: str, spaces: Optional[list[str]] = None,
+          full: bool = False, actor: str = "system") -> dict[str, Any]:
+    """Claim the connection's one sync job and start it. Returns the job (status ``running``);
+    when one is already running (heartbeat fresh) it is returned as it is, nothing new starts."""
+    with engine.begin() as db:
+        row, _client = docs_connections.client_for(db, app_settings, project_id)
+        chosen = docs_connections._spaces(spaces if spaces is not None  # noqa: SLF001
+                                          else row["configuration"].get("knowledge_spaces"))
+        if not chosen:
+            raise docs_connections.DocsConnectionError(
+                "invalid_request", "Pick the Confluence spaces to keep in knowledge first "
+                                  "(Setup › Connections › Confluence).")
+        previous = dict(row["configuration"].get("sync_job") or {})
+        resume = (not full and previous.get("status") in ("running", "failed")
+                  and sorted(previous.get("spaces") or {}) == sorted(chosen))
+        carried = {k: v for k, v in (previous.get("spaces") or {}).items()
+                   if resume and v.get("status") == "done"}
+        job = {"id": make_id("sjob"), "status": "running", "project_id": project_id,
+               "actor": actor, "full": full, "started_at": datetime.now(timezone.utc).isoformat(),
+               "heartbeat": datetime.now(timezone.utc).isoformat(), "resumed": bool(carried),
+               "spaces": {sp: carried.get(sp) or {"status": "waiting"} for sp in chosen}}
+        claimed = db.execute(text(
+            "UPDATE docs_connections SET configuration = configuration || "
+            "jsonb_build_object('sync_job', CAST(:j AS JSONB)), updated_at = now() WHERE id = :i "
+            "AND (configuration->'sync_job' IS NULL OR configuration->'sync_job'->>'status' <> "
+            "'running' OR (configuration->'sync_job'->>'heartbeat')::timestamptz < now() - "
+            f"interval '{STALE}') RETURNING id"), {"j": json.dumps(job), "i": row["id"]}).first()
+        if claimed is None:
+            return dict(row["configuration"].get("sync_job") or {}, already_running=True)
+        from .core import emit_event
+
+        emit_event(db, project_id, "knowledge.confluence_sync_started", actor, "docs_connection",
+             row["id"], {"job": job["id"], "spaces": chosen, "full": full})
+    if DISPATCH == "thread":
+        threading.Thread(target=_safe_run, args=(engine, app_settings, project_id, job["id"]),
+                         name="confluence-sync", daemon=True).start()
+    return job
+
+
+def _safe_run(engine: Any, app_settings: Any, project_id: str, job_id: str) -> None:
+    try:
+        # Catch-up: an approved Confluence page whose write never finished is finished first.
+        from . import confluence_publish
+
+        confluence_publish.reconcile_pending(engine, app_settings, project_id=project_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("confluence publish catch-up failed", exc_info=True)
+    try:
+        run(engine, app_settings, project_id, job_id)
+    except Exception:  # noqa: BLE001 — recorded on the job
+        logger.warning("confluence sync failed", exc_info=True)
+
+
+def run(engine: Any, app_settings: Any, project_id: str, job_id: str) -> dict[str, Any]:
+    """The job body. Every database step is its own short transaction; HTTP runs between them."""
+    with engine.begin() as db:
+        row, client = docs_connections.client_for(db, app_settings, project_id)
+    job = dict(row["configuration"].get("sync_job") or {})
+    if job.get("id") != job_id:
+        return job
+    store = PostgresKnowledgeStore()
+    state = dict(row["configuration"].get("sync_state") or {})
     site = _site(client.base)
-    summaries = client.changed_since(space, since, limit=limit)
-    done = {"space": space, "seen": len(summaries), "indexed": 0, "updated": 0, "unchanged": 0,
-            "failed": []}
-    for summary in summaries:
-        key = node_key(site, summary.id)
-        try:
-            page = client.get_page(summary.id, labels=True)
+    try:
+        for space, progress in job["spaces"].items():
+            if progress.get("status") == "done":
+                continue
+            started = datetime.now(timezone.utc)
+            since = None if job.get("full") else (state.get(space) or {}).get("synced_at")
+            progress.update(status="running", seen=0, indexed=0, updated=0, unchanged=0, failed=[])
+            _save(engine, row["id"], job)
+            summaries = client.changed_since(space, since, limit=MAX_PAGES_PER_SPACE)
+            progress["seen"] = len(summaries)
+            for n, summary in enumerate(summaries, 1):
+                _one_page(engine, store, client, project_id, site, space, summary, progress)
+                if n % 10 == 0:
+                    _save(engine, row["id"], job)
+            progress["status"] = "done"
+            if not progress["failed"]:
+                state[space] = {"synced_at": started.strftime("%Y-%m-%d %H:%M"),
+                                "pages": progress["seen"] + ((state.get(space) or {}).get("pages", 0)
+                                                             if since else 0)}
+            _save(engine, row["id"], job)
+        job["status"] = "done"
+    except Exception as error:  # noqa: BLE001 — a failed job keeps what it finished, for a resume
+        job["status"] = "failed"
+        job["error"] = str(error)[:300]
+    job["finished_at"] = datetime.now(timezone.utc).isoformat()
+    _save(engine, row["id"], job)
+    with engine.begin() as db:
+        db.execute(text("UPDATE docs_connections SET configuration = configuration || "
+                        "jsonb_build_object('sync_state', CAST(:s AS JSONB)) WHERE id = :i"),
+                   {"s": json.dumps(state), "i": row["id"]})
+        from .core import emit_event
+
+        spaces = job["spaces"].values()
+        emit_event(db, project_id, "knowledge.confluence_synced", job.get("actor") or "system",
+                   "docs_connection", row["id"],
+                   {"job": job_id, "status": job["status"], "spaces": list(job["spaces"]),
+                    "indexed": sum(v.get("indexed", 0) for v in spaces),
+                    "updated": sum(v.get("updated", 0) for v in spaces),
+                    "unchanged": sum(v.get("unchanged", 0) for v in spaces)})
+    return job
+
+
+def _one_page(engine: Any, store: PostgresKnowledgeStore, client: Any, project_id: str, site: str,
+              space: str, summary: Any, progress: dict[str, Any]) -> None:
+    key = node_key(site, summary.id)
+    try:
+        page = client.get_page(summary.id, labels=True)            # HTTP: no transaction open
+        with engine.begin() as db:
             held = _held_version(db, project_id, key)
             if held is not None and held >= page.version:
-                done["unchanged"] += 1
-                continue
+                progress["unchanged"] += 1
+                return
             capture = accept_connector_document(
                 db, store, project_id=project_id, connector=SOURCE,
                 document_id=f"{site}:{page.id}:v{page.version}", body=page.body_markdown)
@@ -74,44 +212,6 @@ def sync_space(db: Connection, store: PostgresKnowledgeStore, client: Any, *, pr
                        "page_id": page.id, "version": page.version, "url": page.url,
                        "last_modified": page.last_modified, "labels": page.labels,
                        "truncated": page.truncated, "capture_id": capture["capture_id"]})
-            done["updated" if held is not None else "indexed"] += 1
-        except TicketSystemError as error:
-            done["failed"].append({"page_id": summary.id, "error": str(error)[:200]})
-    return done
-
-
-def sync(db: Connection, app_settings: Any, *, project_id: str,
-         spaces: Optional[list[str]] = None, full: bool = False, actor: str = "system"
-         ) -> dict[str, Any]:
-    """Sync the chosen spaces (default: the connection's ``knowledge_spaces``) into the project's
-    knowledge store. Returns counts per space; records the sync time per space for the next."""
-    row, client = docs_connections.client_for(db, app_settings, project_id)
-    chosen = docs_connections._spaces(spaces if spaces is not None  # noqa: SLF001
-                                      else row["configuration"].get("knowledge_spaces"))
-    if not chosen:
-        raise docs_connections.DocsConnectionError(
-            "invalid_request", "Pick the Confluence spaces to keep in knowledge first "
-                              "(Setup › Connections › Confluence).")
-    store = PostgresKnowledgeStore()
-    state = dict(row["configuration"].get("sync_state") or {})
-    results = []
-    for space in chosen:
-        started = datetime.now(timezone.utc)
-        since = None if full else (state.get(space) or {}).get("synced_at")
-        out = sync_space(db, store, client, project_id=project_id, space=space,
-                         since=since)
-        if not out["failed"]:
-            state[space] = {"synced_at": started.strftime("%Y-%m-%d %H:%M"),
-                            "pages": out["seen"] + (state.get(space) or {}).get("pages", 0)
-                            if since else out["seen"]}
-        results.append(out)
-    db.execute(text("UPDATE docs_connections SET configuration = configuration || "
-                    "jsonb_build_object('sync_state', CAST(:s AS JSONB)), updated_at = now() "
-                    "WHERE id = :i"), {"s": json.dumps(state), "i": row["id"]})
-    from .core import emit_event
-
-    emit_event(db, project_id, "knowledge.confluence_synced", actor, "docs_connection", row["id"],
-               {"spaces": chosen, "indexed": sum(r["indexed"] for r in results),
-                "updated": sum(r["updated"] for r in results),
-                "unchanged": sum(r["unchanged"] for r in results)})
-    return {"ok": True, "spaces": results}
+        progress["updated" if held is not None else "indexed"] += 1
+    except TicketSystemError as error:
+        progress["failed"].append({"page_id": summary.id, "error": str(error)[:200]})
