@@ -4244,6 +4244,13 @@ def _perform_capability(
             ran_as=ran_as, tool_name=capability.tool)
         if resumed is not None:
             return _settle_started_work(capability, key, resumed)
+    if key == "config_deploy" and inputs.get("source_paths") and not inputs.get("code_task_run_id") \
+            and not inputs.get("files") and not inputs.get("produced_artifacts"):
+        # A CONFIG DEPLOY AFTER A BUILD SHIPS THAT BUILD'S FILES (BOSSAPP-1377): with no explicit
+        # run, the step takes the preceding build step's, as a catalogue deploy does.
+        built = _build_run_id(context)
+        if built:
+            inputs = {**inputs, "code_task_run_id": built}
     if key == "promote_config":
         # PROMOTED IS WHAT THIS RUN STAGED (AMEX-G9, BOSSAPP-1167). Never "the latest staging
         # deploy for the app": with two tenants in flight that is the other tenant's bundle.

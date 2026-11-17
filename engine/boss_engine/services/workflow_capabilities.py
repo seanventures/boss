@@ -777,7 +777,7 @@ CAPABILITIES: dict[str, Capability] = {
             # `produced_artifacts` (wired with from_step). WHERE: a config_dir target, by id or by
             # app_name + environment (staging unless said otherwise).
             optional_inputs=("files", "produced_artifacts", "target_id", "app_name",
-                             "environment"),
+                             "environment", "code_task_run_id", "source_paths"),
             produces=("deployment_id", "deployed_url", "bundle_sha256"),
             requires_project=("deployment_target",),
             typical_minutes=3,

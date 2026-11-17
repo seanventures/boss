@@ -364,6 +364,48 @@ def results_table(results: Iterable[Mapping[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def resolve_header_secrets(cases: Any, headers: Any, resolver: Any) -> tuple[Any, Any, Optional[str]]:
+    """Header values that are SECRET REFERENCES, resolved at run time (never a raw token in a spec).
+
+    A header value is a string, or {"secret_ref": "<secret ref id>", "prefix": "Bearer "}: the
+    reference is what the workflow spec, the step's recorded input and the logs hold; the value
+    exists only in the request this step sends (and, once resolved, is registered for redaction
+    by the resolver). `resolver(ref_id) -> str`. Returns (cases, headers, error): `error` names
+    the header and the reference id, never a value."""
+    def one(where: str, mapping: Any) -> tuple[Any, Optional[str]]:
+        if not isinstance(mapping, Mapping):
+            return mapping, None
+        out: dict[str, Any] = {}
+        for name, value in mapping.items():
+            if isinstance(value, Mapping) and "secret_ref" in value:
+                ref = str(value.get("secret_ref") or "").strip()
+                if not ref:
+                    return mapping, f"{where}header {name!r}: secret_ref is empty."
+                try:
+                    out[name] = f"{value.get('prefix') or ''}{resolver(ref)}"
+                except Exception as exc:  # noqa: BLE001 — say which reference, never what it held
+                    return mapping, (f"{where}header {name!r}: the secret reference {ref} could "
+                                     f"not be resolved ({type(exc).__name__}).")
+            else:
+                out[name] = value
+        return out, None
+
+    shared, error = one("", headers)
+    if error:
+        return cases, headers, error
+    if not isinstance(cases, (list, tuple)):
+        return cases, shared, None
+    resolved = []
+    for i, case in enumerate(cases):
+        if isinstance(case, Mapping) and isinstance(case.get("headers"), Mapping):
+            own, error = one(f"case {i + 1}: ", case["headers"])
+            if error:
+                return cases, headers, error
+            case = {**case, "headers": own}
+        resolved.append(case)
+    return resolved, shared, None
+
+
 def run_cases(cases: Any, *, base_url: str = "", timeout_s: Any = 10,
               headers: Optional[Mapping[str, str]] = None,
               allowed_private: Iterable[str] = (),
@@ -513,4 +555,4 @@ def project_origins(db: Any, project_id: str) -> frozenset[tuple[str, str, int]]
     return frozenset(o for o in out if o[1] not in _blocked_hosts())
 
 
-__all__ = ["CaseError", "HostRefused", "check_host", "origin_of", "project_deployment_hosts", "project_origins", "MAX_CASES", "METHODS", "json_path", "results_table", "run_cases"]
+__all__ = ["CaseError", "resolve_header_secrets", "HostRefused", "check_host", "origin_of", "project_deployment_hosts", "project_origins", "MAX_CASES", "METHODS", "json_path", "results_table", "run_cases"]
