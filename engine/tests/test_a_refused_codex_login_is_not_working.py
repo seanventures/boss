@@ -253,12 +253,13 @@ class _Db:
         from contextlib import nullcontext
         return nullcontext(self.c)
 
+    connect = begin
+
 
 @pytest.fixture
 def hook(conn, monkeypatch):
     from boss_engine.services import llm_telemetry
 
-    harness_refusal._NOTED.clear()
     llm_telemetry.set_llm_context(db_engine=_Db(conn), project_id=conn.project_id)
     yield conn
     llm_telemetry.set_llm_context()
@@ -269,10 +270,11 @@ PROVIDER_401 = ("2026-11-17T02:00:27Z ERROR codex_api::endpoint::responses_webso
                 "wss://api.openai.com/v1/responses")
 
 
-def _verdict(message, *, where="engine", source_id=""):
+def _verdict(message, *, where="engine", source_id="", transport=""):
     from boss_engine.services.harness_failures import HarnessVerdict
 
-    return HarnessVerdict("codex", "auth_refused", message, "reconnect", where, source_id)
+    return HarnessVerdict("codex", "auth_refused", message, "reconnect", where, source_id,
+                          transport)
 
 
 def _broken(c, sid):
@@ -284,7 +286,7 @@ def test_a_provider_401_through_trip_flips_the_source(hook):
     from boss_engine.services import harness_failures
 
     _source(hook, "openai_codex_chatgpt", "openai_codex_chatgpt")
-    harness_failures.trip(_verdict(PROVIDER_401))
+    harness_failures.trip(_verdict("x", transport=PROVIDER_401))
     assert _broken(hook, "openai_codex_chatgpt") is True
     assert len(_cards(hook)) == 1
 
@@ -302,7 +304,7 @@ def test_a_refused_pool_account_does_not_flip_the_default_source(hook):
     from boss_engine.services import harness_failures
 
     _source(hook, "openai_codex_chatgpt", "openai_codex_chatgpt")
-    harness_failures.trip(_verdict(PROVIDER_401, source_id="pool:abc"))
+    harness_failures.trip(_verdict("x", source_id="pool:abc", transport=PROVIDER_401))
     assert _broken(hook, "openai_codex_chatgpt") is False
     assert _cards(hook)[0]["source_id"] == "pool:abc"
 
@@ -394,3 +396,77 @@ def test_mark_revoked_takes_the_refreshers_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(codex_login, "_flock", spy)
     codex_login.mark_revoked("invalidated oauth token")
     assert taken and codex_login.failure_stands() is True
+
+
+# -- provider transport vs an app's words -------------------------------------------------------
+
+@pytest.mark.parametrize("summary", [
+    'Tests fail: POST /login -> 401 {"detail":"Failed to authenticate user"}',
+    "test_dashboard_redirects FAILED - user not logged in, got 401",
+    "expected 200, got 401 Unauthorized"])
+def test_an_apps_own_401_words_are_not_a_provider_refusal(summary):
+    assert harness_refusal.is_provider_refusal(_verdict(summary)) is False
+    # even when the app's words sit in the CLI's stdout-side message, only stderr is read
+    assert harness_refusal.is_provider_refusal(_verdict(summary, transport="")) is False
+
+
+def test_a_long_summary_then_a_real_provider_401_in_stderr_is_a_refusal():
+    summary = "I ran the suite and the checkout tests all passed. " * 12
+    assert len(summary) > 300
+    assert harness_refusal.is_provider_refusal(_verdict(summary, transport=PROVIDER_401)) is True
+
+
+def test_the_claude_clis_login_line_is_a_refusal():
+    assert harness_refusal.is_provider_refusal(
+        _verdict("x", transport="OAuth token has expired. Please run /login")) is True
+
+
+def test_generic_auth_words_in_stderr_alone_are_not_enough():
+    assert harness_refusal.is_provider_refusal(
+        _verdict("x", transport="authentication_error: failed to authenticate")) is False
+
+
+# -- repeat refusals, open statuses, other surfaces ---------------------------------------------
+
+def test_a_refusal_after_a_reconnect_and_retry_of_the_same_run_flips_setup_again(hook):
+    from boss_engine.services import harness_failures, model_failures
+
+    _source(hook, "openai_codex_chatgpt", "openai_codex_chatgpt")
+    harness_failures.trip(_verdict("x", transport=PROVIDER_401))
+    assert _broken(hook, "openai_codex_chatgpt") is True
+    # the operator reconnects (a clean mark) and the card is answered
+    model_failures.mark_login(hook, hook.project_id, "openai_codex_chatgpt", rejected=False)
+    hook.execute(text("UPDATE decisions SET status = 'approved' WHERE project_id = :p"),
+                 {"p": hook.project_id})
+    assert _broken(hook, "openai_codex_chatgpt") is False
+    harness_failures.trip(_verdict("x", transport=PROVIDER_401))   # same run, retried
+    assert _broken(hook, "openai_codex_chatgpt") is True
+    assert len(_cards(hook)) == 2
+
+
+def test_a_delegated_card_still_counts_as_open(hook):
+    from boss_engine.services import harness_failures
+
+    _source(hook, "openai_codex_chatgpt", "openai_codex_chatgpt")
+    harness_failures.trip(_verdict("x", transport=PROVIDER_401))
+    hook.execute(text("UPDATE decisions SET status = 'delegated' WHERE project_id = :p"),
+                 {"p": hook.project_id})
+    harness_failures.trip(_verdict("x", transport=PROVIDER_401))
+    assert len(_cards(hook)) == 1
+
+
+def test_a_discovery_run_with_no_project_in_the_context_still_flips_its_source(conn):
+    """A discovery (no code_task_runs row, no llm-context project) resolves its project from the
+    discovery run; a run nothing knows is skipped, never guessed."""
+    from boss_engine.services import harness_failures, llm_telemetry
+
+    _source(conn, "openai_codex_chatgpt", "openai_codex_chatgpt")
+    rid = f"disc_{uuid.uuid4().hex[:8]}"
+    conn.execute(text("INSERT INTO discovery_runs (id, project_id, title) VALUES (:i, :p, 't')"),
+                 {"i": rid, "p": conn.project_id})
+    llm_telemetry.set_llm_context(db_engine=_Db(conn), project_id=None, run_id=rid)
+    try:
+        harness_failures.trip(_verdict("x", transport=PROVIDER_401))
+        assert _broken(conn, "openai_codex_chatgpt") is True
+    finally:
+        llm_telemetry.set_llm_context()

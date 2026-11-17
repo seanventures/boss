@@ -36,7 +36,7 @@ import contextvars
 import json
 import re
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterator, Mapping, Optional
 
 from .harness_registry import FailurePattern
@@ -94,6 +94,9 @@ class HarnessVerdict:
     #: Which account was refused, when the run knows ("pool:<member id>" for a pool account);
     #: empty = the engine's one default login. Keyed by account so several accounts compose.
     source_id: str = ""
+    #: The CLI's OWN stderr (never the agent's summary), read only to tell a provider-transport
+    #: refusal from an app's 401. Never persisted, never in as_dict()/repr.
+    transport_text: str = field(default="", repr=False, compare=False)
 
     def sentence(self) -> str:
         return f"BOSS could not run {self.engine}: {self.message}; fix: {self.fix}."

@@ -23,29 +23,30 @@ from __future__ import annotations
 
 import logging
 import re
-import threading
 from typing import Any, Optional
 
 from . import core, model_failures
+from .decision_actions import OPEN_STATUSES
 
 _log = logging.getLogger("boss.harness_refusal")
 
 #: The existing keep-alive card: one action for "this subscription's login is dead".
 CARD_ACTION = "sign_in_to_subscription_again"
 
-#: What the provider's own CLI says when its login is refused. Deliberately narrow.
+#: What the provider's own CLI says on its STDERR when its login is refused. Deliberately narrow:
+#: transport words only. Generic "failed to authenticate" / "authentication_error" are an app's
+#: words as often as a provider's, so they count for nothing here.
 _PROVIDER_TRANSPORT = re.compile(
-    r"codex_api::|responses_websocket|failed to connect to websocket|invalidated oauth token|"
-    r"refresh token (?:was|has been) (?:revoked|invalidated)|token_expired|"
-    r"oauth token has expired|invalid[_ ]authentication|authentication_error|"
-    r"please run /login|not logged in|failed to authenticate|"
-    r"unauthorized.{0,60}api\.(?:openai|anthropic)\.com|api\.(?:openai|anthropic)\.com.{0,60}401",
-    re.I | re.S)
+    r"codex_api::|responses_websocket|invalidated oauth token|please run /login|"
+    r"(?:api\.openai\.com|api\.anthropic\.com|chatgpt\.com)[^\n]{0,120}\b401\b|"
+    r"\b401\b[^\n]{0,120}(?:api\.openai\.com|api\.anthropic\.com|chatgpt\.com)",
+    re.I)
 
 
 def is_provider_refusal(verdict: Any) -> bool:
-    text = f"{getattr(verdict, 'message', '')}"
-    return bool(_PROVIDER_TRANSPORT.search(text))
+    """Only the CLI's own stderr (`transport_text`) is read — never the agent's summary or the
+    verdict's message, which can quote an app's 401 or be cut before the real line."""
+    return bool(_PROVIDER_TRANSPORT.search(getattr(verdict, "transport_text", "") or ""))
 
 
 def source_for(engine: str, settings: Any) -> Optional[str]:
@@ -74,9 +75,10 @@ def _open_card(connection, project_id: str, source_id: str) -> bool:
     from sqlalchemy import text
 
     row = connection.execute(
-        text("SELECT 1 FROM decisions WHERE project_id = :p AND status = 'pending' "
+        text("SELECT 1 FROM decisions WHERE project_id = :p AND status = ANY(:open) "
              "AND recommendation->>'action' = :a AND recommendation->>'source_id' = :s LIMIT 1"),
-        {"p": project_id, "a": CARD_ACTION, "s": source_id}).first()
+        {"p": project_id, "a": CARD_ACTION, "s": source_id,
+         "open": sorted(OPEN_STATUSES)}).first()
     return row is not None
 
 
@@ -118,11 +120,11 @@ def _record_refusal(connection, project_id, run_id, engine, settings, task_id, s
         {}, reason=f"a run's {engine} harness was refused its login (run {run_id})", risk_tier=2)
 
 
-_NOTED: set = set()
-_NOTED_LOCK = threading.Lock()
-
-
 def _project_and_engine(run_id: Optional[str], settings: Any):
+    """The db and project this refusal belongs to: the llm context's project, else the project of
+    the run it happened in — a build (code_task_runs), a workflow run, or a discovery."""
+    from sqlalchemy import text
+
     from .llm_telemetry import get_llm_context
 
     ctx = get_llm_context() or {}
@@ -132,27 +134,33 @@ def _project_and_engine(run_id: Optional[str], settings: Any):
         from ..db import get_engine
 
         db = get_engine(settings)
-    if not project_id and run_id:
-        from sqlalchemy import text
-
-        with db.connect() as c:
-            project_id = c.execute(text("SELECT project_id FROM code_task_runs WHERE id = :i"),
-                                   {"i": run_id}).scalar()
+    if not project_id:
+        lookups = []
+        if ctx.get("workflow_run_id"):
+            lookups.append(("workflow_runs", ctx["workflow_run_id"]))
+        for rid in (run_id, ctx.get("run_id")):
+            if rid:
+                lookups += [("code_task_runs", rid), ("discovery_runs", rid)]
+        for table, rid in lookups:
+            try:
+                with db.connect() as c:
+                    project_id = c.execute(
+                        text(f"SELECT project_id FROM {table} WHERE id = :i"),  # fixed names
+                        {"i": rid}).scalar()
+            except Exception:  # noqa: BLE001 — a table this edition lacks is not a failure
+                project_id = None
+            if project_id:
+                break
     return db, project_id
 
 
 def note(verdict: Any, run_id: Optional[str] = None) -> Optional[str]:
-    """The shared hook (harness_failures.trip). Records a PROVIDER-sourced refusal once per
-    (run, engine, account); an app's own 401 in a summary is ignored."""
+    """The shared hook (harness_failures.trip). Records a PROVIDER-sourced refusal (the CLI's own
+    stderr names the provider transport); an app's own 401 in a summary is ignored. Not deduped
+    in memory: mark_login only moves on the transition and `_open_card` holds one card per dead
+    login, so a refusal after a reconnect + retry flips Setup and asks again."""
     if verdict.kind != "auth_refused" or not is_provider_refusal(verdict):
         return None
-    key = (run_id or "", verdict.engine, getattr(verdict, "source_id", ""))
-    with _NOTED_LOCK:
-        if key in _NOTED and run_id:
-            return None
-        _NOTED.add(key)
-        if len(_NOTED) > 500:
-            _NOTED.clear()
     try:
         from ..config import get_settings
 
