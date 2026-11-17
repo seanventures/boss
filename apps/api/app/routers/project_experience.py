@@ -414,7 +414,27 @@ def project_new_work(project_id: str, payload: NewWorkBody, request: Request) ->
         if issue:
             link = issue["external_url"]
     run_input: dict[str, Any] = {"title": title, "work_kind": kind, **briefed}
-    if payload.workflow_key and isinstance(payload.inputs, dict):
+    if payload.workflow_key and isinstance(payload.inputs, dict) and payload.inputs:
+        # ONLY WHAT THE WORKFLOW DECLARES. A card's inputs are a caller's words: one the
+        # version's input_schema does not list (ticket, repository, source_ref, profile,
+        # extends_run_id …) would be carried into the run as if BOSS had set it.
+        from boss_engine.services.workflows import declared_input_names
+
+        spec = (chosen.get("resolved") or {}).get("spec") or {}
+        if isinstance(spec, str):
+            import json as _json
+
+            spec = _json.loads(spec or "{}")
+        schema = spec.get("input_schema") if isinstance(spec, dict) else {}
+        props = schema.get("properties") if isinstance(schema, dict) else None
+        allowed = {str(n) for n in props} if isinstance(props, dict) \
+            else set(declared_input_names(schema))
+        stray = sorted(str(k) for k in payload.inputs if str(k) not in allowed)
+        if stray:
+            raise HTTPException(status_code=422, detail={
+                "error": "undeclared_inputs",
+                "message": f"{payload.workflow_key} does not declare: {', '.join(stray)}. "
+                           f"It takes: {', '.join(sorted(allowed)) or 'no inputs'}."})
         run_input = {**{str(k): v for k, v in payload.inputs.items()}, **run_input}
     if repo:
         run_input["repository"] = repo

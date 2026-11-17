@@ -414,30 +414,24 @@ def _steps_of(connection: Connection, project_id: str, start: Mapping[str, Any]
     return out
 
 
-def _named_key(connection: Connection, project_id: str, offer: Optional[Mapping[str, Any]],
-               message: str) -> Optional[str]:
-    """The project workflow this turn names, if it names one: the key a `start_workflow` offer
-    carries, else (new work decided, nothing offered) a workflow of this project whose key or
-    name the person's words contain. A name is a lookup against the project's own workflows,
-    never a guess at intent; BOSS's own catalogue workflows are not matched in prose, because
-    "a feature" must keep meaning the default path."""
+def _named_key(connection: Connection, project_id: str, offer: Optional[Mapping[str, Any]]
+               ) -> Optional[str]:
+    """The key a `start_workflow` offer names, when it is one of THIS PROJECT'S OWN workflows.
+    BOSS's catalogue workflows (minor_feature, fast_fix …) keep the estimate-and-kind card; a
+    named card is for a workflow the project authored. Only the offer decides: nothing is
+    inferred from the person's prose."""
     args = (offer or {}).get("args") if isinstance((offer or {}).get("args"), Mapping) else {}
-    if offer and str(offer.get("tool") or "") == "start_workflow":
-        return str((args or {}).get("workflow_key") or "").strip() or None
-    if offer:
+    if not offer or str(offer.get("tool") or "") != "start_workflow":
         return None
-    low = " " + re.sub(r"[^a-z0-9]+", " ", str(message or "").lower()) + " "
-    rows = connection.execute(text(
-        "SELECT workflow_key, name FROM workflow_definitions WHERE project_id = :p "
-        "AND status = 'active' AND namespace = 'product' AND COALESCE(is_catalogue, false) = false "
-        "AND active_version_id IS NOT NULL"), {"p": project_id}).mappings().all()
-    best: Optional[tuple[int, str]] = None
-    for row in rows:
-        for name in (str(row["workflow_key"]), str(row["name"] or "")):
-            tidy = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
-            if len(tidy) >= 4 and f" {tidy} " in low and (best is None or len(tidy) > best[0]):
-                best = (len(tidy), str(row["workflow_key"]))
-    return best[1] if best else None
+    key = str((args or {}).get("workflow_key") or "").strip()
+    if not key:
+        return None
+    own = connection.execute(text(
+        "SELECT 1 FROM workflow_definitions WHERE project_id = :p AND workflow_key = :k "
+        "AND status = 'active' AND namespace = 'product' "
+        "AND COALESCE(is_catalogue, false) = false AND active_version_id IS NOT NULL"),
+        {"p": project_id, "k": key}).first()
+    return key if own else None
 
 
 def _named_card(connection: Connection, project_id: str, key: str,
@@ -449,20 +443,27 @@ def _named_card(connection: Connection, project_id: str, key: str,
     Review, PR) and Start made a Minor Feature run with the inputs only in prose. The workflow
     the person named is the workflow that runs; if it cannot start yet the card says which
     inputs it still needs rather than starting something else."""
+    try:
+        return _named_card_body(connection, project_id, key, offer, said, title, message_id)
+    except Exception:  # noqa: BLE001 — the card is a convenience; the generic one still shows
+        log.exception("turn_cards: named card for %s failed", key)
+        return None
+
+
+def _named_card_body(connection: Connection, project_id: str, key: str,
+                     offer: Optional[Mapping[str, Any]], said: str, title: str,
+                     message_id: Optional[str]) -> Optional[dict[str, Any]]:
     import json
 
     from .project_experience import new_work
     from .workflows import missing_required_inputs
 
-    try:
-        with connection.begin_nested():
-            got = new_work.plan(connection, project_id, "feature", key)
-            row = connection.execute(text(
-                "SELECT v.version, v.spec FROM workflow_definitions d JOIN workflow_versions v "
-                "ON v.id = d.active_version_id WHERE d.project_id = :p AND d.workflow_key = :k"),
-                {"p": project_id, "k": key}).mappings().first()
-    except LookupError:
-        return None
+    with connection.begin_nested():
+        got = new_work.plan(connection, project_id, "feature", key)
+        row = connection.execute(text(
+            "SELECT v.version, v.spec FROM workflow_definitions d JOIN workflow_versions v "
+            "ON v.id = d.active_version_id WHERE d.project_id = :p AND d.workflow_key = :k"),
+            {"p": project_id, "k": key}).mappings().first()
     spec = row["spec"] if row else {}
     if isinstance(spec, str):
         spec = json.loads(spec or "{}")
@@ -512,11 +513,9 @@ def proposal(connection: Connection, project_id: str, *, offers: Iterable[Mappin
     from .project_experience.titles import shorten
 
     offer = next((o for o in offers or [] if str(o.get("tool") or "") in _WORK_TOOLS), None)
-    named = None
-    if offer or str((decision or {}).get("action") or "") == "new_code_change":
-        named = _named_key(connection, project_id, offer, message)
+    named = _named_key(connection, project_id, offer) if offer else None
     if named:
-        title0, said0 = _offer_words(offer) if offer else ("", str(message or "").strip())
+        title0, said0 = _offer_words(offer)
         card = _named_card(connection, project_id, named, offer,
                            said0 or str((offer or {}).get("label") or "").strip(), title0,
                            message_id)

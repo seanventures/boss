@@ -33,7 +33,20 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
         return {"ok": False, "error": "steps must be a non-empty list"}
     if len(steps) > 24:
         return {"ok": False, "error": "24 steps is the most a workflow may have"}
-    steps = [_normalise_step(item) for item in steps]
+    try:
+        steps = [_normalise_step(item) for item in steps]
+    except DraftRefusal as refusal:
+        return {"ok": False, "error": str(refusal)}
+    explicit: set[str] = set()
+    for item in steps:
+        if isinstance(item, dict) and str(item.get("id") or "").strip():
+            tidy = re.sub(r"[^a-z0-9_]+", "_", str(item["id"]).strip().lower())
+            if tidy in explicit:
+                return {"ok": False,
+                        "error": f"two steps are both named '{item['id']}'. Step ids must be "
+                                 "unique; rename one, or leave `id` out and it is named for "
+                                 "what it does."}
+            explicit.add(tidy)
     # Ids are reserved up front only when a typed decision names later steps as its arms.
     # Otherwise the loop below assigns them exactly as it always has.
     branching = any(
@@ -250,7 +263,16 @@ def _spec_from_steps(steps: Any, args: dict) -> Any:
 
 
 _INPUT_KEYS = ("input", "inputs", "with", "values", "defaults", "set")
-_STEP_REF = re.compile(r"^[A-Za-z0-9_]+$")
+#: Every field a drafted step may carry. Anything else is refused by name, not ignored.
+_STEP_KEYS = frozenset({
+    "id", "capability", "kind", "type", "label", "name", "description", "captain", "approval",
+    "input", "agent", "instructions", "skills", "skill", "mcp", "mcp_servers", "mcp_tool",
+    "produces", "agents", "max_steps", "gate", "question", "guidance", "wait_seconds",
+    "run_workflow", "workflow", "typed_decision", "state", "true_value", "on_true", "on_false"})
+
+
+class DraftRefusal(ValueError):
+    """A drafted step that cannot be read; the message says which step and what to change."""
 
 
 def _normalise_step(raw: Any) -> Any:
@@ -274,8 +296,7 @@ def _normalise_step(raw: Any) -> Any:
             if binding.get(key) and key not in out:
                 out["skill" if key == "custom_step" else key] = binding[key]
         if isinstance(binding.get("inputs"), dict):
-            out["input"] = {**binding["inputs"], **(out.get("input") or {})} \
-                if isinstance(out.get("input"), dict) else dict(binding["inputs"])
+            out["_binding_inputs"] = dict(binding["inputs"])
     work = out.get("agent_work")
     if work and out.get("agent") is not True:
         out["agent"] = True
@@ -287,71 +308,82 @@ def _normalise_step(raw: Any) -> Any:
     out.pop("agent_work", None) if "agent" in out else None
     if str(out.get("kind") or out.get("type") or "").strip().lower() in _AGENT_STEP_WORDS:
         out["agent"] = True
-    # Any of the usual words for "the values this step is given" become `input`.
+    where = f"step '{out.get('id') or '?'}'"
+    # Any of the usual words for "the values this step is given" become `input`. Two words
+    # setting the same input are refused, never resolved by whichever came last.
     merged: dict[str, Any] = {}
-    for key in _INPUT_KEYS:
-        value = out.pop(key, None)
+    sources = [(key, out.pop(key, None)) for key in (*_INPUT_KEYS, "_binding_inputs")]
+    for key, value in sources:
         if isinstance(value, dict):
-            merged.update(value)
+            for name, given in value.items():
+                if name in merged and merged[name] != given:
+                    raise DraftRefusal(
+                        f"{where} sets input '{name}' twice with different values (via "
+                        f"'{key}' and another input key). Set it once, under `input`.")
+                merged[name] = given
     for key in ("deployment_target", "target", "deployment_target_id"):
         target = out.pop(key, None)
-        if target and "target_id" not in merged:
+        if target:
+            if "target_id" in merged and merged["target_id"] != target:
+                raise DraftRefusal(
+                    f"{where} names a deployment target twice ('{key}' and input target_id) "
+                    "with different ids. Name it once.")
             merged["target_id"] = target
     if merged:
         out["input"] = merged
     if out.get("input") is not None:
+        if not isinstance(out["input"], dict):
+            raise DraftRefusal(f"{where} input must be an object of {{name: value}}.")
         out["input"] = {str(k): _clean_value(v, str(k)) for k, v in out["input"].items()}
-    # A step that names nothing but whose id IS a capability ("contract_test") is that capability.
-    if not _draft_capability(out) and out.get("id"):
-        caps = services_module("workflow_capabilities")
-        wanted = str(out["id"]).strip().lower()
-        if wanted in caps.CAPABILITY_KEYS:
-            out["capability"] = wanted
-    if out.get("instructions") and not _draft_capability(out):
-        out["agent"] = True
+    # An id that IS a capability name, exactly, on a step that says nothing else about what it
+    # is, names that capability. Nothing else is guessed: instructions alone do not make an
+    # agent step (say `agent: true`).
+    if not _draft_capability(out) and str(out.get("id") or "") in \
+            services_module("workflow_capabilities").CAPABILITY_KEYS \
+            and not out.get("instructions"):
+        out["capability"] = str(out["id"])
+    unknown = sorted(k for k in out if k not in _STEP_KEYS)
+    if unknown:
+        raise DraftRefusal(
+            f"{where} has fields a step does not take: {', '.join(unknown)}. A step takes: "
+            f"{', '.join(sorted(_STEP_KEYS))}. Values a step is given (cases, url, "
+            "target_id …) go under `input`: {name: value}.")
     return out
 
 
 def _clean_value(value: Any, name: str) -> Any:
-    """A step input as the runtime reads it: a literal, `{from_step, field}` or `{from_input}`.
-
-    Accepts `{"from_step": "deploy", "field": "deployed_url"}` (the runtime's own),
-    `{"step": "deploy", "field": ...}`, `{"from": "deploy.deployed_url"}` and
-    `{"from_step": "deploy.deployed_url"}`. A bare string is a literal, always.
-    """
-    if not isinstance(value, dict):
-        return value
-    if value.get("from_input"):
-        return {"from_input": str(value["from_input"])}
-    step = value.get("from_step") or value.get("step")
-    field = value.get("field")
-    dotted = value.get("from") if value.get("from") else None
-    if dotted and not step:
-        step = dotted
-    if isinstance(step, str) and "." in step and not field:
-        step, field = step.split(".", 1)
-    if step:
-        return {"from_step": str(step).strip(), "field": str(field or name).strip()}
+    """A step input as the runtime reads it. Only `{from_step, field?}` and `{from_input}` are
+    bindings; every other value, a dict with a `from` key included, is a literal."""
+    if isinstance(value, dict):
+        if set(value) == {"from_input"} and value["from_input"]:
+            return {"from_input": str(value["from_input"])}
+        if value.get("from_step") and set(value) <= {"from_step", "field"}:
+            return {"from_step": str(value["from_step"]).strip(),
+                    "field": str(value.get("field") or name).strip()}
     return value
 
 
 def _check_bindings(built: list[dict[str, Any]]) -> Optional[str]:
-    """A `from_step` must name an EARLIER step of this workflow. Says which step, which input,
-    and the three ways to set it."""
-    seen: set[str] = set()
+    """A `from_step` must name an EARLIER step of this workflow (ids compared without regard to
+    case; the binding is rewritten to the exact id). "Earlier" is the order the steps are
+    listed in, which is also execution order except that an arm of a typed decision runs only
+    when its branch is taken. Says which step, which input, and the three ways to set it."""
+    seen: dict[str, str] = {}
     for entry in built:
         step_id = str(entry.get("id"))
         inputs = (entry.get("binding") or {}).get("inputs")
         for name, value in (inputs.items() if isinstance(inputs, dict) else ()):
             if isinstance(value, dict) and value.get("from_step"):
                 source = str(value["from_step"])
-                if source not in seen:
-                    return (f"step '{step_id}' input '{name}' reads from step '{source}', which "
-                            "is not an earlier step of this workflow. Earlier steps: "
-                            f"{', '.join(sorted(seen)) or '(none)'}. Set an input with a "
-                            "literal (input: {name: value}), from an earlier step "
-                            "({from_step, field}), or from the operator (inputs: [name]).")
-        seen.add(step_id)
+                if source.lower() in seen:
+                    value["from_step"] = seen[source.lower()]
+                    continue
+                return (f"step '{step_id}' input '{name}' reads from step '{source}', which "
+                        "is not an earlier step of this workflow. Earlier steps: "
+                        f"{', '.join(seen.values()) or '(none)'}. Set an input with a "
+                        "literal (input: {name: value}), from an earlier step "
+                        "({from_step, field}), or from the operator (inputs: [name]).")
+        seen[step_id.lower()] = step_id
     return None
 
 

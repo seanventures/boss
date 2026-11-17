@@ -174,23 +174,111 @@ def test_boss_publishes_its_v2_design_as_the_next_version_of_the_same_key(eng, p
     assert second["definition_id"] == first["definition_id"]
 
 
-def test_asking_for_a_versioned_key_publishes_the_next_version_of_the_base(eng, project):
+def test_a_versioned_key_of_an_existing_workflow_is_refused_naming_the_real_key(eng, project):
     _draft(eng, project, workflow_key="api_onboarding", name="API onboarding",
            steps=[{"id": "validate", "agent": True, "instructions": "lint it"}])
     out = _draft(eng, project, workflow_key="api_onboarding_v2", name="API onboarding v2",
                  steps=v2_steps(), inputs=INPUTS)
-    assert out.get("status") == "published", out
-    assert (out["workflow_key"], out["version"]) == ("api_onboarding", 2)
+    assert out["ok"] is False and "'api_onboarding'" in out["error"]
+    assert "workflow_key='api_onboarding'" in out["error"]
 
 
-def test_a_key_spelled_loosely_is_tidied_not_refused(eng, project):
+def test_version_of_names_an_existing_workflow_or_is_refused(eng, project):
+    _draft(eng, project, workflow_key="api_onboarding", name="API onboarding",
+           steps=[{"id": "validate", "agent": True, "instructions": "lint it"}])
+    ok = _draft(eng, project, version_of="api_onboarding", name="API onboarding",
+                steps=v2_steps(), inputs=INPUTS)
+    assert (ok.get("status"), ok["workflow_key"], ok["version"]) == (
+        "published", "api_onboarding", 2), ok
+    gone = _draft(eng, project, version_of="no_such_one", name="x", steps=v2_steps())
+    assert gone["ok"] is False and "not a workflow in this project" in gone["error"]
+    clash = _draft(eng, project, version_of="api_onboarding", workflow_key="other_one",
+                   name="x", steps=v2_steps())
+    assert clash["ok"] is False and "different workflows" in clash["error"]
+
+
+def test_a_badly_spelled_key_is_refused_not_renamed(eng, project):
     out = _draft(eng, project, workflow_key="API-Onboarding Flow!", name="x",
                  steps=[{"id": "a", "agent": True, "instructions": "go"}])
-    assert out.get("status") == "published", out
-    assert out["workflow_key"] == "api_onboarding_flow"
-    no_key = _draft(eng, project, name="Tenant intake",
-                    steps=[{"id": "a", "agent": True, "instructions": "go"}])
-    assert no_key["workflow_key"] == "tenant_intake"
+    assert out["ok"] is False and "lower_snake_case" in out["error"]
+    with eng.begin() as c:
+        assert c.execute(text("SELECT count(*) FROM workflow_definitions WHERE project_id=:p"),
+                         {"p": project}).scalar() == 0
+
+
+def test_a_name_derived_key_that_matches_an_existing_workflow_is_refused(eng, project):
+    steps = [{"id": "a", "agent": True, "instructions": "go"}]
+    made = _draft(eng, project, name="Tenant intake", steps=steps)
+    assert made["workflow_key"] == "tenant_intake"
+    again = _draft(eng, project, name="Tenant intake", steps=steps)
+    assert again["ok"] is False and "'tenant_intake'" in again["error"]
+
+
+def test_a_button_for_a_draft_must_name_its_key():
+    import types
+
+    from boss_engine.tools.builtin import build_default_registry
+
+    handler = build_default_registry().get("propose_action").handler
+    out = handler(types.SimpleNamespace(settings=None), project_id="p", actor="u",
+                  args={"tool": "draft_workflow", "label": "x",
+                        "args": {"name": "x", "steps": [{"id": "a", "agent": True}]}})
+    assert out["ok"] is False and "workflow_key" in out["error"]
+
+
+def test_instructions_alone_do_not_make_an_agent_step_and_unknown_fields_are_refused():
+    out = _spec_from_steps([{"id": "validate", "instructions": "lint it"}], {})
+    assert out["ok"] is False and "validate" in out["error"]
+    out = _spec_from_steps([{"id": "t", "capability": "contract_test", "cases": CASES}], {})
+    assert out["ok"] is False and "cases" in out["error"] and "`input`" in out["error"]
+    out = _spec_from_steps([{"id": "a", "capability": "no_such_capability"}], {})
+    assert out.get("ok") is not False  # unknown capability words are refused at validation,
+    # with the full list (see the next test)
+
+
+def test_an_unknown_capability_is_refused_with_every_valid_one(eng, project):
+    out = _draft(eng, project, workflow_key="bad_cap", name="x",
+                 steps=[{"id": "a", "capability": "no_such_capability"}])
+    assert out["ok"] is False and "Valid capabilities:" in out["error"]
+    assert "config_deploy" in out["error"] and "smoke_test" in out["error"]
+
+
+def test_the_id_guess_applies_only_to_an_exact_capability_name():
+    assert _spec_from_steps([{"id": "smoke_test", "input": {"url": "https://x.example"}}],
+                            {})["steps"][0]["binding"]["capability"] == "smoke_test"
+    assert _spec_from_steps([{"id": "Smoke_Test"}], {})["ok"] is False
+
+
+def test_only_from_step_and_from_input_are_bindings():
+    spec = _spec_from_steps(
+        [{"id": "a", "agent": True, "instructions": "go"},
+         {"id": "n", "capability": "notify",
+          "input": {"message": {"from": "a.x", "note": 1}, "channel": {"step": "a"}}}], {})
+    assert spec["steps"][1]["binding"]["inputs"]["message"] == {"from": "a.x", "note": 1}
+    assert spec["steps"][1]["binding"]["inputs"]["channel"] == {"step": "a"}
+
+
+def test_conflicting_or_duplicate_settings_are_refused_not_overwritten():
+    out = _spec_from_steps([{"id": "d", "capability": "config_deploy",
+                             "deployment_target": STAGING, "input": {"target_id": PROD}}], {})
+    assert out["ok"] is False and "target" in out["error"]
+    out = _spec_from_steps([{"id": "s", "capability": "smoke_test",
+                             "input": {"url": "https://a.example"},
+                             "inputs": {"url": "https://b.example"}}], {})
+    assert out["ok"] is False and "'url' twice" in out["error"]
+    same = _spec_from_steps([{"id": "d", "capability": "config_deploy",
+                              "deployment_target": STAGING, "input": {"target_id": STAGING}}], {})
+    assert same.get("ok") is not False
+
+
+def test_duplicate_explicit_step_ids_are_refused_and_from_step_ignores_case():
+    out = _spec_from_steps([{"id": "a", "agent": True}, {"id": "A", "agent": True}], {})
+    assert out["ok"] is False and "unique" in out["error"]
+    spec = _spec_from_steps(
+        [{"id": "staging", "capability": "config_deploy"},
+         {"id": "smoke", "capability": "smoke_test",
+          "input": {"url": {"from_step": "Staging", "field": "deployed_url"}}}], {})
+    assert spec["steps"][1]["binding"]["inputs"]["url"]["from_step"] == "staging"
 
 
 def test_a_missing_input_says_the_step_the_input_and_how_to_set_it(eng, project):

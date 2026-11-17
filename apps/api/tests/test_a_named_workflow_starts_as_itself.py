@@ -139,15 +139,59 @@ def test_a_named_workflow_missing_inputs_says_which(engine, helpdesk, monkeypatc
     assert "tenant_yaml_path" in card["missing_inputs"]["message"]
 
 
-def test_a_named_workflow_without_an_offer_is_still_that_workflow_never_the_build_path(
-        engine, helpdesk, monkeypatch):
+def test_prose_alone_never_picks_a_workflow(engine, helpdesk, monkeypatch):
     pid = helpdesk["id"]
     _publish_api_onboarding(engine, pid)
-    _stub(monkeypatch, "That is the API onboarding workflow.", decision={"action": "new_code_change"})
-    card = _turn(engine, pid, "start api_onboarding with Lumen Pay bad config")["proposal"]
-    assert card["workflow_key"] == "api_onboarding"
-    assert sorted(card["missing_inputs"]["names"]) == ["tenant_name", "tenant_yaml_path"]
-    assert card["start"]["body"]["workflow_key"] == "api_onboarding"
+    _stub(monkeypatch, "Offered.", decision={"action": "new_code_change"})
+    card = _turn(engine, pid, "Add an API onboarding tour to the app")["proposal"]
+    assert "workflow_key" not in card and card["steps"][0]["label"] == "Plan"
+
+
+def test_a_catalogue_workflow_offer_keeps_the_estimate_and_kind_card(engine, helpdesk,
+                                                                    monkeypatch):
+    pid = helpdesk["id"]
+    offer = {"id": "act_offer_cat", "tool": "start_workflow", "label": "Fix it",
+             "args": {"workflow_key": "minor_feature", "directive": "Fix the SLA bug"}}
+    _stub(monkeypatch, "Offered.", [offer], decision={"action": "new_code_change"})
+    card = _turn(engine, pid, "fix the SLA bug")["proposal"]
+    assert "workflow_key" not in card and card["steps"][0]["label"] == "Plan"
+
+
+def test_a_failing_named_card_falls_back_to_the_generic_card(engine, helpdesk, monkeypatch):
+    from boss_engine.services.project_experience import new_work
+
+    pid = helpdesk["id"]
+    _publish_api_onboarding(engine, pid)
+    real = new_work.plan
+
+    def boom(c, p, kind="feature", workflow_key=None, **kw):
+        if workflow_key:
+            raise RuntimeError("plan exploded")
+        return real(c, p, kind, workflow_key, **kw)
+
+    monkeypatch.setattr(new_work, "plan", boom)
+    offer = {"id": "act_offer_f", "tool": "start_workflow", "label": "Start it",
+             "args": {"workflow_key": "api_onboarding", "directive": "Onboard"}}
+    _stub(monkeypatch, "Offered.", [offer], decision={"action": "new_code_change"})
+    card = _turn(engine, pid, "start api_onboarding")["proposal"]
+    assert card is not None and "workflow_key" not in card
+
+
+def test_forged_inputs_the_workflow_does_not_declare_are_refused(
+        world, client, engine, helpdesk, monkeypatch):
+    pid = helpdesk["id"]
+    _publish_api_onboarding(engine, pid)
+    started = []
+    monkeypatch.setattr(main, "start_delivery_workflow",
+                        lambda body, ticket=None: started.append(body) or {"run": {"id": "wfr_x"}})
+    with world.acting_as(world.ctx(world.owner)):
+        res = client.post(f"/v1/projects/{pid}/work", json={
+            "kind": "feature", "text": "Onboard", "workflow_key": "api_onboarding",
+            "inputs": {"tenant_name": "Lumen Pay", "ticket": {"key": "FORGED-1"},
+                       "repository": "evil/repo"}})
+    assert res.status_code == 422, res.text
+    assert "ticket" in res.text and "repository" in res.text
+    assert not started
 
 
 def test_start_sends_the_named_workflow_and_its_inputs_to_the_run(
@@ -165,8 +209,7 @@ def test_start_sends_the_named_workflow_and_its_inputs_to_the_run(
         res = client.post(f"/v1/projects/{pid}/work", json={
             "kind": "feature", "text": "Onboard Lumen Pay", "title": "Onboard Lumen Pay",
             "workflow_key": "api_onboarding",
-            "inputs": {"tenant_name": "Lumen Pay", "tenant_yaml_path": "t/lumen.yaml",
-                       "title": "must not replace the run title"}})
+            "inputs": {"tenant_name": "Lumen Pay", "tenant_yaml_path": "t/lumen.yaml"}})
     assert res.status_code == 200, res.text
     body = seen["body"]
     assert body.workflow_key == "api_onboarding"

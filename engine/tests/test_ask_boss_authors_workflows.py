@@ -107,12 +107,14 @@ def test_the_staged_proposal_maps_every_step_to_a_real_capability():
     steps = [
         {"id": "validate_config", "agent": True,
          "instructions": "run gwlint on the tenant config and write a report with a fix"},
-        {"id": "fix_pr", "capability": "fix_pr", "title": "Fix tenant config"},
+        {"id": "fix_pr", "capability": "fix_pr"},
         {"id": "deploy_staging", "capability": "config_deploy"},
-        {"id": "contract_tests", "capability": "contract_test", "cases": "contract/cases.yaml"},
+        {"id": "contract_tests", "capability": "contract_test",
+         "input": {"cases": "contract/cases.yaml"}},
         {"id": "approve_release", "capability": "release_approval"},
         {"id": "promote_production", "capability": "promote_config"},
-        {"id": "smoke", "capability": "smoke_test", "url": "https://example.test/health"},
+        {"id": "smoke", "capability": "smoke_test",
+         "input": {"url": "https://example.test/health"}},
     ]
     from boss_engine.services import workflow_capabilities
     real = {c["key"] for c in workflow_capabilities.palette()}
@@ -122,7 +124,7 @@ def test_the_staged_proposal_maps_every_step_to_a_real_capability():
         args={"tool": "draft_workflow", "label": "Draft API onboarding",
               "args": {"workflow_key": "api_onboarding", "name": "API onboarding",
                        "steps": [{k: v for k, v in s.items()
-                                  if k in ("id", "capability", "agent", "instructions")}
+                                  if k in ("id", "capability", "agent", "instructions", "input")}
                                  for s in steps]}})
     assert offered["ok"] and offered["proposed"] and offered["tool"] == "draft_workflow"
     assert "NOT executed" in offered["note"]

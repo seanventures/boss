@@ -1729,8 +1729,13 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 "workflow_key": {"type": "string",
                                  "description": "lower_snake_case identifier, stable. Pass the "
                                                 "key of a workflow that EXISTS to publish its "
-                                                "next version; never invent a new key to get "
-                                                "one. Left out, it is made from the name."},
+                                                "next version (or version_of); a new key that "
+                                                "collides with an existing workflow is "
+                                                "refused. Nothing is renamed for you."},
+                "version_of": {"type": "string",
+                               "description": "the key of an existing workflow this publishes "
+                                              "the next version of; refused if it does not "
+                                              "exist."},
                 "name": {"type": "string"},
                 "description": {"type": "string"},
                 "work_class": {"type": "string",
@@ -1793,39 +1798,54 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         wf = services_module("workflows")
         caps = services_module("workflow_capabilities")
         pid = args.get("project_id") or project_id
+        # THE KEY IS THE WORKFLOW'S IDENTITY, and nothing here renames it. A key that is not
+        # lower_snake_case is refused (saying why), not tidied into a different workflow. A new
+        # version of an existing workflow is asked for by NAMING that workflow (`workflow_key`
+        # or `version_of`, which must exist); a key that collides with one is refused with the
+        # existing key named, so the button always shows exactly what it will publish.
         asked_key = str(args.get("workflow_key") or "").strip()
-        # THE KEY IS THE WORKFLOW'S IDENTITY, not something the agent must get exactly right.
-        # Spelled loosely ("API Onboarding", "api-onboarding", a leading digit, too long) it is
-        # tidied; left out, it comes from the name. Publishing a key that EXISTS publishes its
-        # next version, so an agent never needs a new key to get a new version.
-        key = re.sub(r"[^a-z0-9_]+", "_", (asked_key or str(args.get("name") or "")).lower())
-        key = re.sub(r"_+", "_", key).strip("_")
-        if key and not key[0].isalpha():
-            key = "wf_" + key
-        key = key[:61].rstrip("_")
+        version_of = str(args.get("version_of") or "").strip()
+        if version_of and asked_key and version_of != asked_key:
+            return {"ok": False, "error": f"version_of {version_of!r} and workflow_key "
+                                          f"{asked_key!r} name different workflows. Pass one."}
+        key = asked_key or version_of
+        derived = False
+        if not key:
+            key = re.sub(r"_+", "_", re.sub(r"[^a-z0-9_]+", "_",
+                                            str(args.get("name") or "").strip().lower())).strip("_")
+            derived = True
         if not re.fullmatch(r"[a-z][a-z0-9_]{2,60}", key or ""):
             return {"ok": False,
-                    "error": f"workflow_key {asked_key!r} cannot be made into a lower_snake_case "
-                             "key of 3-61 characters. To publish a new version of a workflow "
-                             "that exists, pass ITS key (describe_workflow lists them); "
-                             "otherwise pass a short key such as 'api_onboarding'."}
+                    "error": f"workflow_key {(asked_key or version_of or key)!r} must be "
+                             "lower_snake_case, 3-61 characters, starting with a letter. To "
+                             "publish a new version of a workflow that exists, pass ITS key "
+                             "(describe_workflow lists them)."}
         spec = _spec_from_steps(args.get("steps") or [], args)
         if isinstance(spec, dict) and spec.get("ok") is False:
             return spec
         with ctx.begin() as c:
-            # `api_onboarding_v2` for a workflow that already has `api_onboarding` is a request
-            # for its next version, not a second workflow.
+            def _exists(k: str) -> bool:
+                return bool(c.execute(
+                    _text("SELECT 1 FROM workflow_definitions WHERE project_id=:p AND "
+                          "workflow_key=:k"), {"p": pid, "k": k}).first())
+
+            if version_of and not _exists(version_of):
+                return {"ok": False,
+                        "error": f"version_of {version_of!r} is not a workflow in this project; "
+                                 "describe_workflow lists them. Pass workflow_key for a new one."}
             versioned = re.fullmatch(r"(.+?)_v\d+", key)
-            if versioned and not c.execute(
-                    _text("SELECT 1 FROM workflow_definitions WHERE project_id=:p AND "
-                          "workflow_key=:k"), {"p": pid, "k": key}).first() \
-                    and c.execute(
-                    _text("SELECT 1 FROM workflow_definitions WHERE project_id=:p AND "
-                          "workflow_key=:k"), {"p": pid, "k": versioned.group(1)}).first():
-                key = versioned.group(1)
-            # VALIDATE BEFORE CREATING ANYTHING. A definition row for a spec that cannot publish
-            # leaves a workflow in the catalogue that does not work, and the operator has to go
-            # and delete it.
+            if derived and _exists(key):
+                return {"ok": False,
+                        "error": f"the name {args.get('name')!r} gives the key {key!r}, which "
+                                 "is already a workflow here. To publish its next version "
+                                 f"pass workflow_key={key!r}; for a different workflow pass a "
+                                 "different workflow_key."}
+            if versioned and not _exists(key) and _exists(versioned.group(1)):
+                return {"ok": False,
+                        "error": f"{versioned.group(1)!r} already exists, so {key!r} would be a "
+                                 "second workflow. To publish a new version of it pass "
+                                 f"workflow_key={versioned.group(1)!r}; for a different "
+                                 "workflow pick an unrelated key."}
             try:
                 caps_by_key = {x["key"]: x for x in caps.palette()}
                 # A STEP THAT NAMES A REAL SKILL IS NOT A MISTAKE TO REFUSE.
@@ -3357,6 +3377,12 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                         "available": sorted(_DISCUSS_OPERATIONS_TOOLS)}
             name = "start_workflow"
             call_args["workflow_key"] = workflow_key
+        if name == "draft_workflow" and not (str(call_args.get("workflow_key") or "").strip()
+                                             or str(call_args.get("version_of") or "").strip()):
+            return {"ok": False, "proposed": False,
+                    "error": "a draft_workflow button must name its workflow_key (or version_of "
+                             "for a new version of an existing one) so the button shows exactly "
+                             "what it will publish."}
         unavailable = action_unavailable(name, getattr(ctx, "settings", None))
         if unavailable:
             return {"ok": False,
@@ -5665,10 +5691,10 @@ def _draft_problems(connection, project_id: str, spec: dict, caps_by_key: dict,
             continue
         kind = str(binding.get("capability") or "")
         if kind not in caps_by_key:
-            near = ", ".join(sorted(caps_by_key)[:8])
+            near = ", ".join(sorted(caps_by_key))
             problems.append(
                 f"step '{entry.get('id')}' asks for '{kind}', which is not a capability. "
-                f"Available kinds include: {near}.")
+                f"Valid capabilities: {near}.")
             continue
         capability = caps_by_key[kind]
         if (capability.get("approval_forced_manual")
