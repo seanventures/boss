@@ -3143,7 +3143,9 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                       "description": "NAME -> secret reference id (sref_...)"}},
              required=["target_id"]),
         kind="write",
-        reversibility="safe", permission="deployment_target:manage",
+        # OPERATOR ONLY: rebinding or re-checking a target (production included) is the
+        # operator's press on a proposal, never the model's direct call.
+        reversibility="safe", permission="deployment_target:manage", operator_only=True,
         exposure=Exposure(tags=("deploy", "hosts")))
     def update_deployment_target(ctx, *, project_id, actor, args):
         from ..services.deployment_fleet import update_deployment_target as _update

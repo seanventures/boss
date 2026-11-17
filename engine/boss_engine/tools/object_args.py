@@ -126,6 +126,9 @@ PRODUCTION: dict[str, Production] = {
     "deploy_app": Production(target="args:target_id", environment="args:environment",
                              environment_default="staging"),
     "redeploy": Production(code_task="args:run_id"),
+    # Changing a target's host, port, health check or env changes what a production deploy does.
+    "update_deployment_target": Production(target="args:target_id"),
+    "retarget_app": Production(target="args:target_id"),
     # Configuration deploys (config_deploy, AMEX-G4): the target names the environment; a
     # promotion defaults to production, so it needs deployment:production unless told otherwise.
     "deploy_config": Production(target="args:target_id", environment="args:environment",

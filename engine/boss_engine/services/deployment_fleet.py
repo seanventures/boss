@@ -1161,13 +1161,19 @@ def resolve_health_path(connection, *, project_id: str, repo: str, app_name: str
     path = health_path_from_manifest(manifest_text)
     if path:
         return path, "manifest"
-    if repo:
+    owner, _, name = str(repo or "").strip().strip("/").rpartition("/")
+    if name:
+        # EXACT, owner-scoped: a LIKE on "%/name" treats "_" as a wildcard and matches another
+        # owner's repository of the same name.
         try:
             row = connection.execute(
                 sql("SELECT manifest_text FROM stack_deployments WHERE project_id = :p "
-                    "AND repository LIKE :r AND COALESCE(manifest_text, '') <> '' "
+                    "AND COALESCE(manifest_text, '') <> '' "
+                    "AND (CASE WHEN :o <> '' THEN lower(repository) = lower(:full) "
+                    "     ELSE lower(split_part(repository, '/', 2)) = lower(:n) END) "
                     "ORDER BY created_at DESC LIMIT 1"),
-                {"p": project_id, "r": f"%/{repo}"}).mappings().first()
+                {"p": project_id, "o": owner, "full": f"{owner}/{name}", "n": name}
+            ).mappings().first()
         except Exception:  # noqa: BLE001 - an unreadable history is "no declaration"
             row = None
         path = health_path_from_manifest(row["manifest_text"]) if row else None
@@ -1187,31 +1193,64 @@ def resolve_health_path(connection, *, project_id: str, repo: str, app_name: str
     return "/", "default"
 
 
-def no_host_matches(connection, project_id: str, hint: str) -> Optional[dict[str, Any]]:
-    """None when `hint` ("local", a host's name or address) names a registered host. Otherwise the
-    plain refusal: what is registered, and how to get what was asked for."""
+def valid_health_path(path: Any) -> Optional[str]:
+    """The normalised path, or None when it is not a path (a URL, spaces, a query-less nothing)."""
+    value = str(path or "").strip()
+    if not value or "://" in value or any(ch.isspace() for ch in value) or len(value) > 300:
+        return None
+    return value if value.startswith("/") else "/" + value
+
+
+def this_machine_names() -> set[str]:
+    """Every address or name that means THIS machine: loopback, host.docker.internal, its
+    hostname and the addresses that hostname resolves to (its LAN IP)."""
+    import socket
+
+    names = set(_LOOPBACK) | {"host.docker.internal"}
+    try:
+        host = socket.gethostname().lower()
+        names |= {host, host.split(".")[0]}
+        for info in socket.getaddrinfo(host, None):
+            names.add(str(info[4][0]).lower())
+    except OSError:
+        pass
+    return names
+
+
+def match_host(connection, project_id: str, hint: str
+               ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
+    """(host, None) when `hint` ("local", a host's id, name or address) names a registered host
+    this project may use; (None, refusal) otherwise: what is registered and how to get what was
+    asked for. (None, None) for an empty hint."""
     wanted = str(hint or "").strip().lower()
     if not wanted:
-        return None
+        return None, None
     hosts = [dict(h) for h in list_hosts(connection, project_id)]
     local = wanted in _LOCAL_WORDS
+    here = this_machine_names() if local else set()
     for h in hosts:
-        name, address = str(h.get("name") or "").lower(), str(h.get("address") or "").lower()
-        if wanted in (name, address, str(h.get("id") or "").lower()):
-            return None
-        if local and address in _LOOPBACK:
-            return None
+        if wanted in (str(h.get("id") or "").lower(), str(h.get("name") or "").lower(),
+                      str(h.get("address") or "").lower()):
+            return h, None
+        if local and str(h.get("address") or "").lower() in here:
+            return h, None
     offer = ("register this machine as a deployment host (Infra > Add host), verify it, then "
              "create the target on it" if local else
              "register that host (Infra > Add host) and verify it, or pick one of the "
              "registered hosts")
-    return {"ok": False, "no_matching_host": True, "asked_for": hint,
-            "error": f"no host matches {hint!r}: nothing registered for this project is "
-                     f"{'this machine' if local else hint!r}. Registered: "
-                     f"{', '.join(str(h['name']) for h in hosts) or 'none'}. Nothing was created.",
-            "offer": offer,
-            "hosts": [{"host_id": h["id"], "name": h["name"], "address": h["address"],
-                       "status": h["status"]} for h in hosts]}
+    return None, {"ok": False, "no_matching_host": True, "asked_for": hint,
+                  "error": f"no host matches {hint!r}: nothing registered for this project is "
+                           f"{'this machine' if local else hint!r}. Registered: "
+                           f"{', '.join(str(h['name']) for h in hosts) or 'none'}. "
+                           "Nothing was created.",
+                  "offer": offer,
+                  "hosts": [{"host_id": h["id"], "name": h["name"], "address": h["address"],
+                             "status": h["status"]} for h in hosts]}
+
+
+def no_host_matches(connection, project_id: str, hint: str) -> Optional[dict[str, Any]]:
+    """The refusal when `hint` names no registered host, else None."""
+    return match_host(connection, project_id, hint)[1]
 
 
 def health_path_findings(target: dict[str, Any], *, probe: Any = None) -> list[dict[str, Any]]:
@@ -1238,11 +1277,13 @@ def health_path_findings(target: dict[str, Any], *, probe: Any = None) -> list[d
         if not isinstance(check, dict) or str(check.get("kind") or "http") != "http":
             continue
         scheme = str(check.get("scheme") or "http")
-        port = check.get("port")
+        # THE CHECK'S PORT, else the domain's: never an assumed :80/:443.
+        port = check.get("port") or (str(domains[0]).rpartition(":")[2]
+                                     if ":" in str(domains[0]) else None)
         path = str(check.get("path") or "/")
-        if not base_host:
+        if not base_host or not port:
             continue
-        origin = f"{scheme}://{base_host}" + (f":{port}" if port else "")
+        origin = f"{scheme}://{base_host}:{port}"
         status = ask(origin + path)
         item: dict[str, Any] = {"path": path, "status": status}
         if status == 404:
@@ -1259,6 +1300,24 @@ def health_path_findings(target: dict[str, Any], *, probe: Any = None) -> list[d
 
 
 
+def _port_holder(connection, address: str, port: int, *, exclude_target_id: str
+                 ) -> Optional[dict[str, Any]]:
+    """Another live target that already holds address:port (any app, any environment, so staging
+    and production of one app never share a port on one host), or None."""
+    for row in connection.execute(
+            sql("SELECT t.id, t.app_name, t.environment, t.domains FROM deployment_targets t "
+                "WHERE t.status <> 'retired' AND t.id <> :x " + _NEVER_RAN_SQL),
+            {"x": exclude_target_id}).mappings().all():
+        for domain in (row["domains"] or []):
+            head, _, tail = str(domain).rpartition(":")
+            if tail.isdigit() and head == address and int(tail) == int(port):
+                return dict(row)
+    return None
+
+
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+
+
 def update_deployment_target(
     connection, *, project_id: str, target_id: str, health_path: Optional[str] = None,
     health_expected_status: Optional[int] = None, port: Optional[int] = None,
@@ -1268,39 +1327,101 @@ def update_deployment_target(
     """Change a deployment target in place: its health check (path, expected status), port,
     host, and environment variables BY REFERENCE (name -> a secret ref id, never a value).
 
-    Writes nothing until called; the agent reaches it as a proposal the operator accepts. The
-    API's PATCH /v1/deployment-targets/{id} is the other door to the same row."""
+    EVERYTHING IS CHECKED BEFORE ANYTHING IS WRITTEN: a refusal leaves the row exactly as it
+    was, and `deployment.target_updated` is emitted only after every write succeeded. The agent
+    reaches this as a proposal the operator accepts; the API's PATCH is the other door."""
+    from .secrets_service import bind_secret_to_target
+
     row = connection.execute(
-        sql("SELECT id, host_id, domains, health_checks, required_resources, secret_refs "
-            "FROM deployment_targets WHERE id = :i AND project_id = :p FOR UPDATE"),
+        sql("SELECT id, app_name, host_id, domains, health_checks, required_resources, "
+            "secret_refs FROM deployment_targets WHERE id = :i AND project_id = :p FOR UPDATE"),
         {"i": target_id, "p": project_id}).mappings().first()
     if row is None:
         return {"ok": False, "error": f"no deployment target {target_id} in this project"}
-    changed: dict[str, Any] = {}
 
+    # ---- validate -------------------------------------------------------------------------
+    clean_path = None
+    if health_path is not None:
+        clean_path = valid_health_path(health_path)
+        if not clean_path:
+            return {"ok": False, "error": "health_path must be a path such as /healthz, "
+                                          "not a URL."}
+    if health_expected_status is not None and not 100 <= int(health_expected_status) <= 599:
+        return {"ok": False, "error": "health_expected_status must be an HTTP status."}
     if host_id and host_id != row["host_id"]:
         try:
             usable_host(connection, host_id, project_id)
         except HostNotUsable as refused:
             return {"ok": False, "error": f"{refused.headline} {refused.action}"}
+    effective_host_id = host_id or row["host_id"]
+    host = get_host(connection, effective_host_id) if effective_host_id else None
+    current_port = None
+    for domain in (row["domains"] or []):
+        tail = str(domain).rpartition(":")[2]
+        if tail.isdigit():
+            current_port = int(tail)
+            break
+    new_port = int(port) if port else current_port
+    host_changes = bool(host_id and host_id != row["host_id"])
+    if port and host is None:
+        return {"ok": False, "error": "the target has no host, so a port cannot be set"}
+    if host is not None and new_port and (host_changes or port):
+        holder = _port_holder(connection, str(host["address"]), new_port,
+                              exclude_target_id=target_id)
+        if holder:
+            return {"ok": False,
+                    "error": f"port {new_port} on {host['address']} is already held by "
+                             f"{holder['app_name']!r} ({holder['environment']}). Pick another "
+                             "port: an app's staging and production never share one."}
+    if env:
+        for name, ref in env.items():
+            if not _ENV_NAME.match(str(name)):
+                return {"ok": False, "error": f"{str(name)[:40]!r} is not an environment "
+                                              "variable name."}
+            # THE SAME OWNERSHIP RULE bind_secret_to_target enforces; the value is never echoed.
+            if not connection.execute(
+                    sql("SELECT 1 FROM secret_refs WHERE id = :r AND project_id = :p"),
+                    {"r": str(ref or ""), "p": project_id}).first():
+                return {"ok": False,
+                        "error": f"env {name}: the value is not a secret reference of this "
+                                 "project. Pass the id of an existing reference, never a "
+                                 "value."}
+
+    # ---- write ----------------------------------------------------------------------------
+    changed: dict[str, Any] = {}
+    if host_changes:
         attach_target(connection, target_id=target_id, host_id=host_id)
         changed["host_id"] = host_id
-    host = get_host(connection, host_id or row["host_id"]) if (host_id or row["host_id"]) else None
+    if host is not None and (host_changes or port):
+        # The domain names the host's address and the port; moving either rewrites it, which
+        # also frees the old address:port reservation.
+        resources = [r for r in (row["required_resources"] or [])
+                     if not (isinstance(r, dict) and r.get("kind") == "app_port")]
+        if new_port:
+            resources.append({"kind": "app_port", "name": str(new_port)})
+        connection.execute(
+            sql("UPDATE deployment_targets SET required_resources = CAST(:r AS JSONB), "
+                "domains = CAST(:d AS JSONB), updated_at = now() WHERE id = :i"),
+            {"r": json.dumps(resources),
+             "d": json.dumps([f"{host['address']}:{new_port}"] if new_port
+                             else [str(host["address"])]), "i": target_id})
+        if port:
+            changed["port"] = int(port)
+        if host_changes and new_port:
+            changed["address"] = f"{host['address']}:{new_port}"
 
-    checks = [dict(c) for c in (row["health_checks"] or []) if isinstance(c, dict)]
-    if health_path is not None or health_expected_status is not None or port:
+    if clean_path is not None or health_expected_status is not None or port:
+        checks = [dict(c) for c in (row["health_checks"] or []) if isinstance(c, dict)]
         if not checks:
             checks = [{"kind": "http", "scheme": "http", "path": "/", "expect_status": 200}]
         for check in checks:
             if str(check.get("kind") or "http") != "http":
                 continue
-            if health_path is not None:
-                path = str(health_path).strip()
-                check["path"] = path if path.startswith("/") else "/" + path
-                changed["health_path"] = check["path"]
+            if clean_path is not None:
+                check["path"] = clean_path
+                changed["health_path"] = clean_path
             if health_expected_status is not None:
-                check["expect_status"] = int(health_expected_status)
-                check["expect"] = int(health_expected_status)
+                check["expect_status"] = check["expect"] = int(health_expected_status)
                 changed["health_expected_status"] = int(health_expected_status)
             if port:
                 check["port"] = int(port)
@@ -1309,41 +1430,10 @@ def update_deployment_target(
                 "updated_at = now() WHERE id = :i"),
             {"h": json.dumps(checks), "i": target_id})
 
-    if port:
-        if host is None:
-            return {"ok": False, "error": "the target has no host, so a port cannot be set"}
-        taken = _ports_assigned_on(connection, str(host["address"]))
-        if int(port) in taken and taken[int(port)] != row_app_name(connection, target_id):
-            return {"ok": False,
-                    "error": f"port {port} on {host['address']} is already assigned to "
-                             f"{taken[int(port)]!r}."}
-        resources = [r for r in (row["required_resources"] or [])
-                     if not (isinstance(r, dict) and r.get("kind") == "app_port")]
-        resources.append({"kind": "app_port", "name": str(int(port))})
-        connection.execute(
-            sql("UPDATE deployment_targets SET required_resources = CAST(:r AS JSONB), "
-                "domains = CAST(:d AS JSONB), updated_at = now() WHERE id = :i"),
-            {"r": json.dumps(resources), "d": json.dumps([f"{host['address']}:{int(port)}"]),
-             "i": target_id})
-        changed["port"] = int(port)
-
     if env:
-        bindings = [b for b in (row["secret_refs"] or [])
-                    if not (isinstance(b, dict) and b.get("name") in env)]
         for name, ref in sorted(env.items()):
-            ref = str(ref or "").strip()
-            exists = connection.execute(
-                sql("SELECT 1 FROM secret_refs WHERE id = :r AND project_id = :p"),
-                {"r": ref, "p": project_id}).first()
-            if not exists:
-                return {"ok": False,
-                        "error": f"env {name!r}: {ref!r} is not a secret reference of this "
-                                 "project. Pass the id of an existing reference, never a value."}
-            bindings.append({"name": str(name), "secret_ref_id": ref})
-        connection.execute(
-            sql("UPDATE deployment_targets SET secret_refs = CAST(:s AS JSONB), "
-                "updated_at = now() WHERE id = :i"),
-            {"s": json.dumps(bindings), "i": target_id})
+            bind_secret_to_target(connection, target_id=target_id, name=str(name),
+                                  secret_ref_id=str(ref), project_id=project_id, actor=actor)
         changed["env"] = sorted(env)
 
     if not changed:
@@ -1352,11 +1442,6 @@ def update_deployment_target(
                "deployment_target", target_id, {"changed": changed})
     return {"ok": True, "target_id": target_id, "changed": changed,
             "note": "the target is updated; nothing was deployed. Redeploy to use it."}
-
-
-def row_app_name(connection, target_id: str) -> str:
-    return str(connection.execute(sql("SELECT app_name FROM deployment_targets WHERE id = :i"),
-                                  {"i": target_id}).scalar() or "")
 
 
 def suggest_port(connection, host: dict[str, Any], *, project_id: str = "",
@@ -1451,18 +1536,13 @@ def create_deployment_target(
                         "creating a second one."}
 
     if host and not host_id:
-        # ASKED FOR A PLACE THAT IS NOT REGISTERED ("local staging" with only a remote host):
-        # say so and offer the path, never quietly build somewhere else.
-        refusal = no_host_matches(connection, project_id, host)
+        # ASKED FOR A PLACE THAT IS NOT REGISTERED ("local" staging with only a remote host):
+        # say so and offer the path, never quietly build somewhere else. A match (by id, name,
+        # address, or "local" for this machine) SELECTS that host.
+        matched, refusal = match_host(connection, project_id, host)
         if refusal:
             return refusal
-        for h in list_hosts(connection, project_id):
-            if str(host).strip().lower() in (str(h.get("name") or "").lower(),
-                                             str(h.get("address") or "").lower()) or (
-                    str(host).strip().lower() in _LOCAL_WORDS
-                    and str(h.get("address") or "").lower() in _LOOPBACK):
-                host_id = str(h["id"])
-                break
+        host_id = str(matched["id"])
     hosts = [dict(h) for h in list_hosts(connection, project_id)]
     verified = [h for h in hosts if h.get("status") == "verified"]
     if host_id:
@@ -1530,16 +1610,19 @@ def create_deployment_target(
             sql("SELECT repo FROM deployment_targets WHERE project_id = :p AND repo <> '' "
                 "ORDER BY created_at DESC LIMIT 1"), {"p": project_id}).mappings().first()
         repo = str(row["repo"]) if row else ""
-    repo = str(repo or "").rsplit("/", 1)[-1]
+    repo_full = str(repo or "").strip()
+    repo = repo_full.rsplit("/", 1)[-1]
 
     # A BARE IP HAS NO CERTIFICATE. Defaulting to https had a healthy app failing its gate with
     # WRONG_VERSION_NUMBER; the destination is known here, so this is a fact rather than a guess.
     looks_like_ip = address.count(".") == 3 and all(p.isdigit() for p in address.split("."))
     scheme = "http" if (looks_like_ip or ":" in address) else "https"
 
+    if health_path and not valid_health_path(health_path):
+        return {"ok": False, "error": "health_path must be a path such as /healthz, not a URL."}
     # THE APP SAYS WHERE IT IS HEALTHY. A hard-coded "/" failed every API with no root page.
     check_path, check_source = resolve_health_path(
-        connection, project_id=project_id, repo=repo, app_name=app,
+        connection, project_id=project_id, repo=repo_full, app_name=app,
         health_path=health_path, manifest_text=manifest_text)
 
     target_id = _target_id()

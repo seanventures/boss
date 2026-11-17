@@ -170,3 +170,128 @@ def test_preflight_health_warns_on_404_and_names_the_path_that_answers():
     assert "404" in found[0]["warning"]
     ok = fleet.health_path_findings(target, probe=lambda url: 200)
     assert "warning" not in ok[0]
+
+
+# ---- review round: the write is the operator's, and a refusal writes nothing -----------------
+def test_changing_a_target_is_never_a_direct_model_call_and_counts_as_production():
+    from boss_engine.tools.object_args import PRODUCTION
+    reg = build_default_registry()
+    spec = reg.get("update_deployment_target")
+    assert spec.operator_only is True and spec.self_executable is False
+    # retarget_app stays one-shot by design ("the ordinary fixes still run when asked"), but a
+    # production target now needs deployment:production for it too.
+    for name in ("update_deployment_target", "retarget_app"):
+        assert PRODUCTION[name].target == "args:target_id", name
+
+
+def _made(conn, pid, name, **kw):
+    out = fleet.create_deployment_target(conn, project_id=pid, app_name=name, repo="acme/x", **kw)
+    assert out["ok"], out
+    return out["target_id"]
+
+
+def _row(conn, tid):
+    return dict(conn.execute(text(
+        "SELECT domains, health_checks, secret_refs, required_resources FROM deployment_targets "
+        "WHERE id = :t"), {"t": tid}).mappings().first())
+
+
+def _events(conn, tid):
+    return conn.execute(text(
+        "SELECT count(*) FROM events WHERE entity_id = :t AND event_type = 'deployment.target_updated'"),
+        {"t": tid}).scalar()
+
+
+def test_a_refused_update_writes_nothing_and_emits_nothing(world):
+    conn, pid, _ = world
+    tid = _made(conn, pid, "Atomic App")
+    before = _row(conn, tid)
+    out = fleet.update_deployment_target(conn, project_id=pid, target_id=tid,
+                                         health_path="/healthz",
+                                         env={"API_KEY": "hunter2-raw-value"})
+    assert out["ok"] is False and "hunter2" not in out["error"]
+    assert _row(conn, tid) == before and _events(conn, tid) == 0
+
+
+def test_a_bad_health_path_is_refused(world):
+    conn, pid, _ = world
+    tid = _made(conn, pid, "Path App")
+    assert fleet.update_deployment_target(conn, project_id=pid, target_id=tid,
+                                          health_path="http://evil/x")["ok"] is False
+
+
+def test_moving_host_rewrites_the_domain_and_frees_the_old_address(world):
+    conn, pid, hid = world
+    tid = _made(conn, pid, "Mover")
+    old = _row(conn, tid)["domains"][0]
+    port = old.rpartition(":")[2]
+    new_hid = f"dh_{uuid4().hex[:12]}"
+    conn.execute(text(
+        "INSERT INTO deployment_hosts (id, project_id, name, address, ssh_user, status) "
+        "VALUES (:i, :p, 'remote-two', '198.51.100.9', 'root', 'verified')"),
+        {"i": new_hid, "p": pid})
+    out = fleet.update_deployment_target(conn, project_id=pid, target_id=tid, host_id=new_hid)
+    assert out["ok"], out
+    assert _row(conn, tid)["domains"] == [f"198.51.100.9:{port}"]
+    assert old not in fleet._ports_assigned_on(conn, "198.51.100.7") or True
+    assert fleet._ports_assigned_on(conn, "198.51.100.7").get(int(port)) is None
+
+
+def test_staging_and_production_of_one_app_never_share_a_port(world):
+    conn, pid, _ = world
+    stg = _made(conn, pid, "Twin App", environment="staging")
+    prod = _made(conn, pid, "Twin App", environment="production")
+    taken = int(_row(conn, stg)["domains"][0].rpartition(":")[2])
+    out = fleet.update_deployment_target(conn, project_id=pid, target_id=prod, port=taken)
+    assert out["ok"] is False and "already held" in out["error"]
+
+
+def test_a_host_given_by_id_in_host_selects_that_host(world):
+    conn, pid, hid = world
+    other = f"dh_{uuid4().hex[:12]}"
+    conn.execute(text(
+        "INSERT INTO deployment_hosts (id, project_id, name, address, ssh_user, status) "
+        "VALUES (:i, :p, 'remote-two', '198.51.100.9', 'root', 'verified')"), {"i": other, "p": pid})
+    out = fleet.create_deployment_target(conn, project_id=pid, app_name="By Id", host=other)
+    assert out["ok"] and out["address"] == "198.51.100.9", out
+
+
+def test_this_machines_lan_address_counts_as_local(world, monkeypatch):
+    conn, pid, _ = world
+    monkeypatch.setattr(fleet, "this_machine_names", lambda: {"192.168.1.20", "127.0.0.1"})
+    conn.execute(text(
+        "INSERT INTO deployment_hosts (id, project_id, name, address, ssh_user, status) "
+        "VALUES (:i, :p, 'my-mac', '192.168.1.20', 'root', 'verified')"),
+        {"i": f"dh_{uuid4().hex[:12]}", "p": pid})
+    out = fleet.create_deployment_target(conn, project_id=pid, app_name="Lan Local", host="local")
+    assert out["ok"] and out["address"] == "192.168.1.20", out
+
+
+def test_findings_keep_the_domains_port_and_never_assume_80():
+    seen = []
+    target = {"domains": ["198.51.100.7:8013"], "health_checks": [{"kind": "http", "path": "/"}]}
+    fleet.health_path_findings(target, probe=lambda u: seen.append(u) or 200)
+    assert seen == ["http://198.51.100.7:8013/"]
+    assert fleet.health_path_findings({"domains": ["198.51.100.7"],
+                                       "health_checks": [{"kind": "http", "path": "/"}]},
+                                      probe=lambda u: 200) == []
+
+
+def test_manifest_lookup_is_exact_and_owner_scoped(world):
+    conn, pid, _ = world
+    earlier = f"deptgt_{uuid4().hex[:8]}"
+    conn.execute(text(
+        "INSERT INTO deployment_targets (id, project_id, app_name, repo, environment, "
+        " target_kind, target_ref, status, created_by) VALUES (:t, :p, 'E', 'gw', "
+        " 'production', 'ssh', 'x', 'retired', 'test')"), {"t": earlier, "p": pid})
+    conn.execute(text(
+        "INSERT INTO stack_deployments (id, project_id, target_id, repository, manifest_text, "
+        " status, ref, commit_sha, created_by) VALUES (:i, :p, :t, 'other/gw', :m, 'healthy', "
+        " 'main', 'abc', 'test')"), {"i": f"sd_{uuid4().hex[:8]}", "p": pid, "t": earlier,
+                                     "m": MANIFEST})
+    assert fleet.resolve_health_path(conn, project_id=pid, repo="acme/gw", app_name="Z")[1] \
+        == "default"
+    assert fleet.resolve_health_path(conn, project_id=pid, repo="other/gw", app_name="Z")[0] \
+        == "/healthz"
+    assert fleet.resolve_health_path(conn, project_id=pid, repo="other/g_", app_name="Z")[1] \
+        == "default"

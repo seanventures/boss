@@ -688,6 +688,8 @@ def test_the_tools_that_are_never_pressed_by_the_model():
         "run_on_host",        # arbitrary command on a live machine
         "set_ontology_pack",  # changes which kinds the project's graph accepts (KG P7a)
         "system_doctor_act",  # may pause or cancel a build to free the machine
+        # rebinds / re-checks a target, production included: the operator's press (BOSSAPP-1358)
+        "update_deployment_target",
         "waive_gates",        # removes a check somebody put there
         "write_db",           # arbitrary mutation of any table
     ]
