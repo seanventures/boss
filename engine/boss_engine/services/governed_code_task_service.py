@@ -48,7 +48,7 @@ from ..ports import sql
 from ..schemas import FileChange
 from ..templates import run_env as _run_env
 from . import agent_acts, baseline_verify, ci_gate, design_prompts, plane_sync, review_comments, verification_target
-from . import red_first, repair_review_scope, review_input, review_panel
+from . import red_first, repair_review_scope, review_input, review_panel, review_tools
 from . import approved_prd_design
 from .checks_failing import wait_for_person as _checks_failing_wait
 from . import plan_coverage as _plan_coverage

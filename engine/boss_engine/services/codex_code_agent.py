@@ -37,7 +37,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from . import owned_process
+from . import owned_process, review_tools
 from .cli_harness import CliHarnessUnavailable, GenericCliCodeAgent, _proxy_scoped
 from .engine_contract import EngineCapabilities
 from .workspace_perms import tidies_workspace
@@ -349,6 +349,10 @@ class CodexCodeAgent(GenericCliCodeAgent):
             "session_id": parser.thread_id or resume,
             "stop_reason": "done",
             "exit_code": proc.returncode,
+            # What the CLI itself printed for its tools (never the model's words): a seat whose
+            # commands could not run is NOT RUN (review_tools).
+            **({"tools_blocked": blocked} if (blocked := review_tools.blocked_by_transport(
+                proc.stderr, proc.stdout)) else {}),
         }
 
 

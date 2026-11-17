@@ -40,7 +40,7 @@ import tomllib
 from typing import Callable, Optional
 
 from . import model_proxy as _model_proxy
-from . import owned_process
+from . import owned_process, review_tools
 from .harness_delivery import delivers_kit
 from .harness_registry import FailurePattern, RuntimeBinary
 from .workspace_perms import tidies_workspace
@@ -2213,6 +2213,9 @@ class GenericCliCodeAgent:
             "model": model or "",
             "exit_code": proc.returncode,
             "stop_reason": "done" if ok else "error",
+            # The CLI's own stderr, never the model's words (review_tools).
+            **({"tools_blocked": blocked} if (blocked := review_tools.blocked_by_transport(
+                proc.stderr)) else {}),
         }
 
     def run(self, spec, repo, sandbox):

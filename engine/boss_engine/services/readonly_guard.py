@@ -1,14 +1,15 @@
-"""BOSS holds the read-only invariant itself when a reviewer runs without an inner sandbox.
+"""BOSS WATCHES the live tree while a reviewer runs without an inner sandbox. It never acts on it.
 
 Codex's own `--sandbox read-only` needs user namespaces a container does not grant
-(`bwrap: No permissions to create a new namespace`, BOSSAPP-1350), so every command a reviewer
-tried died and the seat judged blind. A reviewer seat on such an engine runs on a throwaway copy
-(engine_contract `_isolated_copy`) with no inner sandbox, and this guard checks the LIVE tree it
-was copied from: HEAD and the content of every tracked file are recorded before the turn and
-compared after. A change is reverted and the seat fails with the reason.
+(`bwrap: No permissions to create a new namespace`, BOSSAPP-1350), so a review seat runs on a
+throwaway copy (engine_contract `_isolated_copy`) with no inner sandbox. The live tree it was
+copied from is fingerprinted before the turn and after: HEAD, and every changed or untracked file
+(`git status --untracked-files=all`, from the repository's top level, wherever the seat's cwd is).
 
-Tracked files and HEAD only: untracked files are what a concurrent verification run legitimately
-creates, and BOSS never reverts those.
+REPORT-ONLY, by design. The pipeline's own verification run writes into the same tree while the
+seats sit (a lockfile, go.sum, a formatter, build output) and a pipeline step may commit, so
+reverting or failing on a difference would undo BOSS's own work. A change is reported on the seat's
+result; a change no concurrent verify explains (`explained`) marks the seat's verdict suspect.
 """
 from __future__ import annotations
 
@@ -17,8 +18,27 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-#: Dirty tracked files whose bytes are kept to restore them (the change under review).
-_KEEP_BYTES = 8_000_000
+#: Files hashed per snapshot, and the largest one read. A tree past either is said so in the
+#: report (`overflow`), never silently skipped.
+MAX_FILES = 4000
+MAX_BYTES = 5_000_000
+
+#: What a concurrent verification run legitimately writes: not a reviewer's doing.
+_EXPLAINED_NAMES = frozenset({
+    "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb",
+    "bun.lock", "poetry.lock", "Pipfile.lock", "uv.lock", "Cargo.lock", "Gemfile.lock",
+    "composer.lock", "go.sum", "go.work.sum", "mix.lock", "pubspec.lock"})
+_EXPLAINED_DIRS = frozenset({
+    "node_modules", "dist", "build", "out", "target", "coverage", ".next", ".nuxt", ".cache",
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv", "venv", ".gradle",
+    "vendor", "test-results", "playwright-report", ".turbo", "htmlcov"})
+
+
+def explained(path: str) -> bool:
+    """True for a path a concurrent verify run is known to write."""
+    parts = str(path).replace("\\", "/").split("/")
+    return parts[-1] in _EXPLAINED_NAMES or any(p in _EXPLAINED_DIRS for p in parts[:-1]) \
+        or parts[-1].endswith((".tsbuildinfo", ".pyc"))
 
 
 def _git(root: Path, *args: str) -> Optional[str]:
@@ -30,72 +50,73 @@ def _git(root: Path, *args: str) -> Optional[str]:
     return out.stdout if out.returncode == 0 else None
 
 
-def _digest(path: Path) -> Optional[str]:
-    try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:
-        return None
+def is_repo(path: Path) -> bool:
+    return _git(Path(path), "rev-parse", "--show-toplevel") is not None
 
 
-def _dirty(root: Path) -> Optional[list[str]]:
-    out = _git(root, "status", "--porcelain=v1", "-z", "--untracked-files=no")
-    if out is None:
+def snapshot(cwd: Path) -> Optional[dict]:
+    """HEAD and a fingerprint of every dirty or untracked file; None outside a git tree."""
+    top = _git(Path(cwd), "rev-parse", "--show-toplevel")
+    head = _git(Path(cwd), "rev-parse", "HEAD")
+    if top is None:
         return None
-    paths = []
-    parts = out.split("\0")
-    for n, entry in enumerate(parts):
+    root = Path(top.strip())
+    listing = _git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    if listing is None:
+        return None
+    paths, parts = [], listing.split("\0")
+    skip = False
+    for entry in parts:
+        if skip:
+            skip = False
+            continue
         if len(entry) > 3:
             paths.append(entry[3:])
-        if entry[:1] in ("R", "C") and n + 1 < len(parts):
-            parts[n + 1] = "  x"      # the rename's source path is not an entry of its own
-    return paths
-
-
-def snapshot(root: Path) -> Optional[dict]:
-    """HEAD, and the content of every tracked file that is dirty; None outside a git tree."""
-    root = Path(root)
-    head = _git(root, "rev-parse", "HEAD")
-    dirty = _dirty(root)
-    if head is None or dirty is None:
-        return None
-    kept, budget = {}, _KEEP_BYTES
-    for rel in dirty:
+            skip = entry[0] in ("R", "C")     # a rename's source is not an entry of its own
+    prints: dict[str, str] = {}
+    overflow = 0
+    for rel in paths:
+        if len(prints) >= MAX_FILES:
+            overflow += 1
+            continue
         try:
-            data = (root / rel).read_bytes()
+            file = root / rel
+            if file.is_file() and file.stat().st_size > MAX_BYTES:
+                prints[rel] = f"size:{file.stat().st_size}"
+            else:
+                prints[rel] = hashlib.sha256(file.read_bytes()).hexdigest()
         except OSError:
-            continue
-        budget -= len(data)
-        if budget >= 0:
-            kept[rel] = data
-    return {"head": head.strip(), "dirty": {r: _digest(root / r) for r in dirty}, "bytes": kept}
+            prints[rel] = "absent"
+    return {"root": str(root), "head": (head or "").strip(), "prints": prints,
+            "overflow": overflow}
 
 
-def enforce(root: Path, before: Optional[dict]) -> list[str]:
-    """Revert whatever the turn changed in the live tree; the paths it changed ([] = clean)."""
+def compare(before: Optional[dict]) -> Optional[dict]:
+    """What changed in the live tree since `before`, or None when nothing did.
+
+    {"paths": [...], "unexplained": [...], "head_moved": bool, "overflow": int}"""
     if not before:
-        return []
-    root = Path(root)
-    changed: list[str] = []
-    head = (_git(root, "rev-parse", "HEAD") or "").strip()
-    if head and head != before["head"]:
-        _git(root, "reset", "--soft", before["head"])
-        changed.append("HEAD")
-    now = _dirty(root) or []
-    for rel in sorted(set(now) | set(before["dirty"])):
-        was = before["dirty"].get(rel)
-        if rel in before["dirty"] and _digest(root / rel) == was:
-            continue
-        if rel not in before["dirty"] and rel not in now:
-            continue
-        saved = before["bytes"].get(rel)
-        if rel in before["dirty"] and saved is None:
-            continue                              # too large to have kept; never guessed at
-        if saved is not None:
-            try:
-                (root / rel).write_bytes(saved)
-            except OSError:
-                pass
-        else:
-            _git(root, "checkout", "HEAD", "--", rel)
-        changed.append(rel)
-    return changed
+        return None
+    after = snapshot(Path(before["root"]))
+    if after is None:
+        return None
+    changed = sorted(p for p in set(before["prints"]) | set(after["prints"])
+                     if before["prints"].get(p) != after["prints"].get(p))
+    moved = bool(before["head"]) and after["head"] != before["head"]
+    overflow = int(before.get("overflow") or 0) + int(after.get("overflow") or 0)
+    if not changed and not moved and not overflow:
+        return None
+    return {"paths": changed[:50], "unexplained": [p for p in changed if not explained(p)][:50],
+            "head_moved": moved, "overflow": overflow}
+
+
+def words(report: dict) -> str:
+    bits = []
+    if report.get("paths"):
+        bits.append("files changed in the live tree during review: "
+                    + ", ".join(report["paths"][:8]))
+    if report.get("head_moved"):
+        bits.append("HEAD moved")
+    if report.get("overflow"):
+        bits.append(f"{report['overflow']} file(s) past the guard's limit were not compared")
+    return "; ".join(bits)

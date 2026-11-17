@@ -433,6 +433,7 @@ def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, An
 
     tree = tree_listing(root)
     replies: list[Optional[str]] = []
+    blocked: list[Optional[str]] = []
     stops: list[dict[str, Any]] = []
     cost = 0
     model = None
@@ -460,18 +461,21 @@ def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, An
             stops.append({"pass": n, "stop": str(rr.get("stop_reason")), "items": len(batch),
                           "ceiling_usd": rr.get("budget_ceiling_usd"), "words": words})
         replies.append(str(rr.get("summary") or ""))
+        blocked.append(rr.get("tools_blocked"))
     rec = judge(items, "\n".join(r or "" for r in replies), stack, root=root, source=source,
                 dropped=dropped, summary_line=batch_summary(replies), over_cap=over,
                 checks=checks)
     refused = refusal(rec, root) if items else None
     if items and not refused:
         # THE JUDGE'S TOOLS COULD NOT RUN (BOSSAPP-1350: bwrap, 30 items "could not be
-        # verified"): nothing was read, so the items are unjudged, never partial.
+        # verified"): nothing was read, so the items are unjudged, never partial. The engine's
+        # own report of blocked tools decides (`tools_blocked`), or a judge that cited no file
+        # and claimed nothing missing; never a MISSING item, and never the model's prose.
         from . import review_tools
 
-        blind = (review_tools.blocked_reason("\n".join(r or "" for r in replies))
-                 or ("every item says it could not be verified"
-                     if review_tools.all_unverified(rec.get("items") or []) else None))
+        blind = next((b for b in blocked if b), None) or (
+            "the judge cited no file and line for any item"
+            if review_tools.reads_nothing(rec.get("items") or []) else None)
         if blind:
             refused = review_tools.not_run(blind)
     if refused:

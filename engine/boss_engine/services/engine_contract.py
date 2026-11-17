@@ -543,7 +543,8 @@ class ContractedAgent:
                 kwargs["max_budget_usd"] = ceiling
         work = Path(cwd)
         copy: Optional[Path] = None
-        if read_only and (not caps.read_only or caps.read_only_shell):
+        if read_only and (not caps.read_only or caps.read_only_shell) and (
+                readonly_guard.is_repo(work) or work.resolve() != Path.cwd().resolve()):
             # NO (TRUSTWORTHY) READ-ONLY MODE: the reviewer judges a copy; nothing it writes
             # reaches the build. The engine is told it is a review (its review prompt, timeout
             # and argv) and that BOSS holds the read-only invariant by isolation, so it must
@@ -560,25 +561,19 @@ class ContractedAgent:
             run_prompt = run_prompt + LOCAL_TREE_NOTE
         guard = None
         if copy is not None:
-            # BOSS HOLDS READ-ONLY ITSELF for a seat that runs without an inner sandbox: the
-            # live tree is recorded before the turn and checked after (readonly_guard).
+            # A seat with no inner sandbox: the live tree is fingerprinted before the turn and
+            # compared after, and a difference is REPORTED, never acted on (readonly_guard).
             guard = readonly_guard.snapshot(Path(cwd))
         problem = session_tree_problem(work)
         if problem:
             if copy is not None:
                 shutil.rmtree(copy.parent, ignore_errors=True)
             raise EngineSessionFailed(f"{self.engine} not started: {problem}")
-        touched: list[str] = []
         try:
             raw = _call(self._inner.run_role, run_prompt, work, kwargs)
         finally:
             if copy is not None:
                 shutil.rmtree(copy.parent, ignore_errors=True)
-            touched = readonly_guard.enforce(Path(cwd), guard)
-        if touched:
-            raise EngineSessionFailed(
-                f"{self.engine} review seat changed the tree it was only to read "
-                f"({', '.join(touched[:6])}); reverted, and the seat did not count")
         result = normalise_result(raw, engine=self.engine, model=model, caps=caps)
         if kwargs.get("max_budget_usd") is not None:
             # THE CEILING THIS SESSION RAN UNDER, on its result: a session stopped by it says
@@ -592,6 +587,13 @@ class ContractedAgent:
                 f"{self.engine} failed: {result['summary'][:300]}")
         if copy is not None:
             result["read_only_by"] = "copy"
+            # REPORT-ONLY (readonly_guard): never a revert, never a failed seat.
+            changed = readonly_guard.compare(guard)
+            if changed:
+                log.warning("%s: %s", self.engine, readonly_guard.words(changed))
+                result["live_tree_changed"] = changed
+                if changed["unexplained"] or changed["head_moved"]:
+                    result["verdict_suspect"] = readonly_guard.words(changed)
         sid = result.get("session_id")
         if not sid or not caps.resume:
             # A session id for every session, whatever the engine: the pipeline's warm paths
