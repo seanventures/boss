@@ -52,6 +52,7 @@ from . import agent_acts, baseline_verify, ci_gate, design_prompts, plane_sync, 
 from . import red_first, repair_review_scope, review_input, review_panel, review_tools
 from . import approved_prd_design
 from .checks_failing import wait_for_person as _checks_failing_wait
+from . import quality_bar as _quality_bar
 from . import plan_coverage as _plan_coverage
 from . import acceptance_gate as _acceptance_gate
 from . import seat_policy as _seat_policy
@@ -1652,12 +1653,35 @@ def _gate_failure_action(
     return "ship_with_dissent" if (never_block and open_pr) else "block"
 
 
+def _bar_for_run(engine, settings, project_id, spec, fctx) -> tuple[str, dict]:
+    """(the quality bar, its per-gate overrides) for this build (quality_bar.resolve_for_run).
+    An unreadable bar is the default bar, never a failed build."""
+    try:
+        with _transaction(engine) as _qc:
+            return _quality_bar.resolve_for_run(
+                _qc, settings, project_id, spec=spec,
+                workflow_run_id=(fctx or {}).get("workflow_run_id"))
+    except Exception:  # noqa: BLE001
+        _log_caught(logger)
+        return _quality_bar.DEFAULT, {}
+
+
 def _record_quality_gate(connection, *, run_id, project_id, task_id, job_id, evidence, gates):
     # A gate whose check did not run is SKIPPED with its reason (evidence.gates_skipped), never
     # a pass: it is in neither list, and a reader that wants it asks seat_policy.skipped_gates.
     skipped = _seat_policy.skipped_gates(evidence)
-    passed = [k for k, v in gates.items() if v and k not in skipped]
+    # A gate the quality bar let through is a FOLLOW-UP, in neither list (like a skipped one):
+    # it did not pass and it does not fail the build. evidence["quality_bar"] names it.
+    followups = _quality_bar.followups_of(gates)
+    passed = [k for k, v in gates.items() if v and k not in skipped and k not in followups]
     failed = [k for k, v in gates.items() if not v]
+    if hasattr(gates, "bar"):
+        _quality_bar.stamp(evidence, gates, flaky=getattr(gates, "flaky_ref", None) or ())
+        connection.execute(
+            sql("UPDATE code_task_runs SET state = COALESCE(state,'{}'::jsonb) || CAST(:s AS JSONB) "
+                "WHERE id = :id"),
+            {"s": json.dumps({_quality_bar.KEY: evidence[_quality_bar.KEY],
+                              "gates_followup": evidence["gates_followup"]}), "id": run_id})
     status = "pass" if not failed else "fail"
     qg_id = make_id("qg")
     connection.execute(
@@ -2742,12 +2766,15 @@ def _generated_pr_summary(engine, settings, run_id: str, project_id: str, *, tit
         from .pr_review_post import legacy_round
 
         rounds = [legacy_round(evidence, paths)]
-    return pr_description.render(
+    body = pr_description.render(
         title=title, evidence=evidence, gates=gates, paths=paths,
         additions=evidence.get("additions"), deletions=evidence.get("deletions"),
         rounds=rounds, comments=comments, deferred=evidence.get("deferred_findings") or [],
         build_url=pr_description.build_url(settings, run_id, project_id), run_id=run_id,
         quality_gate_id=qg_id or "", baseline=evidence.get("baseline"))
+    # The follow-ups the quality bar let through ride the PR, in one list.
+    section = _quality_bar.pr_section(evidence)
+    return f"{body.rstrip()}\n\n{section}" if section else body
 
 
 def _ledger_review(engine, run_id: str, project_id: str, comments: list, *,
@@ -3557,7 +3584,9 @@ def _review_gate_from_findings(
     try:
         floor = _SEVERITY_ORDER.index((block_severity or "major").strip().lower())
     except ValueError:
-        floor = _SEVERITY_ORDER.index("major")
+        # "none" (the prototype bar): no severity blocks; anything else unknown is "major".
+        floor = (len(_SEVERITY_ORDER) if str(block_severity).strip().lower() == "none"
+                 else _SEVERITY_ORDER.index("major"))
     blocking = [f for f in findings if _SEVERITY_ORDER.index(f["severity"]) >= floor]
     non_blocking = [f for f in findings if _SEVERITY_ORDER.index(f["severity"]) < floor]
     return (not blocking), blocking, non_blocking
@@ -7058,11 +7087,28 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if _needs_person[0] is not None:
                 raise _needs_person[0]
 
+        # FLAKY TESTS NEVER BLOCK (quality_bar.py): a suite that fails and then passes on an
+        # immediate retry is reported as a follow-up, never a failure. At most two retries a run:
+        # a real failure costs one more run of the suite, and only the first two pay it.
+        _flaky_tests: list[str] = []
+        _flake_retries = [2]
+
         def _run_verify(*, record: bool = True):
             """Authoritative test command, scoped to the official app directory. BOSS's own
             install (NPM_INSTALL_CMD, the one every gate runs) is its first step."""
             _halt_if_needs_person()
             result = _run_verify_once(record=record)
+            if (record and not result.ok and _flake_retries[0] > 0
+                    and not verification_target.install_failure(result)
+                    and not getattr(result, "timed_out", False)):
+                _flake_retries[0] -= 1
+                _fc = verification_target.failed_check(result) or {}
+                _failed_first = (f"{_fc.get('command') or 'the test suite'}: "
+                                 f"{_fc.get('line') or 'failed, then passed on retry'}")
+                _again = _run_verify_once(record=record)
+                if _again.ok:
+                    _flaky_tests.append(_failed_first[:300])
+                    result = _again
             env = None
             if record and not result.ok:
                 # COULD THE SUITE RUN AT ALL? (suite_environment) When its failures share one
@@ -7525,7 +7571,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # A PLAN A PERSON SENT BACK GOES BACK TO THAT PERSON (AR-24 review): the re-plan is
             # never approved by the run itself, whatever the tier or the coverage says.
             _asked_again = bool(prior_state.get("plan_change_request"))
+            # THE QUALITY BAR: a prototype needs no plan sign-off (a plan a person sent back
+            # still goes back to them). Standard and production keep it.
+            _plan_signoff = _quality_bar.plan_signoff_required(
+                _bar_for_run(engine, settings, project_id, spec, fctx)[0])
             if _requires_plan_approval(risk_tier) or _gaps or _asked_again:
+              if _plan_signoff or _asked_again:
                 return _block_for_plan_approval(
                     engine, budget, run_id=run_id, project_id=project_id, task_id=task_id,
                     reservation_id=reservation_id, design=design, risk_tier=max(risk_tier, 2),
@@ -9432,6 +9483,27 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "web_package_honest": True,
             # recorded below whether allowed or not, so the PR always states what went
         }
+        # THE QUALITY BAR (quality_bar.py): from here every assignment to `gates` goes through
+        # the bar, so a gate that fails but does not block at this bar is a follow-up, never a
+        # failure, at the first judgement and at every re-judgement after a fix round.
+        _qbar, _qover = _bar_for_run(engine, settings, project_id, spec, fctx)
+        gates = _quality_bar.BarGates(_qbar, _qover, gates)
+        gates.flaky_ref = _flaky_tests
+
+        def _set_acceptance_gate(rec) -> None:
+            # The acceptance gate at this bar: P1 must-haves block at standard, P1+P2 at
+            # production, nothing at prototype; what the bar lets through is a follow-up, and
+            # the record says so (acceptance_gate._unresolved skips a record the bar accepted).
+            _ok, _soft = _quality_bar.acceptance_verdict(rec, gates.bar)
+            gates.set_bar_aware(_acceptance_gate.GATE, _ok, _soft)
+            if _ok and isinstance(rec, dict) and not _acceptance_gate.passed(rec):
+                rec["bar"] = {"bar": gates.bar, "nonblocking": True}
+
+        def _set_consistent(verdict_, summary_) -> None:
+            _ok, _follow = _quality_bar.consistency_passes(gates.bar, verdict_, summary_)
+            gates["consistent"] = _ok
+            if _ok and _follow:
+                gates.note_followup("consistent", [])
         _web_contract: dict | None = None
         if _manifest_governs:
             # The repo defines its own verification (boss.verify.yaml): its suites ran above.
@@ -9660,7 +9732,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # task after the PR opens, so nothing the reviewer caught is lost.
             _rev_pass, _blocking, _deferred = _review_gate_from_findings(
                 r3.get("summary", ""), verdict,
-                getattr(settings, "code_review_block_severity", "major"))
+                _quality_bar.review_block_severity(_qbar))
             deferred_findings = _deferred
             gates["code_review_passed"] = _rev_pass
             gates["security_clean"] = sec_verdict == "clean"
@@ -9690,7 +9762,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if regressions_ok is not None:
                 gates["nothing_broke"] = regressions_ok
             # block on explicit drift, and on a check that never saw the change (review_input)
-            gates["consistent"] = cons_verdict not in ("drift", "hollow")
+            _set_consistent(cons_verdict, r6.get("summary", ""))
 
             # THE ACCEPTANCE CHECK (acceptance_gate.py, BOSSAPP-1211): the WHOLE branch held
             # against the root run's must-haves and the PRD's tested-and-gating list, by an
@@ -9760,7 +9832,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _phase(c, _acceptance_gate.SEAT)
                 _acceptance_record, _acc_cost = _run_acceptance_check()
                 cost += _acc_cost
-                gates[_acceptance_gate.GATE] = _acceptance_gate.passed(_acceptance_record)
+                _set_acceptance_gate(_acceptance_record)
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.acceptance_checked", "boss",
                                "code_task_run", run_id,
@@ -10320,7 +10392,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         review_confidence = 1.0 if verdict == "survived" else 0.0
                         _rev_pass, _blocking, _deferred = _review_gate_from_findings(
                             rr.get("summary", ""), verdict,
-                            getattr(settings, "code_review_block_severity", "major"))
+                            _quality_bar.review_block_severity(_qbar))
                         deferred_findings = _deferred
                         # Materialise the panel's findings as comments NOW, before any fix
                         # round runs, so the implementer and the pull request read the
@@ -10346,7 +10418,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         cons_verdict = ("hollow" if _hollow
                                         else _parse_consistency(rc2.get("summary", "")))
                         r6 = rc2
-                        gates["consistent"] = cons_verdict not in ("drift", "hollow")
+                        _set_consistent(cons_verdict, r6.get("summary", ""))
                     if "security_clean" in failing:
                         rs2, _hollow = _reseat["security_check"]
                         cost += int(rs2.get("cost_usd_micros") or 0)
@@ -10371,7 +10443,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         evidence[_acceptance_gate.KEY] = _acceptance_record
                         evidence[_acceptance_gate.SUMMARY_KEY] = (
                             _acceptance_gate.findings_summary(_acceptance_record))
-                        gates[_acceptance_gate.GATE] = _acceptance_gate.passed(_acceptance_record)
+                        _set_acceptance_gate(_acceptance_record)
                     if "tests_strong_enough" in failing:
                         # THE WEAK-SUITE SEAT RE-JUDGES: plant one bug again and expect the
                         # strengthened suite to catch it. Serial, after the read-only seats: it
@@ -10762,7 +10834,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         r3 = rr
                         _rev_pass, _blocking, _deferred = _review_gate_from_findings(
                             rr.get("summary", ""), verdict,
-                            getattr(settings, "code_review_block_severity", "major"))
+                            _quality_bar.review_block_severity(_qbar))
                         deferred_findings = _deferred
                         # Materialise the panel's findings as comments NOW, before any fix
                         # round runs, so the implementer and the pull request read the
@@ -10805,8 +10877,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             evidence[_acceptance_gate.KEY] = _acceptance_record
                             evidence[_acceptance_gate.SUMMARY_KEY] = (
                                 _acceptance_gate.findings_summary(_acceptance_record))
-                            gates[_acceptance_gate.GATE] = _acceptance_gate.passed(
-                                _acceptance_record)
+                            _set_acceptance_gate(_acceptance_record)
                     failing = [k for k, v in gates.items() if not v]
                     with _transaction(engine) as c:
                         c.execute(sql(
@@ -11103,6 +11174,34 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _rescue_pr(_blocked_reason)
                 return {"status": "blocked", "done": True, "awaiting_gate_override": _held is None,
                         "quality_gate_id": qg_id, "failing_gates": failing}
+
+        # THE QUALITY BAR'S FOLLOW-UPS are never dropped: what the bar let through (a gate that
+        # did not block, a flaky test) joins the deferred findings, so the PR body, the Pass 2
+        # hand-off and the follow-up build carry one list.
+        # (A flaky test is reported on the evidence and the PR, never a build of its own.)
+        _bar_followups = _quality_bar.followup_findings(
+            _quality_bar.followups_of(gates), evidence)
+        if _bar_followups:
+            _have = {" ".join(str(f.get("text") or "").split()).lower()
+                     for f in deferred_findings}
+            deferred_findings = list(deferred_findings) + [
+                f for f in _bar_followups
+                if " ".join(str(f.get("text") or "").split()).lower() not in _have]
+            evidence["deferred_findings"] = deferred_findings
+        if hasattr(gates, "bar"):
+            _quality_bar.stamp(evidence, gates, flaky=_flaky_tests)
+            try:  # the final list, on the run and its gate row (a fix round may have changed it)
+                _final = json.dumps({_quality_bar.KEY: evidence[_quality_bar.KEY],
+                                     "gates_followup": evidence["gates_followup"],
+                                     "deferred_findings": evidence.get("deferred_findings") or []})
+                with _transaction(engine) as c:
+                    c.execute(sql("UPDATE code_task_runs SET state = COALESCE(state,'{}'::jsonb) "
+                                  "|| CAST(:s AS JSONB) WHERE id = :id"), {"s": _final, "id": run_id})
+                    c.execute(sql("UPDATE quality_gates SET evidence = COALESCE(evidence,'{}'::jsonb) "
+                                  "|| CAST(:s AS JSONB) WHERE code_task_run_id = :id"),
+                              {"s": _final, "id": run_id})
+            except Exception:  # noqa: BLE001 — bookkeeping: the PR still carries the list
+                _log_caught(logger)
 
         # GATE PASSED — open the PR via the existing software-factory path.
         # (A re-check reaches the PR terminal with no files: its verdict and card, no commit.)

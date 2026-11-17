@@ -813,6 +813,8 @@ def _unresolved(checks: list[tuple[str, dict]],
     for i, (rid, acc) in enumerate(checks):
         if acc.get("verdict") != "not_met":
             continue
+        if (acc.get("bar") or {}).get("nonblocking"):
+            continue          # the quality bar let this record through (follow-ups, not a failure)
         keys = set((acc.get("source") or {}).get("item_keys") or []) - gone
         cleared = any(later.get("verdict") == "met"
                       and keys <= set((later.get("source") or {}).get("item_keys") or [])

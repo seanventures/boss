@@ -74,6 +74,8 @@ ENFORCED: dict[str, tuple[str, str]] = {
     # Read when a build's checks still fail after its repair rounds (checks_failing.enabled):
     # on, its PR opens as a draft with the checks listed; off, it waits for a waiver.
     "open_pr_when_checks_fail": ("Each build", "each_build"),
+    # Read by every gate of a build (quality_bar.resolve_for_run) and by a production release.
+    "quality_bar": ("Each build", "each_build"),
     "step_recovery": ("Each failed step", "each_failed_step"),
     "recovery_budget_cents": ("Each failed step", "each_failed_step"),
     "recovery_max_minutes": ("Each failed step", "each_failed_step"),
