@@ -25,8 +25,18 @@ describe("job cards", () => {
     expect(card.textContent).toContain("openai/gpt-5");
     expect(q(card, "su-who-paid-review")!.textContent).toBe("API key");
     expect(card.textContent).toContain("All projects");
-    expect(q(card, "su-who-health-review")!.textContent).toContain("Working");
+    expect(q(card, "su-who-health-review")!.textContent).toBe("Not checked");
     expect(q(document.body, "su-who-paid-build")!.textContent).toBe("Subscription");
+  });
+
+  it("never says Working without a server pill; shows the server's pill when sent", async () => {
+    const view = board();
+    view.jobs = view.jobs.map((j) => j.job === "build" && j.resolved
+      ? { ...j, resolved: { ...j.resolved, pill: { state: "failed", tone: "red", label: "Refusing runs", tip: "x" } } } : j);
+    stub(view);
+    mounted = await mountBoard(view, "?area=setup", true, "setup");
+    expect(q(document.body, "su-who-health-chat")!.textContent).not.toContain("Working");
+    expect(q(document.body, "su-who-pill-build")!.textContent).toContain("Refusing runs");
   });
 
   it("Change edits in place under the summary and leaves Advanced closed", async () => {
