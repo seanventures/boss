@@ -68,7 +68,7 @@ _SAME_AS = re.compile(r"(?i)\b(?:same(?:\s+(?:evidence|code|as\s+for))?\s+as|see
                       r"as\s+(?:in|for|with)|per|cf\.?|identical\s+to)\s+(?:ITEM\s*#?\s*|AC-)(\d+)\b")
 #: A bare word that may be an extensionless file (Makefile, Dockerfile, LICENSE, Procfile): it
 #: counts as evidence only when a file of exactly that name is in the tree.
-_BARE = re.compile(r"(?<![\w/.\-])([A-Za-z][\w\-]{2,})(?![\w/.\-])")
+_BARE = re.compile(r"(?<![\w/.\-])([A-Za-z][\w\-]{2,})(?![\w/\-]|\.\w)")
 _DOC_PATH = re.compile(r"(?i)(^|/)(readme[^/]*|changelog[^/]*|docs?/.*|[^/]*\.(md|rst|txt|adoc))$")
 #: Manifests and lockfiles declare a dependency; they deliver no behaviour.
 _DECL_PATH = re.compile(r"(?i)(^|/)(go\.(mod|sum)|package(-lock)?\.json|[^/]*\.lock|"
@@ -131,6 +131,24 @@ def _command_target(root: Path, cited: str, before: str) -> Optional[list[str]]:
     if flag.endswith(("-pl", "--projects")):
         return []                       # a module folder: not file evidence either
     return None
+
+
+#: Directories a cited path starts with that mark it as a path even when the tree lacks it.
+_KNOWN_DIRS = frozenset({"cmd", "internal", "pkg", "src", "app", "apps", "lib", "test", "tests",
+                         "docs", "doc", "scripts", "deploy", "config", "configs", "build", "api",
+                         "web", "public", "migrations", "mocks", "testdata", "bin", "tools"})
+
+
+def _path_shaped(root: Path, cited: str) -> bool:
+    """Whether a slash-joined token is written as a path: a file extension on its last part, a
+    leading `./` or `.dir/`, a first folder the tree has (or a conventional one), or a file
+    the tree has. `Makefile/compose/handler` in a sentence ("match actual Makefile/compose/
+    handler behavior", AR-31) is prose listing three things, not a path — it is never a
+    citation that is absent from the tree."""
+    first, last = cited.split("/", 1)[0], cited.rsplit("/", 1)[-1]
+    return bool("." in last or cited.startswith((".", "/")) or first.startswith(".")
+                or first.lower() in _KNOWN_DIRS or (root / first).is_dir()
+                or (root / cited).exists())
 
 
 def _listed_parts(root: Path, cited: str) -> list[str]:
@@ -219,6 +237,13 @@ def evidence_paths(root: Any, why: str, *,
         # `Store.Swap`, `module.func`): the file that DEFINES it is the evidence (AR-23 —
         # "cited paths not in the tree: auth.VerifyJWT" marked real Go evidence partial).
         hit = _resolve(Path(root), cited) or defs.symbol_file(cited)
+        if not hit and "/" in cited and not _path_shaped(Path(root), cited):
+            # PROSE, NOT A PATH: each part that is a file of that name in the tree is cited
+            # (the Makefile), the rest are words and are never "not in the tree".
+            found.extend(_listed_parts(Path(root), cited)
+                         or [h for h in (_resolve(Path(root), part) for part in cited.split("/"))
+                             if h])
+            continue
         if not hit:
             parts = _listed_parts(Path(root), cited)
             if parts:
@@ -1705,7 +1730,8 @@ def wiring_problem(root: Any, why: str, *, item_text: str = "",
 
 
 def parse_acceptance(reply: str, items: list[dict], *, root: Any, exec_log: Any = None,
-                     replay: Optional[Mapping[str, Any]] = None) -> list[dict[str, Any]]:
+                     replay: Optional[Mapping[str, Any]] = None,
+                     checks: Any = None) -> list[dict[str, Any]]:
     """Each item with the reviewer's status and evidence (the LAST answer for an item wins).
 
     `exec_log` / `replay` (the outer layer, AA-F): the Acceptance Agent's reply is read by
@@ -1759,6 +1785,10 @@ def parse_acceptance(reply: str, items: list[dict], *, root: Any, exec_log: Any 
                 # the answer's own test run over the packages is its evidence. Only then — a
                 # `go test ./...` never evidences anything else (BOSSAPP-1329 review).
                 code = ["(test run)"]
+            if not code and recorded_command_evidence(
+                    cited_why, str(it.get("text") or ""), checks):
+                # A COMMAND THE RUN RECORDED PASSING, about which the item is: its evidence.
+                code = ["(recorded check)"]
             if not code and foreign and not found and not absent:
                 # BORROWED, NOT EVIDENCED: it points at an item that says something else.
                 out.append({**it, "status": UNJUDGED, "unverified": True,
@@ -1814,6 +1844,34 @@ def _suite_run(why: str) -> bool:
     return bool(_SUITE_RUN.search(why))
 
 
+_RUNNER = re.compile(r"(?i)^(?:go\s+(?:vet|test|build)|(?:python3?\s+-m\s+)?pytest|npm\s+(?:run\s+)?\w+|"
+                     r"mvn\s+(?:-\S+\s+)*\w+|gradle\s+\w+|cargo\s+\w+|make\s+\w[\w\-]*)")
+
+
+def recorded_command_evidence(why: str, item_text: str, checks: Any) -> list[str]:
+    """The commands an answer cites (`go vet ./...`) that BOSS itself recorded passing in this
+    run's checks (`checks`: [{command, ok}], `&&`/`;` chains split into their commands), when the
+    ITEM is about that command (its runner, "go vet", is in the item's words): a recorded run is
+    evidence, a command nobody ran is not, and a `go test` never evidences an item about
+    something else (AR-31: "`go vet ./...` and `go test ./...` run clean" read as no evidence)."""
+    ran: set[str] = set()
+    for chk in checks or []:
+        if not chk.get("ok"):
+            continue
+        for part in re.split(r"\s*(?:&&|;)\s*", str(chk.get("command") or "")):
+            if part.strip():
+                ran.add(_ws(part))
+    if not ran:
+        return []
+    out = []
+    for m in re.finditer(r"`([^`\n]{2,120})`", str(why or "")):
+        cmd = _ws(m.group(1))
+        runner = _RUNNER.match(cmd)
+        if cmd in ran and runner and _ws(runner.group(0)).lower() in _ws(item_text).lower():
+            out.append(cmd)
+    return list(dict.fromkeys(out))
+
+
 def _advisory(item: Mapping[str, Any]) -> bool:
     """A judgement item (the contract's tag) answered PARTIAL: reported, never failing. A
     MISSING is never advisory."""
@@ -1824,7 +1882,7 @@ def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
           root: Any, source: Optional[Mapping[str, Any]] = None,
           dropped: int = 0, summary_line: Optional[str] = "",
           over_cap: int = 0, exec_log: Any = None,
-          replay: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+          replay: Optional[Mapping[str, Any]] = None, checks: Any = None) -> dict[str, Any]:
     """The gate's record. It FAILS CLOSED; verdict:
       met       EVERY item MET with evidence in the tree, every declared manifest present, and
                 the reviewer's own summary line says MET
@@ -1845,7 +1903,8 @@ def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
     # at least these (lineage_failures).
     source["item_keys"] = [item_key(i["text"]) for i in items]
     exercised = exec_log is not None or bool(replay)
-    judged = (parse_acceptance(reply or "", items, root=root, exec_log=exec_log, replay=replay)
+    judged = (parse_acceptance(reply or "", items, root=root, exec_log=exec_log, replay=replay,
+                               checks=checks)
               if items else [])
     m = list(_SUMMARY.finditer(str(reply or "")))
     summary = (" ".join(m[-1].group(1).upper().split()) if m else None)

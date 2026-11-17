@@ -90,6 +90,8 @@ export type PrOutput = {
 export type Gate = {
   name: string; label: string; ok: boolean; waivedBy?: string; roleKey: string | null;
   station: StationKey | null; evidence?: string; waivable: boolean; reason?: string;
+  /** The check did not run (a seat the profile did not convene): neither passed nor failed. */
+  skipped?: boolean;
 };
 export type ChecksOutput = { word: string; tip?: string; advisory: boolean; gates: Gate[] };
 export type TestCommand = { command: string; exitCode: number | null; ok: boolean; timedOut: boolean; durationMs?: number };
@@ -235,7 +237,7 @@ export function parseOutputs(w: unknown): CockpitOutputs {
         const x = obj(g);
         return { name: str(x.name), label: str(x.label), ok: x.ok === true, waivedBy: opt(x.waived_by),
                  roleKey: roleOf(x.role_key), station: station(x.station), evidence: opt(x.evidence),
-                 waivable: x.waivable !== false, reason: opt(x.reason) };
+                 waivable: x.waivable !== false, reason: opt(x.reason), skipped: x.skipped === true };
       }),
     } : null,
     tests: tests ? {

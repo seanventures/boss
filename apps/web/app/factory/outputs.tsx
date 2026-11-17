@@ -11,7 +11,7 @@
 import { changeHref, changeSubHref, isLocalChangeUrl, isLocalRepo, linkTarget, reviewChangeWords } from "../../lib/repo-links";
 import { latestPerStep } from "../../lib/model-routes";
 import { WhyThisModel } from "../why-this-model";
-import { CaretDown, CaretRight, Check, X } from "@phosphor-icons/react";
+import { CaretDown, CaretRight, Check, Minus, X } from "@phosphor-icons/react";
 import { plural } from "../../lib/factory-floor";
 import React, { useEffect, useState } from "react";
 
@@ -49,7 +49,7 @@ const STATUS_WORD: Record<string, string> = { open: "Open", addressed: "Fixed", 
 
 /** Which row opens by itself: failed checks, or the PR when it is waiting on you (§4.7). */
 export function defaultOpen(c: Pick<Cockpit, "state" | "outputs">): OutputKey | null {
-  const failed = c.outputs.checks?.gates.some((g) => !g.ok && !g.waivedBy) && !c.outputs.checks?.advisory;
+  const failed = c.outputs.checks?.gates.some((g) => !g.ok && !g.skipped && !g.waivedBy) && !c.outputs.checks?.advisory;
   if (c.state.state === "needs_waiver" || (failed && c.state.state !== "pr_open")) return "checks";
   if (c.state.state === "pr_open") return "pr";
   return null;
@@ -289,16 +289,17 @@ function ChecksBody({ c, projectId, actor, onRefresh }: { c: Cockpit; projectId:
   }
   // WAIVE FROM WHERE THE FAILURES ARE LISTED (the old Iterate block's override), for any
   // stopped build with a failing check, not only one whose card is on the Floor.
-  const failing = checks.gates.filter((g) => !g.ok && !g.waivedBy);
+  const failing = checks.gates.filter((g) => !g.ok && !g.skipped && !g.waivedBy);
   const canWaive = failing.some((g) => g.waivable) && ["needs_waiver", "failed", "blocked"].includes(c.state.state);
   return (
     <span className="fx-out-col">
       <ul className="fx-gates">
         {checks.gates.map((g) => (
-          <li key={g.name} className="fx-gate" data-ok={g.ok} data-testid={`fx-gate-${g.name}`} title={g.evidence || undefined}>
-            {g.ok ? <Check size={12} weight="bold" aria-hidden /> : <X size={12} weight="bold" aria-hidden />}
-            <span className="ag-sr">{g.ok ? "passed" : "failed"}</span>
+          <li key={g.name} className="fx-gate" data-ok={g.skipped ? "skipped" : g.ok} data-testid={`fx-gate-${g.name}`} title={g.evidence || undefined}>
+            {g.skipped ? <Minus size={12} weight="bold" aria-hidden /> : g.ok ? <Check size={12} weight="bold" aria-hidden /> : <X size={12} weight="bold" aria-hidden />}
+            <span className="ag-sr">{g.skipped ? "skipped" : g.ok ? "passed" : "failed"}</span>
             <span>{g.label}</span>
+            {g.skipped ? <span className="fx-muted">Skipped</span> : null}
             {g.evidence ? <span className="fx-muted fx-trunc" data-user-text data-testid={`fx-gate-why-${g.name}`}>{g.evidence}</span> : null}
             {g.waivedBy ? <span className="fx-muted">Waived by {g.waivedBy}</span> : null}
             <Maker roleKey={g.roleKey} boss={!g.roleKey} />

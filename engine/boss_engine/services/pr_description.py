@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Iterable, Optional
 
+from . import seat_policy as _seat_policy
 from .pr_review_post import SEAT_LABELS, VERDICT_WORDS
 
 _GATE_WORDS = {
@@ -86,13 +87,17 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
         # Only ever downgrades: a recorded failure stays a failure.
         if gate in gates and verdict:
             gates[gate] = bool(gates[gate]) and verdict in good
-    passed = [k for k, v in gates.items() if v]
+    # A gate whose check did not run is skipped, with why — never counted as passed.
+    skipped = {g: why for g, why in _seat_policy.skipped_gates(evidence).items() if g in gates}
+    passed = [k for k, v in gates.items() if v and k not in skipped]
     failed = [k for k, v in gates.items() if not v]
     out += ["", "### Checks"]
     if gates:
-        out.append(f"{len(passed)} passed, {len(failed)} failed.")
+        out.append(f"{len(passed)} passed, {len(failed)} failed"
+                   + (f", {len(skipped)} skipped." if skipped else "."))
         out += [f"- ❌ {_gate(g)}" for g in failed]
         out += [f"- ✅ {_gate(g)}" for g in passed]
+        out += [f"- ⏭ {_gate(g)} — skipped: {why}" for g, why in skipped.items()]
     else:
         out.append("- No quality gate was recorded.")
     # Review.

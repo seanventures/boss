@@ -72,6 +72,11 @@ class RouteRequest:
     #: Floors this unit adds to the policy's: a build's own profile (a task that asked for
     #: `strict` gets strict's floors, whatever the project's default preset is).
     extra_floors: tuple = ()
+    #: The operator's Setup pin for the job this step belongs to ("Who does what"), with its
+    #: words for the record. Unlike a snapshot job pin it is always a hard pin (no floor
+    #: raises it): the operator named the model for this job, a profile lane never overrides it.
+    job_pin: Optional[Target] = None
+    job_pin_label: str = ""
     #: A SOFT pin for this step (a profile's explicit step model): tried first within the tier.
     preferred: Optional[Target] = None
     #: The tier the CALLER asks for, as a need, never a model name (a cheap analysis call asks
@@ -381,7 +386,14 @@ class Router:
                 rules.append("local_by_policy")
         if hard is None and engine_pin is None and allowed is None and agent_mode != "pinned":
             pin = snapshot.job_pins.get(job)
-            if pin and pin[0]:
+            if request.job_pin is not None and request.job_pin.engine:
+                if request.job_pin.model:
+                    hard = request.job_pin
+                else:
+                    engine_pin = request.job_pin.engine
+                why.append(f"Pinned in Setup: {request.job_pin_label}")
+                rules.append("pin:setup_job")
+            elif pin and pin[0]:
                 label = engine_label(pin[0]) + (f" · {pin[1]}" if pin[1] else "")
                 if job in policy.hard_pins:
                     hard_is_job = True

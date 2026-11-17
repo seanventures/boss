@@ -30,6 +30,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from . import seat_policy as _seat_policy
 from .self_observability import host_is_degraded
 
 #: A stage this close to its cap did not choose to stop — it was cut off, or nearly was.
@@ -65,6 +66,14 @@ def score_delivery(state: dict, *, pr_number: Optional[int],
         "security": str(state.get("security_verdict") or ""),
         "consistency": str(state.get("consistency_verdict") or ""),
     }
+    # A seat the profile did not convene is skipped on the record (seat_policy decided it, the
+    # gates read the same), not a reviewer that failed to produce a verdict.
+    not_convened = {"adversarial": "review_code", "security": "security_check",
+                    "consistency": "consistency_check"}
+    skipped = _seat_policy.skipped_seats(state)
+    for name, seat in not_convened.items():
+        if seat in skipped and verdicts[name] in {"", "not_run"}:
+            verdicts[name] = "skipped"
     never_ran = [name for name, v in verdicts.items() if v in {"", "not_run"}]
     if never_ran:
         problems.append("reviewer(s) never produced a verdict: " + ", ".join(sorted(never_ran)))

@@ -467,6 +467,7 @@ from datetime import datetime, timedelta, timezone  # noqa: E402
 
 from sqlalchemy import text  # noqa: E402
 
+from . import seat_policy as _seat_policy  # noqa: E402
 from .build_detail import kept_stations, kept_word, now_summary  # noqa: E402
 
 CORE_STATIONS: tuple[str, ...] = ("plan", "tests", "build", "check", "review", "pr", "ship")
@@ -2636,13 +2637,18 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
         failed = [str(g) for g in _j(gate.get("gates_failed"), []) or []]
         gate_evidence = _j(gate.get("evidence"), {}) or {}
         gates = []
-        for name, ok in [(g, True) for g in passed] + [(g, False) for g in failed]:
-            ev = gate_evidence.get(name)
+        # A gate whose check did not run is listed as SKIPPED with why, never as passed.
+        skipped = {g: w for g, w in _seat_policy.skipped_gates(gate_evidence or evidence).items()
+                   if g not in passed and g not in failed}
+        for name, ok in ([(g, True) for g in passed] + [(g, False) for g in failed]
+                         + [(g, False) for g in skipped]):
+            ev = skipped.get(name) or gate_evidence.get(name)
             if not isinstance(ev, str) or not ev.strip():
                 # The row's evidence is keyed by evidence names, not gate names (gate_reason).
                 ev = gate_reason(name, ok, gate_evidence or evidence, run)
             gates.append({
                 "name": name, "label": gate_label(name), "ok": ok,
+                **({"skipped": True} if name in skipped else {}),
                 "waived_by": waived.get("by") if name in (waived.get("gates") or []) else None,
                 "role_key": gate_owner(name, acts), "station": gate_station(name),
                 "evidence": ev[:160] if isinstance(ev, str) else None,
@@ -2651,8 +2657,10 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
                    if name in UNWAIVABLE_GATES else {})})
         advisory = bool(failed) and bool(run.get("pull_request_url")) and not waived and bool(
             fctx.get("advisory_failing_gates"))
-        word = (f"All {len(gates)} passed" if not failed else
+        word = (f"All {len(passed)} passed" if not failed else
                 f"{len(failed)} failed" + (" · shipped anyway" if advisory else ""))
+        if skipped:
+            word += f" · {len(skipped)} skipped"
         checks = {"word": word, "advisory": advisory, "gates": gates,
                   "tip": "First pass: checks advise, they don't block" if advisory else None}
     elif running:

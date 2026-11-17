@@ -99,7 +99,8 @@ def build_routes(connection: Any, settings: Any, project_id: str,
     per stage. In Smart mode the router may move a stage to another connected source at run
     time; the evidence says so."""
     from .model_router import store
-    from .model_router.stages import StageRouter, lane_engines, pinned_engine, task_pin
+    from .model_router.stages import (StageRouter, lane_engines, pinned_engine, setup_job_pins,
+                                      task_pin)
     from .model_routing import CHOSEN, resolve_job
     from .pipeline_profile_service import resolve_for_run
 
@@ -111,6 +112,7 @@ def build_routes(connection: Any, settings: Any, project_id: str,
                          title=str(spec.get("title") or ""), profile=profile,
                          build_engine=build_engine, review_engine=review_engine,
                          budget_state="green")
+    router._pins = setup_job_pins(connection, project_id)  # the stages' own pin reading
     try:
         smart = store.mode_of(connection, s, project_id) == "smart"
     except Exception:  # noqa: BLE001 — an unreadable mode is the default, Fixed

@@ -140,6 +140,7 @@ span.fx-row-face { cursor: default; }
 .fx-gate { display: flex; align-items: center; gap: 6px; }
 .fx-gate[data-ok="true"] svg { color: var(--green); }
 .fx-gate[data-ok="false"] svg { color: var(--red); }
+.fx-gate[data-ok="skipped"] svg { color: var(--muted); }
 .fx-cmd[data-ok="false"] { color: var(--red); }
 .fx-cmt { display: flex; flex-direction: column; gap: 3px; padding: 6px 0; border-bottom: 1px solid var(--hair); }
 .fx-cmt-head { display: flex; align-items: center; gap: 6px; min-width: 0; }

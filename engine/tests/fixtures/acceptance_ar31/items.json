@@ -1,0 +1,30 @@
+{
+ "crun_579975fa542645f0a9d5": [
+  {
+   "n": 5,
+   "id": "AC-5",
+   "text": "All tests pass; the README quick start works as written.",
+   "evidence": "`go vet ./...` clean, `go test ./...` all packages `ok`; README quick-start commands cross-checked against real `Makefile`/endpoints."
+  },
+  {
+   "n": 24,
+   "id": "AC-24",
+   "text": "Clean, idiomatic Go; `go vet` and `go test ./...` clean; `make test`, `make run-staging`, `make run-prod`.",
+   "evidence": "`go vet ./...` and `go test ./...` clean; `Makefile` targets `test`, `run-staging`, `run-prod` exist and run real commands (docker compose / vet+test+race)."
+  }
+ ],
+ "crun_4db2096201f94f1da054": [
+  {
+   "n": 5,
+   "id": "AC-5",
+   "text": "All tests pass; the README quick start works as written.",
+   "evidence": "`go vet ./...` and `go test ./...` run clean in this tree (all packages `ok`); README quick start commands (`make test`, `make run-staging`, curl sequence) match actual Makefile/compose/handler behavior."
+  },
+  {
+   "n": 24,
+   "id": "AC-24",
+   "text": "Clean, idiomatic Go; `go vet` and `go test ./...` clean; `make test`, `make run-staging`, `make run-prod`.",
+   "evidence": "`go vet ./...` and `go test ./...` run clean in this tree; `make test`, `make run-staging`, `make run-prod` present and correct in Makefile."
+  }
+ ]
+}

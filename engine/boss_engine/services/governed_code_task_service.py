@@ -53,6 +53,7 @@ from . import approved_prd_design
 from .checks_failing import wait_for_person as _checks_failing_wait
 from . import plan_coverage as _plan_coverage
 from . import acceptance_gate as _acceptance_gate
+from . import seat_policy as _seat_policy
 from .knowledge import learning_context, learning_writeback  # learning while executing (BOSSAPP-768)
 from .bakeoff import (
     fixture_for_run as bakeoff_fixture_for_run,
@@ -1651,7 +1652,10 @@ def _gate_failure_action(
 
 
 def _record_quality_gate(connection, *, run_id, project_id, task_id, job_id, evidence, gates):
-    passed = [k for k, v in gates.items() if v]
+    # A gate whose check did not run is SKIPPED with its reason (evidence.gates_skipped), never
+    # a pass: it is in neither list, and a reader that wants it asks seat_policy.skipped_gates.
+    skipped = _seat_policy.skipped_gates(evidence)
+    passed = [k for k, v in gates.items() if v and k not in skipped]
     failed = [k for k, v in gates.items() if not v]
     status = "pass" if not failed else "fail"
     qg_id = make_id("qg")
@@ -1679,7 +1683,7 @@ def _record_quality_gate(connection, *, run_id, project_id, task_id, job_id, evi
     )
     emit_event(connection, project_id, "quality_gate.recorded", "boss", "quality_gate", qg_id,
                {"status": status, "gates_passed": passed, "gates_failed": failed,
-                "code_task_run_id": run_id})
+                "gates_skipped": skipped, "code_task_run_id": run_id})
     return qg_id, status
 
 
@@ -9453,16 +9457,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # panel was ["regression"].
             # Mark them satisfied-because-not-applicable, and record WHY in the evidence so
             # the PR still says plainly that no reviewer looked at this.
-            for _seat, _gate in (("review_code", "code_review_passed"),
-                                 ("security_check", "security_clean"),
-                                 ("consistency_check", "consistent")):
-                if _seat not in enabled_seats:
+            for _seat, _gate in _seat_policy.SEAT_GATES.items():
+                _why_skipped = _seat_policy.skip_reason(_seat, enabled_seats, profile)
+                if _why_skipped:
+                    # The flow treats it as satisfied; the RECORD says skipped, never passed
+                    # (gates_skipped → _record_quality_gate, the PR, the console, the
+                    # retrospective — all read seat_policy).
                     gates[_gate] = True
                     # NB: `evidence` is not bound until further down, so collect here and
                     # merge below. Reading it here would NameError exactly when a profile
                     # skips a seat — i.e. on every lean run.
-                    skipped_seats[_seat] = (
-                        f"not convened: profile '{profile.get('name')}' does not include this seat")
+                    skipped_seats[_seat] = _why_skipped
             if mutation_caught is not None and not _strength_advisory:
                 gates["tests_strong_enough"] = mutation_caught
             if regressions_ok is not None:
@@ -9517,6 +9522,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     return _acceptance_gate.run_check(
                         _items, title=title, stack=_stack, root=review_root, source=_source,
                         dropped=_dropped, batch_size=batch_size,
+                        # The run's own recorded test command, when it passed (AR-31).
+                        checks=([{"command": test_cmd, "ok": True}]
+                                if test_cmd and tests_passed else []),
                         ask=lambda prompt: consistency_agent.run_role(
                             prompt, review_root, read_only=True, model=consistency_model,
                             max_turns=_turns, **_ceiling))
@@ -9727,6 +9735,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # Record NOT-RUN seats on the run. `lean` marking these gates satisfied must never
             # read as "a reviewer approved this" — the PR has to say plainly that none looked.
             evidence.update({f"{k}_skipped": v for k, v in skipped_seats.items()})
+            evidence["gates_skipped"] = {_seat_policy.SEAT_GATES[k]: v
+                                         for k, v in skipped_seats.items()}
 
         # No gate judges a build whose engine could not run: its verdict is the harness's.
         _stop_on_harness_failure("quality gate")

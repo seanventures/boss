@@ -98,6 +98,49 @@ def lane_engines(connection: Any, settings: Any, project_id: str, spec: dict
     return settings, build_engine, review_engine
 
 
+#: The Setup jobs that pin a build stage, with their words.
+_PIN_JOBS = {"build": "Build", "review": "Review", "hard": "Hard problems"}
+
+
+def setup_job_pins(connection: Any, project_id: Optional[str]) -> dict[str, tuple[str, Optional[str]]]:
+    """job -> (engine, model) for each job the operator PINNED in Setup › Who does what
+    (setup_actions.set_job writes the engine knob, org-wide or per project). A job left on Auto
+    has no engine knob set: "pinned" is read from the knob, never from the lane's engine
+    default (which is non-empty on an install that pinned nothing)."""
+    if connection is None or not project_id:
+        return {}
+    try:
+        from ..model_routing import JOB_KNOBS
+        from ..project_settings import get_all
+
+        with connection.begin_nested():
+            chosen = get_all(connection, project_id)
+    except Exception:  # noqa: BLE001 — an unreadable setting pins nothing
+        return {}
+    pins: dict[str, tuple[str, Optional[str]]] = {}
+    for job in _PIN_JOBS:
+        engine_knob, model_knob = JOB_KNOBS[job]
+        engine = str(chosen.get(engine_knob) or "").strip().lower()
+        if engine:
+            model = str(chosen.get(model_knob) or "").strip()
+            pins[job] = (engine, model or None)
+    return pins
+
+
+def pin_for_step(pins: dict, step: str, *, kind: str = "build_stage"
+                 ) -> Optional[tuple[str, Optional[str], str]]:
+    """(engine, model, words) when the operator pinned the job `step` belongs to: Review
+    covers the judging seats, Build everything else that builds."""
+    from .tiers import job_for
+
+    job = job_for(kind, step)
+    pin = pins.get(job)
+    if not pin:
+        return None
+    engine, model = pin
+    return engine, model, f"{_PIN_JOBS[job]} → {engine}" + (f" · {model}" if model else "")
+
+
 class StageRouter:
     """One per governed run. Holds the run's ledger; every stage boundary asks `route`."""
 
@@ -116,6 +159,12 @@ class StageRouter:
         self.ledger = EscalationLedger(seed_from_lineage(fctx))
         self.mode_override = str(spec.get("routing_mode") or "").strip().lower() or None
         self.decisions: dict[str, RouteDecision] = {}
+        self._pins: Optional[dict] = None
+
+    def _setup_pins(self, connection: Any) -> dict:
+        if self._pins is None:
+            self._pins = setup_job_pins(connection, self.project_id)
+        return self._pins
 
     # ── the legacy answer (Fixed mode) ─────────────────────────────────────────────────────
     def legacy(self, step: str, *, escalated: bool = False, budget: bool = True,
@@ -125,6 +174,11 @@ class StageRouter:
         s = self.settings
         if escalated:
             prior = previous or {}
+            hard_pin = self._pins.get("hard") if self._pins else None
+            if hard_pin:
+                words = f"Hard problems → {hard_pin[0]}" + (f" · {hard_pin[1]}" if hard_pin[1] else "")
+                return LegacyRoute(hard_pin[0], hard_pin[1], f"pinned in Setup: {words}", "strong",
+                                   {"escalated": True})
             prior_engine = str(prior.get("engine") or "").strip().lower()
             engine = (s.code_agent_strong_engine or prior.get("engine") or self.build_engine)
             chosen = str(engine or "").strip().lower()
@@ -140,6 +194,16 @@ class StageRouter:
             return LegacyRoute(engine, model, "escalated to the hard-problems lane", "strong",
                                {"escalated": True})
         r = route_for_step(self.profile, step, self.spec.get("model_config"))
+        # THE OPERATOR'S JOB PIN beats the profile's lane for every stage the job covers. Only a
+        # task's own pin (spend-cap failover, an experiment) is above it.
+        job_pin = None if (r.get("engine") or r.get("model")) else \
+            pin_for_step(self._pins or {}, step)
+        if job_pin:
+            from .compat import fits
+
+            engine, model, words = job_pin
+            return LegacyRoute(engine, model if fits(engine, model) else None,
+                               f"pinned in Setup: {words}", r.get("model_class"), {})
         lite = False
         if budget:
             r, lite = apply_budget_pressure(r, step, self.budget_state)
@@ -169,6 +233,9 @@ class StageRouter:
         if signal:
             self.ledger.record(step, signal)
         escalated_legacy = signal in ("no_output", "final_attempt")
+        with self._tx() as connection:
+            job_pin = None if task_pin(self.spec, step) else \
+                pin_for_step(self._setup_pins(connection), step)
         request = RouteRequest(
             kind="build_stage", step=step, project_id=self.project_id, unit_id=self.run_id,
             role=self.spec.get("role_key") or None,
@@ -177,6 +244,8 @@ class StageRouter:
             risk_tier=self.spec.get("risk_tier") if isinstance(self.spec.get("risk_tier"), int)
             else None,
             task_pin=task_pin(self.spec, step),
+            job_pin=Target(job_pin[0], job_pin[1]) if job_pin else None,
+            job_pin_label=job_pin[2] if job_pin else "",
             legacy=lambda: self.legacy(step, escalated=escalated_legacy, budget=budget,
                                        previous=previous),
             mode_override=self.mode_override,
