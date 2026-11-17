@@ -37,6 +37,8 @@ offered: the agent runs its own commands inside BOSS's sandbox.
 """
 from __future__ import annotations
 
+from . import brief_items as _brief_items
+
 import logging
 import os
 import queue
@@ -440,7 +442,7 @@ class AcpCodeAgent(GenericCliCodeAgent):
         if error and not summary:
             raise CliHarnessUnavailable(f"{self.spec.name}: {error[:300]}")
         out: dict[str, Any] = {
-            "summary": summary[:8000] or f"({self.spec.name} produced no output)",
+            "summary": _brief_items.clip_summary(summary) or f"({self.spec.name} produced no output)",
             "usage": {"model": model or self.spec.name},
             "cost_usd_micros": 0,
             "cost_unreported": True,

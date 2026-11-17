@@ -24,6 +24,8 @@ corrupt the one place BOSS answers "what did this cost".
 """
 from __future__ import annotations
 
+from . import brief_items as _brief_items
+
 import contextlib
 import contextvars
 from dataclasses import dataclass
@@ -2203,7 +2205,7 @@ class GenericCliCodeAgent:
                 raise CliHarnessUnavailable(
                     f"{self.spec.name} exited {proc.returncode}: {summary[:300]}")
         return {
-            "summary": summary[:8000] or f"({self.spec.name} produced no output)",
+            "summary": _brief_items.clip_summary(summary) or f"({self.spec.name} produced no output)",
             "usage": {"model": model or self.spec.name},
             "cost_usd_micros": 0,
             "cost_unreported": True,

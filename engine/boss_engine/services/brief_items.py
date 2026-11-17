@@ -98,30 +98,133 @@ def sendback_note(missing: Iterable[Item]) -> str:
 
 
 def _reports(summary: str, key: str) -> list[str]:
-    rx = re.compile(r"(?im)^[\s>*\-`#]*(?:(?:ITEM|COVERAGE)\s+)?" + re.escape(key)
+    """The lines of a report that answer `key`. A bare number key (a brief with no ledger keys)
+    must carry the ITEM/COVERAGE prefix, so "1. fixed the cache" prose answers nothing."""
+    prefix = r"(?:ITEM|COVERAGE)\s+" if key.isdigit() else r"(?:(?:ITEM|COVERAGE)\s+)?"
+    rx = re.compile(r"(?im)^[\s>*\-`#]*" + prefix + re.escape(key)
                     + r"(?![\w-])[\s*`:.)\]-]*(.*)$")
     return [m.group(1).strip() for m in rx.finditer(str(summary or ""))]
 
 
+def clip_summary(text: Optional[str], limit: int = 8000, head: int = 3000) -> str:
+    """A harness's summary for the pipeline, keeping its HEAD and its TAIL: the ITEM/COVERAGE
+    report comes last, and cutting at the first `limit` characters threw it away."""
+    text = str(text or "")
+    if len(text) <= limit:
+        return text
+    tail = max(0, limit - head - 24)
+    return text[:head] + "\n[... middle cut ...]\n" + text[-tail:]
+
+
 _FIXED = re.compile(r"(?i)^\**\s*fixed\b[\s*:\-—–]*(.*)$")
 _NOT_FIXED = re.compile(r"(?i)^\**\s*not[\s_-]*fixed\b[\s*:\-—–]*(.*)$")
-_PATHISH = re.compile(r"\S+\.\w+|\S+:\d+|`[^`]+`")
+_PATH = re.compile(r"`?([\w./-]*[\w-]\.[A-Za-z0-9]+|[\w.-]+/[\w./-]+|Dockerfile|Makefile)(?::\d+)?`?")
+_CODE_EXT = frozenset({"go", "py", "js", "jsx", "mjs", "ts", "tsx", "java", "kt", "rs", "rb", "cs",
+                       "c", "cc", "cpp", "h", "hpp", "php", "swift", "scala"})
 
 
-def unaddressed(items: Iterable[Item], summary: Optional[str]) -> list[Item]:
-    """The items the implementer's report does not answer: no line for the key, a FIXED with no
-    place, or a NOT-FIXED with no reason."""
-    out = []
+def _paths(text: str) -> list[str]:
+    return [m.group(1) for m in _PATH.finditer(str(text or ""))]
+
+
+def is_code_item(item: Item) -> bool:
+    """A finding anchored to a source file (not docs, config or build files): only a test can
+    stand for it."""
+    return any(p.rsplit(".", 1)[-1].lower() in _CODE_EXT for p in _paths(item.text.split(": ", 1)[0]))
+
+
+def _same_file(a: str, b: str) -> bool:
+    a, b = a.strip("./"), b.strip("./")
+    return a == b or a.endswith("/" + b) or b.endswith("/" + a)
+
+
+@dataclass
+class Assessment:
+    """What an implementer's report amounts to, checked against the files it changed."""
+    fixed: list[Item]                 # FIXED, and a file it names was changed
+    missing: list[Item]               # no line at all
+    unbacked: list[Item]              # FIXED, but no file it names was changed
+    not_fixed: list[tuple[Item, str]]  # NOT-FIXED, with its reason
+
+    @property
+    def send_back(self) -> list[Item]:
+        return self.missing + self.unbacked
+
+    @property
+    def not_done(self) -> list[Item]:
+        """Every item the coder did not fix: judged by review and acceptance."""
+        return self.missing + self.unbacked + [i for i, _ in self.not_fixed]
+
+    def record(self) -> dict:
+        return {"fixed": [i.key for i in self.fixed], "missing": [i.key for i in self.missing],
+                "unbacked": [i.key for i in self.unbacked],
+                "not_fixed": [{"key": i.key, "reason": r[:200]} for i, r in self.not_fixed]}
+
+
+def assess(items: Iterable[Item], summary: Optional[str],
+           changed: Iterable[str]) -> Assessment:
+    """A FIXED claim counts only when a file it names is among the files actually changed; a
+    NOT-FIXED counts as answered (with its reason) but is not a fix; no line is no answer."""
+    changed = [str(c) for c in changed or ()]
+    out = Assessment([], [], [], [])
     for it in items or ():
-        ok = False
+        verdict = None
+        reason = ""
         for rest in _reports(summary or "", it.key):
             f, n = _FIXED.match(rest), _NOT_FIXED.match(rest)
-            if f and _PATHISH.search(f.group(1) or ""):
-                ok = True
+            if f and any(_same_file(p, c) for p in _paths(f.group(1) or "") for c in changed):
+                verdict = "fixed"
+                break
+            if f and _paths(f.group(1) or ""):
+                verdict = verdict or "unbacked"
             elif n and len((n.group(1) or "").strip()) >= 3:
-                ok = True
-        if not ok:
-            out.append(it)
+                verdict, reason = "not_fixed", n.group(1).strip()
+        if verdict == "fixed":
+            out.fixed.append(it)
+        elif verdict == "unbacked":
+            out.unbacked.append(it)
+        elif verdict == "not_fixed":
+            out.not_fixed.append((it, reason))
+        else:
+            out.missing.append(it)
+    return out
+
+
+def unaddressed(items: Iterable[Item], summary: Optional[str],
+                changed: Iterable[str] = ()) -> list[Item]:
+    """The items to send the implementer back for (no line, or a FIXED no changed file backs)."""
+    return assess(items, summary, changed).send_back
+
+
+def judge_block(not_done: Iterable[Item], excused: Iterable[Item] = ()) -> str:
+    """The list review and acceptance are handed: items the coder did not fix, and items no
+    test covers, each to be judged against the tree."""
+    nd, ex = list(not_done or ()), list(excused or ())
+    out = ""
+    if nd:
+        out += ("\n\nITEMS THE CODER DID NOT FIX (it reported them not fixed, skipped them, or "
+                "named no file it changed). JUDGE EACH against the tree; an unfixed one is a "
+                "finding:\n" + "\n".join(f"  - {i.line()}" for i in nd))
+    if ex:
+        out += ("\n\nITEMS NO UNIT TEST COVERS (the test writer said they are not "
+                "unit-testable). VERIFY EACH in the tree:\n"
+                + "\n".join(f"  - {i.line()}" for i in ex))
+    return out + ("\n" if out else "")
+
+
+def pr_lines(record: Optional[dict]) -> list[str]:
+    """The PR body's lines for what the brief's items came to."""
+    r = record or {}
+    if not r.get("items"):
+        return []
+    left = ([f"{k} (no report)" for k in r.get("missing") or []]
+            + [f"{k} (claimed fixed, no such file changed)" for k in r.get("unbacked") or []]
+            + [f"{x['key']} (not fixed: {x['reason']})" for x in r.get("not_fixed") or []])
+    out = [f"- Brief items: {len(r.get('fixed') or [])} of {r['items']} fixed by the coder"
+           + (", reworked after a send-back" if r.get("reworked") else "")
+           + (", rework reverted (it broke the tests)" if r.get("reverted") else "")]
+    out += [f"  - ⚠ not fixed: {x}" for x in left]
+    out += [f"  - to verify (no unit test): {k}" for k in r.get("excused") or []]
     return out
 
 
@@ -134,8 +237,9 @@ def coverage_note(items: Iterable[Item]) -> str:
     if not items:
         return ""
     return ("\n\nTHE BRIEF'S OPEN ITEMS. Write a test for EACH item a unit test can pin (a "
-            "behaviour, an output, a config value the code reads). An item no test can judge "
-            "(prose in a README, a deploy file, a build flag) gets no test.\n"
+            "behaviour, an output, a config value the code reads). A finding in SOURCE CODE "
+            "needs a test; only an item no test can judge (prose in a README, a deploy file, a "
+            "build flag) may go without one.\n"
             + "\n".join(f"  {i}. {it.line()}" for i, it in enumerate(items, 1))
             + "\n\nEND your reply with one line per item, using the item's key exactly:\n"
               "  COVERAGE <key>: <TestName>[, <TestName>]\n"
@@ -143,27 +247,41 @@ def coverage_note(items: Iterable[Item]) -> str:
               "An item with no line is treated as skipped.\n")
 
 
-def uncovered(items: Iterable[Item], summary: Optional[str],
-              defined: Iterable[str]) -> list[Item]:
-    """The items the test writer skipped, or covered by a test the suite does not define.
-    `defined` is the set of test names the tree's test files define (brief_tests.defined)."""
+def _coverage(items, summary, defined):
+    """(uncovered, excused): an item is covered by a test its line names EXACTLY and the suite
+    defines; excused when the line says it is not unit-testable and it is not a code finding."""
     have = set(defined or ())
-    out = []
+    uncovered, excused = [], []
     for it in items or ():
-        ok = False
+        ok = excuse = False
         for rest in _reports(summary or "", it.key):
             if UNTESTABLE in rest.lower():
-                ok = True
+                excuse = True
                 continue
-            names = re.findall(r"[A-Za-z_][\w./]*", rest)
-            # A JS/TS test is titled by a sentence: its whole title, quoted or not, counts.
-            if (any(n in have or n.split("/")[-1] in have for n in names)
-                    or any(len(h) >= 8 and h in rest for h in have)):
+            parts = [p.strip(" `.*") for p in rest.split(",")] + [rest.strip(" `.*")]
+            if any(p in have for p in parts if p):
                 ok = True
-        if not ok:
-            out.append(it)
-    return out
+        if ok:
+            continue
+        if excuse and not is_code_item(it):
+            excused.append(it)
+        else:
+            uncovered.append(it)
+    return uncovered, excused
 
 
-__all__ = ["Item", "MAX_ITEMS", "UNTESTABLE", "checklist_note", "coverage_note",
-           "parse", "sendback_note", "unaddressed", "uncovered"]
+def uncovered(items: Iterable[Item], summary: Optional[str],
+              defined: Iterable[str]) -> list[Item]:
+    """Items with no test and no allowed excuse. An EMPTY report covers nothing."""
+    return _coverage(items, summary, defined)[0]
+
+
+def excused(items: Iterable[Item], summary: Optional[str],
+            defined: Iterable[str]) -> list[Item]:
+    """Items the test writer excused (and may be excused): verified by review, not a test."""
+    return _coverage(items, summary, defined)[1]
+
+
+__all__ = ["Assessment", "Item", "MAX_ITEMS", "UNTESTABLE", "assess", "checklist_note",
+           "clip_summary", "coverage_note", "excused", "is_code_item", "judge_block", "parse",
+           "pr_lines", "sendback_note", "unaddressed", "uncovered"]
