@@ -75,12 +75,15 @@ def test_a_workflow_authoring_ask_reaches_the_agent_with_the_authoring_brief(mes
     the draft is OFFERED as a button) and never through the work-starting process compiler."""
     router = _router()
     seen = {}
-    router._answer = lambda *_a, **k: (seen.update(k, action=router._turn_action),
-                                       RouterTurn(reply="offered"))[1]
+    router._answer = lambda *_a, **k: (seen.update(
+        k, action=router._turn_action, note=_decision_note(router._turn_verdict)),
+        RouterTurn(reply="offered"))[1]
     router._dispatch = lambda *_a, **_k: pytest.fail("authoring must not start work")
     model = decided(router, "author_workflow")
     turn = _route(router, message)
     assert seen["writes"] is False and seen["action"] == "author_workflow"
+    for needle in ("list_capabilities", "propose_action", "draft_workflow"):
+        assert needle in seen["note"], needle
     assert turn.reply == "offered" and turn.decision["action"] == "author_workflow"
     # The decision model was offered authoring as a choice, in workflow terms.
     assert "author_workflow" in model.prompts[0] and "WORKFLOW" in model.prompts[0]
@@ -132,14 +135,19 @@ def test_a_start_work_ask_with_deploy_words_is_not_refused_by_the_compiler():
     """create_agent_process on delivery prose hands the ask to authoring, not to a refusal."""
     router = _router()
     seen = {}
-    router._answer = lambda *_a, **k: (seen.update(k, action=router._turn_action),
-                                       RouterTurn(reply="offered"))[1]
+    router._answer = lambda *_a, **k: (seen.update(
+        k, action=router._turn_action, note=_decision_note(router._turn_verdict)),
+        RouterTurn(reply="offered"))[1]
     router._dispatch = lambda *_a, **_k: (_ for _ in ()).throw(
         ProcessVocabularyError("BOSS's role-handoff builder has no step that does 'deploy'"))
     decided(router, "create_agent_process")
     turn = _route(router, ASKS[0])
     assert turn.reply == "offered"
     assert seen["action"] == "author_workflow" and seen["writes"] is False
+    for needle in ("list_capabilities", "propose_action", "draft_workflow"):
+        assert needle in seen["note"], needle
+    assert turn.decision["action"] == "author_workflow"
+    assert turn.decision["rerouted_from"] == "create_agent_process"
 
 
 @pytest.mark.parametrize("prose,word", [
@@ -157,10 +165,21 @@ def test_the_compiler_refuses_helpfully_never_with_a_bare_unknown(prose, word):
     assert "workflow" in message and "custom step" in message
 
 
-def test_the_refusal_names_the_closest_real_capabilities():
+def test_the_closest_capabilities_are_real_and_matched_on_whole_words():
+    from boss_engine.services import workflow_capabilities
+    real = {c["key"] for c in workflow_capabilities.palette()}
+    for _pattern, caps in process_compiler.CAPABILITY_HINTS:
+        assert {c.strip() for c in caps.split("/")} <= real | {"deploy"}, caps
+    refused = process_compiler._unsupported("action", "refund", "a relationship manager")
+    assert "config_deploy" not in str(refused)  # 'relationship' is not 'ship'
     with pytest.raises(ProcessVocabularyError) as refused:
         compile_process("architect reviews then deploy to staging then promote to production")
-    assert "config_deploy" in str(refused.value) and "promote_config" in str(refused.value)
+    assert "promote_config" in str(refused.value)
+
+
+def test_a_prose_with_no_handoff_steps_reroutes_to_authoring_not_a_bare_refusal():
+    with pytest.raises(ProcessVocabularyError):
+        compile_process("create a workflow that backs up the database nightly")
 
 
 def test_a_genuinely_unsupported_verb_through_the_router_is_a_helpful_refusal():

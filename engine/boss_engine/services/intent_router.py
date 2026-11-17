@@ -169,7 +169,9 @@ _DECIDED_MEANS = {
                        "business_rules_scan on the area they named."),
     "author_workflow": ("a request to AUTHOR, create, design or edit a WORKFLOW (a sequence of "
                         "steps: validate, fix PR, deploy to staging, contract tests, a person "
-                        "approves, promote, smoke check). Nothing starts. Call "
+                        "approves, promote, smoke check). Never for DOING something now "
+                        "('deploy northgate to staging' is operate or new work). Nothing "
+                        "starts. Call "
                         "list_capabilities for the real step kinds and list_skills, map each "
                         "step the person described to a capability (config_deploy, "
                         "promote_config, contract_test, release_approval, smoke_test, "
@@ -1967,7 +1969,16 @@ class IntentRouter:
             if turn is None:
                 # The role-handoff builder has no step for this prose (deploy, contract tests,
                 # an approval…). That is a WORKFLOW, authored from capabilities by the agent.
-                self._turn_action, self._turn_verdict = "author_workflow", decision
+                import dataclasses
+                import types
+                try:
+                    authoring = dataclasses.replace(decision, action="author_workflow")
+                except TypeError:
+                    authoring = types.SimpleNamespace(
+                        action="author_workflow", status=getattr(decision, "status", ""),
+                        reason=getattr(decision, "reason", ""))
+                self._turn_action, self._turn_verdict = "author_workflow", authoring
+                verdict = {**verdict, "action": "author_workflow", "rerouted_from": action}
                 turn = self._answer(connection, project_id, messages, actor=actor,
                                     external_ref=external_ref, mode=mode, thread_id=thread_id,
                                     role=role, depth=depth, writes=False)
@@ -2006,7 +2017,8 @@ class IntentRouter:
             C("author_workflow", "author, create, design or edit a WORKFLOW — a sequence of "
                                  "steps such as validate, fix PR, deploy, test, approve, "
                                  "promote — from capabilities BOSS has; staged as a draft the "
-                                 "person accepts, nothing runs", acts=False,
+                                 "person accepts, nothing runs; never for doing a deploy or other "
+                                 "task now", acts=False,
               label="Draft the workflow"),
             C("create_project", "create a new BOSS PROJECT in this organization: a separate "
                                 "workspace with its own agents, budget, settings and work, set up "
@@ -2086,7 +2098,9 @@ class IntentRouter:
         latest = str(messages[-1].get("content") or "").strip() if messages else ""
         hints: list[str] = []
         guessed, _ = self._deterministic_intent(latest)
-        if guessed:
+        # The authoring/process keyword reading is not offered: whether this is a workflow to
+        # author or a role-handoff chain is the decision model's call, from the catalogue.
+        if guessed and guessed not in ("create_agent_process", "start_agent_process"):
             hints.append(f"a keyword reading of the words suggests '{guessed}'")
         hints.append("the wording reads as " + ("a question" if asked_only_to_look(latest)
                                                 else "an instruction or a report"))
@@ -3748,6 +3762,8 @@ class IntentRouter:
             if not text_in:
                 raise ValueError("process text is required")
             given_name = str(arguments.get("name") or "").strip()
+            # TODO(BOSSAPP-1351 follow-up): this writes the template immediately on a successful
+            # compile; stage it as a propose_action offer like workflow authoring does.
             try:
                 spec = self._compile_agent_process(text_in, name=given_name or None)
                 template = AgentProcessService(self.settings).create_template(
@@ -4270,8 +4286,9 @@ class IntentRouter:
                 "Only when the user genuinely wants NEW WORK begun, pick exactly one enabled "
                 "initiator, and never a disabled one: code for a narrow change, meeting for an "
                 "open decision, PRD for a fuzzy feature, discovery for research, "
-                "create_agent_process when they are authoring a role-handoff process or "
-                "workflow, start_agent_process when they want to run a process against a PRD "
+                "create_agent_process only for a PRD role-handoff chain between BOSS's own "
+                "review/build/QA roles (a workflow of deploy, test, approval or other steps is "
+                "authored by the agent, not started here), start_agent_process when they want to run a process against a PRD "
                 "(simulated unless they say otherwise; never set auto_build), propose_command "
                 "for two or more dependent delivery phases that are not a process definition.\n\n"
                 "When it is unclear whether they want work started, select nothing. Answering a "

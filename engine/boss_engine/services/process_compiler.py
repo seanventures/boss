@@ -24,11 +24,11 @@ class ProcessVocabularyError(ValueError):
 #: The words a closed vocabulary used to refuse, and the real capability each one names.
 #: Used only to SAY what BOSS can do in a refusal — nothing is decided from it.
 CAPABILITY_HINTS: tuple[tuple[str, str], ...] = (
-    (r"deploy|ship|launch|publish|release", "config_deploy / deploy"),
-    (r"promot", "promote_config"),
-    (r"contract", "contract_test"),
-    (r"smoke", "smoke_test"),
-    (r"approv", "release_approval"),
+    (r"\b(deploy|ship|launch|publish|release)\w*\b", "config_deploy / deploy"),
+    (r"\bpromot", "promote_config"),
+    (r"\bcontract", "contract_test"),
+    (r"\bsmoke", "smoke_test"),
+    (r"\bapprov", "release_approval"),
 )
 
 
@@ -206,7 +206,10 @@ def compile_process_from_text(text: str, name: str | None = None) -> dict[str, A
     else:
         stages = _parse_stages(normalized)
         if not stages:
-            raise ValueError("no process steps found")
+            raise ProcessVocabularyError(
+                "BOSS's role-handoff builder found no review/build/test/accept steps in that. "
+                "Describe it as a workflow instead and BOSS drafts it from real capabilities, "
+                "or add a custom step for what it should do.")
         spec = validate_process_spec(_stages_to_spec(stages, text))
     if name and str(name).strip():
         spec["name"] = str(name).strip()[:160]

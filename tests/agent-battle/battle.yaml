@@ -1277,3 +1277,6 @@
     - input: "why did the last deploy to staging fail?"
       checks: {no_writes: true, never_offer: [draft_workflow]}
       expected: "Answers from the run record about the failed deploy; does not offer to draft a workflow."
+    - input: "deploy northgate to staging"
+      checks: {never_offer: [draft_workflow]}
+      expected: "Does the deploy (or offers it as a button with deploy_app/redeploy); this is doing something now, not authoring a workflow, so no draft_workflow."
