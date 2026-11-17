@@ -418,7 +418,8 @@ def keep_history(history: list, record: dict,
 
 def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, Any], root: Any,
               source: Optional[Mapping[str, Any]] = None, dropped: int = 0,
-              batch_size: Optional[int] = None) -> tuple[dict[str, Any], int]:
+              batch_size: Optional[int] = None,
+              checks: Any = None) -> tuple[dict[str, Any], int]:
     """Judge EVERY item: one reviewer pass per `batch_size` (default MAX_ITEMS) batch
     (`ask(prompt) -> run_role result`), the item numbers global across passes. A pass that fails
     leaves its items unjudged, so the check is not_run — never met. A pass stopped short (its
@@ -460,7 +461,8 @@ def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, An
                           "ceiling_usd": rr.get("budget_ceiling_usd"), "words": words})
         replies.append(str(rr.get("summary") or ""))
     rec = judge(items, "\n".join(r or "" for r in replies), stack, root=root, source=source,
-                dropped=dropped, summary_line=batch_summary(replies), over_cap=over)
+                dropped=dropped, summary_line=batch_summary(replies), over_cap=over,
+                checks=checks)
     refused = refusal(rec, root) if items else None
     if refused:
         # NOT A VERDICT ON THE CODE: not run (re-asked, never met), its items unjudged so no
