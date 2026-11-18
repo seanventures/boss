@@ -80,6 +80,15 @@ def _local_repos_in_tmp(monkeypatch, tmp_path):
     monkeypatch.setattr(route._settings, "local_repo_root", str(tmp_path / "repos"))
 
 
+@pytest.fixture(autouse=True)
+def _a_model_is_connected(monkeypatch):
+    """The builder here is a stand-in that needs no model; the launch's model-first refusal
+    (03385e9da, tests/test_no_model_is_said_as_no_model) is not what these tests are about."""
+    from boss_engine.services import model_readiness
+
+    monkeypatch.setattr(model_readiness, "usable_model", lambda *a, **kw: True)
+
+
 def _write_catalogue(directory: Path) -> None:
     directory.mkdir()
     (directory / "a.yaml").write_text(_ALPHA, encoding="utf-8")
@@ -786,3 +795,76 @@ def test_prose_titles_cut_at_a_word_boundary():
         "Supercalifragilisticexpialidociousandmor"
     assert prose_title("Track the oncall rotation, page whoever is up, and post a weekly summary") \
         == "Track the oncall rotation, page whoever"
+
+
+def _patch_runs(monkeypatch, calls: list) -> None:
+    """A builder that starts a NEW run each time, recorded in code_task_runs as running."""
+    def build(connection, *, project_id, spec, actor, settings, jobs, reservation_id):
+        run_id = f"crun_relaunch_{len(calls) + 1}"
+        calls.append({"project_id": project_id, "run_id": run_id})
+        connection.execute(text(
+            "INSERT INTO code_task_runs (id, project_id, title, status) "
+            "VALUES (:id, :p, 'Build', 'running')"), {"id": run_id, "p": project_id})
+        return {"project_id": project_id, "run_id": run_id}
+
+    monkeypatch.setattr("boss_engine.services.factory_launch.build_run", build)
+
+
+def _age_the_launch(engine, receipt_id: str) -> None:
+    """Out of the double-press window: only the run's own state decides now."""
+    _exec(engine, "UPDATE receipts SET updated_at = now() - interval '1 hour' WHERE id = :r",
+          r=receipt_id)
+
+
+def test_the_same_launch_after_its_run_failed_starts_a_new_run_in_the_same_project(
+        client, engine, monkeypatch, tmp_path):
+    # 2026-11-18: Recipe box's run failed on a platform bug; Easy Mode on Recipe box again
+    # handed back that dead run, forever. Now a launch whose run ended starts a new run.
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", tmp_path / "absent")
+    calls: list = []
+    _patch_runs(monkeypatch, calls)
+    payload = {"prompt": "Build a recipe box that failed once.", "mode": "", "template_id": None, "attachment_ids": []}
+    started = client.post("/v1/factory/launch", json=payload)
+    assert started.status_code == 201, started.text
+    first = started.json()
+    projects = _count(engine, "projects")
+    # As a failed run ends: its run row says so and its budget hold is let go.
+    _exec(engine, "UPDATE code_task_runs SET status = 'failed' WHERE id = :id", id=first["run_id"])
+    with engine.begin() as connection:
+        BudgetGovernor(get_settings()).release(connection, first["project_id"], first["reservation_id"],
+                                 "the run failed")
+    _age_the_launch(engine, first["receipt_id"])
+
+    second = client.post("/v1/factory/launch", json=payload)
+
+    assert second.status_code == 201, second.text
+    again = second.json()
+    assert again["reused"] is False
+    assert again["run_id"] != first["run_id"]
+    assert again["project_id"] == first["project_id"]       # a new run, the same project
+    assert again["receipt_id"] == first["receipt_id"]       # the launch's one receipt...
+    assert _count(engine, "projects") == projects
+    assert len(calls) == 2
+    # ...now remembers the new run: a double press of THIS launch gets it back.
+    third = client.post("/v1/factory/launch", json=payload).json()
+    assert third["reused"] is True and third["run_id"] == again["run_id"]
+    assert len(calls) == 2
+
+
+def test_the_same_launch_while_its_run_is_still_active_is_reused(
+        client, engine, monkeypatch, tmp_path):
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", tmp_path / "absent")
+    calls: list = []
+    _patch_runs(monkeypatch, calls)
+    payload = {"prompt": "Build a recipe box that is still running.", "mode": "", "template_id": None, "attachment_ids": []}
+    started = client.post("/v1/factory/launch", json=payload)
+    assert started.status_code == 201, started.text
+    first = started.json()
+    _age_the_launch(engine, first["receipt_id"])               # long ago, but still running
+
+    second = client.post("/v1/factory/launch", json=payload).json()
+
+    assert second["reused"] is True
+    assert second["run_id"] == first["run_id"]
+    assert len(calls) == 1
+

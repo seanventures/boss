@@ -98,7 +98,7 @@ function needsOf(record: Record<string, unknown>): TemplateCard["needs"] {
 
 type Attachment = { id: string; name: string };
 
-type LaunchIds = { projectId: string; runId: string; title: string };
+type LaunchIds = { projectId: string; runId: string; title: string; reused: boolean };
 
 type Gallery =
   | { state: "loading" }
@@ -244,7 +244,7 @@ function launchIds(data: unknown): LaunchIds | null {
   const runId = first(record, ["run_id", "runId"]);
   if (!projectId && !runId) return null;
   const spec = record.spec && typeof record.spec === "object" ? record.spec as Record<string, unknown> : {};
-  return { projectId, runId, title: first(spec, ["title"]) };
+  return { projectId, runId, title: first(spec, ["title"]), reused: record.reused === true };
 }
 
 function rowsFor(files: File[], ids: string[]): Attachment[] {
@@ -275,14 +275,20 @@ export function projectHref(projectId: string): string {
  *  and links to where it is watched. The ids stay, faint, for whoever needs them. */
 function StartedCard({ launch, fallbackTitle }: { launch: LaunchIds; fallbackTitle: string }) {
   const title = launch.title || fallbackTitle || "Your app";
+  // THE SAME LAUNCH, STILL GOING (`reused`: the server handed back the run already under way —
+  // a double press, or this build pressed again while it runs): it is not "building, 15–25 min"
+  // from now, it is the one already started.
+  const said = launch.reused ? `${title} already started` : `${title} is building`;
+  const next = launch.reused
+    ? "This build was started earlier and is still going. Watch it to see where it is."
+    : "BOSS writes tests, builds, reviews and opens a pull request — about 15–25 min.";
   return (
-    <section className="bh-started" role="status" data-testid="build-launch" aria-labelledby="bh-started-h">
+    <section className="bh-started" data-testid="build-launch" data-reused={launch.reused ? "true" : "false"}
+             aria-labelledby="bh-started-h">
       <RocketLaunch {...ICON} className="bh-started-icon" />
       <div className="bh-started-body">
-        <h2 id="bh-started-h" className="bh-started-title" data-testid="build-started-title">{title} is building</h2>
-        <p className="bh-started-next">
-          BOSS writes tests, builds, reviews and opens a pull request — about 15–25 min.
-        </p>
+        <h2 id="bh-started-h" className="bh-started-title" role="status" data-testid="build-started-title">{said}</h2>
+        <p className="bh-started-next" data-testid="build-started-next">{next}</p>
         <div className="bh-started-actions">
           <a className="bh-started-go" href={watchBuildHref(launch)} data-testid="build-watch">
             Watch the build <ArrowRight {...ICON} />
@@ -291,9 +297,9 @@ function StartedCard({ launch, fallbackTitle }: { launch: LaunchIds; fallbackTit
             <a className="bh-started-open" href={projectHref(launch.projectId)} data-testid="build-open-project">Open project</a>
           ) : null}
         </div>
-        <p className="bh-started-ids">
+        <p className="bh-started-ids" aria-hidden="true">
           {launch.projectId ? <>Project <span data-testid="build-project-id">{launch.projectId}</span></> : null}
-          {launch.projectId && launch.runId ? <span aria-hidden="true"> · </span> : null}
+          {launch.projectId && launch.runId ? <span> · </span> : null}
           {launch.runId ? <>Run <span data-testid="build-run-id">{launch.runId}</span></> : null}
         </p>
       </div>

@@ -155,7 +155,7 @@ describe("a started build says what happens next", () => {
     await mountAs(<BuildHome />, "owner");
     await press("build-lucky");
     expect(tid("build-started-title")?.textContent).toBe("Recipe box is building");
-    expect(tid("build-launch")?.textContent).toMatch(/pull request/);
+    expect(tid("build-started-next")?.textContent).toMatch(/pull request.*15–25 min/);
     const watch = tid("build-watch") as HTMLAnchorElement | null;
     const params = new URLSearchParams(watch?.getAttribute("href")?.replace(/^\?/, "") ?? "");
     expect(params.get("area")).toBe("code_tasks");
@@ -168,6 +168,26 @@ describe("a started build says what happens next", () => {
     expect(tid("build-run-id")?.textContent).toBe("crun_6883ec7cbd67401a9ce8");
     expect(tid("build-started-title")?.textContent).not.toMatch(/crun_|fd3ab4a3/);
     expect(tid("build-run-id")?.closest(".bh-started-ids")).not.toBeNull();
+  });
+
+  it("a reused launch says it already started, not 'is building — 15–25 min'", async () => {
+    server([{ status: 201, body: { ...STARTED.body, reused: true } }]);
+    await mountAs(<BuildHome />, "owner");
+    await press("build-lucky");
+    expect(tid("build-started-title")?.textContent).toBe("Recipe box already started");
+    expect(tid("build-started-next")?.textContent).not.toMatch(/15–25 min/);
+    expect(tid("build-launch")?.getAttribute("data-reused")).toBe("true");
+    expect(new URLSearchParams(tid("build-watch")?.getAttribute("href")?.replace(/^\?/, "") ?? "").get("build"))
+      .toBe("crun_6883ec7cbd67401a9ce8");
+  });
+
+  it("only the title is the live region; the ids are not read out", async () => {
+    server([STARTED]);
+    await mountAs(<BuildHome />, "owner");
+    await press("build-lucky");
+    expect(tid("build-started-title")?.getAttribute("role")).toBe("status");
+    expect(tid("build-launch")?.getAttribute("role")).toBeNull();
+    expect(tid("build-run-id")?.closest("[aria-hidden=true]")).not.toBeNull();
   });
 
   it("without a run, Watch the build opens the project", () => {

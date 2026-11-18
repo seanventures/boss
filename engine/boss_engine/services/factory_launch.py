@@ -297,6 +297,11 @@ def launch(
         return previous
 
     kept = _kept(connection, org_id, dedupe_key)
+    # THE SAME LAUNCH AGAIN, AFTER ITS BUILD ENDED (a failed run, a finished one): a new run in
+    # the project that launch made — never the dead run handed back, never a second project
+    # (the slug is the launch's own). When that project is gone it is made again, and the
+    # launch's one receipt is still the one that remembers the new run.
+    again = None if kept is not None else _relaunch(connection, org_id, dedupe_key)
     if kept is not None:
         # THE SAME LAUNCH AFTER ITS CONSENT (or after a cancel): the project, its agents and its
         # workflows were kept when the build asked for consent. Start the build there; never a
@@ -316,6 +321,13 @@ def launch(
             spec["github_repo"] = repo
         spec["mode"] = asked or origin
 
+    if again is not None and again.get("project_id"):
+        project_id = str(again["project_id"])
+        workspace_id = str(again["workspace_id"])
+        resources = list(again.get("resources") or [])
+        workflows = list(again.get("workflows") or [])
+        receipt_id = str(again["receipt_id"])
+    elif kept is None:
         title = str(spec.get("title") or "Easy Mode").strip()[:120]
         description = str(spec.get("blurb") or spec.get("prompt") or "").strip()[:2000] or None
         slug = _project_slug(title, dedupe_key)
@@ -331,7 +343,7 @@ def launch(
                                       spec.get("resources") or [], actor=actor)
         workflows = _write_workflows(connection, project_id, spec.get("workflows") or [],
                                      actor=actor)
-        receipt_id = None
+        receipt_id = str(again["receipt_id"]) if again is not None else None
     title = str(spec.get("title") or "Easy Mode").strip()[:120]
     # A MODEL FIRST (stranger test r3, 2026-11-18): with no model connected the launch reserved
     # the project's whole cap for a build nothing could run, and the person read "the budget
@@ -480,7 +492,10 @@ def _keep_for_consent(
     else:
         # The kept receipt names the project the launch waits in (a re-ask after the project
         # it named was removed made a new one).
-        connection.execute(text("UPDATE receipts SET project_id = :p WHERE id = :r"),
+        # In progress again: a relaunch of an ended build that now waits for consent is a kept
+        # launch (`_kept`), not the earlier succeeded one handed back by `_reuse`.
+        connection.execute(text("UPDATE receipts SET project_id = :p, status = 'in_progress' "
+                                "WHERE id = :r"),
                            {"p": project_id, "r": receipt_id})
     receipts.merge_result(connection, receipt_id, kept)
     body.update({
@@ -943,7 +958,15 @@ def _reserve(connection: Any, settings: Any, project_id: str, title: str, budget
     return str(reservation["reservation_id"])
 
 
-def _reuse(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, Any]]:
+#: A code-task run in one of these is over: the same launch pressed again starts a new run.
+ENDED_RUN_STATUSES = ("completed", "failed", "cancelled")
+#: How long the same launch hands back its earlier answer whatever that run is doing: the double
+#: press, the reply that timed out in the browser, the resend after "Confirm it's you".
+REUSE_WINDOW_MINUTES = 10
+
+
+def _succeeded(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, Any]]:
+    """The launch's succeeded receipt and its result, or None."""
     existing = ReceiptService().get_by_dedupe_key(connection, org_id, dedupe_key)
     if not existing or existing.get("status") != "succeeded":
         return None
@@ -957,7 +980,52 @@ def _reuse(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, 
         return None
     if not result.get("project_id") or not result.get("run_id"):
         return None
-    return {**result, "reused": True, "receipt_id": existing.get("id") or result.get("receipt_id")}
+    return {"receipt": existing, "result": result}
+
+
+def _still_live(connection: Any, receipt_id: str, run_id: str) -> bool:
+    """The earlier launch is still the answer: its run has not ended, or it answered moments ago.
+
+    Before 2026-11-18 a launch was reused forever: Recipe box's run failed on a platform bug,
+    and pressing Easy Mode on Recipe box again handed back that dead run."""
+    row = connection.execute(text(
+        "SELECT (now() - updated_at) < make_interval(mins => :mins) AS fresh "
+        "FROM receipts WHERE id = :r"), {"r": receipt_id, "mins": REUSE_WINDOW_MINUTES}).first()
+    if row is not None and row[0]:
+        return True
+    run = connection.execute(text("SELECT status FROM code_task_runs WHERE id = :id"),
+                             {"id": run_id}).first()
+    return run is not None and str(run[0] or "") not in ENDED_RUN_STATUSES
+
+
+def _reuse(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, Any]]:
+    """The earlier launch's answer, while it is still the answer (`_still_live`), or None."""
+    found = _succeeded(connection, org_id, dedupe_key)
+    if found is None:
+        return None
+    receipt, result = found["receipt"], found["result"]
+    receipt_id = str(receipt.get("id") or result.get("receipt_id") or "")
+    if not _still_live(connection, receipt_id, str(result["run_id"])):
+        return None
+    return {**result, "reused": True, "receipt_id": receipt_id}
+
+
+def _relaunch(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, Any]]:
+    """The same launch, pressed after its build ended: its receipt, and its project when that
+    still exists (with the resources and workflows it was given), to start a new run in. None
+    when the launch never succeeded."""
+    found = _succeeded(connection, org_id, dedupe_key)
+    if found is None:
+        return None
+    receipt, result = found["receipt"], found["result"]
+    again: dict[str, Any] = {"receipt_id": str(receipt["id"])}
+    row = connection.execute(text("SELECT workspace_id FROM projects WHERE id = :p"),
+                             {"p": result["project_id"]}).first()
+    if row is not None:
+        again.update({"project_id": str(result["project_id"]), "workspace_id": str(row[0]),
+                      "resources": list(result.get("resources") or []),
+                      "workflows": list(result.get("workflows") or [])})
+    return again
 
 
 def _dedupe_key(
