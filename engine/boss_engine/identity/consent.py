@@ -654,6 +654,14 @@ def _agents(db: Any, project_id: str, role_keys: list[str]):
                 # In its OWN transaction: the caller's is about to roll back on 409
                 # consent_required, and the Passports must outlive it for the grant to name them.
                 _upgrade_committed(db, org)
+                p = passports.get(aid, db=db)
+                if p is None:
+                    # A project made in THIS transaction (Easy Mode creates the project and starts
+                    # its first build in one go, 2026-11-18): its roles are not visible to another
+                    # transaction, so the committed upgrade cannot see them. Issue them here; if
+                    # this transaction rolls back, the project and its agents go with it.
+                    passports.upgrade_from_roles(org_id=org, db=db,
+                                                 default_sponsor=_first_owner(db, org))
             p = passports.get(aid, db=db)
         if p is None:
             if aid and lineage._enforced():  # noqa: SLF001
