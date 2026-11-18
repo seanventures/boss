@@ -168,6 +168,9 @@ export type StartPlan = {
   /** To the pull request and its preview (the steps after a person's merge are not counted). */
   minutes_to_pr?: number | null; minutes_low?: number | null; minutes_high?: number | null;
   cost?: { runs: number; low_usd: number; high_usd: number; metered?: boolean } | null;
+  /** Setup's answer: is a model connected? False hides the price words (no subscription and
+   *  nothing to pay per use yet); null/absent is an older API and keeps them. */
+  model_connected?: boolean | null;
 };
 export type StartView = {
   project_id: string; name: string; description?: string | null; project_type: string; archived?: boolean;
@@ -187,13 +190,15 @@ export function estimateLine(plan: StartPlan | null | undefined): string {
   if (plan.minutes_low && plan.minutes_high) parts.push(`${plan.minutes_low}–${plan.minutes_high} min to a pull request`);
   else if (plan.minutes) parts.push(`~${plan.minutes} min`);
   const c = plan.cost;
-  if (c && c.runs > 0) {
+  if (plan.model_connected === false) {
+    // No model yet: no price words (stranger test r2). Setup says what to connect.
+  } else if (c && c.runs > 0) {
     const mid = (c.low_usd + c.high_usd) / 2;
     parts.push(`~${dollars(mid)} or included in subscription`);
   } else {
     parts.push("included in subscription or pay per use");
   }
-  return `Estimate: ${parts.join(" · ")}`;
+  return parts.length ? `Estimate: ${parts.join(" · ")}` : "";
 }
 
 /** The start door's body for Start on the project page (POST /v1/delivery-workflows/start). */
@@ -290,7 +295,10 @@ export function projectPageHref(projectId: string, homeId: string, area: "projec
                                 tab: "onboarding" | null = null): string {
   const url = typeof window === "undefined" ? new URL("http://x/") : new URL(window.location.href);
   const p = new URLSearchParams(url.search);
-  for (const k of [NEW_PROJECT_PARAM, "task", "run", "build", "role", "kg_tab", "kg_node", "kg_scan", "kg_sub", "wfr"]) p.delete(k);
+  // A new project's page is a new place: the last page's deep-link instructions (Setup's
+  // `focus=repository&open=add`) never ride along (stranger test r2).
+  for (const k of [NEW_PROJECT_PARAM, "task", "run", "build", "role", "kg_tab", "kg_node", "kg_scan", "kg_sub", "wfr",
+                   "focus", "open", "decision", "decision_filter"]) p.delete(k);
   if (projectId === homeId) p.delete("project_id"); else p.set("project_id", projectId);
   // THE PROJECT PAGE (BOSSAPP-914): a new project opens where Helm's onboarding shows. From the
   // first run (`first_run=1`) it opens the guided first run beside it instead.

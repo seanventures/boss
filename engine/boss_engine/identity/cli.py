@@ -7,6 +7,8 @@
                                              single-use link. Actor: sys_host_cli. Audited.
     migrate                                  run the M0 mapping now (it also runs by itself)
     legacy status | legacy retire --path P   the legacy bridges, their counts and countdowns
+    legacy restore --path shared_password    bring the shared password back (a fresh claim
+                                             retires it) until its window ends. Audited.
     audit verify | audit export --out F | audit prune --older-than-days N
     shadow-report [--json]                   the per-router shadow -> enforce report
     posture                                  the six posture checks
@@ -258,7 +260,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     rec.add_argument("--origin", default=None, help="the console origin for the link")
     sub.add_parser("migrate", help="run the M0 legacy mapping now")
     leg = sub.add_parser("legacy", help="legacy bridges")
-    leg.add_argument("action", choices=("status", "retire"))
+    leg.add_argument("action", choices=("status", "retire", "restore"))
     leg.add_argument("--path", choices=[k.value for k in (LegacyKind.SHARED_PASSWORD,
                                                           LegacyKind.CONSOLE_API_KEY,
                                                           LegacyKind.NETWORK_MODE)])
@@ -342,6 +344,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                 _print(migration.seed(db, org_id=org_id).as_dict())
             elif args.cmd == "legacy" and args.action == "status":
                 _print(posture.legacy_paths(org_id, db=db))
+            elif args.cmd == "legacy" and args.action == "restore":
+                if args.path != LegacyKind.SHARED_PASSWORD.value:
+                    parser.error("legacy restore needs --path shared_password")
+                _print(migration.restore_path(org_id, LegacyKind.SHARED_PASSWORD, db=db,
+                                              actor_principal_id=HOST_CLI_PRINCIPAL,
+                                              reason="restored from the host shell").__dict__)
             elif args.cmd == "legacy":
                 if not args.path:
                     parser.error("legacy retire needs --path")

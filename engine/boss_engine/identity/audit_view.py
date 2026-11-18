@@ -34,7 +34,7 @@ HEADLINES = {
     "authz.shadow_deny": "would have been refused", "legacy.password_used":
     "used the shared password", "legacy.api_key_used": "used the shared API key",
     "legacy.network_used": "came in over the network bridge", "legacy.path_retired":
-    "retired a legacy credential", "legacy.claimed_actor_ignored": "claimed to be someone else",
+    "retired a legacy credential", "legacy.path_restored": "brought back a legacy credential", "legacy.claimed_actor_ignored": "claimed to be someone else",
     "audit.verified": "verified the audit chain", "audit.exported": "exported the audit log",
     "audit.checkpoint": "pruned old audit events", "token.denied": "was refused a token",
     "egress.denied": "was refused through egress",

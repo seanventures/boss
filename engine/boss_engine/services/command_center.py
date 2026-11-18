@@ -195,6 +195,27 @@ def _latest_per_step(steps: Iterable[Mapping[str, Any]]) -> list[Mapping[str, An
     return [latest[sid] for sid in order]
 
 
+#: Step kinds that are structure, not a step anyone does: fan-out and join markers.
+MARKER_KINDS = frozenset({"parallel", "join"})
+
+
+def is_marker_step(step: Mapping[str, Any]) -> bool:
+    """A fan-out or join marker. Never counted or numbered: the plan's "13 steps", its numbered
+    strip and a running task's "step k of n" all leave them out (stranger test r2 saw 13, 15
+    and a strip that skipped numbers for the same workflow)."""
+    return str(step.get("kind") or "") in MARKER_KINDS
+
+
+def counted_steps(spec: Mapping[str, Mapping[str, Any]],
+                  run_steps: Iterable[Mapping[str, Any]]) -> tuple[int, int]:
+    """(steps done, step count) for a run, markers left out — the ONE count every surface reads."""
+    real = [sid for sid, s in spec.items() if not is_marker_step(s)]
+    rows = [r for r in run_steps
+            if not is_marker_step(spec.get(str(r.get("step_id")), {}))]
+    done = sum(1 for r in rows if r.get("status") in ("succeeded", "skipped"))
+    return done, max(len(real), len(rows))
+
+
 def step_index(steps_done: int, step_count: int, status: Any = None) -> int:
     """Which step a run is on, 1-based: the one after those done (succeeded or skipped).
 
@@ -257,8 +278,7 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
         order = {sid: i for i, sid in enumerate(spec)}
         run_steps = sorted(_latest_per_step(by_run.get(run_id, [])),
                            key=lambda s: order.get(str(s.get("step_id")), len(order)))
-        done = sum(1 for s in run_steps if s.get("status") in ("succeeded", "skipped"))
-        step_count = max(len(spec), len(run_steps))
+        done, step_count = counted_steps(spec, run_steps)
         base = {
             "run_id": run_id,
             "workflow_key": run.get("workflow_key"),

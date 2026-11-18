@@ -79,19 +79,13 @@ function nodeGlyph(n: Node, i: number, small: boolean): React.ReactNode {
   return n.state === "now" ? <ArrowsClockwise size={13} weight="bold" /> : i + 1;
 }
 
-/** The journey detail, unless it is blank or already the label or the sub. */
+/** The journey detail, unless it is blank or already the label or the sub. It is the node's
+ *  tooltip, never text inside the strip: a sentence there rendered as large overlapping body
+ *  text on every Overview (stranger test r2, 2026-11-17). */
 export function journeyDetailSentence(detail: string | null | undefined, label: string | null | undefined, sub: string | null | undefined): string | null {
   const text = detail?.trim() ?? "";
   if (!text || text === (label?.trim() ?? "") || text === (sub?.trim() ?? "")) return null;
   return text;
-}
-
-/** After the journey button. More than six words is a paragraph. */
-export function View({ id, sentence }: { id: string | number; sentence: string | null }) {
-  if (!sentence) return null;
-  return sentence.split(/\s+/).filter(Boolean).length > 6
-    ? <p data-testid={`px-journey-why-${id}`} data-user-text>{sentence}</p>
-    : <span data-testid={`px-journey-why-${id}`} data-user-text>{sentence}</span>;
 }
 
 /** THE JOURNEY STRIP: the project's life as one diagram. Each node opens what happened there. */
@@ -111,13 +105,12 @@ export function Journey({ nodes: given, size, onOpen, canOpen, testid = "px-jour
         <React.Fragment key={`${n.key}-${i}`}>
           {i ? <span className="px-jr-wire" aria-hidden data-s={nodes[i - 1].state === "done" ? (n.state === "now" ? "now" : n.state === "done" ? "done" : undefined) : undefined} /> : null}
           <button type="button" role="listitem" className="px-jr-node" data-s={n.state} disabled={!onOpen || !(canOpen ? canOpen(n) : !!(n.href || n.key))}
-                  data-testid={`${testid}-${n.key || i}`} aria-label={`${n.label}: ${STATE_WORD[n.state]}${n.sub ? `, ${n.sub}` : ""}`} title={n.detail || undefined}
+                  data-testid={`${testid}-${n.key || i}`} aria-label={`${n.label}: ${STATE_WORD[n.state]}${n.sub ? `, ${n.sub}` : ""}`} title={journeyDetailSentence(n.detail, n.label, n.sub) || undefined}
                   onClick={onOpen ? () => onOpen(n) : undefined}>
             <span className="px-jr-shape" aria-hidden>{nodeGlyph(n, i, size === "s")}</span>
             <span className="px-jr-cap">{n.label}</span>
             {n.sub && size !== "s" ? <span className="px-jr-meta">{n.sub}</span> : null}
           </button>
-          <View id={n.key || i} sentence={journeyDetailSentence(n.detail, n.label, n.sub)} />
         </React.Fragment>
       ))}
     </div>

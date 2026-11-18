@@ -128,10 +128,10 @@ export const ACTIONABLE_DECISION_STATUSES = ["pending", "delegated"] as const;
 export const DECISION_INBOX_EMPTY_TITLE = "Queue is clear";
 
 export const DECISION_INBOX_EMPTY_HOWTO = [
-  "Budget reservations or spend that need a human gate",
-  "Pull-request or merge reviews from the software factory",
-  "TPM / credit / model-limit escalations that would otherwise deadletter",
-  "Agents hitting a governance ceiling (plan, deploy, autonomy)",
+  "Spending that needs your OK",
+  "Pull requests waiting for your review or merge",
+  "Work stopped because a model ran out of credit or hit its rate limit",
+  "Agents asking before a plan, a deploy, or acting on their own",
 ] as const;
 
 type AttentionInput = {

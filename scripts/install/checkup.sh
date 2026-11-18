@@ -312,9 +312,9 @@ case "$claim" in
     # BOSSAPP-813: from the server's own network the console's https address is the claim itself.
     claim_origin="$(env_value BOSS_CONSOLE_PUBLIC_ORIGIN)"
     if [ -n "$claim_origin" ]; then
-      warn "identity: unclaimed — nobody owns this BOSS yet. Open ${claim_origin%/} to claim this BOSS (from your own network); from elsewhere run: boss identity setup-link"
+      warn "identity: unclaimed — nobody owns this BOSS yet. Open ${claim_origin%/} to claim this BOSS (from your own network); from elsewhere run: ${BOSS_COMMAND:-boss} identity setup-link"
     else
-      warn "identity: unclaimed — nobody owns this BOSS yet. Run on this server: boss identity setup-link (prints a one-hour link that makes you the Owner; open it in your browser)"
+      warn "identity: unclaimed — nobody owns this BOSS yet. Run on this server: ${BOSS_COMMAND:-boss} identity setup-link (prints a one-hour link that makes you the Owner; open it in your browser)"
     fi ;;
   claimed*) ok "identity: $claim" ;;
   *) : ;;   # an older image without the identity CLI: nothing to say
@@ -377,7 +377,7 @@ fi
 # someone claims it, and Setup comes after that.
 if [ "$fail" -eq 0 ] && [ "$claim" = unclaimed ] && [ -f "$HERE/next_step.sh" ]; then
   bash "$HERE/next_step.sh" --claim unclaimed --setup-url "${CONSOLE_URL}/?area=setup" \
-    --origin "$(env_value BOSS_CONSOLE_PUBLIC_ORIGIN)"
+    --boss "${BOSS_COMMAND:-boss}" --origin "$(env_value BOSS_CONSOLE_PUBLIC_ORIGIN)"
   printf "\n"
 fi
 [ "$REPAIR" -eq 1 ] && [ "$fail" -ne 0 ] || exit "$fail"
@@ -414,7 +414,7 @@ elif has api_silent && [ "${#DOCKER[@]}" -gt 0 ]; then SAFE+=(restart_api); fi
 has docker_down && MANUAL+=("Docker: start it (Docker Desktop, or: sudo systemctl start docker), then run this again")
 has env_quote && MANUAL+=(".env line $_env_bad: close the quote (or remove the line); Compose reads nothing until then")
 has console_loopback && MANUAL+=("console address: rebuild web for its public address — scripts/install/README.md (public URL)")
-has chat_silent && MANUAL+=("models: boss connect (or Setup) to sign the model in again")
+has chat_silent && MANUAL+=("models: ${BOSS_COMMAND:-boss} connect (or Setup) to sign the model in again")
 has repository && MANUAL+=("repository: Setup › Test access, then fix what it names")
 has sandbox_fence && MANUAL+=("sandbox: docs/community/SANDBOX.md — turning the fence off is a security choice, never made for you")
 describe() {
@@ -447,7 +447,7 @@ for remedy in ${SAFE[@]+"${SAFE[@]}"}; do
       else printf "  ${R}could not start the services${N}: boss logs, or Compose's own message above\n"; fi ;;
     restart_api)
       if repair_compose restart api >/dev/null 2>&1; then applied=1
-      else printf "  ${R}could not restart the API${N}: boss logs api\n"; fi ;;
+      else printf "  ${R}could not restart the API${N}: ${BOSS_COMMAND:-boss} logs api\n"; fi ;;
   esac
 done
 if [ "$applied" -eq 1 ]; then

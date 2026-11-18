@@ -180,7 +180,8 @@ export function InUseBlock({ repoId, used, act, testid }: {
   );
 }
 
-/** The step strip: every step, numbered; where a person approves, ✋ in amber. */
+/** The step strip: every step, numbered 1..n (the same n as "13 steps" and a run's "step k of
+ *  n"); where a person approves, the number is in amber. */
 export function StepStrip({ w, testid = "ap-strip" }: { w: Workflow | null; testid?: string }) {
   if (!w) return null;
   const you = w.step_list.filter((s) => s.you).map((s) => s.short || s.label.toLowerCase());
@@ -190,7 +191,9 @@ export function StepStrip({ w, testid = "ap-strip" }: { w: Workflow | null; test
       <ol className="npx-st" aria-label={`${w.name} steps`}>
         {w.step_list.map((s, i) => (
           <li key={`${s.id}-${i}`} data-you={s.you || undefined} title={`${s.label}${s.you ? " · you approve" : s.agent?.name ? ` · ${s.agent.name}` : ""}`}>
-            {s.you ? <Hand size={10} weight="fill" aria-label="you approve" /> : i + 1}
+            {/* EVERY STEP KEEPS ITS NUMBER (stranger test r2: a hand in place of 3, 9 and 13 read
+                as 1 2 4 5 … 12). Amber says you approve; the tip says what. */}
+            {i + 1}
           </li>
         ))}
       </ol>

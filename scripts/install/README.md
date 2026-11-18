@@ -105,6 +105,8 @@ The installer puts `boss` in `~/.local/bin` (or in `/usr/local/bin` when that is
 | `boss password` | Shows the console password, in a terminal only: it claims a new install, then signs teammates in as Operator for 30 days after the claim. `boss password reset` rotates it |
 | `boss doctor` | Runs `checkup.sh` (`--probe` also asks a model a question) |
 | `boss logs [-f] [api\|worker\|web\|db]` | Recent service logs |
+| `boss stop` | Stops every service of this install, including web, Grafana, Prometheus and the optional dev profiles (test database, runner, toolchains). Data, containers and images are kept |
+| `boss start` | Starts this install's enabled services again, without a rebuild. Optional dev profiles stay stopped: bring them back with `boss dev up` or `boss toolchains enable …` |
 | `boss connect` | Runs the [Models](#models) step again. It saves newly exported provider keys into `.env` and restarts only api and worker. It then asks once before each sign-in or connection, offers a subscription sign-in or a local model when nothing is usable, and ends with the Models table. `--connect-found` answers yes for what was found. `--yes` asks nothing and installs nothing |
 | `boss connect --list` / `--summary` | Prints what this machine has, or the Models table, and changes nothing |
 | `boss connect --install-ollama [--local-model NAME]` | Sets up [the local model](#the-local-model) end to end without asking |
@@ -381,6 +383,17 @@ BOSS_PREVIEW_PORT=3101 BOSS_GRAFANA_PORT=3400 \
 ```
 
 The installer saves `COMPOSE_PROJECT_NAME`, `BOSS_BIN_DIR` and the ports in that install's `.env`. Its `boss` command (`~/boss-two-bin/boss`) reads them from there, so later commands never need the variables again and never act on the first install. Without `BOSS_BIN_DIR`, the first install keeps `~/.local/bin/boss` and the installer prints the command for the second one.
+
+Other host ports a second install may need, once the matching feature is on. Give each a free port the same way:
+
+| Setting | Default | Used by |
+|---|---|---|
+| `BOSS_MAILPIT_PORT` | 8025 | the local test inbox (`--with-mailpit`) |
+| `BOSS_TOOLCHAIN_REGISTRY_PORT` | 5000 | the toolchain image registry (`boss toolchains enable …`) |
+| `BOSS_TEST_POSTGRES_PORT` | 55700 | the developer test database (`boss dev up`) |
+| `BOSS_METRICS_PORT` | 9464 | metrics inside the install's own network only; it is not published on the host, so it can stay the same |
+
+Run the second install by its full path (`~/boss-two-bin/boss doctor`, `~/boss-two-bin/boss identity setup-link`). Do not add its directory to `PATH`: plain `boss` would then run the second install in every new shell. Its `boss doctor`, `boss open` and the installer's card print that full path.
 
 ### Installing on a server
 
@@ -706,4 +719,4 @@ Every flag is optional. See `./install.sh --help` for the full list. Added for t
 | `--no-discover` | Skip looking for model keys and subscriptions |
 | `--no-boss-command` | Do not install `boss` on `PATH` |
 
-`BOSS_BIN_DIR` chooses where `boss` goes. `BOSS_INSTALL_DIR` points `boss` at another install.
+`BOSS_BIN_DIR` chooses where `boss` goes. An installed `boss` always runs its own install; use `boss --dir PATH` to act on another one. `BOSS_INSTALL_DIR` only chooses where `install.sh` installs.

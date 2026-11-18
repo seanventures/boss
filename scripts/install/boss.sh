@@ -22,6 +22,10 @@ Usage: boss [--dir PATH] COMMAND [options]
 Commands:
   status              Install directory, release, services, and API health
   open                Print the Mission Control address
+  stop                Stop every service of this install: web, monitoring and the optional
+                      dev profiles too (test database, runner, toolchains). Data is kept
+  start               Start the services this install has enabled, without a rebuild. The
+                      optional dev profiles stay stopped: boss dev up / boss toolchains enable
   metatron [options]  Open Metatron, the BOSS terminal, on this machine (colours, keys and
                       the terminal's size work natively). Talks to the local API with the
                       host tools' key, never printed. --print 'COMMAND' [--json] runs one
@@ -139,7 +143,8 @@ Commands:
                       boss login stored (or BOSS_TOKEN); refused without one.
   version             Installed release and commit
 
-Environment: BOSS_INSTALL_DIR selects another install.
+Another install: boss --dir PATH. The installed boss command always runs its own install
+and ignores an exported BOSS_INSTALL_DIR.
 EOF
 }
 
@@ -313,7 +318,7 @@ cmd_open() {
   # NOT CLAIMED YET: the claim comes first, with the command, then Setup. The same words as the
   # installer's card and `boss doctor` (scripts/install/next_step.sh).
   if [[ "$claim" != claimed* ]]; then
-    bash "$INSTALL_DIR/scripts/install/next_step.sh" --claim "$claim" \
+    bash "$INSTALL_DIR/scripts/install/next_step.sh" --claim "$claim" --boss "$(own_command)" \
       --setup-url "http://127.0.0.1:${port:-3000}${path:-/?area=setup}" --origin "$origin"
     # BOSSAPP-813: from the server's own network (LAN, tailnet) the console's https address IS
     # the claim — the first visitor sets up the Owner on the site.
@@ -355,7 +360,7 @@ cmd_password() {
 cmd_doctor() {
   need_install
   BOSS_ENV_FILE="$ENV_FILE" BOSS_HOST_API_KEY="$(host_key 2>/dev/null || true)" \
-    bash "$INSTALL_DIR/scripts/install/checkup.sh" "$@"
+    BOSS_COMMAND="$(own_command)" bash "$INSTALL_DIR/scripts/install/checkup.sh" "$@"
 }
 
 cmd_logs() {
@@ -369,6 +374,38 @@ cmd_logs() {
     esac
   done
   compose "${args[@]}" </dev/null
+}
+
+# EVERY PROFILE THIS INSTALL'S COMPOSE FILE NAMES (web, monitoring, mail, secrets, dev, runner,
+# toolchains...). `docker compose stop` without them misses profiled services: the stranger test
+# (r2, 2026-11-17) stopped an install that way and web, grafana and prometheus kept running.
+all_profiles() {
+  local name
+  for name in $(grep -oE 'profiles:[[:space:]]*\[[^]]*\]' "$COMPOSE_FILE" | grep -oE '"[a-z0-9_-]+"' | tr -d '"' | sort -u); do
+    printf -- '--profile\n%s\n' "$name"
+  done
+}
+
+# boss stop: stop every service of THIS install's compose project, profiled ones included. Data,
+# containers and images are kept; `boss start` brings it back.
+cmd_stop() {
+  need_install
+  [[ $# -eq 0 ]] || die "boss stop takes no arguments"
+  local profiles=() line
+  while IFS= read -r line; do profiles+=("$line"); done < <(all_profiles)
+  printf 'Stopping BOSS (%s, project %s)...\n' "$INSTALL_DIR" "$COMPOSE_PROJECT_NAME"
+  compose ${profiles[@]+"${profiles[@]}"} stop </dev/null
+  printf 'Stopped. Data is kept. Start again with: %s start\n' "$(own_command)"
+}
+
+# boss start: start this install's services again (the ones it runs: web, mail, secrets as
+# configured), without rebuilding.
+cmd_start() {
+  need_install
+  [[ $# -eq 0 ]] || die "boss start takes no arguments"
+  printf 'Starting BOSS (%s, project %s)...\n' "$INSTALL_DIR" "$COMPOSE_PROJECT_NAME"
+  compose up -d --no-build </dev/null
+  printf 'Started. Check it with: %s status\n' "$(own_command)"
 }
 
 cmd_upgrade() {
@@ -616,6 +653,26 @@ own_launcher() {
     return 0
   done
   return 1
+}
+
+# THE COMMAND THAT RUNS THIS INSTALL, to print in hints. Plain `boss` only when `boss` on PATH is
+# this install's own launcher in a default place (~/.local/bin, /usr/local/bin); a second install
+# (BOSS_BIN_DIR elsewhere) gets its launcher's full path, because plain `boss` on that machine is
+# the FIRST install (stranger test r2, 2026-11-17: doctor and /claim said `boss identity
+# setup-link`, which would have claimed the other BOSS). No launcher: the helper itself.
+own_command() {
+  local launcher on_path
+  launcher="$(own_launcher 2>/dev/null || true)"
+  if [[ -z "$launcher" ]]; then
+    printf 'bash %s/scripts/install/boss.sh' "$INSTALL_DIR"
+    return 0
+  fi
+  on_path="$(command -v boss 2>/dev/null || true)"
+  case "$(dirname "$launcher")" in
+    "$HOME/.local/bin"|/usr/local/bin)
+      if [[ "$on_path" == "$launcher" ]]; then printf 'boss'; return 0; fi ;;
+  esac
+  printf '%s' "$launcher"
 }
 
 cmd_uninstall() {
@@ -1755,6 +1812,8 @@ case "$COMMAND" in
   metatron|terminal) cmd_metatron "$@" ;;
   identity) cmd_identity "$@" ;;
   open) cmd_open "$@" ;;
+  stop) cmd_stop "$@" ;;
+  start) cmd_start "$@" ;;
   password) cmd_password "$@" ;;
   doctor|checkup) cmd_doctor "$@" ;;
   logs) cmd_logs "$@" ;;

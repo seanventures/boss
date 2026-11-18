@@ -34,7 +34,7 @@ import {
 } from "../../lib/project-experience";
 import { FX_ONBOARDING } from "../../lib/project-experience-fixtures";
 import { useSignin } from "../setup/github-signin-row";
-import { welcomeState, type WelcomeState } from "../setup/welcome";
+import { sampleHref, welcomeState, type WelcomeState } from "../setup/welcome";
 import { Face, Flow, Ico, Journey, STATE_WORD, Said, openAddProject, usePxUrl } from "./kit";
 import { LiveDiagram, clockWords, useElapsed } from "./onboarding";
 
@@ -145,7 +145,7 @@ export function FirstRun({ projectId, cards }: { projectId: string; actor: strin
   const guided = url.firstRun ? pickGuided(withRepo, askedId) : null;
   const known = status === "ready" && state !== null;
   // Unknown (loading, or it can't be read): nothing is ticked that we don't know, nothing is blocked.
-  const s: WelcomeState = state ?? { github: { done: false, login: null, repos: 0, local: null }, model: { done: false, label: null, kind: null }, sample: { done: false } };
+  const s: WelcomeState = state ?? { github: { done: false, login: null, repos: 0, local: null }, model: { done: false, label: null, kind: null }, sample: { done: false, project: null } };
   const hasProject = cards.length > 0;
   if (guided) return <Guided card={guided} s={s} known={known} />;
   const current = !known ? 3 : !s.github.done ? 1 : !s.model.done ? 2 : 3;
@@ -185,7 +185,12 @@ export function FirstRun({ projectId, cards }: { projectId: string; actor: strin
               <Lightbulb size={14} /> From an idea</GatedButton>
           </div>
           <div className="px-row px-wrap" style={{ fontSize: ".6rem" }}>
-            <button type="button" className="px-btn" data-kind="ghost" data-size="s" data-testid="px-fr-sample" onClick={() => openAddProject("sample")}><Flask size={12} /> Try a sample</button>
+            {s.sample.project ? (
+              // The sample exists: open it, never start a second one (stranger test r2).
+              <a className="px-btn" data-kind="ghost" data-size="s" data-testid="px-fr-sample-open" href={sampleHref(s.sample.project.project_id)}><Flask size={12} /> Open the sample</a>
+            ) : (
+              <button type="button" className="px-btn" data-kind="ghost" data-size="s" data-testid="px-fr-sample" onClick={() => openAddProject("sample")}><Flask size={12} /> Try a sample</button>
+            )}
             <a className="px-btn" data-kind="ghost" data-size="s" href={pxHref(QUICK_PR)} data-testid="px-fr-quick-pr"><Lightning size={12} /> One small PR</a>
           </div>
           {view?.try.last_run ? <LastRun run={view.try.last_run} /> : null}

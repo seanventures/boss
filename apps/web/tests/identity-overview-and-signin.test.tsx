@@ -107,12 +107,12 @@ describe("sign-in (D33)", () => {
     vi.stubGlobal("PublicKeyCredential", function PublicKeyCredential() {});
     if (!navigator.credentials) Object.defineProperty(navigator, "credentials", { value: {}, configurable: true });
     const el = await mount(<SignIn options={FULL} next="/" />);
-    // Google, GitHub, Microsoft, Apple always; then the configured OIDC/SAML provider.
-    expect(el.querySelectorAll(".idn-idp").length).toBe(5);
+    // Only configured providers: the social ones first, then the configured OIDC/SAML provider.
+    expect(el.querySelectorAll(".idn-idp").length).toBe(3);
     expect(el.querySelectorAll("a.idn-idp").length).toBe(3);
     expect(el.querySelector("a[aria-label='Continue with Google']")).not.toBeNull();
     expect(el.querySelector("a[aria-label='Continue with Acme SSO']")).not.toBeNull();
-    expect(el.querySelector("[data-testid='sso-off-microsoft']")?.getAttribute("aria-disabled")).toBe("true");
+    expect(el.querySelector("[data-testid='sso-off-microsoft']")).toBeNull();
     expect([...el.querySelectorAll("[role='tab']")].map((t) => t.textContent)).toEqual(["Password", "Magic link", "Email code"]);
     expect(el.querySelectorAll("[role='tab'][aria-disabled='true']").length).toBe(0);
     expect(el.querySelector("[data-testid='passkey-sign-in']")?.getAttribute("aria-disabled")).toBeNull();
@@ -124,9 +124,9 @@ describe("sign-in (D33)", () => {
     expect(el.textContent).not.toMatch(/phone|SMS/i);
   });
 
-  it("with nothing configured: providers disabled with what turns them on; no email tabs without SMTP", async () => {
+  it("with nothing configured: no provider tiles at all; no email tabs without SMTP", async () => {
     const el = await mount(<SignIn options={{ ...FULL, providers: [], smtp: false }} next="/" />);
-    expect(el.querySelectorAll("button.idn-idp[aria-disabled='true']").length).toBe(4);
+    expect(el.querySelectorAll(".idn-idp").length).toBe(0);
     expect(el.querySelector("a.idn-idp")).toBeNull();
     expect(el.querySelector("[role='tablist']")).toBeNull();
     expect(el.textContent).not.toContain("Magic link");

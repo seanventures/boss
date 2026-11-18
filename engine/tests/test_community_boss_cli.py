@@ -389,7 +389,9 @@ def test_boss_open_status_and_logs(world) -> None:
     dotenv.write_text(before)
     assert onsite.returncode == 0, onsite.stderr
     assert "From the server's own network, opening https://boss-1.example.ts.net claims it too." in onsite.stdout
-    assert "On this server run:  boss identity setup-link" in onsite.stdout
+    # This fixture's boss command lives outside PATH (BOSS_BIN_DIR=userbin), so the hint names
+    # its full path: plain `boss` could be another install (stranger test r2).
+    assert f"On this server run:  {world['boss']} identity setup-link" in onsite.stdout
 
     status = _run(boss, "status", env=env)
     assert status.returncode == 0, status.stdout + status.stderr
@@ -407,6 +409,114 @@ def test_boss_open_status_and_logs(world) -> None:
                  (world["install"] / ".env").read_text().splitlines() if line.startswith("BOSS_API_KEY="))
     for result in (opened, status, logs):
         assert owner not in result.stdout + result.stderr
+
+
+def test_boss_stop_and_start_cover_every_service_of_this_install(world) -> None:
+    """`docker compose stop` without profiles left web, grafana and prometheus running (stranger
+    test r2). `boss stop` names every profile in the compose file and only this install's
+    project; `boss start` brings the configured services back without a build."""
+    import yaml
+
+    boss = _installed(world)
+    env = {**world["env"], "COMPOSE_PROJECT_NAME": "someone-else"}
+    _set_env_line(world["install"], "COMPOSE_PROJECT_NAME", "boss-two")
+    services = yaml.safe_load((REPO / "scripts/install/community-compose.yml").read_text())["services"]
+    profiles = sorted({p for s in services.values() for p in s.get("profiles", [])})
+    assert {"web", "monitoring", "mail", "dev"} <= set(profiles)
+
+    log = Path(env["BOSS_TEST_DOCKER_LOG"])
+    log.write_text("")
+    Path(str(log) + ".tags").write_text("")
+    stopped = _run(boss, "stop", env=env)
+    assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+    call = next(c for c in log.read_text().splitlines() if c.startswith("compose ") and c.endswith(" stop"))
+    for name in profiles:
+        assert f"--profile {name} " in call + " ", (name, call)
+    assert "start" in stopped.stdout and "boss-two" in stopped.stdout
+    # The project is this install's, never the shell's.
+    assert "boss-two compose" in Path(str(log) + ".tags").read_text()
+
+    log.write_text("")
+    started = _run(boss, "start", env=env)
+    assert started.returncode == 0, started.stdout + started.stderr
+    call = next(c for c in log.read_text().splitlines() if c.startswith("compose "))
+    assert call.endswith("up -d --no-build")
+    assert "--profile dev" not in call       # start runs what the install runs, not test databases
+    assert _run(boss, "stop", "--all", env=env).returncode != 0
+    # The installer guide's command list has both.
+    guide = (REPO / "scripts/install/README.md").read_text()
+    assert "| `boss stop` |" in guide and "| `boss start` |" in guide
+    # Stop is wider than start, and both say so (review of #204).
+    helptext = _run(boss, "help", env=env).stdout
+    assert "optional" in helptext and "dev profiles too" in helptext and "boss dev up" in helptext
+    assert "optional dev profiles" in guide and "Optional dev profiles stay stopped" in guide
+    # The guide names the explicit way to another install, not the env var (review of #204).
+    assert "`BOSS_INSTALL_DIR` points `boss` at another install" not in guide
+    assert "boss --dir PATH" in guide
+
+
+def test_a_second_install_names_its_own_boss_command(world) -> None:
+    """Plain `boss` on a machine with two installs is the first one. A second install's doctor
+    and open print its own launcher's full path; a default install keeps plain `boss`."""
+    boss = _installed(world)   # BOSS_BIN_DIR=userbin, not on PATH: a second install's shape
+    env = world["env"]
+    _set_env_line(world["install"], "BOSS_COMMUNITY_WEB_ENABLED", "1")
+    opened = _run(boss, "open", env={**env, "BOSS_TEST_CLAIM": "unclaimed"})
+    assert f"On this server run:  {boss} identity setup-link" in opened.stdout
+    # checkup.sh is not in the published fixture; the real one runs against the inert Docker.
+    shutil.copy2(REPO / "scripts/install/checkup.sh", world["install"] / "scripts/install/checkup.sh")
+    doctor = _run(boss, "doctor", env={**env, "BOSS_TEST_CLAIM": "unclaimed"})
+    assert f"{boss} identity setup-link" in doctor.stdout + doctor.stderr
+    assert " boss identity setup-link" not in (doctor.stdout + doctor.stderr).replace(str(boss), "")
+    stopped = _run(boss, "stop", env=env)
+    assert f"Start again with: {boss} start" in stopped.stdout
+
+
+def test_a_default_install_keeps_plain_boss_in_hints(world) -> None:
+    default_bin = world["home"] / ".local/bin"
+    env = {**world["env"], "BOSS_BIN_DIR": str(default_bin),
+           "PATH": f"{default_bin}{os.pathsep}{world['env']['PATH']}"}
+    result = _install(world, env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    _set_env_line(world["install"], "BOSS_COMMUNITY_WEB_ENABLED", "1")
+    opened = _run(default_bin / "boss", "open", env={**env, "BOSS_TEST_CLAIM": "unclaimed"})
+    assert "On this server run:  boss identity setup-link" in opened.stdout
+
+
+def test_the_installer_never_puts_a_second_installs_command_on_path(world) -> None:
+    """The first install's launcher is ~/.local/bin/boss; a second install with its own
+    BOSS_BIN_DIR is run by full path, never added to ~/.profile (stranger test r2)."""
+    first = world["home"] / ".local/bin/boss"
+    first.parent.mkdir(parents=True)
+    _executable(first, "#!/usr/bin/env bash\n# BOSS Community command (generated by install.sh)\n"
+                       "BOSS_INSTALL_DIR_DEFAULT=/somewhere/else\n")
+    second = _install(world)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "~/.profile" not in second.stdout
+    assert f"Run this install by its full path: {world['boss']}" in second.stdout
+    assert first.read_text().endswith("/somewhere/else\n")    # the first one is untouched
+    assert "Mission Control Editions" not in second.stdout
+    assert "No cloud account is needed." in second.stdout
+
+
+def test_a_lone_install_outside_path_is_offered_the_path_line(world) -> None:
+    # No other `boss` anywhere (this machine's own install, if any, is taken off PATH).
+    env = {**world["env"], "PATH": os.pathsep.join(
+        p for p in world["env"]["PATH"].split(os.pathsep) if not (Path(p) / "boss").exists())}
+    result = _install(world, env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "~/.profile" in result.stdout
+
+
+def test_the_two_installs_guide_lists_every_host_port_setting() -> None:
+    guide = (REPO / "scripts/install/README.md").read_text()
+    section = guide[guide.index("### Two installs on one machine"):guide.index("### Installing on a server")]
+    compose = (REPO / "scripts/install/community-compose.yml").read_text()
+    for name in ("BOSS_MAILPIT_PORT", "BOSS_METRICS_PORT", "BOSS_TOOLCHAIN_REGISTRY_PORT",
+                 "BOSS_TEST_POSTGRES_PORT"):
+        assert f"`{name}`" in section, name
+        assert name in compose, name        # a real setting, not a guess
+    assert "Do not add its directory to `PATH`" in section
 
 
 def test_boss_password_refuses_to_print_outside_a_terminal(world) -> None:
@@ -1787,3 +1897,22 @@ def test_a_rerun_with_a_hosted_openai_key_does_not_keep_the_local_chat_address(w
     text = (world["install"] / ".env").read_text()
     assert f"OPENAI_API_KEY={SECRET}" in text
     assert local not in text and "OPENAI_MODEL=gpt-4o-mini" in text
+
+
+def test_a_launcher_runs_its_own_install_whatever_is_exported(world) -> None:
+    """Stranger test r2: the second install's launcher obeyed an exported BOSS_INSTALL_DIR, so it
+    could act on the other install. A launcher always runs its own install; `--dir` is the one
+    explicit way to point the helper elsewhere."""
+    boss = _installed(world)
+    other = world["tmp"] / "other-install"
+    (other / "scripts" / "install").mkdir(parents=True)
+    _executable(other / "scripts" / "install" / "boss.sh", "#!/bin/sh\necho OTHER-INSTALL\n")
+    env = dict(world["env"], BOSS_INSTALL_DIR=str(other))
+
+    result = _run(boss, "help", env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OTHER-INSTALL" not in result.stdout + result.stderr
+    assert "manage this BOSS Community install" in result.stdout
+    text = boss.read_text()
+    assert 'export BOSS_INSTALL_DIR="$BOSS_INSTALL_DIR_DEFAULT"' in text
+    assert "${BOSS_INSTALL_DIR:-" not in text

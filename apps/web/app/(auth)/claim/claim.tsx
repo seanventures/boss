@@ -33,7 +33,7 @@ import { webauthnAvailable } from "../../../lib/identity/webauthn";
 import { AuthStage, Live, Logo, linkToken } from "../auth-parts";
 import { primeCsrf, registerPasskey, sayAuth } from "../auth-flow";
 import { CopyCommand } from "../copy-command";
-import { HOST_COMMANDS, overSsh } from "../../../lib/identity/host-commands";
+import { HOST_COMMANDS, onLoopback, overSsh, setupLinkCommand } from "../../../lib/identity/host-commands";
 import { RecoveryCodesView } from "../recovery-codes";
 import { TotpStep } from "../enrol/totp-step";
 
@@ -42,7 +42,6 @@ type Stage = "form" | "protect" | "passkey" | "also-totp" | "totp" | "codes";
 
 const SHOW_ON_SERVER = HOST_COMMANDS.password;
 const SHOW_OVER_SSH = overSsh(SHOW_ON_SERVER);
-const SETUP_LINK = HOST_COMMANDS.setupLink;
 
 /** THE NEXT STEP AFTER THE CLAIM is setup (repository, model, first build), not the Identity
  *  overview: a new Owner landed on posture warnings with no pointer to what comes next. */
@@ -67,6 +66,10 @@ export function forgetLinkToken(): void {
 function minutesLeft(iso: string | null, now: number): number | null {
   if (!iso) return null;
   return Math.max(0, Math.round((Date.parse(iso) - now) / 60_000));
+}
+
+function pageHost(origin: string | null): string {
+  try { return origin ? new URL(origin).hostname : ""; } catch { return ""; }
 }
 
 export function ClaimFlow({ options }: { options: AuthOptions }) {
@@ -208,7 +211,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
         <Logo host={options.host} />
         <h1>Add an authenticator</h1>
         <p className="idn-s" data-copy="prose">{fallback ? `${(noPasskey ?? "Passkeys aren't available here.").replace(/\.$/, "")}. ` : ""}Scan the code with an authenticator app, then enter the 6 digits it shows.</p>
-        {issuedCodes.length ? null : <div className="idn-note" data-copy="prose"><Warning size={15} aria-hidden /> Posture will show &ldquo;No passkey on the only Owner&rdquo; until you add one.</div>}
+        {issuedCodes.length ? null : <div className="idn-note" data-copy="prose"><Warning size={15} aria-hidden /> <span data-testid="no-passkey-note">You can add a passkey later in My account. Until then, BOSS reminds you that the only Owner has none.</span></div>}
         <TotpStep onDone={(issued) => { showCodes(issuedCodes.length ? issuedCodes : issued).catch((e) => setError(sayAuth(e))); }} />
         {error ? <div className="idn-err" role="alert">{error}</div> : null}
       </AuthStage>
@@ -285,9 +288,13 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
         <Logo host={options.host} />
         <h1>Claim this BOSS from its server</h1>
         <div data-testid="claim-no-token">
-          <p className="idn-s" data-copy="prose">You&apos;re not on the server&apos;s own network, so claiming needs a one-hour link from the server.</p>
+          {/* Over an SSH tunnel (or on the server itself) the page is on localhost: "not on the
+              server's network" was wrong and alarming there (stranger test r2). */}
+          {onLoopback(pageHost(pageOrigin))
+            ? <p className="idn-s" data-copy="prose" data-testid="claim-why-link">Claiming needs a one-hour link from the server.</p>
+            : <p className="idn-s" data-copy="prose" data-testid="claim-why-link">This browser isn&apos;t on the server&apos;s own network, so claiming needs a one-hour link from the server.</p>}
           <p className="idn-s" data-copy="prose" data-testid="claim-terminal-step">Run this <b>in a terminal on the server where BOSS is installed</b> (over SSH). It&apos;s a command, not a web address.</p>
-          <CopyCommand command={SETUP_LINK} />
+          <CopyCommand command={setupLinkCommand(claim.host_command)} />
           <p className="idn-s" data-copy="prose">It prints a link. Open that link in this browser to claim.</p>
           {claim.link_over_api
             ? <p className="idn-fine" data-copy="prose">No shell there? Ask whoever holds this install&apos;s admin key to issue the link.</p>

@@ -126,6 +126,26 @@ export function useWorkflowReadiness(
   return readiness;
 }
 
+/** One sentence, capitalised and ended once ("no model is connected" → "No model is connected."). */
+function asSentence(text: string): string {
+  const t = text.trim().replace(/[.\s]+$/, "");
+  return t ? `${t[0].toUpperCase()}${t.slice(1)}.` : "";
+}
+
+/** "Needed by Convene a panel, Set up monitoring. No model is connected." Sentences joined
+ *  properly (stranger test r2: "…Set up monitoring. no model is connected"). */
+export function neededByWords(need: Pick<ReadinessNeed, "needed_by" | "detail">): string {
+  const by = need.needed_by.map((n) => n.label).filter(Boolean);
+  return [by.length ? `Needed by ${by.join(", ")}.` : "", asSentence(need.detail || "")].filter(Boolean).join(" ");
+}
+
+/** WHEN a need the run stops for you before is needed (stranger test r2: the sample listed a
+ *  deploy host as needed while the note under it said the PR does not need one). */
+export function laterWords(need: Pick<ReadinessNeed, "key" | "first_step_label">): string {
+  if (need.key === "deployment_target") return "later, before deploy";
+  return need.first_step_label ? `later, before ${need.first_step_label}` : "later";
+}
+
 export function ReadinessPanel({ readiness, accepted, onAccept }: {
   readiness: Readiness | null;
   accepted: readonly string[];
@@ -157,12 +177,15 @@ export function ReadinessPanel({ readiness, accepted, onAccept }: {
           <li key={need.key} data-testid={`dw-readiness-missing-${need.key}`}
               data-accepted={accepted.includes(need.key) || undefined}>
             <strong>{need.label}</strong>
+            {need.after_a_person ? (
+              <span className="dw-ready-when" data-testid={`dw-readiness-later-${need.key}`}> ({laterWords(need)})</span>
+            ) : null}
             {/* Keep the prerequisite visible; instructions and step context are one press away. */}
             <details className="dw-ready-why">
               <summary>Setup details</summary>
               <span className="dw-ready-fix">{need.fix}</span>
               <span className="detail">
-                Needed by {need.needed_by.map((n) => n.label).join(", ")}. {need.detail}.
+                {neededByWords(need)}
               </span>
               {need.after_a_person ? (
                 <span className="detail dw-ready-later">
@@ -177,9 +200,9 @@ export function ReadinessPanel({ readiness, accepted, onAccept }: {
               {/* The fix's own landing (`?area=setup&focus=repository`, `?area=skills&ability=email`)
                   when the API names one; the shell keeps the org and switches in place. */}
               {need.href && isAreaId(need.area) ? (
-                <a href={withOrg(need.href, org)} data-testid={`dw-readiness-fix-${need.key}`}>Open setup<span className="sr-only">: {need.label}</span></a>
+                <a href={withOrg(need.href, org)} data-testid={`dw-readiness-fix-${need.key}`} aria-label={`Open setup for ${need.label}`}>Open setup</a>
               ) : isAreaId(need.area) ? (
-                <AreaLink area={need.area}>Open setup<span className="sr-only">: {need.label}</span></AreaLink>
+                <AreaLink area={need.area} title={`Open setup for ${need.label}`}>Open setup</AreaLink>
               ) : null}
             </span>
           </li>

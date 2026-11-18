@@ -56,6 +56,7 @@ import { SectionLabel } from "../section-label";
 import { useOnScreen } from "../../lib/area-shown";
 import { SetupBlocks, WhoDoesWhat } from "./setup-blocks";
 import { GET_STARTED_EVENT, getStarted, Welcome } from "./welcome";
+import { switchAreaWith } from "../url-intent";
 
 /** One plain line per Advanced item (≤ 6 words), the detail in its tooltip. */
 const ADVANCED: Record<string, { line: string; tip: string }> = {
@@ -137,7 +138,9 @@ function oldWelcomeLink(): boolean {
 }
 
 function navigate(area: "welcome" | "setup"): void {
-  try { window.dispatchEvent(new CustomEvent("boss:navigate", { detail: area })); } catch { /* no window */ }
+  // The area goes into the URL first, so an old link's `focus=try` survives the switch to
+  // Get started (url-intent switchAreaWith).
+  try { switchAreaWith(area); } catch { /* no window */ }
 }
 
 /**

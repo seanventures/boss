@@ -114,3 +114,19 @@ def test_opening_a_sample_never_fails_on_the_disk_or_git(engine, client, repo_ro
     assert first.status_code == 201 and again.status_code == 201, (first.text, again.text)
     assert again.json()["id"] == first.json()["id"]
     assert _bindings(engine, first.json()["id"]) == []
+
+
+def test_get_started_learns_the_sample_exists(world, client, engine, repo_root):
+    """Get started offers "Open the sample" once the org's sample exists, never "Start the sample"
+    again (stranger test r2): /v1/setup's `try.sample` names it, from any project of the org."""
+    from boss_engine.services import setup_view
+
+    if not local_repo.git_available():
+        pytest.skip("git is not installed here")
+    with world.acting_as(world.ctx(world.owner)):
+        made = client.post("/v1/projects", json={"name": "Hello World", "sample_key": "hello-world"})
+    assert made.status_code == 201, made.text
+    pid = made.json()["id"]
+    with engine.connect() as db:
+        assert setup_view.sample_project(db, pid) == {"project_id": pid, "name": "Hello World"}
+        assert setup_view.sample_project(db, world.project_a) == {"project_id": pid, "name": "Hello World"}

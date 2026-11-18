@@ -1855,7 +1855,11 @@ install_boss_command() {
     printf '%s\n' '#!/usr/bin/env bash' "$BOSS_COMMAND_MARKER"
     printf '%s\n' '# Runs the lifecycle helper of one install. Rerunning the installer rewrites this file.'
     printf 'BOSS_INSTALL_DIR_DEFAULT=%q\n' "$resolved"
-    printf '%s\n' 'export BOSS_INSTALL_DIR="${BOSS_INSTALL_DIR:-$BOSS_INSTALL_DIR_DEFAULT}"' \
+    # THIS LAUNCHER RUNS ITS OWN INSTALL (stranger test r2): an exported BOSS_INSTALL_DIR, set
+    # for another install on the same machine, made a second install's `boss` act on the first.
+    # Another install is picked only explicitly: `boss --dir PATH`.
+    printf '%s\n' '# Always this install; `boss --dir PATH` picks another one explicitly.' \
+      'export BOSS_INSTALL_DIR="$BOSS_INSTALL_DIR_DEFAULT"' \
       'export BOSS_LAUNCHER="${BASH_SOURCE[0]}"' \
       'helper="$BOSS_INSTALL_DIR/scripts/install/boss.sh"' \
       '[[ -f "$helper" ]] || { echo "boss: no BOSS install at $BOSS_INSTALL_DIR" >&2; exit 1; }' \
@@ -1873,7 +1877,17 @@ install_boss_command() {
   else
     BOSS_COMMAND="$target"
     ui_ok "Installed the boss command: $target"
-    ui_info "Add it to PATH for new shells: echo 'export PATH=\"$bin_dir:\$PATH\"' >> ~/.profile"
+    # A SECOND INSTALL'S bin dir never goes on PATH for every shell: plain `boss` would then run
+    # this install in every later shell and no longer the first one (stranger test r2,
+    # 2026-11-17). It is run by its full path; only a lone install is offered the PATH line.
+    local other_boss=""
+    other_boss="$(command -v boss 2>/dev/null || true)"
+    [[ -n "$other_boss" ]] || { [[ -f "$HOME/.local/bin/boss" ]] && other_boss="$HOME/.local/bin/boss"; }
+    if [[ -n "$other_boss" && "$other_boss" != "$target" ]] && grep -qsF "$BOSS_COMMAND_MARKER" "$other_boss"; then
+      ui_info "Run this install by its full path: $target. Plain boss ($other_boss) keeps running your other install."
+    else
+      ui_info "Add it to PATH for new shells: echo 'export PATH=\"$bin_dir:\$PATH\"' >> ~/.profile"
+    fi
   fi
 }
 if [[ "$INSTALL_BOSS_COMMAND" -eq 1 ]]; then
@@ -1992,5 +2006,5 @@ echo ""
 echo -e "${MUTED}Docs: https://github.com/seanventures/boss#readme${NC}"
 echo -e "${MUTED}Features: docs/community/FEATURES.md${NC}"
 echo -e "${MUTED}Model paths: docs/community/MODEL_CONNECTIONS.md${NC}"
-echo -e "${MUTED}Cloud is optional — Easy Connect later via Mission Control Editions.${NC}"
+echo -e "${MUTED}Everything runs on this machine. No cloud account is needed.${NC}"
 echo ""

@@ -51,7 +51,7 @@ import { templatesApi } from "../../lib/templates";
 import { ageShort, hostFolders, type FolderFacts, type FolderHost } from "../../lib/host-folder";
 import { accountsOf, allPresets, createFresh, nameFromIdea, projectPageHref, type Preset } from "../../lib/start-project";
 import {
-  addProjectApi, bringChoices, creatingOwners, defaultWhere, detect, doorOf, estimateTip, estimateWords, hostPort, lineCount, nameFromTitle, nextFreeName, repoSlug,
+  addProjectApi, bringChoices, creatingOwners, defaultWhere, detect, doorOf, estimateTip, estimateWords, hostPort, lineCount, nameFromTitle, newAppDots, nextFreeName, repoSlug,
   type Brief, type BriefField, type Bring, type Door, type Kind, type LocalFolder, type OwnerCredential, type Preview, type RepoCheck, type RepoRead, type Understanding,
 } from "../../lib/add-project";
 import { normalizeChannel } from "../workflows/compose-plan";
@@ -933,7 +933,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
               <span className="npx-spacer" />
               {helmLive && kind !== "idea" ? <span className="npx-tag" data-tone="blue"><i className="npx-pulse" aria-hidden />live</span> : null}
               <span className="npx-ready" data-testid="ap-ready" title="Readiness: what this install needs before it can start">
-                {(preview?.readiness ?? []).map((d) => (
+                {(door === "new" ? newAppDots(preview?.readiness ?? [], plan.where) : preview?.readiness ?? []).map((d) => (
                   <a key={d.key} href={d.ok || !d.href ? undefined : homeHref(Object.fromEntries(new URLSearchParams(d.href.replace(/^\/?\?/, ""))))}
                      data-ok={d.ok || undefined} data-testid={`ap-dot-${d.key}`} title={`${d.label}: ${d.detail}`}><i aria-hidden />{d.label}</a>
                 ))}

@@ -258,6 +258,8 @@ def build_identity_auth_router() -> APIRouter:
             origin = public_origin(db) or authn.request_origin(credentials(request)) or ""
             claim_info = None
             if not claim_module.is_claimed(db):
+                from boss_engine.identity.host_command import host_boss_command
+
                 # read-only (R5): the API's lifespan keeps a live claim link printed
                 private = _private_client(request) if not bridged else None
                 paths = claim_module.available_paths(db, bridged, private_client=bool(private))
@@ -282,6 +284,9 @@ def build_identity_auth_router() -> APIRouter:
                     # network) or "private_network" (this browser's real address is private, so
                     # it claims on the site itself). None: the setup link is the way in.
                     "network": ("bridge" if bridged else "private_network" if private else None),
+                    # this install's `boss` command: a second install's full launcher path, since
+                    # plain `boss` there runs the first install (stranger test r2)
+                    "host_command": host_boss_command(),
                 }
             from boss_engine.config import get_settings
 

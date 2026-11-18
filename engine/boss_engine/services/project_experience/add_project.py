@@ -642,9 +642,6 @@ def _step_label(step: Mapping[str, Any], custom: Mapping[str, Mapping[str, Any]]
     return _label(step, custom)
 
 
-#: Structure, not work: a fork and its join are not steps a person counts.
-_STRUCTURE = ("parallel", "join")
-
 #: What a person approves at a step, in the few words the strip's legend uses (the wireframe's
 #: "you approve: PRD · PR · demo · prod"). A step without one is named by its own first words.
 _SHORT = {"meeting": "PRD", "spec_review": "PRD", "architecture": "architecture", "ux_review": "UX",
@@ -665,6 +662,7 @@ def workflow_steps(connection: Connection, project_id: str, spec: Mapping[str, A
                    ) -> list[dict[str, Any]]:
     """Every step of the workflow, in order: its label, who does it, and whether a person is
     asked there (new_work._gated, the one rule the plan strip reads)."""
+    from ..command_center import is_marker_step
     from ..workflow_capabilities import prd_auto_approved
     from .new_work import _gated, _who  # noqa: SLF001
 
@@ -679,7 +677,7 @@ def workflow_steps(connection: Connection, project_id: str, spec: Mapping[str, A
         custom = {}
     out = []
     for step in spec.get("steps") or []:
-        if not isinstance(step, dict) or str(step.get("kind") or "") in _STRUCTURE:
+        if not isinstance(step, dict) or is_marker_step(step):
             continue
         you = _gated(step, prd_auto)
         who = _who(step)
