@@ -54,7 +54,7 @@ def _build_signals(c, pid):
         {"p": pid}).mappings()]
 
 
-def test_a_build_boss_is_retrying_or_a_person_must_fix_raises_no_signal(eng, project):
+def test_a_build_boss_is_retrying_or_a_person_must_fix_raises_no_signal(eng, project):  # noqa: F811
     with eng.begin() as c:
         retried = _build(c, project, fctx={"failure_class": "infra"})
         _build(c, project, status="queued", fctx={"parent_run_id": retried,
@@ -67,7 +67,7 @@ def test_a_build_boss_is_retrying_or_a_person_must_fix_raises_no_signal(eng, pro
     assert [r["subject_id"] for r in rows] == [spent], "only the failure BOSS could not recover"
 
 
-def test_an_infra_build_failure_is_read_as_a_boss_self_fix_without_asking(eng, project):
+def test_an_infra_build_failure_is_read_as_a_boss_self_fix_without_asking(eng, project):  # noqa: F811
     with eng.begin() as c:
         rid = _build(c, project, fctx={"failure_class": "infra", "reason_code": "pipeline_exception"})
         sig = {"id": "sig_x", "kind": "build.failed", "source": "build", "subject_kind": "code_task",
@@ -77,7 +77,7 @@ def test_an_infra_build_failure_is_read_as_a_boss_self_fix_without_asking(eng, p
     assert not reading.asked
 
 
-def test_an_unclear_build_failure_is_still_never_a_question_for_a_person(eng, project):
+def test_an_unclear_build_failure_is_still_never_a_question_for_a_person(eng, project):  # noqa: F811
     with eng.begin() as c:
         rid = _build(c, project, fctx={})          # an older row: no failure class recorded
         sig = {"id": "sig_y", "kind": "build.failed", "source": "build", "subject_kind": "code_task",
@@ -88,7 +88,7 @@ def test_an_unclear_build_failure_is_still_never_a_question_for_a_person(eng, pr
     assert reading.confidence < 0.7 and not reading.asked
 
 
-def test_a_signal_about_a_build_boss_is_retrying_is_observed_not_asked(eng, project):
+def test_a_signal_about_a_build_boss_is_retrying_is_observed_not_asked(eng, project):  # noqa: F811
     with eng.begin() as c:
         rid = _build(c, project, fctx={"failure_class": "infra"})
         signals.sweep(c, project_id=project, only=["build_failures"])
@@ -101,7 +101,7 @@ def test_a_signal_about_a_build_boss_is_retrying_is_observed_not_asked(eng, proj
     assert cards == []
 
 
-def test_an_unrecovered_infra_failure_is_handed_to_its_agent_with_no_card(eng, project):
+def test_an_unrecovered_infra_failure_is_handed_to_its_agent_with_no_card(eng, project):  # noqa: F811
     with eng.begin() as c:
         _build(c, project, fctx={"failure_class": "infra", "auto_infra_retry": 2})
         signals.sweep(c, project_id=project, only=["build_failures"])
