@@ -11,10 +11,12 @@
  * empty sentence is allowed — the server invents the spec. A refused launch never
  * shows a project or a run.
  */
-import React, { useEffect, useId, useRef, useState } from "react";
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import { askConsent, consentFromBody } from "../lib/identity/consent";
 import { openStartSheet } from "./start-project/start-host";
+
+import { TemplatePreview } from "../components/v2/templates/template-previews";
 
 import "./build-home.css";
 
@@ -668,35 +670,116 @@ export function BuildHome() {
           <p className="bh-note" data-testid="build-templates-empty">No templates yet. The bench still builds from the sentence.</p>
         ) : null}
         {gallery.state === "ready" && gallery.templates.length > 0 ? (
-          <ul className="bh-cards">
-            {gallery.templates.map((card) => (
-              <li key={card.id}>
-                <button
-                  type="button"
-                  className="bh-card"
-                  data-testid="build-template"
-                  data-template-id={card.id}
-                  aria-pressed={templateId === card.id}
-                  disabled={card.needs ? true : undefined}
-                  data-unavailable={card.needs ? "true" : undefined}
-                  title={card.needs ? card.needs.message : undefined}
-                  onClick={() => choose(card)}
-                >
+          <TemplateCards templates={gallery.templates} selected={templateId} onChoose={choose} />
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+/** Two rows of cards by default; the rest behind "Show all". Rows are counted from the grid's
+ *  own resolved columns, so two rows stay two rows at every width. Without a layout (a test DOM)
+ *  it counts three columns. */
+export const COLLAPSED_ROWS = 2;
+const FALLBACK_COLUMNS = 3;
+
+function useGridColumns(ref: React.RefObject<HTMLElement | null>): number {
+  const [cols, setCols] = useState(FALLBACK_COLUMNS);
+  // Measured before paint, so the first frame already shows two rows at this width (no 6→8 jump).
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || typeof window === "undefined") return;
+    const read = () => {
+      const tracks = window.getComputedStyle(el).gridTemplateColumns || "";
+      // Resolved tracks read "224px 224px …"; anything else (no layout) keeps the fallback.
+      const n = /\dpx/.test(tracks) ? tracks.trim().split(/\s+/).length : 0;
+      if (n > 0) setCols((prev) => (prev === n ? prev : n));
+    };
+    read();
+    // The list's own size covers a window resize; the window listener is only for browsers without it.
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(read);
+      ro.observe(el);
+      return () => ro.disconnect();
+    }
+    window.addEventListener("resize", read);
+    return () => window.removeEventListener("resize", read);
+  }, [ref]);
+  return cols;
+}
+
+/** The server's reason, with its `command` spans shown as code. */
+function withCode(text: string): React.ReactNode {
+  return text.split("`").map((part, i) => (i % 2 ? <code key={i}>{part}</code> : part));
+}
+
+/** Two rows' worth, and never without the selected card: a pick past the fold takes the last
+ *  slot, so the highlighted choice stays on screen after "Show fewer" or a narrower window. */
+export function foldedCards<T extends { id: string }>(cards: T[], limit: number, selected: string | null): T[] {
+  const head = cards.slice(0, limit);
+  if (!selected || head.some((card) => card.id === selected)) return head;
+  const pick = cards.find((card) => card.id === selected);
+  return pick ? [...head.slice(0, Math.max(0, limit - 1)), pick] : head;
+}
+
+function TemplateCards({ templates, selected, onChoose }: {
+  templates: TemplateCard[];
+  selected: string | null;
+  onChoose: (card: TemplateCard) => void;
+}) {
+  const listRef = useRef<HTMLUListElement>(null);
+  const cols = useGridColumns(listRef);
+  const [all, setAll] = useState(false);
+  const listId = useId();
+  const limit = Math.max(1, cols) * COLLAPSED_ROWS;
+  const folds = templates.length > limit;
+  const shown = all || !folds ? templates : foldedCards(templates, limit, selected);
+  return (
+    <>
+      <ul className="bh-cards" id={listId} ref={listRef} data-testid="build-template-list"
+          data-columns={cols} data-expanded={all || !folds ? "true" : "false"}>
+        {shown.map((card) => {
+          const whyId = `${listId}-${card.id}-needs`;
+          const showCommand = !!card.needs?.enable && !card.needs.message.includes(card.needs.enable);
+          return (
+            <li key={card.id}>
+              <button
+                type="button"
+                className="bh-card"
+                data-testid="build-template"
+                data-template-id={card.id}
+                aria-pressed={card.needs ? undefined : selected === card.id}
+                aria-disabled={card.needs ? "true" : undefined}
+                aria-describedby={card.needs ? whyId : undefined}
+                data-unavailable={card.needs ? "true" : undefined}
+                onClick={() => onChoose(card)}
+              >
+                <span className="bh-card-art">
+                  <TemplatePreview id={card.id} category={card.category} />
+                </span>
+                <span className="bh-card-text">
                   {card.category ? <span className="bh-cat">{card.category}</span> : null}
                   <span className="bh-card-title">{card.title}</span>
                   {card.blurb ? <span className="bh-blurb">{card.blurb}</span> : null}
                   {card.needs ? (
-                    <span className="bh-needs" data-testid="build-template-needs">
+                    <span className="bh-needs" id={whyId} data-testid="build-template-needs">
                       <span className="bh-needs-label">{card.needs.label}</span>
-                      {card.needs.enable ? <span className="bh-needs-how">Turn on: <code>{card.needs.enable}</code></span> : null}
+                      <span className="bh-needs-why">{withCode(card.needs.message)}</span>
+                      {showCommand ? <span className="bh-needs-how">Turn on: <code>{card.needs.enable}</code></span> : null}
                     </span>
                   ) : null}
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </section>
-    </div>
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {folds ? (
+        <button type="button" className="bh-more" data-testid="build-templates-more"
+                aria-expanded={all} aria-controls={listId} onClick={() => setAll((v) => !v)}>
+          {all ? "Show fewer" : `Show all ${templates.length} templates`}
+        </button>
+      ) : null}
+    </>
   );
 }
