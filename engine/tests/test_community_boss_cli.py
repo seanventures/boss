@@ -1890,3 +1890,22 @@ def test_a_rerun_with_a_hosted_openai_key_does_not_keep_the_local_chat_address(w
     text = (world["install"] / ".env").read_text()
     assert f"OPENAI_API_KEY={SECRET}" in text
     assert local not in text and "OPENAI_MODEL=gpt-4o-mini" in text
+
+
+def test_a_launcher_runs_its_own_install_whatever_is_exported(world) -> None:
+    """Stranger test r2: the second install's launcher obeyed an exported BOSS_INSTALL_DIR, so it
+    could act on the other install. A launcher always runs its own install; `--dir` is the one
+    explicit way to point the helper elsewhere."""
+    boss = _installed(world)
+    other = world["tmp"] / "other-install"
+    (other / "scripts" / "install").mkdir(parents=True)
+    _executable(other / "scripts" / "install" / "boss.sh", "#!/bin/sh\necho OTHER-INSTALL\n")
+    env = dict(world["env"], BOSS_INSTALL_DIR=str(other))
+
+    result = _run(boss, "help", env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OTHER-INSTALL" not in result.stdout + result.stderr
+    assert "manage this BOSS Community install" in result.stdout
+    text = boss.read_text()
+    assert 'export BOSS_INSTALL_DIR="$BOSS_INSTALL_DIR_DEFAULT"' in text
+    assert "${BOSS_INSTALL_DIR:-" not in text

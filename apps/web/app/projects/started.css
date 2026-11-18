@@ -25,3 +25,4 @@
 .px-st-dl dt { color: var(--faint); }
 .px-st-dl dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap; }
 @media (max-width: 760px) { .px-st-path li { margin-right: 10px; } .px-st-path li:not(:last-child)::after { width: 10px; } }
+.px-st-add-why { margin: 0 0 10px; font-size: var(--fs-meta); line-height: 1.4; color: var(--muted); }

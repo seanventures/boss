@@ -142,7 +142,8 @@ Commands:
                       boss login stored (or BOSS_TOKEN); refused without one.
   version             Installed release and commit
 
-Environment: BOSS_INSTALL_DIR selects another install.
+Another install: boss --dir PATH. The installed boss command always runs its own install
+and ignores an exported BOSS_INSTALL_DIR.
 EOF
 }
 

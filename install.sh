@@ -1855,7 +1855,11 @@ install_boss_command() {
     printf '%s\n' '#!/usr/bin/env bash' "$BOSS_COMMAND_MARKER"
     printf '%s\n' '# Runs the lifecycle helper of one install. Rerunning the installer rewrites this file.'
     printf 'BOSS_INSTALL_DIR_DEFAULT=%q\n' "$resolved"
-    printf '%s\n' 'export BOSS_INSTALL_DIR="${BOSS_INSTALL_DIR:-$BOSS_INSTALL_DIR_DEFAULT}"' \
+    # THIS LAUNCHER RUNS ITS OWN INSTALL (stranger test r2): an exported BOSS_INSTALL_DIR, set
+    # for another install on the same machine, made a second install's `boss` act on the first.
+    # Another install is picked only explicitly: `boss --dir PATH`.
+    printf '%s\n' '# Always this install; `boss --dir PATH` picks another one explicitly.' \
+      'export BOSS_INSTALL_DIR="$BOSS_INSTALL_DIR_DEFAULT"' \
       'export BOSS_LAUNCHER="${BASH_SOURCE[0]}"' \
       'helper="$BOSS_INSTALL_DIR/scripts/install/boss.sh"' \
       '[[ -f "$helper" ]] || { echo "boss: no BOSS install at $BOSS_INSTALL_DIR" >&2; exit 1; }' \
