@@ -187,6 +187,71 @@ describe("on a live project", () => {
   });
 });
 
+/** The laptop's lineage (2026-11-18): the build crun_d8b… COMPLETED (change #1 open, its merge
+ *  pending) and its automatic follow-up crun_47c3… FAILED; the first build crun_6883… failed
+ *  and was replaced by that relaunch. */
+const ROOT = "crun_d8b751312b2b4f43af36";
+const FOLLOW = "crun_47c3aea2add242b3ad4a";
+const FOLLOW_SEE = `?project_id=${P}&area=code_tasks&build=${FOLLOW}`;
+const LINEAGE_FAILED = { id: ROOT, label: "Recipe box", build_id: FOLLOW, word: "Follow-up failed", beside: false,
+  reason: "BOSS could not collect this build's changes.", fix: null, see_href: FOLLOW_SEE,
+  retry: { run_id: FOLLOW, href: `/v1/code-tasks/${FOLLOW}/retry`, method: "POST" },
+  work_href: `?project_id=${P}&area=project&tab=work&drawer=build%3A${ROOT}` };
+const LINEAGE_ROW = { ...ROW, id: ROOT, build_id: FOLLOW, href: LINEAGE_FAILED.work_href,
+  stages: ROW.stages.map((st) => (st.key === "pr" ? { ...st, state: "waiting" } : st)) };
+const REPLACED_ROW = { ...ROW, state: "done", replaced_by: { id: ROOT, label: "Recipe box", href: LINEAGE_FAILED.work_href } };
+const LINEAGE = {
+  ...OVERVIEW,
+  project: { ...OVERVIEW.project, status_label: "Follow-up failed", build_failed: LINEAGE_FAILED },
+  needs_you: [{ id: `failed:${ROOT}`, kind: "failed", label: "Follow-up failed: Recipe box", detail: LINEAGE_FAILED.reason, mini: [],
+                work_id: ROOT, retry: LINEAGE_FAILED.retry, see_href: FOLLOW_SEE, action: null }],
+  recent_work: [LINEAGE_ROW, REPLACED_ROW],
+};
+function lineageEngine() {
+  return stubFetch((c) => {
+    if (c.method !== "GET") return { body: { ok: true } };
+    if (c.path === "/v1/projects/summary") return { body: FX_SUMMARY };
+    if (c.path.endsWith("/story")) return { body: { id: ROOT, stages: [{ key: "pr", name: "Merge", state: "waiting", sub: "Only a person merges" }] } };
+    const m = c.path.match(/^\/v1\/projects\/([^/]+)\/(overview|work|onboarding)$/);
+    if (m) return { body: ({ overview: LINEAGE, work: { items: [LINEAGE_ROW, REPLACED_ROW] }, onboarding: { ...FX_ONBOARDING, state: "ready" } } as Record<string, unknown>)[m[2]] };
+    return undefined;
+  });
+}
+
+describe("a completed build with a failed follow-up (the laptop's lineage)", () => {
+  it("the card's Retry resumes the FAILED follow-up, never the completed build", async () => {
+    lineageEngine();
+    await openProject();
+    const r = tid(`px-ov-ny-failed:${ROOT}-retry`)!;
+    expect(r.getAttribute("data-run-id")).toBe(FOLLOW);
+    await press(r);
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(retry.mock.calls[0][0].get("run_id")).toBe(FOLLOW);
+  });
+
+  it("the work drawer behind the pill offers Retry and See what happened, not just words", async () => {
+    lineageEngine();
+    await openProject();
+    await press(tid(`px-needs-failed:${ROOT}`));
+    expect(params().get("drawer")).toBe(`work:${ROOT}`);
+    const box = tid("px-drawer-work-failed")!;
+    expect(box.textContent).toContain("Follow-up failed");
+    expect(tid("px-drawer-work-failed-see")!.getAttribute("href")).toContain(`build=${FOLLOW}`);
+    await press(tid("px-drawer-work-failed-retry"));
+    expect(retry.mock.calls[0][0].get("run_id")).toBe(FOLLOW);
+  });
+
+  it("a failed build a later one replaced reads Replaced, faint, never a red Failed", async () => {
+    lineageEngine();
+    await openProject();
+    const row = tid(`px-ov-work-${RUN}`)!;
+    expect(row.hasAttribute("data-replaced")).toBe(true);
+    expect(tid(`px-ov-replaced-${RUN}`)!.textContent).toBe("Replaced by a later build");
+    expect(tid(`px-ov-failed-${RUN}`)).toBeNull();
+    expect(row.querySelector(".px-dot")!.getAttribute("data-s")).toBeNull();
+  });
+});
+
 describe("the Builds picker never counts a failed build as building", () => {
   it("a STUCK (failed) app is under Failed, not Building, and its row says Failed", async () => {
     stubFetch((c) => c.path === "/api/projects-strip" ? { body: { total: 2, projects: [

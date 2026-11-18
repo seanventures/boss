@@ -6,6 +6,8 @@ import { noteDecisionResult } from "./decided-gates";
 import { currentMirror, liveMirror, wantsStepUp, wasForbidden } from "./identity/mirror";
 import type { Permission } from "./identity/permissions.gen";
 import { permissionName } from "./identity/words";
+import { askConsent, consentFromBody } from "./identity/consent";
+import { codeWords } from "./action-result";
 
 /**
  * THE ONE WAY CLIENT CODE INVOKES A SERVER ACTION.
@@ -24,6 +26,14 @@ import { permissionName } from "./identity/words";
  *     both callers get its result;
  *   - with `press`, a different call in the same scope is refused and the refusal is announced
  *     in the operator's words (lib/api-write.ts `runPress`).
+ *
+ * CONSENT, LIKE STEP-UP, IS ANSWERED HERE ONCE FOR EVERY ACTION. An action refused for want of
+ * the agents' consent answers `{ok: false, data: {consent}}` (lib/server-action.ts act, the
+ * Floor's consentAnswer): the consent sheet opens with what the API named and, once granted,
+ * the same call is sent once more as a new press — the path Easy Mode's launch takes on a 409.
+ * The answer is marked `data.consentAsked`, so a caller that also reads `data.consent` never
+ * opens the sheet a second time; cancelled, the refusal stands as written. A bare API code in `error` is never shown: it is said in words
+ * (action-result codeWords) — the laptop showed "consent_required" under a Retry button.
  *
  * tests/every-write-goes-through-api-write.test.ts fails when client code references a server
  * action any other way than through this, or as the action of a form that has a SubmitButton.
@@ -86,6 +96,27 @@ function said(value: unknown, error: string): unknown {
   return { ...(value as object), error };
 }
 
+/** The consent request an action's answer carries, when it was refused for want of consent. */
+function consentAsked(value: unknown) {
+  if (!value || typeof value !== "object" || (value as { ok?: unknown }).ok !== false) return null;
+  const data = (value as { data?: unknown }).data;
+  if (!data || typeof data !== "object" || (data as { consentAsked?: unknown }).consentAsked) return null;
+  return consentFromBody((data as { consent?: unknown }).consent);
+}
+function markAsked(value: unknown): unknown {
+  if (!value || typeof value !== "object") return value;
+  const v = value as { data?: unknown };
+  return { ...v, data: { ...((v.data && typeof v.data === "object") ? v.data : {}), consentAsked: true } };
+}
+/** An answer's `error` in words, never a bare code. */
+function worded(value: unknown): unknown {
+  if (!value || typeof value !== "object") return value;
+  const e = (value as { error?: unknown }).error;
+  if (typeof e !== "string") return value;
+  const w = codeWords(e);
+  return w === e ? value : { ...(value as object), error: w };
+}
+
 /** Whether a call's answer — a result, or a thrown refusal carrying `identity` — asks for a fresh
  *  second factor. */
 function askedForStepUp(outcome: { value?: unknown; error?: unknown }): boolean {
@@ -137,8 +168,18 @@ export function callAction<A extends unknown[], R>(
       mirror.refresh().catch(() => undefined);
     }
     if ("error" in first) throw first.error;
+    const asked = consentAsked(first.value);
+    if (asked && typeof window !== "undefined") {
+      if (await askConsent(asked)) {
+        const again = await once(...args);
+        noteDecisionResult(again);
+        return worded(markAsked(again)) as R;
+      }
+      // Cancelled: the refusal stands as written ("Needs your consent"), marked as asked.
+      return markAsked(first.value) as R;
+    }
     // An accepted answer to a decision shows on every gate at once (lib/decided-gates.ts).
     noteDecisionResult(first.value);
-    return first.value as R;
+    return worded(first.value) as R;
   };
 }

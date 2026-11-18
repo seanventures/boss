@@ -195,6 +195,9 @@ export function workWhen(w: { state: string; age?: string; updated_at?: string |
 
 export type WorkItem = {
   id: string; label: string; kind: string; state: WorkState; age: string;
+  /** A failed build a later build of the same app replaced (engine work._replaced): history,
+   *  said "Replaced by a later build", never a red Failed. */
+  replaced_by?: { id: string; label: string; href: string } | null;
   stages: { key: string; label: string; state: StepState }[]; agents: Agent[]; cost_usd: number | null;
   /** What the subscription calls would have cost at list price (costWords). */
   list_usd?: number | null;
@@ -568,6 +571,7 @@ export const parseWorkItem = (v: unknown): WorkItem => {
   const x = o(v); const l = o(x.links); const pr = o(l.pr); const mp = o(l.merge_pr); const md = o(l.merged_pr);
   return {
     id: s(x.id), label: s(x.label), kind: s(x.kind, "feature"), state: oneOf(x.state, WORK_STATES, "planned"), age: s(x.age),
+    replaced_by: s(o(x.replaced_by).id) ? { id: s(o(x.replaced_by).id), label: s(o(x.replaced_by).label), href: s(o(x.replaced_by).href) } : null,
     stages: a(x.stages).map((st) => ({ key: s(o(st).key), label: s(o(st).label), state: oneOf(o(st).state, STEP_STATES, "todo") })),
     agents: agents(x.agents), cost_usd: nn(x.cost_usd), list_usd: nn(x.list_usd),
     links: { workflow_run: s(l.workflow_run), build: s(l.build), deploy: s(l.deploy), preview: s(l.preview), decision: s(l.decision),

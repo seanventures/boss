@@ -244,6 +244,7 @@ def _attempt_sql() -> str:
         "c.finalize_ctx->>'parent_run_id' AS parent, "
         "c.finalize_ctx->>'deferred_from_run' AS deferred, "
         "c.finalize_ctx->>'attempt' AS attempt, "
+        "c.finalize_ctx->>'app_id' AS app_id, "
         "c.finalize_ctx->'merge'->>'sha' AS merged_sha, "
         "dd.recommendation->'merge_failed'->>'reason' AS merge_failed, "
         f"{LAST_ACTIVITY_SQL} AS last_activity, {live_job_sql('c')} AS live_job "
@@ -422,10 +423,11 @@ def _build_strip(r: Mapping[str, Any], state: str) -> list[dict[str, str]]:
 
     review = "failed" if repairing else st(3, 3)
     pr = "waiting" if merge_open else "done" if pr_url else "todo" if repairing else st(4, 4)
-    if state == "failed" and at == len(phases) - 1 and not pr_url:
+    if state == "failed" and at == len(phases) - 1 and not pr_url and not merge_open:
         # FAILED AFTER ITS LAST PHASE (phase 'done', no PR): it stopped saving or opening its
         # change — the PR station failed, never a strip of ticks over a build that failed
-        # (recipe-box 2026-11-18: "git add failed" read B ✓ R ✓ PR ✓).
+        # (recipe-box 2026-11-18: "git add failed" read B ✓ R ✓ PR ✓). A merge still pending
+        # on an earlier attempt keeps PR waiting (amber), never a red ✗ over it.
         pr = "failed"
     return [{"key": "plan", "label": "P", "name": "Plan", "state": "skipped"},
             {"key": "design", "label": "D", "name": "Decide", "state": "skipped"},
@@ -822,9 +824,31 @@ def _build_items(connection: Connection, project_id: str,
             "detail": latest.get("error") or title,
             "build_id": str(latest["id"]),
             "href": project_href(project_id, tab="work", drawer=f"build:{key}"),
+            "app_id": root.get("app_id") or latest.get("app_id") or None,
             **group,
         })
+    _replaced(out)
     return out
+
+
+def _replaced(found: list[dict[str, Any]]) -> None:
+    """A FAILED BUILD A LATER ONE REPLACED is history, not a failure: an app built again from
+    the start (Easy Mode's relaunch is a new root, not a retry) after its first build failed.
+    The older row reads "Replaced by a later build" — done, faint — never a red Failed beside
+    the build that took over (recipe-box 2026-11-18: crun_6883 Failed under a completed build)."""
+    by_app: dict[str, list[dict[str, Any]]] = {}
+    for w in found:
+        if w.get("app_id"):
+            by_app.setdefault(str(w["app_id"]), []).append(w)
+    for rows in by_app.values():
+        rows.sort(key=lambda w: str(w.get("created_at") or ""))
+        for older, newer in zip(rows, rows[1:]):
+            if older["state"] == "failed":
+                older["state"] = "done"
+                older["replaced_by"] = {"id": newer["id"], "label": newer.get("label"),
+                                        "href": newer.get("href")}
+                older["stages"] = [{**st, "state": "skipped"} if st["state"] in ("failed", "now")
+                                   else st for st in older["stages"]]
 
 
 #: An accepted item's kind of work, from the roadmap recommendation's kind.

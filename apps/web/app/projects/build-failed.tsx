@@ -47,7 +47,7 @@ export function RetryBuildButton({ runId, projectId, actor, onDone, testid, size
   return (
     <>
       <GatedButton permission="code_task:retry" projectId={projectId} className="px-btn" data-kind={secondary ? undefined : "primary"} data-size={size}
-                   data-testid={testid ?? "px-failed-retry"} disabled={busy} aria-busy={busy || undefined}
+                   data-testid={testid ?? "px-failed-retry"} data-run-id={runId} disabled={busy} aria-busy={busy || undefined}
                    title="Try again from where it stopped: same branch, the failure carried forward"
                    onClick={(e) => { e.stopPropagation(); void retry(); }}>
         <ArrowClockwise size={12} aria-hidden /> {busy ? "Retrying…" : "Retry"}
@@ -103,7 +103,7 @@ export function FailedActions({ retry, fix, retryReason, seeHref, projectId, act
   return (
     <span className="px-row" style={{ gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }} data-testid={`${testid}-actions`}>
       {fix ? <FixAction fix={fix} testid={`${testid}-fix`} /> : null}
-      {retry ? <RetryBuildButton runId={retry.run_id} projectId={projectId} actor={actor} testid={`${testid}-retry`} secondary={!!fix}
+      {retry ? <RetryBuildButton runId={retry.run_id} key={retry.run_id} projectId={projectId} actor={actor} testid={`${testid}-retry`} secondary={!!fix}
                                  onDone={() => onDone?.()} /> : null}
       {!retry && retryReason ? <small className="px-faint" data-testid={`${testid}-no-retry`}>{retryReason}</small> : null}
       {seeHref ? <SeeWhatHappened href={seeHref} testid={`${testid}-see`} /> : null}

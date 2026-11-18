@@ -436,3 +436,50 @@ def test_on_a_live_project_the_failure_sits_beside_the_stage(world, client, engi
     working = next(n for n in ov["journey"] if n["key"] == "working")
     assert working["state"] != "failed"
     assert ov["needs_you"][0]["kind"] == "failed"
+
+
+def test_a_completed_build_with_a_failed_follow_up_retries_the_follow_up(world, client, engine):
+    """The laptop's lineage (2026-11-18): crun_d8b… completed (change #1 open, merge pending) and
+    its automatic follow-up crun_47c3… failed. Retry resumes the FAILED attempt — the one a
+    retry can resume — and the merge still pending reads waiting (amber), never a red ✗."""
+    pid = _project(world, client)
+    dec = f"dec_{uuid.uuid4().hex[:16]}"
+    with engine.begin() as db:
+        db.execute(text(
+            "INSERT INTO decisions (id, project_id, question, recommendation, status, risk_tier, "
+            "created_at) VALUES (:i, :p, 'Merge change #1?', CAST(:r AS JSONB), 'pending', 2, now())"),
+            {"i": dec, "p": pid, "r": json.dumps({"action": "merge_pr"})})
+        root = _build(db, pid, status="completed", error=None, minutes_ago=30,
+                      pr_url="http://boss-local/local_x/recipe-box/pull/1",
+                      fctx={"app_id": "app_rb"})
+        db.execute(text("UPDATE code_task_runs SET decision_id = :d WHERE id = :i"),
+                   {"d": dec, "i": root})
+        follow = _build(db, pid, title="Follow-up: deferred review findings — Recipe box",
+                        minutes_ago=5, fctx={"root_run_id": root, "parent_run_id": root,
+                                             "app_id": "app_rb", "failure_class": "infra"})
+    ov = _get(world, client, f"/v1/projects/{pid}/overview")
+    failed = ov["project"]["build_failed"]
+    assert failed["id"] == root and failed["build_id"] == follow
+    assert failed["word"] == "Follow-up failed"
+    assert failed["retry"]["run_id"] == follow and failed["see_href"].endswith(f"build={follow}")
+    assert ov["needs_you"][0]["retry"]["run_id"] == follow
+    row = next(w for w in ov["recent_work"] if w["id"] == root)
+    assert {s["key"]: s["state"] for s in row["stages"]}["pr"] == "waiting"
+    story = _get(world, client, f"/v1/projects/{pid}/work/{root}/story")
+    merge = next(s for s in story["stages"] if s["key"] == "pr")
+    assert merge["state"] == "waiting" and merge["state"] != "failed"
+
+
+def test_a_failed_build_a_later_build_replaced_is_not_a_red_failure(world, client, engine):
+    """Easy Mode's relaunch is a new root for the same app: the first build's failure is
+    history once it exists — "Replaced by a later build", never red Failed beside it."""
+    pid = _project(world, client)
+    with engine.begin() as db:
+        first = _build(db, pid, minutes_ago=90, fctx={"app_id": "app_rb", "failure_class": "infra"})
+        later = _build(db, pid, status="completed", error=None, minutes_ago=30,
+                       fctx={"app_id": "app_rb"})
+    ov = _get(world, client, f"/v1/projects/{pid}/overview")
+    row = next(w for w in ov["recent_work"] if w["id"] == first)
+    assert row["state"] == "done" and row["replaced_by"]["id"] == later
+    assert not any(st["state"] == "failed" for st in row["stages"])
+    assert ov["project"]["build_failed"] is None
