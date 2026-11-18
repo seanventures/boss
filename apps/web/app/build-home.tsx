@@ -13,6 +13,7 @@
  */
 import React, { useEffect, useId, useRef, useState } from "react";
 
+import { askConsent, consentFromBody } from "../lib/identity/consent";
 import { openStartSheet } from "./start-project/start-host";
 
 import "./build-home.css";
@@ -93,15 +94,42 @@ async function readBody(res: Response): Promise<unknown> {
   }
 }
 
+/** What a refusal's machine code means, in words. A bare code is never shown to a person. */
+const CODE_WORDS: Record<string, string> = {
+  consent_required: "Not started: the agents need your consent first. Press Easy Mode to give it.",
+  personal_data_blocked: "Not started: the description holds a card number or a national id. Take it out and press Easy Mode again.",
+  personal_data_ask: "Not started: the description holds an email or a phone number. Take it out and press Easy Mode again.",
+  budget_refused: "Not started: the budget refused this build.",
+  launch_incomplete: "The build did not start: BOSS did not name a project and a run.",
+  project_exists: "Not started: a project with this name already exists.",
+  agent_without_passport: "Not started: an agent of this project has no Passport yet.",
+  github_not_connected: "Not started: connect GitHub first (Setup › GitHub).",
+  drive_not_connected: "Not started: that Drive source is not connected.",
+  unknown_template: "Not started: that template is no longer in the gallery.",
+  unknown_attachment: "Not started: an attachment is no longer there. Attach it again.",
+};
+
+/** A sentence, not a code: a word with no space in it is looked up, never printed as it is. */
+function sentence(value: string): string {
+  if (!value) return "";
+  if (/\s/.test(value)) return value;
+  return CODE_WORDS[value] ?? "";
+}
+
 function messageOf(data: unknown, fallback: string): string {
   if (!data || typeof data !== "object") return fallback;
   const record = data as Record<string, unknown>;
   for (const key of ["message", "error", "detail"]) {
-    const value = str(record[key]);
+    const value = sentence(str(record[key]));
     if (value) return value;
   }
-  return fallback;
+  const code = str(record.error);
+  return (code && CODE_WORDS[code]) || fallback;
 }
+
+/** The consent sheet was closed: the project is made, idle, and waits for this consent. */
+const CONSENT_DECLINED =
+  "Not started: the agents need your consent to build. The project is made and waits, idle. Press Easy Mode again to give consent and start it.";
 
 function templatesFrom(data: unknown): TemplateCard[] {
   const list = Array.isArray(data)
@@ -291,14 +319,33 @@ export function BuildHome() {
     setLaunch(null);
     setLaunchError(null);
     setPhase("starting");
-    try {
+    const send = async () => {
       const res = await fetch("/api/factory/launch", {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/json" },
         body: JSON.stringify(body),
       });
-      const data = await readBody(res);
+      return { res, data: await readBody(res) };
+    };
+    try {
+      let { res, data } = await send();
       if (generation.current !== mine) return;
+      // CONSENT, THE CONSOLE'S ONE WAY (lib/identity/consent.ts): the build start needs the
+      // person's grant for the project's agents. The API kept the project; the sheet creates the
+      // grant and the same launch is sent again unchanged, so it builds in that same project.
+      const asked = res.status === 409 ? consentFromBody(data) : null;
+      if (asked) {
+        const granted = await askConsent(asked);
+        if (generation.current !== mine) return;
+        if (!granted) {
+          setPhase("error");
+          setLaunch(null);
+          setLaunchError(CONSENT_DECLINED);
+          return;
+        }
+        ({ res, data } = await send());
+        if (generation.current !== mine) return;
+      }
       if (!res.ok) {
         setPhase("error");
         setLaunchError(messageOf(data, "The build did not start."));

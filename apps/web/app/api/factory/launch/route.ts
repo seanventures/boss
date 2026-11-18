@@ -18,6 +18,11 @@ export async function POST(req: Request) {
       body: JSON.stringify(body), cache: "no-store",
     });
     const data = await r.json().catch(() => ({}));
+    // A CONSENT REQUEST PASSES THROUGH AS THE API SENT IT: the console's consent sheet reads
+    // `error: "consent_required"` and its agents, and the kept project id rides along for the retry.
+    if (r.status === 409 && (data as { error?: unknown }).error === "consent_required") {
+      return NextResponse.json(data, { status: 409 });
+    }
     if (!r.ok) {
       const sentence = (data as { message?: unknown }).message;
       return NextResponse.json({ ...(data as object),

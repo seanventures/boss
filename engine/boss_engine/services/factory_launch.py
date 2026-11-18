@@ -9,6 +9,12 @@ blocks, so nothing is reserved and the build does not start. An email or a phone
 asks, and nothing is reserved until that ask is allowed. A result without a project id
 and a run id is a failure.
 
+Consent (the build start answers ConsentRequired): only the start is undone (a savepoint takes
+the reservation back). The project, its role agents with their Passports and its workflows are
+kept with one in-progress receipt, and the 409 names the project and the dedupe key. The caller
+commits. The same launch sent again after the person grants (the console re-sends it unchanged)
+finds that receipt and starts the build in the same project; it never makes a second one.
+
 Attachments (BOSSAPP-1275) are stored for the org and folded in by name and text extract.
 A Drive source that is not already connected is refused. Nothing here calls Drive or GitHub.
 """
@@ -23,11 +29,12 @@ from typing import Any, Callable, Optional
 import yaml
 from sqlalchemy import text
 
+from ..identity.consent import ConsentRequired
 from ..multirepo.common import MultiRepoError, norm_repo
 from ..multirepo.registry import NOT_CONNECTED
 from .core import make_id
 from .personal_data_gate import before_builder_reserve
-from .projects import ProjectExists, create as create_project
+from .projects import create as create_project
 from .receipts import ReceiptService
 from .workflows import (
     PRODUCT_NAMESPACE,
@@ -189,55 +196,79 @@ def launch(
     ids = [str(item).strip() for item in (attachment_ids or []) if str(item).strip()]
     repo = str(github_repo or "").strip()
     asked = str(mode or "").strip()
-    dedupe_key = _dedupe_key(org_id, prompt, asked, template_id, ids, repo)
+    # WHOSE launch it is: two people pressing the same template never share a kept or a reused
+    # project (nor a consent the other one owes).
+    who = str(getattr(getattr(auth, "principal", None), "id", "") or actor or "")
+    dedupe_key = _dedupe_key(org_id, prompt, asked, template_id, ids, repo, who)
     connection.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": dedupe_key})
     previous = _reuse(connection, org_id, dedupe_key)
     if previous is not None:
         return previous
 
-    spec, origin = resolve_spec(prompt, template_id, template_dir)
-    attachments = _load_attachments(connection, org_id, ids)
-    spec = _fold_attachments(spec, attachments)
-    if repo:
-        _require_github_repo(connection, org_id, repo)
-        spec["github_repo"] = repo
-    spec["mode"] = asked or origin
+    kept = _kept(connection, org_id, dedupe_key)
+    if kept is not None:
+        # THE SAME LAUNCH AFTER ITS CONSENT (or after a cancel): the project, its agents and its
+        # workflows were kept when the build asked for consent. Start the build there; never a
+        # second project.
+        spec = dict(kept["spec"])
+        project_id = str(kept["project_id"])
+        workspace_id = str(kept["workspace_id"])
+        resources = list(kept.get("resources") or [])
+        workflows = list(kept.get("workflows") or [])
+        receipt_id: Optional[str] = str(kept["receipt_id"])
+    else:
+        spec, origin = resolve_spec(prompt, template_id, template_dir)
+        attachments = _load_attachments(connection, org_id, ids)
+        spec = _fold_attachments(spec, attachments)
+        if repo:
+            _require_github_repo(connection, org_id, repo)
+            spec["github_repo"] = repo
+        spec["mode"] = asked or origin
 
-    title = str(spec.get("title") or "Easy Mode").strip()[:120]
-    description = str(spec.get("blurb") or spec.get("prompt") or "").strip()[:2000] or None
-    slug = _project_slug(title, dedupe_key)
-    try:
+        title = str(spec.get("title") or "Easy Mode").strip()[:120]
+        description = str(spec.get("blurb") or spec.get("prompt") or "").strip()[:2000] or None
+        slug = _project_slug(title, dedupe_key)
         created = create_project(
             connection, settings, auth=auth, name=title, slug=slug, description=description,
             actor=actor, project_type="app")
-    except ProjectExists:
-        raise
-    except ValueError:
-        raise
-    if str(created.get("org_id") or "") != org_id:
-        raise FactoryLaunchError(
-            409, "wrong_org", "The project was not created in this organization.")
-    project_id = str(created["project_id"])
-    resources = _assign_resources(connection, settings, project_id, spec.get("resources") or [],
-                                  actor=actor)
-    workflows = _write_workflows(connection, project_id, spec.get("workflows") or [], actor=actor)
+        if str(created.get("org_id") or "") != org_id:
+            raise FactoryLaunchError(
+                409, "wrong_org", "The project was not created in this organization.")
+        project_id = str(created["project_id"])
+        workspace_id = str(created["workspace_id"])
+        resources = _assign_resources(connection, settings, project_id,
+                                      spec.get("resources") or [], actor=actor)
+        workflows = _write_workflows(connection, project_id, spec.get("workflows") or [],
+                                     actor=actor)
+        receipt_id = None
+    title = str(spec.get("title") or "Easy Mode").strip()[:120]
 
     # The blurb and the prompt, before any reservation. A block or an unanswered ask stops here.
-    checked = before_builder_reserve(
-        _launch_prompt(spec), allowed=bool(allowed),
-        reserve=lambda: _reserve(connection, settings, project_id, title, budget))
-    if checked["action"] == "block":
-        raise FactoryLaunchError(409, "personal_data_blocked", str(checked["message"]))
-    if checked["action"] != "allow":
-        raise FactoryLaunchError(
-            409, "personal_data_ask",
-            "An email or a phone number has to be allowed before this launch reserves a budget.")
-    reservation_id = str(checked["reservation"])
     if builder is None:
         builder = build_run
-    built = builder(
-        connection, project_id=project_id, spec=spec, actor=actor, settings=settings,
-        jobs=jobs, reservation_id=reservation_id)
+    try:
+        # THE START ALONE MAY BE UNDONE (consent): the reservation and whatever the build start
+        # wrote go back with this savepoint, the project made above stays.
+        with connection.begin_nested():
+            checked = before_builder_reserve(
+                _launch_prompt(spec), allowed=bool(allowed),
+                reserve=lambda: _reserve(connection, settings, project_id, title, budget))
+            if checked["action"] == "block":
+                raise FactoryLaunchError(409, "personal_data_blocked", str(checked["message"]))
+            if checked["action"] != "allow":
+                raise FactoryLaunchError(
+                    409, "personal_data_ask",
+                    "An email or a phone number has to be allowed before this launch reserves "
+                    "a budget.")
+            reservation_id = str(checked["reservation"])
+            built = builder(
+                connection, project_id=project_id, spec=spec, actor=actor, settings=settings,
+                jobs=jobs, reservation_id=reservation_id)
+    except ConsentRequired as asked:
+        raise _keep_for_consent(
+            connection, asked, org_id=org_id, workspace_id=workspace_id, project_id=project_id,
+            dedupe_key=dedupe_key, spec=spec, resources=resources, workflows=workflows,
+            receipt_id=receipt_id) from None
     run_id = str((built or {}).get("run_id") or "").strip()
     returned_project = str((built or {}).get("project_id") or project_id).strip()
     if not run_id or returned_project != project_id:
@@ -254,26 +285,122 @@ def launch(
         "resources": resources,
         "workflows": workflows,
         "reused": False,
-        "spec": {
-            "id": spec.get("id"),
-            "title": spec.get("title"),
-            "prompt": spec.get("prompt"),
-            "stack": spec.get("stack"),
-            "resources": list(spec.get("resources") or []),
-            "workflows": list(spec.get("workflows") or []),
-            "attachments": spec.get("attachments") or [],
-            "github_repo": spec.get("github_repo"),
-        },
+        "spec": _spec_view(spec),
     }
-    receipt, created_receipt = ReceiptService().create_or_reuse(
-        connection, org_id, str(created["workspace_id"]), project_id,
-        dedupe_key=dedupe_key, effect_kind="factory.launch",
-        effect_scope={"mode": spec["mode"], "template_id": spec.get("id")},
-        payload=body)
-    body["receipt_id"] = receipt["id"]
+    if receipt_id is None:
+        receipt, created_receipt = ReceiptService().create_or_reuse(
+            connection, org_id, workspace_id, project_id,
+            dedupe_key=dedupe_key, effect_kind="factory.launch",
+            effect_scope={"mode": spec["mode"], "template_id": spec.get("id")},
+            payload=body)
+        receipt_id = str(receipt["id"])
+        if not created_receipt and receipt.get("status") == "in_progress":
+            # A kept launch whose project was removed meanwhile: this launch is the real one.
+            connection.execute(text("UPDATE receipts SET project_id = :p WHERE id = :r"),
+                               {"p": project_id, "r": receipt_id})
+            created_receipt = True
+    else:
+        created_receipt = True        # the kept launch's own receipt: this is its real launch
+    body["receipt_id"] = receipt_id
     if created_receipt:
-        ReceiptService().mark_succeeded(connection, receipt["id"], None, body)
+        ReceiptService().mark_succeeded(connection, receipt_id, None, body)
     return body
+
+
+def _spec_view(spec: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": spec.get("id"),
+        "title": spec.get("title"),
+        "prompt": spec.get("prompt"),
+        "stack": spec.get("stack"),
+        "resources": list(spec.get("resources") or []),
+        "workflows": list(spec.get("workflows") or []),
+        "attachments": spec.get("attachments") or [],
+        "github_repo": spec.get("github_repo"),
+    }
+
+
+def _keep_for_consent(
+    connection: Any, asked: ConsentRequired, *, org_id: str, workspace_id: str, project_id: str,
+    dedupe_key: str, spec: dict[str, Any], resources: list[Any], workflows: list[Any],
+    receipt_id: Optional[str],
+) -> ConsentRequired:
+    """The build asked for consent: keep the project (its agents, Passports and workflows) and
+    one in-progress receipt that remembers the launch, and answer the same 409 with the project.
+
+    The CALLER MUST COMMIT on this ConsentRequired (the API route does): the consent body names
+    this project's agents, and the same launch sent again (same dedupe key) starts the build
+    in it under the new grant."""
+    body = dict(getattr(asked, "body", None) or {})
+    # The agents' Passports belong to the kept project: issue them in this transaction, so the
+    # grant the person creates names agents that exist (the savepoint took any issued during the
+    # start back with it).
+    try:
+        from ..identity import consent as _consent
+        from ..identity import passports as _passports
+
+        with connection.begin_nested():
+            _passports.upgrade_from_roles(
+                org_id=org_id, db=connection,
+                default_sponsor=_consent._first_owner(connection, org_id))  # noqa: SLF001
+    except Exception:  # noqa: BLE001 — the start issues them again; the consent ask stands
+        import logging
+
+        logging.getLogger(__name__).warning("Passports for kept launch %s not issued", project_id,
+                                            exc_info=True)
+    kept = {
+        "awaiting": "consent",
+        "project_id": project_id,
+        "workspace_id": workspace_id,
+        "dedupe_key": dedupe_key,
+        "spec": spec,
+        "resources": resources,
+        "workflows": workflows,
+    }
+    receipts = ReceiptService()
+    if receipt_id is None:
+        receipt, _ = receipts.create_or_reuse(
+            connection, org_id, workspace_id, project_id,
+            dedupe_key=dedupe_key, effect_kind="factory.launch",
+            effect_scope={"mode": spec.get("mode"), "template_id": spec.get("id")},
+            payload=kept)
+        receipt_id = str(receipt["id"])
+    else:
+        # The kept receipt names the project the launch waits in (a re-ask after the project
+        # it named was removed made a new one).
+        connection.execute(text("UPDATE receipts SET project_id = :p WHERE id = :r"),
+                           {"p": project_id, "r": receipt_id})
+    receipts.merge_result(connection, receipt_id, kept)
+    body.update({
+        "project_id": project_id,
+        "dedupe_key": dedupe_key,
+        "receipt_id": receipt_id,
+        "created": True,
+        "retry": {"project_id": project_id, "dedupe_key": dedupe_key},
+    })
+    return ConsentRequired(body)
+
+
+def _kept(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, Any]]:
+    """The launch kept while it waited for consent (an in-progress receipt), or None."""
+    existing = ReceiptService().get_by_dedupe_key(connection, org_id, dedupe_key)
+    if not existing or existing.get("status") != "in_progress":
+        return None
+    result = existing.get("result") or {}
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(result, dict) or result.get("awaiting") != "consent":
+        return None
+    if not result.get("project_id") or not isinstance(result.get("spec"), dict):
+        return None
+    alive = connection.execute(text("SELECT 1 FROM projects WHERE id = :p"),
+                               {"p": result["project_id"]}).first()
+    if alive is None:
+        return None
+    return {**result, "receipt_id": existing.get("id")}
 
 
 def build_run(
@@ -607,10 +734,11 @@ def _reuse(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, 
 
 def _dedupe_key(
     org_id: str, prompt: str, mode: str, template_id: Optional[str],
-    attachment_ids: list[str], github_repo: str,
+    attachment_ids: list[str], github_repo: str, who: str = "",
 ) -> str:
     raw = json.dumps({
         "org": org_id,
+        "who": who,
         "prompt": str(prompt or ""),
         "mode": mode,
         "template_id": template_id or "",
