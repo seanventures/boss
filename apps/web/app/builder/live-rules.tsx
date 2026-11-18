@@ -9,6 +9,7 @@
  * and the plate is one dark object, not a dark product.
  */
 import React, { useEffect, useState } from "react";
+import { apiWrite } from "../../lib/api-write";
 
 export type LivePredicate = {
   field?: string;
@@ -84,14 +85,14 @@ const httpTransport: LiveRulesTransport = {
     return take(await fetch(`/v1/live-action-rules?${query}`, { cache: "no-store" }));
   },
   async record(body) {
-    return take(await fetch("/v1/live-action-rules", {
+    return take(await apiWrite("/v1/live-action-rules", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }));
   },
   async attempt(body) {
-    return take(await fetch("/v1/live-action-rules/attempt", {
+    return take(await apiWrite("/v1/live-action-rules/attempt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

@@ -6,6 +6,7 @@
  * No cloud is called from this screen.
  */
 import React, { useState } from "react";
+import { apiWrite } from "../../lib/api-write";
 
 export type PublishRecord = {
   app: string;
@@ -172,7 +173,7 @@ function recordedValue(publish: PublishRecord): unknown {
 }
 
 async function defaultRequest(body: HandoffBody): Promise<HandoffResult> {
-  const response = await fetch("/v1/tenant-handoff", {
+  const response = await apiWrite("/v1/tenant-handoff", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),

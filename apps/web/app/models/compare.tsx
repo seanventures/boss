@@ -8,6 +8,7 @@
  * Display Syne, answers in Source Serif 4, stubs in Spline Sans Mono.
  */
 import React, { useState } from "react";
+import { apiWrite } from "../../lib/api-write";
 
 export type CompareColumn = {
   model: string;
@@ -35,7 +36,7 @@ export type CompareRequest = {
 const MAX_LANES = 4;
 
 async function postCompare(input: CompareRequest): Promise<CompareResult> {
-  const response = await fetch("/v1/model-compares", {
+  const response = await apiWrite("/v1/model-compares", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

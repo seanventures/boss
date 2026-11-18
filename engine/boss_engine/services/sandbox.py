@@ -563,6 +563,17 @@ class EphemeralSandbox:
         from .repo_host import git_access
         from .resource_ledger import claim_dir
 
+        from .sandbox_identity import current, mode
+
+        # EVERY GIT HERE RUNS AS THE RUN'S UID, as on a fresh clone. This checkout's .git was
+        # written by the lineage's previous round: a git with BOSS's authority on it (it ran as
+        # BOSS: `_sandbox` was never set here) executed whatever that round configured — a
+        # filter's clean command on `add -A`, an `ext::` remote on `fetch`. Lineage reuse is
+        # keyed on the same uid (lineage_sandbox.claim), so this is the uid that wrote it.
+        self._sandbox = current()
+        self._git_owner = owned_process.current_owner()
+        if self._sandbox is None and mode() == "required":
+            raise SandboxError("sandbox isolation requires an active run identity")
         self.path = warm_dir
         self._owns_dir = False  # the lineage, not this run, owns this directory's lifetime
         self.base_branch = base_branch
@@ -807,7 +818,7 @@ class EphemeralSandbox:
     def diff_summary(self) -> DiffSummary:
         self._require_provisioned()
         self.undo_agent_commits()
-        self._git(["add", "-A"])
+        self._stage_all()
         base = getattr(self, "diff_base_sha", None)
         numstat = self._git(["diff", "--cached", "--numstat", *([base] if base else [])]).strip()
         additions = deletions = 0
@@ -831,7 +842,7 @@ class EphemeralSandbox:
         """The raw patch — stays in the customer boundary; BOSS keeps only the
         summary unless the customer opts in (see architecture §5.1)."""
         self._require_provisioned()
-        self._git(["add", "-A"])
+        self._stage_all()
         base = getattr(self, "diff_base_sha", None)
         return self._git(["diff", "--cached", *([base] if base else [])], raw=True)
 
@@ -1047,7 +1058,14 @@ class EphemeralSandbox:
         failed a whole build on one GitHub 502 during the clone."""
         sub = self._git_subcommand(args)
         if sub not in self._NETWORK_GIT:
-            return self._git_once(args, raw=raw, redact=redact)
+            try:
+                return self._git_once(args, raw=raw, redact=redact)
+            except SandboxError as exc:
+                # A .git another uid wrote last (git_dir_repair below): opened to the run's uid
+                # again, then the same command once more. Anything else raises as it was.
+                if not self._repair_git_dir(exc):
+                    raise
+                return self._git_once(args, raw=raw, redact=redact)
         from . import transient_retry
 
         def attempt() -> str:
@@ -1065,6 +1083,53 @@ class EphemeralSandbox:
         return transient_retry.call(
             attempt, operation=f"git {sub}", redact=redact,
             transient=lambda e: isinstance(e, SandboxError) and transient_retry.is_transient_git_error(e))
+
+    #: How a refused open of the index reads in git's own words.
+    _GIT_PERMISSION_WORDS = ("Permission denied", "insufficient permission", "Operation not permitted")
+
+    @classmethod
+    def _index_refused(cls, exc: BaseException) -> bool:
+        """git could not open this checkout's .git/index (or its lock) for permissions."""
+        text = str(exc)
+        return (".git/index" in text or "index file" in text) and \
+            any(w in text for w in cls._GIT_PERMISSION_WORDS)
+
+    def _repair_git_dir(self, exc: BaseException) -> bool:
+        """BOSS'S GIT WORKS WHOEVER WROTE .git/index LAST. True when `exc` is git refused this
+        checkout's index and the repair changed something worth one more try.
+
+        BOSS's own git here runs AS the run's uid. A process of BOSS's uid that rewrites the index
+        (a reviewer's read-only guard running `git status`) under a narrow umask leaves a file the
+        run's uid may not open: crun_6883ec7c lost a finished Recipe box build on `.git/index:
+        index file open failed: Permission denied`. workspace_perms.repair_git_index opens exactly
+        the index (and its lock), never following a link; any other refusal raises as it was."""
+        if self.path is None or self._provisioning or not self._index_refused(exc):
+            return False
+        isolated = getattr(self, "_sandbox", None)
+        run_uid = getattr(isolated, "uid", None)
+        from . import workspace_perms
+
+        # The walk starts at BOSS's own sandbox root (the run directory's parent, BOSS-owned).
+        trusted = isolated.run_dir.parent if isolated is not None else None
+        changed = workspace_perms.repair_git_index(self.path, run_uid=run_uid,
+                                                   trusted_root=trusted)
+        if changed:
+            self.git_dir_repaired = sorted(set(getattr(self, "git_dir_repaired", []) + changed))
+        return bool(changed)
+
+    def _stage_all(self) -> None:
+        """`git add -A`, which works whoever last wrote .git/index (one repair-and-retry, `_git`).
+        A refusal after that says what failed, in words."""
+        try:
+            self._git(["add", "-A"])
+        except SandboxError as exc:
+            if not self._index_refused(exc):
+                raise
+            raise SandboxError(
+                "BOSS could not collect this build's changes: git refused this checkout's index "
+                f"(.git/index) even after BOSS repaired its permissions ({exc}). The files the "
+                "agents wrote are still in the workspace; Retry continues from the saved "
+                "work.") from exc
 
     def _git_once(
         self, args: list[str], *, raw: bool = False, redact: Optional[str] = None
@@ -1088,8 +1153,9 @@ class EphemeralSandbox:
             # no sandbox uid — never executes what the tree configured; git that runs AS the
             # workload's uid may (it has nothing the workload has not).
             as_boss = provisioning or isolated is None
-            no_tree_code = (["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
-                            if as_boss else [])
+            from .git_safety import NO_TREE_CODE
+
+            no_tree_code = list(NO_TREE_CODE) if as_boss else []
             argv = ["git", "-C", str(self.path), *no_tree_code, *own_config, *args]
             cwd = str(self.path)
             if provisioning:

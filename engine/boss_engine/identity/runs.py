@@ -778,11 +778,18 @@ def serve_shim_socket(shim: Shim) -> str:
     if os.path.lexists(path):
         os.unlink(path)
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    old = os.umask(0o177)
+    # 0600 FROM THE START WITHOUT os.umask (process-wide: every other thread's files would be
+    # created 0600 meanwhile — see the process_umask guard). Bound inside a private 0700
+    # directory, made 0600, then renamed into place: no moment where another uid can reach it.
+    private = tempfile.mkdtemp(prefix=".b", dir=root)
     try:
-        srv.bind(path)
+        staged = os.path.join(private, "s")
+        srv.bind(staged)
+        os.chmod(staged, 0o600)
+        os.replace(staged, path)
     finally:
-        os.umask(old)
+        with contextlib.suppress(OSError):
+            os.rmdir(private)
     os.chmod(path, 0o600)
     if ident is not None:
         ident.adopt_socket(path)              # <uid>:<uid> 0600

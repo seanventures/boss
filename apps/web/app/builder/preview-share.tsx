@@ -8,6 +8,7 @@
  * is never written into the page or the console.
  */
 import React, { useEffect, useState } from "react";
+import { apiWrite } from "../../lib/api-write";
 
 export type PreviewShareLink = {
   id: string;
@@ -246,7 +247,7 @@ function actorBody(props: PreviewShareProps) {
 }
 
 async function postJson(url: string, body: unknown) {
-  const response = await fetch(url, {
+  const response = await apiWrite(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -268,7 +269,7 @@ async function postShare(props: PreviewShareProps, draft: ShareDraft) {
 }
 
 async function postOpen(props: PreviewShareProps, slug: string, password: string): Promise<OpenResult> {
-  const response = await fetch(`/v1/preview-shares/${encodeURIComponent(slug)}/open`, {
+  const response = await apiWrite(`/v1/preview-shares/${encodeURIComponent(slug)}/open`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ project_id: props.projectId ?? "", password }),

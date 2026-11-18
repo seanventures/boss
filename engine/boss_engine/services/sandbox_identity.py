@@ -282,9 +282,10 @@ class SandboxIdentity:
             self._helper("kill", str(self.uid), check=False)
 
     def workspace(self, prefix: str) -> Path:
-        """A fresh directory for one sandbox (a stage's clone) inside the run directory. BOSS
-        creates it and its first contents with umask 0: only this run and BOSS can reach them
-        (the run directory is 2770), and the run's uid must be able to edit what BOSS cloned."""
+        """A fresh directory for one sandbox (a stage's clone) inside the run directory, 2777:
+        only this run and BOSS can reach it (the run directory is 2770), and the run's uid must
+        be able to edit what BOSS clones into it (the clone's own git runs with umask 0 —
+        a per-spawn `umask` (Popen's), never the process-wide one)."""
         import tempfile
 
         path = Path(tempfile.mkdtemp(prefix=prefix, dir=str(self.run_dir)))
@@ -390,14 +391,13 @@ def acquire(owner_id: str, *, project_id: Optional[str] = None,
         ident.killall()                                  # nothing of a previous lease survives
         if ident.run_dir.exists():
             _purge(ident)
-        old = os.umask(0)
-        try:
-            ident.run_dir.mkdir(mode=0o700)
-            for sub in (ident.home, ident.tmp):
-                sub.mkdir()
-                os.chmod(sub, 0o2777)
-        finally:
-            os.umask(old)
+        # Modes by chmod, never os.umask: the umask is process-wide, and every other thread's
+        # files would be created world-writable meanwhile (process_umask guard test).
+        ident.run_dir.mkdir(mode=0o700)
+        os.chmod(ident.run_dir, 0o700)
+        for sub in (ident.home, ident.tmp):
+            sub.mkdir()
+            os.chmod(sub, 0o2777)
         if seed_logins and not sealed:
             _seed_cli_logins(ident)
         _seed_toolchains(ident, project_id)
