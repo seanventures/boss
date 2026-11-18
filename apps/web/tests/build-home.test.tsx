@@ -219,13 +219,28 @@ describe("a template this install cannot build", () => {
     await renderHome();
     const go = document.querySelector<HTMLButtonElement>("[data-template-id=fixture-clock]");
     const ok = document.querySelector<HTMLButtonElement>("[data-template-id=tile-swap]");
-    expect(go?.disabled).toBe(true);
+    // Reachable by keyboard (no native disabled), announced as unavailable, with the reason on screen.
+    expect(go?.disabled).toBe(false);
+    expect(go?.getAttribute("aria-disabled")).toBe("true");
+    expect(go?.hasAttribute("aria-pressed")).toBe(false);
     expect(go?.getAttribute("data-unavailable")).toBe("true");
     expect(go?.title).toContain("boss toolchains enable go");
-    expect(go?.querySelector("[data-testid=build-template-needs]")?.textContent).toBe("Needs GoTurn on: boss toolchains enable go");
+    const why = go?.querySelector("[data-testid=build-template-needs]");
+    expect(why?.id).toBeTruthy();
+    expect(go?.getAttribute("aria-describedby")).toBe(why?.id);
+    expect(document.getElementById(go!.getAttribute("aria-describedby")!)).toBe(why);
+    expect(why?.textContent).toContain("Needs Go");
+    expect(why?.textContent).toContain("Go is not turned on for this BOSS");
+    expect(why?.querySelector("code")?.textContent).toBe("boss toolchains enable go");
     expect(ok?.disabled).toBe(false);
+    expect(ok?.hasAttribute("aria-disabled")).toBe(false);
+    expect(ok?.hasAttribute("aria-describedby")).toBe(false);
     expect(ok?.querySelector("[data-testid=build-template-needs]")).toBeNull();
+    // Still drawn, so the gallery does not show a blank hole.
+    expect(go?.querySelector(".bh-card-art svg[aria-hidden=true]")).not.toBeNull();
 
+    go?.focus();
+    expect(document.activeElement).toBe(go);
     await press("[data-template-id=fixture-clock]");
     expect(document.querySelector("[data-testid=build-home]")?.getAttribute("data-template-id")).toBe("");
     expect(document.querySelector<HTMLTextAreaElement>("[data-testid=build-prompt]")?.value).toBe("");
@@ -332,3 +347,48 @@ describe("templates", () => {
     expect(document.querySelector("[data-testid=build-templates-empty]")).toBeNull();
   });
 });
+
+describe("the gallery folds to two rows", () => {
+  const many = (n: number) => Array.from({ length: n }, (_, i) => ({
+    id: i === 0 ? "tile-swap" : `tpl_${i}`, title: `Template ${i}`, category: i % 2 ? "web" : "brand-new", blurb: "A thing.", prompt: `Build ${i}`,
+  }));
+
+  it("shows two rows' worth, then Show all expands and Show fewer folds", async () => {
+    install({ templates: () => Response.json({ templates: many(21) }) });
+    await renderHome();
+    const list = document.querySelector("[data-testid=build-template-list]")!;
+    const cols = Number(list.getAttribute("data-columns"));
+    expect(cols).toBeGreaterThan(0);
+    expect(document.querySelectorAll("[data-testid=build-template]").length).toBe(cols * 2);
+    const more = document.querySelector<HTMLButtonElement>("[data-testid=build-templates-more]")!;
+    expect(more.textContent).toBe("Show all 21 templates");
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    expect(more.getAttribute("aria-controls")).toBe(list.id);
+
+    await press("[data-testid=build-templates-more]");
+    expect(document.querySelectorAll("[data-testid=build-template]").length).toBe(21);
+    expect(more.textContent).toBe("Show fewer");
+    expect(more.getAttribute("aria-expanded")).toBe("true");
+
+    await press("[data-testid=build-templates-more]");
+    expect(document.querySelectorAll("[data-testid=build-template]").length).toBe(cols * 2);
+  });
+
+  it("has no Show all when everything fits in two rows", async () => {
+    install({ templates: () => Response.json({ templates: many(4) }) });
+    await renderHome();
+    expect(document.querySelectorAll("[data-testid=build-template]").length).toBe(4);
+    expect(document.querySelector("[data-testid=build-templates-more]")).toBeNull();
+  });
+
+  it("every card opens with a decorative drawing: its own, its category's, or the generic one", async () => {
+    install({ templates: () => Response.json({ templates: many(3) }) });
+    await renderHome();
+    const kinds = [...document.querySelectorAll("[data-testid=build-template] .bh-card-art svg")].map((svg) => {
+      expect(svg.getAttribute("aria-hidden")).toBe("true");
+      return svg.getAttribute("data-preview");
+    });
+    expect(kinds).toEqual(["template", "category", "generic"]);
+  });
+});
+

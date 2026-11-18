@@ -38,6 +38,13 @@ const SCREENS: Record<string, Screen> = {
       <><text x="14" y="46" fill="#4ade80" fontSize="9" className="ip-mono">$</text><text x="26" y="46" fill="#e6ecf5" fontSize="9" className="ip-mono">curl localhost:8080/hello</text><text x="14" y="66" fill="#93a1bb" fontSize="9" className="ip-mono">HTTP/1.1 200 OK</text><text x="14" y="80" fill="#93a1bb" fontSize="9" className="ip-mono">content-type: application/json</text><rect x="14" y="92" width="176" height="44" rx="6" fill="#141b33" stroke="#818cf8" strokeOpacity="0.5" /><text x="24" y="110" fill="#c7d2fe" fontSize="10" className="ip-mono">{`{ "message": "hello",`}</text><text x="24" y="126" fill="#c7d2fe" fontSize="10" className="ip-mono">{`  "from": "BOSS" }`}</text><rect x="210" y="92" width="96" height="44" rx="6" fill="#111a2b" stroke="#24314a" /><text x="220" y="108" fill="#4ade80" fontSize="8" fontWeight="700">● 1 test passing</text><text x="220" y="124" fill="#93a1bb" fontSize="7.5">12 ms, healthy</text><text x="14" y="158" fill="#4ade80" fontSize="9" className="ip-mono">$</text><rect x="26" y="150" width="6" height="11" fill="#e6ecf5" /></>
     ),
   },
+  "hello world": {
+    bar: "Hello World · localhost:3000",
+    about: "the sample app's one web page saying Hello, World with the current time, and its one test passing",
+    body: (
+      <><rect x="12" y="32" width="296" height="16" rx="8" fill="#111a2b" stroke="#24314a" /><circle cx="24" cy="40" r="3" fill="#4ade80" /><text x="32" y="43" fill="#93a1bb" fontSize="7.5" className="ip-mono">localhost:3000/</text><rect x="12" y="56" width="200" height="112" rx="8" fill="#111a2b" stroke="#24314a" /><text x="112" y="98" textAnchor="middle" fill="#e6ecf5" fontSize="20" fontWeight="700">Hello, World</text><text x="112" y="118" textAnchor="middle" fill="#93a1bb" fontSize="8">The time is</text><text x="112" y="138" textAnchor="middle" fill="#2dd4bf" fontSize="14" fontWeight="700" className="ip-mono">09:41:07</text><rect x="220" y="56" width="88" height="54" rx="8" fill="#0f2a1c" stroke="#4ade80" strokeOpacity="0.6" /><text x="228" y="74" fill="#4ade80" fontSize="8" fontWeight="700">● 1 test passing</text><text x="228" y="90" fill="#a9b6cc" fontSize="7" className="ip-mono">hello-world.test</text><text x="228" y="102" fill="#93a1bb" fontSize="7">says hello, 9 ms</text><rect x="220" y="118" width="88" height="50" rx="8" fill="#111a2b" stroke="#24314a" /><text x="228" y="134" fill="#93a1bb" fontSize="7">HELLO_NAME</text><text x="228" y="150" fill="#e6ecf5" fontSize="9" fontWeight="600" className="ip-mono">World</text><text x="228" y="162" fill="#6b7a96" fontSize="6.5">GET /</text></>
+    ),
+  },
   "incident timeline builder": {
     bar: "Incident, Timeline",
     about: "a SEV-2 incident laid out as a timeline from first alert to root cause, ready to publish",
@@ -152,8 +159,9 @@ const SCREENS: Record<string, Screen> = {
   },
 };
 
-/** The window chrome every screen shares: frame, title bar, three dots and the window title. */
-function Chrome({ bar }: { bar: string }) {
+/** The window chrome every screen shares: frame, title bar, three dots and the window title.
+ *  Shared with the template gallery's drawings (template-previews.tsx). */
+export function Chrome({ bar }: { bar: string }) {
   return (
     <><rect x="0.5" y="0.5" width="319" height="179" rx="10" fill="#0b1220" stroke="#24314a" /><rect x="0.5" y="0.5" width="319" height="24" rx="10" fill="#111a2b" /><rect x="0.5" y="14" width="319" height="11" fill="#111a2b" /><circle cx="13" cy="12.5" r="3.5" fill="#f87171" /><circle cx="24" cy="12.5" r="3.5" fill="#fbbf24" /><circle cx="35" cy="12.5" r="3.5" fill="#4ade80" /><text x="160" y="16" textAnchor="middle" fill="#93a1bb" fontSize="9">{bar}</text></>
   );
