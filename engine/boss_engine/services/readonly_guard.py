@@ -14,6 +14,7 @@ result; a change no concurrent verify explains (`explained`) marks the seat's ve
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -42,9 +43,12 @@ def explained(path: str) -> bool:
 
 
 def _git(root: Path, *args: str) -> Optional[str]:
+    # WATCHING NEVER WRITES (GIT_OPTIONAL_LOCKS=0): this git runs as BOSS's uid on the live tree,
+    # and a plain `git status` refreshes and REWRITES .git/index as that uid. crun_6883ec7c's
+    # index came back boss 0600 and the run's own `git add -A` could no longer open it.
     try:
         out = subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True,
-                             timeout=60)
+                             timeout=60, env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
     except (OSError, subprocess.SubprocessError):
         return None
     return out.stdout if out.returncode == 0 else None

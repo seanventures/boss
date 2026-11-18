@@ -161,6 +161,65 @@ def normalize(root: Any, *, readable_by_boss: bool = True) -> int:
     return fixed
 
 
+def repair_git_dir(git_dir: Any, *, run_uid: Optional[int]) -> list[str]:
+    """`.git` USABLE BY THE RUN'S UID AGAIN, whoever last wrote it. Returns the entries changed.
+
+    BOSS's own git on a run's checkout runs AS the run's uid (sandbox._git_once). Anything else
+    that writes inside `.git` as BOSS's uid leaves files the run's uid may not open: crun_6883ec7c
+    (Recipe box, 2026-11-18) died on `fatal: .git/index: index file open failed: Permission
+    denied` because a review seat's read-only guard ran `git status` as the API's uid (boss),
+    `git status` opportunistically rewrote .git/index, and it did so while the hourly backup had
+    set the PROCESS-WIDE umask to 077 for its pg_dump: .git/index became boss 0600. The run's uid
+    has no supplementary groups, so only the "other" bits reach it.
+
+    Every entry under `git_dir` the run's uid does not own is opened to it: files readable (and
+    writable when their owner could write), directories rwx. Only what BOSS's uid may chmod (its
+    own entries, or any when BOSS runs as root) is touched; symlinks are never followed. Safe: a run
+    directory is <uid>:boss 2770, so no other uid can reach these. Never raises."""
+    base = Path(git_dir)
+    if run_uid is None:
+        return []
+    try:
+        if base.is_symlink() or not base.is_dir():
+            return []
+    except OSError:
+        return []
+    me = os.geteuid()
+    changed: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(base, topdown=True, followlinks=False):
+        for name in ["", *dirnames, *filenames]:
+            p = os.path.join(dirpath, name) if name else dirpath
+            if name == "" and dirpath != str(base):
+                continue  # each directory is handled once, as its parent's entry
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            if st.st_uid == run_uid or stat.S_ISLNK(st.st_mode):
+                continue
+            if st.st_uid != me and me != 0:
+                continue  # neither BOSS's nor the run's: BOSS cannot change it
+            mode = stat.S_IMODE(st.st_mode)
+            if stat.S_ISDIR(st.st_mode):
+                want = mode | 0o777
+            elif stat.S_ISREG(st.st_mode):
+                want = mode | 0o444 | (0o222 if mode & 0o200 else 0)
+            else:
+                continue
+            if want == mode:
+                continue
+            try:
+                os.chmod(p, want)
+                changed.append(os.path.relpath(p, base.parent))
+            except OSError:
+                continue
+    if changed:
+        log.warning("workspace permissions: %d entr%s of %s opened to the run's uid again: %s",
+                    len(changed), "y" if len(changed) == 1 else "ies", base,
+                    ", ".join(changed[:5]) + ("…" if len(changed) > 5 else ""))
+    return changed
+
+
 def make_writable(path: Any, *, within: Any = None) -> None:
     """The lazy form: `path` (if it exists) and its parent directory. With `within`, nothing is
     touched unless the path resolves inside it (an agent-named path never reaches outside its

@@ -390,14 +390,13 @@ def acquire(owner_id: str, *, project_id: Optional[str] = None,
         ident.killall()                                  # nothing of a previous lease survives
         if ident.run_dir.exists():
             _purge(ident)
-        old = os.umask(0)
-        try:
-            ident.run_dir.mkdir(mode=0o700)
-            for sub in (ident.home, ident.tmp):
-                sub.mkdir()
-                os.chmod(sub, 0o2777)
-        finally:
-            os.umask(old)
+        # Modes by chmod, never os.umask: the umask is process-wide, and every other thread's
+        # files would be created world-writable meanwhile (process_umask guard test).
+        ident.run_dir.mkdir(mode=0o700)
+        os.chmod(ident.run_dir, 0o700)
+        for sub in (ident.home, ident.tmp):
+            sub.mkdir()
+            os.chmod(sub, 0o2777)
         if seed_logins and not sealed:
             _seed_cli_logins(ident)
         _seed_toolchains(ident, project_id)

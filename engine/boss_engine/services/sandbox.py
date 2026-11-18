@@ -302,6 +302,8 @@ class EphemeralSandbox:
         self.diff_base_sha: Optional[str] = None
         self._owns_dir = False
         self._provisioning = False
+        #: Set when .git/index could not be opened even after the repair (`_stage_all`).
+        self._private_index: Optional[str] = None
         self._private_staging: Optional[Path] = None
         self._repo_files: Optional[RepoFiles] = None
         # Set True only when `provision()` actually fetched+reset an existing warm
@@ -807,7 +809,7 @@ class EphemeralSandbox:
     def diff_summary(self) -> DiffSummary:
         self._require_provisioned()
         self.undo_agent_commits()
-        self._git(["add", "-A"])
+        self._stage_all()
         base = getattr(self, "diff_base_sha", None)
         numstat = self._git(["diff", "--cached", "--numstat", *([base] if base else [])]).strip()
         additions = deletions = 0
@@ -831,7 +833,7 @@ class EphemeralSandbox:
         """The raw patch — stays in the customer boundary; BOSS keeps only the
         summary unless the customer opts in (see architecture §5.1)."""
         self._require_provisioned()
-        self._git(["add", "-A"])
+        self._stage_all()
         base = getattr(self, "diff_base_sha", None)
         return self._git(["diff", "--cached", *([base] if base else [])], raw=True)
 
@@ -1047,7 +1049,14 @@ class EphemeralSandbox:
         failed a whole build on one GitHub 502 during the clone."""
         sub = self._git_subcommand(args)
         if sub not in self._NETWORK_GIT:
-            return self._git_once(args, raw=raw, redact=redact)
+            try:
+                return self._git_once(args, raw=raw, redact=redact)
+            except SandboxError as exc:
+                # A .git another uid wrote last (git_dir_repair below): opened to the run's uid
+                # again, then the same command once more. Anything else raises as it was.
+                if not self._repair_git_dir(exc):
+                    raise
+                return self._git_once(args, raw=raw, redact=redact)
         from . import transient_retry
 
         def attempt() -> str:
@@ -1065,6 +1074,63 @@ class EphemeralSandbox:
         return transient_retry.call(
             attempt, operation=f"git {sub}", redact=redact,
             transient=lambda e: isinstance(e, SandboxError) and transient_retry.is_transient_git_error(e))
+
+    #: How a refused open inside .git reads in git's own words.
+    _GIT_PERMISSION_WORDS = ("Permission denied", "insufficient permission", "Operation not permitted")
+
+    def _repair_git_dir(self, exc: BaseException) -> bool:
+        """BOSS'S GIT WORKS WHOEVER WROTE .git LAST. True when `exc` is git refused a file in this
+        checkout's .git and the repair changed something worth one more try.
+
+        BOSS's own git here runs AS the run's uid. A process of BOSS's uid that writes inside .git
+        (a reviewer's read-only guard running `git status`, which rewrites the index) leaves a file
+        the run's uid may not open: crun_6883ec7c lost a finished Recipe box build on
+        `.git/index: index file open failed: Permission denied`. workspace_perms.repair_git_dir
+        opens what BOSS's uid may chmod; a provisioning git (as BOSS) never needs it."""
+        if self.path is None or self._provisioning:
+            return False
+        if not any(w in str(exc) for w in self._GIT_PERMISSION_WORDS):
+            return False
+        isolated = getattr(self, "_sandbox", None)
+        run_uid = getattr(isolated, "uid", None)
+        from . import workspace_perms
+
+        changed = workspace_perms.repair_git_dir(self.path / ".git", run_uid=run_uid)
+        if changed:
+            self.git_dir_repaired = sorted(set(getattr(self, "git_dir_repaired", []) + changed))
+        return bool(changed)
+
+    def _use_private_index(self) -> None:
+        """Stage into an index of this sandbox's own (.git/boss-index, made by the run's uid) when
+        .git/index itself cannot be opened even after the repair (a file a third uid owns that
+        BOSS's uid may not chmod). Seeded from HEAD, so `add -A` measures the same tree."""
+        assert self.path is not None
+        self._private_index = str(self.path / ".git" / "boss-index")
+        with contextlib.suppress(OSError):
+            os.unlink(self._private_index)
+        self._git_once(["read-tree", "HEAD"])
+
+    def _stage_all(self) -> None:
+        """`git add -A`, which works whoever last wrote .git/index: one repair-and-retry (`_git`),
+        then this sandbox's own index. A failure after both says what failed, in words."""
+        try:
+            self._git(["add", "-A"])
+            return
+        except SandboxError as exc:
+            if "index" not in str(exc) or not any(w in str(exc) for w in self._GIT_PERMISSION_WORDS):
+                raise
+            first = exc
+        try:
+            self._use_private_index()
+            self._git_once(["add", "-A"])
+            _log.warning("sandbox %s: .git/index could not be opened (%s); staged into the "
+                         "sandbox's own index instead", self.task_id, first)
+        except SandboxError as exc:
+            raise SandboxError(
+                "BOSS could not collect this build's changes: git refused this checkout's index "
+                f"(.git/index) even after BOSS repaired its permissions ({first}; then {exc}). "
+                "The files the agents wrote are still in the workspace; Retry continues from "
+                "the saved work.") from exc
 
     def _git_once(
         self, args: list[str], *, raw: bool = False, redact: Optional[str] = None
@@ -1092,6 +1158,8 @@ class EphemeralSandbox:
                             if as_boss else [])
             argv = ["git", "-C", str(self.path), *no_tree_code, *own_config, *args]
             cwd = str(self.path)
+            if getattr(self, "_private_index", None) and not provisioning:
+                env["GIT_INDEX_FILE"] = self._private_index
             if provisioning:
                 env.update(getattr(self, "_git_env", {}) or {})
             elif isolated is not None:
