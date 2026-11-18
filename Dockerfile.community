@@ -3,18 +3,19 @@
 # Build only from a reviewed Community tree. The source export gate verifies
 # that every copied path belongs in that tree before publication.
 # Pin the multi-architecture base indexes reviewed for this release candidate.
-# OPT-IN TOOLCHAINS (docs/community/TOOLCHAINS.md). Python and Node are always in the image; any
-# other stack is chosen per install: BOSS_TOOLCHAINS in .env (compose passes it here) is "none" or a
-# comma-separated list of toolchains — java, go, security — e.g. "java,go". Each toolchain's
+# BUILD TOOLCHAINS (docs/community/TOOLCHAINS.md). Python and Node are always in the image; the
+# other stacks are chosen per install: BOSS_TOOLCHAINS in .env (compose passes it here) is "none" or
+# a comma-separated list of toolchains — java, go, security. The default is "java,go" (the stacks
+# most people build); "none" turns both off and "security" stays opt-in. Each toolchain's
 # selector below is its own stage name when the list holds it and "none" otherwise, so each
 # tc-<name> stage is either that toolchain or the empty one, and BuildKit never builds a stage
-# nothing uses: a default install downloads no JDK and no Go at all.
+# nothing uses: an install with BOSS_TOOLCHAINS=none downloads no JDK and no Go at all.
 #   _TC_LIST     ",java,go,"  (commas around every name, so ",go," never matches "golang")
 #   _TC_<X>_HIT  the whole list replaced by "<x>" when it holds ",<x>,", else unchanged
 #   TC_<X>       "<x>", or "none" when _TC_<X>_HIT is still the list (it starts with a comma)
 # String replacement in ARG values needs the dockerfile:1.7 frontend this file pins (line 1).
 # An unknown name fails the build in the `toolchains` stage, in words.
-ARG BOSS_TOOLCHAINS=none
+ARG BOSS_TOOLCHAINS=java,go
 ARG _TC_LIST=",${BOSS_TOOLCHAINS},"
 ARG _TC_JAVA_HIT=${_TC_LIST/*,java,*/java}
 ARG TC_JAVA=${_TC_JAVA_HIT/,*/none}
@@ -278,8 +279,9 @@ RUN python -m playwright install --with-deps chromium \
     && chmod -R a+rX /opt/pw-browsers \
     && rm -rf /var/lib/apt/lists/*
 
-# The install's opt-in toolchains (empty unless BOSS_TOOLCHAINS names one), on every process's
-# PATH, and the per-project dependency cache the build sandbox keeps between runs (boss-only).
+# The install's build toolchains (java,go by default; empty with BOSS_TOOLCHAINS=none), on every
+# process's PATH, and the per-project dependency cache the build sandbox keeps between runs
+# (boss-only).
 COPY --from=toolchains /opt/toolchains /opt/toolchains
 ENV PATH=$PATH:/opt/toolchains/bin
 # A login shell (`sh -lc`, how previews start) resets PATH from /etc/profile: put it back there too.

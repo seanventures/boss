@@ -684,7 +684,7 @@ def render_supported_stacks_md() -> str:
     for lang in LANGUAGES.values():
         lines.append(f"| {lang.label} | {lang.runtime} | {lang.package_manager} | "
                      f"{', '.join(f'`{m}`' for m in lang.manifests)} | "
-                     f"{'always installed' if lang.toolchain is None else f'opt-in: `{toolchains.ENABLE_HINT.format(name=lang.toolchain)}`'} |")
+                     f"{'always installed' if lang.toolchain is None else f'on by default (turned off: `{toolchains.ENABLE_HINT.format(name=lang.toolchain)}`)'} |")
     lines += ["", "## Commands", "",
               "Each service runs its own, in its own directory. `—`: not a separate step.", "",
               "| Language | install | build | lint | typecheck | test | e2e |",

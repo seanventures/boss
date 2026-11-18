@@ -350,7 +350,7 @@ The BOSS source URL the installer uses is not an operator repository binding. Fr
 
 | | Need | Why |
 |---|---|---|
-| **Disk** | **About 100 GB recommended working capacity** | Images, build cache and agent repositories need space; the amount varies by selected services and workload. The installer reports the install filesystem separately from an accessible local Linux Docker image store, with an advisory below about 80 GB free. This is not a hard minimum. |
+| **Disk** | **About 100 GB recommended working capacity** | Images, build cache and agent repositories need space; the amount varies by selected services and workload. The installer reports the install filesystem separately from an accessible local Linux Docker image store, with an advisory below about 80 GB free. This is not a hard minimum. The api/worker image carries Java and Go by default, about 0.75 GB of it ([toolchains](../../docs/community/TOOLCHAINS.md); `boss toolchains disable java` / `go` drops them). |
 | **RAM** | **8 GB minimum, 16 GB comfortable** | The six containers idle at about 1.6 GB. Coding work runs inside the API container and adds whatever that task installs. Less than 8 GB will swap. |
 | **CPU** | 4 cores | Reviewers run in parallel. |
 

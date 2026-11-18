@@ -115,14 +115,17 @@ Commands:
                         host-key              issue a new key for these host tools (kept in .env)
                         legacy status         the shared credentials still in use, with end dates
                         posture | audit verify | migrate
-  toolchains [list]   Build toolchains: which this install has (Python and Node always)
+  toolchains [list]   Build toolchains: which this install has (Python and Node always;
+                      Java and Go on by default)
   toolchains enable java|go|security | disable java|go|security
-                      Turn an opt-in toolchain on or off, keeping the others: saves
+                      Turn a toolchain on or off, keeping the others: saves
                       BOSS_TOOLCHAINS in .env (comma-separated, e.g. java,go), rebuilds the
-                      api and worker images and restarts them. Java adds a pinned Temurin
-                      JDK 21, Maven and Gradle (about 0.5 GB); Go adds Go 1.27 (about
-                      0.25 GB); security adds Semgrep, OSV-Scanner and OWASP ZAP on top of
-                      Java. See docs/community/TOOLCHAINS.md
+                      api and worker images and restarts them. With no BOSS_TOOLCHAINS line
+                      the install has java,go. Java is a pinned Temurin JDK 21, Maven and
+                      Gradle (about 0.5 GB); Go is Go 1.27 (about 0.25 GB); security
+                      (opt-in) adds Semgrep, OSV-Scanner and OWASP ZAP on top of Java.
+                      Turning off the last one saves BOSS_TOOLCHAINS=none, and that choice
+                      is kept. See docs/community/TOOLCHAINS.md
   clone PROJECT [DIR] [--branch B] [--open]
                       A working copy of a local project's code (BOSS's git remote,
                       http://localhost:3000/git/PROJECT.git), in DIR (default ~/code/PROJECT).
@@ -589,6 +592,10 @@ cmd_update() {
 # ---- toolchains ------------------------------------------------------------------------------
 
 KNOWN_TOOLCHAINS=(java go security)
+# What an install has when .env has no BOSS_TOOLCHAINS line (or an empty one): the same default as
+# Dockerfile.community's ARG and community-compose.yml's ${BOSS_TOOLCHAINS:-java,go}. An explicit
+# value, "none" included, always wins, so an install that turned them off stays off.
+DEFAULT_TOOLCHAINS="java,go"
 
 # BOSS_TOOLCHAINS is "none" or a comma-separated list of KNOWN_TOOLCHAINS ("java,go"), the same
 # reading as Dockerfile.community's selectors. toolchains_with LIST NAME / toolchains_without
@@ -609,10 +616,14 @@ toolchains_without() {
 cmd_toolchains() {
   need_install
   local action="${1:-list}" name="${2:-}" current wanted
-  current="$(env_value BOSS_TOOLCHAINS)"; current="$(toolchains_normalise "${current:-none}")"
+  current="$(env_value BOSS_TOOLCHAINS)"; current="$(toolchains_normalise "${current:-$DEFAULT_TOOLCHAINS}")"
   case "$action" in
     list|status)
-      printf 'Configured in .env: BOSS_TOOLCHAINS=%s\n' "$current"
+      if [[ -n "$(env_value BOSS_TOOLCHAINS)" ]]; then
+        printf 'Configured in .env: BOSS_TOOLCHAINS=%s\n' "$current"
+      else
+        printf 'Configured:         BOSS_TOOLCHAINS=%s (the default; .env has no line)\n' "$current"
+      fi
       printf 'Always installed:   python, node\n'
       printf 'Known toolchains:   %s\n' "${KNOWN_TOOLCHAINS[*]}"
       printf 'In the running image: '

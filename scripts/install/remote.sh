@@ -335,6 +335,9 @@ cmd_install() {
     backup_remote
   fi
   ship_source
+  # A reinstall over an existing .env: mark it now, so install.sh's rewrite carries it and the
+  # containers it starts already see it.
+  ensure_dedicated_mark
   local args=(--dir "$DIR" --api-port "$API_PORT" --web-port "$WEB_PORT" --postgres-port "$PG_PORT")
   # Community ports remain on the VM's loopback. A laptop connects through
   # the tunnel command, which makes 127.0.0.1 the correct browser API address.
@@ -344,8 +347,13 @@ cmd_install() {
   say "running the installer on the host — this builds images and takes a while"
   # -t so the installer's progress reaches this terminal as it happens rather than in one
   # silent block at the end.
-  ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" "cd '$DIR' && bash install.sh ${args[*]}" \
+  # A first install has no .env yet: the mark goes in the environment, so the containers
+  # install.sh starts see it (compose takes the shell's value), and into .env right after.
+  # With an .env, its own line (written above, or an explicit 0) is what counts.
+  ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" \
+    "cd '$DIR' && if [ -f .env ]; then bash install.sh ${args[*]}; else BOSS_DEDICATED_HOST=1 bash install.sh ${args[*]}; fi" \
     || die "the installer failed on $HOST; previous source remains at $DIR.prev and private backup was printed above"
+  ensure_dedicated_mark
   clear_prev || warn "previous source remains at $DIR.prev; remove it after verifying this install"
   prune_remote
   ok "installer finished"
@@ -394,6 +402,26 @@ prune_remote() {
   say "disk: $(printf '%s\n' "$out" | grep -E '^disk (before|after)' | tr '\n' ' ')"
 }
 
+# THE DEDICATED-HOST MARK. The same reason as prune_remote, for the prunes that run between
+# deploys: the worker's disk reaper (resource_reaper.prune_disk), the steward and `boss prune`
+# only touch the Docker build cache when .env says BOSS_DEDICATED_HOST=1, and nothing wrote it,
+# so boss-1 sat at 80% disk with 46 GB of cache between updates. A host this script installs runs
+# only BOSS, so install and update write the mark when the line is absent. A line that is
+# already there, BOSS_DEDICATED_HOST=0 included (an operator who shares the machine), is never
+# changed. A laptop install never runs this and stays unset. install.sh carries unknown .env
+# lines across its rewrite (restore_preserved_env.sh), so the mark survives every rerun.
+ensure_dedicated_mark() {
+  local out
+  out="$(rsh "f='$DIR/.env'
+       [ -f \"\$f\" ] || exit 0
+       grep -q '^BOSS_DEDICATED_HOST=' \"\$f\" && exit 0
+       if [ -s \"\$f\" ] && [ -n \"\$(tail -c 1 \"\$f\")\" ]; then printf '\n' >> \"\$f\"; fi
+       printf 'BOSS_DEDICATED_HOST=1\n' >> \"\$f\" && echo wrote")" \
+    || { warn "could not write BOSS_DEDICATED_HOST=1 to $DIR/.env; build-cache pruning stays off until it is set"; return 0; }
+  [[ "$out" == *wrote* ]] && say "marked $HOST as a dedicated BOSS host (BOSS_DEDICATED_HOST=1 in .env)"
+  return 0
+}
+
 # UPDATES RESTARTED BUILDS (stability spec C6): every recreate killed the API mid-turn and the
 # build redid clone and install, four times in an hour on boss-1. The API now drains on SIGTERM
 # (builds resume after), and when the operator chose "Hold updates while builds run" on the
@@ -438,6 +466,9 @@ cmd_update() {
   backup_remote
 
   ship_source
+
+  # Installs made before the mark existed get it here, before the build and recreate below.
+  ensure_dedicated_mark
 
   # Archive updates do not run install.sh. Prepare a private copy of .env with
   # the dedicated worker key, then build against that copy. A failed build
