@@ -6110,6 +6110,12 @@ def create_project_endpoint(request: Request, payload: ProjectCreateBody) -> Any
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
         project_id = created["project_id"]
+        if created.get("sample_key"):
+            # A SAMPLE KEEPS ITS CODE ON THIS MACHINE ("Code can stay on this machine"), the way
+            # Start a new app › This machine does: a local repository, made once, so its build
+            # has somewhere to push without GitHub. Find-or-create: an older sample with no
+            # repository gets one now.
+            project_service.ensure_sample_code(connection, settings, project_id, actor=actor)
         row = connection.execute(text(
             "SELECT p.id, p.name, p.slug, p.workspace_id, p.created_at, p.description, "
             "p.project_type, w.name AS workspace_name, o.id AS org_id, o.name AS org_name FROM projects p "
@@ -28271,12 +28277,15 @@ def _precheck_response(body: dict, *, workflow: Optional[str] = None,
 @app.get("/v1/delivery-workflows/{workflow_key}/readiness")
 @permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
 def get_delivery_workflow_readiness(workflow_key: str, project_id: str,
-                                    input: Optional[str] = None) -> dict:
+                                    input: Optional[str] = None,
+                                    code_location: Optional[str] = None) -> dict:
     """What this workflow needs from this project, each item checked, with the fix.
 
     The same answer Start gives when it refuses, asked before pressing it — the start form and
     the example setup scripts draw it. `input` is the run input as JSON, for needs that depend
-    on it (a notify channel the operator typed).
+    on it (a notify channel the operator typed). `code_location=local` asks for a project that
+    will keep its code on this machine (Try a sample): the local repository it gets answers the
+    repository need, so the list is the whole of what the start will refuse, asked once.
     """
     from boss_engine.services import workflow_readiness
 
@@ -28291,7 +28300,8 @@ def get_delivery_workflow_readiness(workflow_key: str, project_id: str,
                                 detail=f"no delivery workflow '{workflow_key}'")
         result = workflow_readiness.readiness_of_version(
             connection, settings, project_id, version_id=str(running["version_id"]),
-            input_data=supplied if isinstance(supplied, dict) else {})
+            input_data=supplied if isinstance(supplied, dict) else {},
+            local_code=code_location == "local")
         return {"workflow_key": workflow_key, "project_id": project_id, **result}
 
 

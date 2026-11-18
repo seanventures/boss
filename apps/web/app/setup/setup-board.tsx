@@ -450,8 +450,8 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
                        step={shift(stepNumber(view, "repository"))} focused={focus === "repository"} />
         <ModelsRow ref={ref("models")} mode={rowMode(view, "models")}
                    step={shift(stepNumber(view, "models"))} focused={focus === "models" || focus === "capacity"}
-                   add={params.add} source={params.source}
-                   onAddHandled={() => setParams((p) => ({ ...p, add: null }))}>
+                   add={params.add ?? modelAdd} source={params.source}
+                   onAddHandled={() => { setModelAddDone(true); setParams((p) => ({ ...p, add: null })); }}>
           {/* rc9 (BOSS-434/437): the model sources sit inside Models, one heading and panel. */}
           <CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} />
           {/* The org's one embedding model (meaning search), set once for every project. */}
@@ -491,6 +491,14 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
 
   // THE STEPPER while a repository or a model is missing (1 GitHub, 2 Repos, 3 Model).
   const stepper = view.next === "repository" || view.next === "model";
+  // Welcome's and the first run's "Add model / Add another account" (`open=add`) land on the
+  // block's own Add — IN BOTH LAYOUTS (stranger test 2026-11-17: on a fresh install, which shows
+  // the stepper, "Add model" landed on Setup without opening the drawer). Any other link to a
+  // block only lands on it (tester, 2026-11-05: focus=repository opened "Add a GitHub account",
+  // focus=models the Add a model drawer).
+  const blockOpen = openAdd && params.focus && BLOCK_FOCUS.has(params.focus) && !params.add && !params.source
+    ? (params.focus === "models" ? "model" as const : "account" as const) : null;
+  const modelAdd = blockOpen === "model" && !modelAddDone ? defaultAdd(view).provider : null;
   if (layout === "setup" && !stepper) {
     const openAdvanced = (row?: string) => {
       setClassicOpen(true);
@@ -501,12 +509,6 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
         window.setTimeout(() => classicRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 50);
       }
     };
-    // Welcome's "Add another account / model" (`open=add`) land on the block's own Add; any
-    // other link to a block only lands on it (tester, 2026-11-05: focus=repository opened "Add a
-    // GitHub account", focus=models the Add a model drawer).
-    const blockOpen = openAdd && params.focus && BLOCK_FOCUS.has(params.focus) && !params.add && !params.source
-      ? (params.focus === "models" ? "model" as const : "account" as const) : null;
-    const modelAdd = blockOpen === "model" && !modelAddDone ? defaultAdd(view).provider : null;
     return (
       <BoardContext.Provider value={ctx}>
         <div className="su-board" data-testid="su-board" data-layout="setup">

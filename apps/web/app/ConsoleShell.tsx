@@ -28,6 +28,7 @@ import { ProjectMenu, type ProjectMenuItem } from "./project-menu";
 import { useDetailsDismiss } from "../lib/details-dismiss";
 import { PresencePill } from "./agents/presence-pill";
 import { MOUNTED_NAV, MountedSlice } from "./reconcile-mounts";
+import { INSIDER_AREAS, insiderShown, useInsider } from "../lib/insider-areas";
 import { NEW_BUILD_TIP, openNewProject } from "../lib/compose-links";
 import { actorWords } from "../lib/actor-words";
 import { setConsoleLive } from "../lib/console-live";
@@ -219,6 +220,22 @@ const ICONS = {
 //  and nobody should. The chat agent starts a WORKFLOW now (see start_workflow in builtin.py),
 //  so the dossier is a step's output and the run is what you open.
 const OFF_THE_NAV = new Set<AreaId>(["discovery", "meetings"]);
+/** The rail's Approvals badge (review of #200). With a project open: its Needs action (the
+ *  queue's own count, from the attention poll; the server's first-paint count until that
+ *  answers), and `elsewhere` = what the live org total holds beyond it ("+N in other projects"),
+ *  so project B needing you still shows from project A. With no project open: the live org
+ *  total, never the stale first-paint number. */
+export function approvalsBadge(attention: { count: number } | null | undefined, orgNeeds: number | null | undefined,
+                               firstPaint: number, projectOpen: boolean): { count: number; elsewhere: number } {
+  if (!projectOpen) return { count: orgNeeds ?? firstPaint, elsewhere: 0 };
+  const count = attention ? attention.count : firstPaint;
+  return { count, elsewhere: attention && orgNeeds != null ? Math.max(0, orgNeeds - count) : 0 };
+}
+
+/** The badge's words on hover: "2 here · 3 in other projects". */
+export function approvalsTip(b: { count: number; elsewhere: number }): string | undefined {
+  return b.elsewhere ? `${b.count} here · ${b.elsewhere} in other project${b.elsewhere === 1 ? "" : "s"}` : undefined;
+}
 /** The Project page (BOSSAPP-914) is reached from Projects (its rail list), never as a row of its own. */
 const UNDER_PROJECTS = new Set<AreaId>(["project"]);
 /** Get started has its own rail button above the groups, shown only while setup is unfinished. */
@@ -1317,10 +1334,13 @@ function ConsoleShellInner({
   // (SSO stays in the sidebar).
   // THE RAIL SHOWS ONLY WHAT THE VIEWER CAN OPEN (IDENTITY.md §6.5). A direct URL to one they
   // cannot still lands, on <AccessDenied> naming the permission, never a blank page.
+  // INSIDER ITEMS (Self-fixes, Landed slices) only on an install that has fixed BOSS itself.
+  const insider = useInsider(scope.projectId ?? scope.project);
   const navAreas = useMemo(
     () => areasForEdition.filter(
-      (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OWN_RAIL_BUTTON.has(a.id) && !UNDER_PROJECTS.has(a.id) && !OFF_THE_NAV.has(a.id) && areaCan(a.id).allowed),
-    [areasForEdition, resolvedEdition, areaCan],
+      (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OWN_RAIL_BUTTON.has(a.id) && !UNDER_PROJECTS.has(a.id) && !OFF_THE_NAV.has(a.id) && areaCan(a.id).allowed
+        && (!INSIDER_AREAS.has(a.id) || insiderShown(insider))),
+    [areasForEdition, resolvedEdition, areaCan, insider],
   );
 
   const activeDef = areasForEdition.find((a) => a.id === active) ?? areasForEdition[0];
@@ -1359,12 +1379,15 @@ function ConsoleShellInner({
     window.addEventListener(GET_STARTED_EVENT, on);
     return () => window.removeEventListener(GET_STARTED_EVENT, on);
   }, []);
+  const approvals = approvalsBadge(titleAttention, orgNeeds, status.pendingDecisions, Boolean(scope.projectId ?? scope.project));
   const badgeFor = (id: AreaId): number | undefined => {
-    // X-14 ONE COUNT: the rail's Approvals badge is the bell's number and Approvals' Needs action
-    // (decisions + what only a person can set up), from the same poll; the server's count is the
-    // first paint only.
+    // THE BADGE COUNTS WHAT THE QUEUE SHOWS: Approvals' Needs action is this project's decisions
+    // + what only a person can set up here (decision-inbox-ui, the /v1/agents/live `attention`
+    // poll), so the badge is that same number. It was the bell's org-wide sum (X-14), and a
+    // stranger saw Approvals 5 over a queue that said 0 (2026-11-17): the 5 were set-up asks on
+    // two other projects. The bell keeps the org-wide number; the server's count is first paint.
     if (id === "decisions") {
-      const n = orgNeeds ?? (titleAttention ? titleAttention.count : status.pendingDecisions);
+      const n = approvals.count;
       return n > 0 ? n : undefined;
     }
     if (id === "ops" && status.deadletters > 0) return status.deadletters;
@@ -1575,9 +1598,14 @@ function ConsoleShellInner({
                     ) : null}
                     {badge ? (
                       <span className="bx-nav-badge" data-testid={`nav-badge-${a.id}`}
-                            data-tone={a.id === "setup" ? setupBadge?.tone : undefined}>
+                            data-tone={a.id === "setup" ? setupBadge?.tone : undefined}
+                            title={a.id === "decisions" ? approvalsTip(approvals) : undefined}>
                         {badge}
                       </span>
+                    ) : null}
+                    {a.id === "decisions" && approvals.elsewhere ? (
+                      <span className="bx-nav-badge bx-nav-badge-quiet" data-testid="nav-badge-decisions-elsewhere"
+                            title={approvalsTip(approvals)}>+{approvals.elsewhere}</span>
                     ) : null}
                   </button>
                 );
@@ -1585,7 +1613,7 @@ function ConsoleShellInner({
             </div>
           ))}
         </nav>
-        <details className="bx-nav-mounted" data-testid="reconcile-mounts">
+        {insiderShown(insider) ? <details className="bx-nav-mounted" data-testid="reconcile-mounts">
           <summary>Landed slices</summary>
           {MOUNTED_NAV.map((item) => (
             <button
@@ -1598,7 +1626,7 @@ function ConsoleShellInner({
               {item.label}
             </button>
           ))}
-        </details>
+        </details> : null}
 
         <div className="bx-sidebar-foot">
           {/* WHO IS SIGNED IN, the person, from the session, never a claimed actor string. */}

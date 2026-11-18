@@ -118,6 +118,10 @@ export function SaidLine({ line }: { line: Line }) {
   );
 }
 
+/** Where a section lands when a link scrolls to it: below the top bar and the project's sticky
+ *  head (useStickyHead measures both into --px-head-h), with a little air. */
+export const SECTION_SCROLL_MARGIN = "calc(var(--px-head-h, 80px) + 12px)";
+
 export function SettingsTab({ ctx }: { ctx: PxCtx }) {
   const read = usePxRead<Settings>(PX_PATHS.settings(ctx.projectId), parseSettings, { everyMs: 60_000, demo: () => parseSettings(FX_SETTINGS) });
   const data = read.data ?? (read.state === "missing" ? fallbackSettings(ctx) : null);
@@ -205,7 +209,7 @@ function SectionCard({ sec, ctx, onChanged, setRef }: { sec: SettingsSection; ct
   const known = ["demo_logins", "deploy_values", "targets", "captain", "autonomy", "repos", "notifications"].includes(sec.key);
   if (!known || (!Object.keys(raw).length && sec.key !== "captain")) openLinks(sec).filter((x) => !(sec.key === "repos" && /^Add\b/.test(x.label))).forEach((x) => head.push(<PxLink key={`${x.label}-${x.open}`} href={x.open} className="px-more" testid={`px-set-act-${sec.key}`}>{x.label}</PxLink>));
   return (
-    <section ref={setRef} className="px-card" aria-labelledby={`px-set-${sec.key}`} data-testid={`px-set-${sec.key}`} style={{ scrollMarginTop: 80 }}>
+    <section ref={setRef} className="px-card" aria-labelledby={`px-set-${sec.key}`} data-testid={`px-set-${sec.key}`} style={{ scrollMarginTop: SECTION_SCROLL_MARGIN }}>
       <div className="px-card-h">
         {meta?.c === "grey" ? <span className="px-ico" aria-hidden><GithubLogo size={16} weight="duotone" /></span>
           : <Ico icon={meta?.icon ?? GearSix} c={(meta?.c as Tone) ?? "blue"} />}

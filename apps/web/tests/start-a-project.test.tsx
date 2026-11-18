@@ -293,7 +293,38 @@ describe("the sample", () => {
     ]);
   });
 
-  it("refused for what the install lacks: the checklist, then Start anyway sends it once more", async () => {
+  it("refused for what the install lacks: the checklist, and the tick itself starts it", async () => {
+    const MODEL = { ...READINESS.missing[0], key: "model", label: "A connected model", after_a_person: false,
+                    first_step_label: "Plan", needed_by: [{ step_id: "plan", label: "Plan" }] };
+    const NEEDS = { ready: false, checked: [MODEL, ...READINESS.checked], missing: [MODEL, ...READINESS.missing] };
+    let applies = 0;
+    const calls = stubFetch((c) => {
+      if (c.method === "POST" && c.path === "/v1/projects") return { status: 201, body: { id: "hello-world", name: "Hello World" } };
+      if (c.path === "/v1/templates/hello-world/apply") {
+        applies += 1;
+        return applies === 1 ? { status: 409, body: { detail: { message: "Not ready", readiness: NEEDS } } }
+          : { status: 201, body: { workflow_run_id: "wfr_1" } };
+      }
+      return undefined;
+    });
+    const go = vi.fn();
+    await mountAs(<StartProjectSheet step="sample" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
+    await click(tid("start-sample-go"));
+    expect(tid("start-sample-readiness")).not.toBeNull();
+    expect(go).not.toHaveBeenCalled();
+    expect(tid("start-sample-go")!.textContent).toBe("Start anyway");
+    // The deploy host is a later need: said so, and never what stops the sample.
+    expect(tid("sample-later-deploy")).not.toBeNull();
+    await click(tid("dw-readiness-start-anyway"));
+    // One project, two applies: the second says what it starts without — no second press.
+    expect(calls.filter((c) => c.method === "POST" && c.path === "/v1/projects").map((c) => c.body))
+      .toEqual([{ name: "Hello World", sample_key: "hello-world" }]);
+    expect((calls.filter((c) => c.path.endsWith("/apply"))[1].body as { start_anyway: string[] }).start_anyway.sort())
+      .toEqual(["deployment_target", "model"]);
+    expect(go).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refusal for a deployment host alone never stops the sample: it starts with it accepted", async () => {
     let applies = 0;
     const calls = stubFetch((c) => {
       if (c.method === "POST" && c.path === "/v1/projects") return { status: 201, body: { id: "hello-world", name: "Hello World" } };
@@ -307,14 +338,7 @@ describe("the sample", () => {
     const go = vi.fn();
     await mountAs(<StartProjectSheet step="sample" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
     await click(tid("start-sample-go"));
-    expect(tid("start-sample-readiness")).not.toBeNull();
-    expect(go).not.toHaveBeenCalled();
-    expect(tid("start-sample-go")!.textContent).toBe("Start anyway");
-    await click(tid("dw-readiness-start-anyway"));
-    await click(tid("start-sample-go"));
-    // One project, two applies: the second says what it starts without.
-    expect(calls.filter((c) => c.method === "POST" && c.path === "/v1/projects").map((c) => c.body))
-      .toEqual([{ name: "Hello World", sample_key: "hello-world" }]);
+    expect(tid("start-sample-readiness")).toBeNull();
     expect((calls.filter((c) => c.path.endsWith("/apply"))[1].body as { start_anyway: string[] }).start_anyway).toEqual(["deployment_target"]);
     expect(go).toHaveBeenCalledTimes(1);
   });

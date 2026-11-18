@@ -13,7 +13,7 @@
 import React, { useMemo } from "react";
 import { CaretRight, Folders, Plus } from "@phosphor-icons/react";
 
-import { PX_PATHS, parseSummary, projectHref, usePxRead, type ProjectsSummary } from "../../lib/project-experience";
+import { PX_PATHS, parseSummary, projectHref, usePxRead, type ProjectCard, type ProjectsSummary } from "../../lib/project-experience";
 import { FX_SUMMARY } from "../../lib/project-experience-fixtures";
 import { openAddProject } from "./kit";
 
@@ -41,6 +41,25 @@ export function railProjects(list: RailProject[], activeId: string | null, max =
   return top;
 }
 
+/** THE RAIL COUNTS WHAT "All projects" COUNTS (stranger test 2026-11-17: the rail said "All
+ *  projects (1)" over a page that said "Add your first project"). Once the summary has answered,
+ *  its projects are the list, even when there are none: the install's Default project, which the
+ *  summary leaves out, is never listed (or counted) from the shell's own list instead. The shell's
+ *  list stands in only when the summary cannot be read at all. */
+export function railList(state: string, cards: ProjectCard[] | undefined | null,
+                         items: { id: string; name: string }[]): RailProject[] {
+  if (cards && (state === "ready" || cards.length)) {
+    return cards.filter((c) => !c.archived).map((c): RailProject => ({
+      id: c.id, name: c.name, needs: c.needs_you, at: c.updated_at,
+      // The same meaning as the Projects list: amber only when you are needed, teal only while
+      // something is actually running, grey for a project nobody has started on.
+      dot: c.needs_you ? "you" : c.running ? "now" : c.stage === "onboarding" ? "idle" : "done",
+    }));
+  }
+  if (state === "loading") return [];
+  return items.map((p): RailProject => ({ id: p.id, name: p.name, dot: "", needs: 0, at: "" }));
+}
+
 export function ProjectsNav({ items, active, activeProjectId, onGo, open, onToggle }: {
   items: { id: string; name: string }[];
   /** The shell's active area. */
@@ -52,14 +71,7 @@ export function ProjectsNav({ items, active, activeProjectId, onGo, open, onTogg
 }) {
   const summary = usePxRead<ProjectsSummary>(PX_PATHS.summary(), parseSummary, { everyMs: 30_000, demo: () => parseSummary(FX_SUMMARY) });
   const cards = summary.data?.items;
-  const list: RailProject[] = useMemo(() => (cards?.length
-    ? cards.map((c): RailProject => ({
-      id: c.id, name: c.name, needs: c.needs_you, at: c.updated_at,
-      // The same meaning as the Projects list: amber only when you are needed, teal only while
-      // something is actually running, grey for a project nobody has started on.
-      dot: c.needs_you ? "you" : c.running ? "now" : c.stage === "onboarding" ? "idle" : "done",
-    }))
-    : items.map((p): RailProject => ({ id: p.id, name: p.name, dot: "", needs: 0, at: "" }))), [cards, items]);
+  const list: RailProject[] = useMemo(() => railList(summary.state, cards, items), [summary.state, cards, items]);
   const onProjects = active === "projects";
   const onProject = active === "project";
   const shown = open ? railProjects(list, activeProjectId) : list.filter((p) => p.id === activeProjectId);

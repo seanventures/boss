@@ -18,7 +18,7 @@ from ..bootstrap import (
 )
 from .core import emit_event
 
-__all__ = ["PROJECT_TYPES", "ProjectExists", "create"]
+__all__ = ["PROJECT_TYPES", "ProjectExists", "create", "ensure_sample_code"]
 
 #: Try a sample (BOSSAPP-1014). `hello-world` is the one the console sends.
 _SAMPLE_KEY = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
@@ -63,6 +63,37 @@ def _live_sample(connection, org_id: str, key: str) -> dict | None:
           AND p.archived_at IS NOT NULL
         """), {"o": org_id, "k": key})
     return None
+
+
+def ensure_sample_code(connection, settings, project_id: str, *, actor: str) -> Optional[dict]:
+    """A sample's code lives on this machine: a local repository bound as its primary, unless it
+    already has a repository (local or GitHub). Returns the binding made, or None (one existed,
+    or git is not here — the start's readiness then names the repository need, never a silent
+    project with nowhere to push)."""
+    from . import local_projects, local_repo
+
+    has = connection.execute(text(
+        "SELECT 1 FROM github_repository_bindings WHERE project_id = :p AND status = 'active' "
+        "AND role <> 'mirror' LIMIT 1"), {"p": project_id}).first()
+    if has is not None:
+        return None
+    row = connection.execute(text("SELECT name, description FROM projects WHERE id = :p"),
+                             {"p": project_id}).mappings().first()
+    if row is None:
+        return None
+    try:
+        with connection.begin_nested():
+            return local_projects.create_for_project(
+                connection, settings, project_id, name=str(row["name"]), actor=actor,
+                title=str(row["name"]), description=str(row["description"] or ""))
+    except (local_projects.LocalProjectError, local_repo.LocalRepoError, OSError) as error:
+        # NEVER A 500 FOR OPENING A SAMPLE (review of #200): an unwritable repo root, a full disk
+        # or a git failure leaves the sample without code, and its start says so.
+        import logging
+
+        logging.getLogger(__name__).warning("the sample %s got no local repository: %s",
+                                            project_id, error)
+        return None
 
 
 def create(connection, settings, *, auth: Any, name: Any, slug: Any = None,

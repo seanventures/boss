@@ -429,9 +429,12 @@ textarea.px-input { resize: vertical; min-height: 64px; }
 .px-icon-btn[data-copied] { color: var(--green); border-color: var(--green); }
 
 /* ── Diagrams fit every width (page-fix, GAPS 6): nodes share the row at 390 / 768, nothing clips ── */
-.px-jr { overflow-x: visible; }
-.px-jr-node { flex: 0 1 92px; min-width: 0; }
-.px-jr-cap, .px-jr-meta { max-width: 100%; overflow-wrap: anywhere; }
+/* WORDS NEVER BREAK MID-WORD (stranger test at 1440: "Onboar ded", "Product ion"). A node shrinks
+   only to its longest word; the wires give way first, and a strip that still does not fit scrolls
+   sideways inside its card. Captions wrap between words, never inside one. */
+.px-jr { overflow-x: auto; scrollbar-width: thin; }
+.px-jr-node { flex: 0 1 92px; min-width: min-content; }
+.px-jr-cap, .px-jr-meta { max-width: 100%; overflow-wrap: normal; word-break: normal; hyphens: manual; }
 .px-fl { flex-wrap: wrap; row-gap: 8px; overflow-x: visible; }
 .px-jr-node[data-s="todo"] .px-jr-shape { color: var(--faint); }
 .px-jr-node[data-s="waiting"] .px-jr-meta { color: var(--amber); }

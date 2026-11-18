@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2422 operations.
+# 2423 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -2034,6 +2034,7 @@
 "GET /v1/self-fix/upgrade-plan": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/self-fixes": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/self-fixes": ["permit improvement:manage @ project(body=project_id)", "OA"]
+"GET /v1/self-fixes/exists": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/self-fixes/health": ["permit self_fix:ticket_read @ org", "-"]
 "POST /v1/self-fixes/remove-all": ["permit improvement:manage @ project(body=project_id)", "OA"]
 "POST /v1/self-fixes/stack-report": ["permit self_fix:ticket_report @ org", "-"]

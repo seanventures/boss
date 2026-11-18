@@ -241,7 +241,10 @@ export type SetupView = {
   verdict: { label: string; tone: Tone; tip: string; at?: string | null };
   problems: number;
   secrets: { backend: string; needs_consent: boolean };
-  repository: { connection: RepoConnection | null; repos: RepoEntry[] };
+  repository: { connection: RepoConnection | null; repos: RepoEntry[];
+    /** Code BOSS keeps on this machine for this org (this project's first): it satisfies the
+     *  repository step; GitHub stays optional. Absent on an older API. */
+    local?: LocalCode | null };
   models: ModelEntry[];
   detected: Detected[];
   catalogue: CatalogueEntry[];
@@ -399,3 +402,6 @@ export type RowKey = "github" | "repository" | "models" | "capacity" | "jobs" | 
   | "embedding_model"
   /** Setup › Ticket systems (BOSSAPP-1047), Documents (Confluence) and Events: sections of the board. */
   | "ticket_systems" | "documents" | "events";
+
+/** A local repository the org has (setup_view.local_code_in_org). */
+export type LocalCode = { full_name: string; project_id: string; project_name: string; pill?: Pill };

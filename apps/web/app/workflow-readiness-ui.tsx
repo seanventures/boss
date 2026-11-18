@@ -91,6 +91,15 @@ export function unaccepted(readiness: Readiness | null, accepted: readonly strin
   return (readiness?.missing ?? []).filter((m) => !accepted.includes(m.key));
 }
 
+/** WHAT A BUTTON SAYS WHILE THE CHECKLIST WAITS (stranger test: "Tick the 2 items above" over a
+ *  list with ONE checkbox). The panel draws one tick, "Start anyway", for all the missing items,
+ *  so the hint names that tick and counts the items it covers. */
+export function startAnywayHint(readiness: Readiness | null, accepted: readonly string[]): string {
+  const open = unaccepted(readiness, accepted).length;
+  if (!open) return "";
+  return `Tick “Start anyway” above to start without ${open === 1 ? "the missing item" : `the ${open} missing items`}`;
+}
+
 /** The readiness of one workflow for this project, refreshed when what is typed changes the
  *  answer (a notify channel). `null` while unknown, the form does not block on a fetch. */
 export function useWorkflowReadiness(

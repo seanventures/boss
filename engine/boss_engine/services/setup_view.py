@@ -390,6 +390,36 @@ def _repository(connection: Connection, settings: Any, project_id: str, now: dat
     return {"connection": connection_out, "connections": connections, "repos": repos}
 
 
+def local_code_in_org(connection: Connection, settings: Any, project_id: str, *,
+                      own_only: bool = False) -> Optional[dict[str, Any]]:
+    """The org's code kept on this machine, this project's first: {full_name, project_id,
+    project_name} of an active local repository that exists on disk, or None."""
+    from . import local_repo
+
+    rows = connection.execute(text(
+        "SELECT b.full_name, b.owner, b.name, b.project_id, p.name AS project_name "
+        "  FROM github_repository_bindings b JOIN projects p ON p.id = b.project_id "
+        "  JOIN workspaces w ON w.id = p.workspace_id "
+        " WHERE b.host = 'local' AND b.status = 'active' AND b.role <> 'mirror' "
+        "   AND p.archived_at IS NULL AND (NOT :own OR b.project_id = :p) "
+        "   AND w.org_id = (SELECT w1.org_id FROM projects p1 JOIN workspaces w1 "
+        "                   ON w1.id = p1.workspace_id WHERE p1.id = :p) "
+        " ORDER BY (b.project_id = :p) DESC, b.created_at LIMIT 5"),
+        {"p": project_id, "own": own_only}).mappings().all()
+    for row in rows:
+        try:
+            if local_repo.exists(str(row["owner"]), str(row["name"]), settings):
+                return {"full_name": str(row["full_name"]), "project_id": str(row["project_id"]),
+                        "project_name": str(row["project_name"]),
+                        "pill": {"state": "local", "tone": "green", "label": "On this machine",
+                                 "tip": f"{row['full_name']}, kept by BOSS on this machine for "
+                                        f"{row['project_name']}. GitHub is optional: connect it "
+                                        "for PRs on GitHub."}}
+        except Exception:  # noqa: BLE001 - an unreadable disk is not a reason to break Setup
+            continue
+    return None
+
+
 def _connections(connection: Connection, project_id: str) -> list[dict[str, Any]]:
     """Every GitHub connection (account) that owns one of this project's repositories, for the
     console to group repos under. `connection` (singular) stays computed above for callers that
@@ -1338,6 +1368,19 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
     # READY MEANS PROVEN (PROVEN_REPOSITORY / PROVEN_MODEL): a row a check has not answered
     # still lets a workflow start (basics), but the header does not say Ready over it.
     repo_ok = any(r["pill"]["state"] in PROVEN_REPOSITORY for r in repository["repos"])
+    # A LOCAL REPOSITORY IS A REPOSITORY (stranger test, rc10.27): after "Start a new app › This
+    # machine" made one, Setup still said "2 to go" and asked for GitHub. Only what Start will
+    # accept counts (workflow_readiness.check): THIS project's own local repository, when it is
+    # on disk. The org's local code counts only on the install's home project with no
+    # repository row at all (the first-run Setup a stranger lands on) — never over another
+    # project's missing or amber repository, which keeps its own reason (review of #200).
+    own_local = any(r.get("host") == "local" for r in repository["repos"]) and \
+        local_code_in_org(connection, settings, project_id, own_only=True) is not None
+    home = str(getattr(settings, "default_project_id", "") or "") == str(project_id)
+    local = (local_code_in_org(connection, settings, project_id)
+             if not repo_ok and not repository["repos"] and home else None)
+    repository["local"] = local
+    repo_ok = repo_ok or own_local or local is not None
     model_ok = any(m["pill"]["state"] in PROVEN_MODEL for m in models)
     ready = repo_ok and model_ok
     problems_list = [r["pill"] for r in repository["repos"] if r["pill"]["tone"] == "red"] \
