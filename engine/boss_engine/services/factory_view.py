@@ -1482,8 +1482,11 @@ def failed_build_rows(connection: Any, project_id: str) -> list[dict[str, Any]]:
     run's failure is left to that run's failed-step card (its Retry moves the run)."""
     from .build_failure import latest_failure
 
+    from .build_failure import is_failure
+
     failed = latest_failure(connection, project_id)
-    if failed is None or failed["source"] != "code_task":
+    # A build waiting on a merge is that merge's card (already listed), not a failure card.
+    if not is_failure(failed) or failed["source"] != "code_task":
         return []
     return [{"kind": "build_failed", "run_id": failed["build_id"], "app": failed["label"],
              "role_key": None, "failing": [], "where": failed["word"], "word": failed["word"],

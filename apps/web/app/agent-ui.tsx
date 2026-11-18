@@ -879,7 +879,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         // THE AGENT ACTS ON YOUR BEHALF, SO IT ASKS FIRST. A turn that needs a grant the
         // person does not hold yet comes back as a consent request (actions.ts postJsonReturn):
         // open the consent sheet, and once granted send the same turn once more.
-        const asked = r !== stalled && !r.ok
+        const asked = r !== stalled && !r.ok && !(r.data as Record<string, unknown> | undefined)?.consentAsked
           ? consentFromBody((r.data as Record<string, unknown> | undefined)?.consent) : null;
         if (asked && await askConsent(asked)) r = await turn();
       } catch (e) {

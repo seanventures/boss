@@ -10,7 +10,7 @@ import { withdrawnNote, withdrawnSentence } from "../lib/decision-withdrawn";
 import { buildCommandRequest } from "../lib/commands";
 import { apiWrite, pressToken } from "../lib/api-write";
 import { act, apiFetch, consentOfThrown } from "../lib/server-action";
-import { missingInput, okResult, type ActionResult } from "../lib/action-result";
+import { describeActionError, missingInput, okResult, type ActionResult } from "../lib/action-result";
 import { previewWebHref } from "../lib/browser-links";
 import { apiErrorTechnical, detailText } from "../lib/api-error";
 import { declareAction } from "../lib/identity/guarded-action";
@@ -3203,7 +3203,7 @@ export async function retryCodeTaskWithStateAction(
     revalidatePath("/");
     return { runId: res?.run_id, attempt: res?.attempt };
   } catch (e) {
-    return { error: e instanceof Error ? e.message : String(e) };
+    return { error: describeActionError(e) };
   }
 }
 

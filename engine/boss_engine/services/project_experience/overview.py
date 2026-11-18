@@ -568,6 +568,18 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
     # ON A LIVE PROJECT (deployed to staging or production) the failure sits BESIDE the stage.
     failed = part(("needs_you",), lambda: build_failure.latest_failure(connection, project_id,
                                                                       now=now), None)
+    if failed is not None and not build_failure.is_failure(failed):
+        # NOT A FAILURE: a refused build waiting on a person's merge (build_failure.waits_on) is
+        # that merge — "Merge change #1 first", linked to the merge card — never red. When the
+        # merge's own card is already listed, that card is the one answer.
+        w = failed["waits_on"]
+        if not any((n.get("action") or {}).get("decision_id") == w.get("decision_id")
+                   and w.get("decision_id") for n in waiting):
+            waiting = [{"id": f"waits:{failed['id']}", "kind": "merge", "label": w["label"],
+                        "detail": w["detail"], "mini": [], "work_id": failed["id"],
+                        "action": {"label": w["label"], "href": w["href"],
+                                   "decision_id": w.get("decision_id")}}] + waiting
+        failed = None
     if failed is not None:
         failed = {**failed, "beside": bool(facts["got"].get("staging")
                                             or facts["got"].get("production"))}
@@ -750,7 +762,7 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
         except Exception:  # noqa: BLE001 — a card never fails over its setup line
             setup_n = 0
         decided = count_waiting_on_operator(connection, pid, now=now)
-        failed = failed_now.get(pid)
+        failed = failed_now.get(pid) if build_failure.is_failure(failed_now.get(pid)) else None
         # The project page's Needs you leads with a failed latest build (build_failure.needs_card): the
         # card counts it too, so the two numbers agree.
         waiting = decided + setup_n + (1 if failed else 0)

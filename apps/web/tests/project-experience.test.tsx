@@ -558,7 +558,7 @@ describe("Work (screens 5, 5b)", () => {
     expect(labels).toEqual(["Follow-up 3 · checks failing", "Follow-up 2 · retry 1", "Follow-up 2 · checks failing",
                             "Follow-up 1 · retry 1", "Follow-up 1 · checks failing", "Retry 1", "Build"]);
     expect(tid("px-attempt-crun_aml_f3")!.textContent).toContain("Stalled");
-    expect(tid("px-attempt-crun_aml_f2")!.textContent).toContain("Handed on");
+    expect(tid("px-attempt-crun_aml_f2")!.textContent).toContain("Earlier attempt");
     expect(tid("px-attempt-pr-crun_aml_r1")!.getAttribute("href")).toMatch(/\/6$/);
     // An attempt opens as itself in the drawer.
     await press(tid("px-attempt-open-crun_aml_r1"));
