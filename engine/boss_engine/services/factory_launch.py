@@ -484,7 +484,9 @@ def build_run(
         finalize_ctx={"factory_launch": True, "template_id": spec.get("id"),
                       "mode": spec.get("mode"), "reservation_id": reservation_id,
                       "actor": actor},
-        jobs=jobs, open_pr=False, repo_host=None if github else "local")
+        # Its pull request and merge card open like every product build's: `open_pr=False` is
+        # for evaluation runs, and it left Easy Mode builds completed with no PR (crun_5b11643d).
+        jobs=jobs, repo_host=None if github else "local")
     if not run_id:
         return {"project_id": project_id}
     return {"project_id": project_id, "run_id": str(run_id)}

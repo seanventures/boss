@@ -16429,3 +16429,32 @@ BEGIN
       CHECK (subject_kind IN ('skill', 'prompt', 'wiki', 'confluence'));
   END IF;
 END $$;
+
+-- A COMPLETED BUILD NEVER ENDS SILENT (2026-11-18, crun_5b11643d: an Easy Mode build passed
+-- every gate and ended completed with no pull request, no merge card and no reason). A run that
+-- turns `completed` with no pull request carries `finalize_ctx.no_pull_request` {reason, words}:
+-- the paths that skip the PR on purpose write their own (services/pull_request_owed.py); any
+-- other path gets this one, so "completed, no PR, no why" cannot be stored.
+CREATE OR REPLACE FUNCTION code_task_runs_no_silent_completion() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.status = 'completed'
+     AND (TG_OP = 'INSERT' OR OLD.status IS DISTINCT FROM 'completed')
+     AND COALESCE(NEW.pull_request_url, '') = ''
+     AND (COALESCE(NEW.finalize_ctx, '{}'::jsonb) -> 'no_pull_request') IS NULL THEN
+    NEW.finalize_ctx := COALESCE(NEW.finalize_ctx, '{}'::jsonb) || jsonb_build_object(
+      'no_pull_request', jsonb_build_object(
+        'reason', 'unexplained',
+        'words', 'This build completed without opening a pull request, and the step that '
+                 || 'finished it did not say why. Its work is on its branch; open the run to '
+                 || 'see its last step, or retry it to open the pull request.'));
+  END IF;
+  RETURN NEW;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'code_task_runs_no_silent_completion'
+                 AND tgrelid = 'code_task_runs'::regclass) THEN
+    CREATE TRIGGER code_task_runs_no_silent_completion BEFORE INSERT OR UPDATE
+      ON code_task_runs FOR EACH ROW EXECUTE FUNCTION code_task_runs_no_silent_completion();
+  END IF;
+END $$;
