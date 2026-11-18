@@ -25,7 +25,7 @@ import { ChangeLink } from "../change-link";
 import { GitHubWait } from "../../components/github-wait";
 import { ExtensionSlots } from "../extension-frame";
 import { addFeaturePatch } from "../../lib/compose-links";
-import { RetryBuildButton, SeeWhatHappened } from "./build-failed";
+import { FailedActions } from "./build-failed";
 
 /** Each Needs-you card's icon, by what it asks. */
 const NEED_ICON: Record<string, Icon> = { merge: GitMerge, deploy: RocketLaunch, plan: ListChecks, setup: Wrench, question: Question };
@@ -51,12 +51,10 @@ function FailedNeed({ it, ctx, fresh }: { it: PxCtx["overview"]["needs_you"][num
       <div className="px-ny-b">
         <button type="button" className="px-wk-t" onClick={open}>{it.label}</button>
         <small className="px-faint" style={{ display: "block" }} data-testid={`px-ov-ny-why-${it.id}`}>{it.detail}</small>
+        {!it.retry && it.fix?.detail ? <small className="px-faint" style={{ display: "block" }} data-testid={`px-ov-ny-fixwhy-${it.id}`}>{it.fix.detail}</small> : null}
       </div>
-      <span className="px-row" style={{ gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-        {it.retry ? <RetryBuildButton runId={it.retry.run_id} projectId={ctx.projectId} actor={ctx.actor} testid={`px-ov-ny-retry-${it.id}`}
-                                      onDone={() => { ctx.refreshWork(); ctx.refreshOverview?.(); }} /> : null}
-        {it.see_href ? <SeeWhatHappened href={it.see_href} testid={`px-ov-ny-see-${it.id}`} /> : null}
-      </span>
+      <FailedActions retry={it.retry} fix={it.fix} retryReason={it.retry_reason} seeHref={it.see_href} projectId={ctx.projectId} actor={ctx.actor}
+                     testid={`px-ov-ny-${it.id}`} onDone={() => { ctx.refreshWork(); ctx.refreshOverview?.(); }} />
     </div>
   );
 }
@@ -179,7 +177,7 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
           ) : t.running?.failed ? (
             // NOTHING RUNNING BECAUSE THE LAST BUILD FAILED: said, in red, with its reason.
             <div style={{ minWidth: 0 }} data-testid="px-tile-running-failed">
-              <div className="px-row" style={{ color: "var(--red)", fontWeight: 600 }}><Warning size={13} aria-hidden /> Last build failed</div>
+              <div className="px-row" style={{ color: "var(--red)", fontWeight: 600 }}><Warning size={13} aria-hidden /> {t.running.failed.word ? `Last: ${t.running.failed.word.toLowerCase()}` : "Last build failed"}</div>
               <div className="px-ell px-faint" style={{ fontSize: ".58rem" }} title={t.running.failed.reason}>{t.running.failed.label} · {t.running.failed.reason}</div>
             </div>
           ) : <span className="px-faint">Nothing running</span>)}

@@ -452,8 +452,11 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
         elif b["kind"] == "build_failed":
             # A BUILD THAT FAILED (factory_view.failed_build_rows): the reason in words, Retry
             # (resume on its branch) and its page to see what happened.
-            title = f"Build failed: {b.get('app') or 'Build'}"
-            answers = [{"key": "retry", "label": "Retry", "state": "enabled"}]
+            title = f"{b.get('word') or 'Build failed'}: {b.get('app') or 'Build'}"
+            # Retry only when it can help (build_failure.action_for); otherwise the fix rides
+            # on the card's `build.fix` and Retry's absence is explained by `retry_reason`.
+            answers = ([{"key": "retry", "label": "Retry", "state": "enabled"}]
+                       if b.get("retryable") else [])
             detail = str(b.get("reason") or "") or _first_line(b.get("error"))
         else:
             title = "Budget refused"

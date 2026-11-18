@@ -387,15 +387,17 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
                      p95Words(staging?.p95_ms, staging?.window)].filter(Boolean).join(" · ") + " — opens Health"}>
             <span className="px-dot" data-s={health} data-round aria-hidden />{healthChipText(p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "No health yet", p95Words(staging?.p95_ms, staging?.window))}</a>
           <HealthWhy sentence={healthReasonSentence(healthWhy)} />
-          {/* A FAILED LATEST BUILD (engine work.failed_build): red "Build failed", its reason on
-              hover, a link to the build's row — never "Working" over a build that failed. */}
+          {/* A FAILED LATEST BUILD (engine build_failure): red "Build failed" / "Deploy failed", its
+              reason on hover, a link to the build's row — never "Working" over a build that
+              failed. ON A LIVE PROJECT it sits BESIDE the stage chip ("On staging" stays). */}
           {!onboarding && p.build_failed ? (
-            <a className="px-tag" data-tone="red" data-testid="px-head-status" data-failed
+            <a className="px-tag" data-tone="red" data-testid={p.build_failed.beside ? "px-head-failed" : "px-head-status"} data-failed
                href={pxHref(p.build_failed.work_href || `?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=work`)}
                title={`${p.build_failed.label}: ${p.build_failed.reason} — opens the build`}
                onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); ctx.open("work", p.build_failed!.id); }}>
-              <WarningCircle size={11} aria-hidden /> Build failed</a>
-          ) : (
+              <WarningCircle size={11} aria-hidden /> {p.build_failed.word || "Build failed"}</a>
+          ) : null}
+          {!onboarding && p.build_failed && !p.build_failed.beside ? null : (
           <span className="px-tag" data-tone={onboarding ? "blue" : "green"} data-testid="px-head-status" title="Project stage on the journey">{onboarding ? <><Compass size={11} aria-hidden /> Onboarding</>
             : <>{(() => { const I = STAGE_ICON[p.stage] ?? Compass; return <I size={11} aria-hidden />; })()} {p.status_label || "Ready"}</>}</span>
           )}

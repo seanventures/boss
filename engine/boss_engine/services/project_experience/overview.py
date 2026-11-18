@@ -15,6 +15,7 @@ from typing import Any, Iterable, Mapping, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .. import build_failure
 from . import captain as captain_service
 from . import demo_logins as demo
 from . import onboarding as onboarding_service
@@ -24,7 +25,6 @@ from .common import (LIVE_RUN, web_url, STAGE_LABELS, STAGES, STATUS_LABELS, age
                      initials, iso, pr_number, project_href, repos, require_project, short_day,
                      words)
 from .health import environments as health_environments
-from .titles import short_title
 from .health import worst
 
 PRODUCTION = ("production", "prod")
@@ -562,22 +562,27 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
     prod_waits = any(n.get("id") == "prod:host" for n in waiting)
     cost = part(("tile_cost",), lambda: _cost_week(connection, project_id, now), None)
     the_tiles = tiles(project_id, items, envs, cost)   # cost None → the tile's "Couldn't load"
-    # THE LATEST BUILD FAILED (work.failed_build): the header says so, the Working node is red,
-    # the Running tile names it, and Needs you leads with it — Retry and See what happened.
-    failed = work_service.failed_build(project_id, items)
+    # THE LATEST BUILD FAILED (build_failure.latest_failure, the one rule the projects list
+    # and the Command Center read too): the header says so, the Working node is red, the
+    # Running tile names it, and Needs you leads with it — its fix, Retry only when it helps.
+    # ON A LIVE PROJECT (deployed to staging or production) the failure sits BESIDE the stage.
+    failed = part(("needs_you",), lambda: build_failure.latest_failure(connection, project_id,
+                                                                      now=now), None)
     if failed is not None:
-        waiting = [work_service.failed_card(project_id, failed)] + waiting
-        subs = {**subs, "working": "Build failed"}
-        details = {**details, "working": f"Build failed: {failed['reason']}"}
+        failed = {**failed, "beside": bool(facts["got"].get("staging")
+                                            or facts["got"].get("production"))}
+        waiting = [build_failure.needs_card(failed)] + waiting
+        subs = {**subs, "working": failed["word"]}
+        details = {**details, "working": f"{failed['word']}: {failed['reason']}"}
         # Beside whatever else moves (an onboarding pass): the tile shows it when nothing does.
         the_tiles["running"]["failed"] = {"id": failed["id"], "label": failed["label"],
-                                          "reason": failed["reason"],
+                                          "reason": failed["reason"], "word": failed["word"],
                                           "href": failed.get("work_href")}
     the_journey = journey(project_id, facts["got"], stage,
                           needs_you=len(waiting), subs=subs, details=details,
                           prod_waits=prod_waits, ats=ats,
                           active=facts["active"] or bool(facts["got"].get("_onboarding_running")))
-    if failed is not None:
+    if failed is not None and not failed["beside"]:
         the_journey = [{**j, "state": "failed"} if j["key"] == "working" else j
                        for j in the_journey]
     return {
@@ -586,7 +591,8 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
                     "stage": stage, "repos": the_repos, "live_url": url,
                     "deploy": _chip(moving),
                     "health": worst(envs)[0], "health_reason": worst(envs)[1],
-                    "status_label": "Build failed" if failed is not None else STATUS_LABELS[stage],
+                    "status_label": (failed["word"] if failed is not None and not failed["beside"]
+                                     else STATUS_LABELS[stage]),
                     "build_failed": failed,
                     "archived": project["archived_at"] is not None},
         "journey": the_journey,
@@ -654,46 +660,6 @@ def is_placeholder(project_id: str, *, repo: Any, worked: bool, targets: bool,
     default = str(getattr(get_settings(), "default_project_id", "") or "")
     return bool(default) and project_id == default and not (repo or worked or targets
                                                             or onboarded)
-
-
-def latest_failed(connection: Connection, project_ids: list[str]) -> dict[str, dict[str, Any]]:
-    """{project: its latest build, when that build failed} for the projects list — the batched
-    form of work.failed_build (one query for many projects): the newest of the project's builds
-    and product workflow runs, BOSS's own housekeeping builds left out as the Work tab does."""
-    from ..code_task_service import _internal_run_prefixes  # noqa: SLF001 — the one definition
-
-    if not project_ids:
-        return {}
-    params: dict[str, Any] = {"ids": project_ids}
-    clauses = []
-    for i, prefix in enumerate(_internal_run_prefixes()):
-        clauses.append(f"lower(coalesce(c.title, '')) NOT LIKE :pre{i}")
-        params[f"pre{i}"] = f"{prefix}%"
-    rows = connection.execute(text(
-        "SELECT DISTINCT ON (project_id) project_id, id, kind, status, error, title, created_at "
-        "FROM (SELECT c.project_id, c.id, 'build' AS kind, c.status, c.error, c.title, "
-        "c.created_at FROM code_task_runs c WHERE c.project_id = ANY(:ids) "
-        + ("AND " + " AND ".join(clauses) + " " if clauses else "")
-        + "UNION ALL SELECT r.project_id, r.id, 'run' AS kind, r.status, "
-        "COALESCE(r.error, r.blocked_reason), r.input->>'title', r.created_at "
-        "FROM workflow_runs r JOIN workflow_definitions d ON d.id = r.workflow_definition_id "
-        "WHERE r.project_id = ANY(:ids) AND d.namespace = 'product' "
-        "AND COALESCE(r.mode, 'normal') <> 'test') x "
-        "ORDER BY project_id, created_at DESC"), params).mappings().all()
-    out: dict[str, dict[str, Any]] = {}
-    for r in rows:
-        if str(r["status"]) not in ("failed", "deadlettered"):
-            continue
-        pid = str(r["project_id"])
-        build = r["kind"] == "build"
-        out[pid] = {"id": str(r["id"]), "build_id": str(r["id"]) if build else None,
-                    "label": short_title(r["title"] or "Build"),
-                    "reason": work_service.failure_words(r["error"]),
-                    "retry": ({"run_id": str(r["id"]), "href": f"/v1/code-tasks/{r['id']}/retry",
-                               "method": "POST"} if build else None),
-                    "see_href": (href(pid, area="code_tasks", build=r["id"]) if build
-                                 else href(pid, area="delivery_workflows", wfr=r["id"]))}
-    return out
 
 
 def summary(connection: Connection, project_ids: Iterable[str], *,
@@ -765,7 +731,7 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
     from .cards import live_work
 
     moving_now = live_work(connection, ids)
-    failed_now = latest_failed(connection, ids)
+    failed_now = build_failure.latest_failures(connection, ids, now=now)
     out = []
     for pid in ids:
         p = projects.get(pid)
@@ -785,7 +751,7 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
             setup_n = 0
         decided = count_waiting_on_operator(connection, pid, now=now)
         failed = failed_now.get(pid)
-        # The project page's Needs you leads with a failed latest build (work.failed_card): the
+        # The project page's Needs you leads with a failed latest build (build_failure.needs_card): the
         # card counts it too, so the two numbers agree.
         waiting = decided + setup_n + (1 if failed else 0)
         # THE ONE COUNT of what moves now (cards.live_work): the Running tile, this card's
@@ -829,7 +795,10 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
             status = "Not onboarded" if onb.get("state") in (None, "not_started", "failed") \
                 else "Ready for work"
         if failed:
-            status = "Build failed"
+            # Beside the stage on a live project (deployed anywhere), in its place otherwise.
+            failed = {**failed, "beside": bool(non_prod or prod)}
+            if not failed["beside"]:
+                status = failed["word"]
         out.append({"id": pid, "name": p["name"], "initials": initials(p["name"]),
                     "repo": primary.get(pid), "stage": stage,
                     "status_label": status, "onboarding_active": onboarding_active,

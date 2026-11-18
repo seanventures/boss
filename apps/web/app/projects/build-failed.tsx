@@ -13,7 +13,7 @@ import { ArrowClockwise, ArrowSquareOut } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import { callAction } from "../../lib/call-action";
-import { isPxDemo, navigateTo, pxHref } from "../../lib/project-experience";
+import { isPxDemo, navigateTo, pxHref, type FailureFix } from "../../lib/project-experience";
 import { retryBuildAction } from "../factory/floor-actions";
 import { notifyChanged } from "../changed";
 
@@ -68,5 +68,41 @@ export function SeeWhatHappened({ href, testid }: { href: string; testid?: strin
        }}>
       See what happened <ArrowSquareOut size={10} aria-hidden />
     </a>
+  );
+}
+
+/** A failure's fix when Retry can't help (engine build_failure.action_for): a console link, or
+ *  the command to run on the BOSS host, with the fix in words beside it. */
+export function FixAction({ fix, testid }: { fix: FailureFix; testid?: string }) {
+  const id = testid ?? "px-failed-fix";
+  return (
+    <>
+      {fix.href ? (
+        <a className="px-btn" data-kind="primary" data-size="s" href={pxHref(fix.href)} data-testid={id} title={fix.detail}
+           onClick={(e) => {
+             e.stopPropagation();
+             if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+             e.preventDefault();
+             navigateTo(pxHref(fix.href));
+           }}>{fix.label}</a>
+      ) : <b data-testid={id}>{fix.label}</b>}
+      {fix.command ? <code className="px-mono" data-testid={`${id}-command`}>{fix.command}</code> : null}
+    </>
+  );
+}
+
+/** EVERY ANSWER A FAILURE OFFERS, in one place: Retry (a POST, only when the engine says it can
+ *  help), else the fix and why there is no Retry; then See what happened. */
+export function FailedActions({ retry, fix, retryReason, seeHref, projectId, actor, testid, onDone }: {
+  retry?: { run_id: string } | null; fix?: FailureFix | null; retryReason?: string; seeHref?: string;
+  projectId: string; actor: string; testid: string; onDone?: () => void;
+}) {
+  return (
+    <span className="px-row" style={{ gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }} data-testid={`${testid}-actions`}>
+      {retry ? <RetryBuildButton runId={retry.run_id} projectId={projectId} actor={actor} testid={`${testid}-retry`} onDone={() => onDone?.()} />
+        : fix ? <FixAction fix={fix} testid={`${testid}-fix`} /> : null}
+      {!retry && retryReason ? <small className="px-faint" data-testid={`${testid}-no-retry`}>{retryReason}</small> : null}
+      {seeHref ? <SeeWhatHappened href={seeHref} testid={`${testid}-see`} /> : null}
+    </span>
   );
 }

@@ -120,6 +120,8 @@ export type AttentionBuild = {
   prUrl?: string;
   previewUrl?: string;
   planUrl?: string;
+  /** A failed build Retry can't fix: what a person does (build_failure.action_for). */
+  fix?: { label: string; detail: string; href: string; command?: string };
 };
 
 /** The pill's slice of attention, on `/v1/agents/live` (§6.3). */
@@ -283,6 +285,8 @@ export function parseAttentionBuild(w: unknown): AttentionBuild {
     }),
     retryable: b.retryable === true, retryReason: opt(b.retry_reason),
     prUrl: opt(b.pr_url), previewUrl: opt(b.preview_url), planUrl: opt(b.plan_url),
+    ...(b.fix && str(obj(b.fix).label ?? "") ? { fix: { label: str(obj(b.fix).label), detail: str(obj(b.fix).detail),
+                                                       href: str(obj(b.fix).href), ...(opt(obj(b.fix).command) ? { command: opt(obj(b.fix).command) } : {}) } } : {}),
   };
 }
 

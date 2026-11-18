@@ -39,8 +39,8 @@ const press = async (el: Element | null) => { if (!el) throw new Error("nothing 
 const params = () => new URLSearchParams(window.location.search);
 
 /** The engine's answer for the real run (GET /v1/projects/recipe-box-…/overview, 2026-11-18). */
-const FAILED = { id: RUN, label: "Recipe box", build_id: RUN, reason: REASON, at: "2026-11-18T15:51:16.904643+00:00",
-                 retry: { run_id: RUN, href: `/v1/code-tasks/${RUN}/retry`, method: "POST" }, see_href: SEE, work_href: WORK_HREF };
+const FAILED = { id: RUN, label: "Recipe box", build_id: RUN, reason: REASON, at: "2026-11-18T15:51:16.904643+00:00", word: "Build failed",
+                 retry: { run_id: RUN, href: `/v1/code-tasks/${RUN}/retry`, method: "POST" }, fix: null, see_href: SEE, work_href: WORK_HREF, beside: false };
 const ROW = {
   ...FX_WORK.items[1], id: RUN, label: "Recipe box", kind: "feature", state: "failed", status: "failed", source: "code_task", age: "12m",
   stages: [{ key: "plan", label: "P", name: "Plan", state: "skipped" }, { key: "design", label: "D", name: "Decide", state: "skipped" },
@@ -56,7 +56,7 @@ const OVERVIEW = {
   journey: FX_OVERVIEW.journey.map((n) => (n.key === "working" ? { ...n, state: "failed", sub: "Build failed", detail: `Build failed: ${REASON}` } : n)),
   needs_you: [
     { id: `failed:${RUN}`, kind: "failed", label: "Build failed: Recipe box", detail: REASON, mini: [], work_id: RUN,
-      retry: FAILED.retry, see_href: SEE, action: { label: "Retry", href: FAILED.retry.href, decision_id: null } },
+      retry: FAILED.retry, see_href: SEE, action: null },
     { id: "onb:deploy_target", kind: "setup", label: "Pick a staging host", detail: "Use the verified shared host for staging.", mini: [],
       action: { label: "Use for staging", href: `?project_id=${P}&area=infra&add=target`, decision_id: null } },
   ],
@@ -64,12 +64,12 @@ const OVERVIEW = {
   recent_work: [ROW],
 };
 
-function engine() {
+function engine(overview: unknown = OVERVIEW) {
   return stubFetch((c) => {
     if (c.method !== "GET") return { body: { ok: true } };
     if (c.path === "/v1/projects/summary") return { body: FX_SUMMARY };
     const m = c.path.match(/^\/v1\/projects\/([^/]+)\/(overview|work|onboarding)$/);
-    if (m) return { body: ({ overview: OVERVIEW, work: { items: [ROW] }, onboarding: { ...FX_ONBOARDING, state: "ready" } } as Record<string, unknown>)[m[2]] };
+    if (m) return { body: ({ overview, work: { items: [ROW] }, onboarding: { ...FX_ONBOARDING, state: "ready" } } as Record<string, unknown>)[m[2]] };
     return undefined;
   });
 }
@@ -127,15 +127,59 @@ describe("the project page says a build failed", () => {
     const pill = tid(`px-needs-failed:${RUN}`)!;
     expect(pill.getAttribute("data-tone")).toBe("red");
     expect(tid("px-needs-bar")!.textContent).toContain("2 need you");
-    const see = tid(`px-ov-ny-see-failed:${RUN}`)!;
+    const see = tid(`px-ov-ny-failed:${RUN}-see`)!;
     expect(see.getAttribute("href")).toContain(`area=code_tasks&build=${RUN}`);
-    await press(tid(`px-ov-ny-retry-failed:${RUN}`));
+    await press(tid(`px-ov-ny-failed:${RUN}-retry`));
     expect(retry).toHaveBeenCalledTimes(1);
     expect(retry.mock.calls[0][0].get("run_id")).toBe(RUN);
-    expect(tid(`px-ov-ny-retry-failed:${RUN}-said`)!.textContent).toBe("Attempt 2 started");
+    expect(tid(`px-ov-ny-failed:${RUN}-retry-said`)!.textContent).toBe("Attempt 2 started");
     // The bar's pill opens the build's row, not an empty needs drawer.
     await press(pill);
     expect(params().get("drawer")).toBe(`work:${RUN}`);
+  });
+});
+
+const LOGIN_FIX = { label: "Sign in again in Setup › Models", detail: "Reconnect the Claude Code subscription in Repo and models, then retry.",
+                    href: `?project_id=${P}&area=setup&focus=models` };
+const NEEDS_HUMAN = {
+  ...OVERVIEW,
+  project: { ...OVERVIEW.project, build_failed: { ...FAILED, retry: null, fix: LOGIN_FIX, retry_reason: "Retrying fails the same way until this is fixed",
+                                                  reason: "BOSS couldn't run claude_code: Not logged in · Please run /login." } },
+  needs_you: [{ ...OVERVIEW.needs_you[0], retry: null, fix: LOGIN_FIX, retry_reason: "Retrying fails the same way until this is fixed" }, OVERVIEW.needs_you[1]],
+};
+
+describe("a failure only a person can fix", () => {
+  it("names the fix with its link, offers no Retry, and says why", async () => {
+    engine(NEEDS_HUMAN);
+    await openProject();
+    expect(tid(`px-ov-ny-failed:${RUN}-retry`)).toBeNull();
+    const fix = tid(`px-ov-ny-failed:${RUN}-fix`)!;
+    expect(fix.textContent).toBe("Sign in again in Setup › Models");
+    expect(fix.getAttribute("href")).toContain("area=setup");
+    expect(tid(`px-ov-ny-failed:${RUN}-no-retry`)!.textContent).toContain("fails the same way");
+    expect(tid(`px-ov-ny-fixwhy-failed:${RUN}`)!.textContent).toContain("Reconnect");
+  });
+
+  it("the needs drawer draws the same answers, never a link to the API's retry URL", async () => {
+    engine();
+    window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project&drawer=needs:failed:${RUN}`);
+    const { ProjectPage: Page } = await import("../app/projects/project-page");
+    await mountAs(<Page projectId={P} actor="ceo" orgId="org_1" />, "owner");
+    await settle(10);
+    const drawer = tid("px-drawer-needs")!;
+    expect(drawer.textContent).toContain(REASON);
+    expect(drawer.querySelector('a[href*="/v1/code-tasks"]')).toBeNull();
+    await press(tid("px-drawer-failed-retry"));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("on a live project", () => {
+  it("the failure chip sits beside the stage chip, never in its place", async () => {
+    engine({ ...OVERVIEW, project: { ...OVERVIEW.project, status_label: "On staging", stage: "staging", build_failed: { ...FAILED, beside: true, word: "Follow-up failed" } } });
+    await openProject();
+    expect(tid("px-head-status")!.textContent).toContain("On staging");
+    expect(tid("px-head-failed")!.textContent?.trim()).toBe("Follow-up failed");
   });
 });
 
@@ -162,6 +206,19 @@ describe("the Command Center's card for a failed build", () => {
     id: `build:${RUN}:failed`, kind: "build_failed", title: "Build failed: Recipe box", detail: REASON,
     answers: [{ key: "retry", label: "Retry", enabled: true }],
     build: { run_id: RUN, app: "Recipe box", where: "Build failed", failing: [], retryable: true },
+  });
+
+  it("a failure Retry can't fix shows the fix, and Retry disabled with its reason", async () => {
+    const { mount } = await import("./_helpers/live-render");
+    const human = parseAttention({ ...JSON.parse(JSON.stringify({ id: `build:${RUN}:failed`, kind: "build_failed", title: "Build failed: Recipe box", detail: "x" })),
+      answers: [], build: { run_id: RUN, app: "Recipe box", where: "Build failed", failing: [], retryable: false,
+                            retry_reason: "Retrying fails the same way until this is fixed",
+                            fix: { label: "Turn on Java", detail: "Run it on the host", href: "", command: "boss toolchains enable java" } } });
+    await mount(<AttentionCard item={human} projectId={P} actor="ceo" />);
+    expect(tid("ag-att-fix")!.textContent).toContain("boss toolchains enable java");
+    const r = tid("ag-att-retry") as HTMLButtonElement;
+    expect(r.disabled).toBe(true);
+    expect(r.getAttribute("title")).toContain("fails the same way");
   });
 
   it("is called Failed and offers Retry and See what happened", async () => {

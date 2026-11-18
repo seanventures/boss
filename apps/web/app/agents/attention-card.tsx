@@ -428,6 +428,15 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
             Retry
           </GatedButton>
         ) : null}
+        {item.kind === "build_failed" && build?.fix ? (
+          build.fix.href ? (
+            <a className="ag-btn" data-tone="primary" href={linkTo(Object.fromEntries(new URLSearchParams(build.fix.href.replace(/^[^?]*\?/, ""))), orgId)}
+               data-testid="ag-att-fix" title={build.fix.detail}
+               onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(Object.fromEntries(new URLSearchParams(build.fix!.href.replace(/^[^?]*\?/, "")))); } }}>
+              {build.fix.label}
+            </a>
+          ) : <span className="ag-att-kind" data-testid="ag-att-fix" title={build.fix.detail}>{build.fix.label}{build.fix.command ? <>: <code>{build.fix.command}</code></> : null}</span>
+        ) : null}
         {item.kind === "build_failed" && build ? (
           <a className="ag-btn" href={buildHref} data-testid="ag-att-see"
              title="Open the build: its steps, its log and the error in full"

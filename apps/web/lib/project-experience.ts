@@ -82,15 +82,30 @@ export type Node = { key: string; label: string; state: StepState; sub: string; 
  *  build's own resume, POST /v1/code-tasks/{id}/retry) and the build's page. */
 export type BuildFailed = {
   id: string; label: string; build_id: string | null; reason: string; at?: string;
-  retry: { run_id: string; href: string } | null; see_href: string; work_href?: string;
+  /** "Build failed" · "Deploy failed" · "Follow-up failed" (engine build_failure). */
+  word: string;
+  /** Retry only when retrying can help; otherwise `fix` names what a person does and
+   *  `retry_reason` says why there is no Retry. */
+  retry: { run_id: string; href: string } | null; fix: FailureFix | null; retry_reason?: string;
+  see_href: string; work_href?: string;
+  /** On a live project the failure sits beside the stage chip, never in its place. */
+  beside?: boolean;
+};
+/** What a person does about a failure Retry can't fix: words, and where (a console link, or a
+ *  command to run on the BOSS host). */
+export type FailureFix = { label: string; detail: string; href: string; command?: string };
+export const parseFailureFix = (v: unknown): FailureFix | null => {
+  const x = o(v);
+  return s(x.label) ? { label: s(x.label), detail: s(x.detail), href: s(x.href), ...(s(x.command) ? { command: s(x.command) } : {}) } : null;
 };
 export const parseBuildFailed = (v: unknown): BuildFailed | null => {
   const x = o(v);
   if (!s(x.id)) return null;
   const r = o(x.retry);
   return { id: s(x.id), label: s(x.label, "Build"), build_id: s(x.build_id) || null, reason: s(x.reason, "BOSS didn't record why it stopped."),
-           at: s(x.at) || undefined, retry: s(r.run_id) ? { run_id: s(r.run_id), href: s(r.href) } : null,
-           see_href: s(x.see_href), work_href: s(x.work_href) || undefined };
+           word: s(x.word, "Build failed"), at: s(x.at) || undefined, retry: s(r.run_id) ? { run_id: s(r.run_id), href: s(r.href) } : null,
+           fix: parseFailureFix(x.fix), ...(s(x.retry_reason) ? { retry_reason: s(x.retry_reason) } : {}),
+           see_href: s(x.see_href), work_href: s(x.work_href) || undefined, beside: x.beside === true };
 };
 export type ProjectCard = {
   id: string; name: string; initials: string; repo: string; stage: Stage; journey: Node[];
@@ -112,8 +127,9 @@ export type Repo = { full_name: string; branch: string; access: { read: boolean;
 export type NeedsYou = {
   /** `failed`: the latest build failed (work.failed_card) — red, Retry and See what happened. */
   id: string; kind: "merge" | "deploy" | "plan" | "question" | "setup" | "failed"; label: string; detail: string; icon?: string;
-  /** A `failed` card's resume (the build's own retry) and the build's page. */
-  retry?: { run_id: string; href: string } | null; see_href?: string;
+  /** A `failed` card's resume (the build's own retry, only when it can help), its fix when
+   *  Retry can't, why there is no Retry, and the build's page. */
+  retry?: { run_id: string; href: string } | null; see_href?: string; fix?: FailureFix | null; retry_reason?: string;
   mini: { label: string; state: StepState }[]; action: { label: string; href: string; decision_id: string } | null;
   /** The piece of work it belongs to (a merge's build; the Onboarding row for its "only you"
    *  items), the PR on GitHub, and when it was asked (the drawer). */
@@ -283,7 +299,7 @@ export type Overview = {
     open_work: { count: number; by_state: Record<string, number>; href: string } | null;
     running: { count: number; current: { label: string; progress: [number, number]; agent: Agent | null; sub?: string; id?: string } | null; href: string;
       /** Nothing running and the latest build failed: the tile names it, never "Nothing running". */
-      failed?: { id: string; label: string; reason: string; href: string } | null } | null;
+      failed?: { id: string; label: string; reason: string; href: string; word?: string } | null } | null;
     staging: { health: Health; uptime_pct: number | null; p95_ms: number | null; series: number[]; href: string; p95_source?: string; label?: string;
                health_reason?: string; window?: string } | null;
     cost_week: { usd: number; delta_pct: number | null; cap_usd: number | null; series: number[]; href: string;
@@ -726,6 +742,7 @@ export const parseOverview = (v: unknown): Overview => {
       const rt = o(y.retry);
       return { id: s(y.id), kind: oneOf(y.kind, ["merge", "deploy", "plan", "question", "setup", "failed"] as const, "question"), label: s(y.label),
                ...(s(rt.run_id) ? { retry: { run_id: s(rt.run_id), href: s(rt.href) } } : {}), ...(s(y.see_href) ? { see_href: s(y.see_href) } : {}),
+               ...(parseFailureFix(y.fix) ? { fix: parseFailureFix(y.fix) } : {}), ...(s(y.retry_reason) ? { retry_reason: s(y.retry_reason) } : {}),
                icon: s(y.icon), work_id: s(y.work_id), work_label: s(y.work_label), external_url: s(y.external_url), created_at: s(y.created_at),
                detail: s(y.detail), mini: mini(y.mini), release: parseRelease(y.release),
                diagnosis: parseDiagnosis(y.diagnosis),
@@ -737,7 +754,7 @@ export const parseOverview = (v: unknown): Overview => {
     tiles: {
       open_work: Object.keys(ow).length ? { count: n(ow.count), by_state: byState, href: s(ow.href) } : null,
       running: Object.keys(rn).length ? { count: n(rn.count), href: s(rn.href),
-        failed: s(o(rn.failed).id) ? { id: s(o(rn.failed).id), label: s(o(rn.failed).label), reason: s(o(rn.failed).reason), href: s(o(rn.failed).href) } : null,
+        failed: s(o(rn.failed).id) ? { id: s(o(rn.failed).id), label: s(o(rn.failed).label), reason: s(o(rn.failed).reason), href: s(o(rn.failed).href), word: s(o(rn.failed).word) || undefined } : null,
         current: Object.keys(cur).length ? { label: s(cur.label), progress: [prog[0] ?? 0, prog[1] ?? 0], agent: parseAgent(cur.agent), sub: s(cur.sub), id: s(cur.id) } : null } : null,
       staging: Object.keys(st).length ? { health: oneOf(st.health, HEALTHS, "unknown"), uptime_pct: nn(st.uptime_pct), p95_ms: nn(st.p95_ms), p95_source: s(st.p95_source), label: s(st.label),
                                           health_reason: s(st.health_reason), window: s(st.window),

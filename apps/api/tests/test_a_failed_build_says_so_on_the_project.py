@@ -31,42 +31,118 @@ REAL_ERROR = ("git add failed: fatal: .git/index: index file open failed: Permis
 # ── pure rules ─────────────────────────────────────────────────────────────────────────────
 
 def test_a_failure_is_said_in_words_never_raw():
-    from boss_engine.services.project_experience.work import failure_words
+    from boss_engine.services.build_failure import failure_words
 
     said = failure_words(REAL_ERROR)
     assert said == ("It couldn't save its changes: git was not allowed to write to the build's "
                     "copy of the repo (permission denied).")
     trace = ("Traceback (most recent call last):\n  File \"x.py\", line 3, in <module>\n"
              "RuntimeError: the preview never answered on port 8004 [substrate=docker]")
-    assert failure_words(trace) == "The preview never answered on port 8004"
+    assert failure_words(trace) == "The preview never answered on port 8004."
     assert failure_words("") == "BOSS didn't record why it stopped."
     assert "substrate" not in failure_words("boom [substrate=local_subprocess]")
-    assert len(failure_words("x" * 400)) <= 160
+    assert len(failure_words("x" * 400)) <= 161
 
 
-def _item(**kw):
-    base = {"id": "crun_a", "source": "code_task", "state": "failed", "status": "failed",
-            "label": "Recipe box", "build_id": "crun_a", "build_status": "failed",
-            "error": REAL_ERROR, "last_attempt_at": "2026-11-18T15:41:54+00:00",
-            "href": "?project_id=p&area=project&tab=work&drawer=build%3Acrun_a", "links": {}}
-    return {**base, **kw}
+@pytest.mark.parametrize("raw, gone", [
+    ("git push failed: token ghs_ABCDEFGHIJKLMNOPQRSTUV1234 lacks scope", "ghs_"),
+    ("git push failed: ghp_ABCDEFGHIJKLMNOPQRSTUV1234 refused", "ghp_"),
+    ("clone failed with github_pat_11ABCDEFG0123456789_abcdefghijkl", "github_pat_"),
+    ("BOSS could not run claude_code: Authorization: Bearer sk-ant-api03-abcdefghijklmnop; "
+     "fix: reconnect it, then retry.", "sk-ant-"),
+    ("model call failed: key sk-proj-abcdefghijklmnopqrstuvwx rejected", "sk-proj-"),
+    ("fetch https://bob:hunter2@github.com/acme/app.git failed", "hunter2"),
+    ("RuntimeError: secret sref_abc123def456 could not be resolved", "sref_"),
+    ("FileNotFoundError: [Errno 2] No such file or directory: "
+     "'/var/lib/boss/sandboxes/abc/crun_1/app/src/x.py'", "/var/lib/boss"),
+    ("could not open /tmp/boss-build-7/cache/state.db", "/tmp/boss"),
+    ("could not read /Users/param/.config/boss/creds.json", "/Users/param"),
+    ("could not read /home/dev/.ssh/id_ed25519", "/home/dev"),
+])
+def test_a_reason_never_carries_a_secret_or_a_host_path(raw, gone):
+    from boss_engine.services.build_failure import failure_words
+
+    assert gone not in failure_words(raw)
 
 
-def test_only_the_latest_build_counts():
-    from boss_engine.services.project_experience.work import failed_build
+def test_the_shared_redactor_masks_the_new_shapes_and_keeps_paths_in_logs():
+    from boss_engine.identity.redaction import redact_text
 
-    got = failed_build("p", [_item()])
-    assert got is not None and got["retry"]["href"] == "/v1/code-tasks/crun_a/retry"
-    assert got["see_href"] == "?project_id=p&area=code_tasks&build=crun_a"
-    # A newer build that is moving (or done) makes the old failure history.
-    newer = _item(id="crun_b", build_id="crun_b", state="running", status="running",
-                  last_attempt_at="2026-11-18T16:00:00+00:00")
-    assert failed_build("p", [_item(), newer]) is None
-    # Planned work and onboarding are not builds.
-    assert failed_build("p", [_item(), _item(id="plan_1", source="roadmap", state="planned",
-                                             last_attempt_at="2026-11-19T00:00:00+00:00")])
-    # A build blocked at its checks has its own card (Waive / Retry), not this one.
-    assert failed_build("p", [_item(status="blocked")]) is None
+    for token in ("ghs_ABCDEFGHIJKLMNOPQRSTUV1234", "github_pat_11ABCDEFG0123456789_abcdefgh",
+                  "sk-ant-api03-abcdefghijklmnop", "sk-proj-abcdefghijklmnopqrstuvwx"):
+        assert token not in redact_text(f"x {token} y")
+    assert "hunter2" not in redact_text("https://bob:hunter2@github.com/a/b.git")
+    assert "github.com/a/b.git" in redact_text("https://bob:hunter2@github.com/a/b.git")
+    # A log keeps the path (operators need it); a sentence for people does not.
+    path = "/var/lib/boss/sandboxes/abc/crun_1/app/src/x.py"
+    assert path in redact_text(f"open {path}")
+    assert redact_text(f"open '{path}'", public=True) == "open 'src/x.py'"
+    assert "task-abcdefghijklmnopqrstuvwxyz" in redact_text("task-abcdefghijklmnopqrstuvwxyz")
+
+
+def test_reasons_read_well():
+    from boss_engine.services.build_failure import failure_words
+
+    git = ("git -c core.x failed: Cloning into '.'...\nremote: Repository not found.\n"
+           "fatal: repository 'https://github.com/acme/app/' not found")
+    assert failure_words(git) == "Git failed: Repository not found."
+    assert failure_words("'implement'") == "It stopped unexpectedly at the implement step."
+    assert failure_words("Claude code agent exited 143:") == "It was stopped (timed out or cancelled)."
+    codex = ("BOSS could not run codex: 2026-11-17T02:00:27.579001Z ERROR codex_api::endpoint::ws: "
+             "failed to connect to websocket: HTTP error 401; fix: sign in to codex again, then retry.")
+    assert failure_words(codex) == "BOSS couldn't run codex: failed to connect to websocket: HTTP error 401."
+
+
+NOT_LOGGED_IN = ("BOSS could not run claude_code: claude code agent exited 1: success — Not logged "
+                 "in · Please run /login; fix: reconnect the Claude Code subscription in Repo and "
+                 "models, then retry. [substrate=local_subprocess]")
+JAVA_OFF = ("This build asks for Ruby or PHP, which BOSS cannot build. This build needs Java, "
+            "which is not turned on for this BOSS: turn it on with `boss toolchains enable java` "
+            "on the BOSS host, then start again.")
+
+
+@pytest.mark.parametrize("kw, label, has_href", [
+    ({"failure_class": "needs_human", "reason_code": "harness_unavailable", "error": NOT_LOGGED_IN},
+     "Sign in again in Setup › Models", True),
+    ({"failure_class": "needs_human", "reason_code": "harness_unavailable",
+      "error": "BOSS could not run claude_code: 401 OAuth access token has expired; fix: "
+               "reconnect it in Repo and models, then retry."},
+     "Sign in again in Setup › Models", True),
+    ({"failure_class": "needs_human", "reason_code": "stack_unsupported", "error": JAVA_OFF},
+     "Turn on Java", False),
+    ({"failure_class": "needs_human", "reason_code": "build_services_unavailable",
+      "error": "Build services unavailable: cannot reach the build-services Postgres"},
+     "Start build services", True),
+    ({"failure_class": "needs_human", "reason_code": "no_test_files",
+      "error": "Test author produced no test files even after escalating"},
+     "Make the brief testable", True),
+    ({"failure_class": "budget", "reason_code": "budget_cap", "error": "It hit its spending cap."},
+     "Raise the cap in Govern", True),
+])
+def test_a_failure_only_a_person_can_fix_names_the_fix_not_retry(kw, label, has_href):
+    from boss_engine.services.build_failure import action_for
+
+    got = action_for("p", source="code_task", run_id="crun_a", see_href="?see", **kw)
+    assert got["retry"] is None and got["retry_reason"]
+    assert got["fix"]["label"] == label and bool(got["fix"]["href"]) == has_href
+    if label == "Turn on Java":
+        assert got["fix"]["command"] == "boss toolchains enable java"
+    if label == "Raise the cap in Govern":
+        assert "area=budget" in got["fix"]["href"]
+
+
+def test_retry_only_when_it_can_help():
+    from boss_engine.services.build_failure import action_for
+
+    infra = action_for("p", source="code_task", run_id="crun_a", failure_class="infra",
+                       reason_code="pipeline_exception", error=REAL_ERROR)
+    assert infra["retry"] == {"run_id": "crun_a", "href": "/v1/code-tasks/crun_a/retry",
+                              "method": "POST"} and infra["fix"] is None
+    merged = action_for("p", source="code_task", run_id="crun_a", error="x", merged=True)
+    assert merged["retry"] is None and "merged" in merged["retry_reason"]
+    # A workflow's build is retried from the workflow's failed step, never a bare code task.
+    wf = action_for("p", source="workflow_run", run_id="crun_a", error=REAL_ERROR, see_href="?wfr")
+    assert wf["retry"] is None and wf["fix"]["href"] == "?wfr"
 
 
 def test_the_strip_marks_the_pr_station_failed_when_it_failed_after_its_last_phase():
@@ -116,7 +192,8 @@ def recipe_box(world, client, engine):
             "INSERT INTO code_task_runs (id, project_id, status, phase, title, error, finalize_ctx, "
             "created_at, updated_at) VALUES (:i, :p, 'failed', 'done', 'Recipe box', :e, "
             "CAST(:f AS JSONB), :at, :up)"),
-            {"i": run_id, "p": slug, "e": REAL_ERROR, "f": json.dumps({}), "at": at,
+            {"i": run_id, "p": slug, "e": REAL_ERROR,
+             "f": json.dumps({"failure_class": "infra", "reason_code": "pipeline_exception"}), "at": at,
              "up": at + timedelta(minutes=9, seconds=22)})
     return {"id": slug, "run": run_id}
 
@@ -147,8 +224,10 @@ def test_a_project_whose_latest_build_failed_says_so_everywhere(world, client, r
     assert failed["reason"] in working["detail"]
     # The Running tile names it (shown when nothing else moves).
     assert ov["tiles"]["running"]["failed"]["id"] == run
-    # Needs you leads with it: the reason, Retry and See what happened.
+    # Needs you leads with it: the reason, Retry and See what happened — and no generic
+    # action that a needs drawer would turn into a link to the API URL (review L4).
     card = ov["needs_you"][0]
+    assert card["action"] is None and card["fix"] is None
     assert card["kind"] == "failed" and card["id"] == f"failed:{run}"
     assert card["label"] == "Build failed: Recipe box" and card["detail"] == failed["reason"]
     assert card["retry"]["href"] == f"/v1/code-tasks/{run}/retry"
@@ -163,6 +242,9 @@ def test_a_project_whose_latest_build_failed_says_so_everywhere(world, client, r
     assert card_row["status_label"] == "Build failed"
     assert card_row["build_failed"]["retry"]["href"] == f"/v1/code-tasks/{run}/retry"
     assert card_row["needs_you"] >= 1
+    # ONE RULE (review L1): the list, the page and the Command Center name the same failure.
+    assert {k: card_row["build_failed"][k] for k in ("id", "build_id", "word", "reason", "retry")} \
+        == {k: failed[k] for k in ("id", "build_id", "word", "reason", "retry")}
 
 
 def test_the_command_center_lists_the_failed_build(world, client, recipe_box, engine):
@@ -198,3 +280,118 @@ def test_a_retry_that_moves_clears_the_failure(world, client, recipe_box, engine
     assert ov["project"]["build_failed"] is None
     assert ov["project"]["status_label"] != "Build failed"
     assert not any(n["kind"] == "failed" for n in ov["needs_you"])
+
+
+def _project(world, client, name="Recipe box"):
+    slug = f"fb-{uuid.uuid4().hex[:8]}"
+    with world.acting_as(world.ctx(world.owner)):
+        made = client.post("/v1/projects", json={"name": name, "slug": slug})
+    assert made.status_code == 201, made.text
+    return slug
+
+
+def _build(db, pid, *, status="failed", error=REAL_ERROR, fctx=None, title="Recipe box",
+           minutes_ago=5, pr_url=None):
+    rid = f"crun_{uuid.uuid4().hex[:20]}"
+    at = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    db.execute(text(
+        "INSERT INTO code_task_runs (id, project_id, status, phase, title, error, pull_request_url, "
+        "finalize_ctx, created_at, updated_at) VALUES (:i, :p, :s, 'done', :t, :e, :u, "
+        "CAST(:f AS JSONB), :at, :at)"),
+        {"i": rid, "p": pid, "s": status, "t": title, "e": error, "u": pr_url,
+         "f": json.dumps(fctx or {}), "at": at})
+    return rid
+
+
+def test_a_failure_only_a_person_can_fix_offers_the_fix_everywhere(world, client, engine):
+    from boss_engine.config import get_settings
+    from boss_engine.services import command_center
+
+    pid = _project(world, client)
+    with engine.begin() as db:
+        run = _build(db, pid, error=NOT_LOGGED_IN,
+                     fctx={"failure_class": "needs_human", "reason_code": "harness_unavailable"})
+    ov = _get(world, client, f"/v1/projects/{pid}/overview")
+    failed = ov["project"]["build_failed"]
+    assert failed["build_id"] == run and failed["retry"] is None
+    assert failed["fix"]["label"] == "Sign in again in Setup › Models"
+    assert "area=setup" in failed["fix"]["href"] and failed["retry_reason"]
+    assert "login" not in failed["reason"].lower() or "Not logged in" in failed["reason"]
+    card = ov["needs_you"][0]
+    assert card["kind"] == "failed" and card["retry"] is None and card["fix"] == failed["fix"]
+    with engine.connect() as c:
+        cc = command_center.build(c, get_settings(), pid)
+    item = next(n for n in cc["needs_you"] if n["kind"] == "build_failed")
+    # No Retry on the card that can't help; the disabled button says why, and the fix rides.
+    assert item["answers"] == [] and item["build"]["retryable"] is False
+    assert item["build"]["retry_reason"] and item["build"]["fix"]["label"] == failed["fix"]["label"]
+
+
+def test_a_user_cancelled_latest_attempt_is_not_a_failure(world, client, engine):
+    pid = _project(world, client)
+    with engine.begin() as db:
+        root = _build(db, pid, minutes_ago=30)
+        _build(db, pid, status="cancelled", error=None, minutes_ago=2,
+               fctx={"root_run_id": root, "parent_run_id": root, "attempt": 2})
+    ov = _get(world, client, f"/v1/projects/{pid}/overview")
+    assert ov["project"]["build_failed"] is None
+    assert not any(n["kind"] == "failed" for n in ov["needs_you"])
+    row = next(c for c in _get(world, client, "/v1/projects/summary")["items"] if c["id"] == pid)
+    assert row["build_failed"] is None
+
+
+def test_a_merged_change_that_later_failed_offers_no_retry(world, client, engine):
+    pid = _project(world, client)
+    with engine.begin() as db:
+        _build(db, pid, error="post-merge cleanup failed",
+               fctx={"failure_class": "infra", "merge": {"sha": "abc1234"}})
+    failed = _get(world, client, f"/v1/projects/{pid}/overview")["project"]["build_failed"]
+    assert failed["retry"] is None and "merged" in failed["retry_reason"]
+
+
+def test_a_workflow_owned_build_defers_to_the_workflow_run(world, client, engine):
+    from boss_engine.config import get_settings
+    from boss_engine.services import command_center
+    from apps.api.tests.project_experience_seed import _minor_feature
+
+    pid = _project(world, client)
+    with engine.begin() as db:
+        did, vid, _spec = _minor_feature(db, pid)
+        wfr = f"wfr_{uuid.uuid4().hex[:16]}"
+        at = datetime.now(timezone.utc) - timedelta(minutes=20)
+        db.execute(text(
+            "INSERT INTO workflow_runs (id, project_id, workflow_definition_id, workflow_version_id, "
+            "actor, status, input, error, created_at, updated_at) VALUES (:i, :p, :d, :v, 'ceo', "
+            "'failed', CAST(:in AS JSONB), :e, :t, :t)"),
+            {"i": wfr, "p": pid, "d": did, "v": vid, "e": REAL_ERROR, "t": at,
+             "in": json.dumps({"title": "Recipe box", "directive": "Recipe box"})})
+        build = _build(db, pid, fctx={"workflow_run_id": wfr, "failure_class": "infra"},
+                       minutes_ago=10)
+    ov = _get(world, client, f"/v1/projects/{pid}/overview")
+    failed = ov["project"]["build_failed"]
+    assert failed["source"] == "workflow_run" and failed["id"] == wfr
+    # Never a bare code-task retry of a workflow's build: the step Retry on the run's page.
+    assert failed["retry"] is None and failed["build_id"] == build
+    assert failed["see_href"] == f"?project_id={pid}&area=delivery_workflows&wfr={wfr}"
+    assert failed["fix"]["href"] == failed["see_href"]
+    assert ov["needs_you"][0]["retry"] is None
+    with engine.connect() as c:
+        cc = command_center.build(c, get_settings(), pid)
+    # The Command Center leaves it to the run's failed-step card: no bare build card.
+    assert not any(n["kind"] == "build_failed" for n in cc["needs_you"])
+
+
+def test_on_a_live_project_the_failure_sits_beside_the_stage(world, client, engine):
+    from apps.api.tests.project_experience_seed import seed
+
+    pid = _project(world, client, name="HelpDesk AI Demo")
+    with engine.begin() as db:
+        seed(db, pid)
+        _build(db, pid, title="Follow-up: tidy the footer", minutes_ago=0)
+    ov = _get(world, client, f"/v1/projects/{pid}/overview")
+    failed = ov["project"]["build_failed"]
+    assert failed is not None and failed["beside"] is True
+    assert ov["project"]["status_label"] not in ("Build failed", "Follow-up failed")
+    working = next(n for n in ov["journey"] if n["key"] == "working")
+    assert working["state"] != "failed"
+    assert ov["needs_you"][0]["kind"] == "failed"
