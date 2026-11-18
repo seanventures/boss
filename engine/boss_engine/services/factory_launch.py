@@ -196,7 +196,10 @@ def launch(
     ids = [str(item).strip() for item in (attachment_ids or []) if str(item).strip()]
     repo = str(github_repo or "").strip()
     asked = str(mode or "").strip()
-    dedupe_key = _dedupe_key(org_id, prompt, asked, template_id, ids, repo)
+    # WHOSE launch it is: two people pressing the same template never share a kept or a reused
+    # project (nor a consent the other one owes).
+    who = str(getattr(getattr(auth, "principal", None), "id", "") or actor or "")
+    dedupe_key = _dedupe_key(org_id, prompt, asked, template_id, ids, repo, who)
     connection.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": dedupe_key})
     previous = _reuse(connection, org_id, dedupe_key)
     if previous is not None:
@@ -362,6 +365,11 @@ def _keep_for_consent(
             effect_scope={"mode": spec.get("mode"), "template_id": spec.get("id")},
             payload=kept)
         receipt_id = str(receipt["id"])
+    else:
+        # The kept receipt names the project the launch waits in (a re-ask after the project
+        # it named was removed made a new one).
+        connection.execute(text("UPDATE receipts SET project_id = :p WHERE id = :r"),
+                           {"p": project_id, "r": receipt_id})
     receipts.merge_result(connection, receipt_id, kept)
     body.update({
         "project_id": project_id,
@@ -726,10 +734,11 @@ def _reuse(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, 
 
 def _dedupe_key(
     org_id: str, prompt: str, mode: str, template_id: Optional[str],
-    attachment_ids: list[str], github_repo: str,
+    attachment_ids: list[str], github_repo: str, who: str = "",
 ) -> str:
     raw = json.dumps({
         "org": org_id,
+        "who": who,
         "prompt": str(prompt or ""),
         "mode": mode,
         "template_id": template_id or "",

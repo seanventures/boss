@@ -76,12 +76,12 @@ def _builder(starts: list):
     return build
 
 
-def _launch(env, root, template_id, starts, budget):  # noqa: F811
+def _launch(env, root, template_id, starts, budget, who=ALICE):  # noqa: F811
     """As the API route runs it: one transaction, committed even when consent is asked."""
-    with lineage.acting(session_ctx(ALICE)), env.engine.begin() as c:
+    with lineage.acting(session_ctx(who)), env.engine.begin() as c:
         try:
             return factory_launch.launch(
-                c, get_settings(), org_id="org_boss", actor="ceo", auth=session_ctx(ALICE),
+                c, get_settings(), org_id="org_boss", actor="ceo", auth=session_ctx(who),
                 template_id=template_id, template_dir=root, builder=_builder(starts),
                 budget=budget)
         except consent.ConsentRequired as asked:
@@ -190,6 +190,56 @@ def test_consent_keeps_the_project_and_the_retry_builds_in_it(env, monkeypatch, 
     finally:
         if dedupe_key:
             _cleanup(env, made, dedupe_key)
+
+
+BOB = "usr_bob_easy"
+
+
+def test_two_people_pressing_the_same_template_never_share_a_project(env, monkeypatch, tmp_path):  # noqa: F811
+    """A's launch waits for A's consent; B presses the same template and gets B's own project,
+    asked of B, never A's kept one (nor A's run once A has built)."""
+    _own_agents_only(env)
+    monkeypatch.setattr(lineage, "_enforced", lambda: True)
+    monkeypatch.setattr(consent, "_first_owner", lambda db, org: ALICE)
+    with env.engine.begin() as c:
+        c.execute(text("INSERT INTO identity_principals (id, org_id, kind, status, display_name) "
+                       "VALUES (:u, 'org_boss', 'user', 'active', 'Bob') ON CONFLICT DO NOTHING"),
+                  {"u": BOB})
+    template_id = f"csv-desk-{uuid.uuid4().hex[:6]}"
+    root = _template(tmp_path, template_id)
+    starts: list = []
+    made: set[str] = set()
+    keys: list[str] = []
+    try:
+        a = _launch(env, root, template_id, starts, _Budget(), who=ALICE)["__consent__"]
+        made.add(a["project_id"])
+        keys.append(a["dedupe_key"])
+        b = _launch(env, root, template_id, starts, _Budget(), who=BOB)
+        assert "__consent__" in b, b
+        b = b["__consent__"]
+        made.add(b["project_id"])
+        keys.append(b["dedupe_key"])
+        assert b["project_id"] != a["project_id"]
+        assert b["dedupe_key"] != a["dedupe_key"]
+        assert b["projects"] == [b["project_id"]]
+        # A builds; B's next press is still B's own project, never A's reused run.
+        env.world.grant(ALICE, set(NEEDS) | {"delegation:grant"}, a["project_id"])
+        with env.engine.begin() as c:
+            grants.create_grant(session_ctx(ALICE), GrantRequest(
+                agent_ids=tuple(x["id"] for x in a["agents"]),
+                permissions=frozenset(a["permissions"]), project_ids=(a["project_id"],),
+                task_run_id=a["task_run_id"], purpose=a["task"]), db=c)
+        built = _launch(env, root, template_id, starts, _Budget(), who=ALICE)
+        assert built["project_id"] == a["project_id"] and built["reused"] is False
+        b_again = _launch(env, root, template_id, starts, _Budget(), who=BOB)
+        assert b_again["__consent__"]["project_id"] == b["project_id"]
+        assert [s["project_id"] for s in starts] == [a["project_id"]]
+    finally:
+        for key in keys:
+            _cleanup(env, made, key)
+        with env.engine.begin() as c:
+            c.execute(text("DELETE FROM identity_pending_consents WHERE principal_id = :u"), {"u": BOB})
+            c.execute(text("DELETE FROM identity_principals WHERE id = :u"), {"u": BOB})
 
 
 def test_a_launch_that_needs_no_consent_is_unchanged(env, monkeypatch, tmp_path):  # noqa: F811
