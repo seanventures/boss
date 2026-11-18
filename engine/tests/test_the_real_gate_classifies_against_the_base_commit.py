@@ -3,6 +3,8 @@
 failures only. A scripted-engine battle: 1 caused + 3 pre-existing + 2 environment failures
 in one verify output must yield exactly one caused failure to repair.
 """
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -16,7 +18,14 @@ class TestTheRealGateClassifiesAgainstTheBaseCommit(unittest.TestCase):
     repair-decision point does."""
 
     def test_one_caused_three_pre_existing_two_environment_scripted_battle(self):
-        root = Path(__file__).resolve().parents[2]
+        # A clone of its own (git_safety.tree_git reads only a tree's own real .git: BOSS's
+        # checkout may be a worktree, whose .git is a gitfile).
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name).resolve()
+        for args in (["init", "-q"], ["-c", "user.email=t@example.com", "-c", "user.name=t",
+                                      "commit", "-q", "--allow-empty", "-m", "base"]):
+            subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
         failing_ids = {
             "tests/test_a.py::test_pre1",
             "tests/test_a.py::test_pre2",
