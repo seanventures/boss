@@ -94,3 +94,17 @@ export function describeApiError(data: unknown, status: number): string {
   if (status === 403) return "You do not have permission to change this in this project.";
   return text;
 }
+
+/**
+ * THE STEP-UP CODE SURVIVES A ROUTE'S REWORDING. A route under app/api that replaces the API's
+ * `error` with a sentence also dropped `step_up_required`, so the browser's apiWrite could not see
+ * the API asking for "Confirm it's you" and Easy Mode showed "The build did not start." instead
+ * (2026-11-18). Spread this into every reworded refusal: `{ error: sentence, ...stepUpCode(data) }`.
+ * tests/every-write-goes-through-api-write.test.ts fails on a route that rewords without it.
+ */
+export function stepUpCode(data: unknown): { code?: "step_up_required" } {
+  const said = (v: unknown, depth = 0): boolean => v === "step_up_required"
+    || (depth < 3 && !!v && typeof v === "object"
+        && ["error", "code", "detail"].some((k) => said((v as Record<string, unknown>)[k], depth + 1)));
+  return said(data) ? { code: "step_up_required" } : {};
+}

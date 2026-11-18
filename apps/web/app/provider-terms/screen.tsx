@@ -9,6 +9,7 @@
  */
 
 import React, { useState } from "react";
+import { apiWrite } from "../../lib/api-write";
 
 const EMPTY = "Not shown";
 const FACT_KEYS = ["region", "log_retention", "may_train"] as const;
@@ -46,7 +47,7 @@ function shownFacts(body: Record<string, unknown> | null): Facts | null {
 async function post(path: string, body: Record<string, unknown>): Promise<Reply> {
   let response: Response;
   try {
-    response = await fetch(path, {
+    response = await apiWrite(path, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),

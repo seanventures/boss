@@ -5,6 +5,7 @@
  * Publishing one plate does not take the others off the sheet.
  */
 import React, { useEffect, useRef, useState } from "react";
+import { apiWrite } from "../../lib/api-write";
 
 export const SUITE_KINDS = ["website", "mobile", "slides", "data_view"] as const;
 
@@ -89,7 +90,7 @@ async function readPayload(res: Response): Promise<SuitePayload> {
 }
 
 async function publishRemote(projectId: string, body: PublishRequest): Promise<SuitePayload> {
-  const res = await fetch(`/v1/projects/${encodeURIComponent(projectId)}/suite/publish`, {
+  const res = await apiWrite(`/v1/projects/${encodeURIComponent(projectId)}/suite/publish`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -98,7 +99,7 @@ async function publishRemote(projectId: string, body: PublishRequest): Promise<S
 }
 
 async function holdRemote(projectId: string, body: HoldRequest): Promise<SuitePayload> {
-  const res = await fetch(
+  const res = await apiWrite(
     `/v1/projects/${encodeURIComponent(projectId)}/suite/surfaces/${encodeURIComponent(body.kind)}`,
     {
       method: "PUT",

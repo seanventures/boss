@@ -13,6 +13,7 @@
  */
 import {
   Camera,
+  ArrowRight,
   CaretDown,
   Cube,
   Flask,
@@ -25,6 +26,7 @@ import {
   MapTrifold,
   Microphone,
   Paperclip,
+  RocketLaunch,
   Stop,
   UploadSimple,
   VirtualReality,
@@ -32,7 +34,9 @@ import {
 } from "@phosphor-icons/react";
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
+import { apiWrite, stepUpNotConfirmedSentence } from "../lib/api-write";
 import { askConsent, consentFromBody } from "../lib/identity/consent";
+import { consoleHref } from "./console-href";
 import { openStartSheet } from "./start-project/start-host";
 
 import { TemplatePreview } from "../components/v2/templates/template-previews";
@@ -94,7 +98,7 @@ function needsOf(record: Record<string, unknown>): TemplateCard["needs"] {
 
 type Attachment = { id: string; name: string };
 
-type LaunchIds = { projectId: string; runId: string };
+type LaunchIds = { projectId: string; runId: string; title: string };
 
 type Gallery =
   | { state: "loading" }
@@ -143,6 +147,9 @@ async function readBody(res: Response): Promise<unknown> {
   }
 }
 
+/** The launch button's own words: a refusal that names the press says this. */
+const EASY_MODE = "Easy Mode";
+
 /** What a refusal's machine code means, in words. A bare code is never shown to a person. */
 const CODE_WORDS: Record<string, string> = {
   consent_required: "Not started: the agents need your consent first. Press Easy Mode to give it.",
@@ -157,6 +164,8 @@ const CODE_WORDS: Record<string, string> = {
   unknown_template: "Not started: that template is no longer in the gallery.",
   toolchain_not_enabled: "Not started: this template needs a toolchain this BOSS has not turned on.",
   unknown_attachment: "Not started: an attachment is no longer there. Attach it again.",
+  step_up_required: stepUpNotConfirmedSentence(EASY_MODE),
+  step_up_not_confirmed: stepUpNotConfirmedSentence(EASY_MODE),
   needs_model: "No model is connected, so nothing was started or reserved. Add one in Setup › Models, then press Easy Mode again.",
 };
 
@@ -234,7 +243,8 @@ function launchIds(data: unknown): LaunchIds | null {
   const projectId = first(record, ["project_id", "projectId"]);
   const runId = first(record, ["run_id", "runId"]);
   if (!projectId && !runId) return null;
-  return { projectId, runId };
+  const spec = record.spec && typeof record.spec === "object" ? record.spec as Record<string, unknown> : {};
+  return { projectId, runId, title: first(spec, ["title"]) };
 }
 
 function rowsFor(files: File[], ids: string[]): Attachment[] {
@@ -243,6 +253,52 @@ function rowsFor(files: File[], ids: string[]): Attachment[] {
   }
   if (ids.length === 1) return [{ id: ids[0]!, name: files.map((file) => file.name).filter(Boolean).join(", ") || ids[0]! }];
   return ids.map((id) => ({ id, name: id }));
+}
+
+/** Where a started build is watched: its build page in Code Tasks (the Work tab's Build link,
+ *  services/stuck_work.py), else the project's page. Through consoleHref, so org= is kept. */
+export function watchBuildHref(launch: { projectId: string; runId: string }): string {
+  if (launch.runId) {
+    return consoleHref({ ...(launch.projectId ? { project_id: launch.projectId } : {}),
+                         area: "code_tasks", build: launch.runId, tab: undefined });
+  }
+  return projectHref(launch.projectId);
+}
+
+/** The project's page, as the sidebar opens it (`?org=…&project_id=…&area=project`). */
+export function projectHref(projectId: string): string {
+  return consoleHref({ project_id: projectId, area: "project", tab: undefined, build: undefined });
+}
+
+/** WHAT HAPPENS NEXT, not two ids. A newcomer read "Project recipe-box-fd3ab4a3 · Run crun_…"
+ *  and had no idea where to go (2026-11-18): the card names the build, says what BOSS does now,
+ *  and links to where it is watched. The ids stay, faint, for whoever needs them. */
+function StartedCard({ launch, fallbackTitle }: { launch: LaunchIds; fallbackTitle: string }) {
+  const title = launch.title || fallbackTitle || "Your app";
+  return (
+    <section className="bh-started" role="status" data-testid="build-launch" aria-labelledby="bh-started-h">
+      <RocketLaunch {...ICON} className="bh-started-icon" />
+      <div className="bh-started-body">
+        <h2 id="bh-started-h" className="bh-started-title" data-testid="build-started-title">{title} is building</h2>
+        <p className="bh-started-next">
+          BOSS writes tests, builds, reviews and opens a pull request — about 15–25 min.
+        </p>
+        <div className="bh-started-actions">
+          <a className="bh-started-go" href={watchBuildHref(launch)} data-testid="build-watch">
+            Watch the build <ArrowRight {...ICON} />
+          </a>
+          {launch.projectId ? (
+            <a className="bh-started-open" href={projectHref(launch.projectId)} data-testid="build-open-project">Open project</a>
+          ) : null}
+        </div>
+        <p className="bh-started-ids">
+          {launch.projectId ? <>Project <span data-testid="build-project-id">{launch.projectId}</span></> : null}
+          {launch.projectId && launch.runId ? <span aria-hidden="true"> · </span> : null}
+          {launch.runId ? <>Run <span data-testid="build-run-id">{launch.runId}</span></> : null}
+        </p>
+      </div>
+    </section>
+  );
 }
 
 const STATUS: Record<Phase, string> = {
@@ -341,7 +397,8 @@ export function BuildHome() {
     try {
       const body = new FormData();
       for (const file of files) body.append("file", file);
-      const res = await fetch("/api/factory/attachments", { method: "POST", body });
+      const res = await apiWrite("/api/factory/attachments", { method: "POST", body },
+        { press: { scope: "build-home:attach", label: "Attach" } });
       const data = await readBody(res);
       if (!res.ok) {
         setUploadError(messageOf(data, "The file did not upload."));
@@ -382,11 +439,14 @@ export function BuildHome() {
     setLaunchFix(null);
     setPhase("starting");
     const send = async () => {
-      const res = await fetch("/api/factory/launch", {
+      // THE CONSOLE'S ONE WRITE PATH (lib/api-write.ts): a fresh Idempotency-Key per send, and a
+      // 401 step_up_required opens "Confirm it's you" and resends this same launch. A raw fetch
+      // here showed "The build did not start." to a person whose second factor was only stale.
+      const res = await apiWrite("/api/factory/launch", {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/json" },
         body: JSON.stringify(body),
-      });
+      }, { press: { scope: "build-home:launch", label: EASY_MODE } });
       return { res, data: await readBody(res) };
     };
     try {
@@ -477,6 +537,9 @@ export function BuildHome() {
   };
 
   const ModeIcon = MODE_ICON[mode];
+
+  const startedTitle = (gallery.state === "ready"
+    && gallery.templates.find((card) => card.id === templateId)?.title) || "";
 
   return (
     <div className="bh" data-testid="build-home" data-template-id={templateId ?? ""}>
@@ -674,13 +737,7 @@ export function BuildHome() {
           })}
         </ul>
 
-        {launch ? (
-          <p className="bh-ids" role="status" data-testid="build-launch">
-            {launch.projectId ? <>Project <span data-testid="build-project-id">{launch.projectId}</span></> : null}
-            {launch.projectId && launch.runId ? <span aria-hidden="true"> · </span> : null}
-            {launch.runId ? <>Run <span data-testid="build-run-id">{launch.runId}</span></> : null}
-          </p>
-        ) : null}
+        {launch ? <StartedCard launch={launch} fallbackTitle={startedTitle} /> : null}
         {launchError ? (
           <p className="bh-error" role="alert" data-testid="build-launch-error">
             {launchError}

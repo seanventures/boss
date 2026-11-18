@@ -5,6 +5,7 @@
  * painted on a street blade. A new app in this workspace reads that spec.
  */
 import React, { useEffect, useState } from "react";
+import { apiWrite } from "../../lib/api-write";
 
 const CSS = `
 @import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=Public+Sans:wght@400;600&display=swap");
@@ -326,7 +327,7 @@ export function DesignSystemScreen({ workspaceId = "" }: { workspaceId?: string 
       spacing,
     };
     try {
-      const res = await fetch(
+      const res = await apiWrite(
         `/v1/workspaces/${encodeURIComponent(active)}/design-system`,
         {
           method: "PUT",
@@ -354,7 +355,7 @@ export function DesignSystemScreen({ workspaceId = "" }: { workspaceId?: string 
       return;
     }
     try {
-      const res = await fetch(
+      const res = await apiWrite(
         `/v1/workspaces/${encodeURIComponent(active)}/apps`,
         {
           method: "POST",

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { describeApiError } from "../../../../lib/api-error";
+import { describeApiError, stepUpCode } from "../../../../lib/api-error";
 import { apiWrite } from "../../../../lib/api-write";
 import { API_URL, authHeaders } from "../../../../lib/client";
 
@@ -26,7 +26,8 @@ export async function POST(req: Request) {
     if (!r.ok) {
       const sentence = (data as { message?: unknown }).message;
       return NextResponse.json({ ...(data as object),
-        error: typeof sentence === "string" && sentence ? sentence : describeApiError(data, r.status) },
+        error: typeof sentence === "string" && sentence ? sentence : describeApiError(data, r.status),
+        ...stepUpCode(data) },
         { status: r.status });
     }
     return NextResponse.json(data, { status: r.status });

@@ -666,3 +666,43 @@
 @media (max-width: 40rem) {
   .bh-lucky { margin-left: 0; }
 }
+
+/* The started card: what is building, what happens next, where to watch it. */
+.bh-started {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  margin: 0.9rem 0 0;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  color: var(--ink);
+}
+.bh-started-icon { flex: none; margin-top: 0.15rem; color: var(--accent-text); font-size: 1.25rem; }
+.bh-started-body { min-width: 0; }
+.bh-started-title { margin: 0; font-family: var(--sans); font-size: var(--fs-ui); font-weight: 700; }
+.bh-started-next { margin: 0.2rem 0 0; color: var(--muted); font-size: var(--fs-meta); }
+.bh-started-actions { display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; align-items: center; margin-top: 0.6rem; }
+.bh-started-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  padding: 0.35rem 0.85rem;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+  font-size: var(--fs-meta);
+  text-decoration: none;
+}
+.bh-started-go:hover { background: color-mix(in srgb, var(--accent) 88%, var(--ink)); }
+.bh-started-go:focus-visible, .bh-started-open:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.bh-started-open { color: var(--accent-text); font-size: var(--fs-meta); font-weight: 600; }
+.bh-started-ids {
+  margin: 0.55rem 0 0;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: var(--fs-label);
+  overflow-wrap: anywhere;
+}
