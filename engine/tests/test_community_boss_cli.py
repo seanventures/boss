@@ -169,6 +169,7 @@ def world(tmp_path: Path) -> dict:
         "    [ \"${BOSS_TEST_OLLAMA_UNREACHABLE:-0}\" = 1 ] && exit 1\n"
         "    [ -n \"${BOSS_TEST_STATE:-}\" ] && [ -e \"$BOSS_TEST_STATE/ollama-loopback-only\" ] && exit 1 ;;\n"
         "  *'identity.cli claim-status'*) [ -n \"${BOSS_TEST_CLAIM:-}\" ] && echo \"$BOSS_TEST_CLAIM\" ;;\n"
+        "  *'identity.cli console-origin'*) echo \"${BOSS_TEST_BOUND_ORIGIN:-}\" ;;\n"
         "  *'claude auth login'*) [ -n \"${BOSS_TEST_STATE:-}\" ] && touch \"$BOSS_TEST_STATE/claude\" ;;\n"
         "  *'grok login --device-auth'*) [ -n \"${BOSS_TEST_STATE:-}\" ] && touch \"$BOSS_TEST_STATE/grok\" ;;\n"
         "esac\n"
@@ -472,6 +473,28 @@ def test_a_second_install_names_its_own_boss_command(world) -> None:
     assert " boss identity setup-link" not in (doctor.stdout + doctor.stderr).replace(str(boss), "")
     stopped = _run(boss, "stop", env=env)
     assert f"Start again with: {boss} start" in stopped.stdout
+
+
+def test_the_printed_console_url_follows_the_bound_origin(world) -> None:
+    """An install claimed on http://127.0.0.1:<port> (legacy, or before rc10) keeps that origin:
+    its sessions and passkeys live there. open and doctor print it; with nothing bound they print
+    http://localhost:<port>, the claim link's host (stranger test r3 review of #208)."""
+    boss = _installed(world)
+    env = world["env"]
+    _set_env_line(world["install"], "BOSS_COMMUNITY_WEB_ENABLED", "1")
+    shutil.copy2(REPO / "scripts/install/checkup.sh", world["install"] / "scripts/install/checkup.sh")
+    bound = {**env, "BOSS_TEST_CLAIM": "claimed 2026-11-01", "BOSS_TEST_BOUND_ORIGIN": "http://127.0.0.1:3000"}
+    opened = _run(boss, "open", env=bound)
+    assert "http://127.0.0.1:3000" in opened.stdout and "localhost:3000" not in opened.stdout
+    doctor = _run(boss, "doctor", env=bound)
+    assert "open Mission Control (http://127.0.0.1:3000)" in doctor.stdout, doctor.stdout
+    assert "localhost:3000" not in doctor.stdout
+    url = _run(boss, "identity", "console-url", env=bound)
+    assert url.stdout.strip() == "http://127.0.0.1:3000"
+    # Nothing bound, or something that is not an origin: localhost.
+    for value in ("", "not a url; rm -rf ~"):
+        plain = _run(boss, "open", env={**bound, "BOSS_TEST_BOUND_ORIGIN": value})
+        assert "http://localhost:3000" in plain.stdout and "127.0.0.1:3000" not in plain.stdout
 
 
 def test_a_default_install_keeps_plain_boss_in_hints(world) -> None:

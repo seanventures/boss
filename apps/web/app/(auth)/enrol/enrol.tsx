@@ -26,12 +26,14 @@ import { TotpStep } from "./totp-step";
 
 type Stage = "choose" | "totp" | "codes" | "password";
 
-export function Enrol({ host, next, who, passkeyReason = null, passwordMin = 12 }: {
+export function Enrol({ host, next, who, passkeyReason = null, publicOrigin = null, passwordMin = 12 }: {
   host: string; next: string; who: { name: string; email: string; hue: number } | null;
   /** The security policy's password minimum (GET /v1/auth/options). */
   passwordMin?: number;
   /** /v1/auth/options passkey_reason: passkey_needs_domain on an IP address (passkey-support). */
   passkeyReason?: string | null;
+  /** The bound public origin: a passkey works only there (passkeyOtherLoopbackWords). */
+  publicOrigin?: string | null;
 }) {
   const [noPasskey, setNoPasskey] = useState<string | null>(null);
   const [stage, setStage] = useState<Stage>("choose");
@@ -46,13 +48,13 @@ export function Enrol({ host, next, who, passkeyReason = null, passwordMin = 12 
   const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
-    const blocked = passkeyBlockWords(passkeyReason, passkeyPlace());
+    const blocked = passkeyBlockWords(passkeyReason, passkeyPlace(), publicOrigin);
     setNoPasskey(blocked);
     setPasskeys(webauthnAvailable() && !blocked);
     // No passkey possible here: the authenticator app IS the choice, not a link under a dead button.
     if (blocked) setStage("totp");
     primeCsrf().then((me) => setNeedsPassword(me?.sign_in?.password === false)).catch(() => undefined);
-  }, [passkeyReason]);
+  }, [passkeyReason, publicOrigin]);
 
   /** The codes issued with the first factor; only when there were none, ask for a set. */
   const toCodes = async (issued: string[] = []) => {

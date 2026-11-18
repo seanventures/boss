@@ -87,3 +87,21 @@ describe("sign-in words name this install", () => {
     expect(read("app/(auth)/login/sign-in.tsx")).toContain("with this install\\u2019s boss command");
   });
 });
+
+describe("a passkey on the other loopback spelling says where it works", () => {
+  it("names the bound origin when the page is another loopback spelling", async () => {
+    const { passkeyBlockWords, passkeyOtherLoopbackWords } = await import("../lib/identity/passkey-support");
+    const here = { hostname: "127.0.0.1", protocol: "http:", secure: true };
+    expect(passkeyOtherLoopbackWords("http://localhost:3000", here)).toContain("http://localhost:3000");
+    expect(passkeyBlockWords(null, here, "http://localhost:3000")).toContain("work at http://localhost:3000");
+    // Same spelling, a domain, or nothing bound: not this case.
+    expect(passkeyOtherLoopbackWords("http://localhost:3000", { hostname: "localhost" })).toBeNull();
+    expect(passkeyOtherLoopbackWords("https://boss.example.com", here)).toBeNull();
+    expect(passkeyOtherLoopbackWords(null, here)).toBeNull();
+  });
+  it("sign-in, enrol and My account pass the bound origin", () => {
+    expect(read("lib/identity/sign-in-offers.ts")).toContain("options.public_origin");
+    expect(read("app/(auth)/enrol/enrol.tsx")).toContain("passkeyPlace(), publicOrigin)");
+    expect(read("app/account/security.tsx")).toContain("passkeyPlace(), publicOrigin)");
+  });
+});

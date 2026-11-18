@@ -25,5 +25,5 @@ export default async function EnrolPage({ searchParams }: Props) {
   const next = safeNext(firstOwnerNext(me.data, asked) ?? asked ?? "/identity");
   const options = await loadAuthOptions();
   const who = { name: me.data.display_name, email: me.data.email ?? "", hue: avatarTone(me.data.principal_id, me.data.avatar_seed) };
-  return <Enrol host={options.host} next={next} who={who} passkeyReason={options.passkey_reason ?? null} passwordMin={passwordMin(options)} />;
+  return <Enrol host={options.host} next={next} who={who} passkeyReason={options.passkey_reason ?? null} publicOrigin={options.public_origin ?? null} passwordMin={passwordMin(options)} />;
 }

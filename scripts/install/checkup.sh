@@ -239,7 +239,11 @@ else ok "console → API: $compiled"; fi
 # is taken from the address the console was built for, because that is already known to be one
 # a browser can reach.
 console_host=$(printf '%s' "$compiled" | sed -E 's#^[a-z]+://##; s#[:/].*$##')
-if [ -n "$console_host" ] && ! printf '%s' "$console_host" | grep -q '127.0.0.1\|localhost'; then
+if [ -n "${BOSS_CONSOLE_URL:-}" ]; then
+  # boss doctor passes the install's bound origin (boss.sh console_base): where its sessions and
+  # passkeys live, which beats any guess made here.
+  CONSOLE_URL="${BOSS_CONSOLE_URL%/}"
+elif [ -n "$console_host" ] && ! printf '%s' "$console_host" | grep -q '127.0.0.1\|localhost'; then
   CONSOLE_URL="http://${console_host}:${WEB_PORT}"
 else
   # localhost, like the claim link: 127.0.0.1 is a different site for passkeys and sessions.

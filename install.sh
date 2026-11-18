@@ -1927,9 +1927,16 @@ if [[ "$WITH_WEB" -eq 1 ]]; then
   if [[ -n "$CONSOLE_ORIGIN" ]]; then
     _setup_url="${CONSOLE_ORIGIN%/}/?area=setup"
   else
-    # localhost, the host the claim link prints (identity local_console_origin): a passkey and a
-    # session made on localhost do not exist on 127.0.0.1, which is a different site (r3).
-    _setup_url="http://localhost:${WEB_PORT}/?area=setup"
+    # The install's bound origin (a rerun of an install claimed on 127.0.0.1 stays there), else
+    # localhost, the host the claim link prints: a passkey and a session made on one do not exist
+    # on the other (stranger test r3). One rule, in boss.sh console_base.
+    _console_base=""
+    if [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]]; then
+      _console_base="$(bash "$INSTALL_DIR/scripts/install/boss.sh" --dir "$INSTALL_DIR" identity console-url \
+        2>/dev/null </dev/null | tail -n 1 || true)"
+    fi
+    [[ "$_console_base" =~ ^https?://[^[:space:]/]+$ ]] || _console_base="http://localhost:${WEB_PORT}"
+    _setup_url="${_console_base}/?area=setup"
   fi
   if [[ -f "$INSTALL_DIR/scripts/install/next_step.sh" ]]; then
     bash "$INSTALL_DIR/scripts/install/next_step.sh" --claim "$CLAIM_STATUS" --setup-url "$_setup_url" \

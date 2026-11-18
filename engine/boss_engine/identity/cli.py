@@ -13,6 +13,7 @@
     shadow-report [--json]                   the per-router shadow -> enforce report
     posture                                  the six posture checks
     claim-status                             one line for `boss doctor`: claimed or not
+    console-origin                           the bound public origin, or nothing (for printed URLs)
     self-installer-key [--quiet]             mint the host self-installer's boss_sak_ key
                                              (sys_self_installer; boss self-fix enroll keeps it)
     egress-key [--revoke-others]             mint the egress service's boss_sak_ key (sys_egress),
@@ -272,6 +273,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     rep.add_argument("--json", action="store_true")
     sub.add_parser("posture", help="identity posture checks")
     sub.add_parser("claim-status", help="one line: unclaimed, or claimed and the legacy cutoff")
+    sub.add_parser("console-origin", help="the bound public origin, or nothing")
     rmk = sub.add_parser("rotate-master-key", help="re-wrap every vault key under a new master key")
     rmk.add_argument("--new-key-file", required=True,
                      help="a file holding the new 32-byte key, base64 (never printed)")
@@ -397,6 +399,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                 _print(posture.posture(org_id, db=db))
             elif args.cmd == "claim-status":
                 print(claim_status(org_id, db=db))
+            elif args.cmd == "console-origin":
+                # Where sessions and passkeys live: every console URL the host tools print uses it
+                # (an install claimed on http://127.0.0.1:<port> before rc10 stays there).
+                from .authn_support import public_origin
+                print(public_origin(db) or "")
     except (RecoveryError, ValueError) as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 1

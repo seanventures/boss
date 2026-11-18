@@ -304,6 +304,21 @@ setup_state() {
     python3 "$INSTALL_DIR/scripts/install/setup_state.py" "$1" 2>/dev/null </dev/null
 }
 
+# THE CONSOLE'S ADDRESS TO PRINT: the install's bound public origin (where its sessions and
+# passkeys live; an install claimed on http://127.0.0.1:<port> before rc10 stays there), else
+# http://localhost:<port>, the host the claim link prints (stranger test r3).
+console_base() {
+  local port bound
+  port="$(env_value BOSS_WEB_PORT)"; port="${port:-3000}"
+  bound="$(identity_cli console-origin 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+  bound="${bound%/}"
+  if [[ "$bound" =~ ^https?://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(:[0-9]+)?$ ]]; then
+    printf '%s' "$bound"
+  else
+    printf 'http://localhost:%s' "$port"
+  fi
+}
+
 cmd_open() {
   need_install
   [[ "$(env_value BOSS_COMMUNITY_WEB_ENABLED)" != 0 ]] ||
@@ -319,16 +334,16 @@ cmd_open() {
   # installer's card and `boss doctor` (scripts/install/next_step.sh).
   if [[ "$claim" != claimed* ]]; then
     bash "$INSTALL_DIR/scripts/install/next_step.sh" --claim "$claim" --boss "$(own_command)" \
-      --setup-url "http://localhost:${port:-3000}${path:-/?area=setup}" --origin "$origin"
+      --setup-url "$(console_base)${path:-/?area=setup}" --origin "$origin"
     # BOSSAPP-813: from the server's own network (LAN, tailnet) the console's https address IS
     # the claim — the first visitor sets up the Owner on the site.
     [[ -z "$origin" ]] || printf 'Console origin:                  %s\n' "${origin%/}"
     return 0
   fi
   if [[ -n "$path" ]]; then
-    printf 'Finish setup:                    http://localhost:%s%s\n' "${port:-3000}" "$path"
+    printf 'Finish setup:                    %s%s\n' "$(console_base)" "$path"
   else
-    printf 'Mission Control on this machine: http://localhost:%s\n' "${port:-3000}"
+    printf 'Mission Control on this machine: %s\n' "$(console_base)"
   fi
   [[ -z "$origin" ]] || printf 'Console origin:                  %s%s\n' "${origin%/}" "$path"
   printf 'Sign in with your own account. Teammates without one yet: '"$(hint_command)"' password, until it stops.\n'
@@ -361,7 +376,8 @@ cmd_password() {
 cmd_doctor() {
   need_install
   BOSS_ENV_FILE="$ENV_FILE" BOSS_HOST_API_KEY="$(host_key 2>/dev/null || true)" \
-    BOSS_COMMAND="$(own_command)" bash "$INSTALL_DIR/scripts/install/checkup.sh" "$@"
+    BOSS_COMMAND="$(own_command)" BOSS_CONSOLE_URL="$(console_base)" \
+      bash "$INSTALL_DIR/scripts/install/checkup.sh" "$@"
 }
 
 cmd_logs() {
@@ -1562,6 +1578,8 @@ cmd_identity() {
   need_install
   [[ $# -gt 0 ]] || die "identity needs a command: setup-link, claim-status, recover-owner, host-key, legacy, posture, audit, migrate (see boss help)"
   case "$1" in
+    # The console address the host tools print (console_base), for the installer's card.
+    console-url) shift; console_base; printf '\n' ;;
     host-key)
       shift
       [[ $# -eq 0 ]] || die "host-key takes no options"
