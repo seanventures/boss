@@ -253,6 +253,75 @@ def repair_git_index(workspace: Any, *, run_uid: Optional[int],
     return changed
 
 
+#: .git/objects' own entries the run's uid must be able to add objects into: the 256 fan-out
+#: directories, and pack/ and info/.
+def _object_dir_name(name: str) -> bool:
+    return name in ("pack", "info") or (len(name) == 2 and all(c in "0123456789abcdef" for c in name))
+
+
+def repair_git_objects(workspace: Any, *, run_uid: Optional[int],
+                       trusted_root: Any = None) -> list[str]:
+    """.git/objects (and its fan-out, pack/ and info/ directories) WRITABLE BY THE RUN'S UID AGAIN,
+    whoever created them. Returns the directories changed. Never raises.
+
+    crun_47c3aea2 (Recipe box follow-up, 2026-11-18): BOSS's own tree snapshot (`git add -A` into
+    a temporary index, as the API's uid under umask 022) created 50 of the fan-out directories
+    boss 0755; the run's `git add -A` then failed with "insufficient permission for adding an
+    object to repository database .git/objects". (The snapshot now runs as the run's uid; this
+    is the defence in depth for any other BOSS-uid writer.)
+
+    The same rules as repair_git_index: .git/objects is reached component by component with
+    O_NOFOLLOW from BOSS's own sandbox root; each child is opened O_DIRECTORY|O_NOFOLLOW relative
+    to that fd; only a directory BOSS's uid owns is changed, by fchmod on the open fd (rwx for
+    all, setgid kept). Objects themselves (0444 by design) and anything else are never
+    touched."""
+    if run_uid is None:
+        return []
+    objects_fd = _open_dir_chain(str(Path(workspace) / ".git" / "objects"),
+                                 trusted=str(trusted_root) if trusted_root else None)
+    if objects_fd is None:
+        return []
+    me = os.geteuid()
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    changed: list[str] = []
+
+    def fix(fd: int, label: str) -> None:
+        st = os.fstat(fd)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != me or st.st_uid == run_uid:
+            return
+        mode = stat.S_IMODE(st.st_mode)
+        if mode | 0o777 != mode:
+            os.fchmod(fd, mode | 0o777)
+            changed.append(label)
+
+    try:
+        with contextlib.suppress(OSError):
+            fix(objects_fd, ".git/objects")
+        try:
+            names = os.listdir(objects_fd)
+        except OSError:
+            names = []
+        for name in names:
+            if not _object_dir_name(name):
+                continue
+            try:
+                fd = os.open(name, flags, dir_fd=objects_fd)
+            except OSError:
+                continue  # a symlink (ELOOP), a file, or gone
+            try:
+                fix(fd, f".git/objects/{name}")
+            except OSError:
+                pass
+            finally:
+                os.close(fd)
+    finally:
+        os.close(objects_fd)
+    if changed:
+        log.warning("workspace permissions: %d object director%s under %s opened to the run's "
+                    "uid again", len(changed), "y" if len(changed) == 1 else "ies", workspace)
+    return changed
+
+
 def make_writable(path: Any, *, within: Any = None) -> None:
     """The lazy form: `path` (if it exists) and its parent directory. With `within`, nothing is
     touched unless the path resolves inside it (an agent-named path never reaches outside its
