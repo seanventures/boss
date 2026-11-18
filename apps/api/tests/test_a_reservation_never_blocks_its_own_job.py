@@ -126,6 +126,33 @@ def test_a_job_holding_the_whole_cap_is_admitted_and_others_still_see_it(
     assert held_back["reason"] == "red_halts_non_p0_work"
 
 
+def test_a_non_build_job_naming_the_build_run_still_counts_its_hold(client, engine, monkeypatch):
+    """Only the build job itself (`code.task`) is admitted against its run's reservation. Another
+    kind of job whose payload names the same run (a review, a deploy) still sees the cap used."""
+    _models(monkeypatch, connected=True)
+    _estimate(monkeypatch, 1.0)
+
+    launched = _launch(client, f"A shift clock {uuid.uuid4().hex[:6]}.")
+
+    assert launched.status_code == 201, launched.text
+    body = launched.json()
+    build_job = _job_of(engine, body["run_id"])
+    side_job = f"job_side_{uuid.uuid4().hex[:10]}"
+    with engine.begin() as c:
+        c.execute(text(
+            "INSERT INTO jobs SELECT (jsonb_populate_record(NULL::jobs, to_jsonb(j) || "
+            "jsonb_build_object('id', CAST(:new AS text), 'kind', 'code.review_pr_again', "
+            "'dedupe_key', CAST(:new AS text)))).* FROM jobs j WHERE j.id = :old"),
+            {"new": side_job, "old": build_job})
+        kind, run = c.execute(text("SELECT kind, payload->>'run_id' FROM jobs WHERE id = :j"),
+                              {"j": side_job}).one()
+    assert (kind, run) == ("code.review_pr_again", body["run_id"])
+
+    assert _policy(engine, body["project_id"], build_job) is None
+    held = _policy(engine, body["project_id"], side_job)
+    assert held is not None and held["budget_state"] == "red"
+
+
 def test_a_pay_per_use_build_under_the_cap_runs(client, engine, monkeypatch):
     _models(monkeypatch, connected=True)
     _estimate(monkeypatch, 0.4)                  # a known estimate, $4 of the $10 cap

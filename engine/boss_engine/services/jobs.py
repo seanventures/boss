@@ -2779,8 +2779,10 @@ class JobLeaseService:
 
     @staticmethod
     def _own_reservations(connection: Connection, project_id: str, job_id: str) -> list[str]:
-        """The active holds made FOR this job: reserved under its id, or the reservation of the
-        build it carries (code_task_runs.reservation_id, the run named in its payload)."""
+        """The active holds made FOR this job: reserved under its id, or — for the build job
+        itself (`code.task`) — the reservation of the build it carries (code_task_runs.
+        reservation_id, the run named in its payload). Any other job that merely names a build
+        run in its payload still counts that hold."""
         try:
             with connection.begin_nested():
                 rows = connection.execute(
@@ -2791,7 +2793,8 @@ class JobLeaseService:
                           AND (r.job_id = :j OR r.id IN (
                                 SELECT c.reservation_id FROM jobs j
                                 JOIN code_task_runs c ON c.id = j.payload->>'run_id'
-                                WHERE j.id = :j AND c.reservation_id IS NOT NULL))
+                                WHERE j.id = :j AND j.kind = 'code.task'
+                                  AND c.reservation_id IS NOT NULL))
                         """
                     ),
                     {"p": project_id, "j": job_id},
