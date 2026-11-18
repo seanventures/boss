@@ -513,6 +513,11 @@ def mount_platform_routers(app: FastAPI) -> None:
 
     app.include_router(ticket_systems_router)
 
+    # Document systems (BOSSAPP-1384): Confluence, connected once for the org. Unguarded, too.
+    from .docs_connections import router as docs_connections_router
+
+    app.include_router(docs_connections_router)
+
     # Swarm gap routers. Every include already above stays, including factory_launch_router.
     from .gap_1241 import router as gap_1241_router
     from .gap_1242 import router as gap_1242_router

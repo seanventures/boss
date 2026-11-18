@@ -10150,6 +10150,10 @@ def build_default_registry() -> ToolRegistry:
     register_knowledge_project_tools(reg)
     # Ticket systems: Jira, Plane, GitHub Issues through one contract (BOSSAPP-1047 B2).
     _register_ticket_tools(reg)
+    # Confluence: search and read pages, propose a page a person approves (BOSSAPP-1384).
+    from .confluence_tools import register_confluence_tools
+
+    register_confluence_tools(reg)
     # A PR comment and a fix PR on a repository bound to the project (AMEX-G5/G6,
     # BOSSAPP-1141/1142): the API-onboarding workflow's two GitHub effects, as tools.
     from .github_tools import register_github_tools
@@ -10237,6 +10241,9 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # "Update the wiki: ..." from chat: one proposed page change, written only when a person
     # approves exactly that diff (wiki.propose_patch, BOSSAPP-891).
     "wiki_propose",
+    # "Publish this to Confluence" from chat: one proposed page (create or versioned update),
+    # written only when a person approves exactly that diff (confluence_publish, BOSSAPP-1384).
+    "confluence_publish_page",
     # "Scan my app" from chat: the pinned scanners on the app's own code, BOSS's own targets only.
     "run_security_scan",
     # SETUP REPAIR, because a diagnosis with no matching capability is a loop — and setup is

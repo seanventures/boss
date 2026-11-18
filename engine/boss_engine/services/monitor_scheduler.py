@@ -533,6 +533,14 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
 
         return status_cards.sweep(engine, settings, now=now)
     out["status_cards"] = guard("status_cards", cards)
+
+    # APPROVED CONFLUENCE PAGES (BOSSAPP-1384): a page whose approval committed but whose write
+    # never finished (a restart in between) is written now. Idempotent and claim-fenced.
+    def confluence_publish_catch_up():
+        from . import confluence_publish
+
+        return len(confluence_publish.tick(engine, settings))
+    out["confluence_publish"] = guard("confluence_publish", confluence_publish_catch_up)
     out["delivery"] = guard("deliver", lambda: notify.deliver_due(engine, settings, now=now))
     # Two-way chat (BOSSAPP-834): decision cards and answers, retried with backoff, dead-lettered.
     out["chat"] = guard("chat", lambda: notify.deliver_chat_due(engine, settings, now=now))

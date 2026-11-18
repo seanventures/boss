@@ -16394,3 +16394,38 @@ CREATE TABLE IF NOT EXISTS month_closes (
 );
 CREATE INDEX IF NOT EXISTS idx_month_closes_org
   ON month_closes (org_id, "month");
+
+-- BOSSAPP-1384 DOCUMENT-SYSTEM CONNECTIONS (services/docs_connections.py). A document system
+-- (Confluence) is connected ONCE per org, like the ticket systems' org-wide list, and every
+-- project of the org reads through it. The row keeps no secret: `configuration.secret_ref_id`
+-- names the vault entry (stored under the home project), and the row says who connected it and
+-- whether its last test passed.
+CREATE TABLE IF NOT EXISTS docs_connections (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  home_project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disconnected')),
+  configuration JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  last_tested_at TIMESTAMPTZ,
+  last_test_ok BOOLEAN,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (org_id, provider_key)
+);
+
+-- A Confluence page published by an agent is a third kind of consented subject: widened only
+-- when the live constraint does not already allow it.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'change_consents'::regclass
+       AND conname = 'change_consents_subject_kind_check'
+       AND pg_get_constraintdef(oid) LIKE '%confluence%') THEN
+    ALTER TABLE change_consents DROP CONSTRAINT IF EXISTS change_consents_subject_kind_check;
+    ALTER TABLE change_consents ADD CONSTRAINT change_consents_subject_kind_check
+      CHECK (subject_kind IN ('skill', 'prompt', 'wiki', 'confluence'));
+  END IF;
+END $$;

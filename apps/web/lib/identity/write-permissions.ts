@@ -169,6 +169,12 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/subscription-pools.ts#setPoolStatus": "entitlement:manage",     // PATCH /v1/subscription-pools/{id}
   "lib/subscription-pools.ts#deletePool": "entitlement:manage",        // DELETE /v1/subscription-pools/{id} (empty only)
   // lib/tickets.ts — ticket systems (BOSSAPP-1047 Phase C): Setup › Ticket systems, import, start, sync
+  // lib/docs-connections.ts — Setup › Confluence (BOSSAPP-1384): the org's one Confluence connection
+  "lib/docs-connections.ts#connectDocs": "integration:manage",    // POST /v1/docs-connections (tests first; token to the vault)
+  "lib/docs-connections.ts#testDocs": "integration:manage",       // POST /v1/docs-connections/test
+  "lib/docs-connections.ts#saveDocsSpaces": "integration:manage", // PATCH /v1/docs-connections
+  "lib/docs-connections.ts#disconnectDocs": "integration:manage", // DELETE /v1/docs-connections
+  "lib/docs-connections.ts#syncDocsKnowledge": "knowledge:manage", // POST /v1/docs-connections/sync
   "lib/tickets.ts#connectTicketSystem": "integration:manage",     // POST /v1/ticket-systems (tests first; token to the vault)
   "lib/tickets.ts#testTicketSystem": "integration:manage",        // POST /v1/ticket-systems/{id}/test
   "lib/tickets.ts#saveTicketSettings": "integration:manage",      // PATCH /v1/ticket-systems/{id}
@@ -360,6 +366,9 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     // sign-in (oauth/start/load, oauth/me) is connection:use_own, checked by the helper's gate.
     "/v1/ticket-systems": "integration:manage",
     "/v1/ticket-systems/": "integration:manage",
+    // Setup › Confluence (lib/docs-connections.ts, BOSSAPP-1384); the sync press is knowledge:manage.
+    "/v1/docs-connections": "integration:manage",
+    "/v1/docs-connections/sync": "knowledge:manage",
     // Setup › Events (lib/intake.ts, P9a-7): connect, replay and the Slack chat endpoint; each
     // helper's own gate (registered above) is what the screens check.
     "/v1/intake/connections": "integration:manage",
