@@ -108,6 +108,7 @@ nav:
       - Workflow retries, timeouts and error paths: WORKFLOW_STEP_ERRORS.md
       - Workflow test runs and running again from a step: WORKFLOW_TEST_RUNS.md
       - Workflow for each: WORKFLOW_FOR_EACH.md
+      - Release notes for v1.0-rc10.28: RELEASE_NOTES_v1.0-rc10.28.md
       - Release notes for v1.0-rc10.27: RELEASE_NOTES_v1.0-rc10.27.md
       - Release notes for v1.0-rc10.26: RELEASE_NOTES_v1.0-rc10.26.md
       - Release notes for v1.0-rc10.25: RELEASE_NOTES_v1.0-rc10.25.md

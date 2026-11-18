@@ -2,6 +2,21 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.28]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.28.md](docs/community/RELEASE_NOTES_v1.0-rc10.28.md).
+
+### Fixed
+
+- First-run install, claim and sign-in: the claim step leads, the claim link works in an open tab, no seat question on a new install, local model off by default, `boss doctor` wording, side-by-side installs, `boss stop` / `boss start`.
+- Command Center templates load; Easy Mode asks for consent, gives the project a local repository and opens its pull request.
+- Try a sample shows every need up front and keeps its code on this machine; dead controls, counts and the project strip fixed.
+- Host tools see org-shared servers; Confluence moved to Setup › Documents.
+
+### Changed
+
+- A freshly claimed install retires the shared console password (no second factor). The community candidate version is `1.0.0-rc.10.28`.
+
 ## [v1.0-rc10.27]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.27.md](docs/community/RELEASE_NOTES_v1.0-rc10.27.md).
