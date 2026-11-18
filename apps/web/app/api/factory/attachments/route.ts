@@ -21,7 +21,13 @@ export async function POST(req: Request) {
       method: "POST", headers: authHeaders({ "Content-Type": type }), body, cache: "no-store",
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) return NextResponse.json({ error: describeApiError(data, r.status) }, { status: r.status });
+    // The API answers {error: code, message: sentence}: keep the sentence for the person.
+    if (!r.ok) {
+      const sentence = (data as { message?: unknown }).message;
+      return NextResponse.json({ ...(data as object),
+        error: typeof sentence === "string" && sentence ? sentence : describeApiError(data, r.status) },
+        { status: r.status });
+    }
     return NextResponse.json(data, { status: r.status });
   } catch (e) {
     return NextResponse.json({ error: `Upload did not reach BOSS: ${(e as Error).message}` }, { status: 502 });

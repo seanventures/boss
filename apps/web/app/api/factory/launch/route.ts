@@ -18,7 +18,12 @@ export async function POST(req: Request) {
       body: JSON.stringify(body), cache: "no-store",
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) return NextResponse.json({ ...(data as object), error: describeApiError(data, r.status) }, { status: r.status });
+    if (!r.ok) {
+      const sentence = (data as { message?: unknown }).message;
+      return NextResponse.json({ ...(data as object),
+        error: typeof sentence === "string" && sentence ? sentence : describeApiError(data, r.status) },
+        { status: r.status });
+    }
     return NextResponse.json(data, { status: r.status });
   } catch (e) {
     return NextResponse.json({ error: `The build did not reach BOSS: ${(e as Error).message}` }, { status: 502 });
