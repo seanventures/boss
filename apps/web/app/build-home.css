@@ -1,15 +1,49 @@
-/* The overview build bench. One ticket: a teal rail on the console's own surfaces.
-   No motion — a pulse in this console means work is moving, and this bench is not. */
+/* The overview build bench: a header over a faint grid and aurora, one composer card that
+   glows when it is being written in, an icon on every control, and tinted chips that match the
+   gallery's categories. The only motion is small: the ready dot breathes, controls lift on
+   hover, and all of it stops under prefers-reduced-motion. */
 
 .bh { min-width: 0; color: var(--ink); }
 
-.bh-bench { max-width: var(--page-max-narrow); }
+.bh-bench {
+  --bh-glow-a: color-mix(in srgb, var(--accent) 22%, transparent);
+  --bh-glow-b: color-mix(in srgb, var(--teal) 16%, transparent);
+  --bh-grid: color-mix(in srgb, var(--ink) 6%, transparent);
+  position: relative;
+  isolation: isolate;
+  max-width: var(--page-max-narrow);
+}
+
+/* The header's backdrop: two soft colour pools and a faint grid that fades out at the edges. */
+.bh-head {
+  position: relative;
+  padding: 0.35rem 0 0.2rem;
+}
+
+.bh-head::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -1.2rem -1.5rem -0.6rem -1.5rem;
+  pointer-events: none;
+  background:
+    radial-gradient(60% 90% at 12% 20%, var(--bh-glow-a), transparent 70%),
+    radial-gradient(45% 80% at 78% 0%, var(--bh-glow-b), transparent 70%),
+    linear-gradient(var(--bh-grid) 1px, transparent 1px) 0 0 / 1.4rem 1.4rem,
+    linear-gradient(90deg, var(--bh-grid) 1px, transparent 1px) 0 0 / 1.4rem 1.4rem;
+  -webkit-mask-image: radial-gradient(75% 100% at 30% 30%, var(--ink) 35%, transparent 100%);
+  mask-image: radial-gradient(75% 100% at 30% 30%, var(--ink) 35%, transparent 100%);
+}
 
 .bh-status {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.5rem;
   margin: 0;
+  padding: 0.2rem 0.6rem 0.2rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--green) 30%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--green) 8%, var(--surface));
   font-family: var(--mono);
   font-size: var(--fs-label);
   letter-spacing: 0.06em;
@@ -18,19 +52,44 @@
 }
 
 .bh-dot {
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 2px;
-  background: var(--green);
+  --bh-dot: var(--green);
+  position: relative;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--bh-dot);
+  box-shadow: 0 0 0.4rem color-mix(in srgb, var(--bh-dot) 60%, transparent);
   flex: 0 0 auto;
 }
 
-.bh-status[data-state="starting"] .bh-dot { background: var(--amber); }
-.bh-status[data-state="started"] .bh-dot { background: var(--accent-text); }
-.bh-status[data-state="error"] .bh-dot { background: var(--red); }
+.bh-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--bh-dot);
+  opacity: 0;
+}
+
+.bh-status[data-state="ready"] .bh-dot::after,
+.bh-status[data-state="starting"] .bh-dot::after {
+  animation: bh-breathe 2.4s ease-out infinite;
+}
+
+.bh-status[data-state="starting"] { border-color: color-mix(in srgb, var(--amber) 35%, var(--border)); background: color-mix(in srgb, var(--amber) 8%, var(--surface)); }
+.bh-status[data-state="started"] { border-color: var(--accent-line); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.bh-status[data-state="error"] { border-color: color-mix(in srgb, var(--red) 35%, var(--border)); background: color-mix(in srgb, var(--red) 8%, var(--surface)); }
+.bh-status[data-state="starting"] .bh-dot { --bh-dot: var(--amber); }
+.bh-status[data-state="started"] .bh-dot { --bh-dot: var(--accent-text); }
+.bh-status[data-state="error"] .bh-dot { --bh-dot: var(--red); }
+
+@keyframes bh-breathe {
+  0% { transform: scale(1); opacity: 0.55; }
+  70%, 100% { transform: scale(2.6); opacity: 0; }
+}
 
 .bh-title {
-  margin: 0.45rem 0 0.2rem;
+  margin: 0.6rem 0 0.2rem;
   font-family: var(--display);
   font-size: var(--fs-display);
   font-weight: 700;
@@ -40,22 +99,35 @@
 }
 
 .bh-lede {
-  margin: 0 0 0.9rem;
+  margin: 0 0 1rem;
   max-width: var(--prose-max);
   font-size: var(--fs-body);
   color: var(--muted);
 }
 
+/* The composer card. Idle: a quiet border and a soft top sheen. Focused: a gradient border and
+   a glow, drawn with a padding-box fill over a border-box gradient. */
 .bh-ticket {
   position: relative;
-  background: var(--bg);
   border: 1px solid var(--border-strong);
-  border-left: 3px solid var(--accent-text);
   border-radius: var(--r-xl);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 5%, var(--bg)), var(--bg) 45%) padding-box,
+    linear-gradient(var(--border-strong), var(--border-strong)) border-box;
   box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.25s ease, border-color 0.25s ease;
 }
 
-.bh-ticket:focus-within { border-color: var(--accent-line); border-left-color: var(--accent-text); }
+.bh-ticket:focus-within {
+  border-color: transparent;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, var(--bg)), var(--bg) 45%) padding-box,
+    linear-gradient(120deg, var(--accent), var(--teal) 55%, var(--accent-line)) border-box;
+  box-shadow:
+    var(--shadow-sm),
+    0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent),
+    0 0.6rem 2rem -0.6rem color-mix(in srgb, var(--accent) 40%, transparent);
+}
 
 .bh-prompt-wrap { display: block; }
 
@@ -64,22 +136,24 @@
   width: 100%;
   min-height: 8.5rem;
   margin: 0;
-  padding: 0.9rem 1rem 0.4rem;
+  padding: 1rem 1.1rem 0.5rem;
   border: 0;
   resize: vertical;
   background: transparent;
   color: var(--ink);
   font-family: var(--sans);
   font-size: var(--fs-ui);
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 .bh-prompt::placeholder { color: var(--faint); }
 
 .bh-prompt:focus { outline: none; }
 
+/* The card's gradient border and glow is the focus mark for the textarea when it is keyboard
+   focused; the inner outline stays for a forced-colours or high-contrast reader. */
 .bh-prompt:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: 2px solid transparent;
   outline-offset: -2px;
 }
 
@@ -87,8 +161,10 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.55rem 0.7rem 0.7rem;
+  gap: 0.5rem;
+  margin: 0 0.6rem;
+  padding: 0.6rem 0.1rem 0.7rem;
+  border-top: 1px dashed color-mix(in srgb, var(--border-strong) 70%, transparent);
 }
 
 .bh-addwrap { position: relative; }
@@ -108,48 +184,149 @@
   outline-offset: 2px;
 }
 
-.bh-add, .bh-mic, .bh-mode select {
+.bh svg { flex: 0 0 auto; }
+
+.bh-add, .bh-mic, .bh-mode-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   border: 1px solid var(--border-strong);
-  border-radius: var(--r);
+  border-radius: 999px;
   background: var(--surface-2);
   color: var(--ink);
-  padding: 0.4rem 0.7rem;
+  transition: border-color 0.18s ease, background-color 0.18s ease, transform 0.18s ease, color 0.18s ease;
 }
 
-.bh-add[aria-expanded="true"] { border-color: var(--accent-line); }
+.bh-add, .bh-mic { padding: 0.4rem 0.8rem 0.4rem 0.65rem; }
+
+.bh-add svg, .bh-mic svg { color: var(--muted); transition: color 0.18s ease; }
+
+.bh-add:hover, .bh-mic:hover, .bh-mode-pill:hover {
+  border-color: var(--accent-line);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+  transform: translateY(-1px);
+}
+
+.bh-add:hover svg, .bh-mic:hover svg { color: var(--accent-text); }
+
+.bh-add:active, .bh-mic:active { transform: translateY(0); }
+
+.bh-add[aria-expanded="true"] {
+  border-color: var(--accent-line);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
+}
+
+.bh-add[aria-expanded="true"] svg { color: var(--accent-text); }
 
 .bh-mode {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.45rem;
   color: var(--muted);
   font-size: var(--fs-meta);
 }
 
-.bh-mode select { color: var(--ink); }
-
-.bh-mic[aria-pressed="true"] { border-color: var(--accent-text); color: var(--accent-text); }
-
-.bh-lucky {
-  margin-left: auto;
-  border: 0;
-  border-radius: var(--r);
-  background: var(--accent);
-  color: var(--accent-ink);
-  font-weight: 700;
-  padding: 0.45rem 0.9rem;
+.bh-mode-pill {
+  position: relative;
+  padding: 0 0.6rem;
 }
 
-.bh-lucky:hover:not(:disabled) { filter: brightness(1.06); }
+.bh-mode-pill:focus-within { border-color: var(--accent-line); }
 
-.bh-lucky:disabled { opacity: 0.6; cursor: wait; }
+.bh-mode-icon { color: var(--accent-text); }
+.bh-mode[data-mode="prototype"] .bh-mode-icon { color: var(--amber); }
+
+.bh-mode select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  padding: 0.4rem 1.1rem 0.4rem 0;
+  margin-right: -1rem;
+  cursor: pointer;
+}
+
+.bh-mode-caret {
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.bh-mic[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--red) 55%, var(--border-strong));
+  background: color-mix(in srgb, var(--red) 12%, var(--surface-2));
+  color: var(--ink);
+  animation: bh-rec 1.6s ease-in-out infinite;
+}
+
+.bh-mic[aria-pressed="true"] svg { color: var(--red); }
+
+@keyframes bh-rec {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--red) 35%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--red) 0%, transparent); }
+}
+
+/* Easy Mode: the one control that starts a build, so it is the one with colour and light. */
+.bh-lucky {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-left: auto;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(120deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 60%, var(--teal)) 100%);
+  color: var(--accent-ink);
+  font-weight: 700;
+  padding: 0.5rem 1.05rem 0.5rem 0.85rem;
+  box-shadow:
+    0 0.35rem 1.1rem -0.35rem color-mix(in srgb, var(--accent) 70%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--accent-ink) 25%, transparent);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+}
+
+/* A sheen that crosses the button once on hover. */
+.bh-lucky::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--accent-ink) 28%, transparent) 50%, transparent 70%);
+  transform: translateX(-120%);
+  pointer-events: none;
+}
+
+.bh-lucky:hover:not(:disabled) {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+  box-shadow:
+    0 0.55rem 1.5rem -0.4rem color-mix(in srgb, var(--accent) 85%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--accent-ink) 25%, transparent);
+}
+
+.bh-lucky:hover:not(:disabled)::after { transform: translateX(120%); transition: transform 0.7s ease; }
+
+.bh-lucky:hover:not(:disabled) .bh-lucky-icon { transform: rotate(-14deg) scale(1.08); }
+
+.bh-lucky:active:not(:disabled) { transform: translateY(0) scale(0.98); filter: brightness(0.97); }
+
+.bh-lucky-icon { transition: transform 0.2s ease; }
+
+.bh-lucky[aria-busy="true"] .bh-lucky-icon { animation: bh-wiggle 0.9s ease-in-out infinite; }
+
+@keyframes bh-wiggle {
+  0%, 100% { transform: rotate(-12deg); }
+  50% { transform: rotate(12deg); }
+}
+
+.bh-lucky:disabled { opacity: 0.65; cursor: wait; }
 
 .bh-menu {
   position: absolute;
   z-index: var(--z-menu);
   left: 0;
-  top: calc(100% + 0.35rem);
-  min-width: 14rem;
+  top: calc(100% + 0.4rem);
+  min-width: 15rem;
   margin: 0;
   padding: 0.3rem;
   list-style: none;
@@ -157,6 +334,12 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--r);
   box-shadow: var(--shadow);
+  animation: bh-pop 0.14s ease-out;
+}
+
+@keyframes bh-pop {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
 }
 
 .bh-menu button {
@@ -175,30 +358,72 @@
 
 .bh-menu button:hover { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
 
+.bh-menu-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.bh-menu-row svg { color: var(--muted); }
+.bh-menu button:hover .bh-menu-row svg { color: var(--accent-text); }
+
 .bh-menu-note {
+  padding-left: 1.7rem;
   font-size: var(--fs-meta);
   color: var(--muted);
 }
 
+/* Suggestion chips, tinted by the gallery category each one fills. */
 .bh-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
-  margin: 0.75rem 0 0;
+  gap: 0.5rem;
+  margin: 0.9rem 0 0;
   padding: 0;
   list-style: none;
 }
 
 .bh-chip {
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r);
-  background: var(--surface-2);
+  --chip: var(--accent-text);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid color-mix(in srgb, var(--chip) 28%, var(--border-strong));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chip) 9%, var(--surface-2));
   color: var(--ink);
-  padding: 0.35rem 0.7rem;
+  padding: 0.35rem 0.8rem 0.35rem 0.6rem;
   font-size: var(--fs-meta);
+  transition: transform 0.18s ease, border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
 }
 
-.bh-chip:hover { border-color: var(--accent-line); }
+.bh-chip[data-kind="web"] { --chip: var(--boss-c-60a5fa); }
+.bh-chip[data-kind="maps"] { --chip: var(--boss-c-2dd4bf); }
+.bh-chip[data-kind="game"] { --chip: var(--boss-c-fbbf24); }
+.bh-chip[data-kind="3d"] { --chip: var(--boss-c-818cf8); }
+.bh-chip[data-kind="xr"] { --chip: var(--boss-c-a78bfa); }
+
+.bh-chip-icon { color: var(--chip); }
+
+.bh-chip:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--chip) 60%, var(--border-strong));
+  background: color-mix(in srgb, var(--chip) 16%, var(--surface-2));
+  box-shadow: 0 0.4rem 1rem -0.5rem color-mix(in srgb, var(--chip) 60%, transparent);
+}
+
+.bh-chip:active { transform: translateY(0); }
+
+@media (prefers-reduced-motion: reduce) {
+  .bh-status .bh-dot::after,
+  .bh-mic[aria-pressed="true"],
+  .bh-lucky[aria-busy="true"] .bh-lucky-icon,
+  .bh-menu { animation: none !important; }
+  .bh-ticket, .bh-add, .bh-mic, .bh-mode-pill, .bh-lucky, .bh-lucky-icon, .bh-chip { transition: none; }
+  .bh-add:hover, .bh-mic:hover, .bh-mode-pill:hover, .bh-chip:hover,
+  .bh-lucky:hover:not(:disabled), .bh-lucky:hover:not(:disabled) .bh-lucky-icon { transform: none; }
+  .bh-lucky:hover:not(:disabled)::after { transform: translateX(-120%); transition: none; }
+}
 
 .bh-ids, .bh-note, .bh-error {
   margin: 0.7rem 0 0;

@@ -11,6 +11,25 @@
  * empty sentence is allowed — the server invents the spec. A refused launch never
  * shows a project or a run.
  */
+import {
+  Camera,
+  CaretDown,
+  Cube,
+  Flask,
+  GameController,
+  GithubLogo,
+  Globe,
+  GoogleDriveLogo,
+  Hammer,
+  MagicWand,
+  MapTrifold,
+  Microphone,
+  Paperclip,
+  Stop,
+  UploadSimple,
+  VirtualReality,
+  type Icon,
+} from "@phosphor-icons/react";
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import { askConsent, consentFromBody } from "../lib/identity/consent";
@@ -30,10 +49,24 @@ const CHIPS = [
   "Build an XR app",
 ] as const;
 
+/** Each chip's gallery category (web, maps, game, 3d, xr): its icon and its tint. */
+const CHIP_KIND: Record<(typeof CHIPS)[number], { kind: string; icon: Icon }> = {
+  "Build a web app": { kind: "web", icon: Globe },
+  Maps: { kind: "maps", icon: MapTrifold },
+  "Create a game": { kind: "game", icon: GameController },
+  "Three.js 3D scenes": { kind: "3d", icon: Cube },
+  "Build an XR app": { kind: "xr", icon: VirtualReality },
+};
+
 const MODES = [
   { id: "build", label: "Build" },
   { id: "prototype", label: "Prototype" },
 ] as const;
+
+const MODE_ICON: Record<(typeof MODES)[number]["id"], Icon> = { build: Hammer, prototype: Flask };
+
+/** Icons sit beside their words, never instead of them, so every one is decorative. */
+const ICON = { size: "1.15em", weight: "bold", "aria-hidden": true, focusable: false } as const;
 
 type Phase = "ready" | "starting" | "started" | "error";
 
@@ -446,12 +479,14 @@ export function BuildHome() {
   return (
     <div className="bh" data-testid="build-home" data-template-id={templateId ?? ""}>
       <div className="bh-bench">
-        <p className="bh-status" data-state={phase} data-testid="build-status">
-          <span className="bh-dot" aria-hidden="true" />
-          {STATUS[phase]}
-        </p>
-        <h1 className="bh-title">Build with BOSS</h1>
-        <p className="bh-lede">Describe the app. BOSS builds it.</p>
+        <div className="bh-head">
+          <p className="bh-status" data-state={phase} data-testid="build-status">
+            <span className="bh-dot" aria-hidden="true" />
+            {STATUS[phase]}
+          </p>
+          <h1 className="bh-title">Build with BOSS</h1>
+          <p className="bh-lede">Describe the app. BOSS builds it.</p>
+        </div>
 
         <div className="bh-ticket">
           <label className="bh-prompt-wrap" htmlFor={promptId}>
@@ -483,6 +518,7 @@ export function BuildHome() {
                 aria-controls={menuOpen ? menuId : undefined}
                 onClick={() => setMenuOpen((open) => !open)}
               >
+                <Paperclip {...ICON} data-testid="build-add-icon" />
                 Add
               </button>
               {menuOpen ? (
@@ -498,7 +534,7 @@ export function BuildHome() {
                         openStartSheet("import");
                       }}
                     >
-                      Import from GitHub
+                      <span className="bh-menu-row"><GithubLogo {...ICON} />Import from GitHub</span>
                     </button>
                   </li>
                   <li role="none">
@@ -512,7 +548,7 @@ export function BuildHome() {
                         addRef.current?.focus();
                       }}
                     >
-                      Drive
+                      <span className="bh-menu-row"><GoogleDriveLogo {...ICON} />Drive</span>
                       <span className="bh-menu-note">Drive is not connected</span>
                     </button>
                   </li>
@@ -526,7 +562,7 @@ export function BuildHome() {
                         uploadRef.current?.click();
                       }}
                     >
-                      Upload files
+                      <span className="bh-menu-row"><UploadSimple {...ICON} />Upload files</span>
                     </button>
                   </li>
                   <li role="none">
@@ -539,26 +575,30 @@ export function BuildHome() {
                         cameraRef.current?.click();
                       }}
                     >
-                      Camera
+                      <span className="bh-menu-row"><Camera {...ICON} />Camera</span>
                     </button>
                   </li>
                 </ul>
               ) : null}
             </div>
-            <label className="bh-mode">
+            <label className="bh-mode" data-mode={mode}>
               <span>Mode</span>
-              <select
-                aria-label="Mode"
-                data-testid="build-mode"
-                value={mode}
-                onChange={(event) => {
-                  const next = event.target.value;
-                  if (next === "build" || next === "prototype") setMode(next);
-                  touch();
-                }}
-              >
-                {MODES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-              </select>
+              <span className="bh-mode-pill">
+                {React.createElement(MODE_ICON[mode], { ...ICON, className: "bh-mode-icon", "data-testid": "build-mode-icon" })}
+                <select
+                  aria-label="Mode"
+                  data-testid="build-mode"
+                  value={mode}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    if (next === "build" || next === "prototype") setMode(next);
+                    touch();
+                  }}
+                >
+                  {MODES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                </select>
+                <CaretDown {...ICON} className="bh-mode-caret" />
+              </span>
             </label>
             {canDictate ? (
               <button
@@ -569,6 +609,7 @@ export function BuildHome() {
                 aria-label="Dictate"
                 onClick={dictate}
               >
+                {listening ? <Stop {...ICON} weight="fill" data-testid="build-mic-icon" /> : <Microphone {...ICON} data-testid="build-mic-icon" />}
                 {listening ? "Stop" : "Mic"}
               </button>
             ) : null}
@@ -580,6 +621,7 @@ export function BuildHome() {
               aria-busy={busy || uploading}
               onClick={() => void lucky()}
             >
+              <MagicWand {...ICON} className="bh-lucky-icon" data-testid="build-lucky-icon" />
               Easy Mode
             </button>
           </div>
@@ -607,22 +649,27 @@ export function BuildHome() {
         </div>
 
         <ul className="bh-chips" aria-label="Suggestions">
-          {CHIPS.map((chip) => (
-            <li key={chip}>
-              <button
-                type="button"
-                className="bh-chip"
-                data-testid="build-chip"
-                onClick={() => {
-                  setPrompt(chip);
-                  touch();
-                  promptRef.current?.focus();
-                }}
-              >
-                {chip}
-              </button>
-            </li>
-          ))}
+          {CHIPS.map((chip) => {
+            const { kind, icon: ChipIcon } = CHIP_KIND[chip];
+            return (
+              <li key={chip}>
+                <button
+                  type="button"
+                  className="bh-chip"
+                  data-testid="build-chip"
+                  data-kind={kind}
+                  onClick={() => {
+                    setPrompt(chip);
+                    touch();
+                    promptRef.current?.focus();
+                  }}
+                >
+                  <ChipIcon {...ICON} className="bh-chip-icon" />
+                  {chip}
+                </button>
+              </li>
+            );
+          })}
         </ul>
 
         {launch ? (

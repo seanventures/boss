@@ -189,6 +189,77 @@ describe("Easy Mode", () => {
   });
 });
 
+describe("every control carries an icon beside its words", () => {
+  const decorative = (svg: Element | null | undefined) => {
+    expect(svg?.tagName.toLowerCase()).toBe("svg");
+    expect(svg?.getAttribute("aria-hidden")).toBe("true");
+  };
+
+  it("Add, Mode, Easy Mode and the menu each show an icon and keep their words", async () => {
+    install();
+    await renderHome();
+    const add = document.querySelector("[data-testid=build-add]");
+    decorative(add?.querySelector("[data-testid=build-add-icon]"));
+    expect(add?.textContent).toBe("Add");
+    const lucky = document.querySelector("[data-testid=build-lucky]");
+    decorative(lucky?.querySelector("[data-testid=build-lucky-icon]"));
+    expect(lucky?.textContent).toBe("Easy Mode");
+    const mode = document.querySelector<HTMLSelectElement>("[data-testid=build-mode]");
+    expect(mode?.getAttribute("aria-label")).toBe("Mode");
+    decorative(document.querySelector("[data-testid=build-mode-icon]"));
+    // The mode's icon follows the chosen mode.
+    const before = document.querySelector("[data-testid=build-mode-icon]")?.innerHTML;
+    await act(async () => {
+      mode!.value = "prototype";
+      mode!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+    expect(document.querySelector(".bh-mode")?.getAttribute("data-mode")).toBe("prototype");
+    expect(document.querySelector("[data-testid=build-mode-icon]")?.innerHTML).not.toBe(before);
+    await press("[data-testid=build-add]");
+    for (const item of document.querySelectorAll("[role=menuitem]")) decorative(item.querySelector("svg"));
+  });
+
+  it("each chip carries its gallery category's icon and tint, and keeps its words", async () => {
+    install();
+    await renderHome();
+    const chips = [...document.querySelectorAll("[data-testid=build-chip]")];
+    expect(chips.map((chip) => chip.getAttribute("data-kind"))).toEqual(["web", "maps", "game", "3d", "xr"]);
+    for (const chip of chips) decorative(chip.querySelector("svg"));
+    expect(chips.map((chip) => chip.textContent)).toEqual(["Build a web app", "Maps", "Create a game", "Three.js 3D scenes", "Build an XR app"]);
+  });
+
+  it("the mic shows a mic, then a stop while it records, and keeps its label", async () => {
+    class FakeRec {
+      lang = ""; interimResults = false;
+      onresult: unknown = null; onerror: unknown = null; onend: (() => void) | null = null;
+      start() {}
+      stop() { this.onend?.(); }
+    }
+    vi.stubGlobal("webkitSpeechRecognition", FakeRec);
+    install();
+    await renderHome();
+    const mic = () => document.querySelector("[data-testid=build-mic]");
+    expect(mic()?.getAttribute("aria-label")).toBe("Dictate");
+    decorative(mic()?.querySelector("[data-testid=build-mic-icon]"));
+    const idle = mic()?.querySelector("svg")?.innerHTML;
+    expect(mic()?.textContent).toBe("Mic");
+    await press("[data-testid=build-mic]");
+    expect(mic()?.getAttribute("aria-pressed")).toBe("true");
+    expect(mic()?.textContent).toBe("Stop");
+    expect(mic()?.querySelector("svg")?.innerHTML).not.toBe(idle);
+    await press("[data-testid=build-mic]");
+    expect(mic()?.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("the motion stops under prefers-reduced-motion", () => {
+    const css = codeOnly("app/build-home.css");
+    const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)"));
+    expect(reduced.length).toBeGreaterThan(0);
+    for (const sel of [".bh-dot::after", ".bh-mic[aria-pressed=\"true\"]", ".bh-lucky", ".bh-chip"]) expect(reduced).toContain(sel);
+  });
+});
+
 describe("chips", () => {
   it("fills the prompt and does not start a build", async () => {
     const calls = install();
