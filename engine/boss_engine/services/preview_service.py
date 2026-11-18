@@ -159,6 +159,52 @@ def provision_preview_database(engine, run: Optional[dict], preview_id: str,
     return None
 
 
+def keep_preview_data(engine, preview_id: str, workdir: Path, *, project_id: Optional[str],
+                      repo: Optional[str], ident=None) -> list[str]:
+    """THE APP'S DATA, BACK BEFORE IT STARTS (preview_data): what an earlier preview of this app
+    saved is copied into this tree, and this tree is noted so its data is kept when it ends."""
+    from . import preview_data
+
+    try:
+        return preview_data.mark_restored(preview_id, workdir, preview_data.app_key(project_id, repo),
+                                          open_to_sandbox=ident is not None)
+    except Exception as exc:  # noqa: BLE001 — a preview without its old data still runs
+        logger.warning("preview %s: kept data not restored (%s)", preview_id, type(exc).__name__)
+        return []
+
+
+def _end_and_keep_data(preview_id: Optional[str]) -> None:
+    """Stop everything the preview runs, then keep what its app wrote (preview_data.capture),
+    before its tree is removed."""
+    if not preview_id:
+        return
+    with contextlib.suppress(Exception):
+        from . import sandbox_identity
+
+        with sandbox_identity._ACTIVE_LOCK:  # noqa: SLF001 — the held lease, if this process has it
+            ident = sandbox_identity._ACTIVE.get(str(preview_id))  # noqa: SLF001
+        if ident is not None:
+            ident.killall()
+    from . import preview_data
+
+    preview_data.capture(str(preview_id))
+
+
+def reset_preview_data(engine, settings: Settings, run_id: str) -> bool:
+    """"Fresh data": delete what is kept for the app this build previews (every branch and every
+    preview of it share it). True when there was something to delete."""
+    from . import preview_data
+
+    with begin(engine) as c:
+        run = load_code_task_run(c, run_id)
+    if run is None:
+        raise ValueError(f"code task run not found: {run_id}")
+    spec = run.get("spec") or {}
+    owner = spec.get("owner") or settings.target_github_owner
+    repo = spec.get("repo") or settings.target_github_repo
+    return preview_data.reset(preview_data.app_key(run.get("project_id"), f"{owner}/{repo}"))
+
+
 def _preview_workdir(preview_id: str, ident) -> Path:
     if ident is not None:
         return ident.workspace(f"{preview_id}-")
@@ -3146,6 +3192,9 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         # needed to reproduce it by hand.
         failure_kind, suggested_action = _classify_start_failure(msg, exited=exited)
         _release_preview_sandbox(preview_id)
+        from . import preview_data as _preview_data
+
+        _preview_data.forget(preview_id)   # it never served: its kept data stays as it was
         with begin(engine) as c:
             c.execute(text(
                 "INSERT INTO app_previews (id,project_id,run_id,repo,branch,command,substrate,"
@@ -3316,6 +3365,8 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     if app_env.needs:
         return _fail(f"the app {app_env.verdict()} (environment preview), then start the preview again",
                      command=" ".join(command))
+    keep_preview_data(engine, preview_id, workdir, project_id=project_id, repo=f"{owner}/{repo}",
+                      ident=ident)
     proc, port_hint = launch_app(
         workdir, command, log_path,
         owner=owned_process.Owner("preview", preview_id, project_id),
@@ -3787,6 +3838,9 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         branch = row["branch"]
         if not owner or not repo or not branch:
             return
+        # The tree the restart left behind still holds what the app wrote: kept before the
+        # lease is taken again (acquire empties the directory).
+        _end_and_keep_data(preview_id)
         ident = _preview_sandbox(preview_id)       # SandboxUnavailable: stays stopped (below)
         workdir = _preview_workdir(preview_id, ident)
         log_path = preview_log_path(preview_id)
@@ -3832,6 +3886,8 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
             _release_preview_sandbox(preview_id)
             return
         record_demo_logins(engine, preview_id, app_env)
+        keep_preview_data(engine, preview_id, workdir, project_id=project_id, repo=repo_full,
+                          ident=ident)
         proc, port_hint = launch_app(
             workdir, command, log_path,
             owner=owned_process.Owner("preview", preview_id, row.get("project_id")),
@@ -4291,6 +4347,9 @@ _PREVIEW_BLOCKED_HEADER_NAMES = frozenset({
     # be told the wrong Host and a Content-Length that no longer matches the body we send.
     "host", "content-length", "connection", "keep-alive", "proxy-connection",
     "transfer-encoding", "te", "trailer", "upgrade", "expect",
+    # What THIS hop can read: the proxy edits HTML, so it asks the app for identity itself
+    # (proxy_preview) and the API compresses what it sends on (_plain_body).
+    "accept-encoding",
 })
 
 
@@ -4380,6 +4439,9 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
         req.add_header(header_name, header_value)
     if app_cookie_header:
         req.add_header("Cookie", app_cookie_header)
+    # THE APP ANSWERS UNCOMPRESSED (see _plain_body): the browser's Accept-Encoding is not ours
+    # to forward, because this hop edits HTML and the API compresses what it sends on.
+    req.add_header("Accept-Encoding", "identity")
     if row["mode"] == "rootfs" and sandbox_token:
         req.add_header("X-Sandbox-Token", sandbox_token)
     response_headers: dict = {}
@@ -4394,12 +4456,13 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
         resp = urllib.request.build_opener(_NoRedirect()).open(req, timeout=25)
         status = resp.status
         ctype = resp.headers.get("Content-Type", "application/octet-stream")
-        data = resp.read()
+        data, encoding = _plain_body(resp.read(), resp.headers.get("Content-Encoding"))
         if resp.headers.get("Location"):
             response_headers["Location"] = resp.headers["Location"]
         _cookies_of(resp.headers)
     except urllib.error.HTTPError as e:
-        status, ctype, data = e.code, e.headers.get("Content-Type", "text/plain"), e.read()
+        status, ctype = e.code, e.headers.get("Content-Type", "text/plain")
+        data, encoding = _plain_body(e.read(), e.headers.get("Content-Encoding"))
         if e.headers.get("Location"):
             response_headers["Location"] = e.headers["Location"]
         _cookies_of(e.headers)
@@ -4420,9 +4483,63 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     location = response_headers.get("Location")
     if location:
         response_headers["Location"] = _gateway_location(preview_id, location)
-    if "text/html" in (ctype or ""):
+    if encoding:
+        # Still encoded (an encoding this host cannot decode): passed on byte for byte, labelled
+        # as it came, and never edited — splicing text into compressed bytes is what garbled it.
+        response_headers["Content-Encoding"] = encoding
+    elif "text/html" in (ctype or ""):
         data = _inject_shim(data, f"/v1/previews/{preview_id}/web", at_root=serve_at_root)
     return status, ctype, data, response_headers
+
+
+def _decoders() -> dict:
+    import gzip
+    import zlib
+
+    def _deflate(raw: bytes) -> bytes:
+        try:
+            return zlib.decompress(raw)                 # RFC 1950 (zlib-wrapped), what the RFC says
+        except zlib.error:
+            return zlib.decompress(raw, -zlib.MAX_WBITS)  # raw deflate, what some servers send
+
+    out = {"gzip": gzip.decompress, "x-gzip": gzip.decompress, "deflate": _deflate}
+    try:
+        import brotli  # type: ignore[import-not-found]
+
+        out["br"] = brotli.decompress
+    except ImportError:
+        pass
+    return out
+
+
+def _plain_body(raw: bytes, content_encoding: Optional[str]) -> tuple[bytes, str]:
+    """An upstream body without its Content-Encoding → (bytes, "") — or, when it cannot be
+    undone here, (the bytes as they came, the encoding they still carry).
+
+    A PREVIEW OPENED AS BINARY GARBAGE (recipe-box, 2026-11-18). The browser's
+    `Accept-Encoding: gzip, br` was forwarded, Next.js gzipped its HTML, and the shim was
+    spliced into the COMPRESSED bytes: `_inject_shim` decoded them as UTF-8 (dropping every
+    invalid byte, 0x8b first), found no <head>, prepended itself, and the API's GZip middleware
+    compressed the result once more. The browser undid one layer and showed the other as text;
+    every Next chunk was a gzip stream served as JavaScript. The proxy now asks for identity,
+    and an app that compresses anyway (gzip, deflate, br where brotli is installed; stacked
+    encodings in reverse order) is decoded here before anything reads or edits the body."""
+    codings = [c.strip().lower() for c in (content_encoding or "").split(",") if c.strip()]
+    codings = [c for c in codings if c != "identity"]
+    if not codings:
+        return raw, ""
+    decoders = _decoders()
+    data = raw
+    for i in range(len(codings) - 1, -1, -1):
+        decode = decoders.get(codings[i])
+        if decode is None:
+            return data, ", ".join(codings[: i + 1])
+        try:
+            data = decode(data)
+        except Exception:  # noqa: BLE001 — a body that lies about its encoding is sent as it is
+            logger.debug("preview body did not decode as %s", codings[i], exc_info=True)
+            return data, ", ".join(codings[: i + 1])
+    return data, ""
 
 
 def _is_boss_oidc(parsed: urllib.parse.SplitResult) -> bool:
@@ -4575,6 +4692,8 @@ def _teardown(row, settings: Optional[Settings] = None) -> None:
             MicroVMProvider(settings).release(sandbox_id)
     else:
         _kill(row.get("pid"))
+        # What the app saved is the app's, not this preview's: kept before the tree goes.
+        _end_and_keep_data(row.get("id"))
         # The preview's uid: every process it left is killed, its tree removed, the uid freed.
         _release_preview_sandbox(row.get("id"))
 
@@ -4888,6 +5007,11 @@ def reclaim_preview_workdir(preview_id: str) -> int:
     else, and a directory that has already gone is a success, not an error.
     """
     freed = 0
+    # A tree nobody tore down (its process died with an old container) still holds what the
+    # app wrote: kept first. A no-op once the preview's teardown has kept it.
+    from . import preview_data
+
+    preview_data.capture(preview_id)
     try:
         if not PREVIEW_ROOT.exists():
             return 0
