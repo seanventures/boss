@@ -242,6 +242,9 @@ def launch(
                                      actor=actor)
         receipt_id = None
     title = str(spec.get("title") or "Easy Mode").strip()[:120]
+    # THE BUILD'S REPOSITORY IS REAL: the connected GitHub repo, else the project's own local
+    # repository (made here when it has none). Never a placeholder name nothing can clone.
+    made_repo = _ensure_repository(connection, settings, project_id, spec, actor=actor)
 
     # The blurb and the prompt, before any reservation. A block or an unanswered ask stops here.
     if builder is None:
@@ -269,6 +272,13 @@ def launch(
             connection, asked, org_id=org_id, workspace_id=workspace_id, project_id=project_id,
             dedupe_key=dedupe_key, spec=spec, resources=resources, workflows=workflows,
             receipt_id=receipt_id) from None
+    except Exception:
+        # The launch is refused (personal data blocked or asked, the budget, the start itself)
+        # and its transaction rolls back with the project: the repository folder made on disk
+        # for it on THIS call goes too, never left behind unbound.
+        if made_repo:
+            _drop_local_repos(project_id, settings)
+        raise
     run_id = str((built or {}).get("run_id") or "").strip()
     returned_project = str((built or {}).get("project_id") or project_id).strip()
     if not run_id or returned_project != project_id:
@@ -317,6 +327,7 @@ def _spec_view(spec: dict[str, Any]) -> dict[str, Any]:
         "workflows": list(spec.get("workflows") or []),
         "attachments": spec.get("attachments") or [],
         "github_repo": spec.get("github_repo"),
+        "local_repo": spec.get("local_repo"),
     }
 
 
@@ -403,6 +414,49 @@ def _kept(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, A
     return {**result, "receipt_id": existing.get("id")}
 
 
+#: Said when a project ends up with no repository to build in. Raised before anything starts.
+NO_REPOSITORY = (
+    "This project has no repository to build in: BOSS could not make one on this machine (git "
+    "is missing or its repository folder is not writable), and no GitHub repository was chosen. "
+    "Nothing was started.")
+
+
+def _ensure_repository(
+    connection: Any, settings: Any, project_id: str, spec: dict[str, Any], *, actor: str,
+) -> bool:
+    """Name the repository the build runs against in the spec: the GitHub repo the person chose,
+    else the project's local primary repository, made by the one helper new local projects use
+    (projects.ensure_sample_code). No repository at all is a refusal in words, before the start.
+    True when this call made the repository on disk."""
+    if spec.get("github_repo"):
+        return False
+    from . import local_projects
+    from .projects import ensure_sample_code
+
+    made = False
+    bound = local_projects.local_binding(connection, project_id)
+    if bound is None:
+        made = ensure_sample_code(connection, settings, project_id, actor=actor) is not None
+        bound = local_projects.local_binding(connection, project_id)
+    if bound is None or not bound.get("full_name"):
+        raise FactoryLaunchError(409, "no_repository", NO_REPOSITORY)
+    spec["local_repo"] = str(bound["full_name"])
+    return made
+
+
+def _drop_local_repos(project_id: str, settings: Any) -> None:
+    """Remove the project's repository folder (the launch that made it was refused)."""
+    from . import local_repo
+
+    try:
+        local_repo.delete_project_repos(project_id, settings)
+    except Exception:  # noqa: BLE001 — the refusal is the answer; a leftover folder is logged
+        import logging
+
+        logging.getLogger(__name__).warning("could not remove the repository folder of %s",
+                                            project_id, exc_info=True)
+
+
 def build_run(
     connection: Any,
     *,
@@ -416,10 +470,11 @@ def build_run(
     """Start the existing code-task build. Tests replace this; it does not call a model itself."""
     from .code_task_service import start_code_task
 
-    full = str(spec.get("github_repo") or "")
-    owner, _, repo = full.partition("/")
-    if not repo:
-        owner, repo = "_local", "lucky"
+    github = str(spec.get("github_repo") or "")
+    local = str(spec.get("local_repo") or "")
+    owner, _, repo = (github or local).partition("/")
+    if not owner or not repo:
+        raise FactoryLaunchError(409, "no_repository", NO_REPOSITORY)
     title = str(spec.get("title") or "Easy Mode")[:180]
     run_id = start_code_task(
         connection, project_id=project_id, task_id=None, title=title,
@@ -429,7 +484,7 @@ def build_run(
         finalize_ctx={"factory_launch": True, "template_id": spec.get("id"),
                       "mode": spec.get("mode"), "reservation_id": reservation_id,
                       "actor": actor},
-        jobs=jobs, open_pr=False)
+        jobs=jobs, open_pr=False, repo_host=None if github else "local")
     if not run_id:
         return {"project_id": project_id}
     return {"project_id": project_id, "run_id": str(run_id)}

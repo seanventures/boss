@@ -35,6 +35,12 @@ from ._identity_agents_support import session_ctx
 from .test_identity_agents_workflow_consent import ALICE, NEEDS, env  # noqa: F401  (full-schema fixture)
 
 
+@pytest.fixture(autouse=True)
+def _local_repos_in_tmp(monkeypatch, tmp_path):
+    """Each project's local repository is made under this test's folder, never the install's."""
+    monkeypatch.setattr(get_settings(), "local_repo_root", str(tmp_path / "repos"))
+
+
 class _Budget:
     """Reserves nothing real: the reservation's own release is the savepoint's (asserted by the
     API suite against the real governor)."""
@@ -46,6 +52,13 @@ class _Budget:
         rid = f"res_{uuid.uuid4().hex[:8]}"
         self.reserved.append(project_id)
         return {"status": "reserved", "reservation_id": rid}
+
+
+def _resources(body):
+    """As the consent sheet sends them (lib/identity/consent.ts grantBodyFor): the run's
+    repositories on this machine as `local`."""
+    local = (body.get("local") or {}).get("repos") or []
+    return {"local": {"repos": list(local)}} if local else {}
 
 
 def _template(tmp_path, template_id: str):
@@ -67,7 +80,8 @@ def _builder(starts: list):
         run_id = f"crun_{uuid.uuid4().hex[:8]}"
         acting = consent.require_authority(
             org_id=None, project_id=project_id, role_keys=[consent._resolved_builder()],  # noqa: SLF001
-            permissions=consent.CODE_TASK_PERMISSIONS, repos=[], task=str(spec.get("title")),
+            permissions=consent.CODE_TASK_PERMISSIONS,
+            repos=[spec.get("github_repo") or spec.get("local_repo")], task=str(spec.get("title")),
             run_id=f"run_ct:{run_id}", db=connection)
         starts.append({"project_id": project_id, "run_id": run_id,
                        "grant_id": acting.grant_id if acting else None})
@@ -133,6 +147,8 @@ def test_consent_keeps_the_project_and_the_retry_builds_in_it(env, monkeypatch, 
         assert asked["retry"] == {"project_id": project_id, "dedupe_key": dedupe_key}
         assert asked["task_run_id"].startswith(grants.PENDING_PREFIX)
         assert asked["projects"] == [project_id]
+        # The chip names the project's real repository on this machine, never a placeholder.
+        assert asked["local"]["repos"] == [f"local_{project_id}/csv-quality-desk"]
         assert starts == []                                   # no build started
         agent_ids = [a["id"] for a in asked["agents"]]
         assert agent_ids
@@ -160,7 +176,8 @@ def test_consent_keeps_the_project_and_the_retry_builds_in_it(env, monkeypatch, 
             grant = grants.create_grant(session_ctx(ALICE), GrantRequest(
                 agent_ids=tuple(a["id"] for a in body["agents"]),
                 permissions=frozenset(body["permissions"]), project_ids=(project_id,),
-                task_run_id=body["task_run_id"], purpose=body["task"]), db=c)
+                task_run_id=body["task_run_id"], purpose=body["task"],
+                resources=_resources(body)), db=c)
 
         built = _launch(env, root, template_id, starts, budget)
         assert "__consent__" not in built, built
@@ -228,7 +245,8 @@ def test_two_people_pressing_the_same_template_never_share_a_project(env, monkey
             grants.create_grant(session_ctx(ALICE), GrantRequest(
                 agent_ids=tuple(x["id"] for x in a["agents"]),
                 permissions=frozenset(a["permissions"]), project_ids=(a["project_id"],),
-                task_run_id=a["task_run_id"], purpose=a["task"]), db=c)
+                task_run_id=a["task_run_id"], purpose=a["task"],
+                resources=_resources(a)), db=c)
         built = _launch(env, root, template_id, starts, _Budget(), who=ALICE)
         assert built["project_id"] == a["project_id"] and built["reused"] is False
         b_again = _launch(env, root, template_id, starts, _Budget(), who=BOB)

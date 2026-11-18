@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from sqlalchemy import text
 
 from apps.api.app.config import get_settings
@@ -66,6 +67,15 @@ workflows:
     steps:
       - Draft the columns
 """
+
+
+@pytest.fixture(autouse=True)
+def _local_repos_in_tmp(monkeypatch, tmp_path):
+    """A launch with no GitHub repository makes the project a local repository: on disk, under
+    this test's own folder, never the install's."""
+    from apps.api.app.routers import factory_launch as route
+
+    monkeypatch.setattr(route._settings, "local_repo_root", str(tmp_path / "repos"))
 
 
 def _write_catalogue(directory: Path) -> None:
@@ -554,3 +564,81 @@ def test_consent_keeps_the_project_and_the_same_launch_builds_in_it(
     assert repeat.json()["reused"] is True and repeat.json()["run_id"] == "run_after_consent"
     assert len(calls) == 1
     assert _count(engine, "projects") == projects_before + 1
+
+
+def test_a_launch_with_no_github_repo_builds_in_a_real_local_repository(
+        client, engine, monkeypatch, tmp_path):
+    """EASY MODE NEVER BUILDS ON A PLACEHOLDER (2026-11-18): with no GitHub repository chosen it
+    built against `_local/lucky`, which nothing could clone, and the build died with a 500. The
+    project now gets its own local primary repository (the helper samples use) and the build is
+    started against that repository's real name."""
+    from apps.api.app.routers import factory_launch as route
+    from boss_engine.services import local_repo
+
+    monkeypatch.setattr(
+        "boss_engine.services.factory_launch.TEMPLATE_DIR", tmp_path / "absent")
+    calls: list = []
+    _patch_builder(monkeypatch, calls, run_id="run_local_1")
+
+    response = client.post("/v1/factory/launch", json={"prompt": "A CSV quality desk, locally."})
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    project_id = body["project_id"]
+    repo = body["spec"]["local_repo"]
+    owner, name = repo.split("/", 1)
+    assert owner == local_repo.owner_for(project_id)
+    assert "lucky" not in repo and not repo.startswith("_local")
+    assert calls[0]["spec"]["local_repo"] == repo
+    assert calls[0]["spec"].get("github_repo") is None
+    binding = _one(engine, "SELECT full_name, role, host FROM github_repository_bindings "
+                   "WHERE project_id = :p AND status = 'active'", p=project_id)
+    assert dict(binding) == {"full_name": repo, "role": "primary", "host": "local"}
+    assert local_repo.exists(owner, name, route._settings)
+    assert local_repo.bare_path(owner, name, route._settings).is_relative_to(tmp_path)
+
+
+def test_the_real_build_start_names_the_local_repository(client, engine, monkeypatch, tmp_path):
+    """The real build_run (start_code_task, no model): the run's spec is the local repository,
+    with repo_host local, so its clone never asks GitHub."""
+    from boss_engine.services import factory_launch
+
+    seen: dict = {}
+
+    def start(connection, **kw):
+        seen.update(kw)
+        return "crun_local_1"
+
+    monkeypatch.setattr("boss_engine.services.code_task_service.start_code_task", start)
+    out = factory_launch.build_run(
+        None, project_id="prj_x", spec={"title": "CSV desk", "local_repo": "local_prj_x/csv-desk"},
+        actor="ceo", settings=get_settings(), jobs=None, reservation_id="res_1")
+    assert out == {"project_id": "prj_x", "run_id": "crun_local_1"}
+    assert (seen["owner"], seen["repo"], seen["repo_host"]) == ("local_prj_x", "csv-desk", "local")
+
+    with pytest.raises(factory_launch.FactoryLaunchError) as refused:
+        factory_launch.build_run(None, project_id="prj_x", spec={"title": "CSV desk"},
+                                 actor="ceo", settings=get_settings(), jobs=None,
+                                 reservation_id="res_1")
+    assert refused.value.code == "no_repository" and " " in refused.value.message
+
+
+def test_a_refused_launch_leaves_no_repository_folder_behind(client, engine, monkeypatch, tmp_path):
+    """The personal-data check runs after the project's local repository is made; when it blocks
+    (or asks), the project rolls back and the folder made for it on this call is removed."""
+    monkeypatch.setattr(
+        "boss_engine.services.factory_launch.TEMPLATE_DIR", tmp_path / "absent")
+    calls: list = []
+    _patch_builder(monkeypatch, calls)
+    before = _count(engine, "projects")
+
+    for prompt, code in (("Bill card 4111 1111 1111 1111 every month.", "personal_data_blocked"),
+                         ("Email the summary to ada@example.com daily.", "personal_data_ask")):
+        refused = client.post("/v1/factory/launch", json={"prompt": prompt})
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["error"] == code
+
+    assert calls == []
+    assert _count(engine, "projects") == before
+    repos = tmp_path / "repos"
+    assert not repos.exists() or list(repos.iterdir()) == []
