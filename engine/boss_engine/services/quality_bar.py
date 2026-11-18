@@ -404,11 +404,9 @@ def broken_tests_block(bar: str, failing: Iterable[str], changed: Iterable[str],
                        p1_words: Iterable[str] = ()) -> tuple[bool, str]:
     """(does a broken EXISTING test block at `bar`, why it did not when it does not).
 
-    production: always. standard: when a failing test is on a P0/P1 path (its name or file marks
-    startup/health/auth/sign-in, or names one of the brief's own P1 features) or its file or name
-    overlaps the changed files; else a follow-up. prototype: only a P0 test (startup, auth,
-    health). Failing tests that cannot be named block at standard and production (nothing says
-    they are off the critical path) and are a follow-up at prototype."""
+    production: always. prototype and standard (the light lane): only a P0 test (its name or
+    file marks startup, health, auth or sign-in) holds; the rest is a follow-up. Failing tests that cannot be named block at production
+    and are a follow-up below it."""
     bar = normalize(bar) or DEFAULT
     if bar == PRODUCTION:
         return True, ""
@@ -417,27 +415,13 @@ def broken_tests_block(bar: str, failing: Iterable[str], changed: Iterable[str],
         return False, (f"failing existing tests could not be named; not a P0 at the {bar} bar")
     low = [n.lower() for n in names]
     p0 = any(w in n for n in low for w in P0_TEST_WORDS)
-    if bar in (PROTOTYPE, STANDARD):
-        # THE LIGHT LANE: only a P0 test (startup, auth, health) holds; the rest is a follow-up.
-        return p0, (f"{len(names)} existing test(s) failing, none on a P0 path "
-                    f"(startup, auth, health): {'; '.join(names[:5])}")
-    stems = set()
-    import os
-
-    for path in changed or ():
-        base = os.path.splitext(os.path.basename(str(path)))[0].lower()
-        if len(base) >= 3:
-            stems.add(base)
-        stems.update(w for w in _words(os.path.dirname(str(path))) if len(w) >= 5)
-    overlaps = any(stem in n for n in low for stem in stems)
-    p1 = any(w in n for n in low for w in {x for t in p1_words for x in _words(t)})
-    if p0 or overlaps or p1:
-        return True, ""
-    return False, (f"{len(names)} existing test(s) failing outside the changed area and the "
-                   f"P0/P1 paths: {'; '.join(names[:5])}")
+    # THE LIGHT LANE (prototype, standard): only a P0 test (startup, auth, health) holds; the
+    # rest is a follow-up. (`changed`, `p1_words`: kept for callers; production blocks on all.)
+    return p0, (f"{len(names)} existing test(s) failing, none on a P0 path "
+                f"(startup, auth, health): {'; '.join(names[:5])}")
 
 
-#: Words that make a consistency finding a security/secrets one (it then holds at standard).
+#: Words that make a consistency finding a security/secrets one (it then holds at every bar).
 _SECURITY_WORDS = ("security", "secret", "credential", "password", "api key", "token leak",
                    "private key", "injection", "xss", "csrf", "ssrf", "auth bypass",
                    "unauthenticated", "privilege", "vulnerab")
@@ -450,14 +434,13 @@ def consistency_passes(bar: str, verdict: str, summary: str = "") -> tuple[bool,
     bar = normalize(bar) or DEFAULT
     if verdict not in ("drift", "hollow"):
         return True, False
-    if bar == PROTOTYPE:
-        return True, True
     if bar == PRODUCTION:
         return False, False
-    # THE LIGHT LANE (standard): drift, even a BLOCKER, or a check that did not see the change
-    # is a follow-up — unless what it names is about security or secrets, which always holds.
+    # THE LIGHT LANE (standard, prototype): drift, even a BLOCKER, or a check that did not see
+    # the change is a follow-up — unless what it names is about security or secrets, which
+    # holds at every bar.
     low = str(summary or "").lower()
-    if any(w in low for w in _SECURITY_WORDS):
+    if verdict == "drift" and any(w in low for w in _SECURITY_WORDS):
         return False, False
     return True, True
 
@@ -564,10 +547,22 @@ def stamp(evidence: dict, gates: Any, *, flaky: Iterable[str] = ()) -> dict:
     return record
 
 
-#: evidence key: will BOSS start the follow-up build for this build's follow-ups itself? Written
-#: by the pipeline before the pull request opens (it knows: not a follow-up itself, not a
-#: re-check, follow-up builds on), read by the merge card's words and the PR body.
+#: evidence key: who takes this build's follow-ups, written by the pipeline before the pull
+#: request opens: "queued" (BOSS starts a follow-up build), "pass_two" (the workflow's More
+#: tests pass on this branch takes them), "owner" (the build already working on this branch
+#: carries them), or false (they are listed for later: a follow-up, a re-check, follow-ups off).
+#: Read by the merge card's words and the PR body, so neither says "BOSS is fixing it" when no
+#: follow-up build will start.
 QUEUED_KEY = "followups_queued"
+HANDLED_BY = ("queued", "pass_two", "owner")
+
+
+def handled_by(value: Any) -> Optional[str]:
+    """The QUEUED_KEY value as one of HANDLED_BY, or None. `True` (older records) is queued."""
+    if value is True:
+        return "queued"
+    word = str(value or "").strip().lower()
+    return word if word in HANDLED_BY else None
 #: The merge card's follow-ups record (decision recommendation).
 CARD_KEY = "followups"
 
@@ -613,17 +608,25 @@ def merge_followups(evidence: Optional[Mapping[str, Any]]) -> Optional[dict[str,
     items = followup_items(evidence, limit=1000)
     if not items:
         return None
-    return {"count": len(items), "p1": sum(1 for i in items if i["tier"] == P1),
-            "queued": bool((evidence or {}).get(QUEUED_KEY)),
+    card = {"count": len(items), "p1": sum(1 for i in items if i["tier"] == P1),
+            "queued": handled_by((evidence or {}).get(QUEUED_KEY)) == "queued",
+            "handled_by": handled_by((evidence or {}).get(QUEUED_KEY)),
             "bar": ((evidence or {}).get(KEY) or {}).get("bar") or DEFAULT, "items": items[:40]}
+    card["words"] = followup_words(card)
+    return card
 
 
 def followup_words(followups: Mapping[str, Any]) -> str:
     """"1 follow-up queued, BOSS is fixing it" / "3 follow-ups listed for later"."""
     n = int(followups.get("count") or 0)
     s = "" if n == 1 else "s"
-    if followups.get("queued"):
+    how = handled_by(followups.get("handled_by")) or ("queued" if followups.get("queued") else None)
+    if how == "queued":
         return f"{n} follow-up{s} queued, BOSS is fixing {'it' if n == 1 else 'them'}"
+    if how == "pass_two":
+        return f"{n} follow-up{s} go{'es' if n == 1 else ''} to the More tests pass next"
+    if how == "owner":
+        return f"{n} follow-up{s} for the build already working on this branch"
     return f"{n} follow-up{s} listed for later"
 
 
@@ -652,8 +655,10 @@ def pr_section(evidence: Optional[Mapping[str, Any]]) -> str:
         lines.append(f"- {item['tier']} [{item['severity'].upper()}] {item['text']}")
     if not lines:
         return ""
-    who = ("BOSS has queued a follow-up build that fixes them on this branch."
-           if (evidence or {}).get(QUEUED_KEY) else "They are recorded, not dropped.")
+    who = {"queued": "BOSS has queued a follow-up build that fixes them on this branch.",
+           "pass_two": "The workflow's More tests pass takes them next, on this branch.",
+           "owner": "The build already working on this branch carries them."}.get(
+        handled_by((evidence or {}).get(QUEUED_KEY)) or "", "They are recorded, not dropped.")
     return (f"## Follow-ups (quality bar: {rec.get('bar') or DEFAULT})\n\n"
             f"These did not block this build at its quality bar. {who}\n\n"
             + "\n".join(lines) + "\n")
@@ -724,12 +729,22 @@ def production_needs(evidence: Optional[Mapping[str, Any]],
             if isinstance(i, Mapping) and i.get("status") != _v.MET and not _v._advisory(i):  # noqa: SLF001
                 needs.append(f"Must-have {i.get('n')} ({item_tier(i)}) {i.get('status')}: "
                              f"{i.get('text')}"[:600])
-    for key, stage, label in (("review_summary", "review_code", "Review"),
-                              ("consistency_summary", "consistency_check", "Consistency")):
+    for key, stage, label, gate in (
+            ("review_summary", "review_code", "Review", "code_review_passed"),
+            ("consistency_summary", "consistency_check", "Consistency", "consistent")):
+        covered = False
         for c in parse_findings(str(evidence.get(key) or ""), stage=stage):
             if c.severity in ("blocker", "major") and not _resolved(evidence, c):
+                covered = True
                 needs.append(f"{label} finding ({c.severity.upper()}) {c.location()}: "
                              f"{c.body}"[:600])
+        if gate in followups and not covered:
+            # JUDGED AT A LIGHTER BAR WITH NOTHING PARSED TO SHOW FOR IT (a refutation that
+            # named no issue, a check that never saw the change): production re-checks it.
+            why = "; ".join(str(x) for x in followups.get(gate) or [])[:400]
+            needs.append(f"{label} was judged at a lighter bar"
+                         + (f" ({why})" if why else "")
+                         + "; production needs a re-check at the production bar.")
     # (A flaky test is reported, never required: it already passed its re-runs, see the build.)
     return list(dict.fromkeys(needs))
 

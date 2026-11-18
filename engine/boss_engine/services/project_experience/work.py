@@ -598,7 +598,7 @@ def _followups_of(raw: Any) -> Optional[dict[str, Any]]:
     if not isinstance(rec, Mapping) or not int(rec.get("count") or 0):
         return None
     return {"count": int(rec["count"]), "queued": bool(rec.get("queued")),
-            "words": followup_words(rec)}
+            "words": str(rec.get("words") or followup_words(rec))}
 
 
 def _merge_links(members: list[dict[str, Any]], merge: Optional[Mapping[str, Any]]

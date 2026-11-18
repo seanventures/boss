@@ -214,7 +214,9 @@ export function MustHaves({ data }: { data: MustHaveRecord }) {
  * BOSS's follow-up build fixes them; the card lists them, P1 first, folded.
  */
 export type FollowUpItem = { tier: string; severity: string; text: string };
-export type FollowUpsRecord = { count: number; p1: number; queued: boolean; bar: string; items: FollowUpItem[] };
+export type FollowUpsRecord = { count: number; p1: number; queued: boolean; bar: string; items: FollowUpItem[];
+  /** Who takes them, in words (engine quality_bar.followup_words): never "BOSS is fixing it" unless a build will. */
+  words: string };
 
 export function followUpsOf(recommendation: Record<string, unknown> | null | undefined
 ): FollowUpsRecord | null {
@@ -229,7 +231,8 @@ export function followUpsOf(recommendation: Record<string, unknown> | null | und
   const count = typeof r.count === "number" ? r.count : items.length;
   if (!count) return null;
   return { count, p1: typeof r.p1 === "number" ? r.p1 : items.filter((i) => i.tier === "P1").length,
-           queued: r.queued === true, bar: str(r.bar) || "standard", items };
+           queued: r.queued === true, bar: str(r.bar) || "standard", items,
+           words: str(r.words) };
 }
 
 export function FollowUps({ record }: { record: FollowUpsRecord }) {
@@ -238,7 +241,7 @@ export function FollowUps({ record }: { record: FollowUpsRecord }) {
     <details className="dq-guidance" data-testid="decision-follow-ups">
       <summary>
         <b>Ready to merge.</b>{" "}
-        {n} follow-up{n === 1 ? "" : "s"}{record.queued ? ` queued — BOSS is fixing ${n === 1 ? "it" : "them"}` : " listed for later"}
+        {record.words || `${n} follow-up${n === 1 ? "" : "s"}${record.queued ? ` queued, BOSS is fixing ${n === 1 ? "it" : "them"}` : " listed for later"}`}
         {record.p1 ? ` (${record.p1} P1)` : ""}. {n === 1 ? "It does" : "They do"} not block at the {record.bar} quality bar.
       </summary>
       <ul>

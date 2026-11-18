@@ -50,10 +50,40 @@ def test_a_review_that_refutes_without_naming_an_issue_is_a_follow_up_below_prod
     assert ok and not blocking and len(deferred) == 1
     assert "couldn't name its issue" in deferred[0]["text"] and "feels off" in deferred[0]["text"]
     assert qb.finding_tier(deferred[0]) == qb.P1
-    # production keeps it fail-closed; a review that did not see the change is not "refuted"
+    assert deferred[0]["bar_followup"] is True          # recorded on the gate, never "passed"
+    # production keeps it fail-closed
     assert not _review_gate_from_findings(unnamed, "refuted",
                                           qb.review_block_severity(qb.PRODUCTION))[0]
-    assert not _review_gate_from_findings("", "hollow", qb.review_block_severity(qb.STANDARD))[0]
+
+
+def test_a_review_that_never_saw_the_change_is_a_follow_up_at_standard_and_blocks_production():
+    ok, blocking, deferred = _review_gate_from_findings(
+        "", "not_run", qb.review_block_severity(qb.STANDARD))
+    assert ok and not blocking and deferred[0]["bar_followup"] is True
+    assert "did not see the change" in deferred[0]["text"]
+    assert not _review_gate_from_findings("", "not_run",
+                                          qb.review_block_severity(qb.PRODUCTION))[0]
+    src = open(os.path.join(os.path.dirname(__file__), "..", "boss_engine", "services",
+                            "governed_code_task_service.py"), encoding="utf-8").read()
+    # every assignment of the review gate goes through the follow-up-aware door
+    assert src.count("_set_review(_rev_pass, _deferred)") == 3
+    assert 'gates["code_review_passed"] = _rev_pass' not in src
+
+
+def test_the_card_says_who_really_takes_the_follow_ups():
+    base = {"deferred_findings": [{"severity": "major", "text": "overflows on phones"}]}
+    words = {mode: qb.merge_followups({**base, qb.QUEUED_KEY: mode})["words"]
+             for mode in ("queued", "pass_two", "owner", False)}
+    assert words["queued"] == "1 follow-up queued, BOSS is fixing it"
+    assert words["pass_two"] == "1 follow-up goes to the More tests pass next"
+    assert words["owner"] == "1 follow-up for the build already working on this branch"
+    assert words[False] == "1 follow-up listed for later"
+    assert not any("BOSS is fixing" in w for m, w in words.items() if m != "queued")
+    assert qb.merge_followups({**base, qb.QUEUED_KEY: True})["queued"] is True   # older records
+    src = open(os.path.join(os.path.dirname(__file__), "..", "boss_engine", "services",
+                            "governed_code_task_service.py"), encoding="utf-8").read()
+    assert '_takes = "pass_two"' in src and '_takes = "owner"' in src
+    assert "_correct_followup_card(engine, str(proposal[\"decision_id\"]))" in src
 
 
 def test_a_missing_p1_must_have_is_a_follow_up_at_standard_and_blocks_at_production():
@@ -247,6 +277,9 @@ def test_a_missing_must_have_or_an_unnamed_refutation_opens_ready_with_a_follow_
     assert " is ready — " in card["question"] and "queued, BOSS is fixing" in card["question"]
     assert "checks_failing" not in rec
     assert any(words in i["text"] for i in rec["followups"]["items"]), rec["followups"]
+    if fault == "review_unnamed":
+        # a follow-up on the review gate, never "passed" (PR #191 review)
+        assert "code_review_passed" in ev["quality_bar"]["followups"], ev["quality_bar"]
     assert "code_task.deferred_findings_task" in out["events"] and out["children"]
 
 

@@ -258,6 +258,7 @@ def test_consistency_drift_blocks_production_and_only_a_security_finding_blocks_
     assert qb.consistency_passes(S, "drift", blocker) == (True, True)   # the light lane
     assert qb.consistency_passes(S, "drift", secret) == (False, False)
     assert qb.consistency_passes(P, "drift", blocker) == (True, True)
+    assert qb.consistency_passes(P, "drift", secret) == (False, False)   # security: every bar
     assert qb.consistency_passes(S, "hollow") == (True, True)          # re-checked in the follow-up
     assert qb.consistency_passes(R, "hollow") == (False, False)
     assert qb.consistency_passes(S, "ok") == (True, False)
@@ -418,6 +419,42 @@ def test_production_needs_counts_a_seat_that_did_not_run():
           "gates_skipped": {"code_review_passed": "the profile did not convene this seat"}}
     needs = qb.production_needs(ev, [])
     assert len(needs) == 1 and "was not run" in needs[0] and "convene" in needs[0]
+
+
+def test_a_review_that_refuted_without_naming_an_issue_is_re_checked_for_production():
+    # PR #191 review: the unnamed refutation is a follow-up ON the gate, and production needs it.
+    unnamed = "Reviewed a.js. Something is off.\nVERDICT: REFUTED"
+    ok, _, deferred = _review_gate_from_findings(unnamed, "refuted", qb.review_block_severity(S))
+    g = qb.BarGates(S, initial={"code_written": True, "written_tests_pass": True,
+                                "security_clean": True})
+    g["code_review_passed"] = ok
+    g.note_followup("code_review_passed", [f["text"] for f in deferred if f.get("bar_followup")])
+    ev = {"acceptance": _record(MET, verdict="met"), "review_summary": unnamed}
+    qb.stamp(ev, g)
+    passed = [k for k, v in g.items() if v and k not in g.followups]
+    assert "code_review_passed" not in passed and "code_review_passed" in g.followups
+    needs = qb.production_needs(ev, [], passed)
+    assert any("Review was judged at a lighter bar" in n and "couldn't name its issue" in n
+               for n in needs), needs
+
+
+def test_a_consistency_check_that_never_saw_the_change_is_re_checked_for_production():
+    ok, follow = qb.consistency_passes(S, "hollow", "")
+    assert ok and follow
+    g = qb.BarGates(S, initial={"code_written": True, "written_tests_pass": True,
+                                "security_clean": True, "code_review_passed": True,
+                                "consistent": ok})
+    g.note_followup("consistent", [])
+    ev = {"acceptance": _record(MET, verdict="met")}
+    qb.stamp(ev, g)
+    passed = [k for k, v in g.items() if v and k not in g.followups]
+    needs = qb.production_needs(ev, [], passed)
+    assert any("Consistency was judged at a lighter bar" in n for n in needs), needs
+    # a MAJOR the summary names is the need itself, not a second "lighter bar" line
+    ev2 = {**ev, "consistency_summary": "FINDING: MAJOR a.ts:1 — naming drift\n"}
+    needs2 = qb.production_needs(ev2, [], passed)
+    assert any("Consistency finding (MAJOR)" in n for n in needs2)
+    assert not any("Consistency was judged at a lighter bar" in n for n in needs2)
 
 
 def test_a_flaky_test_never_makes_production_wait():

@@ -3615,16 +3615,21 @@ def _review_gate_from_findings(
     """
     findings = _parse_findings(summary)
     if not findings:
-        if verdict == "refuted" and str(block_severity or "").strip().lower() in ("blocker", "none"):
+        light = str(block_severity or "").strip().lower() in ("blocker", "none")
+        if light and verdict in ("refuted", "not_run", "hollow"):
             # THE LIGHT LANE (quality_bar, standard/prototype): a review that refuted the change
-            # but named no issue cannot block a normal build — nobody could act on it. It is a
-            # follow-up carrying the reviewer's own words; BOSS's follow-up build re-reviews.
+            # but named no issue, or that never saw the change, cannot block a normal build —
+            # nobody could act on it. It is a FOLLOW-UP on the gate (`bar_followup`: the caller
+            # records it with gates.note_followup, never as a plain pass), carrying the
+            # reviewer's own words; BOSS's follow-up build re-reviews. Production re-checks it
+            # (quality_bar.production_needs).
             words = " ".join(str(summary or "").split())[-600:]
+            text = ("The review refuted the change but couldn't name its issue (no FINDING "
+                    f"line); re-review and fix what it meant. Its words: {words or '(none)'}"
+                    if verdict == "refuted" else
+                    "The review did not see the change; BOSS re-reviews it in the follow-up.")
             return True, [], [{"severity": "major", "path": None, "line": None, "stage": None,
-                               "end_line": None,
-                               "text": "The review refuted the change but couldn't name its "
-                                       "issue (no FINDING line); re-review and fix what it "
-                                       f"meant. Its words: {words or '(none)'}"}]
+                               "end_line": None, "bar_followup": True, "text": text}]
         return verdict == "survived", [], []
     try:
         floor = _SEVERITY_ORDER.index((block_severity or "major").strip().lower())
@@ -3685,6 +3690,33 @@ def _test_amend_prompt(criteria, ruling_target: str, rationale: str) -> str:
         "and do NOT touch the implementation — you are fixing the oracle, not making it pass. "
         "State in one line what you changed and why it still enforces the criteria."
     )
+
+
+def _correct_followup_card(engine, decision_id: str) -> None:
+    """A merge card that said "N follow-ups queued, BOSS is fixing it" when no follow-up build
+    started: its words become "listed for later". Never raises (the card is extra)."""
+    try:
+        with _transaction(engine) as c:
+            row = c.execute(sql("SELECT question, recommendation FROM decisions WHERE id = :d"),
+                            {"d": decision_id}).mappings().first()
+            rec = (row or {}).get("recommendation")
+            rec = json.loads(rec) if isinstance(rec, str) else rec
+            card = (rec or {}).get(_quality_bar.CARD_KEY) if isinstance(rec, dict) else None
+            if not isinstance(card, dict) or not card.get("queued"):
+                return
+            fixed = {**card, "queued": False, "handled_by": None}
+            before, after = (_quality_bar.followup_words(card),
+                             _quality_bar.followup_words(fixed))
+            fixed["words"] = after
+            c.execute(sql(
+                "UPDATE decisions SET question = replace(question, :b, :a), recommendation = "
+                "jsonb_set(recommendation || jsonb_build_object('summary', "
+                "replace(recommendation->>'summary', :b, :a)), CAST(:path AS text[]), "
+                "CAST(:card AS jsonb)), updated_at = now() WHERE id = :d"),
+                {"b": before, "a": after, "path": "{" + _quality_bar.CARD_KEY + "}",
+                 "card": json.dumps(fixed), "d": decision_id})
+    except Exception:  # noqa: BLE001
+        _log_caught(logger)
 
 
 def _already_spawned_followup(engine, parent_run_id: str) -> bool:
@@ -9662,6 +9694,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 [str(c) for c in (spec.get("acceptance_criteria") or []) if c])
             gates.set_bar_aware("nothing_broke", not _blocks, [_why] if not _blocks else [])
 
+        def _set_review(ok_, deferred_) -> None:
+            # The review at this bar: a refutation that named no issue, or a review that never
+            # saw the change, is a FOLLOW-UP on the gate below production (never "passed"), so
+            # the PR, the console and production_needs all see it was not judged here.
+            gates["code_review_passed"] = ok_
+            _lines = [str(f.get("text")) for f in deferred_ or ()
+                      if isinstance(f, dict) and f.get("bar_followup")]
+            if ok_ and _lines:
+                gates.note_followup("code_review_passed", _lines)
+
         def _set_consistent(verdict_, summary_) -> None:
             _ok, _follow = _quality_bar.consistency_passes(gates.bar, verdict_, summary_)
             gates["consistent"] = _ok
@@ -9897,7 +9939,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 r3.get("summary", ""), verdict,
                 _quality_bar.review_block_severity(_qbar, _qinfo.get("review_severity")))
             deferred_findings = _deferred
-            gates["code_review_passed"] = _rev_pass
+            _set_review(_rev_pass, _deferred)
             gates["security_clean"] = sec_verdict == "clean"
             # A SEAT THE PROFILE DID NOT CONVENE IS NOT A FAILED CHECK.
             # Removing a reviewer from the panel while leaving its gate expecting a verdict
@@ -10573,7 +10615,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             "review_code": {"verdict": verdict, "summary": rr.get("summary", ""),
                                             "hollow": _hollow}},
                             reviewed=repair_review_scope.snapshot(_review_change))
-                        gates["code_review_passed"] = _rev_pass
+                        _set_review(_rev_pass, _deferred)
                     if "consistent" in failing:
                         rc2, _hollow = _reseat["consistency_check"]
                         cost += int(rc2.get("cost_usd_micros") or 0)
@@ -11019,7 +11061,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                                  "verdict": verdict,
                                                  "summary": rr.get("summary", ""),
                                                  "hollow": _hollow}})
-                        gates["code_review_passed"] = _rev_pass
+                        _set_review(_rev_pass, _deferred)
                         evidence["review_summary"] = (rr.get("summary") or "")[:4000]
                         evidence["adversarial_verdict"] = verdict
                         evidence["review_escalated_turns"] = escalated
@@ -11359,13 +11401,31 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # THE ONE LIST every reader of this build's follow-ups reads (the PR body, the merge
         # card): the final deferred findings, whichever fix round last changed them.
         evidence["deferred_findings"] = list(deferred_findings or [])
-        # WILL BOSS FIX THEM ITSELF? A build's follow-ups start their own build after the PR
-        # opens (below: not for a follow-up, nor a re-check). The merge card and the PR say
-        # "queued, BOSS is fixing it" from this — a follow-up is never the person's job.
-        evidence[_quality_bar.QUEUED_KEY] = bool(
-            deferred_findings and not fctx.get("is_followup") and not _recheck
-            and (getattr(settings, "code_review_followup_tasks", True)
-                 or isinstance(evidence.get("checks_failing"), dict)))
+        # WHO TAKES THE FOLLOW-UPS (quality_bar.QUEUED_KEY), decided with the same rules the
+        # spawn below applies, so the merge card and the PR say what will really happen: a
+        # follow-up build ("queued, BOSS is fixing it"), the workflow's More tests pass, the
+        # build already on this branch, or listed for later. Corrected after the PR opens if the
+        # follow-up build then does not start (_correct_followup_card).
+        _takes = None
+        if (deferred_findings and not fctx.get("is_followup") and not _recheck
+                and (getattr(settings, "code_review_followup_tasks", True)
+                     or isinstance(evidence.get("checks_failing"), dict))):
+            _takes = "queued"
+            try:
+                from .code_task_service import lineage_branch_owner
+                from .workflow_capability_runner import pass_two_pending
+
+                with _transaction(engine) as c:
+                    if (fctx.get("workflow_run_id") and not isinstance(
+                            evidence.get("checks_failing"), dict)
+                            and pass_two_pending(c, str(fctx.get("workflow_run_id")))):
+                        _takes = "pass_two"
+                    elif lineage_branch_owner(c, project_id, str(fctx.get("root_run_id")
+                                                                 or run_id), exclude=(run_id,)):
+                        _takes = "owner"
+            except Exception:  # noqa: BLE001 — unknown: the spawn decides; the card is corrected
+                _log_caught(logger)
+        evidence[_quality_bar.QUEUED_KEY] = _takes or False
         if hasattr(gates, "bar"):
             _quality_bar.stamp(evidence, gates, flaky=_flaky_tests)
             try:  # the final list, on the run and its gate row (a fix round may have changed it)
@@ -11851,6 +11911,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                "code_task_run", run_id,
                                {"error": f"{type(exc).__name__}: {exc}"[:300],
                                 "findings": deferred_findings[:20]})
+        # THE CARD SAYS WHAT HAPPENED: it promised a follow-up build ("queued, BOSS is fixing
+        # it") and none started (the PR was merged or closed meanwhile, the spawn failed, the
+        # ledger already held every row) — it now says the follow-ups are listed for later.
+        if (evidence.get(_quality_bar.QUEUED_KEY) == "queued" and not followup_run_id
+                and proposal.get("decision_id")):
+            _correct_followup_card(engine, str(proposal["decision_id"]))
         # A SECRET ONLY A PERSON CAN SET (checks_failing.wait_for_person): the draft PR is
         # open, and the build now waits for that person — one card saying what to set and
         # where, whose "Retry once set" runs the gates again on this branch and PR.

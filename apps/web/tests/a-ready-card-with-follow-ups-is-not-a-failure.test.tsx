@@ -37,7 +37,7 @@ const { parseWorkItem } = await import("../lib/project-experience");
 
 
 const FOLLOWUPS = {
-  count: 2, p1: 1, queued: true, bar: "standard",
+  count: 2, p1: 1, queued: true, bar: "standard", words: "2 follow-ups queued, BOSS is fixing them",
   items: [
     { tier: "P1", severity: "major", text: "styles/globals.css:161 — the serving control overflows on phones" },
     { tier: "P2", severity: "minor", text: "pages/new.js:40 — an empty amount is saved as 0" },
@@ -100,10 +100,18 @@ describe("a merge card whose only open items are follow-ups", () => {
     expect(box.getAttribute("role")).toBeNull();
     expect(box.hasAttribute("open")).toBe(false);
     expect(box.querySelector("summary")!.textContent).toContain("Ready to merge.");
-    expect(box.querySelector("summary")!.textContent).toContain("2 follow-ups queued — BOSS is fixing them (1 P1)");
+    expect(box.querySelector("summary")!.textContent).toContain("2 follow-ups queued, BOSS is fixing them (1 P1)");
     const items = [...box.querySelectorAll("li")].map((li) => li.textContent ?? "");
     expect(items[0]).toContain("P1 [MAJOR]");
     expect(items[1]).toContain("P2 [MINOR]");
+  });
+
+  it("never says BOSS is fixing them when the engine says who really takes them", () => {
+    const row = mount({ ...card(), recommendation: { action: "review_pull_request",
+      followups: { ...FOLLOWUPS, queued: false, words: "2 follow-ups go to the More tests pass next" } } } as unknown as DecisionFeedItem);
+    const summary = row.querySelector('[data-testid="decision-follow-ups"] summary')!.textContent ?? "";
+    expect(summary).toContain("2 follow-ups go to the More tests pass next");
+    expect(summary).not.toContain("BOSS is fixing");
   });
 
   it("a failing card never also reads as ready", () => {
