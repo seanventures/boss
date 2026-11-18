@@ -9,8 +9,8 @@ prompt: |
   a role of staff or guest. Unknown paths return 404 with a JSON error. There is no identity
   provider and no remote call. A passing test starts the server on an ephemeral port, checks that
   two calls to /time return the same instant, and checks that /users returns the seeded names.
-  Build the program into bin/ (go build -o bin/fixtureclock .), which .gitignore already ignores;
-  never leave a compiled binary in the repository root.
+  Build the program into bin/ (go build -o bin/fixtureclock .), which the project's .gitignore ignores;
+  never leave a compiled binary in the repository.
 stack: Go API
 resources:
   - repo

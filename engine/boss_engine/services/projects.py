@@ -65,7 +65,8 @@ def _live_sample(connection, org_id: str, key: str) -> dict | None:
     return None
 
 
-def ensure_sample_code(connection, settings, project_id: str, *, actor: str) -> Optional[dict]:
+def ensure_sample_code(connection, settings, project_id: str, *, actor: str,
+                       stack: Optional[str] = None) -> Optional[dict]:
     """A sample's code lives on this machine: a local repository bound as its primary, unless it
     already has a repository (local or GitHub). Easy Mode's projects with no GitHub repository
     get theirs the same way (factory_launch._ensure_repository). Returns the binding made, or None (one existed,
@@ -86,7 +87,7 @@ def ensure_sample_code(connection, settings, project_id: str, *, actor: str) -> 
         with connection.begin_nested():
             return local_projects.create_for_project(
                 connection, settings, project_id, name=str(row["name"]), actor=actor,
-                title=str(row["name"]), description=str(row["description"] or ""))
+                title=str(row["name"]), description=str(row["description"] or ""), stack=stack)
     except (local_projects.LocalProjectError, local_repo.LocalRepoError, OSError) as error:
         # NEVER A 500 FOR OPENING A SAMPLE (review of #200): an unwritable repo root, a full disk
         # or a git failure leaves the sample without code, and its start says so.

@@ -7,12 +7,14 @@ which every stage, checkpoint and the PR read the changed files through) staged 
 `git add -A` and read it with RepoFiles.read_text, whose 2 MB cap refused it, and the refusal
 failed the whole build.
 
-  - a file the run ADDED that is a compiled program, or too large to read, is left out of the
-    work with a note in words ("left out: fixtureclock, a 3 MB compiled binary — add it to
-    .gitignore"), unstaged and kept out of git for the rest of the run; the source change ships;
-  - a file git already TRACKS that is over the cap still refuses, in words;
-  - a new local project's .gitignore ignores the build output of every compiled stack the
-    factory templates name, and the Go templates build into that ignored bin/.
+  - a file the run ADDED that is a compiled program (ELF, Mach-O, or PE with a real PE header)
+    is left out of the work with a note in words ("left out: fixtureclock, a 3 MB compiled
+    binary — add it to .gitignore") and kept out of git until the next diff, which checks and
+    notes it again (one BOSS block in .git/info/exclude, rewritten each time); the source ships;
+  - any other file over the cap (new or tracked, text or data) refuses in words, unless
+    .gitignore names it;
+  - a new local project's .gitignore ignores its stack's build output (Go: /bin/), never bin/
+    in other stacks, where it holds source (bin/cli.js).
 
 Real git in a temporary repository; no model, no database.
 """
@@ -80,12 +82,29 @@ def test_a_small_compiled_binary_is_build_output_too(tmp_path):
     assert box.left_out[0]["path"] == "fixtureclock"
 
 
-def test_an_untracked_large_data_file_is_left_out_not_a_failure(tmp_path):
+def test_a_new_large_text_file_refuses_in_words_unless_it_is_ignored(tmp_path):
+    """Only a compiled program is left out. A 3 MB text file the run made is work it cannot
+    carry: said in words, never dropped silently."""
+    box, _ = _repo(tmp_path)
+    (tmp_path / "fixtures.json").write_text("[" + "1," * (3 * 1024 * 1024 // 2) + "1]")
+    with pytest.raises(RepoFileRefused) as refused:
+        box.diff()
+    said = str(refused.value)
+    assert said.startswith("fixtures.json is 3 MB") and "not a compiled program" in said
+    assert "add it to .gitignore" in said
+    # Once .gitignore names it, it is not staged and the diff goes on.
+    (tmp_path / ".gitignore").write_text("fixtures.json\n")
+    assert [c.path for c in box.diff()] == [".gitignore"]
+    assert box.left_out == []
+
+
+def test_a_large_untracked_data_blob_that_is_no_program_refuses_too(tmp_path):
     box, _ = _repo(tmp_path)
     (tmp_path / "dump.bin").write_bytes(b"\x00\x01" * (MAX_FILE_BYTES // 2 + 10))
     (tmp_path / "users.json").write_text('[{"id": 1}]')
-    assert [c.path for c in box.diff()] == ["users.json"]
-    assert "dump.bin" in box.left_out[0]["words"]
+    with pytest.raises(RepoFileRefused) as refused:
+        box.diff()
+    assert str(refused.value).startswith("dump.bin is ")
 
 
 def test_a_tracked_file_over_the_cap_still_refuses_in_words(tmp_path):
@@ -101,9 +120,62 @@ def test_a_tracked_file_over_the_cap_still_refuses_in_words(tmp_path):
     assert said.startswith("data.csv is ") and "Git already tracks it" in said
 
 
-def _ignored(tmp_path, paths):
+def test_a_node_projects_bin_cli_reaches_the_diff(tmp_path):
+    """bin/ is source in a Node project: never ignored by the shared scaffold, never left out."""
+    box, git = _repo(tmp_path)
+    (tmp_path / ".gitignore").write_text(local_repo.initial_files("x", stack="Next.js")[".gitignore"])
+    git("add", "-A")
+    git("commit", "-qm", "scaffold")
+    box.diff_base_sha = git("rev-parse", "HEAD").strip()
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "cli.js").write_text("#!/usr/bin/env node\nconsole.log('hi')\n")
+    assert [c.path for c in box.diff()] == ["bin/cli.js"]
+    assert box.left_out == []
+
+
+def test_a_text_file_that_starts_with_mz_is_kept(tmp_path):
+    box, _ = _repo(tmp_path)
+    (tmp_path / "notes.md").write_text("MZ is how this file starts, and it is text.\n" * 20)
+    assert [c.path for c in box.diff()] == ["notes.md"]
+    assert box.left_out == []
+
+
+def test_a_real_pe_header_is_a_compiled_program(tmp_path):
+    box, _ = _repo(tmp_path)
+    pe = bytearray(512)
+    pe[0:2] = b"MZ"
+    pe[0x3C:0x40] = (128).to_bytes(4, "little")
+    pe[128:132] = b"PE\x00\x00"
+    (tmp_path / "tool.bin").write_bytes(bytes(pe))
+    (tmp_path / "time.go").write_text("package main\n")
+    assert [c.path for c in box.diff()] == ["time.go"]
+    assert box.left_out[0]["words"].startswith("left out: tool.bin, a 1 KB compiled binary")
+
+
+def test_every_round_re_notes_a_left_out_binary_and_keeps_no_stale_exclude(tmp_path):
+    box, git = _repo(tmp_path)
+    (tmp_path / "fixtureclock").write_bytes(_elf(3 * 1024 * 1024))
+    (tmp_path / "main.go").write_text("package main\n\nfunc main() { serve() }\n")
+    exclude = tmp_path / ".git" / "info" / "exclude"
+
+    box.diff()
+    assert [n["path"] for n in box.left_out] == ["fixtureclock"]
+    assert "/fixtureclock" in exclude.read_text()
+
+    box.diff()                                                   # round two: still there
+    assert [n["path"] for n in box.left_out] == ["fixtureclock"]
+    assert exclude.read_text().count("/fixtureclock") == 1      # one block, rewritten
+
+    (tmp_path / "fixtureclock").unlink()                         # the agent cleaned it up
+    box.diff()
+    assert box.left_out == []
+    assert "fixtureclock" not in exclude.read_text()
+    assert box._LEFT_OUT_BEGIN not in exclude.read_text()
+
+
+def _ignored(tmp_path, paths, stack=None):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    (tmp_path / ".gitignore").write_text(local_repo.initial_files("x")[".gitignore"])
+    (tmp_path / ".gitignore").write_text(local_repo.initial_files("x", stack=stack)[".gitignore"])
     out = subprocess.run(["git", "check-ignore", "--no-index", *paths], cwd=tmp_path,
                          capture_output=True, text=True)
     return set(out.stdout.split())
@@ -120,27 +192,30 @@ BUILD_OUTPUT = {
 }
 
 
-def test_a_new_local_projects_gitignore_ignores_every_compiled_stacks_output(tmp_path):
-    wanted = [p for paths in BUILD_OUTPUT.values() for p in paths]
-    assert _ignored(tmp_path, wanted) == set(wanted)
-    # ... and never a source file.
+@pytest.mark.parametrize("stack", sorted(BUILD_OUTPUT))
+def test_a_new_local_projects_gitignore_ignores_its_stacks_build_output(tmp_path, stack):
+    wanted = BUILD_OUTPUT[stack]
+    assert _ignored(tmp_path, wanted, stack=stack) == set(wanted)
+    # ... and never a source file, bin/ included outside Go.
     sources = tmp_path / "sources"
     sources.mkdir()
-    assert _ignored(sources, ["main.go", "app/src/main/kotlin/Main.kt", "pages/index.tsx",
-                              "cmd/server/main.go"]) == set()
+    keep = ["main.go", "app/src/main/kotlin/Main.kt", "pages/index.tsx", "cmd/server/main.go",
+            "a.out.md", "scripts/run.out.sh"] + ([] if stack == "Go" else ["bin/cli.js"])
+    assert _ignored(sources, keep, stack=stack) == set()
 
 
-def test_the_go_templates_build_into_the_ignored_bin(tmp_path):
+def test_the_go_scaffold_ignores_its_binary_and_the_go_templates_build_there(tmp_path):
     go = []
     for path in sorted(TEMPLATES.glob("*.yaml")):
         item = yaml.safe_load(path.read_text(encoding="utf-8"))
         if str(item["stack"]).split()[0] == "Go":
             go.append(item["id"])
             assert "go build -o bin/" in item["prompt"], item["id"]
-    assert go, "no Go template found"
+            assert local_repo.gitignore_for(item["stack"]).endswith("/bin/\n")
     assert {"fixture-clock", "license-shelf"} <= set(go)
-    assert _ignored(tmp_path, ["bin/fixtureclock", "bin/licenseshelf"]) == {
+    assert _ignored(tmp_path, ["bin/fixtureclock", "bin/licenseshelf"], stack="Go API") == {
         "bin/fixtureclock", "bin/licenseshelf"}
+    assert "bin/" not in local_repo.gitignore_for("Next.js")
 
 
 def test_the_run_records_what_was_left_out():
