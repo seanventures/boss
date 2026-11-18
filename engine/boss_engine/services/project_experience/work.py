@@ -777,14 +777,30 @@ def _build_items(connection: Connection, project_id: str,
             continue
         _settle_merged(members)
         _states(members, now, horizon)
+        newest = max(members, key=lambda m: str(iso(m.get("created_at")) or ""))
+        from ..build_failure import _moved_on, waits_on  # noqa: SLF001 — the one rule
+
+        moved_on = newest["_state"] == "failed" and _moved_on(members, newest)
+        if moved_on:
+            # THE LINEAGE MOVED ON: a change merged after this attempt failed — it is an earlier
+            # attempt, never the work's red state (recipe-box: crun_47c3 failed, then change #1
+            # of its parent was merged).
+            newest["_state"] = "handed_on"
+        waits = waits_on(connection, project_id, newest) if newest["_state"] == "failed" else None
         group = _group_fields(project_id, members, key, costs)
         latest = group.pop("latest")
         root = g["root"] or min(members, key=lambda m: str(iso(m.get("created_at")) or ""))
         merge = next((m for m in sorted(members, key=lambda m: str(iso(m["created_at"])),
                                         reverse=True) if m.get("merge_open")), None)
         state = latest["_state"]
+        if state == "handed_on":
+            state = "done"
         if merge is not None and state != "failed":
             state = "needs_you"
+        if waits is not None:
+            # A REFUSAL THAT WAITS ON A MERGE (build_failure.waits_on): the merge to do while it
+            # is open; once merged, the refusal's cause is gone — done, said faint.
+            state = "done" if waits.get("resolved") else "needs_you"
         merge_links = _merge_links(members, merge)
         shown = merge_links["merge_pr"] or merge_links["merged_pr"]
         with_pr = next((m for m in sorted(members, key=lambda m: str(iso(m["created_at"])),
@@ -792,6 +808,11 @@ def _build_items(connection: Connection, project_id: str,
         pr_url = (shown or {}).get("external_url") or (
             with_pr["pull_request_url"] if with_pr else None)
         strip = _build_strip({**latest, "merge_open": bool(merge)}, latest["_state"])
+        if waits is not None:
+            # Not a failure: it waits on a merge (PR amber) or its cause is gone (quiet).
+            strip = ([{**st, "state": "skipped"} for st in strip] if waits.get("resolved")
+                     else [{**st, "state": "waiting"} if st["state"] == "failed" else st
+                           for st in strip])
         raw_title = root.get("title") or "Build"
         title = clean_title(raw_title)
         out.append({
@@ -817,11 +838,14 @@ def _build_items(connection: Connection, project_id: str,
                               "external_url": pr_url} if pr_url else None),
                       **merge_links,
                       "deploy": None, "preview": previews.get(str(latest["id"])),
-                      "decision": href(project_id, area="decisions", decision=merge["decision_id"])
-                      if merge is not None else None},
+                      "decision": (href(project_id, area="decisions", decision=merge["decision_id"])
+                                   if merge is not None else waits["href"]
+                                   if waits and not waits.get("resolved") else None)},
             "decision_ids": [merge["decision_id"]] if merge is not None else [],
-            "action_label": "Merge" if merge is not None else None,
-            "detail": latest.get("error") or title,
+            "action_label": ("Merge" if merge is not None else
+                             waits["label"] if waits and not waits.get("resolved") else None),
+            "detail": (waits["detail"] if waits else latest.get("error") or title),
+            "resolved": ({"words": waits["detail"]} if waits and waits.get("resolved") else None),
             "build_id": str(latest["id"]),
             "href": project_href(project_id, tab="work", drawer=f"build:{key}"),
             "app_id": root.get("app_id") or latest.get("app_id") or None,

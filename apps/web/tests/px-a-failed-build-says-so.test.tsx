@@ -241,6 +241,23 @@ describe("a completed build with a failed follow-up (the laptop's lineage)", () 
     expect(retry.mock.calls[0][0].get("run_id")).toBe(FOLLOW);
   });
 
+  it("a refusal whose cause is gone reads its words, faint, never a red Failed", async () => {
+    const REFUSED = "crun_0459f6c96d7f41adac27";
+    const done = { ...ROW, id: REFUSED, state: "done", resolved: { words: "Not needed: change #1 was merged." } };
+    stubFetch((c) => {
+      if (c.method !== "GET") return { body: { ok: true } };
+      if (c.path === "/v1/projects/summary") return { body: FX_SUMMARY };
+      const m = c.path.match(/^\/v1\/projects\/([^/]+)\/(overview|work|onboarding)$/);
+      const ov = { ...OVERVIEW, project: { ...OVERVIEW.project, status_label: "Working", build_failed: null }, needs_you: [], recent_work: [done] };
+      if (m) return { body: ({ overview: ov, work: { items: [done] }, onboarding: { ...FX_ONBOARDING, state: "ready" } } as Record<string, unknown>)[m[2]] };
+      return undefined;
+    });
+    await openProject();
+    expect(tid(`px-ov-resolved-${REFUSED}`)!.textContent).toBe("Not needed: change #1 was merged.");
+    expect(tid(`px-ov-failed-${REFUSED}`)).toBeNull();
+    expect(tid("px-head-status")!.textContent).not.toContain("failed");
+  });
+
   it("a failed build a later one replaced reads Replaced, faint, never a red Failed", async () => {
     lineageEngine();
     await openProject();

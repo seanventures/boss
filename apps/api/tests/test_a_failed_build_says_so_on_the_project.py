@@ -483,3 +483,84 @@ def test_a_failed_build_a_later_build_replaced_is_not_a_red_failure(world, clien
     assert row["state"] == "done" and row["replaced_by"]["id"] == later
     assert not any(st["state"] == "failed" for st in row["stages"])
     assert ov["project"]["build_failed"] is None
+
+
+#: The laptop's recipe-box rows, read from its DB 2026-11-18 ~18:40 UTC (times relative).
+APP_MISSING = ("The checkout of recipe-box (branch main) holds no application files, but BOSS "
+               "has already built this app in this repository: its code is on "
+               "boss/code/{run}, not merged into main. Building here would write a second app "
+               "from scratch beside it, so this build stopped before planning. Merge that "
+               "change, or start this work as a follow-up of that build (it builds on its branch).")
+FOLLOW_ERROR = ("BOSS could not collect this build's changes: git refused this checkout's index "
+                "(.git/index) even after BOSS repaired its permissions (git add failed: error: "
+                "insufficient permission for adding an object to repository database .git/objects")
+
+
+def _laptop_rows(db, pid, *, merged: bool):
+    """crun_6883 (failed) → relaunch crun_d8b (completed, change #1, merge decision) with its
+    follow-up crun_47c3 (failed) → crun_0459 (refused: app_missing, waits on d8b's branch)."""
+    dec = f"dec_{uuid.uuid4().hex[:16]}"
+    db.execute(text(
+        "INSERT INTO decisions (id, project_id, question, recommendation, status, risk_tier, "
+        "created_at) VALUES (:i, :p, 'Merge change #1?', CAST(:r AS JSONB), :s, 2, now())"),
+        {"i": dec, "p": pid, "s": "executed" if merged else "pending",
+         "r": json.dumps({"action": "review_pull_request"})})
+    app = {"app_id": "app_323e177e281ae4f976a0"}
+    first = _build(db, pid, minutes_ago=180, fctx={**app, "failure_class": "infra",
+                                                    "reason_code": "pipeline_exception"})
+    root = _build(db, pid, status="completed", error=None, minutes_ago=90,
+                  pr_url="http://boss-local/local_recipe-box/recipe-box/pull/1",
+                  fctx={**app, **({"merge": {"sha": "c1ea8ff7ed2d"}} if merged else {})})
+    db.execute(text("UPDATE code_task_runs SET decision_id = :d, pull_request_number = 1, "
+                    "updated_at = now() - interval '1 minute' WHERE id = :i"),
+               {"d": dec, "i": root})
+    follow = _build(db, pid, minutes_ago=70, error=FOLLOW_ERROR,
+                    title="Follow-up: deferred review findings — Recipe box",
+                    fctx={**app, "root_run_id": root, "parent_run_id": root,
+                          "failure_class": "infra", "reason_code": "pipeline_exception"})
+    refused = _build(db, pid, minutes_ago=4, error=APP_MISSING.format(run=root),
+                     fctx={**app, "failure_class": "infra", "reason_code": "app_missing"})
+    return {"first": first, "root": root, "follow": follow, "refused": refused, "decision": dec}
+
+
+def test_a_refusal_waiting_on_a_merge_is_that_merge_not_a_red_failure(world, client, engine):
+    pid = _project(world, client)
+    with engine.begin() as db:
+        rows = _laptop_rows(db, pid, merged=False)
+    ov = _get(world, client, f"/v1/projects/{pid}/overview")
+    assert ov["project"]["build_failed"] is None
+    assert ov["project"]["status_label"] not in ("Build failed", "Follow-up failed")
+    assert not any(n["kind"] == "failed" for n in ov["needs_you"])
+    row = next(w for w in ov["recent_work"] if w["id"] == rows["refused"])
+    assert row["state"] == "needs_you" and row["action_label"] == "Merge change #1 first"
+    assert f"decision={rows['decision']}" in row["links"]["decision"]
+    card = _get(world, client, "/v1/projects/summary")["items"]
+    assert next(c for c in card if c["id"] == pid)["build_failed"] is None
+
+
+def test_once_merged_the_refusal_and_the_earlier_failures_clear(world, client, engine):
+    from boss_engine.config import get_settings
+    from boss_engine.services import command_center
+
+    pid = _project(world, client)
+    with engine.begin() as db:
+        rows = _laptop_rows(db, pid, merged=True)
+    ov = _get(world, client, f"/v1/projects/{pid}/overview")
+    # "the latest attempt of the latest lineage": the refusal's cause is gone — nothing red.
+    assert ov["project"]["build_failed"] is None
+    assert ov["project"]["status_label"] not in ("Build failed", "Follow-up failed")
+    assert not any(n["kind"] == "failed" for n in ov["needs_you"])
+    by = {w["id"]: w for w in ov["recent_work"]}
+    assert by[rows["refused"]]["state"] == "done"
+    assert by[rows["refused"]]["resolved"]["words"] == "Not needed: change #1 was merged."
+    # The follow-up that failed before change #1 was merged is an earlier attempt.
+    assert by[rows["root"]]["state"] == "done"
+    attempts = {a["id"]: a["state"] for a in by[rows["root"]]["attempts"]}
+    assert attempts[rows["follow"]] == "handed_on"
+    # The very first build is replaced by the relaunch, never red.
+    assert by[rows["first"]]["state"] == "done" and by[rows["first"]]["replaced_by"]
+    with engine.connect() as c:
+        cc = command_center.build(c, get_settings(), pid)
+    assert not any(n["kind"] == "build_failed" for n in cc["needs_you"])
+    card = next(c for c in _get(world, client, "/v1/projects/summary")["items"] if c["id"] == pid)
+    assert card["build_failed"] is None and card["status_label"] not in ("Build failed",)

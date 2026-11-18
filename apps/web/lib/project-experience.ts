@@ -198,6 +198,8 @@ export type WorkItem = {
   /** A failed build a later build of the same app replaced (engine work._replaced): history,
    *  said "Replaced by a later build", never a red Failed. */
   replaced_by?: { id: string; label: string; href: string } | null;
+  /** A refused build whose stated cause is gone (engine build_failure.waits_on): said faint. */
+  resolved?: { words: string } | null;
   stages: { key: string; label: string; state: StepState }[]; agents: Agent[]; cost_usd: number | null;
   /** What the subscription calls would have cost at list price (costWords). */
   list_usd?: number | null;
@@ -571,6 +573,7 @@ export const parseWorkItem = (v: unknown): WorkItem => {
   const x = o(v); const l = o(x.links); const pr = o(l.pr); const mp = o(l.merge_pr); const md = o(l.merged_pr);
   return {
     id: s(x.id), label: s(x.label), kind: s(x.kind, "feature"), state: oneOf(x.state, WORK_STATES, "planned"), age: s(x.age),
+    resolved: s(o(x.resolved).words) ? { words: s(o(x.resolved).words) } : null,
     replaced_by: s(o(x.replaced_by).id) ? { id: s(o(x.replaced_by).id), label: s(o(x.replaced_by).label), href: s(o(x.replaced_by).href) } : null,
     stages: a(x.stages).map((st) => ({ key: s(o(st).key), label: s(o(st).label), state: oneOf(o(st).state, STEP_STATES, "todo") })),
     agents: agents(x.agents), cost_usd: nn(x.cost_usd), list_usd: nn(x.list_usd),
@@ -654,7 +657,7 @@ export function attemptsPill(w: Pick<WorkItem, "attempt_count" | "followups" | "
 }
 export const KIND_WORDS: Record<string, string> = { feature: "Feature", bug: "Bug", fix: "Fix", ticket: "Ticket", chore: "Chore", incident: "Incident", setup: "Setup" };
 export const ATTEMPT_WORDS: Record<AttemptState, string> = {
-  planned: "Queued", running: "Running", stalled: "Stalled", handed_on: "Handed on", needs_you: "Needs you", done: "Done", failed: "Failed",
+  planned: "Queued", running: "Running", stalled: "Stalled", handed_on: "Earlier attempt", needs_you: "Needs you", done: "Done", failed: "Failed",
 };
 export const parseAccept = (v: unknown): Accept | null => {
   const x = o(v);
