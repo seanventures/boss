@@ -71,22 +71,6 @@ def filter_overrides(root: Path, *, env: Mapping[str, str], timeout: float = 20)
 #: names (core.excludesFile pointed at a BOSS file is an oracle for that file's lines).
 READ_ONLY_CONFIG: tuple[str, ...] = ("-c", "core.excludesFile=/dev/null", "-c", "safe.directory=*")
 
-#: .git entries that make git read ANOTHER repository's objects or refs. git has no switch to
-#: ignore them, so read-only git as BOSS's uid refuses a run's tree that holds one.
-_FOREIGN_STORE = ("objects/info/alternates", "objects/info/http-alternates", "commondir")
-
-
-def _foreign_store(git_dir: Path) -> bool:
-    try:
-        if not stat.S_ISDIR(os.lstat(git_dir / "objects").st_mode):
-            return True                   # objects/ itself a link: another repository's store
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return True
-    return any(os.path.lexists(git_dir / rel) for rel in _FOREIGN_STORE)
-
-
 def tree_git(root: Any, *args: str, owner: Any = None, timeout: float = 20,
              text: bool = True) -> Optional[subprocess.CompletedProcess]:
     """A READ-ONLY git (rev-parse, ls-files, merge-base, remote get-url, ...) BOSS runs on a
@@ -100,9 +84,9 @@ def tree_git(root: Any, *args: str, owner: Any = None, timeout: float = 20,
       gitfile is refused, never discovered upwards.
     * NO_TREE_CODE, READ_ONLY_CONFIG, no system/global config, GIT_OPTIONAL_LOCKS=0 (no
       opportunistic index rewrite).
-    * As BOSS's uid (no identity held) on a tree inside the sandbox root: refused when the tree
-      points git at another object store (alternates, commondir, a linked objects/) — git
-      has no option to ignore those."""
+    * No identity held and the tree inside the sandbox root: refused outright. Checking it for
+      another object store (objects/info/alternates, commondir, a linked objects/) and then
+      running as BOSS would race the run's uid, and git has no switch to ignore those."""
     from . import owned_process, sandbox_identity
 
     base = Path(str(root))
@@ -114,11 +98,11 @@ def tree_git(root: Any, *args: str, owner: Any = None, timeout: float = 20,
         return None
     holder = owner if owner is not None else owned_process.current_owner()
     ident = sandbox_identity.for_owner(holder)
-    if ident is None and _foreign_store(git_dir):
+    if ident is None:
         from . import workspace_perms
 
         if workspace_perms.trusted_root_for(base) is not None:
-            return None
+            return None       # a sandboxed run's tree is only ever read with its run's authority
     env = {**isolated_env({"PATH": os.environ.get("PATH", os.defpath), "LANG": "C.UTF-8",
                            "HOME": os.devnull}),
            "GIT_DIR": str(git_dir), "GIT_WORK_TREE": str(base), "GIT_OPTIONAL_LOCKS": "0"}

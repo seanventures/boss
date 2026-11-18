@@ -167,7 +167,7 @@ def _as_run_uid(monkeypatch, run_dir: Path):
     def run(argv, *, env=None, cwd=None, **kw):
         seen.append((argv, kw, env))
         return subprocess.run(argv, env=env, cwd=cwd, capture_output=True,
-                              text=kw.get("text", True))
+                              text=kw.get("text", True), input=kw.get("input"))
 
     monkeypatch.setattr(owned_process, "run", run)
     return seen
@@ -199,7 +199,8 @@ def test_tree_git_refuses_a_dot_git_that_is_a_link(tmp_path):
 
 def test_planted_alternates_never_make_boss_read_another_repository(tmp_path, monkeypatch):
     """A run tree inside the sandbox root whose objects/info/alternates names a BOSS repository:
-    as BOSS's uid (no identity held) git would read that repository's objects. Refused."""
+    as BOSS's uid (no identity held) git would read that repository's objects. Refused — as is
+    every unbound read of a sandboxed tree (no check-then-run race)."""
     other = _repo(tmp_path.resolve() / "boss-repo", content="BOSS's own\n")
     secret = _git(other, "rev-parse", "HEAD").stdout.strip()
     run_root = tmp_path.resolve() / "runs"
@@ -263,8 +264,102 @@ def test_carry_tree_lists_as_the_run_uid_when_one_is_held(tmp_path, monkeypatch)
     out = runner_dispatch.carry_tree(str(src), str(dst), owner="run-owner")
 
     assert (dst / "new.txt").read_text() == "turn output" and out["copied"] >= 1
+    assert not src.exists()
     assert seen and all(kw.get("sandboxed") is not False and kw.get("owner") == "run-owner"
-                        and "core.excludesFile=/dev/null" in argv for argv, kw, _ in seen)
+                        for argv, kw, _ in seen)
+    gits = [argv for argv, _, _ in seen if argv[0] == "git"]
+    assert len(gits) == 2 and all("core.excludesFile=/dev/null" in a for a in gits)
+    copies = [argv for argv, _, _ in seen if argv[0] != "git"]
+    assert len(copies) == 1 and copies[0][1:3] == ["-I", "-c"]
+
+
+def _forbid_boss_side_writes(monkeypatch):
+    """The API process (BOSS's uid) must not create, copy or unlink anything in either tree."""
+    def boom(*a, **k):
+        raise AssertionError(f"BOSS-side filesystem write: {a[:2]}")
+
+    for name in ("makedirs", "symlink", "unlink", "mkdir", "rename"):   # (os is global: the
+        monkeypatch.setattr(runner_dispatch.os, name, boom, raising=False)  # whole process)
+    monkeypatch.setattr(runner_dispatch.shutil, "copy2", boom)
+
+
+def test_carry_tree_never_writes_as_boss_through_a_symlinked_destination_dir(tmp_path,
+                                                                              monkeypatch):
+    """The #220 review's case: the turn left x/pwn.txt; dst/x is a link to a BOSS 0700 dir.
+    The copy runs as the run's uid (here: simulated, the seam must be the sandboxed spawn), never
+    as BOSS following the link."""
+    run_dir = _run_dir(tmp_path)
+    boss = _boss_only(tmp_path)
+    src, dst = _repo(run_dir / "src"), _repo(run_dir / "dst")
+    (src / "x").mkdir()
+    (src / "x" / "pwn.txt").write_text("written by the run uid")
+    os.symlink(boss, dst / "x")
+    ident = SimpleNamespace(uid=OTHER, run_dir=run_dir)
+    monkeypatch.setattr(sandbox_identity, "for_owner", lambda owner: ident)
+    spawned = []
+    real_run = subprocess.run
+
+    def as_run_uid(argv, *, env=None, cwd=None, **kw):
+        spawned.append((argv, kw))
+        assert kw.get("sandboxed") is not False and kw.get("owner") == "run-owner"
+        if argv[0] == "git":
+            return real_run(argv, env=env, cwd=cwd, capture_output=True, text=kw.get("text"))
+        # The run's uid could not write into BOSS's 0700 dir: what the helper would report.
+        return subprocess.CompletedProcess(argv, 0, '{"copied": 1, "removed": 0}', "")
+
+    monkeypatch.setattr(owned_process, "run", as_run_uid)
+    _forbid_boss_side_writes(monkeypatch)
+    monkeypatch.setattr(runner_dispatch.shutil, "rmtree", lambda p, **k: None)
+
+    out = runner_dispatch.carry_tree(str(src), str(dst), owner="run-owner")
+
+    assert out == {"copied": 1, "removed": 0}
+    assert sorted(p.name for p in boss.iterdir()) == ["secret.key"]
+    assert any(argv[0] != "git" for argv, _ in spawned)
+
+
+def test_carry_tree_never_copies_a_symlinked_source_as_boss(tmp_path, monkeypatch):
+    """src/leak is a link to a BOSS secret: BOSS never reads it; the copy runs as the run's uid,
+    which recreates the LINK (never the content) in dst."""
+    run_dir = _run_dir(tmp_path)
+    boss = _boss_only(tmp_path)
+    src, dst = _repo(run_dir / "src"), _repo(run_dir / "dst")
+    os.symlink(boss / "secret.key", src / "leak")
+    _as_run_uid(monkeypatch, run_dir)
+
+    runner_dispatch.carry_tree(str(src), str(dst), owner="run-owner")
+
+    assert (dst / "leak").is_symlink() and os.readlink(dst / "leak") == str(boss / "secret.key")
+
+
+def test_a_sandboxed_tree_is_never_carried_without_its_identity(tmp_path, monkeypatch):
+    run_root = tmp_path.resolve() / "runs"
+    boss = _boss_only(tmp_path)
+    src, dst = _repo(run_root / "o" / "src"), _repo(run_root / "o" / "dst")
+    (src / "x").mkdir()
+    (src / "x" / "pwn.txt").write_text("x")
+    os.symlink(boss, dst / "x")
+    monkeypatch.setenv(sandbox_identity.RUN_ROOT_ENV, str(run_root))
+    monkeypatch.setattr(sandbox_identity, "for_owner", lambda owner: None)
+    _forbid_boss_side_writes(monkeypatch)
+
+    assert runner_dispatch.carry_tree(str(src), str(dst)) == {"copied": 0, "removed": 0}
+    assert sorted(p.name for p in boss.iterdir()) == ["secret.key"] and src.exists()
+
+
+def test_a_source_the_current_run_uid_cannot_read_is_kept_and_said(tmp_path, monkeypatch, caplog):
+    run_dir = _run_dir(tmp_path)
+    src, dst = _repo(run_dir / "src"), _repo(run_dir / "dst")
+    ident = SimpleNamespace(uid=OTHER, run_dir=run_dir)              # src is owned by our uid
+    monkeypatch.setattr(sandbox_identity, "for_owner", lambda owner: ident)
+    monkeypatch.setattr(owned_process, "run", lambda argv, **kw: subprocess.CompletedProcess(
+        argv, 128, b"", b"fatal: Permission denied"))
+
+    with caplog.at_level("WARNING", logger="boss.runner_dispatch"):
+        assert runner_dispatch.carry_tree(str(src), str(dst), owner="o") == {"copied": 0,
+                                                                              "removed": 0}
+    assert src.exists()
+    assert f"holds uid {OTHER}" in caplog.text and "re-leased after the restart" in caplog.text
 
 
 def test_every_named_read_only_git_goes_through_tree_git(tmp_path, monkeypatch):
