@@ -9,7 +9,7 @@ This is a test candidate. Cutting the tag does not deploy a host or publish an i
 **The template gallery**
 
 - The gallery only offers templates BOSS can build. The three Android templates (Pantry list, Shift clock, Trail log) are gone, because no BOSS image has an Android SDK, an emulator or Xcode. **Orbit dodge**, which was a Godot game, is now a browser game with the same gameplay.
-- Every template says what it builds with (Python, Node, Go or Java).
+- Every template knows what it builds with (Python, Node, Go or Java), so BOSS can refuse one this install cannot build, in words, before anything starts.
 - If a template needs a toolchain your install does not have, its card says **Needs Go** (or **Needs Java**) and shows the command to turn it on, for example `boss toolchains enable go`. You cannot pick it by mistake, and if something asks BOSS to start one anyway, BOSS says in words what is missing before it makes a project.
 - Each card opens with a drawing of that app's screen, like the "Start from an idea" cards.
 - The gallery shows two rows first, with **Show all** to see every template and **Show fewer** to fold it back.
