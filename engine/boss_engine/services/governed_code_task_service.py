@@ -656,9 +656,14 @@ def should_create_followup_for_pr(gh, *, pull_request_number: int) -> tuple[bool
                  if (f.get("path") or f.get("filename")) and f.get("status") != "removed"]
         if paths:
             try:
-                already_in_base = all(
-                    gh.read_text_file(base_ref, path) == gh.read_text_file(head_ref, path)
-                    for path in paths)
+                # A file the head cannot be read at proves nothing: two missing reads are
+                # equal, and "already present on its base" then cancelled the follow-up of a
+                # ready build (a ref the host did not decode read every head file as missing).
+                def _same(path: str) -> bool:
+                    head = gh.read_text_file(head_ref, path)
+                    return head is not None and gh.read_text_file(base_ref, path) == head
+
+                already_in_base = all(_same(path) for path in paths)
             except Exception:  # noqa: BLE001
                 _log_caught(logger)
                 already_in_base = False
@@ -11326,7 +11331,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             deferred_findings = list(deferred_findings) + [
                 f for f in _bar_followups
                 if " ".join(str(f.get("text") or "").split()).lower() not in _have]
-            evidence["deferred_findings"] = deferred_findings
+        # THE ONE LIST every reader of this build's follow-ups reads (the PR body, the merge
+        # card): the final deferred findings, whichever fix round last changed them.
+        evidence["deferred_findings"] = list(deferred_findings or [])
+        # WILL BOSS FIX THEM ITSELF? A build's follow-ups start their own build after the PR
+        # opens (below: not for a follow-up, nor a re-check). The merge card and the PR say
+        # "queued, BOSS is fixing it" from this — a follow-up is never the person's job.
+        evidence[_quality_bar.QUEUED_KEY] = bool(
+            deferred_findings and not fctx.get("is_followup") and not _recheck
+            and (getattr(settings, "code_review_followup_tasks", True)
+                 or isinstance(evidence.get("checks_failing"), dict)))
         if hasattr(gates, "bar"):
             _quality_bar.stamp(evidence, gates, flaky=_flaky_tests)
             try:  # the final list, on the run and its gate row (a fix round may have changed it)

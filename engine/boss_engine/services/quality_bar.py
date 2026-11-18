@@ -530,8 +530,78 @@ def stamp(evidence: dict, gates: Any, *, flaky: Iterable[str] = ()) -> dict:
     return record
 
 
+#: evidence key: will BOSS start the follow-up build for this build's follow-ups itself? Written
+#: by the pipeline before the pull request opens (it knows: not a follow-up itself, not a
+#: re-check, follow-up builds on), read by the merge card's words and the PR body.
+QUEUED_KEY = "followups_queued"
+#: The merge card's follow-ups record (decision recommendation).
+CARD_KEY = "followups"
+
+
+def finding_tier(finding: Mapping[str, Any]) -> str:
+    """A follow-up's tier: P1 for what a stricter bar would have blocked on (a blocker, a major,
+    a security note), P2 for the rest (minor, nit, a flaky test)."""
+    sev = str(finding.get("severity") or "major").strip().lower()
+    return P1 if sev in ("blocker", "major", "security", "critical", "high") else P2
+
+
+def _one_line(text: Any) -> str:
+    return " ".join(str(text or "").split())
+
+
+def followup_items(evidence: Optional[Mapping[str, Any]], limit: int = 40
+                   ) -> list[dict[str, Any]]:
+    """The build's follow-ups as one list, P1 first: every deferred finding (review findings
+    below the bar's blocking severity, the gates the bar let through, flaky tests), each
+    {tier, severity, text}."""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for f in (evidence or {}).get("deferred_findings") or []:
+        if not isinstance(f, Mapping):
+            continue
+        text = _one_line(f.get("text"))
+        if not text or text.lower() in seen:
+            continue
+        seen.add(text.lower())
+        where = _one_line(f.get("path"))
+        if where and f.get("line"):
+            where = f"{where}:{f.get('line')}"
+        out.append({"tier": finding_tier(f), "severity": str(f.get("severity") or "major").lower(),
+                    "text": (f"{where} — {text}" if where and where not in text else text)[:400]})
+    out.sort(key=lambda i: 0 if i["tier"] == P1 else 1)
+    return out[:limit]
+
+
+def merge_followups(evidence: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
+    """What the merge card says about a build whose open items are only follow-ups: {count, p1,
+    queued, bar, items}. None when there are none. A follow-up never makes the card a failure:
+    the card is a normal "ready to merge" one, and BOSS (not the person) fixes the follow-ups."""
+    items = followup_items(evidence, limit=1000)
+    if not items:
+        return None
+    return {"count": len(items), "p1": sum(1 for i in items if i["tier"] == P1),
+            "queued": bool((evidence or {}).get(QUEUED_KEY)),
+            "bar": ((evidence or {}).get(KEY) or {}).get("bar") or DEFAULT, "items": items[:40]}
+
+
+def followup_words(followups: Mapping[str, Any]) -> str:
+    """"1 follow-up queued, BOSS is fixing it" / "3 follow-ups listed for later"."""
+    n = int(followups.get("count") or 0)
+    s = "" if n == 1 else "s"
+    if followups.get("queued"):
+        return f"{n} follow-up{s} queued, BOSS is fixing {'it' if n == 1 else 'them'}"
+    return f"{n} follow-up{s} listed for later"
+
+
+def ready_words(name: str, followups: Mapping[str, Any]) -> str:
+    """The merge card's headline for a build whose open items are only follow-ups:
+    "Recipe box is ready — 1 follow-up queued, BOSS is fixing it"."""
+    return f"{name} is ready — {followup_words(followups)}"
+
+
 def pr_section(evidence: Optional[Mapping[str, Any]]) -> str:
-    """The PR description's follow-ups section ("" when there are none)."""
+    """The PR description's follow-ups section ("" when there are none): the gates the bar let
+    through, the flaky tests, then every other follow-up (a deferred review finding, P1/P2)."""
     rec = (evidence or {}).get(KEY) or {}
     lines: list[str] = []
     for g, items in (rec.get("followups") or {}).items():
@@ -540,10 +610,18 @@ def pr_section(evidence: Optional[Mapping[str, Any]]) -> str:
         else:
             lines.append(f"- `{g}` did not pass; not blocking at the {rec.get('bar')} bar")
     lines.extend(f"- Flaky test (passed on retry): {t}" for t in rec.get("flaky") or [])
+    listed = _one_line(" ".join(lines)).lower()
+    for item in followup_items(evidence):
+        core = item["text"].split(" — ", 1)[-1].lower()
+        if core in listed or core.startswith(("follow-up: gate", "flaky test (passed on retry)")):
+            continue
+        lines.append(f"- {item['tier']} [{item['severity'].upper()}] {item['text']}")
     if not lines:
         return ""
+    who = ("BOSS has queued a follow-up build that fixes them on this branch."
+           if (evidence or {}).get(QUEUED_KEY) else "They are recorded, not dropped.")
     return (f"## Follow-ups (quality bar: {rec.get('bar') or DEFAULT})\n\n"
-            "These did not block this build at its quality bar. They are queued, not dropped.\n\n"
+            f"These did not block this build at its quality bar. {who}\n\n"
             + "\n".join(lines) + "\n")
 
 

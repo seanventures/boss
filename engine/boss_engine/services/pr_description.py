@@ -83,18 +83,26 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
     # (the rounds record an unconvened seat as not_run, which must not turn its gate false).
     skipped = {g: why for g, why in _seat_policy.skipped_gates(evidence).items() if g in gates}
     final = next((r.get("seats") or {} for r in reversed(rounds) if r.get("seats")), {})
+    # A REVIEW THAT REFUTED ONLY WITH FINDINGS BELOW THE BAR'S BLOCKING SEVERITY (a MAJOR at
+    # the standard bar) passed its gate: those findings are the build's follow-ups, so the
+    # review is a follow-up here, never "❌ failed" over a build that was not blocked.
+    graded = {"code_review_passed"} if (
+        gates.get("code_review_passed")
+        and str((final.get("review_code") or {}).get("verdict") or "") == "refuted"
+        and evidence.get("deferred_findings")) else set()
     for seat, gate, good in (("review_code", "code_review_passed", {"survived"}),
                              ("security_check", "security_clean", {"clean"}),
                              ("consistency_check", "consistent", {"consistent"})):
         verdict = str((final.get(seat) or {}).get("verdict") or "")
         # Only ever downgrades: a recorded failure stays a failure.
-        if gate in gates and verdict and gate not in skipped:
+        if gate in gates and verdict and gate not in skipped and gate not in graded:
             gates[gate] = bool(gates[gate]) and verdict in good
     # A gate the quality bar let through is a THIRD bucket, never passed (quality_bar.py): it
     # did not pass, and at this bar it does not fail the build.
     followups = {g: lines for g, lines in
                  ((evidence.get("quality_bar") or {}).get("followups") or {}).items()
                  if g in gates}
+    followups.update({g: [] for g in graded if g not in followups})
     passed = [k for k, v in gates.items() if v and k not in skipped and k not in followups]
     failed = [k for k, v in gates.items() if not v and k not in skipped and k not in followups]
     out += ["", "### Checks"]

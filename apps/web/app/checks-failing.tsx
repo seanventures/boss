@@ -206,3 +206,49 @@ export function MustHaves({ data }: { data: MustHaveRecord }) {
     </details>
   );
 }
+
+/**
+ * READY, WITH FOLLOW-UPS (engine quality_bar.merge_followups). A build whose only open items are
+ * follow-ups (review findings below the quality bar's blocking severity, gates the bar let
+ * through) is a normal ready-to-merge card: never "Checks failing", never a reason to type.
+ * BOSS's follow-up build fixes them; the card lists them, P1 first, folded.
+ */
+export type FollowUpItem = { tier: string; severity: string; text: string };
+export type FollowUpsRecord = { count: number; p1: number; queued: boolean; bar: string; items: FollowUpItem[] };
+
+export function followUpsOf(recommendation: Record<string, unknown> | null | undefined
+): FollowUpsRecord | null {
+  if (checksFailingOf(recommendation)) return null;   // a failing card says that instead
+  const raw = recommendation?.followups;
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const items = (Array.isArray(r.items) ? r.items : [])
+    .filter((i): i is Record<string, unknown> => !!i && typeof i === "object")
+    .map((i) => ({ tier: str(i.tier) || "P1", severity: str(i.severity), text: str(i.text) }))
+    .filter((i) => i.text);
+  const count = typeof r.count === "number" ? r.count : items.length;
+  if (!count) return null;
+  return { count, p1: typeof r.p1 === "number" ? r.p1 : items.filter((i) => i.tier === "P1").length,
+           queued: r.queued === true, bar: str(r.bar) || "standard", items };
+}
+
+export function FollowUps({ record }: { record: FollowUpsRecord }) {
+  const n = record.count;
+  return (
+    <details className="dq-guidance" data-testid="decision-follow-ups">
+      <summary>
+        <b>Ready to merge.</b>{" "}
+        {n} follow-up{n === 1 ? "" : "s"}{record.queued ? ` queued — BOSS is fixing ${n === 1 ? "it" : "them"}` : " listed for later"}
+        {record.p1 ? ` (${record.p1} P1)` : ""}. {n === 1 ? "It does" : "They do"} not block at the {record.bar} quality bar.
+      </summary>
+      <ul>
+        {record.items.map((f, i) => (
+          <li key={i}>
+            <span className="v2-mono">{f.tier}{f.severity ? ` [${f.severity.toUpperCase()}]` : ""}</span>{" "}
+            <span style={{ whiteSpace: "pre-wrap" }}>{f.text}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}

@@ -217,7 +217,9 @@ def latest_failures(connection: Any, project_ids: Iterable[str], *,
         "COALESCE(c.finalize_ctx->>'root_run_id', c.id) AS root, "
         "c.finalize_ctx->>'failure_class' AS failure_class, "
         "c.finalize_ctx->>'reason_code' AS reason_code, "
-        "c.finalize_ctx->'merge'->>'sha' AS merged_sha "
+        "c.finalize_ctx->'merge'->>'sha' AS merged_sha, "
+        "c.finalize_ctx->>'deferred_from_run' AS deferred_from, "
+        "(SELECT d.status FROM decisions d WHERE d.id = c.decision_id) AS decision_status "
         "FROM code_task_runs c WHERE c.project_id = ANY(:ids) AND c.created_at >= :since "
         + _internal_clauses(params, "c")), params).mappings().all()]
     runs = [dict(r) for r in connection.execute(text(
@@ -274,6 +276,8 @@ def latest_failures(connection: Any, project_ids: Iterable[str], *,
         else:
             if latest is None or str(latest["status"]) != "failed":
                 continue
+            if _followups_only(latest, members[:-1]):
+                continue
             root = key.split(":", 1)[1]
             follow_up = len(members) > 1 and any(
                 m["pull_request_url"] or m["merged_sha"] for m in members[:-1])
@@ -290,6 +294,21 @@ def latest_failures(connection: Any, project_ids: Iterable[str], *,
                 error=latest["error"], merged=bool(latest["merged_sha"]), see_href=see))
         out[pid] = failure
     return out
+
+
+def _followups_only(latest: Mapping[str, Any], earlier: list[Mapping[str, Any]]) -> bool:
+    """A FOLLOW-UP-ONLY OUTCOME IS NOT A FAILURE (quality_bar.merge_followups, operator
+    2026-11-18). The failed build is the follow-up BOSS started on its own for a ready build's
+    follow-ups (`deferred_from_run`), and the build it follows still waits, ready, on its merge
+    card: the project reads "ready to merge", never "Follow-up failed" with a Retry for a
+    person. The follow-up's own page keeps its failure; agents pick it up from there."""
+    from .decision_actions import OPEN_STATUSES
+
+    parent = str(latest.get("deferred_from") or "")
+    if not parent:
+        return False
+    return any(str(m["id"]) == parent and m.get("pull_request_url") and not m.get("merged_sha")
+               and str(m.get("decision_status") or "") in OPEN_STATUSES for m in earlier)
 
 
 def latest_failure(connection: Any, project_id: str, *, now: Optional[datetime] = None

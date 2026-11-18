@@ -230,7 +230,12 @@ class GitHubFake:
 
     def _repo_route(self, bare: Path, full: str, method: str, rest: str, query: str,
                     body: dict[str, Any]) -> tuple[int, Any]:
-        q = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
+        # Values decoded as GitHub decodes them: `?ref=boss%2Fcode%2Fcrun_…` names the branch
+        # `boss/code/crun_…` (an undecoded ref read every file of a PR branch as missing).
+        from urllib.parse import unquote
+
+        q = {k: unquote(v) for k, v in (part.split("=", 1) for part in query.split("&")
+                                        if "=" in part)}
         if rest == "":
             return 200, {"id": 1, "name": full.split("/")[1], "full_name": full, "private": True,
                          "default_branch": "main", "owner": {"login": full.split("/")[0]},
