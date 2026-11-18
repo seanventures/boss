@@ -20,7 +20,7 @@
  */
 import { GatedButton, useGate } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowClockwise, CaretDown, Cpu, GitBranch, Lightning, SlidersHorizontal, Ticket } from "@phosphor-icons/react";
+import { ArrowClockwise, BookOpen, CaretDown, Cpu, GitBranch, Lightning, SlidersHorizontal, Ticket } from "@phosphor-icons/react";
 
 import { fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import {
@@ -459,8 +459,9 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
         </ModelsRow>
         {/* TICKET SYSTEMS (BOSSAPP-1047 T1): the one place Jira, Plane, GitHub Issues… connect. */}
         <div ref={ref("ticket_systems")}><TicketSystemsRow projectId={projectId} focused={focus === "ticket_systems"} /></div>
-        {/* CONFLUENCE (BOSSAPP-1384): the org's one Confluence, beside Jira. */}
-        <div><ConfluenceRow projectId={projectId} /></div>
+        {/* DOCUMENTS (operator, 2026-11-18): Confluence is a document repository, not a ticket
+            system: its own area, never under Ticket systems. */}
+        <div ref={ref("documents")}><ConfluenceRow projectId={projectId} /></div>
         {/* EVENTS (P9a-7): what wakes the agents; the way into Setup › Events. */}
         <div><EventsRow projectId={projectId} /></div>
         {/* NO TRY IT HERE (operator, 2026-11-04: "Why trying out sample project is in Repos and
@@ -529,7 +530,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
               Test all
             </GatedButton>
           </header>
-          {/* ONE FOLD PER TOPIC (operator, 2026-11-15): Repos, Models, Ticket systems, Events,
+          {/* ONE FOLD PER TOPIC (operator, 2026-11-15): Repos, Models, Ticket systems, Documents, Events,
               each a line of state when folded (setup-section.tsx). */}
           <SetupSection id="repos" title="Repos" icon={<GitBranch size={16} />} summary={repoSummary(view)}
                         tone={repoTone(view)} attention={repoTone(view) !== "green"}
@@ -572,8 +573,13 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
                         tone={ticketWords.includes("not shared") ? "amber" : ticketWords === "None yet" ? "grey" : "green"}
                         focused={focus === "ticket_systems"}>
             <div ref={ref("ticket_systems")}><TicketSystemsRow projectId={projectId} focused={focus === "ticket_systems"} onSummary={setTicketWords} /></div>
-            {/* CONFLUENCE (BOSSAPP-1384): the org's one Confluence, beside Jira. */}
-            <div><ConfluenceRow projectId={projectId} /></div>
+          </SetupSection>
+          {/* DOCUMENTS (operator, 2026-11-18): Confluence is a document repository, not a ticket
+              system — its own fold, where later document stores (SharePoint, Google Drive) join it. */}
+          <SetupSection id="documents" title="Documents" icon={<BookOpen size={16} />}
+                        summary="Confluence: pages agents read, sync and publish"
+                        focused={focus === "documents"}>
+            <div ref={ref("documents")}><ConfluenceRow projectId={projectId} /></div>
           </SetupSection>
           <SetupSection id="events" title="Events" icon={<Lightning size={16} />} summary="Slack, GitHub or a webhook wakes an agent"
                         focused={focus === "events"}>

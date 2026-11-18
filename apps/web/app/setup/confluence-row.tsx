@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * SETUP › CONFLUENCE (BOSSAPP-1384): the org's one Confluence connection, beside the ticket systems.
+ * SETUP › CONFLUENCE (BOSSAPP-1384): the org's one Confluence connection, under Setup › Documents
+ * (a document repository, not a ticket system).
  *
  * Connected ONCE for the org and shared to every project, like the ticket systems' list: the row
  * says where it was added, whose token BOSS uses (as who), and which spaces agents search by
