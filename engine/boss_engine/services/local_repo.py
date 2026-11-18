@@ -51,7 +51,16 @@ IMPORT_EXCLUDES = ("node_modules/", ".venv/", "venv/", "__pycache__/", ".pytest_
                    "*.pyc")
 
 #: A new local project's first commit.
-GITIGNORE = "node_modules/\n.venv/\n__pycache__/\ndist/\nbuild/\n.env\n.env.local\n*.pyc\n.DS_Store\n"
+#: A new local project's .gitignore: secrets, dependencies, and the BUILD OUTPUT of every stack
+#: the factory templates name (Go builds into bin/ and its test binaries are *.test; Gradle and
+#: Jetpack Compose into build/ and .gradle/; Next.js into .next/; Godot into .godot/ and *.pck).
+#: A compiled program committed by accident is megabytes in every clone (crun_332011ee).
+GITIGNORE = (
+    "node_modules/\n.venv/\n__pycache__/\ndist/\nbuild/\n.env\n.env.local\n*.pyc\n.DS_Store\n"
+    "# build output\n"
+    "bin/\n*.exe\n*.test\n*.out\ntarget/\n.gradle/\n*.class\n*.apk\n*.aab\n"
+    ".next/\n.godot/\n*.pck\n"
+)
 
 
 class LocalRepoError(RuntimeError):

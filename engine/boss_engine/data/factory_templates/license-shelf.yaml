@@ -10,6 +10,8 @@ prompt: |
   result, with missing rows first. Do not call a license-scanning service. The preview is that
   HTML file opened locally. A passing test runs against a fixture of four packages, one each for MIT,
   Apache-2.0, and BSD-3-Clause, plus one folder with no license file, and checks the report text.
+  Build the program into bin/ (go build -o bin/licenseshelf .), which .gitignore already ignores;
+  never leave a compiled binary in the repository root.
 stack: Go
 resources:
   - repo

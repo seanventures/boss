@@ -30,7 +30,7 @@ from . import owned_process
 from ..schemas import FileChange
 from .agent_env import SECRET_SHAPED, agent_environment
 from .scheduling import low_priority
-from .repo_files import RepoFiles
+from .repo_files import MAX_FILE_BYTES, RepoFiles
 
 
 #: Words that are shells, not programs. Seeing one as argv[0] means the caller wrote a shell
@@ -223,6 +223,14 @@ def _pgid_of(proc):
         return os.getpgid(proc.pid)
     except (ProcessLookupError, PermissionError, OSError, AttributeError):
         return None
+
+
+def _mb(size: Optional[int]) -> str:
+    """9437184 -> "9 MB"; small sizes in KB."""
+    n = int(size or 0)
+    if n >= 1024 * 1024:
+        return f"{n / (1024 * 1024):.0f} MB"
+    return f"{max(1, n // 1024)} KB"
 
 
 class SandboxError(RuntimeError):
@@ -843,6 +851,13 @@ class EphemeralSandbox:
 
         changes: list[FileChange] = []
         self.unreadable_paths: list[str] = []
+        if not isinstance(getattr(self, "left_out", None), list):
+            #: Files this run made that are not part of the work, each {path, bytes, words}.
+            self.left_out: list[dict] = []
+        # Files NEW in this run (untracked at its base): only these may be left out. A file git
+        # already tracks is the project's own and is never silently dropped.
+        new_files = self._added_paths()
+        dropped: list[str] = []
         reader = self._repo_files or RepoFiles(self.path)
         try:
             for path in summary.paths:
@@ -851,22 +866,116 @@ class EphemeralSandbox:
                 # killed the HelpDesk repair crun_bcbec2f6 here. They never belong in a PR.
                 if not workspace_keepable(path):
                     continue
+                if path in new_files and self._is_build_artifact(path):
+                    dropped.append(path)        # a compiled program: never the work
+                    continue
                 try:
                     content = reader.read_text(path, errors="strict")
-                except (FileNotFoundError, UnicodeDecodeError):
-                    continue  # absent/deleted or binary; unsafe files fail visibly
+                except FileNotFoundError:
+                    continue  # absent/deleted
+                except UnicodeDecodeError:
+                    if path in new_files:
+                        self._leave_out(path, "binary file", advice="BOSS carries text files "
+                                        "in a pull request only")
+                    continue  # binary: the contents path carries text only
                 except RepoFileRefused as exc:
                     # A file BOSS's uid may not read is reported and left out; a symlink or a
                     # path outside the repository (no PermissionError behind it) still fails.
                     if isinstance(exc.__cause__, PermissionError):
                         self.unreadable_paths.append(path)
                         continue
-                    raise
+                    size = self._size_of(path)
+                    if size is None or size <= MAX_FILE_BYTES:
+                        raise
+                    if path in new_files:
+                        # BUILD OUTPUT NEVER FAILS A BUILD (crun_332011ee, 2026-11-18: `go build`
+                        # left a 9 MB `fixtureclock` binary in the repository root and the whole
+                        # build failed reading it). Left out, said, and kept out of git.
+                        dropped.append(path)
+                        continue
+                    raise RepoFileRefused(
+                        f"{path} is {_mb(size)}, over the {_mb(MAX_FILE_BYTES)} BOSS reads a "
+                        "repository file up to. Git already tracks it, so BOSS will not leave it "
+                        "out: make it smaller or remove it from the repository.") from exc
                 changes.append(FileChange(path=path, content=content))
         finally:
             if reader is not self._repo_files:
                 reader.close()
+        if dropped:
+            self._exclude(dropped)
         return changes
+
+    # -- build output ---------------------------------------------------------
+    #: Executable formats: ELF, Mach-O (both byte orders, 32/64, fat), PE ("MZ").
+    _EXECUTABLE_MAGIC = (b"\x7fELF", b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf",
+                         b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe",
+                         b"MZ")
+
+    def _added_paths(self) -> set[str]:
+        """Paths this run ADDS (untracked at its base; .gitignore already applied by `add -A`)."""
+        base = getattr(self, "diff_base_sha", None)
+        try:
+            out = self._git(["diff", "--cached", "--name-only", "--diff-filter=A", "-z",
+                             *([base] if base else [])], raw=True)
+        except Exception:  # noqa: BLE001 — unknown: nothing is treated as droppable
+            return set()
+        return {p for p in out.split("\0") if p}
+
+    def _size_of(self, path: str) -> Optional[int]:
+        try:
+            return (self.path / path).lstat().st_size  # type: ignore[operator]
+        except OSError:
+            return None
+
+    def _is_build_artifact(self, path: str) -> bool:
+        """A compiled program: its first bytes are an executable header, or it is over the read
+        cap and not text. Never a source file."""
+        try:
+            with open(self.path / path, "rb") as handle:  # type: ignore[operator]
+                head = handle.read(8)
+        except OSError:
+            return False
+        if head.startswith(self._EXECUTABLE_MAGIC):
+            return True
+        size = self._size_of(path)
+        return bool(size and size > MAX_FILE_BYTES and b"\0" in self._head(path))
+
+    def _head(self, path: str) -> bytes:
+        try:
+            with open(self.path / path, "rb") as handle:  # type: ignore[operator]
+                return handle.read(8192)
+        except OSError:
+            return b""
+
+    def _leave_out(self, path: str, what: str, *, advice: str = "add it to .gitignore") -> None:
+        """Record a file this run made that is not part of its pull request, in words."""
+        if any(item["path"] == path for item in self.left_out):
+            return
+        size = self._size_of(path)
+        sized = f"a {_mb(size)} {what}" if size else f"a {what}"
+        self.left_out.append({"path": path, "bytes": size,
+                              "words": f"left out: {path}, {sized} — {advice}"})
+
+    def _exclude(self, paths: list[str]) -> None:
+        """Keep build output out of git for the rest of the run: unstaged now, and listed in
+        .git/info/exclude so the next `git add -A` (diff_summary, the PR) never stages it."""
+        for path in paths:
+            executable = self._head(path).startswith(self._EXECUTABLE_MAGIC)
+            self._leave_out(path, "compiled binary" if executable else "file too large to read")
+        try:
+            self._git(["reset", "-q", "--", *paths])
+        except Exception:  # noqa: BLE001 — still left out of the files; the note stands
+            pass
+        exclude_file = self.path / ".git" / "info" / "exclude"  # type: ignore[operator]
+        try:
+            existing = exclude_file.read_text(encoding="utf-8") if exclude_file.exists() else ""
+            lines = ["/" + p.replace("\\", "/") for p in paths
+                     if ("/" + p) not in existing.splitlines()]
+            if lines:
+                exclude_file.write_text(existing.rstrip("\n") + "\n# BOSS: build output left out\n"
+                                        + "\n".join(lines) + "\n", encoding="utf-8")
+        except OSError:
+            pass
 
     # -- internals ----------------------------------------------------------
     def _require_provisioned(self) -> None:
