@@ -14,6 +14,7 @@ import shutil
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import text
 
 from boss_engine.config import Settings
 from boss_engine.services import acceptance_gate as ag
@@ -68,11 +69,31 @@ def test_a_run_input_the_server_did_not_stamp_changes_nothing():
                                                          qb.BY_KEY: "usr_ana"})["lowered_by"] is None
 
 
-def test_lowering_the_bar_needs_a_person_with_settings_update():
-    for who in ("agent_helper", "boss", "", None):
+def test_lowering_the_bar_needs_a_person_with_settings_update(monkeypatch):
+    from boss_engine.identity import viewer
+
+    for who in ("boss", "system", "agent_helper", "job_1", "", None):
         with pytest.raises(qb.QualityBarOverrideRefused):
             qb.check_override_permission("p1", who)
-    qb.check_override_permission("p1", "usr_ana")        # a person, no guard enforced
+    # identity not enforced (a legacy install): the owner actor may — a usr_ prefix is not needed
+    monkeypatch.setattr(viewer, "decide", lambda *a, **k: None)
+    qb.check_override_permission("p1", "ceo")
+    # identity enforced: a real settings:update decision on the request's own person principal
+    monkeypatch.setattr(viewer, "decide", lambda *a, **k: False)
+    with pytest.raises(qb.QualityBarOverrideRefused):
+        qb.check_override_permission("p1", "usr_ana")
+    monkeypatch.setattr(viewer, "decide", lambda *a, **k: True)
+    with pytest.raises(qb.QualityBarOverrideRefused):      # allowed, but no matching principal
+        qb.check_override_permission("p1", "usr_ana")
+
+
+def test_a_workflow_may_lower_the_bar_only_when_a_person_with_settings_update_published_it():
+    assert qb.resolve(project_value=R, workflow_spec={"quality_bar": P}) == R      # unstamped
+    d = qb.resolve_detail(project_value=R, workflow_spec={"quality_bar": P, qb.BY_KEY: "ceo"})
+    assert d["bar"] == P and d["source"] == "workflow" and d["lowered_by"] == "ceo"
+    assert qb.resolve(project_value=S, workflow_spec={"quality_bar": R}) == R      # raising is free
+    # a production release still applies the production bar, whatever the workflow says
+    assert qb.is_production("production")
 
 
 def test_start_run_drops_a_callers_quality_bar_and_writes_only_the_checked_one():
@@ -658,3 +679,81 @@ def test_the_console_renders_a_follow_up_gate_as_its_own_pill():
     assert 'g.followup ? "follow-up"' in out and '>Follow-up</span>' in out
     assert "followup?: boolean" in open(os.path.join(root, "lib", "cockpit.ts"),
                                         encoding="utf-8").read()
+
+
+# ── round 2: the PR body, the console parser, the hollow check, who launched a build ─────────
+
+def test_a_downgraded_follow_up_gate_is_listed_once_in_the_pr_body():
+    from boss_engine.services import pr_description
+
+    g = qb.BarGates(P, initial={"code_written": True, "code_review_passed": False})
+    evidence: dict = {}
+    qb.stamp(evidence, g)
+    rounds = [{"seats": {"review_code": {"verdict": "refuted"}}}]
+    body = pr_description.render(title="T", evidence=evidence, gates=dict(g), rounds=rounds)
+    checks = body.split("### Checks", 1)[1].split("###", 1)[0]
+    assert checks.count("Review passed") == 1 and "🔸 Review passed" in checks
+    assert "❌" not in checks
+
+
+def test_the_console_parser_keeps_the_follow_up_flag_and_never_calls_it_a_failure():
+    root = os.path.join(os.path.dirname(__file__), "..", "..", "apps", "web")
+    parsed = open(os.path.join(root, "lib", "cockpit.ts"), encoding="utf-8").read()
+    assert "followup: x.followup === true" in parsed
+    out = open(os.path.join(root, "app", "factory", "outputs.tsx"), encoding="utf-8").read()
+    assert "!g.ok && !g.skipped && !g.followup && !g.waivedBy" in out
+    assert 'g.skipped ? "skipped" : g.followup ? "follow-up"' in out
+
+
+@pytestmark_db
+def test_a_build_only_believes_a_workflow_run_that_launched_it(eng, project):
+    import uuid
+
+    from boss_engine.services import workflows
+
+    with eng.begin() as c:
+        _, version = _version(c, project)
+        run = workflows.start_run(
+            c, project_id=project, actor="test", input_data={"directive": "x"},
+            dedupe_key=f"dk_{uuid.uuid4().hex[:8]}", workflow_version_id=version["id"])
+        wf = run["id"]
+        c.execute(text(
+            "INSERT INTO workflow_step_runs (id, project_id, workflow_run_id, step_id, step_kind, "
+            "status, output) VALUES (:i, :p, :w, 'build', 'capability', 'running', "
+            "CAST(:o AS jsonb))"),
+            {"i": f"wsr_{uuid.uuid4().hex[:8]}", "p": project, "w": wf,
+             "o": json.dumps({"code_task_run_id": "crun_launched"})})
+        assert qb.launched_by(c, project, wf, "crun_launched") is True
+        assert qb.launched_by(c, project, wf, "crun_someone_else") is False
+        assert qb.launched_by(c, "other_project", wf, "crun_launched") is False
+        # a stamped, lowered workflow bar reaches only the build it launched
+        bar, _, info = qb.resolve_for_run(c, Settings(), project, workflow_run_id=wf,
+                                          run_id="crun_someone_else")
+        assert info["source"] in ("default", "project") and bar == S
+
+
+@pytestmark_db
+def test_publishing_a_workflow_with_a_bar_is_recorded_and_refuses_an_agent(eng, project):
+    import uuid
+
+    from boss_engine.services import workflows
+
+    with eng.begin() as c:
+        d = workflows.create_definition(
+            c, project_id=project, workflow_key=f"qb_{uuid.uuid4().hex[:6]}", name="qb",
+            description=None, actor="test", namespace="product")
+        spec = {"entry_step": "a", "steps": [{"id": "a", "kind": "task"}], "quality_bar": "prototype",
+                qb.BY_KEY: "forged"}
+        with pytest.raises(workflows.WorkflowValidationError):
+            workflows.publish_version(c, project_id=project, definition_id=d["id"], spec=spec,
+                                      actor="agent_helper")
+    with eng.begin() as c:
+        v = workflows.publish_version(c, project_id=project, definition_id=d["id"], spec=spec,
+                                      actor="ceo")
+        stored = c.execute(text("SELECT spec FROM workflow_versions WHERE id = :i"),
+                           {"i": v["id"]}).scalar()
+        stored = stored if isinstance(stored, dict) else json.loads(stored)
+        assert stored["quality_bar"] == "prototype" and stored[qb.BY_KEY] == "ceo"
+        n = c.execute(text("SELECT count(*) FROM events WHERE event_type = "
+                           "'workflow.quality_bar_set' AND entity_id = :d"), {"d": d["id"]}).scalar()
+        assert n == 1

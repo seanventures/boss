@@ -100,8 +100,14 @@ def test_a_hollow_review_never_passes_the_gate_and_reruns_the_check_not_the_code
 
 
 def test_the_consistency_and_security_gates_fail_on_a_hollow_check():
+    from boss_engine.services import quality_bar
+
+    # BEHAVIOUR, not a source line: a consistency check that never saw the change never passes at
+    # standard or production, and is never a follow-up there either (prototype lets it through).
+    for bar in ("standard", "production"):
+        assert quality_bar.consistency_passes(bar, "hollow") == (False, False), bar
     src = inspect.getsource(gov._run_governed_code_task)
-    assert 'gates["consistent"] = cons_verdict not in ("drift", "hollow")' in src
+    assert "_set_consistent(cons_verdict" in src
     assert '"hollow" if hollow' in src            # security: "hollow" is never "clean"
 
 

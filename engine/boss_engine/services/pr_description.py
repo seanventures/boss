@@ -96,7 +96,7 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
                  ((evidence.get("quality_bar") or {}).get("followups") or {}).items()
                  if g in gates}
     passed = [k for k, v in gates.items() if v and k not in skipped and k not in followups]
-    failed = [k for k, v in gates.items() if not v and k not in skipped]
+    failed = [k for k, v in gates.items() if not v and k not in skipped and k not in followups]
     out += ["", "### Checks"]
     if gates:
         out.append(f"{len(passed)} passed"

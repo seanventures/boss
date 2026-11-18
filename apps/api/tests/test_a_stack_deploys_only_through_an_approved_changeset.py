@@ -463,6 +463,7 @@ def test_the_workflow_deploy_step_plans_a_stack_without_a_preview(
                  "'https://github.com/acme/shop/pull/7', "
                  "'{\"merge\": {\"sha\": \"mmmmmmmmmmmm\", \"source\": \"boss\"}}'::jsonb)"),
             {"i": run_id, "p": HOME, "s": '{"owner": "acme", "repo": "shop"}'})
+        _judged(connection, run_id)
     with engine.begin() as connection:
         ctx = SimpleNamespace(engine=engine, settings=api_main.settings)
         result = runner._perform_capability(
@@ -479,6 +480,16 @@ def test_the_workflow_deploy_step_plans_a_stack_without_a_preview(
     assert deployment["code_task_run_id"] == run_id
 
 
+def _judged(connection, run_id: str) -> None:
+    """The build's recorded, passing quality gate: a production release is judged on it
+    (quality_bar.production_refusal fails closed on a build nothing judged)."""
+    connection.execute(
+        text("INSERT INTO quality_gates (id, project_id, code_task_run_id, risk_tier, status, "
+             "fail_closed, gates_passed, gates_failed, evidence) VALUES (:g, :p, :r, 1, 'pass', "
+             "true, '[]'::jsonb, '[]'::jsonb, '{}'::jsonb)"),
+        {"g": f"qg_{run_id}", "p": HOME, "r": run_id})
+
+
 def _build(engine, spec: str, number: int = 7, *, merged: bool = True) -> str:
     """A finished build with PR #number. MERGED by default: a workflow's deploy waits for its
     pull request's merge (runner._merge_wait), so a build these tests deploy has been merged."""
@@ -490,6 +501,7 @@ def _build(engine, spec: str, number: int = 7, *, merged: bool = True) -> str:
                  "pull_request_number, finalize_ctx) VALUES (:i, :p, 'completed', 'A feature', "
                  "CAST(:s AS JSONB), :n, CAST(:f AS JSONB))"),
             {"i": run_id, "p": HOME, "s": spec, "n": number, "f": json.dumps(fctx)})
+        _judged(connection, run_id)
     return run_id
 
 

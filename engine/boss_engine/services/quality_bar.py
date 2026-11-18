@@ -93,37 +93,36 @@ class QualityBarOverrideRefused(PermissionError):
 
 
 def check_override_permission(project_id: str, actor: Any) -> None:
-    """Who may start a run below the project's bar, or with a per-gate map: a PERSON holding
-    `settings:update` at the project (an agent, a job or 'boss' never). Checked where the run
-    is started; the grant is recorded on the run (`_quality_bar_by`, an event, the evidence)."""
+    """Who may start a run below the project's bar, set a per-gate map, or set a bar on a workflow:
+    ENFORCED identity: the request's own principal must be the person `actor` and hold
+    `settings:update` at the project (a real PDP check; a name alone is never enough). NOT
+    enforced (a legacy install, a script): the project's owner actors (`ceo`...) may, which the
+    start door already established with require_project_actor; an agent, a job or 'boss' never.
+    The grant is recorded on the run / workflow (`_quality_bar_by`, an event, the evidence)."""
     who = str(actor or "").strip()
-    if not who.startswith("usr_"):
-        raise QualityBarOverrideRefused("only a person may change a run's quality bar")
+    if not who or who.lower() in ("boss", "system", "worker") or who.startswith(
+            ("agent", "agt_", "job_", "svc_", "sa_")):
+        raise QualityBarOverrideRefused("only a person may change a quality bar")
     from ..identity import lineage, viewer
 
     allowed = viewer.decide(project_id, OVERRIDE_PERMISSION)
     if allowed is None:
-        return                      # no guard enforced this call (a script, a test)
+        return                      # identity not enforced: the legacy owner actor
     principal = getattr(lineage.current_context(), "principal", None)
     if (not allowed or principal is None or not principal.is_person
             or str(principal.id) != who):
         raise QualityBarOverrideRefused(
-            f"changing a run's quality bar needs {OVERRIDE_PERMISSION} at this project")
-
-
-def normalize(value: Any) -> Optional[str]:
-    """A preset name, or None for anything that is not one."""
-    word = str(value or "").strip().lower()
-    return word if word in PRESETS else None
+            f"changing a quality bar needs {OVERRIDE_PERMISSION} at this project")
 
 
 def resolve_detail(*, run_spec: Any = None, workflow_spec: Any = None, run_input: Any = None,
                    project_value: Any = None) -> dict[str, Any]:
     """{bar, source, lowered_by, overrides} for a run. Order: the RUN SPEC (server-owned), the
     run input (only when the server stamped it: BY_KEY, after the permission check), the
-    WORKFLOW spec (it may only RAISE the project's bar), the project setting, `standard`.
+    WORKFLOW spec (it may raise the project's bar; it may LOWER it only when publish_version stamped
+    it, i.e. a person with settings:update published it that way), the project setting, `standard`.
     A value that is not a preset is skipped, never an error. The per-gate map is honoured only
-    from the run spec or a stamped run input, never from a workflow spec."""
+    from the run spec, a stamped run input or a stamped workflow spec."""
     project_bar = normalize(project_value) or DEFAULT
     spec = run_spec if isinstance(run_spec, Mapping) else {}
     inp = run_input if isinstance(run_input, Mapping) else {}
@@ -135,10 +134,15 @@ def resolve_detail(*, run_spec: Any = None, workflow_spec: Any = None, run_input
         bar, source = normalize(spec.get(SETTING)), "run_spec"
     elif stamped and normalize(inp.get(SETTING)):
         bar, source = normalize(inp.get(SETTING)), "run_input"
-    elif normalize(wf.get(SETTING)) and RANK[normalize(wf.get(SETTING))] >= RANK[project_bar]:
+    elif normalize(wf.get(SETTING)) and (
+            RANK[normalize(wf.get(SETTING))] >= RANK[project_bar]
+            or str(wf.get(BY_KEY) or "").strip()):
+        # A workflow may RAISE the bar freely; it may LOWER it only when a person with
+        # settings:update published it that way (stamped by publish_version, never by a caller).
         bar, source = normalize(wf.get(SETTING)), "workflow"
+        by = by or str(wf.get(BY_KEY) or "").strip() or None
     overrides: dict[str, str] = {}
-    for src_ok, src in ((True, spec), (stamped, inp)):
+    for src_ok, src in ((True, spec), (stamped, inp), (bool(str(wf.get(BY_KEY) or "").strip()), wf)):
         if src_ok and isinstance(src.get(OVERRIDES_KEY), Mapping):
             for gate, how in src[OVERRIDES_KEY].items():
                 if str(how) in ("block", "follow_up"):
@@ -167,8 +171,27 @@ def _configured_review_severity(settings: Any) -> Optional[str]:
     return word if word in ("nit", "minor", "major", "blocker") else None
 
 
+def launched_by(connection: Any, project_id: Optional[str], workflow_run_id: Optional[str],
+                run_id: Optional[str]) -> bool:
+    """Did THIS workflow run launch build `run_id`, in the same project? A build's
+    `finalize_ctx.workflow_run_id` can be written by a caller (POST /code-tasks, create_code_task),
+    so it is believed only when the workflow run is in the build's project and one of its step
+    runs names the build. Otherwise the field is dropped and the build takes the project's bar."""
+    if not (connection and project_id and workflow_run_id and run_id):
+        return False
+    from sqlalchemy import text
+
+    row = connection.execute(text(
+        "SELECT 1 FROM workflow_runs w WHERE w.id = :w AND w.project_id = :p AND EXISTS ("
+        "SELECT 1 FROM workflow_step_runs s WHERE s.workflow_run_id = w.id AND "
+        "(s.output::text LIKE :like OR s.input::text LIKE :like OR s.evidence::text LIKE :like)) "
+        "LIMIT 1"), {"w": workflow_run_id, "p": project_id, "like": f"%{run_id}%"}).first()
+    return row is not None
+
+
 def resolve_for_run(connection: Any, settings: Any, project_id: Optional[str], *,
-                    spec: Any = None, workflow_run_id: Optional[str] = None
+                    spec: Any = None, workflow_run_id: Optional[str] = None,
+                    run_id: Optional[str] = None
                     ) -> tuple[str, dict[str, str], dict[str, Any]]:
     """(the bar, the per-gate overrides, {source, lowered_by, review_severity}) for a build,
     reading the workflow run's own spec and input and the project setting. Never raises: what
@@ -176,6 +199,11 @@ def resolve_for_run(connection: Any, settings: Any, project_id: Optional[str], *
     workflow_spec: Any = None
     run_input: Any = None
     project_value: Any = None
+    try:
+        if workflow_run_id and not launched_by(connection, project_id, workflow_run_id, run_id):
+            workflow_run_id = None      # not this build's workflow run: drop the field
+    except Exception:  # noqa: BLE001
+        workflow_run_id = None
     try:
         if connection is not None and workflow_run_id:
             from . import workflows
@@ -676,3 +704,44 @@ def pass_two_needs(connection: Any, workflow_run_id: Optional[str]) -> list[str]
             out.append(f"Pass 2 (More tests) has not finished (it is {status}): production "
                        "waits for it.")
     return out
+
+
+def plan_refusal(connection: Any, *, target: Mapping[str, Any],
+                 release_packet: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """THE ONE PLACE every production deployment passes (ResourcePlaneService.plan_deployment_run):
+    the production bar for a release to a production target, whichever door it came through (a
+    deploy, a staging -> production promotion, the console). The build is found from the release
+    packet: its own `code_task_run_id`, else the staging deployment it was promoted from (the
+    promotion's `staging_gate.deployment_run_id`). A redeploy, a rollback and a removal re-ship or
+    retire what already shipped and are not judged again; any other release with no build behind
+    it is left to its own checks, except a PROMOTION, which must name a judged build."""
+    if not is_production((target or {}).get("environment")):
+        return None
+    packet = dict(release_packet or {})
+    if str(packet.get("source") or "") in ("redeploy", "rollback") or str(
+            packet.get("kind") or "") == "remove":
+        return None
+    run_id = str(packet.get("code_task_run_id") or "") or None
+    if run_id:
+        return production_refusal(connection, code_task_run_id=run_id)
+    if not packet.get("promotion_id") and not packet.get("promoted_from_run"):
+        return None
+    # A PROMOTION: the build is behind the deployment it was promoted from. The staging
+    # deployment the orchestrator plans for the promotion carries no build of its own, so the
+    # original staged deployment (`promoted_from_run`) is read first.
+    import json
+
+    from sqlalchemy import text
+
+    for dep_id in (packet.get("promoted_from_run"), packet.get("promoted_from"),
+                   (packet.get("staging_gate") or {}).get("deployment_run_id")):
+        if not dep_id:
+            continue
+        found = connection.execute(text(
+            "SELECT release_packet FROM deployment_runs WHERE id = :i"),
+            {"i": str(dep_id)}).scalar()
+        found = json.loads(found) if isinstance(found, str) else (found or {})
+        if found.get("code_task_run_id"):
+            return production_refusal(connection,
+                                      code_task_run_id=str(found["code_task_run_id"]))
+    return NOT_JUDGED.format(why="the promotion names no build")

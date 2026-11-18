@@ -2255,6 +2255,22 @@ def publish_version(
     # STAMPED WITH THE AGENT RULES IT WAS CHECKED UNDER, so a start or a run months from now
     # applies those rules and not whatever this code says then. A step-level copy (which
     # `_run_spec` adds for the runner) is never trusted from a caller.
+    # THE QUALITY BAR ON A WORKFLOW (quality_bar.py): any workflow may set its own bar, but only a
+    # person with settings:update may publish one, recorded here; a caller's own stamp is dropped.
+    # A workflow with no bar of its own takes the project's.
+    from . import quality_bar as _qb
+
+    normalized.pop(_qb.BY_KEY, None)
+    if _qb.SETTING in normalized or _qb.OVERRIDES_KEY in normalized:
+        try:
+            _qb.check_override_permission(project_id, actor)
+        except _qb.QualityBarOverrideRefused as refused:
+            raise WorkflowValidationError(str(refused)) from refused
+        normalized[_qb.BY_KEY] = str(actor)
+        emit_event(connection, project_id, "workflow.quality_bar_set", actor,
+                   "workflow_definition", definition_id,
+                   {"quality_bar": normalized.get(_qb.SETTING),
+                    "gates": normalized.get(_qb.OVERRIDES_KEY) or {}, "by": str(actor)})
     normalized[AGENT_RULES_KEY] = CURRENT_AGENT_RULES
     for step in normalized["steps"]:
         step.pop(AGENT_RULES_KEY, None)

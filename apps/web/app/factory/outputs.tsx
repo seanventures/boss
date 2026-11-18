@@ -49,7 +49,7 @@ const STATUS_WORD: Record<string, string> = { open: "Open", addressed: "Fixed", 
 
 /** Which row opens by itself: failed checks, or the PR when it is waiting on you (§4.7). */
 export function defaultOpen(c: Pick<Cockpit, "state" | "outputs">): OutputKey | null {
-  const failed = c.outputs.checks?.gates.some((g) => !g.ok && !g.skipped && !g.waivedBy) && !c.outputs.checks?.advisory;
+  const failed = c.outputs.checks?.gates.some((g) => !g.ok && !g.skipped && !g.followup && !g.waivedBy) && !c.outputs.checks?.advisory;
   if (c.state.state === "needs_waiver" || (failed && c.state.state !== "pr_open")) return "checks";
   if (c.state.state === "pr_open") return "pr";
   return null;
@@ -289,7 +289,7 @@ function ChecksBody({ c, projectId, actor, onRefresh }: { c: Cockpit; projectId:
   }
   // WAIVE FROM WHERE THE FAILURES ARE LISTED (the old Iterate block's override), for any
   // stopped build with a failing check, not only one whose card is on the Floor.
-  const failing = checks.gates.filter((g) => !g.ok && !g.skipped && !g.waivedBy);
+  const failing = checks.gates.filter((g) => !g.ok && !g.skipped && !g.followup && !g.waivedBy);
   const canWaive = failing.some((g) => g.waivable) && ["needs_waiver", "failed", "blocked"].includes(c.state.state);
   return (
     <span className="fx-out-col">

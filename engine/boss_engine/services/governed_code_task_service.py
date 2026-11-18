@@ -1653,7 +1653,7 @@ def _gate_failure_action(
     return "ship_with_dissent" if (never_block and open_pr) else "block"
 
 
-def _bar_for_run(engine, settings, project_id, spec, fctx) -> tuple[str, dict, dict]:
+def _bar_for_run(engine, settings, project_id, spec, fctx, run_id=None) -> tuple[str, dict, dict]:
     """(the quality bar, its per-gate overrides, {source, lowered_by, review_severity}) for this
     build (quality_bar.resolve_for_run). An unreadable bar is the default bar, never a failed
     build."""
@@ -1661,7 +1661,7 @@ def _bar_for_run(engine, settings, project_id, spec, fctx) -> tuple[str, dict, d
         with _transaction(engine) as _qc:
             return _quality_bar.resolve_for_run(
                 _qc, settings, project_id, spec=spec,
-                workflow_run_id=(fctx or {}).get("workflow_run_id"))
+                workflow_run_id=(fctx or {}).get("workflow_run_id"), run_id=run_id)
     except Exception:  # noqa: BLE001
         _log_caught(logger)
         return _quality_bar.DEFAULT, {}, {}
@@ -7580,7 +7580,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # THE QUALITY BAR: a prototype needs no plan sign-off (a plan a person sent back
             # still goes back to them). Standard and production keep it.
             _plan_signoff = _quality_bar.plan_signoff_required(
-                _bar_for_run(engine, settings, project_id, spec, fctx)[0], risk_tier,
+                _bar_for_run(engine, settings, project_id, spec, fctx, run_id)[0], risk_tier,
                 bool(sensitive_markers_in({**spec, "title": title})))
             if _requires_plan_approval(risk_tier) or _gaps or _asked_again:
               if _plan_signoff or _asked_again:
@@ -9493,7 +9493,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # THE QUALITY BAR (quality_bar.py): from here every assignment to `gates` goes through
         # the bar, so a gate that fails but does not block at this bar is a follow-up, never a
         # failure, at the first judgement and at every re-judgement after a fix round.
-        _qbar, _qover, _qinfo = _bar_for_run(engine, settings, project_id, spec, fctx)
+        _qbar, _qover, _qinfo = _bar_for_run(engine, settings, project_id, spec, fctx, run_id)
         gates = _quality_bar.BarGates(_qbar, _qover, gates)
         gates.info = dict(_qinfo)
         if _qinfo.get("lowered_by"):

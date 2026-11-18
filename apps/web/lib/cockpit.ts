@@ -239,7 +239,7 @@ export function parseOutputs(w: unknown): CockpitOutputs {
         const x = obj(g);
         return { name: str(x.name), label: str(x.label), ok: x.ok === true, waivedBy: opt(x.waived_by),
                  roleKey: roleOf(x.role_key), station: station(x.station), evidence: opt(x.evidence),
-                 waivable: x.waivable !== false, reason: opt(x.reason), skipped: x.skipped === true };
+                 waivable: x.waivable !== false, reason: opt(x.reason), skipped: x.skipped === true, followup: x.followup === true };
       }),
     } : null,
     tests: tests ? {

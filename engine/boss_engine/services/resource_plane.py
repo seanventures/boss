@@ -2395,6 +2395,15 @@ class ResourcePlaneService:
             from .governed_host_deploy import GovernedHostDeployError
 
             raise GovernedHostDeployError(refused, refused.action)
+        # THE BAR FOLLOWS WHERE IT SHIPS (quality_bar.py): every production deployment is planned
+        # here, so a promotion from staging and a direct deploy meet the same production bar.
+        from . import quality_bar as _quality_bar
+
+        bar_refusal = _quality_bar.plan_refusal(connection, target=target,
+                                                release_packet=release_packet)
+        if bar_refusal:
+            return {"status": "failed", "refused": True, "failure_reason": bar_refusal,
+                    "quality_bar": "production"}
         if expected_cost_usd_micros > 0 and not reservation_id:
             decision_id = create_blocking_decision(
                 connection,
