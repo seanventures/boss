@@ -8592,7 +8592,7 @@ def _register_deployment_target_tools(reg: ToolRegistry) -> None:
             ).mappings().all()
             hosts = {r["id"]: dict(r) for r in c.execute(_text(
                 "SELECT id, name, address, status, key_secret_ref FROM deployment_hosts "
-                "WHERE project_id = :p"), {"p": pid}).mappings()}
+                f"WHERE {_usable_hosts_sql()}"), {"p": pid}).mappings()}
 
         out = []
         for row in rows:
@@ -8669,7 +8669,7 @@ def _register_deployment_target_tools(reg: ToolRegistry) -> None:
                 return {"ok": False, "error": "the target has no host and none was given"}
             host = c.execute(_text(
                 "SELECT id, name, address, ssh_user, ssh_port FROM deployment_hosts "
-                "WHERE id = :h AND project_id = :p"),
+                f"WHERE id = :h AND {_usable_hosts_sql()}"),
                 {"h": host_id, "p": pid}).mappings().first()
             if host is None:
                 return {"ok": False, "error": f"no host {host_id} in {pid}"}
@@ -9567,10 +9567,11 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         timeout = int(args.get("timeout_s") or 120)
 
         with ctx.begin() as c:
-            row = c.execute(_text(_host_by_hint_sql()),
+            row = c.execute(_text(_host_by_hint_sql(own_only=True)),
                             {"p": project_id, "h": want}).mappings().first()
             if row is None:
-                return {"ok": False, "error": f"no registered host {want!r} in this project"}
+                return {"ok": False, "error": f"no registered host {want!r} in this project "
+                                              "(run_on_host acts only on the project's own hosts)"}
             host = dict(row)
             probe = {"secret_refs": ([{"name": "ssh_key",
                                        "secret_ref_id": host["key_secret_ref"]}]
@@ -10595,7 +10596,12 @@ def _usable_hosts(alias: str = "") -> str:
     return usable_hosts_sql(alias)
 
 
-def _host_by_hint_sql(columns: str = "*") -> str:
+def _host_by_hint_sql(columns: str = "*", *, own_only: bool = False) -> str:
     """deployment_fleet.host_by_hint_sql: the one id/name/address lookup over usable hosts."""
     from ..services.deployment_fleet import host_by_hint_sql
-    return host_by_hint_sql(columns)
+    return host_by_hint_sql(columns, own_only=own_only)
+
+
+def _usable_hosts_sql(alias: str = "") -> str:
+    from ..services.deployment_fleet import usable_hosts_sql
+    return usable_hosts_sql(alias)

@@ -42,6 +42,10 @@ def test_a_sibling_project_finds_the_shared_host_by_address_name_and_id(engine):
                 # the port probe, debug sessions) finds it too.
                 hit = c.execute(text(host_by_hint_sql()), {"p": sibling, "h": hint}).mappings().first()
                 assert hit and hit["id"] == host_id, hint
+                # run_on_host changes a machine: it stays on the project's own hosts.
+                own = c.execute(text(host_by_hint_sql(own_only=True)),
+                                {"p": sibling, "h": hint}).mappings().first()
+                assert own is None, hint
     finally:
         with engine.begin() as c:
             c.execute(text("DELETE FROM deployment_hosts WHERE id = :i"), {"i": host_id})
@@ -51,7 +55,7 @@ def test_a_sibling_project_finds_the_shared_host_by_address_name_and_id(engine):
 # A host looked up by what a person or agent typed (id, name or address), scoped to the
 # project's own rows: the shape that hid 2.29.2.202. Every such lookup is match_host now.
 _OWN_ROWS_LOOKUP = re.compile(
-    r"FROM deployment_hosts[^;]{0,200}?project_id\s*=\s*:p[^;]{0,120}?(address\s*=|name\s*=\s*:h|name\s*=\s*:n)",
+    r"FROM deployment_hosts[^;]{0,200}?project_id\s*=\s*:p",
     re.S)
 
 
