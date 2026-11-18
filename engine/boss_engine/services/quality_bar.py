@@ -98,7 +98,12 @@ def check_override_permission(project_id: str, actor: Any) -> None:
     `settings:update` at the project (a real PDP check; a name alone is never enough). NOT
     enforced (a legacy install, a script): the project's owner actors (`ceo`...) may, which the
     start door already established with require_project_actor; an agent, a job or 'boss' never.
-    The grant is recorded on the run / workflow (`_quality_bar_by`, an event, the evidence)."""
+    The grant is recorded on the run / workflow (`_quality_bar_by`, an event, the evidence).
+
+    LEGACY INSTALLS (identity not enforced) ARE A WEAKER GUARANTEE, by design: the check is a
+    denylist of non-person actor names, so anything that publishes a workflow or starts a run AS
+    an owner actor such as `ceo` can lower a bar (the project's own API keys are who may act as
+    that actor). Turn identity enforcement on for the real `settings:update` decision."""
     who = str(actor or "").strip()
     if not who or who.lower() in ("boss", "system", "worker") or who.startswith(
             ("agent", "agt_", "job_", "svc_", "sa_")):
@@ -176,7 +181,9 @@ def launched_by(connection: Any, project_id: Optional[str], workflow_run_id: Opt
     """Did THIS workflow run launch build `run_id`, in the same project? A build's
     `finalize_ctx.workflow_run_id` can be written by a caller (POST /code-tasks, create_code_task),
     so it is believed only when the workflow run is in the build's project and one of its step
-    runs names the build. Otherwise the field is dropped and the build takes the project's bar."""
+    runs names the build in a STRUCTURED field: `launched_code_task_run_id`, written by the runner
+    in the launching transaction (workflow_capability_runner._record_launch), or the step's
+    final output. Otherwise the field is dropped and the build takes the project's bar."""
     if not (connection and project_id and workflow_run_id and run_id):
         return False
     from sqlalchemy import text
@@ -184,8 +191,9 @@ def launched_by(connection: Any, project_id: Optional[str], workflow_run_id: Opt
     row = connection.execute(text(
         "SELECT 1 FROM workflow_runs w WHERE w.id = :w AND w.project_id = :p AND EXISTS ("
         "SELECT 1 FROM workflow_step_runs s WHERE s.workflow_run_id = w.id AND "
-        "(s.output::text LIKE :like OR s.input::text LIKE :like OR s.evidence::text LIKE :like)) "
-        "LIMIT 1"), {"w": workflow_run_id, "p": project_id, "like": f"%{run_id}%"}).first()
+        "(s.output->>'launched_code_task_run_id' = :r OR s.output->>'code_task_run_id' = :r "
+        " OR s.output->>'run_id' = :r OR s.output->'await'->>'id' = :r)) LIMIT 1"),
+        {"w": workflow_run_id, "p": project_id, "r": run_id}).first()
     return row is not None
 
 
@@ -557,8 +565,16 @@ NOT_JUDGED = ("This is a production release, so the production quality bar appli
               "release again.")
 
 
+#: The action a refusal for an unconvened seat points at (change_recheck: quality_bar="production").
+RECHECK_ACTION = ("Re-check at the production bar (it convenes every review seat whatever the "
+                  "build's profile), then release again.")
+#: The judgement gates a production build must have had a verdict from.
+SEAT_GATES_REQUIRED = ("code_review_passed", "security_clean", "consistent", "acceptance_met")
+
+
 def production_needs(evidence: Optional[Mapping[str, Any]],
-                     gates_failed: Iterable[str] = ()) -> list[str]:
+                     gates_failed: Iterable[str] = (),
+                     gates_passed: Optional[Iterable[str]] = None) -> list[str]:
     """What this run still needs to pass the PRODUCTION bar, from its recorded evidence (empty =
     it passes). Pure: the quality gate row's evidence and failed gates in, a list out."""
     from . import checks_failing as _cf
@@ -571,7 +587,16 @@ def production_needs(evidence: Optional[Mapping[str, Any]],
     for g in gates_failed or ():
         needs.append(f"Gate '{g}' ({_cf._gate_label(g)}) failed.")  # noqa: SLF001
     # A check that did not run is not a pass: a seat the profile did not convene is needed.
-    for g, why in _seat_policy.skipped_gates(evidence).items():
+    unrun = dict(_seat_policy.skipped_gates(evidence))
+    if gates_passed is not None:
+        # A build whose tier or profile never convened a seat (a tier-0 build has no review at
+        # all) records no verdict for it: absent from passed, failed and follow-ups = not run.
+        have = set(gates_passed) | set(gates_failed or ()) | set(
+            (evidence.get(KEY) or {}).get("followups") or {})
+        for g in SEAT_GATES_REQUIRED:
+            if g not in have:
+                unrun.setdefault(g, "no verdict was recorded for this build")
+    for g, why in unrun.items():
         needs.append(f"Gate '{g}' ({_cf._gate_label(g)}) was not run ({why}); "  # noqa: SLF001
                      "production needs it.")
     rec = evidence.get(KEY) or {}
@@ -651,7 +676,7 @@ def production_refusal(connection: Any, *, code_task_run_id: Optional[str] = Non
         fctx = json.loads(fctx) if isinstance(fctx, str) else (fctx or {})
         workflow_run_id = workflow_run_id or _workflow_run_of(fctx)
         row = connection.execute(text(
-            "SELECT status, gates_failed, evidence FROM quality_gates "
+            "SELECT status, gates_passed, gates_failed, evidence FROM quality_gates "
             "WHERE code_task_run_id = :r ORDER BY created_at DESC LIMIT 1"),
             {"r": code_task_run_id}).mappings().first()
         if row is None:
@@ -662,7 +687,10 @@ def production_refusal(connection: Any, *, code_task_run_id: Optional[str] = Non
         failed = row["gates_failed"]
         if isinstance(failed, str):
             failed = json.loads(failed or "[]")
-        needs = production_needs(evidence, failed or [])
+        passed = row["gates_passed"]
+        if isinstance(passed, str):
+            passed = json.loads(passed or "[]")
+        needs = production_needs(evidence, failed or [], passed or [])
     except Exception:  # noqa: BLE001 — unreadable evidence is not evidence of a pass
         logger.warning("quality bar: production rule could not be evaluated", exc_info=True)
         return NOT_JUDGED.format(why="its quality-gate record could not be read")
@@ -675,9 +703,11 @@ def production_refusal(connection: Any, *, code_task_run_id: Optional[str] = Non
     if not needs:
         return None
     listed = "\n".join(f"- {n}" for n in needs[:40])
+    unrun = any("was not run" in n for n in needs)
     return ("This is a production release, so the production quality bar applies: this build "
             "passed at a lighter bar and these are still needed. Fix them (Fix these, or the "
-            "follow-up build) and release again:\n" + listed)
+            "follow-up build) and release again:\n" + listed
+            + (f"\n{RECHECK_ACTION}" if unrun else ""))
 
 
 def pass_two_needs(connection: Any, workflow_run_id: Optional[str]) -> list[str]:
@@ -706,26 +736,49 @@ def pass_two_needs(connection: Any, workflow_run_id: Optional[str]) -> list[str]
     return out
 
 
+def _reships_a_prior_production_run(connection: Any, target: Mapping[str, Any],
+                                    commit_ref: Optional[str], reships: Optional[str]) -> bool:
+    """TRUSTED (never a request or packet field): `reships` is the prior deployment run a
+    redeploy/rollback was built from by delivery_pipeline.redeploy. It exempts the release only
+    when that run was on THIS target, in production, and shipped EXACTLY this commit: it passed
+    the bar when it was planned. A different commit is a new release and is judged."""
+    if not (reships and commit_ref and (target or {}).get("id")):
+        return False
+    from sqlalchemy import text
+
+    prior = connection.execute(text(
+        "SELECT deployment_target_id, environment, commit_ref FROM deployment_runs WHERE id = :i"),
+        {"i": str(reships)}).mappings().first()
+    return bool(prior and str(prior["deployment_target_id"]) == str(target["id"])
+                and is_production(prior["environment"])
+                and str(prior["commit_ref"] or "").strip()
+                and str(prior["commit_ref"]).strip() == str(commit_ref).strip())
+
+
 def plan_refusal(connection: Any, *, target: Mapping[str, Any],
-                 release_packet: Optional[Mapping[str, Any]]) -> Optional[str]:
+                 release_packet: Optional[Mapping[str, Any]],
+                 commit_ref: Optional[str] = None,
+                 reships: Optional[str] = None) -> Optional[str]:
     """THE ONE PLACE every production deployment passes (ResourcePlaneService.plan_deployment_run):
     the production bar for a release to a production target, whichever door it came through (a
-    deploy, a staging -> production promotion, the console). The build is found from the release
-    packet: its own `code_task_run_id`, else the staging deployment it was promoted from (the
-    promotion's `staging_gate.deployment_run_id`). A redeploy, a rollback and a removal re-ship or
-    retire what already shipped and are not judged again; any other release with no build behind
-    it is left to its own checks, except a PROMOTION, which must name a judged build."""
+    deploy, a promotion, a manual deploy, the API, a skill).
+
+    The ONLY exemptions: a redeploy/rollback that re-ships the exact commit of a prior production
+    deployment on this target (`reships`, passed by trusted code only, verified here), and a
+    config-only target (a directory of files: its own promotion checks apply). Every other
+    production release must name a build that passes the production bar: the packet's
+    `code_task_run_id`, or for a promotion the build behind the deployment it was promoted from.
+    A packet's own `source` ("redeploy"...) exempts nothing. No build named is refused."""
     if not is_production((target or {}).get("environment")):
         return None
-    packet = dict(release_packet or {})
-    if str(packet.get("source") or "") in ("redeploy", "rollback") or str(
-            packet.get("kind") or "") == "remove":
+    if str((target or {}).get("target_kind") or "").strip().lower() == "config_dir":
         return None
+    if _reships_a_prior_production_run(connection, target, commit_ref, reships):
+        return None
+    packet = dict(release_packet or {})
     run_id = str(packet.get("code_task_run_id") or "") or None
     if run_id:
         return production_refusal(connection, code_task_run_id=run_id)
-    if not packet.get("promotion_id") and not packet.get("promoted_from_run"):
-        return None
     # A PROMOTION: the build is behind the deployment it was promoted from. The staging
     # deployment the orchestrator plans for the promotion carries no build of its own, so the
     # original staged deployment (`promoted_from_run`) is read first.
@@ -744,4 +797,4 @@ def plan_refusal(connection: Any, *, target: Mapping[str, Any],
         if found.get("code_task_run_id"):
             return production_refusal(connection,
                                       code_task_run_id=str(found["code_task_run_id"]))
-    return NOT_JUDGED.format(why="the promotion names no build")
+    return NOT_JUDGED.format(why="this production release names no build")

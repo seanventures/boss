@@ -2375,8 +2375,12 @@ class ResourcePlaneService:
         actor: str,
         approval_decision_id: Optional[str] = None,
         person_required: bool = False,
+        reships: Optional[str] = None,
     ) -> dict[str, Any]:
-        """`approval_decision_id`: the workflow gate that already approved this deploy, passed
+        """`reships`: TRUSTED callers only (delivery_pipeline.redeploy): the prior production
+        deployment run this release re-ships at the SAME commit (quality_bar.plan_refusal checks
+        it). Never taken from a request body or a release packet.
+        `approval_decision_id`: the workflow gate that already approved this deploy, passed
         explicitly by the runner (deploy_policy.pre_approval decides whether it counts).
         `person_required`: the step that started it promised a person, so no policy answers."""
         if expected_cost_usd_micros < 0:
@@ -2400,7 +2404,8 @@ class ResourcePlaneService:
         from . import quality_bar as _quality_bar
 
         bar_refusal = _quality_bar.plan_refusal(connection, target=target,
-                                                release_packet=release_packet)
+                                                release_packet=release_packet,
+                                                commit_ref=commit_ref, reships=reships)
         if bar_refusal:
             return {"status": "failed", "refused": True, "failure_reason": bar_refusal,
                     "quality_bar": "production"}

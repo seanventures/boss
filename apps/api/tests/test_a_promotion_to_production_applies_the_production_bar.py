@@ -30,7 +30,7 @@ def _seed(engine, suffix, evidence):
         c.execute(text(
             "INSERT INTO quality_gates (id, project_id, code_task_run_id, risk_tier, status, "
             "fail_closed, gates_passed, gates_failed, evidence) VALUES (:i, :p, :r, 1, 'pass', "
-            "true, '[]'::jsonb, '[]'::jsonb, CAST(:e AS jsonb))"),
+            "true, '[\"code_review_passed\",\"security_clean\",\"consistent\",\"acceptance_met\"]'::jsonb, '[]'::jsonb, CAST(:e AS jsonb))"),
             {"i": f"qg_{suffix}", "p": PROJECT, "r": run_id, "e": json.dumps(evidence)})
         for tid, env in ((tgt_s, "staging"), (tgt_p, "production")):
             c.execute(text(
@@ -86,14 +86,12 @@ def test_promoting_a_standard_pass_with_gaps_to_production_is_refused_with_the_l
     assert planned == 0, "a production deployment was planned past the bar"
 
 
-def test_plan_refusal_is_only_about_production_and_re_ships_are_not_judged(engine):
+def test_plan_refusal_is_only_about_production_and_names_the_promoted_build(engine):
     suffix = uuid4().hex[:8]
     dep, _ = _seed(engine, suffix, GAPS)
     with engine.begin() as c:
         assert quality_bar.plan_refusal(c, target={"environment": "staging"},
                                         release_packet={"code_task_run_id": f"crun_pb{suffix}"}) is None
-        assert quality_bar.plan_refusal(c, target={"environment": "production"},
-                                        release_packet={"source": "redeploy"}) is None
         said = quality_bar.plan_refusal(c, target={"environment": "production"},
                                         release_packet={"promotion_id": "p", "staging_gate": {
                                             "deployment_run_id": dep}})

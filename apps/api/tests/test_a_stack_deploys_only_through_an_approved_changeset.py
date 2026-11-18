@@ -486,7 +486,8 @@ def _judged(connection, run_id: str) -> None:
     connection.execute(
         text("INSERT INTO quality_gates (id, project_id, code_task_run_id, risk_tier, status, "
              "fail_closed, gates_passed, gates_failed, evidence) VALUES (:g, :p, :r, 1, 'pass', "
-             "true, '[]'::jsonb, '[]'::jsonb, '{}'::jsonb)"),
+             "true, '[\"code_review_passed\",\"security_clean\",\"consistent\",\"acceptance_met\"]'::jsonb, "
+             "'[]'::jsonb, '{}'::jsonb)"),
         {"g": f"qg_{run_id}", "p": HOME, "r": run_id})
 
 

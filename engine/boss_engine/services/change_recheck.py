@@ -138,8 +138,19 @@ def preview(connection: Any, run_id: str, project_id: str) -> dict:
             "estimate": estimate(connection, run)}
 
 
+def _bar_asked(value: Any) -> Optional[str]:
+    """RE-CHECK AT THE PRODUCTION BAR: a build whose profile never convened every review seat
+    (a tier-0 build, a fast fix) is refused for production (quality_bar.production_refusal names
+    this action). The re-check is the way to the bar: it raises the run's bar to production, so
+    the pipeline convenes EVERY seat whatever the build's original profile. Only a raise is
+    honoured; any other value is ignored."""
+    from . import quality_bar
+
+    return quality_bar.PRODUCTION if quality_bar.normalize(value) == quality_bar.PRODUCTION else None
+
+
 def request(engine: Any, settings: Any, jobs: Any, run_id: str, *, project_id: str,
-            actor: str, by_person: bool = False) -> dict:
+            actor: str, by_person: bool = False, quality_bar: Optional[str] = None) -> dict:
     """Start the re-check: a new attempt of the lineage, marked `recheck_only`. Refused, in
     words, when the build cannot be re-checked or another run already works on its branch."""
     from ..db import begin
@@ -156,7 +167,8 @@ def request(engine: Any, settings: Any, jobs: Any, run_id: str, *, project_id: s
         cost = estimate(c, run)
     try:
         started = retry_code_task(engine, settings, jobs, run_id, fix_note=NOTE,
-                                  by_person=by_person, recheck=True)
+                                  by_person=by_person, recheck=True,
+                                  recheck_bar=_bar_asked(quality_bar))
     except RetryRefused as exc:
         raise RecheckRefused(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 — BranchOwned and kin: say why, start nothing

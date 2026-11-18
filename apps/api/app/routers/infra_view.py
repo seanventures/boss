@@ -229,6 +229,9 @@ def build_infra_router(
                         reservation_id=(body.budget_reservation_id or None), actor=actor)
                 except (ProviderAccountNotFoundError, ValueError) as error:
                     raise HTTPException(status_code=422, detail=str(error)) from error
+            if item.get("refused"):
+                raise HTTPException(status_code=409, detail=item.get("failure_reason")
+                                    or "Deployment policy blocked this run.")
             run_id = item.get("deployment_run_id") or item.get("id")
             return {"ref": f"registry:{run_id}", "kind": "registry", "run": item}
         from .. import main as api_main

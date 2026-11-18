@@ -22740,6 +22740,10 @@ def create_deployment_run(
             )
         except (ProviderAccountNotFoundError, ValueError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        if item.get("refused"):
+            # The production quality bar (quality_bar.plan_refusal): said in words, nothing planned.
+            raise HTTPException(status_code=409, detail=item.get("failure_reason")
+                                or "Deployment policy blocked this run.")
         return DeploymentRunSummary(**item)
 
 
@@ -31903,6 +31907,8 @@ def code_task_review_pr_again_endpoint(run_id: str, payload: ReviewPrAgainBody) 
 
 class RecheckBody(BaseModel):
     actor: str
+    # "production": re-check at the production quality bar (every review seat convened).
+    quality_bar: Optional[str] = None
 
 
 @app.get("/v1/code-tasks/{run_id}/recheck")
@@ -31939,7 +31945,8 @@ def code_task_recheck_endpoint(run_id: str, payload: RecheckBody) -> dict:
         by_person = is_person(actor, connection, owner)
     try:
         return change_recheck.request(engine, settings, jobs, run_id, project_id=owner,
-                                      actor=actor, by_person=by_person)
+                                      actor=actor, by_person=by_person,
+                                      quality_bar=payload.quality_bar)
     except change_recheck.RecheckRefused as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

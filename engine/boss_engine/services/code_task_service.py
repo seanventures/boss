@@ -2066,6 +2066,7 @@ def retry_code_task(
     title: Optional[str] = None, automatic: bool = False, by_person: bool = False,
     change_request: Optional[dict] = None,
     recheck: bool = False,
+    recheck_bar: Optional[str] = None,
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
@@ -2316,6 +2317,9 @@ def retry_code_task(
                           # RE-CHECK THIS CHANGE (change_recheck): every gate on the branch
                           # head, no code written, no repair round.
                           **({"recheck_only": True, "recheck_of": run_id} if recheck else {}),
+                          # A re-check AT THE PRODUCTION BAR (change_recheck._bar_asked): raises
+                          # this run's bar so every review seat sits (governed _bar_for_run).
+                          **({"recheck_bar": recheck_bar} if recheck and recheck_bar else {}),
                           # A fresh build of the same brief, not a repair (see `fresh` above).
                           **({"fresh_build": True} if fresh else {}),
                           # AN EXPLICIT CHOICE MAKES THIS A PIECE OF WORK IN ITS OWN RIGHT.

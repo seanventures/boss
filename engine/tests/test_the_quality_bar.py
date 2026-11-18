@@ -757,3 +757,109 @@ def test_publishing_a_workflow_with_a_bar_is_recorded_and_refuses_an_agent(eng, 
         n = c.execute(text("SELECT count(*) FROM events WHERE event_type = "
                            "'workflow.quality_bar_set' AND entity_id = :d"), {"d": d["id"]}).scalar()
         assert n == 1
+
+
+# ── round 3: a tier-0 build reaches production through a re-check at the production bar ──────
+
+@pytestmark_db
+def test_a_tier_zero_build_is_refused_for_production_and_its_recheck_convenes_every_seat(pipeline):
+    from boss_engine.services import change_recheck
+
+    run_id, repo = pipeline.build(tag="qb-tier0")
+    _set_spec(pipeline, run_id, risk_tier=0)                 # no review panel at tier 0
+    assert pipeline.run(run_id, repo) is None
+    assert pipeline.result(run_id)["run"]["status"] == "completed"
+    with pipeline.engine.begin() as c:
+        said = qb.production_refusal(c, code_task_run_id=run_id)
+    assert said and "was not run" in said and "Re-check at the production bar" in said, said
+
+    pipeline._engine_env("")                                   # noqa: SLF001
+    asked = change_recheck.request(
+        pipeline.engine, pipeline.settings(repo), pipeline.jobs(repo), run_id,
+        project_id=pipeline.project, actor="operator", by_person=True, quality_bar="production")
+    rid = asked["run_id"]
+    assert pipeline.run(rid, repo) is None
+    out = pipeline.result(rid)
+    assert out["run"]["status"] == "completed", out["run"].get("error")
+    assert out["run"]["finalize_ctx"]["recheck_bar"] == "production"
+    # every review seat sat, whatever the original profile and tier
+    assert any(s in out["stages"] for s in ("review_code", "review_panel")), out["stages"]
+    assert "acceptance_check" in out["stages"], out["stages"]
+    row, ev = _quality(pipeline, rid)
+    assert {"code_review_passed", "security_clean", "consistent",
+            "acceptance_met"} <= set(row["gates_passed"]), row
+    assert ev["quality_bar"]["bar"] == "production"
+    with pipeline.engine.begin() as c:
+        assert qb.production_refusal(c, code_task_run_id=rid) is None
+
+
+@pytestmark_db
+def test_a_workflow_launched_build_reads_its_workflows_bar_through_the_real_runner(
+        pipeline, monkeypatch):
+    """The runner records the launched build on its step run IN THE LAUNCHING TRANSACTION, so the
+    build's pipeline believes its workflow's (stamped) bar before the step has finished."""
+    import uuid
+
+    from boss_engine.services import workflow_capability_runner as wcr
+    from boss_engine.services import workflows
+
+    run_id, repo = pipeline.build(tag="qb-launch")
+    with pipeline.engine.begin() as c:
+        d = workflows.create_definition(
+            c, project_id=pipeline.project, workflow_key=f"qbl_{uuid.uuid4().hex[:6]}", name="qbl",
+            description=None, actor="test", namespace="product")
+        v = workflows.publish_version(
+            c, project_id=pipeline.project, definition_id=d["id"], actor="ceo",
+            spec={"entry_step": "build", "quality_bar": "production",
+                  "steps": [{"id": "build", "kind": "task"}]})
+        wf = workflows.start_run(
+            c, project_id=pipeline.project, actor="test", input_data={"directive": "x"},
+            dedupe_key=f"dk_{uuid.uuid4().hex[:8]}", workflow_version_id=v["id"])["id"]
+        c.execute(text(
+            "INSERT INTO workflow_step_runs (id, project_id, workflow_run_id, step_id, step_kind, "
+            "status) VALUES (:i, :p, :w, 'build', 'task', 'running') "
+            "ON CONFLICT DO NOTHING"),
+            {"i": f"wsr_{uuid.uuid4().hex[:8]}", "p": pipeline.project, "w": wf})
+        # the runner's own launch hook, as _perform_capability calls it the moment the tool answers
+        wcr._record_launch(c, {"run_id": wf}, {"id": "build"}, "build",     # noqa: SLF001
+                           {"status": "awaiting", "run_id": run_id,
+                            "code_task_run_id": run_id})
+        launched = c.execute(text(
+            "SELECT output->>'launched_code_task_run_id' FROM workflow_step_runs "
+            "WHERE workflow_run_id = :w AND step_id = 'build'"), {"w": wf}).scalar()
+        assert launched == run_id
+        c.execute(text("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+                       "|| CAST(:f AS jsonb) WHERE id = :r"),
+                  {"f": json.dumps({"workflow_run_id": wf}), "r": run_id})
+    assert pipeline.run(run_id, repo) is None
+    _, ev = _quality(pipeline, run_id)
+    assert ev["quality_bar"]["bar"] == "production", ev["quality_bar"]
+    assert ev["quality_bar"]["source"] == "workflow"
+
+
+@pytestmark_db
+def test_the_runner_records_the_launched_build_on_its_step_run_before_the_build_finishes(
+        eng, project, monkeypatch):
+    """The real runner path: the step launches create_code_task, the build is still running, and
+    the step run already names it in a structured field, so `launched_by` believes the build."""
+    from boss_engine.services import workflow_capability_runner as runner
+
+    from .test_workflow_capability_runner import (Ctx, RecordingRegistry, RecordingTool,
+                                                  _publish, _start)
+
+    build = RecordingTool("create_code_task", {"run_id": "crun_qblaunch"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([build]))
+    with eng.begin() as c:
+        _, version = _publish(c, project, f"qbl_{os.urandom(3).hex()}", [
+            {"id": "b", "kind": "capability",
+             "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
+             "next": []}], "b")
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)             # launches; the build is running
+        step = c.execute(text(
+            "SELECT status, output FROM workflow_step_runs WHERE workflow_run_id = :w "
+            "AND step_id = 'b'"), {"w": run["id"]}).mappings().one()
+        assert step["status"] == "waiting"
+        assert step["output"]["launched_code_task_run_id"] == "crun_qblaunch"
+        assert qb.launched_by(c, project, run["id"], "crun_qblaunch") is True
+        assert qb.launched_by(c, project, run["id"], "crun_forged") is False

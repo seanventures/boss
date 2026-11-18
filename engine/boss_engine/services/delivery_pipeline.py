@@ -754,6 +754,9 @@ def redeploy(engine, settings: Settings, deployment_run_id: str, *,
             expected_cost_usd_micros=expected_cost_usd_micros,
             reservation_id=reservation_id,
             actor=actor,
+            # TRUSTED: exempt from the production bar only when this re-ships the exact commit
+            # of this prior production run on its own target (quality_bar.plan_refusal).
+            reships=deployment_run_id,
         )
         new_id = planned.get("deployment_run_id") or planned.get("id")
         if planned.get("status") in {"failed", "blocked"}:

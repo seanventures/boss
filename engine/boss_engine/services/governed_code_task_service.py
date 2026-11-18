@@ -663,7 +663,8 @@ def _guidance_block(items: list[dict]) -> str:
     )
 
 
-def review_panel_seats(lane: str, risk_tier: int, profile: dict, *, ci_files: bool) -> set:
+def review_panel_seats(lane: str, risk_tier: int, profile: dict, *, ci_files: bool,
+                       full_panel: bool = False) -> set:
     """Which review-panel seats sit for a build. Tests do not enter into it.
 
     EVERY BUILD IS REVIEWED, WHATEVER ITS TESTS SAY (operator, 2026-10-30). Tests decide a
@@ -687,6 +688,8 @@ def review_panel_seats(lane: str, risk_tier: int, profile: dict, *, ci_files: bo
     # fix lane, where follow-ups usually run — exactly the runs whose clean result must not read
     # as "the must-haves are delivered" (acceptance_gate.py, BOSSAPP-1211).
     seats |= {_acceptance_gate.SEAT}
+    if full_panel:                  # the production quality bar: every seat, whatever the profile
+        seats |= set(_ALL_PANEL_SEATS)
     return seats
 
 
@@ -1659,12 +1662,17 @@ def _bar_for_run(engine, settings, project_id, spec, fctx, run_id=None) -> tuple
     build."""
     try:
         with _transaction(engine) as _qc:
-            return _quality_bar.resolve_for_run(
+            bar, over, info = _quality_bar.resolve_for_run(
                 _qc, settings, project_id, spec=spec,
                 workflow_run_id=(fctx or {}).get("workflow_run_id"), run_id=run_id)
     except Exception:  # noqa: BLE001
         _log_caught(logger)
         return _quality_bar.DEFAULT, {}, {}
+    # A re-check AT THE PRODUCTION BAR raises this run's bar (only ever a raise).
+    asked = _quality_bar.normalize((fctx or {}).get("recheck_bar"))
+    if asked and _quality_bar.RANK[asked] > _quality_bar.RANK[bar]:
+        bar, info = asked, {**info, "source": "recheck", "lowered_by": None}
+    return bar, over, info
 
 
 def _record_quality_gate(connection, *, run_id, project_id, task_id, job_id, evidence, gates):
@@ -7330,6 +7338,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # Future.cancel() is a no-op on a running future. Both are fixed (concurrency 4;
         # _kill_stray_review_processes), so the panel costs ~3 min of WALL time, not 25.
         do_review = risk_tier >= 1
+        # THE PRODUCTION BAR CONVENES EVERY SEAT, whatever the build's profile or tier: a tier-0
+        # build is re-checked at the production bar (change_recheck) to reach it.
+        _full_panel = (_bar_for_run(engine, settings, project_id, spec, fctx, run_id)[0]
+                       == _quality_bar.PRODUCTION)
+        if _full_panel:
+            do_review = True
         # ADVISORY GATE: when True, failing quality checks are SURFACED but do NOT block the PR —
         # the build still ships a PR + preview and the user retries-to-improve. Quality feedback
         # without a dead-end (product decision: always produce a result on the first pass).
@@ -9161,7 +9175,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # seat list survived that override, `lean` would become a way to ship credential
             # handling with no security review at all. Above tier 1 the full panel is restored
             # no matter what the profile asked for.
-            enabled_seats = review_panel_seats(lane, risk_tier, profile, ci_files=bool(_ci_files))
+            enabled_seats = review_panel_seats(lane, risk_tier, profile, ci_files=bool(_ci_files),
+                                               full_panel=_full_panel)
 
             # ONE SESSION SITS EVERY LLM SEAT (BOSSAPP-1000, audit 997 §7.3). The three seats
             # were three separate full CLI sessions over the SAME inline change — $375.98/month

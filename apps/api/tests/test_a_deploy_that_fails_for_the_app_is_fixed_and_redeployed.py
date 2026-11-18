@@ -159,7 +159,7 @@ def _finish(engine, run_id: str, status: str = "completed") -> None:
             c.execute(text(
                 "INSERT INTO quality_gates (id, project_id, code_task_run_id, risk_tier, status, "
                 "fail_closed, gates_passed, gates_failed, evidence) SELECT :g, project_id, id, 1, "
-                "'pass', true, '[]'::jsonb, '[]'::jsonb, '{}'::jsonb FROM code_task_runs "
+                "'pass', true, '[\"code_review_passed\",\"security_clean\",\"consistent\",\"acceptance_met\"]'::jsonb, '[]'::jsonb, '{}'::jsonb FROM code_task_runs "
                 "WHERE id = :i ON CONFLICT DO NOTHING"), {"g": f"qg_{run_id}", "i": run_id})
 
 

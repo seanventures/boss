@@ -241,7 +241,10 @@ def test_the_host_route_deploys_the_other_app(client, world, monkeypatch):
     r = client.post("/v1/delivery/deploy", json={"target_id": "t_live", "actor": "ceo", "ref": "main"})
     assert "insecure by design" not in r.text and "cannot tell" not in r.text
     # past the guard (both planners): the seeded target then stops at the next ordinary check
-    assert r.status_code < 400 or "has no app port" in r.text, r.text
+    # (a manual deploy to a production-named target with no build is stopped by the production
+    # quality bar, which is also past the insecure-template guard under test)
+    assert (r.status_code < 400 or "has no app port" in r.text
+            or "production quality bar" in r.text), r.text
 
 
 def test_a_lab_project_deploys_nothing_whatever_the_target_is_called(world):
