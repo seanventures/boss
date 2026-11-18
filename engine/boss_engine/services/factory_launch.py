@@ -425,6 +425,10 @@ def launch(
         created_receipt = True        # the kept launch's own receipt: this is its real launch
     body["receipt_id"] = receipt_id
     if created_receipt:
+        if again is not None:
+            # A relaunch remembers the project it ran in (made again when it had been removed).
+            connection.execute(text("UPDATE receipts SET project_id = :p WHERE id = :r"),
+                               {"p": project_id, "r": receipt_id})
         ReceiptService().mark_succeeded(connection, receipt_id, None, body)
     return body
 
@@ -958,10 +962,8 @@ def _reserve(connection: Any, settings: Any, project_id: str, title: str, budget
     return str(reservation["reservation_id"])
 
 
-#: A code-task run in one of these is over: the same launch pressed again starts a new run.
-ENDED_RUN_STATUSES = ("completed", "failed", "cancelled")
-#: How long the same launch hands back its earlier answer whatever that run is doing: the double
-#: press, the reply that timed out in the browser, the resend after "Confirm it's you".
+#: How long the same launch hands back its earlier answer when its run is not (yet) a row BOSS
+#: can read — a run of an ended status is never handed back, whatever its age.
 REUSE_WINDOW_MINUTES = 10
 
 
@@ -984,18 +986,23 @@ def _succeeded(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[s
 
 
 def _still_live(connection: Any, receipt_id: str, run_id: str) -> bool:
-    """The earlier launch is still the answer: its run has not ended, or it answered moments ago.
+    """The earlier launch is still the answer: its run has not ended, or (a run BOSS cannot see
+    yet) it answered moments ago.
 
     Before 2026-11-18 a launch was reused forever: Recipe box's run failed on a platform bug,
-    and pressing Easy Mode on Recipe box again handed back that dead run."""
+    and pressing Easy Mode on Recipe box again handed back that dead run. An ENDED run is never
+    the answer, however recent: a double press waits on the launch's lock and finds the run
+    live, and the resend after "Confirm it's you" follows a refusal, not a launch."""
+    from .code_task_service import TERMINAL_RUN_STATUSES
+
+    run = connection.execute(text("SELECT status FROM code_task_runs WHERE id = :id"),
+                             {"id": run_id}).first()
+    if run is not None:
+        return str(run[0] or "") not in TERMINAL_RUN_STATUSES
     row = connection.execute(text(
         "SELECT (now() - updated_at) < make_interval(mins => :mins) AS fresh "
         "FROM receipts WHERE id = :r"), {"r": receipt_id, "mins": REUSE_WINDOW_MINUTES}).first()
-    if row is not None and row[0]:
-        return True
-    run = connection.execute(text("SELECT status FROM code_task_runs WHERE id = :id"),
-                             {"id": run_id}).first()
-    return run is not None and str(run[0] or "") not in ENDED_RUN_STATUSES
+    return bool(row is not None and row[0])
 
 
 def _reuse(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, Any]]:

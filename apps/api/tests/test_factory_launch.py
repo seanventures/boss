@@ -868,3 +868,31 @@ def test_the_same_launch_while_its_run_is_still_active_is_reused(
     assert second["run_id"] == first["run_id"]
     assert len(calls) == 1
 
+
+
+def test_a_run_that_failed_fast_is_relaunched_within_the_window(
+        client, engine, monkeypatch, tmp_path):
+    # An ended run is never the answer, however recent: a build that fails in its first minute
+    # and is pressed again straight away starts again.
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", tmp_path / "absent")
+    calls: list = []
+    _patch_runs(monkeypatch, calls)
+    payload = {"prompt": "Build a recipe box that failed at once.", "mode": "", "template_id": None,
+               "attachment_ids": []}
+    started = client.post("/v1/factory/launch", json=payload)
+    assert started.status_code == 201, started.text
+    first = started.json()
+    _exec(engine, "UPDATE code_task_runs SET status = 'failed' WHERE id = :id", id=first["run_id"])
+    with engine.begin() as connection:
+        BudgetGovernor(get_settings()).release(connection, first["project_id"], first["reservation_id"],
+                                               "the run failed")
+
+    second = client.post("/v1/factory/launch", json=payload)      # seconds later, no ageing
+
+    assert second.status_code == 201, second.text
+    again = second.json()
+    assert again["reused"] is False and again["run_id"] != first["run_id"]
+    assert again["project_id"] == first["project_id"]
+    assert len(calls) == 2
+    receipt = _one(engine, "SELECT project_id FROM receipts WHERE id = :r", r=again["receipt_id"])
+    assert receipt["project_id"] == again["project_id"]
