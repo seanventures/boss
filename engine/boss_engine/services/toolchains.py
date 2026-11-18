@@ -449,11 +449,8 @@ def restore_cache(home: Path, project_id: Optional[str]) -> list[str]:
             continue
         try:
             parent = _mkdirs(home, str(Path(rel).parent))
-            old = os.umask(0)
-            try:
-                _copy_tree(src, parent / Path(rel).name, open_modes=True)
-            finally:
-                os.umask(old)
+            # open_modes chmods every entry itself; never os.umask (process-wide).
+            _copy_tree(src, parent / Path(rel).name, open_modes=True)
             restored.append(name)
         except OSError as exc:
             log.warning("toolchain cache restore %s for %s failed: %s", name, project_id, exc)
