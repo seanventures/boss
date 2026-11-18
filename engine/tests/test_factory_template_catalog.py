@@ -15,7 +15,10 @@ import re
 from collections import Counter
 from pathlib import Path
 
+import pytest
 import yaml
+
+from boss_engine.services import factory_launch, stacks, toolchains
 
 CATALOG = Path(__file__).resolve().parents[1] / "boss_engine" / "data" / "factory_templates"
 
@@ -40,10 +43,8 @@ STACKS_BY_TOOLCHAIN = {
     "java": {"Java", "Spring Boot"},
 }
 
-# Platforms no BOSS image carries. A template that needs one can never build.
-UNBUILDABLE = re.compile(
-    r"\b(android|jetpack|compose|kotlin|ios|swift|xcode|emulator|godot|unity|unreal|"
-    r"react native|flutter|expo|apk|play store|app store)\b", re.I)
+# Platforms no BOSS image carries: the loader's own pattern, so the two can never drift.
+UNBUILDABLE = factory_launch.UNBUILDABLE_PLATFORM
 
 # Resource strings name a kind the launch path can attach locally. An account id is not a kind.
 RESOURCE_KINDS = ("repo", "preview", "database", "model")
@@ -194,12 +195,22 @@ def test_web_maps_game_3d_and_xr_each_have_three():
 
 
 def test_the_toolchains_here_are_the_ones_the_loader_knows():
-    from boss_engine.services import factory_launch, toolchains
-
-    assert set(STACKS_BY_TOOLCHAIN) == set(factory_launch.TEMPLATE_TOOLCHAINS)
-    assert set(factory_launch.BUILTIN_TOOLCHAINS) == {"python", "node"}
-    opt_in = set(factory_launch.TEMPLATE_TOOLCHAINS) - set(factory_launch.BUILTIN_TOOLCHAINS)
+    # The loader reads them from stacks.LANGUAGES, the registry of what BOSS builds; this table
+    # only adds which stack names each one builds.
+    assert set(STACKS_BY_TOOLCHAIN) == set(factory_launch.TEMPLATE_TOOLCHAINS) == set(
+        stacks.LANGUAGES)
+    assert set(factory_launch.BUILTIN_TOOLCHAINS) == {
+        key for key, lang in stacks.LANGUAGES.items() if lang.toolchain is None}
+    opt_in = {lang.toolchain for lang in stacks.LANGUAGES.values() if lang.toolchain}
     assert opt_in <= set(toolchains.KNOWN), "a template toolchain BOSS cannot turn on"
+
+
+def test_the_shipped_catalogue_loads_whole():
+    """A shipped file the loader refuses would only be counted in `skipped` and vanish from the
+    gallery; that is a red test, not a quiet gap."""
+    listed = factory_launch.list_templates(have=set())
+    assert listed["skipped"] == 0
+    assert sorted(t["id"] for t in listed["templates"]) == sorted(p.stem for p in _yaml_files())
 
 
 def test_no_template_needs_a_platform_the_image_does_not_carry():
@@ -214,8 +225,6 @@ def test_no_template_needs_a_platform_the_image_does_not_carry():
 
 
 def test_the_loader_refuses_a_template_without_a_known_toolchain_or_for_android(tmp_path):
-    from boss_engine.services import factory_launch
-
     good = yaml.safe_load((CATALOG / "tile-swap.yaml").read_text(encoding="utf-8"))
     for name, change in (("no-toolchain", {"toolchain": None}),
                          ("rust", {"toolchain": "rust"}),
@@ -233,8 +242,6 @@ def test_the_loader_refuses_a_template_without_a_known_toolchain_or_for_android(
 
 
 def test_go_templates_are_marked_unavailable_until_go_is_turned_on():
-    from boss_engine.services import factory_launch
-
     without = {t["id"]: t for t in factory_launch.list_templates(have=set())["templates"]}
     go_ids = {i for i, t in without.items() if t["toolchain"] == "go"}
     assert {"fixture-clock", "license-shelf"} <= go_ids
@@ -252,8 +259,6 @@ def test_go_templates_are_marked_unavailable_until_go_is_turned_on():
 
 
 def test_the_listing_reads_the_toolchain_manifest(tmp_path, monkeypatch):
-    from boss_engine.services import factory_launch, toolchains
-
     manifest = tmp_path / "manifest.json"
     monkeypatch.setenv(toolchains.MANIFEST_ENV, str(manifest))
     manifest.write_text("{}", encoding="utf-8")
@@ -265,10 +270,6 @@ def test_the_listing_reads_the_toolchain_manifest(tmp_path, monkeypatch):
 
 
 def test_a_launch_of_a_template_that_needs_go_is_refused_in_words(tmp_path, monkeypatch):
-    import pytest
-
-    from boss_engine.services import factory_launch, toolchains
-
     manifest = tmp_path / "manifest.json"
     manifest.write_text("{}", encoding="utf-8")
     monkeypatch.setenv(toolchains.MANIFEST_ENV, str(manifest))
@@ -295,3 +296,52 @@ def test_a_launch_of_a_template_that_needs_go_is_refused_in_words(tmp_path, monk
     manifest.write_text('{"go": {"go": "1.27"}}', encoding="utf-8")
     spec, origin = factory_launch.resolve_spec("", "fixture-clock")
     assert origin == "template" and spec["id"] == "fixture-clock" and spec["toolchain"] == "go"
+
+
+@pytest.mark.parametrize("content", [None, "not json", "[1, 2]"])
+def test_an_unreadable_manifest_never_says_turn_go_on(tmp_path, monkeypatch, content):
+    """toolchains.installed() is {} for a missing or broken manifest. That says nothing about
+    whether Go is on, so a Go card must not tell the person to turn on what may be on."""
+    manifest = tmp_path / "manifest.json"
+    if content is not None:
+        manifest.write_text(content, encoding="utf-8")
+    monkeypatch.setenv(toolchains.MANIFEST_ENV, str(manifest))
+
+    listed = {t["id"]: t for t in factory_launch.list_templates()["templates"]}
+    go = listed["fixture-clock"]
+    assert go["available"] is False
+    assert go["needs"]["label"] == "Can't check toolchains"
+    assert "boss toolchains enable" not in go["needs"]["message"]
+    assert "cannot read its toolchain list" in go["needs"]["message"]
+    assert "`boss update`" in go["needs"]["message"]
+    assert listed["tile-swap"]["available"] is True            # Python and Node are always there
+
+    with pytest.raises(factory_launch.FactoryLaunchError) as refused:
+        factory_launch.resolve_spec("", "fixture-clock")
+    assert refused.value.code == "toolchain_not_enabled"
+    assert "cannot read its toolchain list" in refused.value.message
+    assert "not turned on" not in refused.value.message
+
+
+@pytest.mark.parametrize("change", [
+    {"toolchain": "kotlin"},
+    {"stack": "Jetpack Compose", "toolchain": ""},
+    {"category": "android"},
+    {"stack": "Godot 4"},
+])
+def test_a_pasted_spec_for_a_platform_boss_cannot_build_is_refused_in_words(change):
+    doc = {**yaml.safe_load((CATALOG / "tile-swap.yaml").read_text(encoding="utf-8")),
+           "id": "pasted", **change}
+    if doc.get("toolchain") == "":
+        doc.pop("toolchain")
+    with pytest.raises(factory_launch.FactoryLaunchError) as refused:
+        factory_launch.resolve_spec(yaml.safe_dump(doc), None)
+    error = refused.value
+    assert error.status == 409 and error.code == "platform_not_buildable"
+    assert error.message.startswith("Not started: this spec asks for")
+    assert "does not build Android or iOS apps" in error.message
+
+
+def test_prose_that_mentions_android_is_still_a_brief():
+    spec, origin = factory_launch.resolve_spec("Build a web page that lists Android phones.", None)
+    assert origin == "prompt" and spec["stack"] == ""
