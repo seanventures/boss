@@ -199,13 +199,49 @@
 }
 .bx-strip-sr, .bx-strip-chip > .bx-strip-error { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .bx-strip-chip .bx-strip-caret { color: var(--faint); font-size: var(--fs-tag); }
-.bx-strip-chip .bx-project-picker { top: calc(100% + 8px); left: auto; right: 0; z-index: 60; }
 .bx-strip-notice:empty { display: none; }
 .bx-strip-notice { padding: 8px 20px 0; }
 @media (max-width: 760px) {
   .bx-strip-chip .bx-strip-word, .bx-strip-chip .bx-strip-caret { display: none; }
   .bx-strip-chip > .bx-project-trigger { padding: 0 8px; }
-  .bx-strip-chip .bx-project-picker { position: fixed; top: 60px; left: 12px; right: 12px; width: auto; }
+}
+
+/* ── TOP-BAR POPOVERS: one contract for every panel that drops from the bar ─────────────────────
+   Builds' "Find a build", the bell's crew and the avatar menu each sit inside their trigger's
+   wrapper (position: relative), so that wrapper is their containing block, and a percentage width
+   resolves against the TRIGGER. "min(520px, 100% - 40px)" under a 130px Builds chip was a 90px
+   panel: the search box showed "F", the tabs spilled out, the rows read "Sh". So a top-bar panel
+   is sized by its own width token and the viewport, never by a percentage; it hangs from its
+   trigger's right edge, scrolls inside itself when tall, and on a phone pins to the viewport's
+   right gutter so it cannot run off either side. tests/topbar-popovers-keep-their-width.test.tsx */
+.bx-shell .bx-topbar { --bx-pop-gutter: 16px; --bx-pop-top: 64px; }
+.bx-shell .bx-topbar .bx-project-picker { --bx-pop-w: 420px; }
+.bx-shell .bx-topbar .ag-crew { --bx-pop-w: 380px; }
+.bx-shell .bx-topbar .idn-me-menu { --bx-pop-w: 280px; }
+.bx-shell .bx-topbar :is(.bx-project-picker, .ag-crew, .idn-me-menu) {
+  box-sizing: border-box; position: absolute; top: calc(100% + 8px); right: 0; left: auto; z-index: 60;
+  width: min(var(--bx-pop-w), calc(100vw - 2 * var(--bx-pop-gutter)));
+  min-width: 0; max-width: calc(100vw - 2 * var(--bx-pop-gutter));
+  max-height: calc(100vh - var(--bx-pop-top) - var(--bx-pop-gutter));
+  max-height: calc(100dvh - var(--bx-pop-top) - var(--bx-pop-gutter));
+  overflow-x: hidden; overflow-y: auto;
+  font-size: var(--fs-ui); text-align: left; white-space: normal;
+}
+/* Its own content, laid out by the panel: the search box full width, the tabs wrapping inside,
+   each row one line that ends in an ellipsis (the full title is the row's tooltip). */
+.bx-shell .bx-topbar .bx-project-picker > * { min-width: 0; max-width: 100%; }
+.bx-shell .bx-topbar .bx-project-picker #boss-project-search { box-sizing: border-box; width: 100%; min-width: 0; }
+.bx-shell .bx-topbar .bx-project-picker .bx-strip-filters { flex-wrap: wrap; }
+.bx-shell .bx-topbar .bx-project-picker .bx-strip-scroll { flex: 1 1 auto; overflow-y: auto; }
+.bx-shell .bx-topbar .bx-project-picker .bx-strip-item { flex: none; min-width: 0; box-sizing: border-box; }
+.bx-shell .bx-topbar .bx-project-picker .bx-strip-name {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bx-shell .bx-topbar .bx-project-picker :is(.bx-strip-stage, .bx-strip-pct, .bx-strip-alert) { flex: none; }
+@media (max-width: 760px) {
+  .bx-shell .bx-topbar :is(.bx-project-picker, .ag-crew, .idn-me-menu) {
+    position: fixed; top: var(--bx-pop-top); right: var(--bx-pop-gutter); left: auto;
+  }
 }
 
 /* The bell: needs-you count in amber on its corner; a teal dot while agents are working. */
@@ -216,10 +252,12 @@
 }
 .bx-bell:hover, .bx-bell[aria-expanded="true"] { border-color: var(--active); color: var(--ink); }
 .bx-bell[data-needs] { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, var(--panel-border)); }
+/* A corner badge, not a second button: 16px tall on a 32px bell, inset so it never covers the
+   glyph or reaches the next control (at --fs-tag and 1.45em it was 19px and sat half off the bell). */
 .bx-bell-n {
-  position: absolute; top: -6px; right: -6px; min-width: 1.45em; height: 1.45em; padding: 0 4px; border-radius: 9px;
-  display: grid; place-items: center; background: var(--amber); color: #1b1300;
-  font-family: var(--mono); font-size: var(--fs-tag); font-weight: 800; box-shadow: 0 0 0 2px var(--base, #0b101e);
+  position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  display: grid; place-items: center; background: var(--amber); color: #1b1300; line-height: 1;
+  font-family: var(--mono); font-size: var(--fs-label); font-weight: 800; box-shadow: 0 0 0 2px var(--base, #0b101e);
 }
 .bx-bell-working {
   position: absolute; bottom: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%;
@@ -281,8 +319,6 @@
   .bx-shell .bx-topbar > .bx-topbar-spacer { min-width: 0; }
   .bx-jump { width: 34px; height: 34px; padding: 0; justify-content: center; border-radius: 8px; }
   .bx-jump kbd { display: none; }
-  .bx-shell .ag-crew { position: fixed; left: 12px; right: 12px; top: 56px; width: auto; }
-  .bx-shell .idn-me-menu { position: fixed; left: auto; right: 12px; top: 56px; width: min(280px, calc(100vw - 24px)); }
 }
 
 /* ── wireframe 01 details: NEW tag, list states, the 60px collapsed rail, menus ──────────────── */
@@ -331,7 +367,8 @@
 }
 /* The face is the whole compact avatar: identity.css hides the summary's spans on a phone (the old
    "Name · Role" label), which took the face with it. */
-.bx-shell .idn-me[data-compact] > summary > .idn-face { display: inline-grid; }
+.bx-shell .idn-me[data-compact] > summary > .idn-face,
+.bx-shell .bx-user-fallback > summary > .bx-operator-avatar { display: inline-grid; }
 
 /* A shorter window (1024×768, a laptop with the dock up) still holds every area without scrolling:
    the rows tighten a little before the rail has to scroll. */
