@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import { redirect } from "next/navigation";
 
 import { API_URL } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ type Props = { searchParams: Promise<{ code?: string; linked?: string; error?: s
 
 async function post<T>(path: string, body: unknown): Promise<{ ok: boolean; data: T | null; message: string }> {
   try {
-    const r = await fetch(`${API_URL}${path}`, {
+    const r = await apiWrite(`${API_URL}${path}`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store",
     });
     const data = (await r.json().catch(() => null)) as (T & { message?: string }) | null;

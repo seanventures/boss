@@ -8,6 +8,7 @@
  * Literata for the words, Outfit for the controls.
  */
 import React, { useEffect, useState } from "react";
+import { apiWrite } from "../../lib/api-write";
 
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=Literata:opsz,wght@7..72,500;7..72,650&family=Outfit:wght@400;500;700&display=swap');
@@ -139,7 +140,7 @@ export type PromptRow = {
 type Answer = { status: number; data: Record<string, unknown> };
 
 async function send(url: string, body: unknown): Promise<Answer> {
-  const response = await fetch(url, {
+  const response = await apiWrite(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),

@@ -94,3 +94,18 @@ export function describeApiError(data: unknown, status: number): string {
   if (status === 403) return "You do not have permission to change this in this project.";
   return text;
 }
+
+/**
+ * THE STEP-UP CODE SURVIVES A ROUTE'S REWORDING. Today the API's step-up body is
+ * `{"error":"step_up_required"}` and `describeApiError` keeps that word, so these routes already
+ * passed it on; a refusal that also carries a `message` or a `detail`, which a route prefers,
+ * would replace it, and then the browser's apiWrite could not see the API asking for "Confirm
+ * it's you". A route that puts its own sentence in `error` spreads this in:
+ * `{ error: sentence, ...stepUpCode(data) }`. Tested in tests/easy-mode-asks-confirm-its-you.test.tsx.
+ */
+export function stepUpCode(data: unknown): { code?: "step_up_required" } {
+  const said = (v: unknown, depth = 0): boolean => v === "step_up_required"
+    || (depth < 3 && !!v && typeof v === "object"
+        && ["error", "code", "detail"].some((k) => said((v as Record<string, unknown>)[k], depth + 1)));
+  return said(data) ? { code: "step_up_required" } : {};
+}
