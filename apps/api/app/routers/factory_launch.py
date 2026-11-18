@@ -4,7 +4,9 @@ POST /v1/factory/launch        {prompt, mode, template_id, attachment_ids, githu
 POST /v1/factory/attachments   multipart specs, files and images, or a connected Drive source
 GET  /v1/factory/templates     the yaml catalogue, skipping files that are not the schema
 
-A launch that cannot name a project and a run is a failure. GitHub is accepted only when that
+A launch that cannot name a project and a run is a failure. A build start that needs the
+person's consent answers 409 consent_required with the kept `project_id`: the project is
+committed, and the same launch sent again after the grant starts the build in it. GitHub is accepted only when that
 repository is already connected for the org, and the refusal is the existing connect error.
 """
 from __future__ import annotations
@@ -18,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from boss_engine.config import get_settings
 from boss_engine.db import begin, database_is_reachable, get_engine
 from boss_engine.identity import P, Scope, authenticated, permit
+from boss_engine.identity.consent import ConsentRequired
 from boss_engine.multirepo.common import MultiRepoError
 from boss_engine.services.factory_launch import FactoryLaunchError
 from boss_engine.services.projects import ProjectExists
@@ -108,14 +111,22 @@ def factory_launch(payload: LaunchBody, request: Request) -> Any:
         return JSONResponse({"error": "database", "message": "Postgres is not reachable."},
                             status_code=503)
     auth, org_id, actor = _caller(request)
+    asked: Optional[ConsentRequired] = None
     try:
         with begin(_engine) as connection:
-            result = launch_service.launch(
-                connection, _settings, org_id=org_id, actor=actor, auth=auth,
-                prompt=payload.prompt, mode=payload.mode, template_id=payload.template_id,
-                attachment_ids=payload.attachment_ids, github_repo=payload.github_repo,
-                jobs=_jobs())
-            if not result.get("project_id") or not result.get("run_id"):
+            try:
+                result = launch_service.launch(
+                    connection, _settings, org_id=org_id, actor=actor, auth=auth,
+                    prompt=payload.prompt, mode=payload.mode, template_id=payload.template_id,
+                    attachment_ids=payload.attachment_ids, github_repo=payload.github_repo,
+                    jobs=_jobs())
+            except ConsentRequired as consent_asked:
+                # KEPT, NOT ROLLED BACK: the project and its agents the consent body names are
+                # committed with this transaction; the same launch sent again after the grant
+                # starts the build in that project (services/factory_launch._kept).
+                asked = consent_asked
+                result = {}
+            if asked is None and (not result.get("project_id") or not result.get("run_id")):
                 raise FactoryLaunchError(
                     502, "launch_incomplete",
                     "A launch without a project and a run is not done.")
@@ -131,4 +142,7 @@ def factory_launch(payload: LaunchBody, request: Request) -> Any:
         }, status_code=409)
     except ValueError as error:
         return JSONResponse({"error": "invalid_launch", "message": str(error)}, status_code=422)
+    if asked is not None:
+        # The flat body every console start reads (identity_agents.install_consent_handler).
+        return JSONResponse(asked.body, status_code=409)
     return result

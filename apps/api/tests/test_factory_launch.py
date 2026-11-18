@@ -473,3 +473,84 @@ def test_connected_github_repo_is_passed_to_the_build(client, engine, monkeypatc
     assert body["resources"] == []
     assert calls[0]["spec"]["github_repo"] == "Acme/Notes"
     assert calls[0]["project_id"] == body["project_id"]
+
+
+def test_consent_keeps_the_project_and_the_same_launch_builds_in_it(
+        client, engine, monkeypatch, tmp_path):
+    """EASY MODE UNDER CONSENT (2026-11-17): the build start's 409 consent_required used to roll
+    back the project and the agents it named, so every retry made a new project and asked again.
+    The route now commits the kept project, answers the flat consent body with its id, and the
+    same launch sent after the grant builds in it: one project, one receipt, idempotent after."""
+    from boss_engine.identity.consent import ConsentRequired
+
+    monkeypatch.setattr(
+        "boss_engine.services.factory_launch.TEMPLATE_DIR", tmp_path / "absent")
+    granted = {"yes": False}
+    calls: list = []
+
+    def build(connection, *, project_id, spec, actor, settings, jobs, reservation_id):
+        # What the start wrote before it asked goes back with the savepoint.
+        connection.execute(text("UPDATE projects SET description = 'started' WHERE id = :p"),
+                           {"p": project_id})
+        if not granted["yes"]:
+            raise ConsentRequired({
+                "error": "consent_required", "task": spec["title"], "task_run_id": "pending:abc",
+                "agents": [{"id": "agt_forge_x", "name": "Software Engineer",
+                            "role_key": "software_engineer"}],
+                "permissions": ["code_task:read"], "projects": [project_id], "github": None,
+                "durations": [{"kind": "task", "label": "For this build only", "days": None}],
+                "max_days": 90})
+        calls.append({"project_id": project_id, "reservation_id": reservation_id})
+        return {"project_id": project_id, "run_id": "run_after_consent"}
+
+    monkeypatch.setattr("boss_engine.services.factory_launch.build_run", build)
+    payload = {"prompt": "Build a CSV quality desk that flags bad rows.", "mode": "build"}
+    projects_before = _count(engine, "projects")
+
+    asked = client.post("/v1/factory/launch", json=payload)
+
+    assert asked.status_code == 409, asked.text
+    body = asked.json()
+    assert body["error"] == "consent_required"                     # flat, as every start sends it
+    assert body["agents"][0]["name"] == "Software Engineer"
+    project_id = body["project_id"]
+    assert body["retry"] == {"project_id": project_id, "dedupe_key": body["dedupe_key"]}
+    # KEPT: the project and its workflows are committed; the start's own writes are not.
+    project = _one(engine, "SELECT id, description FROM projects WHERE id = :p", p=project_id)
+    assert project is not None and project["description"] != "started"
+    assert _count(engine, "projects") == projects_before + 1
+    assert _count_where(engine, "SELECT count(*) FROM workflow_definitions WHERE project_id = :p "
+                        "AND workflow_key LIKE 'launch-%'", p=project_id) == 1
+    # The reservation went back with the start (nothing held while the person decides).
+    assert _count_where(engine, "SELECT count(*) FROM budget_reservations WHERE project_id = :p",
+                        p=project_id) == 0
+    assert _count_where(engine, "SELECT count(*) FROM receipts WHERE dedupe_key = :k AND "
+                        "status = 'in_progress'", k=body["dedupe_key"]) == 1
+
+    # Pressed again before consenting: the same project is asked about, never a new one.
+    again = client.post("/v1/factory/launch", json=payload)
+    assert again.status_code == 409 and again.json()["project_id"] == project_id
+    assert _count(engine, "projects") == projects_before + 1
+
+    granted["yes"] = True
+    built = client.post("/v1/factory/launch", json=payload)
+
+    assert built.status_code == 201, built.text
+    done = built.json()
+    assert done["project_id"] == project_id and done["run_id"] == "run_after_consent"
+    assert done["reused"] is False
+    assert calls == [{"project_id": project_id, "reservation_id": done["reservation_id"]}]
+    assert _count(engine, "projects") == projects_before + 1
+    rows = _count_where(engine, "SELECT count(*) FROM receipts WHERE dedupe_key = :k",
+                        k=body["dedupe_key"])
+    assert rows == 1
+    assert _count_where(engine, "SELECT count(*) FROM receipts WHERE dedupe_key = :k AND "
+                        "status = 'succeeded' AND result->>'run_id' = 'run_after_consent'",
+                        k=body["dedupe_key"]) == 1
+    assert done["receipt_id"] == body["receipt_id"]
+
+    repeat = client.post("/v1/factory/launch", json=payload)
+    assert repeat.status_code == 201
+    assert repeat.json()["reused"] is True and repeat.json()["run_id"] == "run_after_consent"
+    assert len(calls) == 1
+    assert _count(engine, "projects") == projects_before + 1
