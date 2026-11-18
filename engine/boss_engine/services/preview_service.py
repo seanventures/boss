@@ -159,6 +159,55 @@ def provision_preview_database(engine, run: Optional[dict], preview_id: str,
     return None
 
 
+def keep_preview_data(engine, preview_id: str, workdir: Path, *, project_id: Optional[str],
+                      repo: Optional[str], ident=None) -> list[str]:
+    """THE APP'S DATA, BACK BEFORE IT STARTS (preview_data): what an earlier preview of this app
+    saved is written into this tree (as the preview's uid when it has one), and this tree is
+    noted so its data is kept when it ends."""
+    from . import preview_data
+
+    try:
+        return preview_data.mark_restored(preview_id, workdir, preview_data.app_key(project_id, repo),
+                                          uid=ident.uid if ident is not None else None)
+    except Exception as exc:  # noqa: BLE001 — a preview without its old data still runs
+        logger.warning("preview %s: kept data not restored (%s)", preview_id, type(exc).__name__)
+        return []
+
+
+def _end_and_keep_data(preview_id: Optional[str]) -> None:
+    """STOP THE PREVIEW'S UID, THEN keep what its app wrote (preview_data.capture), before its
+    tree is removed. Whichever process holds the lease — this one, or none after an API restart
+    (sandbox_identity.stop_owner finds the uid from the run directory). A uid that could not be
+    stopped is never read: a live app could swap a link under BOSS's read (review of #223, B2)."""
+    if not preview_id:
+        return
+    from . import preview_data, sandbox_identity
+
+    try:
+        ident = sandbox_identity.stop_owner(str(preview_id))
+    except Exception as exc:  # noqa: BLE001 — not stopped: not read
+        logger.warning("preview %s: data not kept, its processes could not be stopped (%s)",
+                       preview_id, type(exc).__name__)
+        preview_data.forget(str(preview_id))
+        return
+    preview_data.capture(str(preview_id), owner_uid=ident.uid if ident is not None else None)
+
+
+def reset_preview_data(engine, settings: Settings, run_id: str) -> bool:
+    """"Fresh data": delete what is kept for the app this build previews (every branch and every
+    preview of it share it). True when there was something to delete."""
+    from . import preview_data
+
+    with begin(engine) as c:
+        run = load_code_task_run(c, run_id)
+    if run is None:
+        raise ValueError(f"code task run not found: {run_id}")
+    spec = run.get("spec") or {}
+    owner = spec.get("owner") or settings.target_github_owner
+    repo = spec.get("repo") or settings.target_github_repo
+    return preview_data.reset(preview_data.app_key(run.get("project_id"), f"{owner}/{repo}"))
+
+
 def _preview_workdir(preview_id: str, ident) -> Path:
     if ident is not None:
         return ident.workspace(f"{preview_id}-")
@@ -3146,6 +3195,9 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         # needed to reproduce it by hand.
         failure_kind, suggested_action = _classify_start_failure(msg, exited=exited)
         _release_preview_sandbox(preview_id)
+        from . import preview_data as _preview_data
+
+        _preview_data.forget(preview_id)   # it never served: its kept data stays as it was
         with begin(engine) as c:
             c.execute(text(
                 "INSERT INTO app_previews (id,project_id,run_id,repo,branch,command,substrate,"
@@ -3316,6 +3368,8 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     if app_env.needs:
         return _fail(f"the app {app_env.verdict()} (environment preview), then start the preview again",
                      command=" ".join(command))
+    keep_preview_data(engine, preview_id, workdir, project_id=project_id, repo=f"{owner}/{repo}",
+                      ident=ident)
     proc, port_hint = launch_app(
         workdir, command, log_path,
         owner=owned_process.Owner("preview", preview_id, project_id),
@@ -3787,6 +3841,9 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         branch = row["branch"]
         if not owner or not repo or not branch:
             return
+        # The tree the restart left behind still holds what the app wrote: kept before the
+        # lease is taken again (acquire empties the directory).
+        _end_and_keep_data(preview_id)
         ident = _preview_sandbox(preview_id)       # SandboxUnavailable: stays stopped (below)
         workdir = _preview_workdir(preview_id, ident)
         log_path = preview_log_path(preview_id)
@@ -3832,6 +3889,8 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
             _release_preview_sandbox(preview_id)
             return
         record_demo_logins(engine, preview_id, app_env)
+        keep_preview_data(engine, preview_id, workdir, project_id=project_id, repo=repo_full,
+                          ident=ident)
         proc, port_hint = launch_app(
             workdir, command, log_path,
             owner=owned_process.Owner("preview", preview_id, row.get("project_id")),
@@ -4688,6 +4747,8 @@ def _teardown(row, settings: Optional[Settings] = None) -> None:
             MicroVMProvider(settings).release(sandbox_id)
     else:
         _kill(row.get("pid"))
+        # What the app saved is the app's, not this preview's: kept before the tree goes.
+        _end_and_keep_data(row.get("id"))
         # The preview's uid: every process it left is killed, its tree removed, the uid freed.
         _release_preview_sandbox(row.get("id"))
 
@@ -5001,6 +5062,9 @@ def reclaim_preview_workdir(preview_id: str) -> int:
     else, and a directory that has already gone is a success, not an error.
     """
     freed = 0
+    # A tree nobody tore down (its process died with an old container) still holds what the
+    # app wrote: its uid stopped and its data kept first. A no-op once a teardown has kept it.
+    _end_and_keep_data(preview_id)
     try:
         if not PREVIEW_ROOT.exists():
             return 0
