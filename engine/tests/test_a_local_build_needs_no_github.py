@@ -22,7 +22,7 @@ from types import SimpleNamespace
 import pytest
 
 from boss_engine.services import code_task_service as cts
-from boss_engine.services.github_app_adapter import GitHubAppConfigurationError
+from boss_engine.services.github_app_adapter import GitHubAppConfigurationError, GitHubNotConnected
 
 
 def _no_github(*_a, **_kw):
@@ -57,7 +57,7 @@ def test_no_github_credential_blocks_the_run_in_words_never_a_500(monkeypatch):
     failed = []
 
     def crash(*_a, **_kw):
-        raise GitHubAppConfigurationError(
+        raise GitHubNotConnected(
             "No GitHub credentials for acme/web: the App has no installation for it, "
             "BOSS_GITHUB_TOKEN is not set, and this project has no repository connected in Setup.")
 
@@ -80,3 +80,43 @@ def test_no_github_credential_blocks_the_run_in_words_never_a_500(monkeypatch):
     assert [(f["status"], f["failure_class"], f["reason_code"]) for f in failed] == [
         ("blocked", "needs_human", "github_not_connected")]
     assert "Setup › GitHub" in failed[0]["reason"]
+
+
+def _stand_in_run(monkeypatch, error):
+    failed = []
+
+    def crash(*_a, **_kw):
+        raise error
+
+    monkeypatch.setattr(cts, "_run_code_task", crash)
+    monkeypatch.setattr(cts, "_run_project", lambda engine, run_id: None)
+    monkeypatch.setattr(cts, "_transaction", lambda engine: contextlib.nullcontext(object()))
+    monkeypatch.setattr(cts, "load_code_task_run",
+                        lambda c, run_id: {"status": "running", "project_id": "prj_1"})
+    monkeypatch.setattr(cts, "_fail", lambda *a, **kw: failed.append(kw) or {})
+    return failed
+
+
+@pytest.mark.parametrize("said", [
+    "Failed to mint installation token (502): Bad Gateway",
+    "BOSS_GITHUB_APP_PRIVATE_KEY is not set",
+    "PyJWT is not installed; the GitHub App cannot sign its JWT",
+])
+def test_any_other_github_app_error_keeps_its_old_way(monkeypatch, said):
+    """Only "no credential anywhere" is a person's setup gap. An outage or a broken App install
+    still raises (the step endpoint logs it at error level and the worker retries the step)."""
+    failed = _stand_in_run(monkeypatch, GitHubAppConfigurationError(said))
+    with pytest.raises(GitHubAppConfigurationError) as raised:
+        cts.run_code_task(object(), SimpleNamespace(), None, "crun_gh_outage")
+    assert not isinstance(raised.value, GitHubNotConnected)
+    assert failed == []
+
+
+def test_no_credential_anywhere_is_the_one_case_raised_as_not_connected():
+    import inspect
+
+    from boss_engine.services import github_app_adapter
+
+    assert issubclass(GitHubNotConnected, GitHubAppConfigurationError)
+    source = inspect.getsource(github_app_adapter.repo_token)
+    assert 'raise GitHubNotConnected(\n        "No GitHub credentials for' in source

@@ -37,7 +37,7 @@ from .run_terminal import on_status_written
 from .jobs import JOB_PRIORITY_BACKGROUND, JOB_PRIORITY_REQUESTED
 from .core import emit_event
 from .core import emit_event, make_id
-from .github_app_adapter import GitHubAppAdapter, GitHubAppConfigurationError
+from .github_app_adapter import GitHubNotConnected
 from .iac_verify import is_iac_task
 from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .agent_acts import pr_trailers as _pr_trailers
@@ -3247,7 +3247,9 @@ def _run_code_task_once(engine, settings: Settings, jobs, run_id: str,
                 _link_env(engine, run_id, _run_project(engine, run_id)), \
                 _transient_retry.reporting(_transient_retry_recorder(engine, run_id)):
             return _run_code_task(engine, settings, jobs, run_id, fencing_token=fencing_token)
-    except GitHubAppConfigurationError as exc:
+    except GitHubNotConnected as exc:
+        # ONLY "no credential anywhere" -- a token-issue 5xx, a missing private key or a missing
+        # PyJWT still raise (the worker retries, the step logs it at error level).
         # NEVER A 500 FOR A MISSING GITHUB CREDENTIAL (Easy Mode, crun_3c87d5a3, 2026-11-18): the
         # step endpoint answered 500 and the worker said "the control plane crashed". It is a
         # setup gap a person fixes: the run stops in words, with where to fix it.

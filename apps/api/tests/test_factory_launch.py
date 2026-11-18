@@ -621,3 +621,24 @@ def test_the_real_build_start_names_the_local_repository(client, engine, monkeyp
                                  actor="ceo", settings=get_settings(), jobs=None,
                                  reservation_id="res_1")
     assert refused.value.code == "no_repository" and " " in refused.value.message
+
+
+def test_a_refused_launch_leaves_no_repository_folder_behind(client, engine, monkeypatch, tmp_path):
+    """The personal-data check runs after the project's local repository is made; when it blocks
+    (or asks), the project rolls back and the folder made for it on this call is removed."""
+    monkeypatch.setattr(
+        "boss_engine.services.factory_launch.TEMPLATE_DIR", tmp_path / "absent")
+    calls: list = []
+    _patch_builder(monkeypatch, calls)
+    before = _count(engine, "projects")
+
+    for prompt, code in (("Bill card 4111 1111 1111 1111 every month.", "personal_data_blocked"),
+                         ("Email the summary to ada@example.com daily.", "personal_data_ask")):
+        refused = client.post("/v1/factory/launch", json={"prompt": prompt})
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["error"] == code
+
+    assert calls == []
+    assert _count(engine, "projects") == before
+    repos = tmp_path / "repos"
+    assert not repos.exists() or list(repos.iterdir()) == []
