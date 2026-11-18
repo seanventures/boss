@@ -28,6 +28,19 @@ from boss_engine.services.core import now_utc
 from ._ambient_support import eng, make_project, project, purge  # noqa: F401
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _a_model_is_connected(monkeypatch):
+    """These builds wait for slots, people and workers, not for a model: the test project has
+    none connected, which would otherwise read "Waiting for a model" (model_readiness; covered
+    by apps/api/tests/test_a_reservation_never_blocks_its_own_job.py)."""
+    from boss_engine.services import model_readiness
+
+    monkeypatch.setattr(model_readiness, "usable_model", lambda *a, **kw: True)
+
+
 def _run(c, pid, *, status="running", phase="queued", title="Bump esbuild", ctx=None,
          age_minutes=90, error=None) -> str:
     rid = f"crun_sw_{uuid4().hex[:12]}"

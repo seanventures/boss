@@ -21,6 +21,7 @@ export function isInfraHold(code: string | null | undefined): boolean {
 }
 
 const WHO_WORD: Record<string, string> = { you: "Your move", boss: "BOSS is on it", queue: "In the queue", stuck: "Stuck" };
+const FIX_WORD: Record<string, string> = { needs_model: "Add a model" };
 const STEP_WORD: Record<string, string> = { stuck: "Stuck", checked: "Checked", cause: "Cause", tried: "Tried", next: "Next" };
 
 export function WhyLine({ why, testId = "why-line", compact = false }: { why: WaitReason | null | undefined; testId?: string; compact?: boolean }) {
@@ -48,6 +49,8 @@ export function WhyLine({ why, testId = "why-line", compact = false }: { why: Wa
       <span className="sw-why-dot" aria-hidden="true" />
       <span className="sw-why-words">{why.words}</span>
       {!compact && why.detail ? <span className="sw-why-detail">{why.detail}</span> : null}
+      {/* WHERE TO FIX IT (a run waiting for a model links to Setup › Models). */}
+      {why.href ? <a className="sw-why-fix" href={why.href} data-testid={`${testId}-fix`}>{FIX_WORD[why.code] ?? "Fix it"}</a> : null}
       <span className="sw-sr">{WHO_WORD[why.who] ?? ""}</span>
     </span>
   );

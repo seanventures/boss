@@ -107,7 +107,15 @@ const CODE_WORDS: Record<string, string> = {
   drive_not_connected: "Not started: that Drive source is not connected.",
   unknown_template: "Not started: that template is no longer in the gallery.",
   unknown_attachment: "Not started: an attachment is no longer there. Attach it again.",
+  needs_model: "No model is connected, so nothing was started or reserved. Add one in Setup › Models, then press Easy Mode again.",
 };
+
+/** Where a refusal is fixed, when the API names it (`fix_href`: Setup › Models for no model). */
+function fixHrefOf(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  const href = str((data as Record<string, unknown>).fix_href);
+  return href.startsWith("?") || href.startsWith("/") ? href : null;
+}
 
 /** A sentence, not a code: a word with no space in it is looked up, never printed as it is. */
 function sentence(value: string): string {
@@ -213,6 +221,7 @@ export function BuildHome() {
   const [uploading, setUploading] = useState(false);
   const [launch, setLaunch] = useState<LaunchIds | null>(null);
   const [launchError, setLaunchError] = useState<string | null>(null);
+  const [launchFix, setLaunchFix] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [driveNote, setDriveNote] = useState(false);
@@ -226,6 +235,7 @@ export function BuildHome() {
     generation.current += 1;
     setLaunch(null);
     setLaunchError(null);
+    setLaunchFix(null);
     setPhase("ready");
   };
 
@@ -318,6 +328,7 @@ export function BuildHome() {
     setBusy(true);
     setLaunch(null);
     setLaunchError(null);
+    setLaunchFix(null);
     setPhase("starting");
     const send = async () => {
       const res = await fetch("/api/factory/launch", {
@@ -349,6 +360,7 @@ export function BuildHome() {
       if (!res.ok) {
         setPhase("error");
         setLaunchError(messageOf(data, "The build did not start."));
+        setLaunchFix(fixHrefOf(data));
         setLaunch(null);
         return;
       }
@@ -601,7 +613,12 @@ export function BuildHome() {
             {launch.runId ? <>Run <span data-testid="build-run-id">{launch.runId}</span></> : null}
           </p>
         ) : null}
-        {launchError ? <p className="bh-error" role="alert" data-testid="build-launch-error">{launchError}</p> : null}
+        {launchError ? (
+          <p className="bh-error" role="alert" data-testid="build-launch-error">
+            {launchError}
+            {launchFix ? <> <a href={launchFix} data-testid="build-launch-fix">{/models/.test(launchFix) ? "Add a model" : "Fix it"}</a></> : null}
+          </p>
+        ) : null}
         {driveNote ? <p className="bh-note" role="status" data-testid="build-drive-note">Drive is not connected</p> : null}
         {micError ? <p className="bh-error" role="alert">{micError}</p> : null}
 

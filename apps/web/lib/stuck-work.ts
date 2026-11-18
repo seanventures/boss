@@ -19,6 +19,8 @@ export type WaitReason = {
   etaMinutes: number | null;
   /** When BOSS tries next (ISO): a build waiting for GitHub's next push (BOSSAPP-922). */
   nextAt?: string | null;
+  /** Where the person fixes it (`?area=setup&focus=models` for a run waiting for a model). */
+  href?: string | null;
 };
 
 export type DiagnosisStepKey = "stuck" | "checked" | "cause" | "tried" | "next";
@@ -62,6 +64,7 @@ export function parseWaitReason(v: unknown): WaitReason | null {
     since: s(x.since) || null,
     etaMinutes: typeof x.eta_minutes === "number" && Number.isFinite(x.eta_minutes) ? x.eta_minutes : null,
     nextAt: s(x.next_at) || null,
+    href: s(x.href) || null,
   };
 }
 
