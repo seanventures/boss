@@ -64,7 +64,15 @@ synced stays.
   anywhere else.
 * **Redirects and plain http**: the shared HTTP path never follows a redirect to another host (or
   from https), so a credential is never forwarded; a credentialed call over plain http is refused
-  off loopback. This covers Jira too.
+  only for PUBLIC hosts (loopback, private addresses, single-label compose names and `.local` /
+  `.internal` / `.lan` hosts keep working for self-hosted Jira or Plane). This covers Jira too.
+* **Writes are never re-sent**: the Confluence client does not retry a POST/PUT after a timeout or
+  a 5xx. After any failed write the page is read back; if it holds what was written it is a
+  success. Sync state and the sync job are kept per project (knowledge is per project).
+* **Restarts**: unfinished approved writes are finished by the worker's monitoring tick, claim-fenced
+  so one writer records the outcome. A real failure raises a notice card for the approver.
+* **Upgrades**: the identity upgrade moves an existing `quill` from the `writer` preset to
+  `documentation` (additive; a custom ceiling is never touched).
 * **Jira credential reuse** needs `integration:manage` where Jira lives and always uses Jira's own
   site; a reconnect without a token keeps the stored token only for the same site and email.
   Disconnect revokes and deletes the vault entry this connection stored.

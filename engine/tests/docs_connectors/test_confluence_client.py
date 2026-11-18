@@ -234,3 +234,31 @@ def test_a_page_survives_a_round_trip_through_storage_format():
     md = "# Title\n\nSome **bold** text with a [link](https://x.test).\n\n- one\n- two\n\n" \
          "```python\nprint('hi')\n```\n\n| A | B |\n| --- | --- |\n| 1 | 2 |"
     assert storage_to_markdown(markdown_to_storage(md)) == md
+
+
+def test_a_write_is_never_re_sent_after_a_timeout_or_a_5xx(client, fake, monkeypatch):
+    fake.apply_then_fail = True
+    with pytest.raises(Exception):
+        client.create_page(space="ENG", title="Once", markdown="x")
+    assert len(fake.pages_created) == 1                      # one POST, no retries
+    # a read is still retried
+    calls = {"n": 0}
+    real = fake.__call__
+
+    def flaky(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("reset")
+        return real(*a, **k)
+
+    monkeypatch.setattr(ticket_http, "TRANSPORT", flaky)
+    assert client.get_page("101", body=False).id == "101" and calls["n"] >= 2
+
+
+def test_written_page_reads_back_what_landed(client, fake):
+    client.update_page("101", markdown="# Deploy Runbook\n\nnew", expected_version=4)
+    page = client.written_page(op="update", space="ENG", title="Deploy Runbook",
+                               markdown="# Deploy Runbook\n\nnew", page_id="101", base_version=4)
+    assert page and page.version == 5
+    assert client.written_page(op="update", space="ENG", title="x", markdown="different",
+                               page_id="101", base_version=4) is None

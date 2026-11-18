@@ -68,6 +68,8 @@ REFUSALS: dict[str, str] = {
     # jobs: the budget state deferred a job; it is re-queued and runs later by itself.
     "review_budget_policy": "deferred",
     "budget_state_deferred_job": "deferred",
+    # confluence_publish: an approved page did not land (the write is never re-sent blindly).
+    "confluence_publish_failed": "confluence",
 }
 #: Kept under their old names; both now cover every refusal, by action or by reason.
 REFUSAL_REASONS = frozenset(REFUSALS)
@@ -444,6 +446,16 @@ _RETRY = ("Then retry the work: Retry on the failed step in Workflow, or on the 
           "Factory. Approving this card would not retry anything.")
 
 _REFUSAL_GUIDANCE: dict[str, dict[str, str]] = {
+    "confluence": {
+        "what_happened": (
+            "A Confluence page you approved could not be published, so nothing was written "
+            "(or Confluence already has a different version of the page)."),
+        "what_to_do": (
+            "Read the reason on the card. If the page moved, ask the agent for a new proposal; "
+            "if the sign-in failed, reconnect Confluence in Setup."),
+        "area": "setup",
+        "link_label": "Open Setup",
+    },
     "capacity": {
         "what_happened": (
             "BOSS tried to call a model and it had no capacity or credit left (a rate limit, "

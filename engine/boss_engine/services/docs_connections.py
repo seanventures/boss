@@ -123,7 +123,7 @@ def public_view(db: Connection, row: Optional[dict[str, Any]], project_id: str, 
         "acts_as": config.get("acts_as"),
         "default_spaces": list(config.get("default_spaces") or []),
         "knowledge_spaces": list(config.get("knowledge_spaces") or []),
-        "sync_state": config.get("sync_state") or {},
+        "sync_state": ((config.get("sync_states") or {}).get(project_id)) or {},
         "home_project": {"id": row["home_project_id"], "name": name},
         "reach": "project" if row["home_project_id"] == project_id else "org",
         "last_tested_at": row["last_tested_at"].isoformat() if row.get("last_tested_at") else None,
@@ -187,6 +187,10 @@ def jira_credential(db: Connection, app_settings: Any, project_id: str
     for row in ticket_reach.reachable_rows(db, project_id):
         if str(row["provider_key"]) != "jira" or not ticket_intake.is_connected(row):
             continue
+        from . import ticket_sync
+
+        # The credential and the permission are the HOME row's, never a mirror's.
+        row = ticket_sync.home_row(db, row) or row
         config = row["configuration"]
         token = ticket_intake.stored_token(db, app_settings, row)
         if token and config.get("base_url") and config.get("email"):
@@ -282,7 +286,7 @@ def store(db: Connection, app_settings: Any, *, project_id: str, config: dict[st
     existing = get_row(db, project_id, include_disconnected=True)
     previous = existing["configuration"] if existing else {}
     merged = {k: v for k, v in config.items() if k not in TOKEN_KEYS}
-    for keep in ("default_spaces", "knowledge_spaces", "sync_state"):
+    for keep in ("default_spaces", "knowledge_spaces", "sync_states", "sync_jobs"):
         if previous.get(keep) is not None:
             merged[keep] = previous[keep]
     if default_spaces is not None:

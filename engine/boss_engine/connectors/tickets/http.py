@@ -102,12 +102,17 @@ def _host_of(url: str) -> str:
 
 
 def _loopback(host: str) -> bool:
-    if host in ("localhost",):
+    """A host that is not on the public internet: loopback, a private/link-local address, a
+    single-label name (a compose service such as ``plane-api``) or a ``.local``/``.internal``/
+    ``.lan`` name. Self-hosted Jira or Plane over plain http on such a host keeps working; plain
+    http to a PUBLIC host with a credential is refused."""
+    if host == "localhost" or "." not in host or host.endswith((".local", ".internal", ".lan", ".localhost")):
         return True
     try:
-        return ipaddress.ip_address(host).is_loopback
+        address = ipaddress.ip_address(host)
     except ValueError:
         return False
+    return address.is_loopback or address.is_private or address.is_link_local
 
 
 def _link_local(host: str) -> bool:
@@ -143,7 +148,7 @@ def check_host(url: str, official: tuple[str, ...], configured: tuple[str, ...],
         raise HostNotAllowed(f"{provider}: {host} is never a ticket system", provider=provider)
     if scheme == "http" and not _loopback(host):
         raise HostNotAllowed(f"{provider}: refusing a plain-http request to {host}; a credential "
-                             "is only sent over https.", provider=provider)
+                             "is only sent over https to a public host.", provider=provider)
     if any(_host_matches(host, p) for p in configured):
         return
     if scheme == "https" and any(_host_matches(host, p) for p in official):
@@ -164,7 +169,7 @@ class TicketHttp:
                  default_hosts: tuple[str, ...] = (), base_url_fields: tuple[str, ...] = (),
                  guard_provider: str = "", timeout: float = DEFAULT_TIMEOUT_S,
                  ssl_context: Optional[ssl.SSLContext] = None,
-                 extra_headers: Optional[dict[str, str]] = None):
+                 extra_headers: Optional[dict[str, str]] = None, retry_unsafe: bool = True):
         """``pick_credential()`` -> ActingCredential (auth.select_credential); ``auth(credential)``
         -> (headers, base URL override or None) — an OAuth token may address another API base
         (Atlassian: https://api.atlassian.com/ex/jira/{cloudId})."""
@@ -176,6 +181,10 @@ class TicketHttp:
         self.timeout = timeout
         self.ssl_context = ssl_context
         self.extra_headers = dict(extra_headers or {})
+        #: False: a write (POST/PUT/PATCH/DELETE) is never re-sent after a network error or a 5xx,
+        #: because the first attempt may have been applied (a 429 is rejected before it runs and
+        #: is still retried). The caller reads the target back to learn what happened.
+        self.retry_unsafe = retry_unsafe
         self.official, self.configured = allowed_hosts(conn, default_hosts, base_url_fields,
                                                        guard_provider)
         self._headers_cache: Optional[dict[str, str]] = None
@@ -232,7 +241,7 @@ class TicketHttp:
             except TicketSystemError:
                 raise
             except Exception as error:  # noqa: BLE001 — network: retried, then typed
-                if attempt < MAX_RETRIES:
+                if attempt < MAX_RETRIES and self._may_retry(method):
                     SLEEP(BACKOFF_BASE_S * (2 ** attempt))
                     attempt += 1
                     continue
@@ -248,12 +257,15 @@ class TicketHttp:
                     provider=self.provider)
             if status < 400 or status in ok_statuses:
                 return response
-            retryable = status == 429 or status >= 500
+            retryable = status == 429 or (status >= 500 and self._may_retry(method))
             if retryable and attempt < MAX_RETRIES:
                 SLEEP(self._delay(response, attempt))
                 attempt += 1
                 continue
             raise self._error(method, safe_path, response)
+
+    def _may_retry(self, method: str) -> bool:
+        return self.retry_unsafe or method.upper() in ("GET", "HEAD", "OPTIONS")
 
     def _record(self, method: str, path: str, status: Optional[int]) -> None:
         if self.credential is not None:

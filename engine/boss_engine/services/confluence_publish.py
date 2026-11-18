@@ -28,10 +28,12 @@ from sqlalchemy.engine import Connection
 from ..connectors.docs import VersionConflict
 from ..connectors.tickets.contract import NotFound, TicketSystemError
 from . import change_consent, docs_connections
+from .core import make_id
 
 logger = logging.getLogger(__name__)
 
 ACTION = "apply_confluence_publish"
+FAILED_ACTION = "confluence_publish_failed"
 SUBJECT = "confluence"
 MAX_MARKDOWN = 200_000
 CLAIM_TTL = "10 minutes"
@@ -188,21 +190,29 @@ def reject_for_decision(db: Connection, decision: dict[str, Any], actor: str) ->
     change_consent.reject_for_decision(db, str(decision["id"]), actor)
 
 
-def _claim(engine: Any, consent_id: str) -> bool:
+def _claim(engine: Any, consent_id: str) -> Optional[str]:
+    """Claim a write with a fresh token (the FENCE): only the holder of the current token may
+    record the outcome, so a takeover after CLAIM_TTL leaves exactly one finisher."""
+    token = make_id("clm")
     with engine.begin() as db:
         got = db.execute(text(
-            "UPDATE change_consents SET proposed = jsonb_set(proposed, '{_meta,claimed_at}', "
-            "to_jsonb(now()::text), true) WHERE id = :i AND status = 'approved' AND "
+            "UPDATE change_consents SET proposed = jsonb_set(jsonb_set(proposed, "
+            "'{_meta,claimed_at}', to_jsonb(now()::text), true), '{_meta,claim_id}', "
+            "to_jsonb(CAST(:t AS TEXT)), true) WHERE id = :i AND status = 'approved' AND "
             "((proposed->'_meta'->>'claimed_at') IS NULL OR "
             f"(proposed->'_meta'->>'claimed_at')::timestamptz < now() - interval '{CLAIM_TTL}') "
-            "RETURNING id"), {"i": consent_id}).first()
-    return got is not None
+            "RETURNING id"), {"i": consent_id, "t": token}).first()
+    return token if got is not None else None
 
 
 def reconcile_pending(engine: Any, app_settings: Any, *, project_id: Optional[str] = None,
                       limit: int = 20) -> list[dict[str, Any]]:
-    """Perform every approved, unfinished Confluence write (HTTP outside any transaction)."""
+    """Perform every approved, unfinished Confluence write (HTTP outside any transaction). Run
+    after an approval commits, when a sync starts, and on the worker's periodic tick
+    (:func:`tick`), so a restart between the approval and the write loses nothing."""
     with engine.begin() as db:
+        if not db.execute(text("SELECT to_regclass('change_consents') IS NOT NULL")).scalar():
+            return []
         rows = db.execute(text(
             "SELECT * FROM change_consents WHERE subject_kind = 'confluence' AND status = 'approved' "
             "AND (CAST(:p AS TEXT) IS NULL OR project_id = :p) ORDER BY decided_at LIMIT :n"),
@@ -210,16 +220,31 @@ def reconcile_pending(engine: Any, app_settings: Any, *, project_id: Optional[st
     done = []
     for raw in rows:
         consent = change_consent._row(raw)  # noqa: SLF001
-        if _claim(engine, consent["id"]):
-            done.append(_publish_one(engine, app_settings, consent))
+        token = _claim(engine, consent["id"])
+        if token:
+            done.append(_publish_one(engine, app_settings, consent, token))
     return done
 
 
-def _publish_one(engine: Any, app_settings: Any, consent: dict[str, Any]) -> dict[str, Any]:
+def tick(engine: Any, app_settings: Any) -> list[dict[str, Any]]:
+    """The worker's periodic catch-up for every project (see worker_loops)."""
+    return reconcile_pending(engine, app_settings)
+
+
+def _fenced(db: Any, consent_id: str, token: str) -> bool:
+    """Is this writer still the holder of the claim?"""
+    return db.execute(text(
+        "SELECT 1 FROM change_consents WHERE id = :i AND status = 'approved' AND "
+        "proposed->'_meta'->>'claim_id' = :t"), {"i": consent_id, "t": token}).first() is not None
+
+
+def _publish_one(engine: Any, app_settings: Any, consent: dict[str, Any], token: str
+                 ) -> dict[str, Any]:
     project_id = consent["project_id"]
     proposed = {k: v for k, v in consent["proposed"].items() if k != "_meta"}
     failure: Optional[str] = None
     page = None
+    client = None
     try:
         with engine.begin() as db:
             _row, client = docs_connections.client_for(db, app_settings, project_id)
@@ -237,9 +262,20 @@ def _publish_one(engine: Any, app_settings: Any, consent: dict[str, Any]) -> dic
         failure = f"{stale} Ask for a new proposal."
     except TicketSystemError as refused:
         failure = str(refused)
+    if failure is not None and client is not None:
+        # A timeout, a 5xx, a 409 or a duplicate title may follow a write that DID land (the
+        # write is never re-sent). Read the page back before calling it a failure.
+        landed = client.written_page(
+            op=proposed["op"], space=proposed["space"], title=proposed["title"],
+            markdown=proposed["markdown"], page_id=proposed.get("page_id", ""),
+            base_version=int(proposed.get("base_version") or 0))
+        if landed is not None:
+            page, failure = landed, None
     from .core import emit_event
 
     with engine.begin() as db:
+        if not _fenced(db, consent["id"], token):
+            return {"ok": False, "skipped": "another writer holds this approval"}
         if failure is None and page is not None:
             change_consent.consume(db, project_id=project_id, subject_kind=SUBJECT,
                                    subject_key=consent["subject_key"], digest=consent["diff_hash"])
@@ -255,4 +291,14 @@ def _publish_one(engine: Any, app_settings: Any, consent: dict[str, Any]) -> dic
         emit_event(db, project_id, "docs.confluence_publish_failed", "system", "change_consent",
                    consent["id"], {"error": failure, "space": proposed.get("space"),
                                    "title": proposed.get("title")})
+        # TELL THE APPROVER: a notice card (not a question) says it did not land and why.
+        from .core import create_blocking_decision
+
+        create_blocking_decision(
+            db, project_id, None,
+            f"The Confluence page {proposed.get('title')!r} you approved was NOT published.\n\n"
+            f"{failure}",
+            {"action": FAILED_ACTION, "consent_id": consent["id"], "space": proposed.get("space"),
+             "title": proposed.get("title"), "error": failure},
+            {}, FAILED_ACTION, risk_tier=0)
     return {"ok": False, "error": failure}

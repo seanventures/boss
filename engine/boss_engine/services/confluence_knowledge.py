@@ -11,7 +11,7 @@ somebody's words, not governed facts). The first sync of a space reads everythin
 cap); later syncs ask Confluence only for pages modified since the last one.
 
 THE SYNC IS A BACKGROUND JOB, never a request: :func:`start` claims the one job of the org's
-connection (``configuration.sync_job``: status, a heartbeat, per-space progress) and runs it in a
+connection (``configuration.sync_jobs[<project>]``: status, a heartbeat, per-space progress) and runs it in a
 thread (:func:`run`) whose every database step is its own short transaction, with the Confluence
 HTTP calls made between them. A job whose heartbeat stopped (a restart) is taken over by the next
 ``start``, which RESUMES: spaces already done are skipped, and pages already held at their
@@ -65,18 +65,47 @@ def _held_version(db: Connection, project_id: str, key: str) -> Optional[int]:
         return None
 
 
-def _save(engine: Any, row_id: str, job: dict[str, Any]) -> None:
+class JobOvertaken(Exception):
+    """A newer job took over this project's sync; this one stops writing."""
+
+
+_PUT = ("UPDATE docs_connections SET configuration = jsonb_set(CASE WHEN configuration ? :sec "
+        "THEN configuration ELSE configuration || jsonb_build_object(CAST(:sec AS TEXT), "
+        "'{}'::jsonb) END, ARRAY[CAST(:sec AS TEXT), CAST(:p AS TEXT)], CAST(:v AS JSONB), true), "
+        "updated_at = now() WHERE id = :i")
+
+
+def _put(db: Any, row_id: str, section: str, project_id: str, value: dict[str, Any],
+         *, only_job: Optional[str] = None) -> bool:
+    """Write ``configuration[section][project]``. Sync state and job are PER PROJECT (knowledge is
+    per project; one project's cursor never decides what another is missing). With ``only_job`` the
+    write happens only while that job is still the project's current one."""
+    guard = (" AND configuration->'sync_jobs'->CAST(:p AS TEXT)->>'id' = :jid" if only_job else "")
+    return db.execute(text(_PUT + guard), {"sec": section, "p": project_id, "i": row_id,
+                                           "v": json.dumps(value), "jid": only_job}).rowcount > 0
+
+
+def _save(engine: Any, row_id: str, project_id: str, job: dict[str, Any]) -> None:
+    """Record progress, only while this job is still the project's current one (a job taken over
+    after a stalled heartbeat stops here instead of overwriting the newer job's progress)."""
     job["heartbeat"] = datetime.now(timezone.utc).isoformat()
     with engine.begin() as db:
-        db.execute(text("UPDATE docs_connections SET configuration = configuration || "
-                        "jsonb_build_object('sync_job', CAST(:j AS JSONB)), updated_at = now() "
-                        "WHERE id = :i"), {"j": json.dumps(job), "i": row_id})
+        if not _put(db, row_id, "sync_jobs", project_id, job, only_job=job["id"]):
+            raise JobOvertaken(job["id"])
+
+
+def _job_of(config: dict[str, Any], project_id: str) -> dict[str, Any]:
+    return dict(((config.get("sync_jobs") or {}).get(project_id)) or {})
+
+
+def _state_of(config: dict[str, Any], project_id: str) -> dict[str, Any]:
+    return dict(((config.get("sync_states") or {}).get(project_id)) or {})
 
 
 def status(db: Connection, project_id: str) -> dict[str, Any]:
     """The sync job of the org's connection as this project sees it (or {} when none ran)."""
     row = docs_connections.get_row(db, project_id, include_disconnected=True)
-    job = dict((row or {}).get("configuration", {}).get("sync_job") or {})
+    job = _job_of((row or {}).get("configuration", {}), project_id)
     if job.get("status") == "running":
         beat = job.get("heartbeat")
         stale = db.execute(text(f"SELECT CAST(:b AS timestamptz) < now() - interval '{STALE}'"),
@@ -98,7 +127,7 @@ def start(engine: Any, app_settings: Any, *, project_id: str, spaces: Optional[l
             raise docs_connections.DocsConnectionError(
                 "invalid_request", "Pick the Confluence spaces to keep in knowledge first "
                                   "(Setup › Connections › Confluence).")
-        previous = dict(row["configuration"].get("sync_job") or {})
+        previous = _job_of(row["configuration"], project_id)
         resume = (not full and previous.get("status") in ("running", "failed")
                   and sorted(previous.get("spaces") or {}) == sorted(chosen))
         carried = {k: v for k, v in (previous.get("spaces") or {}).items()
@@ -107,14 +136,13 @@ def start(engine: Any, app_settings: Any, *, project_id: str, spaces: Optional[l
                "actor": actor, "full": full, "started_at": datetime.now(timezone.utc).isoformat(),
                "heartbeat": datetime.now(timezone.utc).isoformat(), "resumed": bool(carried),
                "spaces": {sp: carried.get(sp) or {"status": "waiting"} for sp in chosen}}
+        mine = "configuration->'sync_jobs'->CAST(:p AS TEXT)"
         claimed = db.execute(text(
-            "UPDATE docs_connections SET configuration = configuration || "
-            "jsonb_build_object('sync_job', CAST(:j AS JSONB)), updated_at = now() WHERE id = :i "
-            "AND (configuration->'sync_job' IS NULL OR configuration->'sync_job'->>'status' <> "
-            "'running' OR (configuration->'sync_job'->>'heartbeat')::timestamptz < now() - "
-            f"interval '{STALE}') RETURNING id"), {"j": json.dumps(job), "i": row["id"]}).first()
+            _PUT + f" AND ({mine} IS NULL OR {mine}->>'status' <> 'running' OR "
+            f"({mine}->>'heartbeat')::timestamptz < now() - interval '{STALE}') RETURNING id"),
+            {"sec": "sync_jobs", "p": project_id, "i": row["id"], "v": json.dumps(job)}).first()
         if claimed is None:
-            return dict(row["configuration"].get("sync_job") or {}, already_running=True)
+            return dict(_job_of(row["configuration"], project_id), already_running=True)
         from .core import emit_event
 
         emit_event(db, project_id, "knowledge.confluence_sync_started", actor, "docs_connection",
@@ -143,11 +171,11 @@ def run(engine: Any, app_settings: Any, project_id: str, job_id: str) -> dict[st
     """The job body. Every database step is its own short transaction; HTTP runs between them."""
     with engine.begin() as db:
         row, client = docs_connections.client_for(db, app_settings, project_id)
-    job = dict(row["configuration"].get("sync_job") or {})
+    job = _job_of(row["configuration"], project_id)
     if job.get("id") != job_id:
         return job
     store = PostgresKnowledgeStore()
-    state = dict(row["configuration"].get("sync_state") or {})
+    state = _state_of(row["configuration"], project_id)
     site = _site(client.base)
     try:
         for space, progress in job["spaces"].items():
@@ -156,29 +184,32 @@ def run(engine: Any, app_settings: Any, project_id: str, job_id: str) -> dict[st
             started = datetime.now(timezone.utc)
             since = None if job.get("full") else (state.get(space) or {}).get("synced_at")
             progress.update(status="running", seen=0, indexed=0, updated=0, unchanged=0, failed=[])
-            _save(engine, row["id"], job)
+            _save(engine, row["id"], project_id, job)
             summaries = client.changed_since(space, since, limit=MAX_PAGES_PER_SPACE)
             progress["seen"] = len(summaries)
             for n, summary in enumerate(summaries, 1):
                 _one_page(engine, store, client, project_id, site, space, summary, progress)
                 if n % 10 == 0:
-                    _save(engine, row["id"], job)
+                    _save(engine, row["id"], project_id, job)
             progress["status"] = "done"
             if not progress["failed"]:
                 state[space] = {"synced_at": started.strftime("%Y-%m-%d %H:%M"),
                                 "pages": progress["seen"] + ((state.get(space) or {}).get("pages", 0)
                                                              if since else 0)}
-            _save(engine, row["id"], job)
+            _save(engine, row["id"], project_id, job)
         job["status"] = "done"
+    except JobOvertaken:
+        return job            # a newer job owns this project's sync now; write nothing more
     except Exception as error:  # noqa: BLE001 — a failed job keeps what it finished, for a resume
         job["status"] = "failed"
         job["error"] = str(error)[:300]
     job["finished_at"] = datetime.now(timezone.utc).isoformat()
-    _save(engine, row["id"], job)
+    try:
+        _save(engine, row["id"], project_id, job)
+    except JobOvertaken:
+        return job
     with engine.begin() as db:
-        db.execute(text("UPDATE docs_connections SET configuration = configuration || "
-                        "jsonb_build_object('sync_state', CAST(:s AS JSONB)) WHERE id = :i"),
-                   {"s": json.dumps(state), "i": row["id"]})
+        _put(db, row["id"], "sync_states", project_id, state, only_job=job_id)
         from .core import emit_event
 
         spaces = job["spaces"].values()

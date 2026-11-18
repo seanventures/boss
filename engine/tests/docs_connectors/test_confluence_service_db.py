@@ -386,11 +386,12 @@ def test_the_sync_is_one_job_with_progress_and_it_resumes(eng, fake, project):
         assert confluence_knowledge.status(c, project)["status"] == "running"
     # the worker died after ENG finished: heartbeat goes stale; the next start RESUMES
     with eng.begin() as c:
-        cfg = docs.get_row(c, project)["configuration"]["sync_job"]
+        cfg = docs.get_row(c, project)["configuration"]["sync_jobs"][project]
         cfg["spaces"]["ENG"] = {"status": "done", "seen": 3, "indexed": 1, "updated": 0, "unchanged": 0, "failed": []}
         cfg["heartbeat"] = "2020-01-01T00:00:00+00:00"
-        c.execute(text("UPDATE docs_connections SET configuration = configuration || "
-                       "jsonb_build_object('sync_job', CAST(:j AS JSONB))"), {"j": json.dumps(cfg)})
+        c.execute(text("UPDATE docs_connections SET configuration = jsonb_set(configuration, "
+                       "ARRAY['sync_jobs', CAST(:p AS TEXT)], CAST(:j AS JSONB))"),
+                  {"j": json.dumps(cfg), "p": project})
         assert confluence_knowledge.status(c, project)["status"] == "stalled"
     fake.requests.clear()
     resumed = confluence_knowledge.start(eng, _settings(), project_id=project, actor="ceo")
@@ -451,3 +452,155 @@ def test_the_jira_credential_needs_manage_at_jiras_home_and_forces_jiras_site(en
                                      may_use_jira=lambda home: None)
         c.execute(text("DELETE FROM work_tracker_providers WHERE id = 'trk_confl2'"))
     assert config["base_url"] == "https://acme.atlassian.net/wiki" and config["email"] == EMAIL
+
+
+# ---- review round 2 ---------------------------------------------------------------------------
+
+def test_sync_state_and_job_are_per_project(eng, fake, project):
+    _connect(eng, project)
+    other = make_project(eng)                         # a second project of the same org
+    with eng.begin() as c:
+        docs.update_settings(c, docs.get_row(c, project), actor="ceo", knowledge_spaces=["ENG"])
+    _sync(eng, project)
+    with eng.begin() as c:                            # A holds a cursor for ENG
+        confluence_knowledge._put(c, docs.get_row(c, project)["id"], "sync_states", project,  # noqa: SLF001
+                                  {"ENG": {"synced_at": "2026-11-17 10:00", "pages": 3}})
+        row = docs.get_row(c, project)
+        assert set(row["configuration"]["sync_states"]) == {project}
+        assert confluence_knowledge.status(c, other) == {}           # B sees none of A's job
+    job_b = confluence_knowledge.start(eng, _settings(), project_id=other, actor="ceo")
+    assert job_b["project_id"] == other and not job_b.get("already_running")
+    fake.requests.clear()
+    done = confluence_knowledge.run(eng, _settings(), other, job_b["id"])
+    # B starts from nothing: it is NOT incremental from A's cursor, so it reads the whole space
+    assert all("lastmodified >=" not in r["query"]["cql"] for r in fake.requests if "search" in r["path"])
+    assert done["spaces"]["ENG"]["indexed"] == 1
+    with eng.begin() as c:
+        assert confluence_knowledge.status(c, project)["project_id"] == project
+        assert confluence_knowledge.status(c, other)["project_id"] == other
+        view = docs.public_view(c, docs.get_row(c, other), other)
+        assert view["sync_state"] == {}                      # B's own cursor, not A's
+        assert set(docs.public_view(c, docs.get_row(c, project), project)["sync_state"]) == {"ENG"}
+
+
+def test_a_job_that_was_taken_over_stops_writing(eng, fake, project):
+    _connect(eng, project)
+    with eng.begin() as c:
+        docs.update_settings(c, docs.get_row(c, project), actor="ceo", knowledge_spaces=["ENG"])
+    old = confluence_knowledge.start(eng, _settings(), project_id=project, actor="ceo")
+    with eng.begin() as c:      # its heartbeat went stale and a newer job took the project over
+        cfg = docs.get_row(c, project)["configuration"]["sync_jobs"][project]
+        cfg["heartbeat"] = "2020-01-01T00:00:00+00:00"
+        c.execute(text("UPDATE docs_connections SET configuration = jsonb_set(configuration, "
+                       "ARRAY['sync_jobs', CAST(:p AS TEXT)], CAST(:j AS JSONB))"),
+                  {"j": json.dumps(cfg), "p": project})
+    new = confluence_knowledge.start(eng, _settings(), project_id=project, actor="ceo")
+    assert new["id"] != old["id"]
+    fake.requests.clear()
+    confluence_knowledge.run(eng, _settings(), project, old["id"])               # the old worker wakes
+    assert [r for r in fake.requests if "search" in r["path"]] == []            # and does nothing
+    with eng.begin() as c:
+        assert confluence_knowledge.status(c, project)["id"] == new["id"]       # not overwritten
+    with pytest.raises(confluence_knowledge.JobOvertaken):
+        confluence_knowledge._save(eng, docs.get_row(eng.connect(), project)["id"], project, dict(old))
+
+
+def test_a_write_that_landed_but_timed_out_is_success_not_rejected(eng, fake, project):
+    _connect(eng, project)
+    got = _tool("confluence_publish_page")(
+        Ctx(eng), project_id=project, actor="a",
+        args={"page_id": "101", "space": "ENG", "body": "# Deploy Runbook\n\nlanded"})
+    decide(eng, got["decision_id"], "approve")
+    fake.apply_then_fail = True                     # the server applies the PUT, the client times out
+    done = _reconcile(eng, project)
+    assert done[0]["ok"] is True and done[0]["version"] == 5
+    assert len(fake.pages_updated) == 1             # the write was NOT re-sent
+    with eng.begin() as c:
+        assert c.execute(text("SELECT status FROM change_consents WHERE decision_id = :d"),
+                         {"d": got["decision_id"]}).scalar() == "consumed"
+
+
+def test_a_create_that_landed_is_not_retried_into_a_duplicate_title_error(eng, fake, project):
+    _connect(eng, project)
+    got = _tool("confluence_publish_page")(
+        Ctx(eng), project_id=project, actor="a",
+        args={"space": "ENG", "title": "Fresh Page", "body": "Hello"})
+    decide(eng, got["decision_id"], "approve")
+    fake.apply_then_fail = True
+    assert _reconcile(eng, project)[0]["ok"] is True
+    assert len(fake.pages_created) == 1
+
+
+def test_a_real_failure_tells_the_approver_with_a_card(eng, fake, project):
+    _connect(eng, project)
+    got = _tool("confluence_publish_page")(
+        Ctx(eng), project_id=project, actor="a", args={"page_id": "101", "space": "ENG", "body": "mine"})
+    decide(eng, got["decision_id"], "approve")
+    fake.versions["101"] = 9
+    assert _reconcile(eng, project)[0]["ok"] is False
+    with eng.begin() as c:
+        cards = c.execute(text("SELECT question, recommendation FROM decisions WHERE project_id = :p "
+                               "AND recommendation->>'action' = 'confluence_publish_failed'"),
+                          {"p": project}).mappings().all()
+    assert len(cards) == 1 and "NOT published" in cards[0]["question"] and "version 9" in cards[0]["question"]
+    from boss_engine.services import decision_actions
+
+    assert "confluence_publish_failed" in decision_actions.REFUSALS
+
+
+def test_only_the_current_claim_holder_may_record_the_outcome(eng, fake, project):
+    _connect(eng, project)
+    got = _tool("confluence_publish_page")(
+        Ctx(eng), project_id=project, actor="a", args={"page_id": "101", "space": "ENG", "body": "mine"})
+    decide(eng, got["decision_id"], "approve")
+    cid = got["consent_id"]
+    first = confluence_publish._claim(eng, cid)
+    assert first and confluence_publish._claim(eng, cid) is None          # one claimant at a time
+    with eng.begin() as c:       # the first writer stalls; its claim goes stale and is taken over
+        c.execute(text("UPDATE change_consents SET proposed = jsonb_set(proposed, '{_meta,claimed_at}', "
+                       "to_jsonb((now() - interval '1 hour')::text)) WHERE id = :i"), {"i": cid})
+    second = confluence_publish._claim(eng, cid)
+    assert second and second != first
+    with eng.begin() as c:
+        consent = confluence_publish.change_consent.for_decision(c, got["decision_id"])
+    stale = confluence_publish._publish_one(eng, _settings(), consent, first)
+    assert stale == {"ok": False, "skipped": "another writer holds this approval"}
+    assert confluence_publish._publish_one(eng, _settings(), consent, second)["ok"] is True
+    assert len(fake.pages_updated) == 1
+
+
+def test_the_periodic_tick_finishes_an_approval_that_never_got_its_write(eng, fake, project):
+    _connect(eng, project)
+    got = _tool("confluence_publish_page")(
+        Ctx(eng), project_id=project, actor="a", args={"page_id": "101", "space": "ENG", "body": "later"})
+    decide(eng, got["decision_id"], "approve")            # "the process restarted" before the thread ran
+    assert fake.pages_updated == []
+    done = confluence_publish.tick(eng, _settings())
+    assert any(d.get("ok") for d in done) and len(fake.pages_updated) == 1
+    from boss_engine.services import monitor_scheduler
+
+    assert "confluence_publish" in open(monitor_scheduler.__file__).read()
+
+
+def test_the_jira_check_uses_the_home_row_not_a_mirror(eng, fake, project):
+    from boss_engine.services.secret_backends import default_secret_backend
+    from boss_engine.services.secrets_service import put_secret
+
+    home = project
+    mirror_project = make_project(eng)
+    with eng.begin() as c:
+        ref = put_secret(c, _settings(), project_id=home, name="ticket_jira_token", value=TOKEN,
+                         backend=default_secret_backend(_settings()), actor="ceo")["secret_ref_id"]
+        base = {"base_url": "https://acme.atlassian.net", "email": EMAIL, "ticket_system": True}
+        c.execute(text("INSERT INTO work_tracker_providers (id, project_id, provider_key, display_name, "
+                       "status, is_default, configuration, created_by) VALUES ('trk_home3', :p, 'jira', "
+                       "'Jira', 'active', true, CAST(:c AS JSONB), 't')"),
+                  {"p": home, "c": json.dumps({**base, "secret_ref_id": ref,
+                                               "settings": {"share_with_org": True}})})
+        c.execute(text("INSERT INTO work_tracker_providers (id, project_id, provider_key, display_name, "
+                       "status, is_default, configuration, created_by) VALUES ('trk_mir3', :p, 'jira', "
+                       "'Jira', 'active', true, CAST(:c AS JSONB), 't')"),
+                  {"p": mirror_project, "c": json.dumps({**base, "secret_ref_id": ref, "mirror_of": "trk_home3"})})
+        found = docs.jira_credential(c, _settings(), mirror_project)
+        c.execute(text("DELETE FROM work_tracker_providers WHERE id IN ('trk_home3','trk_mir3')"))
+    assert found and found["home_project"] == home          # never the mirror's own project

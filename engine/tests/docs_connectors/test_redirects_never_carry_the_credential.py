@@ -87,3 +87,15 @@ def test_a_credentialed_call_over_plain_http_is_refused_off_loopback():
         th.check_host("http://wiki.corp.example/api", (), ("wiki.corp.example",), "confluence")
     th.check_host("https://wiki.corp.example/api", (), ("wiki.corp.example",), "confluence")
     th.check_host("http://127.0.0.1:9/api", (), ("127.0.0.1",), "jira")
+
+
+@pytest.mark.parametrize("host", ["plane-api", "10.1.2.3", "192.168.0.5", "jira.corp.internal",
+                                  "wiki.lan", "localhost", "172.20.0.4"])
+def test_self_hosted_connectors_over_http_on_private_hosts_keep_working(host):
+    th.check_host(f"http://{host}:8000/api", (), (host,), "plane")
+
+
+@pytest.mark.parametrize("host", ["plane.example.com", "8.8.8.8", "jira.acme.org"])
+def test_plain_http_to_a_public_host_is_still_refused(host):
+    with pytest.raises(HostNotAllowed):
+        th.check_host(f"http://{host}/api", (), (host,), "plane")

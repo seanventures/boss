@@ -36,6 +36,10 @@ class FakeConfluence:
         self.versions = {"101": 4}
         self.force_conflict = False
         self.pages_created: list[dict] = []
+        #: apply a write, then fail the connection (a timeout AFTER the server did the work)
+        self.apply_then_fail = False
+        self.bodies: dict[str, str] = {}
+        self.created: dict[str, dict] = {}
         self.pages_updated: list[dict] = []
 
     # the TRANSPORT signature: (method, url, headers, data, timeout, context)
@@ -47,12 +51,17 @@ class FakeConfluence:
                               "headers": dict(headers), "body": body, "host": parts.hostname})
         if headers.get("Authorization") != self.expect:
             return _json(401, fixture("unauthorized"))
-        return self.route(method, parts.path, query, body)
+        response = self.route(method, parts.path, query, body)
+        if self.apply_then_fail and method in ("POST", "PUT") and response.status < 300:
+            raise TimeoutError("read timed out")
+        return response
 
     def page(self, page_id: str, name: str = "page_101") -> dict:
         page = copy.deepcopy(fixture(name))
         page["id"] = page_id
         page["version"]["number"] = self.versions.get(page_id, page["version"]["number"])
+        if page_id in self.bodies:
+            page["body"]["storage"]["value"] = self.bodies[page_id]
         return page
 
     def route(self, method, path, query, body) -> Response:
@@ -73,6 +82,8 @@ class FakeConfluence:
         if method == "GET" and p == "/rest/api/search":
             return _json(200, fixture("search_p2" if query.get("start") == "2" else "search_p1"))
         if method == "GET" and p == "/api/v2/pages":
+            if query.get("title") in self.created:
+                return _json(200, {"results": [self.created[query["title"]]], "_links": {}})
             if query.get("title") == "Deploy Runbook":
                 found = fixture("page_by_title")
                 found["results"][0]["version"]["number"] = self.versions["101"]
@@ -89,13 +100,18 @@ class FakeConfluence:
             return _json(200, self.page(page_id))
         if method == "POST" and p == "/api/v2/pages":
             self.pages_created.append(body)
+            if body["title"] in self.created:
+                return _json(400, {"message": "A page with this title already exists in the space"})
             made = fixture("page_new")
             made["title"] = body["title"]
+            made["body"]["storage"]["value"] = body["body"]["value"]
+            self.created[body["title"]] = made
             return _json(200, made)
         if method == "PUT" and p == "/api/v2/pages/101":
             self.pages_updated.append(body)
             if self.force_conflict or body["version"]["number"] != self.versions["101"] + 1:
                 return _json(409, fixture("conflict"))
             self.versions["101"] += 1
+            self.bodies["101"] = body["body"]["value"]
             return _json(200, self.page("101", "page_new_updated"))
         return _json(404, {"message": f"no fixture for {method} {p}"})

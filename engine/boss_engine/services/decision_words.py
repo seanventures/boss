@@ -29,6 +29,7 @@ _BY_ACTION: dict[str, tuple[str, str]] = {
     "apply_agent_prompt_diff": ("Approve an instruction change", "Agents"),
     "apply_wiki_patch": ("Approve a wiki change", "Wiki"),
     "apply_confluence_publish": ("Approve a Confluence page", "Confluence"),
+    "confluence_publish_failed": ("A Confluence page was not published", "Confluence"),
     "review_cost_anomaly": ("Review unusual spend", "Spend guard"),
     "approve_initiative_budget": ("Approve an initiative budget", "Budget"),
     "publish_document": ("Publish a document", "Documents"),

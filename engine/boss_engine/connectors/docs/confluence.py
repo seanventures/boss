@@ -220,7 +220,8 @@ class ConfluenceClient:
         self._http = TicketHttp(
             self.conn, base_url=self.base, auth=lambda cred: (auth_headers(self.config, cred.token), None),
             default_hosts=(), base_url_fields=("base_url",), guard_provider=PROVIDER,
-            timeout=timeout, extra_headers={"User-Agent": "BOSS-confluence-connector/1"})
+            timeout=timeout, extra_headers={"User-Agent": "BOSS-confluence-connector/1"},
+            retry_unsafe=False)
         self._space_keys: dict[str, str] = {}
         self._space_ids: dict[str, str] = {}
         self._origin = "{0.scheme}://{0.netloc}".format(urlsplit(self.base))
@@ -474,6 +475,23 @@ class ConfluenceClient:
 
     # -- write --------------------------------------------------------------------------------
 
+    def written_page(self, *, op: str, space: str, title: str, markdown: str, page_id: str = "",
+                     base_version: int = 0) -> Optional[Page]:
+        """READ BACK after a write that failed or timed out: the page if it holds what was
+        written (an update: a newer version with this body; a create: a page of that title with
+        this body), else None. Writes are never re-sent blindly; this is how "did it land?" is
+        answered."""
+        try:
+            if op == "update":
+                page = self.get_page(page_id)
+                ok = page.version > int(base_version) and same_body(markdown, page.body_markdown)
+            else:
+                page = self.find_page(title, space)
+                ok = same_body(markdown, page.body_markdown)
+        except TicketSystemError:
+            return None
+        return page if ok else None
+
     def create_page(self, *, space: str, title: str, markdown: str,
                     parent_id: Optional[str] = None) -> Page:
         body = {"spaceId": self.space_id(space), "status": "current", "title": title,
@@ -514,6 +532,13 @@ class ConfluenceClient:
                     expected_version=current.version) from None
             raise
         return self._page(data or {}, max_chars=MAX_BODY_CHARS, with_body=False)
+
+
+def same_body(markdown_written: str, page_markdown: str) -> bool:
+    """Is the page's body what we wrote? Compared after a round trip through storage format, so
+    Confluence's own normalisation does not matter."""
+    expected = storage_to_markdown(markdown_to_storage(markdown_written))
+    return expected.strip() == (page_markdown or "").strip()
 
 
 def _plain(excerpt: str) -> str:
