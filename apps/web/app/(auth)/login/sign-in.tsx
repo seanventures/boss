@@ -9,8 +9,8 @@
  *   → "New here? Create account" → the host, and "Use the shared password" while it still works.
  *
  * What `/v1/auth/options` says isn't set up stays discoverable but disabled, and says exactly
- * what turns it on (lib/identity/sign-in-offers.ts): no fake
- * buttons. Then the second factor (code, passkey or recovery code) when the account has one. No
+ * what turns it on (lib/identity/sign-in-offers.ts): no fake buttons. The email methods are the
+ * exception: with no email delivery they are hidden, and Password stands alone with no tab bar. Then the second factor (code, passkey or recovery code) when the account has one. No
  * phone or SMS anywhere. The API decides every step; the page only carries the person through
  * it, and keeps every message uniform (an unknown address gets exactly the words a known one does).
  *
@@ -32,7 +32,7 @@ import { emailSignInOffered } from "../../../lib/identity/email-sign-in";
 import { conditionalMediationAvailable, getAssertion, PasskeyFailure, unwrapOptions, webauthnAvailable, type AssertionOptions, type Wrapped } from "../../../lib/identity/webauthn";
 import { sayAuth } from "../auth-flow";
 import { passkeyPlace } from "../../../lib/identity/passkey-support";
-import { methodWhyNot, passkeyWhyNot, providerOffers, type Method } from "../../../lib/identity/sign-in-offers";
+import { emailMethodsShown, methodWhyNot, passkeyWhyNot, providerOffers, type Method } from "../../../lib/identity/sign-in-offers";
 import { CodeInput, Face, Sheet } from "../../../components/identity/kit";
 import { AuthStage, HostLine, Live, Logo, MethodTabs, ProviderRow, safeNextClient, Tip } from "../auth-parts";
 import { CopyCommand } from "../copy-command";
@@ -218,11 +218,17 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
     } finally { setBusy(false); }
   };
 
+  // The email methods appear only when this BOSS can send email (stranger test: a fresh install
+  // showed Magic link and Email code tabs that could never work). With email set up but no public
+  // address, they stay visible and disabled, saying what's missing (lib/identity/sign-in-offers).
   const tabs = [
     { id: "password" as const, label: "Password", icon: <Key size={14} weight="bold" aria-hidden /> },
-    { id: "magic" as const, label: "Magic link", icon: <Sparkle size={14} weight="bold" aria-hidden />, why: methodWhyNot("magic", options) },
-    { id: "code" as const, label: "Email code", icon: <Hash size={14} weight="bold" aria-hidden />, why: methodWhyNot("code", options) },
+    ...(emailMethodsShown(options) ? [
+      { id: "magic" as const, label: "Magic link", icon: <Sparkle size={14} weight="bold" aria-hidden />, why: methodWhyNot("magic", options) },
+      { id: "code" as const, label: "Email code", icon: <Hash size={14} weight="bold" aria-hidden />, why: methodWhyNot("code", options) },
+    ] : []),
   ];
+  const onlyPassword = tabs.length === 1;
   const whyLine = (at: "idp" | "passkey" | "tabs") => why?.at === at
     ? <p className="idn-why" data-copy="prose" data-testid={`why-${at}`}>{why.text}</p> : null;
 
@@ -352,8 +358,8 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
         <summary>Other sign-in options</summary>
         {externalMethods}
       </details>}
-      <MethodTabs tabs={tabs} value={method} label="Sign-in method" onWhy={(text) => setWhy({ at: "tabs", text })}
-        onChange={(m) => { setMethod(m); setError(null); setWhy(null); setStage({ kind: "start" }); }} />
+      {onlyPassword ? null : <MethodTabs tabs={tabs} value={method} label="Sign-in method" onWhy={(text) => setWhy({ at: "tabs", text })}
+        onChange={(m) => { setMethod(m); setError(null); setWhy(null); setStage({ kind: "start" }); }} />}
       {whyLine("tabs")}
 
       {stage.kind === "magic-sent" ? (
@@ -388,7 +394,7 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
           </div>
         </div>
       ) : (
-        <form id={`panel-${method}`} role="tabpanel" aria-labelledby={`tab-${method}`}
+        <form id={`panel-${method}`} role={onlyPassword ? undefined : "tabpanel"} aria-labelledby={onlyPassword ? undefined : `tab-${method}`}
           onSubmit={(e) => {
             e.preventDefault();
             if (method === "password") run(async () => after(await idPost<SignInStep>("/v1/auth/login", { email: shared ? "" : email, password })));

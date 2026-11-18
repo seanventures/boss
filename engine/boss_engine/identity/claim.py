@@ -109,7 +109,16 @@ DEFAULT_SEATS = ("ceo", "cto", "cao", "vp_agents", "release_manager")
 
 
 def legacy_seats(db: Any) -> list[str]:
-    return list(DEFAULT_SEATS)
+    """The seats the first Owner may take over: only those with real history on this install (a
+    decision approved, delegated, sent back or executed under that name). A FRESH install has
+    none, so the claim form does not ask "Which seat were you?" and the Owner starts fresh
+    (stranger test, rc10.27); an upgrade whose `ceo` approved things still offers `ceo`."""
+    rows = db.execute(text(
+        "SELECT DISTINCT s FROM (SELECT unnest(ARRAY[approved_by, delegated_by, "
+        "revision_requested_by, executed_by]) AS s FROM decisions) d WHERE s = ANY(:seats)"),
+        {"seats": list(DEFAULT_SEATS)}).scalars().all()
+    held = {str(r) for r in rows}
+    return [s for s in DEFAULT_SEATS if s in held]
 
 
 def setup_expires_at(db: Any) -> Optional[str]:

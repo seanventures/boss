@@ -34,7 +34,7 @@ Without a checkout, `curl -fsSL https://boss.sean.network/install.sh | bash` ins
 On the install machine, open `http://127.0.0.1:3000`. From another computer, open an SSH tunnel to the VM you administer and use the same address locally:
 
 ```bash
-ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
+ssh -L 3000:127.0.0.1:3000 -L 3001:127.0.0.1:3001 -L 8000:127.0.0.1:8000 user@your-vm
 ```
 
 The main areas of the console are:

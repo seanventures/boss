@@ -1,8 +1,8 @@
 /**
  * WHAT THE SIGN-IN PAGE OFFERS, AND WHY NOT (no fake buttons).
  *
- * The page always has its full shape: the four social providers, a passkey button and the three
- * email methods. Each one is live only when `/v1/auth/options` (and, for passkeys, this browser's
+ * The page always has its full shape: the four social providers, a passkey button and Password.
+ * The two emailed methods (magic link, email code) appear only when email delivery is set up. Each one is live only when `/v1/auth/options` (and, for passkeys, this browser's
  * own address) says it can work; otherwise it is shown disabled with the exact words that turn it
  * on. A plain module so the page and its tests read the same rules.
  */
@@ -66,6 +66,12 @@ export function passkeyWhyNot(options: Pick<AuthOptions, "passkey" | "passkey_re
 }
 
 export type Method = "password" | "magic" | "code";
+
+/** Whether the Magic link and Email code tabs appear at all: only when this BOSS can deliver
+ *  email. Without it they could never work, so a fresh install shows Password alone. */
+export function emailMethodsShown(options: Pick<AuthOptions, "smtp">): boolean {
+  return options.smtp === true;
+}
 
 /** Why an email method is off, or null when it is offered. Password always is. */
 export function methodWhyNot(method: Method, options: Pick<AuthOptions, "smtp" | "public_origin">): string | null {

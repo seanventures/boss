@@ -51,7 +51,7 @@ After the stack is healthy, the installer runs one **Models** step. `boss connec
 **3. When no model is usable, offer one.** "Usable" means a connected API key, subscription, or Ollama. These offers come only at a terminal, one question each:
 
 - Sign in to Codex, then Claude Code, then Grok Build, inside BOSS. Each question defaults to no.
-- Set up a free local model, with the download size in the question. This one defaults to **yes**, because without it BOSS has no model; it is still a question because the download is several GB. See [The local model](#the-local-model). `--no-local-model` turns this offer off.
+- Optionally set up a free local model, with the download size in the question (about 4.4 GB for the default). This one also defaults to **no**: pressing Enter downloads nothing. A subscription or an API key works without it, and a local model is slow on a CPU. See [The local model](#the-local-model). `--no-local-model` turns this offer off.
 - The installer only: install the official coding CLIs on this machine, through the same path as `--install-coding-clis`. Codex needs its CLI here to sign in; Claude Code and Grok Build already run inside BOSS. This question defaults to no.
 
 `--yes` asks nothing and installs nothing extra. Only explicit flags install: `--install-ollama` (with `--local-model NAME`) and `--install-coding-clis`.
@@ -101,7 +101,7 @@ The installer puts `boss` in `~/.local/bin` (or in `/usr/local/bin` when that is
 | Command | What it does |
 |---|---|
 | `boss status` | Install directory, release, services, and API health |
-| `boss open` | Prints the Mission Control address |
+| `boss open` | Prints the Mission Control address, and how to claim BOSS while it has no Owner |
 | `boss password` | Shows the console password, in a terminal only: it claims a new install, then signs teammates in as Operator for 30 days after the claim. `boss password reset` rotates it |
 | `boss doctor` | Runs `checkup.sh` (`--probe` also asks a model a question) |
 | `boss logs [-f] [api\|worker\|web\|db]` | Recent service logs |
@@ -370,6 +370,18 @@ Everything derives from these variables; set them once in `.env`:
 
 `NEXT_PUBLIC_BOSS_API_URL` derives from `BOSS_API_PORT` automatically. Set it explicitly only when the API is reached at a different hostname than the browser uses, such as a remote VM, where it must be the address **the browser** will use, not `127.0.0.1`.
 
+### Two installs on one machine
+
+A second install beside an existing one needs its own Compose project name, its own ports, and its own `boss` command. Otherwise it shares the first install's containers, volumes and database.
+
+```bash
+COMPOSE_PROJECT_NAME=boss-two BOSS_BIN_DIR="$HOME/boss-two-bin" \
+BOSS_PREVIEW_PORT=3101 BOSS_GRAFANA_PORT=3400 \
+  ./install.sh --dir ~/boss-two --api-port 8100 --web-port 3100 --postgres-port 5532
+```
+
+The installer saves `COMPOSE_PROJECT_NAME`, `BOSS_BIN_DIR` and the ports in that install's `.env`. Its `boss` command (`~/boss-two-bin/boss`) reads them from there, so later commands never need the variables again and never act on the first install. Without `BOSS_BIN_DIR`, the first install keeps `~/.local/bin/boss` and the installer prints the command for the second one.
+
 ### Installing on a server
 
 The worked path for a console hostname is [docs/community/hostname.md](../../docs/community/hostname.md). On the VM:
@@ -383,10 +395,10 @@ The web listener and Postgres stay on loopback. The API stays on `127.0.0.1` unl
 To skip the proxy, use an SSH tunnel to a VM you administer:
 
 ```bash
-ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
+ssh -L 3000:127.0.0.1:3000 -L 3001:127.0.0.1:3001 -L 8000:127.0.0.1:8000 user@your-vm
 ```
 
-Then open `http://127.0.0.1:3000` on the computer that opened the tunnel. The public URL is baked into the web build. An older `.env` that set `BOSS_BIND_ADDRESS=0.0.0.0` is moved back to loopback on rerun. The only way to publish the API is `--api-bind` / `BOSS_API_BIND`, and authentication stays required.
+Then open `http://127.0.0.1:3000` on the computer that opened the tunnel. Port 3001 is where previews open. The public URL is baked into the web build. An older `.env` that set `BOSS_BIND_ADDRESS=0.0.0.0` is moved back to loopback on rerun. The only way to publish the API is `--api-bind` / `BOSS_API_BIND`, and authentication stays required.
 
 ## Verify the install
 
@@ -442,7 +454,8 @@ Returns three separate grades (delivery, efficiency, host) deterministically, wi
 ```bash
 source ~/boss/boss-community.env.sh
 curl -sS "$BOSS_API_URL/health"
-# Mission Control: http://127.0.0.1:3000 — the first visit claims it (boss password proves it is you)
+# First, claim it: boss identity setup-link prints a one-hour link; open it and create the Owner.
+# Then Mission Control: http://127.0.0.1:3000/?area=setup (repository, model, first pull request)
 ```
 
 ## Upgrade & recover

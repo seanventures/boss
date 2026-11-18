@@ -56,6 +56,14 @@ const SEAT_WORDS: Record<string, string> = {
   release_manager: "release_manager. Releases will show your name",
 };
 
+/** Drop the `#t=` setup link from the address bar without a navigation (a spent token must not
+ *  linger in history or in a URL someone copies). */
+export function forgetLinkToken(): void {
+  if (typeof window === "undefined" || !window.location.hash) return;
+  const { pathname, search } = window.location;
+  window.history.replaceState(window.history.state, "", `${pathname}${search}`);
+}
+
 function minutesLeft(iso: string | null, now: number): number | null {
   if (!iso) return null;
   return Math.max(0, Math.round((Date.parse(iso) - now) / 60_000));
@@ -97,9 +105,18 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
   const [pageOrigin, setPageOrigin] = useState<string | null>(null);
   const [noPasskey, setNoPasskey] = useState<string | null>(null);
 
+  // The setup link lives in the fragment, so pasting it into a tab already on /claim changes only
+  // the hash: no load, no remount. Read it now AND on every hashchange (stranger test: the pasted
+  // link did nothing until a reload).
+  useEffect(() => {
+    const read = () => setToken(linkToken("setup"));
+    read();
+    window.addEventListener("hashchange", read);
+    return () => window.removeEventListener("hashchange", read);
+  }, []);
+
   useEffect(() => {
     setPasskeys(webauthnAvailable());
-    setToken(linkToken("setup"));
     setPageOrigin(window.location.origin);
     // An address no browser can hold a passkey for (an IP, plain http): the authenticator app is
     // the way in, said in one plain line, never a prompt the browser will refuse.
@@ -156,6 +173,9 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
     try {
       const proof = claimProof(path, { token, legacy, origin });
       await idPost("/v1/auth/setup/claim", { ...proof, name: name.trim(), email: email.trim(), seat: seat || null, password });
+      // The link is spent: take it out of the address bar (and so out of history and any copy of
+      // this URL) the moment it has done its job.
+      forgetLinkToken();
       setLegacy("");
       setPassword("");
       await primeCsrf();

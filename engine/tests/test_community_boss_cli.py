@@ -23,7 +23,7 @@ HELPERS = (
     "community-compose.yml", "restore_preserved_env.sh", "reconcile_api_credentials.py",
     "boss.sh", "upgrade.sh", "uninstall.sh", "discover_models.py", "coding_subscriptions.py",
     "console_password.py", "connect_ollama.py", "model_status.py", "local_model.py",
-    "boss_refusal.py", "post_check.sh",
+    "boss_refusal.py", "post_check.sh", "next_step.sh",
 )
 # What `docker compose config --format json` would say about the build services (install.sh
 # builds them one image at a time from this answer). Kept equal to the real compose file below.
@@ -359,15 +359,24 @@ def test_boss_open_status_and_logs(world) -> None:
     (world["install"] / ".env").write_text(
         (world["install"] / ".env").read_text().replace(
             "BOSS_COMMUNITY_WEB_ENABLED=0", "BOSS_COMMUNITY_WEB_ENABLED=1"))
-    opened = _run(boss, "open", env=env)
+    opened = _run(boss, "open", env={**env, "BOSS_TEST_CLAIM": "claimed 2026-11-01"})
     assert opened.returncode == 0, opened.stderr
     assert "http://127.0.0.1:3000" in opened.stdout
     assert "boss password" in opened.stdout
+    assert "setup-link" not in opened.stdout
 
-    # NOT CLAIMED: `boss open` says how, with the command — nobody has to find the link in a log.
+    # NOT CLAIMED: `boss open` leads with the claim, with the command, then Setup — the same
+    # words as the installer's card (scripts/install/next_step.sh).
     unclaimed = _run(boss, "open", env={**env, "BOSS_TEST_CLAIM": "unclaimed"})
     assert unclaimed.returncode == 0, unclaimed.stderr
-    assert "Not claimed yet" in unclaimed.stdout and "  boss identity setup-link" in unclaimed.stdout
+    out = unclaimed.stdout
+    assert "Next: claim this BOSS (nobody owns it yet)" in out
+    assert "boss identity setup-link" in out
+    assert out.index("setup-link") < out.index("Then finish setup") < out.index("http://127.0.0.1:3000")
+    assert "boss password" not in out
+    # Claim state unknown (an image without the identity CLI): the claim still comes first.
+    unknown = _run(boss, "open", env=env)
+    assert "Next: claim this BOSS (if nobody owns it yet)" in unknown.stdout
 
     # BOSSAPP-813: with an https console origin, that address IS the claim from the server's own
     # network; the setup link is for everywhere else.
@@ -379,8 +388,8 @@ def test_boss_open_status_and_logs(world) -> None:
     onsite = _run(boss, "open", env={**env, "BOSS_TEST_CLAIM": "unclaimed"})
     dotenv.write_text(before)
     assert onsite.returncode == 0, onsite.stderr
-    assert "Open https://boss-1.example.ts.net to claim this BOSS (from your own network)" in onsite.stdout
-    assert "from elsewhere run, on this server: boss identity setup-link" in onsite.stdout
+    assert "From the server's own network, opening https://boss-1.example.ts.net claims it too." in onsite.stdout
+    assert "On this server run:  boss identity setup-link" in onsite.stdout
 
     status = _run(boss, "status", env=env)
     assert status.returncode == 0, status.stdout + status.stderr
@@ -1626,7 +1635,9 @@ def test_an_install_from_before_the_record_moves_roles_on_the_old_local_model(
     assert roles["code_agent_low_cost_engine"][0] == "codex"
 
 
-def test_boss_connect_offers_a_local_model_with_yes_as_the_default(world, boss_api) -> None:
+def test_boss_connect_offers_a_local_model_with_no_as_the_default(world, boss_api) -> None:
+    """Stranger test (rc10.27): Enter on the local-model question downloaded Ollama and a 4.4 GB
+    model. It is optional and large, so it says so, and Enter is No; only "y" installs it."""
     boss = _installed(world)
     _local_ollama(world, boss_api)
     env = dict(world["env"], BOSS_TEST_UNAME="Linux")
@@ -1634,14 +1645,21 @@ def test_boss_connect_offers_a_local_model_with_yes_as_the_default(world, boss_a
     suppressed_code, suppressed = _run_tty(boss, "connect", "--no-local-model", env=env,
                                            answers="n\nn\nn\n")
     assert suppressed_code == 0, suppressed
-    assert "[Y/n]" not in suppressed
+    assert "Optional: set up a free local model" not in suppressed
     assert "ollama.com" not in _curl_urls(world)
 
-    # Codex: no. Claude: no. Grok: no. Local model: Enter, which is yes.
+    # Codex: no. Claude: no. Grok: no. Local model: Enter, which is NO.
     code, output = _run_tty(boss, "connect", env=env, answers="n\nn\nn\n\n", timeout=180)
     assert code == 0, output
-    assert output.count("[y/N]") == 3 and output.count("[Y/n]") == 1
-    assert f"downloads {DEFAULT_LOCAL} (about 4.4 GB)" in output
+    assert output.count("[y/N]") == 4 and "[Y/n]" not in output
+    assert "Optional: set up a free local model (about 4.4 GB download)?" in output
+    assert f"downloads {DEFAULT_LOCAL}" in output
+    assert "ollama.com" not in _curl_urls(world)
+    assert "A free local model: boss connect --install-ollama" in output
+
+    # Only an explicit yes installs it.
+    code, output = _run_tty(boss, "connect", env=env, answers="n\nn\nn\ny\n", timeout=180)
+    assert code == 0, output
     assert "https://ollama.com/install.sh" in _curl_urls(world)
     assert f"Ollama       connected: {DEFAULT_LOCAL}" in output
 

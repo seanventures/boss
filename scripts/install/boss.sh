@@ -169,6 +169,16 @@ need_install() {
 # .env is data, not shell code.
 env_value() { grep -m 1 "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true; }
 
+# THIS INSTALL'S COMPOSE PROJECT comes from its own .env (install.sh writes it), and it wins over
+# whatever the shell exported: `boss` run for one install must never act on another's
+# containers, volumes or database (stranger test, rc10.27: a second install's project name was
+# never saved, so every later `boss` command fell back to boss-community, the FIRST install).
+# Exported here, so every helper this command runs (checkup, backup, upgrade, uninstall) uses it.
+# An .env from before the name was recorded: the shell's value, else the default.
+_project="$(env_value COMPOSE_PROJECT_NAME)"
+export COMPOSE_PROJECT_NAME="${_project:-${COMPOSE_PROJECT_NAME:-boss-community}}"
+unset _project
+
 # ---- scoped sudo Docker fallback ------------------------------------------
 # Keep this small boundary identical in the installer and lifecycle helpers.
 # sudo resets selection variables and uses root's Docker configuration.
@@ -216,8 +226,8 @@ compose() {
   [[ -z "$(env_value BOSS_EMAIL_DEV_INBOX)" ]] || profiles+=(--profile mail)
   # The images are tagged with the compose project name (install.sh); without the same
   # default here Compose looks for boss-community-api:local, which was never built.
-  COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-boss-community}" \
-  BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-${COMPOSE_PROJECT_NAME:-boss-community}}" \
+  COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME" \
+  BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-$COMPOSE_PROJECT_NAME}" \
     "${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ${profiles[@]+"${profiles[@]}"} "$@"
 }
 
@@ -298,29 +308,25 @@ cmd_open() {
   # UNTIL SETUP IS DONE, THE ADDRESS IS REPO AND MODELS: paste a token, connect a model, open a
   # first pull request. Once ready, the console's own front page.
   [[ "$(setup_state ready || true)" == ready ]] || path="/?area=setup"
+  local claim
+  claim="$(identity_cli claim-status 2>/dev/null | tail -n 1 || true)"
+  # NOT CLAIMED YET: the claim comes first, with the command, then Setup. The same words as the
+  # installer's card and `boss doctor` (scripts/install/next_step.sh).
+  if [[ "$claim" != claimed* ]]; then
+    bash "$INSTALL_DIR/scripts/install/next_step.sh" --claim "$claim" \
+      --setup-url "http://127.0.0.1:${port:-3000}${path:-/?area=setup}" --origin "$origin"
+    # BOSSAPP-813: from the server's own network (LAN, tailnet) the console's https address IS
+    # the claim — the first visitor sets up the Owner on the site.
+    [[ -z "$origin" ]] || printf 'Console origin:                  %s\n' "${origin%/}"
+    return 0
+  fi
   if [[ -n "$path" ]]; then
     printf 'Finish setup:                    http://127.0.0.1:%s%s\n' "${port:-3000}" "$path"
   else
     printf 'Mission Control on this machine: http://127.0.0.1:%s\n' "${port:-3000}"
   fi
   [[ -z "$origin" ]] || printf 'Console origin:                  %s%s\n' "${origin%/}" "$path"
-  # NOT CLAIMED YET: say how, with the command, so nobody has to find the link in a log.
-  case "$(identity_cli claim-status 2>/dev/null | tail -n 1 || true)" in
-    unclaimed)
-      # BOSSAPP-813: from the server's own network (LAN, tailnet) the console's https address IS
-      # the claim — the first visitor sets up the Owner on the site. The setup link is for
-      # everywhere else (and for an install with no https origin).
-      if [[ -n "$origin" ]]; then
-        printf '\nNot claimed yet. Open %s to claim this BOSS (from your own network);\n' "${origin%/}"
-        printf 'from elsewhere run, on this server: boss identity setup-link\n'
-        printf '(it prints a one-hour link; open it in the browser you will sign in with).\n'
-      else
-        printf '\nNot claimed yet: nobody owns this BOSS. To become its Owner, run\n\n'
-        printf '  boss identity setup-link\n\n'
-        printf 'and open the one-hour link it prints, in the browser you will sign in with.\n'
-      fi ;;
-    *) printf 'Sign in with your own account. Teammates without one yet: boss password, until it stops.\n' ;;
-  esac
+  printf 'Sign in with your own account. Teammates without one yet: boss password, until it stops.\n'
 }
 
 cmd_status() {
@@ -1231,15 +1237,9 @@ LOCAL_MODEL_SET=0
 FROM_INSTALLER=0   # the installer already saved keys and handled Codex
 FOUND_FILE=""
 
-# Ask unless told not to. ask_default_yes answers yes on Enter.
+# Ask unless told not to. Every question defaults to No: Enter never downloads or installs
+# anything (stranger test, rc10.27: Enter on the local-model question pulled ~4.4 GB).
 ask() { [[ "$NO_QUESTIONS" -eq 0 ]] && ask_yes "$1"; }
-ask_default_yes() {
-  local reply
-  [[ "$NO_QUESTIONS" -eq 0 ]] && have_tty || return 1
-  printf '%s [Y/n] ' "$1" >/dev/tty
-  read -r reply </dev/tty || return 1
-  [[ -z "$reply" || "$reply" == y || "$reply" == Y || "$reply" == yes ]]
-}
 
 model_state() {
   local key rc=0
@@ -1326,7 +1326,9 @@ models_step() {
   if [[ "$rc" -eq 3 && "$NO_LOCAL_MODEL" -eq 0 && "$INSTALL_OLLAMA" -eq 0 ]]; then
     size="$(python3 "$INSTALL_DIR/scripts/install/local_model.py" size "$LOCAL_MODEL" </dev/null 2>/dev/null || echo unknown)"
     [[ "$size" =~ ^[0-9]+$ ]] && size="about $(gigabytes "$size") GB" || size="size unknown"
-    if ask_default_yes "Set up a free local model? BOSS installs Ollama if needed and downloads $LOCAL_MODEL ($size)."; then
+    # Optional and large: asked with No as the default; unattended runs never install it
+    # unless --install-ollama asks for it.
+    if ask "Optional: set up a free local model ($size download)? BOSS installs Ollama if needed and downloads $LOCAL_MODEL. Slow on CPU; a subscription or API key works without it."; then
       setup_local_model "$LOCAL_MODEL" || true
     else
       printf '  next      A free local model: boss connect --install-ollama  (or --local-model NAME)\n'
