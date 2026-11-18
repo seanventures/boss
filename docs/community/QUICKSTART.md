@@ -38,15 +38,15 @@ Use a new directory named `boss-rc10.28`. The command stops if the clone fails. 
 
 The script at `https://boss.sean.network/install.sh` is published separately. Do not treat it as this tag.
 
-Add `--console-origin https://boss.example.com` (your hostname, not this example) when anyone will open the console from another machine. Set that before you claim. The [hostname guide](hostname.md) is the proxy, certificates, and private-IP case. Omit the flag to open `http://127.0.0.1:3000` on the install machine only.
+Add `--console-origin https://boss.example.com` (your hostname, not this example) when anyone will open the console from another machine. Set that before you claim. The [hostname guide](hostname.md) is the proxy, certificates, and private-IP case. Omit the flag to open `http://localhost:3000` on the install machine only.
 
-The installer asks once about models it finds, and offers a local model (about 4.4 GB; the default is No). `--yes` skips those questions. With `--yes`, exported keys are still saved, and nothing is signed in or installed unless you also pass `--connect-found` or `--install-ollama`.
+The installer asks about the models it finds on the machine, and offers a local model (about 4.4 GB; the default is No). `--yes` skips those questions. With `--yes`, exported keys are still saved, and nothing is signed in or installed unless you also pass `--connect-found` or `--install-ollama`.
 
 What the install does:
 
 - The API, console, and database listen on `127.0.0.1` only.
 - Installer keys go into `.env` in the install directory, mode `0600`. The installer does not print them. Console connections use the selected secret backend.
-- It seeds one local project, shown as **Default project**.
+- It seeds one local project, `boss-dogfood`, for BOSS's own housekeeping. Your projects are the ones you add.
 - It puts a `boss` command on your `PATH`. Open a new terminal if the command is not found, or run `~/.local/bin/boss`.
 - It does not add your user to the `docker` group. If Docker needs an administrator, later manual Compose commands are `sudo docker compose`.
 
@@ -90,7 +90,7 @@ The default path does not ask you to paste a token. Access is the GitHub App on 
 
 ## Connect a model
 
-Under **② Models**, click **Add a model**. Three tabs:
+Under **② Models**, click **Add model**. Three tabs:
 
 - **Subscription:** Claude Code, Codex or Grok Build. Click **Sign in**, approve on the provider's page, copy the code it shows, paste it back and submit.
 - **API key:** OpenRouter, OpenAI, Anthropic, Gemini, xAI or another OpenAI-compatible endpoint. Paste the key, pick a model, click **Connect**.
@@ -108,9 +108,9 @@ With a repository and a model connected, pick one way to start:
 
 - **Command Center:** pick a template (for example **CSV quality desk**) or describe an app, and press **Easy Mode**.
 - **Try a sample** on **Projects › Add project**: a small sample app, kept on this machine. If something is still missing, the **Setup needed** box lists it up front; **Start anyway** lets you add it before the step that needs it.
-- **On a project you already have:** **What should we add?**, describe one small change, press **Start**.
+- **On a project you already have:** open it, press **New work**, describe one small change, and start it.
 
-The first time, BOSS asks **Let … act for you?** and lists the agents, the permissions and the repository. Choose **For this run only** or **For 30 days**. Allow it only if you mean that.
+The first time, BOSS asks **Let … act for you?** and lists the agents, the permissions and the repository. Choose **For this run only** (Easy Mode says **For this build only**) or **For 30 days**. Allow it only if you mean that.
 
 The pull request appears on GitHub (or, for code on this machine, in BOSS) for you to review. This can spend model credit, and it can write a branch. It is not a merge, and it is not evidence that the result is useful. Follow the run before you treat it as finished. The [first change](FIRST_USEFUL_CHANGE.md) is how to read the plan, the revision, and the receipt.
 
