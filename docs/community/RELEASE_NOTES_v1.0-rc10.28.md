@@ -35,6 +35,13 @@ This is a test candidate. Cutting the tag does not deploy a host or publish an i
 - Confluence lives under **Setup › Documents**, not Ticket systems.
 - A build that finishes without a pull request now says why.
 
+## Known issues
+
+- **Command Center may still say "Connect a repository"** when your code is kept on this machine. Setup shows Repos as **On this machine**, and builds work; you can ignore that card.
+- **A model at a plain `http://` address** (LM Studio, vLLM or LiteLLM on your network, added under **API key › Other**) passes its connection test, then builds refuse to send it the key. Use an `https://` address for now. OpenRouter, OpenAI, Anthropic, Gemini and xAI are not affected.
+- Reloading the recovery-codes screen loses the codes it showed; create new ones from **My account** if that happens.
+- A build waiting for a model is listed under **Running**; its card says **Waiting for a model**.
+
 ## Not in this tag
 
 - Opening a pull request on GitHub still needs a GitHub account and the BOSS GitHub App; a model still needs a subscription sign-in, an API key, or a local model.
@@ -45,5 +52,5 @@ This is a test candidate. Cutting the tag does not deploy a host or publish an i
 
 - The version pins match `1.0.0-rc.10.28` (`engine/tests/test_distribution_contract.py`).
 - Every change in this tag was reviewed by an independent agent before merge, with its own tests, and passed the merge gate.
-- A clean, side-by-side install of this tree was walked by an agent following QUICKSTART on Ubuntu 24.04 x86_64: install, claim (passkey-less, authenticator app), Setup, template gallery, Try a sample, Start a new app on this machine, the model screen and the sign-in page.
+- A clean, side-by-side install of this tree (commit 13ce3e8f4) was walked by an agent following QUICKSTART on Ubuntu 24.04 x86_64, four rounds in all, until it found no blocker: install (about 6–10 minutes), claim with an authenticator app, Setup, template gallery, Easy Mode with and without a model, Try a sample, Start a new app on this machine, Approvals, the model screen, `boss stop` / `boss start`, the sign-in page and every link.
 - On a second install with a model connected, a template build ran from Easy Mode through consent, implementation, review and tests to its pull request and merge card.

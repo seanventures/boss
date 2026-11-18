@@ -40,7 +40,7 @@ The script at `https://boss.sean.network/install.sh` is published separately. Do
 
 Add `--console-origin https://boss.example.com` (your hostname, not this example) when anyone will open the console from another machine. Set that before you claim. The [hostname guide](hostname.md) is the proxy, certificates, and private-IP case. Omit the flag to open `http://localhost:3000` on the install machine only.
 
-The installer asks about the models it finds on the machine, and offers a local model (about 4.4 GB; the default is No). `--yes` skips those questions. With `--yes`, exported keys are still saved, and nothing is signed in or installed unless you also pass `--connect-found` or `--install-ollama`.
+The installer asks about model keys and sign-ins it can use, and offers a local model (about 4.4 GB; the default is No). `--yes` skips those questions. With `--yes`, exported keys are still saved, and nothing is signed in or installed unless you also pass `--connect-found` or `--install-ollama`.
 
 What the install does:
 
