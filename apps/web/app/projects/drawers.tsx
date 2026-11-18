@@ -89,7 +89,7 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
                                          actor={ctx.actor} testid="px-drawer-failed" onDone={() => { ctx.refreshWork(); ctx.refreshOverview?.(); }} />
                           <AskBox ctx={ctx} about={n.label} /></>}>
           <p style={{ margin: 0 }} data-testid="px-drawer-failed-why">{n.detail}</p>
-          {!n.retry && n.fix?.detail ? <p className="px-faint" style={{ margin: 0 }}>{n.fix.detail}</p> : null}
+          {n.fix?.detail ? <p className="px-faint" style={{ margin: 0 }}>{n.fix.detail}</p> : null}
         </Drawer>
       );
     }

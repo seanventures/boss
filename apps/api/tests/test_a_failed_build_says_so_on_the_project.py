@@ -80,6 +80,34 @@ def test_the_shared_redactor_masks_the_new_shapes_and_keeps_paths_in_logs():
     assert "task-abcdefghijklmnopqrstuvwxyz" in redact_text("task-abcdefghijklmnopqrstuvwxyz")
 
 
+def test_the_redactor_is_linear_on_adversarial_input():
+    import time
+
+    from boss_engine.identity.redaction import redact_text
+
+    # It runs on every log record: a 100 KB run of `a.` (every dot a word boundary) once took
+    # 11 s through an unbounded URL-scheme pattern.
+    for blob in ("a." * 50_000, "-".join(["123e4567-e89b-12d3-a456-426614174000"] * 2800),
+                 "x+" * 50_000):
+        started = time.perf_counter()
+        redact_text(blob)
+        redact_text(blob, public=True)
+        assert time.perf_counter() - started < 0.2, len(blob)
+    assert "p@" not in redact_text("postgresql+psycopg://u:p@db:5432/boss")
+
+
+def test_a_url_and_a_slug_survive_redaction():
+    from boss_engine.identity.redaction import redact_text
+
+    said = redact_text("see https://example.com/home/dashboard and /api/root/x and /rootfs/y",
+                       public=True)
+    assert said == "see https://example.com/home/dashboard and /api/root/x and /rootfs/y"
+    for slug in ("feature/sk-1234-add-checkout-flow-page", "risk-sk-abcdefghijklmnopqrstu"):
+        assert redact_text(slug) == slug
+    assert "sk-svcacct" not in redact_text("key sk-svcacct-abcdefghijklmnopqrstuvwx")
+    assert "a" * 40 not in redact_text("key sk-" + "a" * 40)
+
+
 def test_reasons_read_well():
     from boss_engine.services.build_failure import failure_words
 
@@ -96,6 +124,8 @@ def test_reasons_read_well():
 NOT_LOGGED_IN = ("BOSS could not run claude_code: claude code agent exited 1: success — Not logged "
                  "in · Please run /login; fix: reconnect the Claude Code subscription in Repo and "
                  "models, then retry. [substrate=local_subprocess]")
+JAVA_ONLY = ("This build needs Java, which is not turned on for this BOSS: turn it on with "
+             "`boss toolchains enable java` on the BOSS host, then start again.")
 JAVA_OFF = ("This build asks for Ruby or PHP, which BOSS cannot build. This build needs Java, "
             "which is not turned on for this BOSS: turn it on with `boss toolchains enable java` "
             "on the BOSS host, then start again.")
@@ -108,7 +138,7 @@ JAVA_OFF = ("This build asks for Ruby or PHP, which BOSS cannot build. This buil
       "error": "BOSS could not run claude_code: 401 OAuth access token has expired; fix: "
                "reconnect it in Repo and models, then retry."},
      "Sign in again in Setup › Models", True),
-    ({"failure_class": "needs_human", "reason_code": "stack_unsupported", "error": JAVA_OFF},
+    ({"failure_class": "needs_human", "reason_code": "stack_unsupported", "error": JAVA_ONLY},
      "Turn on Java", False),
     ({"failure_class": "needs_human", "reason_code": "build_services_unavailable",
       "error": "Build services unavailable: cannot reach the build-services Postgres"},
@@ -119,16 +149,27 @@ JAVA_OFF = ("This build asks for Ruby or PHP, which BOSS cannot build. This buil
     ({"failure_class": "budget", "reason_code": "budget_cap", "error": "It hit its spending cap."},
      "Raise the cap in Govern", True),
 ])
-def test_a_failure_only_a_person_can_fix_names_the_fix_not_retry(kw, label, has_href):
+def test_a_failure_a_person_can_fix_names_the_fix_first_and_keeps_retry_for_after(kw, label, has_href):
     from boss_engine.services.build_failure import action_for
 
     got = action_for("p", source="code_task", run_id="crun_a", see_href="?see", **kw)
-    assert got["retry"] is None and got["retry_reason"]
+    # The fix's own words end "then retry": Retry stays, beside the fix, so the card is no dead end.
+    assert got["retry"]["href"] == "/v1/code-tasks/crun_a/retry" and got["retry_reason"] is None
     assert got["fix"]["label"] == label and bool(got["fix"]["href"]) == has_href
     if label == "Turn on Java":
         assert got["fix"]["command"] == "boss toolchains enable java"
     if label == "Raise the cap in Govern":
         assert "area=budget" in got["fix"]["href"]
+
+
+def test_a_stack_boss_cannot_build_is_said_so_never_turn_on_another_toolchain():
+    from boss_engine.services.build_failure import action_for
+
+    got = action_for("p", source="code_task", run_id="crun_a", failure_class="needs_human",
+                     reason_code="stack_unsupported", error=JAVA_OFF, see_href="?see")
+    assert got["fix"]["label"] == "See what it needs" and "Ruby or PHP" in got["fix"]["detail"]
+    assert "Java" not in got["fix"]["label"] and got["retry"] is None
+    assert "can't build Ruby or PHP" in got["retry_reason"]
 
 
 def test_retry_only_when_it_can_help():
@@ -313,18 +354,18 @@ def test_a_failure_only_a_person_can_fix_offers_the_fix_everywhere(world, client
                      fctx={"failure_class": "needs_human", "reason_code": "harness_unavailable"})
     ov = _get(world, client, f"/v1/projects/{pid}/overview")
     failed = ov["project"]["build_failed"]
-    assert failed["build_id"] == run and failed["retry"] is None
+    assert failed["build_id"] == run and failed["retry"]["run_id"] == run
     assert failed["fix"]["label"] == "Sign in again in Setup › Models"
-    assert "area=setup" in failed["fix"]["href"] and failed["retry_reason"]
+    assert "area=setup" in failed["fix"]["href"]
     assert "login" not in failed["reason"].lower() or "Not logged in" in failed["reason"]
     card = ov["needs_you"][0]
-    assert card["kind"] == "failed" and card["retry"] is None and card["fix"] == failed["fix"]
+    assert card["kind"] == "failed" and card["retry"] == failed["retry"] and card["fix"] == failed["fix"]
     with engine.connect() as c:
         cc = command_center.build(c, get_settings(), pid)
     item = next(n for n in cc["needs_you"] if n["kind"] == "build_failed")
-    # No Retry on the card that can't help; the disabled button says why, and the fix rides.
-    assert item["answers"] == [] and item["build"]["retryable"] is False
-    assert item["build"]["retry_reason"] and item["build"]["fix"]["label"] == failed["fix"]["label"]
+    # The fix rides on the card, and Retry beside it for after the fix.
+    assert [a["key"] for a in item["answers"]] == ["retry"] and item["build"]["retryable"] is True
+    assert item["build"]["fix"]["label"] == failed["fix"]["label"]
 
 
 def test_a_user_cancelled_latest_attempt_is_not_a_failure(world, client, engine):

@@ -93,9 +93,14 @@ _SHAPES: list[tuple[re.Pattern[str], str]] = [
     # of the secret's shape, so none of it survives.
     (re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,})"), REDACTED),
     (re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{8,}"), REDACTED),
-    (re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_\-]{16,}"), REDACTED),
-    # A URL carrying basic-auth credentials (https://user:pass@host/…): the host stays.
-    (re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/\s:@'\"]+:[^/\s@'\"]+@"), r"\1" + REDACTED + "@"),
+    # OpenAI-style keys by their real shapes only — never a branch or ticket slug that happens
+    # to start "sk-" (feature/sk-1234-add-checkout stays readable in logs).
+    (re.compile(r"\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{20,}"), REDACTED),
+    (re.compile(r"\bsk-[A-Za-z0-9]{32,}"), REDACTED),
+    # A URL carrying basic-auth credentials (https://user:pass@host/…): the host stays. The
+    # scheme is bounded: unbounded, a long run of `a.a.a.…` rescanned at every boundary and a
+    # 100 KB log line took 11 s (this runs on every log record).
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{0,31}://)[^/\s:@'\"]+:[^/\s@'\"]+@"), r"\1" + REDACTED + "@"),
     # JWT / JWS / id_token shape.
     (re.compile(r"eyJ[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{2,}\.[A-Za-z0-9_\-]*"), REDACTED),
     # Header lines of a dumped request or response.
@@ -168,8 +173,10 @@ def register_configured_secrets(settings: Any = None) -> None:
 _SREF = re.compile(r"\bsref_[A-Za-z0-9_\-]+")
 _SANDBOX_PATH = re.compile(r"/var/lib/boss/sandboxes/[^/\s'\"]+/[^/\s'\"]+/"
                            r"(?:(?:app|repo|src|work|workspace)/)?([^\s'\"]*)")
-_HOST_PATH = re.compile(r"(?:/var/lib/boss|/tmp/boss[^/\s'\"]*|/private/tmp|/Users/[^/\s'\"]+"
-                        r"|/home/[^/\s'\"]+|/root)(?:/[^\s'\"]*)?")
+#: Only a path that STARTS here: never one inside a URL (https://example.com/home/…) or after a
+#: word, and never a longer name (/rootfs).
+_HOST_PATH = re.compile(r"(?<![\w.:/-])(?:/var/lib/boss|/tmp/boss[^/\s'\"]*|/private/tmp"
+                        r"|/Users/[^/\s'\"]+|/home/[^/\s'\"]+|/root)(?![\w.-])(?:/[^\s'\"]*)?")
 
 
 def _path_tail(match: "re.Match[str]") -> str:

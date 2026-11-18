@@ -143,20 +143,24 @@ const LOGIN_FIX = { label: "Sign in again in Setup › Models", detail: "Reconne
                     href: `?project_id=${P}&area=setup&focus=models` };
 const NEEDS_HUMAN = {
   ...OVERVIEW,
-  project: { ...OVERVIEW.project, build_failed: { ...FAILED, retry: null, fix: LOGIN_FIX, retry_reason: "Retrying fails the same way until this is fixed",
+  project: { ...OVERVIEW.project, build_failed: { ...FAILED, fix: LOGIN_FIX,
                                                   reason: "BOSS couldn't run claude_code: Not logged in · Please run /login." } },
-  needs_you: [{ ...OVERVIEW.needs_you[0], retry: null, fix: LOGIN_FIX, retry_reason: "Retrying fails the same way until this is fixed" }, OVERVIEW.needs_you[1]],
+  needs_you: [{ ...OVERVIEW.needs_you[0], fix: LOGIN_FIX }, OVERVIEW.needs_you[1]],
 };
 
 describe("a failure only a person can fix", () => {
-  it("names the fix with its link, offers no Retry, and says why", async () => {
+  it("names the fix first with its link, and keeps Retry beside it, secondary, for after", async () => {
     engine(NEEDS_HUMAN);
     await openProject();
-    expect(tid(`px-ov-ny-failed:${RUN}-retry`)).toBeNull();
     const fix = tid(`px-ov-ny-failed:${RUN}-fix`)!;
     expect(fix.textContent).toBe("Sign in again in Setup › Models");
     expect(fix.getAttribute("href")).toContain("area=setup");
-    expect(tid(`px-ov-ny-failed:${RUN}-no-retry`)!.textContent).toContain("fails the same way");
+    expect(fix.getAttribute("data-kind")).toBe("primary");
+    const again = tid(`px-ov-ny-failed:${RUN}-retry`)!;
+    expect(again.getAttribute("data-kind")).toBeNull();
+    // The fix comes first in the card's answers.
+    const answers = tid(`px-ov-ny-failed:${RUN}-actions`)!;
+    expect(answers.firstElementChild).toBe(fix);
     expect(tid(`px-ov-ny-fixwhy-failed:${RUN}`)!.textContent).toContain("Reconnect");
   });
 
@@ -208,14 +212,14 @@ describe("the Command Center's card for a failed build", () => {
     build: { run_id: RUN, app: "Recipe box", where: "Build failed", failing: [], retryable: true },
   });
 
-  it("a failure Retry can't fix shows the fix, and Retry disabled with its reason", async () => {
+  it("a stack BOSS can't build shows what it needs, and Retry disabled with its reason", async () => {
     const { mount } = await import("./_helpers/live-render");
     const human = parseAttention({ ...JSON.parse(JSON.stringify({ id: `build:${RUN}:failed`, kind: "build_failed", title: "Build failed: Recipe box", detail: "x" })),
       answers: [], build: { run_id: RUN, app: "Recipe box", where: "Build failed", failing: [], retryable: false,
-                            retry_reason: "Retrying fails the same way until this is fixed",
-                            fix: { label: "Turn on Java", detail: "Run it on the host", href: "", command: "boss toolchains enable java" } } });
+                            retry_reason: "BOSS can't build Ruby or PHP: retrying fails the same way",
+                            fix: { label: "See what it needs", detail: "BOSS can't build Ruby or PHP.", href: "", command: "" } } });
     await mount(<AttentionCard item={human} projectId={P} actor="ceo" />);
-    expect(tid("ag-att-fix")!.textContent).toContain("boss toolchains enable java");
+    expect(tid("ag-att-fix")!.textContent).toContain("See what it needs");
     const r = tid("ag-att-retry") as HTMLButtonElement;
     expect(r.disabled).toBe(true);
     expect(r.getAttribute("title")).toContain("fails the same way");

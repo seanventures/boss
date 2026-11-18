@@ -420,14 +420,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
         {item.kind === "approval" && build?.previewUrl ? (
           <a className="ag-btn" href={build.previewUrl} target="_blank" rel="noreferrer" data-testid="ag-att-open-preview">Open preview ↗</a>
         ) : null}
-        {(item.kind === "gate_override" || item.kind === "budget_refused" || item.kind === "build_failed") && build ? (
-          <GatedButton permission="code_task:retry" type="button" className="ag-btn" data-testid="ag-att-retry"
-                  disabled={!build.retryable || busy !== null} title={!build.retryable ? build.retryReason : undefined}
-                  aria-busy={busy === "retry" || undefined} onClick={() => void retryBuild()}>
-            {busy === "retry" ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}
-            Retry
-          </GatedButton>
-        ) : null}
+        {/* A failed build's fix first (it says "then retry"), Retry beside it. */}
         {item.kind === "build_failed" && build?.fix ? (
           build.fix.href ? (
             <a className="ag-btn" data-tone="primary" href={linkTo(Object.fromEntries(new URLSearchParams(build.fix.href.replace(/^[^?]*\?/, ""))), orgId)}
@@ -436,6 +429,14 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
               {build.fix.label}
             </a>
           ) : <span className="ag-att-kind" data-testid="ag-att-fix" title={build.fix.detail}>{build.fix.label}{build.fix.command ? <>: <code>{build.fix.command}</code></> : null}</span>
+        ) : null}
+        {(item.kind === "gate_override" || item.kind === "budget_refused" || item.kind === "build_failed") && build ? (
+          <GatedButton permission="code_task:retry" type="button" className="ag-btn" data-testid="ag-att-retry"
+                  disabled={!build.retryable || busy !== null} title={!build.retryable ? build.retryReason : undefined}
+                  aria-busy={busy === "retry" || undefined} onClick={() => void retryBuild()}>
+            {busy === "retry" ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}
+            Retry
+          </GatedButton>
         ) : null}
         {item.kind === "build_failed" && build ? (
           <a className="ag-btn" href={buildHref} data-testid="ag-att-see"

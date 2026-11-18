@@ -51,7 +51,7 @@ function FailedNeed({ it, ctx, fresh }: { it: PxCtx["overview"]["needs_you"][num
       <div className="px-ny-b">
         <button type="button" className="px-wk-t" onClick={open}>{it.label}</button>
         <small className="px-faint" style={{ display: "block" }} data-testid={`px-ov-ny-why-${it.id}`}>{it.detail}</small>
-        {!it.retry && it.fix?.detail ? <small className="px-faint" style={{ display: "block" }} data-testid={`px-ov-ny-fixwhy-${it.id}`}>{it.fix.detail}</small> : null}
+        {it.fix?.detail ? <small className="px-faint" style={{ display: "block" }} data-testid={`px-ov-ny-fixwhy-${it.id}`}>{it.fix.detail}</small> : null}
       </div>
       <FailedActions retry={it.retry} fix={it.fix} retryReason={it.retry_reason} seeHref={it.see_href} projectId={ctx.projectId} actor={ctx.actor}
                      testid={`px-ov-ny-${it.id}`} onDone={() => { ctx.refreshWork(); ctx.refreshOverview?.(); }} />

@@ -13,9 +13,9 @@ Command Center (its card, the bell, Live) all read, so they can never disagree:
   "Follow-up failed" (a later attempt of work that already landed).
 * WHY, in words (`failure_words`): one sentence, redacted for people
   (identity.redaction.redact_text(public=True)), never a stack, a token or a host path.
-* WHAT TO DO (`action_for`): Retry only when retrying can help. A failure only a person can fix
-  (needs_human: a login, a toolchain, a service, a brief with nothing to test) names that fix;
-  a spending cap says raise the cap; a merged change offers nothing to retry. A workflow run's
+* WHAT TO DO (`action_for`): a failure only a person can fix (needs_human: a login, a
+  toolchain, a service, a brief with nothing to test; a spending cap) names that fix first,
+  with Retry beside it for after; a merged change or a stack BOSS cannot build offers no Retry. A workflow run's
   failure is retried from its failed step on the run's page — never a bare code-task retry,
   which would start an attempt the workflow does not know about (factory_view leaves workflow
   builds to the run's failed-step card for the same reason).
@@ -106,15 +106,17 @@ def failure_words(error: Any) -> str:
 _LOGIN = re.compile(r"not logged in|/login|oauth|re-?authenticate|failed to authenticate|"
                     r"token (?:has )?expired|401\b|sign in", re.I)
 _TOOLCHAIN = re.compile(r"boss toolchains enable (\w+)", re.I)
+_CANNOT_BUILD = re.compile(r"asks for ([\w#+. ]+?), which BOSS cannot build", re.I)
 _BUDGET = re.compile(r"spending cap|max[_ ]budget|budget[_ ]cap|error_max_budget_usd", re.I)
 
 
 def action_for(project_id: str, *, source: str, run_id: Optional[str],
                failure_class: Any = None, reason_code: Any = None, error: Any = None,
                merged: bool = False, see_href: str = "") -> dict[str, Any]:
-    """{retry, fix, retry_reason}: Retry only when retrying can help; otherwise the fix in
-    words (`fix.label`, `fix.detail`, `fix.href` when the console has a place for it) and why
-    Retry is not offered (`retry_reason`, the disabled button's tooltip)."""
+    """{retry, fix, retry_reason}. A failure a person can fix names the fix (`fix.label`,
+    `fix.detail`, `fix.href` when the console has a place for it) FIRST, with Retry beside it
+    for after the fix. No Retry at all when retrying cannot help — a merged change, a stack
+    BOSS cannot build, a workflow's build (its step Retry) — and `retry_reason` says why."""
     from .project_experience.common import href
     from .harness_failures import parse_sentence
 
@@ -134,7 +136,8 @@ def action_for(project_id: str, *, source: str, run_id: Optional[str],
     if merged:
         return out(False, None, "Its change is already merged: there is nothing to retry")
     if _BUDGET.search(raw) or rc in ("budget_cap", "budget_denied"):
-        return out(False, {"label": "Raise the cap in Govern",
+        # The fix first, then Retry once it is done (the fix's own words say "then retry").
+        return out(True, {"label": "Raise the cap in Govern",
                            "href": href(project_id, area="budget", tab="limits"),
                            "detail": "It hit its spending cap. Raise the cap, then retry."},
                    "It hit its spending cap: raise the cap first")
@@ -142,6 +145,14 @@ def action_for(project_id: str, *, source: str, run_id: Optional[str],
                                      "build_services_unavailable", "no_test_files"):
         tool = _TOOLCHAIN.search(raw)
         said = parse_sentence(raw)
+        cannot = _CANNOT_BUILD.search(raw)
+        if cannot:
+            # A STACK BOSS CANNOT BUILD AT ALL (Ruby, PHP): no toolchain turns it on — never
+            # "Turn on Java" because the same error also names a toolchain that is off.
+            return out(False, {"label": "See what it needs", "href": see_href,
+                               "detail": f"BOSS can't build {cannot.group(1)}. Change the brief to a "
+                                         "stack BOSS builds, then start again."},
+                       f"BOSS can't build {cannot.group(1)}: retrying fails the same way")
         if tool:
             lang = tool.group(1).lower()
             fix = {"label": f"Turn on {lang.capitalize()}", "href": "",
@@ -164,7 +175,8 @@ def action_for(project_id: str, *, source: str, run_id: Optional[str],
         else:
             fix = {"label": "See what it needs", "href": see_href,
                    "detail": "Only a person can fix this; the build's page says what."}
-        return out(False, fix, "Retrying fails the same way until this is fixed")
+        # The fix first, and Retry beside it for after the fix (every fix ends "then retry").
+        return out(True, fix)
     return out(True)
 
 

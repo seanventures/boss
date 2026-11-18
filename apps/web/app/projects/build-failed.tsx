@@ -17,8 +17,10 @@ import { isPxDemo, navigateTo, pxHref, type FailureFix } from "../../lib/project
 import { retryBuildAction } from "../factory/floor-actions";
 import { notifyChanged } from "../changed";
 
-export function RetryBuildButton({ runId, projectId, actor, onDone, testid, size = "s" }: {
+export function RetryBuildButton({ runId, projectId, actor, onDone, testid, size = "s", secondary = false }: {
   runId: string; projectId: string; actor: string; onDone?: (said: string) => void; testid?: string; size?: "s" | "m";
+  /** Beside a fix (the fix is the primary answer; Retry is for after it). */
+  secondary?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState("");
@@ -44,7 +46,7 @@ export function RetryBuildButton({ runId, projectId, actor, onDone, testid, size
   };
   return (
     <>
-      <GatedButton permission="code_task:retry" projectId={projectId} className="px-btn" data-kind="primary" data-size={size}
+      <GatedButton permission="code_task:retry" projectId={projectId} className="px-btn" data-kind={secondary ? undefined : "primary"} data-size={size}
                    data-testid={testid ?? "px-failed-retry"} disabled={busy} aria-busy={busy || undefined}
                    title="Try again from where it stopped: same branch, the failure carried forward"
                    onClick={(e) => { e.stopPropagation(); void retry(); }}>
@@ -91,16 +93,18 @@ export function FixAction({ fix, testid }: { fix: FailureFix; testid?: string })
   );
 }
 
-/** EVERY ANSWER A FAILURE OFFERS, in one place: Retry (a POST, only when the engine says it can
- *  help), else the fix and why there is no Retry; then See what happened. */
+/** EVERY ANSWER A FAILURE OFFERS, in one place: the fix first when a person must act (Retry
+ *  beside it, secondary, for after the fix); Retry alone when retrying is the answer; why there
+ *  is no Retry when it cannot help; then See what happened. Retry is always a POST. */
 export function FailedActions({ retry, fix, retryReason, seeHref, projectId, actor, testid, onDone }: {
   retry?: { run_id: string } | null; fix?: FailureFix | null; retryReason?: string; seeHref?: string;
   projectId: string; actor: string; testid: string; onDone?: () => void;
 }) {
   return (
     <span className="px-row" style={{ gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }} data-testid={`${testid}-actions`}>
-      {retry ? <RetryBuildButton runId={retry.run_id} projectId={projectId} actor={actor} testid={`${testid}-retry`} onDone={() => onDone?.()} />
-        : fix ? <FixAction fix={fix} testid={`${testid}-fix`} /> : null}
+      {fix ? <FixAction fix={fix} testid={`${testid}-fix`} /> : null}
+      {retry ? <RetryBuildButton runId={retry.run_id} projectId={projectId} actor={actor} testid={`${testid}-retry`} secondary={!!fix}
+                                 onDone={() => onDone?.()} /> : null}
       {!retry && retryReason ? <small className="px-faint" data-testid={`${testid}-no-retry`}>{retryReason}</small> : null}
       {seeHref ? <SeeWhatHappened href={seeHref} testid={`${testid}-see`} /> : null}
     </span>
