@@ -27,6 +27,7 @@ import time
 import hashlib
 import json
 import re
+import stat
 import subprocess
 import threading
 from pathlib import Path
@@ -3700,53 +3701,80 @@ def advisory_followup_findings(failing, evidence: dict, deferred: list) -> list[
     return out
 
 
+def _tree_git(root, args: list, index: str):
+    """One git of the snapshot/restore pair on a run's tree, with its own temporary index.
+
+    AS THE RUN'S UID (owned_process wraps it through boss-sandbox-exec when the run holds one),
+    never with BOSS's: crun_47c3aea2 (Recipe box follow-up, 2026-11-18) ran this `git add -A` as
+    the API's uid under umask 022, which created 50 of .git/objects' fan-out directories boss
+    0755; the run's own `git add -A` a minute later could not add an object into them
+    ("insufficient permission for adding an object to repository database .git/objects") and
+    the finished build failed. The temporary index lives in .git, where the run's uid writes."""
+    from . import owned_process
+    from .git_safety import NO_TREE_CODE, isolated_env
+
+    # PINNED to this tree (as readonly_guard._git): a planted core.worktree or a .git that is a
+    # link/gitfile never points the pair at another directory.
+    if not stat.S_ISDIR(os.lstat(Path(root) / ".git").st_mode):
+        raise OSError(f"{root}/.git is not a real directory")
+    env = {**isolated_env({"PATH": os.environ.get("PATH", os.defpath), "LANG": "C.UTF-8"}),
+           "GIT_INDEX_FILE": index, "GIT_DIR": str(Path(root) / ".git"),
+           "GIT_WORK_TREE": str(root)}
+    return owned_process.run(["git", *NO_TREE_CODE, *args], cwd=str(root), env=env,
+                             capture_output=True, text=True, timeout=120)
+
+
+def _tree_index(root) -> str:
+    import uuid
+
+    return str(Path(root) / ".git" / f"boss-tree-{uuid.uuid4().hex[:12]}.index")
+
+
 def _tree_snapshot(root) -> Optional[str]:
     """The working tree as a git tree object (a temporary index: the real index is untouched),
     or None when it cannot be taken. Includes every non-ignored file, binaries too."""
-    import subprocess
-    import tempfile
-
+    index = _tree_index(root)
     try:
-        with tempfile.TemporaryDirectory() as d:
-            env = {**os.environ, "GIT_INDEX_FILE": str(Path(d) / "index")}
-            for cmd in (["git", "add", "-A"], ["git", "write-tree"]):
-                done = subprocess.run(cmd, cwd=str(root), env=env, capture_output=True,
-                                      text=True, timeout=120)
-                if done.returncode != 0:
-                    return None
-            return done.stdout.strip() or None
+        for cmd in (["add", "-A"], ["write-tree"]):
+            done = _tree_git(root, cmd, index)
+            if done.returncode != 0:
+                return None
+        return done.stdout.strip() or None
     except Exception:  # noqa: BLE001 — no snapshot: the caller does not rework
         _log_caught(logger)
         return None
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(index)
 
 
 def _tree_restore(root, tree: str) -> bool:
     """Put the working tree back EXACTLY as the snapshot: its files rewritten (a deleted or
-    edited one included), and every file the snapshot did not have removed."""
-    import subprocess
-    import tempfile
-
+    edited one included), and every file the snapshot did not have removed. The files are
+    written by the run's uid (as the agent's own), never left BOSS-owned."""
+    index = _tree_index(root)
     try:
-        with tempfile.TemporaryDirectory() as d:
-            env = {**os.environ, "GIT_INDEX_FILE": str(Path(d) / "index")}
-            run = lambda cmd: subprocess.run(  # noqa: E731
-                cmd, cwd=str(root), env=env, capture_output=True, text=True, timeout=120)
-            if run(["git", "read-tree", tree]).returncode != 0:
-                return False
-            # The snapshot's files FIRST (its .gitignore included), so what counts as "not in
-            # the snapshot" is read against the snapshot's ignore rules, never the rework's.
-            if run(["git", "checkout-index", "-a", "-f"]).returncode != 0:
-                return False
-            extra = run(["git", "ls-files", "-o", "--exclude-standard", "-z"])
-            for rel in filter(None, extra.stdout.split("\0")):
-                try:
-                    (Path(root) / rel).unlink()
-                except OSError:
-                    pass
-            return True
+        if _tree_git(root, ["read-tree", tree], index).returncode != 0:
+            return False
+        # The snapshot's files FIRST (its .gitignore included), so what counts as "not in
+        # the snapshot" is read against the snapshot's ignore rules, never the rework's.
+        if _tree_git(root, ["checkout-index", "-a", "-f"], index).returncode != 0:
+            return False
+        extra = _tree_git(root, ["ls-files", "-o", "--exclude-standard", "-z"], index)
+        # Removed WITHOUT following a link on the way (workspace_perms.unlink_nofollow): the
+        # run's uid controls this tree, and a listed `d/x` whose `d` it swapped for a link to a
+        # BOSS directory after the listing must never cost BOSS a file there.
+        from . import workspace_perms
+
+        for rel in filter(None, extra.stdout.split("\0")):
+            workspace_perms.unlink_nofollow(root, rel)
+        return True
     except Exception:  # noqa: BLE001
         _log_caught(logger)
         return False
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(index)
 
 
 def _ledger_followup(engine, *, project_id: str, parent_run_id: str, parent_root: str,

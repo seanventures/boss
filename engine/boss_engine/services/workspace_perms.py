@@ -199,6 +199,132 @@ def _open_dir_chain(path: str, *, trusted: Optional[str] = None) -> Optional[int
         return None
 
 
+def trusted_root_for(path: Any) -> Optional[str]:
+    """BOSS's own sandbox root when `path` lies under it (the walk may start there: only BOSS
+    writes it), else None (the walk starts at "/")."""
+    try:
+        from . import sandbox_identity
+
+        root = str(sandbox_identity.run_root())
+    except Exception:  # noqa: BLE001
+        return None
+    target = os.path.abspath(str(path))
+    for spelling in {os.path.abspath(root), os.path.realpath(root)}:
+        if target.startswith(spelling.rstrip("/") + "/"):
+            return root
+    return None
+
+
+def _parent_fd(root: Any, rel: str, *, trusted: Any = None, create_mode: Optional[int] = None):
+    """(fd of the directory holding `rel` inside `root`, its last name), every component reached
+    with O_NOFOLLOW (`_open_dir_chain`); missing directories are made (mode `create_mode`) when
+    asked. None when refused: a symlink on the way, a `..`, or no such directory."""
+    parts = [p for p in str(rel).replace("\\", "/").split("/") if p not in ("", ".")]
+    if not parts or ".." in parts:
+        return None
+    fd = _open_dir_chain(str(root), trusted=str(trusted) if trusted else trusted_root_for(root))
+    if fd is None:
+        return None
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    try:
+        for part in parts[:-1]:
+            try:
+                nxt = os.open(part, flags, dir_fd=fd)
+            except FileNotFoundError:
+                if create_mode is None:
+                    raise
+                os.mkdir(part, create_mode, dir_fd=fd)
+                nxt = os.open(part, flags, dir_fd=fd)
+                os.fchmod(nxt, create_mode)
+            os.close(fd)
+            fd = nxt
+        return fd, parts[-1]
+    except OSError:
+        os.close(fd)
+        return None
+
+
+def read_nofollow(root: Any, rel: str, *, trusted: Any = None) -> Optional[bytes]:
+    """`rel` under `root`, read WITHOUT following a link anywhere on its path. None when absent,
+    not a regular file, or refused. Never raises."""
+    got = _parent_fd(root, rel, trusted=trusted)
+    if got is None:
+        return None
+    dfd, name = got
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                     | getattr(os, "O_CLOEXEC", 0), dir_fd=dfd)
+    except OSError:
+        os.close(dfd)
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+        os.close(dfd)
+
+
+def write_nofollow(root: Any, rel: str, data: bytes, *, mode: int, trusted: Any = None,
+                   dir_mode: Optional[int] = None) -> None:
+    """Write `rel` under `root` as BOSS WITHOUT following a link anywhere on its path: a fresh file
+    (O_CREAT|O_EXCL|O_NOFOLLOW) in the parent reached by `_parent_fd`, then renamed over the name
+    — which replaces a planted symlink itself, never what it points at. Raises OSError when it
+    cannot (a symlink on the way, no parent and no `dir_mode` to make it)."""
+    got = _parent_fd(root, rel, trusted=trusted, create_mode=dir_mode)
+    if got is None:
+        raise PermissionError(f"refused to write {rel}: a link or no such directory on the way")
+    dfd, name = got
+    import secrets as _secrets
+
+    tmp = f".boss-{_secrets.token_hex(6)}.tmp"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                     | getattr(os, "O_CLOEXEC", 0), 0o600, dir_fd=dfd)
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fchmod(fd, mode)
+        finally:
+            os.close(fd)
+        os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp, dir_fd=dfd)
+        raise
+    finally:
+        os.close(dfd)
+
+
+def unlink_nofollow(root: Any, rel: str, *, trusted: Any = None, directory: bool = False) -> bool:
+    """Remove `rel` under `root` (a file, a link itself, or with `directory` an empty directory)
+    WITHOUT following a link on the way to it. True when removed. Never raises."""
+    got = _parent_fd(root, rel, trusted=trusted)
+    if got is None:
+        return False
+    dfd, name = got
+    try:
+        if directory:
+            os.rmdir(name, dir_fd=dfd)
+        else:
+            os.unlink(name, dir_fd=dfd)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(dfd)
+
+
 def repair_git_index(workspace: Any, *, run_uid: Optional[int],
                      trusted_root: Any = None) -> list[str]:
     """`.git/index` (and a left-over `.git/index.lock`) USABLE BY THE RUN'S UID AGAIN, whoever
@@ -250,6 +376,75 @@ def repair_git_index(workspace: Any, *, run_uid: Optional[int],
     if changed:
         log.warning("workspace permissions: %s under %s opened to the run's uid again",
                     ", ".join(changed), workspace)
+    return changed
+
+
+#: .git/objects' own entries the run's uid must be able to add objects into: the 256 fan-out
+#: directories, and pack/ and info/.
+def _object_dir_name(name: str) -> bool:
+    return name in ("pack", "info") or (len(name) == 2 and all(c in "0123456789abcdef" for c in name))
+
+
+def repair_git_objects(workspace: Any, *, run_uid: Optional[int],
+                       trusted_root: Any = None) -> list[str]:
+    """.git/objects (and its fan-out, pack/ and info/ directories) WRITABLE BY THE RUN'S UID AGAIN,
+    whoever created them. Returns the directories changed. Never raises.
+
+    crun_47c3aea2 (Recipe box follow-up, 2026-11-18): BOSS's own tree snapshot (`git add -A` into
+    a temporary index, as the API's uid under umask 022) created 50 of the fan-out directories
+    boss 0755; the run's `git add -A` then failed with "insufficient permission for adding an
+    object to repository database .git/objects". (The snapshot now runs as the run's uid; this
+    is the defence in depth for any other BOSS-uid writer.)
+
+    The same rules as repair_git_index: .git/objects is reached component by component with
+    O_NOFOLLOW from BOSS's own sandbox root; each child is opened O_DIRECTORY|O_NOFOLLOW relative
+    to that fd; only a directory BOSS's uid owns is changed, by fchmod on the open fd (rwx for
+    all, setgid kept). Objects themselves (0444 by design) and anything else are never
+    touched."""
+    if run_uid is None:
+        return []
+    objects_fd = _open_dir_chain(str(Path(workspace) / ".git" / "objects"),
+                                 trusted=str(trusted_root) if trusted_root else None)
+    if objects_fd is None:
+        return []
+    me = os.geteuid()
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    changed: list[str] = []
+
+    def fix(fd: int, label: str) -> None:
+        st = os.fstat(fd)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != me or st.st_uid == run_uid:
+            return
+        mode = stat.S_IMODE(st.st_mode)
+        if mode | 0o777 != mode:
+            os.fchmod(fd, mode | 0o777)
+            changed.append(label)
+
+    try:
+        with contextlib.suppress(OSError):
+            fix(objects_fd, ".git/objects")
+        try:
+            names = os.listdir(objects_fd)
+        except OSError:
+            names = []
+        for name in names:
+            if not _object_dir_name(name):
+                continue
+            try:
+                fd = os.open(name, flags, dir_fd=objects_fd)
+            except OSError:
+                continue  # a symlink (ELOOP), a file, or gone
+            try:
+                fix(fd, f".git/objects/{name}")
+            except OSError:
+                pass
+            finally:
+                os.close(fd)
+    finally:
+        os.close(objects_fd)
+    if changed:
+        log.warning("workspace permissions: %d object director%s under %s opened to the run's "
+                    "uid again", len(changed), "y" if len(changed) == 1 else "ies", workspace)
     return changed
 
 

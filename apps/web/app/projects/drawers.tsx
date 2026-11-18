@@ -8,6 +8,7 @@
  *   env:<key>     an environment's full picture;  deploy:<id>  one deploy
  * Prose lives here, never on the page.
  */
+import { FailedActions } from "./build-failed";
 import { changeHref, changeRef, isLocalChangeUrl, linkTarget, reviewChangeWords } from "../../lib/repo-links";
 import { ChangeLink } from "../change-link";
 import { DiagnosisFlow, WhyLine } from "../../components/stuck-work";
@@ -79,6 +80,19 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
   if (drawer.kind === "needs") {
     const n = ctx.overview.needs_you.find((x) => x.id === drawer.id);
     if (!n) return <Missing what="This item" onClose={onClose} />;
+    // A FAILED BUILD's card has its own answers (Retry is a POST, only when it helps), never a
+    // generic action that would navigate to an API URL (review #218 L4).
+    if (n.kind === "failed") {
+      return (
+        <Drawer title={n.label} icon={<Ico icon={Warning} c="red" />} onClose={onClose} testid="px-drawer-needs" sub={<Tag tone="red">failed</Tag>}
+                footer={<><FailedActions retry={n.retry} fix={n.fix} retryReason={n.retry_reason} seeHref={n.see_href} projectId={ctx.projectId}
+                                         actor={ctx.actor} testid="px-drawer-failed" onDone={() => { ctx.refreshWork(); ctx.refreshOverview?.(); }} />
+                          <AskBox ctx={ctx} about={n.label} /></>}>
+          <p style={{ margin: 0 }} data-testid="px-drawer-failed-why">{n.detail}</p>
+          {n.fix?.detail ? <p className="px-faint" style={{ margin: 0 }}>{n.fix.detail}</p> : null}
+        </Drawer>
+      );
+    }
     return (
       <Drawer title={n.label} icon={<Ico icon={NEED_ICON[n.kind] ?? Warning} c="amber" />} onClose={onClose} testid="px-drawer-needs" sub={<Tag tone="amber">needs you</Tag>}
               footer={<>{n.action?.decision_id ? <DecisionActs ctx={ctx} n={n} />

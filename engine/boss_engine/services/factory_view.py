@@ -1441,6 +1441,7 @@ def build_attention_rows(connection: Any, project_id: str,
                 "role_key": None, "failing": [], "where": f"before {STATION_LABELS[nxt]}",
                 "at": _iso(b.get("updated_at")), "error": b.get("error"),
             })
+    rows += failed_build_rows(connection, project_id)
     by_decision: dict[str, dict[str, Any]] = {}
     ids = [str(d.get("id")) for d in decisions if d.get("id")]
     plan_runs = {str(_j(d.get("recommendation"), {}).get("run_id") or ""): str(d.get("id"))
@@ -1473,6 +1474,24 @@ def build_attention_rows(connection: Any, project_id: str,
     return {"blocked": rows, "by_decision": by_decision}
 
 
+def failed_build_rows(connection: Any, project_id: str) -> list[dict[str, Any]]:
+    """THE PROJECT'S LATEST BUILD, WHEN IT FAILED (build_failure.latest_failure — the same answer
+    the project page and the projects list give), as the Command Center's card. Before this a
+    failed build reached no card: the Command Center, the bell and Live listed only builds
+    blocked at their checks or budget ("git add failed", recipe-box 2026-11-18). A workflow
+    run's failure is left to that run's failed-step card (its Retry moves the run)."""
+    from .build_failure import latest_failure
+
+    failed = latest_failure(connection, project_id)
+    if failed is None or failed["source"] != "code_task":
+        return []
+    return [{"kind": "build_failed", "run_id": failed["build_id"], "app": failed["label"],
+             "role_key": None, "failing": [], "where": failed["word"], "word": failed["word"],
+             "at": failed.get("at"), "error": None, "reason": failed["reason"],
+             "retryable": failed.get("retry") is not None,
+             "retry_reason": failed.get("retry_reason"), "fix": failed.get("fix")}]
+
+
 def attention_build(info: Mapping[str, Any]) -> dict[str, Any]:
     """The `build` an attention item carries (lib/agents-live-board.ts AttentionBuild)."""
     failing = [{"name": g, "label": gate_label(g), "waivable": g not in UNWAIVABLE_GATES,
@@ -1481,8 +1500,13 @@ def attention_build(info: Mapping[str, Any]) -> dict[str, Any]:
                for g in info.get("failing") or []]
     out: dict[str, Any] = {"run_id": info.get("run_id"), "app": info.get("app") or "",
                            "where": info.get("where") or "", "failing": failing,
-                           "retryable": info.get("kind") in ("gate_override", "budget_refused"),
-                           "retry_reason": None}
+                           "retryable": (bool(info.get("retryable"))
+                                         if info.get("kind") == "build_failed"
+                                         else info.get("kind") in ("gate_override",
+                                                                   "budget_refused")),
+                           "retry_reason": info.get("retry_reason") or None}
+    if info.get("fix"):
+        out["fix"] = dict(info["fix"])
     for key in ("pr_url", "preview_url", "plan_url"):
         if info.get(key):
             out[key] = info[key]

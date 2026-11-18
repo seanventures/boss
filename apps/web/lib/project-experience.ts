@@ -77,6 +77,36 @@ export type Node = { key: string; label: string; state: StepState; sub: string; 
   /** When a done node happened (ISO): its sub is that day in the VIEWER's zone, and "{day}" in
    *  its detail is replaced by it (04-02 — the server never writes a day). */
   at?: string };
+/** THE PROJECT'S LATEST BUILD, WHEN IT FAILED (engine work.failed_build): what every surface that
+ *  summarises the project's builds says instead of "Working" — the reason in words, Retry (the
+ *  build's own resume, POST /v1/code-tasks/{id}/retry) and the build's page. */
+export type BuildFailed = {
+  id: string; label: string; build_id: string | null; reason: string; at?: string;
+  /** "Build failed" · "Deploy failed" · "Follow-up failed" (engine build_failure). */
+  word: string;
+  /** Retry only when retrying can help; otherwise `fix` names what a person does and
+   *  `retry_reason` says why there is no Retry. */
+  retry: { run_id: string; href: string } | null; fix: FailureFix | null; retry_reason?: string;
+  see_href: string; work_href?: string;
+  /** On a live project the failure sits beside the stage chip, never in its place. */
+  beside?: boolean;
+};
+/** What a person does about a failure Retry can't fix: words, and where (a console link, or a
+ *  command to run on the BOSS host). */
+export type FailureFix = { label: string; detail: string; href: string; command?: string };
+export const parseFailureFix = (v: unknown): FailureFix | null => {
+  const x = o(v);
+  return s(x.label) ? { label: s(x.label), detail: s(x.detail), href: s(x.href), ...(s(x.command) ? { command: s(x.command) } : {}) } : null;
+};
+export const parseBuildFailed = (v: unknown): BuildFailed | null => {
+  const x = o(v);
+  if (!s(x.id)) return null;
+  const r = o(x.retry);
+  return { id: s(x.id), label: s(x.label, "Build"), build_id: s(x.build_id) || null, reason: s(x.reason, "BOSS didn't record why it stopped."),
+           word: s(x.word, "Build failed"), at: s(x.at) || undefined, retry: s(r.run_id) ? { run_id: s(r.run_id), href: s(r.href) } : null,
+           fix: parseFailureFix(x.fix), ...(s(x.retry_reason) ? { retry_reason: s(x.retry_reason) } : {}),
+           see_href: s(x.see_href), work_href: s(x.work_href) || undefined, beside: x.beside === true };
+};
 export type ProjectCard = {
   id: string; name: string; initials: string; repo: string; stage: Stage; journey: Node[];
   needs_you: number; running: number; health: Health; live_url: string; captain: Agent | null;
@@ -85,6 +115,8 @@ export type ProjectCard = {
   on_subscription?: boolean; list_week?: number | null;
   /** Screen 02 (cards.extras): the ring's number, the two status lines, the live crew. */
   status_label: string; onboarding_active: boolean; start_onboarding: Accept | null; archived: boolean;
+  /** Its latest build failed (engine overview.latest_failed): the card says so in red. */
+  build_failed?: BuildFailed | null;
   uptime_pct: number | null; onboarding_progress: [number, number] | null; lines: string[]; line_tone: string;
   crew: Agent[]; merged: number; building: number; week_cap_usd: number | null;
   /** 02-05 the agents acting right now (the Running tile's working faces). */
@@ -93,7 +125,11 @@ export type ProjectCard = {
 export type ProjectsSummary = { items: ProjectCard[]; week_cap_usd: number | null };
 export type Repo = { full_name: string; branch: string; access: { read: boolean; write: boolean; pr: boolean }; external_url: string };
 export type NeedsYou = {
-  id: string; kind: "merge" | "deploy" | "plan" | "question" | "setup"; label: string; detail: string; icon?: string;
+  /** `failed`: the latest build failed (work.failed_card) — red, Retry and See what happened. */
+  id: string; kind: "merge" | "deploy" | "plan" | "question" | "setup" | "failed"; label: string; detail: string; icon?: string;
+  /** A `failed` card's resume (the build's own retry, only when it can help), its fix when
+   *  Retry can't, why there is no Retry, and the build's page. */
+  retry?: { run_id: string; href: string } | null; see_href?: string; fix?: FailureFix | null; retry_reason?: string;
   mini: { label: string; state: StepState }[]; action: { label: string; href: string; decision_id: string } | null;
   /** The piece of work it belongs to (a merge's build; the Onboarding row for its "only you"
    *  items), the PR on GitHub, and when it was asked (the drawer). */
@@ -245,7 +281,9 @@ export type Overview = {
     /** Why it is not healthy, in words (health.state_of): "SLO breached: 98.13% up, target 99.5%". */
     health_reason?: string;
     /** The deploy moving now, or the last one that failed ("Deploying · 2/7"). */
-    deploy?: DeployChip | null };
+    deploy?: DeployChip | null;
+    /** The latest build failed: the header chip is red "Build failed" with its reason. */
+    build_failed?: BuildFailed | null };
   journey: Node[]; needs_you: NeedsYou[];
   /** Work waiting for GitHub (BOSSAPP-922): an FYI under Needs you, never a card to act on and
    *  never counted as one — BOSS pushes it on its own. */
@@ -259,7 +297,9 @@ export type Overview = {
   still_answerable?: StillAnswerable | null;
   tiles: {
     open_work: { count: number; by_state: Record<string, number>; href: string } | null;
-    running: { count: number; current: { label: string; progress: [number, number]; agent: Agent | null; sub?: string; id?: string } | null; href: string } | null;
+    running: { count: number; current: { label: string; progress: [number, number]; agent: Agent | null; sub?: string; id?: string } | null; href: string;
+      /** Nothing running and the latest build failed: the tile names it, never "Nothing running". */
+      failed?: { id: string; label: string; reason: string; href: string; word?: string } | null } | null;
     staging: { health: Health; uptime_pct: number | null; p95_ms: number | null; series: number[]; href: string; p95_source?: string; label?: string;
                health_reason?: string; window?: string } | null;
     cost_week: { usd: number; delta_pct: number | null; cap_usd: number | null; series: number[]; href: string;
@@ -501,6 +541,7 @@ export const parseCard = (v: unknown): ProjectCard => {
     cost_week: nn(x.cost_week) ?? nn(o(x.cost_week).usd), series: nums(x.series).length ? nums(x.series) : nums(o(x.cost_week).series),
     on_subscription: x.on_subscription === true, list_week: nn(x.list_week),
     status_label: s(x.status_label), onboarding_active: x.onboarding_active === true, archived: x.archived === true,
+    build_failed: parseBuildFailed(x.build_failed),
     start_onboarding: parseAccept(x.start_onboarding),
     uptime_pct: nn(x.uptime_pct),
     onboarding_progress: Array.isArray(x.onboarding_progress) && x.onboarding_progress.length === 2
@@ -688,7 +729,7 @@ export const parseOverview = (v: unknown): Overview => {
     project: { id: s(p.id), name, initials: s(p.initials) || initialsOf(name), stage: oneOf(p.stage, STAGES, "onboarding"),
                repos: a(p.repos).map(parseRepo), live_url: s(p.live_url), status_label: s(p.status_label),
                health: oneOf(p.health ?? st.health, HEALTHS, "unknown"), health_reason: s(p.health_reason),
-               deploy: parseDeployChip(p.deploy) },
+               deploy: parseDeployChip(p.deploy), build_failed: parseBuildFailed(p.build_failed) },
     journey: a(x.journey).map(parseNode),
     roadmap_count: nn(x.roadmap_count),
     still_answerable: parseStillAnswerable(x.still_answerable),
@@ -698,7 +739,10 @@ export const parseOverview = (v: unknown): Overview => {
     }).filter((g) => g.id),
     needs_you: a(x.needs_you).map((it) => {
       const y = o(it); const act = o(y.action);
-      return { id: s(y.id), kind: oneOf(y.kind, ["merge", "deploy", "plan", "question", "setup"] as const, "question"), label: s(y.label),
+      const rt = o(y.retry);
+      return { id: s(y.id), kind: oneOf(y.kind, ["merge", "deploy", "plan", "question", "setup", "failed"] as const, "question"), label: s(y.label),
+               ...(s(rt.run_id) ? { retry: { run_id: s(rt.run_id), href: s(rt.href) } } : {}), ...(s(y.see_href) ? { see_href: s(y.see_href) } : {}),
+               ...(parseFailureFix(y.fix) ? { fix: parseFailureFix(y.fix) } : {}), ...(s(y.retry_reason) ? { retry_reason: s(y.retry_reason) } : {}),
                icon: s(y.icon), work_id: s(y.work_id), work_label: s(y.work_label), external_url: s(y.external_url), created_at: s(y.created_at),
                detail: s(y.detail), mini: mini(y.mini), release: parseRelease(y.release),
                diagnosis: parseDiagnosis(y.diagnosis),
@@ -710,6 +754,7 @@ export const parseOverview = (v: unknown): Overview => {
     tiles: {
       open_work: Object.keys(ow).length ? { count: n(ow.count), by_state: byState, href: s(ow.href) } : null,
       running: Object.keys(rn).length ? { count: n(rn.count), href: s(rn.href),
+        failed: s(o(rn.failed).id) ? { id: s(o(rn.failed).id), label: s(o(rn.failed).label), reason: s(o(rn.failed).reason), href: s(o(rn.failed).href), word: s(o(rn.failed).word) || undefined } : null,
         current: Object.keys(cur).length ? { label: s(cur.label), progress: [prog[0] ?? 0, prog[1] ?? 0], agent: parseAgent(cur.agent), sub: s(cur.sub), id: s(cur.id) } : null } : null,
       staging: Object.keys(st).length ? { health: oneOf(st.health, HEALTHS, "unknown"), uptime_pct: nn(st.uptime_pct), p95_ms: nn(st.p95_ms), p95_source: s(st.p95_source), label: s(st.label),
                                           health_reason: s(st.health_reason), window: s(st.window),
