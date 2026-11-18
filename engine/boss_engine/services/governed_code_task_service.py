@@ -10613,10 +10613,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # slice completed, skips the deferred-findings follow-up (spawned only after a
             # PR opens), and lets advance_decomposition build the next slice on unresolved
             # security/test failures. Treat them like open_pr=false for gate disposition.
-            _didx, _dtot = fctx.get("decomposition_index"), fctx.get("decomposition_total")
-            _nonfinal_slice = (isinstance(_didx, int) and isinstance(_dtot, int)
-                               and _dtot > 1 and _didx < _dtot)
-            _can_ship_pr = spec.get("open_pr", True) is not False and not _nonfinal_slice
+            from . import pull_request_owed as _pr_owed
+
+            _nonfinal_slice = _pr_owed.nonfinal_slice(fctx) is not None
+            # THE ONE DECISION (pull_request_owed.owed), as the delivery step asks it below.
+            _can_ship_pr = _pr_owed.owed(spec, fctx) is None
             # WHAT IS STILL A BLOCKER after the warm round: it blocks on every profile.
             _blockers = unresolved_blockers(
                 failing, review_summary=r3.get("summary", ""), security_verdict=sec_verdict,
@@ -11213,10 +11214,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # for one website. So only the FINAL slice opens a PR (the whole accumulated site, one
         # approval); earlier slices complete silently on the shared branch and advance the chain.
         # Recompute for the happy path (gate-failure branch may not have run).
-        _didx, _dtot = fctx.get("decomposition_index"), fctx.get("decomposition_total")
-        _nonfinal_slice = (isinstance(_didx, int) and isinstance(_dtot, int)
-                           and _dtot > 1 and _didx < _dtot)
-        if spec.get("open_pr", True) is False or _nonfinal_slice:
+        from . import pull_request_owed as _pr_owed
+
+        _sliced = _pr_owed.nonfinal_slice(fctx)
+        _nonfinal_slice = _sliced is not None
+        _didx, _dtot = _sliced if _sliced else (None, None)
+        # THE ONE DECISION, and its reason written ON THE RUN in words: a completed build with
+        # no PR never ends silent (crun_5b11643d, 2026-11-18: completed, no PR, no card, no why).
+        _no_pr = _pr_owed.owed(spec, fctx, branch=work_branch)
+        if _no_pr is not None:
             # Eval/bake-off runs (open_pr=false) measure the gate not the delivery; a non-final
             # decomposition slice defers its PR to the final slice. Either way: record the verified
             # outcome, keep the work on the shared branch, and let the chain advance.
@@ -11233,13 +11239,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                      if _nonfinal_slice else "gate passed; PR suppressed (open_pr=false)"),
                     run_id=run_id,
                 )
-                if not _fenced_status("completed", "phase='done'"):
+                if not _fenced_status("completed", "phase='done', " + _pr_owed.record_clause(),
+                                      {"no_pr": _pr_owed.record_value(_no_pr)}):
                     emit_event(c, project_id, "code_task.terminal_write_refused", "boss",
                                "code_task_run", run_id, {"attempted": "completed_no_pr"})
                 emit_event(c, project_id, "code_task.completed_no_pr", "boss",
                            "code_task_run", run_id,
                            {"quality_gate_id": qg_id,
-                            "reason": "decomposition_slice" if _nonfinal_slice else "open_pr_false",
+                            "reason": _no_pr["reason"], "words": _no_pr["words"],
                             "slice": f"{_didx}/{_dtot}" if _nonfinal_slice else None})
             plane_sync.on_event(engine, settings, run_id, "code_task.completed_no_pr")  # P2
             return {"status": "completed", "done": True, "quality_gate_id": qg_id,
