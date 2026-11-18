@@ -11,7 +11,15 @@ fingerprints a reviewer's live tree) must not execute anything the tree names:
   call, which git treats as "no filter";
 * no system or global config, no terminal prompt.
 
-One definition, used by sandbox._git_once and readonly_guard._git.
+DEFENCE IN DEPTH, NOT THE BOUNDARY. A tree's owner can rewrite its config between the read that
+lists its filters and the git that would run them, and a submodule brings config of its own, so
+no list of overrides closes this while the git runs as BOSS. The boundary is WHO runs it: git on
+a sandboxed run's tree runs AS THE RUN'S UID (sandbox._git_once after provisioning, the warm
+reuse, readonly_guard._git). These options stay on that git anyway, and are what an unisolated
+machine (no sandbox uid: the agent is BOSS's own uid there) has.
+
+NO_TREE_CODE is used by sandbox._git_once and readonly_guard._git; filter_overrides by
+readonly_guard._git when it runs as BOSS.
 """
 from __future__ import annotations
 

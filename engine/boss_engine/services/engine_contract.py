@@ -592,7 +592,7 @@ class ContractedAgent:
             if changed:
                 log.warning("%s: %s", self.engine, readonly_guard.words(changed))
                 result["live_tree_changed"] = changed
-                if changed["unexplained"] or changed["head_moved"]:
+                if changed["unexplained"] or changed["head_moved"] or changed.get("unverifiable"):
                     result["verdict_suspect"] = readonly_guard.words(changed)
         sid = result.get("session_id")
         if not sid or not caps.resume:

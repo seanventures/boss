@@ -165,14 +165,31 @@ def normalize(root: Any, *, readable_by_boss: bool = True) -> int:
 _INDEX_NAMES = ("index", "index.lock")
 
 
-def _open_dir_chain(path: str) -> Optional[int]:
-    """An O_DIRECTORY fd for `path`, every component opened from "/" with O_NOFOLLOW relative to
-    the one before: a symlink ANYWHERE on the way (a run's uid swapping its workspace, or .git,
-    for a link to a BOSS directory) refuses, never follows. None when refused."""
+def _open_dir_chain(path: str, *, trusted: Optional[str] = None) -> Optional[int]:
+    """An O_DIRECTORY fd for `path`, every component opened with O_NOFOLLOW relative to the one
+    before: a symlink ANYWHERE on the way (a run's uid swapping its workspace, or .git, for a
+    link to a BOSS directory) refuses, never follows. None when refused.
+
+    The walk starts at `trusted` (BOSS's own sandbox root, which only BOSS can write) resolved
+    with its realpath when `path` lies under it — so a symlinked ancestor of that root (macOS
+    /var -> /private/var, a data mount) is fine — and at "/" otherwise."""
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-    fd = os.open("/", flags)
+    target = os.path.abspath(path)
+    start, rest = "/", Path(target).parts[1:]
+    if trusted:
+        for spelling in {os.path.abspath(trusted), os.path.realpath(trusted)}:
+            if target.startswith(spelling.rstrip("/") + "/"):
+                start = os.path.realpath(trusted)
+                rest = Path(os.path.relpath(target, spelling)).parts
+                break
     try:
-        for part in Path(os.path.abspath(path)).parts[1:]:
+        fd = os.open(start, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        return None
+    try:
+        for part in rest:
+            if part in ("..", "."):
+                raise OSError("no relative components")
             nxt = os.open(part, flags, dir_fd=fd)
             os.close(fd)
             fd = nxt
@@ -182,7 +199,8 @@ def _open_dir_chain(path: str) -> Optional[int]:
         return None
 
 
-def repair_git_index(workspace: Any, *, run_uid: Optional[int]) -> list[str]:
+def repair_git_index(workspace: Any, *, run_uid: Optional[int],
+                     trusted_root: Any = None) -> list[str]:
     """`.git/index` (and a left-over `.git/index.lock`) USABLE BY THE RUN'S UID AGAIN, whoever
     last wrote it. Returns the entries changed. Never raises.
 
@@ -200,7 +218,8 @@ def repair_git_index(workspace: Any, *, run_uid: Optional[int]) -> list[str]:
     changed, by fchmod on the open fd. Nothing else in .git is ever touched."""
     if run_uid is None:
         return []
-    git_fd = _open_dir_chain(str(Path(workspace) / ".git"))
+    git_fd = _open_dir_chain(str(Path(workspace) / ".git"),
+                             trusted=str(trusted_root) if trusted_root else None)
     if git_fd is None:
         return []
     me = os.geteuid()

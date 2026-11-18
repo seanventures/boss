@@ -65,7 +65,7 @@ def _repo(tmp_path, monkeypatch, *, index_ok=None):
     _plain_git(tmp_path, "commit", "-qm", "base")
     base = _plain_git(tmp_path, "rev-parse", "HEAD").stdout.strip()
 
-    ident = SimpleNamespace(uid=os.geteuid() + 1)       # never BOSS's own uid
+    ident = SimpleNamespace(uid=os.geteuid() + 1, run_dir=tmp_path)  # never BOSS's own uid
     monkeypatch.setattr(sandbox_identity, "for_owner", lambda owner: ident)
     calls = []
 
@@ -255,6 +255,7 @@ def test_the_swap_race_between_listing_and_open_is_closed(tmp_path, monkeypatch)
 # ── the read-only guard: never writes, never runs tree code ────────────────────────────────
 
 def _committed(tmp_path) -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     _plain_git(tmp_path, "init", "-q")
     _plain_git(tmp_path, "config", "user.email", "t@example.com")
     _plain_git(tmp_path, "config", "user.name", "t")
@@ -319,6 +320,159 @@ def test_the_read_only_guard_never_runs_a_planted_filter(tmp_path):
     assert not marker.exists()
     _plain_git(tmp_path, "status", "--porcelain")
     assert marker.exists()
+
+
+# ── the guard's git runs as the run's uid, pinned to the tree ──────────────────────────────
+
+def _record_guard_git(monkeypatch, *, ident):
+    """Bind `ident` as the run identity the guard sees; record every git it spawns (and run it,
+    as the run's uid would)."""
+    monkeypatch.setattr(sandbox_identity, "for_owner", lambda owner: ident)
+    seen = []
+
+    def run(argv, *, sandboxed=None, **kw):
+        seen.append((list(argv), sandboxed, dict(kw.get("env") or {})))
+        kw.pop("owner", None)
+        return subprocess.run(argv, **kw)
+
+    monkeypatch.setattr(owned_process, "run", run)
+    return seen
+
+
+def test_a_sandboxed_runs_guard_git_runs_as_the_run_uid_pinned_to_its_tree(tmp_path, monkeypatch):
+    tracked = _committed(tmp_path)
+    seen = _record_guard_git(monkeypatch, ident=SimpleNamespace(uid=OTHER, run_dir=tmp_path))
+    tracked.write_text("changed\n")
+
+    snap = readonly_guard.snapshot(tmp_path / ".")
+
+    assert snap is not None and "recipes.txt" in snap["prints"] and "unverifiable" not in snap
+    assert seen and all(sandboxed is True for _, sandboxed, _ in seen)    # never as BOSS
+    top = os.path.realpath(tmp_path)
+    assert all(env["GIT_DIR"] == f"{top}/.git" and env["GIT_WORK_TREE"] == top
+               and env["GIT_OPTIONAL_LOCKS"] == "0" for _, _, env in seen)
+
+
+def test_a_run_directory_with_no_identity_is_unverifiable_and_runs_no_git(tmp_path, monkeypatch):
+    _committed(tmp_path)
+    seen = _record_guard_git(monkeypatch, ident=None)
+    monkeypatch.setattr(sandbox_identity, "run_root", lambda: tmp_path.parent)
+
+    snap = readonly_guard.snapshot(tmp_path)
+
+    assert "no run identity" in snap["unverifiable"]
+    assert seen == []
+    report = readonly_guard.compare(snap)
+    assert report["unverifiable"] and "could not be checked" in readonly_guard.words(report)
+
+
+def test_core_worktree_cannot_blind_the_guard(tmp_path):
+    """The run's uid sets core.worktree to a directory that is not a repository: the guard used
+    to follow it, fail, return None — and None read as "no change"."""
+    tracked = _committed(tmp_path / "ws")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    before = readonly_guard.snapshot(tmp_path / "ws")
+    _plain_git(tmp_path / "ws", "config", "core.worktree", str(elsewhere))
+    tracked.write_text("the reviewer wrote this\n")
+
+    report = readonly_guard.compare(before)
+
+    assert report is not None and report["paths"] == ["recipes.txt"]
+    assert report["unexplained"] == ["recipes.txt"]
+
+
+@pytest.mark.parametrize("how", ["symlink", "gitfile"])
+def test_a_git_dir_that_is_not_a_real_directory_is_unverifiable(tmp_path, how):
+    _committed(tmp_path / "ws")
+    before = readonly_guard.snapshot(tmp_path / "ws")
+    git = tmp_path / "ws" / ".git"
+    os.rename(git, tmp_path / "real.git")
+    if how == "symlink":
+        os.symlink(tmp_path / "real.git", git)
+    else:
+        git.write_text(f"gitdir: {tmp_path / 'real.git'}\n")
+
+    report = readonly_guard.compare(before)
+
+    assert report is not None and "not a real directory" in report["unverifiable"]
+
+
+def test_a_repo_that_stops_being_one_is_unverifiable_not_unchanged(tmp_path):
+    _committed(tmp_path / "ws")
+    before = readonly_guard.snapshot(tmp_path / "ws")
+    import shutil
+    shutil.rmtree(tmp_path / "ws" / ".git")
+    assert readonly_guard.compare(before)["unverifiable"]
+
+
+def test_a_submodules_own_filter_never_runs_as_boss(tmp_path):
+    tracked = _committed(tmp_path / "ws")
+    sub = tmp_path / "ws" / "sub"
+    sub.mkdir()
+    _committed(sub)
+    marker = tmp_path / "PWNED"
+    (sub / ".gitattributes").write_text("*.txt filter=z\n")
+    _planted(sub, "filter.z.clean", marker)
+    _plain_git(tmp_path / "ws", "add", "sub")                       # a gitlink
+    _plain_git(tmp_path / "ws", "commit", "-qm", "sub")
+    later = (sub / ".git" / "index").stat().st_mtime + 10
+    os.utime(sub / "recipes.txt", (later, later))
+    tracked.write_text("y\n")
+
+    snap = readonly_guard.snapshot(tmp_path / "ws")
+
+    assert "recipes.txt" in snap["prints"]
+    assert not marker.exists()
+
+
+def test_the_guard_never_reads_through_a_link_the_run_planted(tmp_path):
+    tracked = _committed(tmp_path / "ws")
+    secret = tmp_path / "boss-secret"
+    secret.write_text("KEY")
+    tracked.unlink()
+    os.symlink(secret, tracked)                                     # a dirty "file"
+
+    snap = readonly_guard.snapshot(tmp_path / "ws")
+
+    assert snap["prints"]["recipes.txt"] == f"link:{secret}"
+
+
+# ── a warm-reused checkout: every git as the run's uid ─────────────────────────────────────
+
+def test_a_warm_reused_checkouts_git_runs_as_the_run_uid(tmp_path, monkeypatch):
+    """The lineage's previous round wrote this .git: a clean filter, an ext:: remote. BOSS's git
+    on it used to run as BOSS (`_sandbox` was never set on the warm path)."""
+    origin = tmp_path / "origin.git"
+    seed = tmp_path / "seed"
+    _committed(seed)
+    _plain_git(tmp_path, "clone", "-q", "--bare", str(seed), str(origin))
+    warm = tmp_path / "warm"
+    _plain_git(tmp_path, "clone", "-q", str(origin), str(warm))
+    marker = tmp_path / "PWNED"
+    (warm / ".gitattributes").write_text("*.txt filter=evil\n")
+    _planted(warm, "filter.evil.clean", marker)
+    _plain_git(warm, "config", "protocol.ext.allow", "always")
+
+    ident = SimpleNamespace(uid=OTHER, run_dir=tmp_path)
+    monkeypatch.setattr(sandbox_identity, "current", lambda: ident)
+    monkeypatch.setattr(sandbox_identity, "for_owner", lambda owner: ident)
+    monkeypatch.setattr(owned_process, "current_owner", lambda: "run-owner")
+    seen = []
+
+    def run(argv, *, sandboxed=None, owner=None, umask=None, **kw):
+        seen.append((argv[3:5], sandboxed, owner))
+        return subprocess.run(argv, **kw)
+
+    monkeypatch.setattr(owned_process, "run", run)
+    box = sandbox.EphemeralSandbox(SimpleNamespace(sandbox_validation_timeout_seconds=60,
+                                                   sandbox_validation_output_limit_chars=10000),
+                                   task_id="crun_warm")
+    box._provision_warm("o", "r", base_branch="main", work_branch="main", token=None,
+                        repo_host="local", egress=None, warm_dir=warm)
+    box.diff_summary()
+
+    assert seen and all(sb is True and owner == "run-owner" for _, sb, owner in seen), seen
 
 
 # ── no process-wide umask ──────────────────────────────────────────────────────────────────

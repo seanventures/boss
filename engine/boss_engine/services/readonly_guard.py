@@ -14,7 +14,8 @@ result; a change no concurrent verify explains (`explained`) marks the seat's ve
 from __future__ import annotations
 
 import hashlib
-import subprocess
+import os
+import stat
 from pathlib import Path
 from typing import Optional
 
@@ -41,41 +42,143 @@ def explained(path: str) -> bool:
         or parts[-1].endswith((".tsbuildinfo", ".pyc"))
 
 
-def _git(root: Path, *args: str) -> Optional[str]:
-    """Git as BOSS's uid on a tree a run's uid controls: it READS and never writes, and never runs
-    what the tree configured.
+class _Unverifiable(Exception):
+    """The guard could not fingerprint a tree that IS a repository: never "unchanged"."""
 
-    * WATCHING NEVER WRITES (GIT_OPTIONAL_LOCKS=0): a plain `git status` refreshes and REWRITES
-      .git/index as BOSS's uid. crun_6883ec7c's index came back boss 0600 (the backup's umask)
-      and the run's own `git add -A` could no longer open it.
-    * NO TREE CODE (git_safety, as sandbox._git_once since BOSSAPP-1325): `.git/config` is the
-      run's to write, and `git status` runs core.fsmonitor and any filter driver's clean command."""
+
+def _top(cwd: Path) -> Optional[Path]:
+    """The repository the seat stands in: the nearest ancestor of realpath(cwd) with a `.git`
+    entry, or None outside any (no git tree: nothing to guard)."""
+    try:
+        here = Path(os.path.realpath(cwd))
+    except OSError:
+        return None
+    for candidate in (here, *here.parents):
+        try:
+            os.lstat(candidate / ".git")
+            return candidate
+        except OSError:
+            continue
+    return None
+
+
+def _runner(top: Path):
+    """Who runs the guard's git: THE RUN'S UID when the tree is a sandboxed run's (owned_process
+    wraps the spawn through boss-sandbox-exec, as sandbox._git_once does), BOSS itself only when
+    no sandbox uid exists anywhere (a developer's machine: the agent is BOSS's uid too).
+    Returns (sandboxed, why-not) — a run directory with no identity bound is unverifiable, never
+    a reason to run the tree's git with BOSS's authority."""
+    from . import owned_process, sandbox_identity
+
+    ident = sandbox_identity.for_owner(owned_process.current_owner())
+    if ident is not None:
+        return True, None
+    try:
+        root = Path(os.path.realpath(sandbox_identity.run_root()))
+        Path(top).relative_to(root)
+        return None, "the tree is a sandboxed run's and no run identity is bound to check it"
+    except (ValueError, OSError):
+        return False, None
+
+
+def _git(top: Path, *args: str, sandboxed: bool) -> str:
+    """One READ-ONLY git on the tree at `top`, pinned to it.
+
+    * AS THE RUN'S UID (`sandboxed`): `.git/config` is the run's to write, and `git status` runs
+      core.fsmonitor, filter drivers (its own and its submodules'), and follows core.worktree.
+      A git with the run's authority may: it has nothing the workload lacks. The git_safety
+      overrides stay on as defence in depth (and are all there is on an unisolated machine,
+      where the agent is BOSS's own uid).
+    * PINNED: GIT_DIR=<top>/.git (a real directory, checked by the caller) and
+      GIT_WORK_TREE=<top>, so core.worktree or a gitfile cannot point the guard elsewhere.
+    * WATCHING NEVER WRITES (GIT_OPTIONAL_LOCKS=0): a plain `git status` REWRITES .git/index.
+      crun_6883ec7c's came back boss 0600 (the backup's umask) and the run's own `git add -A`
+      could no longer open it.
+    Raises _Unverifiable on any failure."""
+    from . import owned_process
     from .git_safety import NO_TREE_CODE, filter_overrides, isolated_env
 
-    env = {**isolated_env(), "GIT_OPTIONAL_LOCKS": "0"}
+    env = {**isolated_env({"PATH": os.environ.get("PATH", os.defpath), "LANG": "C.UTF-8"}),
+           "GIT_OPTIONAL_LOCKS": "0", "GIT_DIR": str(top / ".git"), "GIT_WORK_TREE": str(top)}
+    extra: list[str] = []
+    if not sandboxed:
+        extra = filter_overrides(top, env=env)
+    argv = ["git", *NO_TREE_CODE, *extra, *args]
+    if not sandboxed and args[:1] == ("status",):
+        argv.append("--ignore-submodules=dirty")   # a submodule's own filters never run as BOSS
     try:
-        filters = filter_overrides(Path(root), env=env) if args[:1] != ("config",) else []
-        out = subprocess.run(["git", *NO_TREE_CODE, *filters, *args], cwd=str(root),
-                             capture_output=True, text=True, timeout=60, env=env)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return out.stdout if out.returncode == 0 else None
+        done = owned_process.run(argv, cwd=str(top), capture_output=True, text=True, timeout=60,
+                                 env=env, sandboxed=bool(sandboxed))
+    except Exception as exc:  # noqa: BLE001
+        raise _Unverifiable(f"git {args[0]} could not run: {type(exc).__name__}") from exc
+    if done.returncode != 0:
+        raise _Unverifiable(f"git {args[0]} failed: {(done.stderr or '').strip()[:200]}")
+    return done.stdout
 
 
 def is_repo(path: Path) -> bool:
-    return _git(Path(path), "rev-parse", "--show-toplevel") is not None
+    """The seat stands in a git tree (a `.git` entry above it): it is judged on a copy."""
+    return _top(Path(path)) is not None
+
+
+def _fingerprint(top_fd: int, rel: str) -> str:
+    """sha256 of `rel` read WITHOUT following a link anywhere on its path (relative to an fd of
+    the top, every component O_NOFOLLOW): a run's uid cannot point BOSS at a file of its own.
+    A symlink is fingerprinted by its target text."""
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    parts = [p for p in rel.split("/") if p]
+    fd = os.dup(top_fd)
+    try:
+        for part in parts[:-1]:
+            nxt = os.open(part, flags | os.O_DIRECTORY, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+        st = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
+        if stat.S_ISLNK(st.st_mode):
+            return "link:" + os.readlink(parts[-1], dir_fd=fd)
+        if not stat.S_ISREG(st.st_mode):
+            return "special"
+        if st.st_size > MAX_BYTES:
+            return f"size:{st.st_size}"
+        ffd = os.open(parts[-1], flags | os.O_NONBLOCK, dir_fd=fd)
+        try:
+            digest = hashlib.sha256()
+            while True:
+                chunk = os.read(ffd, 1 << 20)
+                if not chunk:
+                    break
+                digest.update(chunk)
+            return digest.hexdigest()
+        finally:
+            os.close(ffd)
+    finally:
+        os.close(fd)
 
 
 def snapshot(cwd: Path) -> Optional[dict]:
-    """HEAD and a fingerprint of every dirty or untracked file; None outside a git tree."""
-    top = _git(Path(cwd), "rev-parse", "--show-toplevel")
-    head = _git(Path(cwd), "rev-parse", "HEAD")
+    """HEAD and a fingerprint of every dirty or untracked file. None ONLY outside a git tree; a
+    repository the guard cannot read comes back {"unverifiable": why} — never "nothing to see"."""
+    top = _top(Path(cwd))
     if top is None:
         return None
-    root = Path(top.strip())
-    listing = _git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
-    if listing is None:
-        return None
+    try:
+        git_dir = os.lstat(top / ".git")
+        if not stat.S_ISDIR(git_dir.st_mode):
+            raise _Unverifiable(".git is not a real directory (a symlink or a gitfile)")
+        sandboxed, why = _runner(top)
+        if sandboxed is None:
+            raise _Unverifiable(why)
+        shown = _git(top, "rev-parse", "--show-toplevel", sandboxed=sandboxed).strip()
+        if os.path.realpath(shown) != str(top):
+            raise _Unverifiable(f"git names {shown} as the tree, not {top}")
+        try:
+            head = _git(top, "rev-parse", "HEAD", sandboxed=sandboxed).strip()
+        except _Unverifiable:
+            head = ""                                   # a repository with no commit yet
+        listing = _git(top, "status", "--porcelain=v1", "-z", "--untracked-files=all",
+                       sandboxed=sandboxed)
+    except _Unverifiable as exc:
+        return {"root": str(top), "unverifiable": str(exc)}
     paths, parts = [], listing.split("\0")
     skip = False
     for entry in parts:
@@ -87,31 +190,39 @@ def snapshot(cwd: Path) -> Optional[dict]:
             skip = entry[0] in ("R", "C")     # a rename's source is not an entry of its own
     prints: dict[str, str] = {}
     overflow = 0
-    for rel in paths:
-        if len(prints) >= MAX_FILES:
-            overflow += 1
-            continue
-        try:
-            file = root / rel
-            if file.is_file() and file.stat().st_size > MAX_BYTES:
-                prints[rel] = f"size:{file.stat().st_size}"
-            else:
-                prints[rel] = hashlib.sha256(file.read_bytes()).hexdigest()
-        except OSError:
-            prints[rel] = "absent"
-    return {"root": str(root), "head": (head or "").strip(), "prints": prints,
-            "overflow": overflow}
+    try:
+        top_fd = os.open(str(top), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        return {"root": str(top), "unverifiable": f"the tree could not be opened: {exc}"}
+    try:
+        for rel in paths:
+            if len(prints) >= MAX_FILES:
+                overflow += 1
+                continue
+            try:
+                prints[rel] = _fingerprint(top_fd, rel.rstrip("/"))
+            except OSError:
+                prints[rel] = "absent"
+    finally:
+        os.close(top_fd)
+    return {"root": str(top), "head": head, "prints": prints, "overflow": overflow}
 
 
 def compare(before: Optional[dict]) -> Optional[dict]:
-    """What changed in the live tree since `before`, or None when nothing did.
+    """What changed in the live tree since `before`, or None when nothing did (or there was no
+    git tree to guard). A tree the guard could not read, before or after, is UNVERIFIABLE:
+    reported, and the seat's verdict marked suspect — never read as "unchanged".
 
-    {"paths": [...], "unexplained": [...], "head_moved": bool, "overflow": int}"""
+    {"paths": [...], "unexplained": [...], "head_moved": bool, "overflow": int,
+     "unverifiable": str (only when it is)}"""
     if not before:
         return None
     after = snapshot(Path(before["root"]))
-    if after is None:
-        return None
+    problem = before.get("unverifiable") or (
+        "the tree is no longer a git repository" if after is None else after.get("unverifiable"))
+    if problem:
+        return {"paths": [], "unexplained": [], "head_moved": False, "overflow": 0,
+                "unverifiable": problem}
     changed = sorted(p for p in set(before["prints"]) | set(after["prints"])
                      if before["prints"].get(p) != after["prints"].get(p))
     moved = bool(before["head"]) and after["head"] != before["head"]
@@ -124,6 +235,8 @@ def compare(before: Optional[dict]) -> Optional[dict]:
 
 def words(report: dict) -> str:
     bits = []
+    if report.get("unverifiable"):
+        bits.append("the live tree could not be checked during review: " + report["unverifiable"])
     if report.get("paths"):
         bits.append("files changed in the live tree during review: "
                     + ", ".join(report["paths"][:8]))

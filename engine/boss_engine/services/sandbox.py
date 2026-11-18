@@ -563,6 +563,17 @@ class EphemeralSandbox:
         from .repo_host import git_access
         from .resource_ledger import claim_dir
 
+        from .sandbox_identity import current, mode
+
+        # EVERY GIT HERE RUNS AS THE RUN'S UID, as on a fresh clone. This checkout's .git was
+        # written by the lineage's previous round: a git with BOSS's authority on it (it ran as
+        # BOSS: `_sandbox` was never set here) executed whatever that round configured — a
+        # filter's clean command on `add -A`, an `ext::` remote on `fetch`. Lineage reuse is
+        # keyed on the same uid (lineage_sandbox.claim), so this is the uid that wrote it.
+        self._sandbox = current()
+        self._git_owner = owned_process.current_owner()
+        if self._sandbox is None and mode() == "required":
+            raise SandboxError("sandbox isolation requires an active run identity")
         self.path = warm_dir
         self._owns_dir = False  # the lineage, not this run, owns this directory's lifetime
         self.base_branch = base_branch
@@ -1098,7 +1109,10 @@ class EphemeralSandbox:
         run_uid = getattr(isolated, "uid", None)
         from . import workspace_perms
 
-        changed = workspace_perms.repair_git_index(self.path, run_uid=run_uid)
+        # The walk starts at BOSS's own sandbox root (the run directory's parent, BOSS-owned).
+        trusted = isolated.run_dir.parent if isolated is not None else None
+        changed = workspace_perms.repair_git_index(self.path, run_uid=run_uid,
+                                                   trusted_root=trusted)
         if changed:
             self.git_dir_repaired = sorted(set(getattr(self, "git_dir_repaired", []) + changed))
         return bool(changed)
