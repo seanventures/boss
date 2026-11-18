@@ -41,6 +41,16 @@ def client():
     return TestClient(main.app, raise_server_exceptions=False)
 
 
+@pytest.fixture(autouse=True)
+def _local_repos_in_tmp(tmp_path, monkeypatch):
+    """A sample keeps its code in a local repository: made under the test's own directory."""
+    from boss_engine.services import local_repo
+
+    root = tmp_path / "repos"
+    root.mkdir()
+    monkeypatch.setattr(local_repo, "root", lambda settings=None: root)
+
+
 @pytest.fixture
 def github(monkeypatch, world, engine):
     """One allowed repository in the org's registry, a project connection that reaches it, and

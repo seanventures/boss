@@ -79,44 +79,81 @@ function nodeGlyph(n: Node, i: number, small: boolean): React.ReactNode {
   return n.state === "now" ? <ArrowsClockwise size={13} weight="bold" /> : i + 1;
 }
 
-/** The journey detail, unless it is blank or already the label or the sub. */
+/** The journey detail, unless it is blank or already the label or the sub. It is the node's
+ *  tooltip, never text inside the strip: a sentence there rendered as large overlapping body
+ *  text on every Overview (stranger test r2, 2026-11-17). */
 export function journeyDetailSentence(detail: string | null | undefined, label: string | null | undefined, sub: string | null | undefined): string | null {
   const text = detail?.trim() ?? "";
   if (!text || text === (label?.trim() ?? "") || text === (sub?.trim() ?? "")) return null;
   return text;
 }
 
-/** After the journey button. More than six words is a paragraph. */
-export function View({ id, sentence }: { id: string | number; sentence: string | null }) {
-  if (!sentence) return null;
-  return sentence.split(/\s+/).filter(Boolean).length > 6
-    ? <p data-testid={`px-journey-why-${id}`} data-user-text>{sentence}</p>
-    : <span data-testid={`px-journey-why-${id}`} data-user-text>{sentence}</span>;
-}
-
 /** THE JOURNEY STRIP: the project's life as one diagram. Each node opens what happened there. */
-export function Journey({ nodes: given, size, onOpen, testid = "px-journey" }: { nodes: Node[]; size?: "s"; onOpen?: (n: Node) => void; testid?: string }) {
+export function Journey({ nodes: given, size, onOpen, canOpen, testid = "px-journey" }: {
+  nodes: Node[]; size?: "s"; onOpen?: (n: Node) => void;
+  /** Which nodes go somewhere when pressed. A node that goes nowhere is drawn, never a button
+   *  that does nothing (stranger test 2026-11-17: "Helm onboards" and "First PR" were dead). */
+  canOpen?: (n: Node) => boolean; testid?: string;
+}) {
   // Days in the viewer's zone (04-02): a dated node's sub and tooltip, written after mount.
   const local = useLocalTime();
   const nodes = given.map((n) => (n.at ? { ...n, ...nodeWords(n, local.day) } : n));
+  const more = useScrollMore<HTMLDivElement>(nodes.length);
   if (!nodes.length) return null;
   return (
-    <div className="px-jr" data-size={size} data-testid={testid} role="list" aria-label="Journey">
+    <div className="px-jr-wrap" data-more-left={more.left || undefined} data-more-right={more.right || undefined}
+         data-testid={`jr-wrap-${testid}`}>
+    <div className="px-jr" ref={more.ref} onScroll={more.update} data-size={size} data-testid={testid} role="list" aria-label="Journey">
       {nodes.map((n, i) => (
         <React.Fragment key={`${n.key}-${i}`}>
           {i ? <span className="px-jr-wire" aria-hidden data-s={nodes[i - 1].state === "done" ? (n.state === "now" ? "now" : n.state === "done" ? "done" : undefined) : undefined} /> : null}
-          <button type="button" role="listitem" className="px-jr-node" data-s={n.state} disabled={!onOpen || !(n.href || n.key)}
-                  data-testid={`${testid}-${n.key || i}`} aria-label={`${n.label}: ${STATE_WORD[n.state]}${n.sub ? `, ${n.sub}` : ""}`} title={n.detail || undefined}
+          <button type="button" role="listitem" className="px-jr-node" data-s={n.state} disabled={!onOpen || !(canOpen ? canOpen(n) : !!(n.href || n.key))}
+                  data-testid={`${testid}-${n.key || i}`} aria-label={`${n.label}: ${STATE_WORD[n.state]}${n.sub ? `, ${n.sub}` : ""}`} title={journeyDetailSentence(n.detail, n.label, n.sub) || undefined}
                   onClick={onOpen ? () => onOpen(n) : undefined}>
             <span className="px-jr-shape" aria-hidden>{nodeGlyph(n, i, size === "s")}</span>
             <span className="px-jr-cap">{n.label}</span>
             {n.sub && size !== "s" ? <span className="px-jr-meta">{n.sub}</span> : null}
           </button>
-          <View id={n.key || i} sentence={journeyDetailSentence(n.detail, n.label, n.sub)} />
         </React.Fragment>
       ))}
     </div>
+    {more.right ? (
+      <button type="button" className="px-jr-more" data-testid={`jr-more-${testid}`} aria-label="More stages"
+              title="More stages: scroll right" onClick={() => more.scroll(1)}>›</button>
+    ) : null}
+    </div>
   );
+}
+
+/** A SIDEWAYS STRIP SAYS IT HAS MORE (stranger test r3, 390 px: the Journey stopped at "Staging"
+ *  with nothing to say it scrolls — a touch screen hides the scrollbar). Which edges hide content,
+ *  re-read on scroll and resize; the strip shows a fade on that edge and a "More stages" chevron. */
+export function useScrollMore<T extends HTMLElement>(dep: unknown) {
+  const ref = useRef<T | null>(null);
+  const [edges, setEdges] = useState({ left: false, right: false });
+  const update = React.useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const left = el.scrollLeft > 2;
+    const right = el.scrollWidth - el.clientWidth - el.scrollLeft > 2;
+    setEdges((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
+  }, []);
+  useEffect(() => {
+    update();
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [update, dep]);
+  const scroll = (dir: 1 | -1) => {
+    const el = ref.current;
+    if (!el) return;
+    if (typeof el.scrollBy === "function") el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: "smooth" });
+    else el.scrollLeft += dir * el.clientWidth * 0.8;
+    update();
+  };
+  return { ref, update, scroll, ...edges };
 }
 
 /** A recommendation's kind in words — ONE map for the Roadmap card and Overview's What's next

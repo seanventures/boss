@@ -53,8 +53,9 @@ def installed() -> dict[str, str]:
 
 def missing_message() -> str:
     return ("Security scanning needs the security scanners, which are not turned on for this BOSS. "
-            "Turn them on with `boss toolchains enable security` on the BOSS host (or set "
-            "BOSS_TOOLCHAINS=security in .env and run `boss update`), then scan again.")
+            "Turn them on with `boss toolchains enable security` on the BOSS host, which keeps "
+            "the toolchains already on (or add security to BOSS_TOOLCHAINS in .env, e.g. "
+            "BOSS_TOOLCHAINS=java,go,security, and run `boss update`), then scan again.")
 
 
 def rules_dir() -> Path:

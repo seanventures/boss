@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -362,6 +363,8 @@ def main() -> int:
     parser.add_argument("--api-url", required=True)
     parser.add_argument("--env-file", type=Path, required=True)
     parser.add_argument("--found", type=Path, help="discover_models.py --summary output")
+    parser.add_argument("--boss", default="boss",
+                        help="the command that runs THIS install, named in every fix")
     parser.add_argument("--hosted", action="store_true",
                         help="exit 0 when a hosted model is connected, 3 when none, 4 unknown")
     parser.add_argument("--local", action="store_true",
@@ -382,8 +385,17 @@ def main() -> int:
     shown = rows(args.api_url, api_key, args.env_file, read_found(args.found))
     width = max([12, *(len(label) for label, _ in shown)])
     for label, text in shown:
-        print(f"    {label:<{width}} {text}")
+        print(f"    {label:<{width}} {own_command(text, args.boss)}")
     return 0
+
+
+def own_command(text: str, boss: str) -> str:
+    """Name THIS install's command in a fix. A second install's card said "boss connect codex",
+    which runs the FIRST install on that machine (stranger test r3). The rows are written with
+    plain `boss`; this is the one place that swaps in the install's own command."""
+    if not boss or boss == "boss":
+        return text
+    return re.sub(r"(?<![\w/.-])boss (?=connect\b|status\b|update\b)", lambda _m: f"{boss} ", text)
 
 
 if __name__ == "__main__":

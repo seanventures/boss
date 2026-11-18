@@ -1928,7 +1928,12 @@ def list_definitions(
     for row in rows:
         item = _serialize_definition(row)
         item["version_count"] = int(row["version_count"])
-        item["step_count"] = int(row["step_count"] or 0)
+        from .command_center import is_marker_step
+
+        specs = row["step_specs"] if isinstance(row["step_specs"], list) else None
+        # Markers (fork/join) are not steps: the same count as the plan and a run's "k of n".
+        item["step_count"] = (sum(1 for st in specs if isinstance(st, dict) and not is_marker_step(st))
+                              if specs is not None else int(row["step_count"] or 0))
         from .deploy_policy import step_answer
 
         item["steps"] = _step_outline(

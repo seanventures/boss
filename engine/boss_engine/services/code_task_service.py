@@ -37,7 +37,7 @@ from .run_terminal import on_status_written
 from .jobs import JOB_PRIORITY_BACKGROUND, JOB_PRIORITY_REQUESTED
 from .core import emit_event
 from .core import emit_event, make_id
-from .github_app_adapter import GitHubAppAdapter
+from .github_app_adapter import GitHubNotConnected
 from .iac_verify import is_iac_task
 from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .agent_acts import pr_trailers as _pr_trailers
@@ -690,7 +690,8 @@ def start_code_task(
                 _wf = _parent_workflow_run(connection, parent_run)
             identity_acting = _consent.carry_retry_authority(
                 connection, parent_run_id=parent_run, new_run_id=run_id, project_id=project_id,
-                role_keys=[builder], permissions=_consent.CODE_TASK_PERMISSIONS,
+                role_keys=[builder], permissions=_consent.code_task_permissions(
+                    _consent_repos(owner, repo, repo_host), repo_host),
                 repos=_consent_repos(owner, repo, repo_host), by_boss=automatic_retry or continuation,
                 workflow_run_id=_wf, gap=authority_gap)
         if automatic_retry and identity_acting is None:
@@ -706,7 +707,8 @@ def start_code_task(
 
         identity_acting = _consent.require_authority(
             org_id=None, project_id=project_id, role_keys=[builder],
-            permissions=_consent.CODE_TASK_PERMISSIONS, repos=_consent_repos(owner, repo, repo_host),
+            permissions=_consent.code_task_permissions(_consent_repos(owner, repo, repo_host), repo_host),
+            repos=_consent_repos(owner, repo, repo_host),
             task=title, run_id=f"run_ct:{run_id}", db=connection)
     if substrate:  # per-run substrate override (retry fallback: microvm infra-failure -> local)
         spec["substrate"] = substrate
@@ -1991,7 +1993,9 @@ def redeliver_code_task(engine, settings: Settings, run_id: str, *, automatic: b
             carried = _consent.carry_retry_authority(
                 c, parent_run_id=run_id, new_run_id="delivery", project_id=run["project_id"],
                 role_keys=[_identity_runs.resolved_builder({"role_key": spec.get("role_key")}, fctx)],
-                permissions=_consent.CODE_TASK_PERMISSIONS,
+                permissions=_consent.code_task_permissions(
+                    _consent_repos(spec.get("owner"), spec.get("repo"), spec.get("repo_host")),
+                    spec.get("repo_host")),
                 repos=_consent_repos(spec.get("owner"), spec.get("repo"), spec.get("repo_host")),
                 by_boss=True, workflow_run_id=str(fctx.get("workflow_run_id") or "") or None)
         if carried is None:
@@ -3185,6 +3189,29 @@ def _transient_retry_recorder(engine, run_id: str):
     return record
 
 
+def _clone_token(engine, settings: Settings, *, owner: str, repo: str, project_id: str,
+                 repo_host_kind: str) -> str:
+    """The credential the build clones and pushes with. A repository BOSS keeps on this machine
+    (`local_<project>/<name>`, or the spec's repo_host "local") needs none: asking GitHub for one
+    failed every local build with a 500 on an install without a GitHub token (Easy Mode,
+    2026-11-18). The governed lane makes the same decision."""
+    from .local_repo import is_local_owner as _is_local_owner
+
+    if repo_host_kind == "bitbucket":
+        return settings.bitbucket_token or ""
+    if repo_host_kind == "local" or _is_local_owner(owner):
+        return ""
+    # Shared decision — see repo_token. Was: prefer the App and fail hard when this repo
+    # is outside its installation, even with a working PAT configured.
+    from .github_app_adapter import repo_token
+
+    # THE PROJECT'S OWN REGISTERED CREDENTIAL, as a third source after the App and the
+    # environment. This is the build that used to die on "BOSS_GITHUB_TOKEN is not set"
+    # against a repository the operator had just connected in Setup.
+    with _transaction(engine) as c:
+        return repo_token(settings, owner, repo, connection=c, project_id=project_id)
+
+
 def run_code_task(engine, settings: Settings, jobs, run_id: str,
                   *, fencing_token: Optional[str] = None) -> dict:
     """Execute one full code-task attempt. Safe to re-run after a crash.
@@ -3228,6 +3255,22 @@ def _run_code_task_once(engine, settings: Settings, jobs, run_id: str,
                 _link_env(engine, run_id, _run_project(engine, run_id)), \
                 _transient_retry.reporting(_transient_retry_recorder(engine, run_id)):
             return _run_code_task(engine, settings, jobs, run_id, fencing_token=fencing_token)
+    except GitHubNotConnected as exc:
+        # ONLY "no credential anywhere" -- a token-issue 5xx, a missing private key or a missing
+        # PyJWT still raise (the worker retries, the step logs it at error level).
+        # NEVER A 500 FOR A MISSING GITHUB CREDENTIAL (Easy Mode, crun_3c87d5a3, 2026-11-18): the
+        # step endpoint answered 500 and the worker said "the control plane crashed". It is a
+        # setup gap a person fixes: the run stops in words, with where to fix it.
+        words = (f"This build could not reach its GitHub repository: {exc} Connect GitHub in "
+                 "Setup › GitHub (or connect this repository to the project), then retry.")
+        with _transaction(engine) as c:
+            run = load_code_task_run(c, run_id)
+            if run is not None and run["status"] not in (
+                    "completed", "failed", "cancelled", "blocked", "waiting_on_person"):
+                return _fail(c, run_id, run["project_id"], words, status="blocked",
+                             failure_class="needs_human", reason_code="github_not_connected")
+        return {"status": "blocked", "done": True, "reason": "github_not_connected",
+                "message": words}
     except SandboxUnavailable as exc:
         # Fail closed: a build never runs unisolated when isolation is required.
         with _transaction(engine) as c:
@@ -3453,20 +3496,8 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
                    run_id, _bases.as_event())
     base_branch = _bases.clone     # may advance to work_branch below (a repair)
     repo_base_branch = _bases.pr   # the PR's base
-    if repo_host_kind == "bitbucket":
-        token = settings.bitbucket_token or ""
-    else:
-        app = GitHubAppAdapter(settings)
-        # Shared decision — see repo_token. Was: prefer the App and fail hard when this repo
-        # is outside its installation, even with a working PAT configured.
-        from .github_app_adapter import repo_token
-
-        # THE PROJECT'S OWN REGISTERED CREDENTIAL, as a third source after the App and the
-        # environment. This is the build that used to die on "BOSS_GITHUB_TOKEN is not set"
-        # against a repository the operator had just connected in Setup.
-        with _transaction(engine) as c:
-            token = repo_token(settings, owner, repo,
-                               connection=c, project_id=project_id)
+    token = _clone_token(engine, settings, owner=owner, repo=repo, project_id=project_id,
+                         repo_host_kind=repo_host_kind)
 
     # Feedback-iteration: reuse the ROOT run's branch and clone its accumulated code so the
     # model builds ON prior work (not from base), and update the SAME PR. Mirrors the governed

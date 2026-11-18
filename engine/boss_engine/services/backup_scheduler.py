@@ -25,6 +25,7 @@ and repository volumes) that upgrades take; `boss rollback --restore-backup` res
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
@@ -266,13 +267,18 @@ def run_backup(engine: Any, settings: Any = None, *, now: Optional[datetime] = N
     partial = final.with_suffix(".dump.partial")
     try:
         folder.mkdir(parents=True, exist_ok=True, mode=0o700)
-        old_umask = os.umask(0o077)
-        try:
-            done = runner([getattr(settings, "backup_pg_dump", "pg_dump"), "-Fc", "--no-password",
-                           "-f", str(partial)], env=_pg_env(settings.database_url),
-                          capture_output=True, text=True, timeout=DUMP_TIMEOUT_SECONDS)
-        finally:
-            os.umask(old_umask)
+        # OWNER-ONLY BY THE FILE'S OWN MODE, NEVER THE PROCESS UMASK. os.umask is process-wide:
+        # for the ~35 s of this dump every file ANY thread of the API created was 0600, and a
+        # review seat's `git status` rewrote a run's .git/index as boss 0600 (crun_6883ec7c lost
+        # a finished build to it). The partial file is made 0600 first; pg_dump -f truncates
+        # it and keeps that mode.
+        with contextlib.suppress(FileNotFoundError):
+            partial.unlink()
+        os.close(os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        os.chmod(partial, 0o600)
+        done = runner([getattr(settings, "backup_pg_dump", "pg_dump"), "-Fc", "--no-password",
+                       "-f", str(partial)], env=_pg_env(settings.database_url),
+                      capture_output=True, text=True, timeout=DUMP_TIMEOUT_SECONDS)
         if done.returncode != 0:
             raise RuntimeError(f"pg_dump failed ({done.returncode}): {_short(done.stderr)}")
         if not partial.exists() or partial.stat().st_size == 0:

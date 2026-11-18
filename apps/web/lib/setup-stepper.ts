@@ -47,7 +47,7 @@ export type SetupParams = { focus: RowKey | null; add: string | null; source: st
 
 const ROWS: RowKey[] = ["github", "repository", "models", "capacity", "jobs", "budget", "try",
                         "advanced", "github_app", "repositories", "ci", "build_database", "build_speed",
-                        "toolchains", "public_url", "embedding_model", "ticket_systems", "events"];
+                        "toolchains", "public_url", "embedding_model", "ticket_systems", "documents", "events"];
 
 /** Rows folded under Advanced: a deep link to one opens the fold first. */
 export const ADVANCED_ROWS: readonly RowKey[] = ["advanced", "github_app", "repositories", "ci", "build_database",
@@ -120,11 +120,18 @@ export type SetupSummary = { ready: boolean; badge: { count: number; tone: "ambe
   /** The rail shows Get started (the Welcome) until GitHub, a model and a first PR exist. */
   get_started?: boolean };
 
+/** THE REPOSITORY STEP IS DONE when the project has a repository, or the org keeps code on this
+ *  machine (stranger test: a local project left Setup saying "2 to go" and asking for GitHub).
+ *  GitHub is optional: it is for PRs on GitHub. */
+export function hasCode(view: { repository: { repos: unknown[]; local?: unknown } }): boolean {
+  return view.repository.repos.length > 0 || Boolean(view.repository.local);
+}
+
 /** Whether the Welcome is still the landing page and the rail shows Get started: GitHub, a model
  *  and a first PR (any, `try.done`) are not all there yet (BOSSAPP-808). */
 export function getStarted(view: Pick<SetupView, "repository" | "models"> & Partial<SetupView>): boolean {
   const github = (view.github_accounts ?? []).some((a) => a.pill.tone === "green")
-    || view.repository.repos.some((r) => r.pill.tone === "green");
+    || view.repository.repos.some((r) => r.pill.tone === "green") || Boolean(view.repository.local);
   const model = view.models.some((m) => m.pill.tone === "green");
   return !(github && model && Boolean(view.try?.done));
 }
@@ -133,7 +140,7 @@ export function getStarted(view: Pick<SetupView, "repository" | "models"> & Part
  *  checks, red while any check fails. */
 export function summarize(view: Pick<SetupView, "ready" | "next" | "problems" | "repository" | "models">):
   SetupSummary {
-  const unfinished = (view.repository.repos.length ? 0 : 1) + (view.models.length ? 0 : 1);
+  const unfinished = (hasCode(view) ? 0 : 1) + (view.models.length ? 0 : 1);
   const count = unfinished + view.problems;
   return {
     ready: view.ready,

@@ -114,7 +114,8 @@ describe("sign-in never starts a passkey by itself", () => {
   it("opens on Password with the email field focused, and asks the device nothing", async () => {
     routes({});
     const el = await mount(<SignIn options={ON} next="/" />);
-    expect(el.querySelector("#tab-password")?.getAttribute("aria-selected")).toBe("true");
+    // No email delivery here, so Password stands alone: no tab bar (stranger test).
+    expect(el.querySelector("[role='tablist']")).toBeNull();
     expect(document.activeElement?.id).toBe("email");
     expect(el.querySelector("#password")).not.toBeNull();
     expect(el.querySelector("[data-testid='passkey-sign-in']")).not.toBeNull();

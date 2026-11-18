@@ -621,7 +621,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
       <ol className="px-nw-steps" data-testid="px-nw-steps">
         {steps.map((s, i) => (
           <li key={`${s.id}-${i}`} data-you={s.you ? "" : undefined}>
-            <span className="px-nw-stn" data-s={s.you ? "you" : undefined}>{s.you ? "✋" : i + 1}</span>
+            <span className="px-nw-stn" data-s={s.you ? "you" : undefined} data-testid="px-nw-step-n">{i + 1}</span>
             <span className="px-ell">{s.label}</span>
             {s.you ? <span className="px-nw-you">you approve{s.approve ? ` ${s.approve}` : ""}</span> : s.agent ? <span className="px-row" style={{ gap: 4 }}><Face agent={s.agent} size={16} />{s.agent.name}</span> : <span />}
           </li>
@@ -641,9 +641,11 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
         value: <span data-testid="px-compose-workflow" className="px-ell"><span title={p?.workflow?.why ? `Start runs ${p.workflow.name}: ${p.workflow.why}` : undefined}>{wfName}</span>
           {p?.workflow?.why ? <span className="px-faint" style={{ fontWeight: 400, fontSize: ".54rem" }}> · {p.workflow.why}</span> : null}</span>,
         sub: steps.length ? (
+          // EVERY STEP KEEPS ITS NUMBER (stranger test r2: a hand in place of 3 and 9 read as a
+          // strip that skipped numbers). A step you approve is the amber circle, said on its tip.
           <span className="px-nw-strip">
             <span className="px-nw-st" aria-hidden>{steps.slice(0, 14).map((s, i) => (
-              <React.Fragment key={`${s.id}-${i}`}>{i ? <span className="px-nw-stw" /> : null}<span className="px-nw-stn" data-s={s.you ? "you" : undefined} title={`${s.label}${s.you ? ` · you approve ${s.approve || "it"}` : ""}`}>{s.you ? "✋" : i + 1}</span></React.Fragment>
+              <React.Fragment key={`${s.id}-${i}`}>{i ? <span className="px-nw-stw" /> : null}<span className="px-nw-stn" data-s={s.you ? "you" : undefined} title={`${s.label}${s.you ? ` · you approve ${s.approve || "it"}` : ""}`}>{i + 1}</span></React.Fragment>
             ))}</span>
             <span>{steps.length} steps{approvals.length ? <> · <b className="px-nw-amber">{approvals.length} you approve: {approveWords(approvals)}</b></> : " · no approvals"}</span>
           </span>

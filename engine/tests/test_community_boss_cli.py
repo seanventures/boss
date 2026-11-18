@@ -23,7 +23,7 @@ HELPERS = (
     "community-compose.yml", "restore_preserved_env.sh", "reconcile_api_credentials.py",
     "boss.sh", "upgrade.sh", "uninstall.sh", "discover_models.py", "coding_subscriptions.py",
     "console_password.py", "connect_ollama.py", "model_status.py", "local_model.py",
-    "boss_refusal.py", "post_check.sh",
+    "boss_refusal.py", "post_check.sh", "next_step.sh",
 )
 # What `docker compose config --format json` would say about the build services (install.sh
 # builds them one image at a time from this answer). Kept equal to the real compose file below.
@@ -169,6 +169,7 @@ def world(tmp_path: Path) -> dict:
         "    [ \"${BOSS_TEST_OLLAMA_UNREACHABLE:-0}\" = 1 ] && exit 1\n"
         "    [ -n \"${BOSS_TEST_STATE:-}\" ] && [ -e \"$BOSS_TEST_STATE/ollama-loopback-only\" ] && exit 1 ;;\n"
         "  *'identity.cli claim-status'*) [ -n \"${BOSS_TEST_CLAIM:-}\" ] && echo \"$BOSS_TEST_CLAIM\" ;;\n"
+        "  *'identity.cli console-origin'*) echo \"${BOSS_TEST_BOUND_ORIGIN:-}\" ;;\n"
         "  *'claude auth login'*) [ -n \"${BOSS_TEST_STATE:-}\" ] && touch \"$BOSS_TEST_STATE/claude\" ;;\n"
         "  *'grok login --device-auth'*) [ -n \"${BOSS_TEST_STATE:-}\" ] && touch \"$BOSS_TEST_STATE/grok\" ;;\n"
         "esac\n"
@@ -359,15 +360,26 @@ def test_boss_open_status_and_logs(world) -> None:
     (world["install"] / ".env").write_text(
         (world["install"] / ".env").read_text().replace(
             "BOSS_COMMUNITY_WEB_ENABLED=0", "BOSS_COMMUNITY_WEB_ENABLED=1"))
-    opened = _run(boss, "open", env=env)
+    opened = _run(boss, "open", env={**env, "BOSS_TEST_CLAIM": "claimed 2026-11-01"})
     assert opened.returncode == 0, opened.stderr
-    assert "http://127.0.0.1:3000" in opened.stdout
+    # localhost, the host the claim link prints: a passkey made there does not work on 127.0.0.1.
+    assert "http://localhost:3000" in opened.stdout and "127.0.0.1:3000" not in opened.stdout
     assert "boss password" in opened.stdout
+    assert "setup-link" not in opened.stdout
 
-    # NOT CLAIMED: `boss open` says how, with the command — nobody has to find the link in a log.
+    # NOT CLAIMED: `boss open` leads with the claim, with the command, then Setup — the same
+    # words as the installer's card (scripts/install/next_step.sh).
     unclaimed = _run(boss, "open", env={**env, "BOSS_TEST_CLAIM": "unclaimed"})
     assert unclaimed.returncode == 0, unclaimed.stderr
-    assert "Not claimed yet" in unclaimed.stdout and "  boss identity setup-link" in unclaimed.stdout
+    out = unclaimed.stdout
+    assert "Next: claim this BOSS (nobody owns it yet)" in out
+    assert "boss identity setup-link" in out
+    assert out.index("setup-link") < out.index("Then finish setup") < out.index("http://localhost:3000/?area=setup")
+    assert "127.0.0.1:3000" not in out
+    assert "boss password" not in out
+    # Claim state unknown (an image without the identity CLI): the claim still comes first.
+    unknown = _run(boss, "open", env=env)
+    assert "Next: claim this BOSS (if nobody owns it yet)" in unknown.stdout
 
     # BOSSAPP-813: with an https console origin, that address IS the claim from the server's own
     # network; the setup link is for everywhere else.
@@ -379,8 +391,10 @@ def test_boss_open_status_and_logs(world) -> None:
     onsite = _run(boss, "open", env={**env, "BOSS_TEST_CLAIM": "unclaimed"})
     dotenv.write_text(before)
     assert onsite.returncode == 0, onsite.stderr
-    assert "Open https://boss-1.example.ts.net to claim this BOSS (from your own network)" in onsite.stdout
-    assert "from elsewhere run, on this server: boss identity setup-link" in onsite.stdout
+    assert "From the server's own network, opening https://boss-1.example.ts.net claims it too." in onsite.stdout
+    # This fixture's boss command lives outside PATH (BOSS_BIN_DIR=userbin), so the hint names
+    # its full path: plain `boss` could be another install (stranger test r2).
+    assert f"On this server run:  {world['boss']} identity setup-link" in onsite.stdout
 
     status = _run(boss, "status", env=env)
     assert status.returncode == 0, status.stdout + status.stderr
@@ -398,6 +412,136 @@ def test_boss_open_status_and_logs(world) -> None:
                  (world["install"] / ".env").read_text().splitlines() if line.startswith("BOSS_API_KEY="))
     for result in (opened, status, logs):
         assert owner not in result.stdout + result.stderr
+
+
+def test_boss_stop_and_start_cover_every_service_of_this_install(world) -> None:
+    """`docker compose stop` without profiles left web, grafana and prometheus running (stranger
+    test r2). `boss stop` names every profile in the compose file and only this install's
+    project; `boss start` brings the configured services back without a build."""
+    import yaml
+
+    boss = _installed(world)
+    env = {**world["env"], "COMPOSE_PROJECT_NAME": "someone-else"}
+    _set_env_line(world["install"], "COMPOSE_PROJECT_NAME", "boss-two")
+    services = yaml.safe_load((REPO / "scripts/install/community-compose.yml").read_text())["services"]
+    profiles = sorted({p for s in services.values() for p in s.get("profiles", [])})
+    assert {"web", "monitoring", "mail", "dev"} <= set(profiles)
+
+    log = Path(env["BOSS_TEST_DOCKER_LOG"])
+    log.write_text("")
+    Path(str(log) + ".tags").write_text("")
+    stopped = _run(boss, "stop", env=env)
+    assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+    call = next(c for c in log.read_text().splitlines() if c.startswith("compose ") and c.endswith(" stop"))
+    for name in profiles:
+        assert f"--profile {name} " in call + " ", (name, call)
+    assert "start" in stopped.stdout and "boss-two" in stopped.stdout
+    # The project is this install's, never the shell's.
+    assert "boss-two compose" in Path(str(log) + ".tags").read_text()
+
+    log.write_text("")
+    started = _run(boss, "start", env=env)
+    assert started.returncode == 0, started.stdout + started.stderr
+    call = next(c for c in log.read_text().splitlines() if c.startswith("compose "))
+    assert call.endswith("up -d --no-build")
+    assert "--profile dev" not in call       # start runs what the install runs, not test databases
+    assert _run(boss, "stop", "--all", env=env).returncode != 0
+    # The installer guide's command list has both.
+    guide = (REPO / "scripts/install/README.md").read_text()
+    assert "| `boss stop` |" in guide and "| `boss start` |" in guide
+    # Stop is wider than start, and both say so (review of #204).
+    helptext = _run(boss, "help", env=env).stdout
+    assert "optional" in helptext and "dev profiles too" in helptext and "boss dev up" in helptext
+    assert "optional dev profiles" in guide and "Optional dev profiles stay stopped" in guide
+    # The guide names the explicit way to another install, not the env var (review of #204).
+    assert "`BOSS_INSTALL_DIR` points `boss` at another install" not in guide
+    assert "boss --dir PATH" in guide
+
+
+def test_a_second_install_names_its_own_boss_command(world) -> None:
+    """Plain `boss` on a machine with two installs is the first one. A second install's doctor
+    and open print its own launcher's full path; a default install keeps plain `boss`."""
+    boss = _installed(world)   # BOSS_BIN_DIR=userbin, not on PATH: a second install's shape
+    env = world["env"]
+    _set_env_line(world["install"], "BOSS_COMMUNITY_WEB_ENABLED", "1")
+    opened = _run(boss, "open", env={**env, "BOSS_TEST_CLAIM": "unclaimed"})
+    assert f"On this server run:  {boss} identity setup-link" in opened.stdout
+    # checkup.sh is not in the published fixture; the real one runs against the inert Docker.
+    shutil.copy2(REPO / "scripts/install/checkup.sh", world["install"] / "scripts/install/checkup.sh")
+    doctor = _run(boss, "doctor", env={**env, "BOSS_TEST_CLAIM": "unclaimed"})
+    assert f"{boss} identity setup-link" in doctor.stdout + doctor.stderr
+    assert " boss identity setup-link" not in (doctor.stdout + doctor.stderr).replace(str(boss), "")
+    stopped = _run(boss, "stop", env=env)
+    assert f"Start again with: {boss} start" in stopped.stdout
+
+
+def test_the_printed_console_url_follows_the_bound_origin(world) -> None:
+    """An install claimed on http://127.0.0.1:<port> (legacy, or before rc10) keeps that origin:
+    its sessions and passkeys live there. open and doctor print it; with nothing bound they print
+    http://localhost:<port>, the claim link's host (stranger test r3 review of #208)."""
+    boss = _installed(world)
+    env = world["env"]
+    _set_env_line(world["install"], "BOSS_COMMUNITY_WEB_ENABLED", "1")
+    shutil.copy2(REPO / "scripts/install/checkup.sh", world["install"] / "scripts/install/checkup.sh")
+    bound = {**env, "BOSS_TEST_CLAIM": "claimed 2026-11-01", "BOSS_TEST_BOUND_ORIGIN": "http://127.0.0.1:3000"}
+    opened = _run(boss, "open", env=bound)
+    assert "http://127.0.0.1:3000" in opened.stdout and "localhost:3000" not in opened.stdout
+    doctor = _run(boss, "doctor", env=bound)
+    assert "open Mission Control (http://127.0.0.1:3000)" in doctor.stdout, doctor.stdout
+    assert "localhost:3000" not in doctor.stdout
+    url = _run(boss, "identity", "console-url", env=bound)
+    assert url.stdout.strip() == "http://127.0.0.1:3000"
+    # Nothing bound, or something that is not an origin: localhost.
+    for value in ("", "not a url; rm -rf ~"):
+        plain = _run(boss, "open", env={**bound, "BOSS_TEST_BOUND_ORIGIN": value})
+        assert "http://localhost:3000" in plain.stdout and "127.0.0.1:3000" not in plain.stdout
+
+
+def test_a_default_install_keeps_plain_boss_in_hints(world) -> None:
+    default_bin = world["home"] / ".local/bin"
+    env = {**world["env"], "BOSS_BIN_DIR": str(default_bin),
+           "PATH": f"{default_bin}{os.pathsep}{world['env']['PATH']}"}
+    result = _install(world, env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    _set_env_line(world["install"], "BOSS_COMMUNITY_WEB_ENABLED", "1")
+    opened = _run(default_bin / "boss", "open", env={**env, "BOSS_TEST_CLAIM": "unclaimed"})
+    assert "On this server run:  boss identity setup-link" in opened.stdout
+
+
+def test_the_installer_never_puts_a_second_installs_command_on_path(world) -> None:
+    """The first install's launcher is ~/.local/bin/boss; a second install with its own
+    BOSS_BIN_DIR is run by full path, never added to ~/.profile (stranger test r2)."""
+    first = world["home"] / ".local/bin/boss"
+    first.parent.mkdir(parents=True)
+    _executable(first, "#!/usr/bin/env bash\n# BOSS Community command (generated by install.sh)\n"
+                       "BOSS_INSTALL_DIR_DEFAULT=/somewhere/else\n")
+    second = _install(world)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "~/.profile" not in second.stdout
+    assert f"Run this install by its full path: {world['boss']}" in second.stdout
+    assert first.read_text().endswith("/somewhere/else\n")    # the first one is untouched
+    assert "Mission Control Editions" not in second.stdout
+    assert "No cloud account is needed." in second.stdout
+
+
+def test_a_lone_install_outside_path_is_offered_the_path_line(world) -> None:
+    # No other `boss` anywhere (this machine's own install, if any, is taken off PATH).
+    env = {**world["env"], "PATH": os.pathsep.join(
+        p for p in world["env"]["PATH"].split(os.pathsep) if not (Path(p) / "boss").exists())}
+    result = _install(world, env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "~/.profile" in result.stdout
+
+
+def test_the_two_installs_guide_lists_every_host_port_setting() -> None:
+    guide = (REPO / "scripts/install/README.md").read_text()
+    section = guide[guide.index("### Two installs on one machine"):guide.index("### Installing on a server")]
+    compose = (REPO / "scripts/install/community-compose.yml").read_text()
+    for name in ("BOSS_MAILPIT_PORT", "BOSS_METRICS_PORT", "BOSS_TOOLCHAIN_REGISTRY_PORT",
+                 "BOSS_TEST_POSTGRES_PORT"):
+        assert f"`{name}`" in section, name
+        assert name in compose, name        # a real setting, not a guess
+    assert "Do not add its directory to `PATH`" in section
 
 
 def test_boss_password_refuses_to_print_outside_a_terminal(world) -> None:
@@ -619,7 +763,7 @@ def test_yes_reports_a_found_login_without_copying_it(world) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     rendered = result.stdout + result.stderr
     assert "found      Codex ChatGPT login on this machine" in rendered
-    assert "found, not connected: boss connect codex" in rendered
+    assert f"found, not connected: {world['boss']} connect codex" in rendered
     assert "Connecting the Codex ChatGPT login" not in rendered
     assert "not found  Ollama" in rendered
     assert CODEX_SECRET not in rendered
@@ -632,7 +776,7 @@ def test_connect_found_never_copies_a_host_codex_login(world) -> None:
     result = _install(world, "--connect-found")
     rendered = result.stdout + result.stderr
     assert result.returncode == 0, rendered
-    assert "Codex: signing in needs a person at a terminal. Run: boss connect codex" in rendered
+    assert f"Codex: signing in needs a person at a terminal. Run: {world['boss']} connect codex" in rendered
     assert "accept-database-fallback" not in rendered
     assert "Connecting the Codex ChatGPT login" not in rendered
     assert CODEX_SECRET not in rendered
@@ -651,7 +795,7 @@ def test_boss_connect_without_a_terminal_copies_nothing(world) -> None:
     result = _run(boss, "connect", env=world["env"])
     assert result.returncode == 0, result.stdout + result.stderr
     assert "found      Codex ChatGPT login" in result.stdout
-    assert "Codex: signing in needs a person at a terminal. Run: boss connect codex" in result.stdout
+    assert f"Codex: signing in needs a person at a terminal. Run: {world['boss']} connect codex" in result.stdout
     assert CODEX_SECRET not in result.stdout + result.stderr
 
 
@@ -994,9 +1138,9 @@ def test_yes_alone_signs_nothing_in_and_connects_no_ollama(world, boss_api) -> N
     result = _install(world)
     rendered = result.stdout + result.stderr
     assert result.returncode == 0, rendered
-    assert "Claude Code  found, not connected: boss connect claude" in rendered
-    assert "Grok Build   found, not connected: boss connect grok" in rendered
-    assert "Ollama       found, not connected: boss connect ollama" in rendered
+    assert f"Claude Code  found, not connected: {world['boss']} connect claude" in rendered
+    assert f"Grok Build   found, not connected: {world['boss']} connect grok" in rendered
+    assert f"Ollama       found, not connected: {world['boss']} connect ollama" in rendered
     calls = _docker_calls(world)
     assert "auth login" not in calls and "login --device-auth" not in calls
     assert "host.docker.internal" not in calls
@@ -1009,9 +1153,9 @@ def test_connect_found_without_a_terminal_skips_sign_in_and_connects_ollama(worl
     result = _install(world, "--connect-found")
     rendered = result.stdout + result.stderr
     assert result.returncode == 0, rendered
-    assert "Claude Code: signing in needs a person at a terminal. Run: boss connect claude" in rendered
-    assert "Grok Build: signing in needs a person at a terminal. Run: boss connect grok" in rendered
-    assert "Claude Code  found, not connected: boss connect claude" in rendered
+    assert f"Claude Code: signing in needs a person at a terminal. Run: {world['boss']} connect claude" in rendered
+    assert f"Grok Build: signing in needs a person at a terminal. Run: {world['boss']} connect grok" in rendered
+    assert f"Claude Code  found, not connected: {world['boss']} connect claude" in rendered
     calls = _docker_calls(world)
     assert "auth login" not in calls and "login --device-auth" not in calls
 
@@ -1058,7 +1202,7 @@ def test_boss_connect_asks_once_per_found_login_and_no_changes_nothing(world, bo
     assert [b["provider"] for b in boss_api.posts("/v1/setup/sign-in")] == ["claude_code"]
     assert "login" not in calls
     assert "host.docker.internal" not in calls
-    assert "skipped   Grok Build. Later: boss connect grok" in output
+    assert f"skipped   Grok Build. Later: {world['boss']} connect grok" in output
     assert "skipped   Ollama (nothing was changed)" in output
     assert [b["provider"] for b in boss_api.posts("/v1/setup/models")] == ["claude_code"]
     assert boss_api.posts("/v1/setup/model") == []
@@ -1125,7 +1269,7 @@ def test_a_failed_codex_sign_in_says_why_and_records_nothing(world, boss_api) ->
     code, output = _run_tty(boss, "connect", "codex", env=world["env"])
     assert code == 1, output
     assert "Sign-in failed — The login stopped. Start it again." in output
-    assert "✗ Codex was not connected; the reason is above. Retry: boss connect codex" in output
+    assert f"✗ Codex was not connected; the reason is above. Retry: {world['boss']} connect codex" in output
     assert boss_api.posts("/v1/setup/models") == []
 
 
@@ -1135,7 +1279,7 @@ def test_install_connect_codex_never_dies_after_boss_is_up(world, boss_api) -> N
     unattended = _install(world, "--connect-codex")
     rendered = unattended.stdout + unattended.stderr
     assert unattended.returncode == 0, rendered
-    assert "Next: boss connect codex" in rendered
+    assert f"Next: {world['boss']} connect codex" in rendered
     assert boss_api.posts("/v1/setup/sign-in") == []
 
     boss_api.sign_in_fails = True
@@ -1151,7 +1295,7 @@ def test_boss_connect_claude_without_a_terminal_or_with_an_api_key_signs_nothing
     boss = _installed(world)
     no_tty = _run(boss, "connect", "claude", env=world["env"])
     assert no_tty.returncode == 2, no_tty.stdout + no_tty.stderr
-    assert "needs a person at a terminal. Run: boss connect claude" in no_tty.stdout
+    assert f"needs a person at a terminal. Run: {world['boss']} connect claude" in no_tty.stdout
 
     _set_env_line(world["install"], "ANTHROPIC_API_KEY", SECRET)
     blocked_code, blocked = _run_tty(boss, "connect", "claude", env=world["env"])
@@ -1626,7 +1770,9 @@ def test_an_install_from_before_the_record_moves_roles_on_the_old_local_model(
     assert roles["code_agent_low_cost_engine"][0] == "codex"
 
 
-def test_boss_connect_offers_a_local_model_with_yes_as_the_default(world, boss_api) -> None:
+def test_boss_connect_offers_a_local_model_with_no_as_the_default(world, boss_api) -> None:
+    """Stranger test (rc10.27): Enter on the local-model question downloaded Ollama and a 4.4 GB
+    model. It is optional and large, so it says so, and Enter is No; only "y" installs it."""
     boss = _installed(world)
     _local_ollama(world, boss_api)
     env = dict(world["env"], BOSS_TEST_UNAME="Linux")
@@ -1634,14 +1780,25 @@ def test_boss_connect_offers_a_local_model_with_yes_as_the_default(world, boss_a
     suppressed_code, suppressed = _run_tty(boss, "connect", "--no-local-model", env=env,
                                            answers="n\nn\nn\n")
     assert suppressed_code == 0, suppressed
-    assert "[Y/n]" not in suppressed
+    assert "Optional: set up a free local model" not in suppressed
     assert "ollama.com" not in _curl_urls(world)
 
-    # Codex: no. Claude: no. Grok: no. Local model: Enter, which is yes.
-    code, output = _run_tty(boss, "connect", env=env, answers="n\nn\nn\n\n", timeout=180)
+    # No login was found, so no sign-in question (stranger test r3): one line names them, and
+    # the only question is the local model. Enter, which is NO.
+    code, output = _run_tty(boss, "connect", env=env, answers="\n", timeout=180)
     assert code == 0, output
-    assert output.count("[y/N]") == 3 and output.count("[Y/n]") == 1
-    assert f"downloads {DEFAULT_LOCAL} (about 4.4 GB)" in output
+    assert output.count("[y/N]") == 1 and "[Y/n]" not in output
+    assert "inside BOSS now?" not in output
+    assert ("Not found: Codex, Claude Code, Grok Build — you can sign in to a subscription "
+            "later in Setup › Models.") in output
+    assert "Optional: set up a free local model (about 4.4 GB download)?" in output
+    assert f"downloads {DEFAULT_LOCAL}" in output
+    assert "ollama.com" not in _curl_urls(world)
+    assert f"A free local model: {world['boss']} connect --install-ollama" in output
+
+    # Only an explicit yes installs it.
+    code, output = _run_tty(boss, "connect", env=env, answers="y\n", timeout=180)
+    assert code == 0, output
     assert "https://ollama.com/install.sh" in _curl_urls(world)
     assert f"Ollama       connected: {DEFAULT_LOCAL}" in output
 
@@ -1654,13 +1811,13 @@ def test_yes_alone_never_installs_a_local_model(world, boss_api) -> None:
     assert result.returncode == 0, out
     assert "ollama.com" not in _curl_urls(world)
     assert not (Path(env["BOSS_TEST_BIN"]) / "ollama").exists()
-    assert "A free local model: boss connect --install-ollama" in out
+    assert f"A free local model: {world['boss']} connect --install-ollama" in out
     # The card: one row per source, each with its fix.
-    assert "API keys     not found. Export a key, then: boss connect keys" in out
-    assert "Codex        not found. Sign in inside BOSS: boss connect codex" in out
-    assert "Claude Code  not found. Sign in inside BOSS: boss connect claude" in out
-    assert "Ollama       not found. Set it up: boss connect --install-ollama" in out
-    assert "Default      none. Model calls fail closed until one is connected: boss connect" in out
+    assert f"API keys     not found. Export a key, then: {world['boss']} connect keys" in out
+    assert f"Codex        not found. Sign in inside BOSS: {world['boss']} connect codex" in out
+    assert f"Claude Code  not found. Sign in inside BOSS: {world['boss']} connect claude" in out
+    assert f"Ollama       not found. Set it up: {world['boss']} connect --install-ollama" in out
+    assert f"Default      none. Model calls fail closed until one is connected: {world['boss']} connect" in out
 
     again = _run(world["boss"], "connect", "--yes", env=env)
     assert again.returncode == 0, again.stdout + again.stderr
@@ -1712,8 +1869,8 @@ def test_an_existing_ollama_is_moved_only_with_consent(world, boss_api) -> None:
     assert boss_api.posts("/v1/setup/model") == []
 
     # At a terminal the question defaults to no.
-    # Rebind: Enter (no). Then the Codex, Claude Code and Grok sign-in offers: no.
-    code, output = _run_tty(boss, "connect", "--install-ollama", env=env, answers="\nn\nn\nn\n")
+    # Rebind: Enter (no). No login was found, so nothing else is asked.
+    code, output = _run_tty(boss, "connect", "--install-ollama", env=env, answers="\n")
     assert code == 1, output
     assert "Move it to the Docker bridge address" in output and "[y/N]" in output
     assert not dropin.exists()
@@ -1769,3 +1926,22 @@ def test_a_rerun_with_a_hosted_openai_key_does_not_keep_the_local_chat_address(w
     text = (world["install"] / ".env").read_text()
     assert f"OPENAI_API_KEY={SECRET}" in text
     assert local not in text and "OPENAI_MODEL=gpt-4o-mini" in text
+
+
+def test_a_launcher_runs_its_own_install_whatever_is_exported(world) -> None:
+    """Stranger test r2: the second install's launcher obeyed an exported BOSS_INSTALL_DIR, so it
+    could act on the other install. A launcher always runs its own install; `--dir` is the one
+    explicit way to point the helper elsewhere."""
+    boss = _installed(world)
+    other = world["tmp"] / "other-install"
+    (other / "scripts" / "install").mkdir(parents=True)
+    _executable(other / "scripts" / "install" / "boss.sh", "#!/bin/sh\necho OTHER-INSTALL\n")
+    env = dict(world["env"], BOSS_INSTALL_DIR=str(other))
+
+    result = _run(boss, "help", env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OTHER-INSTALL" not in result.stdout + result.stderr
+    assert "manage this BOSS Community install" in result.stdout
+    text = boss.read_text()
+    assert 'export BOSS_INSTALL_DIR="$BOSS_INSTALL_DIR_DEFAULT"' in text
+    assert "${BOSS_INSTALL_DIR:-" not in text

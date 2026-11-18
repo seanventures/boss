@@ -343,6 +343,17 @@ def prod_waits(connection: Connection, project_id: str) -> bool:
     return bool(row and row["staged"] and not row["prod"])
 
 
+#: "Only you" items a sample project (projects.sample_key) does not need on its PR path.
+OPTIONAL_FOR_A_SAMPLE = frozenset({"deploy_target"})
+
+
+def _is_sample(connection: Connection, project_id: str) -> bool:
+    """Try a sample's project (projects.sample_key set)."""
+    row = connection.execute(text(
+        "SELECT sample_key FROM projects WHERE id = :p"), {"p": project_id}).first()
+    return bool(row and row[0])
+
+
 def setup_cards(connection: Connection, project_id: str,
                 onboarding: Optional[Mapping[str, Any]] = None,
                 production_waits: Optional[bool] = None,
@@ -359,7 +370,14 @@ def setup_cards(connection: Connection, project_id: str,
             {"p": project_id}).first()
         onboarding = onboarding_service.view(connection, project_id) if has_run else {}
     out = []
+    sample = _is_sample(connection, project_id)
     for item in (onboarding or {}).get("only_you") or []:
+        # A SAMPLE NEVER WAITS ON A SERVER (stranger test r3, 2026-11-18): Try a sample builds and
+        # opens its PR with no host — its own checklist says so — yet "Pick a staging host" sat in
+        # Needs you and the bell. A server is optional for it; the onboarding checklist keeps the
+        # row, and a deploy the run reaches still stops for a person there.
+        if sample and str(item.get("key")) in OPTIONAL_FOR_A_SAMPLE:
+            continue
         action = item.get("action") or {}
         out.append({"id": f"onb:{item['key']}", "kind": "setup",
                     "label": ONLY_YOU_WORDS.get(str(item["key"])) or item["label"],

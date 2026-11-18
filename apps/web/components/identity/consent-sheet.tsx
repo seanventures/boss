@@ -94,9 +94,9 @@ function PlainConsentSheet({ request, onClose }: { request: ConsentRequest; onCl
       <div className="idn-need">
         {known.map((p) => <Perm key={p} p={p} sm />)}
         {other.map((p) => <Perm key={p} p={p} sm />)}
-        {request.github ? <span className="idn-chip"><GithubLogo size={13} aria-hidden /> {request.github.repos.join(", ") || request.github.repo}, {request.github.summary}</span> : null}
+        {request.github ? <RepoChip icon={<GithubLogo size={13} aria-hidden />} text={`${request.github.repos.join(", ") || request.github.repo}, ${request.github.summary}`} testId="consent-github" /> : null}
         {/* A repository BOSS keeps on this machine (a local-first project): named, not GitHub. */}
-        {request.local ? <span className="idn-chip" data-testid="consent-local"><Laptop size={13} aria-hidden /> {request.local.repos.join(", ") || request.local.repo}, {request.local.summary}</span> : null}
+        {request.local ? <RepoChip icon={<Laptop size={13} aria-hidden />} text={`${request.local.repos.join(", ") || request.local.repo}, ${request.local.summary}`} testId="consent-local" /> : null}
       </div>
       <div className="idn-opts" data-testid="consent-durations">
         {durations.map((d, i) => (
@@ -243,4 +243,15 @@ export function ConsentHost() {
     return () => window.removeEventListener(CONSENT_EVENT, on);
   }, []);
   return request ? <ConsentSheet request={request} onClose={() => setRequest(null)} /> : null;
+}
+
+/** A repository chip. Repository names run long (a local one is `local_<project>/<name>`): the chip
+ *  never grows past the sheet, the text ellipsizes, and the whole name is on hover (stranger test
+ *  r3, the Easy Mode sheet's chip ran past its right edge). */
+function RepoChip({ icon, text, testId }: { icon: React.ReactNode; text: string; testId: string }) {
+  return (
+    <span className="idn-chip idn-chip-repo" data-testid={testId} title={text}>
+      {icon}<span className="idn-chip-text">{text}</span>
+    </span>
+  );
 }

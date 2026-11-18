@@ -21,18 +21,22 @@ from .manifest import TemplateManifest
 
 
 def _write_tree(dest: Path, files: dict[str, bytes], prefix: str) -> None:
-    old = os.umask(0)
-    try:
-        for path, content in files.items():
-            if not path.startswith(prefix):
-                continue
-            target = (dest / path[len(prefix):]).resolve()
-            if dest.resolve() not in target.parents:
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(content)
-    finally:
-        os.umask(old)
+    # Open to the sandbox's uid by chmod, never os.umask: the umask is process-wide, and every
+    # other thread's files would be created world-writable meanwhile (process_umask guard).
+    root = dest.resolve()
+    for path, content in files.items():
+        if not path.startswith(prefix):
+            continue
+        target = (dest / path[len(prefix):]).resolve()
+        if root not in target.parents:
+            continue
+        missing = [d for d in (target.parent, *target.parent.parents)
+                   if d != root and root in d.parents and not d.exists()]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        for d in missing:
+            os.chmod(d, 0o777)
+        target.write_bytes(content)
+        os.chmod(target, 0o666)
 
 
 def run_stack(manifest: TemplateManifest, files: dict[str, bytes], stack: str, *,

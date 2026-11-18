@@ -51,7 +51,16 @@ IMPORT_EXCLUDES = ("node_modules/", ".venv/", "venv/", "__pycache__/", ".pytest_
                    "*.pyc")
 
 #: A new local project's first commit.
-GITIGNORE = "node_modules/\n.venv/\n__pycache__/\ndist/\nbuild/\n.env\n.env.local\n*.pyc\n.DS_Store\n"
+#: A new local project's .gitignore: secrets, dependencies, and build output that is never source
+#: in any stack (Go test binaries *.test, Windows *.exe, Gradle/Compose .gradle/, *.apk, *.aab,
+#: JVM target/ and *.class, Next.js .next/, Godot .godot/ and *.pck). Not `bin/`: in a Node or a
+#: Python project bin/ holds source (bin/cli.js). A compiled program anywhere else is caught by
+#: the sandbox (EphemeralSandbox.diff), and the Go templates write theirs to /bin/ and ignore it.
+GITIGNORE = (
+    "node_modules/\n.venv/\n__pycache__/\ndist/\nbuild/\n.env\n.env.local\n*.pyc\n.DS_Store\n"
+    "# build output\n"
+    "*.exe\n*.test\ntarget/\n.gradle/\n*.class\n*.apk\n*.aab\n.next/\n.godot/\n*.pck\n"
+)
 
 
 class LocalRepoError(RuntimeError):
@@ -460,18 +469,31 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def initial_files(title: str, description: str = "") -> dict[str, str]:
+#: Stack-specific build output, added to a new project's .gitignore by its stack's first word.
+#: Go builds its program into /bin/ (the Go templates say `go build -o bin/<name> .`); only
+#: there, since bin/ holds source in other stacks.
+STACK_GITIGNORE = {"go": "# Go: compiled programs\n/bin/\n"}
+
+
+def gitignore_for(stack: Optional[str] = None) -> str:
+    """A new project's .gitignore: the shared rules plus its stack's own build output."""
+    word = str(stack or "").strip().split(" ", 1)[0].lower()
+    return GITIGNORE + STACK_GITIGNORE.get(word, "")
+
+
+def initial_files(title: str, description: str = "", stack: Optional[str] = None
+                  ) -> dict[str, str]:
     readme = f"# {title.strip() or 'New project'}\n"
     if description.strip():
         readme += f"\n{description.strip()}\n"
     readme += ("\nThis project's code lives on this machine, in a git repository BOSS keeps. "
                "Publish it to GitHub whenever you are ready; its whole history goes with it.\n")
-    return {"README.md": readme, ".gitignore": GITIGNORE}
+    return {"README.md": readme, ".gitignore": gitignore_for(stack)}
 
 
 def create(project_id: str, name: str, *, settings: Any = None, title: str = "",
            description: str = "", files: Optional[Mapping[str, Content]] = None,
-           default: str = DEFAULT_BRANCH) -> dict[str, Any]:
+           default: str = DEFAULT_BRANCH, stack: Optional[str] = None) -> dict[str, Any]:
     """A new local project's bare repository with an initial commit (README, .gitignore).
     Idempotent: an existing repository is returned as it is."""
     owner, repo = owner_for(project_id), clean_name(name)
@@ -480,7 +502,7 @@ def create(project_id: str, name: str, *, settings: Any = None, title: str = "",
         return describe(owner, repo, settings)
     init_bare(path, default=default, marker={"project_id": project_id, "name": repo,
                                              "created_at": _now(), "origin": "new"})
-    commit_files(path, default, files or initial_files(title or name, description),
+    commit_files(path, default, files or initial_files(title or name, description, stack),
                  "Initial commit (BOSS)")
     return describe(owner, repo, settings)
 

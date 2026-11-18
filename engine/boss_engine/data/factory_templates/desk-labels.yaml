@@ -7,9 +7,11 @@ prompt: |
   panels. In an immersive session the person taps the floor to drop the next title as a panel that
   faces the viewer. When WebXR is unavailable, the same list is placed by clicking a ground grid
   in a Three.js view. Placed labels are stored in a sqlite file or IndexedDB so a reload shows
-  them again. There is no cloud anchor account. A passing test uses the desktop fallback, places
+  them again. Use Node's built-in node:sqlite module or a pure-JavaScript sqlite package, not a native
+  module that downloads a binary when it installs. There is no cloud anchor account. A passing test uses the desktop fallback, places
   two labels, reloads the stored list, and checks that both titles and their grid positions remain.
 stack: WebXR
+toolchain: node
 resources:
   - repo
   - preview

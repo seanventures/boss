@@ -7,7 +7,7 @@ a person approves, and chosen spaces are kept in BOSS's knowledge.
 
 1. Create an Atlassian API token: id.atlassian.com › Security › API tokens (the account must be able
    to see the spaces the agents should read, and to edit the ones they should publish to).
-2. In the console: **Setup › Ticket systems › Confluence › Connect Confluence**.
+2. In the console: **Setup › Documents › Confluence › Connect Confluence**.
 3. Site URL: `https://<site>.atlassian.net/wiki`. Email: the account that owns the token. Paste the
    token. Or tick **Use the org's Jira credential** when Jira is connected for the same Atlassian
    site: the email and token are copied into Confluence's own vault entry (disconnecting Jira later

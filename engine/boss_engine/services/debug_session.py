@@ -498,11 +498,11 @@ def run_on_investigation_host(*, host: str, command: str, project_id: str,
     ephemeral = None
     with begin(get_engine(settings)) as c:
         row = c.execute(
-            sql(f"SELECT * FROM deployment_hosts WHERE {_usable_hosts()} AND (id = :h OR name = :h)"),
+            sql(_host_by_hint_sql()),
             {"p": project_id, "h": host.strip()}).mappings().first()
         if row is None:
             names = [r["name"] for r in c.execute(
-                sql("SELECT name FROM deployment_hosts WHERE project_id = :p"),
+                sql(f"SELECT name FROM deployment_hosts WHERE {_usable_hosts()}"),
                 {"p": project_id}).mappings().all()]
             return {"ok": False,
                     "error": f"no registered host {host!r}. This project has: {names}"}
@@ -1282,6 +1282,13 @@ def get_investigation(connection, *, project_id: str,
 __all__ = ["open_investigation", "run_investigation", "get_investigation",
            "host_command_allowed", "sql_is_read_only", "sql_is_allowed",
            "run_on_investigation_host", "authorise", "run_db", "run_operation"]
+
+
+def _host_by_hint_sql(columns: str = "*") -> str:
+    """deployment_fleet.host_by_hint_sql: the one id/name/address lookup over usable hosts."""
+    from .deployment_fleet import host_by_hint_sql
+
+    return host_by_hint_sql(columns)
 
 
 def _usable_hosts(alias: str = "") -> str:

@@ -11,6 +11,7 @@ prompt: |
   test deals a scripted board, swaps two tiles to make a line of three, and checks that those
   cells clear and the score is 3.
 stack: HTML canvas
+toolchain: node
 resources:
   - repo
   - preview

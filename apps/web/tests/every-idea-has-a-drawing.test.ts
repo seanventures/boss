@@ -54,8 +54,9 @@ describe("every idea has a drawing", () => {
       const label = ideaPreviewLabel(title)!;
       expect(label.startsWith(`${title} preview: `), title).toBe(true);
       expect(label.length - title.length, `${title}: say what the screen shows`).toBeGreaterThan(50);
-      // The window chrome, titled with the app's own screen.
-      expect(svg, title).toMatch(/<text x="160" y="16"[^>]*>[^<]+ · [^<]+<\/text>|>Terminal<\/text>/);
+      // The window chrome, titled with the app's own screen ("App, Screen": the console dropped
+      // the middle dot in 410dde5c7, BOSSAPP-899).
+      expect(svg, title).toMatch(/<text x="160" y="16"[^>]*>[^<]+, [^<]+<\/text>|>Terminal<\/text>/);
       // Drawn inline with literal colours; never an image or a theme token.
       expect(svg, title).not.toMatch(/<image|href=|var\(--/);
     }

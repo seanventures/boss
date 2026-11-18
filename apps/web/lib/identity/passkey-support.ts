@@ -37,7 +37,9 @@ function placeIsSecure(where: PasskeyPlace): boolean {
  * even when the API judged a forwarded http scheme (`passkey_needs_https`). An unknown place
  * (no `where`) still trusts that API reason.
  */
-export function passkeyBlockWords(reason: string | null | undefined, where: PasskeyPlace): string | null {
+export function passkeyBlockWords(reason: string | null | undefined, where: PasskeyPlace, bound?: string | null): string | null {
+  const elsewhere = passkeyOtherLoopbackWords(bound, where);
+  if (elsewhere) return elsewhere;
   if (reason === "passkey_needs_domain") return PASSKEY_NEEDS_DOMAIN_WORDS;
   const hostname = where?.hostname ?? "";
   if (hostname && isIpHost(hostname)) return PASSKEY_NEEDS_DOMAIN_WORDS;
@@ -46,6 +48,25 @@ export function passkeyBlockWords(reason: string | null | undefined, where: Pass
     if (hostname && where?.protocol && where.protocol !== "https:") return PASSKEY_NEEDS_HTTPS_WORDS;
   }
   return null;
+}
+
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "::1"]);
+const bare = (h: string | null | undefined) => (h ?? "").trim().toLowerCase().replace(/^\[|\]$/g, "");
+
+/**
+ * THE OTHER SPELLING OF THIS MACHINE (stranger test r3 review). The API accepts a sign-in from
+ * localhost, 127.0.0.1 or [::1] on the bound loopback origin's port, but a passkey belongs to the
+ * bound origin's RP ID, which the API keeps: on the other spelling the browser refuses it. Say
+ * where the passkey works instead of offering one that cannot. Null: not that case.
+ */
+export function passkeyOtherLoopbackWords(bound: string | null | undefined, where: PasskeyPlace): string | null {
+  if (!bound || !where?.hostname) return null;
+  let home: URL;
+  try { home = new URL(bound); } catch { return null; }
+  const page = bare(where.hostname);
+  const boundHost = bare(home.hostname);
+  if (!LOOPBACK.has(page) || !LOOPBACK.has(boundHost) || page === boundHost) return null;
+  return `Passkeys for this BOSS work at ${home.origin}. Open it there to use yours, or sign in here with your password and code.`;
 }
 
 /** This page, including the browser's secure-context bit. Null during a server render. */

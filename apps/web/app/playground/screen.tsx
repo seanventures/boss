@@ -8,6 +8,7 @@
  * Syne for the name, and one perforated ticket for the receipt.
  */
 import React, { useState } from "react";
+import { apiWrite } from "../../lib/api-write";
 
 export type PlaygroundResult = {
   prompt: string;
@@ -158,7 +159,7 @@ const CSS = `
 `;
 
 export async function runPlayground(input: PlaygroundRequest): Promise<PlaygroundResult> {
-  const response = await fetch("/v1/playground/runs", {
+  const response = await apiWrite("/v1/playground/runs", {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify({

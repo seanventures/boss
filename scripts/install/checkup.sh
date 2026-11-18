@@ -124,7 +124,7 @@ env_file_error() {
   [ -f "$ENV_FILE" ] || return 0
   awk -v k="" -v mode=error "$_env_awk" "$ENV_FILE" 2>/dev/null || true
 }
-for key in BOSS_API_PORT BOSS_WEB_PORT BOSS_DEFAULT_PROJECT_ID BOSS_HOST_API_KEY BOSS_API_KEY BOSS_PUBLIC_URL BOSS_API_BIND COMPOSE_PROJECT_NAME; do
+for key in BOSS_API_PORT BOSS_WEB_PORT BOSS_PREVIEW_PORT BOSS_DEFAULT_PROJECT_ID BOSS_HOST_API_KEY BOSS_API_KEY BOSS_PUBLIC_URL BOSS_API_BIND COMPOSE_PROJECT_NAME; do
   if [ -z "${!key:-}" ]; then
     value="$(env_value "$key")"
     [ -z "$value" ] || printf -v "$key" '%s' "$value"
@@ -138,6 +138,14 @@ export BOSS_ENV_FILE="$ENV_FILE"
 STACK="${COMPOSE_PROJECT_NAME:-boss-community}"
 API_PORT="${BOSS_API_PORT:-8000}"
 WEB_PORT="${BOSS_WEB_PORT:-3000}"
+# Previews open on their own port (docs/community/CONSOLE_AUTH.md): a tunnel without it shows the
+# console but every preview link fails.
+PREVIEW_PORT="${BOSS_PREVIEW_PORT:-3001}"
+# The whole tunnel, in one command a person can paste on their laptop.
+ssh_tunnel_hint() {
+  printf 'ssh -L %s:127.0.0.1:%s -L %s:127.0.0.1:%s -L %s:127.0.0.1:%s user@this-server' \
+    "$WEB_PORT" "$WEB_PORT" "$PREVIEW_PORT" "$PREVIEW_PORT" "$API_PORT" "$API_PORT"
+}
 PROJECT="${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}"
 # 0.0.0.0 still answers on loopback. A specific --api-bind address does not.
 API_BIND="${BOSS_API_BIND:-127.0.0.1}"
@@ -153,10 +161,15 @@ AUTH=(); [ -n "$KEY" ] && AUTH=(-H "Authorization: Bearer $KEY")
 
 G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; B=$'\e[1m'; N=$'\e[0m'
 fail=0
+# Warnings are counted: "BOSS is ready" next to five warnings read as "nothing to do" (stranger
+# test, rc10.27), so the verdict says how many there are.
+warns=0
 # Each FAIL may name its remedy (the second argument): what --repair offers for it.
 FAILED=()
 ok()   { printf "  ${G}ok${N}    %s\n" "$1"; }
-warn() { printf "  ${Y}warn${N}  %s\n" "$1"; }
+warn() { printf "  ${Y}warn${N}  %s\n" "$1"; warns=$((warns + 1)); }
+# A plain fact that needs nothing from anyone: not a warning, not counted.
+note() { printf "  note  %s\n" "$1"; }
 bad()  { printf "  ${R}FAIL${N}  %s\n" "$1"; fail=1; FAILED+=("${2:-}"); }
 
 printf "\n${B}BOSS checkup${N}  (%s)\n\n" "$API"
@@ -215,7 +228,7 @@ elif printf '%s' "$compiled" | grep -q '127.0.0.1\|localhost'; then
     bad "console → API: built with $compiled — a browser on another machine cannot reach that.
         Rebuild web with --public-url (see scripts/install/README.md)" console_loopback
   elif [ -n "${SSH_CONNECTION:-}" ]; then
-    warn "console → API: $compiled uses loopback; forward both console :$WEB_PORT and API :$API_PORT over SSH before opening it in a browser"
+    warn "console → API: $compiled uses loopback; from your laptop forward the console, previews and API over SSH: $(ssh_tunnel_hint)"
   else ok "console → API: $compiled (local install)"; fi
 else ok "console → API: $compiled"; fi
 
@@ -226,10 +239,15 @@ else ok "console → API: $compiled"; fi
 # is taken from the address the console was built for, because that is already known to be one
 # a browser can reach.
 console_host=$(printf '%s' "$compiled" | sed -E 's#^[a-z]+://##; s#[:/].*$##')
-if [ -n "$console_host" ] && ! printf '%s' "$console_host" | grep -q '127.0.0.1\|localhost'; then
+if [ -n "${BOSS_CONSOLE_URL:-}" ]; then
+  # boss doctor passes the install's bound origin (boss.sh console_base): where its sessions and
+  # passkeys live, which beats any guess made here.
+  CONSOLE_URL="${BOSS_CONSOLE_URL%/}"
+elif [ -n "$console_host" ] && ! printf '%s' "$console_host" | grep -q '127.0.0.1\|localhost'; then
   CONSOLE_URL="http://${console_host}:${WEB_PORT}"
 else
-  CONSOLE_URL="http://127.0.0.1:${WEB_PORT}"
+  # localhost, like the claim link: 127.0.0.1 is a different site for passkeys and sessions.
+  CONSOLE_URL="http://localhost:${WEB_PORT}"
 fi
 
 # 4. models: connected AND with capacity
@@ -253,7 +271,8 @@ if [ "$PROBE" -eq 1 ]; then
   if printf '%s' "$reply" | grep -qi "ok"; then ok "chat: a model answered"
   else bad "chat: no usable answer — a model is connected but not working" chat_silent; fi
 else
-  warn "chat: not asked (run with --probe to prove a model actually answers)"
+  # Not a problem, a choice (asking costs tokens): a note, so it never counts as a warning.
+  note "chat: not asked (run with --probe to prove a model actually answers)"
 fi
 
 # 6. repository, pushable
@@ -298,9 +317,9 @@ case "$claim" in
     # BOSSAPP-813: from the server's own network the console's https address is the claim itself.
     claim_origin="$(env_value BOSS_CONSOLE_PUBLIC_ORIGIN)"
     if [ -n "$claim_origin" ]; then
-      warn "identity: unclaimed — nobody owns this BOSS yet. Open ${claim_origin%/} to claim this BOSS (from your own network); from elsewhere run: boss identity setup-link"
+      warn "identity: unclaimed — nobody owns this BOSS yet. Open ${claim_origin%/} to claim this BOSS (from your own network); from elsewhere run: ${BOSS_COMMAND:-boss} identity setup-link"
     else
-      warn "identity: unclaimed — nobody owns this BOSS yet. Run on this server: boss identity setup-link (prints a one-hour link that makes you the Owner; open it in your browser)"
+      warn "identity: unclaimed — nobody owns this BOSS yet. Run on this server: ${BOSS_COMMAND:-boss} identity setup-link (prints a one-hour link that makes you the Owner; open it in your browser)"
     fi ;;
   claimed*) ok "identity: $claim" ;;
   *) : ;;   # an older image without the identity CLI: nothing to say
@@ -313,15 +332,25 @@ esac
 # this install has had was a line in this list that nobody knew was there — a CI timeout of 20
 # seconds, a reviewer turn cap, three coding agents on a box that fits one.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if drift=$(python3 "$HERE/drift.py" 2>/dev/null); then
+drift_err=""
+if drift=$(python3 "$HERE/drift.py" 2>"${TMPDIR:-/tmp}/boss-drift.$$"); then
   n=$(printf '%s' "$drift" | sed 's/\x1b\[[0-9;]*m//g' | grep -c '^  ~ ' || true)
   unread=$(printf '%s' "$drift" | sed 's/\x1b\[[0-9;]*m//g' | grep -c '^  ? ' || true)
   if [ "$n" -eq 0 ]; then ok "config: identical to a stock install"
   else ok "config: $n setting(s) differ from stock — scripts/install/drift.py to see which"; fi
   [ "$unread" -gt 0 ] && warn "config: $unread BOSS_ variable(s) set that nothing reads (drift.py names them)"
 else
-  warn "config: could not compare against a stock install"
+  drift_err="$(cat "${TMPDIR:-/tmp}/boss-drift.$$" 2>/dev/null || true)"
+  # drift.py reads BOSS's own settings code, so it needs BOSS's Python packages. A host python3
+  # without them (the usual case: BOSS runs in containers) is not a problem with the install;
+  # say so plainly instead of an unexplained warning.
+  if printf '%s' "$drift_err" | grep -q 'ModuleNotFoundError\|ImportError'; then
+    note "config: drift report skipped (it needs BOSS's Python packages on this machine; nothing is wrong)"
+  else
+    warn "config: the drift report failed — run python3 scripts/install/drift.py to see why"
+  fi
 fi
+rm -f "${TMPDIR:-/tmp}/boss-drift.$$"
 
 # 9. what this install tells the BOSS project (docs/product/RUN_SCORECARDS.md). Said plainly
 # every time. The words are the engine's ONE list (improve_boss.TELEMETRY_OFF_WORDS and
@@ -343,8 +372,19 @@ else
 fi
 
 printf "\n"
-if [ "$fail" -eq 0 ]; then printf "  ${G}${B}BOSS is ready.${N}  Mission Control: %s\n\n" "$CONSOLE_URL"
-else printf "  ${R}${B}Not ready.${N} Fix the FAIL lines above, then run this again.\n\n"; fi
+if [ "$fail" -ne 0 ]; then printf "  ${R}${B}Not ready.${N} Fix the FAIL lines above, then run this again.\n\n"
+elif [ "$warns" -eq 0 ]; then printf "  ${G}${B}BOSS is ready.${N}  Mission Control: %s\n\n" "$CONSOLE_URL"
+else
+  [ "$warns" -eq 1 ] && _w="1 warning" || _w="$warns warnings"
+  printf "  ${G}${B}BOSS is running${N}, ${Y}%s to look at${N} (above).  Mission Control: %s\n\n" "$_w" "$CONSOLE_URL"
+fi
+# THE NEXT STEP, the same words the installer's card leads with: nobody owns a fresh BOSS until
+# someone claims it, and Setup comes after that.
+if [ "$fail" -eq 0 ] && [ "$claim" = unclaimed ] && [ -f "$HERE/next_step.sh" ]; then
+  bash "$HERE/next_step.sh" --claim unclaimed --setup-url "${CONSOLE_URL}/?area=setup" \
+    --boss "${BOSS_COMMAND:-boss}" --origin "$(env_value BOSS_CONSOLE_PUBLIC_ORIGIN)"
+  printf "\n"
+fi
 [ "$REPAIR" -eq 1 ] && [ "$fail" -ne 0 ] || exit "$fail"
 
 # ── --repair (BOSSAPP-895): every FAIL to its remedy ────────────────────────────────────────────
@@ -379,7 +419,7 @@ elif has api_silent && [ "${#DOCKER[@]}" -gt 0 ]; then SAFE+=(restart_api); fi
 has docker_down && MANUAL+=("Docker: start it (Docker Desktop, or: sudo systemctl start docker), then run this again")
 has env_quote && MANUAL+=(".env line $_env_bad: close the quote (or remove the line); Compose reads nothing until then")
 has console_loopback && MANUAL+=("console address: rebuild web for its public address — scripts/install/README.md (public URL)")
-has chat_silent && MANUAL+=("models: boss connect (or Setup) to sign the model in again")
+has chat_silent && MANUAL+=("models: ${BOSS_COMMAND:-boss} connect (or Setup) to sign the model in again")
 has repository && MANUAL+=("repository: Setup › Test access, then fix what it names")
 has sandbox_fence && MANUAL+=("sandbox: docs/community/SANDBOX.md — turning the fence off is a security choice, never made for you")
 describe() {
@@ -412,7 +452,7 @@ for remedy in ${SAFE[@]+"${SAFE[@]}"}; do
       else printf "  ${R}could not start the services${N}: boss logs, or Compose's own message above\n"; fi ;;
     restart_api)
       if repair_compose restart api >/dev/null 2>&1; then applied=1
-      else printf "  ${R}could not restart the API${N}: boss logs api\n"; fi ;;
+      else printf "  ${R}could not restart the API${N}: ${BOSS_COMMAND:-boss} logs api\n"; fi ;;
   esac
 done
 if [ "$applied" -eq 1 ]; then

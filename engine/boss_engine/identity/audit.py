@@ -95,7 +95,7 @@ EVENT_TYPES: frozenset[str] = frozenset({
     # policy and system
     "policy.changed", "bootstrap.claimed", "identity.setup_link_issued", "owner.recovered_by_host", "banner.acknowledged", "legacy.password_used",
     "legacy.api_key_used", "legacy.network_used", "legacy.claimed_actor_ignored",
-    "legacy.path_retired", "catalogue.permission_removed", "audit.exported", "audit.verified",
+    "legacy.path_retired", "legacy.path_restored", "catalogue.permission_removed", "audit.exported", "audit.verified",
     "audit.checkpoint",
     # cross-app links (APP_TEMPLATES_AND_SECURITY_LOOP.md §5.6, D9; stream S5 of the app platform)
     "app_link.created", "app_link.revoked", "app_link.test_users_revealed",

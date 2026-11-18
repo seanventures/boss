@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from sqlalchemy import text
 
 from apps.api.app.config import get_settings
@@ -28,6 +29,7 @@ blurb: A list and an editor.
 category: app
 prompt: Build alpha notes.
 stack: vite-react
+toolchain: node
 resources:
   - postgres
 workflows:
@@ -44,6 +46,7 @@ blurb: Three columns.
 category: app
 prompt: Build a beta board.
 stack: vite-react
+toolchain: node
 resources:
   - redis
 workflows:
@@ -66,6 +69,24 @@ workflows:
     steps:
       - Draft the columns
 """
+
+
+@pytest.fixture(autouse=True)
+def _local_repos_in_tmp(monkeypatch, tmp_path):
+    """A launch with no GitHub repository makes the project a local repository: on disk, under
+    this test's own folder, never the install's."""
+    from apps.api.app.routers import factory_launch as route
+
+    monkeypatch.setattr(route._settings, "local_repo_root", str(tmp_path / "repos"))
+
+
+@pytest.fixture(autouse=True)
+def _a_model_is_connected(monkeypatch):
+    """The builder here is a stand-in that needs no model; the launch's model-first refusal
+    (03385e9da, tests/test_no_model_is_said_as_no_model) is not what these tests are about."""
+    from boss_engine.services import model_readiness
+
+    monkeypatch.setattr(model_readiness, "usable_model", lambda *a, **kw: True)
 
 
 def _write_catalogue(directory: Path) -> None:
@@ -473,3 +494,405 @@ def test_connected_github_repo_is_passed_to_the_build(client, engine, monkeypatc
     assert body["resources"] == []
     assert calls[0]["spec"]["github_repo"] == "Acme/Notes"
     assert calls[0]["project_id"] == body["project_id"]
+
+
+def test_consent_keeps_the_project_and_the_same_launch_builds_in_it(
+        client, engine, monkeypatch, tmp_path):
+    """EASY MODE UNDER CONSENT (2026-11-17): the build start's 409 consent_required used to roll
+    back the project and the agents it named, so every retry made a new project and asked again.
+    The route now commits the kept project, answers the flat consent body with its id, and the
+    same launch sent after the grant builds in it: one project, one receipt, idempotent after."""
+    from boss_engine.identity.consent import ConsentRequired
+
+    monkeypatch.setattr(
+        "boss_engine.services.factory_launch.TEMPLATE_DIR", tmp_path / "absent")
+    granted = {"yes": False}
+    calls: list = []
+
+    def build(connection, *, project_id, spec, actor, settings, jobs, reservation_id):
+        # What the start wrote before it asked goes back with the savepoint.
+        connection.execute(text("UPDATE projects SET description = 'started' WHERE id = :p"),
+                           {"p": project_id})
+        if not granted["yes"]:
+            raise ConsentRequired({
+                "error": "consent_required", "task": spec["title"], "task_run_id": "pending:abc",
+                "agents": [{"id": "agt_forge_x", "name": "Software Engineer",
+                            "role_key": "software_engineer"}],
+                "permissions": ["code_task:read"], "projects": [project_id], "github": None,
+                "durations": [{"kind": "task", "label": "For this build only", "days": None}],
+                "max_days": 90})
+        calls.append({"project_id": project_id, "reservation_id": reservation_id})
+        return {"project_id": project_id, "run_id": "run_after_consent"}
+
+    monkeypatch.setattr("boss_engine.services.factory_launch.build_run", build)
+    payload = {"prompt": "Build a CSV quality desk that flags bad rows.", "mode": "build"}
+    projects_before = _count(engine, "projects")
+
+    asked = client.post("/v1/factory/launch", json=payload)
+
+    assert asked.status_code == 409, asked.text
+    body = asked.json()
+    assert body["error"] == "consent_required"                     # flat, as every start sends it
+    assert body["agents"][0]["name"] == "Software Engineer"
+    project_id = body["project_id"]
+    assert body["retry"] == {"project_id": project_id, "dedupe_key": body["dedupe_key"]}
+    # KEPT: the project and its workflows are committed; the start's own writes are not.
+    project = _one(engine, "SELECT id, description FROM projects WHERE id = :p", p=project_id)
+    assert project is not None and project["description"] != "started"
+    assert _count(engine, "projects") == projects_before + 1
+    assert _count_where(engine, "SELECT count(*) FROM workflow_definitions WHERE project_id = :p "
+                        "AND workflow_key LIKE 'launch-%'", p=project_id) == 1
+    # The reservation went back with the start (nothing held while the person decides).
+    assert _count_where(engine, "SELECT count(*) FROM budget_reservations WHERE project_id = :p",
+                        p=project_id) == 0
+    assert _count_where(engine, "SELECT count(*) FROM receipts WHERE dedupe_key = :k AND "
+                        "status = 'in_progress'", k=body["dedupe_key"]) == 1
+
+    # Pressed again before consenting: the same project is asked about, never a new one.
+    again = client.post("/v1/factory/launch", json=payload)
+    assert again.status_code == 409 and again.json()["project_id"] == project_id
+    assert _count(engine, "projects") == projects_before + 1
+
+    granted["yes"] = True
+    built = client.post("/v1/factory/launch", json=payload)
+
+    assert built.status_code == 201, built.text
+    done = built.json()
+    assert done["project_id"] == project_id and done["run_id"] == "run_after_consent"
+    assert done["reused"] is False
+    assert calls == [{"project_id": project_id, "reservation_id": done["reservation_id"]}]
+    assert _count(engine, "projects") == projects_before + 1
+    rows = _count_where(engine, "SELECT count(*) FROM receipts WHERE dedupe_key = :k",
+                        k=body["dedupe_key"])
+    assert rows == 1
+    assert _count_where(engine, "SELECT count(*) FROM receipts WHERE dedupe_key = :k AND "
+                        "status = 'succeeded' AND result->>'run_id' = 'run_after_consent'",
+                        k=body["dedupe_key"]) == 1
+    assert done["receipt_id"] == body["receipt_id"]
+
+    repeat = client.post("/v1/factory/launch", json=payload)
+    assert repeat.status_code == 201
+    assert repeat.json()["reused"] is True and repeat.json()["run_id"] == "run_after_consent"
+    assert len(calls) == 1
+    assert _count(engine, "projects") == projects_before + 1
+
+
+def test_a_launch_with_no_github_repo_builds_in_a_real_local_repository(
+        client, engine, monkeypatch, tmp_path):
+    """EASY MODE NEVER BUILDS ON A PLACEHOLDER (2026-11-18): with no GitHub repository chosen it
+    built against `_local/lucky`, which nothing could clone, and the build died with a 500. The
+    project now gets its own local primary repository (the helper samples use) and the build is
+    started against that repository's real name."""
+    from apps.api.app.routers import factory_launch as route
+    from boss_engine.services import local_repo
+
+    monkeypatch.setattr(
+        "boss_engine.services.factory_launch.TEMPLATE_DIR", tmp_path / "absent")
+    calls: list = []
+    _patch_builder(monkeypatch, calls, run_id="run_local_1")
+
+    response = client.post("/v1/factory/launch", json={"prompt": "A CSV quality desk, locally."})
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    project_id = body["project_id"]
+    repo = body["spec"]["local_repo"]
+    owner, name = repo.split("/", 1)
+    assert owner == local_repo.owner_for(project_id)
+    assert "lucky" not in repo and not repo.startswith("_local")
+    assert calls[0]["spec"]["local_repo"] == repo
+    assert calls[0]["spec"].get("github_repo") is None
+    binding = _one(engine, "SELECT full_name, role, host FROM github_repository_bindings "
+                   "WHERE project_id = :p AND status = 'active'", p=project_id)
+    assert dict(binding) == {"full_name": repo, "role": "primary", "host": "local"}
+    assert local_repo.exists(owner, name, route._settings)
+    assert local_repo.bare_path(owner, name, route._settings).is_relative_to(tmp_path)
+
+
+def test_the_real_build_start_names_the_local_repository(client, engine, monkeypatch, tmp_path):
+    """The real build_run (start_code_task, no model): the run's spec is the local repository,
+    with repo_host local, so its clone never asks GitHub."""
+    from boss_engine.services import factory_launch
+
+    seen: dict = {}
+
+    def start(connection, **kw):
+        seen.update(kw)
+        return "crun_local_1"
+
+    monkeypatch.setattr("boss_engine.services.code_task_service.start_code_task", start)
+    out = factory_launch.build_run(
+        None, project_id="prj_x", spec={"title": "CSV desk", "local_repo": "local_prj_x/csv-desk"},
+        actor="ceo", settings=get_settings(), jobs=None, reservation_id="res_1")
+    assert out == {"project_id": "prj_x", "run_id": "crun_local_1"}
+    assert (seen["owner"], seen["repo"], seen["repo_host"]) == ("local_prj_x", "csv-desk", "local")
+
+    with pytest.raises(factory_launch.FactoryLaunchError) as refused:
+        factory_launch.build_run(None, project_id="prj_x", spec={"title": "CSV desk"},
+                                 actor="ceo", settings=get_settings(), jobs=None,
+                                 reservation_id="res_1")
+    assert refused.value.code == "no_repository" and " " in refused.value.message
+
+
+def test_a_refused_launch_leaves_no_repository_folder_behind(client, engine, monkeypatch, tmp_path):
+    """The personal-data check runs after the project's local repository is made; when it blocks
+    (or asks), the project rolls back and the folder made for it on this call is removed."""
+    monkeypatch.setattr(
+        "boss_engine.services.factory_launch.TEMPLATE_DIR", tmp_path / "absent")
+    calls: list = []
+    _patch_builder(monkeypatch, calls)
+    before = _count(engine, "projects")
+
+    for prompt, code in (("Bill card 4111 1111 1111 1111 every month.", "personal_data_blocked"),
+                         ("Email the summary to ada@example.com daily.", "personal_data_ask")):
+        refused = client.post("/v1/factory/launch", json={"prompt": prompt})
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["error"] == code
+
+    assert calls == []
+    assert _count(engine, "projects") == before
+    repos = tmp_path / "repos"
+    assert not repos.exists() or list(repos.iterdir()) == []
+
+
+_GO_DESK = """\
+id: fixture-clock
+title: Fixture clock
+blurb: A frozen clock for demos.
+category: internal
+prompt: Build a Go API named Fixture Clock.
+stack: Go API
+toolchain: go
+resources: []
+workflows:
+  - name: build
+    steps:
+      - scaffold
+"""
+
+
+def _gitignore_of(spec_repo: str) -> str:
+    import subprocess
+
+    from apps.api.app.routers import factory_launch as route
+    from boss_engine.services import local_repo
+
+    owner, name = spec_repo.split("/", 1)
+    bare = local_repo.bare_path(owner, name, route._settings)
+    return subprocess.run(["git", "--git-dir", str(bare), "show", "HEAD:.gitignore"],
+                          capture_output=True, text=True, check=True).stdout
+
+
+def test_a_picked_template_names_the_project_and_brings_its_stack(
+        client, engine, monkeypatch, tmp_path):
+    """Picking a card fills the brief AND sends template_id: the template is the spec (its title,
+    its stack), the person's words are its prompt. The brief used to win outright: the project
+    was named after its first 80 characters and the stack never reached .gitignore."""
+    catalogue = tmp_path / "factory_templates"
+    catalogue.mkdir()
+    (catalogue / "go.yaml").write_text(_GO_DESK, encoding="utf-8")
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", catalogue)
+    _toolchains(monkeypatch, tmp_path, '{"go": {"go": "1.27"}}')
+    calls: list = []
+    _patch_builder(monkeypatch, calls)
+    brief = ("Build a Go API named Fixture Clock that listens on localhost and serves a frozen "
+             "instant at GET /time, plus seeded users at GET /users.")
+
+    response = client.post("/v1/factory/launch",
+                           json={"prompt": brief, "template_id": "fixture-clock"})
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["mode"] == "template" and body["template_id"] == "fixture-clock"
+    assert body["spec"]["title"] == "Fixture clock"
+    assert body["spec"]["stack"] == "Go API"
+    assert calls[0]["spec"]["prompt"] == brief                  # the person's words are built
+    project = _one(engine, "SELECT name FROM projects WHERE id = :p", p=body["project_id"])
+    assert project["name"] == "Fixture clock"
+    repo = body["spec"]["local_repo"]
+    assert repo.endswith("/fixture-clock")
+    assert "/bin/" in _gitignore_of(repo).splitlines()          # Go's build output, ignored
+
+
+def _toolchains(monkeypatch, tmp_path, manifest: str) -> None:
+    """This install's toolchain manifest, as the image writes it ({} when none is turned on)."""
+    from boss_engine.services import toolchains
+
+    path = tmp_path / "toolchains-manifest.json"
+    path.write_text(manifest, encoding="utf-8")
+    monkeypatch.setenv(toolchains.MANIFEST_ENV, str(path))
+
+
+def test_a_template_that_needs_go_is_listed_as_such_and_refused_in_words_without_go(
+        client, engine, monkeypatch, tmp_path):
+    """Stranger test 2026-11-18: the gallery offered templates the install could not build. A Go
+    template on an install without Go is shown, marked, and its launch is refused in words before
+    anything is made or reserved."""
+    catalogue = tmp_path / "factory_templates"
+    catalogue.mkdir()
+    (catalogue / "go.yaml").write_text(_GO_DESK, encoding="utf-8")
+    (catalogue / "b.yaml").write_text(_BETA, encoding="utf-8")
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", catalogue)
+    _toolchains(monkeypatch, tmp_path, "{}")
+    calls: list = []
+    _patch_builder(monkeypatch, calls)
+
+    listed = {t["id"]: t for t in client.get("/v1/factory/templates").json()["templates"]}
+    assert listed["beta-board"]["available"] is True and listed["beta-board"]["needs"] is None
+    go = listed["fixture-clock"]
+    assert go["available"] is False and go["toolchain"] == "go"
+    assert go["needs"]["label"] == "Needs Go"
+    assert go["needs"]["enable"] == "boss toolchains enable go"
+
+    projects, receipts = _count(engine, "projects"), _count(engine, "receipts")
+    refused = client.post("/v1/factory/launch", json={"template_id": "fixture-clock"})
+    assert refused.status_code == 409, refused.text
+    body = refused.json()
+    assert body["error"] == "toolchain_not_enabled"
+    assert body["message"].startswith("Not started: Fixture clock is built in Go")
+    assert "`boss toolchains enable go`" in body["message"]
+    assert calls == []
+    assert _count(engine, "projects") == projects and _count(engine, "receipts") == receipts
+
+    lucky = client.post("/v1/factory/launch", json={})                # never lands on Go
+    assert lucky.status_code == 201, lucky.text
+    assert lucky.json()["template_id"] == "beta-board"          # fixture-clock sorts first
+
+    _toolchains(monkeypatch, tmp_path, '{"go": {"go": "1.27"}}')
+    listed = {t["id"]: t for t in client.get("/v1/factory/templates").json()["templates"]}
+    assert listed["fixture-clock"]["available"] is True
+
+
+def test_a_free_text_brief_names_the_project_by_its_first_words(client, engine, monkeypatch,
+                                                                 tmp_path):
+    from boss_engine.services.factory_launch import TITLE_CHARS
+
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", tmp_path / "absent")
+    _patch_builder(monkeypatch, [])
+    brief = ("Build a Python app named CSV Quality Desk with a command that reads a CSV path and "
+             "reports bad rows.")
+
+    response = client.post("/v1/factory/launch", json={"prompt": brief})
+
+    assert response.status_code == 201, response.text
+    title = response.json()["spec"]["title"]
+    assert title == "Build a Python app named CSV Quality"
+    assert len(title) <= TITLE_CHARS and brief.startswith(title)
+    assert brief[len(title)] == " "                              # cut between words
+    project = _one(engine, "SELECT name FROM projects WHERE id = :p",
+                   p=response.json()["project_id"])
+    assert project["name"] == title
+    assert response.json()["spec"]["local_repo"].endswith("/build-a-python-app-named-csv-quality")
+    assert "/bin/" not in _gitignore_of(response.json()["spec"]["local_repo"]).splitlines()
+
+
+def test_prose_titles_cut_at_a_word_boundary():
+    from boss_engine.services.factory_launch import prose_title
+
+    assert prose_title("A pantry list.") == "A pantry list"
+    assert prose_title("x") == "Easy Mode"
+    assert prose_title("Supercalifragilisticexpialidociousandmoreandmore letters") == \
+        "Supercalifragilisticexpialidociousandmor"
+    assert prose_title("Track the oncall rotation, page whoever is up, and post a weekly summary") \
+        == "Track the oncall rotation, page whoever"
+
+
+def _patch_runs(monkeypatch, calls: list) -> None:
+    """A builder that starts a NEW run each time, recorded in code_task_runs as running."""
+    def build(connection, *, project_id, spec, actor, settings, jobs, reservation_id):
+        run_id = f"crun_relaunch_{len(calls) + 1}"
+        calls.append({"project_id": project_id, "run_id": run_id})
+        connection.execute(text(
+            "INSERT INTO code_task_runs (id, project_id, title, status) "
+            "VALUES (:id, :p, 'Build', 'running')"), {"id": run_id, "p": project_id})
+        return {"project_id": project_id, "run_id": run_id}
+
+    monkeypatch.setattr("boss_engine.services.factory_launch.build_run", build)
+
+
+def _age_the_launch(engine, receipt_id: str) -> None:
+    """Out of the double-press window: only the run's own state decides now."""
+    _exec(engine, "UPDATE receipts SET updated_at = now() - interval '1 hour' WHERE id = :r",
+          r=receipt_id)
+
+
+def test_the_same_launch_after_its_run_failed_starts_a_new_run_in_the_same_project(
+        client, engine, monkeypatch, tmp_path):
+    # 2026-11-18: Recipe box's run failed on a platform bug; Easy Mode on Recipe box again
+    # handed back that dead run, forever. Now a launch whose run ended starts a new run.
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", tmp_path / "absent")
+    calls: list = []
+    _patch_runs(monkeypatch, calls)
+    payload = {"prompt": "Build a recipe box that failed once.", "mode": "", "template_id": None, "attachment_ids": []}
+    started = client.post("/v1/factory/launch", json=payload)
+    assert started.status_code == 201, started.text
+    first = started.json()
+    projects = _count(engine, "projects")
+    # As a failed run ends: its run row says so and its budget hold is let go.
+    _exec(engine, "UPDATE code_task_runs SET status = 'failed' WHERE id = :id", id=first["run_id"])
+    with engine.begin() as connection:
+        BudgetGovernor(get_settings()).release(connection, first["project_id"], first["reservation_id"],
+                                 "the run failed")
+    _age_the_launch(engine, first["receipt_id"])
+
+    second = client.post("/v1/factory/launch", json=payload)
+
+    assert second.status_code == 201, second.text
+    again = second.json()
+    assert again["reused"] is False
+    assert again["run_id"] != first["run_id"]
+    assert again["project_id"] == first["project_id"]       # a new run, the same project
+    assert again["receipt_id"] == first["receipt_id"]       # the launch's one receipt...
+    assert _count(engine, "projects") == projects
+    assert len(calls) == 2
+    # ...now remembers the new run: a double press of THIS launch gets it back.
+    third = client.post("/v1/factory/launch", json=payload).json()
+    assert third["reused"] is True and third["run_id"] == again["run_id"]
+    assert len(calls) == 2
+
+
+def test_the_same_launch_while_its_run_is_still_active_is_reused(
+        client, engine, monkeypatch, tmp_path):
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", tmp_path / "absent")
+    calls: list = []
+    _patch_runs(monkeypatch, calls)
+    payload = {"prompt": "Build a recipe box that is still running.", "mode": "", "template_id": None, "attachment_ids": []}
+    started = client.post("/v1/factory/launch", json=payload)
+    assert started.status_code == 201, started.text
+    first = started.json()
+    _age_the_launch(engine, first["receipt_id"])               # long ago, but still running
+
+    second = client.post("/v1/factory/launch", json=payload).json()
+
+    assert second["reused"] is True
+    assert second["run_id"] == first["run_id"]
+    assert len(calls) == 1
+
+
+
+def test_a_run_that_failed_fast_is_relaunched_within_the_window(
+        client, engine, monkeypatch, tmp_path):
+    # An ended run is never the answer, however recent: a build that fails in its first minute
+    # and is pressed again straight away starts again.
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", tmp_path / "absent")
+    calls: list = []
+    _patch_runs(monkeypatch, calls)
+    payload = {"prompt": "Build a recipe box that failed at once.", "mode": "", "template_id": None,
+               "attachment_ids": []}
+    started = client.post("/v1/factory/launch", json=payload)
+    assert started.status_code == 201, started.text
+    first = started.json()
+    _exec(engine, "UPDATE code_task_runs SET status = 'failed' WHERE id = :id", id=first["run_id"])
+    with engine.begin() as connection:
+        BudgetGovernor(get_settings()).release(connection, first["project_id"], first["reservation_id"],
+                                               "the run failed")
+
+    second = client.post("/v1/factory/launch", json=payload)      # seconds later, no ageing
+
+    assert second.status_code == 201, second.text
+    again = second.json()
+    assert again["reused"] is False and again["run_id"] != first["run_id"]
+    assert again["project_id"] == first["project_id"]
+    assert len(calls) == 2
+    receipt = _one(engine, "SELECT project_id FROM receipts WHERE id = :r", r=again["receipt_id"])
+    assert receipt["project_id"] == again["project_id"]

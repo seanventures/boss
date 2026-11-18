@@ -33,8 +33,9 @@ import { webauthnAvailable } from "../../../lib/identity/webauthn";
 import { AuthStage, Live, Logo, linkToken } from "../auth-parts";
 import { primeCsrf, registerPasskey, sayAuth } from "../auth-flow";
 import { CopyCommand } from "../copy-command";
-import { HOST_COMMANDS, overSsh } from "../../../lib/identity/host-commands";
+import { HOST_COMMANDS, onLoopback, overSsh, setupLinkCommand } from "../../../lib/identity/host-commands";
 import { RecoveryCodesView } from "../recovery-codes";
+import { AFTER_CLAIM } from "../../../lib/identity/claim-resume";
 import { TotpStep } from "../enrol/totp-step";
 
 type Claim = NonNullable<AuthOptions["claim"]>;
@@ -42,11 +43,7 @@ type Stage = "form" | "protect" | "passkey" | "also-totp" | "totp" | "codes";
 
 const SHOW_ON_SERVER = HOST_COMMANDS.password;
 const SHOW_OVER_SSH = overSsh(SHOW_ON_SERVER);
-const SETUP_LINK = HOST_COMMANDS.setupLink;
 
-/** THE NEXT STEP AFTER THE CLAIM is setup (repository, model, first build), not the Identity
- *  overview: a new Owner landed on posture warnings with no pointer to what comes next. */
-export const AFTER_CLAIM = "/?area=setup";
 
 const SEAT_WORDS: Record<string, string> = {
   ceo: "ceo. Approvals and history will show your name",
@@ -56,9 +53,21 @@ const SEAT_WORDS: Record<string, string> = {
   release_manager: "release_manager. Releases will show your name",
 };
 
+/** Drop the `#t=` setup link from the address bar without a navigation (a spent token must not
+ *  linger in history or in a URL someone copies). */
+export function forgetLinkToken(): void {
+  if (typeof window === "undefined" || !window.location.hash) return;
+  const { pathname, search } = window.location;
+  window.history.replaceState(window.history.state, "", `${pathname}${search}`);
+}
+
 function minutesLeft(iso: string | null, now: number): number | null {
   if (!iso) return null;
   return Math.max(0, Math.round((Date.parse(iso) - now) / 60_000));
+}
+
+function pageHost(origin: string | null): string {
+  try { return origin ? new URL(origin).hostname : ""; } catch { return ""; }
 }
 
 export function ClaimFlow({ options }: { options: AuthOptions }) {
@@ -97,9 +106,18 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
   const [pageOrigin, setPageOrigin] = useState<string | null>(null);
   const [noPasskey, setNoPasskey] = useState<string | null>(null);
 
+  // The setup link lives in the fragment, so pasting it into a tab already on /claim changes only
+  // the hash: no load, no remount. Read it now AND on every hashchange (stranger test: the pasted
+  // link did nothing until a reload).
+  useEffect(() => {
+    const read = () => setToken(linkToken("setup"));
+    read();
+    window.addEventListener("hashchange", read);
+    return () => window.removeEventListener("hashchange", read);
+  }, []);
+
   useEffect(() => {
     setPasskeys(webauthnAvailable());
-    setToken(linkToken("setup"));
     setPageOrigin(window.location.origin);
     // An address no browser can hold a passkey for (an IP, plain http): the authenticator app is
     // the way in, said in one plain line, never a prompt the browser will refuse.
@@ -156,6 +174,9 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
     try {
       const proof = claimProof(path, { token, legacy, origin });
       await idPost("/v1/auth/setup/claim", { ...proof, name: name.trim(), email: email.trim(), seat: seat || null, password });
+      // The link is spent: take it out of the address bar (and so out of history and any copy of
+      // this URL) the moment it has done its job.
+      forgetLinkToken();
       setLegacy("");
       setPassword("");
       await primeCsrf();
@@ -188,7 +209,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
         <Logo host={options.host} />
         <h1>Add an authenticator</h1>
         <p className="idn-s" data-copy="prose">{fallback ? `${(noPasskey ?? "Passkeys aren't available here.").replace(/\.$/, "")}. ` : ""}Scan the code with an authenticator app, then enter the 6 digits it shows.</p>
-        {issuedCodes.length ? null : <div className="idn-note" data-copy="prose"><Warning size={15} aria-hidden /> Posture will show &ldquo;No passkey on the only Owner&rdquo; until you add one.</div>}
+        {issuedCodes.length ? null : <div className="idn-note" data-copy="prose"><Warning size={15} aria-hidden /> <span data-testid="no-passkey-note">You can add a passkey later in My account. Until then, BOSS reminds you that the only Owner has none.</span></div>}
         <TotpStep onDone={(issued) => { showCodes(issuedCodes.length ? issuedCodes : issued).catch((e) => setError(sayAuth(e))); }} />
         {error ? <div className="idn-err" role="alert">{error}</div> : null}
       </AuthStage>
@@ -265,9 +286,13 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
         <Logo host={options.host} />
         <h1>Claim this BOSS from its server</h1>
         <div data-testid="claim-no-token">
-          <p className="idn-s" data-copy="prose">You&apos;re not on the server&apos;s own network, so claiming needs a one-hour link from the server.</p>
+          {/* Over an SSH tunnel (or on the server itself) the page is on localhost: "not on the
+              server's network" was wrong and alarming there (stranger test r2). */}
+          {onLoopback(pageHost(pageOrigin))
+            ? <p className="idn-s" data-copy="prose" data-testid="claim-why-link">Claiming needs a one-hour link from the server.</p>
+            : <p className="idn-s" data-copy="prose" data-testid="claim-why-link">This browser isn&apos;t on the server&apos;s own network, so claiming needs a one-hour link from the server.</p>}
           <p className="idn-s" data-copy="prose" data-testid="claim-terminal-step">Run this <b>in a terminal on the server where BOSS is installed</b> (over SSH). It&apos;s a command, not a web address.</p>
-          <CopyCommand command={SETUP_LINK} />
+          <CopyCommand command={setupLinkCommand(claim.host_command)} />
           <p className="idn-s" data-copy="prose">It prints a link. Open that link in this browser to claim.</p>
           {claim.link_over_api
             ? <p className="idn-fine" data-copy="prose">No shell there? Ask whoever holds this install&apos;s admin key to issue the link.</p>

@@ -9,6 +9,12 @@ blocks, so nothing is reserved and the build does not start. An email or a phone
 asks, and nothing is reserved until that ask is allowed. A result without a project id
 and a run id is a failure.
 
+Consent (the build start answers ConsentRequired): only the start is undone (a savepoint takes
+the reservation back). The project, its role agents with their Passports and its workflows are
+kept with one in-progress receipt, and the 409 names the project and the dedupe key. The caller
+commits. The same launch sent again after the person grants (the console re-sends it unchanged)
+finds that receipt and starts the build in the same project; it never makes a second one.
+
 Attachments (BOSSAPP-1275) are stored for the org and folded in by name and text extract.
 A Drive source that is not already connected is refused. Nothing here calls Drive or GitHub.
 """
@@ -23,11 +29,13 @@ from typing import Any, Callable, Optional
 import yaml
 from sqlalchemy import text
 
+from ..identity.consent import ConsentRequired
 from ..multirepo.common import MultiRepoError, norm_repo
 from ..multirepo.registry import NOT_CONNECTED
+from . import stacks as _stacks
 from .core import make_id
 from .personal_data_gate import before_builder_reserve
-from .projects import ProjectExists, create as create_project
+from .projects import create as create_project
 from .receipts import ReceiptService
 from .workflows import (
     PRODUCT_NAMESPACE,
@@ -43,7 +51,24 @@ TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "data" / "factory_templates
 MAX_ATTACHMENT_BYTES = 256 * 1024
 TEXT_EXTRACT_LIMIT = 8000
 
-_TEMPLATE_FIELDS = ("id", "title", "blurb", "category", "prompt", "stack", "resources", "workflows")
+_TEMPLATE_FIELDS = ("id", "title", "blurb", "category", "prompt", "stack", "toolchain",
+                    "resources", "workflows")
+
+#: WHAT A TEMPLATE BUILDS WITH (stranger test 2026-11-18: the gallery offered Android and Godot
+#: templates no install can build). Python and Node are in every build image; Go and Java are
+#: opt-in toolchains (services/toolchains.KNOWN, `boss toolchains enable go`). A catalogue
+#: template names one of these; anything else is not loaded. Read from the one registry of what
+#: BOSS builds (services/stacks.LANGUAGES), never a second copy.
+TEMPLATE_TOOLCHAINS = tuple(_stacks.LANGUAGES)
+BUILTIN_TOOLCHAINS = tuple(k for k, lang in _stacks.LANGUAGES.items() if lang.toolchain is None)
+
+#: Platforms no BOSS image carries (no Android SDK or emulator, no Xcode, no game-engine binary).
+#: A template whose category, stack or toolchain names one is not loaded, and a pasted spec that
+#: does is refused in words. engine/tests/test_factory_template_catalog.py also holds every
+#: shipped template's title, blurb and prompt to this same pattern.
+UNBUILDABLE_PLATFORM = re.compile(
+    r"\b(android|jetpack|kotlin|ios|swift(?: ?ui)?|xcode|emulator|godot|unity|unreal|"
+    r"react native|flutter|expo|apk|play store|app store)\b", re.I)
 
 BUILTIN_SPEC: dict[str, Any] = {
     "id": "lucky-notes",
@@ -52,6 +77,7 @@ BUILTIN_SPEC: dict[str, Any] = {
     "category": "app",
     "prompt": "Build a small notes app: a list of notes and an editor. One page, no accounts.",
     "stack": "vite-react",
+    "toolchain": "node",
     "resources": ["postgres"],
     "workflows": [
         {"name": "Build the notes app", "steps": ["Draft the page", "Save a note"]},
@@ -62,27 +88,41 @@ BUILTIN_SPEC: dict[str, Any] = {
 class FactoryLaunchError(Exception):
     """A refusal with a status, a machine code and a sentence a person can act on."""
 
-    def __init__(self, status: int, code: str, message: str) -> None:
+    def __init__(self, status: int, code: str, message: str,
+                 fix_href: Optional[str] = None) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
         self.message = message
+        self.fix_href = fix_href
 
     def body(self) -> dict[str, str]:
-        return {"error": self.code, "message": self.message}
+        out = {"error": self.code, "message": self.message}
+        if self.fix_href:
+            out["fix_href"] = self.fix_href
+        return out
 
 
-def list_templates(root: Optional[Path] = None) -> dict[str, Any]:
-    """The catalogue on disk. A file that is not the schema is skipped and counted, not fatal."""
+def list_templates(
+    root: Optional[Path] = None, have: Optional[set[str]] = None,
+) -> dict[str, Any]:
+    """The catalogue on disk. A file that is not the schema is skipped and counted, not fatal.
+
+    Every template says whether THIS install can build it (`available`) and, when it cannot,
+    what it needs (`needs`: the toolchain, its name for a person, and the command that turns it
+    on). `have` is the opt-in toolchains this image carries (default: the toolchain manifest)."""
     directory = Path(root) if root is not None else TEMPLATE_DIR
     if not directory.is_dir():
         return {"templates": [], "skipped": 0}
+    problem = None
+    if have is None:
+        have, problem = _installed()
     found: list[dict[str, Any]] = []
     skipped = 0
     seen: set[str] = set()
     for path in sorted(directory.glob("*.yaml")):
         try:
-            item = _template(yaml.safe_load(path.read_text(encoding="utf-8")))
+            item = _template(yaml.safe_load(path.read_text(encoding="utf-8")), catalogue=True)
         except (OSError, UnicodeError, yaml.YAMLError, ValueError):
             skipped += 1
             continue
@@ -90,9 +130,67 @@ def list_templates(root: Optional[Path] = None) -> dict[str, Any]:
             skipped += 1
             continue
         seen.add(item["id"])
-        found.append(item)
+        found.append({**item, **availability(item, have, problem)})
     found.sort(key=lambda item: item["id"])
     return {"templates": found, "skipped": skipped}
+
+
+def _installed() -> tuple[set[str], Optional[str]]:
+    """The opt-in toolchains this image carries, and why that cannot be known (the manifest is
+    missing, unreadable or not JSON — toolchains.manifest_problem), else None."""
+    from . import toolchains
+
+    problem = toolchains.manifest_problem()
+    return (set() if problem else set(toolchains.installed())), problem
+
+
+def availability(
+    spec: dict[str, Any], have: set[str], problem: Optional[str] = None,
+) -> dict[str, Any]:
+    """{"available": bool, "needs": None | {...}} for a spec on an install carrying `have`.
+    `problem`: the manifest could not be read, so what is turned on is not known."""
+    name = str(spec.get("toolchain") or "")
+    lang = _stacks.LANGUAGES.get(name)
+    needed = lang.toolchain if lang is not None else name
+    if not name or needed is None or needed in have:
+        return {"available": True, "needs": None}
+    from . import toolchains
+
+    label = toolchains.LABELS.get(needed, needed)
+    title = spec.get("title") or "This template"
+    if problem:
+        # NEVER "IT IS OFF" ON A GUESS: an unreadable manifest says nothing about what is on.
+        return {"available": False, "needs": {
+            "toolchain": needed,
+            "label": "Can't check toolchains",
+            "enable": "boss update",
+            "message": (f"{title} is built in {label}, and BOSS cannot read its toolchain list "
+                        f"({problem}), so it cannot tell whether {label} is turned on. Rebuild "
+                        "the images with `boss update` (and run `boss doctor` if it persists), "
+                        "then pick it again."),
+        }}
+    command = toolchains.ENABLE_HINT.format(name=needed)
+    return {"available": False, "needs": {
+        "toolchain": needed,
+        "label": f"Needs {label}",
+        "enable": command,
+        "message": (f"{title} is built in {label}, and {label} is "
+                    f"not turned on for this BOSS. Turn it on with `{command}` on the BOSS host, "
+                    "then pick it again."),
+    }}
+
+
+def _require_buildable(spec: dict[str, Any]) -> None:
+    """Refuse, in words and before anything is made or reserved, a spec whose toolchain this
+    install does not carry."""
+    needs = availability(spec, *_installed())["needs"]
+    if needs:
+        raise FactoryLaunchError(409, "toolchain_not_enabled", "Not started: " + needs["message"])
+
+
+def _plain(spec: dict[str, Any]) -> dict[str, Any]:
+    """A catalogue item as a launch spec: what this install has is not part of the spec."""
+    return {k: v for k, v in spec.items() if k not in ("available", "needs")}
 
 
 def store_attachments(
@@ -189,55 +287,110 @@ def launch(
     ids = [str(item).strip() for item in (attachment_ids or []) if str(item).strip()]
     repo = str(github_repo or "").strip()
     asked = str(mode or "").strip()
-    dedupe_key = _dedupe_key(org_id, prompt, asked, template_id, ids, repo)
+    # WHOSE launch it is: two people pressing the same template never share a kept or a reused
+    # project (nor a consent the other one owes).
+    who = str(getattr(getattr(auth, "principal", None), "id", "") or actor or "")
+    dedupe_key = _dedupe_key(org_id, prompt, asked, template_id, ids, repo, who)
     connection.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": dedupe_key})
     previous = _reuse(connection, org_id, dedupe_key)
     if previous is not None:
         return previous
 
-    spec, origin = resolve_spec(prompt, template_id, template_dir)
-    attachments = _load_attachments(connection, org_id, ids)
-    spec = _fold_attachments(spec, attachments)
-    if repo:
-        _require_github_repo(connection, org_id, repo)
-        spec["github_repo"] = repo
-    spec["mode"] = asked or origin
+    kept = _kept(connection, org_id, dedupe_key)
+    # THE SAME LAUNCH AGAIN, AFTER ITS BUILD ENDED (a failed run, a finished one): a new run in
+    # the project that launch made — never the dead run handed back, never a second project
+    # (the slug is the launch's own). When that project is gone it is made again, and the
+    # launch's one receipt is still the one that remembers the new run.
+    again = None if kept is not None else _relaunch(connection, org_id, dedupe_key)
+    if kept is not None:
+        # THE SAME LAUNCH AFTER ITS CONSENT (or after a cancel): the project, its agents and its
+        # workflows were kept when the build asked for consent. Start the build there; never a
+        # second project.
+        spec = dict(kept["spec"])
+        project_id = str(kept["project_id"])
+        workspace_id = str(kept["workspace_id"])
+        resources = list(kept.get("resources") or [])
+        workflows = list(kept.get("workflows") or [])
+        receipt_id: Optional[str] = str(kept["receipt_id"])
+    else:
+        spec, origin = resolve_spec(prompt, template_id, template_dir)
+        attachments = _load_attachments(connection, org_id, ids)
+        spec = _fold_attachments(spec, attachments)
+        if repo:
+            _require_github_repo(connection, org_id, repo)
+            spec["github_repo"] = repo
+        spec["mode"] = asked or origin
 
-    title = str(spec.get("title") or "Easy Mode").strip()[:120]
-    description = str(spec.get("blurb") or spec.get("prompt") or "").strip()[:2000] or None
-    slug = _project_slug(title, dedupe_key)
-    try:
+    if again is not None and again.get("project_id"):
+        project_id = str(again["project_id"])
+        workspace_id = str(again["workspace_id"])
+        resources = list(again.get("resources") or [])
+        workflows = list(again.get("workflows") or [])
+        receipt_id = str(again["receipt_id"])
+    elif kept is None:
+        title = str(spec.get("title") or "Easy Mode").strip()[:120]
+        description = str(spec.get("blurb") or spec.get("prompt") or "").strip()[:2000] or None
+        slug = _project_slug(title, dedupe_key)
         created = create_project(
             connection, settings, auth=auth, name=title, slug=slug, description=description,
             actor=actor, project_type="app")
-    except ProjectExists:
-        raise
-    except ValueError:
-        raise
-    if str(created.get("org_id") or "") != org_id:
-        raise FactoryLaunchError(
-            409, "wrong_org", "The project was not created in this organization.")
-    project_id = str(created["project_id"])
-    resources = _assign_resources(connection, settings, project_id, spec.get("resources") or [],
-                                  actor=actor)
-    workflows = _write_workflows(connection, project_id, spec.get("workflows") or [], actor=actor)
+        if str(created.get("org_id") or "") != org_id:
+            raise FactoryLaunchError(
+                409, "wrong_org", "The project was not created in this organization.")
+        project_id = str(created["project_id"])
+        workspace_id = str(created["workspace_id"])
+        resources = _assign_resources(connection, settings, project_id,
+                                      spec.get("resources") or [], actor=actor)
+        workflows = _write_workflows(connection, project_id, spec.get("workflows") or [],
+                                     actor=actor)
+        receipt_id = str(again["receipt_id"]) if again is not None else None
+    title = str(spec.get("title") or "Easy Mode").strip()[:120]
+    # A MODEL FIRST (stranger test r3, 2026-11-18): with no model connected the launch reserved
+    # the project's whole cap for a build nothing could run, and the person read "the budget
+    # cap is reached" at $0.00. Nothing is made, reserved or started; the sentence says what is
+    # missing and links to it. Unknown is usable (model_readiness never holds work on a guess).
+    from . import model_readiness
+
+    if not model_readiness.usable_model(connection, settings, project_id):
+        raise FactoryLaunchError(409, "needs_model", model_readiness.NO_MODEL_LAUNCH,
+                                 fix_href=model_readiness.SETUP_MODELS_HREF)
+    # THE BUILD'S REPOSITORY IS REAL: the connected GitHub repo, else the project's own local
+    # repository (made here when it has none). Never a placeholder name nothing can clone.
+    made_repo = _ensure_repository(connection, settings, project_id, spec, actor=actor)
 
     # The blurb and the prompt, before any reservation. A block or an unanswered ask stops here.
-    checked = before_builder_reserve(
-        _launch_prompt(spec), allowed=bool(allowed),
-        reserve=lambda: _reserve(connection, settings, project_id, title, budget))
-    if checked["action"] == "block":
-        raise FactoryLaunchError(409, "personal_data_blocked", str(checked["message"]))
-    if checked["action"] != "allow":
-        raise FactoryLaunchError(
-            409, "personal_data_ask",
-            "An email or a phone number has to be allowed before this launch reserves a budget.")
-    reservation_id = str(checked["reservation"])
     if builder is None:
         builder = build_run
-    built = builder(
-        connection, project_id=project_id, spec=spec, actor=actor, settings=settings,
-        jobs=jobs, reservation_id=reservation_id)
+    try:
+        # THE START ALONE MAY BE UNDONE (consent): the reservation and whatever the build start
+        # wrote go back with this savepoint, the project made above stays.
+        with connection.begin_nested():
+            checked = before_builder_reserve(
+                _launch_prompt(spec), allowed=bool(allowed),
+                reserve=lambda: _reserve(connection, settings, project_id, title, budget))
+            if checked["action"] == "block":
+                raise FactoryLaunchError(409, "personal_data_blocked", str(checked["message"]))
+            if checked["action"] != "allow":
+                raise FactoryLaunchError(
+                    409, "personal_data_ask",
+                    "An email or a phone number has to be allowed before this launch reserves "
+                    "a budget.")
+            reservation_id = str(checked["reservation"])
+            built = builder(
+                connection, project_id=project_id, spec=spec, actor=actor, settings=settings,
+                jobs=jobs, reservation_id=reservation_id)
+    except ConsentRequired as asked:
+        raise _keep_for_consent(
+            connection, asked, org_id=org_id, workspace_id=workspace_id, project_id=project_id,
+            dedupe_key=dedupe_key, spec=spec, resources=resources, workflows=workflows,
+            receipt_id=receipt_id) from None
+    except Exception:
+        # The launch is refused (personal data blocked or asked, the budget, the start itself)
+        # and its transaction rolls back with the project: the repository folder made on disk
+        # for it on THIS call goes too, never left behind unbound.
+        if made_repo:
+            _drop_local_repos(project_id, settings)
+        raise
     run_id = str((built or {}).get("run_id") or "").strip()
     returned_project = str((built or {}).get("project_id") or project_id).strip()
     if not run_id or returned_project != project_id:
@@ -254,26 +407,175 @@ def launch(
         "resources": resources,
         "workflows": workflows,
         "reused": False,
-        "spec": {
-            "id": spec.get("id"),
-            "title": spec.get("title"),
-            "prompt": spec.get("prompt"),
-            "stack": spec.get("stack"),
-            "resources": list(spec.get("resources") or []),
-            "workflows": list(spec.get("workflows") or []),
-            "attachments": spec.get("attachments") or [],
-            "github_repo": spec.get("github_repo"),
-        },
+        "spec": _spec_view(spec),
     }
-    receipt, created_receipt = ReceiptService().create_or_reuse(
-        connection, org_id, str(created["workspace_id"]), project_id,
-        dedupe_key=dedupe_key, effect_kind="factory.launch",
-        effect_scope={"mode": spec["mode"], "template_id": spec.get("id")},
-        payload=body)
-    body["receipt_id"] = receipt["id"]
+    if receipt_id is None:
+        receipt, created_receipt = ReceiptService().create_or_reuse(
+            connection, org_id, workspace_id, project_id,
+            dedupe_key=dedupe_key, effect_kind="factory.launch",
+            effect_scope={"mode": spec["mode"], "template_id": spec.get("id")},
+            payload=body)
+        receipt_id = str(receipt["id"])
+        if not created_receipt and receipt.get("status") == "in_progress":
+            # A kept launch whose project was removed meanwhile: this launch is the real one.
+            connection.execute(text("UPDATE receipts SET project_id = :p WHERE id = :r"),
+                               {"p": project_id, "r": receipt_id})
+            created_receipt = True
+    else:
+        created_receipt = True        # the kept launch's own receipt: this is its real launch
+    body["receipt_id"] = receipt_id
     if created_receipt:
-        ReceiptService().mark_succeeded(connection, receipt["id"], None, body)
+        if again is not None:
+            # A relaunch remembers the project it ran in (made again when it had been removed).
+            connection.execute(text("UPDATE receipts SET project_id = :p WHERE id = :r"),
+                               {"p": project_id, "r": receipt_id})
+        ReceiptService().mark_succeeded(connection, receipt_id, None, body)
     return body
+
+
+def _spec_view(spec: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": spec.get("id"),
+        "title": spec.get("title"),
+        "prompt": spec.get("prompt"),
+        "stack": spec.get("stack"),
+        "toolchain": spec.get("toolchain"),
+        "resources": list(spec.get("resources") or []),
+        "workflows": list(spec.get("workflows") or []),
+        "attachments": spec.get("attachments") or [],
+        "github_repo": spec.get("github_repo"),
+        "local_repo": spec.get("local_repo"),
+    }
+
+
+def _keep_for_consent(
+    connection: Any, asked: ConsentRequired, *, org_id: str, workspace_id: str, project_id: str,
+    dedupe_key: str, spec: dict[str, Any], resources: list[Any], workflows: list[Any],
+    receipt_id: Optional[str],
+) -> ConsentRequired:
+    """The build asked for consent: keep the project (its agents, Passports and workflows) and
+    one in-progress receipt that remembers the launch, and answer the same 409 with the project.
+
+    The CALLER MUST COMMIT on this ConsentRequired (the API route does): the consent body names
+    this project's agents, and the same launch sent again (same dedupe key) starts the build
+    in it under the new grant."""
+    body = dict(getattr(asked, "body", None) or {})
+    # The agents' Passports belong to the kept project: issue them in this transaction, so the
+    # grant the person creates names agents that exist (the savepoint took any issued during the
+    # start back with it).
+    try:
+        from ..identity import consent as _consent
+        from ..identity import passports as _passports
+
+        with connection.begin_nested():
+            _passports.upgrade_from_roles(
+                org_id=org_id, db=connection,
+                default_sponsor=_consent._first_owner(connection, org_id))  # noqa: SLF001
+    except Exception:  # noqa: BLE001 — the start issues them again; the consent ask stands
+        import logging
+
+        logging.getLogger(__name__).warning("Passports for kept launch %s not issued", project_id,
+                                            exc_info=True)
+    kept = {
+        "awaiting": "consent",
+        "project_id": project_id,
+        "workspace_id": workspace_id,
+        "dedupe_key": dedupe_key,
+        "spec": spec,
+        "resources": resources,
+        "workflows": workflows,
+    }
+    receipts = ReceiptService()
+    if receipt_id is None:
+        receipt, _ = receipts.create_or_reuse(
+            connection, org_id, workspace_id, project_id,
+            dedupe_key=dedupe_key, effect_kind="factory.launch",
+            effect_scope={"mode": spec.get("mode"), "template_id": spec.get("id")},
+            payload=kept)
+        receipt_id = str(receipt["id"])
+    else:
+        # The kept receipt names the project the launch waits in (a re-ask after the project
+        # it named was removed made a new one).
+        # In progress again: a relaunch of an ended build that now waits for consent is a kept
+        # launch (`_kept`), not the earlier succeeded one handed back by `_reuse`.
+        connection.execute(text("UPDATE receipts SET project_id = :p, status = 'in_progress' "
+                                "WHERE id = :r"),
+                           {"p": project_id, "r": receipt_id})
+    receipts.merge_result(connection, receipt_id, kept)
+    body.update({
+        "project_id": project_id,
+        "dedupe_key": dedupe_key,
+        "receipt_id": receipt_id,
+        "created": True,
+        "retry": {"project_id": project_id, "dedupe_key": dedupe_key},
+    })
+    return ConsentRequired(body)
+
+
+def _kept(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, Any]]:
+    """The launch kept while it waited for consent (an in-progress receipt), or None."""
+    existing = ReceiptService().get_by_dedupe_key(connection, org_id, dedupe_key)
+    if not existing or existing.get("status") != "in_progress":
+        return None
+    result = existing.get("result") or {}
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(result, dict) or result.get("awaiting") != "consent":
+        return None
+    if not result.get("project_id") or not isinstance(result.get("spec"), dict):
+        return None
+    alive = connection.execute(text("SELECT 1 FROM projects WHERE id = :p"),
+                               {"p": result["project_id"]}).first()
+    if alive is None:
+        return None
+    return {**result, "receipt_id": existing.get("id")}
+
+
+#: Said when a project ends up with no repository to build in. Raised before anything starts.
+NO_REPOSITORY = (
+    "This project has no repository to build in: BOSS could not make one on this machine (git "
+    "is missing or its repository folder is not writable), and no GitHub repository was chosen. "
+    "Nothing was started.")
+
+
+def _ensure_repository(
+    connection: Any, settings: Any, project_id: str, spec: dict[str, Any], *, actor: str,
+) -> bool:
+    """Name the repository the build runs against in the spec: the GitHub repo the person chose,
+    else the project's local primary repository, made by the one helper new local projects use
+    (projects.ensure_sample_code). No repository at all is a refusal in words, before the start.
+    True when this call made the repository on disk."""
+    if spec.get("github_repo"):
+        return False
+    from . import local_projects
+    from .projects import ensure_sample_code
+
+    made = False
+    bound = local_projects.local_binding(connection, project_id)
+    if bound is None:
+        made = ensure_sample_code(connection, settings, project_id, actor=actor,
+                                  stack=str(spec.get("stack") or "") or None) is not None
+        bound = local_projects.local_binding(connection, project_id)
+    if bound is None or not bound.get("full_name"):
+        raise FactoryLaunchError(409, "no_repository", NO_REPOSITORY)
+    spec["local_repo"] = str(bound["full_name"])
+    return made
+
+
+def _drop_local_repos(project_id: str, settings: Any) -> None:
+    """Remove the project's repository folder (the launch that made it was refused)."""
+    from . import local_repo
+
+    try:
+        local_repo.delete_project_repos(project_id, settings)
+    except Exception:  # noqa: BLE001 — the refusal is the answer; a leftover folder is logged
+        import logging
+
+        logging.getLogger(__name__).warning("could not remove the repository folder of %s",
+                                            project_id, exc_info=True)
 
 
 def build_run(
@@ -289,10 +591,11 @@ def build_run(
     """Start the existing code-task build. Tests replace this; it does not call a model itself."""
     from .code_task_service import start_code_task
 
-    full = str(spec.get("github_repo") or "")
-    owner, _, repo = full.partition("/")
-    if not repo:
-        owner, repo = "_local", "lucky"
+    github = str(spec.get("github_repo") or "")
+    local = str(spec.get("local_repo") or "")
+    owner, _, repo = (github or local).partition("/")
+    if not owner or not repo:
+        raise FactoryLaunchError(409, "no_repository", NO_REPOSITORY)
     title = str(spec.get("title") or "Easy Mode")[:180]
     run_id = start_code_task(
         connection, project_id=project_id, task_id=None, title=title,
@@ -302,37 +605,77 @@ def build_run(
         finalize_ctx={"factory_launch": True, "template_id": spec.get("id"),
                       "mode": spec.get("mode"), "reservation_id": reservation_id,
                       "actor": actor},
-        jobs=jobs, open_pr=False)
+        # Its pull request and merge card open like every product build's: `open_pr=False` is
+        # for evaluation runs, and it left Easy Mode builds completed with no PR (crun_5b11643d).
+        jobs=jobs, repo_host=None if github else "local")
     if not run_id:
         return {"project_id": project_id}
+    # THE LAUNCH'S HOLD IS THE BUILD'S (a reservation never blocks the job it was made for): it
+    # is recorded as the run's reservation, so the build's job is admitted against it
+    # (jobs._own_reservations) and the run settles it when it starts, before reserving its own.
+    from . import build_budget
+
+    build_budget.bind(connection, str(run_id), reservation_id)
     return {"project_id": project_id, "run_id": str(run_id)}
 
 
 def resolve_spec(
     prompt: str, template_id: Optional[str], root: Optional[Path] = None,
 ) -> tuple[dict[str, Any], str]:
-    """A non-empty prompt is the spec. An empty one picks a template file, else the built-in."""
+    """What the launch builds.
+
+    - A pasted spec (the template schema as YAML) is the spec.
+    - A template the person picked (`template_id` in the catalogue) is the spec — its title,
+      stack, resources and workflows — with the person's words, when they wrote some, as the
+      prompt. The build home sends both: picking a card fills the brief, and the brief used to
+      win outright, so the project was named after its first 80 characters and the template's
+      stack never reached the repository's .gitignore (stranger test r3, 2026-11-18).
+    - Other words are a prose spec, titled from their first words.
+    - Nothing at all picks the first template, else the built-in spec."""
     text_prompt = str(prompt or "").strip()
     catalogue = list_templates(root)
     if text_prompt:
         parsed = _parse_spec_text(text_prompt)
         if parsed is not None:
+            _require_buildable(parsed)
             return parsed, "prompt"
-        return _prose_spec(text_prompt), "prompt"
+    match = None
     if template_id:
         match = next((item for item in catalogue["templates"] if item["id"] == template_id), None)
-        if match is None:
+        if match is None and not text_prompt:
             raise FactoryLaunchError(404, "unknown_template", f"No template {template_id}.")
-        return dict(match), "template"
-    if catalogue["templates"]:
-        return dict(catalogue["templates"][0]), "lucky"
+    if match is not None:
+        if match.get("needs"):
+            raise FactoryLaunchError(409, "toolchain_not_enabled",
+                                     "Not started: " + match["needs"]["message"])
+        spec = _plain(match)
+        if text_prompt:
+            spec["prompt"] = text_prompt
+        return spec, "template"
+    if text_prompt:
+        return _prose_spec(text_prompt), "prompt"
+    buildable = [item for item in catalogue["templates"] if item.get("available", True)]
+    if buildable:
+        return _plain(buildable[0]), "lucky"
     return dict(BUILTIN_SPEC), "lucky"
 
 
-def _template(loaded: Any) -> dict[str, Any]:
+class UnbuildableSpec(ValueError):
+    """A spec in the template schema that names a platform or toolchain BOSS cannot build."""
+
+
+def _template(loaded: Any, catalogue: bool = False) -> dict[str, Any]:
+    """A spec in the template schema. A catalogue file must name its toolchain and must not need
+    a platform no image carries; a pasted spec may leave the toolchain out."""
     if not isinstance(loaded, dict):
         raise ValueError("a template is a mapping")
-    missing = [field for field in _TEMPLATE_FIELDS if field not in loaded]
+    toolchain = loaded.get("toolchain", "" if not catalogue else None)
+    if toolchain is None:
+        raise ValueError("missing toolchain")
+    if not isinstance(toolchain, str):
+        raise ValueError("toolchain")
+    missing = [field for field in _TEMPLATE_FIELDS
+               if field != "toolchain" and field not in loaded]
     if missing:
         raise ValueError("missing " + ", ".join(missing))
     for field in ("id", "title", "blurb", "category", "prompt", "stack"):
@@ -346,6 +689,13 @@ def _template(loaded: Any) -> dict[str, Any]:
     workflows = loaded["workflows"]
     if not isinstance(workflows, list) or not workflows:
         raise ValueError("workflows")
+    # A WHOLE SPEC THAT ASKS FOR WHAT NO IMAGE CARRIES is refused, never quietly built as prose.
+    hit = next((m.group(0) for field in ("category", "stack", "toolchain")
+                for m in [UNBUILDABLE_PLATFORM.search(str(loaded.get(field) or ""))] if m), None)
+    if hit:
+        raise UnbuildableSpec(hit)
+    if toolchain and toolchain not in TEMPLATE_TOOLCHAINS:
+        raise UnbuildableSpec(toolchain)
     return {
         "id": loaded["id"].strip(),
         "title": loaded["title"].strip(),
@@ -353,6 +703,7 @@ def _template(loaded: Any) -> dict[str, Any]:
         "category": loaded["category"],
         "prompt": loaded["prompt"],
         "stack": loaded["stack"],
+        "toolchain": toolchain,
         "resources": list(resources),
         "workflows": [_workflow_item(item) for item in workflows],
     }
@@ -388,13 +739,36 @@ def _parse_spec_text(prompt: str) -> Optional[dict[str, Any]]:
         return None
     try:
         return _template(loaded)
+    except UnbuildableSpec as unbuildable:
+        raise FactoryLaunchError(
+            409, "platform_not_buildable",
+            f"Not started: this spec asks for {str(unbuildable)!r}, which BOSS cannot build. BOSS "
+            "builds web apps, games and services in Python and Node, and in Go or Java once that "
+            "toolchain is turned on; it does not build Android or iOS apps or game-engine "
+            "projects (docs/community/SUPPORTED_STACKS.md).") from None
     except ValueError:
         return None
 
 
+#: A prose brief's project name: its first words, cut at a word boundary near this length.
+TITLE_CHARS = 40
+
+
+def prose_title(brief: str, limit: int = TITLE_CHARS) -> str:
+    """The project's name from a brief: its first line, cut at the last word boundary within
+    `limit` characters (a single longer word is cut at `limit`), trailing punctuation dropped.
+    "Easy Mode" when there is nothing to name it by."""
+    line = (str(brief or "").strip().splitlines() or [""])[0].strip()
+    if len(line) > limit:
+        cut = line[:limit + 1]
+        space = cut.rstrip().rfind(" ")
+        line = cut[:space] if space >= limit // 2 else line[:limit]
+    line = line.rstrip(" ,;:.-–—")
+    return line if len(line) >= 2 else "Easy Mode"
+
+
 def _prose_spec(prompt: str) -> dict[str, Any]:
-    line = prompt.strip().splitlines()[0].strip()
-    title = line[:80] if len(line) >= 2 else "Easy Mode"
+    title = prose_title(prompt)
     return {
         "id": "prompt",
         "title": title,
@@ -588,7 +962,13 @@ def _reserve(connection: Any, settings: Any, project_id: str, title: str, budget
     return str(reservation["reservation_id"])
 
 
-def _reuse(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, Any]]:
+#: How long the same launch hands back its earlier answer when its run is not (yet) a row BOSS
+#: can read — a run of an ended status is never handed back, whatever its age.
+REUSE_WINDOW_MINUTES = 10
+
+
+def _succeeded(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, Any]]:
+    """The launch's succeeded receipt and its result, or None."""
     existing = ReceiptService().get_by_dedupe_key(connection, org_id, dedupe_key)
     if not existing or existing.get("status") != "succeeded":
         return None
@@ -602,15 +982,66 @@ def _reuse(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, 
         return None
     if not result.get("project_id") or not result.get("run_id"):
         return None
-    return {**result, "reused": True, "receipt_id": existing.get("id") or result.get("receipt_id")}
+    return {"receipt": existing, "result": result}
+
+
+def _still_live(connection: Any, receipt_id: str, run_id: str) -> bool:
+    """The earlier launch is still the answer: its run has not ended, or (a run BOSS cannot see
+    yet) it answered moments ago.
+
+    Before 2026-11-18 a launch was reused forever: Recipe box's run failed on a platform bug,
+    and pressing Easy Mode on Recipe box again handed back that dead run. An ENDED run is never
+    the answer, however recent: a double press waits on the launch's lock and finds the run
+    live, and the resend after "Confirm it's you" follows a refusal, not a launch."""
+    from .code_task_service import TERMINAL_RUN_STATUSES
+
+    run = connection.execute(text("SELECT status FROM code_task_runs WHERE id = :id"),
+                             {"id": run_id}).first()
+    if run is not None:
+        return str(run[0] or "") not in TERMINAL_RUN_STATUSES
+    row = connection.execute(text(
+        "SELECT (now() - updated_at) < make_interval(mins => :mins) AS fresh "
+        "FROM receipts WHERE id = :r"), {"r": receipt_id, "mins": REUSE_WINDOW_MINUTES}).first()
+    return bool(row is not None and row[0])
+
+
+def _reuse(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, Any]]:
+    """The earlier launch's answer, while it is still the answer (`_still_live`), or None."""
+    found = _succeeded(connection, org_id, dedupe_key)
+    if found is None:
+        return None
+    receipt, result = found["receipt"], found["result"]
+    receipt_id = str(receipt.get("id") or result.get("receipt_id") or "")
+    if not _still_live(connection, receipt_id, str(result["run_id"])):
+        return None
+    return {**result, "reused": True, "receipt_id": receipt_id}
+
+
+def _relaunch(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, Any]]:
+    """The same launch, pressed after its build ended: its receipt, and its project when that
+    still exists (with the resources and workflows it was given), to start a new run in. None
+    when the launch never succeeded."""
+    found = _succeeded(connection, org_id, dedupe_key)
+    if found is None:
+        return None
+    receipt, result = found["receipt"], found["result"]
+    again: dict[str, Any] = {"receipt_id": str(receipt["id"])}
+    row = connection.execute(text("SELECT workspace_id FROM projects WHERE id = :p"),
+                             {"p": result["project_id"]}).first()
+    if row is not None:
+        again.update({"project_id": str(result["project_id"]), "workspace_id": str(row[0]),
+                      "resources": list(result.get("resources") or []),
+                      "workflows": list(result.get("workflows") or [])})
+    return again
 
 
 def _dedupe_key(
     org_id: str, prompt: str, mode: str, template_id: Optional[str],
-    attachment_ids: list[str], github_repo: str,
+    attachment_ids: list[str], github_repo: str, who: str = "",
 ) -> str:
     raw = json.dumps({
         "org": org_id,
+        "who": who,
         "prompt": str(prompt or ""),
         "mode": mode,
         "template_id": template_id or "",

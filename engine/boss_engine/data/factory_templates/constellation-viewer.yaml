@@ -10,6 +10,7 @@ prompt: |
   preview does not need a headset. Do not call a sky survey. A passing test loads the CSV, asserts
   the point count matches the rows, and selects a named star to check the distance text.
 stack: WebXR
+toolchain: node
 resources:
   - repo
   - preview

@@ -27,7 +27,7 @@ from sqlalchemy import text
 MissionState = Literal["running", "waiting_you", "waiting_person", "waiting", "stopped",
                        "blocked", "stalled", "done"]
 AttentionKind = Literal["approval", "failed_step", "readiness", "gate_override", "budget_refused",
-                        "system_health"]
+                        "build_failed", "system_health"]
 
 
 class AttentionAction(TypedDict):
@@ -337,7 +337,7 @@ def attention_items(connection: Any, project_id: str, needs_you: list[dict[str, 
             item["decide_inline"] = decide_inline(
                 n.get("decision_kind"), n.get("risk_tier"), actions, bool(preview),
                 content_hash)
-        elif kind in ("gate_override", "budget_refused"):
+        elif kind in ("gate_override", "budget_refused", "build_failed"):
             # A build stopped for the operator (factory spec §6.5): the reviewer whose gate
             # failed, from the build's acts — or nobody (a refused budget is BOSS's).
             item["role_key"] = n.get("role_key")
@@ -670,8 +670,7 @@ def missions(connection: Any, project_id: str, read: Mapping[str, Any],
         order = {sid: i for i, sid in enumerate(spec)}
         run_steps = sorted(command_center._latest_per_step(by_run.get(str(run["id"]), [])),
                            key=lambda s: order.get(str(s.get("step_id")), len(order)))
-        done = sum(1 for s in run_steps if s.get("status") in ("succeeded", "skipped"))
-        count = max(len(spec), len(run_steps))
+        done, count = command_center.counted_steps(spec, run_steps)
         current = next((s for s in run_steps if s.get("status") in command_center.CURRENT_STEP),
                        None)
         failed = next((s for s in reversed(run_steps)

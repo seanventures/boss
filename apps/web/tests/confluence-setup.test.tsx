@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * SETUP › CONFLUENCE (BOSSAPP-1384): the org's one Confluence connection beside the ticket systems.
+ * SETUP › CONFLUENCE (BOSSAPP-1384): the org's one Confluence connection, under Setup › Documents.
  * Empty state, the connect form (the token is a password field, sent once, never kept in the page),
  * the Jira-credential option, a refusal said in words, the connected row (who BOSS acts as, shared
  * from another project, last test), Test connection, choosing the spaces kept in knowledge, Sync

@@ -27,6 +27,7 @@ import time
 import hashlib
 import json
 import re
+import stat
 import subprocess
 import threading
 from pathlib import Path
@@ -3738,53 +3739,80 @@ def advisory_followup_findings(failing, evidence: dict, deferred: list) -> list[
     return out
 
 
+def _tree_git(root, args: list, index: str):
+    """One git of the snapshot/restore pair on a run's tree, with its own temporary index.
+
+    AS THE RUN'S UID (owned_process wraps it through boss-sandbox-exec when the run holds one),
+    never with BOSS's: crun_47c3aea2 (Recipe box follow-up, 2026-11-18) ran this `git add -A` as
+    the API's uid under umask 022, which created 50 of .git/objects' fan-out directories boss
+    0755; the run's own `git add -A` a minute later could not add an object into them
+    ("insufficient permission for adding an object to repository database .git/objects") and
+    the finished build failed. The temporary index lives in .git, where the run's uid writes."""
+    from . import owned_process
+    from .git_safety import NO_TREE_CODE, isolated_env
+
+    # PINNED to this tree (as readonly_guard._git): a planted core.worktree or a .git that is a
+    # link/gitfile never points the pair at another directory.
+    if not stat.S_ISDIR(os.lstat(Path(root) / ".git").st_mode):
+        raise OSError(f"{root}/.git is not a real directory")
+    env = {**isolated_env({"PATH": os.environ.get("PATH", os.defpath), "LANG": "C.UTF-8"}),
+           "GIT_INDEX_FILE": index, "GIT_DIR": str(Path(root) / ".git"),
+           "GIT_WORK_TREE": str(root)}
+    return owned_process.run(["git", *NO_TREE_CODE, *args], cwd=str(root), env=env,
+                             capture_output=True, text=True, timeout=120)
+
+
+def _tree_index(root) -> str:
+    import uuid
+
+    return str(Path(root) / ".git" / f"boss-tree-{uuid.uuid4().hex[:12]}.index")
+
+
 def _tree_snapshot(root) -> Optional[str]:
     """The working tree as a git tree object (a temporary index: the real index is untouched),
     or None when it cannot be taken. Includes every non-ignored file, binaries too."""
-    import subprocess
-    import tempfile
-
+    index = _tree_index(root)
     try:
-        with tempfile.TemporaryDirectory() as d:
-            env = {**os.environ, "GIT_INDEX_FILE": str(Path(d) / "index")}
-            for cmd in (["git", "add", "-A"], ["git", "write-tree"]):
-                done = subprocess.run(cmd, cwd=str(root), env=env, capture_output=True,
-                                      text=True, timeout=120)
-                if done.returncode != 0:
-                    return None
-            return done.stdout.strip() or None
+        for cmd in (["add", "-A"], ["write-tree"]):
+            done = _tree_git(root, cmd, index)
+            if done.returncode != 0:
+                return None
+        return done.stdout.strip() or None
     except Exception:  # noqa: BLE001 — no snapshot: the caller does not rework
         _log_caught(logger)
         return None
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(index)
 
 
 def _tree_restore(root, tree: str) -> bool:
     """Put the working tree back EXACTLY as the snapshot: its files rewritten (a deleted or
-    edited one included), and every file the snapshot did not have removed."""
-    import subprocess
-    import tempfile
-
+    edited one included), and every file the snapshot did not have removed. The files are
+    written by the run's uid (as the agent's own), never left BOSS-owned."""
+    index = _tree_index(root)
     try:
-        with tempfile.TemporaryDirectory() as d:
-            env = {**os.environ, "GIT_INDEX_FILE": str(Path(d) / "index")}
-            run = lambda cmd: subprocess.run(  # noqa: E731
-                cmd, cwd=str(root), env=env, capture_output=True, text=True, timeout=120)
-            if run(["git", "read-tree", tree]).returncode != 0:
-                return False
-            # The snapshot's files FIRST (its .gitignore included), so what counts as "not in
-            # the snapshot" is read against the snapshot's ignore rules, never the rework's.
-            if run(["git", "checkout-index", "-a", "-f"]).returncode != 0:
-                return False
-            extra = run(["git", "ls-files", "-o", "--exclude-standard", "-z"])
-            for rel in filter(None, extra.stdout.split("\0")):
-                try:
-                    (Path(root) / rel).unlink()
-                except OSError:
-                    pass
-            return True
+        if _tree_git(root, ["read-tree", tree], index).returncode != 0:
+            return False
+        # The snapshot's files FIRST (its .gitignore included), so what counts as "not in
+        # the snapshot" is read against the snapshot's ignore rules, never the rework's.
+        if _tree_git(root, ["checkout-index", "-a", "-f"], index).returncode != 0:
+            return False
+        extra = _tree_git(root, ["ls-files", "-o", "--exclude-standard", "-z"], index)
+        # Removed WITHOUT following a link on the way (workspace_perms.unlink_nofollow): the
+        # run's uid controls this tree, and a listed `d/x` whose `d` it swapped for a link to a
+        # BOSS directory after the listing must never cost BOSS a file there.
+        from . import workspace_perms
+
+        for rel in filter(None, extra.stdout.split("\0")):
+            workspace_perms.unlink_nofollow(root, rel)
+        return True
     except Exception:  # noqa: BLE001
         _log_caught(logger)
         return False
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(index)
 
 
 def _ledger_followup(engine, *, project_id: str, parent_run_id: str, parent_root: str,
@@ -5875,6 +5903,29 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         turns=int(res.turns or 0))
         return res
 
+    _left_out_said: set[str] = set()
+
+    def _note_left_out(box) -> None:
+        """Say on the run which files this build made that are NOT its work (build output a
+        compiled stack left in the repository, a binary): sandbox.diff left them out instead of
+        failing the build. Recorded once per file; never raises."""
+        notes = [n for n in (getattr(box, "left_out", None) or [])
+                 if isinstance(n, dict) and n.get("path") not in _left_out_said]
+        if not notes:
+            return
+        try:
+            with _transaction(engine) as c:
+                c.execute(sql(
+                    "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+                    "|| jsonb_build_object('left_out', COALESCE(finalize_ctx->'left_out', "
+                    "'[]'::jsonb) || CAST(:n AS JSONB)), updated_at = now() WHERE id = :id"),
+                    {"n": json.dumps(notes), "id": run_id})
+                emit_event(c, project_id, "code_task.files_left_out", "boss", "code_task_run",
+                           run_id, {"files": notes})
+            _left_out_said.update(str(n.get("path")) for n in notes)
+        except Exception:  # noqa: BLE001 — a note never fails the build
+            _log_caught(logger)
+
     def _commit_stage(files, message: str) -> None:
         """Commit a stage's returned files to the work branch (control-plane-only git;
         requires the task repo to be the deployment's configured target repo)."""
@@ -6420,6 +6471,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         except Exception:  # noqa: BLE001 — a dead sandbox must not mask the real failure
             _log_caught(logger)
             return 0
+        _note_left_out(sandbox)
         if not files:
             return 0
         try:
@@ -10728,10 +10780,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # slice completed, skips the deferred-findings follow-up (spawned only after a
             # PR opens), and lets advance_decomposition build the next slice on unresolved
             # security/test failures. Treat them like open_pr=false for gate disposition.
-            _didx, _dtot = fctx.get("decomposition_index"), fctx.get("decomposition_total")
-            _nonfinal_slice = (isinstance(_didx, int) and isinstance(_dtot, int)
-                               and _dtot > 1 and _didx < _dtot)
-            _can_ship_pr = spec.get("open_pr", True) is not False and not _nonfinal_slice
+            from . import pull_request_owed as _pr_owed
+
+            _nonfinal_slice = _pr_owed.nonfinal_slice(fctx) is not None
+            # THE ONE DECISION (pull_request_owed.owed), as the delivery step asks it below.
+            _can_ship_pr = _pr_owed.owed(spec, fctx) is None
             # WHAT IS STILL A BLOCKER after the warm round: it blocks on every profile.
             _blockers = unresolved_blockers(
                 failing, review_summary=r3.get("summary", ""), security_verdict=sec_verdict,
@@ -11354,10 +11407,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # for one website. So only the FINAL slice opens a PR (the whole accumulated site, one
         # approval); earlier slices complete silently on the shared branch and advance the chain.
         # Recompute for the happy path (gate-failure branch may not have run).
-        _didx, _dtot = fctx.get("decomposition_index"), fctx.get("decomposition_total")
-        _nonfinal_slice = (isinstance(_didx, int) and isinstance(_dtot, int)
-                           and _dtot > 1 and _didx < _dtot)
-        if spec.get("open_pr", True) is False or _nonfinal_slice:
+        from . import pull_request_owed as _pr_owed
+
+        _sliced = _pr_owed.nonfinal_slice(fctx)
+        _nonfinal_slice = _sliced is not None
+        _didx, _dtot = _sliced if _sliced else (None, None)
+        # THE ONE DECISION, and its reason written ON THE RUN in words: a completed build with
+        # no PR never ends silent (crun_5b11643d, 2026-11-18: completed, no PR, no card, no why).
+        _no_pr = _pr_owed.owed(spec, fctx, branch=work_branch)
+        if _no_pr is not None:
             # Eval/bake-off runs (open_pr=false) measure the gate not the delivery; a non-final
             # decomposition slice defers its PR to the final slice. Either way: record the verified
             # outcome, keep the work on the shared branch, and let the chain advance.
@@ -11374,13 +11432,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                      if _nonfinal_slice else "gate passed; PR suppressed (open_pr=false)"),
                     run_id=run_id,
                 )
-                if not _fenced_status("completed", "phase='done'"):
+                if not _fenced_status("completed", "phase='done', " + _pr_owed.record_clause(),
+                                      {"no_pr": _pr_owed.record_value(_no_pr)}):
                     emit_event(c, project_id, "code_task.terminal_write_refused", "boss",
                                "code_task_run", run_id, {"attempted": "completed_no_pr"})
                 emit_event(c, project_id, "code_task.completed_no_pr", "boss",
                            "code_task_run", run_id,
                            {"quality_gate_id": qg_id,
-                            "reason": "decomposition_slice" if _nonfinal_slice else "open_pr_false",
+                            "reason": _no_pr["reason"], "words": _no_pr["words"],
                             "slice": f"{_didx}/{_dtot}" if _nonfinal_slice else None})
             plane_sync.on_event(engine, settings, run_id, "code_task.completed_no_pr")  # P2
             return {"status": "completed", "done": True, "quality_gate_id": qg_id,

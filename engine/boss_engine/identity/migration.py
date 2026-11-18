@@ -1112,6 +1112,54 @@ def retire_due(org_id: str, *, db: Any, now: Optional[datetime] = None,
     return out
 
 
+def restore_path(org_id: str, kind: LegacyKind, *, db: Any, now: Optional[datetime] = None,
+                 actor_principal_id: str, actor_ctx: Any = None, reason: str) -> Retirement:
+    """Undo a retirement of the shared password (review of #204: a fresh claim retires it at
+    once, and nothing could bring it back). The mapping works again, its principal is active and
+    Operator again, until the window the claim started would have ended — never past the
+    absolute cutoff, and never once that has passed. Writes `legacy.path_restored`."""
+    if kind != LegacyKind.SHARED_PASSWORD:
+        raise ValueError("only the shared password can be brought back")
+    now = _now(now)
+    if claimed_at(db, org_id) is None:
+        raise ValueError("claim the first Owner first")
+    ref, pid = {k: (r, p) for k, r, p in BRIDGE_PATHS}[kind]
+    m = mapping(db, org_id, kind, ref)
+    if not m or m["retired_at"] is None:
+        raise ValueError("the shared password is not retired")
+    policy = get_policy(org_id, db=db)
+    started = window_start(db, org_id) or now
+    hard = hard_cutoff(db, org_id) or (started + timedelta(days=LEGACY_MAX_DAYS))
+    cutoff = min(started + timedelta(days=policy.legacy_cutoff_days), hard)
+    if cutoff <= now:
+        raise ValueError(f"the shared-password window ended {cutoff.date().isoformat()}; "
+                         "it cannot be brought back. Invite people instead.")
+    db.execute(_sql("UPDATE identity_legacy_mappings SET retired_at = NULL, retire_after = :c "
+                    "WHERE org_id = :o AND legacy_kind = :k AND legacy_ref = :r"),
+               {"c": cutoff, "o": org_id, "k": kind.value, "r": ref})
+    db.execute(_sql("UPDATE identity_principals SET status = 'active', status_changed_at = :now, "
+                    "status_changed_by = :by, status_reason = :why, updated_at = now() "
+                    "WHERE id = :p AND status IN ('disabled', 'pending')"),
+               {"now": now, "by": actor_principal_id, "why": f"legacy path restored: {reason}",
+                "p": pid})
+    bind(db, org_id, pid, "arl_operator", "org", org_id, expires_at=cutoff,
+         reason="legacy: shared console password as Operator, restored (D25)")
+    details = {"path": kind.value, "reason": reason, "until": cutoff.isoformat()}
+    if actor_ctx is not None:
+        event = SecurityEvent.from_context(actor_ctx, "legacy.path_restored", Outcome.SUCCESS,
+                                           target_type="principal", target_id=pid, details=details)
+    else:
+        event = SecurityEvent(org_id=org_id, event_type="legacy.path_restored",
+                              outcome=Outcome.SUCCESS, actor_principal_id=actor_principal_id,
+                              actor_kind="system" if actor_principal_id.startswith("sys_") else
+                              None, target_type="principal", target_id=pid, details=details)
+    audit.record(event, db=db)
+    bump_epoch(db, org_id)
+    from . import legacy as _legacy
+    _legacy.invalidate_cache()
+    return Retirement(kind.value, False, reason)
+
+
 def retire_path(org_id: str, kind: LegacyKind, *, db: Any, now: Optional[datetime] = None,
                 actor_principal_id: str, actor_ctx: Any = None, reason: str) -> Retirement:
     """Retire one bridge now: the mapping stops working, its principal is disabled (history keeps

@@ -16,6 +16,7 @@ import { useBoard } from "./parts";
 import { Pill } from "./pill";
 import { TryRow } from "./try-row";
 import { accountsOf, reposOf } from "./setup-blocks";
+import { switchAreaWith } from "../url-intent";
 
 export const NEW_PROJECT_HREF = {
   sample: "/?new_project=sample",
@@ -26,10 +27,17 @@ export const NEW_PROJECT_HREF = {
 const FLOW = ["Idea", "Plan (you approve)", "Build", "Review", "Pull request", "Live preview"];
 
 export type WelcomeState = {
-  github: { done: boolean; login: string | null; repos: number };
+  /** `local`: the org keeps code on this machine (no GitHub needed to build; GitHub is for PRs on GitHub). */
+  github: { done: boolean; login: string | null; repos: number; local: { full_name: string; project_name: string } | null };
   model: { done: boolean; label: string | null; kind: string | null };
-  sample: { done: boolean };
+  /** `project`: the org's live sample project, once it exists (Open the sample). */
+  sample: { done: boolean; project: { project_id: string; name: string } | null };
 };
+
+/** The sample project's page. Only that project and area: no one-shot params ride along. */
+export function sampleHref(projectId: string): string {
+  return `/?${new URLSearchParams({ project_id: projectId, area: "project" }).toString()}`;
+}
 
 /** What the three steps say, from the server's view alone. */
 export function welcomeState(view: SetupView, signin?: SigninStatus | null): WelcomeState {
@@ -37,14 +45,25 @@ export function welcomeState(view: SetupView, signin?: SigninStatus | null): Wel
   const green = accounts.find((a) => a.pill.tone === "green");
   const repoWorks = view.repository.repos.some((r) => r.pill.tone === "green");
   const model = view.models.find((m) => m.pill.tone === "green");
+  const local = view.repository.local ?? null;
   return {
-    github: { done: Boolean(green) || repoWorks, login: green?.login ?? green?.name ?? null,
-              repos: reposOf(view).length },
+    github: { done: Boolean(green) || repoWorks || Boolean(local), login: green?.login ?? green?.name ?? null,
+              repos: reposOf(view).length,
+              local: local && !green && !repoWorks ? { full_name: local.full_name, project_name: local.project_name } : null },
     model: { done: Boolean(model), label: model?.label ?? null, kind: model?.kind ?? null },
     // TICKED ONLY FOR A REAL FIRST PR from the sample / Try it run (walk 2026-11-04: a green tick
     // with no sample run). Other PRs in the project make the install established, not this step.
-    sample: { done: Boolean(view.try.last_run?.pr_url) },
+    sample: { done: Boolean(view.try.last_run?.pr_url), project: view.try.sample ?? null },
   };
+}
+
+/** WHAT THE SAMPLE COSTS, only as true as what is connected (stranger test: "included in your
+ *  subscription" with no subscription connected). */
+export function sampleCostLine(model: WelcomeState["model"]): string {
+  if (!model.done) return "About 8 minutes, once a model is connected";
+  if (model.kind === "subscription") return "About 8 minutes, included in your subscription";
+  if (model.kind === "local") return "About 8 minutes on your local model, no API cost";
+  return "About 8 minutes, billed to your API key";
 }
 
 export function welcomeDone(state: WelcomeState): boolean {
@@ -91,12 +110,7 @@ function SetupLink({ focus, className, testid, children }: {
          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
          e.preventDefault();
          try {
-           const url = new URL(window.location.href);
-           url.searchParams.set("focus", focus);
-           url.searchParams.set("open", "add");
-           url.searchParams.delete("view");
-           window.history.replaceState(window.history.state, "", url.toString());
-           window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "setup" }));
+           switchAreaWith("setup", { focus, open: "add", view: null });
          } catch { window.location.assign(href); }
        }}>
       {children}
@@ -130,15 +144,21 @@ export function Welcome({ onSetup }: { onSetup: () => void }) {
         <li className="su-wl-step" data-current={current === 1 || undefined} data-testid="su-wl-github">
           <Circle n={1} done={state.github.done} current={current === 1} />
           <div className="su-stack su-tight">
-            <span className="su-strong">Connect GitHub</span>
-            {state.github.done ? (
+            <span className="su-strong">{state.github.local ? "Code on this machine" : "Connect GitHub"}</span>
+            {state.github.local ? (
+              <span className="su-faint" data-testid="su-wl-github-local">
+                {state.github.local.project_name} keeps its code here. GitHub is optional: connect it for PRs on GitHub.
+              </span>
+            ) : state.github.done ? (
               <span className="su-faint" data-testid="su-wl-github-done">
                 Connected{state.github.login ? ` as ${state.github.login}` : ""}. {state.github.repos} repo{s(state.github.repos)} BOSS can use
               </span>
             ) : <span className="su-faint">Pick the repos BOSS may work on.</span>}
           </div>
           <span className="su-spacer" />
-          {state.github.done ? (
+          {state.github.local ? (
+            <SetupLink focus="repository" className="su-link" testid="su-wl-github-optional">Connect GitHub</SetupLink>
+          ) : state.github.done ? (
             <SetupLink focus="repository" className="su-link" testid="su-wl-github-more">Add another account</SetupLink>
           ) : (
             <SetupLink focus="repository" className={`su-btn${current === 1 ? " su-btn-primary" : ""}`}
@@ -178,12 +198,18 @@ export function Welcome({ onSetup }: { onSetup: () => void }) {
                 </React.Fragment>
               ))}
             </ol>
-            <span className="su-faint">About 8 minutes, included in your subscription</span>
+            <span className="su-faint" data-testid="su-wl-sample-cost">{sampleCostLine(state.model)}</span>
             {view.try.last_run ? <LastRun run={view.try.last_run} /> : null}
           </div>
           <span className="su-spacer" />
-          <a className={`su-btn${current === 3 ? " su-btn-primary" : ""}`} href={NEW_PROJECT_HREF.sample}
-             data-testid="su-wl-sample-go">Start the sample</a>
+          {state.sample.project ? (
+            // THE SAMPLE EXISTS: open it, never offer to start a second one (stranger test r2).
+            <a className={`su-btn${current === 3 ? " su-btn-primary" : ""}`} href={sampleHref(state.sample.project.project_id)}
+               data-testid="su-wl-sample-open">Open the sample</a>
+          ) : (
+            <a className={`su-btn${current === 3 ? " su-btn-primary" : ""}`} href={NEW_PROJECT_HREF.sample}
+               data-testid="su-wl-sample-go">Start the sample</a>
+          )}
         </li>
       </ol>
 

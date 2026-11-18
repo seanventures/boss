@@ -7,10 +7,12 @@ prompt: |
   Include at least eight point features around a single invented park, each with an id and a name.
   Plot them with MapLibre GL using a style document shipped in the repo, not a hosted tile account
   and not an API key. Tapping a point opens a panel with the bench name and a note. Notes are
-  stored in a sqlite file keyed by the feature id and start empty. The page must still show the
+  stored in a sqlite file keyed by the feature id and start empty. Use Node's built-in node:sqlite module or a pure-JavaScript sqlite package, not a native
+  module that downloads a binary when it installs. The page must still show the
   points if the browser is offline. A passing test loads the fixture, counts eight markers, and
   saves a note that is still there after a reload.
 stack: MapLibre GL
+toolchain: node
 resources:
   - repo
   - preview

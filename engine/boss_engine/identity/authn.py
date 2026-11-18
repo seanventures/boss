@@ -181,12 +181,12 @@ def check_csrf(creds: RequestCredentials, *, session_id: str, public_origin: str
     HMAC(session_id). Raises AuthnError("csrf_failed", 403)."""
     import hmac as _hmac
 
-    from .authn_support import origin_of
+    from .authn_support import origin_of, same_console_origin
     from .sessions import csrf_token
 
     origin = origin_of(creds.headers.get("origin", ""))
     expected = origin_of(public_origin or "")
-    if not origin or not expected or origin != expected:
+    if not same_console_origin(origin, expected):
         raise AuthnError("csrf_failed", 403)
     site = creds.headers.get("sec-fetch-site")
     if site is not None and site.strip().lower() != "same-origin":
@@ -219,11 +219,11 @@ def check_origin_only(creds: RequestCredentials, *, public_origin: Optional[str]
     """The pre-session CSRF check for /v1/auth/* writes (no session, so no HMAC yet): the Origin
     must be the public origin (or, when none is bound, this request's own origin) and
     Sec-Fetch-Site, when sent, same-origin. Login CSRF is refused (A8, A69)."""
-    from .authn_support import origin_of
+    from .authn_support import origin_of, same_console_origin
 
     origin = origin_of(creds.headers.get("origin", ""))
     expected = origin_of(public_origin or "") or request_origin(creds)
-    if not origin or not expected or origin != expected:
+    if not same_console_origin(origin, expected):
         raise AuthnError("csrf_failed", 403)
     site = creds.headers.get("sec-fetch-site")
     if site is not None and site.strip().lower() != "same-origin":

@@ -51,6 +51,7 @@ export function kindWord(item: Pick<AttentionItem, "kind" | "decisionKind"> & { 
   if (item.kind === "failed_step") return "Failed";
   if (item.kind === "gate_override") return "Checks";
   if (item.kind === "budget_refused") return "Budget";
+  if (item.kind === "build_failed") return "Failed";
   if (item.kind === "system_health") return "System";
   if (item.kind === "infra") {
     // What the card is about, not which screen raised it: on Observability an app that is down
@@ -111,7 +112,7 @@ export const buildPatch = (runId: string) => ({ area: "code_tasks", build: runId
 /** Cards for work that stopped, and the face each wears: a failed step or failed checks FAILED,
  *  a budget refusal STOPPED the build. None is "stuck" (live work gone quiet). */
 const STUCK_KINDS = new Map<string, "failed" | "stopped">([
-  ["failed_step", "failed"], ["gate_override", "failed"], ["budget_refused", "stopped"]]);
+  ["failed_step", "failed"], ["gate_override", "failed"], ["budget_refused", "stopped"], ["build_failed", "failed"]]);
 
 /** Where a system-health option's "open" answer goes: a guide in a new tab, an area in place. */
 function openTarget(target: string) {
@@ -419,13 +420,30 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
         {item.kind === "approval" && build?.previewUrl ? (
           <a className="ag-btn" href={build.previewUrl} target="_blank" rel="noreferrer" data-testid="ag-att-open-preview">Open preview ↗</a>
         ) : null}
-        {(item.kind === "gate_override" || item.kind === "budget_refused") && build ? (
+        {/* A failed build's fix first (it says "then retry"), Retry beside it. */}
+        {item.kind === "build_failed" && build?.fix ? (
+          build.fix.href ? (
+            <a className="ag-btn" data-tone="primary" href={linkTo(Object.fromEntries(new URLSearchParams(build.fix.href.replace(/^[^?]*\?/, ""))), orgId)}
+               data-testid="ag-att-fix" title={build.fix.detail}
+               onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(Object.fromEntries(new URLSearchParams(build.fix!.href.replace(/^[^?]*\?/, "")))); } }}>
+              {build.fix.label}
+            </a>
+          ) : <span className="ag-att-kind" data-testid="ag-att-fix" title={build.fix.detail}>{build.fix.label}{build.fix.command ? <>: <code>{build.fix.command}</code></> : null}</span>
+        ) : null}
+        {(item.kind === "gate_override" || item.kind === "budget_refused" || item.kind === "build_failed") && build ? (
           <GatedButton permission="code_task:retry" type="button" className="ag-btn" data-testid="ag-att-retry"
                   disabled={!build.retryable || busy !== null} title={!build.retryable ? build.retryReason : undefined}
                   aria-busy={busy === "retry" || undefined} onClick={() => void retryBuild()}>
             {busy === "retry" ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}
             Retry
           </GatedButton>
+        ) : null}
+        {item.kind === "build_failed" && build ? (
+          <a className="ag-btn" href={buildHref} data-testid="ag-att-see"
+             title="Open the build: its steps, its log and the error in full"
+             onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(buildPatch(build.runId)); } }}>
+            See what happened
+          </a>
         ) : null}
         {item.kind === "gate_override" && build ? (
           <GatedButton permission="code_task:override" type="button" className="ag-btn" data-testid="ag-att-waive" disabled={busy !== null}

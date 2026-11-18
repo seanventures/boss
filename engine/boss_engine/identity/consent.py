@@ -366,6 +366,26 @@ def _name(db: Any, principal_id: str) -> str:
 
 #: What a code task's builder needs (the same scope the run token is minted with).
 CODE_TASK_PERMISSIONS = frozenset({"code_task:read", "code_task:steer", "repository:read", "github:read", "github:sync"})
+#: What a build asks of GitHub. A build whose repositories are ALL on this machine (a local
+#: repository, BOSSAPP-918: file://, no credential, no egress) never touches GitHub, so its consent
+#: sheet does not ask "View GitHub / Sync with GitHub" (stranger test r3, Easy Mode on a local repo).
+GITHUB_BUILD_PERMISSIONS = frozenset({"github:read", "github:sync"})
+
+
+def _is_local_repo(full_name: Any, repo_host: Optional[str] = None) -> bool:
+    from ..services.local_repo import is_local
+
+    return str(repo_host or "").strip().lower() == "local" or is_local(full_name)
+
+
+def code_task_permissions(repos: Iterable[str] = (), repo_host: Optional[str] = None) -> frozenset[str]:
+    """The permissions a build asks for, by where its code lives: CODE_TASK_PERMISSIONS, without
+    the GitHub ones when every repository it names is local. No repository named: all of them
+    (where the build will push is not known yet)."""
+    names = [str(r or "").strip() for r in repos if str(r or "").strip()]
+    if names and all(_is_local_repo(name, repo_host) for name in names):
+        return CODE_TASK_PERMISSIONS - GITHUB_BUILD_PERMISSIONS
+    return CODE_TASK_PERMISSIONS
 
 
 # ---- workflow runs and schedules ---------------------------------------------------------------------
@@ -501,18 +521,18 @@ def workflow_needs(db: Any, project_id: str, spec: Any, input_data: Any) -> tupl
             key = str(c or "").strip().lower()
             if key and key != "human" and key not in roles:
                 roles.append(key)
-    if builds:
-        perms |= CODE_TASK_PERMISSIONS
-        # Repository work a step does OUTSIDE a delegated chain (a preview's or a deploy's clone,
-        # a review's checkout run as the person: runs.repo_access) runs as the default builder.
-        default = _resolved_builder()
-        if default not in roles:
-            roles.append(default)
     # A LOCAL REPOSITORY (BOSSAPP-918) is on this machine: no GitHub access is asked for it — but
     # it IS named, as `local` (BOSSAPP-1163). Dropped here, the run's grant was minted with no
     # repositories at all, and the first follow-up build on the local repository (Request changes
     # on the merge decision) was refused `consent_required` by that very grant.
     repos = _repos_for(db, project_id, input_data) if builds else []
+    if builds:
+        perms |= code_task_permissions(repos)
+        # Repository work a step does OUTSIDE a delegated chain (a preview's or a deploy's clone,
+        # a review's checkout run as the person: runs.repo_access) runs as the default builder.
+        default = _resolved_builder()
+        if default not in roles:
+            roles.append(default)
     return roles, frozenset(perms), repos
 
 
@@ -654,6 +674,14 @@ def _agents(db: Any, project_id: str, role_keys: list[str]):
                 # In its OWN transaction: the caller's is about to roll back on 409
                 # consent_required, and the Passports must outlive it for the grant to name them.
                 _upgrade_committed(db, org)
+                p = passports.get(aid, db=db)
+                if p is None:
+                    # A project made in THIS transaction (Easy Mode creates the project and starts
+                    # its first build in one go, 2026-11-18): its roles are not visible to another
+                    # transaction, so the committed upgrade cannot see them. Issue them here; if
+                    # this transaction rolls back, the project and its agents go with it.
+                    passports.upgrade_from_roles(org_id=org, db=db,
+                                                 default_sponsor=_first_owner(db, org))
             p = passports.get(aid, db=db)
         if p is None:
             if aid and lineage._enforced():  # noqa: SLF001

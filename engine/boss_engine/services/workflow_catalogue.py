@@ -2107,6 +2107,7 @@ def catalogue_summary(prd_auto_approve: Optional[bool] = None) -> list[dict[str,
 
     if prd_auto_approve is None:
         prd_auto_approve = prd_auto_approved()
+    from .command_center import is_marker_step
     from .workflow_readiness import need_for, needs_of
 
     out = []
@@ -2150,7 +2151,9 @@ def catalogue_summary(prd_auto_approve: Optional[bool] = None) -> list[dict[str,
             "name": entry["name"],
             "description": entry["description"],
             "work_class": entry["work_class"],
-            "step_count": len(entry["steps"]),
+            # Markers (fork/join) are not steps: the same count as the plan and a run's "k of n".
+            "step_count": sum(1 for s in entry["steps"]
+                              if isinstance(s, dict) and not is_marker_step(s)),
             "steps": [
                 {"id": s["id"],
                  "capability": (s.get("binding") or {}).get("capability") or s["kind"]}

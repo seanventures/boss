@@ -429,9 +429,12 @@ textarea.px-input { resize: vertical; min-height: 64px; }
 .px-icon-btn[data-copied] { color: var(--green); border-color: var(--green); }
 
 /* ── Diagrams fit every width (page-fix, GAPS 6): nodes share the row at 390 / 768, nothing clips ── */
-.px-jr { overflow-x: visible; }
-.px-jr-node { flex: 0 1 92px; min-width: 0; }
-.px-jr-cap, .px-jr-meta { max-width: 100%; overflow-wrap: anywhere; }
+/* WORDS NEVER BREAK MID-WORD (stranger test at 1440: "Onboar ded", "Product ion"). A node shrinks
+   only to its longest word; the wires give way first, and a strip that still does not fit scrolls
+   sideways inside its card. Captions wrap between words, never inside one. */
+.px-jr { overflow-x: auto; scrollbar-width: thin; }
+.px-jr-node { flex: 0 1 92px; min-width: min-content; }
+.px-jr-cap, .px-jr-meta { max-width: 100%; overflow-wrap: normal; word-break: normal; hyphens: manual; }
 .px-fl { flex-wrap: wrap; row-gap: 8px; overflow-x: visible; }
 .px-jr-node[data-s="todo"] .px-jr-shape { color: var(--faint); }
 .px-jr-node[data-s="waiting"] .px-jr-meta { color: var(--amber); }
@@ -869,3 +872,28 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 /* Needs you › an FYI row (BOSSAPP-922 waiting for GitHub): calm blue, no action, not counted. */
 .px-ny.px-ny-fyi { background: color-mix(in srgb, var(--blue) 7%, var(--surface)); }
 .px-ny-ico.px-ny-ico-fyi { background: var(--blue); color: var(--surface); }
+
+/* THE JOURNEY SAYS IT SCROLLS (stranger test r3, 390 px: cut after "Staging" with no sign of more).
+   A fade on each edge that hides stages, and a chevron that scrolls right. */
+.px-jr-wrap { position: relative; min-width: 0; }
+.px-jr-wrap[data-more-right] > .px-jr { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 44px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 44px), transparent); }
+.px-jr-wrap[data-more-left] > .px-jr { -webkit-mask-image: linear-gradient(90deg, transparent, #000 32px);
+  mask-image: linear-gradient(90deg, transparent, #000 32px); }
+.px-jr-wrap[data-more-left][data-more-right] > .px-jr {
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 32px, #000 calc(100% - 44px), transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 32px, #000 calc(100% - 44px), transparent); }
+.px-jr-more { position: absolute; right: 0; top: 6px; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink-soft); font-size: var(--fs-title); line-height: 1;
+  cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.18); }
+.px-jr-more:hover { color: var(--teal); border-color: var(--teal); }
+
+/* A FAILED BUILD (engine work.failed_build): red wherever it is summarised — the header chip,
+   the Needs-you card and pill, the Recent-work row's word. Tokens only. */
+.px a.px-tag[data-failed] { text-decoration: none; cursor: pointer; }
+.px a.px-tag[data-failed]:hover { filter: brightness(1.08); }
+/* Dark text on the red (≈6:1, WCAG AA), never white on it (≈3:1, review #218 L3). */
+.px-needs-item[data-tone="red"] { background: var(--red); color: var(--bg); }
+.px-ny[data-tone="red"] { background: color-mix(in srgb, var(--red) 7%, var(--surface)); border-color: color-mix(in srgb, var(--red) 30%, transparent); }
+.px-ny-ico[data-tone="red"] { background: var(--red); color: var(--bg); }
+.px-wk-failed { color: var(--red); font-weight: 650; }

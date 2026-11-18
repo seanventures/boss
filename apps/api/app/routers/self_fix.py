@@ -120,6 +120,17 @@ def build_self_fix_router(
                 item["line"] = sf.step_line(item)
         return {"self_fixes": items, "count": len(items)}
 
+    # Declared before /v1/self-fixes/{id}, which would match it.
+    @router.get("/v1/self-fixes/exists")
+    @permit(P.IMPROVEMENT_READ, scope=Scope.project(query="project_id"))
+    def self_fixes_exist(project_id: str) -> dict:
+        """Whether this install (the project's org) has any self-fix, whichever project holds it:
+        the rail shows its BOSS-developer items on every project of such an install."""
+        pid = _pid(project_id)
+        with begin(engine) as c:
+            require_reader(c, pid)
+            return {"exists": sf.install_has_self_fixes(c, pid)}
+
     # ── the host self-installer (declared before /v1/self-fixes/{id}, which would match it) ─────────────────────────────────────────────────────────────
     @router.get("/v1/self-fixes/tickets")
     @permit(P.SELF_FIX_TICKET_READ, scope=Scope.org())

@@ -16,7 +16,7 @@
 import React, { useEffect, useState } from "react";
 
 import type { ProjectMenuItem } from "./project-menu";
-import { TAB_WORDS, projectHref, pxHref, toTab } from "../lib/project-experience";
+import { PX_PATHS, TAB_WORDS, parseSummary, projectHref, pxHref, toTab, usePxRead, type ProjectsSummary } from "../lib/project-experience";
 import { crumbTrail, onCrumbTrail, type CrumbTrail } from "./shell-crumb-here";
 
 /** A template's lab project (template-sheet's naming): insecure by design, never deployed. */
@@ -76,6 +76,18 @@ function useUrlTab(key = "tab"): string | null {
   return tab;
 }
 
+/** Whether the open project gets a crumb. The install's own Default project is left out of the
+ *  Projects list while nobody has used it (overview.is_placeholder), so the breadcrumb leaves it
+ *  out too: a crumb naming "Default project", a project the list never shows, was the stranger
+ *  test's r2 finding. Every other project, and the Default project once the list shows it, keeps
+ *  its crumb. Until the list answers, nothing is hidden. */
+export function crumbProjectShown(projectId: string | undefined, homeId: string | undefined,
+                                  listed: { id: string }[] | null): boolean {
+  if (!projectId) return false;
+  if (!homeId || projectId !== homeId || listed === null) return true;
+  return listed.some((p) => p.id === projectId);
+}
+
 export function ShellCrumbs({ active, areaLabel, routeMode, projects, projectId, onProjects }: {
   active: string; areaLabel: string; routeMode: boolean;
   projects?: { items: ProjectMenuItem[]; homeId: string }; projectId?: string;
@@ -83,7 +95,9 @@ export function ShellCrumbs({ active, areaLabel, routeMode, projects, projectId,
 }) {
   const tab = useUrlTab();
   const view = useUrlTab("view");
-  const hasProject = Boolean(projects && projectId);
+  const summary = usePxRead<ProjectsSummary>(PX_PATHS.summary(), parseSummary, { everyMs: 30_000 });
+  const listed = summary.state === "ready" && summary.data ? summary.data.items.filter((c) => !c.archived) : null;
+  const hasProject = Boolean(projects && projectId) && crumbProjectShown(projectId, projects?.homeId, listed);
   const [trail, setTrail] = useState<CrumbTrail>(null);
   useEffect(() => { setTrail(crumbTrail()); return onCrumbTrail(() => setTrail(crumbTrail())); }, []);
   const crumbs = crumbsFor({ active, areaLabel, routeMode, hasProject, tab, view, trail });

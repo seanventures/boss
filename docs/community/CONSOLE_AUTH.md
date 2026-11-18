@@ -79,7 +79,7 @@ With Okta as BOSS's sign-in provider, people use the same Okta login (and the sa
 
 ## Reach the console
 
-The installer binds the web listener to `127.0.0.1`. On the install machine, open `http://127.0.0.1:3000`.
+The installer binds the web listener to `127.0.0.1`. On the install machine, open `http://localhost:3000`, the address the claim link uses. Use the same address every time: a passkey belongs to the exact address it was made on, and `localhost` and `127.0.0.1` are different sites to a browser.
 
 From another computer, you have two options.
 
@@ -91,7 +91,7 @@ A tunnel needs no proxy. Open it to the VM you administer:
 ssh -L 3000:127.0.0.1:3000 -L 3001:127.0.0.1:3001 -L 8000:127.0.0.1:8000 user@your-vm
 ```
 
-Then open `http://127.0.0.1:3000` on the computer that opened the tunnel. Port 3001 is where previews open (see [Previews have their own address](#previews-have-their-own-address)).
+Then open `http://localhost:3000` on the computer that opened the tunnel. Port 3001 is where previews open (see [Previews have their own address](#previews-have-their-own-address)).
 
 ### Serve the console on a hostname
 
@@ -103,7 +103,7 @@ The HTTPS origin answers only once the proxy is in place. Postgres stays on loop
 
 ### Previews have their own address
 
-A preview runs an app BOSS built, which is code you have not reviewed yet, so it never runs on the console's address. Previews open on their own origin: by default the console's host on port 3001 (`http://127.0.0.1:3000` → previews at `http://127.0.0.1:3001`). That listener serves preview pages and nothing else, and it removes every cookie and credential before the request reaches anything. The console sends a preview link there automatically.
+A preview runs an app BOSS built, which is code you have not reviewed yet, so it never runs on the console's address. Previews open on their own origin: by default the console's host on port 3001 (`http://localhost:3000` → previews at `http://localhost:3001`). That listener serves preview pages and nothing else, and it removes every cookie and credential before the request reaches anything. The console sends a preview link there automatically.
 
 - `BOSS_PREVIEW_PORT` is the port (default `3001`). Set `0` to turn previews off.
 - `BOSS_PREVIEW_ORIGIN` is the address a browser opens previews at. Set it when the console is behind HTTPS or on a hostname, for example `https://previews.console.example`, and point your TLS proxy for that name at port 3001. Use a different hostname from the console's, never a path under it.

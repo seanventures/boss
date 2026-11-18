@@ -15,6 +15,7 @@ from typing import Any, Iterable, Mapping, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .. import build_failure
 from . import captain as captain_service
 from . import demo_logins as demo
 from . import onboarding as onboarding_service
@@ -561,18 +562,40 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
     prod_waits = any(n.get("id") == "prod:host" for n in waiting)
     cost = part(("tile_cost",), lambda: _cost_week(connection, project_id, now), None)
     the_tiles = tiles(project_id, items, envs, cost)   # cost None → the tile's "Couldn't load"
+    # THE LATEST BUILD FAILED (build_failure.latest_failure, the one rule the projects list
+    # and the Command Center read too): the header says so, the Working node is red, the
+    # Running tile names it, and Needs you leads with it — its fix, Retry only when it helps.
+    # ON A LIVE PROJECT (deployed to staging or production) the failure sits BESIDE the stage.
+    failed = part(("needs_you",), lambda: build_failure.latest_failure(connection, project_id,
+                                                                      now=now), None)
+    if failed is not None:
+        failed = {**failed, "beside": bool(facts["got"].get("staging")
+                                            or facts["got"].get("production"))}
+        waiting = [build_failure.needs_card(failed)] + waiting
+        subs = {**subs, "working": failed["word"]}
+        details = {**details, "working": f"{failed['word']}: {failed['reason']}"}
+        # Beside whatever else moves (an onboarding pass): the tile shows it when nothing does.
+        the_tiles["running"]["failed"] = {"id": failed["id"], "label": failed["label"],
+                                          "reason": failed["reason"], "word": failed["word"],
+                                          "href": failed.get("work_href")}
+    the_journey = journey(project_id, facts["got"], stage,
+                          needs_you=len(waiting), subs=subs, details=details,
+                          prod_waits=prod_waits, ats=ats,
+                          active=facts["active"] or bool(facts["got"].get("_onboarding_running")))
+    if failed is not None and not failed["beside"]:
+        the_journey = [{**j, "state": "failed"} if j["key"] == "working" else j
+                       for j in the_journey]
     return {
         "project": {"id": project["id"], "name": project["name"], "initials":
                     initials(project["name"]), "description": project["description"],
                     "stage": stage, "repos": the_repos, "live_url": url,
                     "deploy": _chip(moving),
                     "health": worst(envs)[0], "health_reason": worst(envs)[1],
-                    "status_label": STATUS_LABELS[stage],
+                    "status_label": (failed["word"] if failed is not None and not failed["beside"]
+                                     else STATUS_LABELS[stage]),
+                    "build_failed": failed,
                     "archived": project["archived_at"] is not None},
-        "journey": journey(project_id, facts["got"], stage,
-                           needs_you=len(waiting), subs=subs, details=details,
-                           prod_waits=prod_waits, ats=ats,
-                           active=facts["active"] or bool(facts["got"].get("_onboarding_running"))),
+        "journey": the_journey,
         "needs_you": waiting,
         # Questions that expired off the compliance boundary and can still be answered: one
         # line under Needs you (never counted as waiting, never hidden) — needs.still_answerable.
@@ -708,6 +731,7 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
     from .cards import live_work
 
     moving_now = live_work(connection, ids)
+    failed_now = build_failure.latest_failures(connection, ids, now=now)
     out = []
     for pid in ids:
         p = projects.get(pid)
@@ -726,7 +750,10 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
         except Exception:  # noqa: BLE001 — a card never fails over its setup line
             setup_n = 0
         decided = count_waiting_on_operator(connection, pid, now=now)
-        waiting = decided + setup_n
+        failed = failed_now.get(pid)
+        # The project page's Needs you leads with a failed latest build (build_failure.needs_card): the
+        # card counts it too, so the two numbers agree.
+        waiting = decided + setup_n + (1 if failed else 0)
         # THE ONE COUNT of what moves now (cards.live_work): the Running tile, this card's
         # Working pill and its "N building" line read the same pieces of work.
         live = int((moving_now.get(pid) or {}).get("count") or 0)
@@ -767,6 +794,11 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
         if stage == "onboarding" and not onboarding_active:
             status = "Not onboarded" if onb.get("state") in (None, "not_started", "failed") \
                 else "Ready for work"
+        if failed:
+            # Beside the stage on a live project (deployed anywhere), in its place otherwise.
+            failed = {**failed, "beside": bool(non_prod or prod)}
+            if not failed["beside"]:
+                status = failed["word"]
         out.append({"id": pid, "name": p["name"], "initials": initials(p["name"]),
                     "repo": primary.get(pid), "stage": stage,
                     "status_label": status, "onboarding_active": onboarding_active,
@@ -776,6 +808,7 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
                     "journey": [{"key": j["key"], "label": j["label"], "state": j["state"]}
                                 for j in journey(pid, got, stage, needs_you=waiting,
                                                  active=moving or onboarding_active)],
+                    "build_failed": failed,
                     "needs_you": waiting, "running": live, "health": health,
                     "health_reason": health_reason, "live_url": url,
                     "captain": ({"name": f["name"], "role_key": f["role_key"],

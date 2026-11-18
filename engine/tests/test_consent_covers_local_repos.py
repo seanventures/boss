@@ -79,6 +79,34 @@ def test_a_workflow_that_builds_in_a_local_repository_names_it(monkeypatch):
     assert repos == [LOCAL, "acme/web"], "the local repository is named, so the run's grant covers it"
 
 
+def test_a_build_only_on_this_machine_asks_for_no_github_permission(monkeypatch):
+    """Stranger test r3: Easy Mode on a local repository asked "View GitHub / Sync with GitHub".
+    One rule (consent.code_task_permissions) for the code-task start, its retries, the person
+    wait and a workflow's build step."""
+    github = consent.GITHUB_BUILD_PERMISSIONS
+    local_only = consent.code_task_permissions([LOCAL])
+    assert not (local_only & github) and "code_task:steer" in local_only
+    assert consent.code_task_permissions(["desk/app"], "local") == local_only
+    # GitHub, a mix, or no repository named yet: the GitHub permissions stay asked.
+    assert github <= consent.code_task_permissions(["acme/web"])
+    assert github <= consent.code_task_permissions([LOCAL, "acme/web"])
+    assert consent.code_task_permissions([]) == consent.CODE_TASK_PERMISSIONS
+
+    monkeypatch.setattr(consent, "_repos_for", lambda db, project_id, input_data: [LOCAL])
+    monkeypatch.setattr(consent, "build_step_builders", lambda db, project_id, step, input_data=None: ["forge"])
+    spec = {"steps": [{"id": "build", "kind": "code_task", "binding": {}}]}
+    _, perms, repos = consent.workflow_needs(None, PROJECT, spec, {})
+    assert repos == [LOCAL] and not (perms & github) and "code_task:read" in perms
+
+
+def test_every_build_consent_call_uses_the_one_rule():
+    src = (ROOT / "boss_engine/services/code_task_service.py").read_text()
+    assert "permissions=_consent.CODE_TASK_PERMISSIONS" not in src
+    assert src.count("_consent.code_task_permissions(") >= 3
+    wait = (ROOT / "boss_engine/services/person_wait.py").read_text()
+    assert "_consent.code_task_permissions(" in wait
+
+
 # ---- the grant stores it, covers reads it ---------------------------------------------------------
 
 def test_validate_local_takes_only_this_projects_registered_repositories(monkeypatch):

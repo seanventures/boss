@@ -168,7 +168,7 @@ def repo_token(settings, owner: str, repo: str, *, api_base_url: str = "", app=N
         held = None
     if held:
         return held
-    raise GitHubAppConfigurationError(
+    raise GitHubNotConnected(
         "No GitHub credentials for %s/%s: the App has no installation for it, "
         "BOSS_GITHUB_TOKEN is not set, and this project has no repository connected in Setup."
         % (owner, repo))
@@ -176,6 +176,12 @@ def repo_token(settings, owner: str, repo: str, *, api_base_url: str = "", app=N
 
 class GitHubAppConfigurationError(RuntimeError):
     pass
+
+
+class GitHubNotConnected(GitHubAppConfigurationError):
+    """No credential for this repository anywhere (App, environment, Setup): a setup gap a person
+    fixes, not an outage. Every other GitHubAppConfigurationError (a token-issue 5xx, a missing
+    private key, PyJWT not installed) is not this one."""
 
 
 @dataclass

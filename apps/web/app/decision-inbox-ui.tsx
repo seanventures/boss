@@ -19,6 +19,7 @@ import { AreaLink } from "./area-link";
 import { linkTo, navigate } from "./agents/live-util";
 import { reviewPatch } from "./agents/presence-pill";
 import { useAttention } from "../lib/agents-live";
+import { PX_PATHS, approvalCountsOf, parseSummary, usePxRead, type ProjectsSummary } from "../lib/project-experience";
 import { isAreaId } from "../lib/area-ids";
 import { displayTitle } from "../lib/directive-subject";
 import { PrdRecordView } from "./prd-record";
@@ -531,6 +532,44 @@ function writeFilterToLocation(next: DecisionInboxFilter, orgId?: string): void 
   }
 }
 
+/** What waits on you in the OTHER projects (stranger test r2): the rail said "+4" and the bell
+ *  "4" while this page said "Queue is clear 0" with no pointer anywhere. From the same summary
+ *  the rail's org total is counted from (orgNeedsOf), so the three numbers agree. */
+export type ElsewhereWaiting = { total: number; projects: { id: string; name: string; count: number; href: string }[] };
+export function waitingElsewhere(summary: ProjectsSummary | null | undefined, projectId: string, orgId?: string): ElsewhereWaiting {
+  const projects = (summary?.items ?? [])
+    .filter((c) => !c.archived && c.id !== projectId && (c.needs_you || 0) > 0)
+    .map((c) => ({ id: c.id, name: c.name || c.id, count: c.needs_you,
+                   href: linkTo({ area: "decisions", project_id: c.id, decision_filter: "needs_action" }, orgId) }));
+  // The same number the rail's "+N" and the bell count beyond this project (approvalCountsOf).
+  return { total: summary ? approvalCountsOf(null, summary, projectId).elsewhere : 0, projects };
+}
+
+/** The rail's quiet "+N" beside a tab's own count: what waits in the other projects, so the page,
+ *  the rail and the bell read as one set (stranger test r3: "Needs action 0 / All 0" under a bell of 8). */
+export function ElsewhereChip({ total }: { total: number }) {
+  if (!total) return null;
+  return (
+    <span className="dq-filter-count dq-filter-elsewhere" data-testid="decision-filter-elsewhere"
+          title={`${total} in other project${total === 1 ? "" : "s"}`}>+{total}</span>
+  );
+}
+
+export function WaitingElsewhere({ waiting }: { waiting: ElsewhereWaiting }) {
+  if (!waiting.total) return null;
+  return (
+    <p className="detail dq-elsewhere" data-testid="decision-inbox-elsewhere">
+      {waiting.total} waiting in other project{waiting.projects.length === 1 ? "" : "s"}:{" "}
+      {waiting.projects.map((p, i) => (
+        <React.Fragment key={p.id}>
+          {i ? ", " : null}
+          <a href={p.href} data-testid={`decision-inbox-elsewhere-${p.id}`}>{p.name} ({p.count})</a>
+        </React.Fragment>
+      ))}
+    </p>
+  );
+}
+
 export type DecisionInboxProps = {
   feed: DecisionFeed;
   tasks: TaskFeedItem[];
@@ -593,6 +632,11 @@ export function DecisionInbox({
     () => filterDecisionInbox(feed.items, "needs_action").length,
     [feed.items],
   ) + setupCount;
+  const summary = usePxRead<ProjectsSummary>(PX_PATHS.summary(), parseSummary, { everyMs: 30_000 });
+  const elsewhere = useMemo(
+    () => waitingElsewhere(summary.state === "ready" ? summary.data : null, projectId, orgId),
+    [summary, projectId, orgId],
+  );
   const resolvedCount = useMemo(
     () => filterDecisionInbox(feed.items, "resolved").length,
     [feed.items],
@@ -648,6 +692,7 @@ export function DecisionInbox({
         >
           Needs action
           <span className="dq-filter-count">{actionableCount}</span>
+          <ElsewhereChip total={elsewhere.total} />
         </button>
         <button
           type="button"
@@ -680,7 +725,8 @@ export function DecisionInbox({
           onClick={() => applyFilter("all")}
         >
           All
-          <span className="dq-filter-count">{feed.items.length}</span>
+          <span className="dq-filter-count">{feed.items.length + setupCount}</span>
+          <ElsewhereChip total={elsewhere.total} />
         </button>
       </div>
 
@@ -697,7 +743,8 @@ export function DecisionInbox({
           </p>
         </article>
       ) : null}
-      {feed.apiReachable && filter === "needs_action" && setupCount > 0 ? (
+      {feed.apiReachable ? <WaitingElsewhere waiting={elsewhere} /> : null}
+      {feed.apiReachable && (filter === "needs_action" || filter === "all") && setupCount > 0 ? (
         <div className="dq dq-setup" data-testid="decision-inbox-setup" aria-label="Only you can set these up">
           <span className="eyebrow">Only you can set these up</span>
           {setupItems.map((i) => (
@@ -711,7 +758,7 @@ export function DecisionInbox({
         </div>
       ) : null}
       {!feed.apiReachable ? null : visible.length === 0 ? (
-        filter === "needs_action" && setupCount > 0 ? null : <DecisionInboxEmpty filter={filter} orgId={orgId} />
+        (filter === "needs_action" || filter === "all") && setupCount > 0 ? null : <DecisionInboxEmpty filter={filter} orgId={orgId} />
       ) : (
         <div className="dq" data-testid="decision-inbox-list">
           {/* THE ONE SOMEBODY WAS SENT HERE TO DECIDE. A workflow gate links here with the

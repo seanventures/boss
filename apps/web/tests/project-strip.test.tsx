@@ -47,14 +47,17 @@ describe("the strip never claims an empty company", () => {
 });
 
 describe("the filter", () => {
-  it("offers the four states, ALL first", () => {
-    expect(SRC).toContain('const FILTERS = ["ALL", "RUNNING", "GATED", "DONE"] as const');
+  it("offers the five states, ALL first", () => {
+    expect(SRC).toContain('const FILTERS = ["ALL", "RUNNING", "FAILED", "GATED", "DONE"] as const');
   });
 
-  it("counts STUCK as running", () => {
-    // Work that started and has not finished. Filed under a tab nobody opens, a stalled project
-    // stays invisible for a day.
-    expect(SRC).toContain('RUNNING: (s) => s === "RUNNING" || s === "STUCK"');
+  it("counts STUCK (a failed build) as Failed, never as Building", () => {
+    // The stranger test (r5) read "Building 1" over a build that had failed. A failed build is
+    // its own filter, and stays in ALL, first, counted as needing attention, so it is never
+    // filed under a tab nobody opens (px-a-failed-build-says-so renders it).
+    expect(SRC).toContain('RUNNING: (s) => s === "RUNNING",');
+    expect(SRC).toContain('FAILED: (s) => s === "STUCK"');
+    expect(SRC).toContain('p.status === "STUCK").length');
   });
 
   it("shows a count on each tab, including zero", () => {

@@ -628,8 +628,14 @@ def preflight(
     project_id: str,
     spec: Mapping[str, Any],
     input_data: Optional[Mapping[str, Any]] = None,
+    *,
+    local_code: bool = False,
 ) -> dict[str, Any]:
-    """Everything this workflow needs from this project, each checked, and what is missing."""
+    """Everything this workflow needs from this project, each checked, and what is missing.
+
+    `local_code` asks for a project that WILL keep its code on this machine (Try a sample, Start
+    a new app › This machine): the repository need is answered by the local repository the start
+    makes, when git is here to make it. Every other need is checked as it is."""
     if settings is None:
         from ..config import get_settings
 
@@ -653,6 +659,8 @@ def preflight(
     checked: list[dict[str, Any]] = []
     for entry in grouped.values():
         ok, detail = check(connection, settings, project_id, entry["key"])
+        if not ok and local_code and entry["key"] == "repository":
+            ok, detail = _local_code_answer(detail)
         checked.append({**entry, "ok": ok, "detail": detail})
     budget, notes = _budget_readiness(connection, settings, project_id, spec)
     if budget is not None:
@@ -660,6 +668,15 @@ def preflight(
     missing = [c for c in checked if not c["ok"]]
     return {"ready": not missing, "checked": checked, "missing": missing,
             "notes": notes, "summary": summary_sentence(missing)}
+
+
+def _local_code_answer(found: str) -> tuple[bool, str]:
+    """The repository need of a project whose code will be made on this machine."""
+    from . import local_repo
+
+    if local_repo.git_available():
+        return True, "a new repository is made on this machine for it (GitHub is optional)"
+    return False, f"{found}; git is not installed on this machine, so no local repository can be made"
 
 
 def budget_state_of(connection: Connection, settings: Any, project_id: str
@@ -755,13 +772,15 @@ def readiness_of_version(
     *,
     version_id: str,
     input_data: Optional[Mapping[str, Any]] = None,
+    local_code: bool = False,
 ) -> dict[str, Any]:
     """The preflight for a published version — what Start would say, without starting."""
     spec, namespace = _version_spec(connection, project_id, version_id)
     if spec is None or namespace != "product":
         return {"ready": True, "checked": [], "missing": [], "applies": False,
                 "summary": "not a product workflow; nothing to check"}
-    return {**preflight(connection, settings, project_id, spec, input_data), "applies": True}
+    return {**preflight(connection, settings, project_id, spec, input_data,
+                        local_code=local_code), "applies": True}
 
 
 def refuse_unless_ready(

@@ -82,7 +82,8 @@ describe("Screen 1 — Get started is its own place", () => {
     expect(q(container, "su-wl-idea")!.getAttribute("href")).toBe("/?new_project=idea");
     const flow = [...container.querySelectorAll(".su-wl-flow > li.su-chip")].map((li) => li.textContent);
     expect(flow).toEqual(["Idea", "Plan (you approve)", "Build", "Review", "Pull request", "Live preview"]);
-    expect(container.textContent).toContain("About 8 minutes, included in your subscription");
+    // No model yet: never "included in your subscription" (stranger test).
+    expect(q(container, "su-wl-sample-cost")!.textContent).toBe("About 8 minutes, once a model is connected");
     expect(q(container, "su-accounts")).toBeNull();
     expect(q(container, "su-row-repository")).toBeNull();
   });
@@ -205,6 +206,18 @@ describe("Welcome is honest", () => {
     const circle = q(container, "su-wl-sample")!.querySelector(".su-wl-circle")!;
     expect(circle.getAttribute("data-done")).toBeNull();
     expect(q(container, "su-wl-github")!.querySelector(".su-wl-circle")!.getAttribute("data-done")).toBe("true");
+  });
+
+  it("once the sample exists it offers Open the sample, never Start the sample (stranger test r2)", async () => {
+    const view = { ...withAccounts(tryStep()),
+                   try: { workflow_key: "setup_first_pr", last_run: null, sample: { project_id: "hello-world", name: "Hello World" } } };
+    fakeApi(view);
+    const { container } = await mount(view, "?area=welcome&focus=repository&open=add", "welcome");
+    expect(q(container, "su-wl-sample-go")).toBeNull();
+    const open = q(container, "su-wl-sample-open")!;
+    expect(open.textContent).toBe("Open the sample");
+    expect(open.getAttribute("href")).toBe("/?project_id=hello-world&area=project");
+    expect(container.textContent).not.toContain("Start the sample");
   });
 
   it("the rail's Get started shows until GitHub, a model and a first PR exist", async () => {
