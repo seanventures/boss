@@ -692,8 +692,9 @@ export function templatePreviewKind(id: string, category = ""): "template" | "ca
   return "generic";
 }
 
-/** The card's top panel: a decorative drawing (the card's own words name it), hidden from readers. */
-export function TemplatePreview({ id, category = "" }: { id: string; category?: string }) {
+/** The card's top panel: a decorative drawing (the card's own words name it), hidden from readers.
+ *  Memoised on its two strings, so typing in the prompt does not redraw every card. */
+export const TemplatePreview = React.memo(function TemplatePreview({ id, category = "" }: { id: string; category?: string }) {
   const kind = templatePreviewKind(id, category);
   const screen = kind === "template" ? SCREENS[id] : kind === "category" ? CATEGORY[category.trim().toLowerCase()] : GENERIC;
   return (
@@ -703,4 +704,4 @@ export function TemplatePreview({ id, category = "" }: { id: string; category?: 
       {screen.body}
     </svg>
   );
-}
+});

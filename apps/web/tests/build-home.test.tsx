@@ -224,7 +224,8 @@ describe("a template this install cannot build", () => {
     expect(go?.getAttribute("aria-disabled")).toBe("true");
     expect(go?.hasAttribute("aria-pressed")).toBe(false);
     expect(go?.getAttribute("data-unavailable")).toBe("true");
-    expect(go?.title).toContain("boss toolchains enable go");
+    // The reason is said once: on screen and through aria-describedby, not again in a tooltip.
+    expect(go?.hasAttribute("title")).toBe(false);
     const why = go?.querySelector("[data-testid=build-template-needs]");
     expect(why?.id).toBeTruthy();
     expect(go?.getAttribute("aria-describedby")).toBe(why?.id);
@@ -372,6 +373,34 @@ describe("the gallery folds to two rows", () => {
 
     await press("[data-testid=build-templates-more]");
     expect(document.querySelectorAll("[data-testid=build-template]").length).toBe(cols * 2);
+  });
+
+  it("never folds the selected card away", async () => {
+    install({ templates: () => Response.json({ templates: many(21) }) });
+    await renderHome();
+    const cols = Number(document.querySelector("[data-testid=build-template-list]")!.getAttribute("data-columns"));
+    await press("[data-testid=build-templates-more]");
+    await press('[data-testid=build-template][data-template-id="tpl_12"]');
+    await press("[data-testid=build-templates-more]");
+    const shown = [...document.querySelectorAll<HTMLElement>("[data-testid=build-template]")];
+    expect(shown.length).toBe(cols * 2);
+    const picked = document.querySelector('[data-testid=build-template][data-template-id="tpl_12"]');
+    expect(picked?.getAttribute("aria-pressed")).toBe("true");
+    expect(shown[shown.length - 1]).toBe(picked);
+    expect(document.querySelector("[data-testid=build-home]")?.getAttribute("data-template-id")).toBe("tpl_12");
+  });
+
+  it("counts the grid's real columns", async () => {
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation((el: Element, pseudo?: string | null) => {
+      const style = real(el, pseudo);
+      if ((el as HTMLElement).dataset?.testid !== "build-template-list") return style;
+      return new Proxy(style, { get: (t, k) => (k === "gridTemplateColumns" ? "240px 240px 240px 240px" : Reflect.get(t, k)) });
+    });
+    install({ templates: () => Response.json({ templates: many(21) }) });
+    await renderHome();
+    expect(document.querySelector("[data-testid=build-template-list]")?.getAttribute("data-columns")).toBe("4");
+    expect(document.querySelectorAll("[data-testid=build-template]").length).toBe(8);
   });
 
   it("has no Show all when everything fits in two rows", async () => {

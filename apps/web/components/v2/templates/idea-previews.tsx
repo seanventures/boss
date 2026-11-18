@@ -39,7 +39,7 @@ const SCREENS: Record<string, Screen> = {
     ),
   },
   "hello world": {
-    bar: "Hello World · localhost:3000",
+    bar: "Hello World, localhost:3000",
     about: "the sample app's one web page saying Hello, World with the current time, and its one test passing",
     body: (
       <><rect x="12" y="32" width="296" height="16" rx="8" fill="#111a2b" stroke="#24314a" /><circle cx="24" cy="40" r="3" fill="#4ade80" /><text x="32" y="43" fill="#93a1bb" fontSize="7.5" className="ip-mono">localhost:3000/</text><rect x="12" y="56" width="200" height="112" rx="8" fill="#111a2b" stroke="#24314a" /><text x="112" y="98" textAnchor="middle" fill="#e6ecf5" fontSize="20" fontWeight="700">Hello, World</text><text x="112" y="118" textAnchor="middle" fill="#93a1bb" fontSize="8">The time is</text><text x="112" y="138" textAnchor="middle" fill="#2dd4bf" fontSize="14" fontWeight="700" className="ip-mono">09:41:07</text><rect x="220" y="56" width="88" height="54" rx="8" fill="#0f2a1c" stroke="#4ade80" strokeOpacity="0.6" /><text x="228" y="74" fill="#4ade80" fontSize="8" fontWeight="700">● 1 test passing</text><text x="228" y="90" fill="#a9b6cc" fontSize="7" className="ip-mono">hello-world.test</text><text x="228" y="102" fill="#93a1bb" fontSize="7">says hello, 9 ms</text><rect x="220" y="118" width="88" height="50" rx="8" fill="#111a2b" stroke="#24314a" /><text x="228" y="134" fill="#93a1bb" fontSize="7">HELLO_NAME</text><text x="228" y="150" fill="#e6ecf5" fontSize="9" fontWeight="600" className="ip-mono">World</text><text x="228" y="162" fill="#6b7a96" fontSize="6.5">GET /</text></>

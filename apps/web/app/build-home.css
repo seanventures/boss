@@ -279,7 +279,7 @@
 }
 
 .bh-card:hover:not([aria-disabled="true"]),
-.bh-card:focus-visible {
+.bh-card:focus-visible:not([aria-disabled="true"]) {
   border-color: var(--teal);
   transform: translateY(-2px);
 }
