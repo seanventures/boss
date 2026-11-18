@@ -172,7 +172,7 @@ export type SecretRow = {
   fingerprint: string | null; last4: string | null; bound_to: string[];
 };
 export const listSecrets = (projectId: string) => read<{ secrets?: SecretRow[] }>(`/v1/secrets?project_id=${enc(projectId)}`);
-export const putSecret = (projectId: string, actor: string, f: { name: string; value: string; secret_kind: string; backend: string }) =>
+export const putSecret = (projectId: string, actor: string, f: { name: string; value: string; secret_kind: string; backend: string; http_auth?: boolean }) =>
   send<{ name?: string; fingerprint?: string; last4?: string }>("POST", "/v1/secrets", { project_id: projectId, actor, ...f }, P("infra-secrets", "Upload"));
 export const generateKeypair = (projectId: string, actor: string, f: { name: string; backend: string }) =>
   send<{ public_key?: string; fingerprint?: string }>("POST", "/v1/secrets/keypair", { project_id: projectId, actor, ...f }, P("infra-secrets", "Generate keypair"));

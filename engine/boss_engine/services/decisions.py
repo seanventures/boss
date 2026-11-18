@@ -1624,6 +1624,16 @@ class DecisionService:
                 apply_wiki_patch(connection, row, actor)
             except WikiError as stale:
                 raise InvalidDecisionTransitionError(str(stale)) from stale
+        elif action == "apply_confluence_publish":
+            # An agent's page for Confluence (BOSSAPP-1384): written, as a versioned update, only
+            # now that a person approved exactly what the card showed. A page that moved since
+            # the proposal (or a credential that no longer works) refuses the approval.
+            from .confluence_publish import ConfluencePublishError, apply_for_decision as publish
+
+            try:
+                publish(connection, self.settings, row, actor)
+            except ConfluencePublishError as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
         elif action in ("ticket_pickup", "ticket_changed_mid_run"):
             # A TICKET CARD (ticket_sync, BOSSAPP-1047 B2). "Start it" imports the labelled ticket
             # and starts its build; "Include it" gives the running build the ticket's new
@@ -1802,6 +1812,10 @@ class DecisionService:
             from .change_consent import reject_for_decision
 
             reject_for_decision(connection, str(row["id"]), actor)
+        elif rec.get("action") == "apply_confluence_publish":
+            from .confluence_publish import reject_for_decision as refuse_confluence
+
+            refuse_confluence(connection, row, actor)
         elif rec.get("action") == "apply_wiki_patch":
             # A refused wiki change's consent can never be spent either (BOSSAPP-891).
             from .change_consent import reject_for_decision as refuse_wiki_patch

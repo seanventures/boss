@@ -1,0 +1,25 @@
+{
+  "id": "101",
+  "status": "current",
+  "title": "Deploy Runbook",
+  "spaceId": "98",
+  "parentId": null,
+  "authorId": "u1",
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "version": {
+    "number": 4,
+    "createdAt": "2026-11-10T09:00:00.000Z",
+    "message": "",
+    "authorId": "u1"
+  },
+  "body": {
+    "storage": {
+      "representation": "storage",
+      "value": "<h1>Deploy Runbook</h1><p>Run <code>boss upgrade</code>, then check <a href=\"https://status.acme.test/health\">health</a>.</p><ul><li>Announce</li><li>Deploy<ul><li>canary</li></ul></li></ul><ac:structured-macro ac:name=\"code\"><ac:parameter ac:name=\"language\">bash</ac:parameter><ac:plain-text-body><![CDATA[boss upgrade --check]]></ac:plain-text-body></ac:structured-macro><ac:structured-macro ac:name=\"info\"><ac:rich-text-body><p>Never on Fridays.</p></ac:rich-text-body></ac:structured-macro><ac:structured-macro ac:name=\"toc\"/><p>See <ac:link><ri:page ri:content-title=\"Rollback Guide\"/><ac:link-body>the rollback guide</ac:link-body></ac:link>.</p><table><tbody><tr><th>Step</th><th>Owner</th></tr><tr><td>Announce</td><td>Ops</td></tr></tbody></table>"
+    }
+  },
+  "_links": {
+    "webui": "/spaces/ENG/pages/101/Deploy+Runbook",
+    "base": "https://acme.atlassian.net/wiki"
+  }
+}

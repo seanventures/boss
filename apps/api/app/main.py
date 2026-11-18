@@ -9594,7 +9594,8 @@ def put_secret_endpoint(payload: SecretPutBody):
                 # bank's outside agent failed "platform secret store is not configured" on the
                 # database-backed laptop install (2026-10-31).
                 backend=payload.get("backend") or durable_secret_backend(settings),
-                scope_type=scope_type, scope_id=scope_id, actor=actor)
+                scope_type=scope_type, scope_id=scope_id, actor=actor,
+                http_auth=payload.get("http_auth"))
     except SecretUnavailable as exc:
         # A backend that cannot accept the write is a configuration problem, not a server bug.
         raise HTTPException(status_code=422, detail=str(exc))

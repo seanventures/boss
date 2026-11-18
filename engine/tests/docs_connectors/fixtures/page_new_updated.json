@@ -1,0 +1,25 @@
+{
+  "id": "101",
+  "status": "current",
+  "title": "Deploy Runbook",
+  "spaceId": "98",
+  "parentId": null,
+  "authorId": "u1",
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "version": {
+    "number": 5,
+    "createdAt": "2026-11-10T09:00:00.000Z",
+    "message": "",
+    "authorId": "u1"
+  },
+  "body": {
+    "storage": {
+      "representation": "storage",
+      "value": "<p>new</p>"
+    }
+  },
+  "_links": {
+    "webui": "/spaces/ENG/pages/101/Deploy+Runbook",
+    "base": "https://acme.atlassian.net/wiki"
+  }
+}

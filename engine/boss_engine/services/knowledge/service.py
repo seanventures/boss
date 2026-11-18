@@ -5,6 +5,7 @@ forget a fact require a person. `kg_propose_fact` always stores `inferred`.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -16,6 +17,7 @@ from .age import projection_counts
 from .archivist import distil, forget_source as forget_source_lineage
 from .capture import capture_lifecycle as capture_lifecycle_record
 from .find import find_written, pinned
+from .sources import OUTSIDE_SOURCES
 from .learning import apply_learning
 from .retrieval import blast_radius, fuse_lists, knowledge_pack, precedent_section, rank_hits
 from .scopes import KEYWORD_EXCLUDED_LAYERS, keyword_policy
@@ -23,6 +25,20 @@ from .store import PostgresKnowledgeStore
 
 READ = "knowledge:read"
 MANAGE = "knowledge:manage"
+
+
+def _outside_mark(node: dict[str, Any]) -> dict[str, Any]:
+    """A node whose text came from outside BOSS (a synced Confluence page) is returned marked
+    untrusted, so the low-trust ledger treats it as it does the live read of the same page."""
+    attrs = node.get("attrs") or {}
+    if isinstance(attrs, str):
+        try:
+            attrs = json.loads(attrs)
+        except ValueError:
+            attrs = {}
+    if str(attrs.get("source") or node.get("source") or "") in OUTSIDE_SOURCES:
+        return {"untrusted": True, "trust_origin": "document"}
+    return {}
 
 
 class KnowledgeService:
@@ -102,6 +118,7 @@ class KnowledgeService:
                 "name": node["name"],
                 "trust_tier": node["trust_tier"],
                 "body": node["body"],
+                **_outside_mark(node),
                 **({"match": by_written[hit["node_id"]]} if hit["node_id"] in by_written else {}),
             })
         # An exact id the caller named (INC-2041, kgn_…) leads: the nodes that carry it, then what
@@ -144,7 +161,8 @@ class KnowledgeService:
                 continue
             hits.append({"node_id": hit["node_id"], "node_key": hit.get("node_key"),
                          "score": float(hit.get("rank") or 0), "via": ["text"],
-                         "name": node["name"], "trust_tier": node["trust_tier"], "body": node["body"]})
+                         "name": node["name"], "trust_tier": node["trust_tier"], "body": node["body"],
+                         **_outside_mark(node)})
         return {"hits": hits[:limit], "retrieval": {"mode": "keyword", "lists": {"text": len(text_hits)}}}
 
     def why(

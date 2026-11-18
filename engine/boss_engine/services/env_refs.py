@@ -179,6 +179,8 @@ PROVIDER_HOSTS: dict[str, tuple[str, ...]] = {
     "mistral": ("api.mistral.ai",),
     "plane": ("api.plane.so", "app.plane.so"),
     "jira": ("*.atlassian.net", "api.atlassian.com", "mcp.atlassian.com"),
+    # Confluence Cloud (BOSSAPP-1384): the configured site, and Atlassian's gateway for OAuth 3LO.
+    "confluence": ("*.atlassian.net", "api.atlassian.com"),
     "linear": ("api.linear.app", "mcp.linear.app"),
     "azure_devops": ("dev.azure.com", "*.dev.azure.com", "*.visualstudio.com"),
     "asana": ("app.asana.com",),
@@ -214,6 +216,7 @@ OPERATOR_BASE_URLS: dict[str, tuple[str, ...]] = {
     "mistral": ("MISTRAL_BASE_URL",),
     "plane": ("PLANE_BASE_URL", "PLANE_API_URL", "PLANE_PROJECT_URL"),
     "jira": ("JIRA_BASE_URL",),
+    "confluence": ("CONFLUENCE_BASE_URL",),
     "digitalocean": ("BOSS_DO_INFERENCE_BASE_URL",),
 }
 

@@ -2702,6 +2702,24 @@ def execute_tickets_write(context: "SkillExecutorContext", inputs: dict[str, Any
     return run_bundled_tool(context, "tickets.write", inputs)
 
 
+@register_executor("confluence.read")
+def execute_confluence_read(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
+    """The org's Confluence, read: confluence_search, confluence_read_page (BOSSAPP-1384).
+    See agent_baseline.CONFLUENCE_READ_TOOLS."""
+    from .agent_baseline import run_bundled_tool
+
+    return run_bundled_tool(context, "confluence.read", inputs)
+
+
+@register_executor("confluence.publish")
+def execute_confluence_publish(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
+    """Propose a Confluence page: confluence_publish_page queues a diff a person approves
+    (BOSSAPP-1384). See agent_baseline.CONFLUENCE_WRITE_TOOLS."""
+    from .agent_baseline import run_bundled_tool
+
+    return run_bundled_tool(context, "confluence.publish", inputs)
+
+
 @register_executor("knowledge.propose")
 def execute_knowledge_propose(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
     """kg_propose_fact: the agent's fact, always stored `inferred`. A baseline skill: every

@@ -2777,7 +2777,7 @@ export async function listSecretsAction(projectId?: string): Promise<any> {
 
 /** Upload a secret. The value is written through to a backend; nothing returns it afterwards. */
 export async function putSecretAction(input: {
-  name: string; value: string; secret_kind?: string; backend?: string; scope_id?: string;
+  name: string; value: string; secret_kind?: string; backend?: string; scope_id?: string; http_auth?: boolean;
 }): Promise<any> {
   return post("/v1/secrets", { project_id: PROJECT_ID, actor: CONSOLE_ACTOR, ...input });
 }

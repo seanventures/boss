@@ -131,3 +131,26 @@ def test_a_custom_human_role_that_read_integrations_gains_ticket_read_once(c):
     assert passports.grant_splits_to_custom_roles(c, org_id=ORG) == {}
     assert "ticket:read" not in perms("arl_cc_reader")
 
+
+
+def test_an_existing_quill_moves_from_writer_to_documentation_on_upgrade(c):
+    """BOSSAPP-1384: quill left the `writer` preset for `documentation`. An install that already
+    has quill on `writer` is moved by the identity upgrade (additive, audited); a `custom`
+    ceiling is never touched; a second run changes nothing."""
+    _agent(c, "agt_ccquill0001", "writer", ["knowledge:read", "comms:read"])
+    _agent(c, "agt_ccquillcus01", "custom", ["knowledge:read"])
+    c.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES ('ws_cc', :o, 'cc')"), {"o": ORG})
+    c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) VALUES ('p_cc', 'ws_cc', 'cc', 'p_cc')"))
+    for agent, role in (("agt_ccquill0001", "docs_writer"), ("agt_ccquillcus01", "docs_writer_b")):
+        c.execute(text("INSERT INTO roles (id, project_id, role_key, display_name, agent_id, spec) VALUES "
+                       "(:i, 'p_cc', :r, 'Quill', :a, CAST(:s AS JSONB))"),
+                  {"i": f"role_{agent}", "r": role, "a": agent,
+                   "s": '{"persona": {"callsign": "Quill"}}'})
+    out = passports.upgrade_from_roles(org_id=ORG, db=c)
+    assert out["agt_ccquill0001"].startswith("moved to its preset: writer -> documentation")
+    assert {"docs:read", "docs:publish"} <= _ceiling(c, "agt_ccquill0001")
+    assert "comms:read" in _ceiling(c, "agt_ccquill0001")                 # additive: nothing removed
+    assert c.execute(text("SELECT ceiling_preset FROM identity_agent_passports WHERE agent_id = "
+                          "'agt_ccquill0001'")).scalar() == "documentation"
+    assert _ceiling(c, "agt_ccquillcus01") == {"knowledge:read"}          # a custom ceiling is left alone
+    assert passports.upgrade_from_roles(org_id=ORG, db=c)["agt_ccquill0001"] == "exists"

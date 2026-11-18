@@ -1,7 +1,9 @@
 """Enterprise source ingest.
 
 ADR folders are read from a local path. Confluence, Jira, and Slack connectors
-accept already-fetched documents and refuse to open a network themselves.
+accept already-fetched documents and refuse to open a network themselves. The Confluence sync
+(services/confluence_knowledge.py, BOSSAPP-1384) fetches through the org's connection and hands each
+page to ``accept_connector_document`` here.
 """
 from __future__ import annotations
 
@@ -13,6 +15,9 @@ from .scrub import scrub
 from .store import PostgresKnowledgeStore
 
 LIVE_CONNECTORS = frozenset({"confluence", "jira", "slack"})
+#: Node sources whose text was written OUTSIDE BOSS: a search that returns one marks the hit
+#: untrusted (low-trust ledger), exactly as the live read of the same page is.
+OUTSIDE_SOURCES = frozenset({"confluence"})
 
 
 def ingest_adr_dir(

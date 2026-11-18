@@ -68,6 +68,8 @@ REFUSALS: dict[str, str] = {
     # jobs: the budget state deferred a job; it is re-queued and runs later by itself.
     "review_budget_policy": "deferred",
     "budget_state_deferred_job": "deferred",
+    # confluence_publish: an approved page did not land (the write is never re-sent blindly).
+    "confluence_publish_failed": "confluence",
 }
 #: Kept under their old names; both now cover every refusal, by action or by reason.
 REFUSAL_REASONS = frozenset(REFUSALS)
@@ -125,6 +127,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # Approving an agent's (or the maintainer's) wiki change writes exactly that page onto the
     # revision it was proposed against (wiki.apply_for_decision, BOSSAPP-891).
     "apply_wiki_patch",
+    # Approving an agent's Confluence page writes exactly that page, as a versioned update
+    # (confluence_publish.apply_for_decision, BOSSAPP-1384).
+    "apply_confluence_publish",
     # Approving a "Tool changed" card clears the MCP tool's quarantine and accepts the new
     # definition (mcp_registry.accept_tool_change); rejecting turns it Off (BOSSAPP-818).
     "review_tool_change",
@@ -441,6 +446,16 @@ _RETRY = ("Then retry the work: Retry on the failed step in Workflow, or on the 
           "Factory. Approving this card would not retry anything.")
 
 _REFUSAL_GUIDANCE: dict[str, dict[str, str]] = {
+    "confluence": {
+        "what_happened": (
+            "A Confluence page you approved could not be published, so nothing was written "
+            "(or Confluence already has a different version of the page)."),
+        "what_to_do": (
+            "Read the reason on the card. If the page moved, ask the agent for a new proposal; "
+            "if the sign-in failed, reconnect Confluence in Setup."),
+        "area": "setup",
+        "link_label": "Open Setup",
+    },
     "capacity": {
         "what_happened": (
             "BOSS tried to call a model and it had no capacity or credit left (a rate limit, "

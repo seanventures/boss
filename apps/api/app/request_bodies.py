@@ -413,6 +413,7 @@ class SecretPutBody(OpenProjectBody):
     backend: SkipValidation[str | None] = None
     scope_type: SkipValidation[str | None] = None
     scope_id: SkipValidation[str | None] = None
+    http_auth: SkipValidation[bool | None] = None
 
 
 class SecretProposalStoreBody(OpenRequestBody):

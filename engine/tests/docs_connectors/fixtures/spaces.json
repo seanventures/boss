@@ -1,0 +1,19 @@
+{
+  "results": [
+    {
+      "id": "98",
+      "key": "ENG",
+      "name": "Engineering",
+      "type": "global",
+      "status": "current"
+    },
+    {
+      "id": "99",
+      "key": "OPS",
+      "name": "Operations",
+      "type": "global",
+      "status": "current"
+    }
+  ],
+  "_links": {}
+}

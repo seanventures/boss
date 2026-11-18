@@ -647,7 +647,8 @@ class GitHubAdapter:
         try:
             payload = self._request(
                 "GET",
-                f"/repos/{self.repository_full_name}/contents/{path}?ref={branch_name}",
+                f"/repos/{self.repository_full_name}/contents/{quote(path, safe='/')}"
+                f"?ref={quote(branch_name, safe='')}",
             )
         except httpx.HTTPStatusError as error:
             if error.response.status_code == 404:
