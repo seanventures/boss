@@ -112,7 +112,7 @@ describe("one needs-you number (X-14) and first run (00a-34)", () => {
     expect(shell).toContain('variant="bell" total={orgNeeds}');
     // Stranger test 2026-11-17: Approvals 5 over a queue that said 0 (set-up asks on other
     // projects). The badge counts what Approvals' Needs action lists (rail-counts-match-…).
-    expect(shell).toContain("approvalsBadge(titleAttention, status.pendingDecisions)");
+    expect(shell).toContain("approvalsBadge(titleAttention, orgNeeds, status.pendingDecisions");
   });
   it("Command Center drops its setup rows while there is no project, and shows first run", () => {
     expect(isSetupRow({ kind: "readiness" } as never)).toBe(true);

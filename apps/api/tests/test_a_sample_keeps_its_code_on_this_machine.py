@@ -93,3 +93,24 @@ def test_readiness_for_local_code_answers_the_repository_and_lists_the_rest(worl
         assert said["ok"] is True and "this machine" in said["detail"]
     # Everything else missing is still missing.
     assert [k for k in keys(plain, "missing") if k != "repository"] == keys(local, "missing")
+
+
+@pytest.mark.parametrize("failure", [local_repo.LocalRepoError("git init failed"), OSError(28, "No space left")])
+def test_opening_a_sample_never_fails_on_the_disk_or_git(engine, client, repo_root, monkeypatch, failure):
+    """Review of #200: an unwritable repo root, a full disk or a git failure while making the
+    sample's code was a 500 on every press of Try a sample. The sample opens; it has no code
+    yet, and its start's readiness names the repository need."""
+    fresh = IdentityWorld.create(engine)
+    owner = fresh.person(f"sample-disk-{type(failure).__name__.lower()}")
+    fresh.bind(owner, "owner")
+
+    def broken(*_a, **_k):
+        raise failure
+
+    monkeypatch.setattr(local_repo, "create", broken)
+    with fresh.acting_as(fresh.ctx(owner)):
+        first = client.post("/v1/projects", json={"name": "Hello World", "sample_key": "hello-world"})
+        again = client.post("/v1/projects", json={"name": "Hello World", "sample_key": "hello-world"})
+    assert first.status_code == 201 and again.status_code == 201, (first.text, again.text)
+    assert again.json()["id"] == first.json()["id"]
+    assert _bindings(engine, first.json()["id"]) == []

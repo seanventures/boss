@@ -35,7 +35,7 @@ vi.mock("../components/identity/identity-provider", () => {
 
 import ConsoleShell from "../app/ConsoleShell";
 import { NOT_OFFERED, offeredInPicker, sourceName } from "../app/setup/capacity-row";
-import { insiderFrom, insiderShown } from "../lib/insider-areas";
+import { forgetInsider, insiderFrom, insiderShown } from "../lib/insider-areas";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -47,6 +47,8 @@ describe("the insider rule", () => {
     expect(insiderFrom({ ok: false, status: 0, error: "network" })).toBeNull();
     expect(insiderFrom({ ok: false, status: 502, error: "down" })).toBeNull();
     expect(insiderFrom({ ok: true, data: {} as never, etag: null })).toBeNull();
+    expect(insiderFrom({ ok: true, data: { exists: true }, etag: null })).toBe(true);
+    expect(insiderFrom({ ok: true, data: { exists: false }, etag: null })).toBe(false);
     expect(insiderShown(null)).toBe(true);
     expect(insiderShown(false)).toBe(false);
   });
@@ -54,12 +56,15 @@ describe("the insider rule", () => {
 
 let host: HTMLDivElement;
 let root: Root;
-beforeEach(() => { host = document.createElement("div"); document.body.append(host); root = createRoot(host); window.localStorage.clear(); });
+beforeEach(() => { host = document.createElement("div"); document.body.append(host); root = createRoot(host); window.localStorage.clear(); forgetInsider(); });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
-async function shell(selfFixes: number) {
+/** `selfFixes` is the open project's own list; `install` what the whole install has. */
+async function shell(selfFixes: number, install = selfFixes) {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-    const body = String(url).includes("/api/self-fix") ? { self_fixes: [], count: selfFixes } : {};
+    const u = String(url);
+    const body = u.includes("/api/self-fix") && u.includes("view=exists") ? { exists: install > 0 }
+      : u.includes("/api/self-fix") ? { self_fixes: [], count: selfFixes } : {};
     return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
   }));
   window.history.replaceState(null, "", "/?area=overview");
@@ -84,6 +89,22 @@ describe("the rail", () => {
     await shell(2);
     expect(host.querySelector('[data-area-nav="self_fixes"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="reconcile-mounts"]')).not.toBeNull();
+  });
+});
+
+describe("the operator never loses them (review of #200)", () => {
+  it("a project with no self-fixes still shows both when another project of the install has some", async () => {
+    await shell(0, 27);
+    expect(host.querySelector('[data-area-nav="self_fixes"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="reconcile-mounts"]')).not.toBeNull();
+  });
+
+  it("a true answer is kept for the session: a later probe that fails or says no does not hide them", async () => {
+    await shell(0, 3);
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await shell(0, 0);
+    expect(host.querySelector('[data-area-nav="self_fixes"]')).not.toBeNull();
   });
 });
 

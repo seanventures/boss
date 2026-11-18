@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { approvalsBadge } from "../app/ConsoleShell";
+import { approvalsBadge, approvalsTip } from "../app/ConsoleShell";
 import { firstRunHeading } from "../app/projects/first-run";
 import { railList } from "../app/projects/nav";
 import type { ProjectCard } from "../lib/project-experience";
@@ -40,9 +40,18 @@ describe("the first-run heading", () => {
 });
 
 describe("the Approvals badge", () => {
-  it("is the queue's Needs action for the open project, not the org-wide bell", () => {
-    expect(approvalsBadge({ count: 0 }, 5)).toBe(0);
-    expect(approvalsBadge({ count: 2 }, 0)).toBe(2);
-    expect(approvalsBadge(null, 4)).toBe(4);
+  it("is the queue's Needs action for the open project, with the rest as +N in other projects", () => {
+    // The stranger's case: 0 here, 5 across the org — the badge says 0, the hint says +5.
+    expect(approvalsBadge({ count: 0 }, 5, 5, true)).toEqual({ count: 0, elsewhere: 5 });
+    expect(approvalsBadge({ count: 2 }, 5, 0, true)).toEqual({ count: 2, elsewhere: 3 });
+    expect(approvalsTip({ count: 2, elsewhere: 3 })).toBe("2 here · 3 in other projects");
+    expect(approvalsBadge({ count: 2 }, 2, 0, true)).toEqual({ count: 2, elsewhere: 0 });
+    expect(approvalsTip({ count: 2, elsewhere: 0 })).toBeUndefined();
+    // Until the project's poll answers: the first paint, no hint guessed.
+    expect(approvalsBadge(null, 7, 4, true)).toEqual({ count: 4, elsewhere: 0 });
+  });
+  it("with no project open it is the live org total, not the stale first paint", () => {
+    expect(approvalsBadge(null, 3, 9, false)).toEqual({ count: 3, elsewhere: 0 });
+    expect(approvalsBadge(null, null, 9, false)).toEqual({ count: 9, elsewhere: 0 });
   });
 });

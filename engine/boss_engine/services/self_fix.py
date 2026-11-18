@@ -703,6 +703,18 @@ def list_self_fixes(connection: Connection, *, project_id: Optional[str] = None,
     return out
 
 
+def install_has_self_fixes(connection: Connection, project_id: str) -> bool:
+    """Whether ANY project of this project's org has a self-fix on record: the console's
+    "is this an install where BOSS is being developed" probe. The open project alone said no on
+    most of an operator's projects, and the rail items vanished there (review of #200)."""
+    return bool(connection.execute(text(
+        "SELECT EXISTS (SELECT 1 FROM self_fixes s JOIN projects p ON p.id = s.project_id "
+        "  JOIN workspaces w ON w.id = p.workspace_id "
+        " WHERE w.org_id = (SELECT w1.org_id FROM projects p1 JOIN workspaces w1 "
+        "                   ON w1.id = p1.workspace_id WHERE p1.id = :p))"),
+        {"p": project_id}).scalar())
+
+
 def _org_id(connection: Connection) -> Optional[str]:
     try:
         with connection.begin_nested():

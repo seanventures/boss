@@ -70,7 +70,7 @@ def ensure_sample_code(connection, settings, project_id: str, *, actor: str) -> 
     already has a repository (local or GitHub). Returns the binding made, or None (one existed,
     or git is not here — the start's readiness then names the repository need, never a silent
     project with nowhere to push)."""
-    from . import local_projects
+    from . import local_projects, local_repo
 
     has = connection.execute(text(
         "SELECT 1 FROM github_repository_bindings WHERE project_id = :p AND status = 'active' "
@@ -86,7 +86,13 @@ def ensure_sample_code(connection, settings, project_id: str, *, actor: str) -> 
             return local_projects.create_for_project(
                 connection, settings, project_id, name=str(row["name"]), actor=actor,
                 title=str(row["name"]), description=str(row["description"] or ""))
-    except local_projects.LocalProjectError:
+    except (local_projects.LocalProjectError, local_repo.LocalRepoError, OSError) as error:
+        # NEVER A 500 FOR OPENING A SAMPLE (review of #200): an unwritable repo root, a full disk
+        # or a git failure leaves the sample without code, and its start says so.
+        import logging
+
+        logging.getLogger(__name__).warning("the sample %s got no local repository: %s",
+                                            project_id, error)
         return None
 
 
