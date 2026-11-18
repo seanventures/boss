@@ -1700,6 +1700,16 @@ chmod 600 "$INSTALL_DIR/boss-community.env.sh"
 # already saved above. Nothing is copied from a login found here: Codex, Claude Code and Grok
 # Build sign in inside the BOSS container, Ollama is connected, and the offers when no model
 # is usable are made, all by the Models step below, which is this install's own `boss connect`.
+# THE COMMAND EVERY MODEL HINT NAMES. The boss command is installed later; hints name the one
+# this install will get: a chosen BOSS_BIN_DIR's launcher (a second install), the helper's path
+# when plain boss runs another install, else plain boss (stranger test r3).
+_hint_boss="boss"
+[[ -z "${BOSS_BIN_DIR:-}" ]] || _hint_boss="${BOSS_BIN_DIR%/}/boss"
+_other_boss="$(command -v boss 2>/dev/null || true)"
+if [[ "$INSTALL_BOSS_COMMAND" -ne 1 ]] || { [[ -z "${BOSS_BIN_DIR:-}" && -n "$_other_boss" ]] &&
+     ! grep -qsF "BOSS_INSTALL_DIR_DEFAULT=$(printf '%q' "$(cd "$INSTALL_DIR" && pwd -P)")" "$_other_boss"; }; then
+  _hint_boss="bash $INSTALL_DIR/scripts/install/boss.sh"
+fi
 MODEL_NOTES=()
 _found=""
 if [[ "$AUTO_DISCOVER" -eq 1 && -f scripts/install/discover_models.py ]]; then
@@ -1716,7 +1726,7 @@ if [[ "$AUTO_DISCOVER" -eq 1 && -f scripts/install/discover_models.py ]]; then
   if BOSS_OLLAMA_URL="${_ollama_url:-${BOSS_OLLAMA_URL:-}}" python3 scripts/install/discover_models.py --summary "$_found" </dev/null; then
     :
   else
-    ui_warn "Model discovery did not finish; nothing was connected. Retry later: boss connect"
+    ui_warn "Model discovery did not finish; nothing was connected. Retry later: $_hint_boss connect"
     rm -f "$_found"
     _found=""
   fi
@@ -1732,12 +1742,12 @@ if [[ "$DISCOVER_SUBSCRIPTIONS" -eq 1 ]]; then
   _claude_ok=1
   if [[ "$CONNECT_CLAUDE" -eq 1 || "$CONNECT_CLAUDE_LOCAL" -eq 1 ]]; then
     if [[ -n "$(env_value ANTHROPIC_API_KEY)" ]]; then
-      ui_err "Claude Code not connected: .env holds ANTHROPIC_API_KEY, which headless work would use instead of the subscription. Remove it from .env, then: boss connect claude"
-      MODEL_NOTES+=("✗ Claude Code not connected: remove ANTHROPIC_API_KEY from .env, then boss connect claude")
+      ui_err "Claude Code not connected: .env holds ANTHROPIC_API_KEY, which headless work would use instead of the subscription. Remove it from .env, then: $_hint_boss connect claude"
+      MODEL_NOTES+=("✗ Claude Code not connected: remove ANTHROPIC_API_KEY from .env, then $_hint_boss connect claude")
       _claude_ok=0
     elif [[ -n "$(env_value CLAUDE_CODE_OAUTH_TOKEN)" ]]; then
-      ui_err "Claude Code not connected: .env holds a legacy CLAUDE_CODE_OAUTH_TOKEN. Remove it from .env, then: boss connect claude"
-      MODEL_NOTES+=("✗ Claude Code not connected: remove CLAUDE_CODE_OAUTH_TOKEN from .env, then boss connect claude")
+      ui_err "Claude Code not connected: .env holds a legacy CLAUDE_CODE_OAUTH_TOKEN. Remove it from .env, then: $_hint_boss connect claude"
+      MODEL_NOTES+=("✗ Claude Code not connected: remove CLAUDE_CODE_OAUTH_TOKEN from .env, then $_hint_boss connect claude")
       _claude_ok=0
     fi
   fi
@@ -1746,11 +1756,11 @@ if [[ "$DISCOVER_SUBSCRIPTIONS" -eq 1 ]]; then
   fi
   if [[ "$CONNECT_CLAUDE_LOCAL" -eq 1 && "$_claude_ok" -eq 1 ]]; then
     if _subscriptions --connect-claude-local; then MODEL_NOTES+=("✓ Claude Code connected")
-    else MODEL_NOTES+=("✗ Claude Code not connected: boss connect claude"); fi
+    else MODEL_NOTES+=("✗ Claude Code not connected: $_hint_boss connect claude"); fi
   fi
   if [[ "$CONNECT_GROK_LOCAL" -eq 1 ]]; then
     if _subscriptions --connect-grok-local; then MODEL_NOTES+=("✓ Grok Build connected")
-    else MODEL_NOTES+=("✗ Grok Build not connected: boss connect grok"); fi
+    else MODEL_NOTES+=("✗ Grok Build not connected: $_hint_boss connect grok"); fi
   fi
   # --connect-codex / --connect-claude: the provider's own login inside BOSS, then the proof.
   # The flag is the consent. The link needs a person, so without a terminal the installer
@@ -1761,17 +1771,17 @@ if [[ "$DISCOVER_SUBSCRIPTIONS" -eq 1 ]]; then
       claude) [[ "$CONNECT_CLAUDE" -eq 1 && "$_claude_ok" -eq 1 ]] || continue; _label="Claude Code" ;;
     esac
     if ! (: </dev/tty) 2>/dev/null; then
-      ui_info "$_label signs in inside BOSS through its own login, which needs a person at a terminal. Next: boss connect $_sub"
-      MODEL_NOTES+=("… $_label not signed in yet: boss connect $_sub")
+      ui_info "$_label signs in inside BOSS through its own login, which needs a person at a terminal. Next: $_hint_boss connect $_sub"
+      MODEL_NOTES+=("… $_label not signed in yet: $_hint_boss connect $_sub")
       continue
     fi
     _rc=0
     _subscriptions --sign-in "$_sub" || _rc=$?
     case "$_rc" in
       0) MODEL_NOTES+=("✓ $_label signed in inside BOSS and connected") ;;
-      2) MODEL_NOTES+=("… $_label not signed in yet: boss connect $_sub") ;;
-      *) ui_err "$_label was not connected; the reason is above. BOSS is running. Retry: boss connect $_sub"
-         MODEL_NOTES+=("✗ $_label not connected: boss connect $_sub") ;;
+      2) MODEL_NOTES+=("… $_label not signed in yet: $_hint_boss connect $_sub") ;;
+      *) ui_err "$_label was not connected; the reason is above. BOSS is running. Retry: $_hint_boss connect $_sub"
+         MODEL_NOTES+=("✗ $_label not connected: $_hint_boss connect $_sub") ;;
     esac
   done
 fi
@@ -1792,8 +1802,8 @@ if [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]] &&
   [[ -z "$LOCAL_MODEL" ]] || _models_args+=(--local-model "$LOCAL_MODEL")
   [[ "$NO_LOCAL_MODEL" -eq 0 ]] || _models_args+=(--no-local-model)
   [[ "$REBIND_OLLAMA" -eq 0 ]] || _models_args+=(--rebind-ollama)
-  bash "$INSTALL_DIR/scripts/install/boss.sh" "${_models_args[@]}" ||
-    ui_warn "The Models step did not finish; BOSS is running. Retry: boss connect"
+  BOSS_HINT_COMMAND="$_hint_boss" bash "$INSTALL_DIR/scripts/install/boss.sh" "${_models_args[@]}" ||
+    ui_warn "The Models step did not finish; BOSS is running. Retry: $_hint_boss connect"
 fi
 [[ -z "$_found" ]] || rm -f "$_found"
 
@@ -1917,7 +1927,16 @@ if [[ "$WITH_WEB" -eq 1 ]]; then
   if [[ -n "$CONSOLE_ORIGIN" ]]; then
     _setup_url="${CONSOLE_ORIGIN%/}/?area=setup"
   else
-    _setup_url="http://127.0.0.1:${WEB_PORT}/?area=setup"
+    # The install's bound origin (a rerun of an install claimed on 127.0.0.1 stays there), else
+    # localhost, the host the claim link prints: a passkey and a session made on one do not exist
+    # on the other (stranger test r3). One rule, in boss.sh console_base.
+    _console_base=""
+    if [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]]; then
+      _console_base="$(bash "$INSTALL_DIR/scripts/install/boss.sh" --dir "$INSTALL_DIR" identity console-url \
+        2>/dev/null </dev/null | tail -n 1 || true)"
+    fi
+    [[ "$_console_base" =~ ^https?://[^[:space:]/]+$ ]] || _console_base="http://localhost:${WEB_PORT}"
+    _setup_url="${_console_base}/?area=setup"
   fi
   if [[ -f "$INSTALL_DIR/scripts/install/next_step.sh" ]]; then
     bash "$INSTALL_DIR/scripts/install/next_step.sh" --claim "$CLAIM_STATUS" --setup-url "$_setup_url" \
@@ -1932,7 +1951,8 @@ fi
 # that fixes it. Read from BOSS and this machine now, not from what this run happened to do.
 _model_rows=""
 if [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]]; then
-  _model_rows="$(bash "$INSTALL_DIR/scripts/install/boss.sh" --dir "$INSTALL_DIR" connect --summary 2>/dev/null </dev/null || true)"
+  # Each row's fix names THIS install's command ($B), never plain boss on a second install.
+  _model_rows="$(BOSS_HINT_COMMAND="${B:-}" bash "$INSTALL_DIR/scripts/install/boss.sh" --dir "$INSTALL_DIR" connect --summary 2>/dev/null </dev/null || true)"
 fi
 if [[ -n "$_model_rows" || "${#MODEL_NOTES[@]}" -gt 0 ]]; then
   echo -e "  ${BOLD}Models${NC}"

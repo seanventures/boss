@@ -39,3 +39,15 @@ def test_the_api_container_is_given_the_bin_dir() -> None:
 
     compose = (Path(__file__).resolve().parents[2] / "scripts/install/community-compose.yml").read_text()
     assert "BOSS_BIN_DIR: ${BOSS_BIN_DIR:-}" in compose
+
+
+def test_sign_in_options_carry_the_command_after_the_claim_too() -> None:
+    """The Forgot? sheet and "Lost every factor?" name `<cmd> identity recover-owner` on a claimed
+    install, when the claim block is gone (stranger test r3): /v1/auth/options carries the
+    command at the top level as well."""
+    from pathlib import Path
+
+    router = (Path(__file__).resolve().parents[2] / "apps/api/app/routers/identity_auth.py").read_text()
+    body = router[router.index("def sign_in_options"):router.index("def invitation_preview")]
+    top = body[body.index("return JSONResponse({"):]
+    assert '"host_command": _public_host_command(claimed=claim_info is None)' in top

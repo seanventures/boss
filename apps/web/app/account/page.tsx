@@ -38,6 +38,7 @@ export default async function AccountSecurityPage({ searchParams }: Props) {
       passwordMin={passwordMin(options)}
       profile={profile.ok ? asProfile(profile.data) : null}
       passkeyReason={options.passkey_reason ?? null}
+      publicOrigin={options.public_origin ?? null}
     />
   );
 }

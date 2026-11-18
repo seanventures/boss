@@ -111,9 +111,13 @@ describe("the operator never loses them (review of #200)", () => {
 describe("the model picker and the docs agree", () => {
   it("Cursor CLI, Cursor API and the Gemini CLI are not offered; Gemini stays as an API key", () => {
     for (const id of ["cursor_cli", "cursor_api", "google_gemini_cli"]) expect(offeredInPicker(id), id).toBe(false);
-    for (const id of ["anthropic_claude_code", "openai_codex_chatgpt", "xai_grok_build", "google_api", "typesafe_jev"]) {
+    for (const id of ["anthropic_claude_code", "openai_codex_chatgpt", "xai_grok_build", "google_api"]) {
       expect(offeredInPicker(id), id).toBe(true);
     }
+  });
+
+  it("the decision model (TypeSafe Jev) is not offered under More sources until a key is configured", () => {
+    expect(offeredInPicker("typesafe_jev")).toBe(false);
   });
 
   it("TypeSafe Jev says what it is for", () => {

@@ -13,6 +13,8 @@
  *   - the dock keeps a consent-refused offer standing (no repair turn, not spent);
  *   - "Let an agent act for me" lists a project's local repository, labelled, and grants it.
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -61,10 +63,38 @@ describe("the consent request names the repository on this machine", () => {
     const decided: Array<string | null> = [];
     const req: ConsentRequest = { ...consentFromBody(LOCAL_409)!, onDecided: (id) => decided.push(id) };
     await mountAs(<ConsentSheet request={req} onClose={() => undefined} />, "owner");
-    expect(tid("consent-local")?.textContent).toBe(` ${LOCAL}, on this machine`);
+    expect(tid("consent-local")?.textContent).toBe(`${LOCAL}, on this machine`);
     await click(tid("consent-standing"));
     expect(calls[0].body).toMatchObject({ kind: "standing", local: { repos: [LOCAL] } });
     expect(decided).toEqual(["dlg_1"]);
+  });
+});
+
+describe("the Easy Mode sheet on a local repository (stranger test r3)", () => {
+  const LONG = "local_build-a-python-app-named-csv-quality-des-29bc4174/build-a-python-app-named-csv-quality-desk-with-a-command";
+
+  it("keeps a long repository chip inside the sheet, with the whole name on hover", async () => {
+    stubFetch(() => undefined);
+    const req = consentFromBody({ ...LOCAL_409, local: { repo: LONG, repos: [LONG], summary: "on this machine" } })!;
+    await mountAs(<ConsentSheet request={req} onClose={() => undefined} />, "owner");
+    const chip = tid("consent-local") as HTMLElement;
+    expect(chip.classList.contains("idn-chip-repo")).toBe(true);
+    expect(chip.getAttribute("title")).toBe(`${LONG}, on this machine`);
+    expect(chip.querySelector(".idn-chip-text")?.textContent).toBe(`${LONG}, on this machine`);
+  });
+
+  it("asks for no GitHub ability when the build is on this machine", async () => {
+    stubFetch(() => undefined);
+    await mountAs(<ConsentSheet request={consentFromBody(LOCAL_409)!} onClose={() => undefined} />, "owner");
+    const need = document.querySelector(".idn-need")!.textContent ?? "";
+    expect(need).not.toMatch(/GitHub/);
+    expect(tid("consent-github")).toBeNull();
+  });
+
+  it("the chip ellipsizes and never grows past its row", () => {
+    const css = readFileSync(join(__dirname, "../app/identity/identity.css"), "utf8");
+    expect(css).toMatch(/\.idn-chip-repo \{[^}]*max-width: 100%[^}]*min-width: 0/);
+    expect(css).toMatch(/\.idn-chip-repo \.idn-chip-text \{[^}]*text-overflow: ellipsis/);
   });
 });
 

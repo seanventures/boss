@@ -96,3 +96,21 @@ def test_a_retirement_at_the_claim_is_audited_and_an_owner_can_undo_it(real_worl
         with pytest.raises(ValueError, match="not retired"):
             migration.restore_path(org, LegacyKind.SHARED_PASSWORD, db=db,
                                    actor_principal_id="sys_host_cli", reason="twice")
+
+
+def test_an_anonymous_caller_after_the_claim_reads_no_install_path(real_world, monkeypatch, capsys):
+    """/v1/auth/options is public. A second install's launcher path (BOSS_BIN_DIR) is shown on the
+    claim page while unclaimed; after the claim an anonymous caller gets no path (stranger test r3
+    review): the Forgot? sheet says "this install's boss command" instead."""
+    monkeypatch.setenv("BOSS_BIN_DIR", "/home/dev/stranger-test/rc28/bin")
+    before = fresh_client().get("/v1/auth/options").json()
+    assert before["claim"]["host_command"] == "/home/dev/stranger-test/rc28/bin/boss"
+    assert before["host_command"] == "/home/dev/stranger-test/rc28/bin/boss"
+    _claim_with_link(capsys)
+    res = fresh_client().get("/v1/auth/options")
+    assert res.status_code == 200, res.text
+    after = res.json()
+    assert after["claim"] is None and after["host_command"] is None
+    assert "/home/dev" not in res.text and "stranger-test" not in res.text
+    monkeypatch.delenv("BOSS_BIN_DIR")
+    assert fresh_client().get("/v1/auth/options").json()["host_command"] == "boss"

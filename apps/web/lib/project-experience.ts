@@ -1441,6 +1441,36 @@ export function orgNeedsOf(summary: ProjectsSummary | null): number | null {
   return summary.items.filter((c) => !c.archived).reduce((t, c) => t + (c.needs_you || 0), 0);
 }
 
+/** ONE SET, THREE PLACES (stranger test r3, 2026-11-18): the Approvals page said "Needs action 0 /
+ *  All 0", the rail "+8" and the bell "8". The 8 were set-up asks (add a model, pick a host) on
+ *  the projects a fresh install had just started, none on the open one, and the page never put the
+ *  8 next to its own tabs. Worse, the rail and bell took "elsewhere" as org total − this project's
+ *  live count while the page summed the OTHER projects' own counts, so whenever the summary's row
+ *  for the open project differed from its live count the two "elsewhere" numbers disagreed. Now the
+ *  bell, the rail badge, the tab title and the Approvals tabs all read this: `here` is the open
+ *  project's live count (the summary's own row until that answers), `elsewhere` the other open
+ *  projects' counts, `total` their sum. No project open: everything is elsewhere. */
+export type ApprovalCounts = { here: number | null; elsewhere: number; total: number | null };
+
+export function approvalCountsOf(here: number | null | undefined, summary: ProjectsSummary | null,
+                                 projectId?: string | null): ApprovalCounts {
+  if (!summary) return { here: here ?? null, elsewhere: 0, total: here ?? null };
+  const open = summary.items.filter((c) => !c.archived);
+  if (!projectId) {
+    const all = open.reduce((t, c) => t + (c.needs_you || 0), 0);
+    return { here: null, elsewhere: all, total: all };
+  }
+  const elsewhere = open.filter((c) => c.id !== projectId).reduce((t, c) => t + (c.needs_you || 0), 0);
+  const own = here ?? (open.find((c) => c.id === projectId)?.needs_you || 0);
+  return { here: own, elsewhere, total: own + elsewhere };
+}
+
+/** The counts for the open project; `here` is its live count (useAttention), when known. */
+export function useApprovalCounts(projectId: string | null | undefined, here: number | null | undefined): ApprovalCounts {
+  const read = usePxRead<ProjectsSummary>(PX_PATHS.summary(), parseSummary, { everyMs: 30_000 });
+  return approvalCountsOf(here, read.state === "ready" ? read.data : null, projectId);
+}
+
 export function useOrgNeeds(): number | null {
   const read = usePxRead<ProjectsSummary>(PX_PATHS.summary(), parseSummary, { everyMs: 30_000 });
   return read.state === "ready" ? orgNeedsOf(read.data) : null;

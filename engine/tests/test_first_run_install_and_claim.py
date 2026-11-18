@@ -36,17 +36,17 @@ def _next(*args: str) -> str:
 # ---- the next step, one set of words -------------------------------------------------------
 
 def test_an_unclaimed_boss_leads_with_the_claim_then_setup() -> None:
-    out = _next("--claim", "unclaimed", "--setup-url", "http://127.0.0.1:3000/?area=setup")
+    out = _next("--claim", "unclaimed", "--setup-url", "http://localhost:3000/?area=setup")
     assert "Next: claim this BOSS (nobody owns it yet)" in out
     order = ["boss identity setup-link", "Open the one-hour link", "Create the Owner account",
-             "Then finish setup", "http://127.0.0.1:3000/?area=setup"]
+             "Then finish setup", "http://localhost:3000/?area=setup"]
     assert [out.index(w) for w in order] == sorted(out.index(w) for w in order)
     assert "password" not in out
 
 
 def test_a_claimed_boss_goes_straight_to_setup() -> None:
     out = _next("--claim", "claimed 2026-11-01; shared credentials stop 2026-12-01",
-                "--setup-url", "http://127.0.0.1:3000/?area=setup", "--boss", "/opt/bin/boss")
+                "--setup-url", "http://localhost:3000/?area=setup", "--boss", "/opt/bin/boss")
     assert "setup-link" not in out
     assert "Finish setup" in out and "/opt/bin/boss password" in out
 
@@ -67,6 +67,10 @@ def test_the_install_card_leads_with_the_claim(world) -> None:  # noqa: F811
     card = out[out.index("BOSS Community is running"):]
     assert "Next: claim this BOSS (nobody owns it yet)" in card
     assert card.index("identity setup-link") < card.index("Then finish setup") < card.index("?area=setup")
+    # ONE CONSOLE ADDRESS (stranger test r3): the claim link prints http://localhost:<port>, and a
+    # passkey or session made there does not exist on 127.0.0.1. The card names the same host.
+    assert "http://localhost:3000/?area=setup" in card
+    assert "127.0.0.1:3000" not in card
     assert "Password " not in card            # the shared password is not how a fresh BOSS is claimed
     nxt = card[card.index("Next\n"):] if "Next\n" in card else card
     assert nxt.index("identity setup-link") < nxt.index(" open ")
@@ -97,6 +101,13 @@ def test_the_project_name_and_bin_dir_are_saved_and_boss_uses_them(world) -> Non
         assert status.returncode == 0, status.stdout + status.stderr
         compose = [line for line in tags.read_text().splitlines() if line]
         assert compose and all(line.startswith("boss-second ") for line in compose), compose
+
+    # The card's Models lines name THIS install's command, not plain boss, which runs the first
+    # install on this machine (stranger test r3).
+    card = result.stdout[result.stdout.index("BOSS Community is running"):]
+    models = card[card.index("Models"):card.index("Repository")]
+    assert f"{bin_dir}/boss connect codex" in models, models
+    assert ": boss connect" not in models, models
 
     # A rerun without the variables keeps them.
     rerun = _install(world, env={k: v for k, v in world["env"].items() if k != "BOSS_BIN_DIR"})
@@ -186,6 +197,15 @@ def test_doctor_names_the_next_step_the_card_names(doctor) -> None:
     assert tail.index("boss identity setup-link") < tail.index("Then finish setup")
     claimed = doctor(FAKE_CLAIM="claimed 2026-11-01").stdout
     assert "Next: claim" not in claimed
+
+
+def test_doctor_prints_the_console_on_the_claim_links_host(doctor) -> None:
+    """The claim link is http://localhost:<port>; doctor's Mission Control and Setup lines must
+    be the same site, or the Owner lands signed out where their passkey does not work (r3)."""
+    out = doctor(FAKE_CLAIM="unclaimed").stdout
+    assert "Mission Control: http://localhost:3000" in out
+    assert "http://localhost:3000/?area=setup" in out
+    assert "http://127.0.0.1:3000" not in out
 
 
 def test_doctor_never_warns_about_a_drift_report_it_cannot_run(doctor) -> None:

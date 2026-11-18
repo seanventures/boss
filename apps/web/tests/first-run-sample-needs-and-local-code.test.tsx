@@ -54,9 +54,12 @@ describe("Try a sample: every need up front, and the tick is the answer", () => 
     await click(tid("ap-sample"));
     const asked = calls.find((c) => c.path === "/v1/delivery-workflows/minor_feature/readiness")!;
     expect(new URLSearchParams(asked.search).get("code_location")).toBe("local");
-    for (const k of ["model", "repository", "deployment_target"]) expect(tid(`dw-readiness-missing-${k}`)).not.toBeNull();
+    for (const k of ["model", "repository"]) expect(tid(`dw-readiness-missing-${k}`)).not.toBeNull();
     expect(calls.some((c) => c.method === "POST" && c.path === "/v1/projects")).toBe(false);
-    // The later need is said as later, with where this machine becomes a host.
+    // Stranger test r3: the deploy host is not in "Setup needed" at all; it is said once as
+    // optional, with where this machine becomes a host.
+    expect(tid("dw-readiness-missing-deployment_target")).toBeNull();
+    expect(tid("sample-later-deploy")!.textContent).toMatch(/^Optional: a server to deploy to\./);
     expect(tid("sample-later-deploy")!.textContent).toMatch(/not needed to build and open the PR/);
     expect(tid("sample-add-host")!.getAttribute("href")).toContain("area=infra");
   });

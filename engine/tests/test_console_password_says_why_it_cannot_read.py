@@ -60,3 +60,22 @@ def test_refusing_a_pipe_says_how_to_get_a_terminal_over_ssh(tmp_path: Path) -> 
     result = _show(env, tmp_path / "home")  # capture_output: stdout is a pipe, not a terminal
     assert result.returncode != 0
     assert "outside a terminal" in result.stderr and "ssh -t" in result.stderr
+
+
+def test_the_refusal_names_this_installs_own_command_or_directory(tmp_path: Path) -> None:
+    """A second install's `boss password` said "cd ~/boss && …", the FIRST install's directory
+    (stranger test r3). It names the command boss.sh passes, else this install's directory."""
+    install = tmp_path / "second-install"
+    install.mkdir()
+    env = install / ".env"
+    env.write_text("BOSS_CONSOLE_PASSWORD=x\n")
+    env.chmod(0o600)
+    own = subprocess.run([sys.executable, str(SCRIPT), "show", "--env-file", str(env)],
+                         capture_output=True, text=True, timeout=30,
+                         env={**os.environ, "HOME": str(tmp_path / "home"),
+                              "BOSS_COMMAND": "/srv/two/bin/boss"})
+    assert "ssh -t user@your-server '/srv/two/bin/boss password'" in own.stderr
+    assert "~/boss" not in own.stderr
+    plain = _show(env, tmp_path / "home")
+    assert f"cd {install.resolve()} && python3 scripts/install/console_password.py show" in plain.stderr
+    assert "~/boss" not in plain.stderr

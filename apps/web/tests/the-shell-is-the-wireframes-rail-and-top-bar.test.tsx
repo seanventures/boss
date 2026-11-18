@@ -189,7 +189,9 @@ describe("the top bar", () => {
     await mount("overview");
     const bell = $('[data-testid="topbar-bell"]')!;
     expect(bell.title).toBe("Approvals waiting on you");
-    expect($('[data-testid="topbar-bell-count"]')!.textContent).toBe("3");
+    // One set with Approvals (stranger test r3): the open project's live 3 + the other projects'
+    // 2 + 1 from the summary (its own row says 0 there, the live count wins for the open project).
+    expect($('[data-testid="topbar-bell-count"]')!.textContent).toBe("6");
     await act(async () => { bell.click(); });
     expect($('[data-testid="ag-crew-need-dec_1"]')!.textContent).toContain("Merge PR #3");
     expect($('[data-testid="topbar-bell-approvals"]')).not.toBeNull();

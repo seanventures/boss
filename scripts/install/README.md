@@ -411,7 +411,7 @@ To skip the proxy, use an SSH tunnel to a VM you administer:
 ssh -L 3000:127.0.0.1:3000 -L 3001:127.0.0.1:3001 -L 8000:127.0.0.1:8000 user@your-vm
 ```
 
-Then open `http://127.0.0.1:3000` on the computer that opened the tunnel. Port 3001 is where previews open. The public URL is baked into the web build. An older `.env` that set `BOSS_BIND_ADDRESS=0.0.0.0` is moved back to loopback on rerun. The only way to publish the API is `--api-bind` / `BOSS_API_BIND`, and authentication stays required.
+Then open `http://localhost:3000` on the computer that opened the tunnel (the host the claim link prints; `127.0.0.1` is a different site for passkeys and sessions). Port 3001 is where previews open. The public URL is baked into the web build. An older `.env` that set `BOSS_BIND_ADDRESS=0.0.0.0` is moved back to loopback on rerun. The only way to publish the API is `--api-bind` / `BOSS_API_BIND`, and authentication stays required.
 
 ## Verify the install
 
@@ -434,7 +434,7 @@ The checks cover: containers running, the API answering, the address compiled in
   ok    repository: connected
   ok    host: scheduling BOSS normally
 
-  BOSS is ready.  Mission Control: http://127.0.0.1:3000
+  BOSS is ready.  Mission Control: http://localhost:3000
 ```
 
 > [!NOTE]
@@ -468,7 +468,7 @@ Returns three separate grades (delivery, efficiency, host) deterministically, wi
 source ~/boss/boss-community.env.sh
 curl -sS "$BOSS_API_URL/health"
 # First, claim it: boss identity setup-link prints a one-hour link; open it and create the Owner.
-# Then Mission Control: http://127.0.0.1:3000/?area=setup (repository, model, first pull request)
+# Then Mission Control: http://localhost:3000/?area=setup (repository, model, first pull request)
 ```
 
 ## Upgrade & recover

@@ -57,9 +57,9 @@ export function providerOffers(providers: AuthOptions["providers"], next: string
  * Why "Sign in with a passkey" can't work here, or null when it can. `where` is the page's own
  * address (null on the server); `webauthn` is whether this browser has passkeys at all.
  */
-export function passkeyWhyNot(options: Pick<AuthOptions, "passkey" | "passkey_reason">,
+export function passkeyWhyNot(options: Pick<AuthOptions, "passkey" | "passkey_reason" | "public_origin">,
   where: { hostname?: string; protocol?: string; secure?: boolean } | null, webauthn: boolean): string | null {
-  const blocked = passkeyBlockWords(options.passkey_reason, where);
+  const blocked = passkeyBlockWords(options.passkey_reason, where, options.public_origin);
   if (blocked) return blocked;
   if (options.passkey_reason === "public_origin_unset") return "Passkeys need BOSS's public address. It's set when an Owner claims BOSS.";
   if (options.passkey === false) return "Passkeys aren't set up on this BOSS yet";

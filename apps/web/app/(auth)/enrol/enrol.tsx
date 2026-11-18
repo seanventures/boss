@@ -21,16 +21,19 @@ import { Face } from "../../../components/identity/kit";
 import { AuthStage, Live, Logo, safeNextClient } from "../auth-parts";
 import { primeCsrf, registerPasskey, sayAuth } from "../auth-flow";
 import { RecoveryCodesView } from "../recovery-codes";
+import { enrolContinueLabel } from "../../../lib/identity/claim-resume";
 import { TotpStep } from "./totp-step";
 
 type Stage = "choose" | "totp" | "codes" | "password";
 
-export function Enrol({ host, next, who, passkeyReason = null, passwordMin = 12 }: {
+export function Enrol({ host, next, who, passkeyReason = null, publicOrigin = null, passwordMin = 12 }: {
   host: string; next: string; who: { name: string; email: string; hue: number } | null;
   /** The security policy's password minimum (GET /v1/auth/options). */
   passwordMin?: number;
   /** /v1/auth/options passkey_reason: passkey_needs_domain on an IP address (passkey-support). */
   passkeyReason?: string | null;
+  /** The bound public origin: a passkey works only there (passkeyOtherLoopbackWords). */
+  publicOrigin?: string | null;
 }) {
   const [noPasskey, setNoPasskey] = useState<string | null>(null);
   const [stage, setStage] = useState<Stage>("choose");
@@ -45,13 +48,13 @@ export function Enrol({ host, next, who, passkeyReason = null, passwordMin = 12 
   const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
-    const blocked = passkeyBlockWords(passkeyReason, passkeyPlace());
+    const blocked = passkeyBlockWords(passkeyReason, passkeyPlace(), publicOrigin);
     setNoPasskey(blocked);
     setPasskeys(webauthnAvailable() && !blocked);
     // No passkey possible here: the authenticator app IS the choice, not a link under a dead button.
     if (blocked) setStage("totp");
     primeCsrf().then((me) => setNeedsPassword(me?.sign_in?.password === false)).catch(() => undefined);
-  }, [passkeyReason]);
+  }, [passkeyReason, publicOrigin]);
 
   /** The codes issued with the first factor; only when there were none, ask for a set. */
   const toCodes = async (issued: string[] = []) => {
@@ -71,7 +74,7 @@ export function Enrol({ host, next, who, passkeyReason = null, passwordMin = 12 
         <Logo host={host} />
         <h1>Save your recovery codes</h1>
         <p className="idn-s" data-copy="prose">If you lose your second factor, one of these gets you back in. Each works once.</p>
-        <RecoveryCodesView codes={codes} host={host} onContinue={() => {
+        <RecoveryCodesView codes={codes} host={host} continueLabel={enrolContinueLabel(next)} onContinue={() => {
           setCodes(null);
           if (needsPassword) { setError(null); setStage("password"); } else window.location.assign(target);
         }} />

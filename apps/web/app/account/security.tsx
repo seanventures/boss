@@ -96,9 +96,11 @@ function ProfileSheet({ profile, id, onClose, onSaved }: { profile: MyProfile; i
   );
 }
 
-export function AccountSecurity({ me, factors: initialFactors, identities: initialIdentities, host, linked = false, providers = [], passwordMin = 12, profile: initialProfile = null, passkeyReason = null }: {
+export function AccountSecurity({ me, factors: initialFactors, identities: initialIdentities, host, linked = false, providers = [], passwordMin = 12, profile: initialProfile = null, passkeyReason = null, publicOrigin = null }: {
   /** /v1/auth/options passkey_reason (passkey-support): no "Add a passkey" where none can be made. */
   passkeyReason?: string | null;
+  /** The bound public origin: a passkey works only there (passkeyOtherLoopbackWords). */
+  publicOrigin?: string | null;
   me: MeResponse | null; factors: Factor[]; identities: LinkedIdentity[]; host: string;
   /** The security policy's password minimum (GET /v1/auth/options). */
   passwordMin?: number;
@@ -129,10 +131,10 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
   const [canPasskey, setCanPasskey] = useState(false);
   const [noPasskey, setNoPasskey] = useState<string | null>(null);
   useEffect(() => {
-    const blocked = passkeyBlockWords(passkeyReason, passkeyPlace());
+    const blocked = passkeyBlockWords(passkeyReason, passkeyPlace(), publicOrigin);
     setNoPasskey(blocked);
     setCanPasskey(webauthnAvailable() && !blocked);
-  }, [passkeyReason]);
+  }, [passkeyReason, publicOrigin]);
   useEffect(() => {
     if (!linked) return;
     showToast("success", "Single sign-on linked");

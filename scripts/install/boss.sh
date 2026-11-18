@@ -290,7 +290,7 @@ release_line() {
     printf '%s (%s channel%s, commit %s)\n' "$ref" "${channel:-unknown}" \
       "${follow:+, follows $follow}" "$commit"
   else
-    printf 'not recorded (installed before releases were recorded; boss update records it), commit %s\n' "$commit"
+    printf 'not recorded (installed before releases were recorded; '"$(hint_command)"' update records it), commit %s\n' "$commit"
   fi
 }
 
@@ -304,10 +304,25 @@ setup_state() {
     python3 "$INSTALL_DIR/scripts/install/setup_state.py" "$1" 2>/dev/null </dev/null
 }
 
+# THE CONSOLE'S ADDRESS TO PRINT: the install's bound public origin (where its sessions and
+# passkeys live; an install claimed on http://127.0.0.1:<port> before rc10 stays there), else
+# http://localhost:<port>, the host the claim link prints (stranger test r3).
+console_base() {
+  local port bound
+  port="$(env_value BOSS_WEB_PORT)"; port="${port:-3000}"
+  bound="$(identity_cli console-origin 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+  bound="${bound%/}"
+  if [[ "$bound" =~ ^https?://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(:[0-9]+)?$ ]]; then
+    printf '%s' "$bound"
+  else
+    printf 'http://localhost:%s' "$port"
+  fi
+}
+
 cmd_open() {
   need_install
   [[ "$(env_value BOSS_COMMUNITY_WEB_ENABLED)" != 0 ]] ||
-    die "Mission Control is not enabled on this install. Enable it with: boss update --web"
+    die "Mission Control is not enabled on this install. Enable it with: $(hint_command) update --web"
   local port origin path=""
   port="$(env_value BOSS_WEB_PORT)"; origin="$(env_value BOSS_CONSOLE_PUBLIC_ORIGIN)"
   # UNTIL SETUP IS DONE, THE ADDRESS IS REPO AND MODELS: paste a token, connect a model, open a
@@ -319,19 +334,19 @@ cmd_open() {
   # installer's card and `boss doctor` (scripts/install/next_step.sh).
   if [[ "$claim" != claimed* ]]; then
     bash "$INSTALL_DIR/scripts/install/next_step.sh" --claim "$claim" --boss "$(own_command)" \
-      --setup-url "http://127.0.0.1:${port:-3000}${path:-/?area=setup}" --origin "$origin"
+      --setup-url "$(console_base)${path:-/?area=setup}" --origin "$origin"
     # BOSSAPP-813: from the server's own network (LAN, tailnet) the console's https address IS
     # the claim — the first visitor sets up the Owner on the site.
     [[ -z "$origin" ]] || printf 'Console origin:                  %s\n' "${origin%/}"
     return 0
   fi
   if [[ -n "$path" ]]; then
-    printf 'Finish setup:                    http://127.0.0.1:%s%s\n' "${port:-3000}" "$path"
+    printf 'Finish setup:                    %s%s\n' "$(console_base)" "$path"
   else
-    printf 'Mission Control on this machine: http://127.0.0.1:%s\n' "${port:-3000}"
+    printf 'Mission Control on this machine: %s\n' "$(console_base)"
   fi
   [[ -z "$origin" ]] || printf 'Console origin:                  %s%s\n' "${origin%/}" "$path"
-  printf 'Sign in with your own account. Teammates without one yet: boss password, until it stops.\n'
+  printf 'Sign in with your own account. Teammates without one yet: '"$(hint_command)"' password, until it stops.\n'
 }
 
 cmd_status() {
@@ -354,13 +369,15 @@ cmd_password() {
   need_install
   local action="${1:-show}"
   case "$action" in show|reset) ;; *) die "password takes show or reset" ;; esac
-  python3 "$INSTALL_DIR/scripts/install/console_password.py" "$action" --env-file "$ENV_FILE"
+  BOSS_COMMAND="$(hint_command)" \
+    python3 "$INSTALL_DIR/scripts/install/console_password.py" "$action" --env-file "$ENV_FILE"
 }
 
 cmd_doctor() {
   need_install
   BOSS_ENV_FILE="$ENV_FILE" BOSS_HOST_API_KEY="$(host_key 2>/dev/null || true)" \
-    BOSS_COMMAND="$(own_command)" bash "$INSTALL_DIR/scripts/install/checkup.sh" "$@"
+    BOSS_COMMAND="$(own_command)" BOSS_CONSOLE_URL="$(console_base)" \
+      bash "$INSTALL_DIR/scripts/install/checkup.sh" "$@"
 }
 
 cmd_logs() {
@@ -452,7 +469,7 @@ cmd_host_sample() {
   need_install
   [[ "$(uname -s)" == Darwin ]] || die "host-sample reads macOS memory; on Linux BOSS measures the machine itself."
   local key url body
-  key="$(host_key)"; [[ -n "$key" ]] || die "no API key for the host tools: run boss identity host-key"
+  key="$(host_key)"; [[ -n "$key" ]] || die "no API key for the host tools: run $(hint_command) identity host-key"
   url="$(api_url)"
   body="$(python3 - <<'PY'
 import json, re, subprocess
@@ -628,7 +645,7 @@ cmd_toolchains() {
   set_env_value BOSS_TOOLCHAINS "$wanted"
   printf 'Saved BOSS_TOOLCHAINS=%s in .env. Rebuilding the api and worker images...\n' "$wanted"
   if ! compose build api worker </dev/null; then
-    printf '  ✗ The image build failed. .env says BOSS_TOOLCHAINS=%s; fix the cause and run: boss update\n' "$wanted"
+    printf '  ✗ The image build failed. .env says BOSS_TOOLCHAINS=%s; fix the cause and run: '"$(hint_command)"' update\n' "$wanted"
     return 1
   fi
   apply_env "Toolchains ($wanted)"
@@ -675,6 +692,14 @@ own_command() {
   printf '%s' "$launcher"
 }
 
+# THE COMMAND NAMED IN A HINT ("Retry: boss connect codex"). The installer passes the command it is
+# about to install (BOSS_HINT_COMMAND) before the launcher exists; otherwise this install's own
+# command. Plain `boss` in a second install's hints ran the FIRST install (stranger test r3).
+hint_command() {
+  if [[ -n "${BOSS_HINT_COMMAND:-}" ]]; then printf '%s' "$BOSS_HINT_COMMAND"; return 0; fi
+  own_command
+}
+
 cmd_uninstall() {
   need_install
   local args=(--dir "$INSTALL_DIR") purge=0 dry=0 launcher=""
@@ -717,7 +742,7 @@ ask_yes() {
 run_subscriptions() {
   local key
   key="$(host_key)"
-  [[ -n "$key" ]] || die "no API key for the host tools: run boss identity host-key"
+  [[ -n "$key" ]] || die "no API key for the host tools: run $(hint_command) identity host-key"
   (cd "$INSTALL_DIR" && BOSS_API_KEY="$key" python3 scripts/install/coding_subscriptions.py \
      --api-url "$(api_url)" "$@" </dev/null)
 }
@@ -788,7 +813,7 @@ apply_env() {
   local what="${1:-Settings}" url i
   printf 'Restarting api and worker so they read the updated .env...\n'
   if ! compose up -d --no-deps --no-build --force-recreate api worker </dev/null; then
-    printf '  ✗ api and worker were not restarted. The change is saved in .env; apply it with: boss update\n'
+    printf '  ✗ api and worker were not restarted. The change is saved in .env; apply it with: '"$(hint_command)"' update\n'
     return 1
   fi
   url="$(api_url)"
@@ -827,11 +852,11 @@ connect_keys() {
 
 claude_blocked() {
   if [[ -n "$(env_value ANTHROPIC_API_KEY)" ]]; then
-    printf '  ✗ Claude Code: .env holds ANTHROPIC_API_KEY, which would be used instead of the subscription. Remove that line from %s, run boss update, then: boss connect claude\n' "$ENV_FILE"
+    printf '  ✗ Claude Code: .env holds ANTHROPIC_API_KEY, which would be used instead of the subscription. Remove that line from %s, run '"$(hint_command)"' update, then: '"$(hint_command)"' connect claude\n' "$ENV_FILE"
     return 0
   fi
   if [[ -n "$(env_value CLAUDE_CODE_OAUTH_TOKEN)" ]]; then
-    printf '  ✗ Claude Code: .env holds a legacy CLAUDE_CODE_OAUTH_TOKEN. Remove that line from %s, run boss update, then: boss connect claude\n' "$ENV_FILE"
+    printf '  ✗ Claude Code: .env holds a legacy CLAUDE_CODE_OAUTH_TOKEN. Remove that line from %s, run '"$(hint_command)"' update, then: '"$(hint_command)"' connect claude\n' "$ENV_FILE"
     return 0
   fi
   return 1
@@ -863,7 +888,7 @@ sign_in() {
   if ! have_tty; then
     container_login_state "$name" || state=$?
     if [[ "$state" -ne 0 ]]; then
-      printf '  skipped   %s sign-in needs a person at a terminal. Run: boss connect %s\n' "$label" "$name"
+      printf '  skipped   %s sign-in needs a person at a terminal. Run: '"$(hint_command)"' connect %s\n' "$label" "$name"
       return 2
     fi
   fi
@@ -871,7 +896,7 @@ sign_in() {
   case "$rc" in
     0) printf '  ✓ %s is signed in inside BOSS and connected: it answered one test turn\n' "$label" ;;
     2) return 2 ;;
-    *) printf '  ✗ %s was not connected; the reason is above. Retry: boss connect %s\n' "$label" "$name"
+    *) printf '  ✗ %s was not connected; the reason is above. Retry: '"$(hint_command)"' connect %s\n' "$label" "$name"
        return 1 ;;
   esac
 }
@@ -890,16 +915,16 @@ offer_sign_in() {
     return 0
   fi
   if ! have_tty; then
-    printf '  next      %s: signing in needs a person at a terminal. Run: boss connect %s\n' "$label" "$name"
+    printf '  next      %s: signing in needs a person at a terminal. Run: '"$(hint_command)"' connect %s\n' "$label" "$name"
     return 2
   fi
   if [[ "$assume" -ne 1 && "${NO_QUESTIONS:-0}" -eq 1 ]]; then
-    printf '  next      %s login found, not signed in (an unattended run signs nothing in without --connect-found). Run: boss connect %s\n' "$label" "$name"
+    printf '  next      %s login found, not signed in (an unattended run signs nothing in without --connect-found). Run: '"$(hint_command)"' connect %s\n' "$label" "$name"
     return 2
   fi
   if [[ "$assume" -ne 1 ]] &&
      ! ask_yes "Sign $label in inside the BOSS container now? $label runs its own login there; nothing is copied from this machine."; then
-    printf '  skipped   %s. Later: boss connect %s\n' "$label" "$name"
+    printf '  skipped   %s. Later: '"$(hint_command)"' connect %s\n' "$label" "$name"
     return 2
   fi
   sign_in "$name"
@@ -1012,30 +1037,30 @@ install_ollama() {
       fi
       if have_tty; then sh "$script" </dev/tty; else sh "$script" </dev/null; fi || {
         rm -f "$script"
-        printf '  ✗ The Ollama installer failed; the reason is above. Retry: boss connect --install-ollama\n'
+        printf '  ✗ The Ollama installer failed; the reason is above. Retry: '"$(hint_command)"' connect --install-ollama\n'
         return 1
       }
       rm -f "$script"
       ;;
     Darwin)
       if ! command -v brew >/dev/null 2>&1; then
-        printf '  ✗ Install the Ollama app from https://ollama.com/download and open it once, then run: boss connect --install-ollama\n'
+        printf '  ✗ Install the Ollama app from https://ollama.com/download and open it once, then run: '"$(hint_command)"' connect --install-ollama\n'
         return 1
       fi
       printf 'Installing Ollama with Homebrew (brew install ollama)...\n'
       brew install ollama </dev/null || {
-        printf '  ✗ brew install ollama failed; the reason is above. Retry: boss connect --install-ollama\n'
+        printf '  ✗ brew install ollama failed; the reason is above. Retry: '"$(hint_command)"' connect --install-ollama\n'
         return 1
       }
       ;;
     *)
-      printf '  ✗ BOSS can set up Ollama on Linux and macOS only. Install it from https://ollama.com/download, then: boss connect ollama\n'
+      printf '  ✗ BOSS can set up Ollama on Linux and macOS only. Install it from https://ollama.com/download, then: '"$(hint_command)"' connect ollama\n'
       return 1
       ;;
   esac
   hash -r
   if ! command -v ollama >/dev/null 2>&1; then
-    printf '  ✗ Ollama was installed, but the ollama command is not on PATH. Open a new shell, then: boss connect --install-ollama\n'
+    printf '  ✗ Ollama was installed, but the ollama command is not on PATH. Open a new shell, then: '"$(hint_command)"' connect --install-ollama\n'
     return 1
   fi
   printf '  ✓ Ollama installed\n'
@@ -1090,7 +1115,7 @@ start_ollama() {
     fi
     [[ "$i" -eq 30 ]] || sleep 1
   done
-  printf '  ✗ Ollama did not start. Start it (ollama serve), then: boss connect --install-ollama\n'
+  printf '  ✗ Ollama did not start. Start it (ollama serve), then: '"$(hint_command)"' connect --install-ollama\n'
   return 1
 }
 
@@ -1108,13 +1133,13 @@ reach_ollama() {
   fi
   if [[ "$rebind" -eq 0 || "$(host_os)" != Linux ]] || ! command -v systemctl >/dev/null 2>&1 ||
      ! systemctl cat ollama.service >/dev/null 2>&1; then
-    printf '  ✗ The BOSS containers cannot reach Ollama at %s. Ollama must listen on an address the Docker bridge reaches; on Linux run: boss connect --install-ollama (it binds Ollama to the bridge address). See docs/community/MODEL_CONNECTIONS.md. Nothing was changed.\n' "$container"
+    printf '  ✗ The BOSS containers cannot reach Ollama at %s. Ollama must listen on an address the Docker bridge reaches; on Linux run: '"$(hint_command)"' connect --install-ollama (it binds Ollama to the bridge address). See docs/community/MODEL_CONNECTIONS.md. Nothing was changed.\n' "$container"
     return 1
   fi
   docker_cmd
   gateway="$("${DOCKER[@]}" network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}' </dev/null 2>/dev/null || true)"
   if [[ ! "$gateway" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ || "$gateway" == 0.0.0.0 ]]; then
-    printf '  ✗ Could not read the Docker bridge address. Set OLLAMA_HOST=<bridge address>:%s for the Ollama service, then: boss connect ollama\n' "$port"
+    printf '  ✗ Could not read the Docker bridge address. Set OLLAMA_HOST=<bridge address>:%s for the Ollama service, then: '"$(hint_command)"' connect ollama\n' "$port"
     return 1
   fi
   dropin="${BOSS_OLLAMA_DROPIN_DIR:-/etc/systemd/system/ollama.service.d}"
@@ -1122,7 +1147,7 @@ reach_ollama() {
   # moving it needs a yes at a terminal (default no) or --rebind-ollama.
   if [[ "$rebind" -eq 2 && "$REBIND_OLLAMA" -ne 1 ]] &&
      ! ask "Your Ollama already runs on 127.0.0.1, which the BOSS containers cannot reach. Move it to the Docker bridge address $gateway:$port? Programs that use 127.0.0.1:$port would then need OLLAMA_HOST=$gateway:$port."; then
-    printf '  ✗ Your existing Ollama was left on 127.0.0.1, so the BOSS containers cannot reach it. Nothing was changed. To move it: boss connect --install-ollama --rebind-ollama (or set OLLAMA_HOST=%s:%s for the service yourself, then: boss connect ollama)\n' "$gateway" "$port"
+    printf '  ✗ Your existing Ollama was left on 127.0.0.1, so the BOSS containers cannot reach it. Nothing was changed. To move it: '"$(hint_command)"' connect --install-ollama --rebind-ollama (or set OLLAMA_HOST=%s:%s for the service yourself, then: '"$(hint_command)"' connect ollama)\n' "$gateway" "$port"
     return 1
   fi
   printf 'Ollama listens on 127.0.0.1, which containers cannot reach on Linux. Binding it to the Docker bridge address %s:%s: this machine and its containers reach it, your network does not.\n' "$gateway" "$port"
@@ -1130,7 +1155,7 @@ reach_ollama() {
      ! printf '[Unit]\nAfter=docker.service\n\n[Service]\nEnvironment="OLLAMA_HOST=%s:%s"\n' "$gateway" "$port" |
          as_root tee "$dropin/boss-docker-bridge.conf" >/dev/null ||
      ! as_root systemctl daemon-reload </dev/null || ! as_root systemctl restart ollama.service </dev/null; then
-    printf '  ✗ Could not change the Ollama service (this needs sudo). Set OLLAMA_HOST=%s:%s for it yourself, then: boss connect ollama\n' "$gateway" "$port"
+    printf '  ✗ Could not change the Ollama service (this needs sudo). Set OLLAMA_HOST=%s:%s for it yourself, then: '"$(hint_command)"' connect ollama\n' "$gateway" "$port"
     return 1
   fi
   set_env_value BOSS_OLLAMA_URL "http://$gateway:$port"
@@ -1142,7 +1167,7 @@ reach_ollama() {
     fi
     [[ "$i" -eq 30 ]] || sleep 1
   done
-  printf '  ✗ The BOSS containers still cannot reach Ollama at %s. Check: systemctl status ollama, then: boss connect ollama\n' "$container"
+  printf '  ✗ The BOSS containers still cannot reach Ollama at %s. Check: systemctl status ollama, then: '"$(hint_command)"' connect ollama\n' "$container"
   return 1
 }
 
@@ -1168,7 +1193,7 @@ pull_local_model() {
   if [[ "$free_kb" =~ ^[0-9]+$ ]]; then
     printf 'Disk: %s GB free in %s, %s GB needed.\n' "$(gigabytes $(( free_kb * 1024 )))" "$dir" "$(gigabytes $(( need_kb * 1024 )))"
     if (( free_kb < need_kb )); then
-      printf '  ✗ Not enough disk space; nothing was downloaded. Free space, or choose a smaller model: boss connect --install-ollama --local-model NAME\n'
+      printf '  ✗ Not enough disk space; nothing was downloaded. Free space, or choose a smaller model: '"$(hint_command)"' connect --install-ollama --local-model NAME\n'
       return 1
     fi
   else
@@ -1190,7 +1215,7 @@ pull_local_model() {
     rm -f "$pull_log"
   fi
   if [[ "$pull_ok" -ne 1 ]]; then
-    printf '  ✗ ollama pull %s failed; the reason is above. Retry: boss connect --install-ollama --local-model %s\n' "$model" "$model"
+    printf '  ✗ ollama pull %s failed; the reason is above. Retry: '"$(hint_command)"' connect --install-ollama --local-model %s\n' "$model" "$model"
     return 1
   fi
   printf '  ✓ %s pulled\n' "$model"
@@ -1204,7 +1229,7 @@ register_ollama() {
   port="$(ollama_port)" || return 1
   container="http://host.docker.internal:$port"
   key="$(host_key)"
-  [[ -n "$key" ]] || { printf '  ✗ no API key for the host tools; run boss identity host-key\n'; return 1; }
+  [[ -n "$key" ]] || { printf '  ✗ no API key for the host tools; run '"$(hint_command)"' identity host-key\n'; return 1; }
   result="$(mktemp)"
   args=(--api-url "$(api_url)" --container-url "$container/v1" --default-if-no-hosted --env-file "$ENV_FILE")
   [[ -z "$model" ]] || args+=(--model "$model")
@@ -1241,7 +1266,7 @@ register_ollama() {
   if container_sees_ollama "$container" "$model"; then
     printf '  ✓ Checked: the BOSS API container sees %s in Ollama. No completion was run: Community setup makes no model calls; the first governed job verifies it.\n' "$model"
   else
-    printf '  ✗ The BOSS API container does not see %s in Ollama. Check: ollama list, then: boss connect ollama\n' "$model"
+    printf '  ✗ The BOSS API container does not see %s in Ollama. Check: ollama list, then: '"$(hint_command)"' connect ollama\n' "$model"
     return 1
   fi
 }
@@ -1260,7 +1285,7 @@ connect_ollama() {
   local assume="$1" model="${2:-}"
   if [[ "$assume" -ne 1 ]] &&
      ! ask "Connect the Ollama on this machine as a BOSS model? The BOSS containers reach it as host.docker.internal; no port is opened."; then
-    printf '  skipped   Ollama (nothing was changed). Later: boss connect ollama\n'
+    printf '  skipped   Ollama (nothing was changed). Later: '"$(hint_command)"' connect ollama\n'
     return 2
   fi
   reach_ollama 0 || return 1
@@ -1321,7 +1346,8 @@ print_model_rows() {
   local found="$1" key
   key="$(host_key)"
   BOSS_API_KEY="$key" python3 "$INSTALL_DIR/scripts/install/model_status.py" \
-    --api-url "$(api_url)" --env-file "$ENV_FILE" ${found:+--found "$found"} </dev/null
+    --api-url "$(api_url)" --env-file "$ENV_FILE" ${found:+--found "$found"} \
+    --boss "$(hint_command)" </dev/null
 }
 
 models_step() {
@@ -1369,14 +1395,18 @@ models_step() {
   usable_model || rc=$?
   if [[ "$rc" -eq 3 ]]; then
     printf '\nNo model is connected yet, so BOSS cannot run model work.\n'
+    # SIGN-IN IS OFFERED ONLY FOR A LOGIN FOUND ON THIS MACHINE (offered above). The stranger
+    # test (r3) was asked three sign-in questions right after each tool was reported "not found";
+    # the rest is one line, and Setup › Models signs any subscription in later.
+    local missing=()
     for key in codex claude grok; do
-      [[ "$(state "${key}_login")" != found ]] || continue  # already offered above
-      if have_tty && ask "Sign in to $(provider_label "$key") inside BOSS now? It runs the provider's own login in the BOSS container; you need that subscription."; then
-        if sign_in "$key" && usable_model; then
-          break
-        fi
-      fi
+      [[ "$(state "${key}_login")" == found ]] || missing+=("$(provider_label "$key")")
     done
+    if [[ ${#missing[@]} -gt 0 ]]; then
+      local joined
+      joined="$(printf '%s, ' "${missing[@]}")"; joined="${joined%, }"
+      printf '  Not found: %s — you can sign in to a subscription later in Setup › Models.\n' "$joined"
+    fi
     rc=0
     usable_model || rc=$?
   fi
@@ -1388,12 +1418,12 @@ models_step() {
     if ask "Optional: set up a free local model ($size download)? BOSS installs Ollama if needed and downloads $LOCAL_MODEL. Slow on CPU; a subscription or API key works without it."; then
       setup_local_model "$LOCAL_MODEL" || true
     else
-      printf '  next      A free local model: boss connect --install-ollama  (or --local-model NAME)\n'
+      printf '  next      A free local model: '"$(hint_command)"' connect --install-ollama  (or --local-model NAME)\n'
     fi
   fi
   if [[ "$FROM_INSTALLER" -eq 0 ]]; then
     if [[ "$(state codex_login)" != found ]]; then
-      printf '  next      Codex: boss connect codex  (signs in inside BOSS through Codex'"'"'s own login)\n'
+      printf '  next      Codex: '"$(hint_command)"' connect codex  (signs in inside BOSS through Codex'"'"'s own login)\n'
     fi
     printf '\nModels\n'
     print_model_rows "$summary" || true
@@ -1412,7 +1442,7 @@ cmd_connect() {
       --connect-found) ASSUME=1; shift ;;
       --yes|-y) ASSUME=1; NO_QUESTIONS=1; shift ;;
       --accept-database-fallback)
-        die "--accept-database-fallback is not needed: a subscription signs in inside BOSS through its own login (boss connect codex|claude|grok); nothing is copied or stored from this machine." ;;
+        die "--accept-database-fallback is not needed: a subscription signs in inside BOSS through its own login ($(hint_command) connect codex|claude|grok); nothing is copied or stored from this machine." ;;
       --install-ollama) INSTALL_OLLAMA=1; shift ;;
       --local-model)
         LOCAL_MODEL="${2:-}"; LOCAL_MODEL_SET=1; shift 2 || die "--local-model needs a model name"
@@ -1476,7 +1506,7 @@ cmd_self_fix() {
       local key_file="$INSTALL_DIR/.boss/self-installer.key" key
       mkdir -p "$INSTALL_DIR/.boss" && chmod 700 "$INSTALL_DIR/.boss"
       key="$(compose exec -T -u boss api python -m boss_engine.identity.cli self-installer-key --quiet </dev/null)" ||
-        die "BOSS did not issue a key. Is the api service running (boss status)?"
+        die "BOSS did not issue a key. Is the api service running ($(hint_command) status)?"
       [[ "$key" == boss_sak_* ]] || die "BOSS did not issue a key."
       (umask 077 && printf '%s\n' "$key" > "$key_file")
       printf 'This host can now install the self-fixes you approve. The key is in %s.\n' "$key_file" ;;
@@ -1528,7 +1558,7 @@ cmd_metatron() {
   local py key project
   py="$(metatron_python)"
   key="$(host_key)"
-  [[ -n "$key" ]] || die "no key for the host tools. Is the api service running (boss status)? Then: boss identity host-key"
+  [[ -n "$key" ]] || die "no key for the host tools. Is the api service running ($(hint_command) status)? Then: $(hint_command) identity host-key"
   project="${BOSS_PROJECT_ID:-$(env_value BOSS_DEFAULT_PROJECT_ID)}"
   BOSS_API_URL="$(api_url)" BOSS_API_KEY="$key" BOSS_PROJECT_ID="${project:-boss-dogfood}" \
     exec "$py" "$INSTALL_DIR/scripts/metatron_tui.py" "$@"
@@ -1548,10 +1578,12 @@ cmd_identity() {
   need_install
   [[ $# -gt 0 ]] || die "identity needs a command: setup-link, claim-status, recover-owner, host-key, legacy, posture, audit, migrate (see boss help)"
   case "$1" in
+    # The console address the host tools print (console_base), for the installer's card.
+    console-url) shift; console_base; printf '\n' ;;
     host-key)
       shift
       [[ $# -eq 0 ]] || die "host-key takes no options"
-      issue_host_key >/dev/null || die "BOSS did not issue a key. Is the api service running (boss status)?"
+      issue_host_key >/dev/null || die "BOSS did not issue a key. Is the api service running ($(hint_command) status)?"
       printf 'A new key for the host tools is in %s as BOSS_HOST_API_KEY. Earlier ones stopped working.\n' "$ENV_FILE" ;;
     mcp-key|egress-key|seed-test-accounts)
       die "$1 prints a credential, which this command never does. Use make mcp-setup for MCP, or run it in the container (see docs/community/IDENTITY_ADMIN.md)." ;;

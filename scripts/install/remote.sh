@@ -354,7 +354,7 @@ cmd_install() {
   # do not suggest opening unencrypted public HTTP endpoints.
   printf "\n${B}Where it is${N}\n\n"
   say "Tunnel    ${D}$(again) tunnel${N}"
-  say "Console   http://127.0.0.1:${WEB_PORT} after connecting the tunnel"
+  say "Console   http://localhost:${WEB_PORT} after connecting the tunnel"
   say "API       http://127.0.0.1:${API_PORT} after connecting the tunnel"
   printf "\n${B}What next${N}\n\n"
   claim_next
@@ -622,7 +622,7 @@ cmd_smoke() {
     # SAY WHERE TO GO, not just what was compiled in. Reported as "console: <api url>" this
     # sent an operator to the API port, where `/` is a 404 and the install looks broken.
     say ""
-    say "  ${B}Open the console through the SSH tunnel:${N} http://127.0.0.1:${WEB_PORT}"
+    say "  ${B}Open the console through the SSH tunnel:${N} http://localhost:${WEB_PORT}"
     say "  ${D}it calls the API at: $baked${N}"
   fi
 
@@ -739,7 +739,7 @@ cmd_env() {
 cmd_tunnel() {
   head_ "Forwarding $HOST to this laptop"
   say "API      http://127.0.0.1:$API_PORT"
-  say "Console  http://127.0.0.1:$WEB_PORT"
+  say "Console  http://localhost:$WEB_PORT"
   say ""
   say "Leave this running. Ctrl-C closes the tunnel."
   say ""

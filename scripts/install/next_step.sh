@@ -11,7 +11,7 @@
 #
 #   --claim      `unclaimed`, `claimed …` (boss identity claim-status), or empty when unknown
 #                (an older image): unknown is treated as unclaimed, with "if nobody owns it yet".
-#   --setup-url  where Setup opens (http://127.0.0.1:3000/?area=setup)
+#   --setup-url  where Setup opens (http://localhost:3000/?area=setup)
 #   --boss       the boss command to name (default: boss)
 #   --origin     the console's https origin, when it has one: from the server's own network,
 #                opening it claims BOSS on the site (BOSSAPP-813)

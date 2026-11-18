@@ -39,6 +39,18 @@ def private_env(path: Path) -> list[str]:
     return path.read_text().splitlines()
 
 
+def show_over_ssh(env_file: Path) -> str:
+    """How to run `show` from another machine, for THIS install: its own command (boss.sh passes
+    BOSS_COMMAND) or its own directory. "cd ~/boss" named the first install on a machine with two
+    (stranger test r3)."""
+    own = os.environ.get("BOSS_COMMAND", "").strip()
+    if own:
+        return f"ssh -t user@your-server '{own} password'"
+    install_dir = env_file.resolve().parent
+    return (f"ssh -t user@your-server 'cd {install_dir} && "
+            "python3 scripts/install/console_password.py show'")
+
+
 def password_from(lines: list[str]) -> str:
     values = [line.split("=", 1)[1] for line in lines if line.startswith(KEY + "=")]
     if len(values) != 1 or len(values[0]) < 32:
@@ -77,8 +89,7 @@ def main() -> int:
         if not sys.stdout.isatty():
             raise SystemExit(
                 "Refusing to print a console password outside a terminal (it would land in a "
-                "pipe or a log). Over SSH, add -t: "
-                "ssh -t user@your-server 'cd ~/boss && python3 scripts/install/console_password.py show'")
+                "pipe or a log). Over SSH, add -t: " + show_over_ssh(args.env_file))
         print(password_from(lines))
     else:
         reset(args.env_file, lines)

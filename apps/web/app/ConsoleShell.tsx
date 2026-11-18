@@ -34,7 +34,7 @@ import { actorWords } from "../lib/actor-words";
 import { setConsoleLive } from "../lib/console-live";
 import { PAINTED_EVENT } from "../lib/area-painted";
 import { useAttention } from "../lib/agents-live";
-import { useOrgNeeds } from "../lib/project-experience";
+import { useApprovalCounts } from "../lib/project-experience";
 import { useTitleCount } from "../lib/tab-title";
 import { ConverseHost } from "./agents/converse-host";
 import { useLoadIdentities } from "../lib/use-agent-identities";
@@ -505,7 +505,9 @@ function ConsoleShellInner({
   const titleAttention = useAttention(scope.projectId ?? scope.project);
   // X-14 ONE NUMBER: what waits on you across every project (the Projects page's Need-you tile),
   // for the bell, the rail's Approvals badge and the tab title alike.
-  const orgNeeds = useOrgNeeds();
+  // One set with the Approvals page (stranger test r3): this project's live count + the other
+  // projects' own counts (lib/project-experience approvalCountsOf), never org total − here.
+  const orgNeeds = useApprovalCounts(scope.projectId ?? scope.project, titleAttention?.count).total;
   useTitleCount(orgNeeds ?? titleAttention?.count ?? 0);
   const switchOrg = () => {
     try {
