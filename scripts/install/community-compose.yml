@@ -343,9 +343,10 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
-        # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or a list (java,go). Every image
-        # built from python-runtime takes the same value, so that stage is built once.
-        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
+        # Build toolchains (docs/community/TOOLCHAINS.md): java,go unless .env says otherwise (none, or a
+        # list such as java,go,security). Every image built from python-runtime takes the same
+        # value, so that stage is built once.
+        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-java,go}
     image: ${BOSS_RECOVERY_API_IMAGE_ID:-boss-community-api:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}}
     pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
     command: ["python", "-m", "apps.api.serve", "--host", "0.0.0.0", "--port", "8000"]
@@ -743,9 +744,10 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
-        # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or a list (java,go). Every image
-        # built from python-runtime takes the same value, so that stage is built once.
-        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
+        # Build toolchains (docs/community/TOOLCHAINS.md): java,go unless .env says otherwise (none, or a
+        # list such as java,go,security). Every image built from python-runtime takes the same
+        # value, so that stage is built once.
+        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-java,go}
     image: ${BOSS_RECOVERY_API_IMAGE_ID:-boss-community-worker:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}}
     pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
     command: ["python", "-m", "apps.worker.boss_worker.main"]
@@ -1036,9 +1038,10 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
-        # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or a list (java,go). Every image
-        # built from python-runtime takes the same value, so that stage is built once.
-        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
+        # Build toolchains (docs/community/TOOLCHAINS.md): java,go unless .env says otherwise (none, or a
+        # list such as java,go,security). Every image built from python-runtime takes the same
+        # value, so that stage is built once.
+        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-java,go}
     image: ${BOSS_RECOVERY_API_IMAGE_ID:-boss-community-mcp-tools:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}}
     pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
     command: ["python", "-m", "tools.mcp_tools_mux"]
@@ -1085,7 +1088,7 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
-        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
+        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-java,go}
     image: ${BOSS_RECOVERY_API_IMAGE_ID:-boss-community-worker:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}}
     pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
     command: ["python", "-m", "boss_engine", "serve-mcp", "--http", "--host", "0.0.0.0", "--port", "8790"]
@@ -1123,9 +1126,10 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
-        # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or a list (java,go). Every image
-        # built from python-runtime takes the same value, so that stage is built once.
-        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
+        # Build toolchains (docs/community/TOOLCHAINS.md): java,go unless .env says otherwise (none, or a
+        # list such as java,go,security). Every image built from python-runtime takes the same
+        # value, so that stage is built once.
+        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-java,go}
     image: ${BOSS_RECOVERY_API_IMAGE_ID:-boss-community-egress:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}}
     pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
     command: ["python", "-m", "apps.egress.boss_egress"]
@@ -1254,7 +1258,7 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
-        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
+        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-java,go}
     image: boss-community-runner:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
     pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
     command: ["python", "-m", "apps.runner.boss_runner"]

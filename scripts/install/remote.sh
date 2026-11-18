@@ -243,7 +243,7 @@ report_capacity() {
   [[ "$slots" -gt $(( cores / 2 )) ]] && slots=$(( cores / 2 ))
   [[ "$slots" -lt 1 ]] && slots=1
   say "Builds at once: ${slots} (auto) — more are queued, not run into swap"
-  [[ "${disk:-0}" -lt 15 ]] && warn "under 15GB free — the images alone are ~13GB"
+  [[ "${disk:-0}" -lt 15 ]] && warn "under 15GB free — the images alone are ~14GB (with the default Java and Go)"
   # NO SWAP IS THE RISK, not the RAM figure on its own. The console build is the peak, and on a
   # box with nothing to page out to the kernel kills it rather than slowing down — which reads
   # as a mysterious installer failure rather than as "this machine is too small".
@@ -335,6 +335,9 @@ cmd_install() {
     backup_remote
   fi
   ship_source
+  # A reinstall over an existing .env: mark it now, so install.sh's rewrite carries it and the
+  # containers it starts already see it.
+  ensure_dedicated_mark
   local args=(--dir "$DIR" --api-port "$API_PORT" --web-port "$WEB_PORT" --postgres-port "$PG_PORT")
   # Community ports remain on the VM's loopback. A laptop connects through
   # the tunnel command, which makes 127.0.0.1 the correct browser API address.
@@ -344,8 +347,13 @@ cmd_install() {
   say "running the installer on the host — this builds images and takes a while"
   # -t so the installer's progress reaches this terminal as it happens rather than in one
   # silent block at the end.
-  ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" "cd '$DIR' && bash install.sh ${args[*]}" \
+  # A first install has no .env yet: the mark goes in the environment, so the containers
+  # install.sh starts see it (compose takes the shell's value), and into .env right after.
+  # With an .env, its own line (written above, or an explicit 0) is what counts.
+  ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" \
+    "cd '$DIR' && if [ -f .env ]; then bash install.sh ${args[*]}; else BOSS_DEDICATED_HOST=1 bash install.sh ${args[*]}; fi" \
     || die "the installer failed on $HOST; previous source remains at $DIR.prev and private backup was printed above"
+  ensure_dedicated_mark
   clear_prev || warn "previous source remains at $DIR.prev; remove it after verifying this install"
   prune_remote
   ok "installer finished"
@@ -394,6 +402,48 @@ prune_remote() {
   say "disk: $(printf '%s\n' "$out" | grep -E '^disk (before|after)' | tr '\n' ' ')"
 }
 
+# THE DEDICATED-HOST MARK. The same reason as prune_remote, for the prunes that run between
+# deploys: the API's disk reaper (resource_reaper.prune_disk, a system thread of the api
+# process; compose passes the mark to the api service), the steward and `boss prune`
+# only touch the Docker build cache when .env says BOSS_DEDICATED_HOST=1, and nothing wrote it,
+# so boss-1 sat at 80% disk with 46 GB of cache between updates. A host this script installs runs
+# only BOSS, so install and update write the mark when the line is absent. A line that is
+# already there, BOSS_DEDICATED_HOST=0 included (an operator who shares the machine), is never
+# changed. A laptop install never runs this and stays unset. install.sh carries unknown .env
+# lines across its rewrite (restore_preserved_env.sh), so the mark survives every rerun.
+ensure_dedicated_mark() {
+  local out
+  out="$(rsh "f='$DIR/.env'
+       [ -f \"\$f\" ] || exit 0
+       grep -q '^BOSS_DEDICATED_HOST=' \"\$f\" && exit 0
+       if [ -s \"\$f\" ] && [ -n \"\$(tail -c 1 \"\$f\")\" ]; then printf '\n' >> \"\$f\"; fi
+       printf 'BOSS_DEDICATED_HOST=1\n' >> \"\$f\" && echo wrote")" \
+    || { warn "could not write BOSS_DEDICATED_HOST=1 to $DIR/.env; build-cache pruning stays off until it is set"; return 0; }
+  [[ "$out" == *wrote* ]] && say "marked $HOST as a dedicated BOSS host (BOSS_DEDICATED_HOST=1 in .env)"
+  return 0
+}
+
+# ONE TOOLCHAIN SET ACROSS THE IMAGES. After an update, every running service built with
+# BOSS_TOOLCHAINS must carry the api's /opt/toolchains/manifest.json (written with sorted keys, so
+# equal sets are equal text). A difference is said in words with the fix, never left for the first
+# Go or Maven build to find. Best effort: a service that is not running is skipped.
+check_toolchain_drift() {
+  local compose="$1" script out
+  script="cd '$DIR' || exit 0
+m() { $compose exec -T \"\$1\" cat /opt/toolchains/manifest.json </dev/null 2>/dev/null | tr -d ' \n'; }
+ref=\$(m api); [ -n \"\$ref\" ] || exit 0
+for s in worker egress runner; do
+  v=\$(m \$s) || continue
+  [ -z \"\$v\" ] || [ \"\$v\" = \"\$ref\" ] || echo \"\$s has \$v, api has \$ref\"
+done"
+  out="$(rshq "$script" || true)"
+  [[ -n "$out" ]] || return 0
+  warn "these services run different build toolchains than the api:"
+  printf '%s\n' "$out" | sed 's/^/      /'
+  say "  rebuild them together: ${D}$(again) update --all-services${N}"
+  return 0
+}
+
 # UPDATES RESTARTED BUILDS (stability spec C6): every recreate killed the API mid-turn and the
 # build redid clone and install, four times in an hour on boss-1. The API now drains on SIGTERM
 # (builds resume after), and when the operator chose "Hold updates while builds run" on the
@@ -439,6 +489,9 @@ cmd_update() {
 
   ship_source
 
+  # Installs made before the mark existed get it here, before the build and recreate below.
+  ensure_dedicated_mark
+
   # Archive updates do not run install.sh. Prepare a private copy of .env with
   # the dedicated worker key, then build against that copy. A failed build
   # leaves the live credentials unchanged; only a successful build promotes it.
@@ -446,8 +499,16 @@ cmd_update() {
   rsh "cd '$DIR' && cp -p .env '$next_env' && chmod 600 '$next_env' && python3 scripts/install/reconcile_api_credentials.py --ensure-worker '$next_env'" \
     || { rsh "rm -f '$DIR/$next_env'"; die "could not bind separate owner and worker keys on $HOST; previous source remains at $DIR.prev"; }
 
-  local services="api worker"
-  [[ "$WITH_CONSOLE" -eq 1 ]] && services="api worker web"
+  # api and worker, plus every other service whose image carries the toolchains (BOSS_TOOLCHAINS):
+  # egress opens the Maven, Gradle and Go proxy hosts only when its OWN image has the toolchain
+  # (apps/egress/boss_egress/connect.py). An update that rebuilt api and worker alone, after the
+  # default became java,go, left egress on the old image: Setup said Go was on and every Go build
+  # failed at its first download. The runner builds too, so it comes along when it is running.
+  local services="api worker egress"
+  local runner_running=0
+  rshq "$REMOTE_DOCKER ps --filter name=boss-community-runner- -q | grep -q ." \
+    && runner_running=1 && services="$services runner"
+  [[ "$WITH_CONSOLE" -eq 1 ]] && services="$services web"
   [[ "$ALL_SERVICES"  -eq 1 ]] && services=""
   if [[ -n "$services" ]]; then
     say "rebuilding: $services  ${D}(console left alone; --with-console to include it)${N}"
@@ -469,6 +530,7 @@ cmd_update() {
     && profiles="$profiles --profile web"
   rshq "$REMOTE_DOCKER ps --filter name=boss-community-mailpit- -q | grep -q ." \
     && profiles="$profiles --profile mail"
+  [[ "$runner_running" -eq 1 ]] && profiles="$profiles --profile runner"
   local update_started
   update_started=$(rshq "date -u +%s")
   local compose_build="$REMOTE_DOCKER compose -f scripts/install/community-compose.yml --env-file $next_env $profiles"
@@ -499,6 +561,7 @@ cmd_update() {
       [ \"\$t\" -lt '$update_started' ] && echo \"\$c\"; done | grep -v infisical || true")
     [[ -z "$stale" ]] || die "these services were not rebuilt and still run the old build: $stale"
   fi
+  check_toolchain_drift "$compose"
   clear_prev || warn "previous source remains at $DIR.prev; remove it after verifying this update"
 
   prune_remote

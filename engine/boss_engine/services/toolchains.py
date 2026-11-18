@@ -1,10 +1,11 @@
 """PER-STACK TOOLCHAINS IN THE BUILD SANDBOX (docs/community/TOOLCHAINS.md).
 
-The API/worker image always carries Python and Node. Anything else is opt-in per install:
-`BOSS_TOOLCHAINS=java` (or several, `java,go`) in .env selects the `toolchains-java` (and
-`toolchains-go`) stages of Dockerfile.community, which put a pinned, checksum-verified Temurin
-JDK, Maven and Gradle (a Go release) under /opt/toolchains and write /opt/toolchains/manifest.json.
-An install without any carries an empty manifest and nothing else.
+The API/worker image always carries Python and Node. Anything else is chosen per install:
+`BOSS_TOOLCHAINS` in .env (default `java,go` when the line is absent; `none`, `java`, `go`,
+`security`, comma-separated) selects the `toolchains-java` (and `toolchains-go`) stages of
+Dockerfile.community, which put a pinned, checksum-verified Temurin JDK, Maven and Gradle (a Go
+release) under /opt/toolchains and write /opt/toolchains/manifest.json. An install with
+`BOSS_TOOLCHAINS=none` carries an empty manifest and nothing else.
 
 This module is the one place that knows:
 

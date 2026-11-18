@@ -81,11 +81,13 @@ and issue it during install if missing (`bash scripts/install/boss.sh --dir "$IN
 
 # Toolchains: installer follow-ups
 
-Build toolchains (docs/community/TOOLCHAINS.md) ship without touching `install.sh`. Java is
-turned on after an install with `boss toolchains enable java`, or by putting
-`BOSS_TOOLCHAINS=java` in `.env` before `boss update`. Compose passes the value to the image
-build as `${BOSS_TOOLCHAINS:-none}`, and `restore_preserved_env.sh` keeps it when the installer
-rewrites `.env`.
+Build toolchains (docs/community/TOOLCHAINS.md) ship without touching `install.sh`. Java and Go
+are on by default: compose passes the value to the image build as `${BOSS_TOOLCHAINS:-java,go}`
+(the Dockerfile's ARG has the same default), so an `.env` with no `BOSS_TOOLCHAINS` line builds
+both. They are turned off with `boss toolchains disable java|go` (the last one off writes
+`BOSS_TOOLCHAINS=none`), and `restore_preserved_env.sh` keeps the line when the installer
+rewrites `.env`. The suggestion below predates the default; it now matters for a first install
+that wants `none` or `security` from the start.
 
 ## (h) `--toolchains LIST` on the installer
 

@@ -115,14 +115,17 @@ Commands:
                         host-key              issue a new key for these host tools (kept in .env)
                         legacy status         the shared credentials still in use, with end dates
                         posture | audit verify | migrate
-  toolchains [list]   Build toolchains: which this install has (Python and Node always)
+  toolchains [list]   Build toolchains: which this install has (Python and Node always;
+                      Java and Go on by default)
   toolchains enable java|go|security | disable java|go|security
-                      Turn an opt-in toolchain on or off, keeping the others: saves
+                      Turn a toolchain on or off, keeping the others: saves
                       BOSS_TOOLCHAINS in .env (comma-separated, e.g. java,go), rebuilds the
-                      api and worker images and restarts them. Java adds a pinned Temurin
-                      JDK 21, Maven and Gradle (about 0.5 GB); Go adds Go 1.27 (about
-                      0.25 GB); security adds Semgrep, OSV-Scanner and OWASP ZAP on top of
-                      Java. See docs/community/TOOLCHAINS.md
+                      api, worker and egress images and restarts them. With no BOSS_TOOLCHAINS line
+                      the install has java,go. Java is a pinned Temurin JDK 21, Maven and
+                      Gradle (about 0.5 GB); Go is Go 1.27 (about 0.25 GB); security
+                      (opt-in) adds Semgrep, OSV-Scanner and OWASP ZAP on top of Java.
+                      Turning off the last one saves BOSS_TOOLCHAINS=none, and that choice
+                      is kept. See docs/community/TOOLCHAINS.md
   clone PROJECT [DIR] [--branch B] [--open]
                       A working copy of a local project's code (BOSS's git remote,
                       http://localhost:3000/git/PROJECT.git), in DIR (default ~/code/PROJECT).
@@ -589,6 +592,10 @@ cmd_update() {
 # ---- toolchains ------------------------------------------------------------------------------
 
 KNOWN_TOOLCHAINS=(java go security)
+# What an install has when .env has no BOSS_TOOLCHAINS line (or an empty one): the same default as
+# Dockerfile.community's ARG and community-compose.yml's ${BOSS_TOOLCHAINS:-java,go}. An explicit
+# value, "none" included, always wins, so an install that turned them off stays off.
+DEFAULT_TOOLCHAINS="java,go"
 
 # BOSS_TOOLCHAINS is "none" or a comma-separated list of KNOWN_TOOLCHAINS ("java,go"), the same
 # reading as Dockerfile.community's selectors. toolchains_with LIST NAME / toolchains_without
@@ -606,18 +613,58 @@ toolchains_without() {
   toolchains_normalise "${list//,$2,/,}"
 }
 
+# EVERY SERVICE WHOSE IMAGE MUST CARRY THE SAME TOOLCHAINS. api and worker build with them;
+# egress opens Maven Central, the Gradle portal and the Go proxy only when ITS OWN image's
+# manifest lists the toolchain (apps/egress/boss_egress/connect.py), so an api with Go behind an
+# egress without it fails every Go build at its first download (and the reverse leaves the Go
+# proxy open after Go is gone). The runner builds too, when it runs. A toolchain change rebuilds
+# and recreates all of them, never api and worker alone.
+toolchain_services() {
+  local s="api worker egress"
+  compose ps --services --status running </dev/null 2>/dev/null | grep -qx runner && s="$s runner"
+  printf '%s\n' "$s"
+}
+
+# The running services whose toolchain manifest differs from the api's: one "SERVICE: MANIFEST"
+# line each, nothing when they agree (or the api is not running). The manifests are written with
+# sorted keys (Dockerfile.community), so equal toolchains are equal text.
+toolchain_drift() {
+  local ref svc m
+  ref="$(compose exec -T api cat /opt/toolchains/manifest.json </dev/null 2>/dev/null | tr -d ' \n')" \
+    || return 0
+  [[ -n "$ref" ]] || return 0
+  for svc in $(toolchain_services); do
+    [[ "$svc" == api ]] && continue
+    m="$(compose exec -T "$svc" cat /opt/toolchains/manifest.json </dev/null 2>/dev/null | tr -d ' \n')" \
+      || continue
+    [[ -z "$m" || "$m" == "$ref" ]] || printf '%s: %s\n' "$svc" "$m"
+  done
+}
+
 cmd_toolchains() {
   need_install
   local action="${1:-list}" name="${2:-}" current wanted
-  current="$(env_value BOSS_TOOLCHAINS)"; current="$(toolchains_normalise "${current:-none}")"
+  current="$(env_value BOSS_TOOLCHAINS)"; current="$(toolchains_normalise "${current:-$DEFAULT_TOOLCHAINS}")"
   case "$action" in
     list|status)
-      printf 'Configured in .env: BOSS_TOOLCHAINS=%s\n' "$current"
+      if [[ -n "$(env_value BOSS_TOOLCHAINS)" ]]; then
+        printf 'Configured in .env: BOSS_TOOLCHAINS=%s\n' "$current"
+      else
+        printf 'Configured:         BOSS_TOOLCHAINS=%s (the default; .env has no line)\n' "$current"
+      fi
       printf 'Always installed:   python, node\n'
       printf 'Known toolchains:   %s\n' "${KNOWN_TOOLCHAINS[*]}"
       printf 'In the running image: '
       compose exec -T api cat /opt/toolchains/manifest.json </dev/null 2>/dev/null \
         || printf '(api not running)\n'
+      local drift
+      drift="$(toolchain_drift)"
+      if [[ -n "$drift" ]]; then
+        printf '  ! These services run an image with different toolchains than the api:\n'
+        printf '%s\n' "$drift" | sed 's/^/      /'
+        printf '    Rebuild them together: '"$(hint_command)"' update\n'
+        return 1
+      fi
       return 0 ;;
     enable|disable) ;;
     *) die "unknown toolchains action: $action (list, enable NAME, disable NAME)" ;;
@@ -643,9 +690,19 @@ cmd_toolchains() {
     return 0
   fi
   set_env_value BOSS_TOOLCHAINS "$wanted"
-  printf 'Saved BOSS_TOOLCHAINS=%s in .env. Rebuilding the api and worker images...\n' "$wanted"
-  if ! compose build api worker </dev/null; then
+  local services extra
+  services="$(toolchain_services)"
+  printf 'Saved BOSS_TOOLCHAINS=%s in .env. Rebuilding: %s...\n' "$wanted" "$services"
+  # shellcheck disable=SC2086 # a list of service names
+  if ! compose build $services </dev/null; then
     printf '  ✗ The image build failed. .env says BOSS_TOOLCHAINS=%s; fix the cause and run: '"$(hint_command)"' update\n' "$wanted"
+    return 1
+  fi
+  # apply_env recreates api and worker; the other toolchain services are recreated here.
+  extra="${services#api worker}"
+  # shellcheck disable=SC2086
+  if [[ -n "${extra// /}" ]] && ! compose up -d --no-deps --no-build --force-recreate $extra </dev/null; then
+    printf '  ✗ %s were not restarted, so they still run the old toolchains; apply it with: '"$(hint_command)"' update\n' "${extra# }"
     return 1
   fi
   apply_env "Toolchains ($wanted)"

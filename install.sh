@@ -666,7 +666,7 @@ if [[ "$_docker_root" == /* && -d "$_docker_root" && -n "$_docker_os" && "$_dock
 else
   ui_warn "Docker image-store free space is unknown here. Check the selected Docker host or Docker Desktop disk settings; install filesystem space is not Docker-store headroom."
 fi
-ui_info "About 100 GB of working capacity is recommended for images, cache and agent work; actual needs vary."
+ui_info "About 100 GB of working capacity is recommended for images, cache and agent work (the images include Java and Go by default); actual needs vary."
 # ---- end storage advice ---------------------------------------------------
 
 # A noninteractive reinstall or upgrade must retain the service profile chosen on the
