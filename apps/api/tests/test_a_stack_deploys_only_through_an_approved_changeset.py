@@ -123,7 +123,9 @@ def stack(client, engine, monkeypatch):
     target = client.post("/v1/deployments/stack/targets", json={
         "project_id": HOME, "host_id": host_id, "repository": "acme/shop",
         "app_name": f"shop-{uuid4().hex[:6]}", "public_url": "https://shop.example.test",
-        "actor": "ceo"})
+        # STAGING: a production stack target needs a build that passes the production bar
+        # (quality_bar.stack_plan_decision); these tests are about the governed plan itself.
+        "environment": "staging", "actor": "ceo"})
     assert target.status_code == 201, target.text
     return {"host": host, "journal": journal, "target": target.json(), "github": github}
 
@@ -325,7 +327,7 @@ def test_a_second_target_on_the_host_gets_its_own_dir_never_the_first_ones(clien
     first = _plan(client, stack)
     staging = client.post("/v1/deployments/stack/targets", json={
         "project_id": HOME, "host_id": stack["target"]["host_id"], "repository": "acme/shop",
-        "app_name": stack["target"]["app_name"], "environment": "staging", "actor": "ceo"})
+        "app_name": stack["target"]["app_name"], "environment": "development", "actor": "ceo"})
     assert staging.status_code == 201, staging.text
     response = client.post("/v1/deployments/stack/plan", json={
         "project_id": HOME, "target_id": staging.json()["id"], "ref": "main", "actor": "ceo"})

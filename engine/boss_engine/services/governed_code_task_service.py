@@ -11540,6 +11540,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # by — in its OWN transaction, committed first, never nested inside the one the
         # terminal write runs in.
         _close_phase()
+        # THE COMMIT THIS RUN JUDGED/OPENED, recorded on every finished build (a re-check too, which
+        # judges the branch head and pushes nothing): a production release must ship it
+        # (quality_bar.build_commits / _commit_check).
+        _final_head = (proposal.get("head_sha") if isinstance(proposal, dict) else None)
+        if not _final_head:
+            try:
+                _final_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(root), timeout=10,
+                                             capture_output=True, text=True).stdout.strip() or None
+            except Exception:  # noqa: BLE001 — unrecorded: the merge card's head is read instead
+                _final_head = None
+        if _final_head and re.fullmatch(r"[0-9a-fA-F]{7,40}", str(_final_head)):
+            with _transaction(engine) as c:
+                c.execute(sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,"
+                              "'{}'::jsonb) || jsonb_build_object('final_head_sha', CAST(:h AS text)) "
+                              "WHERE id = :id"), {"h": str(_final_head).lower(), "id": run_id})
         with _transaction(engine) as c:
             _ok = _fenced_status(
                 "completed",

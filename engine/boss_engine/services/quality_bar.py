@@ -634,6 +634,68 @@ def _workflow_run_of(fctx: Any) -> Optional[str]:
     return str(fctx.get("workflow_run_id") or origin.get("workflow_run_id") or "") or None
 
 
+def _run_needs(connection: Any, run_id: str) -> tuple[list[str], Optional[str]]:
+    """(what this run's own recorded gates still need for production, why it could not be judged).
+    Fail closed: no record, or one that cannot be read, is `why`, never a pass."""
+    import json
+
+    from sqlalchemy import text
+
+    try:
+        row = connection.execute(text(
+            "SELECT status, gates_passed, gates_failed, evidence FROM quality_gates "
+            "WHERE code_task_run_id = :r ORDER BY created_at DESC LIMIT 1"),
+            {"r": run_id}).mappings().first()
+        if row is None:
+            return [], "it has no quality-gate record"
+
+        def j(v: Any, default: Any) -> Any:
+            return json.loads(v or default) if isinstance(v, str) else v
+
+        return production_needs(j(row["evidence"], "{}") or {}, j(row["gates_failed"], "[]") or [],
+                                j(row["gates_passed"], "[]") or []), None
+    except Exception:  # noqa: BLE001 — unreadable evidence is not evidence of a pass
+        logger.warning("quality bar: production rule could not be evaluated", exc_info=True)
+        return [], "its quality-gate record could not be read"
+
+
+def production_rechecks(connection: Any, run_id: str) -> list[str]:
+    """The completed re-checks AT THE PRODUCTION BAR in this build's lineage, newest first (a
+    re-check records `recheck_bar: production` on its run: change_recheck)."""
+    import json
+
+    from sqlalchemy import text
+
+    row = connection.execute(text("SELECT finalize_ctx FROM code_task_runs WHERE id = :i"),
+                             {"i": run_id}).scalar()
+    fctx = json.loads(row) if isinstance(row, str) else (row or {})
+    root = str((fctx or {}).get("root_run_id") or run_id)
+    return [str(r[0]) for r in connection.execute(text(
+        "SELECT id FROM code_task_runs WHERE status = 'completed' "
+        "AND finalize_ctx->>'recheck_bar' = 'production' "
+        "AND (finalize_ctx->>'recheck_of' = :r OR finalize_ctx->>'root_run_id' = :root) "
+        "ORDER BY created_at DESC"), {"r": run_id, "root": root})]
+
+
+def judging_run(connection: Any, run_id: str) -> tuple[Optional[str], list[str], Optional[str]]:
+    """(the run whose record clears `run_id` for production, what is still needed, why it could
+    not be judged). A build clears on its own record; otherwise the newest re-check at the
+    production bar in its lineage that needs nothing clears it (so the Deploy step and deploy_app,
+    which name the ORIGINAL build, work after a re-check). The release must then ship a commit
+    the judging run judged (`_commit_check`)."""
+    needs, why = _run_needs(connection, run_id)
+    if why is None and not needs:
+        return run_id, [], None
+    try:
+        for rc in production_rechecks(connection, run_id):
+            n, w = _run_needs(connection, rc)
+            if w is None and not n:
+                return rc, [], None
+    except Exception:  # noqa: BLE001
+        logger.warning("quality bar: re-checks not read", exc_info=True)
+    return None, needs, why
+
+
 def production_refusal(connection: Any, *, code_task_run_id: Optional[str] = None,
                        workflow_run_id: Optional[str] = None,
                        deployment_run_id: Optional[str] = None) -> Optional[str]:
@@ -675,22 +737,9 @@ def production_refusal(connection: Any, *, code_task_run_id: Optional[str] = Non
         fctx = run["finalize_ctx"]
         fctx = json.loads(fctx) if isinstance(fctx, str) else (fctx or {})
         workflow_run_id = workflow_run_id or _workflow_run_of(fctx)
-        row = connection.execute(text(
-            "SELECT status, gates_passed, gates_failed, evidence FROM quality_gates "
-            "WHERE code_task_run_id = :r ORDER BY created_at DESC LIMIT 1"),
-            {"r": code_task_run_id}).mappings().first()
-        if row is None:
-            return NOT_JUDGED.format(why="it has no quality-gate record")
-        evidence = row["evidence"]
-        if isinstance(evidence, str):
-            evidence = json.loads(evidence or "{}")
-        failed = row["gates_failed"]
-        if isinstance(failed, str):
-            failed = json.loads(failed or "[]")
-        passed = row["gates_passed"]
-        if isinstance(passed, str):
-            passed = json.loads(passed or "[]")
-        needs = production_needs(evidence, failed or [], passed or [])
+        judging, needs, why = judging_run(connection, code_task_run_id)
+        if why:
+            return NOT_JUDGED.format(why=why)
     except Exception:  # noqa: BLE001 — unreadable evidence is not evidence of a pass
         logger.warning("quality bar: production rule could not be evaluated", exc_info=True)
         return NOT_JUDGED.format(why="its quality-gate record could not be read")
@@ -788,13 +837,15 @@ def build_commits(connection: Any, run_id: str) -> list[str]:
             if x and _HEX.match(str(x).strip().lower())]
 
 
-def _commit_check(connection: Any, run_id: str, commit_ref: Optional[str]
-                  ) -> tuple[Optional[str], Optional[str]]:
+def _commit_check(connection: Any, run_id: str, commit_ref: Optional[str],
+                  also_judged: Iterable[str] = ()) -> tuple[Optional[str], Optional[str]]:
     """(refusal, the commit to ship) for a release of build `run_id` at `commit_ref`. A release
     ships the commit its build judged: a given commit must be one of the build's; a release with
     no commit, or a named ref (a branch such as `main`), takes the build's own commit. A build that
     recorded no commit cannot be verified and is refused."""
-    known = build_commits(connection, run_id)
+    judging = judging_run(connection, run_id)[0] or run_id
+    known = build_commits(connection, judging) + [
+        str(x).strip().lower() for x in also_judged or () if _HEX.match(str(x).strip().lower())]
     given = str(commit_ref or "").strip().lower()
     if not known:
         return (NOT_JUDGED.format(why="the build recorded no commit, so the release cannot be "
@@ -809,7 +860,8 @@ def _commit_check(connection: Any, run_id: str, commit_ref: Optional[str]
 def plan_decision(connection: Any, *, target: Mapping[str, Any],
                   release_packet: Optional[Mapping[str, Any]],
                   commit_ref: Optional[str] = None,
-                  reships: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
+                  reships: Optional[str] = None,
+                  also_judged: Iterable[str] = ()) -> tuple[Optional[str], Optional[str]]:
     """THE ONE PLACE every production deployment passes (ResourcePlaneService.plan_deployment_run):
     (refusal, commit to ship) for a release to a production target, whichever door it came
     through (a deploy, a promotion, a manual deploy, the API, a skill).
@@ -853,7 +905,7 @@ def plan_decision(connection: Any, *, target: Mapping[str, Any],
     refused = production_refusal(connection, code_task_run_id=run_id)
     if refused:
         return refused, None
-    return _commit_check(connection, run_id, commit_ref)
+    return _commit_check(connection, run_id, commit_ref, also_judged)
 
 
 def plan_refusal(connection: Any, *, target: Mapping[str, Any],
@@ -863,3 +915,42 @@ def plan_refusal(connection: Any, *, target: Mapping[str, Any],
     """The refusal half of `plan_decision`."""
     return plan_decision(connection, target=target, release_packet=release_packet,
                          commit_ref=commit_ref, reships=reships)[0]
+
+
+def _stack_rollback_ok(connection: Any, target_id: str, rollback_of: Optional[str],
+                       ref: Optional[str]) -> bool:
+    """TRUSTED (rollback_stack_deploy): a stack rollback is exempt only when it ships the previous
+    healthy commit of THIS target, earlier than the deployment being rolled back."""
+    if not (rollback_of and ref):
+        return False
+    from sqlalchemy import text
+
+    row = connection.execute(text(
+        "SELECT target_id, created_at FROM stack_deployments WHERE id = :i"),
+        {"i": rollback_of}).mappings().first()
+    if row is None or str(row["target_id"]) != str(target_id):
+        return False
+    given = str(ref).strip().lower()
+    for (sha,) in connection.execute(text(
+            "SELECT commit_sha FROM stack_deployments WHERE target_id = :t AND status = 'healthy' "
+            "AND apply_started_at IS NOT NULL AND created_at < :c"),
+            {"t": target_id, "c": row["created_at"]}):
+        sha = str(sha or "").strip().lower()
+        if sha and (sha.startswith(given) or given.startswith(sha)):
+            return True
+    return False
+
+
+def stack_plan_decision(connection: Any, *, target: Mapping[str, Any], run_id: Optional[str],
+                        ref: Optional[str], rollback_of: Optional[str] = None,
+                        also_judged: Iterable[str] = ()) -> tuple[Optional[str], Optional[str]]:
+    """THE SAME CHOKEPOINT for a STACK plan (plan_stack_deploy): (refusal, commit to ship). A
+    production stack release must name a build that passes the production bar and ship the commit
+    it judged; the only exemption is a rollback to the target's previous healthy commit."""
+    if not is_production((target or {}).get("environment")):
+        return None, None
+    if _stack_rollback_ok(connection, (target or {}).get("id"), rollback_of, ref):
+        return None, None
+    return plan_decision(connection, target=target,
+                         release_packet={"code_task_run_id": run_id} if run_id else {},
+                         commit_ref=ref, also_judged=also_judged)

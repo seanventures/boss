@@ -1115,6 +1115,8 @@ class StackDeployPlanBody(OpenProjectBody):
     target_id: SkipValidation[str | None] = None
     repository: SkipValidation[str | None] = None
     ref: SkipValidation[str | None] = None
+    #: The build this release is of: a production target needs one that passes the production bar.
+    run_id: SkipValidation[str | None] = None
 
 
 class StackDeployRollbackBody(OpenRequestBody):

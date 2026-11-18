@@ -85,7 +85,7 @@ def is_recheck(fctx: Optional[Mapping[str, Any]]) -> bool:
     return bool((fctx or {}).get(KEY))
 
 
-def refusal(run: Optional[Mapping[str, Any]]) -> Optional[str]:
+def refusal(run: Optional[Mapping[str, Any]], *, quality_bar: Optional[str] = None) -> Optional[str]:
     """Why this run cannot be re-checked, or None: it must have finished with its pull request
     open (a running build is still checking; a build with no PR has no change to re-check)."""
     if not run:
@@ -96,6 +96,11 @@ def refusal(run: Optional[Mapping[str, Any]]) -> Optional[str]:
         return "this build has no pull request: there is no change to re-check"
     merge = (run.get("finalize_ctx") or {}).get("merge")
     if isinstance(merge, Mapping) and str(merge.get("sha") or "").strip():
+        # A MERGED change can still be re-checked AT THE PRODUCTION BAR: production releases come
+        # after the merge, and the re-check only runs checks on the commit as it stands and writes
+        # no code (it holds every push). Only code-writing follow-ups are refused for a merged one.
+        if quality_bar and quality_bar == _bar_asked(quality_bar):
+            return None
         return "this change is already merged"
     return None
 
@@ -161,7 +166,7 @@ def request(engine: Any, settings: Any, jobs: Any, run_id: str, *, project_id: s
         run = load_code_task_run(c, run_id)
         if not run or run.get("project_id") != project_id:
             raise RecheckRefused("no such build in this project")
-        why = refusal(run)
+        why = refusal(run, quality_bar=_bar_asked(quality_bar))
         if why:
             raise RecheckRefused(why)
         cost = estimate(c, run)

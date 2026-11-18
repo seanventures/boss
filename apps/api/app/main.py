@@ -10821,7 +10821,8 @@ def plan_stack_deployment_endpoint(payload: open_bodies.StackDeployPlanBody):
     try:
         deployment = plan_stack_deploy(
             engine, settings, project_id=project_id, target_id=target_id,
-            repository=(payload.get("repository") or None), ref=ref, actor=actor)
+            repository=(payload.get("repository") or None), ref=ref, actor=actor,
+            run_id=(str(payload.get("run_id") or "").strip() or None))
     except StackDeployError as exc:
         raise _stack_error(exc)
     return {"deployment": deployment}

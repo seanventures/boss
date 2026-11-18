@@ -863,3 +863,93 @@ def test_the_runner_records_the_launched_build_on_its_step_run_before_the_build_
         assert step["output"]["launched_code_task_run_id"] == "crun_qblaunch"
         assert qb.launched_by(c, project, run["id"], "crun_qblaunch") is True
         assert qb.launched_by(c, project, run["id"], "crun_forged") is False
+
+
+# ── round 4: one chokepoint for every production plan (a guard against future doors) ─────────
+
+def test_every_function_that_creates_a_production_plan_calls_the_chokepoint():
+    """Any function that INSERTs a deployment_runs / stack_deployments row is either the
+    chokepoint's caller (it calls quality_bar.plan_decision / stack_plan_decision) or is listed
+    here with why it creates no production release plan. A NEW door fails this test until it
+    calls the chokepoint or is reviewed into the list."""
+    import ast
+    import glob
+    import re
+
+    root = os.path.join(os.path.dirname(__file__), "..", "..")
+    exempt = {
+        "plan_removal": "retires an app (its own governed removal), not a release",
+        "plan_config_deployment": "config-only (config_dir) targets; config_deploy.promote applies "
+                                  "the production bar to a promotion",
+        "plan_host_deployment": "reached only from plan_deployment_run (asserted below)",
+        "_record_blocked_deployment_run": "records a refusal; nothing is released",
+    }
+    found: dict[str, bool] = {}
+    callers_of_host: set[str] = set()
+    for path in glob.glob(os.path.join(root, "engine", "boss_engine", "**", "*.py"), recursive=True) \
+            + glob.glob(os.path.join(root, "apps", "api", "app", "**", "*.py"), recursive=True):
+        text_ = open(path, encoding="utf-8").read()
+        try:
+            tree = ast.parse(text_)
+        except SyntaxError:
+            continue
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            src = ast.get_source_segment(text_, fn) or ""
+            if re.search(r"INSERT\s+INTO\s+(stack_deployments|deployment_runs)\b", src, re.I):
+                found[fn.name] = bool(re.search(r"\b(stack_)?plan_decision\(|stack_plan_decision\(",
+                                                src))
+            if fn.name != "plan_host_deployment" and re.search(r"\bplan_host_deployment\(", src):
+                callers_of_host.add(fn.name)
+    assert {"plan_stack_deploy", "plan_deployment_run"} <= {k for k, v in found.items() if v}
+    unguarded = sorted(k for k, v in found.items() if not v and k not in exempt)
+    assert unguarded == [], (
+        f"{unguarded} create a deployment plan without the production chokepoint "
+        "(quality_bar.plan_decision / stack_plan_decision); call it, or list the function with why")
+    assert callers_of_host <= {"plan_deployment_run"}, callers_of_host
+
+
+# ── round 4: a MERGED build is re-checked at the production bar, and that clears the build ───
+
+@pytestmark_db
+def test_a_merged_tier_zero_build_is_cleared_for_production_by_a_production_recheck(pipeline):
+    from boss_engine.services import change_recheck
+
+    run_id, repo = pipeline.build(tag="qb-merged")
+    _set_spec(pipeline, run_id, risk_tier=0)
+    assert pipeline.run(run_id, repo) is None
+    assert pipeline.result(run_id)["run"]["status"] == "completed"
+    with pipeline.engine.begin() as c:
+        head = c.execute(text("SELECT finalize_ctx->>'final_head_sha' FROM code_task_runs "
+                              "WHERE id = :r"), {"r": run_id}).scalar()
+        assert head and len(head) >= 7, "every finished build records the commit it opened"
+        c.execute(text("UPDATE code_task_runs SET finalize_ctx = finalize_ctx || CAST(:m AS jsonb) "
+                       "WHERE id = :r"),
+                  {"m": json.dumps({"merge": {"sha": "d" * 40, "source": "boss"}}), "r": run_id})
+        assert "Re-check at the production bar" in qb.production_refusal(c, code_task_run_id=run_id)
+    # the normal re-check still refuses a merged change; the production re-check does not
+    with pytest.raises(change_recheck.RecheckRefused, match="already merged"):
+        change_recheck.request(pipeline.engine, pipeline.settings(repo), pipeline.jobs(repo),
+                               run_id, project_id=pipeline.project, actor="operator",
+                               by_person=True)
+    pipeline._engine_env("")                                   # noqa: SLF001
+    asked = change_recheck.request(
+        pipeline.engine, pipeline.settings(repo), pipeline.jobs(repo), run_id,
+        project_id=pipeline.project, actor="operator", by_person=True, quality_bar="production")
+    rid = asked["run_id"]
+    assert pipeline.run(rid, repo) is None
+    assert pipeline.result(rid)["run"]["status"] == "completed"
+    with pipeline.engine.begin() as c:
+        recheck_head = c.execute(text("SELECT finalize_ctx->>'final_head_sha' FROM code_task_runs "
+                                      "WHERE id = :r"), {"r": rid}).scalar()
+        assert recheck_head, "the re-check records the commit it judged"
+        # the ORIGINAL build (what the Deploy step and deploy_app name) is now cleared
+        assert qb.production_refusal(c, code_task_run_id=run_id) is None
+        target = {"id": "t", "environment": "production", "target_kind": "ssh"}
+        packet = {"code_task_run_id": run_id}
+        assert qb.plan_decision(c, target=target, release_packet=packet,
+                                commit_ref=None) == (None, recheck_head)
+        # ...and it must ship a commit the re-check judged
+        said, _ = qb.plan_decision(c, target=target, release_packet=packet, commit_ref="e" * 40)
+        assert said and "not the one the build judged" in said

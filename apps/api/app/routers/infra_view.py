@@ -27,6 +27,8 @@ class InfraBody(BaseModel):
 
 class TargetDeployBody(InfraBody):
     ref: Optional[str] = None
+    #: The build this release is of: a production stack target needs one that passes the bar.
+    run_id: Optional[str] = None
     #: registry-only extras (`More`): dollars, converted to micros server-side.
     expected_cost_usd: Optional[float] = None
     budget_reservation_id: Optional[str] = None
@@ -203,6 +205,7 @@ def build_infra_router(
                     engine, settings(), project_id=pid, target_id=target_id,
                     repository=(shipped or {}).get("repository") or None,
                     ref=(body.ref or "").strip() or "main", actor=actor,
+                    run_id=(body.run_id or "").strip() or None,
                     **({"manifest_path": declared} if declared else {}))
             except StackDeployError as exc:
                 raise _stack_error(exc)
