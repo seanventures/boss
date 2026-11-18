@@ -35,8 +35,8 @@ Promotion: An experimental adapter becomes certified only when a recorded benchm
 |---|---|---|---|---|
 | Python | python >=3.11 | pip | `requirements.txt`, `pyproject.toml`, `setup.py`, `Pipfile` | always installed |
 | Node | node >=20 | npm | `package.json` | always installed |
-| Java | java 21 (Temurin) | maven or gradle | `pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts` | on by default (turned off: `boss toolchains enable java`) |
-| Go | go 1.27 | go modules | `go.mod` | on by default (turned off: `boss toolchains enable go`) |
+| Java | java 21 (Temurin) | maven or gradle | `pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts` | on by default (if turned off: `boss toolchains enable java`) |
+| Go | go 1.27 | go modules | `go.mod` | on by default (if turned off: `boss toolchains enable go`) |
 
 ## Commands
 

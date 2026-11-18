@@ -30,13 +30,19 @@ carries the toolchain).
 - **`BOSS_TOOLCHAINS=none`** (someone turned them off): stays off. An explicit value always wins.
 - **`BOSS_TOOLCHAINS=java`, `go`, `security`, …**: kept exactly as it is.
 
+Every service built with `BOSS_TOOLCHAINS` is rebuilt together: api and worker (they build
+projects), egress (it opens Maven Central, the Gradle portal and the Go proxy only when its own
+image has the toolchain) and the runner when it runs. `boss update`, `remote.sh update` and
+`boss toolchains enable|disable` all do this. `boss toolchains` and `remote.sh update` say so
+when a running service carries different toolchains than the api, with the command that fixes it.
+
 ## Turn a toolchain on or off
 
 On the BOSS host:
 
 ```sh
 boss toolchains                 # what .env asks for (or the default), and what the running image has
-boss toolchains disable java    # saves BOSS_TOOLCHAINS=go in .env, rebuilds api + worker, restarts them
+boss toolchains disable java    # saves BOSS_TOOLCHAINS=go in .env, rebuilds api, worker and egress, restarts them
 boss toolchains disable go      # the last one off saves BOSS_TOOLCHAINS=none, and that is kept
 boss toolchains enable go       # back on: BOSS_TOOLCHAINS=go
 boss toolchains enable security # the scanners (opt-in), on top of Java

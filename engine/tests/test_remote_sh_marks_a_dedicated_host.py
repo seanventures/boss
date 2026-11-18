@@ -47,6 +47,18 @@ printf 'docker %s\\n' "$*" >> "$log"
 if [[ " $* " == *" build "* && -n "$env_file" ]]; then
   printf -- '--- build env\\n' >> "$log"; cat "$env_file" >> "$log"
 fi
+# `docker ps --filter name=boss-community-runner-`: a running runner when FAKE_RUNNER is set.
+if [[ "$1" == ps && " $* " == *"name=boss-community-runner-"* && -n "${FAKE_RUNNER:-}" ]]; then
+  echo abc123
+fi
+# `compose ... exec -T SERVICE cat /opt/toolchains/manifest.json`: FAKE_MANIFEST_<SERVICE>.
+for ((i=0; i<${#args[@]}; i++)); do
+  if [[ "${args[$i]}" == exec ]]; then
+    svc="${args[$((i+2))]}"; var="FAKE_MANIFEST_${svc//-/_}"
+    [[ -n "${!var:-}" ]] || exit 1
+    printf '%s\\n' "${!var}"
+  fi
+done
 exit 0
 """
 
@@ -73,7 +85,8 @@ wait_for_builds() { :; }
 """
 
 
-def _run(tmp_path: Path, cmd: str, host_env: str | None) -> tuple[subprocess.CompletedProcess, Path, str]:
+def _run(tmp_path: Path, cmd: str, host_env: str | None,
+         extra_env: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess, Path, str]:
     host_dir = tmp_path / "host" / "boss"
     (host_dir / "scripts" / "install").mkdir(parents=True)
     (host_dir / "install.sh").write_text(FAKE_INSTALL)
@@ -97,7 +110,7 @@ def _run(tmp_path: Path, cmd: str, host_env: str | None) -> tuple[subprocess.Com
     log = tmp_path / "log"
     log.write_text("")
     env = {k: v for k, v in os.environ.items() if k != "BOSS_DEDICATED_HOST"}
-    env.update(PATH=f"{bin_dir}:{env['PATH']}", FAKE_LOG=str(log))
+    env.update(PATH=f"{bin_dir}:{env['PATH']}", FAKE_LOG=str(log), **(extra_env or {}))
     result = subprocess.run(
         ["bash", str(repo / "remote_test.sh"), cmd, "--host", "fake-host", "--dir", str(host_dir)],
         env=env, text=True, capture_output=True, timeout=60)
@@ -142,8 +155,8 @@ def test_an_update_of_an_unmarked_install_marks_it_before_the_build(tmp_path: Pa
     assert _marks(env_file) == ["BOSS_DEDICATED_HOST=1"]
     build_env = log.split("--- build env\n", 1)[1]
     assert "BOSS_DEDICATED_HOST=1" in build_env.splitlines()
-    # The api and worker are recreated after the mark, so the reaper reads it.
-    assert "up -d --no-deps --force-recreate api worker" in log
+    # The api (whose reaper reads it) is recreated after the mark.
+    assert "up -d --no-deps --force-recreate api worker egress" in log
 
 
 def test_a_second_update_writes_nothing_twice(tmp_path: Path) -> None:
@@ -157,3 +170,43 @@ def test_the_engine_reads_the_name_remote_sh_writes() -> None:
     assert 'os.environ.get("BOSS_DEDICATED_HOST"' in reaper
     compose = (ROOT / "scripts" / "install" / "community-compose.yml").read_text()
     assert "BOSS_DEDICATED_HOST: ${BOSS_DEDICATED_HOST:-}" in compose
+
+
+# ---- one toolchain set across the images (review of #211, M1) -----------------------------------
+# egress opens the Maven/Gradle/Go hosts from ITS OWN image's manifest, so an update that rebuilt
+# api and worker alone left Go "on" in Setup and unreachable for every build.
+
+def test_an_update_rebuilds_egress_with_api_and_worker(tmp_path: Path) -> None:
+    result, _, log = _run(tmp_path, "update", host_env="BOSS_API_KEY=x\nBOSS_DEDICATED_HOST=1\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert " build api worker egress\n" in log
+    assert "--force-recreate api worker egress\n" in log
+
+
+def test_a_running_runner_is_rebuilt_too_under_its_profile(tmp_path: Path) -> None:
+    result, _, log = _run(tmp_path, "update", host_env="BOSS_API_KEY=x\nBOSS_DEDICATED_HOST=1\n",
+                          extra_env={"FAKE_RUNNER": "1"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    build = next(l for l in log.splitlines() if " build " in l)
+    assert "--profile runner" in build and build.endswith(" build api worker egress runner")
+
+
+def test_an_egress_on_other_toolchains_is_said_with_the_fix(tmp_path: Path) -> None:
+    go = '{"go": {"go": "1.27.4"}}'
+    result, _, _ = _run(tmp_path, "update", host_env="BOSS_API_KEY=x\nBOSS_DEDICATED_HOST=1\n",
+                        extra_env={"FAKE_MANIFEST_api": go, "FAKE_MANIFEST_worker": go,
+                                   "FAKE_MANIFEST_egress": "{}"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    out = result.stdout
+    assert "different build toolchains than the api" in out
+    assert "egress has {}" in out and "worker has" not in out
+    assert "update --all-services" in out
+
+
+def test_matching_toolchains_say_nothing(tmp_path: Path) -> None:
+    go = '{"go": {"go": "1.27.4"}}'
+    result, _, _ = _run(tmp_path, "update", host_env="BOSS_API_KEY=x\nBOSS_DEDICATED_HOST=1\n",
+                        extra_env={"FAKE_MANIFEST_api": go, "FAKE_MANIFEST_worker": go,
+                                   "FAKE_MANIFEST_egress": go})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "different build toolchains" not in result.stdout

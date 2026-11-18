@@ -191,15 +191,20 @@ def _boss_sh_toolchains_command() -> str:
     setter = text[text.index("set_env_value() {"):]
     setter = setter[:setter.index("\n}\n") + 3]
     stubs = ("need_install() { :; }\ndie() { echo \"$*\" >&2; exit 1; }\nhint_command() { echo boss; }\n"
-             "compose() { [[ \"$1\" == build ]] && echo \"BUILT $*\"; return 0; }\n"
+             # build/up are recorded; `ps --services` lists a runner when FAKE_RUNNER is set;
+             # `exec -T SERVICE cat manifest` answers FAKE_MANIFEST_<SERVICE> (absent: not running).
+             "compose() { case \"$1\" in build) echo \"BUILT $*\" ;; up) echo \"UP $*\" ;;\n"
+             "  ps) [[ -z \"${FAKE_RUNNER:-}\" ]] || echo runner ;;\n"
+             "  exec) local v=\"FAKE_MANIFEST_${3//-/_}\"; [[ -n \"${!v:-}\" ]] || return 1;"
+             " printf '%s\\n' \"${!v}\" ;; esac; return 0; }\n"
              "apply_env() { echo \"APPLIED $*\"; }\n")
     return stubs + env_value + "\n" + setter + text[start:end]
 
 
-def _toolchains(env_file: Path, *args: str) -> subprocess.CompletedProcess:
+def _toolchains(env_file: Path, *args: str, **env: str) -> subprocess.CompletedProcess:
     script = _boss_sh_toolchains_command() + '\ncmd_toolchains "$@"\n'
     return subprocess.run(["bash", "-c", script, "boss", *args], capture_output=True, text=True,
-                          env={**os.environ, "ENV_FILE": str(env_file)})
+                          env={**os.environ, "ENV_FILE": str(env_file), **env})
 
 
 def _setting(env_file: Path) -> list[str]:
@@ -228,7 +233,9 @@ def test_disable_go_from_the_default_persists_java_only(tmp_path):
     out = _toolchains(env, "disable", "go")
     assert out.returncode == 0, out.stderr
     assert _setting(env) == ["BOSS_TOOLCHAINS=java"]
-    assert "BUILT build api worker" in out.stdout
+    assert "BUILT build api worker egress\n" in out.stdout
+    assert "UP up -d --no-deps --no-build --force-recreate egress\n" in out.stdout
+    assert "APPLIED Toolchains (java)" in out.stdout
     out = _toolchains(env, "disable", "java")
     assert out.returncode == 0, out.stderr
     assert _setting(env) == ["BOSS_TOOLCHAINS=none"]
@@ -254,6 +261,49 @@ def test_enabling_security_on_the_default_keeps_java_and_go(tmp_path):
     out = _toolchains(env, "enable", "security")
     assert out.returncode == 0, out.stderr
     assert _setting(env) == ["BOSS_TOOLCHAINS=java,go,security"]
+
+
+# ---- every image that carries the toolchains changes with them (review of #211, M1) ------------
+
+#: Built with BOSS_TOOLCHAINS but never reading /opt/toolchains at run time (no builds, no
+#: allowlist). A new python-runtime service must be put here or in toolchain_services.
+DOES_NOT_READ_THE_MANIFEST = {"mcp-tools", "kg-mcp"}
+
+
+def test_every_service_that_reads_the_manifest_is_rebuilt_with_a_toolchain_change(tmp_path):
+    import yaml
+
+    services = yaml.safe_load((ROOT / "scripts" / "install" / "community-compose.yml").read_text())["services"]
+    takes = {n for n, svc in services.items() if "BOSS_TOOLCHAINS" in ((svc.get("build") or {}).get("args") or {})}
+    env = tmp_path / ".env"
+    env.write_text("")
+    listed = subprocess.run(["bash", "-c", _boss_sh_toolchains_command() + "\ntoolchain_services\n"],
+                            capture_output=True, text=True, env={**os.environ, "ENV_FILE": str(env),
+                                                                 "FAKE_RUNNER": "1"}).stdout.split()
+    assert set(listed) == takes - DOES_NOT_READ_THE_MANIFEST
+    remote = (ROOT / "scripts" / "install" / "remote.sh").read_text()
+    assert 'local services="api worker egress"' in remote and 'services="$services runner"' in remote
+
+
+def test_a_running_runner_is_rebuilt_and_recreated_with_a_toolchain_change(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("BOSS_TOOLCHAINS=java,go\n")
+    out = _toolchains(env, "disable", "go", FAKE_RUNNER="1")
+    assert out.returncode == 0, out.stderr
+    assert "BUILT build api worker egress runner\n" in out.stdout
+    assert "--force-recreate egress runner\n" in out.stdout
+
+
+def test_toolchains_list_flags_an_egress_on_other_toolchains(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("")
+    go = '{"go": {"go": "1.27.4"}, "java": {"java": "21"}}'
+    out = _toolchains(env, "list", FAKE_MANIFEST_api=go, FAKE_MANIFEST_worker=go, FAKE_MANIFEST_egress="{}")
+    assert out.returncode == 1
+    assert "different toolchains than the api" in out.stdout and "egress: {}" in out.stdout
+    assert "worker:" not in out.stdout and "boss update" in out.stdout
+    same = _toolchains(env, "list", FAKE_MANIFEST_api=go, FAKE_MANIFEST_worker=go, FAKE_MANIFEST_egress=go)
+    assert same.returncode == 0 and "different toolchains" not in same.stdout
 
 def test_disabling_java_under_security_says_security_includes_java():
     text = (ROOT / "scripts" / "install" / "boss.sh").read_text()
