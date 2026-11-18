@@ -161,62 +161,76 @@ def normalize(root: Any, *, readable_by_boss: bool = True) -> int:
     return fixed
 
 
-def repair_git_dir(git_dir: Any, *, run_uid: Optional[int]) -> list[str]:
-    """`.git` USABLE BY THE RUN'S UID AGAIN, whoever last wrote it. Returns the entries changed.
+#: The only .git entries repair_git_index opens: what `git add`/`git status` must read and write.
+_INDEX_NAMES = ("index", "index.lock")
 
-    BOSS's own git on a run's checkout runs AS the run's uid (sandbox._git_once). Anything else
-    that writes inside `.git` as BOSS's uid leaves files the run's uid may not open: crun_6883ec7c
+
+def _open_dir_chain(path: str) -> Optional[int]:
+    """An O_DIRECTORY fd for `path`, every component opened from "/" with O_NOFOLLOW relative to
+    the one before: a symlink ANYWHERE on the way (a run's uid swapping its workspace, or .git,
+    for a link to a BOSS directory) refuses, never follows. None when refused."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open("/", flags)
+    try:
+        for part in Path(os.path.abspath(path)).parts[1:]:
+            nxt = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+        return fd
+    except OSError:
+        os.close(fd)
+        return None
+
+
+def repair_git_index(workspace: Any, *, run_uid: Optional[int]) -> list[str]:
+    """`.git/index` (and a left-over `.git/index.lock`) USABLE BY THE RUN'S UID AGAIN, whoever
+    last wrote it. Returns the entries changed. Never raises.
+
+    BOSS's own git on a run's checkout runs AS the run's uid (sandbox._git_once). crun_6883ec7c
     (Recipe box, 2026-11-18) died on `fatal: .git/index: index file open failed: Permission
-    denied` because a review seat's read-only guard ran `git status` as the API's uid (boss),
-    `git status` opportunistically rewrote .git/index, and it did so while the hourly backup had
-    set the PROCESS-WIDE umask to 077 for its pg_dump: .git/index became boss 0600. The run's uid
-    has no supplementary groups, so only the "other" bits reach it.
+    denied`: a review seat's read-only guard ran `git status` as the API's uid (boss), `git
+    status` opportunistically rewrote .git/index, and it did so while the hourly backup had set
+    the PROCESS-WIDE umask to 077 for its pg_dump: .git/index became boss 0600. The run's uid has
+    no supplementary groups, so only the "other" bits reach it. (Both causes are gone — no
+    process umask, a guard that never writes; this is the defence in depth.)
 
-    Every entry under `git_dir` the run's uid does not own is opened to it: files readable (and
-    writable when their owner could write), directories rwx. Only what BOSS's uid may chmod (its
-    own entries, or any when BOSS runs as root) is touched; symlinks are never followed. Safe: a run
-    directory is <uid>:boss 2770, so no other uid can reach these. Never raises."""
-    base = Path(git_dir)
+    THE RUN'S UID CONTROLS THIS TREE, so nothing here follows a path it could swap: the .git
+    directory is reached component by component with O_NOFOLLOW, each index file is opened
+    O_NOFOLLOW relative to that fd, and only a REGULAR file with ONE link that BOSS's uid owns is
+    changed, by fchmod on the open fd. Nothing else in .git is ever touched."""
     if run_uid is None:
         return []
-    try:
-        if base.is_symlink() or not base.is_dir():
-            return []
-    except OSError:
+    git_fd = _open_dir_chain(str(Path(workspace) / ".git"))
+    if git_fd is None:
         return []
     me = os.geteuid()
     changed: list[str] = []
-    for dirpath, dirnames, filenames in os.walk(base, topdown=True, followlinks=False):
-        for name in ["", *dirnames, *filenames]:
-            p = os.path.join(dirpath, name) if name else dirpath
-            if name == "" and dirpath != str(base):
-                continue  # each directory is handled once, as its parent's entry
+    try:
+        for name in _INDEX_NAMES:
             try:
-                st = os.lstat(p)
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                             | getattr(os, "O_CLOEXEC", 0), dir_fd=git_fd)
             except OSError:
-                continue
-            if st.st_uid == run_uid or stat.S_ISLNK(st.st_mode):
-                continue
-            if st.st_uid != me and me != 0:
-                continue  # neither BOSS's nor the run's: BOSS cannot change it
-            mode = stat.S_IMODE(st.st_mode)
-            if stat.S_ISDIR(st.st_mode):
-                want = mode | 0o777
-            elif stat.S_ISREG(st.st_mode):
+                continue  # absent, a symlink (ELOOP), or not ours to open
+            try:
+                st = os.fstat(fd)
+                if (not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_uid != me
+                        or st.st_uid == run_uid):
+                    continue
+                mode = stat.S_IMODE(st.st_mode)
                 want = mode | 0o444 | (0o222 if mode & 0o200 else 0)
-            else:
-                continue
-            if want == mode:
-                continue
-            try:
-                os.chmod(p, want)
-                changed.append(os.path.relpath(p, base.parent))
+                if want != mode:
+                    os.fchmod(fd, want)
+                    changed.append(f".git/{name}")
             except OSError:
                 continue
+            finally:
+                os.close(fd)
+    finally:
+        os.close(git_fd)
     if changed:
-        log.warning("workspace permissions: %d entr%s of %s opened to the run's uid again: %s",
-                    len(changed), "y" if len(changed) == 1 else "ies", base,
-                    ", ".join(changed[:5]) + ("…" if len(changed) > 5 else ""))
+        log.warning("workspace permissions: %s under %s opened to the run's uid again",
+                    ", ".join(changed), workspace)
     return changed
 
 

@@ -14,7 +14,6 @@ result; a change no concurrent verify explains (`explained`) marks the seat's ve
 from __future__ import annotations
 
 import hashlib
-import os
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -43,12 +42,21 @@ def explained(path: str) -> bool:
 
 
 def _git(root: Path, *args: str) -> Optional[str]:
-    # WATCHING NEVER WRITES (GIT_OPTIONAL_LOCKS=0): this git runs as BOSS's uid on the live tree,
-    # and a plain `git status` refreshes and REWRITES .git/index as that uid. crun_6883ec7c's
-    # index came back boss 0600 and the run's own `git add -A` could no longer open it.
+    """Git as BOSS's uid on a tree a run's uid controls: it READS and never writes, and never runs
+    what the tree configured.
+
+    * WATCHING NEVER WRITES (GIT_OPTIONAL_LOCKS=0): a plain `git status` refreshes and REWRITES
+      .git/index as BOSS's uid. crun_6883ec7c's index came back boss 0600 (the backup's umask)
+      and the run's own `git add -A` could no longer open it.
+    * NO TREE CODE (git_safety, as sandbox._git_once since BOSSAPP-1325): `.git/config` is the
+      run's to write, and `git status` runs core.fsmonitor and any filter driver's clean command."""
+    from .git_safety import NO_TREE_CODE, filter_overrides, isolated_env
+
+    env = {**isolated_env(), "GIT_OPTIONAL_LOCKS": "0"}
     try:
-        out = subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True,
-                             timeout=60, env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
+        filters = filter_overrides(Path(root), env=env) if args[:1] != ("config",) else []
+        out = subprocess.run(["git", *NO_TREE_CODE, *filters, *args], cwd=str(root),
+                             capture_output=True, text=True, timeout=60, env=env)
     except (OSError, subprocess.SubprocessError):
         return None
     return out.stdout if out.returncode == 0 else None

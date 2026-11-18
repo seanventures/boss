@@ -105,9 +105,9 @@ def test_an_index_boss_rewrote_0600_is_repaired_and_the_diff_works(tmp_path, mon
     summary = box.diff_summary()
 
     assert sorted(summary.paths) == ["box.js", "recipes.js"]
-    assert ".git/index" in box.git_dir_repaired
+    assert box.git_dir_repaired == [".git/index"]
+    # (the retried `add -A` then wrote a fresh index of its own)
     assert stat.S_IMODE((tmp_path / ".git" / "index").stat().st_mode) & 0o004
-    assert box._private_index is None            # the real index works again
     # diff() (the PR's files, the workspace save on any exit) reads the same way.
     assert sorted(c.path for c in box.diff()) == ["box.js", "recipes.js"]
 
@@ -121,28 +121,9 @@ def test_every_boss_git_command_repairs_once_and_retries(tmp_path, monkeypatch):
     assert sum(1 for a in calls if "status" in a) == 2
 
 
-def test_an_index_boss_cannot_repair_falls_back_to_the_sandboxs_own(tmp_path, monkeypatch):
-
-    def only_the_private_index(index):
-        return index.name == "boss-index"
-
-    box, _ = _repo(tmp_path, monkeypatch, index_ok=only_the_private_index)
-    real = tmp_path / ".git" / "index"
-    monkeypatch.setattr(workspace_perms, "repair_git_dir", lambda *a, **k: [])
-    (tmp_path / "recipes.js").write_text("export const recipes = ['stew'];\n")
-    (tmp_path / "new.js").write_text("export {};\n")
-
-    summary = box.diff_summary()
-
-    assert sorted(summary.paths) == ["new.js", "recipes.js"]
-    assert box._private_index == str(tmp_path / ".git" / "boss-index")
-    assert real.exists()                          # the real index is left alone
-    assert sorted(c.path for c in box.diff()) == ["new.js", "recipes.js"]
-
-
-def test_a_failure_after_both_says_in_words_and_points_at_the_retry(tmp_path, monkeypatch):
+def test_an_index_boss_cannot_repair_says_in_words_and_points_at_the_retry(tmp_path, monkeypatch):
     box, _ = _repo(tmp_path, monkeypatch, index_ok=lambda index: False)
-    monkeypatch.setattr(workspace_perms, "repair_git_dir", lambda *a, **k: [])
+    monkeypatch.setattr(workspace_perms, "repair_git_index", lambda *a, **k: [])
     (tmp_path / "recipes.js").write_text("changed\n")
 
     with pytest.raises(sandbox.SandboxError) as caught:
@@ -152,46 +133,139 @@ def test_a_failure_after_both_says_in_words_and_points_at_the_retry(tmp_path, mo
     assert words.startswith("BOSS could not collect this build's changes")
     assert "index file open failed: Permission denied" in words
     assert "Retry continues from the saved work" in words
+    assert not (tmp_path / ".git" / "boss-index").exists()   # no second index, no missed files
 
 
-def test_a_refusal_that_is_not_about_permissions_is_not_repaired(tmp_path, monkeypatch):
+@pytest.mark.parametrize("error", [
+    "git rev-parse failed: fatal: ambiguous argument 'no-such-ref'",
+    # The agent can make any `add -A` say "Permission denied" (a worktree file chmod 000): that
+    # is not the index, and never starts a repair.
+    "git add failed: error: open(\"secret.txt\"): Permission denied",
+])
+def test_a_refusal_that_is_not_the_index_is_not_repaired(tmp_path, monkeypatch, error):
     box, _ = _repo(tmp_path, monkeypatch)
     repaired = []
-    monkeypatch.setattr(workspace_perms, "repair_git_dir",
+    monkeypatch.setattr(workspace_perms, "repair_git_index",
                         lambda *a, **k: repaired.append(a) or [".git/index"])
-    with pytest.raises(sandbox.SandboxError):
-        box._git(["rev-parse", "no-such-ref"])
+    assert box._repair_git_dir(sandbox.SandboxError(error)) is False
     assert repaired == []
 
 
-def test_repair_opens_only_what_the_run_uid_does_not_own(tmp_path):
-    git_dir = tmp_path / ".git"
-    (git_dir / "objects" / "ab").mkdir(parents=True)
-    (git_dir / "index").write_bytes(b"DIRC")
-    os.chmod(git_dir / "index", 0o600)
-    (git_dir / "objects" / "ab" / "cd").write_bytes(b"x")
-    os.chmod(git_dir / "objects" / "ab" / "cd", 0o400)
-    os.chmod(git_dir / "objects" / "ab", 0o700)
+# ── the repair itself: exactly the index, never through a link ─────────────────────────────
 
-    changed = workspace_perms.repair_git_dir(git_dir, run_uid=os.geteuid() + 1)
-
-    assert ".git/index" in changed and ".git/objects/ab" in changed
-    assert stat.S_IMODE((git_dir / "index").stat().st_mode) == 0o666
-    assert stat.S_IMODE((git_dir / "objects" / "ab" / "cd").stat().st_mode) == 0o444  # read-only stays
-    assert stat.S_IMODE((git_dir / "objects" / "ab").stat().st_mode) == 0o777
-    # Entries the run's uid owns are its own business; no sandbox uid, nothing to do.
-    assert workspace_perms.repair_git_dir(git_dir, run_uid=os.geteuid()) == []
-    assert workspace_perms.repair_git_dir(git_dir, run_uid=None) == []
+OTHER = os.geteuid() + 1        # "the run's uid": anyone but BOSS
 
 
-def test_the_read_only_guard_never_rewrites_the_index(tmp_path):
+def _git_dir(tmp_path) -> Path:
+    ws = tmp_path.resolve() / "ws"
+    (ws / ".git" / "objects" / "ab").mkdir(parents=True)
+    (ws / ".git" / "index").write_bytes(b"DIRC")
+    os.chmod(ws / ".git" / "index", 0o600)
+    (ws / ".git" / "objects" / "ab" / "cd").write_bytes(b"x")
+    os.chmod(ws / ".git" / "objects" / "ab" / "cd", 0o400)
+    return ws
+
+
+def _secret(tmp_path) -> Path:
+    """A BOSS-owned file outside the sandbox (master.key, a backup) the run's uid wants opened."""
+    outside = tmp_path.resolve() / "boss-only"
+    outside.mkdir()
+    key = outside / "index"
+    key.write_bytes(b"KEY")
+    os.chmod(key, 0o600)
+    os.chmod(outside, 0o700)
+    return key
+
+
+def _mode(p: Path) -> int:
+    return stat.S_IMODE(os.lstat(p).st_mode)
+
+
+def test_repair_opens_exactly_the_index_and_its_lock(tmp_path):
+    ws = _git_dir(tmp_path)
+    (ws / ".git" / "index.lock").write_bytes(b"")
+    os.chmod(ws / ".git" / "index.lock", 0o600)
+
+    assert workspace_perms.repair_git_index(ws, run_uid=OTHER) == [".git/index", ".git/index.lock"]
+    assert _mode(ws / ".git" / "index") == 0o666
+    assert _mode(ws / ".git" / "objects" / "ab" / "cd") == 0o400      # nothing else in .git
+    assert workspace_perms.repair_git_index(ws, run_uid=OTHER) == []    # already usable
+    # The run's own index is its business; no sandbox uid, nothing to do.
+    os.chmod(ws / ".git" / "index", 0o600)
+    assert workspace_perms.repair_git_index(ws, run_uid=os.geteuid()) == []
+    assert workspace_perms.repair_git_index(ws, run_uid=None) == []
+
+
+def test_an_index_swapped_for_a_symlink_is_never_followed(tmp_path):
+    ws, key = _git_dir(tmp_path), _secret(tmp_path)
+    os.unlink(ws / ".git" / "index")
+    os.symlink(key, ws / ".git" / "index")
+
+    assert workspace_perms.repair_git_index(ws, run_uid=OTHER) == []
+    assert _mode(key) == 0o600
+
+
+def test_a_git_dir_swapped_for_a_symlink_is_never_followed(tmp_path):
+    ws, key = _git_dir(tmp_path), _secret(tmp_path)
+    os.rename(ws / ".git", ws / "git.real")
+    os.symlink(key.parent, ws / ".git")
+
+    assert workspace_perms.repair_git_index(ws, run_uid=OTHER) == []
+    assert _mode(key) == 0o600
+
+
+def test_a_workspace_swapped_for_a_symlink_is_never_followed(tmp_path):
+    ws, key = _git_dir(tmp_path), _secret(tmp_path)
+    (key.parent / ".git").mkdir()
+    os.rename(key, key.parent / ".git" / "index")
+    os.rename(ws, tmp_path.resolve() / "ws.real")
+    os.symlink(key.parent, ws)
+
+    assert workspace_perms.repair_git_index(ws, run_uid=OTHER) == []
+    assert _mode(key.parent / ".git" / "index") == 0o600
+
+
+def test_a_hardlinked_index_is_never_changed(tmp_path):
+    ws, key = _git_dir(tmp_path), _secret(tmp_path)
+    os.unlink(ws / ".git" / "index")
+    os.link(key, ws / ".git" / "index")              # same inode as BOSS's secret
+
+    assert workspace_perms.repair_git_index(ws, run_uid=OTHER) == []
+    assert _mode(key) == 0o600
+
+
+def test_the_swap_race_between_listing_and_open_is_closed(tmp_path, monkeypatch):
+    """The reviewer's PoC raced a path walk: here the swap lands at the worst moment, right
+    after the .git fd is open and before the index is opened. The fd still names the real
+    .git; the link put in place of the index is refused (O_NOFOLLOW)."""
+    ws, key = _git_dir(tmp_path), _secret(tmp_path)
+    real_open = os.open
+
+    def swapping_open(path, flags, *a, dir_fd=None, **k):
+        if path == "index" and dir_fd is not None:
+            os.unlink(ws / ".git" / "index")
+            os.symlink(key, ws / ".git" / "index")
+        return real_open(path, flags, *a, dir_fd=dir_fd, **k)
+
+    monkeypatch.setattr(workspace_perms.os, "open", swapping_open)
+    assert workspace_perms.repair_git_index(ws, run_uid=OTHER) == []
+    assert _mode(key) == 0o600
+
+
+# ── the read-only guard: never writes, never runs tree code ────────────────────────────────
+
+def _committed(tmp_path) -> Path:
     _plain_git(tmp_path, "init", "-q")
     _plain_git(tmp_path, "config", "user.email", "t@example.com")
     _plain_git(tmp_path, "config", "user.name", "t")
-    tracked = tmp_path / "recipes.js"
-    tracked.write_text("x\n")
+    (tmp_path / "recipes.txt").write_text("x\n")
     _plain_git(tmp_path, "add", "-A")
     _plain_git(tmp_path, "commit", "-qm", "base")
+    return tmp_path / "recipes.txt"
+
+
+def test_the_read_only_guard_never_rewrites_the_index(tmp_path):
+    tracked = _committed(tmp_path)
     index = tmp_path / ".git" / "index"
 
     def stale():                                     # same content, new stat: refresh wants a write
@@ -209,22 +283,77 @@ def test_the_read_only_guard_never_rewrites_the_index(tmp_path):
     assert (index.stat().st_ino, index.stat().st_mtime_ns) != before
 
 
-def _umask_calls(path: Path) -> list[int]:
+def _planted(tmp_path, key: str, marker: Path) -> None:
+    script = tmp_path / "evil.sh"
+    script.write_text(f"#!/bin/sh\ntouch {marker}\ncat\n")
+    os.chmod(script, 0o755)
+    _plain_git(tmp_path, "config", key, str(script))
+
+
+def test_the_read_only_guard_never_runs_a_planted_fsmonitor(tmp_path):
+    tracked = _committed(tmp_path)
+    marker = tmp_path.parent / f"{tmp_path.name}-PWNED"
+    _planted(tmp_path, "core.fsmonitor", marker)
+    tracked.write_text("y\n")
+
+    snap = readonly_guard.snapshot(tmp_path)
+
+    assert not marker.exists()
+    assert snap is not None and "recipes.txt" in snap["prints"]
+    # The control: git as before runs it.
+    _plain_git(tmp_path, "status", "--porcelain")
+    assert marker.exists()
+
+
+def test_the_read_only_guard_never_runs_a_planted_filter(tmp_path):
+    tracked = _committed(tmp_path)
+    marker = tmp_path.parent / f"{tmp_path.name}-PWNED"
+    (tmp_path / ".gitattributes").write_text("*.txt filter=evil\n")
+    _planted(tmp_path, "filter.evil.clean", marker)
+    _plain_git(tmp_path, "config", "filter.evil.required", "true")
+    later = (tmp_path / ".git" / "index").stat().st_mtime + 10
+    os.utime(tracked, (later, later))                # stat-dirty: status would run clean
+
+    readonly_guard.snapshot(tmp_path)
+
+    assert not marker.exists()
+    _plain_git(tmp_path, "status", "--porcelain")
+    assert marker.exists()
+
+
+# ── no process-wide umask ──────────────────────────────────────────────────────────────────
+
+def _umask_uses(path: Path) -> list[int]:
+    """Every call of anything named umask (os.umask, an `import os as _os` alias, a bare
+    `umask(...)` after `from os import umask`) and every import of it."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    return [node.lineno for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "umask" and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "os"]
+    lines = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+            if name == "umask":
+                lines.append(node.lineno)
+        elif isinstance(node, ast.ImportFrom) and any(a.name == "umask" for a in node.names):
+            lines.append(node.lineno)
+    return lines
+
+
+def test_the_umask_guard_sees_every_spelling(tmp_path):
+    probe = tmp_path / "probe.py"
+    probe.write_text("import os as _os\nfrom os import umask\n_os.umask(0)\numask(0o77)\n")
+    assert sorted(_umask_uses(probe)) == [2, 3, 4]
 
 
 def test_no_process_wide_umask_anywhere_in_boss():
     """os.umask is process-wide: one thread's 077 (the backup) made another thread's git write a
-    run's index 0600; a 0 made every concurrent file world-writable. Modes are set per file."""
+    run's index 0600; a 0 made every concurrent file world-writable. Modes are set per file, or
+    per spawn (Popen's `umask`, a keyword, not a call)."""
     offenders = []
     for top in (ROOT / "engine" / "boss_engine", ROOT / "apps"):
         for path in top.rglob("*.py"):
             if "node_modules" in path.parts or "tests" in path.parts:
                 continue
-            for line in _umask_calls(path):
+            for line in _umask_uses(path):
                 offenders.append(f"{path.relative_to(ROOT)}:{line}")
     assert offenders == []

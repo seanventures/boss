@@ -282,9 +282,10 @@ class SandboxIdentity:
             self._helper("kill", str(self.uid), check=False)
 
     def workspace(self, prefix: str) -> Path:
-        """A fresh directory for one sandbox (a stage's clone) inside the run directory. BOSS
-        creates it and its first contents with umask 0: only this run and BOSS can reach them
-        (the run directory is 2770), and the run's uid must be able to edit what BOSS cloned."""
+        """A fresh directory for one sandbox (a stage's clone) inside the run directory, 2777:
+        only this run and BOSS can reach it (the run directory is 2770), and the run's uid must
+        be able to edit what BOSS clones into it (the clone's own git runs with umask 0 —
+        a per-spawn `umask` (Popen's), never the process-wide one)."""
         import tempfile
 
         path = Path(tempfile.mkdtemp(prefix=prefix, dir=str(self.run_dir)))
