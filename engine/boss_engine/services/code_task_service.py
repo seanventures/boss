@@ -690,7 +690,8 @@ def start_code_task(
                 _wf = _parent_workflow_run(connection, parent_run)
             identity_acting = _consent.carry_retry_authority(
                 connection, parent_run_id=parent_run, new_run_id=run_id, project_id=project_id,
-                role_keys=[builder], permissions=_consent.CODE_TASK_PERMISSIONS,
+                role_keys=[builder], permissions=_consent.code_task_permissions(
+                    _consent_repos(owner, repo, repo_host), repo_host),
                 repos=_consent_repos(owner, repo, repo_host), by_boss=automatic_retry or continuation,
                 workflow_run_id=_wf, gap=authority_gap)
         if automatic_retry and identity_acting is None:
@@ -706,7 +707,8 @@ def start_code_task(
 
         identity_acting = _consent.require_authority(
             org_id=None, project_id=project_id, role_keys=[builder],
-            permissions=_consent.CODE_TASK_PERMISSIONS, repos=_consent_repos(owner, repo, repo_host),
+            permissions=_consent.code_task_permissions(_consent_repos(owner, repo, repo_host), repo_host),
+            repos=_consent_repos(owner, repo, repo_host),
             task=title, run_id=f"run_ct:{run_id}", db=connection)
     if substrate:  # per-run substrate override (retry fallback: microvm infra-failure -> local)
         spec["substrate"] = substrate
@@ -1991,7 +1993,9 @@ def redeliver_code_task(engine, settings: Settings, run_id: str, *, automatic: b
             carried = _consent.carry_retry_authority(
                 c, parent_run_id=run_id, new_run_id="delivery", project_id=run["project_id"],
                 role_keys=[_identity_runs.resolved_builder({"role_key": spec.get("role_key")}, fctx)],
-                permissions=_consent.CODE_TASK_PERMISSIONS,
+                permissions=_consent.code_task_permissions(
+                    _consent_repos(spec.get("owner"), spec.get("repo"), spec.get("repo_host")),
+                    spec.get("repo_host")),
                 repos=_consent_repos(spec.get("owner"), spec.get("repo"), spec.get("repo_host")),
                 by_boss=True, workflow_run_id=str(fctx.get("workflow_run_id") or "") or None)
         if carried is None:

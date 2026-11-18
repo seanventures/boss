@@ -35,6 +35,7 @@ import { primeCsrf, registerPasskey, sayAuth } from "../auth-flow";
 import { CopyCommand } from "../copy-command";
 import { HOST_COMMANDS, onLoopback, overSsh, setupLinkCommand } from "../../../lib/identity/host-commands";
 import { RecoveryCodesView } from "../recovery-codes";
+import { AFTER_CLAIM } from "../../../lib/identity/claim-resume";
 import { TotpStep } from "../enrol/totp-step";
 
 type Claim = NonNullable<AuthOptions["claim"]>;
@@ -43,9 +44,6 @@ type Stage = "form" | "protect" | "passkey" | "also-totp" | "totp" | "codes";
 const SHOW_ON_SERVER = HOST_COMMANDS.password;
 const SHOW_OVER_SSH = overSsh(SHOW_ON_SERVER);
 
-/** THE NEXT STEP AFTER THE CLAIM is setup (repository, model, first build), not the Identity
- *  overview: a new Owner landed on posture warnings with no pointer to what comes next. */
-export const AFTER_CLAIM = "/?area=setup";
 
 const SEAT_WORDS: Record<string, string> = {
   ceo: "ceo. Approvals and history will show your name",

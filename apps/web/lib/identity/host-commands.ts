@@ -14,14 +14,31 @@ export const HOST_COMMANDS = {
   recoverOwner: "boss identity recover-owner --email you@example.com",
 } as const;
 
-/** The setup-link command for THIS install. A second install on one machine runs by its own
- *  launcher's full path (the API's `claim.host_command`): plain `boss` there is the FIRST install,
- *  so it would claim the other BOSS (stranger test r2, 2026-11-17). Anything that is not a plain
+/** THIS install's `boss` command. A second install on one machine runs by its own launcher's full
+ *  path (the API's `host_command`): plain `boss` there is the FIRST install, so a command printed
+ *  with it acts on the other BOSS (stranger tests r2 and r3). Anything that is not a plain
  *  `.../boss` path falls back to `boss`. */
-export function setupLinkCommand(hostCommand?: string | null): string {
+export function ownBoss(hostCommand?: string | null): string {
   const cmd = (hostCommand ?? "").trim();
-  if (!cmd || cmd === "boss" || !/^[A-Za-z0-9._/~+-]+\/boss$/.test(cmd)) return HOST_COMMANDS.setupLink;
-  return `${cmd} identity setup-link`;
+  if (!cmd || cmd === "boss" || !/^[A-Za-z0-9._/~+-]+\/boss$/.test(cmd)) return "boss";
+  return cmd;
+}
+
+/** The setup-link command for THIS install (`claim.host_command`). */
+export function setupLinkCommand(hostCommand?: string | null): string {
+  return HOST_COMMANDS.setupLink.replace(/^boss\b/, ownBoss(hostCommand));
+}
+
+/** A locked-out Owner's way back in, with THIS install's command (`host_command` in auth options). */
+export function recoverOwnerCommand(hostCommand?: string | null): string {
+  return HOST_COMMANDS.recoverOwner.replace(/^boss\b/, ownBoss(hostCommand));
+}
+
+/** "the 6-digit code for BOSS, Acme": the org's name once, never "BOSS, BOSS" when the org is
+ *  still called BOSS (stranger test r3). */
+export function authenticatorLabel(orgName?: string | null): string {
+  const org = (orgName ?? "").trim();
+  return !org || org.toLowerCase() === "boss" ? "BOSS" : `BOSS, ${org}`;
 }
 
 /** Whether this page is opened on a loopback name (localhost, 127.x, ::1): the server's own

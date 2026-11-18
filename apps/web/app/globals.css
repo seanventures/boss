@@ -5718,6 +5718,11 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .dq-filter-btn.active .dq-filter-count {
   color: var(--ink); background: color-mix(in srgb, var(--accent, var(--boss-c-6ea8fe)) 26%, transparent);
 }
+/* "+N" in other projects: the rail's quiet badge, beside the tab's own count. */
+.dq-filter-count.dq-filter-elsewhere,
+.dq-filter-btn.active .dq-filter-count.dq-filter-elsewhere {
+  margin-left: -2px; color: var(--muted); background: transparent; border: 1px dashed var(--border);
+}
 
 /* Reference block at the foot of the decisions page: present, clearly secondary.
    These panels are worth keeping and cannot be acted on, so they read quieter than the queue

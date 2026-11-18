@@ -110,13 +110,14 @@ def grant_scope_for_run(connection: Any, run: Mapping[str, Any]) -> dict[str, An
     role_key = _runs.resolved_builder(spec, ctx)
     agent_id = _runs.agent_for_role(connection, full.get("project_id") or run.get("project_id"),
                                     role_key)
-    permissions = sorted(k for k in _consent.CODE_TASK_PERMISSIONS
+    repos = _cts._consent_repos(spec.get("owner"), spec.get("repo"), spec.get("repo_host"))
+    permissions = sorted(k for k in _consent.code_task_permissions(repos, spec.get("repo_host"))
                          if catalogue.is_known(k) and catalogue.meta(k).delegable)
     return {
         "permissions": permissions,
         "agents": [agent_id] if agent_id else [],
         "role_keys": [role_key] if role_key else [],
-        "repos": _cts._consent_repos(spec.get("owner"), spec.get("repo"), spec.get("repo_host")),
+        "repos": repos,
     }
 
 

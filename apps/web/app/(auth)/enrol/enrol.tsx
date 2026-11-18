@@ -21,6 +21,7 @@ import { Face } from "../../../components/identity/kit";
 import { AuthStage, Live, Logo, safeNextClient } from "../auth-parts";
 import { primeCsrf, registerPasskey, sayAuth } from "../auth-flow";
 import { RecoveryCodesView } from "../recovery-codes";
+import { enrolContinueLabel } from "../../../lib/identity/claim-resume";
 import { TotpStep } from "./totp-step";
 
 type Stage = "choose" | "totp" | "codes" | "password";
@@ -71,7 +72,7 @@ export function Enrol({ host, next, who, passkeyReason = null, passwordMin = 12 
         <Logo host={host} />
         <h1>Save your recovery codes</h1>
         <p className="idn-s" data-copy="prose">If you lose your second factor, one of these gets you back in. Each works once.</p>
-        <RecoveryCodesView codes={codes} host={host} onContinue={() => {
+        <RecoveryCodesView codes={codes} host={host} continueLabel={enrolContinueLabel(next)} onContinue={() => {
           setCodes(null);
           if (needsPassword) { setError(null); setStage("password"); } else window.location.assign(target);
         }} />

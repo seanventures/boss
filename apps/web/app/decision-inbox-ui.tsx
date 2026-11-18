@@ -19,7 +19,7 @@ import { AreaLink } from "./area-link";
 import { linkTo, navigate } from "./agents/live-util";
 import { reviewPatch } from "./agents/presence-pill";
 import { useAttention } from "../lib/agents-live";
-import { PX_PATHS, parseSummary, usePxRead, type ProjectsSummary } from "../lib/project-experience";
+import { PX_PATHS, approvalCountsOf, parseSummary, usePxRead, type ProjectsSummary } from "../lib/project-experience";
 import { isAreaId } from "../lib/area-ids";
 import { displayTitle } from "../lib/directive-subject";
 import { PrdRecordView } from "./prd-record";
@@ -541,7 +541,18 @@ export function waitingElsewhere(summary: ProjectsSummary | null | undefined, pr
     .filter((c) => !c.archived && c.id !== projectId && (c.needs_you || 0) > 0)
     .map((c) => ({ id: c.id, name: c.name || c.id, count: c.needs_you,
                    href: linkTo({ area: "decisions", project_id: c.id, decision_filter: "needs_action" }, orgId) }));
-  return { total: projects.reduce((t, p) => t + p.count, 0), projects };
+  // The same number the rail's "+N" and the bell count beyond this project (approvalCountsOf).
+  return { total: summary ? approvalCountsOf(null, summary, projectId).elsewhere : 0, projects };
+}
+
+/** The rail's quiet "+N" beside a tab's own count: what waits in the other projects, so the page,
+ *  the rail and the bell read as one set (stranger test r3: "Needs action 0 / All 0" under a bell of 8). */
+export function ElsewhereChip({ total }: { total: number }) {
+  if (!total) return null;
+  return (
+    <span className="dq-filter-count dq-filter-elsewhere" data-testid="decision-filter-elsewhere"
+          title={`${total} in other project${total === 1 ? "" : "s"}`}>+{total}</span>
+  );
 }
 
 export function WaitingElsewhere({ waiting }: { waiting: ElsewhereWaiting }) {
@@ -681,6 +692,7 @@ export function DecisionInbox({
         >
           Needs action
           <span className="dq-filter-count">{actionableCount}</span>
+          <ElsewhereChip total={elsewhere.total} />
         </button>
         <button
           type="button"
@@ -714,6 +726,7 @@ export function DecisionInbox({
         >
           All
           <span className="dq-filter-count">{feed.items.length + setupCount}</span>
+          <ElsewhereChip total={elsewhere.total} />
         </button>
       </div>
 

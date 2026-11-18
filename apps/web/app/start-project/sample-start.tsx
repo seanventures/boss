@@ -104,13 +104,19 @@ export function SampleNeeds({ refusal, accepted, onAccept, testid }: {
 }) {
   if (!refusal) return null;
   const later = laterNeeds(refusal);
+  // NOT NEEDED IS NOT LISTED AS NEEDED (stranger test r3, 2026-11-18): the deploy host sat in
+  // "Setup needed" as "(later, before deploy)" though the sample's PR path never deploys. The
+  // checklist holds only what the PR needs; a later need is accepted with the one tick and said
+  // once, below, as optional.
+  const now = { ...refusal, missing: (refusal.missing ?? []).filter((m) => !later.includes(m.key)) };
+  const accept = (keys: string[]) => onAccept(keys.length ? [...new Set([...keys, ...later])] : []);
   return (
     <div data-testid={testid}>
-      <ReadinessPanel readiness={refusal} accepted={accepted} onAccept={onAccept} />
+      {now.missing.length ? <ReadinessPanel readiness={now} accepted={accepted} onAccept={accept} /> : null}
       {later.includes("deployment_target") ? (
         <p className="dw-ready dw-ready-note" data-testid="sample-later-deploy">
-          A deployment host is not needed to build and open the PR: the run stops for you before it deploys.
-          To deploy on this machine, <a href={consoleHref({ area: "infra", view: "fleet", add: "host", new_project: undefined })} data-testid="sample-add-host">add it as a host in Infra</a> any time before then.
+          <strong>Optional: a server to deploy to.</strong> It is not needed to build and open the PR.
+          To deploy on this machine later, <a href={consoleHref({ area: "infra", view: "fleet", add: "host", new_project: undefined })} data-testid="sample-add-host">add it as a host in Infra</a>.
         </p>
       ) : null}
     </div>

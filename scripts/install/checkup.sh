@@ -242,7 +242,8 @@ console_host=$(printf '%s' "$compiled" | sed -E 's#^[a-z]+://##; s#[:/].*$##')
 if [ -n "$console_host" ] && ! printf '%s' "$console_host" | grep -q '127.0.0.1\|localhost'; then
   CONSOLE_URL="http://${console_host}:${WEB_PORT}"
 else
-  CONSOLE_URL="http://127.0.0.1:${WEB_PORT}"
+  # localhost, like the claim link: 127.0.0.1 is a different site for passkeys and sessions.
+  CONSOLE_URL="http://localhost:${WEB_PORT}"
 fi
 
 # 4. models: connected AND with capacity

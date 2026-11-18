@@ -98,9 +98,12 @@ export function Journey({ nodes: given, size, onOpen, canOpen, testid = "px-jour
   // Days in the viewer's zone (04-02): a dated node's sub and tooltip, written after mount.
   const local = useLocalTime();
   const nodes = given.map((n) => (n.at ? { ...n, ...nodeWords(n, local.day) } : n));
+  const more = useScrollMore<HTMLDivElement>(nodes.length);
   if (!nodes.length) return null;
   return (
-    <div className="px-jr" data-size={size} data-testid={testid} role="list" aria-label="Journey">
+    <div className="px-jr-wrap" data-more-left={more.left || undefined} data-more-right={more.right || undefined}
+         data-testid={`jr-wrap-${testid}`}>
+    <div className="px-jr" ref={more.ref} onScroll={more.update} data-size={size} data-testid={testid} role="list" aria-label="Journey">
       {nodes.map((n, i) => (
         <React.Fragment key={`${n.key}-${i}`}>
           {i ? <span className="px-jr-wire" aria-hidden data-s={nodes[i - 1].state === "done" ? (n.state === "now" ? "now" : n.state === "done" ? "done" : undefined) : undefined} /> : null}
@@ -114,7 +117,43 @@ export function Journey({ nodes: given, size, onOpen, canOpen, testid = "px-jour
         </React.Fragment>
       ))}
     </div>
+    {more.right ? (
+      <button type="button" className="px-jr-more" data-testid={`jr-more-${testid}`} aria-label="More stages"
+              title="More stages: scroll right" onClick={() => more.scroll(1)}>›</button>
+    ) : null}
+    </div>
   );
+}
+
+/** A SIDEWAYS STRIP SAYS IT HAS MORE (stranger test r3, 390 px: the Journey stopped at "Staging"
+ *  with nothing to say it scrolls — a touch screen hides the scrollbar). Which edges hide content,
+ *  re-read on scroll and resize; the strip shows a fade on that edge and a "More stages" chevron. */
+export function useScrollMore<T extends HTMLElement>(dep: unknown) {
+  const ref = useRef<T | null>(null);
+  const [edges, setEdges] = useState({ left: false, right: false });
+  const update = React.useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const left = el.scrollLeft > 2;
+    const right = el.scrollWidth - el.clientWidth - el.scrollLeft > 2;
+    setEdges((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
+  }, []);
+  useEffect(() => {
+    update();
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [update, dep]);
+  const scroll = (dir: 1 | -1) => {
+    const el = ref.current;
+    if (!el) return;
+    if (typeof el.scrollBy === "function") el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: "smooth" });
+    else el.scrollLeft += dir * el.clientWidth * 0.8;
+    update();
+  };
+  return { ref, update, scroll, ...edges };
 }
 
 /** A recommendation's kind in words — ONE map for the Roadmap card and Overview's What's next

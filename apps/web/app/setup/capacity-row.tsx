@@ -109,7 +109,13 @@ export const sourceName = (id: string) => Object.hasOwn(SOURCE_NAMES, id) ? SOUR
  *  the picker no longer lists them (Gemini stays offered as an API key: Google API). An existing
  *  row for one (an install that set it up by hand) still shows in the list. */
 export const NOT_OFFERED = new Set(["cursor_cli", "cursor_api", "google_gemini_cli"]);
-export const offeredInPicker = (id: string): boolean => !NOT_OFFERED.has(id);
+/** DECISIONS ONLY, NOT A MODEL TO ADD (stranger test r3, 2026-11-18): "Decision model (TypeSafe
+ *  Jev)" sat under More sources on a Community install, which runs decisions on Claude Code. It
+ *  writes no code, and its key is added from Decisions when someone has one. So the picker never
+ *  offers it untouched; once a TypeSafe key is configured its row is in use and shows as usual.
+ *  This console is the Community edition (page.tsx), so the rule is unconditional here. */
+export const DECISIONS_ONLY = new Set(["typesafe_jev"]);
+export const offeredInPicker = (id: string): boolean => !NOT_OFFERED.has(id) && !DECISIONS_ONLY.has(id);
 /** The badge: the source's proven pill when the API sends one, else its connection record. */
 export function badgeOf(src: CapSource): { label: string; tone: Tone; proven: boolean } {
   if (src.pill) return { label: src.pill.label, tone: src.pill.tone, proven: true };

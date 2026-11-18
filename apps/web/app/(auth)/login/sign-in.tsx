@@ -36,7 +36,7 @@ import { emailMethodsShown, methodWhyNot, passkeyWhyNot, providerOffers, type Me
 import { CodeInput, Face, Sheet } from "../../../components/identity/kit";
 import { AuthStage, HostLine, Live, Logo, MethodTabs, ProviderRow, safeNextClient, Tip } from "../auth-parts";
 import { CopyCommand } from "../copy-command";
-import { HOST_COMMANDS } from "../../../lib/identity/host-commands";
+import { authenticatorLabel, recoverOwnerCommand } from "../../../lib/identity/host-commands";
 import { localWith } from "../../../lib/local-time";
 
 type Stage =
@@ -254,7 +254,7 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
         <h1>{recovery ? "Use a recovery code" : codeOffered ? "Enter your code" : "Use your passkey"}</h1>
         <p className="idn-s" data-copy="prose">
           {recovery ? "One of the ten codes you saved. Each works once."
-            : codeOffered ? <>Open your authenticator app and enter the 6-digit code for <b>BOSS, {options.org_name}</b>.</>
+            : codeOffered ? <>Open your authenticator app and enter the 6-digit code for <b>{authenticatorLabel(options.org_name)}</b>.</>
             : <>Your password was right. Confirm it&apos;s you with the passkey for <b>{options.host}</b>.</>}
         </p>
         {recovery ? (
@@ -291,7 +291,7 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
             <button type="button" onClick={() => { setStage({ kind: "recovery", step: stage.step }); setCode(""); setError(null); }}><LockSimple size={16} aria-hidden /> Use a recovery code <CaretRight size={13} className="idn-chev" aria-hidden /></button>
           )}
         </div>
-        <p className="idn-fine" data-copy="prose">5 tries per sign-in. Lost every factor? An admin can reset it.</p>
+        <p className="idn-fine" data-copy="prose" data-testid="lost-every-factor">5 tries per sign-in. Lost every factor? The Owner runs <code>{recoverOwnerCommand(options.host_command)}</code> on the server; anyone else, ask an Owner or admin to reset it.</p>
         <Live text={busy ? "Checking" : ""} />
       </AuthStage>
     );
@@ -473,7 +473,7 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
         <Sheet title="Reset your password" icon={<LockSimple size={20} aria-hidden />} onClose={() => setSheet(null)} testId="forgot-sheet">
           <p className="idn-lede2" data-copy="prose">This BOSS sends no email. Ask an admin to send you a reset link.</p>
           <p className="idn-lede2" data-copy="prose">A locked-out sole Owner runs this on the host:</p>
-          <CopyCommand command={HOST_COMMANDS.recoverOwner} />
+          <CopyCommand command={recoverOwnerCommand(options.host_command)} />
           <div className="idn-mf"><span className="idn-spacer" /><button type="button" className="idn-btn primary" onClick={() => setSheet(null)}>Got it</button></div>
         </Sheet>
       ) : null}
