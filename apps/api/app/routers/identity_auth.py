@@ -232,10 +232,12 @@ def _private_client(request: Request) -> Optional[str]:
     return claim_module.site_claim_client(creds.peer_ip, creds.headers.get("x-forwarded-for"))
 
 
-def _host_boss_command() -> str:
+def _public_host_command(*, claimed: bool) -> Optional[str]:
+    """The `boss` command an anonymous caller may read: never a filesystem path once claimed."""
     from boss_engine.identity.host_command import host_boss_command
 
-    return host_boss_command()
+    command = host_boss_command()
+    return None if claimed and command != "boss" else command
 
 
 def build_identity_auth_router() -> APIRouter:
@@ -321,9 +323,10 @@ def build_identity_auth_router() -> APIRouter:
                 # The policy's password minimum, so every "choose a password" field says it.
                 "password_min_length": pol.password_min_length if pol else 12,
                 # This install's `boss` command for host-side fixes (the Forgot? sheet's
-                # recover-owner): a second install's launcher path, since plain `boss` there runs
-                # the first install (stranger test r3). The same value the claim block carries.
-                "host_command": _host_boss_command(),
+                # recover-owner, stranger test r3). This route is public: a launcher PATH is said
+                # only while unclaimed (as the claim block does). After the claim, plain `boss` on
+                # a default install, else None, and the page says "this install's boss command".
+                "host_command": _public_host_command(claimed=claim_info is None),
             }, headers={"Cache-Control": "no-store"})
 
     @router.post("/v1/auth/invitations/preview")

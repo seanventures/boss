@@ -34,6 +34,15 @@ export function recoverOwnerCommand(hostCommand?: string | null): string {
   return HOST_COMMANDS.recoverOwner.replace(/^boss\b/, ownBoss(hostCommand));
 }
 
+/** The recover-owner step for the sign-in page. `/v1/auth/options` is public, so after the claim a
+ *  second install's launcher path is withheld (host_command null): the page then says to run the
+ *  subcommand with "this install's boss command", never a path and never a plain `boss` that would
+ *  run another install. */
+export function recoverOwnerStep(hostCommand: string | null | undefined): { command: string; withOwnBoss: boolean } {
+  if (hostCommand === null) return { command: HOST_COMMANDS.recoverOwner.replace(/^boss\s+/, ""), withOwnBoss: true };
+  return { command: recoverOwnerCommand(hostCommand), withOwnBoss: false };
+}
+
 /** "the 6-digit code for BOSS, Acme": the org's name once, never "BOSS, BOSS" when the org is
  *  still called BOSS (stranger test r3). */
 export function authenticatorLabel(orgName?: string | null): string {

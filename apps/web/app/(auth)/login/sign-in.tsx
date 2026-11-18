@@ -36,7 +36,7 @@ import { emailMethodsShown, methodWhyNot, passkeyWhyNot, providerOffers, type Me
 import { CodeInput, Face, Sheet } from "../../../components/identity/kit";
 import { AuthStage, HostLine, Live, Logo, MethodTabs, ProviderRow, safeNextClient, Tip } from "../auth-parts";
 import { CopyCommand } from "../copy-command";
-import { authenticatorLabel, recoverOwnerCommand } from "../../../lib/identity/host-commands";
+import { authenticatorLabel, recoverOwnerStep } from "../../../lib/identity/host-commands";
 import { localWith } from "../../../lib/local-time";
 
 type Stage =
@@ -291,7 +291,7 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
             <button type="button" onClick={() => { setStage({ kind: "recovery", step: stage.step }); setCode(""); setError(null); }}><LockSimple size={16} aria-hidden /> Use a recovery code <CaretRight size={13} className="idn-chev" aria-hidden /></button>
           )}
         </div>
-        <p className="idn-fine" data-copy="prose" data-testid="lost-every-factor">5 tries per sign-in. Lost every factor? The Owner runs <code>{recoverOwnerCommand(options.host_command)}</code> on the server; anyone else, ask an Owner or admin to reset it.</p>
+        <p className="idn-fine" data-copy="prose" data-testid="lost-every-factor">5 tries per sign-in. Lost every factor? The Owner runs <code>{recoverOwnerStep(options.host_command).command}</code>{recoverOwnerStep(options.host_command).withOwnBoss ? " with this install\u2019s boss command" : ""} on the server; anyone else, ask an Owner or admin to reset it.</p>
         <Live text={busy ? "Checking" : ""} />
       </AuthStage>
     );
@@ -472,8 +472,10 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
       {sheet === "forgot" ? (
         <Sheet title="Reset your password" icon={<LockSimple size={20} aria-hidden />} onClose={() => setSheet(null)} testId="forgot-sheet">
           <p className="idn-lede2" data-copy="prose">This BOSS sends no email. Ask an admin to send you a reset link.</p>
-          <p className="idn-lede2" data-copy="prose">A locked-out sole Owner runs this on the host:</p>
-          <CopyCommand command={recoverOwnerCommand(options.host_command)} />
+          <p className="idn-lede2" data-copy="prose" data-testid="recover-owner-how">{recoverOwnerStep(options.host_command).withOwnBoss
+            ? "A locked-out sole Owner runs this with this install\u2019s boss command, on the server:"
+            : "A locked-out sole Owner runs this on the server:"}</p>
+          <CopyCommand command={recoverOwnerStep(options.host_command).command} />
           <div className="idn-mf"><span className="idn-spacer" /><button type="button" className="idn-btn primary" onClick={() => setSheet(null)}>Got it</button></div>
         </Sheet>
       ) : null}

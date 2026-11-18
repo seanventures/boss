@@ -50,4 +50,4 @@ def test_sign_in_options_carry_the_command_after_the_claim_too() -> None:
     router = (Path(__file__).resolve().parents[2] / "apps/api/app/routers/identity_auth.py").read_text()
     body = router[router.index("def sign_in_options"):router.index("def invitation_preview")]
     top = body[body.index("return JSONResponse({"):]
-    assert '"host_command": _host_boss_command()' in top
+    assert '"host_command": _public_host_command(claimed=claim_info is None)' in top

@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { AFTER_CLAIM, claimResumeHref, enrolContinueLabel, firstOwnerNext } from "../lib/identity/claim-resume";
-import { authenticatorLabel, ownBoss, recoverOwnerCommand, setupLinkCommand } from "../lib/identity/host-commands";
+import { authenticatorLabel, ownBoss, recoverOwnerCommand, recoverOwnerStep, setupLinkCommand } from "../lib/identity/host-commands";
 import type { MeResponse } from "../lib/identity/contract";
 
 const WEB = join(__dirname, "..");
@@ -78,6 +78,12 @@ describe("sign-in words name this install", () => {
     const signIn = read("app/(auth)/login/sign-in.tsx");
     expect(signIn).not.toContain("An admin can reset it.");
     expect(signIn).not.toContain("HOST_COMMANDS.recoverOwner");
-    expect(signIn.match(/recoverOwnerCommand\(options\.host_command\)/g)?.length).toBe(2);
+    expect(signIn.match(/recoverOwnerStep\(options\.host_command\)/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+  it("after the claim, with the path withheld, names the subcommand and 'this install's boss command'", () => {
+    expect(recoverOwnerStep(null)).toEqual({ command: "identity recover-owner --email you@example.com", withOwnBoss: true });
+    expect(recoverOwnerStep("boss")).toEqual({ command: "boss identity recover-owner --email you@example.com", withOwnBoss: false });
+    expect(recoverOwnerStep("/srv/b2/boss").command).toBe("/srv/b2/boss identity recover-owner --email you@example.com");
+    expect(read("app/(auth)/login/sign-in.tsx")).toContain("with this install\\u2019s boss command");
   });
 });

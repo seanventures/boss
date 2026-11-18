@@ -475,8 +475,9 @@ export interface AuthOptions {
     /** This install's `boss` command: `boss`, or a second install's launcher path. */
     host_command?: string | null;
   };
-  /** This install's `boss` command for host-side fixes (recover-owner): `boss`, or a second
-   *  install's launcher path. */
+  /** This install's `boss` command for host-side fixes (recover-owner): `boss`, a second
+   *  install's launcher path while unclaimed, or null after the claim when it is a path (this
+   *  route is public, so no path is said). */
   host_command?: string | null;
 }
 
