@@ -76,7 +76,7 @@ describe("a PRD card whose build is already running", () => {
   it("says the build is running, and that approving starts nothing", () => {
     const row = card(true);
     expect(row.querySelector(".dq-effect")!.textContent).toBe(SAID);
-    expect(row.textContent).not.toContain("starts a governed project");
+    expect(row.textContent).not.toContain("starts the build from it");
     // Approving is not sent as work starting ("the project starts in a few seconds").
     expect(row.querySelector('input[name="starts_work"]')).toBeNull();
     const labels = [...row.querySelectorAll(".dq-actions button[name=\"action\"]")].map((b) => b.textContent);
@@ -85,7 +85,7 @@ describe("a PRD card whose build is already running", () => {
 
   it("an ordinary PRD card still says what approving starts", () => {
     const row = card(false);
-    expect(row.querySelector(".dq-effect")!.textContent).toContain("starts a governed project");
+    expect(row.querySelector(".dq-effect")!.textContent).toContain("starts the build from it");
     expect(row.querySelector('input[name="starts_work"]')).not.toBeNull();
   });
 });

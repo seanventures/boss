@@ -21,7 +21,7 @@ export function isInfraHold(code: string | null | undefined): boolean {
 }
 
 const WHO_WORD: Record<string, string> = { you: "Your move", boss: "BOSS is on it", queue: "In the queue", stuck: "Stuck" };
-const FIX_WORD: Record<string, string> = { needs_model: "Add a model" };
+const FIX_WORD: Record<string, string> = { needs_model: "Add a model", continued: "Open that attempt" };
 const STEP_WORD: Record<string, string> = { stuck: "Stuck", checked: "Checked", cause: "Cause", tried: "Tried", next: "Next" };
 
 export function WhyLine({ why, testId = "why-line", compact = false }: { why: WaitReason | null | undefined; testId?: string; compact?: boolean }) {

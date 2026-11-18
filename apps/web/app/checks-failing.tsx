@@ -8,6 +8,8 @@
  */
 import React from "react";
 
+import { gateFailedWords, gateLabel, plainSentence } from "../lib/plain-words";
+
 export type ChecksFailingGate = { gate: string; label: string; security: boolean; detail?: string };
 export type ChecksFailingFinding = {
   gate: string; stage: string; security: boolean; severity: string; where?: string; text: string;
@@ -30,7 +32,7 @@ export function checksFailingOf(recommendation: Record<string, unknown> | null |
   const r = raw as Record<string, unknown>;
   const gates = (Array.isArray(r.gates) ? r.gates : [])
     .filter((g): g is Record<string, unknown> => !!g && typeof g === "object")
-    .map((g) => ({ gate: str(g.gate), label: str(g.label) || str(g.gate),
+    .map((g) => ({ gate: str(g.gate), label: str(g.label) || gateLabel(str(g.gate)),
                    security: g.security === true, detail: str(g.detail) || undefined }))
     .filter((g) => g.gate);
   if (!gates.length) return null;
@@ -66,11 +68,16 @@ export function ChecksFailing({ record }: { record: ChecksFailingRecord }) {
         {record.gates.map((g) => (
           <li key={g.gate} data-security={g.security || undefined}>
             {g.security ? <b>Security, </b> : null}
-            <b>{g.label}</b> <span className="v2-mono">({g.gate})</span>
-            {g.detail ? <>: {g.detail}</> : null}
+            <b>{g.gate ? gateFailedWords(g.gate) : plainSentence(g.label)}</b>
+            {g.detail ? <>: {plainSentence(g.detail)}</> : null}
           </li>
         ))}
       </ul>
+      {/* The gate keys, for whoever needs to grep a log: folded, never in the sentence. */}
+      <details className="dq-muted" data-testid="decision-checks-keys">
+        <summary>Check names</summary>
+        <span className="v2-mono">{record.gates.map((g) => g.gate).join(", ")}</span>
+      </details>
       {record.findings.length ? (
         <details open={record.security} data-testid="decision-checks-findings">
           <summary>{record.findings.length} open finding{record.findings.length === 1 ? "" : "s"}</summary>
@@ -95,7 +102,8 @@ export function failingGateLabels(r: Record<string, unknown>): string {
   const gates = cf && Array.isArray(cf.gates) ? cf.gates : [];
   return gates
     .map((g) => (g && typeof g === "object"
-      ? String((g as Record<string, unknown>).label || (g as Record<string, unknown>).gate || "")
+      ? ((g as Record<string, unknown>).gate ? gateFailedWords(String((g as Record<string, unknown>).gate))
+        : String((g as Record<string, unknown>).label || ""))
       : ""))
     .filter(Boolean)
     .join(", ");

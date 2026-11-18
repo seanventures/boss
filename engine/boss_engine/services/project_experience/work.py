@@ -1162,9 +1162,35 @@ def everything(connection: Connection, project_id: str, *, limit: int = 60,
     ready = _ticket_ready_items(connection, project_id, now, tickets)
     out = found[:limit] + planned + ready
     _with_tickets(out, tickets)
+    _in_plain_words(out)
     if is_local_project(connection, project_id):
         _in_local_words(out)
     return out
+
+
+def _in_plain_words(found: list[dict[str, Any]]) -> None:
+    """THE ONE PLAIN-WORDS PASS (plain_words.py): no "· retry N", raw repair prompt or gate key
+    in a row's name, its reason or its attempts (e2e recipe-box walk, 2026-11-18)."""
+    from ..plain_words import plain_sentence, plain_title
+
+    def plain(item: dict[str, Any], keys: tuple[str, ...] = ("label", "title")) -> None:
+        for key in keys:
+            if isinstance(item.get(key), str):
+                item[key] = plain_title(item[key])
+        if isinstance(item.get("detail"), str):
+            item["detail"] = plain_sentence(item["detail"])
+        why = item.get("why")
+        if isinstance(why, dict) and isinstance(why.get("words"), str):
+            item["why"] = {**why, "words": plain_sentence(why["words"])}
+
+    for w in found:
+        if isinstance(w, dict):
+            plain(w)
+            for a in w.get("attempts") or []:
+                if isinstance(a, dict):
+                    # An attempt's `label` ("Follow-up 2 · retry 1") is its place in the list,
+                    # said beside its name; its `title` is the work's name.
+                    plain(a, ("title",))
 
 
 #: A LOCAL PROJECT'S PR STATION IS ITS CHANGE SET (BOSSAPP-946): no GitHub word on a project

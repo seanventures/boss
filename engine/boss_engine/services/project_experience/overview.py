@@ -281,6 +281,18 @@ def _cost_week(connection: Connection, project_id: str, now: datetime) -> dict[s
             "href": href(project_id, area="budget", tab="limits")}
 
 
+POLISHING_WORDS = "BOSS is polishing (follow-up)"
+
+
+def polishing(item: dict[str, Any]) -> bool:
+    """The work's running attempt is BOSS's automatic follow-up (its own attempts list, newest
+    first: a "Follow-up N · …" label, project_experience.work.label_attempts)."""
+    attempts = item.get("attempts") or []
+    newest = attempts[0] if attempts and isinstance(attempts[0], dict) else None
+    return bool(newest) and (newest.get("kind") == "followup"
+                             or str(newest.get("label") or "").startswith("Follow-up"))
+
+
 def tiles(project_id: str, items: list[dict[str, Any]], envs: list[dict[str, Any]],
           cost: dict[str, Any]) -> dict[str, Any]:
     by_state = work_service.counts(items)
@@ -297,8 +309,13 @@ def tiles(project_id: str, items: list[dict[str, Any]], envs: list[dict[str, Any
         doing = {"plan": "Planning", "design": "Designing", "build": "Building",
                  "review": "Reviewing", "pr": "Opening PR", "ship": "Shipping"}.get(
             str((now_stage or {}).get("key")), "Working")
+        if polishing(w):
+            # ONLY BOSS'S OWN FOLLOW-UP IS RUNNING (e2e recipe-box): the change is in; BOSS is
+            # tidying what review left — never "Building" as if the work were not done.
+            doing = POLISHING_WORDS
         current = {"id": w["id"], "label": w["label"], "progress": [done, len(live)],
                    "sub": f"{doing} · {w['age']}" if w.get("age") else doing,
+                   "polishing": polishing(w),
                    "agent": (w.get("agents") or [None])[0], "href": w["href"]}
     staging = next((e for e in envs if str(e["key"]).lower() in ("staging", "stage")), None) or \
         next((e for e in envs if str(e["key"]).lower() not in PRODUCTION), None)

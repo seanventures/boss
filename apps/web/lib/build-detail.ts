@@ -17,6 +17,8 @@ import { arr, num, obj, opt, str } from "./factory-floor";
 export type VerifyResult = {
   runId: string; attempt: number; own: boolean; at?: string; ok: boolean | null;
   passed: number | null; failed: number | null; total: number | null; failing: string[];
+  /** A suite the runner could not load (engine verify_counts): the counts never read "passed". */
+  loadError?: string;
 };
 export type GatesResult = { runId: string; attempt: number; own: boolean; at?: string; passed: string[]; failed: string[] };
 export type Seeded = {
@@ -61,6 +63,7 @@ export function parseSummary(w: unknown): BuildSummary | null {
       runId: str(v.run_id), attempt: num(v.attempt, 1), own: v.own === true, at: opt(v.at),
       ok: typeof v.ok === "boolean" ? v.ok : null,
       passed: optNum(v.passed), failed: optNum(v.failed), total: optNum(v.total), failing: strs(v.failing),
+      loadError: opt(v.load_error),
     } : null,
     gates: g ? { runId: str(g.run_id), attempt: num(g.attempt, 1), own: g.own === true, at: opt(g.at),
                  passed: strs(g.passed), failed: strs(g.failed) } : null,
@@ -81,7 +84,9 @@ export function mins(seconds: number): string {
 }
 
 /** `7/11 failed` · `11/11 passed` · `Failed` (a runner that printed no counts). */
-export function testsWord(v: Pick<VerifyResult, "passed" | "failed" | "total" | "ok">): string {
+export function testsWord(v: Pick<VerifyResult, "passed" | "failed" | "total" | "ok"> & { loadError?: string }): string {
+  // A suite that never loaded ran none of its tests: never "passed" (engine verify_counts).
+  if (v.loadError) return v.failed ? `${v.failed} failed · a suite did not load` : "A suite did not load";
   const total = v.total ?? ((v.passed ?? 0) + (v.failed ?? 0) || null);
   if (v.failed && total) return `${v.failed}/${total} failed`;
   if (v.failed === 0 && total) return `${total}/${total} passed`;

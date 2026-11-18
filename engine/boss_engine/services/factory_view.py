@@ -353,6 +353,7 @@ class Cockpit(TypedDict, total=False):
     summary: dict[str, Any]        # build_detail.now_summary: what it is doing now
     why: Optional[dict[str, Any]]  # stuck_work.wait_reason: what it waits for, in words
     diagnosis: Optional[dict[str, Any]]  # stuck_work.public_diagnosis: what the Shepherd found
+    continued: Optional[dict[str, Any]]  # continuation.continued_in: where its repair went
 
 
 # ── labels and sentences (§5.1) ─────────────────────────────────────────────────────────────
@@ -933,6 +934,13 @@ def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]
         # itself once the blocker clears.
         return out("needs_person", "Needs you · reply",
                    "Paused for a person's reply. Costs nothing meanwhile.", "Needs you")
+    from .continuation import handed_on as _handed_on
+
+    if _handed_on(run):
+        # ITS REPAIR CONTINUED IN THE NEXT ATTEMPT (continuation.py): history, not a failure
+        # and not a stall; the page says where it went and offers no Retry, Steer or Stop.
+        return out("blocked", "Continued", "Its repair continued in the next attempt",
+                   "Handed on")
     if status == "blocked":
         if phase == "awaiting_plan_approval":
             return out("needs_plan", "Needs you · plan", "Approve the plan to start building",
@@ -2672,6 +2680,10 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
         for name, ok in ([(g, True) for g in passed] + [(g, False) for g in failed]
                          + [(g, False) for g in skipped]):
             ev = skipped.get(name) or gate_evidence.get(name)
+            if name in skipped:
+                from .plain_words import plain_skip
+
+                ev = plain_skip(ev)
             if not isinstance(ev, str) or not ev.strip():
                 # The row's evidence is keyed by evidence names, not gate names (gate_reason).
                 ev = gate_reason(name, ok, gate_evidence or evidence, run)
@@ -2880,7 +2892,19 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
     agent_list = sorted(({"role_key": k, "state": v} for k, v in agents.items()),
                         key=lambda a: a["state"] != "working")
     ok, why = _retry_offer(run)
-    live = row["state"] in ("building", "queued", "quiet", "budget_wait", "needs_plan")
+    # HANDED ON (continuation.py): where its repair went, on the header, the wait line and the
+    # diagnosis — the stored "press Retry" diagnosis of the blocked attempt is not shown.
+    from .continuation import continued_in
+
+    try:
+        cont = continued_in(connection, run)
+    except Exception:  # noqa: BLE001 — the page still renders the attempt as it is
+        cont = None
+    if cont is not None:
+        st["word"], st["tip"], st["verb"] = "Continued", cont["words"], "Handed on"
+        ok, why = False, cont["words"]
+    live = row["state"] in ("building", "queued", "quiet", "budget_wait", "needs_plan") \
+        and cont is None
     fctx = run.get("finalize_ctx") or {}
     origin = row.get("origin") or lineage_origin(connection, project_id, run)
     out: Cockpit = {
@@ -2890,7 +2914,8 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
         "started_at": row.get("started_at"), "station_since": row.get("station_since"),
         "cost_usd": row["cost_usd"], "included_usd": row.get("included_usd") or 0,
         "metered": row["metered"], "live": live,
-        "stoppable": str(run.get("status")) in ("running", "repairing", "blocked"),
+        "stoppable": str(run.get("status")) in ("running", "repairing", "blocked")
+        and cont is None,
         "retryable": ok, "retry_reason": why,
         "failure": failure_line(fctx, run.get("error")) if row["state"] == "failed" else None,
         "lineage": _lineage(connection, project_id, run, now, viewer),
@@ -2908,8 +2933,20 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
         "routes": _routes(connection, run_id),
         # Why it waits, and what the Shepherd found when it stopped moving (stuck_work).
         "why": waiting,
-        "diagnosis": stuck_work.public_diagnosis(fctx, connection=connection, run=run),
+        "diagnosis": (None if cont is not None else
+                      stuck_work.public_diagnosis(fctx, connection=connection, run=run)),
+        "continued": cont,
     }
+    # THE ONE PLAIN-WORDS PASS (plain_words.py): the attempt counter, the raw repair prompt and
+    # gate keys never reach the page; the records keep them.
+    from .plain_words import plain_note, plain_title
+
+    out["run"]["title"] = plain_title(out["run"].get("title"))
+    for entry in out["lineage"] or []:
+        if isinstance(entry, dict) and entry.get("title"):
+            entry["title"] = plain_title(entry["title"])
+    if isinstance(out["summary"], dict) and out["summary"].get("note"):
+        out["summary"]["note"] = plain_note(out["summary"]["note"])
     for key in ("finalize_ctx", "spec", "state"):
         out["run"].pop(key, None)
     out["etag"] = _etag({k: v for k, v in out.items() if k != "etag"})

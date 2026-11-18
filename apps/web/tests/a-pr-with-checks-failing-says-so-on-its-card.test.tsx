@@ -100,7 +100,7 @@ describe("a merge card whose checks are failing", () => {
     expect(row.querySelector('[data-testid="decision-checks-security"]')!.textContent)
       .toBe("security finding open");
     const gates = [...banner.querySelectorAll('[data-testid="decision-checks-gates"] li')];
-    expect(gates[0].textContent).toContain("Security clean");
+    expect(gates[0].textContent).toContain("Security findings open");   // the failure, never the pass label
     expect(gates[1].textContent).toContain("2 of 14 tests fail");
     const findings = banner.querySelector('[data-testid="decision-checks-findings"]')!;
     expect(findings.hasAttribute("open")).toBe(true);
