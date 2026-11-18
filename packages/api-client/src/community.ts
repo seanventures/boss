@@ -6732,7 +6732,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
         "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/override`,
         { body: { waive_gates: waiveGates, reason: reason ?? "", actor } });
     },
-    startPreview(runId: string, ttlMinutes?: number, actor = "executive_console", freshData = false) {
+    startPreview(runId: string, ttlMinutes?: number, actor = "executive_console") {
       return request<{
         id: string; status: string; url?: string; error?: string;
         // library/CLI builds have no live URL — they are "run" by executing their tests:
@@ -6740,8 +6740,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
         passed?: boolean; output?: string; message?: string;
       }>(
         "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/preview`,
-        // fresh_data: delete the app's kept preview data first, so it starts empty.
-        { body: { ttl_minutes: ttlMinutes ?? 60, actor, ...(freshData ? { fresh_data: true } : {}) } });
+        { body: { ttl_minutes: ttlMinutes ?? 60, actor } });
     },
     stopPreview(previewId: string, actor = "executive_console") {
       return request<{ status: string }>(

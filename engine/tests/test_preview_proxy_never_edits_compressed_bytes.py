@@ -44,6 +44,10 @@ ROUTES: dict[str, tuple[str, str | None, bytes]] = {
     "/logo-gz.png": ("image/png", "gzip", gzip.compress(PNG)),
     "/unknown": ("text/html", "zstd", b"\x28\xb5\x2f\xfd-not-really-zstd"),
     "/missing": ("text/html", "gzip", gzip.compress(b"<html><head></head><body>404</body></html>")),
+    # A hostile app that ignores identity: 64 MB of zeros in ~64 KB of gzip.
+    "/bomb": ("text/html", "gzip", gzip.compress(b"\0" * (64 << 20), compresslevel=9)),
+    "/bomb.js": ("application/javascript", "gzip, gzip",
+                 gzip.compress(gzip.compress(b"\0" * (64 << 20), compresslevel=9))),
 }
 
 
@@ -148,20 +152,8 @@ def test_an_encoding_this_host_cannot_undo_is_passed_on_labelled_and_untouched(u
     assert headers["Content-Encoding"] == "zstd"
 
 
-def test_brotli_html_is_decoded_or_passed_on_untouched(monkeypatch):
-    """br: decoded where the brotli module is installed, else passed on still labelled br —
-    never spliced into."""
-    class _FakeBrotli:
-        @staticmethod
-        def decompress(raw: bytes) -> bytes:
-            assert raw == b"BR:" + HTML
-            return HTML
-
-    import sys
-
-    monkeypatch.setitem(sys.modules, "brotli", _FakeBrotli)
-    assert preview_service._plain_body(b"BR:" + HTML, "br") == (HTML, "")
-    monkeypatch.setitem(sys.modules, "brotli", None)   # import brotli -> ImportError
+def test_brotli_is_passed_on_untouched_never_spliced_into():
+    """br cannot be decoded with a bounded output here, so it is passed on, still labelled br."""
     assert preview_service._plain_body(b"BR:" + HTML, "br") == (b"BR:" + HTML, "br")
 
 
@@ -197,3 +189,42 @@ def test_the_browser_gets_the_page_through_the_apis_gzip_middleware(upstream):
 def test_the_browsers_accept_encoding_is_never_forwarded():
     got = preview_service.forwarded_preview_headers({"Accept-Encoding": "gzip, br", "X-A": "1"})
     assert {k.lower() for k in got} == {"x-a"}
+
+
+def test_a_decompression_bomb_is_refused_without_being_decoded(upstream, monkeypatch):
+    """Review of #223 (B1): 0.5 MB of gzip decoded to 512 MB in the API process. Decoding is
+    bounded: past BOSS_PREVIEW_MAX_BODY_MB the answer is a 502, and memory stays near the cap."""
+    import tracemalloc
+
+    monkeypatch.setenv("BOSS_PREVIEW_MAX_BODY_MB", "1")
+    tracemalloc.start()
+    try:
+        for path in ("/bomb", "/bomb.js"):
+            status, ctype, data, _headers = _proxy(path)
+            assert status == 502, path
+            assert b"too large to show" in data
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 8 * 1024 * 1024, f"decoding held {peak} bytes"
+    # The default cap (32 MB) refuses the 64 MB body too, and a body under the cap decodes.
+    monkeypatch.delenv("BOSS_PREVIEW_MAX_BODY_MB")
+    assert _proxy("/bomb")[0] == 502
+    assert _proxy("/")[0] == 200
+
+
+def test_more_than_two_stacked_encodings_are_never_decoded():
+    thrice = gzip.compress(gzip.compress(gzip.compress(HTML)))
+    assert preview_service._plain_body(thrice, "gzip, gzip, gzip") == (thrice, "gzip, gzip, gzip")
+    twice = gzip.compress(gzip.compress(HTML))
+    assert preview_service._plain_body(twice, "gzip, gzip") == (HTML, "")
+
+
+def test_a_multi_member_gzip_body_decodes_whole():
+    body = gzip.compress(b"<html><head>") + gzip.compress(b"</head></html>")
+    assert preview_service._plain_body(body, "gzip") == (b"<html><head></head></html>", "")
+
+
+def test_a_truncated_stream_is_passed_on_as_it_came():
+    cut = gzip.compress(HTML)[:-20]
+    assert preview_service._plain_body(cut, "gzip") == (cut, "gzip")
