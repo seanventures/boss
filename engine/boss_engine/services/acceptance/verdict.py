@@ -79,7 +79,7 @@ _DECL_PATH = re.compile(r"(?i)(^|/)(go\.(mod|sum)|package(-lock)?\.json|[^/]*\.l
 _TEST_PATH = re.compile(r"(?i)(^|/)(tests?|__tests__|spec|testdata)/|_test\.\w+$|\.(test|spec)\.\w+$"
                         r"|(^|/)test_[^/]*$")
 #: The reviewer's wiring claim (acceptance_prompt): "LOADED BY <file>:<symbol>".
-_LOADED_BY = re.compile(r"(?i)\bLOADED\s+BY\s+`?([\w.\-/]+?):`?([A-Za-z_][\w$]*(?:\.[A-Za-z_$][\w$]*)*)`?")
+_LOADED_BY = re.compile(r"(?i)\bLOADED\s+BY\s+`?([\w.\-/]+?)`?:`?([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)`?")
 
 
 def _resolve(root: Path, cited: str) -> Optional[str]:
