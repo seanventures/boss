@@ -66,7 +66,7 @@ def _template(tmp_path, template_id: str):
     root.mkdir()
     (root / "csv.yaml").write_text(
         f"id: {template_id}\ntitle: CSV quality desk\nblurb: Check a CSV.\ncategory: app\n"
-        "prompt: Build a CSV quality desk.\nstack: vite-react\nresources: []\n"
+        "prompt: Build a CSV quality desk.\nstack: vite-react\ntoolchain: node\nresources: []\n"
         "workflows:\n  - name: Build the desk\n    steps:\n      - Read the CSV\n",
         encoding="utf-8")
     return root

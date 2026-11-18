@@ -106,7 +106,7 @@ That test can be a real call. It is budgeted, and it is not proof that a later b
 
 With a repository and a model connected, pick one way to start:
 
-- **Command Center:** pick a template (for example **CSV quality desk**) or describe an app, and press **Easy Mode**.
+- **Command Center:** pick a template (for example **CSV quality desk**) or describe an app, and press **Easy Mode**. Templates build web apps, browser games, maps, 3D/XR pages, data tools and small services in Python or Node; a card marked **Needs Go** is built in Go and starts once you run `boss toolchains enable go` on the BOSS host. BOSS does not build Android or iOS apps.
 - **Try a sample** on **Projects › Add project**: a small sample app, kept on this machine. If something is still missing, the **Setup needed** box lists it up front; **Start anyway** lets you add it before the step that needs it.
 - **On a project you already have:** open it, press **New work**, describe one small change, and start it.
 

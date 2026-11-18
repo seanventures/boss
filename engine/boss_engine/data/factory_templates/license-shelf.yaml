@@ -13,6 +13,7 @@ prompt: |
   Build the program into bin/ (go build -o bin/licenseshelf .), which the project's .gitignore ignores;
   never leave a compiled binary in the repository.
 stack: Go
+toolchain: go
 resources:
   - repo
   - preview

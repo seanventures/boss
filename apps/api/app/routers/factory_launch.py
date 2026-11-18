@@ -2,7 +2,9 @@
 
 POST /v1/factory/launch        {prompt, mode, template_id, attachment_ids, github_repo}
 POST /v1/factory/attachments   multipart specs, files and images, or a connected Drive source
-GET  /v1/factory/templates     the yaml catalogue, skipping files that are not the schema
+GET  /v1/factory/templates     the yaml catalogue, skipping files that are not the schema; each
+                               template says whether this install can build it (`available`,
+                               `needs`: an opt-in toolchain such as Go that is not turned on)
 
 A launch that cannot name a project and a run is a failure. A build start that needs the
 person's consent answers 409 consent_required with the kept `project_id`: the project is
