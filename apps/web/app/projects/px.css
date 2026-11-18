@@ -887,3 +887,12 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
   border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink-soft); font-size: var(--fs-title); line-height: 1;
   cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.18); }
 .px-jr-more:hover { color: var(--teal); border-color: var(--teal); }
+
+/* A FAILED BUILD (engine work.failed_build): red wherever it is summarised — the header chip,
+   the Needs-you card and pill, the Recent-work row's word. Tokens only. */
+.px a.px-tag[data-failed] { text-decoration: none; cursor: pointer; }
+.px a.px-tag[data-failed]:hover { filter: brightness(1.08); }
+.px-needs-item[data-tone="red"] { background: var(--red); color: #fff; }
+.px-ny[data-tone="red"] { background: color-mix(in srgb, var(--red) 7%, var(--surface)); border-color: color-mix(in srgb, var(--red) 30%, transparent); }
+.px-ny-ico[data-tone="red"] { background: var(--red); color: #fff; }
+.px-wk-failed { color: var(--red); font-weight: 650; }

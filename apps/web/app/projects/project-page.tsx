@@ -387,8 +387,18 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
                      p95Words(staging?.p95_ms, staging?.window)].filter(Boolean).join(" · ") + " — opens Health"}>
             <span className="px-dot" data-s={health} data-round aria-hidden />{healthChipText(p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "No health yet", p95Words(staging?.p95_ms, staging?.window))}</a>
           <HealthWhy sentence={healthReasonSentence(healthWhy)} />
+          {/* A FAILED LATEST BUILD (engine work.failed_build): red "Build failed", its reason on
+              hover, a link to the build's row — never "Working" over a build that failed. */}
+          {!onboarding && p.build_failed ? (
+            <a className="px-tag" data-tone="red" data-testid="px-head-status" data-failed
+               href={pxHref(p.build_failed.work_href || `?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=work`)}
+               title={`${p.build_failed.label}: ${p.build_failed.reason} — opens the build`}
+               onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); ctx.open("work", p.build_failed!.id); }}>
+              <WarningCircle size={11} aria-hidden /> Build failed</a>
+          ) : (
           <span className="px-tag" data-tone={onboarding ? "blue" : "green"} data-testid="px-head-status" title="Project stage on the journey">{onboarding ? <><Compass size={11} aria-hidden /> Onboarding</>
             : <>{(() => { const I = STAGE_ICON[p.stage] ?? Compass; return <I size={11} aria-hidden />; })()} {p.status_label || "Ready"}</>}</span>
+          )}
           {onboarding && elapsed ? <span className="px-mono px-faint" style={{ fontSize: "var(--fs-meta)" }} data-testid="px-head-elapsed">{clockWords(elapsed)}</span> : null}
         </div>
       </div>
@@ -451,8 +461,10 @@ function NeedsBar({ ctx, onboarding }: { ctx: PxCtx; onboarding: Onboarding | nu
       <span className="px-ny-ico" aria-hidden>!</span>
       <b>{n} need{n === 1 ? "s" : ""} you</b>
       {items.map((it) => (
-        <button key={it.id} type="button" className="px-needs-item" data-testid={`px-needs-${it.id}`} onClick={() => ctx.open("needs", it.id)}>
-          {it.kind === "merge" ? <GitMerge size={12} aria-hidden /> : it.kind === "deploy" ? <RocketLaunch size={12} aria-hidden />
+        <button key={it.id} type="button" className="px-needs-item" data-testid={`px-needs-${it.id}`} data-tone={it.kind === "failed" ? "red" : undefined}
+                title={it.kind === "failed" ? it.detail : undefined}
+                onClick={() => (it.kind === "failed" && it.work_id ? ctx.open("work", it.work_id) : ctx.open("needs", it.id))}>
+          {it.kind === "failed" ? <WarningCircle size={12} aria-hidden /> : it.kind === "merge" ? <GitMerge size={12} aria-hidden /> : it.kind === "deploy" ? <RocketLaunch size={12} aria-hidden />
             : it.icon === "cloud" ? <CloudCheck size={12} aria-hidden /> : it.kind === "plan" ? <ListChecks size={12} aria-hidden /> : <HandWaving size={12} aria-hidden />}{it.label}
         </button>
       ))}

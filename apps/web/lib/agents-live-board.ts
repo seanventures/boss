@@ -53,6 +53,8 @@ export function teamOfAgent(roleKey: string): { key: string; label: string; tip?
  *  `system_health` is the machine: a system-doctor finding (or a Shepherd question) that needs
  *  a person's choice (stability spec §4d). */
 export type AttentionKind = "approval" | "failed_step" | "readiness" | "gate_override" | "budget_refused"
+  /** A build that failed and nothing took over (factory_view.failed_build_rows): Retry, See what happened. */
+  | "build_failed"
   | "system_health" | "infra";
 export type DecisionKindWire = "workflow_gate" | "deploy_gate" | "pull_request" | "refusal" | "general"
   // Read in Approvals, never decided inline: a person approves the document they read.

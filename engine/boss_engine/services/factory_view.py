@@ -1441,6 +1441,7 @@ def build_attention_rows(connection: Any, project_id: str,
                 "role_key": None, "failing": [], "where": f"before {STATION_LABELS[nxt]}",
                 "at": _iso(b.get("updated_at")), "error": b.get("error"),
             })
+    rows += failed_build_rows(connection, project_id)
     by_decision: dict[str, dict[str, Any]] = {}
     ids = [str(d.get("id")) for d in decisions if d.get("id")]
     plan_runs = {str(_j(d.get("recommendation"), {}).get("run_id") or ""): str(d.get("id"))
@@ -1473,6 +1474,45 @@ def build_attention_rows(connection: Any, project_id: str,
     return {"blocked": rows, "by_decision": by_decision}
 
 
+#: How far back a failed build still asks for a Retry (command_center.STALE_FAILURE's reach).
+FAILED_BUILD_REACH_DAYS = 14
+
+
+def failed_build_rows(connection: Any, project_id: str) -> list[dict[str, Any]]:
+    """BUILDS THAT FAILED AND NOTHING TOOK OVER: each build started on its own whose newest
+    attempt failed in the last two weeks — no retry, follow-up or later attempt of its lineage
+    after it. Before this a failed build reached no card: the Command Center, the bell and Live
+    listed only builds blocked at their checks or budget, so a build that died ("git add
+    failed", recipe-box 2026-11-18) looked like nothing at all. A build a workflow run owns is
+    left to that run's failed-step card; BOSS's own housekeeping builds are not listed."""
+    from .code_task_service import _internal_run_prefixes  # noqa: SLF001 — the one definition
+    from .project_experience.work import failure_words
+
+    params: dict[str, Any] = {"p": project_id, "days": FAILED_BUILD_REACH_DAYS}
+    clauses = []
+    for i, prefix in enumerate(_internal_run_prefixes()):
+        clauses.append(f"lower(coalesce(r.title, '')) NOT LIKE :pre{i}")
+        params[f"pre{i}"] = f"{prefix}%"
+    out = []
+    for r in connection.execute(text(
+            "SELECT r.id, r.title, r.spec, r.finalize_ctx, r.error, r.updated_at "
+            "FROM code_task_runs r WHERE r.project_id = :p AND r.status = 'failed' "
+            "AND r.updated_at >= now() - make_interval(days => :days) "
+            "AND COALESCE(r.finalize_ctx->>'workflow_run_id', '') = '' "
+            + ("AND " + " AND ".join(clauses) + " " if clauses else "")
+            + "AND NOT EXISTS (SELECT 1 FROM code_task_runs n WHERE n.project_id = r.project_id "
+            "AND n.id <> r.id AND n.created_at > r.created_at "
+            "AND (n.finalize_ctx->>'parent_run_id' = r.id "
+            "OR COALESCE(n.finalize_ctx->>'root_run_id', n.id) "
+            "= COALESCE(r.finalize_ctx->>'root_run_id', r.id))) "
+            "ORDER BY r.updated_at DESC LIMIT 20"), params).mappings().all():
+        out.append({"kind": "build_failed", "run_id": r["id"], "app": app_name(dict(r)),
+                    "role_key": None, "failing": [], "where": "Build failed",
+                    "at": _iso(r.get("updated_at")), "error": r.get("error"),
+                    "reason": failure_words(r.get("error"))})
+    return out
+
+
 def attention_build(info: Mapping[str, Any]) -> dict[str, Any]:
     """The `build` an attention item carries (lib/agents-live-board.ts AttentionBuild)."""
     failing = [{"name": g, "label": gate_label(g), "waivable": g not in UNWAIVABLE_GATES,
@@ -1481,7 +1521,8 @@ def attention_build(info: Mapping[str, Any]) -> dict[str, Any]:
                for g in info.get("failing") or []]
     out: dict[str, Any] = {"run_id": info.get("run_id"), "app": info.get("app") or "",
                            "where": info.get("where") or "", "failing": failing,
-                           "retryable": info.get("kind") in ("gate_override", "budget_refused"),
+                           "retryable": info.get("kind") in ("gate_override", "budget_refused",
+                                                             "build_failed"),
                            "retry_reason": None}
     for key in ("pr_url", "preview_url", "plan_url"):
         if info.get(key):

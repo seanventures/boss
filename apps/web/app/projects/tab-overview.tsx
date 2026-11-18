@@ -25,6 +25,7 @@ import { ChangeLink } from "../change-link";
 import { GitHubWait } from "../../components/github-wait";
 import { ExtensionSlots } from "../extension-frame";
 import { addFeaturePatch } from "../../lib/compose-links";
+import { RetryBuildButton, SeeWhatHappened } from "./build-failed";
 
 /** Each Needs-you card's icon, by what it asks. */
 const NEED_ICON: Record<string, Icon> = { merge: GitMerge, deploy: RocketLaunch, plan: ListChecks, setup: Wrench, question: Question };
@@ -38,6 +39,27 @@ const NEXT_KIND_WORDS: Record<string, string> = {
   feature: "Feature", test_gap: "Test gap", incident_hotspot: "Incident hotspot", alert_gap: "Alert gap", bug: "Bug", ticket: "Ticket", chore: "Chore",
   security: "Security", dependency: "Dependency", performance: "Performance", docs: "Docs",
 };
+
+/** A FAILED BUILD in Needs you (engine work.failed_card): red, the reason in words, Retry (the
+ *  build's resume) and See what happened (the build's page). The title opens its Work row. */
+function FailedNeed({ it, ctx, fresh }: { it: PxCtx["overview"]["needs_you"][number]; ctx: PxCtx; fresh: boolean }) {
+  const open = () => (it.work_id ? ctx.open("work", it.work_id) : ctx.tab("work"));
+  return (
+    <div className="px-ny" data-tone="red" data-testid={`px-ov-ny-${it.id}`} data-new={fresh ? "1" : undefined}
+         role="button" tabIndex={-1} onClick={(e) => { if ((e.target as HTMLElement).closest("button,a")) return; open(); }}>
+      <span className="px-ny-ico" data-tone="red" aria-hidden><Warning size={12} weight="bold" /></span>
+      <div className="px-ny-b">
+        <button type="button" className="px-wk-t" onClick={open}>{it.label}</button>
+        <small className="px-faint" style={{ display: "block" }} data-testid={`px-ov-ny-why-${it.id}`}>{it.detail}</small>
+      </div>
+      <span className="px-row" style={{ gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+        {it.retry ? <RetryBuildButton runId={it.retry.run_id} projectId={ctx.projectId} actor={ctx.actor} testid={`px-ov-ny-retry-${it.id}`}
+                                      onDone={() => { ctx.refreshWork(); ctx.refreshOverview?.(); }} /> : null}
+        {it.see_href ? <SeeWhatHappened href={it.see_href} testid={`px-ov-ny-see-${it.id}`} /> : null}
+      </span>
+    </div>
+  );
+}
 
 /** What each crew member does, in one word (screen 04's crew row). */
 const CREW_VERB: Record<string, string> = {
@@ -140,7 +162,8 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
           {t.open_work ? <WorkBar by={t.open_work.by_state} /> : null}</>}
         </Tile>
         <Tile label="Running" icon={Lightning} c="teal" testid="px-tile-running"
-              onClick={() => (t.running?.current?.id ? ctx.open("work", t.running.current.id) : goHref(ctx, t.running?.href ?? "", () => ctx.tab("work")))}>
+              onClick={() => (t.running?.current?.id ? ctx.open("work", t.running.current.id)
+                : t.running?.failed?.id ? ctx.open("work", t.running.failed.id) : goHref(ctx, t.running?.href ?? "", () => ctx.tab("work")))}>
           {failed("tile_running") ?? (t.running?.current ? (
             <div className="px-row">
               <Ring pct={t.running.current.progress[1] ? (100 * t.running.current.progress[0]) / t.running.current.progress[1] : 30} tone="teal"
@@ -152,6 +175,12 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
                   {t.running.current.agent ? <Face agent={t.running.current.agent} size={18} state="working" /> : null}
                   <span>{t.running.current.sub || t.running.current.agent?.name}</span></div>
               </div>
+            </div>
+          ) : t.running?.failed ? (
+            // NOTHING RUNNING BECAUSE THE LAST BUILD FAILED: said, in red, with its reason.
+            <div style={{ minWidth: 0 }} data-testid="px-tile-running-failed">
+              <div className="px-row" style={{ color: "var(--red)", fontWeight: 600 }}><Warning size={13} aria-hidden /> Last build failed</div>
+              <div className="px-ell px-faint" style={{ fontSize: ".58rem" }} title={t.running.failed.reason}>{t.running.failed.label} · {t.running.failed.reason}</div>
             </div>
           ) : <span className="px-faint">Nothing running</span>)}
         </Tile>
@@ -204,6 +233,7 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
             <div className="px-card-h"><Ico icon={HandWaving} c="amber" /><h2 id="px-ov-ny">Needs you</h2><span className="px-nbadge" data-tone={ov.needs_you.length ? "amber" : undefined}>{ov.needs_you.length}</span></div>
             {failed("needs_you") ?? (ov.needs_you.length ? ov.needs_you.map((it) => {
               const KindIcon = (it.icon === "cloud" ? Cloud : NEED_ICON[it.kind]) ?? Question;
+              if (it.kind === "failed") return <FailedNeed key={it.id} it={it} ctx={ctx} fresh={fresh(it.id)} />;
               return (
                 <div key={it.id} className="px-ny" data-testid={`px-ov-ny-${it.id}`} data-new={fresh(it.id) ? "1" : undefined}
                      role="button" tabIndex={-1} onClick={(e) => { if ((e.target as HTMLElement).closest("button,a")) return; ctx.open("needs", it.id); }}>
@@ -302,7 +332,7 @@ function MiniRow({ w, ctx }: { w: WorkItem; ctx: PxCtx }) {
       <span className="px-dot" data-s={w.state === "running" ? "now" : w.state === "needs_you" || w.state === "stalled" ? "you" : w.state === "failed" ? "bad" : w.state === "done" ? "done" : undefined} aria-hidden />
       <span style={{ minWidth: 0 }}>
         <button type="button" className="px-wk-t px-ell" style={{ display: "block", maxWidth: "100%" }} title={w.detail || w.label} onClick={(e) => { e.stopPropagation(); open(); }}>{w.label}</button>
-        <span className="px-wk-sub"><span>{w.state === "stalled" ? "Stalled" : w.links.pr ? <ChangeLink url={w.links.pr.external_url} number={w.links.pr.number} icon={false} className="px-linkbtn" merged={w.state === "done"} testid={`px-ov-pr-${w.id}`} /> : KIND_WORDS[w.kind] ?? w.kind}</span>{workWhen(w) ? <span className="px-mono">{workWhen(w)}</span> : null}
+        <span className="px-wk-sub"><span>{w.state === "failed" ? <b className="px-wk-failed" data-testid={`px-ov-failed-${w.id}`}>Failed</b> : w.state === "stalled" ? "Stalled" : w.links.pr ? <ChangeLink url={w.links.pr.external_url} number={w.links.pr.number} icon={false} className="px-linkbtn" merged={w.state === "done"} testid={`px-ov-pr-${w.id}`} /> : KIND_WORDS[w.kind] ?? w.kind}</span>{workWhen(w) ? <span className="px-mono">{workWhen(w)}</span> : null}
           <Cost usd={w.cost_usd} list={w.list_usd} /></span>
       </span>
       {/* 04 at 390: the station strip stays (wireframe .wk-row > .st); faces and the chevron go. */}

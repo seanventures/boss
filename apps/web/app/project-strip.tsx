@@ -34,22 +34,25 @@ type StripProject = {
 };
 
 /** ALL first, because most of the time you want the whole picture; the others narrow it. */
-const FILTERS = ["ALL", "RUNNING", "GATED", "DONE"] as const;
+const FILTERS = ["ALL", "RUNNING", "FAILED", "GATED", "DONE"] as const;
 const STRIP_LABEL = "Builds";
 type Filter = (typeof FILTERS)[number];
 const FILTER_LABELS: Record<Filter, string> = {
   ALL: "All",
   RUNNING: "Building",
+  FAILED: "Failed",
   GATED: "Gated",
   DONE: "Shipped",
 };
 
-/** Which statuses each filter admits. STUCK belongs under RUNNING: it is work that started and
- *  has not finished, and hiding it under a tab nobody opens is how a stalled project stays
- *  invisible for a day. */
+/** Which statuses each filter admits. STUCK (the engine's word for an app whose newest build
+ *  failed, console_v2._stage_of) is FAILED, never "Building": the stranger test counted a failed
+ *  build as "Building 1" (r5). It stays in ALL, sorts first and counts as needing attention, so
+ *  it is never hidden under a tab nobody opens. */
 const ADMITS: Record<Filter, (status: string) => boolean> = {
   ALL: () => true,
-  RUNNING: (s) => s === "RUNNING" || s === "STUCK",
+  RUNNING: (s) => s === "RUNNING",
+  FAILED: (s) => s === "STUCK",
   GATED: (s) => s === "GATED",
   DONE: (s) => s === "DONE",
 };
@@ -414,13 +417,14 @@ export function ProjectStrip({ projectId, area, chip = false }: { projectId: str
             key={p.id}
             className="bx-strip-item"
             onClick={() => open(p)}
-            title={`${p.title}, ${p.status.toLowerCase()}, ${p.stage.toLowerCase()} ${p.pct}%`}
+            title={p.status === "STUCK" ? `${p.title}, build failed` : `${p.title}, ${p.status.toLowerCase()}, ${p.stage.toLowerCase()} ${p.pct}%`}
             data-testid={`bx-strip-${p.id}`}
           >
             <span className="bx-strip-dot" data-status={p.status} aria-hidden />
             <span className="bx-strip-name">{p.title}</span>
+            {p.status === "STUCK" ? <span className="bx-strip-alert" data-tone="bad" data-testid={`bx-strip-failed-${p.id}`}>Failed</span> : <>
             <span className="bx-strip-stage">{p.status === "DONE" ? "Shipped" : p.stage}</span>
-            {p.status !== "DONE" ? <span className="bx-strip-pct">{p.pct}%</span> : null}
+            {p.status !== "DONE" ? <span className="bx-strip-pct">{p.pct}%</span> : null}</>}
             {p.status === "GATED" ? <span className="bx-strip-alert">Gated</span> : null}
           </button>
         ))}

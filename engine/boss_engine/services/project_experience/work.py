@@ -422,6 +422,11 @@ def _build_strip(r: Mapping[str, Any], state: str) -> list[dict[str, str]]:
 
     review = "failed" if repairing else st(3, 3)
     pr = "waiting" if merge_open else "done" if pr_url else "todo" if repairing else st(4, 4)
+    if state == "failed" and at == len(phases) - 1 and not pr_url:
+        # FAILED AFTER ITS LAST PHASE (phase 'done', no PR): it stopped saving or opening its
+        # change — the PR station failed, never a strip of ticks over a build that failed
+        # (recipe-box 2026-11-18: "git add failed" read B ✓ R ✓ PR ✓).
+        pr = "failed"
     return [{"key": "plan", "label": "P", "name": "Plan", "state": "skipped"},
             {"key": "design", "label": "D", "name": "Decide", "state": "skipped"},
             {"key": "build", "label": "B", "name": "Build", "state": st(0, 2)},
@@ -748,7 +753,11 @@ def _run_items(connection: Connection, project_id: str, limit: int,
                                          (merge or {}).get("decision_id")) if d],
             "detail": (r["directive"] or r["error"] or r["blocked_reason"] or r["workflow"]),
             "workflow": r["workflow"],
+            # Why it failed, in the run's (or its latest build's) own words: failed_build reads it.
+            "error": ((build or {}).get("error") if str((build or {}).get("status") or "") == "failed"
+                      else None) or r["error"] or r["blocked_reason"] or None,
             "build_id": str(build["id"]) if build else None,
+            "build_status": str((build or {}).get("status") or ""),
             "href": project_href(project_id, tab="work", drawer=f"run:{rid}"),
             **group,
         })
@@ -815,7 +824,9 @@ def _build_items(connection: Connection, project_id: str,
             "decision_ids": [merge["decision_id"]] if merge is not None else [],
             "action_label": "Merge" if merge is not None else None,
             "detail": latest.get("error") or title,
+            "error": latest.get("error") or None,
             "build_id": str(latest["id"]),
+            "build_status": str(latest.get("status") or ""),
             "href": project_href(project_id, tab="work", drawer=f"build:{key}"),
             **group,
         })
@@ -1059,6 +1070,92 @@ def _with_why(connection: Connection, found: list[dict[str, Any]]) -> None:
             elif why["who"] == "stuck":
                 w["state"] = "stalled"
                 w["stalled_since"] = w.get("stalled_since") or why.get("since")
+
+
+#: A sandbox tag the engine appends to an error ("[substrate=local_subprocess]"): not words.
+_SUBSTRATE = re.compile(r"\s*\[substrate=[^\]]*\]")
+_EXC_PREFIX = re.compile(r"^(?:[A-Za-z_][\w.]*(?:Error|Exception)|fatal|error):\s*", re.I)
+
+
+def failure_words(error: Any) -> str:
+    """A build's failure as a person reads it: one sentence, never a stack or a sandbox tag.
+    The raw error stays on the run (its page shows it in full) for whoever needs it."""
+    from ..agent_health import plain_cause
+
+    raw = str(error or "").strip()
+    if not raw:
+        return "BOSS didn't record why it stopped."
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    # A traceback names the failure on its LAST line; anything else on its first.
+    line = lines[-1] if lines[0].startswith("Traceback") else lines[0]
+    line = _SUBSTRATE.sub("", line).strip()
+    while _EXC_PREFIX.match(line):
+        line = _EXC_PREFIX.sub("", line, count=1).strip()
+    low = line.lower()
+    if "permission denied" in low and ("git" in low or ".git/" in low):
+        return ("It couldn't save its changes: git was not allowed to write to the build's "
+                "copy of the repo (permission denied).")
+    if "permission denied" in low:
+        return "It couldn't write a file it needed (permission denied)."
+    cause = plain_cause(line) or ""
+    if cause and not cause.startswith("it failed:"):
+        return cause[0].upper() + cause[1:] + "."
+    line = re.sub(r":\s*(?:fatal|error):\s*", ": ", line)
+    if len(line) > 160:
+        line = line[:157].rstrip(" ,;:") + "…"
+    return (line[0].upper() + line[1:]) if line else "BOSS didn't record why it stopped."
+
+
+#: The work a project's builds are: what failed_build looks at (onboarding and planned rows are not).
+_BUILD_SOURCES = ("code_task", "workflow_run")
+
+
+def failed_build(project_id: str, found: Iterable[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
+    """THE PROJECT'S LATEST BUILD, WHEN IT FAILED — the one read every surface that summarises a
+    project's builds uses (the header chip, the journey, the Running tile, Needs you, the
+    projects list), so none of them says "Working" over a build that failed (recipe-box
+    2026-11-18). None when the newest build is anything else: a later run moving, done or
+    waiting on a person makes an older failure history, not the project's state.
+
+    `retry` resumes the failed build (POST /v1/code-tasks/{id}/retry: a new attempt on the same
+    branch with the findings carried forward); `see_href` is that build's page."""
+    built = [w for w in found if w.get("source") in _BUILD_SOURCES and w.get("state") != "planned"]
+    if not built:
+        return None
+    w = max(built, key=lambda x: str(x.get("last_attempt_at") or x.get("created_at") or ""))
+    if w.get("state") != "failed" or str(w.get("status") or "") not in ("failed", "deadlettered"):
+        return None
+    build_id = w.get("build_id") or None
+    own = str(w.get("build_status") or "") == "failed"
+    error = w.get("error") or (w.get("why") or {}).get("detail")
+    if build_id and own:
+        see = href(project_id, area="code_tasks", build=build_id)
+    else:
+        see = (w.get("links") or {}).get("workflow_run") or (
+            href(project_id, area="code_tasks", build=build_id) if build_id else w.get("href"))
+    return {
+        "id": w["id"], "label": w.get("label") or "Build", "build_id": build_id,
+        "reason": failure_words(error),
+        "at": (w.get("why") or {}).get("since") or w.get("updated_at"),
+        # Retry is the build's own resume; a workflow run whose build did not fail is retried
+        # from its failed step on its page (See what happened), never restarted from here.
+        "retry": ({"run_id": build_id, "href": f"/v1/code-tasks/{build_id}/retry",
+                   "method": "POST"} if build_id and own else None),
+        "see_href": see,
+        "work_href": w.get("href"),
+    }
+
+
+def failed_card(project_id: str, failed: Mapping[str, Any]) -> dict[str, Any]:
+    """failed_build as a Needs-you card: red, its reason, Retry and See what happened."""
+    return {"id": f"failed:{failed['id']}", "kind": "failed", "label": f"Build failed: {failed['label']}",
+            "detail": failed["reason"], "mini": [], "work_id": failed["id"],
+            "created_at": failed.get("at"), "retry": failed.get("retry"),
+            "see_href": failed.get("see_href"),
+            "action": ({"label": "Retry", "href": failed["retry"]["href"], "decision_id": None}
+                       if failed.get("retry") else
+                       {"label": "See what happened", "href": failed.get("see_href") or "",
+                        "decision_id": None})}
 
 
 def everything(connection: Connection, project_id: str, *, limit: int = 60,

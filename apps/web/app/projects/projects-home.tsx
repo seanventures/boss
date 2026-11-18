@@ -214,7 +214,10 @@ export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChan
   const deployed = card.journey.some((j) => (j.key === "staging" || j.key === "production") && j.state === "done");
   // THE CHIP SAYS THE REAL STATE: Needs you · Onboarding · Working (only while something
   // runs, teal and live) · Live · Idle — never "Working" over a card that says idle.
-  const pill = card.needs_you ? <Tag tone="amber">{card.needs_you} need you</Tag>
+  // A FAILED LATEST BUILD (engine overview.latest_failed) is said first, in red, with its reason.
+  const pill = card.build_failed && !card.archived && !card.running
+    ? <Tag tone="red" title={`${card.build_failed.label}: ${card.build_failed.reason}`}><span data-testid={`px-card-failed-${card.id}`}>Build failed</span></Tag>
+    : card.needs_you ? <Tag tone="amber">{card.needs_you} need you</Tag>
     : card.onboarding_active ? <Tag tone="blue">Onboarding</Tag>
     : card.archived ? <Tag tone="idle">Archived</Tag>
     : card.running > 0 ? <Tag tone="teal"><span className="px-dot" data-s="now" data-round aria-hidden />Working</Tag>

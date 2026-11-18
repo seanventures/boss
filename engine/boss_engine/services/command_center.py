@@ -230,7 +230,7 @@ def step_index(steps_done: int, step_count: int, status: Any = None) -> int:
 
 #: Attention items that are work which has STOPPED (a failed step; a build stopped at its checks
 #: or its budget, factory §6.5) — listed first, counted apart from decisions.
-STOPPED_KINDS = frozenset({"failed_step", "gate_override", "budget_refused"})
+STOPPED_KINDS = frozenset({"failed_step", "gate_override", "budget_refused", "build_failed"})
 
 
 def attention_counts(items: list[Mapping[str, Any]]) -> dict[str, int]:
@@ -449,12 +449,19 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             answers = [{"key": "retry", "label": "Retry", "state": "enabled"},
                        {"key": "waive", "label": "Waive…", "state": "enabled"}]
             detail = " · ".join(f["label"] for f in info["failing"])
+        elif b["kind"] == "build_failed":
+            # A BUILD THAT FAILED (factory_view.failed_build_rows): the reason in words, Retry
+            # (resume on its branch) and its page to see what happened.
+            title = f"Build failed: {b.get('app') or 'Build'}"
+            answers = [{"key": "retry", "label": "Retry", "state": "enabled"}]
+            detail = str(b.get("reason") or "") or _first_line(b.get("error"))
         else:
             title = "Budget refused"
             answers = [{"key": "retry", "label": "Retry", "state": "enabled"}]
             detail = _first_line(b.get("error")) or "Over the build budget."
+        suffix = {"gate_override": "gates", "build_failed": "failed"}.get(b["kind"], "budget")
         needs_you.append({
-            "id": f"build:{b['run_id']}:{'gates' if b['kind'] == 'gate_override' else 'budget'}",
+            "id": f"build:{b['run_id']}:{suffix}",
             "kind": b["kind"], "title": title, "detail": detail,
             "what_to_do": None, "run_id": None, "build_run_id": b["run_id"],
             "role_key": b.get("role_key"), "actions": [a["key"] for a in answers],
@@ -490,7 +497,7 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
     # A STOPPED RUN FIRST (agents-home D12): it has already stopped, and its card was hidden
     # under "+6 more" behind routine gates. Then gates, riskiest first; then notices; setup last.
     def rank(item: Mapping[str, Any]) -> tuple[int, int, str]:
-        if item["kind"] in ("failed_step", "gate_override", "budget_refused"):
+        if item["kind"] in STOPPED_KINDS:
             # A build stopped at its checks or its budget has stopped too (factory spec §6.5).
             first = 0
         elif item["kind"] == "system_health" and item.get("severity") == "critical":
@@ -525,7 +532,7 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             "failed_steps": sum(1 for n in needs_you if n["kind"] == "failed_step"),
             "readiness": sum(1 for n in needs_you if n["kind"] == "readiness"),
             "builds": sum(1 for n in needs_you
-                          if n["kind"] in ("gate_override", "budget_refused")),
+                          if n["kind"] in ("gate_override", "budget_refused", "build_failed")),
             "succeeded_7d": sum(1 for r in recent if r["outcome"] == "succeeded"),
             "failed_7d": sum(1 for r in recent if r["outcome"] in ("failed", "deadlettered")),
         },

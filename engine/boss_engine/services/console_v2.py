@@ -310,7 +310,12 @@ def _stage_of(runs: list[dict]) -> tuple[str, str]:
     any_pr = any(r.get("pull_request_url") for r in runs)
     any_running = any(str(r.get("status")) == "running" for r in runs)
     any_done = any(str(r.get("status")) in _DONE_STATES for r in runs)
-    all_failed = runs and all(str(r.get("status")) in _FAILED_STATES for r in runs)
+    # THE NEWEST ATTEMPT FAILED (and nothing is moving): the app is stopped, whatever an older
+    # attempt did — never "Building" over a build that failed (stranger test r5: "Building 1"
+    # over a failed build).
+    newest = max(runs, key=lambda r: str(r.get("created_at") or "")) if runs else None
+    all_failed = bool(runs) and (all(str(r.get("status")) in _FAILED_STATES for r in runs)
+                                 or str((newest or {}).get("status")) in _FAILED_STATES)
 
     if any_done and any_pr:
         return "SHIPPED", DONE
