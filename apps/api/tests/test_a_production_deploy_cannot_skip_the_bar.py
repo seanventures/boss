@@ -17,6 +17,8 @@ from boss_engine.services import quality_bar
 from boss_engine.services.resource_plane import ResourcePlaneService
 
 PROJECT = "boss-dogfood"
+JUDGED = "a" * 40
+OTHER = "b" * 40
 PASSED = '["code_review_passed","security_clean","consistent","acceptance_met"]'
 GAPS = {
     "acceptance": {"verdict": "not_met", "stack": {}, "items": [
@@ -32,8 +34,8 @@ def world(engine):
     with engine.begin() as c:
         c.execute(text(
             "INSERT INTO code_task_runs (id, project_id, status, title, spec, finalize_ctx) "
-            "VALUES (:r, :p, 'completed', 'App', '{}'::jsonb, '{}'::jsonb)"),
-            {"r": run_id, "p": PROJECT})
+            "VALUES (:r, :p, 'completed', 'App', '{}'::jsonb, CAST(:f AS jsonb))"),
+            {"r": run_id, "p": PROJECT, "f": json.dumps({"final_head_sha": JUDGED})})
         c.execute(text(
             "INSERT INTO quality_gates (id, project_id, code_task_run_id, risk_tier, status, "
             "fail_closed, gates_passed, gates_failed, evidence) VALUES (:i, :p, :r, 1, 'pass', "
@@ -134,3 +136,55 @@ def test_the_exemptions_are_exactly_a_same_commit_reship_and_a_config_target(eng
             c, target={**target, "target_kind": "config_dir"}, release_packet={}) is None
         assert quality_bar.plan_refusal(
             c, target={**target, "environment": "staging"}, release_packet={}) is None
+
+
+def test_a_production_release_ships_the_commit_its_build_judged(client, engine, world):
+    """Name a PASSING build with a different commit: refused. No commit (or a branch name): the
+    build's own commit is what ships."""
+    suffix = uuid4().hex[:8]
+    good = f"crun_ok{suffix}"
+    with engine.begin() as c:
+        c.execute(text(
+            "INSERT INTO code_task_runs (id, project_id, status, title, spec, finalize_ctx) "
+            "VALUES (:r, :p, 'completed', 'Good', '{}'::jsonb, CAST(:f AS jsonb))"),
+            {"r": good, "p": PROJECT, "f": json.dumps({"final_head_sha": JUDGED})})
+        c.execute(text(
+            "INSERT INTO quality_gates (id, project_id, code_task_run_id, risk_tier, status, "
+            "fail_closed, gates_passed, gates_failed, evidence) VALUES (:i, :p, :r, 1, 'pass', "
+            "true, CAST(:gp AS jsonb), '[]'::jsonb, '{}'::jsonb)"),
+            {"i": f"qgok_{suffix}", "p": PROJECT, "r": good, "gp": PASSED})
+
+    def create(ref):
+        return client.post("/v1/deployment-runs", json={
+            "project_id": PROJECT, "deployment_target_id": world.target, "commit_ref": ref,
+            "release_packet": {"code_task_run_id": good}, "expected_cost_usd_micros": 0,
+            "actor": "ceo"})
+
+    before = _count(engine, world.target)
+    refused = create(OTHER)
+    assert refused.status_code == 409, refused.text
+    assert "the commit is not the one the build judged" in refused.text
+    assert _count(engine, world.target) == before
+    # its own commit ships; so do no commit and a branch name (they take the build's commit)
+    for ref in (JUDGED, JUDGED[:12], None, "main"):
+        response = create(ref)                    # past the bar (a later host check may stop it)
+        assert "judged" not in response.text and "production quality bar" not in response.text, (
+            ref, response.text)
+    target = {"id": world.target, "environment": "production", "target_kind": "ssh"}
+    packet = {"code_task_run_id": good}
+    with engine.begin() as c:
+        assert quality_bar.plan_decision(c, target=target, release_packet=packet,
+                                         commit_ref=None) == (None, JUDGED)
+        assert quality_bar.plan_decision(c, target=target, release_packet=packet,
+                                         commit_ref="main") == (None, JUDGED)
+        assert quality_bar.plan_decision(c, target=target, release_packet=packet,
+                                         commit_ref=JUDGED[:12]) == (None, JUDGED[:12])
+        said, _ = quality_bar.plan_decision(c, target=target, release_packet=packet,
+                                            commit_ref=OTHER)
+        assert said and "the commit is not the one the build judged" in said
+        # a build that recorded no commit cannot be checked against what it judged
+        c.execute(text("UPDATE code_task_runs SET finalize_ctx = '{}'::jsonb WHERE id = :r"),
+                  {"r": good})
+        said, _ = quality_bar.plan_decision(c, target=target, release_packet=packet,
+                                            commit_ref=JUDGED)
+        assert said and "recorded no commit" in said

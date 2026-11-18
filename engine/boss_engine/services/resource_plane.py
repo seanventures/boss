@@ -2403,12 +2403,14 @@ class ResourcePlaneService:
         # here, so a promotion from staging and a direct deploy meet the same production bar.
         from . import quality_bar as _quality_bar
 
-        bar_refusal = _quality_bar.plan_refusal(connection, target=target,
-                                                release_packet=release_packet,
-                                                commit_ref=commit_ref, reships=reships)
+        bar_refusal, bar_commit = _quality_bar.plan_decision(
+            connection, target=target, release_packet=release_packet, commit_ref=commit_ref,
+            reships=reships)
         if bar_refusal:
             return {"status": "failed", "refused": True, "failure_reason": bar_refusal,
                     "quality_bar": "production"}
+        if bar_commit:
+            commit_ref = bar_commit     # a production release ships the commit its build judged
         if expected_cost_usd_micros > 0 and not reservation_id:
             decision_id = create_blocking_decision(
                 connection,

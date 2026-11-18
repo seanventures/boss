@@ -3762,6 +3762,19 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
                         "merge_state": merge.get("state"),
                         "manual_merge_pending": bool(merge.get("manual")),
                         "said": unmerged})
+    # A PRODUCTION RELEASE SHIPS THE COMMIT ITS BUILD JUDGED (quality_bar): a pinned commit or the
+    # merge commit must be the build's own (its recorded heads) or the merge of its pull request
+    # observed above. (A `pull/N` ref is the PR's head, resolved by the deploy itself.)
+    if _quality_bar.is_production(target.get("environment")) and _SHA.match(str(ref or "")):
+        with engine.begin() as connection:
+            known = _quality_bar.build_commits(connection, run_id)
+        known += [str(merge.get("sha") or "").lower()] if merge.get("sha") else []
+        given = str(ref).lower()
+        if known and not any(k.startswith(given) or given.startswith(k) for k in known if k):
+            return {"capability": "deploy", "tool": None, "status": "failed",
+                    "error": _quality_bar.NOT_THE_JUDGED_COMMIT.format(
+                        given=given[:12], known=", ".join(k[:12] for k in known)),
+                    "quality_bar": "production"}
     try:
         deployment = plan_stack_deploy(
             engine, settings, project_id=project_id, target_id=target["id"],

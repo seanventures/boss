@@ -755,46 +755,111 @@ def _reships_a_prior_production_run(connection: Any, target: Mapping[str, Any],
                 and str(prior["commit_ref"]).strip() == str(commit_ref).strip())
 
 
-def plan_refusal(connection: Any, *, target: Mapping[str, Any],
-                 release_packet: Optional[Mapping[str, Any]],
-                 commit_ref: Optional[str] = None,
-                 reships: Optional[str] = None) -> Optional[str]:
-    """THE ONE PLACE every production deployment passes (ResourcePlaneService.plan_deployment_run):
-    the production bar for a release to a production target, whichever door it came through (a
-    deploy, a promotion, a manual deploy, the API, a skill).
+_HEX = __import__("re").compile(r"^[0-9a-f]{7,40}$")
 
-    The ONLY exemptions: a redeploy/rollback that re-ships the exact commit of a prior production
-    deployment on this target (`reships`, passed by trusted code only, verified here), and a
-    config-only target (a directory of files: its own promotion checks apply). Every other
-    production release must name a build that passes the production bar: the packet's
-    `code_task_run_id`, or for a promotion the build behind the deployment it was promoted from.
-    A packet's own `source` ("redeploy"...) exempts nothing. No build named is refused."""
-    if not is_production((target or {}).get("environment")):
-        return None
-    if str((target or {}).get("target_kind") or "").strip().lower() == "config_dir":
-        return None
-    if _reships_a_prior_production_run(connection, target, commit_ref, reships):
-        return None
-    packet = dict(release_packet or {})
-    run_id = str(packet.get("code_task_run_id") or "") or None
-    if run_id:
-        return production_refusal(connection, code_task_run_id=run_id)
-    # A PROMOTION: the build is behind the deployment it was promoted from. The staging
-    # deployment the orchestrator plans for the promotion carries no build of its own, so the
-    # original staged deployment (`promoted_from_run`) is read first.
+NOT_THE_JUDGED_COMMIT = ("the commit is not the one the build judged ({given} is not among the "
+                         "build's judged commits: {known}). A production release ships the commit "
+                         "its named build passed the bar on; release that commit, or re-check "
+                         "this one.")
+
+
+def build_commits(connection: Any, run_id: str) -> list[str]:
+    """The commits a build judged, best first: its recorded `final_head_sha`, its merge commit,
+    and the head its pull request / merge card recorded (`recommendation.head_sha`)."""
     import json
 
     from sqlalchemy import text
 
-    for dep_id in (packet.get("promoted_from_run"), packet.get("promoted_from"),
-                   (packet.get("staging_gate") or {}).get("deployment_run_id")):
-        if not dep_id:
-            continue
-        found = connection.execute(text(
-            "SELECT release_packet FROM deployment_runs WHERE id = :i"),
-            {"i": str(dep_id)}).scalar()
-        found = json.loads(found) if isinstance(found, str) else (found or {})
-        if found.get("code_task_run_id"):
-            return production_refusal(connection,
-                                      code_task_run_id=str(found["code_task_run_id"]))
-    return NOT_JUDGED.format(why="this production release names no build")
+    row = connection.execute(text(
+        "SELECT r.finalize_ctx, d.recommendation FROM code_task_runs r "
+        "LEFT JOIN decisions d ON d.id = r.decision_id WHERE r.id = :i"), {"i": run_id}
+    ).mappings().first()
+    if row is None:
+        return []
+
+    def j(v: Any) -> dict:
+        v = json.loads(v) if isinstance(v, str) else v
+        return v if isinstance(v, dict) else {}
+
+    fctx, rec = j(row["finalize_ctx"]), j(row["recommendation"])
+    found = [fctx.get("final_head_sha"), (fctx.get("merge") or {}).get("sha"),
+             rec.get("head_sha")]
+    return [str(x).strip().lower() for x in found
+            if x and _HEX.match(str(x).strip().lower())]
+
+
+def _commit_check(connection: Any, run_id: str, commit_ref: Optional[str]
+                  ) -> tuple[Optional[str], Optional[str]]:
+    """(refusal, the commit to ship) for a release of build `run_id` at `commit_ref`. A release
+    ships the commit its build judged: a given commit must be one of the build's; a release with
+    no commit, or a named ref (a branch such as `main`), takes the build's own commit. A build that
+    recorded no commit cannot be verified and is refused."""
+    known = build_commits(connection, run_id)
+    given = str(commit_ref or "").strip().lower()
+    if not known:
+        return (NOT_JUDGED.format(why="the build recorded no commit, so the release cannot be "
+                                      "checked against what it judged"), None)
+    if not given or not _HEX.match(given):
+        return None, known[0]
+    if any(k.startswith(given) or given.startswith(k) for k in known):
+        return None, str(commit_ref).strip()
+    return NOT_THE_JUDGED_COMMIT.format(given=given[:12], known=", ".join(k[:12] for k in known)), None
+
+
+def plan_decision(connection: Any, *, target: Mapping[str, Any],
+                  release_packet: Optional[Mapping[str, Any]],
+                  commit_ref: Optional[str] = None,
+                  reships: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
+    """THE ONE PLACE every production deployment passes (ResourcePlaneService.plan_deployment_run):
+    (refusal, commit to ship) for a release to a production target, whichever door it came
+    through (a deploy, a promotion, a manual deploy, the API, a skill).
+
+    The ONLY exemptions: a redeploy/rollback that re-ships the exact commit of a prior production
+    deployment on this target (`reships`, passed by trusted code only, verified here), and a
+    config-only target (a directory of files: its own promotion checks apply). Every other
+    production release must name a build that passes the production bar (the packet's
+    `code_task_run_id`, or for a promotion the build behind the deployment it was promoted from)
+    AND ship the commit that build judged (`_commit_check`). A packet's own `source`
+    ("redeploy"...) exempts nothing. No build named is refused."""
+    if not is_production((target or {}).get("environment")):
+        return None, None
+    if str((target or {}).get("target_kind") or "").strip().lower() == "config_dir":
+        return None, None
+    if _reships_a_prior_production_run(connection, target, commit_ref, reships):
+        return None, None
+    packet = dict(release_packet or {})
+    run_id = str(packet.get("code_task_run_id") or "") or None
+    if not run_id:
+        # A PROMOTION: the build is behind the deployment it was promoted from. The staging
+        # deployment the orchestrator plans for the promotion carries no build of its own, so the
+        # original staged deployment (`promoted_from_run`) is read first.
+        import json
+
+        from sqlalchemy import text
+
+        for dep_id in (packet.get("promoted_from_run"), packet.get("promoted_from"),
+                       (packet.get("staging_gate") or {}).get("deployment_run_id")):
+            if not dep_id:
+                continue
+            found = connection.execute(text(
+                "SELECT release_packet FROM deployment_runs WHERE id = :i"),
+                {"i": str(dep_id)}).scalar()
+            found = json.loads(found) if isinstance(found, str) else (found or {})
+            if found.get("code_task_run_id"):
+                run_id = str(found["code_task_run_id"])
+                break
+    if not run_id:
+        return NOT_JUDGED.format(why="this production release names no build"), None
+    refused = production_refusal(connection, code_task_run_id=run_id)
+    if refused:
+        return refused, None
+    return _commit_check(connection, run_id, commit_ref)
+
+
+def plan_refusal(connection: Any, *, target: Mapping[str, Any],
+                 release_packet: Optional[Mapping[str, Any]],
+                 commit_ref: Optional[str] = None,
+                 reships: Optional[str] = None) -> Optional[str]:
+    """The refusal half of `plan_decision`."""
+    return plan_decision(connection, target=target, release_packet=release_packet,
+                         commit_ref=commit_ref, reships=reships)[0]
