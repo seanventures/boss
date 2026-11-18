@@ -188,3 +188,20 @@ def test_a_production_release_ships_the_commit_its_build_judged(client, engine, 
         said, _ = quality_bar.plan_decision(c, target=target, release_packet=packet,
                                             commit_ref=JUDGED)
         assert said and "recorded no commit" in said
+
+
+def test_a_merged_build_ships_its_merge_commit_never_the_pre_merge_head(engine, world):
+    """After a squash merge the PR head is not on main: only the merge commit is accepted, and it
+    is what ships by default. (An unmerged build ships its PR head.)"""
+    merge = "c" * 40
+    with engine.begin() as c:
+        c.execute(text("UPDATE code_task_runs SET finalize_ctx = finalize_ctx || CAST(:m AS jsonb) "
+                       "WHERE id = :r"),
+                  {"m": json.dumps({"merge": {"sha": merge, "source": "boss"}}), "r": world.run})
+        # (the build's evidence passes at standard only; judge the commit rule directly)
+        assert quality_bar.build_commits(c, world.run) == [merge]
+        said, _ = quality_bar._commit_check(c, world.run, JUDGED)
+        assert said and "not the one the build judged" in said
+        assert quality_bar._commit_check(c, world.run, None) == (None, merge)
+        assert quality_bar._commit_check(c, world.run, "main") == (None, merge)
+        assert quality_bar._commit_check(c, world.run, merge[:10]) == (None, merge[:10])

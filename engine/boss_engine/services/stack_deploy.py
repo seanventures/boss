@@ -2089,8 +2089,10 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
             raise StackDeployError(bar_refusal, "Release a build that passes the production bar "
                                    "(see what is listed), or re-check it at the production bar.",
                                    status_code=409)
-        if bar_commit and not re.match(r"^pull/\d+$", str(ref or "")):
-            ref = bar_commit          # a branch name or no commit: ship what the build judged
+        if bar_commit:
+            # A production release ships the commit its build judged: a branch name, no commit and
+            # `pull/N` (any PR, or this PR after new pushes) are all replaced by it.
+            ref = bar_commit
         host = get_host(connection, str(target.get("host_id") or "")) if target.get("host_id") \
             else None
         if not host:

@@ -66,6 +66,21 @@ def test_the_direct_plan_route_needs_a_build_that_passes_and_ships_its_commit(cl
     assert _count(engine, target) == 0, "a production stack release was planned past the bar"
 
 
+def test_a_pull_ref_never_ships_an_unjudged_head_to_a_production_stack_target(client, engine, stack):
+    """`pull/N` is treated like any other ref: replaced by the commit the named build judged (the
+    fake GitHub resolves pull/7 to an UNJUDGED head, and pull/99 to itself)."""
+    target = _production(engine, stack)
+    good = _build(engine, {})
+    for ref in ("pull/7", "pull/99", "main"):
+        response = client.post("/v1/deployments/stack/plan", json={
+            "project_id": HOME, "target_id": target, "ref": ref, "actor": "ceo", "run_id": good})
+        assert response.status_code == 200, (ref, response.text)
+        assert response.json()["deployment"]["commit"] == JUDGED, (ref, response.json())
+        with engine.begin() as c:
+            c.execute(text("UPDATE stack_deployments SET status = 'rejected' WHERE target_id = :t"),
+                      {"t": target})
+
+
 def test_the_console_target_deploy_is_judged_too(client, engine, stack):
     target = _production(engine, stack)
     response = client.post(f"/v1/infra/targets/{target}/deploy", json={

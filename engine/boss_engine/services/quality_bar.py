@@ -831,8 +831,12 @@ def build_commits(connection: Any, run_id: str) -> list[str]:
         return v if isinstance(v, dict) else {}
 
     fctx, rec = j(row["finalize_ctx"]), j(row["recommendation"])
-    found = [fctx.get("final_head_sha"), (fctx.get("merge") or {}).get("sha"),
-             rec.get("head_sha")]
+    merged = str((fctx.get("merge") or {}).get("sha") or "").strip().lower()
+    if _HEX.match(merged):
+        # A MERGED build ships what main holds: its merge commit (judged through its pull
+        # request). The pre-merge PR head is not on main after a squash, so it is not accepted.
+        return [merged]
+    found = [fctx.get("final_head_sha"), rec.get("head_sha")]
     return [str(x).strip().lower() for x in found
             if x and _HEX.match(str(x).strip().lower())]
 
@@ -844,7 +848,18 @@ def _commit_check(connection: Any, run_id: str, commit_ref: Optional[str],
     no commit, or a named ref (a branch such as `main`), takes the build's own commit. A build that
     recorded no commit cannot be verified and is refused."""
     judging = judging_run(connection, run_id)[0] or run_id
-    known = build_commits(connection, judging) + [
+    known = build_commits(connection, judging)
+    if judging != run_id:
+        # CLEARED BY A RE-CHECK: a MERGED build still ships its merge commit (what main holds,
+        # judged through its pull request and the re-check); an unmerged one ships a commit the
+        # re-check judged.
+        own = build_commits(connection, run_id)
+        row = connection.execute(__import__("sqlalchemy").text(
+            "SELECT finalize_ctx->'merge'->>'sha' FROM code_task_runs WHERE id = :i"),
+            {"i": run_id}).scalar()
+        if row and _HEX.match(str(row).strip().lower()):
+            known = own
+    known = known + [
         str(x).strip().lower() for x in also_judged or () if _HEX.match(str(x).strip().lower())]
     given = str(commit_ref or "").strip().lower()
     if not known:

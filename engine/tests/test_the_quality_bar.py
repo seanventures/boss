@@ -948,8 +948,11 @@ def test_a_merged_tier_zero_build_is_cleared_for_production_by_a_production_rech
         assert qb.production_refusal(c, code_task_run_id=run_id) is None
         target = {"id": "t", "environment": "production", "target_kind": "ssh"}
         packet = {"code_task_run_id": run_id}
+        # the build is MERGED: what ships is its merge commit (what main holds), judged through its
+        # pull request and the re-check; the pre-merge head is not accepted
         assert qb.plan_decision(c, target=target, release_packet=packet,
-                                commit_ref=None) == (None, recheck_head)
-        # ...and it must ship a commit the re-check judged
+                                commit_ref=None) == (None, "d" * 40)
         said, _ = qb.plan_decision(c, target=target, release_packet=packet, commit_ref="e" * 40)
+        assert said and "not the one the build judged" in said
+        said, _ = qb.plan_decision(c, target=target, release_packet=packet, commit_ref=head)
         assert said and "not the one the build judged" in said
