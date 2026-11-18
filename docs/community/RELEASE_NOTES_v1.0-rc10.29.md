@@ -27,7 +27,10 @@ This is a test candidate. Cutting the tag does not deploy a host or publish an i
 
 - `remote.sh install` and `remote.sh update` now mark the server as a dedicated BOSS host (`BOSS_DEDICATED_HOST=1`) when that line is missing, so old Docker build cache is cleaned automatically. A value you set yourself, `0` included, is never changed. Laptop and local installs are not affected.
 
-> **TODO before tagging:** add the Build with BOSS composer polish (PR #213: icons, tinted chips, glowing card) here once it is merged; remove this line if it is not in the tag.
+**A clearer start screen**
+
+- The **Build with BOSS** box has an icon on every control (Add, Mode, Mic), coloured suggestion chips, and an **Easy Mode** button that stands out and stays readable.
+- The menus in the top bar (**Builds**, the bell, your account) open at their own width. Before, **Find a build** was squeezed to the width of its button, so its search box, tabs and build names were cut off.
 
 ## Known issues
 

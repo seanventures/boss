@@ -12,7 +12,8 @@ Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.29.md](docs/community/RELEASE_NOT
 - Java and Go are built in by default (about 0.75 GB more). Existing installs get them on the next update unless `.env` sets `BOSS_TOOLCHAINS=none` or its own list. A toolchain change also rebuilds egress.
 - Remote installs mark the host dedicated (`BOSS_DEDICATED_HOST=1`) when unset, so old build cache is cleaned automatically.
 - Template cards show a drawing of each app and fold to two rows with Show all. The community candidate version is `1.0.0-rc.10.29`.
-- TODO before tagging: add the Build with BOSS composer polish (PR #213) once merged; drop this line if it is not in the tag.
+- The Build with BOSS composer has icons, tinted suggestion chips and a readable Easy Mode button.
+- Top-bar menus (Builds, bell, account) keep their own width; Find a build was squeezed to its button.
 
 ## [v1.0-rc10.28]
 
