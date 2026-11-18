@@ -621,16 +621,49 @@ class EphemeralSandbox:
         ".terraform/", ".terraform.lock.hcl", "*.tfplan",
     )
 
+    #: .git/info/exclude, relative to the checkout.
+    _EXCLUDE = ".git/info/exclude"
+
+    def _trusted_root(self) -> Optional[str]:
+        """BOSS's own sandbox root above this checkout (only BOSS writes it): where a no-follow
+        walk into the checkout starts."""
+        isolated = getattr(self, "_sandbox", None)
+        if isolated is not None:
+            return str(isolated.run_dir.parent)
+        from . import workspace_perms
+
+        return workspace_perms.trusted_root_for(self.path)
+
+    def _read_exclude(self) -> Optional[str]:
+        """.git/info/exclude ("" when absent), read WITHOUT following a link: the run's uid owns
+        this tree, and BOSS must never read (or below, rewrite) a file it pointed the name at."""
+        from . import workspace_perms
+
+        data = workspace_perms.read_nofollow(self.path, self._EXCLUDE, trusted=self._trusted_root())
+        if data is None:
+            # Absent, or a planted link (its target is never read: the link is replaced when
+            # written): "". A regular file BOSS may not read: None, left alone.
+            where = self.path / ".git" / "info" / "exclude"  # type: ignore[operator]
+            return "" if where.is_symlink() or not os.path.lexists(where) else None
+        return data.decode("utf-8", errors="replace")
+
+    def _write_exclude(self, text: str) -> None:
+        """.git/info/exclude written as a fresh file renamed over the name, through no-follow
+        directory fds (workspace_perms.write_nofollow): a planted link to a BOSS file is replaced,
+        never written through. 0666: the run's uid may edit it (its run directory is 2770)."""
+        from . import workspace_perms
+
+        workspace_perms.write_nofollow(self.path, self._EXCLUDE, text.encode("utf-8"), mode=0o666,
+                                       trusted=self._trusted_root(), dir_mode=0o2777)
+
     def _write_local_excludes(self) -> None:
         assert self.path is not None
-        exclude_file = self.path / ".git" / "info" / "exclude"
         try:
-            existing = exclude_file.read_text(encoding="utf-8") if exclude_file.exists() else ""
-            exclude_file.write_text(
-                existing.rstrip("\n") + "\n# BOSS sandbox artifact ignores\n"
-                + "\n".join(self._ARTIFACT_PATTERNS) + "\n",
-                encoding="utf-8",
-            )
+            existing = self._read_exclude()
+            if existing is None:
+                return  # not a file BOSS may read: left alone
+            self._write_exclude(existing.rstrip("\n") + "\n# BOSS sandbox artifact ignores\n"
+                                + "\n".join(self._ARTIFACT_PATTERNS) + "\n")
         except OSError:
             pass  # best-effort; diff still works, just noisier
 
@@ -997,10 +1030,8 @@ class EphemeralSandbox:
         repository root), or no block at all. Every other line is kept as it is."""
         if self.path is None:
             return
-        exclude_file = self.path / ".git" / "info" / "exclude"
-        try:
-            existing = exclude_file.read_text(encoding="utf-8") if exclude_file.exists() else ""
-        except OSError:
+        existing = self._read_exclude()
+        if existing is None:
             return
         kept: list[str] = []
         inside = False
@@ -1021,8 +1052,7 @@ class EphemeralSandbox:
         if text == existing:
             return
         try:
-            exclude_file.parent.mkdir(parents=True, exist_ok=True)
-            exclude_file.write_text(text, encoding="utf-8")
+            self._write_exclude(text)
         except OSError:
             pass
 

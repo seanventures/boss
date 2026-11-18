@@ -245,3 +245,148 @@ def test_an_objects_dir_swapped_for_a_symlink_is_never_followed(tmp_path):
 
     assert workspace_perms.repair_git_objects(ws, run_uid=OTHER) == []
     assert _mode(outside / "ab") == 0o700
+
+
+# ── BOSS never writes or deletes THROUGH a path the run's uid controls (PR #219 review) ─────
+
+def _boss_only(tmp_path) -> Path:
+    """A BOSS directory outside the run: a key the run's uid would like gone or rewritten."""
+    d = tmp_path.resolve() / "bossdata"
+    d.mkdir()
+    (d / "victim.key").write_text("KEY")
+    (d / "exclude").write_text("BOSS FILE\n")
+    (d / "mcp.json").write_text("BOSS FILE\n")
+    os.chmod(d, 0o700)
+    return d
+
+
+def test_restore_never_deletes_through_a_dir_swapped_after_the_listing(tmp_path, monkeypatch):
+    ws, boss = _provisioned(tmp_path), _boss_only(tmp_path)
+    tree = gcts._tree_snapshot(ws)
+    (ws / "d").mkdir()
+    (ws / "d" / "victim.key").write_text("the run's own")        # untracked: to be removed
+    real = gcts._tree_git
+
+    def swap_after_listing(root, args, index):
+        done = real(root, args, index)
+        if args[0] == "ls-files":                                  # the attacker wins the race
+            os.rename(ws / "d", ws / "d.real")
+            os.symlink(boss, ws / "d")
+        return done
+
+    monkeypatch.setattr(gcts, "_tree_git", swap_after_listing)
+    assert gcts._tree_restore(ws, tree) is True
+    assert (boss / "victim.key").read_text() == "KEY"
+
+
+def test_the_snapshot_pair_is_pinned_to_its_tree(tmp_path):
+    ws, boss = _provisioned(tmp_path), _boss_only(tmp_path)
+    os.chmod(boss, 0o755)
+    (boss / "keep.txt").write_text("BOSS's")
+    tree = gcts._tree_snapshot(ws)
+    _git(ws, "config", "core.worktree", str(boss))                # planted by the run
+    (ws / "stray.txt").write_text("x")
+
+    assert gcts._tree_restore(ws, tree) is True
+    assert not (ws / "stray.txt").exists()                        # the run's tree, not boss's
+    assert (boss / "keep.txt").exists() and (boss / "victim.key").exists()
+
+
+def _box(ws: Path):
+    box = sandbox.EphemeralSandbox(SimpleNamespace(sandbox_validation_timeout_seconds=60,
+                                                   sandbox_validation_output_limit_chars=10000),
+                                   task_id="crun_test")
+    box.path = ws
+    return box
+
+
+def test_a_symlinked_exclude_is_replaced_never_written_through(tmp_path):
+    ws, boss = _provisioned(tmp_path), _boss_only(tmp_path)
+    exclude = ws / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(exist_ok=True)
+    if exclude.exists():
+        exclude.unlink()
+    os.symlink(boss / "exclude", exclude)
+    box = _box(ws)
+
+    box._write_local_excludes()
+    box._write_left_out_block(["fixtureclock"])
+
+    assert (boss / "exclude").read_text() == "BOSS FILE\n"
+    assert not exclude.is_symlink()
+    text = exclude.read_text()
+    assert "# BOSS sandbox artifact ignores" in text and "/fixtureclock" in text
+    assert "BOSS FILE" not in text                                 # the target was never read
+
+
+def test_a_symlinked_git_info_is_never_written_into(tmp_path):
+    ws, boss = _provisioned(tmp_path), _boss_only(tmp_path)
+    import shutil
+    shutil.rmtree(ws / ".git" / "info", ignore_errors=True)
+    os.symlink(boss, ws / ".git" / "info")
+    box = _box(ws)
+
+    box._write_local_excludes()
+    box._write_left_out_block(["fixtureclock"])
+
+    assert (boss / "exclude").read_text() == "BOSS FILE\n"
+    assert sorted(p.name for p in boss.iterdir()) == ["exclude", "mcp.json", "victim.key"]
+
+
+def _cursor_kit(tmp_path, ws):
+    from boss_engine.services import harness_delivery as hd
+    from boss_engine.services.code_task_mcp import HarnessMcp
+
+    path = tmp_path / "mcp-src.json"
+    path.write_text('{"mcpServers": {"docs": {"type": "http", "url": "https://d.example/mcp",'
+                    ' "headers": {"Authorization": "Bearer t"}}}}')
+    mcp = HarnessMcp(path=str(path), servers=["docs"], disallowed=[], gateway_token="")
+    return hd.deliver(engine="cursor", mode="cursor_workspace", mcp=mcp, workspace=ws,
+                      gateway=False)
+
+
+def test_cursor_mcp_json_replaces_a_planted_link_and_puts_it_back(tmp_path):
+    ws, boss = tmp_path.resolve() / "ws", _boss_only(tmp_path)
+    (ws / ".cursor").mkdir(parents=True)
+    os.symlink(boss / "mcp.json", ws / ".cursor" / "mcp.json")
+
+    kit = _cursor_kit(tmp_path, ws)
+    try:
+        written = ws / ".cursor" / "mcp.json"
+        assert not written.is_symlink() and "d.example" in written.read_text()
+        assert stat.S_IMODE(written.stat().st_mode) == 0o600      # no run uid here: BOSS only
+        assert (boss / "mcp.json").read_text() == "BOSS FILE\n"
+    finally:
+        kit.cleanup()
+    assert (boss / "mcp.json").read_text() == "BOSS FILE\n"
+
+
+def test_cursor_mcp_json_is_never_written_through_a_linked_dot_cursor(tmp_path):
+    ws, boss = tmp_path.resolve() / "ws", _boss_only(tmp_path)
+    ws.mkdir()
+    os.symlink(boss, ws / ".cursor")
+
+    with pytest.raises(OSError):
+        _cursor_kit(tmp_path, ws)
+    assert (boss / "mcp.json").read_text() == "BOSS FILE\n"
+
+
+def test_the_kernel_tree_sha_runs_through_the_run_uid_seam_pinned(tmp_path, monkeypatch):
+    from boss_engine.kernel import workspace as kws
+
+    ws = _provisioned(tmp_path)
+    seen = []
+
+    def run(argv, *, env=None, cwd=None, **kw):
+        seen.append((argv, kw.get("sandboxed"), env))
+        return subprocess.run(argv, env=env, cwd=cwd, capture_output=True, text=True)
+
+    monkeypatch.setattr(owned_process, "run", run)
+    (ws / "new.txt").write_text("x")
+    sha = kws.tree_sha(ws)
+
+    assert sha and len(sha) == 40
+    assert seen and all(sb is not False and "core.fsmonitor=false" in argv
+                        and env["GIT_DIR"] == str(ws / ".git") for argv, sb, env in seen)
+    assert not list((ws / ".git").glob("boss-tree-*.index"))
+    assert kws.tree_sha(tmp_path / "nowhere") is None

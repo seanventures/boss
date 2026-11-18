@@ -27,6 +27,7 @@ import time
 import hashlib
 import json
 import re
+import stat
 import subprocess
 import threading
 from pathlib import Path
@@ -3712,8 +3713,13 @@ def _tree_git(root, args: list, index: str):
     from . import owned_process
     from .git_safety import NO_TREE_CODE, isolated_env
 
+    # PINNED to this tree (as readonly_guard._git): a planted core.worktree or a .git that is a
+    # link/gitfile never points the pair at another directory.
+    if not stat.S_ISDIR(os.lstat(Path(root) / ".git").st_mode):
+        raise OSError(f"{root}/.git is not a real directory")
     env = {**isolated_env({"PATH": os.environ.get("PATH", os.defpath), "LANG": "C.UTF-8"}),
-           "GIT_INDEX_FILE": index}
+           "GIT_INDEX_FILE": index, "GIT_DIR": str(Path(root) / ".git"),
+           "GIT_WORK_TREE": str(root)}
     return owned_process.run(["git", *NO_TREE_CODE, *args], cwd=str(root), env=env,
                              capture_output=True, text=True, timeout=120)
 
@@ -3755,11 +3761,13 @@ def _tree_restore(root, tree: str) -> bool:
         if _tree_git(root, ["checkout-index", "-a", "-f"], index).returncode != 0:
             return False
         extra = _tree_git(root, ["ls-files", "-o", "--exclude-standard", "-z"], index)
+        # Removed WITHOUT following a link on the way (workspace_perms.unlink_nofollow): the
+        # run's uid controls this tree, and a listed `d/x` whose `d` it swapped for a link to a
+        # BOSS directory after the listing must never cost BOSS a file there.
+        from . import workspace_perms
+
         for rel in filter(None, extra.stdout.split("\0")):
-            try:
-                (Path(root) / rel).unlink()
-            except OSError:
-                pass
+            workspace_perms.unlink_nofollow(root, rel)
         return True
     except Exception:  # noqa: BLE001
         _log_caught(logger)
