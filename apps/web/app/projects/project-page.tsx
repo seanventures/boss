@@ -107,6 +107,10 @@ export function useStickyHead(): (el: HTMLDivElement | null) => void {
       const tabs = el.querySelector<HTMLElement>(".px-tabs");
       // Everything above the tab row (screen 10 has no tabs: then nothing stays on a phone but the block's foot).
       el.style.setProperty("--px-stick-off", `${Math.max(0, Math.round(el.offsetHeight - (tabs?.offsetHeight ?? 0)))}px`);
+      // EVERYTHING THAT STAYS ON TOP, for the page: a section a link scrolls to (Settings › Code
+      // from "Add a repo") lands BELOW the top bar and this sticky block, never under it (stranger
+      // test 2026-11-17: "Add repository" landed with the Code card hidden under the tabs).
+      document.documentElement.style.setProperty("--px-head-h", `${top + Math.round(el.offsetHeight)}px`);
     };
     measure();
     if (typeof ResizeObserver !== "undefined") {

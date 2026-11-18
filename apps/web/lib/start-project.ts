@@ -302,28 +302,33 @@ export function projectPageHref(projectId: string, homeId: string, area: "projec
   return `/?${p.toString()}`;
 }
 
-// ── The sample's install-wide check, BEFORE anything is created (00a-26) ───────────────────
+// ── The sample's needs, ALL OF THEM, before anything is created (stranger test rc10.27) ──────
 
-/** Needs a new project cannot bring with it: the install's model. A sample started without one
- *  used to create its project (201) and then be refused (409), leaving an empty project behind. */
-export const INSTALL_WIDE_NEEDS = ["model"] as const;
+type ReadinessWire = { ready?: boolean; checked?: { key: string; ok: boolean }[];
+                       missing?: { key: string; after_a_person?: boolean }[]; [k: string]: unknown };
 
-type ReadinessWire = { ready?: boolean; checked?: { key: string; ok: boolean }[]; missing?: { key: string }[]; [k: string]: unknown };
-
-/** The workflow's readiness on the home project, cut to the install-wide needs that are missing
- *  (null when none is, or when the check cannot be read — the start's own refusal still guards).
- *  The sheet shows it as the same refusal panel, and creates nothing. */
-export async function installWideRefusal(homeId: string, workflowKey: string,
-                                         get: <T>(path: string) => Promise<T> = idGet,
-                                         accepted: string[] = []): Promise<ReadinessWire | null> {
+/** EVERY NEED THE SAMPLE'S START WILL CHECK, asked once (00a-26, then the stranger test). The
+ *  sheet listed "a connected model" alone, and after Start anyway the server refused again for a
+ *  repository and a deployment host: the list was cut to install-wide needs on the client. Now it
+ *  is the start's own check (GET …/readiness, the same preflight the 409 carries), asked for a
+ *  project whose code is made on this machine (`code_location=local`: the sample gets a local
+ *  repository), never filtered. Null when nothing is missing (or the check can't be read — the
+ *  start's own refusal still guards). Creates nothing. */
+export async function sampleNeeds(homeId: string, workflowKey: string,
+                                  get: <T>(path: string) => Promise<T> = idGet): Promise<ReadinessWire | null> {
   let wire: ReadinessWire;
   try {
-    wire = await get<ReadinessWire>(`/v1/delivery-workflows/${enc(workflowKey)}/readiness?project_id=${enc(homeId)}`);
+    wire = await get<ReadinessWire>(`/v1/delivery-workflows/${enc(workflowKey)}/readiness?project_id=${enc(homeId)}&code_location=local`);
   } catch {
     return null;
   }
-  const wide = new Set<string>(INSTALL_WIDE_NEEDS);
-  const missing = (wire.missing ?? []).filter((m) => wide.has(m.key) && !accepted.includes(m.key));
-  if (!missing.length) return null;
-  return { ...wire, ready: false, missing, checked: (wire.checked ?? []).filter((c) => wide.has(c.key)) };
+  if (!wire || !Array.isArray(wire.missing) || !wire.missing.length) return null;
+  return { ...wire, ready: false };
+}
+
+/** Needs the run stops for a person before (a deployment host: the release step comes after
+ *  the PR is reviewed). Not needed to build and open the PR, so a sample never waits on them:
+ *  they are accepted for it, said out loud in the list. */
+export function laterNeeds(readiness: { missing?: { key: string; after_a_person?: boolean }[] } | null): string[] {
+  return (readiness?.missing ?? []).filter((m) => m.after_a_person).map((m) => m.key);
 }

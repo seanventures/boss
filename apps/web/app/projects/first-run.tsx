@@ -121,6 +121,22 @@ function WorkspaceDoor({ id, step, title, icon, tone, known, loading, done, done
   );
 }
 
+/** "first" only while there is no project: the summary's projects, which leave the install's
+ *  Default project out (the rail counts the same list, nav.tsx railList). A project without a repo
+ *  yet is still a project: then it is "Add a project". */
+export function firstRunHeading(cards: { archived?: boolean }[]): string {
+  return cards.some((c) => !c.archived) ? "Add a project" : "Add your first project";
+}
+
+/** A first-run strip node is a button only when pressing it goes somewhere: a link, or Add project. */
+export const stripOpens = (n: { key: string; href?: string }): boolean => !!n.href || n.key === "project";
+
+/** The sample's PR, once there is one: where "First PR" goes. */
+export function firstPrHref(view: SetupView | null | undefined): string {
+  const pr = view?.try.last_run?.pr_url;
+  return pr ? changeHref(pr) : "";
+}
+
 export function FirstRun({ projectId, cards }: { projectId: string; actor: string; cards: ProjectCard[] }) {
   const { state, view, status } = useWelcome(projectId);
   const url = usePxUrl();
@@ -129,7 +145,7 @@ export function FirstRun({ projectId, cards }: { projectId: string; actor: strin
   const guided = url.firstRun ? pickGuided(withRepo, askedId) : null;
   const known = status === "ready" && state !== null;
   // Unknown (loading, or it can't be read): nothing is ticked that we don't know, nothing is blocked.
-  const s: WelcomeState = state ?? { github: { done: false, login: null, repos: 0 }, model: { done: false, label: null, kind: null }, sample: { done: false } };
+  const s: WelcomeState = state ?? { github: { done: false, login: null, repos: 0, local: null }, model: { done: false, label: null, kind: null }, sample: { done: false } };
   const hasProject = cards.length > 0;
   if (guided) return <Guided card={guided} s={s} known={known} />;
   const current = !known ? 3 : !s.github.done ? 1 : !s.model.done ? 2 : 3;
@@ -137,17 +153,20 @@ export function FirstRun({ projectId, cards }: { projectId: string; actor: strin
     { key: "github", label: "Connect GitHub", state: known && s.github.done ? "done" : current === 1 ? "now" : "todo", sub: known && s.github.done ? (s.github.login ?? "") : "", href: setupHref("repository") },
     { key: "model", label: "Add a model", state: known && s.model.done ? "done" : current === 2 ? "now" : "todo", sub: known && s.model.done ? (s.model.label ?? "") : "", href: setupHref("models") },
     { key: "project", label: "Add project", state: hasProject ? "done" : current === 3 ? "now" : "todo", sub: "", href: "" },
+    // Nothing to open before a project exists: Helm onboards the project once it is added.
     { key: "onboard", label: "Helm onboards", state: "todo", sub: "", href: "" },
-    { key: "pr", label: "First PR", state: s.sample.done ? "done" : "todo", sub: "", href: "" },
+    // The first PR opens once there is one (the sample's), else it is a step still to come.
+    { key: "pr", label: "First PR", state: s.sample.done ? "done" : "todo", sub: "", href: firstPrHref(view) },
   ];
   return (
     <div className="px-stack" data-testid="px-first-run" data-step={current} data-status={status}>
       <nav className="px-crumbs" aria-label="Breadcrumb"><span aria-current="page">Projects</span></nav>
       <section className="px-hero" aria-labelledby="px-fr-title">
         <Orbit />
-        <h1 id="px-fr-title">Add your first project</h1>
+        <h1 id="px-fr-title">{firstRunHeading(cards)}</h1>
         <p>Point the crew at a repo or an idea. Helm, your captain, reads it, gets it ready, and suggests the first piece of work.</p>
-        <Journey nodes={strip} testid="px-fr-strip" onOpen={(n) => { if (n.href) navigateTo(n.href); else if (n.key === "project") openAddProject("1"); }} />
+        <Journey nodes={strip} testid="px-fr-strip" canOpen={stripOpens}
+                 onOpen={(n) => { if (n.href) navigateTo(n.href); else if (n.key === "project") openAddProject("1"); }} />
         <small className="px-faint">About 10 minutes · change anything later in <a href={pxHref("?area=setup")} data-testid="px-fr-setup">Setup</a></small>
       </section>
 

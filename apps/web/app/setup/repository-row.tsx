@@ -484,6 +484,17 @@ export const RepositoryRow = forwardRef<HTMLElement, {
   let body: React.ReactNode;
   if (mode === "waiting") {
     body = <span className="su-faint">Not connected</span>;
+  } else if (repos.length === 0 && view.repository.local) {
+    // CODE ON THIS MACHINE (stranger test): the repository step is done; GitHub is optional.
+    const local = view.repository.local;
+    body = (
+      <div className="su-line" data-testid="su-repo-local">
+        {local.pill ? <Pill pill={local.pill} /> : null}
+        <span className="su-faint">{local.project_name} keeps its code here. GitHub is optional: connect it for PRs on GitHub.</span>
+        <GatedButton permission="github:connect" type="button" className="su-btn" data-testid="su-connect-github"
+                onClick={() => setDrawer("connect")}>Connect GitHub</GatedButton>
+      </div>
+    );
   } else if (repos.length === 0) {
     body = mode === "current" ? (
       <div>

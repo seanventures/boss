@@ -17,7 +17,7 @@ import { repoChecks } from "../app/start-project/import-repo";
 import { acceptedWorkId } from "../app/projects/tab-roadmap";
 import { dayTime } from "../app/projects/tab-health";
 import { isSetupRow } from "../app/command-center-ui";
-import { installWideRefusal } from "../lib/start-project";
+import { sampleNeeds } from "../lib/start-project";
 import { nodeWords, orgNeedsOf, type ProjectCard, type ProjectsSummary } from "../lib/project-experience";
 
 const card = (id: string, over: Partial<ProjectCard>): ProjectCard => ({
@@ -76,24 +76,27 @@ describe("Roadmap › Accepted (07-18)", () => {
   });
 });
 
-describe("the sample (00a-26)", () => {
-  it("is refused for a missing model BEFORE anything is created", async () => {
+describe("the sample (00a-26, then the stranger test)", () => {
+  it("asks EVERY need the start checks, for code kept on this machine, BEFORE anything is created", async () => {
     const asked: string[] = [];
-    const got = await installWideRefusal("home", "minor_feature", async <T,>(p: string) => {
+    const got = await sampleNeeds("home", "minor_feature", async <T,>(p: string) => {
       asked.push(p);
-      return { ready: false, checked: [{ key: "model", ok: false }, { key: "repository", ok: false }], missing: [{ key: "model" }, { key: "repository" }] } as T;
+      return { ready: false, checked: [{ key: "model", ok: false }, { key: "deployment_target", ok: false }],
+               missing: [{ key: "model" }, { key: "deployment_target", after_a_person: true }] } as T;
     });
-    expect(asked[0]).toBe("/v1/delivery-workflows/minor_feature/readiness?project_id=home");
-    expect(got?.missing?.map((m) => m.key)).toEqual(["model"]);
-    expect(await installWideRefusal("home", "minor_feature", async <T,>() => ({ missing: [{ key: "repository" }], checked: [] }) as T)).toBeNull();
-    expect(await installWideRefusal("home", "minor_feature", async () => { throw new Error("404"); })).toBeNull();
-    // "Start anyway" on the model goes on to create it.
-    expect(await installWideRefusal("home", "minor_feature", async <T,>() => ({ missing: [{ key: "model" }], checked: [] }) as T, ["model"])).toBeNull();
+    expect(asked[0]).toBe("/v1/delivery-workflows/minor_feature/readiness?project_id=home&code_location=local");
+    // Never cut to the install-wide ones: the list is as long as the server's refusal.
+    expect(got?.missing?.map((m) => m.key)).toEqual(["model", "deployment_target"]);
+    expect(await sampleNeeds("home", "minor_feature", async <T,>() => ({ missing: [], checked: [] }) as T)).toBeNull();
+    expect(await sampleNeeds("home", "minor_feature", async () => { throw new Error("404"); })).toBeNull();
   });
-  it("the sheet asks before it creates the project", () => {
-    const src = readFileSync("app/start-project/start-sheet.tsx", "utf8");
-    expect(src.indexOf("installWideRefusal(")).toBeGreaterThan(0);
-    expect(src.indexOf("installWideRefusal(")).toBeLessThan(src.indexOf("ensureSample(SAMPLE.name)"));
+  it("the sheets ask before they create the project, through the one sample path", () => {
+    const src = readFileSync("app/start-project/sample-start.tsx", "utf8");
+    expect(src.indexOf("sampleNeeds(")).toBeGreaterThan(0);
+    expect(src.indexOf("sampleNeeds(")).toBeLessThan(src.indexOf("ensureSample(SAMPLE.name)"));
+    for (const sheet of ["app/start-project/start-sheet.tsx", "app/start-project/add-project.tsx"]) {
+      expect(readFileSync(sheet, "utf8")).toContain("useSampleStart(");
+    }
   });
 });
 
@@ -103,11 +106,13 @@ describe("one needs-you number (X-14) and first run (00a-34)", () => {
     expect(orgNeedsOf(s)).toBe(3);
     expect(orgNeedsOf(null)).toBeNull();
   });
-  it("the bell, the rail badge and the tab title read it", () => {
+  it("the bell and the tab title read it; the rail's Approvals badge is the queue's own count", () => {
     const shell = readFileSync("app/ConsoleShell.tsx", "utf8");
     expect(shell).toContain("useTitleCount(orgNeeds ??");
-    expect(shell).toContain("const n = orgNeeds ??");
     expect(shell).toContain('variant="bell" total={orgNeeds}');
+    // Stranger test 2026-11-17: Approvals 5 over a queue that said 0 (set-up asks on other
+    // projects). The badge counts what Approvals' Needs action lists (rail-counts-match-…).
+    expect(shell).toContain("approvalsBadge(titleAttention, status.pendingDecisions)");
   });
   it("Command Center drops its setup rows while there is no project, and shows first run", () => {
     expect(isSetupRow({ kind: "readiness" } as never)).toBe(true);

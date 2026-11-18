@@ -21,18 +21,16 @@ import { Flask, FolderPlus, GitBranch, Lightbulb, X } from "@phosphor-icons/reac
 import { GatedButton, useGate } from "../../components/gated";
 import { useGuardedCall } from "../../components/identity/identity-provider";
 import { IdentityError } from "../../lib/identity/api";
-import { withConsent } from "../../lib/identity/consent";
-import { templatesApi } from "../../lib/templates";
 import {
-  CHOICES, allPresets, createFresh, ensureSample, installWideRefusal, nameFromIdea, projectPageHref, shownPresets, type Preset, type StartStep,
+  CHOICES, allPresets, createFresh, nameFromIdea, projectPageHref, shownPresets, type Preset, type StartStep,
 } from "../../lib/start-project";
-import { ReadinessPanel, asReadiness, unaccepted, type Readiness } from "../workflow-readiness-ui";
+import { ReadinessPanel, unaccepted, type Readiness } from "../workflow-readiness-ui";
 import { ImportRepo } from "./import-repo";
+import { SampleNeeds, useSampleStart } from "./sample-start";
 import { post } from "../workflows/delivery-api";
 import "./start-project.css";
 
-/** The sample, as the project page's view names it (services/start_project.py). */
-export const SAMPLE = { template: "hello-world", name: "Hello World", stack: "node", workflow_key: "minor_feature" };
+export { SAMPLE } from "./sample-start";
 
 export function knowledgePresetHref(projectId: string, homeId: string, tab: "documents" | "setup" = "documents"): string {
   const p = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
@@ -68,8 +66,7 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [all, setAll] = useState(false);
-  // The sample, refused for what this install lacks: the checklist, and Start anyway.
-  const [sampleProject, setSampleProject] = useState<string | null>(null);
+  // The idea, refused for what this project lacks: the checklist, and Start anyway.
   const [refusal, setRefusal] = useState<Readiness | null>(null);
   const [startAnyway, setStartAnyway] = useState<string[]>([]);
 
@@ -82,35 +79,10 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
   const presets = allPresets();
   const grid = all ? presets : shownPresets(presets);
 
-  /** The sample: a Hello World project, then the template applied as its first app. */
-  const runSample = async () => {
-    if (!canCreate.allowed) { setError(canCreate.reason); return; }
-    setBusy("sample"); setError(null);
-    try {
-      let pid = sampleProject;
-      if (!pid) {
-        // CHECK FIRST (00a-26): what no new project can bring (the install's model) is asked
-        // before the project is made, so a refusal leaves nothing behind.
-        const wide = asReadiness(await installWideRefusal(homeId, SAMPLE.workflow_key, undefined, startAnyway));
-        if (wide) { setRefusal(wide); setBusy(null); return; }
-        const made = await guarded("Create the Hello World project.", () => ensureSample(SAMPLE.name));
-        pid = made.id;
-        setSampleProject(pid);
-      }
-      const body = { project_id: pid, new_app: { name: SAMPLE.name }, stack: SAMPLE.stack, workflow_key: SAMPLE.workflow_key,
-                     dedupe_key: `sample:${pid}`, ...(startAnyway.length ? { start_anyway: startAnyway } : {}) };
-      await guarded("Start the sample.", () => withConsent(() => templatesApi.apply(SAMPLE.template, body)));
-      go(projectPageHref(pid, homeId));
-    } catch (e) {
-      const b = e instanceof IdentityError ? e.body : {};
-      const detail = (b.detail && typeof b.detail === "object" ? b.detail : {}) as Record<string, unknown>;
-      const ready = asReadiness(b.readiness ?? detail.readiness);
-      if (ready) { setRefusal(ready); setBusy(null); return; }
-      setError(refusalText(e));
-    } finally {
-      setBusy((cur) => (cur === "sample" ? null : cur));
-    }
-  };
+  /** The sample: a Hello World project (its code on this machine), then the template applied
+   *  as its first app — one path with Add a project's chip (sample-start.tsx). */
+  const sample = useSampleStart({ homeId, go, words: refusalText, setError,
+                                  setBusy: (b) => setBusy((cur) => (b ? "sample" : cur === "sample" ? null : cur)) });
 
   /** A preset: its project, then its page (an app brief waiting for Start; a banking one's Documents). */
   const pickPreset = async (p: Preset) => {
@@ -186,7 +158,7 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
           <span style={{ flex: 1 }} />
           <button type="button" className="spj-more spj-sample-link" data-testid="start-tab-sample" disabled={!!busy}
                   aria-current={step === "sample" || step === "choose" ? "page" : undefined}
-                  onClick={() => { setRefusal(null); setError(null); onStep("sample"); }}>
+                  onClick={() => { setRefusal(null); sample.reset(); setError(null); onStep("sample"); }}>
             <Flask size={13} aria-hidden /> Try a sample</button>
           <button type="button" className="spj-close" aria-label="Close" title="Close (Esc)" data-testid="start-close"
                   disabled={!!busy} onClick={onClose}><X size={16} weight="bold" aria-hidden /></button>
@@ -240,17 +212,13 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
             </ol>
             <p className="spj-quiet">Hello World. One page and one test. About 8 minutes.
               {" "}<button type="button" className="spj-more" data-testid="start-tab-presets" disabled={!!busy} onClick={() => onStep("choose")}>More samples &amp; presets</button></p>
-            {refusal ? (
-              <div data-testid="start-sample-readiness">
-                <ReadinessPanel readiness={refusal} accepted={startAnyway} onAccept={setStartAnyway} />
-              </div>
-            ) : null}
+            <SampleNeeds refusal={sample.refusal} accepted={sample.accepted} onAccept={sample.accept} testid="start-sample-readiness" />
             <div className="bx-np-actions">
               <GatedButton permission="project:create" className="ag-btn ag-btn-primary" data-testid="start-sample-go"
-                           disabled={!!busy || (!!refusal && open.length > 0)}
+                           disabled={!!busy || (!!sample.refusal && unaccepted(sample.refusal, sample.accepted).length > 0)}
                            title="Create the Hello World project and start building it"
-                           onClick={() => void runSample()}>
-                {busy === "sample" ? "Starting…" : refusal ? "Start anyway" : "Start the sample"}
+                           onClick={() => void sample.run()}>
+                {busy === "sample" ? "Starting…" : sample.refusal ? "Start anyway" : "Start the sample"}
               </GatedButton>
             </div>
           </div>

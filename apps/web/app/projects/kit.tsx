@@ -95,7 +95,12 @@ export function View({ id, sentence }: { id: string | number; sentence: string |
 }
 
 /** THE JOURNEY STRIP: the project's life as one diagram. Each node opens what happened there. */
-export function Journey({ nodes: given, size, onOpen, testid = "px-journey" }: { nodes: Node[]; size?: "s"; onOpen?: (n: Node) => void; testid?: string }) {
+export function Journey({ nodes: given, size, onOpen, canOpen, testid = "px-journey" }: {
+  nodes: Node[]; size?: "s"; onOpen?: (n: Node) => void;
+  /** Which nodes go somewhere when pressed. A node that goes nowhere is drawn, never a button
+   *  that does nothing (stranger test 2026-11-17: "Helm onboards" and "First PR" were dead). */
+  canOpen?: (n: Node) => boolean; testid?: string;
+}) {
   // Days in the viewer's zone (04-02): a dated node's sub and tooltip, written after mount.
   const local = useLocalTime();
   const nodes = given.map((n) => (n.at ? { ...n, ...nodeWords(n, local.day) } : n));
@@ -105,7 +110,7 @@ export function Journey({ nodes: given, size, onOpen, testid = "px-journey" }: {
       {nodes.map((n, i) => (
         <React.Fragment key={`${n.key}-${i}`}>
           {i ? <span className="px-jr-wire" aria-hidden data-s={nodes[i - 1].state === "done" ? (n.state === "now" ? "now" : n.state === "done" ? "done" : undefined) : undefined} /> : null}
-          <button type="button" role="listitem" className="px-jr-node" data-s={n.state} disabled={!onOpen || !(n.href || n.key)}
+          <button type="button" role="listitem" className="px-jr-node" data-s={n.state} disabled={!onOpen || !(canOpen ? canOpen(n) : !!(n.href || n.key))}
                   data-testid={`${testid}-${n.key || i}`} aria-label={`${n.label}: ${STATE_WORD[n.state]}${n.sub ? `, ${n.sub}` : ""}`} title={n.detail || undefined}
                   onClick={onOpen ? () => onOpen(n) : undefined}>
             <span className="px-jr-shape" aria-hidden>{nodeGlyph(n, i, size === "s")}</span>

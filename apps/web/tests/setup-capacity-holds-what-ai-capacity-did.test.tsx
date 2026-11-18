@@ -15,7 +15,7 @@ import { overBudget } from "./_helpers/copy-budget";
 import { entitlementSessionsWire, entitlementSourcesWire } from "./_helpers/obs-fixtures";
 import { board, firstRun } from "./_helpers/setup-fixtures";
 import { click, mountBoard, q, type, type Mounted } from "./_helpers/setup-board";
-import { badgeOf, completeBody, stateOf, type CapSource } from "../app/setup/capacity-row";
+import { badgeOf, completeBody, offeredInPicker, stateOf, type CapSource } from "../app/setup/capacity-row";
 import type { SetupView } from "../lib/setup-types";
 
 let mounted: Mounted | null = null;
@@ -307,7 +307,8 @@ async function choose(id: string) {
 describe("unused model sources", () => {
   it("offers eleven unselected actions from the thirteen-source catalog; untouched local and account rows are not listed", async () => {
     const sources = freshCatalogSources();
-    const ids = sources.items.slice(0, 11).map(x => x.source_id);
+    // Minus what this image cannot connect (Cursor CLI / API, the Gemini CLI: MODEL_CONNECTIONS.md).
+    const ids = sources.items.slice(0, 11).map(x => x.source_id).filter((id) => offeredInPicker(id));
     const calls = api(firstRunView(), sources, { items: [] });
     mounted = await mountBoard(firstRunView());
     expect(q(document.body, "su-row-capacity")?.getAttribute("aria-label")).toBe("Model sources");
@@ -335,7 +336,16 @@ describe("unused model sources", () => {
     expect(writes(calls)).toEqual([]);
   });
 
-  for (const id of ["openai_codex_chatgpt", "anthropic_claude_code", "google_gemini_cli", "cursor_cli", "xai_grok_build"]) {
+  it("never offers a source this image cannot connect (Cursor CLI / API, the Gemini CLI)", async () => {
+    api(firstRunView(), freshCatalogSources(), { items: [] });
+    mounted = await mountBoard(firstRunView());
+    await openAdd();
+    const chooser = q(document.body, "setup-cap-chooser") as HTMLSelectElement;
+    const offered = [...chooser.options].map(x => x.value);
+    for (const id of ["cursor_cli", "cursor_api", "google_gemini_cli"]) expect(offered, id).not.toContain(id);
+  });
+
+  for (const id of ["openai_codex_chatgpt", "anthropic_claude_code", "xai_grok_build"]) {
     it(`catalog OAuth chooser preserves ${id} sign-in modes and scope controls without incidental writes`, async () => {
       const sources = freshCatalogSources();
       const expected = sources.items.find(x => x.source_id === id)!;
@@ -372,7 +382,9 @@ describe("unused model sources", () => {
     mounted = await mountBoard(firstRunView());
     await openAdd();
     const chooser = q(document.body, "setup-cap-chooser") as HTMLSelectElement;
-    expect(chooser.options).toHaveLength(12); // Empty choice plus eleven key/OAuth actions.
+    // Empty choice plus the key/OAuth actions this image can connect.
+    expect(chooser.options).toHaveLength(1 + freshCatalogSources(false).items.slice(0, 11)
+      .filter((x) => offeredInPicker(x.source_id)).length);
     expect([...chooser.options].map(x => x.value)).not.toContain("managed_cloud_model_gateway");
     expect([...document.querySelectorAll('[data-testid="setup-cap-source"]')].map(x => x.getAttribute("data-source")))
       .toEqual([]);

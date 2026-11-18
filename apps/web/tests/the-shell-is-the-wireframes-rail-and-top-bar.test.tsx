@@ -106,7 +106,8 @@ describe("the rail", () => {
     // Activity log stays (parity: it was on the rail before), between Observability and Self-fixes.
     expect(order.filter((a) => a !== "activity")).toEqual(WIREFRAME_RAIL);
     expect($('[data-area-nav="decisions"]')!.title).toBe("Approvals — Explicit approvals before real effects");
-    expect($('[data-testid="nav-badge-decisions"]')!.textContent).toBe("3") // X-14: the bell's count, not the server's first paint;
+    // The queue's count (this project's Needs action, the attention poll's 3), not the server's first paint.
+    expect($('[data-testid="nav-badge-decisions"]')!.textContent).toBe("3");
     expect($('[data-testid="nav-projects-new"]')).not.toBeNull();
   });
 
@@ -124,7 +125,7 @@ describe("the rail", () => {
     expect($(`[data-testid="nav-project-${id("HelpDesk AI Demo")}"] .bx-nav-dot`)!.dataset.s).toBe("you");
   });
 
-  it("X-14 the rail's Approvals badge is the bell's number (the server's 2 is first paint only)", async () => {
+  it("the rail's Approvals badge counts what the queue shows (this project's attention), not the server's 2", async () => {
     await mount("overview");
     expect($("[data-testid='nav-badge-decisions']")!.textContent).toBe("3");
   });
