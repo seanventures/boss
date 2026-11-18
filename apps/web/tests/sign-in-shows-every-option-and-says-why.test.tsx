@@ -80,7 +80,7 @@ describe("all off: the page keeps its shape and says what turns each thing on", 
     expect(catalog.contains(el.querySelector("#email"))).toBe(false);
     expect(catalog.contains(el.querySelector("#password"))).toBe(false);
     expect(catalog.contains(el.querySelector("[data-testid='email-submit']"))).toBe(false);
-    expect(el.querySelectorAll("[role='tab']").length).toBe(3);
+    expect(el.querySelectorAll("[role='tab']").length).toBe(0);
     expect(calls).toEqual([]);
   });
 
@@ -117,15 +117,24 @@ describe("all off: the page keeps its shape and says what turns each thing on", 
     expect(calls).toEqual([]);
   });
 
-  it("magic link and email code stay visible, disabled, and need SMTP; password stays chosen", async () => {
+  it("with no email delivery, magic link and email code are hidden: Password alone, no tab bar (stranger test)", async () => {
     const el = await mount(OFF);
+    expect(el.querySelector("[role='tablist']")).toBeNull();
+    expect(el.querySelectorAll("[role='tab']").length).toBe(0);
+    expect(el.textContent).not.toContain("Magic link");
+    expect(el.textContent).not.toContain("Email code");
+    expect(el.querySelector("#email")).not.toBeNull();
+    expect(el.querySelector("#password")).not.toBeNull();
+    expect(el.querySelector("[data-testid='email-submit']")?.textContent).toBe("Sign in");
+  });
+
+  it("with email set up but no public address, the email methods show disabled and say why", async () => {
+    const el = await mount({ ...OFF, smtp: true, public_origin: null });
     const tabs = [...el.querySelectorAll("[role='tab']")];
     expect(tabs.map((t) => t.textContent)).toEqual(["Password", "Magic link", "Email code"]);
-    expect(tipOf(el, tabs[1])).toBe("Magic links need email (SMTP) set up");
-    expect(tipOf(el, tabs[2])).toBe("Email codes need email (SMTP) set up");
+    expect(tipOf(el, tabs[1])).toBe("Magic links need BOSS's public address set");
     await click(tabs[1]);
     expect(el.querySelector("[role='tab'][aria-selected='true']")?.textContent).toBe("Password");
-    expect(el.querySelector("[data-testid='why-tabs']")?.textContent).toBe("Magic links need email (SMTP) set up");
     // The arrows reach a method that's off (so its reason shows) but never choose it.
     await act(async () => { tabs[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
     expect(el.querySelector("[role='tab'][aria-selected='true']")?.textContent).toBe("Password");

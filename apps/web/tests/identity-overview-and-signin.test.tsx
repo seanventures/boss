@@ -124,12 +124,12 @@ describe("sign-in (D33)", () => {
     expect(el.textContent).not.toMatch(/phone|SMS/i);
   });
 
-  it("with nothing configured: the same shape, each option disabled with what turns it on", async () => {
+  it("with nothing configured: providers disabled with what turns them on; no email tabs without SMTP", async () => {
     const el = await mount(<SignIn options={{ ...FULL, providers: [], smtp: false }} next="/" />);
     expect(el.querySelectorAll("button.idn-idp[aria-disabled='true']").length).toBe(4);
     expect(el.querySelector("a.idn-idp")).toBeNull();
-    expect(el.querySelector("[role='tablist']")).not.toBeNull();
-    expect([...el.querySelectorAll("[role='tab'][aria-disabled='true']")].map((t) => t.textContent)).toEqual(["Magic link", "Email code"]);
+    expect(el.querySelector("[role='tablist']")).toBeNull();
+    expect(el.textContent).not.toContain("Magic link");
     expect(el.querySelector("button[data-testid='forgot']")).not.toBeNull();
     expect(el.querySelector("a[href='/reset']")).toBeNull();
   });

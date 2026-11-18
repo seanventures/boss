@@ -184,7 +184,9 @@ def test_apply_starts_the_services_without_building_and_checks_again(host):
     run, _state, calls = host
     out = run("--repair", "--apply")
     assert out.returncode == 0, out.stdout
-    assert "Checking again" in out.stdout and "BOSS is ready" in out.stdout
+    # Up again; the fake host still has warnings (no model, no repository), so it says so.
+    assert "Checking again" in out.stdout and "BOSS is running" in out.stdout
+    assert "Not ready" not in out.stdout.split("Checking again")[1]
     compose = [line for line in calls().splitlines() if line.startswith("compose")]
     assert len(compose) == 1 and "up -d --no-build --pull never" in compose[0]
     for forbidden in ("build ", "pull ", "rmi", "image rm", "tag ", "prune"):
