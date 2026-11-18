@@ -9,6 +9,7 @@
 .sw-why[data-who="stuck"] .sw-why-words { color: var(--red); }
 .sw-why[data-who="you"] .sw-why-words { color: var(--amber); }
 .sw-why-detail { color: var(--muted); overflow-wrap: anywhere; }
+.sw-why-fix { color: var(--accent, inherit); font-weight: 600; text-decoration: underline; white-space: nowrap; }
 .sw-why[data-compact] .sw-why-words { font-weight: 500; }
 .sw-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 

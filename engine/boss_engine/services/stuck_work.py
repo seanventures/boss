@@ -47,6 +47,7 @@ MAX_FIXES_PER_ITEM = 3
 #: Why BOSS does not fix it itself, per cause: the one line a person reads under "what to do".
 WHY_NOT: dict[str, str] = {
     "no_grant": "Only a person can let an agent act for them.",
+    "needs_model": "Only a person can connect a model (a subscription sign-in or an API key).",
     "review": "You asked to review always-on builds before they start.",
     "crash_loop": "It is BOSS's own bug: another attempt runs the same code.",
     "budget": "Raising a budget is a person's call.",
@@ -248,6 +249,23 @@ def _decision(connection: Any, decision_id: Optional[str]) -> Optional[dict[str,
 # ───────────────────────────── 1. waiting for what ─────────────────────────────
 
 
+def _needs_model(connection: Any, project_id: Any, since: Any = None
+                 ) -> Optional[dict[str, Any]]:
+    """The wait reason of work in a project with no usable model (model_readiness), or None.
+    A person's move, with where to fix it (`href`)."""
+    if not project_id:
+        return None
+    from . import model_readiness
+    from ..config import get_settings
+
+    if model_readiness.usable_model(connection, get_settings(), str(project_id)):
+        return None
+    s = _aware(since)
+    return {"code": "needs_model", "who": "you", "words": model_readiness.WAITING_FOR_MODEL,
+            "detail": "", "since": s.isoformat() if s else None, "eta_minutes": None,
+            "href": model_readiness.SETUP_MODELS_HREF}
+
+
 def wait_reason(connection: Any, run: Mapping[str, Any], *, job: Any = "load",
                 now: Optional[datetime] = None) -> Optional[dict[str, Any]]:
     """Why this build is not moving right now, in words, from real state. None while it is
@@ -371,6 +389,12 @@ def wait_reason(connection: Any, run: Mapping[str, Any], *, job: Any = "load",
                    f"Retrying{' in about ' + span_words(eta_retry) if eta_retry else ' now'} "
                    f"after: {_clip(err.get('message') or 'an error', 90)}",
                    _clip(err.get("message") or "", 300), job.get("updated_at"), eta_retry)
+    # NO MODEL, SAID AS THAT (stranger test r3, 2026-11-18): a queued build with no model to run
+    # on read as "Waiting for budget" or as next in line. It waits for a person to add a model.
+    # After the job's own verdicts (a crash loop, a lost worker, a retry) and before every wait.
+    needs = _needs_model(connection, run.get("project_id"), job.get("updated_at"))
+    if needs is not None:
+        return needs
     if code == "budget_hold" or ctx.get("budget_wait_since"):
         return out("budget", "you", "Waiting for budget: the project's cap is reached",
                    _clip(err.get("message") or "Raise the cap or wait for spend to free up.", 300),
@@ -612,6 +636,11 @@ def triage(ev: Mapping[str, Any]) -> dict[str, Any]:
                  "person is asked (BOSSAPP-885).", ["wait"], "wait",
                  "BOSS asks the next manager, then a person, if nobody takes it over in time.",
                  "boss")
+    if code == "needs_model":
+        return t("needs_model", "No model is connected",
+                 "Setup › Models has no usable model for this project, so nothing can run it.",
+                 ["ask_person"], "ask_person",
+                 "Add a model in Setup › Models, then press Retry.", "you")
     if code == "person_grant" or pw.get("blocker_type") == "authority_no_grant":
         return t("no_grant", f"No person's grant lets {pw.get('builder') or 'its builder'} act",
                  "Started by an always-on agent, not a person; the build refused to run without "
@@ -1450,6 +1479,11 @@ def workflow_wait_reason(connection: Any, wfr_id: str, *,
                        f"{span_words(_mins((now - lease).total_seconds()))} ago", "", lease)
         if s["status"] in ("running", "leased"):
             return None
+    project = connection.execute(text("SELECT project_id FROM workflow_runs WHERE id = :w"),
+                                 {"w": wfr_id}).scalar()
+    needs = _needs_model(connection, project, run["updated_at"])
+    if needs is not None:
+        return needs                      # not "Waiting at meeting": waiting for a model
     quiet = _mins((now - (_aware(run["updated_at"]) or now)).total_seconds())
     waiting = [s["step_id"] for s in steps if s["status"] == "waiting"]
     if quiet >= STUCK_MINUTES * 4:

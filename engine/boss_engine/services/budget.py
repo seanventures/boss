@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -78,13 +78,18 @@ def budget_period(period: str, now: Optional[datetime] = None) -> dict[str, Any]
 
 
 def period_spend(connection: Connection, project_id: str, period: str,
-                 now: Optional[datetime] = None) -> dict[str, Any]:
+                 now: Optional[datetime] = None,
+                 exclude_reservations: Iterable[str] = ()) -> dict[str, Any]:
     """THE ONE MEASURE OF A PERIOD'S SPEND: the money settled in it (MONEY_SQL — a subscription
     or local call is $0, included_spend.py) plus ALL outstanding reservations. An unresolved
     liability does not disappear at midnight: settlement replaces its hold with period spend.
-    Every cap, state, forecast and message reads this."""
+    Every cap, state, forecast and message reads this.
+
+    `exclude_reservations`: holds left out — only ever a job's OWN reservation, when that job's
+    admission is decided (a reservation never blocks the work it was made for)."""
     bounds = budget_period(period, now)
-    params = {"p": project_id, "start": bounds["start"], "end": bounds["end"]}
+    params = {"p": project_id, "start": bounds["start"], "end": bounds["end"],
+              "own": [str(r) for r in exclude_reservations if r]}
     # Both aggregates share one MVCC snapshot. Separate statements can miss a hold
     # consumed between the actual-cost read and the held-cost read.
     totals = connection.execute(
@@ -92,7 +97,8 @@ def period_spend(connection: Connection, project_id: str, period: str,
              f"(SELECT COALESCE(SUM({MONEY_SQL}), 0) AS total FROM cost_receipts "
              "WHERE project_id = :p AND created_at >= :start AND created_at < :end) actual "
              "CROSS JOIN (SELECT COALESCE(SUM(amount_usd_micros), 0) AS total, COUNT(*) AS n "
-             "FROM budget_reservations WHERE project_id = :p AND status = 'active') held"),
+             "FROM budget_reservations WHERE project_id = :p AND status = 'active' "
+             "AND NOT (id = ANY(CAST(:own AS TEXT[])))) held"),
         params).mappings().one()
     return {**bounds, "actual_usd_micros": int(totals["actual"] or 0),
             "reserved_usd_micros": int(totals["held"] or 0),
@@ -709,7 +715,8 @@ class BudgetGovernor:
             {"p": project_id, "r": reservation_id})
 
     def status_for_project(self, connection: Connection, project_id: str,
-                           *, now: Optional[datetime] = None) -> dict:
+                           *, now: Optional[datetime] = None,
+                           exclude_reservations: Iterable[str] = ()) -> dict:
         """The budget as every gate and screen reads it. Each cap is measured over its own
         period (period_spend); the period nearest its cap — the binding one — supplies the
         top-level numbers (`cap`, `actual`, `reserved`, `available`, `utilization`, state), and
@@ -783,7 +790,8 @@ class BudgetGovernor:
         periods: dict[str, dict[str, Any]] = {}
         for column, period in CAP_PERIODS:
             cap = int(policy_row[column] or 0)
-            spend = period_spend(connection, project_id, period, now)
+            spend = period_spend(connection, project_id, period, now,
+                                 exclude_reservations=exclude_reservations)
             committed = spend["actual_usd_micros"] + spend["reserved_usd_micros"]
             utilization = 0.0 if cap == 0 else committed / cap
             periods[period] = {

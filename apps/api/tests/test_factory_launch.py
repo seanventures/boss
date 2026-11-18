@@ -642,3 +642,94 @@ def test_a_refused_launch_leaves_no_repository_folder_behind(client, engine, mon
     assert _count(engine, "projects") == before
     repos = tmp_path / "repos"
     assert not repos.exists() or list(repos.iterdir()) == []
+
+
+_GO_DESK = """\
+id: fixture-clock
+title: Fixture clock
+blurb: A frozen clock for demos.
+category: internal
+prompt: Build a Go API named Fixture Clock.
+stack: Go API
+resources: []
+workflows:
+  - name: build
+    steps:
+      - scaffold
+"""
+
+
+def _gitignore_of(spec_repo: str) -> str:
+    import subprocess
+
+    from apps.api.app.routers import factory_launch as route
+    from boss_engine.services import local_repo
+
+    owner, name = spec_repo.split("/", 1)
+    bare = local_repo.bare_path(owner, name, route._settings)
+    return subprocess.run(["git", "--git-dir", str(bare), "show", "HEAD:.gitignore"],
+                          capture_output=True, text=True, check=True).stdout
+
+
+def test_a_picked_template_names_the_project_and_brings_its_stack(
+        client, engine, monkeypatch, tmp_path):
+    """Picking a card fills the brief AND sends template_id: the template is the spec (its title,
+    its stack), the person's words are its prompt. The brief used to win outright: the project
+    was named after its first 80 characters and the stack never reached .gitignore."""
+    catalogue = tmp_path / "factory_templates"
+    catalogue.mkdir()
+    (catalogue / "go.yaml").write_text(_GO_DESK, encoding="utf-8")
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", catalogue)
+    calls: list = []
+    _patch_builder(monkeypatch, calls)
+    brief = ("Build a Go API named Fixture Clock that listens on localhost and serves a frozen "
+             "instant at GET /time, plus seeded users at GET /users.")
+
+    response = client.post("/v1/factory/launch",
+                           json={"prompt": brief, "template_id": "fixture-clock"})
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["mode"] == "template" and body["template_id"] == "fixture-clock"
+    assert body["spec"]["title"] == "Fixture clock"
+    assert body["spec"]["stack"] == "Go API"
+    assert calls[0]["spec"]["prompt"] == brief                  # the person's words are built
+    project = _one(engine, "SELECT name FROM projects WHERE id = :p", p=body["project_id"])
+    assert project["name"] == "Fixture clock"
+    repo = body["spec"]["local_repo"]
+    assert repo.endswith("/fixture-clock")
+    assert "/bin/" in _gitignore_of(repo).splitlines()          # Go's build output, ignored
+
+
+def test_a_free_text_brief_names_the_project_by_its_first_words(client, engine, monkeypatch,
+                                                                 tmp_path):
+    from boss_engine.services.factory_launch import TITLE_CHARS
+
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", tmp_path / "absent")
+    _patch_builder(monkeypatch, [])
+    brief = ("Build a Python app named CSV Quality Desk with a command that reads a CSV path and "
+             "reports bad rows.")
+
+    response = client.post("/v1/factory/launch", json={"prompt": brief})
+
+    assert response.status_code == 201, response.text
+    title = response.json()["spec"]["title"]
+    assert title == "Build a Python app named CSV Quality"
+    assert len(title) <= TITLE_CHARS and brief.startswith(title)
+    assert brief[len(title)] == " "                              # cut between words
+    project = _one(engine, "SELECT name FROM projects WHERE id = :p",
+                   p=response.json()["project_id"])
+    assert project["name"] == title
+    assert response.json()["spec"]["local_repo"].endswith("/build-a-python-app-named-csv-quality")
+    assert "/bin/" not in _gitignore_of(response.json()["spec"]["local_repo"]).splitlines()
+
+
+def test_prose_titles_cut_at_a_word_boundary():
+    from boss_engine.services.factory_launch import prose_title
+
+    assert prose_title("A pantry list.") == "A pantry list"
+    assert prose_title("x") == "Easy Mode"
+    assert prose_title("Supercalifragilisticexpialidociousandmoreandmore letters") == \
+        "Supercalifragilisticexpialidociousandmor"
+    assert prose_title("Track the oncall rotation, page whoever is up, and post a weekly summary") \
+        == "Track the oncall rotation, page whoever"

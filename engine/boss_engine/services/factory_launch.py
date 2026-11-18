@@ -69,14 +69,19 @@ BUILTIN_SPEC: dict[str, Any] = {
 class FactoryLaunchError(Exception):
     """A refusal with a status, a machine code and a sentence a person can act on."""
 
-    def __init__(self, status: int, code: str, message: str) -> None:
+    def __init__(self, status: int, code: str, message: str,
+                 fix_href: Optional[str] = None) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
         self.message = message
+        self.fix_href = fix_href
 
     def body(self) -> dict[str, str]:
-        return {"error": self.code, "message": self.message}
+        out = {"error": self.code, "message": self.message}
+        if self.fix_href:
+            out["fix_href"] = self.fix_href
+        return out
 
 
 def list_templates(root: Optional[Path] = None) -> dict[str, Any]:
@@ -242,6 +247,15 @@ def launch(
                                      actor=actor)
         receipt_id = None
     title = str(spec.get("title") or "Easy Mode").strip()[:120]
+    # A MODEL FIRST (stranger test r3, 2026-11-18): with no model connected the launch reserved
+    # the project's whole cap for a build nothing could run, and the person read "the budget
+    # cap is reached" at $0.00. Nothing is made, reserved or started; the sentence says what is
+    # missing and links to it. Unknown is usable (model_readiness never holds work on a guess).
+    from . import model_readiness
+
+    if not model_readiness.usable_model(connection, settings, project_id):
+        raise FactoryLaunchError(409, "needs_model", model_readiness.NO_MODEL_LAUNCH,
+                                 fix_href=model_readiness.SETUP_MODELS_HREF)
     # THE BUILD'S REPOSITORY IS REAL: the connected GitHub repo, else the project's own local
     # repository (made here when it has none). Never a placeholder name nothing can clone.
     made_repo = _ensure_repository(connection, settings, project_id, spec, actor=actor)
@@ -490,25 +504,46 @@ def build_run(
         jobs=jobs, repo_host=None if github else "local")
     if not run_id:
         return {"project_id": project_id}
+    # THE LAUNCH'S HOLD IS THE BUILD'S (a reservation never blocks the job it was made for): it
+    # is recorded as the run's reservation, so the build's job is admitted against it
+    # (jobs._own_reservations) and the run settles it when it starts, before reserving its own.
+    from . import build_budget
+
+    build_budget.bind(connection, str(run_id), reservation_id)
     return {"project_id": project_id, "run_id": str(run_id)}
 
 
 def resolve_spec(
     prompt: str, template_id: Optional[str], root: Optional[Path] = None,
 ) -> tuple[dict[str, Any], str]:
-    """A non-empty prompt is the spec. An empty one picks a template file, else the built-in."""
+    """What the launch builds.
+
+    - A pasted spec (the template schema as YAML) is the spec.
+    - A template the person picked (`template_id` in the catalogue) is the spec — its title,
+      stack, resources and workflows — with the person's words, when they wrote some, as the
+      prompt. The build home sends both: picking a card fills the brief, and the brief used to
+      win outright, so the project was named after its first 80 characters and the template's
+      stack never reached the repository's .gitignore (stranger test r3, 2026-11-18).
+    - Other words are a prose spec, titled from their first words.
+    - Nothing at all picks the first template, else the built-in spec."""
     text_prompt = str(prompt or "").strip()
     catalogue = list_templates(root)
     if text_prompt:
         parsed = _parse_spec_text(text_prompt)
         if parsed is not None:
             return parsed, "prompt"
-        return _prose_spec(text_prompt), "prompt"
+    match = None
     if template_id:
         match = next((item for item in catalogue["templates"] if item["id"] == template_id), None)
-        if match is None:
+        if match is None and not text_prompt:
             raise FactoryLaunchError(404, "unknown_template", f"No template {template_id}.")
-        return dict(match), "template"
+    if match is not None:
+        spec = dict(match)
+        if text_prompt:
+            spec["prompt"] = text_prompt
+        return spec, "template"
+    if text_prompt:
+        return _prose_spec(text_prompt), "prompt"
     if catalogue["templates"]:
         return dict(catalogue["templates"][0]), "lucky"
     return dict(BUILTIN_SPEC), "lucky"
@@ -577,9 +612,25 @@ def _parse_spec_text(prompt: str) -> Optional[dict[str, Any]]:
         return None
 
 
+#: A prose brief's project name: its first words, cut at a word boundary near this length.
+TITLE_CHARS = 40
+
+
+def prose_title(brief: str, limit: int = TITLE_CHARS) -> str:
+    """The project's name from a brief: its first line, cut at the last word boundary within
+    `limit` characters (a single longer word is cut at `limit`), trailing punctuation dropped.
+    "Easy Mode" when there is nothing to name it by."""
+    line = (str(brief or "").strip().splitlines() or [""])[0].strip()
+    if len(line) > limit:
+        cut = line[:limit + 1]
+        space = cut.rstrip().rfind(" ")
+        line = cut[:space] if space >= limit // 2 else line[:limit]
+    line = line.rstrip(" ,;:.-–—")
+    return line if len(line) >= 2 else "Easy Mode"
+
+
 def _prose_spec(prompt: str) -> dict[str, Any]:
-    line = prompt.strip().splitlines()[0].strip()
-    title = line[:80] if len(line) >= 2 else "Easy Mode"
+    title = prose_title(prompt)
     return {
         "id": "prompt",
         "title": title,

@@ -13,9 +13,10 @@ class NoopBudgetPort:
         self._reservations: dict[str, dict[str, Any]] = {}
         self._lock = RLock()
 
-    def status_for_project(self, connection: Any, project_id: str) -> dict[str, Any]:
+    def status_for_project(self, connection: Any, project_id: str,
+                           exclude_reservations: Any = ()) -> dict[str, Any]:
         """Unmetered: never under budget pressure, so the state is always green."""
-        del connection
+        del connection, exclude_reservations
         return {"project_id": project_id, "budget_state": "green", "unmetered": True}
 
     def reserve(
