@@ -189,7 +189,7 @@ def run_on_runner(h: Handoff, args: Any, *, session_key: str, collect_files: lis
                 Path(path).write_text(content, encoding="utf-8")
     remote_cwd = str(result.get("cwd") or "")
     if started.get("adopted") and remote_cwd and local_cwd and os.path.realpath(remote_cwd) != os.path.realpath(local_cwd):
-        carried = carry_tree(remote_cwd, local_cwd)
+        carried = carry_tree(remote_cwd, local_cwd, owner=h.owner)
         _log.warning("carried %s's turn output from %s into the resumed sandbox %s (%s)",
                      h.task_run_id, remote_cwd, local_cwd, carried)
     _close(h, sid, token)
@@ -292,25 +292,42 @@ def retained(path: Any) -> bool:
         return os.path.realpath(str(path)) in _RETAINED
 
 
-def _git_files(root: str) -> Optional[set[str]]:
-    try:
-        proc = owned_process.boss_run(["git", "-c", "safe.directory=*", "-C", root, "ls-files", "-co",
-                                       "--exclude-standard", "-z"], capture_output=True, timeout=120)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
+def _git_files(root: str, owner: Any = None) -> Optional[set[str]]:
+    """Tracked plus untracked-not-ignored files of `root`. Read-only git on a run's tree
+    (git_safety.tree_git): as the run's uid when `owner` holds one, pinned to its own .git, and
+    never an excludes file the tree's config names (core.excludesFile at a BOSS file was an oracle
+    for its lines). As BOSS's uid, .git/info/exclude is read without following a link (and only
+    with one hard link) and handed to git as a copy, never by name."""
+    from . import sandbox_identity, workspace_perms
+    from .git_safety import tree_git
+
+    holder = owner if owner is not None else owned_process.current_owner()
+    if sandbox_identity.for_owner(holder) is not None:
+        proc = tree_git(root, "ls-files", "-co", "--exclude-standard", "-z", owner=holder,
+                        timeout=120, text=False)
+    else:
+        import tempfile
+
+        exclude = workspace_perms.read_nofollow(root, ".git/info/exclude") or b""
+        with tempfile.NamedTemporaryFile(prefix="boss-exclude-", delete=True) as tmp:
+            tmp.write(exclude)
+            tmp.flush()
+            proc = tree_git(root, "ls-files", "-co", "--exclude-per-directory=.gitignore",
+                            f"--exclude-from={tmp.name}", "-z", owner=holder, timeout=120,
+                            text=False)
+    if proc is None or proc.returncode != 0:
         return None
     return {p for p in proc.stdout.decode("utf-8", errors="surrogateescape").split("\0") if p}
 
 
-def carry_tree(src: str, dst: str) -> dict[str, int]:
+def carry_tree(src: str, dst: str, *, owner: Any = None) -> dict[str, int]:
     """Make `dst`'s working tree what the turn left in `src` (both checkouts of the same branch):
     every tracked or untracked-not-ignored file of `src` copied over, every such file of `dst`
     that `src` no longer has removed. `.git` is never touched. Then `src` goes."""
     out = {"copied": 0, "removed": 0}
     if not os.path.isdir(src) or not os.path.isdir(dst):
         return out
-    have, want = _git_files(src), _git_files(dst)
+    have, want = _git_files(src, owner), _git_files(dst, owner)
     if have is None:
         return out
     # `ls-files -c` also names tracked files the turn deleted: those are removals, not copies.

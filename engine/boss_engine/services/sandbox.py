@@ -650,11 +650,16 @@ class EphemeralSandbox:
     def _write_exclude(self, text: str) -> None:
         """.git/info/exclude written as a fresh file renamed over the name, through no-follow
         directory fds (workspace_perms.write_nofollow): a planted link to a BOSS file is replaced,
-        never written through. 0666: the run's uid may edit it (its run directory is 2770)."""
+        never written through. 0666 (and a 2777 .git/info) only when the checkout sits inside the
+        run's own 2770 run directory, which keeps every other uid out (workspace_perms.shared_mode);
+        0600 (0755) anywhere else."""
         from . import workspace_perms
 
-        workspace_perms.write_nofollow(self.path, self._EXCLUDE, text.encode("utf-8"), mode=0o666,
-                                       trusted=self._trusted_root(), dir_mode=0o2777)
+        ident = getattr(self, "_sandbox", None)
+        mode = workspace_perms.shared_mode(self.path, 0o666, ident=ident)
+        dir_mode = 0o2777 if mode == 0o666 else 0o755
+        workspace_perms.write_nofollow(self.path, self._EXCLUDE, text.encode("utf-8"), mode=mode,
+                                       trusted=self._trusted_root(), dir_mode=dir_mode)
 
     def _write_local_excludes(self) -> None:
         assert self.path is not None

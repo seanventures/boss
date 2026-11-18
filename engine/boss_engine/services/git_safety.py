@@ -24,9 +24,10 @@ readonly_guard._git when it runs as BOSS.
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 #: The `-c` options every BOSS-authority git on a run's tree carries.
 NO_TREE_CODE: tuple[str, ...] = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
@@ -66,4 +67,72 @@ def filter_overrides(root: Path, *, env: Mapping[str, str], timeout: float = 20)
     return out
 
 
-__all__ = ["ISOLATED_ENV", "NO_TREE_CODE", "filter_overrides", "isolated_env"]
+#: What a read-only git on a run's tree never reads from the tree's config: an excludes file it
+#: names (core.excludesFile pointed at a BOSS file is an oracle for that file's lines).
+READ_ONLY_CONFIG: tuple[str, ...] = ("-c", "core.excludesFile=/dev/null", "-c", "safe.directory=*")
+
+#: .git entries that make git read ANOTHER repository's objects or refs. git has no switch to
+#: ignore them, so read-only git as BOSS's uid refuses a run's tree that holds one.
+_FOREIGN_STORE = ("objects/info/alternates", "objects/info/http-alternates", "commondir")
+
+
+def _foreign_store(git_dir: Path) -> bool:
+    try:
+        if not stat.S_ISDIR(os.lstat(git_dir / "objects").st_mode):
+            return True                   # objects/ itself a link: another repository's store
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return any(os.path.lexists(git_dir / rel) for rel in _FOREIGN_STORE)
+
+
+def tree_git(root: Any, *args: str, owner: Any = None, timeout: float = 20,
+             text: bool = True) -> Optional[subprocess.CompletedProcess]:
+    """A READ-ONLY git (rev-parse, ls-files, merge-base, remote get-url, ...) BOSS runs on a
+    run's tree. None when refused or git could not start; otherwise the finished process.
+
+    * AS THE RUN'S UID when `owner` (default: the enclosing owner scope) holds a sandbox
+      identity, through owned_process like sandbox._git_once: whatever the tree planted
+      (objects/info/alternates naming another repository, a core.excludesFile naming a BOSS
+      file) is read with the run's own authority, which has nothing BOSS's has.
+    * Pinned to `root`'s own real .git (GIT_DIR/GIT_WORK_TREE): a `.git` that is a link or a
+      gitfile is refused, never discovered upwards.
+    * NO_TREE_CODE, READ_ONLY_CONFIG, no system/global config, GIT_OPTIONAL_LOCKS=0 (no
+      opportunistic index rewrite).
+    * As BOSS's uid (no identity held) on a tree inside the sandbox root: refused when the tree
+      points git at another object store (alternates, commondir, a linked objects/) — git
+      has no option to ignore those."""
+    from . import owned_process, sandbox_identity
+
+    base = Path(str(root))
+    git_dir = base / ".git"
+    try:
+        if not stat.S_ISDIR(os.lstat(git_dir).st_mode):
+            return None
+    except OSError:
+        return None
+    holder = owner if owner is not None else owned_process.current_owner()
+    ident = sandbox_identity.for_owner(holder)
+    if ident is None and _foreign_store(git_dir):
+        from . import workspace_perms
+
+        if workspace_perms.trusted_root_for(base) is not None:
+            return None
+    env = {**isolated_env({"PATH": os.environ.get("PATH", os.defpath), "LANG": "C.UTF-8",
+                           "HOME": os.devnull}),
+           "GIT_DIR": str(git_dir), "GIT_WORK_TREE": str(base), "GIT_OPTIONAL_LOCKS": "0"}
+    try:
+        return owned_process.run(["git", *NO_TREE_CODE, *READ_ONLY_CONFIG, *args],
+                                 cwd=str(base), env=env, capture_output=True, text=text,
+                                 timeout=timeout, **({"owner": holder} if holder is not None
+                                                     else {}),
+                                 **({} if ident is not None else {"sandboxed": False}))
+    except (OSError, subprocess.SubprocessError):
+        return None
+    except Exception:  # noqa: BLE001 — e.g. SandboxUnavailable: no read, never BOSS's uid instead
+        return None
+
+
+__all__ = ["ISOLATED_ENV", "NO_TREE_CODE", "READ_ONLY_CONFIG", "filter_overrides",
+           "isolated_env", "tree_git"]
