@@ -483,7 +483,8 @@ class _NoReader:
         raise RuntimeError("not asked")
 
 
-def quality_problem(source: dict[str, Any], environment: str) -> Optional[str]:
+def quality_problem(source: dict[str, Any], environment: str,
+                    connection: Any = None) -> Optional[str]:
     """Why this build may not be shipped as configuration to `environment` without a person's
     look, or None. PRODUCTION always asks: it is refused when the build's gates were failing or
     advisory or its PR is not merged (the production check of the quality bar —
@@ -498,16 +499,17 @@ def quality_problem(source: dict[str, Any], environment: str) -> Optional[str]:
     from ..identity.object_rules import is_production_environment
 
     if is_production_environment(environment):
-        try:
-            from .quality_bar import production_refusal  # PR #191; absent until it merges
-        except Exception:  # noqa: BLE001
-            production_refusal = None
-        if production_refusal is not None:
-            why = production_refusal(source)
-            if why:
-                return str(why)
-        if reasons:
-            return "Not shipped to production: " + "; ".join(reasons) + "."
+        # The production quality bar judges the build behind this release (PR #191): fail closed.
+        why = None
+        if connection is not None and source.get("code_task_run_id"):
+            from . import quality_bar
+
+            why = quality_bar.production_refusal(
+                connection, code_task_run_id=str(source["code_task_run_id"]))
+        if why or reasons:
+            return " ".join(x for x in (
+                str(why or ""),
+                ("Not shipped to production: " + "; ".join(reasons) + ".") if reasons else "") if x)
     return None
 
 
@@ -897,7 +899,7 @@ def deploy_files(engine: Any, settings: Settings, *, project_id: str, actor: str
                         "A config deployment from a build needs source_paths: the files the "
                         "build wrote.", "Name them, e.g. source_paths: [\"tenants/\"].")
                 source = build_source(c, settings, project_id, str(code_task_run_id))
-                refused = quality_problem(source, cfg.environment)
+                refused = quality_problem(source, cfg.environment, c)
                 if refused:
                     raise ConfigDeployError(refused, "Fix the build's failing checks and merge it, "
                                             "or deploy a build that passed.")

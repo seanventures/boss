@@ -11608,11 +11608,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if _final_head and not re.fullmatch(r"[0-9a-fA-F]{7,40}", _final_head):
             _final_head = ""
         _final_head = _final_head.lower()
-        with _transaction(engine) as c:
-            if _final_head:
+        if _final_head:
+            # ITS OWN TRANSACTION, committed before the terminal write: `_fenced_status` opens
+            # another connection on the same row, so holding this UPDATE open across it waits on
+            # itself until the statement timeout.
+            with _transaction(engine) as c:
                 c.execute(sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, "
                               "'{}'::jsonb) || jsonb_build_object('final_head_sha', CAST(:h AS text)) "
                               "WHERE id = :id"), {"h": _final_head, "id": run_id})
+        with _transaction(engine) as c:
             _ok = _fenced_status(
                 "completed",
                 "phase='done', pull_request_url=:u, pull_request_number=:n, decision_id=:d",
