@@ -79,7 +79,7 @@ _DECL_PATH = re.compile(r"(?i)(^|/)(go\.(mod|sum)|package(-lock)?\.json|[^/]*\.l
 _TEST_PATH = re.compile(r"(?i)(^|/)(tests?|__tests__|spec|testdata)/|_test\.\w+$|\.(test|spec)\.\w+$"
                         r"|(^|/)test_[^/]*$")
 #: The reviewer's wiring claim (acceptance_prompt): "LOADED BY <file>:<symbol>".
-_LOADED_BY = re.compile(r"(?i)\bLOADED\s+BY\s+`?([\w.\-/]+?):`?([A-Za-z_][\w.$]*)`?")
+_LOADED_BY = re.compile(r"(?i)\bLOADED\s+BY\s+`?([\w.\-/]+?)`?:`?([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)`?")
 
 
 def _resolve(root: Path, cited: str) -> Optional[str]:
@@ -389,7 +389,7 @@ _IDENT = re.compile(r"[A-Za-z_$][\w$]*")
 _QUALIFIED = re.compile(r"(?<![\w/.\-$])([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+)(?![\w/$])")
 #: `file:Symbol` (`internal/config/loader.go:Load`, `atomic.go:Store.Swap`): a citation of a
 #: definition in a named file, whether or not the reviewer wrote LOADED BY in front of it.
-_FILE_SYMBOL = re.compile(r"`?([\w.\-/]+\.[A-Za-z]\w{0,8}):`?([A-Za-z_$][\w.$]*)")
+_FILE_SYMBOL = re.compile(r"`?([\w.\-/]+\.[A-Za-z]\w{0,8}):`?([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)")
 #: A bare "*.yaml" glob string: it names every YAML in the tree, never one file.
 _BARE_GLOB = re.compile(r"""(["'`])\*\.[\w]+\1""")
 _DATA_FILE = re.compile(r"(?i)\.(ya?ml|json|toml|ini|cfg|conf|csv|xml)$")
