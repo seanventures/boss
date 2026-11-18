@@ -67,7 +67,8 @@ def _live_sample(connection, org_id: str, key: str) -> dict | None:
 
 def ensure_sample_code(connection, settings, project_id: str, *, actor: str) -> Optional[dict]:
     """A sample's code lives on this machine: a local repository bound as its primary, unless it
-    already has a repository (local or GitHub). Returns the binding made, or None (one existed,
+    already has a repository (local or GitHub). Easy Mode's projects with no GitHub repository
+    get theirs the same way (factory_launch._ensure_repository). Returns the binding made, or None (one existed,
     or git is not here — the start's readiness then names the repository need, never a silent
     project with nowhere to push)."""
     from . import local_projects, local_repo
