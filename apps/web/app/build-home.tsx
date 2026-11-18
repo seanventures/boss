@@ -476,6 +476,8 @@ export function BuildHome() {
     promptRef.current?.focus();
   };
 
+  const ModeIcon = MODE_ICON[mode];
+
   return (
     <div className="bh" data-testid="build-home" data-template-id={templateId ?? ""}>
       <div className="bh-bench">
@@ -584,7 +586,7 @@ export function BuildHome() {
             <label className="bh-mode" data-mode={mode}>
               <span>Mode</span>
               <span className="bh-mode-pill">
-                {React.createElement(MODE_ICON[mode], { ...ICON, className: "bh-mode-icon", "data-testid": "build-mode-icon" })}
+                <ModeIcon {...ICON} className="bh-mode-icon" data-testid="build-mode-icon" />
                 <select
                   aria-label="Mode"
                   data-testid="build-mode"

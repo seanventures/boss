@@ -1,7 +1,8 @@
 /* The overview build bench: a header over a faint grid and aurora, one composer card that
    glows when it is being written in, an icon on every control, and tinted chips that match the
-   gallery's categories. The only motion is small: the ready dot breathes, controls lift on
-   hover, and all of it stops under prefers-reduced-motion. */
+   gallery's categories. The only motion is small: controls lift on hover and the dot breathes
+   only while a build is starting (a pulse means work is moving), and all of it stops under
+   prefers-reduced-motion. */
 
 .bh { min-width: 0; color: var(--ink); }
 
@@ -71,7 +72,8 @@
   opacity: 0;
 }
 
-.bh-status[data-state="ready"] .bh-dot::after,
+/* A pulse in this console means work is moving, so only "starting" breathes; a ready bench
+   that is waiting for words holds a still glow. */
 .bh-status[data-state="starting"] .bh-dot::after {
   animation: bh-breathe 2.4s ease-out infinite;
 }
@@ -150,11 +152,12 @@
 
 .bh-prompt:focus { outline: none; }
 
-/* The card's gradient border and glow is the focus mark for the textarea when it is keyboard
-   focused; the inner outline stays for a forced-colours or high-contrast reader. */
+/* The textarea's own focus mark (the card glow also lights for Add, Mode and Mic): an accent
+   bar along its left edge. The transparent outline shows in forced-colours mode. */
 .bh-prompt:focus-visible {
   outline: 2px solid transparent;
   outline-offset: -2px;
+  box-shadow: inset 3px 0 0 var(--accent-text);
 }
 
 .bh-foot {
@@ -266,9 +269,15 @@
   50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--red) 0%, transparent); }
 }
 
-/* Easy Mode: the one control that starts a build, so it is the one with colour and light. */
+/* Easy Mode: the one control that starts a build, so it is the one with colour and light.
+   The label is --fs-ui bold, not large text, so it needs 4.5:1 everywhere under it. The
+   gradient only darkens from --accent toward the dark accent --boss-c-1b3a6b (white on
+   --accent is 4.70, the rest right stop 6.05, hover 5.55 to 7.22, and at worst 4.75 under the
+   8% hover sheen); the teal lives only in the glow. tests/build-home.test.tsx pins the stops
+   and computes these ratios. */
 .bh-lucky {
   position: relative;
+  isolation: isolate;
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
@@ -276,39 +285,41 @@
   overflow: hidden;
   border: 0;
   border-radius: 999px;
-  background: linear-gradient(120deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 60%, var(--teal)) 100%);
+  background: linear-gradient(120deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 70%, var(--boss-c-1b3a6b)) 100%);
   color: var(--accent-ink);
   font-weight: 700;
   padding: 0.5rem 1.05rem 0.5rem 0.85rem;
   box-shadow:
-    0 0.35rem 1.1rem -0.35rem color-mix(in srgb, var(--accent) 70%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--accent-ink) 25%, transparent);
-  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+    0 0.35rem 1.1rem -0.35rem color-mix(in srgb, var(--teal) 55%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--accent-ink) 20%, transparent);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
 
-/* A sheen that crosses the button once on hover. */
+/* A faint sheen that crosses once on hover, painted under the label (z-index -1 inside the
+   button's own stacking context), at 8% so the label stays above 4.5:1. */
 .bh-lucky::after {
   content: "";
   position: absolute;
+  z-index: -1;
   inset: 0;
-  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--accent-ink) 28%, transparent) 50%, transparent 70%);
+  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--accent-ink) 8%, transparent) 50%, transparent 70%);
   transform: translateX(-120%);
   pointer-events: none;
 }
 
 .bh-lucky:hover:not(:disabled) {
-  filter: brightness(1.08);
+  background: linear-gradient(120deg, color-mix(in srgb, var(--accent) 80%, var(--boss-c-1b3a6b)) 0%, color-mix(in srgb, var(--accent) 50%, var(--boss-c-1b3a6b)) 100%);
   transform: translateY(-1px);
   box-shadow:
-    0 0.55rem 1.5rem -0.4rem color-mix(in srgb, var(--accent) 85%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--accent-ink) 25%, transparent);
+    0 0.55rem 1.5rem -0.4rem color-mix(in srgb, var(--teal) 70%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--accent-ink) 20%, transparent);
 }
 
 .bh-lucky:hover:not(:disabled)::after { transform: translateX(120%); transition: transform 0.7s ease; }
 
 .bh-lucky:hover:not(:disabled) .bh-lucky-icon { transform: rotate(-14deg) scale(1.08); }
 
-.bh-lucky:active:not(:disabled) { transform: translateY(0) scale(0.98); filter: brightness(0.97); }
+.bh-lucky:active:not(:disabled) { transform: translateY(0) scale(0.98); }
 
 .bh-lucky-icon { transition: transform 0.2s ease; }
 
@@ -415,13 +426,16 @@
 .bh-chip:active { transform: translateY(0); }
 
 @media (prefers-reduced-motion: reduce) {
-  .bh-status .bh-dot::after,
-  .bh-mic[aria-pressed="true"],
-  .bh-lucky[aria-busy="true"] .bh-lucky-icon,
-  .bh-menu { animation: none !important; }
-  .bh-ticket, .bh-add, .bh-mic, .bh-mode-pill, .bh-lucky, .bh-lucky-icon, .bh-chip { transition: none; }
+  .bh-status[data-state="starting"] .bh-dot::after { animation: none; }
+  .bh-mic[aria-pressed="true"] { animation: none; }
+  .bh-lucky[aria-busy="true"] .bh-lucky-icon { animation: none; }
+  .bh-menu { animation: none; }
+  .bh-ticket, .bh-add, .bh-mic, .bh-add svg, .bh-mic svg, .bh-mode-pill, .bh-lucky, .bh-lucky-icon, .bh-chip { transition: none; }
   .bh-add:hover, .bh-mic:hover, .bh-mode-pill:hover, .bh-chip:hover,
-  .bh-lucky:hover:not(:disabled), .bh-lucky:hover:not(:disabled) .bh-lucky-icon { transform: none; }
+  .bh-add:active, .bh-mic:active, .bh-chip:active { transform: none; }
+  .bh-lucky:hover:not(:disabled) { transform: none; }
+  .bh-lucky:hover:not(:disabled) .bh-lucky-icon { transform: none; }
+  .bh-lucky:active:not(:disabled) { transform: none; }
   .bh-lucky:hover:not(:disabled)::after { transform: translateX(-120%); transition: none; }
 }
 

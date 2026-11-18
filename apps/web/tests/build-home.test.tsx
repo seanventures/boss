@@ -3,6 +3,7 @@
  * The default overview opens on the build bench (BOSSAPP-1273). The three factory
  * routes are mocked: templates, attachments, launch.
  */
+import { readFileSync } from "node:fs";
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { landingArea, summarize } from "../lib/setup-server";
 import { board, firstRun } from "./_helpers/setup-fixtures";
 import { codeOnly } from "./_helpers/source";
+import { declarations } from "./_helpers/css-declarations";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -252,11 +254,120 @@ describe("every control carries an icon beside its words", () => {
     expect(mic()?.getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("the motion stops under prefers-reduced-motion", () => {
-    const css = codeOnly("app/build-home.css");
-    const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)"));
-    expect(reduced.length).toBeGreaterThan(0);
-    for (const sel of [".bh-dot::after", ".bh-mic[aria-pressed=\"true\"]", ".bh-lucky", ".bh-chip"]) expect(reduced).toContain(sel);
+  it("every animation, transition and hover lift has its own exact rule under prefers-reduced-motion", () => {
+    const css = readFileSync("app/build-home.css", "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const at = css.indexOf("@media (prefers-reduced-motion: reduce)");
+    expect(at).toBeGreaterThan(0);
+    const open = css.indexOf("{", at);
+    let depth = 0;
+    let close = open;
+    for (; close < css.length; close += 1) {
+      if (css[close] === "{") depth += 1;
+      if (css[close] === "}" && --depth === 0) break;
+    }
+    const inside = declarations(css.slice(open + 1, close));
+    // The composer's rules; the template gallery below (.bh-card, .bh-more) is out of scope here.
+    const outside = declarations(css.slice(0, at) + css.slice(close + 1))
+      .filter((d) => !d.selector.startsWith("@") && !/^(from|to|\d)/.test(d.selector))
+      .filter((d) => !/^\.bh-(card|more)/.test(d.selector));
+    const reduced = (selector: string, prop: string) =>
+      inside.find((d) => d.prop === prop && d.selector.split(",").map((x) => x.trim()).includes(selector))?.value;
+    const each = (prop: string, keep: (d: { selector: string; value: string }) => boolean) =>
+      outside.filter((d) => d.prop === prop && keep(d)).flatMap((d) => d.selector.split(",").map((x) => x.trim()));
+
+    const animated = each("animation", () => true);
+    expect(animated.sort()).toEqual([
+      ".bh-lucky[aria-busy=\"true\"] .bh-lucky-icon",
+      ".bh-menu",
+      ".bh-mic[aria-pressed=\"true\"]",
+      ".bh-status[data-state=\"starting\"] .bh-dot::after",
+    ]);
+    for (const sel of animated) expect(reduced(sel, "animation"), sel).toBe("none");
+    for (const sel of each("transition", (d) => !d.selector.includes(":hover"))) {
+      expect(reduced(sel, "transition"), sel).toBe("none");
+    }
+    const lifts = each("transform", (d) => /:hover|:active/.test(d.selector));
+    expect(lifts.length).toBeGreaterThan(5);
+    for (const sel of lifts) {
+      // The sheen's hover rule goes back to its resting place; every other lift is removed.
+      const rest = sel.endsWith("::after") ? "translateX(-120%)" : "none";
+      expect(reduced(sel, "transform"), sel).toBe(rest);
+    }
+  });
+});
+
+describe("Easy Mode stays readable (WCAG AA 4.5:1 for its bold --fs-ui label)", () => {
+  type RGB = [number, number, number];
+  const root = new Map<string, string>();
+  for (const file of ["app/globals.css", "app/design-system.css"]) {
+    const src = readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    for (const block of src.matchAll(/(?<=^|\})\s*:root\s*\{([^}]*)\}/g)) {
+      for (const m of block[1]!.matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/gi)) root.set(m[1]!.toLowerCase(), m[2]!.trim());
+    }
+  }
+  const hex = (value: string): RGB => {
+    const ref = value.match(/^var\((--[a-z0-9-]+)\)$/);
+    if (ref) { const next = root.get(ref[1]!); if (!next) throw new Error(`no :root token ${ref[1]}`); return hex(next); }
+    const m = value.match(/^#([0-9a-f]{6})$/i);
+    if (!m) throw new Error(`not a colour: ${value}`);
+    return [0, 2, 4].map((i) => parseInt(m[1]!.slice(i, i + 2), 16)) as RGB;
+  };
+  const mix = (a: RGB, b: RGB, p: number): RGB => a.map((v, i) => v * p + b[i]! * (1 - p)) as RGB;
+  const colour = (value: string): RGB => {
+    const m = value.match(/^color-mix\(in srgb, (var\(--[a-z0-9-]+\)) (\d+)%, (var\(--[a-z0-9-]+\))\)$/);
+    return m ? mix(hex(m[1]!), hex(m[3]!), Number(m[2]) / 100) : hex(value);
+  };
+  const lum = (c: RGB) => {
+    const [r, g, b] = c.map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; });
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+  };
+  const ratio = (a: RGB, b: RGB) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+  const css = declarations(readFileSync("app/build-home.css", "utf8"));
+  const decl = (selector: string, prop: string) => css.find((d) => d.selector === selector && d.prop === prop)?.value ?? "";
+  const stops = (gradient: string) => {
+    const m = gradient.match(/^linear-gradient\(120deg, (.+)\)$/);
+    expect(m, gradient).not.toBeNull();
+    // Split at the commas between stops, not the ones inside color-mix(...).
+    const parts: string[] = [];
+    let depth = 0;
+    let from = 0;
+    const body = m![1]!;
+    for (let i = 0; i < body.length; i += 1) {
+      if (body[i] === "(") depth += 1;
+      else if (body[i] === ")") depth -= 1;
+      else if (body[i] === "," && depth === 0) { parts.push(body.slice(from, i)); from = i + 1; }
+    }
+    parts.push(body.slice(from));
+    return parts.map((stop) => colour(stop.trim().replace(/\s+\d+%$/, "")));
+  };
+
+  it("pins the resting and hover gradients, with no brightness filter", () => {
+    expect(decl(".bh-lucky", "background")).toBe(
+      "linear-gradient(120deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 70%, var(--boss-c-1b3a6b)) 100%)");
+    expect(decl(".bh-lucky:hover:not(:disabled)", "background")).toBe(
+      "linear-gradient(120deg, color-mix(in srgb, var(--accent) 80%, var(--boss-c-1b3a6b)) 0%, color-mix(in srgb, var(--accent) 50%, var(--boss-c-1b3a6b)) 100%)");
+    expect(css.filter((d) => d.selector.startsWith(".bh-lucky") && d.prop === "filter")).toEqual([]);
+    expect(decl(".bh-lucky", "color")).toBe("var(--accent-ink)");
+  });
+
+  it("every stop, at rest, on hover and under the sheen, is at least 4.5:1 against the label", () => {
+    const ink = hex("var(--accent-ink)");
+    const rest = stops(decl(".bh-lucky", "background"));
+    const hover = stops(decl(".bh-lucky:hover:not(:disabled)", "background"));
+    for (const stop of [...rest, ...hover]) expect(ratio(ink, stop)).toBeGreaterThanOrEqual(4.5);
+    // The sheen sits under the label at a set strength of the label colour; at its peak over the
+    // lightest hover stop the label still clears 4.5:1.
+    expect(decl(".bh-lucky::after", "z-index")).toBe("-1");
+    expect(decl(".bh-lucky", "isolation")).toBe("isolate");
+    const sheen = decl(".bh-lucky::after", "background").match(/color-mix\(in srgb, var\(--accent-ink\) (\d+)%, transparent\)/);
+    expect(sheen).not.toBeNull();
+    const alpha = Number(sheen![1]) / 100;
+    for (const stop of hover) expect(ratio(ink, mix(ink, stop, alpha))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("a pulse means work is moving: only a starting build breathes", () => {
+    const pulsing = css.filter((d) => d.prop === "animation" && d.value.startsWith("bh-breathe")).map((d) => d.selector);
+    expect(pulsing).toEqual([".bh-status[data-state=\"starting\"] .bh-dot::after"]);
   });
 });
 
