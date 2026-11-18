@@ -201,6 +201,17 @@ def usable_hosts_sql(alias: str = "") -> str:
             "WHERE p1.id = :p))))")
 
 
+def host_by_hint_sql(columns: str = "*") -> str:
+    """THE ONE HOST LOOKUP BY WHAT SOMEONE TYPED (2026-11-18): id, name or address, any case,
+    among the hosts this project may use — its own and the verified ones its org shares, as
+    list_hosts/match_host see them. Binds :p (project) and :h (the hint). inspect_host,
+    run_on_host, describe_deployment_host and the port probe each looked in the project's own
+    rows only, so a shared host list_deployment_hosts had just shown was "not registered"."""
+    return (f"SELECT {columns} FROM deployment_hosts WHERE {usable_hosts_sql()} "
+            "AND status <> 'retired' AND (lower(id) = lower(:h) OR lower(name) = lower(:h) "
+            "OR lower(address) = lower(:h)) ORDER BY (project_id = :p) DESC LIMIT 1")
+
+
 def host_usable_by(connection, host_id: str, project_id: str) -> bool:
     """May `project_id` deploy onto this host (its own, or a verified one its org shares)?"""
     return bool(connection.execute(

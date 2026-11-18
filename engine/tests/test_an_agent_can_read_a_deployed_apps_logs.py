@@ -55,5 +55,10 @@ def test_only_docker_ps_and_docker_logs_run():
 
 
 def test_hosts_are_also_found_by_their_address():
+    # One lookup for every host tool (deployment_fleet.host_by_hint_sql): id, name or address,
+    # any case, over the hosts the project may use (its own and the org's shared ones).
+    from boss_engine.services.deployment_fleet import host_by_hint_sql
     src = inspect.getsource(builtin)
-    assert "(id = :h OR name = :h OR address = :h)" in src
+    assert "_host_by_hint_sql(" in src
+    q = host_by_hint_sql()
+    assert "lower(address) = lower(:h)" in q and "lower(name) = lower(:h)" in q

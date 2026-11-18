@@ -1044,11 +1044,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
             # Matched three ways because an operator says "192.0.2.202" and the console says
             # "hetzner-ci-01"; forcing them to know the id is a lookup they should not have to do.
             row = c.execute(
-                _text(
-                    "SELECT * FROM deployment_hosts "
-                    "WHERE project_id=:p AND (id=:n OR name=:n OR address=:n) LIMIT 1"
-                ),
-                {"p": pid, "n": needle},
+                _text(_host_by_hint_sql()),
+                {"p": pid, "h": needle},
             ).mappings().first()
             if not row:
                 return {"error": f"no host matching {needle!r} in this project"}
@@ -6627,9 +6624,7 @@ def _project_probe_host(ctx: Any, project_id: _Optional[str], host: str
     try:
         with ctx.begin() as c:
             row = c.execute(
-                _text("SELECT id, name, address, port_min, port_max FROM deployment_hosts "
-                      "WHERE project_id = :p AND (address = :h OR name = :h) "
-                      "AND status <> 'retired' LIMIT 1"),
+                _text(_host_by_hint_sql("id, name, address, port_min, port_max")),
                 {"p": project_id, "h": host}).mappings().first()
     except Exception:  # noqa: BLE001 — no proof of registration is no probe
         row = None
@@ -9336,10 +9331,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         from ..services.secret_backends import resolve_target_secret
 
         with ctx.begin() as c:
-            row = c.execute(_text(
-                "SELECT * FROM deployment_hosts "
-                "WHERE project_id = :p AND (id = :h OR name = :h OR address = :h)"),
-                {"p": project_id, "h": want}).mappings().first()
+            row = c.execute(_text(_host_by_hint_sql()),
+                            {"p": project_id, "h": want}).mappings().first()
             if row is None:
                 return {"ok": False, "error": f"no registered host {want!r}"}
             host = dict(row)
@@ -9574,10 +9567,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         timeout = int(args.get("timeout_s") or 120)
 
         with ctx.begin() as c:
-            row = c.execute(_text(
-                "SELECT * FROM deployment_hosts "
-                "WHERE project_id = :p AND (id = :h OR name = :h OR address = :h)"),
-                {"p": project_id, "h": want}).mappings().first()
+            row = c.execute(_text(_host_by_hint_sql()),
+                            {"p": project_id, "h": want}).mappings().first()
             if row is None:
                 return {"ok": False, "error": f"no registered host {want!r} in this project"}
             host = dict(row)
@@ -10602,3 +10593,9 @@ def _usable_hosts(alias: str = "") -> str:
     from ..services.deployment_fleet import usable_hosts_sql
 
     return usable_hosts_sql(alias)
+
+
+def _host_by_hint_sql(columns: str = "*") -> str:
+    """deployment_fleet.host_by_hint_sql: the one id/name/address lookup over usable hosts."""
+    from ..services.deployment_fleet import host_by_hint_sql
+    return host_by_hint_sql(columns)
