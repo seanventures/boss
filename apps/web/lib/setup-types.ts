@@ -397,5 +397,5 @@ export type RowKey = "github" | "repository" | "models" | "capacity" | "jobs" | 
   /** Advanced: the rows folded under it (`focus=` opens the fold on that row). */
   | "advanced" | "github_app" | "repositories" | "ci" | "build_database" | "build_speed" | "toolchains" | "public_url"
   | "embedding_model"
-  /** Setup › Ticket systems (BOSSAPP-1047) and Events: sections of the board. */
-  | "ticket_systems" | "events";
+  /** Setup › Ticket systems (BOSSAPP-1047), Documents (Confluence) and Events: sections of the board. */
+  | "ticket_systems" | "documents" | "events";

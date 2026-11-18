@@ -18,7 +18,7 @@ import React, { useEffect, useId, useState } from "react";
 import { CaretDown } from "@phosphor-icons/react";
 
 export const SECTIONS_KEY = "boss.setup.sections.v1";
-export type SectionId = "repos" | "models" | "ticket_systems" | "events";
+export type SectionId = "repos" | "models" | "ticket_systems" | "documents" | "events";
 
 export function readOpen(): Partial<Record<SectionId, boolean>> {
   try {
