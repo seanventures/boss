@@ -76,7 +76,8 @@ def repo_blocks(repos: Iterable[str], needs: Optional[dict[str, str]] = None, *,
 def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, project_id: Optional[str],
                           role_keys: Iterable[str], permissions: Iterable[str], repos: Iterable[str] = (),
                           by_boss: bool = False, workflow_run_id: Optional[str] = None,
-                          gap: Optional[list[str]] = None) -> Optional[Acting]:
+                          gap: Optional[list[str]] = None,
+                          same_build: bool = False) -> Optional[Acting]:
     """A RETRY KEEPS ITS GRANT (R2): the authority the parent build was started under (its first
     code.task job), carried to the retry as a child run of the parent's (`<parent run>/retry:<new>`),
     so a task-bound grant covers the retry exactly as it covered the parent — and nothing else.
@@ -95,7 +96,12 @@ def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, proje
       stamped as BOSS's own work has no person behind it, so nothing is carried;
     * still live, still covering the builder, permissions and repos, and bound to the same run
       (`<run>/retry:<new>`);
-    * never a "this build only" grant (`run_ct:`): it ends with the build it was given for.
+    * a "this build only" grant (`run_ct:`) only for BOSS's RETRY OF THAT SAME BUILD
+      (`same_build`: retry_code_task(automatic=True)), bound to it as `run_ct:<build>/retry:<new>`
+      — never to a follow-up or any other build. The build is not finished while BOSS is retrying
+      what failed on BOSS's side: crun_6883ec7c (recipe-box, 2026-11-18) died on BOSS's own git
+      index permission bug, its person's "this build only" grant was live, and BOSS left it
+      failed for the person to press Retry — under the very same grant.
 
     The same rule carries a lineage's CONTINUATION that BOSS starts: a "Follow-up: checks
     failing" / deferred-findings task (start_code_task(continuation=True) -> `by_boss=True`).
@@ -145,7 +151,8 @@ def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, proje
     whose = ("the build it continues" if origin_run == parent_run_id
              else f"its lineage's person-started build ({origin_run})")
     g = grants.load(parent.grant_id, db=db)
-    if by_boss and g is not None and str(g.task_run_id or "").startswith("run_ct:"):
+    if (by_boss and g is not None and str(g.task_run_id or "").startswith("run_ct:")
+            and not same_build):
         return _no(f"grant {g.id} was given for build {str(g.task_run_id)[len('run_ct:'):]} only "
                    "and does not extend past it")             # "this build only": not past it
     if g is None or g.user_principal_id != parent.principal_id:

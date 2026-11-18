@@ -28,6 +28,17 @@ from typing import Any, Iterable, Mapping, Optional
 
 from sqlalchemy import text
 
+#: What BOSS says once its own platform retries of a build are spent (the pipeline's
+#: _retry_after_infra_failure and the failed-build card): what it did, never a question.
+AUTO_RETRY_SPENT_WORDS = ("BOSS retried this build {times} after a platform error on its own "
+                          "side; it failed the same way, so BOSS handed it to its engineer agent "
+                          "as a BOSS fix. Retry once BOSS is updated.")
+
+
+def spent_words(n: int) -> str:
+    times = {1: "once", 2: "twice"}.get(int(n), f"{int(n)} times")
+    return AUTO_RETRY_SPENT_WORDS.format(times=times)
+
 #: How far back a failure still speaks for the project, on every surface.
 REACH_DAYS = 14
 
@@ -217,7 +228,9 @@ def latest_failures(connection: Any, project_ids: Iterable[str], *,
         "COALESCE(c.finalize_ctx->>'root_run_id', c.id) AS root, "
         "c.finalize_ctx->>'failure_class' AS failure_class, "
         "c.finalize_ctx->>'reason_code' AS reason_code, "
-        "c.finalize_ctx->'merge'->>'sha' AS merged_sha "
+        "c.finalize_ctx->'merge'->>'sha' AS merged_sha, "
+        "c.finalize_ctx->>'auto_infra_retry' AS auto_retries, "
+        "c.finalize_ctx->'restart_recovery' AS restart_recovery "
         "FROM code_task_runs c WHERE c.project_id = ANY(:ids) AND c.created_at >= :since "
         + _internal_clauses(params, "c")), params).mappings().all()]
     runs = [dict(r) for r in connection.execute(text(
@@ -284,6 +297,15 @@ def latest_failures(connection: Any, project_ids: Iterable[str], *,
                        "follow_up": follow_up, "at": _iso(latest["updated_at"]),
                        "work_href": project_href(pid, tab="work", drawer=f"build:{root}"),
                        "see_href": see, "reason": failure_words(latest["error"])}
+            doing = boss_did(latest["failure_class"], latest.get("auto_retries"))
+            if doing:
+                failure["doing"] = doing
+            stopped = _stopped_by_boss(latest.get("restart_recovery"))
+            if stopped:
+                # A BOSS bug, fixed since, stopped it: said as that, never a red "Build failed".
+                failure.update({"word": "Stopped by a BOSS bug", "reason": stopped,
+                                "tone": "info", "boss_bug": True})
+                failure.pop("doing", None)
             failure.update(action_for(
                 pid, source="code_task", run_id=str(latest["id"]),
                 failure_class=latest["failure_class"], reason_code=latest["reason_code"],
@@ -333,13 +355,37 @@ def _failed_at_ship(connection: Any, run_ids: list[str]) -> set[str]:
     return out
 
 
+def _stopped_by_boss(value: Any) -> Optional[str]:
+    from .build_restart_recovery import words_for
+    from .project_experience.common import as_json
+
+    said = words_for({"restart_recovery": as_json(value, None)}) if value else None
+    return said["words"] if said and said["state"] == "cannot_resume" else None
+
+
+def boss_did(failure_class: Any, auto_retries: Any) -> Optional[str]:
+    """What BOSS already did about a build that died of BOSS's own platform error, in one
+    sentence — said in place of a question: "BOSS retried it twice; …". None when BOSS made no
+    automatic retry (a needs_human failure, or one whose retries are off)."""
+    if str(failure_class or "") != "infra":
+        return None
+    raw = str(auto_retries or "").strip().lower()
+    n = 1 if raw == "true" else int(raw) if raw.isdigit() else 0
+    if n <= 0:
+        return None
+    return spent_words(n)
+
+
 def needs_card(failure: Mapping[str, Any]) -> dict[str, Any]:
     """The failure as a Needs-you card (kind `failed`). It carries no generic `action`: its
     buttons are its own (Retry is a POST, never a link), so a generic renderer — the needs
     drawer — draws the same Retry / fix / See what happened, never an API URL as a link."""
     return {"id": f"failed:{failure['id']}", "kind": "failed",
             "label": f"{failure['word']}: {failure['label']}", "word": failure["word"],
-            "detail": failure["reason"], "mini": [], "work_id": failure["id"],
+            "detail": (f"{failure['doing']} {failure['reason']}".strip() if failure.get("doing")
+                       else failure["reason"]),
+            "doing": failure.get("doing"), "mini": [], "work_id": failure["id"],
             "created_at": failure.get("at"), "retry": failure.get("retry"),
             "fix": failure.get("fix"), "retry_reason": failure.get("retry_reason"),
-            "see_href": failure.get("see_href"), "action": None}
+            "see_href": failure.get("see_href"), "action": None,
+            **({"tone": failure["tone"]} if failure.get("tone") else {})}

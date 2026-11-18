@@ -145,7 +145,7 @@ def test_make_writable_never_leaves_the_workspace(ws, tmp_path_factory):
     os.chmod(outside, 0o644)
 
 
-# ---- (c) one automatic retry for an infra failure ---------------------------------------------
+# ---- (c) bounded automatic retries for an infra failure ---------------------------------------------
 
 class _Conn:
     def __init__(self, log):
@@ -169,29 +169,56 @@ def _wire(monkeypatch, log, retry):
     return g
 
 
-def test_an_infra_failure_is_retried_once_automatically(monkeypatch):
+def test_an_infra_failure_is_retried_automatically_with_backoff(monkeypatch):
     log, retried = [], []
 
     def retry(engine, settings, jobs, run_id, **kw):
-        retried.append(run_id)
+        retried.append((run_id, kw.get("automatic"), kw.get("platform_retry")))
         return {"status": "queued", "run_id": "crun_next"}
 
     g = _wire(monkeypatch, log, retry)
     out = g._retry_after_infra_failure(None, None, None, "crun_a", "p", {}, {"status": "failed"})
-    assert retried == ["crun_a"]
+    assert retried == [("crun_a", True, True)]
     assert out["auto_retry_run_id"] == "crun_next" and out["status"] == "failed"
+    assert out["auto_retry_attempt"] == 1
     flagged = [e for e in log if e[0] == "sql"]
-    assert flagged and flagged[0][2] == {"k": g.AUTO_INFRA_RETRY_KEY, "id": "crun_next"}
-    assert any(e[0] == "event" and e[1] == "code_task.auto_retried" for e in log)
+    assert flagged and flagged[0][2] == {"k": g.AUTO_INFRA_RETRY_KEY, "n": 1, "id": "crun_next"}
+    # The backoff: the new attempt's job waits (30 s by default, doubled per try).
+    assert flagged[1][2] == {"d": 30, "id": "crun_next"} and "run_after" in flagged[1][1]
+    said = [e for e in log if e[0] == "event" and e[1] == "code_task.auto_retried"]
+    assert said and said[0][2]["attempt"] == 1 and said[0][2]["of"] == 2
 
 
-def test_the_automatic_retry_is_not_retried_again(monkeypatch):
+def test_the_second_try_waits_longer_and_the_third_is_not_made(monkeypatch):
     log, retried = [], []
-    g = _wire(monkeypatch, log, lambda *a, **k: retried.append(1))
+    g = _wire(monkeypatch, log, lambda *a, **k: retried.append(1) or {"run_id": "crun_n"})
+    # The marker was a bare `true` for BOSS's old single retry: that counts as one.
     out = g._retry_after_infra_failure(None, None, None, "crun_b", "p",
                                        {g.AUTO_INFRA_RETRY_KEY: True}, {"status": "failed"})
-    assert retried == []
-    assert "press Retry" in out["next_step"]
+    assert retried == [1] and out["auto_retry_attempt"] == 2
+    assert [e[2] for e in log if e[0] == "sql"][1]["d"] == 60
+    out = g._retry_after_infra_failure(None, None, None, "crun_n", "p",
+                                       {g.AUTO_INFRA_RETRY_KEY: 2}, {"status": "failed"})
+    assert retried == [1], "bounded: two tries, then it stops"
+    # Said as what BOSS did, never a question to the person.
+    assert out["auto_retry"] == "not_again" and "BOSS retried this build twice" in out["next_step"]
+    assert "?" not in out["next_step"]
+
+
+def test_automatic_retries_can_be_turned_off(monkeypatch):
+    log, retried = [], []
+    g = _wire(monkeypatch, log, lambda *a, **k: retried.append(1))
+    off = type("S", (), {"build_auto_retries": 0, "build_auto_retry_backoff_seconds": 30})()
+    out = g._retry_after_infra_failure(None, off, None, "crun_b", "p", {}, {"status": "failed"})
+    assert retried == [] and out["auto_retry"] == "off"
+
+
+def test_automatic_retries_are_on_by_default():
+    from boss_engine.config import Settings
+
+    fields = Settings.model_fields
+    assert fields["build_auto_retries"].default == 2
+    assert fields["build_auto_retry_backoff_seconds"].default > 0
 
 
 def test_a_refused_retry_leaves_a_plain_message(monkeypatch):

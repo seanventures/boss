@@ -130,6 +130,8 @@ export type NeedsYou = {
   /** A `failed` card's resume (the build's own retry, only when it can help), its fix when
    *  Retry can't, why there is no Retry, and the build's page. */
   retry?: { run_id: string; href: string } | null; see_href?: string; fix?: FailureFix | null; retry_reason?: string;
+  /** "info": a BOSS bug fixed since stopped it (build_restart_recovery) — said plainly, not red. */
+  tone?: "info";
   mini: { label: string; state: StepState }[]; action: { label: string; href: string; decision_id: string } | null;
   /** The piece of work it belongs to (a merge's build; the Onboarding row for its "only you"
    *  items), the PR on GitHub, and when it was asked (the drawer). */
@@ -743,6 +745,7 @@ export const parseOverview = (v: unknown): Overview => {
       return { id: s(y.id), kind: oneOf(y.kind, ["merge", "deploy", "plan", "question", "setup", "failed"] as const, "question"), label: s(y.label),
                ...(s(rt.run_id) ? { retry: { run_id: s(rt.run_id), href: s(rt.href) } } : {}), ...(s(y.see_href) ? { see_href: s(y.see_href) } : {}),
                ...(parseFailureFix(y.fix) ? { fix: parseFailureFix(y.fix) } : {}), ...(s(y.retry_reason) ? { retry_reason: s(y.retry_reason) } : {}),
+               ...(s(y.tone) === "info" ? { tone: "info" as const } : {}),
                icon: s(y.icon), work_id: s(y.work_id), work_label: s(y.work_label), external_url: s(y.external_url), created_at: s(y.created_at),
                detail: s(y.detail), mini: mini(y.mini), release: parseRelease(y.release),
                diagnosis: parseDiagnosis(y.diagnosis),
