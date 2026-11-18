@@ -436,7 +436,8 @@ def _ensure_repository(
     made = False
     bound = local_projects.local_binding(connection, project_id)
     if bound is None:
-        made = ensure_sample_code(connection, settings, project_id, actor=actor) is not None
+        made = ensure_sample_code(connection, settings, project_id, actor=actor,
+                                  stack=str(spec.get("stack") or "") or None) is not None
         bound = local_projects.local_binding(connection, project_id)
     if bound is None or not bound.get("full_name"):
         raise FactoryLaunchError(409, "no_repository", NO_REPOSITORY)

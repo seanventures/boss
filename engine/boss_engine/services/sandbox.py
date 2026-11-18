@@ -30,7 +30,7 @@ from . import owned_process
 from ..schemas import FileChange
 from .agent_env import SECRET_SHAPED, agent_environment
 from .scheduling import low_priority
-from .repo_files import RepoFiles
+from .repo_files import MAX_FILE_BYTES, RepoFiles
 
 
 #: Words that are shells, not programs. Seeing one as argv[0] means the caller wrote a shell
@@ -223,6 +223,14 @@ def _pgid_of(proc):
         return os.getpgid(proc.pid)
     except (ProcessLookupError, PermissionError, OSError, AttributeError):
         return None
+
+
+def _mb(size: Optional[int]) -> str:
+    """9437184 -> "9 MB"; small sizes in KB."""
+    n = int(size or 0)
+    if n >= 1024 * 1024:
+        return f"{n / (1024 * 1024):.0f} MB"
+    return f"{max(1, n // 1024)} KB"
 
 
 class SandboxError(RuntimeError):
@@ -830,8 +838,18 @@ class EphemeralSandbox:
     def diff(self) -> list[FileChange]:
         """The changed tree as BOSS ``FileChange`` objects, ready to feed the
         existing ``propose_pull_request`` path. Binary/deleted files are skipped
-        (the contents API path handles text upserts)."""
+        (the contents API path handles text upserts).
+
+        BUILD OUTPUT NEVER FAILS A BUILD (crun_332011ee, 2026-11-18: `go build` left a 9 MB
+        `fixtureclock` binary in the repository root and the build failed reading it). A
+        compiled program the run added is left out, said in `left_out`, and kept out of git
+        until the next diff; every diff re-checks and re-notes it. Anything else over the read
+        cap (a text file, new or tracked) refuses in words."""
         self._require_provisioned()
+        # Last round's left-out block is cleared FIRST, so this round stages and checks those
+        # files again: one is noted again while it is still there, and a file the run removed or
+        # ignored itself leaves no stale entry behind.
+        self._write_left_out_block([])
         summary = self.diff_summary()
         from .governed_code_task_service import workspace_keepable
         from .repo_files import RepoFileRefused
@@ -843,6 +861,12 @@ class EphemeralSandbox:
 
         changes: list[FileChange] = []
         self.unreadable_paths: list[str] = []
+        #: Files this round left out of the work, each {path, bytes, words}.
+        self.left_out: list[dict] = []
+        # Files NEW in this run (untracked at its base): only these may be left out. A file git
+        # already tracks is the project's own and is never silently dropped.
+        new_files = self._added_paths()
+        dropped: list[str] = []
         reader = self._repo_files or RepoFiles(self.path)
         try:
             for path in summary.paths:
@@ -851,22 +875,145 @@ class EphemeralSandbox:
                 # killed the HelpDesk repair crun_bcbec2f6 here. They never belong in a PR.
                 if not workspace_keepable(path):
                     continue
+                if path in new_files and self._is_compiled_program(path):
+                    dropped.append(path)        # a compiled program: never the work
+                    self._leave_out(path, "compiled binary")
+                    continue
                 try:
                     content = reader.read_text(path, errors="strict")
-                except (FileNotFoundError, UnicodeDecodeError):
-                    continue  # absent/deleted or binary; unsafe files fail visibly
+                except FileNotFoundError:
+                    continue  # absent/deleted
+                except UnicodeDecodeError:
+                    if path in new_files:
+                        self._leave_out(path, "binary file", advice="BOSS carries text files "
+                                        "in a pull request only")
+                    continue  # binary: the contents path carries text only
                 except RepoFileRefused as exc:
                     # A file BOSS's uid may not read is reported and left out; a symlink or a
                     # path outside the repository (no PermissionError behind it) still fails.
                     if isinstance(exc.__cause__, PermissionError):
                         self.unreadable_paths.append(path)
                         continue
-                    raise
+                    size = self._size_of(path)
+                    if size is None or size <= MAX_FILE_BYTES:
+                        raise
+                    if self._ignored(path):
+                        # .gitignore names it (staged before the rule was added): not the work.
+                        self._unstage([path])
+                        continue
+                    tracked = "Git already tracks it" if path not in new_files else \
+                        "It is not a compiled program"
+                    raise RepoFileRefused(
+                        f"{path} is {_mb(size)}, over the {_mb(MAX_FILE_BYTES)} BOSS reads a "
+                        f"repository file up to. {tracked}, so BOSS will not leave it out: make "
+                        "it smaller, split it, or add it to .gitignore.") from exc
                 changes.append(FileChange(path=path, content=content))
         finally:
             if reader is not self._repo_files:
                 reader.close()
+        if dropped:
+            self._unstage(dropped)
+            self._write_left_out_block(dropped)
         return changes
+
+    # -- build output ---------------------------------------------------------
+    #: Executable headers: ELF and Mach-O (both byte orders, 32/64, fat). PE is checked apart.
+    _EXECUTABLE_MAGIC = (b"\x7fELF", b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf",
+                         b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe")
+    #: The comment lines around the block of .git/info/exclude this sandbox owns.
+    _LEFT_OUT_BEGIN = "# BOSS: build output left out (rewritten by every diff) — begin"
+    _LEFT_OUT_END = "# BOSS: build output left out — end"
+
+    def _added_paths(self) -> set[str]:
+        """Paths this run ADDS (untracked at its base; .gitignore already applied by `add -A`)."""
+        base = getattr(self, "diff_base_sha", None)
+        try:
+            out = self._git(["diff", "--cached", "--name-only", "--diff-filter=A", "-z",
+                             *([base] if base else [])], raw=True)
+        except Exception:  # noqa: BLE001 — unknown: nothing is treated as droppable
+            return set()
+        return {p for p in out.split("\0") if p}
+
+    def _size_of(self, path: str) -> Optional[int]:
+        try:
+            return (self.path / path).lstat().st_size  # type: ignore[operator]
+        except OSError:
+            return None
+
+    def _is_compiled_program(self, path: str) -> bool:
+        """An executable by its header: ELF, Mach-O, or PE (`MZ` whose e_lfanew at 0x3C points
+        at the "PE" signature followed by two NUL bytes). A text file that merely starts with
+        "MZ" is not one."""
+        try:
+            with open(self.path / path, "rb") as handle:  # type: ignore[operator]
+                head = handle.read(64)
+                if head.startswith(self._EXECUTABLE_MAGIC):
+                    return True
+                if not head.startswith(b"MZ") or len(head) < 64:
+                    return False
+                offset = int.from_bytes(head[0x3C:0x40], "little")
+                if offset < 64 or offset > 16 * 1024 * 1024:
+                    return False
+                handle.seek(offset)
+                return handle.read(4) == b"PE\0\0"
+        except OSError:
+            return False
+
+    def _ignored(self, path: str) -> bool:
+        try:
+            self._git(["check-ignore", "-q", "--no-index", "--", path])
+            return True
+        except Exception:  # noqa: BLE001 — exit 1 (not ignored) or no git: not ignored
+            return False
+
+    def _leave_out(self, path: str, what: str, *, advice: str = "add it to .gitignore") -> None:
+        """Record a file this round left out of its pull request, in words."""
+        if any(item["path"] == path for item in self.left_out):
+            return
+        size = self._size_of(path)
+        sized = f"a {_mb(size)} {what}" if size else f"a {what}"
+        self.left_out.append({"path": path, "bytes": size,
+                              "words": f"left out: {path}, {sized} — {advice}"})
+
+    def _unstage(self, paths: list[str]) -> None:
+        try:
+            self._git(["reset", "-q", "--", *paths])
+        except Exception:  # noqa: BLE001 — still left out of the files; the note stands
+            pass
+
+    def _write_left_out_block(self, paths: list[str]) -> None:
+        """Rewrite ONLY this sandbox's block of .git/info/exclude: exactly `paths` (anchored at the
+        repository root), or no block at all. Every other line is kept as it is."""
+        if self.path is None:
+            return
+        exclude_file = self.path / ".git" / "info" / "exclude"
+        try:
+            existing = exclude_file.read_text(encoding="utf-8") if exclude_file.exists() else ""
+        except OSError:
+            return
+        kept: list[str] = []
+        inside = False
+        for line in existing.splitlines():
+            if line == self._LEFT_OUT_BEGIN:
+                inside = True
+                continue
+            if line == self._LEFT_OUT_END:
+                inside = False
+                continue
+            if not inside:
+                kept.append(line)
+        if paths:
+            kept += [self._LEFT_OUT_BEGIN,
+                     *("/" + p.replace("\\", "/") for p in sorted(set(paths))),
+                     self._LEFT_OUT_END]
+        text = "\n".join(kept) + ("\n" if kept else "")
+        if text == existing:
+            return
+        try:
+            exclude_file.parent.mkdir(parents=True, exist_ok=True)
+            exclude_file.write_text(text, encoding="utf-8")
+        except OSError:
+            pass
 
     # -- internals ----------------------------------------------------------
     def _require_provisioned(self) -> None:

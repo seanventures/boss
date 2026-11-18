@@ -5837,6 +5837,29 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         turns=int(res.turns or 0))
         return res
 
+    _left_out_said: set[str] = set()
+
+    def _note_left_out(box) -> None:
+        """Say on the run which files this build made that are NOT its work (build output a
+        compiled stack left in the repository, a binary): sandbox.diff left them out instead of
+        failing the build. Recorded once per file; never raises."""
+        notes = [n for n in (getattr(box, "left_out", None) or [])
+                 if isinstance(n, dict) and n.get("path") not in _left_out_said]
+        if not notes:
+            return
+        try:
+            with _transaction(engine) as c:
+                c.execute(sql(
+                    "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+                    "|| jsonb_build_object('left_out', COALESCE(finalize_ctx->'left_out', "
+                    "'[]'::jsonb) || CAST(:n AS JSONB)), updated_at = now() WHERE id = :id"),
+                    {"n": json.dumps(notes), "id": run_id})
+                emit_event(c, project_id, "code_task.files_left_out", "boss", "code_task_run",
+                           run_id, {"files": notes})
+            _left_out_said.update(str(n.get("path")) for n in notes)
+        except Exception:  # noqa: BLE001 — a note never fails the build
+            _log_caught(logger)
+
     def _commit_stage(files, message: str) -> None:
         """Commit a stage's returned files to the work branch (control-plane-only git;
         requires the task repo to be the deployment's configured target repo)."""
@@ -6382,6 +6405,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         except Exception:  # noqa: BLE001 — a dead sandbox must not mask the real failure
             _log_caught(logger)
             return 0
+        _note_left_out(sandbox)
         if not files:
             return 0
         try:

@@ -99,11 +99,13 @@ def local_binding(c: Any, project_id: str, *, include_mirror: bool = False
 
 
 def create_for_project(c: Any, settings: Any, project_id: str, *, name: str, actor: str,
-                       title: str = "", description: str = "") -> dict[str, Any]:
-    """Code location "local": the bare repository with its first commit, bound to the project."""
+                       title: str = "", description: str = "",
+                       stack: Optional[str] = None) -> dict[str, Any]:
+    """Code location "local": the bare repository with its first commit, bound to the project.
+    `stack` adds that stack's build output to its .gitignore (local_repo.gitignore_for)."""
     _require_git()
     described = local_repo.create(project_id, name, settings=settings, title=title or name,
-                                  description=description)
+                                  description=description, stack=stack)
     return bind(c, project_id, described, actor=actor, origin="new")
 
 
