@@ -4,13 +4,15 @@ blurb: A cook saves recipes, scales the ingredient amounts by servings, and sear
 category: web
 prompt: |
   Build a Next.js app named Recipe Box that stores recipes in a sqlite file under the app data
-  directory. A recipe has a title, a meal tag of breakfast, lunch, or dinner, a base serving count,
+  directory. Use Node's built-in node:sqlite module or a pure-JavaScript sqlite package, not a native
+  module that downloads a binary when it installs. A recipe has a title, a meal tag of breakfast, lunch, or dinner, a base serving count,
   steps, and ingredients. Each ingredient has a name, an amount, and a unit. The detail page has a
   serving control that multiplies every amount from the base count and shows one decimal place.
   The list page filters by meal tag and by a case-insensitive title search. There is no account and
   no outbound request. A passing test saves a recipe, doubles the servings, and checks that each
   stored amount is doubled on the page.
 stack: Next.js
+toolchain: node
 resources:
   - repo
   - preview

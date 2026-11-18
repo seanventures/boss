@@ -279,6 +279,39 @@
   background: var(--surface);
 }
 
+.bh-card:disabled {
+  cursor: not-allowed;
+  background: var(--surface);
+}
+
+.bh-card:disabled .bh-card-title,
+.bh-card:disabled .bh-blurb {
+  color: var(--muted);
+}
+
+.bh-needs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-width: 100%;
+}
+
+.bh-needs-label {
+  font-size: var(--fs-label);
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.bh-needs-how {
+  font-size: var(--fs-meta);
+  color: var(--muted);
+}
+
+.bh-needs-how code {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+
 .bh-cat {
   font-family: var(--mono);
   font-size: var(--fs-label);

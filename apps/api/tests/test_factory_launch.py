@@ -29,6 +29,7 @@ blurb: A list and an editor.
 category: app
 prompt: Build alpha notes.
 stack: vite-react
+toolchain: node
 resources:
   - postgres
 workflows:
@@ -45,6 +46,7 @@ blurb: Three columns.
 category: app
 prompt: Build a beta board.
 stack: vite-react
+toolchain: node
 resources:
   - redis
 workflows:
@@ -651,6 +653,7 @@ blurb: A frozen clock for demos.
 category: internal
 prompt: Build a Go API named Fixture Clock.
 stack: Go API
+toolchain: go
 resources: []
 workflows:
   - name: build
@@ -680,6 +683,7 @@ def test_a_picked_template_names_the_project_and_brings_its_stack(
     catalogue.mkdir()
     (catalogue / "go.yaml").write_text(_GO_DESK, encoding="utf-8")
     monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", catalogue)
+    _toolchains(monkeypatch, tmp_path, '{"go": {"go": "1.27"}}')
     calls: list = []
     _patch_builder(monkeypatch, calls)
     brief = ("Build a Go API named Fixture Clock that listens on localhost and serves a frozen "
@@ -699,6 +703,55 @@ def test_a_picked_template_names_the_project_and_brings_its_stack(
     repo = body["spec"]["local_repo"]
     assert repo.endswith("/fixture-clock")
     assert "/bin/" in _gitignore_of(repo).splitlines()          # Go's build output, ignored
+
+
+def _toolchains(monkeypatch, tmp_path, manifest: str) -> None:
+    """This install's toolchain manifest, as the image writes it ({} when none is turned on)."""
+    from boss_engine.services import toolchains
+
+    path = tmp_path / "toolchains-manifest.json"
+    path.write_text(manifest, encoding="utf-8")
+    monkeypatch.setenv(toolchains.MANIFEST_ENV, str(path))
+
+
+def test_a_template_that_needs_go_is_listed_as_such_and_refused_in_words_without_go(
+        client, engine, monkeypatch, tmp_path):
+    """Stranger test 2026-11-18: the gallery offered templates the install could not build. A Go
+    template on an install without Go is shown, marked, and its launch is refused in words before
+    anything is made or reserved."""
+    catalogue = tmp_path / "factory_templates"
+    catalogue.mkdir()
+    (catalogue / "go.yaml").write_text(_GO_DESK, encoding="utf-8")
+    (catalogue / "b.yaml").write_text(_BETA, encoding="utf-8")
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", catalogue)
+    _toolchains(monkeypatch, tmp_path, "{}")
+    calls: list = []
+    _patch_builder(monkeypatch, calls)
+
+    listed = {t["id"]: t for t in client.get("/v1/factory/templates").json()["templates"]}
+    assert listed["beta-board"]["available"] is True and listed["beta-board"]["needs"] is None
+    go = listed["fixture-clock"]
+    assert go["available"] is False and go["toolchain"] == "go"
+    assert go["needs"]["label"] == "Needs Go"
+    assert go["needs"]["enable"] == "boss toolchains enable go"
+
+    projects, receipts = _count(engine, "projects"), _count(engine, "receipts")
+    refused = client.post("/v1/factory/launch", json={"template_id": "fixture-clock"})
+    assert refused.status_code == 409, refused.text
+    body = refused.json()
+    assert body["error"] == "toolchain_not_enabled"
+    assert body["message"].startswith("Not started: Fixture clock is built in Go")
+    assert "`boss toolchains enable go`" in body["message"]
+    assert calls == []
+    assert _count(engine, "projects") == projects and _count(engine, "receipts") == receipts
+
+    lucky = client.post("/v1/factory/launch", json={})                # never lands on Go
+    assert lucky.status_code == 201, lucky.text
+    assert lucky.json()["template_id"] == "beta-board"          # fixture-clock sorts first
+
+    _toolchains(monkeypatch, tmp_path, '{"go": {"go": "1.27"}}')
+    listed = {t["id"]: t for t in client.get("/v1/factory/templates").json()["templates"]}
+    assert listed["fixture-clock"]["available"] is True
 
 
 def test_a_free_text_brief_names_the_project_by_its_first_words(client, engine, monkeypatch,

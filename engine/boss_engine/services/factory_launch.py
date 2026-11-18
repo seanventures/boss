@@ -32,6 +32,7 @@ from sqlalchemy import text
 from ..identity.consent import ConsentRequired
 from ..multirepo.common import MultiRepoError, norm_repo
 from ..multirepo.registry import NOT_CONNECTED
+from . import stacks as _stacks
 from .core import make_id
 from .personal_data_gate import before_builder_reserve
 from .projects import create as create_project
@@ -50,7 +51,24 @@ TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "data" / "factory_templates
 MAX_ATTACHMENT_BYTES = 256 * 1024
 TEXT_EXTRACT_LIMIT = 8000
 
-_TEMPLATE_FIELDS = ("id", "title", "blurb", "category", "prompt", "stack", "resources", "workflows")
+_TEMPLATE_FIELDS = ("id", "title", "blurb", "category", "prompt", "stack", "toolchain",
+                    "resources", "workflows")
+
+#: WHAT A TEMPLATE BUILDS WITH (stranger test 2026-11-18: the gallery offered Android and Godot
+#: templates no install can build). Python and Node are in every build image; Go and Java are
+#: opt-in toolchains (services/toolchains.KNOWN, `boss toolchains enable go`). A catalogue
+#: template names one of these; anything else is not loaded. Read from the one registry of what
+#: BOSS builds (services/stacks.LANGUAGES), never a second copy.
+TEMPLATE_TOOLCHAINS = tuple(_stacks.LANGUAGES)
+BUILTIN_TOOLCHAINS = tuple(k for k, lang in _stacks.LANGUAGES.items() if lang.toolchain is None)
+
+#: Platforms no BOSS image carries (no Android SDK or emulator, no Xcode, no game-engine binary).
+#: A template whose category, stack or toolchain names one is not loaded, and a pasted spec that
+#: does is refused in words. engine/tests/test_factory_template_catalog.py also holds every
+#: shipped template's title, blurb and prompt to this same pattern.
+UNBUILDABLE_PLATFORM = re.compile(
+    r"\b(android|jetpack|kotlin|ios|swift(?: ?ui)?|xcode|emulator|godot|unity|unreal|"
+    r"react native|flutter|expo|apk|play store|app store)\b", re.I)
 
 BUILTIN_SPEC: dict[str, Any] = {
     "id": "lucky-notes",
@@ -59,6 +77,7 @@ BUILTIN_SPEC: dict[str, Any] = {
     "category": "app",
     "prompt": "Build a small notes app: a list of notes and an editor. One page, no accounts.",
     "stack": "vite-react",
+    "toolchain": "node",
     "resources": ["postgres"],
     "workflows": [
         {"name": "Build the notes app", "steps": ["Draft the page", "Save a note"]},
@@ -84,17 +103,26 @@ class FactoryLaunchError(Exception):
         return out
 
 
-def list_templates(root: Optional[Path] = None) -> dict[str, Any]:
-    """The catalogue on disk. A file that is not the schema is skipped and counted, not fatal."""
+def list_templates(
+    root: Optional[Path] = None, have: Optional[set[str]] = None,
+) -> dict[str, Any]:
+    """The catalogue on disk. A file that is not the schema is skipped and counted, not fatal.
+
+    Every template says whether THIS install can build it (`available`) and, when it cannot,
+    what it needs (`needs`: the toolchain, its name for a person, and the command that turns it
+    on). `have` is the opt-in toolchains this image carries (default: the toolchain manifest)."""
     directory = Path(root) if root is not None else TEMPLATE_DIR
     if not directory.is_dir():
         return {"templates": [], "skipped": 0}
+    problem = None
+    if have is None:
+        have, problem = _installed()
     found: list[dict[str, Any]] = []
     skipped = 0
     seen: set[str] = set()
     for path in sorted(directory.glob("*.yaml")):
         try:
-            item = _template(yaml.safe_load(path.read_text(encoding="utf-8")))
+            item = _template(yaml.safe_load(path.read_text(encoding="utf-8")), catalogue=True)
         except (OSError, UnicodeError, yaml.YAMLError, ValueError):
             skipped += 1
             continue
@@ -102,9 +130,67 @@ def list_templates(root: Optional[Path] = None) -> dict[str, Any]:
             skipped += 1
             continue
         seen.add(item["id"])
-        found.append(item)
+        found.append({**item, **availability(item, have, problem)})
     found.sort(key=lambda item: item["id"])
     return {"templates": found, "skipped": skipped}
+
+
+def _installed() -> tuple[set[str], Optional[str]]:
+    """The opt-in toolchains this image carries, and why that cannot be known (the manifest is
+    missing, unreadable or not JSON — toolchains.manifest_problem), else None."""
+    from . import toolchains
+
+    problem = toolchains.manifest_problem()
+    return (set() if problem else set(toolchains.installed())), problem
+
+
+def availability(
+    spec: dict[str, Any], have: set[str], problem: Optional[str] = None,
+) -> dict[str, Any]:
+    """{"available": bool, "needs": None | {...}} for a spec on an install carrying `have`.
+    `problem`: the manifest could not be read, so what is turned on is not known."""
+    name = str(spec.get("toolchain") or "")
+    lang = _stacks.LANGUAGES.get(name)
+    needed = lang.toolchain if lang is not None else name
+    if not name or needed is None or needed in have:
+        return {"available": True, "needs": None}
+    from . import toolchains
+
+    label = toolchains.LABELS.get(needed, needed)
+    title = spec.get("title") or "This template"
+    if problem:
+        # NEVER "IT IS OFF" ON A GUESS: an unreadable manifest says nothing about what is on.
+        return {"available": False, "needs": {
+            "toolchain": needed,
+            "label": "Can't check toolchains",
+            "enable": "boss update",
+            "message": (f"{title} is built in {label}, and BOSS cannot read its toolchain list "
+                        f"({problem}), so it cannot tell whether {label} is turned on. Rebuild "
+                        "the images with `boss update` (and run `boss doctor` if it persists), "
+                        "then pick it again."),
+        }}
+    command = toolchains.ENABLE_HINT.format(name=needed)
+    return {"available": False, "needs": {
+        "toolchain": needed,
+        "label": f"Needs {label}",
+        "enable": command,
+        "message": (f"{title} is built in {label}, and {label} is "
+                    f"not turned on for this BOSS. Turn it on with `{command}` on the BOSS host, "
+                    "then pick it again."),
+    }}
+
+
+def _require_buildable(spec: dict[str, Any]) -> None:
+    """Refuse, in words and before anything is made or reserved, a spec whose toolchain this
+    install does not carry."""
+    needs = availability(spec, *_installed())["needs"]
+    if needs:
+        raise FactoryLaunchError(409, "toolchain_not_enabled", "Not started: " + needs["message"])
+
+
+def _plain(spec: dict[str, Any]) -> dict[str, Any]:
+    """A catalogue item as a launch spec: what this install has is not part of the spec."""
+    return {k: v for k, v in spec.items() if k not in ("available", "needs")}
 
 
 def store_attachments(
@@ -337,6 +423,7 @@ def _spec_view(spec: dict[str, Any]) -> dict[str, Any]:
         "title": spec.get("title"),
         "prompt": spec.get("prompt"),
         "stack": spec.get("stack"),
+        "toolchain": spec.get("toolchain"),
         "resources": list(spec.get("resources") or []),
         "workflows": list(spec.get("workflows") or []),
         "attachments": spec.get("attachments") or [],
@@ -531,6 +618,7 @@ def resolve_spec(
     if text_prompt:
         parsed = _parse_spec_text(text_prompt)
         if parsed is not None:
+            _require_buildable(parsed)
             return parsed, "prompt"
     match = None
     if template_id:
@@ -538,21 +626,37 @@ def resolve_spec(
         if match is None and not text_prompt:
             raise FactoryLaunchError(404, "unknown_template", f"No template {template_id}.")
     if match is not None:
-        spec = dict(match)
+        if match.get("needs"):
+            raise FactoryLaunchError(409, "toolchain_not_enabled",
+                                     "Not started: " + match["needs"]["message"])
+        spec = _plain(match)
         if text_prompt:
             spec["prompt"] = text_prompt
         return spec, "template"
     if text_prompt:
         return _prose_spec(text_prompt), "prompt"
-    if catalogue["templates"]:
-        return dict(catalogue["templates"][0]), "lucky"
+    buildable = [item for item in catalogue["templates"] if item.get("available", True)]
+    if buildable:
+        return _plain(buildable[0]), "lucky"
     return dict(BUILTIN_SPEC), "lucky"
 
 
-def _template(loaded: Any) -> dict[str, Any]:
+class UnbuildableSpec(ValueError):
+    """A spec in the template schema that names a platform or toolchain BOSS cannot build."""
+
+
+def _template(loaded: Any, catalogue: bool = False) -> dict[str, Any]:
+    """A spec in the template schema. A catalogue file must name its toolchain and must not need
+    a platform no image carries; a pasted spec may leave the toolchain out."""
     if not isinstance(loaded, dict):
         raise ValueError("a template is a mapping")
-    missing = [field for field in _TEMPLATE_FIELDS if field not in loaded]
+    toolchain = loaded.get("toolchain", "" if not catalogue else None)
+    if toolchain is None:
+        raise ValueError("missing toolchain")
+    if not isinstance(toolchain, str):
+        raise ValueError("toolchain")
+    missing = [field for field in _TEMPLATE_FIELDS
+               if field != "toolchain" and field not in loaded]
     if missing:
         raise ValueError("missing " + ", ".join(missing))
     for field in ("id", "title", "blurb", "category", "prompt", "stack"):
@@ -566,6 +670,13 @@ def _template(loaded: Any) -> dict[str, Any]:
     workflows = loaded["workflows"]
     if not isinstance(workflows, list) or not workflows:
         raise ValueError("workflows")
+    # A WHOLE SPEC THAT ASKS FOR WHAT NO IMAGE CARRIES is refused, never quietly built as prose.
+    hit = next((m.group(0) for field in ("category", "stack", "toolchain")
+                for m in [UNBUILDABLE_PLATFORM.search(str(loaded.get(field) or ""))] if m), None)
+    if hit:
+        raise UnbuildableSpec(hit)
+    if toolchain and toolchain not in TEMPLATE_TOOLCHAINS:
+        raise UnbuildableSpec(toolchain)
     return {
         "id": loaded["id"].strip(),
         "title": loaded["title"].strip(),
@@ -573,6 +684,7 @@ def _template(loaded: Any) -> dict[str, Any]:
         "category": loaded["category"],
         "prompt": loaded["prompt"],
         "stack": loaded["stack"],
+        "toolchain": toolchain,
         "resources": list(resources),
         "workflows": [_workflow_item(item) for item in workflows],
     }
@@ -608,6 +720,13 @@ def _parse_spec_text(prompt: str) -> Optional[dict[str, Any]]:
         return None
     try:
         return _template(loaded)
+    except UnbuildableSpec as unbuildable:
+        raise FactoryLaunchError(
+            409, "platform_not_buildable",
+            f"Not started: this spec asks for {str(unbuildable)!r}, which BOSS cannot build. BOSS "
+            "builds web apps, games and services in Python and Node, and in Go or Java once that "
+            "toolchain is turned on; it does not build Android or iOS apps or game-engine "
+            "projects (docs/community/SUPPORTED_STACKS.md).") from None
     except ValueError:
         return None
 

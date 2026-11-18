@@ -11,6 +11,7 @@ prompt: |
   A passing test moves the player along an open path and asserts the score is stored, and a second
   case asserts a patrol collision ends the run.
 stack: Phaser
+toolchain: node
 resources:
   - repo
   - preview

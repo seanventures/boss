@@ -11,6 +11,7 @@ prompt: |
   meter apart on each axis, and checks that the shown distance is the square root of two within a
   hundredth of a meter.
 stack: WebXR
+toolchain: node
 resources:
   - repo
   - preview

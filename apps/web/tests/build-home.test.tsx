@@ -103,9 +103,11 @@ describe("the build bench is the default overview", () => {
     expect(items.some((text) => text?.startsWith("Drive"))).toBe(true);
     expect(items).toContain("Upload files");
     expect(items).toContain("Camera");
-    for (const chip of ["Build an Android app", "Maps", "Create a game", "Three.js 3D scenes", "Build an XR app"]) {
+    for (const chip of ["Build a web app", "Maps", "Create a game", "Three.js 3D scenes", "Build an XR app"]) {
       expect(document.body.textContent).toContain(chip);
     }
+    // BOSS has no Android SDK, emulator or Xcode: the bench never offers a phone app.
+    expect(document.body.textContent).not.toMatch(/android|\biOS\b/i);
     expect(document.querySelector("[data-testid=build-mic]")).toBeNull();
     expect(document.querySelector("[data-testid=build-camera-input]")?.getAttribute("capture")).toBe("environment");
   });
@@ -197,6 +199,49 @@ describe("chips", () => {
     expect(document.querySelector<HTMLTextAreaElement>("[data-testid=build-prompt]")?.value).toBe("Create a game");
     expect(calls.some((call) => call.url.includes("/api/factory/launch"))).toBe(false);
     expect(document.querySelector("[data-testid=build-launch]")).toBeNull();
+  });
+});
+
+describe("a template this install cannot build", () => {
+  it("is shown, marked with what it needs and the command, and cannot be picked", async () => {
+    const calls = install({
+      templates: () => Response.json({
+        templates: [
+          { id: "tile-swap", title: "Tile swap", category: "game", blurb: "Match three.", prompt: "Build Tile Swap.", available: true, needs: null },
+          {
+            id: "fixture-clock", title: "Fixture clock", category: "internal", blurb: "A frozen clock.", prompt: "Build a Go API.",
+            available: false,
+            needs: { toolchain: "go", label: "Needs Go", enable: "boss toolchains enable go", message: "Fixture clock is built in Go, and Go is not turned on for this BOSS. Turn it on with `boss toolchains enable go` on the BOSS host, then pick it again." },
+          },
+        ],
+      }),
+    });
+    await renderHome();
+    const go = document.querySelector<HTMLButtonElement>("[data-template-id=fixture-clock]");
+    const ok = document.querySelector<HTMLButtonElement>("[data-template-id=tile-swap]");
+    expect(go?.disabled).toBe(true);
+    expect(go?.getAttribute("data-unavailable")).toBe("true");
+    expect(go?.title).toContain("boss toolchains enable go");
+    expect(go?.querySelector("[data-testid=build-template-needs]")?.textContent).toBe("Needs GoTurn on: boss toolchains enable go");
+    expect(ok?.disabled).toBe(false);
+    expect(ok?.querySelector("[data-testid=build-template-needs]")).toBeNull();
+
+    await press("[data-template-id=fixture-clock]");
+    expect(document.querySelector("[data-testid=build-home]")?.getAttribute("data-template-id")).toBe("");
+    expect(document.querySelector<HTMLTextAreaElement>("[data-testid=build-prompt]")?.value).toBe("");
+    await press("[data-template-id=tile-swap]");
+    expect(document.querySelector("[data-testid=build-home]")?.getAttribute("data-template-id")).toBe("tile-swap");
+    expect(calls.some((call) => call.url.includes("/api/factory/launch"))).toBe(false);
+  });
+
+  it("says the launch refusal in words, not the code", async () => {
+    install({
+      launch: () => Response.json({ error: "toolchain_not_enabled" }, { status: 409 }),
+    });
+    await renderHome();
+    await press("[data-testid=build-lucky]");
+    expect(document.body.textContent).toContain("Not started: this template needs a toolchain this BOSS has not turned on.");
+    expect(document.body.textContent).not.toContain("toolchain_not_enabled");
   });
 });
 

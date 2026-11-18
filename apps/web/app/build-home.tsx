@@ -21,7 +21,7 @@ import "./build-home.css";
 const PLACEHOLDER = "Describe an app and let BOSS do the rest";
 
 const CHIPS = [
-  "Build an Android app",
+  "Build a web app",
   "Maps",
   "Create a game",
   "Three.js 3D scenes",
@@ -41,7 +41,21 @@ type TemplateCard = {
   category: string;
   blurb: string;
   prompt: string;
+  /** Null when this install builds it; else what it needs ("Needs Go") and the command. */
+  needs: { label: string; enable: string; message: string } | null;
 };
+
+/** `available: false` with `needs` (GET /v1/factory/templates): an opt-in toolchain is off. */
+function needsOf(record: Record<string, unknown>): TemplateCard["needs"] {
+  if (record.available !== false) return null;
+  const needs = record.needs && typeof record.needs === "object" ? (record.needs as Record<string, unknown>) : {};
+  const enable = str(needs.enable);
+  return {
+    label: str(needs.label) || "Not on this install",
+    enable,
+    message: str(needs.message) || "This install cannot build this template yet.",
+  };
+}
 
 type Attachment = { id: string; name: string };
 
@@ -106,6 +120,7 @@ const CODE_WORDS: Record<string, string> = {
   github_not_connected: "Not started: connect GitHub first (Setup › GitHub).",
   drive_not_connected: "Not started: that Drive source is not connected.",
   unknown_template: "Not started: that template is no longer in the gallery.",
+  toolchain_not_enabled: "Not started: this template needs a toolchain this BOSS has not turned on.",
   unknown_attachment: "Not started: an attachment is no longer there. Attach it again.",
   needs_model: "No model is connected, so nothing was started or reserved. Add one in Setup › Models, then press Easy Mode again.",
 };
@@ -159,6 +174,7 @@ function templatesFrom(data: unknown): TemplateCard[] {
       category: first(record, ["category", "kind"]),
       blurb: first(record, ["blurb", "summary", "description"]),
       prompt: first(record, ["prompt"]),
+      needs: needsOf(record),
     });
   }
   if (list.length > 0 && cards.length === 0) throw new Error("Templates did not load.");
@@ -418,6 +434,7 @@ export function BuildHome() {
   };
 
   const choose = (card: TemplateCard) => {
+    if (card.needs) return;
     setTemplateId(card.id);
     if (card.prompt) setPrompt(card.prompt);
     touch();
@@ -660,11 +677,20 @@ export function BuildHome() {
                   data-testid="build-template"
                   data-template-id={card.id}
                   aria-pressed={templateId === card.id}
+                  disabled={card.needs ? true : undefined}
+                  data-unavailable={card.needs ? "true" : undefined}
+                  title={card.needs ? card.needs.message : undefined}
                   onClick={() => choose(card)}
                 >
                   {card.category ? <span className="bh-cat">{card.category}</span> : null}
                   <span className="bh-card-title">{card.title}</span>
                   {card.blurb ? <span className="bh-blurb">{card.blurb}</span> : null}
+                  {card.needs ? (
+                    <span className="bh-needs" data-testid="build-template-needs">
+                      <span className="bh-needs-label">{card.needs.label}</span>
+                      {card.needs.enable ? <span className="bh-needs-how">Turn on: <code>{card.needs.enable}</code></span> : null}
+                    </span>
+                  ) : null}
                 </button>
               </li>
             ))}
