@@ -245,6 +245,9 @@ def _attempt_sql() -> str:
         "c.finalize_ctx->>'deferred_from_run' AS deferred, "
         "c.finalize_ctx->>'attempt' AS attempt, "
         "c.finalize_ctx->>'app_id' AS app_id, "
+        "md5(COALESCE(c.spec->>'instructions', '')) AS brief, "
+        "(c.finalize_ctx ? 'change_request') AS asks_change, "
+        "c.finalize_ctx->'merge'->>'at' AS merged_at, "
         "c.finalize_ctx->'merge'->>'sha' AS merged_sha, "
         "dd.recommendation->'merge_failed'->>'reason' AS merge_failed, "
         f"{LAST_ACTIVITY_SQL} AS last_activity, {live_job_sql('c')} AS live_job "
@@ -849,25 +852,40 @@ def _build_items(connection: Connection, project_id: str,
             "build_id": str(latest["id"]),
             "href": project_href(project_id, tab="work", drawer=f"build:{key}"),
             "app_id": root.get("app_id") or latest.get("app_id") or None,
+            # What was asked (the root's brief, hashed): `_replaced` matches the SAME request.
+            "brief": root.get("brief") if root.get("brief") != _NO_BRIEF else None,
+            # Some attempt of it is moving or completed: it can take over a failed twin.
+            "takes_over": any(str(m.get("status") or "") in _TAKES_OVER for m in members),
             **group,
         })
     _replaced(out)
     return out
 
 
+#: md5('') — a build with no brief names no request, so it never "replaces" another.
+_NO_BRIEF = "d41d8cd98f00b204e9800998ecf8427e"
+#: A newer build that can take over: still moving, or completed. A failed or cancelled one can't.
+_TAKES_OVER = ("completed", "running", "queued", "provisioning", "repairing",
+               "waiting_for_github")
+
+
 def _replaced(found: list[dict[str, Any]]) -> None:
-    """A FAILED BUILD A LATER ONE REPLACED is history, not a failure: an app built again from
-    the start (Easy Mode's relaunch is a new root, not a retry) after its first build failed.
-    The older row reads "Replaced by a later build" — done, faint — never a red Failed beside
-    the build that took over (recipe-box 2026-11-18: crun_6883 Failed under a completed build)."""
-    by_app: dict[str, list[dict[str, Any]]] = {}
+    """A FAILED BUILD A LATER ONE REPLACED is history, not a failure: THE SAME REQUEST built
+    again from the start (Easy Mode's relaunch is a new root with the same brief, not a retry)
+    by a build that is moving or completed. The older row reads "Replaced by a later build" —
+    done, faint — never a red Failed beside the build that took over (recipe-box 2026-11-18:
+    crun_6883 Failed under its completed relaunch). An app is NOT a request: a failed feature
+    on an app with later, different features stays red (review #221: "Login with Google"
+    failed, then an unrelated fix ran on the same app)."""
+    by_request: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for w in found:
-        if w.get("app_id"):
-            by_app.setdefault(str(w["app_id"]), []).append(w)
-    for rows in by_app.values():
+        if w.get("app_id") and w.get("brief"):
+            by_request.setdefault((str(w["app_id"]), str(w["brief"])), []).append(w)
+    for rows in by_request.values():
         rows.sort(key=lambda w: str(w.get("created_at") or ""))
-        for older, newer in zip(rows, rows[1:]):
-            if older["state"] == "failed":
+        for i, older in enumerate(rows):
+            newer = next((n for n in rows[i + 1:] if n.get("takes_over")), None)
+            if older["state"] == "failed" and newer is not None:
                 older["state"] = "done"
                 older["replaced_by"] = {"id": newer["id"], "label": newer.get("label"),
                                         "href": newer.get("href")}

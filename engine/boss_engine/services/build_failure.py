@@ -217,7 +217,9 @@ def latest_failures(connection: Any, project_ids: Iterable[str], *,
         "COALESCE(c.finalize_ctx->>'root_run_id', c.id) AS root, "
         "c.finalize_ctx->>'failure_class' AS failure_class, "
         "c.finalize_ctx->>'reason_code' AS reason_code, "
-        "c.finalize_ctx->'merge'->>'sha' AS merged_sha "
+        "c.finalize_ctx->'merge'->>'sha' AS merged_sha, "
+        "c.finalize_ctx->'merge'->>'at' AS merged_at, "
+        "(c.finalize_ctx ? 'change_request') AS asks_change "
         "FROM code_task_runs c WHERE c.project_id = ANY(:ids) AND c.created_at >= :since "
         + _internal_clauses(params, "c")), params).mappings().all()]
     runs = [dict(r) for r in connection.execute(text(
@@ -367,13 +369,30 @@ def is_failure(entry: Optional[Mapping[str, Any]]) -> bool:
     return bool(entry) and not entry.get("waits_on")
 
 
+def _when(v: Any) -> Optional[datetime]:
+    if isinstance(v, str):
+        try:
+            return _aware(datetime.fromisoformat(v.replace("Z", "+00:00")))
+        except ValueError:
+            return None
+    return _aware(v)
+
+
 def _moved_on(members: list[Mapping[str, Any]], latest: Mapping[str, Any]) -> bool:
-    """THE LINEAGE MOVED ON: another attempt's change was merged after this attempt failed (a
-    follow-up that failed before its parent's change #1 was merged is an earlier attempt)."""
-    failed_at = _aware(latest.get("updated_at"))
-    return any(m is not latest and m.get("merged_sha")
-               and (failed_at is None or (_aware(m.get("updated_at")) or failed_at) > failed_at)
-               for m in members)
+    """THE LINEAGE MOVED ON: another attempt's change was merged (its `merge.at`) after this
+    attempt failed — a retry or automatic follow-up that failed before change #1 was merged is
+    an earlier attempt. A follow-up that carried its OWN change request ("add X") is not: X
+    never landed, so its failure stays visible (review #221)."""
+    if latest.get("asks_change"):
+        return False
+    failed_at = _when(latest.get("updated_at"))
+    for m in members:
+        if m is latest or not m.get("merged_sha"):
+            continue
+        merged_at = _when(m.get("merged_at")) or _when(m.get("updated_at"))
+        if failed_at is None or (merged_at is not None and merged_at > failed_at):
+            return True
+    return False
 
 
 #: A build refused because the app's code waits, unmerged, on another build's branch.

@@ -332,15 +332,15 @@ def _project(world, client, name="Recipe box"):
 
 
 def _build(db, pid, *, status="failed", error=REAL_ERROR, fctx=None, title="Recipe box",
-           minutes_ago=5, pr_url=None):
+           minutes_ago=5, pr_url=None, brief="Build a recipe box app"):
     rid = f"crun_{uuid.uuid4().hex[:20]}"
     at = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
     db.execute(text(
         "INSERT INTO code_task_runs (id, project_id, status, phase, title, error, pull_request_url, "
-        "finalize_ctx, created_at, updated_at) VALUES (:i, :p, :s, 'done', :t, :e, :u, "
-        "CAST(:f AS JSONB), :at, :at)"),
+        "spec, finalize_ctx, created_at, updated_at) VALUES (:i, :p, :s, 'done', :t, :e, :u, "
+        "CAST(:sp AS JSONB), CAST(:f AS JSONB), :at, :at)"),
         {"i": rid, "p": pid, "s": status, "t": title, "e": error, "u": pr_url,
-         "f": json.dumps(fctx or {}), "at": at})
+         "sp": json.dumps({"instructions": brief}), "f": json.dumps(fctx or {}), "at": at})
     return rid
 
 
@@ -510,11 +510,13 @@ def _laptop_rows(db, pid, *, merged: bool):
                                                     "reason_code": "pipeline_exception"})
     root = _build(db, pid, status="completed", error=None, minutes_ago=90,
                   pr_url="http://boss-local/local_recipe-box/recipe-box/pull/1",
-                  fctx={**app, **({"merge": {"sha": "c1ea8ff7ed2d"}} if merged else {})})
+                  fctx={**app, **({"merge": {"sha": "c1ea8ff7ed2d",
+                                             "at": datetime.now(timezone.utc).isoformat()}}
+                                   if merged else {})})
     db.execute(text("UPDATE code_task_runs SET decision_id = :d, pull_request_number = 1, "
                     "updated_at = now() - interval '1 minute' WHERE id = :i"),
                {"d": dec, "i": root})
-    follow = _build(db, pid, minutes_ago=70, error=FOLLOW_ERROR,
+    follow = _build(db, pid, minutes_ago=70, error=FOLLOW_ERROR, brief="deferred review findings",
                     title="Follow-up: deferred review findings — Recipe box",
                     fctx={**app, "root_run_id": root, "parent_run_id": root,
                           "failure_class": "infra", "reason_code": "pipeline_exception"})
@@ -564,3 +566,35 @@ def test_once_merged_the_refusal_and_the_earlier_failures_clear(world, client, e
     assert not any(n["kind"] == "build_failed" for n in cc["needs_you"])
     card = next(c for c in _get(world, client, "/v1/projects/summary")["items"] if c["id"] == pid)
     assert card["build_failed"] is None and card["status_label"] not in ("Build failed",)
+
+
+def test_a_different_feature_on_the_same_app_never_replaces_a_failed_one(world, client, engine):
+    """Review #221: "HelpDesk AI: add Login with Google…" failed, then an unrelated fix ran on
+    the same app. An app is not a request: the login feature stays red Failed."""
+    pid = _project(world, client, name="HelpDesk AI")
+    app = {"app_id": "app_c2d3", "failure_class": "infra"}
+    with engine.begin() as db:
+        login = _build(db, pid, minutes_ago=60, fctx=app, title="HelpDesk AI: add Login with Google",
+                       brief="Add Login with Google, GitHub or BOSS")
+        _build(db, pid, status="completed", error=None, minutes_ago=20, fctx={"app_id": "app_c2d3"},
+               title="HelpDesk AI: Fix failing requests", brief="Fix helpdesk-ai: failing requests")
+        # The same request rebuilt, but it failed too: a failed twin never takes over either.
+        twin_src = _build(db, pid, minutes_ago=50, fctx=app, title="Ticket tags", brief="Add ticket tags")
+        _build(db, pid, minutes_ago=10, fctx=app, title="Ticket tags", brief="Add ticket tags")
+    rows = {w["id"]: w for w in _get(world, client, f"/v1/projects/{pid}/work")["items"]}
+    assert rows[login]["state"] == "failed" and not rows[login].get("replaced_by")
+    assert rows[twin_src]["state"] == "failed" and not rows[twin_src].get("replaced_by")
+
+
+def test_a_failed_follow_up_with_its_own_change_request_stays_visible(world, client, engine):
+    """Review #221: merging change #1 must not hide a follow-up that asked for something else."""
+    pid = _project(world, client)
+    with engine.begin() as db:
+        root = _build(db, pid, status="completed", error=None, minutes_ago=60,
+                      pr_url="http://boss-local/local_x/recipe-box/pull/1",
+                      fctx={"merge": {"sha": "abc1234", "at": datetime.now(timezone.utc).isoformat()}})
+        ask = _build(db, pid, minutes_ago=30, brief="Add a shopping list",
+                     fctx={"root_run_id": root, "parent_run_id": root, "failure_class": "infra",
+                           "change_request": {"instructions": "Add a shopping list"}})
+    failed = _get(world, client, f"/v1/projects/{pid}/overview")["project"]["build_failed"]
+    assert failed is not None and failed["build_id"] == ask
