@@ -621,16 +621,49 @@ class EphemeralSandbox:
         ".terraform/", ".terraform.lock.hcl", "*.tfplan",
     )
 
+    #: .git/info/exclude, relative to the checkout.
+    _EXCLUDE = ".git/info/exclude"
+
+    def _trusted_root(self) -> Optional[str]:
+        """BOSS's own sandbox root above this checkout (only BOSS writes it): where a no-follow
+        walk into the checkout starts."""
+        isolated = getattr(self, "_sandbox", None)
+        if isolated is not None:
+            return str(isolated.run_dir.parent)
+        from . import workspace_perms
+
+        return workspace_perms.trusted_root_for(self.path)
+
+    def _read_exclude(self) -> Optional[str]:
+        """.git/info/exclude ("" when absent), read WITHOUT following a link: the run's uid owns
+        this tree, and BOSS must never read (or below, rewrite) a file it pointed the name at."""
+        from . import workspace_perms
+
+        data = workspace_perms.read_nofollow(self.path, self._EXCLUDE, trusted=self._trusted_root())
+        if data is None:
+            # Absent, or a planted link (its target is never read: the link is replaced when
+            # written): "". A regular file BOSS may not read: None, left alone.
+            where = self.path / ".git" / "info" / "exclude"  # type: ignore[operator]
+            return "" if where.is_symlink() or not os.path.lexists(where) else None
+        return data.decode("utf-8", errors="replace")
+
+    def _write_exclude(self, text: str) -> None:
+        """.git/info/exclude written as a fresh file renamed over the name, through no-follow
+        directory fds (workspace_perms.write_nofollow): a planted link to a BOSS file is replaced,
+        never written through. 0666: the run's uid may edit it (its run directory is 2770)."""
+        from . import workspace_perms
+
+        workspace_perms.write_nofollow(self.path, self._EXCLUDE, text.encode("utf-8"), mode=0o666,
+                                       trusted=self._trusted_root(), dir_mode=0o2777)
+
     def _write_local_excludes(self) -> None:
         assert self.path is not None
-        exclude_file = self.path / ".git" / "info" / "exclude"
         try:
-            existing = exclude_file.read_text(encoding="utf-8") if exclude_file.exists() else ""
-            exclude_file.write_text(
-                existing.rstrip("\n") + "\n# BOSS sandbox artifact ignores\n"
-                + "\n".join(self._ARTIFACT_PATTERNS) + "\n",
-                encoding="utf-8",
-            )
+            existing = self._read_exclude()
+            if existing is None:
+                return  # not a file BOSS may read: left alone
+            self._write_exclude(existing.rstrip("\n") + "\n# BOSS sandbox artifact ignores\n"
+                                + "\n".join(self._ARTIFACT_PATTERNS) + "\n")
         except OSError:
             pass  # best-effort; diff still works, just noisier
 
@@ -997,10 +1030,8 @@ class EphemeralSandbox:
         repository root), or no block at all. Every other line is kept as it is."""
         if self.path is None:
             return
-        exclude_file = self.path / ".git" / "info" / "exclude"
-        try:
-            existing = exclude_file.read_text(encoding="utf-8") if exclude_file.exists() else ""
-        except OSError:
+        existing = self._read_exclude()
+        if existing is None:
             return
         kept: list[str] = []
         inside = False
@@ -1021,8 +1052,7 @@ class EphemeralSandbox:
         if text == existing:
             return
         try:
-            exclude_file.parent.mkdir(parents=True, exist_ok=True)
-            exclude_file.write_text(text, encoding="utf-8")
+            self._write_exclude(text)
         except OSError:
             pass
 
@@ -1087,23 +1117,32 @@ class EphemeralSandbox:
     #: How a refused open of the index reads in git's own words.
     _GIT_PERMISSION_WORDS = ("Permission denied", "insufficient permission", "Operation not permitted")
 
+    #: What git says when a file or directory under .git refuses the run's uid.
+    _GIT_STORE_WORDS = (".git/index", "index file open failed", "repository database", ".git/objects")
+
     @classmethod
-    def _index_refused(cls, exc: BaseException) -> bool:
-        """git could not open this checkout's .git/index (or its lock) for permissions."""
+    def _store_refused(cls, exc: BaseException) -> bool:
+        """git could not open this checkout's index or add to its object store, for permissions.
+        (Its words for an object store refusal end "unable to index file 'X'": both are one
+        class here, and both are repaired.)"""
         text = str(exc)
-        return (".git/index" in text or "index file" in text) and \
+        return any(w in text for w in cls._GIT_STORE_WORDS) and \
             any(w in text for w in cls._GIT_PERMISSION_WORDS)
 
     def _repair_git_dir(self, exc: BaseException) -> bool:
-        """BOSS'S GIT WORKS WHOEVER WROTE .git/index LAST. True when `exc` is git refused this
-        checkout's index and the repair changed something worth one more try.
+        """BOSS'S GIT WORKS WHOEVER WROTE .git LAST. True when `exc` is git refused this checkout's
+        index or object store and the repair changed something worth one more try.
 
-        BOSS's own git here runs AS the run's uid. A process of BOSS's uid that rewrites the index
-        (a reviewer's read-only guard running `git status`) under a narrow umask leaves a file the
-        run's uid may not open: crun_6883ec7c lost a finished Recipe box build on `.git/index:
-        index file open failed: Permission denied`. workspace_perms.repair_git_index opens exactly
-        the index (and its lock), never following a link; any other refusal raises as it was."""
-        if self.path is None or self._provisioning or not self._index_refused(exc):
+        BOSS's own git here runs AS the run's uid. A process of BOSS's uid that writes inside .git
+        under a narrow umask leaves entries the run's uid may not use:
+          * crun_6883ec7c: a reviewer's read-only guard's `git status` rewrote .git/index boss
+            0600 (`.git/index: index file open failed: Permission denied`);
+          * crun_47c3aea2: BOSS's tree snapshot's `git add -A` created .git/objects fan-out
+            directories boss 0755 ("insufficient permission for adding an object to repository
+            database .git/objects").
+        workspace_perms.repair_git_index / repair_git_objects open exactly those, never following
+        a link; any other refusal raises as it was."""
+        if self.path is None or self._provisioning or not self._store_refused(exc):
             return False
         isolated = getattr(self, "_sandbox", None)
         run_uid = getattr(isolated, "uid", None)
@@ -1111,25 +1150,28 @@ class EphemeralSandbox:
 
         # The walk starts at BOSS's own sandbox root (the run directory's parent, BOSS-owned).
         trusted = isolated.run_dir.parent if isolated is not None else None
-        changed = workspace_perms.repair_git_index(self.path, run_uid=run_uid,
-                                                   trusted_root=trusted)
+        changed = (workspace_perms.repair_git_index(self.path, run_uid=run_uid,
+                                                    trusted_root=trusted)
+                   + workspace_perms.repair_git_objects(self.path, run_uid=run_uid,
+                                                        trusted_root=trusted))
         if changed:
             self.git_dir_repaired = sorted(set(getattr(self, "git_dir_repaired", []) + changed))
         return bool(changed)
 
     def _stage_all(self) -> None:
-        """`git add -A`, which works whoever last wrote .git/index (one repair-and-retry, `_git`).
+        """`git add -A`, which works whoever last wrote .git (one repair-and-retry, `_git`).
         A refusal after that says what failed, in words."""
         try:
             self._git(["add", "-A"])
         except SandboxError as exc:
-            if not self._index_refused(exc):
+            if not self._store_refused(exc):
                 raise
+            what = ("object store (.git/objects)" if "repository database" in str(exc)
+                    or ".git/objects" in str(exc) else "index (.git/index)")
             raise SandboxError(
-                "BOSS could not collect this build's changes: git refused this checkout's index "
-                f"(.git/index) even after BOSS repaired its permissions ({exc}). The files the "
-                "agents wrote are still in the workspace; Retry continues from the saved "
-                "work.") from exc
+                f"BOSS could not collect this build's changes: git refused this checkout's {what} "
+                f"even after BOSS repaired its permissions ({exc}). The files the agents wrote "
+                "are still in the workspace; Retry continues from the saved work.") from exc
 
     def _git_once(
         self, args: list[str], *, raw: bool = False, redact: Optional[str] = None

@@ -105,7 +105,7 @@ def test_an_index_boss_rewrote_0600_is_repaired_and_the_diff_works(tmp_path, mon
     summary = box.diff_summary()
 
     assert sorted(summary.paths) == ["box.js", "recipes.js"]
-    assert box.git_dir_repaired == [".git/index"]
+    assert ".git/index" in box.git_dir_repaired       # (and its object dirs, 0755 in a test)
     # (the retried `add -A` then wrote a fresh index of its own)
     assert stat.S_IMODE((tmp_path / ".git" / "index").stat().st_mode) & 0o004
     # diff() (the PR's files, the workspace save on any exit) reads the same way.

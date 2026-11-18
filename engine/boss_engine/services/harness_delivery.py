@@ -301,26 +301,33 @@ def deliver(*, engine: str, mode: str, skills_dir: str = "", mcp: Any = None,
         kit._codex_plan = {"servers": table,
                            "skills_source": skills_source if skills_dir else ""}
     elif mode == "cursor_workspace" and usable and workspace is not None:
+        # THE WORKSPACE IS THE RUN'S: its uid can put a link at .cursor or .cursor/mcp.json. Every
+        # read, write and undo here goes through no-follow directory fds (workspace_perms), so a
+        # planted link is replaced, never written (or read) through. The file is readable by the
+        # run's uid — the Cursor agent runs as it, and is "other" to a BOSS-owned file — and by
+        # no one else: a sandboxed run's directory is <uid>:boss 2770.
+        from . import sandbox_identity, workspace_perms
+
+        rel = ".cursor/mcp.json"
         target = Path(workspace) / ".cursor" / "mcp.json"
-        existed_dir = target.parent.exists()
-        before = target.read_bytes() if target.is_file() else None
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps({"mcpServers": {
+        existed_dir = os.path.lexists(Path(workspace) / ".cursor")
+        before = workspace_perms.read_nofollow(workspace, rel)
+        body = json.dumps({"mcpServers": {
             name: {"url": e.get("url", ""), **({"headers": _http_headers(e)}
                                                if _http_headers(e) else {})}
-            for name, e in usable.items()}}, indent=2), encoding="utf-8")
-        os.chmod(target, 0o600)
+            for name, e in usable.items()}}, indent=2).encode("utf-8")
+        file_mode = 0o604 if sandbox_identity.current() is not None else 0o600
+        workspace_perms.write_nofollow(workspace, rel, body, mode=file_mode, dir_mode=0o755)
         kit.written.append(str(target))
 
         def _restore() -> None:
             if before is not None:
-                target.write_bytes(before)
-            else:
                 with contextlib.suppress(OSError):
-                    target.unlink()
+                    workspace_perms.write_nofollow(workspace, rel, before, mode=file_mode)
+            else:
+                workspace_perms.unlink_nofollow(workspace, rel)
                 if not existed_dir:
-                    with contextlib.suppress(OSError):
-                        target.parent.rmdir()
+                    workspace_perms.unlink_nofollow(workspace, ".cursor", directory=True)
 
         kit._undo.append(_restore)
     elif mode == "acp":
