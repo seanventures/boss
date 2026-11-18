@@ -1873,7 +1873,17 @@ install_boss_command() {
   else
     BOSS_COMMAND="$target"
     ui_ok "Installed the boss command: $target"
-    ui_info "Add it to PATH for new shells: echo 'export PATH=\"$bin_dir:\$PATH\"' >> ~/.profile"
+    # A SECOND INSTALL'S bin dir never goes on PATH for every shell: plain `boss` would then run
+    # this install in every later shell and no longer the first one (stranger test r2,
+    # 2026-11-17). It is run by its full path; only a lone install is offered the PATH line.
+    local other_boss=""
+    other_boss="$(command -v boss 2>/dev/null || true)"
+    [[ -n "$other_boss" ]] || { [[ -f "$HOME/.local/bin/boss" ]] && other_boss="$HOME/.local/bin/boss"; }
+    if [[ -n "$other_boss" && "$other_boss" != "$target" ]] && grep -qsF "$BOSS_COMMAND_MARKER" "$other_boss"; then
+      ui_info "Run this install by its full path: $target. Plain boss ($other_boss) keeps running your other install."
+    else
+      ui_info "Add it to PATH for new shells: echo 'export PATH=\"$bin_dir:\$PATH\"' >> ~/.profile"
+    fi
   fi
 }
 if [[ "$INSTALL_BOSS_COMMAND" -eq 1 ]]; then
@@ -1992,5 +2002,5 @@ echo ""
 echo -e "${MUTED}Docs: https://github.com/seanventures/boss#readme${NC}"
 echo -e "${MUTED}Features: docs/community/FEATURES.md${NC}"
 echo -e "${MUTED}Model paths: docs/community/MODEL_CONNECTIONS.md${NC}"
-echo -e "${MUTED}Cloud is optional — Easy Connect later via Mission Control Editions.${NC}"
+echo -e "${MUTED}Everything runs on this machine. No cloud account is needed.${NC}"
 echo ""

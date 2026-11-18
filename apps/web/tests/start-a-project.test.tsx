@@ -598,6 +598,16 @@ describe("screen 3 — What should we add?", () => {
     expect(estimateLine({ mode: "feature", work_class: null, workflow_key: "x", minutes: null, cost: { runs: 1, low_usd: 0.2, high_usd: 0.4 } }))
       .toBe("Estimate: ~$0.30 or included in subscription");
   });
+
+  it("says no price words while no model is connected (stranger test r2)", () => {
+    const base = { mode: "feature" as const, work_class: null, workflow_key: "x" };
+    expect(estimateLine({ ...base, minutes: null, model_connected: false })).toBe("");
+    expect(estimateLine({ ...base, minutes: null, minutes_low: 20, minutes_high: 30, model_connected: false,
+                          cost: { runs: 1, low_usd: 0.2, high_usd: 0.4 } }))
+      .toBe("Estimate: 20–30 min to a pull request");
+    expect(estimateLine({ ...base, minutes: null, model_connected: true }))
+      .toBe("Estimate: included in subscription or pay per use");
+  });
 });
 
 describe("one task box per project page (walk 806)", () => {

@@ -472,6 +472,8 @@ export interface AuthOptions {
      *  "private_network" (this browser's real address is private: it claims on the site itself).
      *  Null/absent: the setup link is the way in. */
     network?: "bridge" | "private_network" | null;
+    /** This install's `boss` command: `boss`, or a second install's launcher path. */
+    host_command?: string | null;
   };
 }
 

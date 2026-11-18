@@ -165,3 +165,18 @@ export function consoleHref(
   const rest = next.toString();
   return rest ? `?${rest}` : "";
 }
+
+/**
+ * DEEP-LINK INSTRUCTIONS FOR ONE AREA: `focus=repository&open=add` says "on Setup, open Repos'
+ * add form". Moving to ANOTHER area must not carry them (stranger test r2: they rode along to
+ * Approvals and Projects), and a new project's page is a different place from the one that
+ * linked to it.
+ */
+export const AREA_ONE_SHOT_PARAMS = ["focus", "open"] as const;
+
+/** Set `area` on `params`; when it is a different area, drop the previous area's instructions. */
+export function moveToArea(params: URLSearchParams, area: string): URLSearchParams {
+  if (params.get("area") !== area) for (const key of AREA_ONE_SHOT_PARAMS) params.delete(key);
+  params.set("area", area);
+  return params;
+}

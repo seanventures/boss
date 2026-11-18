@@ -29,8 +29,14 @@ export type WelcomeState = {
   /** `local`: the org keeps code on this machine (no GitHub needed to build; GitHub is for PRs on GitHub). */
   github: { done: boolean; login: string | null; repos: number; local: { full_name: string; project_name: string } | null };
   model: { done: boolean; label: string | null; kind: string | null };
-  sample: { done: boolean };
+  /** `project`: the org's live sample project, once it exists (Open the sample). */
+  sample: { done: boolean; project: { project_id: string; name: string } | null };
 };
+
+/** The sample project's page. Only that project and area: no one-shot params ride along. */
+export function sampleHref(projectId: string): string {
+  return `/?${new URLSearchParams({ project_id: projectId, area: "project" }).toString()}`;
+}
 
 /** What the three steps say, from the server's view alone. */
 export function welcomeState(view: SetupView, signin?: SigninStatus | null): WelcomeState {
@@ -46,7 +52,7 @@ export function welcomeState(view: SetupView, signin?: SigninStatus | null): Wel
     model: { done: Boolean(model), label: model?.label ?? null, kind: model?.kind ?? null },
     // TICKED ONLY FOR A REAL FIRST PR from the sample / Try it run (walk 2026-11-04: a green tick
     // with no sample run). Other PRs in the project make the install established, not this step.
-    sample: { done: Boolean(view.try.last_run?.pr_url) },
+    sample: { done: Boolean(view.try.last_run?.pr_url), project: view.try.sample ?? null },
   };
 }
 
@@ -200,8 +206,14 @@ export function Welcome({ onSetup }: { onSetup: () => void }) {
             {view.try.last_run ? <LastRun run={view.try.last_run} /> : null}
           </div>
           <span className="su-spacer" />
-          <a className={`su-btn${current === 3 ? " su-btn-primary" : ""}`} href={NEW_PROJECT_HREF.sample}
-             data-testid="su-wl-sample-go">Start the sample</a>
+          {state.sample.project ? (
+            // THE SAMPLE EXISTS: open it, never offer to start a second one (stranger test r2).
+            <a className={`su-btn${current === 3 ? " su-btn-primary" : ""}`} href={sampleHref(state.sample.project.project_id)}
+               data-testid="su-wl-sample-open">Open the sample</a>
+          ) : (
+            <a className={`su-btn${current === 3 ? " su-btn-primary" : ""}`} href={NEW_PROJECT_HREF.sample}
+               data-testid="su-wl-sample-go">Start the sample</a>
+          )}
         </li>
       </ol>
 

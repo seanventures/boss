@@ -1235,13 +1235,25 @@ def _cap_name(period: str) -> str:
 
 # ── Try it ────────────────────────────────────────────────────────────────────────────────────
 
+def sample_project(connection: Connection, project_id: str) -> Optional[dict[str, Any]]:
+    """The org's live Try-a-sample project ({project_id, name}), or None. Get started offers
+    "Open the sample" once it exists, never "Start the sample" again (stranger test r2)."""
+    row = connection.execute(text(
+        "SELECT p.id, p.name FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+        " WHERE w.org_id = (SELECT w2.org_id FROM projects p2 JOIN workspaces w2 "
+        "                     ON w2.id = p2.workspace_id WHERE p2.id = :p) "
+        "   AND p.sample_key IS NOT NULL AND p.archived_at IS NULL "
+        " ORDER BY p.created_at, p.id LIMIT 1"), {"p": project_id}).mappings().first()
+    return {"project_id": str(row["id"]), "name": row["name"]} if row else None
+
+
 def _try(connection: Connection, project_id: str) -> dict[str, Any]:
     last = _latest_event(connection, project_id, "setup.try_started", SETUP_TRY_WORKFLOW)
     any_pr = connection.execute(
         text("SELECT 1 FROM code_task_runs WHERE project_id = :p "
              "AND pull_request_url IS NOT NULL LIMIT 1"), {"p": project_id}).first()
     out: dict[str, Any] = {"workflow_key": SETUP_TRY_WORKFLOW, "last_run": None,
-                           "done": bool(any_pr)}
+                           "done": bool(any_pr), "sample": sample_project(connection, project_id)}
     if not last or not last.get("run_id"):
         return out
     run_id = str(last["run_id"])

@@ -254,7 +254,9 @@ export type SetupView = {
   /** Null when the server has no router tables yet (an older API): the row shows the jobs. */
   routing?: Routing | null;
   budget: Budget;
-  try: { workflow_key: string; last_run: TryRun | null; done?: boolean };
+  try: { workflow_key: string; last_run: TryRun | null; done?: boolean;
+         /** The org's live Try-a-sample project, once made. Absent on an older API. */
+         sample?: { project_id: string; name: string } | null };
   /** Build toolchains in this install's image. Absent on an older API. */
   toolchains?: Toolchain[];
   /** Installed coding adapters, and whether skills and MCP config are delivered. Empty or absent: none. */

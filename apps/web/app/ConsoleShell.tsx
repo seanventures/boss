@@ -1,7 +1,7 @@
 "use client";
 
 import { GatedButton } from "../components/gated";
-import { IDENTITY_PARAMS } from "./url-intent";
+import { IDENTITY_PARAMS, moveToArea } from "./url-intent";
 import { rememberOrg, withOrgRestored } from "../lib/console-org";
 import { isInConsoleLink } from "./console-href";
 import { consoleParams, resolveLegacyArea } from "./legacy-areas";
@@ -888,7 +888,7 @@ function ConsoleShellInner({
         const url = new URL(window.location.href);
         if (url.searchParams.get("area") === id) window.location.replace(url.toString());
         else {
-          url.searchParams.set("area", id);
+          moveToArea(url.searchParams, id);
           window.location.assign(url.toString());
         }
         setAreaLoadAsked({ id, at: Date.now() });
@@ -996,7 +996,7 @@ function ConsoleShellInner({
     window.localStorage.setItem("boss.area", id);
     try {
       const url = new URL(window.location.href);
-      url.searchParams.set("area", id);
+      moveToArea(url.searchParams, id);
       if (url.toString() !== window.location.href) {
         // AN AREA STILL TO BE FETCHED GETS ITS URL WHEN IT ARRIVES. A pushState is a router
         // action in Next 15 (it syncs the router's URL); one issued just before the area's
@@ -1027,7 +1027,7 @@ function ConsoleShellInner({
       // From the URL as it is NOW, not as it was at the click: a filter or a restore that
       // committed while the area loaded (`&state=pending`) is kept, never overwritten.
       const url = new URL(window.location.href);
-      url.searchParams.set("area", due.id);
+      moveToArea(url.searchParams, due.id);
       if (url.toString() === window.location.href) return;
       window.history.pushState(null, "", `${url.pathname}${url.search}${url.hash}`);
       window.dispatchEvent(new PopStateEvent("popstate"));

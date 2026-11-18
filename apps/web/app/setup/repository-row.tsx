@@ -9,6 +9,7 @@ import React, { forwardRef, useCallback, useEffect, useRef, useState } from "rea
 import { CircleNotch, Plus } from "@phosphor-icons/react";
 
 import { idGet } from "../../lib/identity/api";
+import { isLocalRepo } from "../../lib/repo-links";
 import { newFineGrainedTokenUrl } from "../../lib/github-urls";
 import { fetchRepos, fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import { ageLabel, daysUntil } from "../../lib/setup-stepper";
@@ -368,21 +369,25 @@ function RepoLine({ repo, onReplace, single }: { repo: RepoEntry; onReplace: () 
   };
   const red = pill.tone === "red";
   const [confirming, setConfirming] = useState(false);
+  const local = isLocalRepo(repo.full_name);
   return (
-    <div className="su-repo" data-testid={`su-repo-${repo.full_name}`}>
+    <div className="su-repo" data-testid={`su-repo-${repo.full_name}`} data-local={local || undefined}>
       <div className="su-line">
         <Pill pill={pill} testid="su-repo-pill" />
         <span className="su-mono su-strong" data-user-text>{repo.full_name}</span>
         {repo.default ? <span className="su-chip">default</span> : null}
         {repo.default_branch ? <span className="su-faint" data-user-text>{repo.default_branch}</span> : null}
-        {repo.private ? <span className="su-chip">Private</span> : null}
-        {install ? (
+        {/* A LOCAL REPO IS ON THIS MACHINE (stranger test r2): no GitHub-only facts — private,
+            pull requests and token checks are GitHub's, and said nothing true about it. */}
+        {local ? <span className="su-chip" data-testid="su-repo-on-machine">On this machine</span>
+          : repo.private ? <span className="su-chip">Private</span> : null}
+        {install && !local ? (
           <Tip tip="Set in the server's settings file. Replace here to manage it in BOSS."
                className="su-chip">From install</Tip>
         ) : null}
       </div>
       <div className="su-line">
-        <Checks checks={repo.checks} />
+        {local ? null : <Checks checks={repo.checks} />}
         {/* Once, and only when it means something: the pill already says "Expires in 2d"
             when it is close, and a token valid for decades needs no countdown. */}
         {days !== null && days <= EXPIRY_SHOWN_DAYS
@@ -413,7 +418,7 @@ function RepoLine({ repo, onReplace, single }: { repo: RepoEntry; onReplace: () 
       ) : null}
       <RowMenu label={`${repo.full_name} actions`} testid="su-repo-menu" items={[
         { label: "Test", onSelect: test, testid: "su-menu-test" },
-        { label: "Replace token", onSelect: onReplace, testid: "su-menu-replace" },
+        ...(local ? [] : [{ label: "Replace token", onSelect: onReplace, testid: "su-menu-replace" }]),
         ...(!single && !repo.default && repo.binding_id ? [{
           label: "Make default", testid: "su-menu-default",
           onSelect: () => run("repo_default", { binding_id: repo.binding_id }, "Make default") }] : []),
@@ -470,6 +475,14 @@ export function AddRepo({ connectionId, onDone }: { connectionId: string; onDone
   );
 }
 
+/** Setup › Repos when the code is on this machine. Names a project only when it is the one
+ *  Setup is showing (stranger test r2: "Hello World keeps its code here" with the to-do app
+ *  selected); another project's local code is "on this machine", unnamed. */
+export function localCodeWords(local: { project_id: string; project_name: string }, projectId: string): string {
+  const who = local.project_id === projectId ? `${local.project_name} keeps its code here.` : "Projects keep their code on this machine.";
+  return `${who} GitHub is optional: connect it for PRs on GitHub.`;
+}
+
 export const RepositoryRow = forwardRef<HTMLElement, {
   mode: string; step: number | null; focused: boolean;
 }>(function RepositoryRow({ mode, step, focused }, ref) {
@@ -490,7 +503,7 @@ export const RepositoryRow = forwardRef<HTMLElement, {
     body = (
       <div className="su-line" data-testid="su-repo-local">
         {local.pill ? <Pill pill={local.pill} /> : null}
-        <span className="su-faint">{local.project_name} keeps its code here. GitHub is optional: connect it for PRs on GitHub.</span>
+        <span className="su-faint" data-testid="su-repo-local-words">{localCodeWords(local, view.project_id)}</span>
         <GatedButton permission="github:connect" type="button" className="su-btn" data-testid="su-connect-github"
                 onClick={() => setDrawer("connect")}>Connect GitHub</GatedButton>
       </div>

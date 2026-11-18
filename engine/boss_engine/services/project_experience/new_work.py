@@ -413,13 +413,14 @@ def steps(connection: Connection, project_id: str, spec: Mapping[str, Any],
     """The workflow's REAL steps, in its own order, for the Workflow chip's numbered strip and
     its Steps list: {id, label, you (a person approves here), agent?}. Fan-out and join markers
     are not steps anyone does."""
+    from ..command_center import is_marker_step
     from ..workflow_capabilities import CAPABILITIES, prd_auto_approved
 
     prd_auto = prd_auto_approved()
     roster = roster if roster is not None else agents(connection, project_id)
     out = []
     for step in spec.get("steps") or []:
-        if not isinstance(step, dict) or str(step.get("kind") or "") in ("parallel", "join"):
+        if not isinstance(step, dict) or is_marker_step(step):
             continue
         cap = _cap(step)
         found = CAPABILITIES.get(cap)

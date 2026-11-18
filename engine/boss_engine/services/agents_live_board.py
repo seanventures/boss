@@ -670,8 +670,7 @@ def missions(connection: Any, project_id: str, read: Mapping[str, Any],
         order = {sid: i for i, sid in enumerate(spec)}
         run_steps = sorted(command_center._latest_per_step(by_run.get(str(run["id"]), [])),
                            key=lambda s: order.get(str(s.get("step_id")), len(order)))
-        done = sum(1 for s in run_steps if s.get("status") in ("succeeded", "skipped"))
-        count = max(len(spec), len(run_steps))
+        done, count = command_center.counted_steps(spec, run_steps)
         current = next((s for s in run_steps if s.get("status") in command_center.CURRENT_STEP),
                        None)
         failed = next((s for s in reversed(run_steps)

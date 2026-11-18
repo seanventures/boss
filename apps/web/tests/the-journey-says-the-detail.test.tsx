@@ -1,151 +1,87 @@
+// @vitest-environment happy-dom
 /**
- * The journey says the detail after the node button, not only on its title.
- * A blank detail says nothing. The same words as the label or the sub are not
- * repeated. More than six words is a paragraph. Six or fewer is a span.
- * The timeline keeps the detail on its tip and does not say the sentence.
+ * The journey's detail sentence is the node's tooltip, never text inside the strip.
  *
- * Breaks if the detail stays title-only, the sentence sits inside the button,
- * a blank or repeated detail still renders, a long detail is a span, a short
- * detail is a paragraph, the button title changes, or the timeline calls
- * journeyDetailSentence.
+ * Stranger test r2 (2026-11-17): the detail rendered as an unstyled <p>/<span> flex sibling of
+ * each node, so every project Overview showed large overlapping text ("Ready for work: 4 of 7
+ * checks", "Backlog: 1 items proposed, you accepted 0") at 390/1280/1440/1920 px.
+ *
+ * Breaks if the strip holds anything but node buttons and wires, a node button holds a
+ * sentence-length text, the tooltip loses the detail, or a blank / repeated detail still
+ * becomes a tooltip.
  */
-import { join } from "node:path";
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { codeOnly } from "./_helpers/source";
-
-type SentenceFn = (
-  detail: string | null | undefined,
-  label: string | null | undefined,
-  sub: string | null | undefined,
-) => string | null;
-type DetailView = (props: { id: string; sentence: string | null }) => React.ReactNode;
-
-const mod = await import("../app/projects/kit") as {
-  journeyDetailSentence?: SentenceFn;
-  View?: DetailView;
-};
-const journeyDetailSentence = mod.journeyDetailSentence;
+import { Journey, journeyDetailSentence } from "../app/projects/kit";
+import type { Node } from "../lib/project-experience";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const LONG = "this stage is waiting because the review has not started yet";
-const SEVEN = "one two three four five six seven";
-const SIX = "one two three four five six";
-const SPACED = "one  two  three  four  five  six";
-const SHORT = "review has not started";
+const LONG = "Ready for work: 4 of 7 checks";
+const BACKLOG = "Backlog: 1 items proposed, you accepted 0";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 
-function unmountShown(): void {
+afterEach(() => {
   act(() => { root?.unmount(); });
-  if (host) host.remove();
+  host?.remove();
   host = null;
   root = null;
-}
-
-afterEach(() => {
-  unmountShown();
-  document.body.innerHTML = "";
 });
 
-async function show(id: string, sentence: string | null): Promise<HTMLElement> {
-  unmountShown();
+async function show(nodes: Node[]): Promise<HTMLElement> {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
-  const View = mod.View!;
-  await act(async () => {
-    root!.render(<View id={id} sentence={sentence} />);
-  });
+  await act(async () => { root!.render(<Journey nodes={nodes} onOpen={() => {}} />); });
   return host;
 }
 
-function why(el: HTMLElement, id: string): Element | null {
-  return el.querySelector(`[data-testid='px-journey-why-${id}']`);
-}
+const node = (key: string, label: string, sub: string, detail?: string): Node =>
+  ({ key, label, state: "todo", sub, href: "", detail });
 
 describe("journeyDetailSentence", () => {
   it("is the trimmed detail, or nothing when it is blank or already the label or the sub", () => {
-    expect(typeof journeyDetailSentence).toBe("function");
-    expect(journeyDetailSentence!(`  ${LONG}  `, "Ready", "6/6")).toBe(LONG);
-    expect(journeyDetailSentence!(`  ${SHORT}  `, "Ready", "6/6")).toBe(SHORT);
-    expect(journeyDetailSentence!(SIX, "Ready", "6/6")).toBe(SIX);
-    expect(journeyDetailSentence!(SEVEN, "Ready", "6/6")).toBe(SEVEN);
-    expect(journeyDetailSentence!(null, "Ready", "6/6")).toBeNull();
-    expect(journeyDetailSentence!(undefined, "Ready", "6/6")).toBeNull();
-    expect(journeyDetailSentence!("", "Ready", "6/6")).toBeNull();
-    expect(journeyDetailSentence!(" \n\t ", "Ready", "6/6")).toBeNull();
-    expect(journeyDetailSentence!("  Ready  ", "Ready", "6/6")).toBeNull();
-    expect(journeyDetailSentence!("Ready", "  Ready  ", "later")).toBeNull();
-    expect(journeyDetailSentence!("  6/6  ", "Ready", "6/6")).toBeNull();
-    expect(journeyDetailSentence!("6/6", "Ready", "  6/6  ")).toBeNull();
-    expect(journeyDetailSentence!("Ready", "Working", "6/6")).toBe("Ready");
+    expect(journeyDetailSentence(`  ${LONG}  `, "Ready", "4/7")).toBe(LONG);
+    expect(journeyDetailSentence(null, "Ready", "6/6")).toBeNull();
+    expect(journeyDetailSentence(undefined, "Ready", "6/6")).toBeNull();
+    expect(journeyDetailSentence(" \n\t ", "Ready", "6/6")).toBeNull();
+    expect(journeyDetailSentence("  Ready  ", "Ready", "6/6")).toBeNull();
+    expect(journeyDetailSentence("6/6", "Ready", "  6/6  ")).toBeNull();
   });
 });
 
-describe("the journey says the detail", () => {
-  it("shows more than six words as a paragraph and six or fewer as a span", async () => {
-    const long = why(await show("working", LONG), "working");
-    expect(long?.tagName).toBe("P");
-    expect(long?.textContent).toBe(LONG);
-    expect(long?.hasAttribute("data-user-text")).toBe(true);
+describe("the journey strip", () => {
+  it("holds only node buttons and wires; the detail is each node's tooltip", async () => {
+    const el = await show([
+      node("ready", "Ready", "4/7", LONG),
+      node("backlog", "Backlog", "1", BACKLOG),
+      node("working", "Working", "", "Working"),
+      node("staging", "Staging", ""),
+    ]);
+    const strip = el.querySelector("[data-testid='px-journey']")!;
+    expect(strip).not.toBeNull();
+    const kids = Array.from(strip.children);
+    expect(kids.length).toBe(7); // 4 nodes + 3 wires
+    for (const k of kids) {
+      const ok = (k.tagName === "BUTTON" && k.classList.contains("px-jr-node")) || k.classList.contains("px-jr-wire");
+      expect(ok, `unexpected strip child <${k.tagName.toLowerCase()} class="${k.className}">`).toBe(true);
+    }
+    expect(strip.querySelector("p")).toBeNull();
+    expect(strip.querySelector("[data-testid^='px-journey-why']")).toBeNull();
 
-    const seven = why(await show("r7", SEVEN), "r7");
-    expect(seven?.tagName).toBe("P");
-    expect(seven?.textContent).toBe(SEVEN);
-    expect(seven?.hasAttribute("data-user-text")).toBe(true);
-
-    const spaced = why(await show("rs", SPACED), "rs");
-    expect(spaced?.tagName).toBe("SPAN");
-    expect(spaced?.textContent).toBe(SPACED);
-    expect(spaced?.hasAttribute("data-user-text")).toBe(true);
-
-    const six = why(await show("r6", SIX), "r6");
-    expect(six?.tagName).toBe("SPAN");
-    expect(six?.textContent).toBe(SIX);
-    expect(six?.hasAttribute("data-user-text")).toBe(true);
-
-    const short = why(await show("ready", SHORT), "ready");
-    expect(short?.tagName).toBe("SPAN");
-    expect(short?.textContent).toBe(SHORT);
-    expect(short?.hasAttribute("data-user-text")).toBe(true);
-  });
-
-  it("says nothing when there is no sentence", async () => {
-    const none = await show("ready", null);
-    expect(why(none, "ready")).toBeNull();
-    expect(none.textContent).toBe("");
-  });
-
-  it("calls journeyDetailSentence after the button and leaves the timeline title-only", () => {
-    const src = codeOnly(join(__dirname, "../app/projects/kit.tsx"));
-    const journeyAt = src.indexOf("export function Journey");
-    const timelineAt = src.indexOf("export function Timeline");
-    expect(journeyAt).toBeGreaterThan(-1);
-    expect(timelineAt).toBeGreaterThan(journeyAt);
-    const journey = src.slice(journeyAt, timelineAt);
-    const timelineRest = src.slice(timelineAt + "export function Timeline".length);
-    const nextExport = timelineRest.search(/\nexport\s/);
-    const timeline = nextExport === -1 ? src.slice(timelineAt) : src.slice(timelineAt, timelineAt + "export function Timeline".length + nextExport);
-    const open = journey.indexOf("<button");
-    const close = journey.indexOf("</button>");
-    expect(open).toBeGreaterThan(-1);
-    expect(close).toBeGreaterThan(open);
-    const inside = journey.slice(open, close);
-    const after = journey.slice(close);
-    const call = "<View id={n.key || i} sentence={journeyDetailSentence(n.detail, n.label, n.sub)} />";
-    expect(inside).toContain("title={n.detail || undefined}");
-    expect(inside).toContain("{n.label}");
-    expect(inside).toContain("{n.sub}");
-    expect(inside).not.toContain("journeyDetailSentence");
-    expect(inside).not.toContain("<View");
-    expect(after).toContain(call);
-    expect(journey.indexOf(call)).toBeGreaterThan(close);
-    expect(timeline).not.toContain("journeyDetailSentence");
-    expect(timeline).toContain("title={p.detail || undefined}");
+    const ready = strip.querySelector<HTMLButtonElement>("[data-testid='px-journey-ready']")!;
+    expect(ready.title).toBe(LONG);
+    expect(ready.textContent).not.toContain(LONG);
+    expect(strip.querySelector<HTMLButtonElement>("[data-testid='px-journey-backlog']")!.title).toBe(BACKLOG);
+    // A detail equal to the label, or none, is no tooltip.
+    expect(strip.querySelector<HTMLButtonElement>("[data-testid='px-journey-working']")!.hasAttribute("title")).toBe(false);
+    expect(strip.querySelector<HTMLButtonElement>("[data-testid='px-journey-staging']")!.hasAttribute("title")).toBe(false);
+    // The strip's visible text is only labels and subs.
+    expect(strip.textContent).not.toContain("checks");
+    expect(strip.textContent).not.toContain("proposed");
   });
 });

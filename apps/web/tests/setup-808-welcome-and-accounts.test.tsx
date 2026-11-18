@@ -208,6 +208,18 @@ describe("Welcome is honest", () => {
     expect(q(container, "su-wl-github")!.querySelector(".su-wl-circle")!.getAttribute("data-done")).toBe("true");
   });
 
+  it("once the sample exists it offers Open the sample, never Start the sample (stranger test r2)", async () => {
+    const view = { ...withAccounts(tryStep()),
+                   try: { workflow_key: "setup_first_pr", last_run: null, sample: { project_id: "hello-world", name: "Hello World" } } };
+    fakeApi(view);
+    const { container } = await mount(view, "?area=welcome&focus=repository&open=add", "welcome");
+    expect(q(container, "su-wl-sample-go")).toBeNull();
+    const open = q(container, "su-wl-sample-open")!;
+    expect(open.textContent).toBe("Open the sample");
+    expect(open.getAttribute("href")).toBe("/?project_id=hello-world&area=project");
+    expect(container.textContent).not.toContain("Start the sample");
+  });
+
   it("the rail's Get started shows until GitHub, a model and a first PR exist", async () => {
     const { summarize } = await import("../lib/setup-stepper");
     expect(summarize(firstRun()).get_started).toBe(true);

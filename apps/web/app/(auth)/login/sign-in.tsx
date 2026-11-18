@@ -334,7 +334,7 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
   const offers = providerOffers(options.providers, target);
   const hasExternalMethod = offers.some((offer) => !!offer.href) || hasPasskeys;
   const externalMethods = <>
-    <ProviderRow offers={offers} onWhy={(text) => setWhy({ at: "idp", text })} />
+    {offers.length ? <ProviderRow offers={offers} onWhy={(text) => setWhy({ at: "idp", text })} /> : null}
     {whyLine("idp")}
     {passkeyWhy ? <Tip text={passkeyWhy} className="block">{(tip) => passkeyButton(tip)}</Tip> : passkeyButton()}
     {whyLine("passkey")}

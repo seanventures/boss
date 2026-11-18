@@ -396,6 +396,20 @@ def _work(connection: Connection, project_id: str, limit: int = 8) -> list[dict[
 
 # ── the project page ───────────────────────────────────────────────────────────────────────────
 
+def model_connected(connection: Connection, project_id: str) -> Optional[bool]:
+    """Whether a model is connected to the project (Setup's own answer, connected_basics), or
+    None when that cannot be read. The start box's price words ("included in subscription or pay
+    per use") are said only when one is: with none connected there is no subscription and nothing
+    to pay per use (stranger test r2)."""
+    try:
+        from ..config import get_settings
+        from .setup_service import connected_basics
+
+        return bool(connected_basics(connection, get_settings(), project_id).get("model"))
+    except Exception:  # noqa: BLE001 - an estimate's wording never fails the page
+        return None
+
+
 def view(connection: Connection, project_id: str) -> dict[str, Any]:
     """The project page's one read (GET /v1/projects/{id}/start). Raises LookupError for no such
     project."""
@@ -421,7 +435,8 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
         "project_id": project["id"], "name": project["name"], "description": project["description"],
         "project_type": project["project_type"] or "app", "archived": project["archived_at"] is not None,
         "repo": repo,
-        "start": how_to_start(connection, project_id, has_repo=repo is not None),
+        "start": {**how_to_start(connection, project_id, has_repo=repo is not None),
+                  "model_connected": model_connected(connection, project_id)},
         "examples": list(EXAMPLES), "next": [dict(s) for s in NEXT_STEPS],
         "work": _work(connection, project_id),
         "sample": {"template": SAMPLE_TEMPLATE, "name": SAMPLE_NAME, "stack": SAMPLE_STACK,

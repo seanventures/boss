@@ -90,8 +90,19 @@ def _on_claimed(db: Any, org_id: str, owner_id: str, path: str, *, seat: Optiona
         if exc.name != "boss_engine.identity.migration":
             raise
         return
+    seats = legacy_seats(db)
     migration.on_claimed(org_id, owner_id, db=db, via=path,
-                         assume_member=seat if seat in legacy_seats(db) else None)
+                         assume_member=seat if seat in seats else None)
+    if is_fresh_install(db, path, seats=seats):
+        # A FRESH install never had shared-password days: nobody to bridge, so the shared
+        # password does not become a 30-day Operator sign-in without MFA beside the Owner who
+        # just enrolled a second factor (stranger test r2, 2026-11-17). An upgrade keeps it.
+        from .legacy import LegacyKind
+
+        if migration.mapping(db, org_id, LegacyKind.SHARED_PASSWORD, "BOSS_CONSOLE_PASSWORD"):
+            migration.retire_path(org_id, LegacyKind.SHARED_PASSWORD, db=db,
+                                  actor_principal_id=owner_id,
+                                  reason="fresh install: no shared-password history to bridge")
     # §6.13: the first Owner holds every approval seat nobody holds yet (a fresh install has no
     # one else to approve a tier-2 or tier-3 decision); an Owner reassigns them later.
     from .approvals import seat_the_first_owner
@@ -119,6 +130,16 @@ def legacy_seats(db: Any) -> list[str]:
         {"seats": list(DEFAULT_SEATS)}).scalars().all()
     held = {str(r) for r in rows}
     return [s for s in DEFAULT_SEATS if s in held]
+
+
+def is_fresh_install(db: Any, path: str, *, seats: Optional[list[str]] = None) -> bool:
+    """THE rule for "claimed fresh, not upgraded": the same decision history that decides the
+    seat question (`legacy_seats`, PR #199) — no decision was ever approved, delegated, sent back
+    or executed under a governance seat — and the claim did not itself use the shared password
+    (someone who claims with it lived in shared-password days)."""
+    if path == "legacy_password":
+        return False
+    return not (legacy_seats(db) if seats is None else seats)
 
 
 def setup_expires_at(db: Any) -> Optional[str]:
