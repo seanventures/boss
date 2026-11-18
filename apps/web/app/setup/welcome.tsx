@@ -16,6 +16,7 @@ import { useBoard } from "./parts";
 import { Pill } from "./pill";
 import { TryRow } from "./try-row";
 import { accountsOf, reposOf } from "./setup-blocks";
+import { switchAreaWith } from "../url-intent";
 
 export const NEW_PROJECT_HREF = {
   sample: "/?new_project=sample",
@@ -109,12 +110,7 @@ function SetupLink({ focus, className, testid, children }: {
          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
          e.preventDefault();
          try {
-           const url = new URL(window.location.href);
-           url.searchParams.set("focus", focus);
-           url.searchParams.set("open", "add");
-           url.searchParams.delete("view");
-           window.history.replaceState(window.history.state, "", url.toString());
-           window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "setup" }));
+           switchAreaWith("setup", { focus, open: "add", view: null });
          } catch { window.location.assign(href); }
        }}>
       {children}

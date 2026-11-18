@@ -90,16 +90,19 @@ def _on_claimed(db: Any, org_id: str, owner_id: str, path: str, *, seat: Optiona
         if exc.name != "boss_engine.identity.migration":
             raise
         return
-    seats = legacy_seats(db)
+    history = install_has_history(db)
+    seats = legacy_seats(db) if history else []
     migration.on_claimed(org_id, owner_id, db=db, via=path,
                          assume_member=seat if seat in seats else None)
-    if is_fresh_install(db, path, seats=seats):
+    if is_fresh_install(db, path, history=history):
         # A FRESH install never had shared-password days: nobody to bridge, so the shared
         # password does not become a 30-day Operator sign-in without MFA beside the Owner who
         # just enrolled a second factor (stranger test r2, 2026-11-17). An upgrade keeps it.
         from .legacy import LegacyKind
 
         if migration.mapping(db, org_id, LegacyKind.SHARED_PASSWORD, "BOSS_CONSOLE_PASSWORD"):
+            # Audited (legacy.path_retired) and reversible while the window would have run:
+            # `boss identity legacy restore --path shared_password` (migration.restore_path).
             migration.retire_path(org_id, LegacyKind.SHARED_PASSWORD, db=db,
                                   actor_principal_id=owner_id,
                                   reason="fresh install: no shared-password history to bridge")
@@ -119,11 +122,36 @@ def legacy_password_configured() -> bool:
 DEFAULT_SEATS = ("ceo", "cto", "cao", "vp_agents", "release_manager")
 
 
+def install_has_history(db: Any) -> bool:
+    """THE one rule for "this install was used before it was claimed" — the seat question (PR
+    #199) and the shared password's fate at the claim both read it. Any of: a decision (by
+    anyone), a workflow run, a code task run, or a project other than the one bootstrap seeds
+    (settings `default_project_id`). A pre-identity install that auto-approved everything, or
+    approved under custom seat names, still has runs and decisions, so it is never "fresh"
+    (review of #204)."""
+    from ..config import get_settings
+
+    default = str(getattr(get_settings(), "default_project_id", "") or "")
+    for sql, params in (("SELECT 1 FROM decisions LIMIT 1", {}),
+                        ("SELECT 1 FROM workflow_runs LIMIT 1", {}),
+                        ("SELECT 1 FROM code_task_runs LIMIT 1", {}),
+                        ("SELECT 1 FROM projects WHERE id <> :d LIMIT 1", {"d": default})):
+        try:
+            with db.begin_nested():
+                if db.execute(text(sql), params).first() is not None:
+                    return True
+        except Exception:  # noqa: BLE001 - a table an older schema lacks holds no history
+            continue
+    return False
+
+
 def legacy_seats(db: Any) -> list[str]:
-    """The seats the first Owner may take over: only those with real history on this install (a
-    decision approved, delegated, sent back or executed under that name). A FRESH install has
-    none, so the claim form does not ask "Which seat were you?" and the Owner starts fresh
-    (stranger test, rc10.27); an upgrade whose `ceo` approved things still offers `ceo`."""
+    """The seats the first Owner may take over. None on an install with no history
+    (`install_has_history`), so a FRESH install's claim form does not ask "Which seat were you?"
+    (stranger test, rc10.27). With history: the seats something was approved, delegated, sent
+    back or executed under, so an upgrade whose `ceo` approved things still offers `ceo`."""
+    if not install_has_history(db):
+        return []
     rows = db.execute(text(
         "SELECT DISTINCT s FROM (SELECT unnest(ARRAY[approved_by, delegated_by, "
         "revision_requested_by, executed_by]) AS s FROM decisions) d WHERE s = ANY(:seats)"),
@@ -132,14 +160,13 @@ def legacy_seats(db: Any) -> list[str]:
     return [s for s in DEFAULT_SEATS if s in held]
 
 
-def is_fresh_install(db: Any, path: str, *, seats: Optional[list[str]] = None) -> bool:
-    """THE rule for "claimed fresh, not upgraded": the same decision history that decides the
-    seat question (`legacy_seats`, PR #199) — no decision was ever approved, delegated, sent back
-    or executed under a governance seat — and the claim did not itself use the shared password
-    (someone who claims with it lived in shared-password days)."""
+def is_fresh_install(db: Any, path: str, *, history: Optional[bool] = None) -> bool:
+    """Claimed fresh, not upgraded: no history (`install_has_history`, the seat question's own
+    rule) and the claim did not itself use the shared password (someone who claims with it
+    lived in shared-password days)."""
     if path == "legacy_password":
         return False
-    return not (legacy_seats(db) if seats is None else seats)
+    return not (install_has_history(db) if history is None else history)
 
 
 def setup_expires_at(db: Any) -> Optional[str]:

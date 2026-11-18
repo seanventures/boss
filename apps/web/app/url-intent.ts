@@ -180,3 +180,24 @@ export function moveToArea(params: URLSearchParams, area: string): URLSearchPara
   params.set("area", area);
   return params;
 }
+
+/**
+ * Switch the console to `area` CARRYING instructions for it (`focus=repository&open=add`). The
+ * URL is written with the new area first, so the shell's switch (which drops the previous
+ * area's one-shot params, `moveToArea`) sees the same area and keeps them. Writing the params
+ * under the old area and then announcing the switch lost them (review of #204: Get started's
+ * Connect GitHub landed on Setup without its Add form).
+ */
+export function switchAreaWith(area: string, set: Record<string, string | null> = {}): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set("area", area);
+  for (const [key, value] of Object.entries(set)) {
+    if (value === null) url.searchParams.delete(key); else url.searchParams.set(key, value);
+  }
+  // A new history entry (Back returns to where you were) and the popstate panels read the URL on.
+  if (url.toString() !== window.location.href) {
+    window.history.pushState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }
+  window.dispatchEvent(new CustomEvent("boss:navigate", { detail: area }));
+}

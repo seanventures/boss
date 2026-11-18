@@ -105,8 +105,8 @@ The installer puts `boss` in `~/.local/bin` (or in `/usr/local/bin` when that is
 | `boss password` | Shows the console password, in a terminal only: it claims a new install, then signs teammates in as Operator for 30 days after the claim. `boss password reset` rotates it |
 | `boss doctor` | Runs `checkup.sh` (`--probe` also asks a model a question) |
 | `boss logs [-f] [api\|worker\|web\|db]` | Recent service logs |
-| `boss stop` | Stops every service of this install, including web, Grafana, Prometheus and every other Compose profile. Data, containers and images are kept |
-| `boss start` | Starts this install's services again, without a rebuild |
+| `boss stop` | Stops every service of this install, including web, Grafana, Prometheus and the optional dev profiles (test database, runner, toolchains). Data, containers and images are kept |
+| `boss start` | Starts this install's enabled services again, without a rebuild. Optional dev profiles stay stopped: bring them back with `boss dev up` or `boss toolchains enable …` |
 | `boss connect` | Runs the [Models](#models) step again. It saves newly exported provider keys into `.env` and restarts only api and worker. It then asks once before each sign-in or connection, offers a subscription sign-in or a local model when nothing is usable, and ends with the Models table. `--connect-found` answers yes for what was found. `--yes` asks nothing and installs nothing |
 | `boss connect --list` / `--summary` | Prints what this machine has, or the Models table, and changes nothing |
 | `boss connect --install-ollama [--local-model NAME]` | Sets up [the local model](#the-local-model) end to end without asking |
@@ -719,4 +719,4 @@ Every flag is optional. See `./install.sh --help` for the full list. Added for t
 | `--no-discover` | Skip looking for model keys and subscriptions |
 | `--no-boss-command` | Do not install `boss` on `PATH` |
 
-`BOSS_BIN_DIR` chooses where `boss` goes. `BOSS_INSTALL_DIR` points `boss` at another install.
+`BOSS_BIN_DIR` chooses where `boss` goes. An installed `boss` always runs its own install; use `boss --dir PATH` to act on another one. `BOSS_INSTALL_DIR` only chooses where `install.sh` installs.

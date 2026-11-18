@@ -22,9 +22,10 @@ Usage: boss [--dir PATH] COMMAND [options]
 Commands:
   status              Install directory, release, services, and API health
   open                Print the Mission Control address
-  stop                Stop every service of this install (web, monitoring and every other
-                      profile too). Data is kept
-  start               Start this install's services again, without a rebuild
+  stop                Stop every service of this install: web, monitoring and the optional
+                      dev profiles too (test database, runner, toolchains). Data is kept
+  start               Start the services this install has enabled, without a rebuild. The
+                      optional dev profiles stay stopped: boss dev up / boss toolchains enable
   metatron [options]  Open Metatron, the BOSS terminal, on this machine (colours, keys and
                       the terminal's size work natively). Talks to the local API with the
                       host tools' key, never printed. --print 'COMMAND' [--json] runs one

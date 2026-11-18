@@ -446,6 +446,13 @@ def test_boss_stop_and_start_cover_every_service_of_this_install(world) -> None:
     # The installer guide's command list has both.
     guide = (REPO / "scripts/install/README.md").read_text()
     assert "| `boss stop` |" in guide and "| `boss start` |" in guide
+    # Stop is wider than start, and both say so (review of #204).
+    helptext = _run(boss, "help", env=env).stdout
+    assert "optional" in helptext and "dev profiles too" in helptext and "boss dev up" in helptext
+    assert "optional dev profiles" in guide and "Optional dev profiles stay stopped" in guide
+    # The guide names the explicit way to another install, not the env var (review of #204).
+    assert "`BOSS_INSTALL_DIR` points `boss` at another install" not in guide
+    assert "boss --dir PATH" in guide
 
 
 def test_a_second_install_names_its_own_boss_command(world) -> None:
