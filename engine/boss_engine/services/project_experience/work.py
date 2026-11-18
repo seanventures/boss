@@ -422,6 +422,11 @@ def _build_strip(r: Mapping[str, Any], state: str) -> list[dict[str, str]]:
 
     review = "failed" if repairing else st(3, 3)
     pr = "waiting" if merge_open else "done" if pr_url else "todo" if repairing else st(4, 4)
+    if state == "failed" and at == len(phases) - 1 and not pr_url:
+        # FAILED AFTER ITS LAST PHASE (phase 'done', no PR): it stopped saving or opening its
+        # change — the PR station failed, never a strip of ticks over a build that failed
+        # (recipe-box 2026-11-18: "git add failed" read B ✓ R ✓ PR ✓).
+        pr = "failed"
     return [{"key": "plan", "label": "P", "name": "Plan", "state": "skipped"},
             {"key": "design", "label": "D", "name": "Decide", "state": "skipped"},
             {"key": "build", "label": "B", "name": "Build", "state": st(0, 2)},
@@ -1059,6 +1064,13 @@ def _with_why(connection: Connection, found: list[dict[str, Any]]) -> None:
             elif why["who"] == "stuck":
                 w["state"] = "stalled"
                 w["stalled_since"] = w.get("stalled_since") or why.get("since")
+
+
+def failure_words(error: Any) -> str:
+    """A failure in words (build_failure.failure_words: the one wording, redacted for people)."""
+    from ..build_failure import failure_words as words_
+
+    return words_(error)
 
 
 def everything(connection: Connection, project_id: str, *, limit: int = 60,

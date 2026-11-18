@@ -49,7 +49,7 @@ export function splitAttention(items: AttentionItem[]): {
 } {
   return {
     // A build stopped at its checks or its budget has stopped too (factory spec §6.5).
-    stopped: items.filter((a) => a.kind === "failed_step" || a.kind === "gate_override" || a.kind === "budget_refused"),
+    stopped: items.filter((a) => a.kind === "failed_step" || a.kind === "gate_override" || a.kind === "budget_refused" || a.kind === "build_failed"),
     decisions: items.filter((a) => a.kind === "approval"),
     setup: items.filter((a) => a.kind === "readiness"),
   };

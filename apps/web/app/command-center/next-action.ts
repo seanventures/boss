@@ -55,7 +55,7 @@ function pickNextAction(view: CommandCenterView | null, attention: AttentionItem
   if (setup) return { ...attentionAction(setup, "setup"), patch: setupPatch(setup) };
   if (view.counts.setup > 0 || view.status.key === "setup") return { kind: "setup", title: "Finish setup",
     detail: view.status.tip, label: "Finish setup", patch: { area: "setup", view: null, role: null } };
-  const stopped = attention.find((item) => item.kind === "failed_step" || item.kind === "gate_override");
+  const stopped = attention.find((item) => item.kind === "failed_step" || item.kind === "gate_override" || item.kind === "build_failed");
   if (stopped) return attentionAction(stopped, "stopped");
   const halted = view.missions.find((m) => ["stopped", "stalled", "blocked"].includes(m.state));
   if (halted) return { kind: "stopped", title: halted.subject,

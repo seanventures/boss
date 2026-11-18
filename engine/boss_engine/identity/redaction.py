@@ -89,6 +89,18 @@ _SHAPES: list[tuple[re.Pattern[str], str]] = [
     # token, services/model_proxy.py). No prefix survives either.
     (re.compile(r"boss_(?:pat|sak|scim|egr|mdl)_[A-Za-z0-9]{6,}"), REDACTED),
     (re.compile(r"\bbss_[A-Za-z0-9_\-]{16,}"), REDACTED),
+    # Provider tokens by their own prefixes (GitHub, Anthropic, OpenAI-style): the prefix is part
+    # of the secret's shape, so none of it survives.
+    (re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,})"), REDACTED),
+    (re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{8,}"), REDACTED),
+    # OpenAI-style keys by their real shapes only — never a branch or ticket slug that happens
+    # to start "sk-" (feature/sk-1234-add-checkout stays readable in logs).
+    (re.compile(r"\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{20,}"), REDACTED),
+    (re.compile(r"\bsk-[A-Za-z0-9]{32,}"), REDACTED),
+    # A URL carrying basic-auth credentials (https://user:pass@host/…): the host stays. The
+    # scheme is bounded: unbounded, a long run of `a.a.a.…` rescanned at every boundary and a
+    # 100 KB log line took 11 s (this runs on every log record).
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{0,31}://)[^/\s:@'\"]+:[^/\s@'\"]+@"), r"\1" + REDACTED + "@"),
     # JWT / JWS / id_token shape.
     (re.compile(r"eyJ[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{2,}\.[A-Za-z0-9_\-]*"), REDACTED),
     # Header lines of a dumped request or response.
@@ -155,8 +167,26 @@ def register_configured_secrets(settings: Any = None) -> None:
     register_secrets(values)
 
 
-def redact_text(text: str) -> str:
-    """Redact one string: configured literals first, then every credential shape."""
+#: What `public=True` also hides (a sentence shown to people, never a log): BOSS's secret
+#: reference ids, and paths on the BOSS host — a sandbox path keeps only its repo-relative
+#: tail, any other host path only its file name. Logs keep both: operators need them there.
+_SREF = re.compile(r"\bsref_[A-Za-z0-9_\-]+")
+_SANDBOX_PATH = re.compile(r"/var/lib/boss/sandboxes/[^/\s'\"]+/[^/\s'\"]+/"
+                           r"(?:(?:app|repo|src|work|workspace)/)?([^\s'\"]*)")
+#: Only a path that STARTS here: never one inside a URL (https://example.com/home/…) or after a
+#: word, and never a longer name (/rootfs).
+_HOST_PATH = re.compile(r"(?<![\w.:/-])(?:/var/lib/boss|/tmp/boss[^/\s'\"]*|/private/tmp"
+                        r"|/Users/[^/\s'\"]+|/home/[^/\s'\"]+|/root)(?![\w.-])(?:/[^\s'\"]*)?")
+
+
+def _path_tail(match: "re.Match[str]") -> str:
+    tail = match.group(0).rstrip("/").rsplit("/", 1)[-1]
+    return tail if "." in tail else "a folder on the BOSS host"
+
+
+def redact_text(text: str, *, public: bool = False) -> str:
+    """Redact one string: configured literals first, then every credential shape. `public`: the
+    string is shown to people (a card, a list) — secret reference ids and host paths go too."""
     if not text:
         return text
     out = text
@@ -165,6 +195,10 @@ def redact_text(text: str) -> str:
             out = out.replace(literal, REDACTED)
     for pattern, repl in _SHAPES:
         out = pattern.sub(repl, out)
+    if public:
+        out = _SREF.sub("a stored secret", out)
+        out = _SANDBOX_PATH.sub(lambda m: m.group(1) or "the build's copy of the repo", out)
+        out = _HOST_PATH.sub(_path_tail, out)
     return out
 
 
