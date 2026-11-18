@@ -43,6 +43,39 @@ def test_a_normal_build_with_no_setting_runs_at_standard_where_a_major_never_blo
     assert ok and not blocking and [f["severity"] for f in deferred] == ["major", "minor"]
 
 
+def test_a_review_that_refutes_without_naming_an_issue_is_a_follow_up_below_production():
+    unnamed = "Reviewed src/a.js. It feels off.\nVERDICT: REFUTED"
+    ok, blocking, deferred = _review_gate_from_findings(
+        unnamed, "refuted", qb.review_block_severity(qb.STANDARD))
+    assert ok and not blocking and len(deferred) == 1
+    assert "couldn't name its issue" in deferred[0]["text"] and "feels off" in deferred[0]["text"]
+    assert qb.finding_tier(deferred[0]) == qb.P1
+    # production keeps it fail-closed; a review that did not see the change is not "refuted"
+    assert not _review_gate_from_findings(unnamed, "refuted",
+                                          qb.review_block_severity(qb.PRODUCTION))[0]
+    assert not _review_gate_from_findings("", "hollow", qb.review_block_severity(qb.STANDARD))[0]
+
+
+def test_a_missing_p1_must_have_is_a_follow_up_at_standard_and_blocks_at_production():
+    rec = {"verdict": "not_met", "stack": {}, "items": [
+        {"n": 1, "text": "Doubling servings doubles the amounts on the page", "status": "missing"}]}
+    g = qb.BarGates(qb.STANDARD)
+    ok, soft = qb.acceptance_verdict(rec, qb.STANDARD)
+    g.set_bar_aware("acceptance_met", ok, soft)
+    assert g["acceptance_met"] is True and "acceptance_met" in g.followups
+    assert "Doubling servings" in g.followups["acceptance_met"][0]
+    assert qb.acceptance_verdict(rec, qb.PRODUCTION)[0] is False
+
+
+@pytest.mark.parametrize("gate", sorted(qb.FLOOR))
+def test_the_floor_blocks_at_every_bar_whatever_the_lane(gate):
+    for bar in qb.PRESETS:
+        g = qb.BarGates(bar, initial={gate: False})
+        assert g[gate] is False and not g.followups, (gate, bar)
+    assert {"code_written", "app_serves", "written_tests_pass", "security_clean",
+            "no_committed_secrets", "coder_did_not_edit_tests", "existing_tests_intact"} <= qb.FLOOR
+
+
 def test_a_blocker_still_blocks_at_standard_and_a_major_blocks_at_production():
     blocker = REVIEW.replace("MAJOR", "BLOCKER")
     assert not _review_gate_from_findings(blocker, "refuted",
@@ -197,6 +230,27 @@ def test_a_build_with_only_major_findings_opens_ready_and_boss_queues_the_follow
 
 
 @pytestmark_db
+@pytest.mark.parametrize("fault,words", [
+    ("acceptance_missing", "Must-have 1 (P1)"),
+    ("review_unnamed", "couldn't name its issue"),
+])
+def test_a_missing_must_have_or_an_unnamed_refutation_opens_ready_with_a_follow_up(
+        pipeline, fault, words):
+    run_id, repo = pipeline.build(faults=fault, tag=f"light-{fault[:10]}")
+    assert pipeline.run(run_id, repo) is None
+    out = pipeline.result(run_id)
+    assert out["run"]["status"] == "completed", out["run"].get("error")
+    gate, ev = _gate(pipeline, run_id)
+    assert gate["status"] == "pass" and not gate["gates_failed"], gate
+    card, rec = _card(pipeline, run_id)
+    assert not card["question"].startswith("Checks failing"), card["question"]
+    assert " is ready — " in card["question"] and "queued, BOSS is fixing" in card["question"]
+    assert "checks_failing" not in rec
+    assert any(words in i["text"] for i in rec["followups"]["items"]), rec["followups"]
+    assert "code_task.deferred_findings_task" in out["events"] and out["children"]
+
+
+@pytestmark_db
 def test_a_blocker_that_stays_still_ends_on_checks_failing_at_standard(pipeline):
     run_id, repo = pipeline.build(faults="review_blocker_stays", tag="light-blocker")
     assert pipeline.run(run_id, repo) is None
@@ -239,3 +293,126 @@ def test_the_same_major_findings_block_at_the_production_bar(pipeline):
     assert "code_review_passed" in (gate["gates_failed"] or []), gate
     card, rec = _card(pipeline, run_id)
     assert card["question"].startswith("Checks failing") and "followups" not in rec
+
+
+# ── Recipe box's follow-up (2026-11-18): process rules, lean contracts, one fix round ────────
+
+def test_process_rules_in_a_contract_are_p2_follow_ups_and_never_a_repair_round():
+    from boss_engine.services.acceptance import contract as ct
+    from boss_engine.services.governed_code_task_service import resolve_gate_failure_action
+
+    prompt = ct.prose_prompt({"title": "t", "description": "d"}, "text", [])
+    for words in ("PROCESS RULES", "exact test or file name", "pull request description",
+                  "what it mocks", "telemetry or metrics"):
+        assert words in prompt, words
+    # a P2 gap rides the ready card as P2; nothing about it blocks or asks for another round
+    rec = {"verdict": "not_met", "stack": {}, "items": [
+        {"n": 1, "text": "test named exactly 'doubles amounts'", "status": "missing", "tier": "P2"},
+        {"n": 9, "text": "an aria-label is called out in the PR description", "status": "partial",
+         "tier": "P2"}]}
+    g = qb.BarGates(qb.STANDARD)
+    g.set_bar_aware("acceptance_met", *qb.acceptance_verdict(rec, qb.STANDARD))
+    assert g["acceptance_met"] is True
+    found = qb.followup_findings(g.followups, {})
+    assert [qb.finding_tier(f) for f in found] == ["P2", "P2"], found
+    assert resolve_gate_failure_action(failing=[k for k, v in g.items() if not v],
+                                       advisory_gate=False, rounds_used=0,
+                                       max_repair_rounds=2) == "ship"
+
+
+def test_the_prd_asks_for_a_few_behaviour_level_must_haves_not_process_rules():
+    src = open(os.path.join(os.path.dirname(__file__), "..", "boss_engine", "services",
+                            "meeting_service.py"), encoding="utf-8").read()
+    assert "ACCEPTANCE CRITERIA ARE BEHAVIOUR, FEW AND CHECKABLE: 3 to 7 must-haves" in src
+    for words in ("no exact test or file names", "no wording the", "what it mocks",
+                  "no metrics or telemetry the request did not ask for"):
+        assert words in src, words
+
+
+def test_the_light_lane_runs_one_fix_round_and_production_keeps_its_rounds():
+    assert qb.fix_rounds(qb.STANDARD, 2) == 1 and qb.fix_rounds(qb.PROTOTYPE, 3) == 1
+    assert qb.fix_rounds(qb.PRODUCTION, 2) == 2 and qb.fix_rounds(qb.STANDARD, 0) == 0
+    src = open(os.path.join(os.path.dirname(__file__), "..", "boss_engine", "services",
+                            "governed_code_task_service.py"), encoding="utf-8").read()
+    # both the warm in-run rounds and the cold repair rounds (a new run: "· retry N")
+    assert "inrun_max = _quality_bar.fix_rounds(" in src
+    assert "max_repair_rounds = _quality_bar.fix_rounds(" in src
+
+
+def test_a_suite_that_cannot_load_its_package_is_the_agents_to_fix():
+    from boss_engine.services import verification_target as vt
+
+    out = ("node:internal/modules/esm/resolve:873\n  throw new ERR_MODULE_NOT_FOUND(...)\n"
+           "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'jsdom' imported from "
+           "/w/tests/recipes.test.js\n")
+    assert vt.missing_packages(out) == ["jsdom"]
+    note = vt.missing_package_note(out)
+    assert "`jsdom`" in note and "devDependencies" in note and "BOSS's install" in note
+    assert vt.missing_packages("Cannot find module './lib/scale.js'") == []
+    assert vt.missing_packages("ModuleNotFoundError: No module named 'httpx.auth'") == ["httpx"]
+    assert vt.missing_package_note("1 failing: expected 2 to equal 4") == ""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "boss_engine", "services",
+                            "governed_code_task_service.py"), encoding="utf-8").read()
+    assert "+ verification_target.missing_package_note(fail_output)" in src
+
+
+# ── a Bug / small change takes the small path, scoped to its request (Recipe box walk) ───────
+
+def test_a_change_to_an_existing_app_is_scoped_to_its_request_at_the_light_lane():
+    from boss_engine.services import build_scope
+
+    brief = ("Continue work on an EXISTING application. Its code is already on this branch.\n\n"
+             "REQUESTED CHANGE:\nThe doubling test should click More servings on the page.")
+    assert build_scope.extends_existing_app(brief)
+    assert build_scope.extends_existing_app("Fix it", {"root_run_id": "crun_x"})
+    assert not build_scope.extends_existing_app("Build a recipe box app", {})
+    # the workflow deploys, but a light-lane change to the app asks for no ops scaffolding
+    light = build_scope.decide("Fix the doubling test", brief, workflow_deploys=True,
+                               light_change=True)
+    assert light["ops"] is False
+    # ...unless the request asks for it, the app declares a manifest, or it is not light
+    assert build_scope.decide("Add a metrics endpoint", brief, workflow_deploys=True,
+                              light_change=True)["ops"] is True
+    assert build_scope.decide("Fix", brief, has_manifest=True, light_change=True)["ops"] is True
+    assert build_scope.decide("Fix", brief, workflow_deploys=True)["ops"] is True
+    src = open(os.path.join(os.path.dirname(__file__), "..", "boss_engine", "services",
+                            "governed_code_task_service.py"), encoding="utf-8").read()
+    assert "light_change=_light_change" in src
+
+
+def test_the_reviewer_flags_scope_creep_instead_of_asking_for_more_of_it():
+    from boss_engine.services.governed_code_task_service import _review_prompt
+
+    prompt = _review_prompt("Fix the doubling test", ["the page doubles amounts"], ctx=False)
+    assert "SCOPE CREEP IS THE ISSUE, NEVER THE CURE" in prompt
+    assert "Never ask a change to add more of them" in prompt
+
+
+def test_a_bug_with_no_bugfix_mapping_takes_the_small_path():
+    from boss_engine.services.project_experience import new_work
+
+    class _Rows:
+        def __init__(self, row):
+            self.row = row
+
+        def mappings(self):
+            return self
+
+        def first(self):
+            return self.row
+
+    class _Conn:
+        """No bugfix mapping; Fast Fix and Minor Feature installed."""
+
+        def execute(self, stmt, params=None):
+            sql = str(stmt)
+            if "workflow_mappings" in sql:
+                return _Rows(None)
+            if "d.workflow_key = :k" in sql and (params or {}).get("k") == "fast_fix":
+                return _Rows({"workflow_key": "fast_fix", "name": "Fast Fix / Hotfix",
+                              "description": "", "spec": {"steps": [{"id": "build"}]}})
+            return _Rows(None)
+
+    got = new_work.choose(_Conn(), "p_1", "bug")
+    assert got["workflow_key"] == "fast_fix" and got["chosen"] == "small"
+    assert got["work_class"] is None

@@ -3549,6 +3549,10 @@ def _review_prompt(title, criteria, *, instructions="", ui=False, change="", ope
         + "Judge ONLY against the stated task and acceptance criteria. A concern that is OUT OF SCOPE "
         "— a feature that was not asked for, or a spec stricter than what was agreed — is NOT a "
         "defect; note it but do not fail the change for it.\n\n"
+        "SCOPE CREEP IS THE ISSUE, NEVER THE CURE: in a change to an existing app, files or "
+        "machinery the request did not ask for (a Dockerfile, a compose or deploy manifest, a "
+        "metrics endpoint, telemetry calls, new documents) are a MINOR finding — 'not asked for, "
+        "remove it'. Never ask a change to add more of them.\n\n"
         "Triage by SEVERITY: a MINOR finding (style, a robustness nicety, a missed edge case that "
         "no acceptance criterion requires) is a RECOMMENDATION — list it, but it must NOT drive the "
         "verdict. Refute ONLY for a defect that materially violates the task or a criterion.\n\n"
@@ -3611,6 +3615,16 @@ def _review_gate_from_findings(
     """
     findings = _parse_findings(summary)
     if not findings:
+        if verdict == "refuted" and str(block_severity or "").strip().lower() in ("blocker", "none"):
+            # THE LIGHT LANE (quality_bar, standard/prototype): a review that refuted the change
+            # but named no issue cannot block a normal build — nobody could act on it. It is a
+            # follow-up carrying the reviewer's own words; BOSS's follow-up build re-reviews.
+            words = " ".join(str(summary or "").split())[-600:]
+            return True, [], [{"severity": "major", "path": None, "line": None, "stage": None,
+                               "end_line": None,
+                               "text": "The review refuted the change but couldn't name its "
+                                       "issue (no FINDING line); re-review and fix what it "
+                                       f"meant. Its words: {words or '(none)'}"}]
         return verdict == "survived", [], []
     try:
         floor = _SEVERITY_ORDER.index((block_severity or "major").strip().lower())
@@ -5185,10 +5199,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     except Exception:  # noqa: BLE001
         _log_caught(logger)
         _deploys = False
+    # A CHANGE TO AN EXISTING APP AT THE LIGHT LANE is scoped to its request (build_scope).
+    _light_change = (_build_scope.extends_existing_app(
+        str((spec or {}).get("instructions") or ""), fctx)
+        and _bar_for_run(engine, settings, project_id, spec, fctx, run_id)[0]
+        != _quality_bar.PRODUCTION)
     _scope = _build_scope.decide(
         str((spec or {}).get("title") or ""), str((spec or {}).get("instructions") or ""),
         (spec or {}).get("acceptance_criteria") or (), workflow_deploys=_deploys,
-        has_manifest=bool(fctx.get("deploy_manifest")), spec=spec or {})
+        has_manifest=bool(fctx.get("deploy_manifest")), spec=spec or {},
+        light_change=_light_change)
     _build_scope.set_scope(_scope)
     logger.info("code_task.build_scope run=%s scope=%s", run_id, _scope)
     _n_refs = load_reference_links((spec or {}).get("reference_links"))
@@ -8776,7 +8796,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     repair_findings.evidence_block(
                         fail_output, command=test_cmd, exit_code=test_exit_code),
                     root,
-                )
+                ) + verification_target.missing_package_note(fail_output)
                 if (_warm_fix[0] and do_separate_tests and not use_microvm
                         and getattr(settings, "code_test_arbiter_enabled", True)):
                     # THE ARBITER BEFORE THE SAME-MODEL WARM FIX: the implementer may not edit
@@ -10248,6 +10268,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _fix_rounds_run = 0
             if _recheck:
                 inrun_max = 0          # a re-check reports; it never runs a fix round
+            # THE LIGHT LANE: at most one fix round below production (quality_bar.fix_rounds).
+            inrun_max = _quality_bar.fix_rounds(getattr(gates, "bar", _qbar), inrun_max)
             if inrun_max:
               try:  # a convergence failure must DEGRADE to the legacy paths, never kill the run
                 for round_i in range(1, inrun_max + 1):
@@ -10779,6 +10801,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             rounds_used = max(0, int(fctx.get("attempt", 1)) - 1)
             # Fallback 2 (not 0): a missing/blank config field must never SILENTLY disable the moat.
             max_repair_rounds = review_repair_rounds(settings)
+            # THE LIGHT LANE: at most one cold repair round below production, then hand over.
+            max_repair_rounds = _quality_bar.fix_rounds(getattr(gates, "bar", _qbar),
+                                                        max_repair_rounds)
             gate_faults = classify_gate_faults(failing=failing, evidence=evidence)
             # Non-final decomposition slices suppress the PR and advance the chain on
             # completed_no_pr. They must NOT take ship_with_dissent: that path marks the

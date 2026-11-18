@@ -2,13 +2,17 @@
 this module "does this block, at this bar?".
 
     prototype   blocks on: the build, the app starting, the tests the build wrote (P0), security,
-                a committed secret. Everything else (P1 tests, partial must-haves, review and
+                a committed secret, the tests' integrity (existing tests deleted or weakened). Everything else (P1 tests, partial must-haves, review and
                 consistency findings, a weak suite) goes to the follow-ups list. No plan sign-off,
                 no Pass 2 requirement.
-    standard    (the default) blocks on: all of the above, P0+P1 tests written for the change,
-                P1 must-haves met, a review BLOCKER, broken existing tests. P2 must-haves,
-                MAJOR/MINOR findings, a weak suite and TDD order go to the follow-ups list. Pass 2
-                runs alongside and never blocks.
+    standard    (the default; Easy Mode, templates, Try a sample, New work) THE LIGHT LANE
+                (operator, 2026-11-18: "there is no need to fail ... only agents should fix it"):
+                blocks on the floor, a review BLOCKER, a consistency finding about security or
+                secrets, and a declared stack built in another one. Everything else — missing or
+                partial must-haves (P1 too), an acceptance check that did not run, the brief's
+                tests not written, broken existing tests off the P0 paths, a review that refuted
+                without naming an issue, MAJOR/MINOR findings, consistency drift, a weak suite,
+                TDD order — is a follow-up BOSS queues and fixes itself. Pass 2 never blocks.
     production  blocks on everything: P1+P2 must-haves, review BLOCKER and MAJOR, every test
                 gate, and Pass 2 must have finished.
 
@@ -58,8 +62,8 @@ _BLOCKS: dict[str, tuple[bool, bool, bool]] = {
     "written_tests_pass": (True, True, True),        # the build's own tests (P0)
     "coder_did_not_edit_tests": (True, True, True),  # integrity, not polish
     "nothing_broke": (True, True, True),             # computed: broken_tests_block (by path)
-    "existing_tests_intact": (False, True, True),
-    "brief_tests_written": (False, True, True),      # P1 tests the brief names
+    "existing_tests_intact": (True, True, True),     # integrity: existing tests deleted/weakened
+    "brief_tests_written": (False, False, True),     # P1 tests the brief names: a follow-up below production
     "tests_written_first": (False, False, True),
     "tests_strong_enough": (False, False, True),     # mutation probe: a stricter test bar
     "code_review_passed": (False, True, True),
@@ -85,7 +89,7 @@ RANK = {PROTOTYPE: 0, STANDARD: 1, PRODUCTION: 2}
 #: wrote, their integrity, security, secrets and an applied template. (Unknown gates block too.)
 FLOOR = frozenset({"code_written", "app_serves", "template_tests", "no_committed_secrets",
                    "security_clean", "web_package_honest", "written_tests_pass",
-                   "coder_did_not_edit_tests"})
+                   "coder_did_not_edit_tests", "existing_tests_intact"})
 
 
 class QualityBarOverrideRefused(PermissionError):
@@ -289,6 +293,21 @@ def plan_signoff_required(bar: str, risk_tier: Optional[int] = None,
     return bool(sensitive) or int(risk_tier or 0) >= SIGNOFF_TIER
 
 
+#: THE LIGHT LANE'S FIX-ROUND CAP (operator, 2026-11-18): below production a build gets at most
+#: this many review fix rounds (warm, in the run; and cold, a new run), then hands over — ready
+#: with follow-ups, or the floor/blocker card. Recipe box's follow-up looped three rounds on
+#: wording-level must-haves. The build's own implement/test repair loop is not capped here: a
+#: floor failure (its tests cannot run) is the agents' to fix.
+LIGHT_LANE_FIX_ROUNDS = 1
+
+
+def fix_rounds(bar: str, configured: int) -> int:
+    """The review fix rounds a build at `bar` may run: `configured` at production, at most
+    LIGHT_LANE_FIX_ROUNDS below it."""
+    n = max(0, int(configured or 0))
+    return n if normalize(bar) == PRODUCTION else min(n, LIGHT_LANE_FIX_ROUNDS)
+
+
 def pass_two_must_finish(bar: str) -> bool:
     return normalize(bar) == PRODUCTION
 
@@ -323,9 +342,9 @@ def floor_tier(text: Any, tier: Optional[str]) -> Optional[str]:
 def acceptance_verdict(record: Optional[Mapping[str, Any]], bar: str) -> tuple[bool, list[str]]:
     """(does the acceptance gate pass at `bar`, the unmet items it lets through as follow-ups).
 
-    met / no_items pass. A check that did not run (not_run) is the check's fault: it blocks at
-    standard and production (it is re-asked, never waved through) and is a follow-up at
-    prototype. Otherwise every unmet item (MISSING, PARTIAL, not judged, needs a person) blocks
+    met / no_items pass. Below production (the light lane) every gap is a follow-up — a missing
+    P1 must-have and a check that did not run included — except, at standard, a declared stack
+    built in another one. At production a check that did not run blocks (never waved through). Otherwise every unmet item (MISSING, PARTIAL, not judged, needs a person) blocks
     when it is P1, or when the bar is production; a P2 item is a follow-up below it. At
     prototype nothing in the must-haves blocks: all of it is follow-up work."""
     from .acceptance import verdict as _v
@@ -342,10 +361,18 @@ def acceptance_verdict(record: Optional[Mapping[str, Any]], bar: str) -> tuple[b
         return (f"Must-have {i.get('n')} ({item_tier(i)}) {i.get('status')}: "
                 f"{i.get('text')}")[:600]
 
-    if bar == PROTOTYPE:
+    if bar in (PROTOTYPE, STANDARD):
+        # THE LIGHT LANE: every gap is a follow-up BOSS fixes (named on the ready card) — a
+        # missing P1 must-have, a check that could not judge. Only a declared stack built in
+        # another one holds at standard: that build is not the one the brief asked for.
+        if bar == STANDARD and (record.get("stack") or {}).get("missing"):
+            return False, []
         soft = [line(i) for i in unmet]
         if record.get("why"):
             soft.append(f"Acceptance check: {record['why']}")
+        if not record or record.get("verdict") in (None, "", "not_run", "not_checked"):
+            soft.append("Acceptance check did not judge the change; BOSS re-checks it in the "
+                        "follow-up")
         return True, soft
     if record.get("verdict") != "not_met":
         return False, []             # not_run (or no record): the check never judged the code
@@ -387,11 +414,11 @@ def broken_tests_block(bar: str, failing: Iterable[str], changed: Iterable[str],
         return True, ""
     names = [str(n) for n in failing or () if str(n).strip()]
     if not names:
-        return (bar == STANDARD), ("failing existing tests could not be named; not a P0 at the "
-                                   "prototype bar")
+        return False, (f"failing existing tests could not be named; not a P0 at the {bar} bar")
     low = [n.lower() for n in names]
     p0 = any(w in n for n in low for w in P0_TEST_WORDS)
-    if bar == PROTOTYPE:
+    if bar in (PROTOTYPE, STANDARD):
+        # THE LIGHT LANE: only a P0 test (startup, auth, health) holds; the rest is a follow-up.
         return p0, (f"{len(names)} existing test(s) failing, none on a P0 path "
                     f"(startup, auth, health): {'; '.join(names[:5])}")
     stems = set()
@@ -410,6 +437,12 @@ def broken_tests_block(bar: str, failing: Iterable[str], changed: Iterable[str],
                    f"P0/P1 paths: {'; '.join(names[:5])}")
 
 
+#: Words that make a consistency finding a security/secrets one (it then holds at standard).
+_SECURITY_WORDS = ("security", "secret", "credential", "password", "api key", "token leak",
+                   "private key", "injection", "xss", "csrf", "ssrf", "auth bypass",
+                   "unauthenticated", "privilege", "vulnerab")
+
+
 def consistency_passes(bar: str, verdict: str, summary: str = "") -> tuple[bool, bool]:
     """(passes, is_followup) for the consistency check at `bar`. A check that never saw the change
     (hollow) never passes below prototype. Drift blocks at production; at standard only a
@@ -419,15 +452,14 @@ def consistency_passes(bar: str, verdict: str, summary: str = "") -> tuple[bool,
         return True, False
     if bar == PROTOTYPE:
         return True, True
-    if bar == PRODUCTION or verdict == "hollow":
+    if bar == PRODUCTION:
         return False, False
-    from .review_comments import parse_findings
-
-    graded = parse_findings(summary or "", stage="consistency_check")
-    if not graded:
+    # THE LIGHT LANE (standard): drift, even a BLOCKER, or a check that did not see the change
+    # is a follow-up — unless what it names is about security or secrets, which always holds.
+    low = str(summary or "").lower()
+    if any(w in low for w in _SECURITY_WORDS):
         return False, False
-    ok = not any(c.severity == "blocker" for c in graded)
-    return ok, ok
+    return True, True
 
 
 # ---------------------------------------------------------------------------------------------
@@ -504,7 +536,9 @@ def followup_findings(followups: Mapping[str, list[str]],
         if g in seen and not lines:
             continue
         if lines:
-            out.extend({"severity": "major", "text": text} for text in lines)
+            # A must-have line carries its tier ("Must-have 3 (P2) partial: …"): P2 is minor.
+            out.extend({"severity": "minor" if f"({P2})" in text[:40] else "major",
+                        "text": text} for text in lines)
         else:
             out.append({"severity": "major",
                         "text": f"Follow-up: gate '{g}' ({_cf._gate_label(g)}) did not pass; "  # noqa: SLF001

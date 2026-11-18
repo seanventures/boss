@@ -103,9 +103,11 @@ def test_the_consistency_and_security_gates_fail_on_a_hollow_check():
     from boss_engine.services import quality_bar
 
     # BEHAVIOUR, not a source line: a consistency check that never saw the change never passes at
-    # standard or production, and is never a follow-up there either (prototype lets it through).
-    for bar in ("standard", "production"):
-        assert quality_bar.consistency_passes(bar, "hollow") == (False, False), bar
+    # production. Below it (the light lane, 2026-11-18) it is a FOLLOW-UP — never a pass: BOSS
+    # re-checks in the follow-up build, and the person is not asked about BOSS's own blind check.
+    assert quality_bar.consistency_passes("production", "hollow") == (False, False)
+    for bar in ("standard", "prototype"):
+        assert quality_bar.consistency_passes(bar, "hollow") == (True, True), bar
     src = inspect.getsource(gov._run_governed_code_task)
     assert "_set_consistent(cons_verdict" in src
     assert '"hollow" if hollow' in src            # security: "hollow" is never "clean"

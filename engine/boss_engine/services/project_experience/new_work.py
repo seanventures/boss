@@ -6,7 +6,8 @@ start_delivery_workflow). Which workflow that is:
 
   feature, ticket  the project's mapped small-feature workflow, else Minor Feature
                    (start_project.how_to_start — exactly what the old "What should we add?" ran);
-  bug              the project's `bugfix` mapping when it has one, else the feature path;
+  bug              the project's `bugfix` mapping when it has one, else its Fast Fix (the
+                   small path: one build, no PRD panel), else the feature path;
   picked           any active product workflow of this project, when the person used "change".
 
 HELM'S PLAN is that workflow's REAL steps as a strip, in the order its version lists them:
@@ -39,6 +40,8 @@ from .common import agents, as_json, face, href
 
 KINDS = ("feature", "bug", "ticket")
 BUG_CLASS = "bugfix"
+#: A Bug's workflow when the project maps none to `bugfix`: one build, no PRD panel.
+SMALL_BUG_WORKFLOW = "fast_fix"
 #: How many completed runs the time estimate reads (the newest).
 HISTORY_RUNS = 20
 #: Steps from the deploy on wait on a person's release: not "how long it takes".
@@ -188,6 +191,14 @@ def choose(connection: Connection, project_id: str, kind: str,
         if mapped:
             return {"workflow_key": None, "work_class": BUG_CLASS, "chosen": "mapped",
                     "resolved": mapped}
+        # THE SMALL PATH FOR A BUG (the light lane, 2026-11-18): with no bugfix mapping, a Bug
+        # runs the project's Fast Fix — one build, no research, no PRD panel — never the
+        # feature path. Recipe box's one-test Bug ran Minor Feature: a panel, a PRD to
+        # approve, two deploy approvals, four builds and ~1h45m.
+        small = _definition(connection, project_id, SMALL_BUG_WORKFLOW)
+        if small is not None:
+            return {"workflow_key": SMALL_BUG_WORKFLOW, "work_class": None, "chosen": "small",
+                    "resolved": small}
     start = how_to_start(connection, project_id, has_repo=_has_repo(connection, project_id))
     resolved = None
     if start.get("resolved_key"):
@@ -625,6 +636,8 @@ def plan(connection: Connection, project_id: str, kind: str = "feature",
                        "chosen": chosen["chosen"],
                        "work_class": chosen.get("work_class"),
                        "why": ("you picked it" if chosen["chosen"] == "picked" else
+                               "the small path for a bug: one build, no PRD panel"
+                               if chosen["chosen"] == "small" else
                                f"this project's workflow for {work_class_label(chosen['work_class'])}"
                                if chosen.get("work_class") else "the default for a change"),
                        "href": href(project_id, area="delivery_workflows", tab="library", wf=key)}

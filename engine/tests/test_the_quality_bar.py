@@ -113,14 +113,15 @@ def test_the_setting_is_a_project_knob():
 # ── what blocks, per gate ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("gate", ["code_written", "app_serves", "written_tests_pass",
-                                  "security_clean", "no_committed_secrets", "template_tests"])
+                                  "security_clean", "no_committed_secrets", "template_tests",
+                                  "coder_did_not_edit_tests", "existing_tests_intact"])
 def test_the_floor_blocks_at_every_bar(gate):
     assert all(qb.gate_blocks(gate, bar) for bar in (P, S, R))
 
 
 @pytest.mark.parametrize("gate,expected", [
-    ("existing_tests_intact", (False, True, True)),
-    ("brief_tests_written", (False, True, True)),
+    ("existing_tests_intact", (True, True, True)),   # integrity: the floor (2026-11-18)
+    ("brief_tests_written", (False, False, True)),   # the light lane: a follow-up at standard
     ("tests_written_first", (False, False, True)),
     ("tests_strong_enough", (False, False, True)),
     ("code_review_passed", (False, True, True)),
@@ -148,8 +149,8 @@ def test_gates_that_fail_without_blocking_are_follow_ups_not_failures():
     for bar in (P, S, R):
         g = qb.BarGates(bar, initial=outcome)
         seen[bar] = ([k for k, v in g.items() if not v], sorted(g.followups))
-    assert seen[P] == ([], ["brief_tests_written", "existing_tests_intact", "tests_strong_enough"])
-    assert seen[S] == (["existing_tests_intact", "brief_tests_written"], ["tests_strong_enough"])
+    assert seen[P] == (["existing_tests_intact"], ["brief_tests_written", "tests_strong_enough"])
+    assert seen[S] == (["existing_tests_intact"], ["brief_tests_written", "tests_strong_enough"])
     assert seen[R] == (["existing_tests_intact", "tests_strong_enough", "brief_tests_written"], [])
 
 
@@ -184,24 +185,27 @@ def test_a_p2_partial_does_not_block_standard_but_blocks_production():
     assert qb.acceptance_verdict(rec, R) == (False, [])
 
 
-def test_a_p1_gap_blocks_standard_and_production_and_is_a_follow_up_at_prototype():
+def test_a_p1_gap_blocks_production_and_is_a_follow_up_below_it():
+    # THE LIGHT LANE (operator, 2026-11-18): a missing P1 must-have is a follow-up at standard.
     rec = _record(P1_MISSING, P2_PARTIAL)
     ok_p, soft_p = qb.acceptance_verdict(rec, P)
     assert ok_p is True and len(soft_p) == 2
     ok_s, soft_s = qb.acceptance_verdict(rec, S)
-    assert ok_s is False and len(soft_s) == 1           # the P2 rides along as a follow-up
+    assert ok_s is True and len(soft_s) == 2 and "(P1) missing" in soft_s[0]
     assert qb.acceptance_verdict(rec, R)[0] is False
-    # an untagged item is P1: held
+    # an untagged item is P1: held at production
     assert qb.item_tier(P1_PARTIAL) == "P1"
-    assert qb.acceptance_verdict(_record(P1_PARTIAL), S)[0] is False
+    assert qb.acceptance_verdict(_record(P1_PARTIAL), R)[0] is False
 
 
-def test_a_check_that_never_ran_is_never_waved_through_below_prototype():
+def test_a_check_that_never_ran_is_never_waved_through_at_production_and_is_a_follow_up_below():
     rec = {"verdict": "not_run", "items": [], "stack": {}, "why": "the reviewer was blind"}
-    assert qb.acceptance_verdict(rec, S) == (False, [])
     assert qb.acceptance_verdict(rec, R) == (False, [])
+    ok, soft = qb.acceptance_verdict(rec, S)
+    assert ok is True and any("did not judge" in x for x in soft), soft
     assert qb.acceptance_verdict(rec, P)[0] is True
-    assert qb.acceptance_verdict(None, S) == (False, [])
+    assert qb.acceptance_verdict(None, S)[0] is True
+    assert qb.acceptance_verdict(None, R) == (False, [])
     assert qb.acceptance_verdict({"verdict": "met", "items": []}, S) == (True, [])
 
 
@@ -211,9 +215,11 @@ def test_a_declared_stack_without_its_manifest_blocks_standard():
     assert qb.acceptance_verdict(rec, P)[0] is True
 
 
-def test_not_met_for_a_reason_naming_no_item_still_holds():
+def test_not_met_for_a_reason_naming_no_item_holds_production_and_is_a_follow_up_below():
     rec = _record(MET, why="2 items claimed MET with evidence BOSS could not verify")
-    assert qb.acceptance_verdict(rec, S) == (False, [])
+    assert qb.acceptance_verdict(rec, R) == (False, [])
+    ok, soft = qb.acceptance_verdict(rec, S)
+    assert ok is True and any("could not verify" in x for x in soft)
 
 
 def test_a_record_the_bar_accepted_is_not_a_lineage_failure():
@@ -243,14 +249,17 @@ def test_review_severity_blocks_by_bar(summary, expected):
     assert g["code_review_passed"] is True and "code_review_passed" in g.followups
 
 
-def test_consistency_drift_blocks_production_and_only_a_blocker_blocks_standard():
+def test_consistency_drift_blocks_production_and_only_a_security_finding_blocks_standard():
     major = "FINDING: MAJOR a.ts:1 — naming drift\n"
     blocker = "FINDING: BLOCKER a.ts:1 — contract drift\n"
+    secret = "FINDING: BLOCKER a.ts:1 — the API key is written to the log (secret)\n"
     assert qb.consistency_passes(R, "drift", major) == (False, False)
     assert qb.consistency_passes(S, "drift", major) == (True, True)
-    assert qb.consistency_passes(S, "drift", blocker) == (False, False)
+    assert qb.consistency_passes(S, "drift", blocker) == (True, True)   # the light lane
+    assert qb.consistency_passes(S, "drift", secret) == (False, False)
     assert qb.consistency_passes(P, "drift", blocker) == (True, True)
-    assert qb.consistency_passes(S, "hollow") == (False, False)        # never saw the change
+    assert qb.consistency_passes(S, "hollow") == (True, True)          # re-checked in the follow-up
+    assert qb.consistency_passes(R, "hollow") == (False, False)
     assert qb.consistency_passes(S, "ok") == (True, False)
 
 
@@ -271,13 +280,12 @@ def test_broken_existing_tests_block_by_where_they_are():
     p0 = ["test/auth/login.test.js > rejects a bad password"]
     near = ["test/tickets/list.test.js > sorts"]
     assert qb.broken_tests_block(R, off, changed)[0] is True
-    # standard: the changed area or a P0/P1 path blocks; an unrelated test is a follow-up
-    assert qb.broken_tests_block(S, near, changed)[0] is True
+    # standard (the light lane): only a P0 (startup, auth, health) test holds
+    assert qb.broken_tests_block(S, near, changed)[0] is False
     assert qb.broken_tests_block(S, p0, changed)[0] is True
     blocks, why = qb.broken_tests_block(S, off, changed)
     assert blocks is False and "invoice" in why
-    assert qb.broken_tests_block(S, off, changed, ["Users can invoice customers"])[0] is True
-    assert qb.broken_tests_block(S, [], changed)[0] is True       # unnamed: held
+    assert qb.broken_tests_block(S, [], changed)[0] is False      # unnamed: a follow-up
     # prototype: only a P0 (startup, auth, health) test
     assert qb.broken_tests_block(P, p0, changed)[0] is True
     assert qb.broken_tests_block(P, near, changed)[0] is False

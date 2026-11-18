@@ -38,6 +38,7 @@ turn, to exercise the fix rounds:
     review_major    EVERY review_code answers with one MAJOR finding (REFUTED): no fix round
                     clears it (Recipe box, 2026-11-18) — the quality bar decides what it does
     review_blocker_stays  EVERY review_code answers with one BLOCKER finding (REFUTED)
+    review_unnamed  EVERY review_code answers REFUTED with no FINDING line at all
     security_finding  EVERY security_check answers VERDICT: ISSUES with one HIGH finding
     crash_on_start  the first implement writes a server that exits on start
     acceptance_missing  the first acceptance check answers item 1 MISSING
@@ -350,6 +351,9 @@ class ScriptedEngine:
             if "review_blocker_stays" in self.faults:
                 return (f"Reviewed {names}.\nFINDING: BLOCKER {target0}:1 — scripted fault: the "
                         "handler trusts its input (review_blocker_stays).\nVERDICT: REFUTED")
+            if "review_unnamed" in self.faults:
+                return (f"Reviewed {names}. Something about the flow feels off to me; I would "
+                        "not ship it as is (review_unnamed).\nVERDICT: REFUTED")
             if "review_major" in self.faults:
                 return (f"Reviewed {names}.\nFINDING: MAJOR {target0}:1 — scripted fault: the "
                         "layout overflows on phone-width screens (review_major).\n"
