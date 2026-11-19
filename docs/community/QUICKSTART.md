@@ -1,10 +1,10 @@
 # The path
 
-Install [v1.0-rc10.30](https://github.com/seanventures/boss/releases/tag/v1.0-rc10.30), claim the install, connect one repository, connect one model, and open one pull request.
+Install [v1.0-rc10.31](https://github.com/seanventures/boss/releases/tag/v1.0-rc10.31), claim the install, connect one repository, connect one model, and open one pull request.
 
 This is the short path on a machine you administer. [Your hostname](hostname.md) covers HTTPS. [Sign in](CONSOLE_AUTH.md) covers passkeys, passwords, and an SSH tunnel. The [first change](FIRST_USEFUL_CHANGE.md) is what you do with the pull request after it exists.
 
-This is a release candidate. This tag was installed from this page, word for word, on an Ubuntu 24.04 x86_64 host before it was published, and walked through claim, Setup, a sample project and the model screen. The [release notes](RELEASE_NOTES_v1.0-rc10.30.md) say what changed and what was not checked.
+This is a release candidate. This tag was installed from this page, word for word, on an Ubuntu 24.04 x86_64 host before it was published, and walked through claim, Setup, a sample project and the model screen. The [release notes](RELEASE_NOTES_v1.0-rc10.31.md) say what changed and what was not checked.
 
 You need about 30 minutes, and for the last step a GitHub account (or code kept on the install machine) and one model: a Claude, ChatGPT or Grok subscription, an API key (OpenRouter, OpenAI, Anthropic, Gemini or xAI), or a local model.
 
@@ -18,7 +18,7 @@ The installer is written for one of these hosts:
 
 A model key is optional. The control plane starts without one.
 
-The installer warns when free disk is under 80 GB. The images include Java and Go by default (about 0.75 GB; [Toolchains](TOOLCHAINS.md) says how to turn them off). Docker Desktop keeps images on its own disk, which can fill while the host still looks fine. If Postgres fails to initialize, the installer prints the database log. Free space in Docker and run the installer again. A rerun keeps credentials it has already written. Sizing is in the [installer guide](https://github.com/seanventures/boss/blob/v1.0-rc10.30/scripts/install/README.md).
+The installer warns when free disk is under 80 GB. The images include Java and Go by default (about 0.75 GB; [Toolchains](TOOLCHAINS.md) says how to turn them off). Docker Desktop keeps images on its own disk, which can fill while the host still looks fine. If Postgres fails to initialize, the installer prints the database log. Free space in Docker and run the installer again. A rerun keeps credentials it has already written. Sizing is in the [installer guide](https://github.com/seanventures/boss/blob/v1.0-rc10.31/scripts/install/README.md).
 
 ## Install
 
@@ -27,14 +27,14 @@ Install this tag from its checkout. You need Git. If GitHub asks you to sign in,
 ```bash
 (
   set -e
-  git clone --branch v1.0-rc10.30 https://github.com/seanventures/boss.git boss-rc10.30
-  cd boss-rc10.30
+  git clone --branch v1.0-rc10.31 https://github.com/seanventures/boss.git boss-rc10.31
+  cd boss-rc10.31
   BOSS_RELEASE_COMMIT="$(git rev-parse HEAD)"
   ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"
 )
 ```
 
-Use a new directory named `boss-rc10.30`. The command stops if the clone fails. It records the checked-out commit and stays on that source when you rerun it. Continue from `cd boss-rc10.30`. To move later, on purpose, use `boss upgrade --to REF`.
+Use a new directory named `boss-rc10.31`. The command stops if the clone fails. It records the checked-out commit and stays on that source when you rerun it. Continue from `cd boss-rc10.31`. To move later, on purpose, use `boss upgrade --to REF`.
 
 The script at `https://boss.sean.network/install.sh` is published separately. Do not treat it as this tag.
 
@@ -114,13 +114,13 @@ The first time, BOSS asks **Let … act for you?** and lists the agents, the per
 
 The pull request appears on GitHub (or, for code on this machine, in BOSS) for you to review. This can spend model credit, and it can write a branch. It is not a merge, and it is not evidence that the result is useful. Follow the run before you treat it as finished. The [first change](FIRST_USEFUL_CHANGE.md) is how to read the plan, the revision, and the receipt.
 
-Installing an agent definition, or one of the [fifteen example workflows](https://github.com/seanventures/boss/blob/v1.0-rc10.30/examples/README.md), does not start work.
+Installing an agent definition, or one of the [fifteen example workflows](https://github.com/seanventures/boss/blob/v1.0-rc10.31/examples/README.md), does not start work.
 
 ## If you get stuck
 
-Run `boss status` and `boss doctor`. Keep the release and the error. Leave credentials and private task data out of the report. The [feedback page](FEEDBACK_LOOP.md#stuck-during-your-first-run) is the next step. Security reports go by email, as [SECURITY.md](https://github.com/seanventures/boss/blob/v1.0-rc10.30/SECURITY.md) says.
+Run `boss status` and `boss doctor`. Keep the release and the error. Leave credentials and private task data out of the report. The [feedback page](FEEDBACK_LOOP.md#stuck-during-your-first-run) is the next step. Security reports go by email, as [SECURITY.md](https://github.com/seanventures/boss/blob/v1.0-rc10.31/SECURITY.md) says.
 
-`boss upgrade` backs up, then moves release. `boss uninstall` stops BOSS and keeps the data. Deleting data is a separate confirmation. `boss stop` and `boss start` stop and start this install. See the [installer guide](https://github.com/seanventures/boss/blob/v1.0-rc10.30/scripts/install/README.md#upgrade--recover).
+`boss upgrade` backs up, then moves release. `boss uninstall` stops BOSS and keeps the data. Deleting data is a separate confirmation. `boss stop` and `boss start` stop and start this install. See the [installer guide](https://github.com/seanventures/boss/blob/v1.0-rc10.31/scripts/install/README.md#upgrade--recover).
 
 ## Optional: store one task without a model
 
