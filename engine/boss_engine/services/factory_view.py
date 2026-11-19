@@ -866,7 +866,20 @@ def preview_flag(preview: Optional[Mapping[str, Any]], now: Optional[datetime] =
     if status == "running" and steps and any(
             x.get("status") not in ("ok", "skipped", "failed") for x in steps):
         status = "starting"
-    return {"status": status, "url": preview.get("url") if status == "running" else None}
+    return {"status": status,
+            "url": preview_open_href(preview.get("id")) if status == "running" else None}
+
+
+def preview_open_href(preview_id: Any) -> Optional[str]:
+    """Where a browser opens a preview: the gateway path the console's Preview button opens
+    (apps/web/lib/browser-links.ts previewWebHref), which sends it on to the preview's own
+    origin. NEVER app_previews.url: that is the app's loopback port inside the API container
+    (http://127.0.0.1:19862), reachable from no browser — the merged build's "App ↗" pointed
+    there (recipe-box, 2026-11-18)."""
+    from urllib.parse import quote
+
+    pid = str(preview_id or "").strip()
+    return f"/v1/previews/{quote(pid, safe='')}/web/" if pid else None
 
 
 def _who_stopped(fctx: Mapping[str, Any], viewer: Optional[str]) -> str:
@@ -1461,8 +1474,8 @@ def build_attention_rows(connection: Any, project_id: str,
         for r in connection.execute(
             text("SELECT r.id, r.title, r.spec, r.finalize_ctx, r.decision_id, r.pull_request_url, "
                  "r.pull_request_number, r.status, r.phase, "
-                 "(SELECT url FROM app_previews p WHERE p.run_id = r.id AND p.status = 'running' "
-                 " ORDER BY p.created_at DESC LIMIT 1) AS preview_url "
+                 "(SELECT id FROM app_previews p WHERE p.run_id = r.id AND p.status = 'running' "
+                 " ORDER BY p.created_at DESC LIMIT 1) AS preview_id "
                  "FROM code_task_runs r WHERE r.project_id = :p "
                  "AND (r.decision_id = ANY(:ids) OR r.id = ANY(:runs))"),
             {"p": project_id, "ids": ids, "runs": list(plan_runs)},
@@ -1478,7 +1491,7 @@ def build_attention_rows(connection: Any, project_id: str,
                 by_decision[str(row["decision_id"])] = {
                     "kind": "pr", "run_id": row["id"], "app": app_name(row), "where": "PR open",
                     "pr_number": _pr_number(row), "pr_url": row.get("pull_request_url"),
-                    "preview_url": row.get("preview_url")}
+                    "preview_url": preview_open_href(row.get("preview_id"))}
     return {"blocked": rows, "by_decision": by_decision}
 
 

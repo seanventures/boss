@@ -3592,7 +3592,7 @@ export async function startPreviewAction(
   const runId = String(formData.get("run_id") ?? "").trim();
   if (!runId) return { error: "missing run_id" };
   try {
-    const res = await client.startPreview(runId, 60, getActor(formData));
+    const res = await client.startPreview(runId, 60, getActor(formData), formData.get("fresh_data") === "true");
     revalidatePath("/");
     // A same-origin gateway path: neither the preview's 127.0.0.1 port nor this server's API
     // address is reachable from the operator's browser (see lib/browser-links).
