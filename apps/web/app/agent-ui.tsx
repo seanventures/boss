@@ -28,6 +28,9 @@ import { leadingFlow } from "../lib/answer-flow";
 import { AnswerFlow, CitationChips, ProposalCard, citationsOf, proposalOf } from "./answer-cards";
 import { AskedQuestion } from "./typed-form-ui";
 import { TicketBrief } from "./tickets/ticket-brief";
+import { Paperclip } from "@phosphor-icons/react";
+import { ChatFullscreenButton, useChatFullscreen } from "../components/chat-fullscreen";
+import { splitDetails } from "../lib/answer-details";
 /** An action as RECORDED, which is not one shape. The router writes `{kind, args, result}`;
  *  `AgentService` writes `{id, tool, ok}`. Typing it as only the first is what let a `.kind`
  *  that is sometimes absent reach the render. */
@@ -250,8 +253,11 @@ async function read<T>(params: Record<string, string>, ms = 12_000): Promise<T |
 
 
 export function AgentChat({ projectId, actor, initialTaskId, initialMessage, roleName,
-                           fresh, roleKey: roleKeyProp, actId, placeholder, starters, sendOnOpen }: {
+                           fresh, roleKey: roleKeyProp, actId, placeholder, starters, sendOnOpen, expandable }: {
   projectId: string; actor: string; initialTaskId?: string;
+  /** A chat with no window of its own around it (the BOSS Agent page) carries its own
+   *  full-screen control; a drawer or dock puts it in its header instead. */
+  expandable?: boolean;
   /** Text to seed the composer with, handed in as a PROP rather than read from the URL.
    *
    *  `?ask=` is consumed by whichever AgentChat reads it first, and the console keeps the BOSS
@@ -308,6 +314,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   const [input, setInput] = useState(initialMessage ?? "");
   //: Files on the message being written. Cleared when it is sent, so they belong to one turn.
   const [files, setFiles] = useState<Attached[]>([]);
+  const fs = useChatFullscreen();
   const [fileError, setFileError] = useState("");
   const picker = useRef<HTMLInputElement>(null);
 
@@ -1221,7 +1228,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
        composer sat wherever the content happened to end, with the rest of the panel empty
        below it. A chat's input belongs at the bottom of whatever box it is in, and the
        transcript takes the slack; that is a rule about the shape, not about a pixel count. */
-    <div className="agent-chat-shell" data-role={roleName ? "yes" : undefined}>
+    <div className="agent-chat-shell" data-role={roleName ? "yes" : undefined} {...(expandable ? fs.attr : {})}>
       {/* RAIL, General + one entry per task (💬 if it already has a conversation) */}
       <aside className="agent-chat-rail">
         {/* SESSIONS, NOT TASKS.
@@ -1255,6 +1262,11 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
 
       {/* MAIN, context header + scoped history + input */}
       <section className="agent-chat-main">
+        {expandable ? (
+          <div className="agent-chat-tools">
+            <ChatFullscreenButton full={fs.full} onToggle={fs.toggle} testid="agent-chat-fullscreen" />
+          </div>
+        ) : null}
         {dockFace ? (
           <DockAgentHead roleKey={dockFace} roleName={roleName} state={speech.state} projectId={projectId}
                          actId={aboutAct} onClearAct={clearAboutAct} />
@@ -1397,12 +1409,22 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                   {(() => {
                     // A status answer may lead with its path as one line ("A → B → C"): drawn
                     // as flow chips, the rest stays the answer (lib/answer-flow).
-                    const lead = leadingFlow(stripAppFacts(withoutBrief(m.content)));
+                    // ONE SENTENCE, THEN DETAILS ON REQUEST (lib/answer-details, the engine's
+                    // reply_style): what follows a `Details:` line is folded, so an action
+                    // request reads as one line and its button.
+                    const parts = splitDetails(stripAppFacts(withoutBrief(m.content)));
+                    const lead = leadingFlow(parts.lead);
                     return (
                       <>
                         <AnswerFlow nodes={lead.nodes} testId="agent-flow" />
                         <CitedAnswer className="agent-md" projectId={projectId} actor={actor}
-                                     text={lead.nodes.length ? lead.rest : stripAppFacts(withoutBrief(m.content))} />
+                                     text={lead.nodes.length ? lead.rest : parts.lead} />
+                        {parts.details ? (
+                          <details className="agent-answer-details" data-testid="agent-answer-details">
+                            <summary>Details</summary>
+                            <CitedAnswer className="agent-md" projectId={projectId} actor={actor} text={parts.details} />
+                          </details>
+                        ) : null}
                         {/* The records the answer named (PR, run, file, doc), each opening it. */}
                         <CitationChips items={citationsOf(m.citations).filter((c) => c.kind !== "ask")} />
                         {/* A typed question the turn asked (ask_human, BOSSAPP-832): its form,
@@ -1732,9 +1754,15 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                    data-testid="agent-file-input"
                    accept="image/png,image/jpeg,image/webp,image/gif,text/plain,text/markdown,text/csv,application/json,.log,.txt,.md,.json,.yaml,.yml,.csv"
                    onChange={(e) => { void attach(e.target.files); e.target.value = ""; }} />
+            {/* AN ICON BUTTON, not a word. A bare "Attach" took the console's title size in the
+                captain drawer and sat beside the field like a heading (operator, 2026-11-19). */}
             <button type="button" className="agent-attach" data-testid="agent-attach"
                     onClick={() => picker.current?.click()}
-                    title="Attach a screenshot or a text file, or just paste an image here">Attach</button>
+                    aria-label="Attach a file"
+                    title="Attach a screenshot or a text file, or just paste an image here">
+              <Paperclip size={15} aria-hidden />
+              <span className="agent-attach-label">Attach</span>
+            </button>
             <span className="agent-composer-hint">
               {busy
                 ? (queued.length

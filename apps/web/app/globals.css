@@ -8673,11 +8673,46 @@ a.agent-chip-name:hover { text-decoration: underline; }
 }
 .agent-attached-drop:hover { color: var(--ink, var(--boss-c-eef3fb)); }
 .agent-attached-error { margin: 4px 0 0; font-size: .78rem; color: var(--amber, var(--boss-c-d29922)); }
+/* ATTACH IS AN ICON BUTTON (operator, 2026-11-19): a paperclip and a small label, the send
+   button's height, so the bar reads as controls and not as a word beside the field. */
 .agent-attach {
-  border: 1px solid var(--border, var(--boss-c-1c2740)); background: transparent; cursor: pointer;
-  border-radius: 8px; padding: 4px 8px; font-size: .9rem; line-height: 1;
+  display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto;
+  height: 32px; padding: 0 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--muted);
+  font: inherit; font-size: var(--fs-tag); font-weight: 600; line-height: 1;
 }
-.agent-attach:hover { border-color: var(--accent, var(--boss-c-4c8df6)); }
+.agent-attach svg { flex: 0 0 auto; }
+.agent-attach:hover { color: var(--ink); border-color: var(--accent); }
+.agent-attach:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* AN ANSWER'S DETAILS, FOLDED (lib/answer-details.ts): the sentence and its button first. */
+.agent-answer-details { margin-top: 6px; }
+.agent-answer-details > summary {
+  cursor: pointer; font-size: var(--fs-tag); font-weight: 600; color: var(--muted); width: fit-content;
+}
+.agent-answer-details > summary:hover { color: var(--ink); }
+.agent-answer-details[open] > summary { margin-bottom: 4px; }
+
+/* CHAT FULL SCREEN (components/chat-fullscreen.tsx). The WINDOW goes full screen, header and
+   all; the transcript and the composer keep a readable measure in the middle. Important
+   because each window sizes itself inline or per surface (the dock's dragged width). */
+.chat-full-btn {
+  display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; flex: 0 0 auto;
+  border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer;
+}
+.chat-full-btn:hover { color: var(--ink); border-color: var(--border-strong); }
+.chat-full-btn:focus-visible, .bx-dock-full:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[data-chat-full="1"] {
+  position: fixed !important; inset: 0 !important;
+  width: auto !important; max-width: none !important; height: auto !important; max-height: none !important;
+  z-index: calc(var(--z-dialog) + 10) !important;
+  border-radius: 0 !important; animation: none !important; box-shadow: none !important;
+}
+[data-chat-full="1"] .agent-chat-main { width: 100%; max-width: 60rem; margin-inline: auto; }
+.agent-chat-shell[data-chat-full="1"] { background: var(--surface); border: 0; }
+.agent-chat-tools { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+.bx-dock-full { margin-left: auto; }
+.bx-dock-head code ~ .bx-dock-full { margin-left: 0; }
 
 /* Setup wizard. Deliberately plain: the one screen a first-time operator sees should read like
    instructions, not like a product tour. */

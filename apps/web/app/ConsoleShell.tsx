@@ -108,6 +108,7 @@ import {
   shouldShowPaidNavBadge,
 } from "../lib/edition";
 import { EditionChip } from "./edition-ui";
+import { ChatFullscreenButton, useChatFullscreen } from "../components/chat-fullscreen";
 import { areaVisibilityCss } from "../lib/area-visibility";
 import type { AreaId } from "../lib/area-ids";
 import { accessForArea } from "../lib/identity/area-access";
@@ -1242,6 +1243,11 @@ function ConsoleShellInner({
     document.addEventListener("mouseup", onUp);
   }, []);
 
+  // FULL SCREEN for the dock's chat (components/chat-fullscreen); a closed dock is never full.
+  const dockFs = useChatFullscreen();
+  const exitDockFs = dockFs.exit;
+  useEffect(() => { if (!dockedRun) exitDockFs(); }, [dockedRun, exitDockFs]);
+
   const closeDock = useCallback(() => {
     const url = new URL(window.location.href);
     url.searchParams.delete("agent");
@@ -1873,7 +1879,7 @@ function ConsoleShellInner({
         </ActiveAreaContext.Provider>
         {dockedRun ? (
           <aside className="bx-dock" aria-label="Ask BOSS about this app"
-                 style={{ width: dockWidth }}>
+                 style={{ width: dockWidth }} {...dockFs.attr}>
             {/* Drag to resize. The panel is fixed and overlays the page, so without this it
                 simply hid the right-hand column of cards with no way to see them again. */}
             <div className="bx-dock-grip" onMouseDown={startResize}
@@ -1900,6 +1906,8 @@ function ConsoleShellInner({
                   title and the run id, and a text "Close" competed with both while doing the
                   most ordinary thing in the panel. aria-label keeps it announced to screen
                   readers, and title keeps it discoverable on hover. */}
+              <ChatFullscreenButton full={dockFs.full} onToggle={dockFs.toggle}
+                                    className="cap-btn bx-dock-close bx-dock-full" testid="bx-dock-fullscreen" />
               <button type="button" className="cap-btn bx-dock-close" onClick={closeDock}
                       aria-label="Close the Ask BOSS panel" title="Close">
                 <X size={14} weight="bold" aria-hidden />

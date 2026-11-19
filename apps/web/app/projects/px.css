@@ -579,7 +579,12 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 .px-capd .agent-composer { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .px-capd .agent-composer textarea.agent-input { flex: 1 1 200px; order: 1; width: auto; }
 .px-capd .agent-composer-bar { display: contents; }
-.px-capd .agent-attach { order: 0; background: none; border: 0; color: var(--faint); cursor: pointer; font-size: var(--fs-title); }
+/* Icon only in the drawer's one-row composer: the paperclip, named by its tooltip and label. */
+.px-capd .agent-attach { order: 0; width: 28px; height: 28px; padding: 0; justify-content: center; border-radius: 8px;
+  border-color: transparent; color: var(--muted); align-self: center; }
+.px-capd .agent-attach:hover { color: var(--ink); border-color: var(--border-strong); }
+.px-capd .agent-attach-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.px-capd .agent-send { align-self: center; }
 .px-capd .agent-composer-hint { display: none; }
 .px-capd .agent-stop { order: 2; }
 .px-capd .agent-send { order: 3; }
