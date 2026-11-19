@@ -298,6 +298,21 @@ describe("(A) Output is what the step made, for a person", () => {
     expect((q('[data-testid="dw-step-details"]') as HTMLDetailsElement).open).toBe(false);
   });
 
+  it("an id link keeps the org and the project the run is in", () => {
+    // A bare ?area=code_tasks&build=… reopened the build under the home project.
+    const was = window.location.search;
+    window.history.replaceState(null, "", "/?org=org_boss&project_id=park-bench-map-e86c6d9e&area=delivery_workflows&wfr=wfr_1");
+    try {
+      const { details } = stepOutput({ code_task_run_id: "crun_768a" }, { noteShownAbove: false, status: "succeeded" });
+      const href = details.find((d) => d.href?.includes("crun_768a"))?.href ?? "";
+      const p = new URLSearchParams(href.slice(1));
+      expect([p.get("org"), p.get("project_id"), p.get("area"), p.get("build")])
+        .toEqual(["org_boss", "park-bench-map-e86c6d9e", "code_tasks", "crun_768a"]);
+    } finally {
+      window.history.replaceState(null, "", `/${was}`);
+    }
+  });
+
   it("a finished step shows no in-flight state and no raw ids, only named links", () => {
     const deploy = { await: { id: "deprun_8bdeb296", kind: "deployment" }, verdict: "awaiting",
       next_action: "approve_decision", target_id: "deptgt_be289c6af97a", decision_id: "dec_fb1f425c2979",

@@ -28,6 +28,7 @@ import { usePolledRead } from "../../lib/log-stream";
 import { clock as logClock, utcTitle } from "../../lib/log-time";
 import { logHref } from "../../lib/log-url";
 import { isLoopbackPreviewUrl } from "../../lib/code-tasks";
+import { consoleHref } from "../url-intent";
 import { humanDuration } from "../../lib/datetime";
 import { INCLUDED_TIP, laneAgentOf, spendLabel, type LaneAgent } from "../agents/chain-model";
 import { nameOf, RunFace } from "../agents/run-face";
@@ -87,15 +88,19 @@ export type OutputFact = { label: string; value: string; tip?: string; href?: st
 /** A RECORD ID IS A LINK, NEVER TEXT (rc10 tester: "Details, 11" listed `deprun_…`, `dec_…`,
  *  `chg_…` on a finished deploy step). The kinds a person can open become a named link; the
  *  rest (targets, jobs, acts) are bookkeeping the panel already names elsewhere and drop. */
-const ID_LINKS: Array<[RegExp, string, (id: string) => string]> = [
-  [/^deprun_/, "Deployment", (id) => `?area=infra&view=deploys&deploy=${encodeURIComponent(`delivery:${id}`)}`],
-  [/^sdep_/, "Deployment", (id) => `?area=infra&view=deploys&deploy=${encodeURIComponent(`stack:${id}`)}`],
-  [/^dec_/, "Decision", (id) => `?area=decisions&decision=${encodeURIComponent(id)}`],
-  [/^chg_/, "Change set", (id) => `?area=infra&view=cloud&cloud=changes&changeset=${encodeURIComponent(id)}`],
-  [/^crun_/, "Build", (id) => `?area=code_tasks&build=${encodeURIComponent(id)}`],
-  [/^wfr_/, "Workflow run", (id) => `?area=delivery_workflows&wfr=${encodeURIComponent(id)}`],
-  [/^sfx_/, "Self-fix", (id) => `?area=self_fixes&sfx=${encodeURIComponent(id)}`],
+const ID_LINKS: Array<[RegExp, string, (id: string) => Record<string, string>]> = [
+  [/^deprun_/, "Deployment", (id) => ({ area: "infra", view: "deploys", deploy: `delivery:${id}` })],
+  [/^sdep_/, "Deployment", (id) => ({ area: "infra", view: "deploys", deploy: `stack:${id}` })],
+  [/^dec_/, "Decision", (id) => ({ area: "decisions", decision: id })],
+  [/^chg_/, "Change set", (id) => ({ area: "infra", view: "cloud", cloud: "changes", changeset: id })],
+  [/^crun_/, "Build", (id) => ({ area: "code_tasks", build: id })],
+  [/^wfr_/, "Workflow run", (id) => ({ area: "delivery_workflows", wfr: id })],
+  [/^sfx_/, "Self-fix", (id) => ({ area: "self_fixes", sfx: id })],
 ];
+/** THROUGH consoleHref, so the org AND the project this run is in ride along: a bare
+ *  `?area=code_tasks&build=…` reopened the build under the home project ("Can't reach BOSS"). */
+const idHref = (params: Record<string, string>) =>
+  consoleHref(typeof window === "undefined" ? "" : window.location.search, params);
 // BOSS's own record prefixes, named: a looser shape matched words like "not_applicable".
 const RECORD_ID = /^(deprun|sdep|dec|chg|crun|wfr|deptgt|job|act|rrcpt|res|agt|usr|dh|tsk|mrun|prev|qg|drun|asb|tpl|tapp|disc|mtg|sfx)_[A-Za-z0-9]+$/;
 /** Lifecycle fields that describe a step IN FLIGHT. On a finished step they are stale: a
@@ -163,7 +168,7 @@ export function stepOutput(output: Record<string, unknown> | null | undefined,
       const link = ID_LINKS.find(([re]) => re.test(text));
       if (!link) return;
       const [, kind, href] = link;
-      list.push({ label, value: `Open ${kind.toLowerCase()}`, tip: kind, href: href(text) });
+      list.push({ label, value: `Open ${kind.toLowerCase()}`, tip: kind, href: idHref(href(text)) });
       return;
     }
     list.push({ label, value: WORDS[text] ?? text, ...(tip ? { tip } : {}) });

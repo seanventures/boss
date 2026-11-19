@@ -250,6 +250,9 @@ export type Polled<T> = {
   data: T | null;
   /** The last failure's reason, while the answer could not be read. Cleared by an answer. */
   error: string | null;
+  /** The HTTP status of that failure (404, 403, 503…), or null when nothing answered at all.
+   *  "Can't reach BOSS" is only true of the null case; a 404 is BOSS answering. */
+  errorStatus?: number | null;
   /** True until the first answer (or failure). */
   loading: boolean;
   refresh: () => void;
@@ -270,6 +273,7 @@ export function usePolled<T>(url: string | null, parse: (w: unknown) => T,
   const seededEtag = useRef(seed?.etag ?? null);
   const [data, setData] = useState<T | null>(seeded.current);
   const [error, setErrorState] = useState<string | null>(null);
+  const [errorStatus, setErrorStatus] = useState<number | null>(null);
   const [loading, setLoadingState] = useState(seeded.current === null);
   // A 304 CHANGES NOTHING, SO IT SETS NOTHING. Setting the same value again is not free: React
   // may spend a render pass on an identical update, and under load the deploy drawer re-rendered
@@ -339,10 +343,11 @@ export function usePolled<T>(url: string | null, parse: (w: unknown) => T,
             if (r.status === 404 || r.status === 405) wait = MISSING_MS;
             let said = "";
             try { said = String(((await r.json()) as { detail?: unknown }).detail ?? ""); } catch { /* none */ }
+            setErrorStatus(r.status);
             setError(said || `The API answered ${r.status}.`);
           }
         } catch (e) {
-          if (!stopped) setError(e instanceof Error ? e.message : "The API did not answer.");
+          if (!stopped) { setErrorStatus(null); setError(e instanceof Error ? e.message : "The API did not answer."); }
         } finally {
           inflight = false;
           if (!stopped) setLoading(false);
@@ -373,7 +378,7 @@ export function usePolled<T>(url: string | null, parse: (w: unknown) => T,
   }, [url]);
 
   const refresh = useCallback(() => kick.current(), []);
-  return { data, error, loading: loading && data === null && !error, refresh };
+  return { data, error, errorStatus: error ? errorStatus : null, loading: loading && data === null && !error, refresh };
 }
 
 /** `viewer` is the signed-in person: what they did reads "you" (`Stopped by you`). */

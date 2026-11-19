@@ -63,6 +63,7 @@ import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { ChangeSetCockpit, useRunChangeSet } from "../multirepo/change-set-cockpit";
 import { LearnedStrip } from "../knowledge/learned-strip";
 import { useAreaKeydown } from "../../lib/area-keys";
+import { explainObjectMiss, objectMissWords, type ObjectMiss } from "../console-owner";
 
 export type CockpitProps = {
   projectId: string;
@@ -126,8 +127,39 @@ function usePaused(): boolean {
   return paused;
 }
 
+/**
+ * A BUILD THAT IS NOT IN THIS PROJECT IS NOT AN OUTAGE (2026-11-19). The cockpit read is
+ * project-scoped, so a build opened under the wrong project is answered 404, and this page said
+ * "Can't reach BOSS" over a healthy API. A 403/404 asks the resolver whose build it is: another
+ * project the person may open is said and opened (a page load: every area holds one project's
+ * data); otherwise it says the build is not here. Only no answer at all is "Can't reach BOSS".
+ */
+export function useBuildMiss(projectId: string, runId: string, failed: boolean, status: number | null | undefined): ObjectMiss | null {
+  const [miss, setMiss] = useState<ObjectMiss | null>(null);
+  useEffect(() => {
+    setMiss(null);
+    if (!failed) return undefined;
+    let live = true;
+    void explainObjectMiss({
+      target: { param: "build", type: "build", id: runId }, projectId, status,
+      fetchImpl: (path) => fetch(path, { cache: "no-store", headers: { Accept: "application/json" } }),
+    }).then((m) => { if (live) setMiss(m); });
+    return () => { live = false; };
+  }, [projectId, runId, failed, status]);
+  useEffect(() => {
+    if (miss?.kind !== "elsewhere" || typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("project_id", miss.projectId);
+    url.searchParams.set("build", runId);
+    window.location.assign(`${url.pathname}${url.search}`);
+  }, [miss, runId]);
+  return miss;
+}
+
 export function Cockpit({ projectId, runId, actor, onClose, onOpenBuild, initialLogs }: CockpitProps) {
-  const { data, error, loading, refresh } = useCockpit(projectId, runId, actor);
+  const { data, error, errorStatus, loading, refresh } = useCockpit(projectId, runId, actor);
+  const failed = !data && !!error && !loading;
+  const miss = useBuildMiss(projectId, runId, failed, errorStatus);
   // A build that is one lane of a multi-repo change opens the change's cockpit (every lane, one
   // set of PRs); an ordinary build is answered 404 and keeps this page exactly as it was.
   const changeSet = useRunChangeSet(projectId, runId);
@@ -143,13 +175,23 @@ export function Cockpit({ projectId, runId, actor, onClose, onOpenBuild, initial
                              actor={actor} onClose={onClose} />;
   }
   if (!data) {
-    if (error && !loading) {
+    if (failed && miss && miss.kind !== "unreachable") {
+      return (
+        <section className="fx-cockpit" data-testid="fx-cockpit" data-run={runId}>
+          <button type="button" className="ag-link fx-back" onClick={onClose}>← Builds</button>
+          <span className="fx-unreachable" data-testid="fx-elsewhere" data-kind={miss.kind} role="status">
+            <span>{objectMissWords(miss, "build")}</span>
+          </span>
+        </section>
+      );
+    }
+    if (failed && miss) {
       return (
         <section className="fx-cockpit" data-testid="fx-cockpit" data-run={runId}>
           <button type="button" className="ag-link fx-back" onClick={onClose}>← Builds</button>
           <span className="fx-unreachable" data-testid="fx-unreachable">
             <span>Can&apos;t reach BOSS</span>
-            <button type="button" className="ag-btn" title={error} onClick={refresh}>Retry</button>
+            <button type="button" className="ag-btn" title={error ?? undefined} onClick={refresh}>Retry</button>
           </span>
         </section>
       );

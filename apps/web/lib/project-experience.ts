@@ -112,6 +112,8 @@ export type ProjectCard = {
   id: string; name: string; initials: string; repo: string; stage: Stage; journey: Node[];
   needs_you: number; running: number; health: Health; live_url: string; captain: Agent | null;
   updated_at: string; href: string; cost_week: number | null; series: number[];
+  /** When the project was made (the rail keeps the newest in view). */
+  created_at?: string;
   /** On a subscription: the week at list price (cost_words), never a bare $0.00. */
   on_subscription?: boolean; list_week?: number | null;
   /** Screen 02 (cards.extras): the ring's number, the two status lines, the live crew. */
@@ -554,7 +556,7 @@ export const parseCard = (v: unknown): ProjectCard => {
   return {
     id: s(x.id), name, initials: s(x.initials) || initialsOf(name), repo: s(x.repo), stage: oneOf(x.stage, STAGES, "onboarding"),
     journey: a(x.journey).map(parseNode), needs_you: n(x.needs_you), running: n(x.running), health: oneOf(x.health, HEALTHS, "unknown"),
-    live_url: s(x.live_url), captain: parseAgent(x.captain), updated_at: s(x.updated_at), href: s(x.href),
+    live_url: s(x.live_url), captain: parseAgent(x.captain), updated_at: s(x.updated_at), created_at: s(x.created_at), href: s(x.href),
     // `cost_week` is the week's dollars (a number); an object {usd} is read the same way.
     cost_week: nn(x.cost_week) ?? nn(o(x.cost_week).usd), series: nums(x.series).length ? nums(x.series) : nums(o(x.cost_week).series),
     on_subscription: x.on_subscription === true, list_week: nn(x.list_week),

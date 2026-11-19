@@ -117,3 +117,55 @@ export async function resolveDeepLinkOwner(opts: {
     return { target, projectId: opts.projectId, switched: false, canView: false };
   }
 }
+
+/**
+ * WHY A PAGE COULD NOT OPEN ITS OBJECT, IN WORDS (2026-11-19: a build of Park bench map, opened
+ * under the home project, said "Can't reach BOSS" while the API answered 404 in 30 ms). Only a
+ * request nothing answered is "Can't reach BOSS". An answer of 404/403 means the object is not
+ * in the project the page asked about, so ask the resolver whose it is:
+ *
+ *   elsewhere    it belongs to another project the person may open: say so and go there
+ *   not_here     nobody answers for it here (gone, or not the person's to see; told alike)
+ *   unreachable  nothing answered, or the server failed (5xx): BOSS is the problem
+ */
+export type ObjectMiss =
+  | { kind: "elsewhere"; projectId: string; projectName: string | null }
+  | { kind: "not_here" }
+  | { kind: "unreachable" };
+
+/** A failed status the page should explain rather than call an outage. */
+export function isAnsweredMiss(status: number | null | undefined): boolean {
+  return status === 403 || status === 404 || status === 410;
+}
+
+export async function explainObjectMiss(opts: {
+  target: DeepLinkTarget;
+  /** The project the page asked under. */
+  projectId: string | null;
+  /** The failed status; null when nothing answered. */
+  status: number | null | undefined;
+  fetchImpl: (path: string) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
+}): Promise<ObjectMiss> {
+  if (!isAnsweredMiss(opts.status)) return { kind: "unreachable" };
+  try {
+    const res = await opts.fetchImpl(resolveOwnerPath(opts.target, opts.projectId));
+    if (res.status === 403 || res.status === 404) return { kind: "not_here" };
+    if (!res.ok) return { kind: "unreachable" };
+    const body = (await res.json()) as ResolveOk & { project_name?: unknown };
+    const owner = typeof body.project_id === "string" ? body.project_id.trim() : "";
+    if (body.can_view !== true || !owner || owner === opts.projectId) return { kind: "not_here" };
+    const name = typeof body.project_name === "string" && body.project_name.trim() ? body.project_name.trim() : null;
+    return { kind: "elsewhere", projectId: owner, projectName: name };
+  } catch {
+    return { kind: "unreachable" };
+  }
+}
+
+/** The sentence for a miss. `noun` is the object ("build", "meeting"). */
+export function objectMissWords(miss: ObjectMiss, noun: string): string {
+  if (miss.kind === "elsewhere") {
+    return `This ${noun} belongs to ${miss.projectName ?? "another project"}, opening it…`;
+  }
+  if (miss.kind === "not_here") return `This ${noun} isn't in this project, or you can't open it.`;
+  return "Can't reach BOSS";
+}
