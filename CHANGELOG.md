@@ -2,6 +2,18 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.31]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.31.md](docs/community/RELEASE_NOTES_v1.0-rc10.31.md).
+
+### Changed
+
+- Project pages have an About this app card (spec summary, must-haves met or partly met, Read the full spec) and What was discussed / What was built for each piece of work.
+- The Work row's button names the real next step; every change has Open, Start or Recreate preview; short titles come from the spec; the Outputs header matches Checks.
+- Build pages open from any project; "Can't reach BOSS" shows only when BOSS is down; the sidebar keeps your current, newest and last-opened project.
+- Chat windows have an Attach icon and a full-screen button; Helm replies are short with Details folded.
+- Docs updates never ask for GitHub on local projects. The community candidate version is `1.0.0-rc.10.31`.
+
 ## [v1.0-rc10.30]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.30.md](docs/community/RELEASE_NOTES_v1.0-rc10.30.md).
