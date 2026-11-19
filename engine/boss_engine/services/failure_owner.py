@@ -167,7 +167,11 @@ _PLATFORM_FIRST = re.compile(
     r"os error 13|\[Errno 13\]|/var/lib/boss/|lease_lost|lost its holder|"
     r"symlink, special file|Budget admission is busy|control plane crashed|"
     r"Internal Server Error|\b50[0-4]\b|\b409 Conflict\b|timed? ?out|Connection (?:refused|reset)|"
-    r"EAI_AGAIN|stalled \(\d+s", re.I)
+    r"EAI_AGAIN|stalled \(\d+s|"
+    # A credential asked for NO repository ("for /": empty owner and name) is BOSS's own bug —
+    # it never resolved the project's repository — not a repository a person must connect
+    # (docs.update on a project whose code is on this machine, laptop 2026-11-18).
+    r"No GitHub credentials for /[:\s]", re.I)
 
 #: (cause_code, pattern, what a person does) — ordered; the first match wins.
 _PERSON_RULES: tuple[tuple[str, str, str], ...] = (
@@ -873,6 +877,30 @@ class Previews(Surface):
         return None if status == "starting" else False
 
 
+def _docs_update_moot(c: Any, project_id: str) -> Optional[str]:
+    """A docs update that does not apply to this project (its code is in a repository on this
+    machine, or it has no repository): every open docs.update dead letter of the project is
+    resolved at once with the reason — BOSS's own note, never a person's item. 72 of the
+    laptop's 202 "No GitHub credentials for /" docs dead letters were local-repo projects."""
+    from ..config import get_settings
+    from .docs_agent import docs_repository
+
+    _target, why_not = docs_repository(c, get_settings(), project_id)
+    if not why_not:
+        return None
+    resolve_docs_dead_letters(c, project_id)
+    return f"Nothing to do: {why_not}"
+
+
+def resolve_docs_dead_letters(c: Any, project_id: str) -> int:
+    """Close the project's open docs.update dead letters (docs do not apply to it)."""
+    return int(c.execute(text(
+        "UPDATE deadletters d SET status = 'resolved', resolved_by = :a, resolved_at = now(), "
+        "updated_at = now() FROM jobs j WHERE j.id = d.source_id AND d.source_kind = 'job' "
+        "AND d.status = 'open' AND j.kind = 'docs.update' AND j.project_id = :p"),
+        {"a": ACTOR, "p": project_id}).rowcount or 0)
+
+
 #: Job kinds whose failure another surface owns (the deadletter fails that record in words).
 _JOB_KINDS_OWNED_ELSEWHERE = ("code.task", "deployment.stack_apply", "deployment.host_apply")
 #: Kinds whose dedupe key is per attempt (a model check, a docs update per event): their lineage
@@ -949,6 +977,10 @@ class Jobs(Surface):
         if later:
             self._close(c, item, f"superseded: job {later} did the same work since")
             return Said(RESOLVED, f"The same job ran fine since ({later}).")
+        if item.hints["kind"] == "docs.update" and item.project_id:
+            moot = _docs_update_moot(c, str(item.project_id))
+            if moot:
+                return Said(RESOLVED, moot)
         if item.hints["kind"] == "github.pull_request.merge":
             decision = (item.hints["payload"] or {}).get("decision_id")
             status = c.execute(text("SELECT status FROM decisions WHERE id = :d"),
@@ -1038,13 +1070,14 @@ class Jobs(Surface):
 
         try:
             with engine.begin() as c:
+                reopened = _reopen_what_the_job_advances(c, deadletter_id)
                 got = DeadletterRemediationService(settings).requeue_job_deadletter(
                     c, deadletter_id=deadletter_id, actor=actor,
                     reason="failure_owner_retry", run_after_seconds=run_after_seconds,
                     as_boss=as_boss)
         except (DeadletterRemediationBlocked, ValueError) as refused:
             raise NeedsPerson(_words(refused, 280)) from None
-        return f"running it again (job {got.get('requeued_job_id') or ''})"
+        return (f"{reopened}running it again (job {got.get('requeued_job_id') or ''})")
 
     def person_retry(self, engine, settings, jobs, ref, actor):
         return self._requeue(engine, settings, str(ref["id"]), actor=actor, as_boss=False)
@@ -1066,6 +1099,52 @@ class Jobs(Surface):
         if row["requeued"] in ("queued", "leased", "running"):
             return None
         return row["requeued"] in ("deadlettered", "failed_final")
+
+
+def _reopen_what_the_job_advances(c: Any, deadletter_id: str) -> str:
+    """A RE-RUN THAT RE-RUNS NOTHING IS NOT A RETRY (stranger test r8, 2026-11-19): "Done —
+    retry" on a dead panel step re-queued the `meeting.step` job, but its panel had been closed
+    meanwhile (cancelled as abandoned), so the step answered "cancelled, done", the job
+    succeeded doing nothing and the item read Resolved. A `meeting.step` re-run first reopens
+    its panel where it stopped (its finished phases are saved); a panel that cannot be reopened
+    raises NeedsPerson, and the item stays open saying why. Returns words for what it reopened."""
+    job = c.execute(text(
+        "SELECT j.kind, j.payload FROM deadletters d JOIN jobs j ON j.id = d.source_id "
+        "WHERE d.id = :d"), {"d": deadletter_id}).mappings().first()
+    if not job or str(job["kind"]) != "meeting.step":
+        return ""
+    run_id = str((_json(job["payload"], {}) or {}).get("run_id") or "")
+    if not run_id:
+        return ""
+    return _reopen_panel(c, run_id)
+
+
+def _reopen_panel(c: Any, run_id: str) -> str:
+    """Set a failed (or abandoned) panel running again from its saved phase; '' when it already
+    runs. Raises NeedsPerson when it cannot be resumed."""
+    row = c.execute(text("SELECT status, error FROM meeting_runs WHERE id = :r FOR UPDATE"),
+                    {"r": run_id}).mappings().first()
+    if row is None:
+        raise NeedsPerson("Its panel no longer exists, so there is nothing to run again.",
+                          "Start a new panel from the project's page.")
+    status, error = str(row["status"] or ""), str(row["error"] or "")
+    if status == "running":
+        return ""
+    if status == "completed":
+        raise NeedsPerson("Its panel already finished, so there is nothing to run again.",
+                          "Open the panel from the project's page to read its PRD.")
+    if status == "cancelled" and "built from the brief" in error.lower():
+        raise NeedsPerson("Its workflow already went on without this panel (BOSS built from "
+                          "the brief), so running the panel again would change nothing.",
+                          "Start a new panel from the project's page if you want a spec.")
+    if status not in ("failed", "cancelled"):
+        raise NeedsPerson(f"Its panel is {status or 'in an unknown state'}, so it cannot be "
+                          "resumed from here.", "Open the panel from the project's page.")
+    c.execute(text(
+        "UPDATE meeting_runs SET status = 'running', error = NULL, updated_at = now(), "
+        "state = (COALESCE(state, '{}'::jsonb) - 'failure_class' - 'reason_code') || "
+        "jsonb_build_object('resumed_at', CAST(now() AS text)) WHERE id = :r"), {"r": run_id})
+    return "reopened its panel where it stopped, "
 
 
 def _job_lineage(c: Any, job_id: str, dedupe_key: Any, payload: Mapping[str, Any]) -> str:
@@ -1111,14 +1190,18 @@ class Meetings(Surface):
     def failed(self, c, since, pid=None):
         rows = c.execute(text(
             "SELECT id, project_id, task_id, COALESCE(title, directive, 'Panel') AS title, error, "
-            "phase, updated_at FROM meeting_runs WHERE status = 'failed' AND updated_at >= :since "
+            "phase, updated_at, state->>'failure_class' AS failure_class, "
+            "state->>'reason_code' AS reason_code "
+            "FROM meeting_runs WHERE status = 'failed' AND updated_at >= :since "
             "AND (CAST(:pid AS text) IS NULL OR project_id = :pid) "
             "ORDER BY updated_at DESC LIMIT :n"), {"since": since, "n": MAX_ITEMS_PER_SURFACE,
                                                    "pid": pid}
         ).mappings().all()
         return [Item(self.key, str(r["id"]), str(r["id"]), r["project_id"],
                      str(r["title"])[:120], str(r["error"] or ""), _aware(r["updated_at"]),
-                     {"task_id": r["task_id"], "phase": r["phase"]}) for r in rows]
+                     {"task_id": r["task_id"], "phase": r["phase"],
+                      "failure_class": r["failure_class"], "reason_code": r["reason_code"]})
+                for r in rows]
 
     def held(self, c, item):
         card = c.execute(text(
@@ -1147,11 +1230,11 @@ class Meetings(Surface):
 
             jobs = JobLeaseService(settings)
         with engine.begin() as c:
-            moved = c.execute(text(
-                "UPDATE meeting_runs SET status = 'running', error = NULL, updated_at = now() "
-                "WHERE id = :r AND status = 'failed'"), {"r": run_id}).rowcount
-            if not moved:
+            status = c.execute(text("SELECT status FROM meeting_runs WHERE id = :r"),
+                               {"r": run_id}).scalar()
+            if status != "failed":
                 raise NeedsPerson("The panel is no longer failed, so there is nothing to resume.")
+            _reopen_panel(c, run_id)
             job = jobs.create_job(c, project_id=str(project_id), task_id=task_id,
                                   kind="meeting.step", payload={"run_id": run_id})
         return f"resuming the panel where it stopped (job {job.get('id') or ''})"
@@ -1674,7 +1757,8 @@ def on_answered(connection: Any, settings: Any, jobs: Any, decision: Mapping[str
                    attempts=0, now=now, note={"retry_by": actor, "decision_id": decision["id"]})
             refs.append({"id": row["item_id"], "key": row["item_key"],
                          "project_id": row["project_id"], "hints": item.hints,
-                         "surface": row["surface"]})
+                         "surface": row["surface"], "title": item.title,
+                         "failed_at": item.failed_at, "cause": str(row.get("cause") or "")})
         else:
             _write(connection, item, state=RESOLVED, by="person",
                    words=f"{actor_words(actor)} chose not to retry it.",
@@ -1690,6 +1774,23 @@ def on_answered(connection: Any, settings: Any, jobs: Any, decision: Mapping[str
                     did = SURFACES[ref["surface"]].person_retry(eng, settings, jobs, ref, actor)
                     words = f"BOSS is running it again ({did}) because you said it is done."
                 except NeedsPerson as np:
+                    # NOTHING RAN, SO IT STAYS OPEN (stranger test r8): the item goes back to
+                    # the person with why, on a new card — never "running it again".
+                    try:
+                        with eng.begin() as c:
+                            _hand_over(
+                                c, Item(ref["surface"], ref["key"], ref["id"],
+                                        ref["project_id"], str(ref.get("title") or ""), "",
+                                        ref.get("failed_at"), ref.get("hints") or {}),
+                                cls=PERSON, cause_code="retry_refused",
+                                cause=ref.get("cause") or np.reason,
+                                action=np.action or "Start it again from its page.",
+                                reason=f"Could not run it again: {np.reason}",
+                                attempts=0, now=_now())
+                        continue
+                    except Exception:  # noqa: BLE001 — at least say so on the item, below
+                        log.warning("failure owner: could not hand back %s", ref["key"],
+                                    exc_info=True)
                     words = f"Could not run it again: {np.reason}"
                 except Exception as exc:  # noqa: BLE001 — said on the item, never lost
                     log.warning("failure owner: person retry of %s failed", ref["key"],

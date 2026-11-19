@@ -3140,6 +3140,13 @@ def _person_side(lowered: str) -> Optional[str]:
     return None
 
 
+def person_side_reason(reason: str) -> Optional[str]:
+    """The reason code when `reason` is a failure only the person's own setup can fix
+    (credential_plain_http, credential_misdirected, model_auth_rejected, repo_access_denied),
+    else None. The one classifier for builds and panels (meeting_service.person_side_failure)."""
+    return _person_side(str(reason or "").lower())
+
+
 def classify_pipeline_exception(reason: str) -> tuple[str, str]:
     """Map a pipeline exception onto the failure taxonomy. Most unexpected exceptions ARE infra
     (platform's fault) — but an agent that exhausted its turn cap is a RECOVERABLE task-shaped

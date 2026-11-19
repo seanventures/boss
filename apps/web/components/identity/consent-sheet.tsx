@@ -98,7 +98,7 @@ function PlainConsentSheet({ request, onClose }: { request: ConsentRequest; onCl
         {other.map((p) => <Perm key={p} p={p} sm />)}
         {request.github ? <RepoChip icon={<GithubLogo size={13} aria-hidden />} text={`${request.github.repos.join(", ") || request.github.repo}, ${request.github.summary}`} testId="consent-github" /> : null}
         {/* A repository BOSS keeps on this machine (a local-first project): named, not GitHub. */}
-        {request.local ? <RepoChip icon={<Laptop size={13} aria-hidden />} text={`${request.local.repos.join(", ") || request.local.repo}, ${request.local.summary}`} testId="consent-local" /> : null}
+        {request.local ? <RepoChip icon={<Laptop size={13} aria-hidden />} text={`${request.local.names.join(", ") || request.local.repo}, ${request.local.summary}`} testId="consent-local" /> : null}
       </div>
       <div className="idn-opts" data-testid="consent-durations">
         {durations.map((d, i) => (

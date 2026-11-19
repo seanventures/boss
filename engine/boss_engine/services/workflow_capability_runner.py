@@ -6852,7 +6852,9 @@ def _panel_fallback(connection: Connection, *, project_id: str, run_id: str, ste
     bare failure. None when none of that applies."""
     try:
         row = connection.execute(
-            text("SELECT constraints, error, EXTRACT(EPOCH FROM (now() - created_at)) AS age "
+            text("SELECT constraints, error, state, EXTRACT(EPOCH FROM (now() - GREATEST("
+                 "created_at, COALESCE(CAST(NULLIF(state->>'resumed_at', '') AS timestamptz), "
+                 "created_at)))) AS age "
                  "FROM meeting_runs WHERE id = :m"), {"m": meeting_run_id}).mappings().first()
     except Exception:  # noqa: BLE001 — an unreadable panel keeps the ordinary path
         return None
@@ -6860,6 +6862,13 @@ def _panel_fallback(connection: Connection, *, project_id: str, run_id: str, ste
         return None
     constraints = row["constraints"] if isinstance(row["constraints"], dict) else \
         json.loads(row["constraints"] or "{}")
+    if output.get("waiting_on_person") and status not in bad_states:
+        # THE PERSON'S RETRY RESUMED THE PANEL: the step no longer waits on them.
+        for key in ("waiting_on_person", "awaited_note"):
+            output.pop(key, None)
+        connection.execute(
+            text("UPDATE workflow_step_runs SET output = output - 'waiting_on_person' "
+                 "- 'awaited_note', updated_at = now() WHERE id = :i"), {"i": step["id"]})
     if not constraints.get("fallback_to_brief") or status in ok_states:
         return None
     reason = ""
@@ -6867,6 +6876,12 @@ def _panel_fallback(connection: Connection, *, project_id: str, run_id: str, ste
         if _meeting_successor(connection, project_id, meeting_run_id, run_id):
             return None           # a person retried the panel: the ordinary path follows it
         error = str(row["error"] or "").strip()
+        state = row["state"] if isinstance(row["state"], dict) else \
+            json.loads(row["state"] or "{}")
+        if state.get("failure_class") == "needs_human" or _person_side_words(error):
+            return _park_on_person(connection, project_id=project_id, run_id=run_id, step=step,
+                                   output=output, meeting_run_id=meeting_run_id,
+                                   words=_person_side_words(error) or error)
         reason = f"the panel ended as '{status}'" + (f": {error[:200]}" if error else "")
     else:
         job = connection.execute(
@@ -6876,7 +6891,32 @@ def _panel_fallback(connection: Connection, *, project_id: str, run_id: str, ste
         budget = int(constraints.get("time_budget_seconds") or 0)
         if str(job.get("status") or "") in ("deadlettered", "failed_final"):
             said = job.get("last_error")
+            if isinstance(said, str):
+                try:
+                    said = json.loads(said)
+                except ValueError:
+                    pass
             said = said.get("message") if isinstance(said, dict) else said
+            person = _person_side_words(str(said or ""))
+            if person:
+                # THE MODEL ITSELF IS UNUSABLE: the panel is failed as the person's (never
+                # cancelled into a build that would fail the same way) and the step waits on it.
+                from .meeting_service import person_side_failure, release_meeting_hold
+
+                code = (person_side_failure(str(said)) or {}).get("reason_code") or "needs_human"
+                failed = connection.execute(text(
+                    "UPDATE meeting_runs SET status = 'failed', error = :e, updated_at = now(), "
+                    "state = COALESCE(state, '{}'::jsonb) || jsonb_build_object("
+                    "'failure_class', 'needs_human', 'reason_code', CAST(:rc AS text)) "
+                    "WHERE id = :m AND status = 'running'"),
+                    {"e": person[:500], "rc": code, "m": meeting_run_id})
+                if not failed.rowcount:
+                    return None       # the panel finished meanwhile: the ordinary path follows
+                release_meeting_hold(connection, get_settings(), meeting_run_id,
+                                     "panel stopped: " + person[:200])
+                return _park_on_person(connection, project_id=project_id, run_id=run_id,
+                                       step=step, output=output,
+                                       meeting_run_id=meeting_run_id, words=person)
             reason = "the panel's step failed" + (f": {str(said)[:200]}" if said else "")
         elif budget and float(row["age"] or 0) > budget:
             reason = (f"the panel ran past its {max(1, budget // 60)}-minute budget")
@@ -6890,6 +6930,12 @@ def _panel_fallback(connection: Connection, *, project_id: str, run_id: str, ste
             # THE PANEL FINISHED MEANWHILE (its PRD may already be approved and building): the
             # ordinary path follows it. Building from the brief too would be a second build.
             return None
+    # THE PANEL HAS ENDED, SO ITS HOLD GOES (stranger test r8: a failed panel's $6 hold kept the
+    # build after it in budget_wait with $0 spent).
+    from .meeting_service import release_meeting_hold
+
+    release_meeting_hold(connection, get_settings(), meeting_run_id,
+                         f"panel ended: {reason[:200]}")
     fallback = {"reason": reason, "meeting_run_id": meeting_run_id,
                 "at": now_utc().isoformat()}
     workflows.force_complete_waiting_step(
@@ -6901,6 +6947,47 @@ def _panel_fallback(connection: Connection, *, project_id: str, run_id: str, ste
                {"step_id": step["step_id"], **fallback})
     return {"run_id": run_id, "step_id": step["step_id"], "outcome": "spec_fallback",
             "awaited": "meeting", "because": reason}
+
+
+def _person_side_words(error: str) -> str:
+    """Plain words when a panel's failure is the person's own model setup (meeting_service.
+    person_side_failure — the build's own classifier), else ""."""
+    from .meeting_service import person_side_failure
+
+    found = person_side_failure(error) if error else None
+    return found["words"] if found else ""
+
+
+#: The event a panel step records when it waits on the person instead of building from the brief.
+SPEC_WAITS_ON_PERSON_EVENT = "workflow.panel_waits_on_person"
+
+
+def _park_on_person(connection: Connection, *, project_id: str, run_id: str, step: Any,
+                    output: dict[str, Any], meeting_run_id: str, words: str) -> dict[str, Any]:
+    """THE PANEL FAILED BECAUSE THE MODEL ITSELF IS UNUSABLE (stranger test r8: a plain-http
+    model): building from the brief would fail the same way on the same model, so the workflow
+    does NOT go on to Build. The step keeps waiting on the panel, saying why in the person's
+    words; the panel's own failure item (failure_owner, "Done — retry") resumes it, and this step
+    follows it to its PRD. Only failures that are not the person's (a timeout, a transient
+    error) build from the brief."""
+    note = (f"Waiting on you: {words.rstrip('.')}. Press Done — retry on its item once it is "
+            "fixed; the panel resumes and nothing is built before it.")
+    if output.get("waiting_on_person") != words:
+        from .meeting_service import release_meeting_hold
+
+        release_meeting_hold(connection, get_settings(), meeting_run_id,
+                             f"panel failed: {words[:200]}")
+        connection.execute(
+            text("UPDATE workflow_step_runs SET output = COALESCE(output, '{}'::jsonb) "
+                 "|| CAST(:o AS JSONB), updated_at = now() WHERE id = :i AND status = 'waiting'"),
+            {"i": step["id"], "o": json.dumps({"waiting_on_person": words,
+                                               "awaited_note": note,
+                                               "meeting_run_id": meeting_run_id})})
+        emit_event(connection, project_id, SPEC_WAITS_ON_PERSON_EVENT, "boss", "workflow_run",
+                   run_id, {"step_id": step["step_id"], "meeting_run_id": meeting_run_id,
+                            "words": words[:300]})
+    return {"run_id": run_id, "step_id": step["step_id"], "outcome": "waiting_on_person",
+            "awaited": "meeting", "because": words}
 
 
 def _hold_for_spec(connection: Connection, *, project_id: str, run_id: str,
