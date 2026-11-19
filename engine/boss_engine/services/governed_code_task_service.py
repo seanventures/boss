@@ -28,7 +28,6 @@ import hashlib
 import json
 import re
 import stat
-import subprocess
 import threading
 from pathlib import Path
 import tempfile
@@ -2857,8 +2856,10 @@ def _ledger_acceptance_check(engine, run_id: str, project_id: str, record: dict,
     head = None
     if root is not None:
         try:
-            head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(root), timeout=10,
-                                  capture_output=True, text=True).stdout.strip() or None
+            from .git_safety import tree_git
+
+            got = tree_git(root, "rev-parse", "HEAD", timeout=10)
+            head = (got.stdout.strip() or None) if got is not None and got.returncode == 0 else None
         except Exception:  # noqa: BLE001 — a check without its sha is still a check
             head = None
     try:
@@ -4200,14 +4201,13 @@ def failing_tests(output: str, limit: int = 20) -> list[str]:
 
 def _base_commit_sha(root: Path, base_branch: str) -> Optional[str]:
     """The base commit a build started from, as a sha — None when it cannot be resolved (no
-    git, no such ref): a classification that cannot run never blocks the build."""
-    from . import owned_process
+    git, no such ref): a classification that cannot run never blocks the build. Read-only git
+    on the run's tree: as the run's uid, pinned, nothing the tree configured (git_safety.tree_git)."""
+    from .git_safety import tree_git
 
     try:
-        out = owned_process.boss_run(
-            ["git", "-C", str(root), "rev-parse", str(base_branch)],
-            capture_output=True, text=True, timeout=30)
-        if out.returncode == 0:
+        out = tree_git(root, "rev-parse", str(base_branch), timeout=30)
+        if out is not None and out.returncode == 0:
             return out.stdout.strip() or None
     except Exception:  # noqa: BLE001
         _log_caught(logger)
@@ -5550,8 +5550,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if not path:
             return None
         try:
-            out = subprocess.run(["git", "-C", str(path), "ls-files", "-z"], capture_output=True,
-                                 timeout=20, check=False).stdout
+            from .git_safety import tree_git
+
+            got = tree_git(path, "ls-files", "-z", timeout=20, text=False)
+            out = got.stdout if got is not None and got.returncode == 0 else b""
             n = out.count(b"\0")
         except Exception:  # noqa: BLE001 — an uncountable repo is sized as a medium one
             n = 0

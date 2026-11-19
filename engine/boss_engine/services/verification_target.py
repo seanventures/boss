@@ -896,18 +896,20 @@ def checkout_problem(root: Path | str, *, branch: str = "", owner: str = "",
     head (the branch's remote head is not in its history). Never the stack, never an empty or
     small tree: a follow-up that rewrites Node into Go, a retry of an empty first build, an empty
     slice branch and a polyglot repo all build on exactly what the branch holds (PR #164 E2).
-    None when git cannot say (no checkout, no remote ref): nothing to prove wrong."""
-    import subprocess
+    None when git cannot say (no checkout, no remote ref): nothing to prove wrong.
+
+    Read-only git on the run's tree (git_safety.tree_git): as the run's uid, so a planted
+    objects/info/alternates cannot make BOSS read another repository's objects."""
+    from .git_safety import tree_git
 
     base = Path(root)
 
     def git(*args: str) -> str | None:
         try:
-            got = subprocess.run(["git", "-C", str(base), *args], capture_output=True, text=True,
-                                 timeout=20)
+            got = tree_git(base, *args, timeout=20)
         except Exception:  # noqa: BLE001
             return None
-        return got.stdout.strip() if got.returncode == 0 else None
+        return got.stdout.strip() if got is not None and got.returncode == 0 else None
 
     if git("rev-parse", "--is-inside-work-tree") != "true":
         return None

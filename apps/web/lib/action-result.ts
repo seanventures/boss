@@ -54,8 +54,26 @@ export function whatToDo(status: number): string {
 }
 
 /** "API said X" plus what to do, without repeating a sentence the server already ended with. */
+/** AN API'S BARE CODE IS NEVER SHOWN AS IS ("consent_required" under a Retry button, the
+ *  laptop 2026-11-18): the known codes in words, any other bare snake_case code said as a
+ *  refusal with its words. A sentence passes through unchanged. */
+const CODE_WORDS: Record<string, string> = {
+  consent_required: "Needs your consent: the agents need your permission to do this. Press it again to give it.",
+  step_up_required: "Confirm it's you, then press it again.",
+  forbidden: "You don't have permission to do this. Ask an Admin.",
+  not_found: "It isn't there any more. Reload to see its current state.",
+  conflict: "It changed meanwhile. Reload to see its current state.",
+  rate_limited: "Too many requests just now. Try again in a moment.",
+  budget_refused: "The budget refused it. Raise the cap in Govern, then try again.",
+};
+export function codeWords(text: string): string {
+  const t = String(text ?? "").trim();
+  if (!/^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$|^[a-z]+$/.test(t)) return t;
+  return CODE_WORDS[t] ?? (t.includes("_") ? `The API refused it (${t.replace(/_/g, " ")}).` : t);
+}
+
 export function failureSentence(what: string, status?: number): string {
-  const said = String(what ?? "").trim();
+  const said = codeWords(String(what ?? "").trim());
   const next = typeof status === "number" && status > 0 ? whatToDo(status) : "";
   if (!said) return next || "The action failed and the server gave no reason. Try again.";
   if (!next) return said;
@@ -76,10 +94,10 @@ export function describeActionError(error: unknown): string {
         return `BOSS's API could not be reached (${message}). It may be restarting — try `
           + "again in a moment.";
       }
-      return message;
+      return codeWords(message);
     }
   }
-  if (typeof error === "string" && error.trim()) return error.trim();
+  if (typeof error === "string" && error.trim()) return codeWords(error.trim());
   return "The action failed and the server gave no reason. Try again.";
 }
 

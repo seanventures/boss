@@ -306,7 +306,7 @@ def deliver(*, engine: str, mode: str, skills_dir: str = "", mcp: Any = None,
         # planted link is replaced, never written (or read) through. The file is readable by the
         # run's uid — the Cursor agent runs as it, and is "other" to a BOSS-owned file — and by
         # no one else: a sandboxed run's directory is <uid>:boss 2770.
-        from . import sandbox_identity, workspace_perms
+        from . import workspace_perms
 
         rel = ".cursor/mcp.json"
         target = Path(workspace) / ".cursor" / "mcp.json"
@@ -316,7 +316,9 @@ def deliver(*, engine: str, mode: str, skills_dir: str = "", mcp: Any = None,
             name: {"url": e.get("url", ""), **({"headers": _http_headers(e)}
                                                if _http_headers(e) else {})}
             for name, e in usable.items()}}, indent=2).encode("utf-8")
-        file_mode = 0o604 if sandbox_identity.current() is not None else 0o600
+        # 0604 only inside the bound identity's own 2770 run directory (workspace_perms.shared_mode):
+        # elsewhere (the warm-lineage path, no identity) another uid could read the MCP headers.
+        file_mode = workspace_perms.shared_mode(workspace, 0o604)
         workspace_perms.write_nofollow(workspace, rel, body, mode=file_mode, dir_mode=0o755)
         kit.written.append(str(target))
 

@@ -197,7 +197,9 @@ export async function withConsent<T>(start: () => Promise<T>): Promise<T> {
  */
 export async function withConsentResult<R extends { ok: boolean; data?: unknown }>(call: () => Promise<R>): Promise<R> {
   const r = await call();
-  const asked = !r.ok ? consentFromBody((r.data as Record<string, unknown> | undefined)?.consent) : null;
+  const data = r.data as Record<string, unknown> | undefined;
+  // callAction already asked (data.consentAsked): never a second sheet.
+  const asked = !r.ok && !data?.consentAsked ? consentFromBody(data?.consent) : null;
   if (asked && await askConsent(asked)) return call();
   return r;
 }

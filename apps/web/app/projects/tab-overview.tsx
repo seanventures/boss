@@ -327,12 +327,12 @@ function MiniRow({ w, ctx }: { w: WorkItem; ctx: PxCtx }) {
   const setup = w.kind === "setup" && w.source === "onboarding";
   const open = () => (setup ? writePxUrl({ drawer: "onboarding" }) : ctx.open("work", w.id));
   return (
-    <div className="px-wk px-ov-wk" data-s={w.state} data-testid={`px-ov-work-${w.id}`}
+    <div className="px-wk px-ov-wk" data-s={w.state} data-testid={`px-ov-work-${w.id}`} data-replaced={w.replaced_by ? "" : undefined}
          onClick={open}>
-      <span className="px-dot" data-s={w.state === "running" ? "now" : w.state === "needs_you" || w.state === "stalled" ? "you" : w.state === "failed" ? "bad" : w.state === "done" ? "done" : undefined} aria-hidden />
+      <span className="px-dot" data-s={w.replaced_by || w.resolved ? undefined : w.state === "running" ? "now" : w.state === "needs_you" || w.state === "stalled" ? "you" : w.state === "failed" ? "bad" : w.state === "done" ? "done" : undefined} aria-hidden />
       <span style={{ minWidth: 0 }}>
         <button type="button" className="px-wk-t px-ell" style={{ display: "block", maxWidth: "100%" }} title={w.detail || w.label} onClick={(e) => { e.stopPropagation(); open(); }}>{w.label}</button>
-        <span className="px-wk-sub"><span>{w.state === "failed" ? <b className="px-wk-failed" data-testid={`px-ov-failed-${w.id}`}>Failed</b> : w.state === "stalled" ? "Stalled" : w.links.pr ? <ChangeLink url={w.links.pr.external_url} number={w.links.pr.number} icon={false} className="px-linkbtn" merged={w.state === "done"} testid={`px-ov-pr-${w.id}`} /> : KIND_WORDS[w.kind] ?? w.kind}</span>{workWhen(w) ? <span className="px-mono">{workWhen(w)}</span> : null}
+        <span className="px-wk-sub"><span>{w.resolved ? <span className="px-faint" data-testid={`px-ov-resolved-${w.id}`}>{w.resolved.words}</span> : w.replaced_by ? <span className="px-faint" data-testid={`px-ov-replaced-${w.id}`} title={`Replaced by ${w.replaced_by.label || "a later build"}`}>Replaced by a later build</span> : w.state === "failed" ? <b className="px-wk-failed" data-testid={`px-ov-failed-${w.id}`}>Failed</b> : w.state === "stalled" ? "Stalled" : w.links.pr ? <ChangeLink url={w.links.pr.external_url} number={w.links.pr.number} icon={false} className="px-linkbtn" merged={w.state === "done"} testid={`px-ov-pr-${w.id}`} /> : KIND_WORDS[w.kind] ?? w.kind}</span>{workWhen(w) ? <span className="px-mono">{workWhen(w)}</span> : null}
           <Cost usd={w.cost_usd} list={w.list_usd} /></span>
       </span>
       {/* 04 at 390: the station strip stays (wireframe .wk-row > .st); faces and the chevron go. */}

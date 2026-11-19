@@ -154,6 +154,24 @@ def test_boss_retries_a_this_build_only_build_under_that_same_grant(env, staffed
     assert str(job["payload"]["_identity"]["run_id"]).startswith(f"run_ct:{crun}/retry:")
 
 
+def test_boss_retries_its_own_retry_under_the_same_this_build_only_grant(env, staffed):  # noqa: F811
+    """The build's own retry chain is the same build: BOSS's retry R2 of its retry R1 of build B
+    still carries B's "this build only" grant (no lineage walk: R1 ran as the person), bound to
+    run_ct:B/retry:R1/retry:R2."""
+    crun, grant = _standalone_build(env)
+    with lineage.acting(WORKER_KEY):
+        r1 = cts.retry_code_task(env.engine, get_settings(), _Jobs(), crun, automatic=True)["run_id"]
+    with env.engine.begin() as c:
+        c.execute(text("UPDATE code_task_runs SET status='failed', phase='done', error='git: 502', "
+                       "finalize_ctx = finalize_ctx || '{\"failure_class\": \"infra\"}'::jsonb "
+                       "WHERE id=:r"), {"r": r1})
+    with lineage.acting(WORKER_KEY):
+        r2 = cts.retry_code_task(env.engine, get_settings(), _Jobs(), r1, automatic=True)["run_id"]
+    job = _job_of(env, r2)
+    assert job["on_behalf_of"] == ALICE and job["grant_id"] == grant
+    assert str(job["payload"]["_identity"]["run_id"]).startswith(f"run_ct:{crun}/retry:{r1}/retry:")
+
+
 def test_a_this_build_only_grant_is_not_carried_to_another_build(env, staffed):  # noqa: F811
     _, crun, grant = _workflow_build(env)
     with env.engine.begin() as c:

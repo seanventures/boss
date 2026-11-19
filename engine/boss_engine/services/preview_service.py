@@ -4291,6 +4291,9 @@ _PREVIEW_BLOCKED_HEADER_NAMES = frozenset({
     # be told the wrong Host and a Content-Length that no longer matches the body we send.
     "host", "content-length", "connection", "keep-alive", "proxy-connection",
     "transfer-encoding", "te", "trailer", "upgrade", "expect",
+    # What THIS hop can read: the proxy edits HTML, so it asks the app for identity itself
+    # (proxy_preview) and the API compresses what it sends on (_plain_body).
+    "accept-encoding",
 })
 
 
@@ -4380,6 +4383,9 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
         req.add_header(header_name, header_value)
     if app_cookie_header:
         req.add_header("Cookie", app_cookie_header)
+    # THE APP ANSWERS UNCOMPRESSED (see _plain_body): the browser's Accept-Encoding is not ours
+    # to forward, because this hop edits HTML and the API compresses what it sends on.
+    req.add_header("Accept-Encoding", "identity")
     if row["mode"] == "rootfs" and sandbox_token:
         req.add_header("X-Sandbox-Token", sandbox_token)
     response_headers: dict = {}
@@ -4390,16 +4396,25 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
         if made:
             response_headers["Set-Cookie"] = made
 
+    too_large = (502, "text/plain; charset=utf-8",
+                 b"This preview's answer is too large to show (over BOSS_PREVIEW_MAX_BODY_MB "
+                 b"once decoded).", {})
     try:
         resp = urllib.request.build_opener(_NoRedirect()).open(req, timeout=25)
         status = resp.status
         ctype = resp.headers.get("Content-Type", "application/octet-stream")
-        data = resp.read()
+        data, encoding = _plain_body(resp.read(), resp.headers.get("Content-Encoding"))
         if resp.headers.get("Location"):
             response_headers["Location"] = resp.headers["Location"]
         _cookies_of(resp.headers)
+    except PreviewBodyTooLarge:
+        return too_large
     except urllib.error.HTTPError as e:
-        status, ctype, data = e.code, e.headers.get("Content-Type", "text/plain"), e.read()
+        status, ctype = e.code, e.headers.get("Content-Type", "text/plain")
+        try:
+            data, encoding = _plain_body(e.read(), e.headers.get("Content-Encoding"))
+        except PreviewBodyTooLarge:
+            return too_large
         if e.headers.get("Location"):
             response_headers["Location"] = e.headers["Location"]
         _cookies_of(e.headers)
@@ -4420,9 +4435,107 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     location = response_headers.get("Location")
     if location:
         response_headers["Location"] = _gateway_location(preview_id, location)
-    if "text/html" in (ctype or ""):
+    if encoding:
+        # Still encoded (an encoding this host cannot decode): passed on byte for byte, labelled
+        # as it came, and never edited — splicing text into compressed bytes is what garbled it.
+        response_headers["Content-Encoding"] = encoding
+    elif "text/html" in (ctype or ""):
         data = _inject_shim(data, f"/v1/previews/{preview_id}/web", at_root=serve_at_root)
     return status, ctype, data, response_headers
+
+
+class PreviewBodyTooLarge(Exception):
+    """An upstream body that decodes past BOSS_PREVIEW_MAX_BODY_MB."""
+
+
+#: Encodings stacked deeper than this are passed on undecoded (each layer multiplies a bomb).
+_MAX_STACKED_ENCODINGS = 2
+
+
+def preview_max_body_bytes() -> int:
+    try:
+        return max(1, int(float(os.environ.get("BOSS_PREVIEW_MAX_BODY_MB") or 32) * 1024 * 1024))
+    except ValueError:
+        return 32 * 1024 * 1024
+
+
+def _inflate(raw: bytes, wbits: int, limit: int) -> bytes:
+    """zlib-decode `raw` (every gzip member) without ever holding more than `limit` + 1 bytes of
+    output: decompressobj with max_length, fed its unconsumed tail. PreviewBodyTooLarge past it."""
+    import zlib
+
+    out = bytearray()
+    data = raw
+    while data:
+        d = zlib.decompressobj(wbits)
+        while data and not d.eof:
+            out += d.decompress(data, limit + 1 - len(out))
+            if len(out) > limit:
+                raise PreviewBodyTooLarge()
+            data = d.unconsumed_tail
+        if not d.eof:
+            out += d.flush(limit + 1 - len(out))
+            if len(out) > limit:
+                raise PreviewBodyTooLarge()
+            if not d.eof:
+                raise zlib.error("truncated stream")
+        # Another gzip member follows (gzip.decompress reads them all); anything else ends it.
+        data = d.unused_data if wbits == 31 and d.unused_data[:2] == b"\x1f\x8b" else b""
+    return bytes(out)
+
+
+def _decode_one(coding: str, data: bytes, limit: int) -> Optional[bytes]:
+    """`data` without one layer of `coding`, bounded by `limit`; None for an encoding this host
+    does not decode. br is never decoded here: the brotli module cannot bound its output."""
+    import zlib
+
+    if coding in ("gzip", "x-gzip"):
+        return _inflate(data, 31, limit)
+    if coding == "deflate":
+        try:
+            return _inflate(data, 15, limit)        # RFC 1950 (zlib-wrapped), what the RFC says
+        except zlib.error:
+            return _inflate(data, -15, limit)       # raw deflate, what some servers send
+    return None
+
+
+def _plain_body(raw: bytes, content_encoding: Optional[str]) -> tuple[bytes, str]:
+    """An upstream body without its Content-Encoding → (bytes, "") — or, when it is not undone
+    here, (the bytes as they came, the encoding they still carry).
+
+    A PREVIEW OPENED AS BINARY GARBAGE (recipe-box, 2026-11-18). The browser's
+    `Accept-Encoding: gzip, br` was forwarded, Next.js gzipped its HTML, and the shim was
+    spliced into the COMPRESSED bytes: `_inject_shim` decoded them as UTF-8 (dropping every
+    invalid byte, 0x8b first), found no <head>, prepended itself, and the API's GZip middleware
+    compressed the result once more. The browser undid one layer and showed the other as text;
+    every Next chunk was a gzip stream served as JavaScript. The proxy now asks for identity,
+    and an app that compresses anyway (gzip, deflate) is decoded here before anything reads or
+    edits the body.
+
+    AND NEVER INTO A BOMB (review of #223): a preview app is untrusted and may ignore the
+    identity request — 0.5 MB of gzip is 512 MB decoded, in the API process. Decoding is
+    bounded (BOSS_PREVIEW_MAX_BODY_MB, default 32; PreviewBodyTooLarge past it), at most two
+    stacked encodings are undone, and br (unboundable here) is passed on undecoded."""
+    codings = [c.strip().lower() for c in (content_encoding or "").split(",") if c.strip()]
+    codings = [c for c in codings if c != "identity"]
+    if not codings:
+        return raw, ""
+    if len(codings) > _MAX_STACKED_ENCODINGS:
+        return raw, ", ".join(codings)
+    limit = preview_max_body_bytes()
+    data = raw
+    for i in range(len(codings) - 1, -1, -1):
+        try:
+            decoded = _decode_one(codings[i], data, limit)
+        except PreviewBodyTooLarge:
+            raise
+        except Exception:  # noqa: BLE001 — a body that lies about its encoding is sent as it is
+            logger.debug("preview body did not decode as %s", codings[i], exc_info=True)
+            return data, ", ".join(codings[: i + 1])
+        if decoded is None:
+            return data, ", ".join(codings[: i + 1])
+        data = decoded
+    return data, ""
 
 
 def _is_boss_oidc(parsed: urllib.parse.SplitResult) -> bool:

@@ -189,7 +189,7 @@ def run_on_runner(h: Handoff, args: Any, *, session_key: str, collect_files: lis
                 Path(path).write_text(content, encoding="utf-8")
     remote_cwd = str(result.get("cwd") or "")
     if started.get("adopted") and remote_cwd and local_cwd and os.path.realpath(remote_cwd) != os.path.realpath(local_cwd):
-        carried = carry_tree(remote_cwd, local_cwd)
+        carried = carry_tree(remote_cwd, local_cwd, owner=h.owner)
         _log.warning("carried %s's turn output from %s into the resumed sandbox %s (%s)",
                      h.task_run_id, remote_cwd, local_cwd, carried)
     _close(h, sid, token)
@@ -292,46 +292,126 @@ def retained(path: Any) -> bool:
         return os.path.realpath(str(path)) in _RETAINED
 
 
-def _git_files(root: str) -> Optional[set[str]]:
-    try:
-        proc = owned_process.boss_run(["git", "-c", "safe.directory=*", "-C", root, "ls-files", "-co",
-                                       "--exclude-standard", "-z"], capture_output=True, timeout=120)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
+def _git_files(root: str, owner: Any = None) -> Optional[set[str]]:
+    """Tracked plus untracked-not-ignored files of `root`. Read-only git on a run's tree
+    (git_safety.tree_git): as the run's uid when `owner` holds one, pinned to its own .git, and
+    never an excludes file the tree's config names (core.excludesFile at a BOSS file was an oracle
+    for its lines). As BOSS's uid, .git/info/exclude is read without following a link (and only
+    with one hard link) and handed to git as a copy, never by name."""
+    from . import sandbox_identity, workspace_perms
+    from .git_safety import tree_git
+
+    holder = owner if owner is not None else owned_process.current_owner()
+    if sandbox_identity.for_owner(holder) is not None:
+        proc = tree_git(root, "ls-files", "-co", "--exclude-standard", "-z", owner=holder,
+                        timeout=120, text=False)
+    else:
+        import tempfile
+
+        exclude = workspace_perms.read_nofollow(root, ".git/info/exclude") or b""
+        with tempfile.NamedTemporaryFile(prefix="boss-exclude-", delete=True) as tmp:
+            tmp.write(exclude)
+            tmp.flush()
+            proc = tree_git(root, "ls-files", "-co", "--exclude-per-directory=.gitignore",
+                            f"--exclude-from={tmp.name}", "-z", owner=holder, timeout=120,
+                            text=False)
+    if proc is None or proc.returncode != 0:
         return None
     return {p for p in proc.stdout.decode("utf-8", errors="surrogateescape").split("\0") if p}
 
 
-def carry_tree(src: str, dst: str) -> dict[str, int]:
+#: The copy and removal of `carry_tree`, run AS THE RUN'S UID (owned_process): both trees are the
+#: run's, so every link on the way is one it planted and is followed with its authority only.
+#: stdin: {"have": [...], "want": [...]}; stdout: {"copied": n, "removed": n}.
+_CARRY_SCRIPT = r"""
+import json, os, shutil, sys
+src, dst = sys.argv[1], sys.argv[2]
+job = json.load(sys.stdin)
+have, want = job["have"], job["want"]
+top = lambda rel: rel.split("/", 1)[0] == ".git"
+present = sorted(r for r in have if not top(r) and os.path.lexists(os.path.join(src, r)))
+out = {"copied": 0, "removed": 0}
+for rel in present:
+    s, d = os.path.join(src, rel), os.path.join(dst, rel)
+    try:
+        os.makedirs(os.path.dirname(d) or dst, exist_ok=True)
+        if os.path.islink(s):
+            if os.path.lexists(d):
+                os.unlink(d)
+            os.symlink(os.readlink(s), d)
+        else:
+            if os.path.islink(d):
+                os.unlink(d)
+            shutil.copy2(s, d)
+        out["copied"] += 1
+    except OSError:
+        pass
+keep = set(present)
+for rel in sorted((set(want) | set(have)) - keep):
+    d = os.path.join(dst, rel)
+    if top(rel) or not os.path.lexists(d):
+        continue
+    try:
+        os.unlink(d)
+        out["removed"] += 1
+    except OSError:
+        pass
+print(json.dumps(out))
+"""
+
+
+def carry_tree(src: str, dst: str, *, owner: Any = None) -> dict[str, int]:
     """Make `dst`'s working tree what the turn left in `src` (both checkouts of the same branch):
     every tracked or untracked-not-ignored file of `src` copied over, every such file of `dst`
-    that `src` no longer has removed. `.git` is never touched. Then `src` goes."""
+    that `src` no longer has removed. `.git` is never touched. Then `src` goes.
+
+    THE RUN'S UID CONTROLS BOTH TREES (a tracked or planted symlink at any directory on the way),
+    so the copy and the removal never run as BOSS on a sandboxed run: they run as the run's uid
+    (one owned_process spawn of _CARRY_SCRIPT under `owner`), and a sandboxed tree with no
+    identity held is not carried at all. Only an unisolated machine (no sandbox uid: the agent is
+    BOSS's own uid there) copies as BOSS. `src` is kept when nothing could be read from it."""
+    import sys
+
+    from . import sandbox_identity, workspace_perms
+
     out = {"copied": 0, "removed": 0}
     if not os.path.isdir(src) or not os.path.isdir(dst):
         return out
-    have, want = _git_files(src), _git_files(dst)
-    if have is None:
+    holder = owner if owner is not None else owned_process.current_owner()
+    ident = sandbox_identity.for_owner(holder)
+    if ident is None and (workspace_perms.trusted_root_for(src) is not None
+                          or workspace_perms.trusted_root_for(dst) is not None):
+        _log.warning("carry_tree: %s is a sandboxed tree but no sandbox identity is held for "
+                     "its owner; nothing carried, %s kept", dst, src)
         return out
-    # `ls-files -c` also names tracked files the turn deleted: those are removals, not copies.
-    present = {rel for rel in have if os.path.lexists(os.path.join(src, rel)) and rel.split("/", 1)[0] != ".git"}
-    for rel in sorted(present):
-        s, d = os.path.join(src, rel), os.path.join(dst, rel)
-        os.makedirs(os.path.dirname(d) or dst, exist_ok=True)
-        with contextlib.suppress(OSError):
-            if os.path.islink(s):
-                if os.path.lexists(d):
-                    os.unlink(d)
-                os.symlink(os.readlink(s), d)
-            else:
-                shutil.copy2(s, d)
-            out["copied"] += 1
-    for rel in sorted(((want or set()) | have) - present):
-        if rel.split("/", 1)[0] == ".git" or not os.path.lexists(os.path.join(dst, rel)):
-            continue
-        with contextlib.suppress(OSError):
-            os.unlink(os.path.join(dst, rel))
-            out["removed"] += 1
+    have, want = _git_files(src, holder), _git_files(dst, holder)
+    if have is None:
+        try:
+            src_uid = os.lstat(src).st_uid
+        except OSError:
+            src_uid = None
+        if ident is not None and src_uid is not None and src_uid != ident.uid:
+            _log.warning("carry_tree: the turn's tree %s belongs to uid %s, but this run now "
+                         "holds uid %s (re-leased after the restart), which cannot read it; "
+                         "nothing carried, %s kept", src, src_uid, ident.uid, src)
+        else:
+            _log.warning("carry_tree: could not list the turn's tree %s; nothing carried, "
+                         "it is kept", src)
+        return out
+    try:
+        done = owned_process.run(
+            [sys.executable, "-I", "-c", _CARRY_SCRIPT, src, dst],
+            input=json.dumps({"have": sorted(have), "want": sorted(want or ())}),
+            capture_output=True, text=True, timeout=600,
+            **({"owner": holder} if holder is not None else {}),
+            **({} if ident is not None else {"sandboxed": False}))
+        got = json.loads(done.stdout or "{}") if done.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        got = None
+    if not isinstance(got, dict):
+        _log.warning("carry_tree: the copy from %s into %s failed; %s kept", src, dst, src)
+        return out
+    out.update({k: int(got.get(k) or 0) for k in out})
     with _RETAINED_LOCK:
         _RETAINED.discard(os.path.realpath(src))
     shutil.rmtree(src, ignore_errors=True)
