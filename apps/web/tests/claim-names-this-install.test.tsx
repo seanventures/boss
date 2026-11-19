@@ -60,6 +60,30 @@ describe("onLoopback", () => {
 });
 
 describe("the claim page without a link", () => {
+  it("labels the clipboard content as a command, not a setup link", async () => {
+    window.history.replaceState(null, "", "/claim");
+    const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    const el = await mount(<ClaimFlow options={options(null)} />);
+    const button = el.querySelector("[data-testid='claim-no-token'] button") as HTMLButtonElement;
+    expect(button.textContent).toBe("Copy command");
+    expect(el.querySelector("[data-testid='claim-copy-link']")).toBeNull();
+    await act(async () => button.click());
+    expect(writeText).toHaveBeenCalledWith("boss identity setup-link");
+    writeText.mockRestore();
+  });
+
+  it("copies the actual URL only when a setup token is already present", async () => {
+    window.history.replaceState(null, "", "/claim#t=bst_test_only");
+    const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    const el = await mount(<ClaimFlow options={options(null)} />);
+    const button = el.querySelector("[data-testid='claim-copy-link'] button") as HTMLButtonElement;
+    expect(button.textContent).toBe("Copy setup link");
+    await act(async () => button.click());
+    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/claim#t=bst_test_only`);
+    writeText.mockRestore();
+    window.history.replaceState(null, "", "/claim");
+  });
+
   it("names the second install's command and says nothing about the network on localhost", async () => {
     window.history.replaceState(null, "", "/claim");
     expect(onLoopback(window.location.hostname)).toBe(true);

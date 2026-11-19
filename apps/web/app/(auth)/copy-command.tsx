@@ -9,7 +9,7 @@ import React, { useState } from "react";
  * you only ever paste is busywork, so the command is copied whole; it still selects in one
  * click where the clipboard is unavailable (plain http to a non-localhost address).
  */
-export function CopyCommand({ command }: { command: string }) {
+export function CopyCommand({ command, label = "Copy" }: { command: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="idn-cmd">
@@ -22,7 +22,7 @@ export function CopyCommand({ command }: { command: string }) {
             window.setTimeout(() => setCopied(false), 1500);
           } catch { /* no clipboard here; the text still selects in one click */ }
         }}>
-        {copied ? "Copied" : "Copy"}
+        {copied ? "Copied" : label}
       </button>
     </div>
   );
