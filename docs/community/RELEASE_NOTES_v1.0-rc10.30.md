@@ -11,7 +11,6 @@ This is a test candidate. Cutting the tag does not deploy a host or publish an i
 - Easy Mode runs a quick spec panel first, then build, P1 tests, preview, and deploy to staging. When there is no server to deploy to, the deploy step is skipped and says so in plain words.
 - Every Easy Mode build always gets its delivery workflow, under the one consent you give at the start.
 - Easy Mode never auto-merges. You press **Approve and merge**.
-- Starting Easy Mode no longer holds up sign-in while the spec panel launches.
 
 **Merging**
 
@@ -28,6 +27,9 @@ This is a test candidate. Cutting the tag does not deploy a host or publish an i
 - Previews are kept running while memory allows. **Recreate preview** rebuilds one, and a sleeping link wakes the preview when you open it.
 
 ## Known issues
+
+- When a model fails because of your setup (for example a plain `http://` address), Easy Mode's panel shows one clear card plus a second, vaguer "Background job · Panel step" card; use the clear one. Retrying both can run the panel twice.
+- A model added under **Local › Other URL** (LM Studio, vLLM) shows Working but cannot be used yet. Use Ollama, or an `https://` address under API key › Other.
 
 - **Command Center may still say "Connect a repository"** when your code is kept on this machine. Setup shows Repos as **On this machine**, and builds work; you can ignore that card.
 - **A model at a plain `http://` address** (LM Studio, vLLM or LiteLLM on your network, added under **API key › Other**) passes its connection test, then builds refuse to send it the key. Use an `https://` address for now. OpenRouter, OpenAI, Anthropic, Gemini and xAI are not affected.
@@ -46,4 +48,4 @@ This is a test candidate. Cutting the tag does not deploy a host or publish an i
 ## Checks
 
 - The version pins match `1.0.0-rc.10.30` (`engine/tests/test_distribution_contract.py`).
-- Stranger test: pending
+- Stranger test: a clean install of this exact commit, following README and QUICKSTART, passed (round 9: SHIP), including the failure path with a misconfigured model. On a laptop, a fresh Easy Mode project went spec panel → build → ready with follow-ups → merged → app open in the browser, and its follow-up opened its own change
