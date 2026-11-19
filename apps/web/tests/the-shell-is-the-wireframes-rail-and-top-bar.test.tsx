@@ -137,6 +137,21 @@ describe("the rail", () => {
     expect(railProjects(list, "a").map((x) => x.id)).toEqual(["c", "b", "d", "e", "a"]);
   });
 
+  it("railProjects: the newest project and the one opened last always have a row, the cap still holds", () => {
+    // 2026-11-19: Park bench map, just made, was hidden under five projects that needed you more.
+    const p = (name: string, needs: number, at: string, created = "2026-01-01"): RailProject =>
+      ({ id: name, name, needs, at, dot: "done", created });
+    const list = [p("a", 2, "9"), p("b", 2, "8"), p("c", 1, "7"), p("d", 1, "6"), p("e", 1, "5"),
+                  p("f", 0, "4"), p("new", 0, "1", "2026-11-19"), p("g", 0, "3")];
+    expect(railProjects(list, null).map((x) => x.id)).toEqual(["a", "b", "c", "d", "new"]);
+    // The open one, the one opened last and the newest: three kept, ranked order, five rows.
+    expect(railProjects(list, "g", RAIL_PROJECTS_MAX, "f").map((x) => x.id)).toEqual(["a", "b", "f", "g", "new"]);
+    // Already in the top five: nothing moves.
+    expect(railProjects(list, "a", RAIL_PROJECTS_MAX, "b").map((x) => x.id)).toEqual(["a", "b", "c", "d", "new"]);
+    // A remembered project that is gone (archived, deleted) takes no row.
+    expect(railProjects(list, null, RAIL_PROJECTS_MAX, "gone")).toHaveLength(RAIL_PROJECTS_MAX);
+  });
+
   it("fits a 900px window: compact rows, a scrolling area list, a footer that stays, a full-height colour", () => {
     const css = readFileSync("app/shell.css", "utf8");
     const px = (re: RegExp) => Number(css.match(re)?.[1]);

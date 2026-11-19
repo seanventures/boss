@@ -153,3 +153,47 @@ describe("resolveDeepLinkOwner, per object type", () => {
     expect(seen[0]?.startsWith("https://api.internal/v1/console/resolve-owner")).toBe(true);
   });
 });
+
+describe("explainObjectMiss: only no answer is Can't reach BOSS", () => {
+  const target = { param: "build", type: "build", id: "crun_1caf" };
+  const answer = (status: number, body: unknown = {}) => async () =>
+    ({ ok: status < 400, status, json: async () => body });
+
+  it("a 5xx or no answer at all is unreachable, and the resolver is not asked", async () => {
+    const { explainObjectMiss, objectMissWords } = await import("../app/console-owner");
+    let asked = 0;
+    const fetchImpl = async () => { asked += 1; return { ok: true, status: 200, json: async () => ({}) }; };
+    for (const status of [null, 500, 503]) {
+      const miss = await explainObjectMiss({ target, projectId: "boss-dogfood", status, fetchImpl });
+      expect(miss).toEqual({ kind: "unreachable" });
+      expect(objectMissWords(miss, "build")).toBe("Can't reach BOSS");
+    }
+    expect(asked).toBe(0);
+  });
+
+  it("a 404 for a build of another project names that project", async () => {
+    const { explainObjectMiss, objectMissWords, resolveOwnerPath } = await import("../app/console-owner");
+    const paths: string[] = [];
+    const miss = await explainObjectMiss({ target, projectId: "boss-dogfood", status: 404,
+      fetchImpl: async (path) => { paths.push(path); return answer(200, { project_id: "park-bench-map-e86c6d9e", project_name: "Park bench map", can_view: true })(); } });
+    expect(paths).toEqual([resolveOwnerPath(target, "boss-dogfood")]);
+    expect(miss).toEqual({ kind: "elsewhere", projectId: "park-bench-map-e86c6d9e", projectName: "Park bench map" });
+    expect(objectMissWords(miss, "build")).toBe("This build belongs to Park bench map, opening it…");
+  });
+
+  it("a 403/404 the resolver cannot place, or places here, or hides, is not here", async () => {
+    const { explainObjectMiss } = await import("../app/console-owner");
+    const cases = [answer(404), answer(403), answer(200, { project_id: "boss-dogfood", can_view: true }),
+                   answer(200, { project_id: "park", can_view: false })];
+    for (const fetchImpl of cases) {
+      expect(await explainObjectMiss({ target, projectId: "boss-dogfood", status: 403, fetchImpl })).toEqual({ kind: "not_here" });
+    }
+  });
+
+  it("a resolver that cannot be reached is unreachable", async () => {
+    const { explainObjectMiss } = await import("../app/console-owner");
+    const fetchImpl = async () => { throw new Error("offline"); };
+    expect(await explainObjectMiss({ target, projectId: "p", status: 404, fetchImpl })).toEqual({ kind: "unreachable" });
+    expect(await explainObjectMiss({ target, projectId: "p", status: 404, fetchImpl: answer(502) })).toEqual({ kind: "unreachable" });
+  });
+});

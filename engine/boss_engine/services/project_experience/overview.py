@@ -873,6 +873,8 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
                     "placeholder": is_placeholder(pid, repo=primary.get(pid), worked=worked,
                                                   targets=bool(tgs), onboarded=bool(onb)),
                     **_card_cost(connection, pid, now),
+                    # The rail keeps the person's newest project in view (apps/web projects/nav.tsx).
+                    "created_at": iso(p["created_at"]),
                     "updated_at": iso(updated), "href": project_href(pid)})
     return out
 

@@ -170,6 +170,18 @@ describe("a link inside the console keeps who you are", () => {
     expect(p.get("run")).toBe("crun_1");
   });
 
+  it("carries the project too, so a build link from a project opens in that project", async () => {
+    // 2026-11-19: "Build ↗" from Park bench map opened ?org=…&area=code_tasks&build=… with no
+    // project, and the build page loaded under the home project.
+    const { consoleHref } = await import("../app/url-intent");
+    const here = "?org=org_boss&project_id=park-bench-map-e86c6d9e&area=activity";
+    const p = new URLSearchParams(consoleHref(here, { area: "code_tasks", run: "crun_1" }).slice(1));
+    expect(p.get("project_id")).toBe("park-bench-map-e86c6d9e");
+    // A link that names another project wins; an explicit null is the home project.
+    expect(new URLSearchParams(consoleHref(here, { area: "project", project_id: "other" }).slice(1)).get("project_id")).toBe("other");
+    expect(new URLSearchParams(consoleHref(here, { area: "project", project_id: null }).slice(1)).get("project_id")).toBeNull();
+  });
+
   it("accepts the other spelling links have shipped with", async () => {
     const { consoleHref } = await import("../app/url-intent");
     const href = consoleHref("?org_id=org_boss", { area: "meetings" });
