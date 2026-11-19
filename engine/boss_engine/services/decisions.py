@@ -1342,6 +1342,25 @@ class DecisionService:
                     _log.exception("retry once set failed for %s", run_id)
 
             _spawn_as_this_request(_retry)
+        elif action == "start_delivery_workflow":
+            # START IT NOW (code_task_service.start_delivery_workflow): the build's delivery
+            # workflow did not start when the build did. The person's approval starts it, adopting
+            # the build, under the authority the build runs under — or says why it still cannot.
+            from .code_task_service import attach_delivery_workflow
+
+            build_run = str(recommendation.get("run_id") or "")
+            already = connection.execute(text(
+                "SELECT finalize_ctx->>'workflow_run_id' FROM code_task_runs WHERE id = :r"),
+                {"r": build_run}).scalar()
+            if not already and attach_delivery_workflow(connection, build_run) is None:
+                why = connection.execute(text(
+                    "SELECT finalize_ctx->'workflow_start_error'->>'reason' FROM code_task_runs "
+                    "WHERE id = :r"), {"r": build_run}).scalar()
+                raise InvalidDecisionTransitionError(
+                    "The delivery workflow still did not start"
+                    + (f": {why}." if why else ".") + " The card stays open; try again once that is fixed.")
+            emit_event(connection, row["project_id"], "code_task.workflow_started_by_person", actor,
+                       "code_task_run", build_run, {"decision_id": row["id"]})
         elif action == "start_recheck_followup":
             # FIX THESE (change_recheck, #168 review R1): a re-check never starts a build on its
             # own; a person with the steer permission starts the follow-up here.

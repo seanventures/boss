@@ -53,6 +53,8 @@ export type ConsentRequest = {
   max_days: number | null;
   /** A multi-repo app's repositories for this run, when the API sent them. */
   multirepo?: MultiRepoConsent | null;
+  /** One line on what this consent also covers (a new piece of work: its delivery workflow). */
+  covers?: string | null;
   /** Called with the new grant id, or null when the person cancels. */
   onDecided?: (grantId: string | null) => void;
 };
@@ -114,6 +116,7 @@ export function consentFromBody(raw: unknown): ConsentRequest | null {
   const taskRunId = str(b.task_run_id) || null;
   return {
     scope: str(b.scope) || null,
+    covers: str(b.covers) || null,
     task: str(b.task) || "this work",
     task_run_id: taskRunId,
     agents,

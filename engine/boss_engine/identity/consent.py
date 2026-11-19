@@ -229,7 +229,8 @@ def _lineage_person(db: Any, run_id: str) -> tuple[Optional[str], Optional[Actin
 
 def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_keys: Iterable[str],
                       permissions: Iterable[str], repos: Iterable[str] = (), task: str, run_id: Optional[str],
-                      github_needs: Optional[dict[str, str]] = None, db: Any) -> Optional[Acting]:
+                      github_needs: Optional[dict[str, str]] = None, db: Any,
+                      covers: Optional[str] = None) -> Optional[Acting]:
     """The Acting (person + covering grant) the work runs under, or ConsentRequired.
 
     A person in a console session gets the consent sheet. A person using a PAT, an API key or an
@@ -283,6 +284,7 @@ def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_
             "max_days": int(pol.delegation_max_days),
             "hint": "No grant of yours covers this. Open the link to give consent in the console, then "
                     "retry with the same key.",
+            **({"covers": covers} if covers else {}),
         }))
     raise ConsentRequired(offer_link(db, ctx, {
         "error": "consent_required",
@@ -296,6 +298,7 @@ def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_
                       {"kind": "standing", "label": f"For {int(pol.delegation_default_days)} days",
                        "days": int(pol.delegation_default_days)}],
         "max_days": int(pol.delegation_max_days),
+        **({"covers": covers} if covers else {}),
     }))
 
 
@@ -802,16 +805,92 @@ def own_github_refusal(db: Any, *, org_id: str, person_id: str, project_id: str,
     return {"state": "refused", **refused, "linked": linked}
 
 
+#: The one line the consent sheet shows when the person's consent to start work also covers that
+#: work's delivery workflow (operator, 2026-11-19: "Why we need approval for starting the workflow").
+DELIVERY_COVERS = ("Covers this build and its delivery workflow: tests, review, preview, staging deploy, "
+                   "smoke test and monitoring. Merging to main, production deploys, spending past the "
+                   "budget and permission changes still ask you.")
+
+
+def inherit_build_authority(db: Any, build: Acting, *, workflow_run_id: str, ctx: Any = None,
+                            ambient: Optional[Acting] = None) -> Optional[Acting]:
+    """THE DELIVERY WORKFLOW RUNS UNDER THE CONSENT THAT STARTED ITS BUILD.
+
+    A person starts work once (Easy Mode, a template, Try a sample, New work) and consents once.
+    The outer workflow run that carries that build through tests, review, preview, staging deploy,
+    smoke test and monitoring is the same work, so it never asks again. It was asking: the build's
+    grant ("for this build only", bound to `run_ct:<build>`) did not cover `run_wf:<run>`, so
+    require_for_workflow raised consent_required inside the build's start, the start swallowed it,
+    and every Easy Mode build ran with no workflow at all (2026-11-19, Neighborhood board).
+
+    Returns the Acting to record on the workflow run (`run_wf:<run>`, the build's person and
+    grant), or None when there is nothing to carry (BOSS's own build, a delegated chain, another
+    person's build, a grant that is gone) — the caller then decides as before.
+
+    A "for this build only" grant is MOVED to the workflow run: `task_run_id` becomes
+    `run_wf:<run>` and the build's first job is re-stamped `run_wf:<run>`, so the build mints
+    `run_wf:<run>/ct:<build>` exactly as a build the workflow started itself, and the grant ends
+    with the workflow run (maintenance.end_workflow_task_grants), not when the build finishes and
+    the deploy is still to come. A standing grant is recorded as it is."""
+    from sqlalchemy import text
+
+    from . import grants, lineage
+
+    if build is None or not build.grant_id or build.chain or getattr(build, "system", False) \
+            or str(build.principal_id or "").startswith("sys_"):
+        return None
+    if ctx is not None and ctx.run_token is None and ctx.principal.id != build.principal_id \
+            and not _is_system(ctx.principal):
+        return None                                   # someone else's build: never their grant
+    if ctx is None and ambient is not None and not (
+            ambient.system or str(ambient.principal_id).startswith("sys_")
+            or ambient.principal_id == build.principal_id):
+        return None
+    g = grants.load(build.grant_id, db=db)
+    if g is None or g.user_principal_id != build.principal_id or not grants.is_live(g):
+        return None
+    wf_run = f"run_wf:{workflow_run_id}"
+    if g.task_run_id and not grants.run_matches(g, wf_run):
+        old = str(g.task_run_id)
+        build_run = str(build.run_id or "")
+        if not (old.startswith("run_ct:") and build_run == old):
+            return None                               # bound to some other run: not this build's
+        moved = db.execute(text("UPDATE identity_delegation_grants SET task_run_id = :w WHERE id = :g "
+                                "AND task_run_id = :old RETURNING id"),
+                           {"w": wf_run, "g": g.id, "old": old}).scalar()
+        if not moved:
+            return None
+        crun = old[len("run_ct:"):]
+        db.execute(text(
+            "UPDATE jobs SET payload = jsonb_set(payload, '{_identity,run_id}', to_jsonb(CAST(:w AS text))) "
+            "WHERE kind = 'code.task' AND payload->>'run_id' = :c AND grant_id = :g "
+            "AND payload->'_identity' IS NOT NULL"), {"w": wf_run, "c": crun, "g": g.id})
+        lineage.grant_event(db, grants.load(g.id, db=db) or g, "delegation.extended", details={
+            "change": "carried_to_delivery_workflow", "from_run": old, "to_run": wf_run})
+    return Acting(principal_id=build.principal_id, org_id=build.org_id or g.org_id, grant_id=g.id,
+                  run_id=wf_run)
+
+
 def require_for_workflow(db: Any, *, project_id: str, spec: Any, input_data: Any, run_id: str,
-                         parent_run_id: Optional[str] = None, title: str = "") -> Optional[Acting]:
+                         parent_run_id: Optional[str] = None, title: str = "",
+                         inherit: Optional[Acting] = None) -> Optional[Acting]:
     """At workflow-run start. Returns the Acting to record on the run, None when identity does not
     apply (system start, no Passports), or raises ConsentRequired (a person) / AuthorityLost (a
-    schedule's or job's grant that no longer covers)."""
+    schedule's or job's grant that no longer covers).
+
+    `inherit`: the authority of the build this run is the delivery workflow OF (the outer run
+    code_task_service starts for a person's new work). That run never asks for its own consent:
+    the person's one consent at the start covers the whole delivery workflow
+    (`inherit_build_authority`)."""
     from . import grants, lineage
 
     wf_run = f"run_wf:{run_id}"
     ctx = lineage.current_context()
     ambient = lineage.current()
+    if inherit is not None:
+        carried = inherit_build_authority(db, inherit, workflow_run_id=run_id, ctx=ctx, ambient=ambient)
+        if carried is not None:
+            return carried
     if parent_run_id:
         # A CHILD RUN INHERITS ITS PARENT'S AUTHORITY ONLY FOR THAT AUTHORITY'S OWN PERSON (#2):
         # naming someone else's run as the parent is not a way to run under their grant. Allowed:
