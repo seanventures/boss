@@ -129,3 +129,20 @@ def test_resolve_owner_route_records_the_console_resolve_owner_metric(engine, cl
                            params={"type": "build", "id": build_id, "project_id": world.project_a})
     assert resp.status_code == 200
     assert console_links.resolve_owner_metric_value("build", "resolved") == before + 1
+
+
+def test_a_preview_links_recreate_resolves_to_the_previews_own_project(engine, client):
+    """A preview link's "Recreate preview in BOSS" carries only the preview id (security review
+    #230); the resolver opens its project for a person who may read it."""
+    world = IdentityWorld.create(engine)
+    alice = world.principal("alice")
+    world.bind(alice, "operator", project=world.project_a)
+    world.bind(alice, "operator", project=world.project_b)
+    preview_id = f"prev_{uuid.uuid4().hex[:12]}"
+    with engine.begin() as db:
+        db.execute(text("INSERT INTO app_previews (id, project_id, status, mode) VALUES "
+                        "(:id, :p, 'stopped', 'process')"), {"id": preview_id, "p": world.project_b})
+    with world.acting_as(world.ctx(alice)):
+        resp = client.get("/v1/console/resolve-owner",
+                          params={"type": "preview", "id": preview_id, "project_id": world.project_a})
+    assert resp.status_code == 200 and resp.json()["project_id"] == world.project_b

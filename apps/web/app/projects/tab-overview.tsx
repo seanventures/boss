@@ -26,6 +26,7 @@ import { GitHubWait } from "../../components/github-wait";
 import { ExtensionSlots } from "../extension-frame";
 import { addFeaturePatch } from "../../lib/compose-links";
 import { FailedActions } from "./build-failed";
+import { YourAppCard } from "./your-app";
 
 /** Each Needs-you card's icon, by what it asks. */
 const NEED_ICON: Record<string, Icon> = { merge: GitMerge, deploy: RocketLaunch, plan: ListChecks, setup: Wrench, question: Question };
@@ -154,6 +155,9 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
           {failed("journey") ?? <Journey nodes={ov.journey} onOpen={(n) => goHref(ctx, n.href, () => ctx.open("stage", n.key))} />}
         </section>
       ) : null}
+
+      {/* YOUR APP: the app, always one press away (asleep wakes on Open app). */}
+      {ov.app ? <YourAppCard app={ov.app} projectId={ctx.projectId} actor={ctx.actor} onStarted={ctx.refreshOverview} /> : null}
 
       <div className="px-grid px-g4" data-testid="px-tiles">
         <Tile label="Open work" icon={Kanban} c="blue" testid="px-tile-work" onClick={() => goHref(ctx, t.open_work?.href ?? "", () => ctx.tab("work"))}>

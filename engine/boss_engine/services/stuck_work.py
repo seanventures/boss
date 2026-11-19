@@ -1022,6 +1022,46 @@ def _act(connection: Any, settings: Any, run_id: str, move: str,
 
 CARD_ACTION = "stuck_work_needs_person"
 
+#: How long a queued job may wait with no worker activity anywhere before "no worker is taking
+#: work from the queue" is TRUE (the precheck's sandbox.worker uses the same 10/15 minutes).
+STARVED_QUEUED_MINUTES = 10
+STARVED_IDLE_MINUTES = 15
+
+
+def queue_starved(connection: Any, *, now: Optional[datetime] = None) -> Optional[dict[str, Any]]:
+    """IS THE QUEUE STARVED RIGHT NOW? BOSS checks this itself instead of asking a person to
+    restart a worker (Recipe box, 2026-11-19: "No worker is taking work from the queue. Restart
+    BOSS's worker" sat in Needs you while the worker was healthy and the queue empty).
+
+    Starved = a job has waited queued and unleased for STARVED_QUEUED_MINUTES AND no worker has
+    shown a sign of life (a heartbeat, a live lease, or a job it finished) for
+    STARVED_IDLE_MINUTES, install-wide (the worker is not project-scoped). Returns the evidence
+    ({"queued": n, "last_activity": at}) when starved, else None. Never raises: a queue BOSS cannot
+    read is not proof of a dead worker."""
+    now = now or _now()
+    try:
+        with connection.begin_nested():
+            row = connection.execute(text(
+                "SELECT (SELECT count(*) FROM jobs WHERE status = 'queued' AND lease_owner IS NULL "
+                "        AND COALESCE(run_after, created_at) < :queued_before) AS queued, "
+                "       GREATEST((SELECT max(heartbeat_at) FROM jobs), "
+                "                (SELECT max(updated_at) FROM jobs WHERE status IN "
+                "                 ('succeeded', 'completed', 'failed', 'deadlettered')), "
+                "                (SELECT max(lease_expires_at) FROM jobs WHERE lease_owner IS NOT NULL "
+                "                 AND lease_expires_at > :now)) AS last_activity"),
+                {"queued_before": now - timedelta(minutes=STARVED_QUEUED_MINUTES),
+                 "now": now}).mappings().first()
+    except Exception:  # noqa: BLE001 — unreadable is "not proven starved"
+        log.debug("queue_starved: could not read the queue", exc_info=True)
+        return None
+    queued = int((row or {}).get("queued") or 0)
+    last = _aware((row or {}).get("last_activity"))
+    if not queued:
+        return None
+    if last is not None and now - last <= timedelta(minutes=STARVED_IDLE_MINUTES):
+        return None
+    return {"queued": queued, "last_activity": last.isoformat() if last else None}
+
 
 #: BOSSAPP-885: the causes a manager AGENT can act on — the build itself stopped moving (BOSS's
 #: bounded fixes did not get it going). Platform causes (a crash loop, no worker, a budget cap, a
@@ -1047,6 +1087,10 @@ def _raise_card(connection: Any, run_id: str, ev: Mapping[str, Any], tri: Mappin
     run = ev.get("run") or {}
     project = run.get("project_id")
     cause_code = str(tri.get("cause_code") or "")
+    if cause_code == "no_worker" and queue_starved(connection) is None:
+        # BOSS CAN CHECK THIS ITSELF: a worker is taking work (or nothing waits in the queue),
+        # so a person is never told to restart one.
+        return None
     if chain:
         if org_chain.open_for_run(connection, run_id) is not None:
             return None

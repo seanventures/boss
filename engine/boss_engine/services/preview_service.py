@@ -26,7 +26,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from sqlalchemy import text
 
@@ -3927,7 +3927,7 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         with begin(engine) as c:
             c.execute(text(
                 "UPDATE app_previews SET status='running', pid=:pid, port=:port, url=:url, "
-                "log_path=:lg WHERE id=:id"),
+                "log_path=:lg, error=NULL WHERE id=:id"),
                 {"pid": proc.pid, "port": port, "url": url, "lg": log_path, "id": preview_id})
     except Exception:  # noqa: BLE001 — best-effort; a failed respawn just leaves it 'stopped'
         _release_preview_sandbox(preview_id)
@@ -3979,8 +3979,11 @@ def reconcile_previews(engine, settings: Settings) -> dict[str, int]:
             _teardown(row, settings)
         with begin(engine) as c:
             c.execute(
-                text("UPDATE app_previews SET status=:status WHERE id=:id AND status='running'"),
-                {"status": target_status, "id": row["id"]},
+                text("UPDATE app_previews SET status=:status, error=COALESCE(error, :why) "
+                     "WHERE id=:id AND status='running'"),
+                {"status": target_status, "id": row["id"],
+                 "why": ("Stopped by BOSS: past its time limit." if target_status == "expired"
+                         else "Stopped by BOSS: it stopped answering.")},
             )
         if target_status == "expired":
             expired += 1
@@ -4021,51 +4024,85 @@ def _respawn_allowed(engine, settings: Settings) -> bool:
         return False
 
 
-def reap_previews(engine, settings: Settings, *, idle_minutes: Optional[int] = None,
-                  now: Optional[datetime] = None) -> dict[str, int]:
-    """THE PERIODIC PREVIEW REAPER (stability spec §4a.6). Expiry used to happen only when
-    somebody listed previews or the API booted, so an unlisted 60-minute preview ran forever.
+#: PREVIEWS ARE KEPT WHILE THERE IS ROOM (operator, 2026-11-19: "the preview is very important —
+#: retain it if there's enough memory"). An idle or past-its-time preview is stopped only when the
+#: host is under pressure or more previews run than the cap; otherwise it keeps running and its
+#: time limit is renewed. Both thresholds are settings:
+#:   BOSS_PREVIEW_MAX_RUNNING      previews that may run at once (default 6)
+#:   BOSS_PREVIEW_MEMORY_FLOOR_PCT the host is "under pressure" below this much free memory
+#:                                 (default 20, the admission ladder's L1), or with memory PSI
+#:                                 full avg60 >= 2, or load per core >= 1.5
+DEFAULT_PREVIEW_MAX_RUNNING = 6
+DEFAULT_PREVIEW_MEMORY_FLOOR_PCT = 20.0
+#: A kept preview's time limit is renewed when it has less than this left.
+_RENEW_WITHIN = timedelta(minutes=10)
 
-    * past its TTL → torn down, `expired`;
-    * its process or container is gone → `stopped`;
-    * nobody has opened it (no proxied request) for `idle_minutes` → torn down, `stopped`.
+
+def preview_max_running() -> int:
+    try:
+        return max(1, int(os.environ.get("BOSS_PREVIEW_MAX_RUNNING") or DEFAULT_PREVIEW_MAX_RUNNING))
+    except ValueError:
+        return DEFAULT_PREVIEW_MAX_RUNNING
+
+
+def preview_memory_floor_pct() -> float:
+    try:
+        return float(os.environ.get("BOSS_PREVIEW_MEMORY_FLOOR_PCT") or DEFAULT_PREVIEW_MEMORY_FLOOR_PCT)
+    except ValueError:
+        return DEFAULT_PREVIEW_MEMORY_FLOOR_PCT
+
+
+def host_under_pressure(engine=None) -> bool:
+    """Is the host short of memory or CPU right now (the admission sample)? Unknown is no."""
+    try:
+        from .admission import MAX_LOAD_PER_CORE, sample
+
+        cap = sample()
+    except Exception:  # noqa: BLE001 — no reading is not pressure
+        return False
+    if cap.total_mb > 0 and 100.0 * cap.available_mb / cap.total_mb < preview_memory_floor_pct():
+        return True
+    return cap.psi_full_avg60 >= 2 or cap.load_per_core >= MAX_LOAD_PER_CORE
+
+
+def reap_previews(engine, settings: Settings, *, idle_minutes: Optional[int] = None,
+                  now: Optional[datetime] = None,
+                  pressure: Optional[Callable[[], bool]] = None,
+                  max_running: Optional[int] = None) -> dict[str, int]:
+    """THE PERIODIC PREVIEW REAPER (stability spec §4a.6), MEMORY-AWARE (2026-11-19).
+
+    * its process or container is gone → `stopped` (always: there is nothing to keep);
+    * idle (nobody opened it for `idle_minutes`) or past its time limit → a CANDIDATE. A candidate
+      is stopped only when the host is under pressure (`pressure()`, default host_under_pressure)
+      or more than `max_running` previews run; older previews of the same app go first, and an
+      app's latest preview goes only if the pressure is still there after them. A candidate that
+      is kept has its time limit renewed. The reason is on the row: "to free memory" / "to make
+      room", so the console can say why.
     """
     now = now or datetime.now(timezone.utc)
     if idle_minutes is None:
         idle_minutes = int(os.environ.get("BOSS_PREVIEW_IDLE_MINUTES") or 20)
+    pressure = pressure or (lambda: host_under_pressure(engine))
+    cap_n = max_running if max_running is not None else preview_max_running()
     with begin(engine) as c:
         rows = [dict(r) for r in c.execute(text(
-            "SELECT id, project_id, pid, mode, container_id, sandbox_task_id, expires_at, "
-            "created_at, last_seen_at FROM app_previews WHERE status = 'running'"
+            "SELECT id, project_id, run_id, repo, pid, mode, container_id, sandbox_task_id, "
+            "expires_at, created_at, last_seen_at FROM app_previews WHERE status = 'running'"
         )).mappings().all()]
-    out = {"checked": len(rows), "expired": 0, "dead": 0, "idle": 0}
-    for row in rows:
-        mode = row.get("mode") or "process"
-        if mode == FIXTURE_MODE:
-            continue
-        expires = row.get("expires_at")
-        if expires is not None and expires.tzinfo is None:
-            expires = expires.replace(tzinfo=timezone.utc)
-        seen = row.get("last_seen_at") or row.get("created_at")
-        if seen is not None and getattr(seen, "tzinfo", None) is None:
-            seen = seen.replace(tzinfo=timezone.utc)
-        if expires is not None and expires <= now:
-            status, why, key = "expired", "past its time limit", "expired"
-        elif mode == "process" and not _process_alive(row.get("pid")):
-            status, why, key = "stopped", "its process exited", "dead"
-        elif mode == "docker" and not _docker_alive(row.get("container_id")):
-            status, why, key = "stopped", "its container exited", "dead"
-        elif idle_minutes and seen is not None and now - seen > timedelta(minutes=idle_minutes):
-            status, why, key = "stopped", f"nobody opened it for {idle_minutes} min", "idle"
-        else:
-            continue
+    out = {"checked": len(rows), "expired": 0, "dead": 0, "idle": 0, "memory": 0, "room": 0,
+           "kept": 0}
+
+    def aware(v):
+        return v.replace(tzinfo=timezone.utc) if v is not None and v.tzinfo is None else v
+
+    def stop(row: dict, status: str, why: str, key: str) -> None:
         try:
             _teardown(row, settings)
         except Exception:  # noqa: BLE001 — mark it anyway; the substrate sweep follows up
             pass
         with begin(engine) as c:
             changed = c.execute(text(
-                "UPDATE app_previews SET status = :s, error = COALESCE(error, :e) "
+                "UPDATE app_previews SET status = :s, error = :e "
                 "WHERE id = :id AND status = 'running'"),
                 {"s": status, "e": f"Stopped by BOSS: {why}.", "id": row["id"]}).rowcount
             if changed:
@@ -4077,6 +4114,80 @@ def reap_previews(engine, settings: Settings, *, idle_minutes: Optional[int] = N
                 except Exception:  # noqa: BLE001 — the stop stands without its log line
                     pass
         out[key] += 1
+
+    alive: list[dict] = []
+    candidates: list[dict] = []
+    for row in rows:
+        mode = row.get("mode") or "process"
+        if mode == FIXTURE_MODE:
+            continue
+        if mode == "process" and not _process_alive(row.get("pid")):
+            stop(row, "stopped", "its process exited", "dead")
+            continue
+        if mode == "docker" and not _docker_alive(row.get("container_id")):
+            stop(row, "stopped", "its container exited", "dead")
+            continue
+        alive.append(row)
+        expires = aware(row.get("expires_at"))
+        seen = aware(row.get("last_seen_at") or row.get("created_at"))
+        row["_expired"] = expires is not None and expires <= now
+        row["_idle"] = bool(idle_minutes and seen is not None
+                            and now - seen > timedelta(minutes=idle_minutes))
+        row["_seen"] = seen or now
+        if row["_expired"] or row["_idle"]:
+            candidates.append(row)
+
+    # EACH APP'S LATEST PREVIEW (same project and repository, else the same build) is the one
+    # kept longest.
+    newest: dict[tuple, str] = {}
+    for row in sorted(alive, key=lambda r: aware(r.get("created_at")) or now):
+        newest[(row.get("project_id"), row.get("repo") or row.get("run_id") or row["id"])] = row["id"]
+    latest_ids = set(newest.values())
+    older = sorted((r for r in candidates if r["id"] not in latest_ids), key=lambda r: r["_seen"])
+    latest = sorted((r for r in candidates if r["id"] in latest_ids), key=lambda r: r["_seen"])
+
+    def why_of(row: dict, cause: str) -> str:
+        quiet = (f"nobody opened it for {idle_minutes} min" if row["_idle"]
+                 else "past its time limit")
+        return f"{cause} ({quiet})"
+
+    def ended(row: dict) -> str:
+        return "expired" if row["_expired"] and not row["_idle"] else "stopped"
+
+    stopped: set[str] = set()
+    if candidates and pressure():
+        for row in older:
+            stop(row, ended(row), why_of(row, "to free memory"), "memory")
+            stopped.add(row["id"])
+        if latest and (not older or pressure()):
+            for row in latest:
+                stop(row, ended(row), why_of(row, "to free memory"), "memory")
+                stopped.add(row["id"])
+    running = len(alive) - len(stopped)
+    for row in older + latest:
+        if running <= cap_n:
+            break
+        if row["id"] in stopped:
+            continue
+        stop(row, ended(row), why_of(row, f"to make room (more than {cap_n} previews were running)"),
+             "room")
+        stopped.add(row["id"])
+        running -= 1
+    # KEPT: renew a kept preview's time limit before it runs out (list_previews would expire it).
+    for row in alive:
+        if row["id"] in stopped:
+            continue
+        expires = aware(row.get("expires_at"))
+        if expires is not None and expires - now < _RENEW_WITHIN:
+            with begin(engine) as c:
+                c.execute(text("UPDATE app_previews SET expires_at = :e WHERE id = :id "
+                               "AND status = 'running'"),
+                          {"e": now + timedelta(minutes=60), "id": row["id"]})
+        if row in candidates:
+            out["kept"] += 1
+    # The old counters: what ended idle or past its limit, whatever made room for it.
+    out["idle"] += sum(1 for r in candidates if r["id"] in stopped and r["_idle"])
+    out["expired"] += sum(1 for r in candidates if r["id"] in stopped and not r["_idle"])
     return out
 
 
@@ -4495,7 +4606,9 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     except Exception as e:  # noqa: BLE001 — process gone (e.g. after an api restart): self-heal
         try:
             with begin(engine) as c2:
-                c2.execute(text("UPDATE app_previews SET status='stopped' WHERE id=:id AND status='running'"),
+                c2.execute(text("UPDATE app_previews SET status='stopped', error=COALESCE(error, "
+                                "'Stopped by BOSS: its process ended.') "
+                                "WHERE id=:id AND status='running'"),
                            {"id": preview_id})
         except Exception:
             pass

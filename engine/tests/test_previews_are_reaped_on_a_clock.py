@@ -66,7 +66,8 @@ def test_expired_dead_and_idle_previews_end_and_a_watched_one_stays(engine):
     orig = preview_service._kill
     preview_service._kill = lambda pid: killed.append(pid)
     try:
-        got = preview_service.reap_previews(engine, Settings(), idle_minutes=20)
+        got = preview_service.reap_previews(engine, Settings(), idle_minutes=20,
+                                            pressure=lambda: True)  # short of memory
     finally:
         preview_service._kill = orig
     assert _status(engine, expired) == "expired"

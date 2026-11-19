@@ -1,0 +1,37 @@
+/* YOUR APP (your-app.tsx): the Overview's card and the small Open app chip. Tokens only. */
+.ya-card .ya-body { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.ya-thumb {
+  position: relative; flex: none; width: 76px; height: 56px; border-radius: var(--r-sm);
+  display: grid; place-items: center; font-family: var(--display); font-weight: 700; font-size: var(--fs-title);
+  color: var(--teal); letter-spacing: .04em;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--teal) 22%, transparent), color-mix(in srgb, var(--accent) 12%, transparent));
+  border: 1px solid color-mix(in srgb, var(--teal) 30%, transparent);
+}
+.ya-thumb[data-state="asleep"], .ya-thumb[data-state="stopped"], .ya-thumb[data-state="none"] { filter: saturate(.45); }
+.ya-thumb .ya-badge { position: absolute; right: -5px; top: -5px; color: var(--muted); background: var(--surface); border-radius: 50%; padding: 2px; }
+.ya-main { flex: 1; min-width: 0; }
+.ya-card .ya-h { margin-bottom: 4px; }
+.ya-name { font-weight: 600; font-size: var(--fs-row); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ya-version { font-size: var(--fs-meta); }
+.ya-version b { color: var(--ink); font-weight: 600; }
+.ya-line { display: block; margin-top: 2px; }
+.ya-err { display: block; margin-top: 2px; color: var(--red); font-size: var(--fs-meta); }
+.ya-actions { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.ya-actions .px-more { font-size: var(--fs-meta); display: inline-flex; gap: 4px; align-items: center; }
+@media (max-width: 640px) {
+  .ya-card .ya-body { flex-wrap: wrap; }
+  .ya-thumb { width: 56px; height: 44px; }
+  .ya-actions { width: 100%; flex-direction: row; align-items: center; justify-content: flex-start; flex-wrap: wrap; }
+}
+
+.ya-chip { display: inline-flex; }
+.ya-chip-btn {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px;
+  font-size: var(--fs-meta); line-height: 1.5; cursor: pointer; white-space: nowrap;
+  color: var(--teal); background: color-mix(in srgb, var(--teal) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--teal) 30%, transparent);
+}
+.ya-chip-btn:hover { background: color-mix(in srgb, var(--teal) 18%, transparent); }
+.ya-chip-btn:disabled { opacity: .6; cursor: progress; }
+.ya-chip[data-state="asleep"] .ya-chip-btn { color: var(--muted); }
+.ya-card[data-asked="1"] { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }

@@ -509,7 +509,7 @@ def _facts(connection: Connection, project_id: str, items: list[dict[str, Any]],
 
 #: The Overview's cards, each of which loads or fails on its own (04 "Couldn't load · Retry").
 CARDS = ("journey", "tile_work", "tile_running", "tile_staging", "tile_cost", "needs_you",
-         "recent_work", "week", "captain", "next", "try_it")
+         "recent_work", "week", "captain", "next", "try_it", "app")
 
 
 def _chip(told: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
@@ -650,6 +650,9 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
         "recent_work": ([w for w in items if w["state"] != "planned"]
                         + [w for w in items if w["state"] == "planned"])[:5],
         "next": part(("next",), lambda: next_items(connection, project_id, onboarding), []),
+        # YOUR APP (your_app.py): the app, always one press away — which version it shows and
+        # whether its preview runs; asleep wakes on Open app. Beside Try it, never instead of it.
+        "app": part(("app",), lambda: _your_app(connection, project_id, url), None),
         "try_it": {"url": url, "env": try_env["key"] if try_env else None,
                    "demo_logins": try_env["logins"] if try_env else [],
                    "users_from": logins["source"]},
@@ -660,6 +663,14 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
         # Cards that could not load this time, in words: each shows "Couldn't load · Retry".
         "errors": errors,
     }
+
+
+def _your_app(connection: Connection, project_id: str, live_url: Optional[str]
+              ) -> Optional[dict[str, Any]]:
+    from . import your_app
+
+    found = your_app.card(connection, project_id)
+    return {**found, "live_url": live_url or None} if found else None
 
 
 # ── the projects list (§1), batched across projects ─────────────────────────────────────────
@@ -761,6 +772,9 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
 
     moving_now = live_work(connection, ids)
     failed_now = build_failure.latest_failures(connection, ids, now=now)
+    from . import your_app
+
+    apps = your_app.cards(connection, ids)   # never raises: a card shows no app, not an error
     out = []
     for pid in ids:
         p = projects.get(pid)
@@ -838,6 +852,8 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
                                 for j in journey(pid, got, stage, needs_you=waiting,
                                                  active=moving or onboarding_active)],
                     "build_failed": failed,
+                    # YOUR APP's small "Open app" (your_app.py), on the card and Command Center.
+                    "app": ({**apps[pid], "live_url": url or None} if pid in apps else None),
                     "needs_you": waiting, "running": live, "health": health,
                     "health_reason": health_reason, "live_url": url,
                     "captain": ({"name": f["name"], "role_key": f["role_key"],

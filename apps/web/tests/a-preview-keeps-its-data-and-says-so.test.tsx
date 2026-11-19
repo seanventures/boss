@@ -67,6 +67,8 @@ describe("a preview's data", () => {
   it("a plain Restart keeps the data", async () => {
     stubFetch(cockpit());
     await mount(view(withPreview({ id: "prev_1", status: "stopped", word: "Not running" })));
+    // A preview that is not running offers Recreate preview (operator, 2026-11-19).
+    expect($('[data-testid="fx-preview-restart"]')?.textContent).toBe("Recreate preview");
     await click($('[data-testid="fx-preview-restart"]'));
     expect(forms).toHaveLength(1);
     expect(forms[0].get("fresh_data")).toBeNull();

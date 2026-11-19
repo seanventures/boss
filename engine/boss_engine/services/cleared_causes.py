@@ -205,6 +205,9 @@ def _judge(connection: Any, decision: Mapping[str, Any]) -> Optional[tuple[str, 
                     "approving this one would roll the app back.")
             return (f"superseded — {note}", overtaken)
     if action in STUCK_QUESTIONS:
+        live = _live_cause_cleared(connection, rec)
+        if live:
+            return live
         moving = _stuck_builds_moving(connection, rec, decision.get("created_at"))
         if moving:
             return moving
@@ -218,6 +221,58 @@ def _judge(connection: Any, decision: Mapping[str, Any]) -> Optional[tuple[str, 
                     {"kind": "pull_request_merged", "action": action,
                      "code_task_run_id": merged["id"], "sha": merged["sha"]})
     return None
+
+
+#: STUCK CAUSES BOSS CAN CHECK LIVE: cause_code -> a reader that says, from the system's own
+#: state now, whether the cause still holds. A card whose cause no longer holds is never shown
+#: (decision_actions.waiting_on_operator asks `stale_now`) and the sweep withdraws it.
+def _no_worker_holds(connection: Any) -> bool:
+    from .stuck_work import queue_starved
+
+    return queue_starved(connection) is not None
+
+
+LIVE_CAUSES = {"no_worker": _no_worker_holds}
+
+
+def _cause_code(rec: Mapping[str, Any]) -> str:
+    return str(rec.get("cause_code") or rec.get("reason_code") or rec.get("reason") or "")
+
+
+def _live_cause_cleared(connection: Any, rec: Mapping[str, Any]
+                        ) -> Optional[tuple[str, dict[str, Any]]]:
+    """(note, cause) when a stuck card's cause is one BOSS checks live and it no longer holds."""
+    code = _cause_code(rec)
+    holds = LIVE_CAUSES.get(code)
+    if holds is None or holds(connection):
+        return None
+    note = ("a worker is taking work from the queue (nothing has waited unclaimed), so there is "
+            "nothing to restart." if code == "no_worker" else "its cause no longer holds.")
+    return note, {"kind": "live_cause_cleared", "cause_code": code}
+
+
+def stale_now(connection: Any, rows: list[Mapping[str, Any]]) -> set[str]:
+    """The ids, among these open decisions, of stuck cards whose cause BOSS re-checked live and
+    found gone: they are not shown to anyone (the sweep withdraws them). Each live check runs at
+    most once per call, and only when such a card is among the rows. Never raises."""
+    out: set[str] = set()
+    verdicts: dict[str, bool] = {}
+    for row in rows:
+        rec = _json(row.get("recommendation"))
+        if str(rec.get("action") or "") not in STUCK_QUESTIONS:
+            continue
+        code = _cause_code(rec)
+        holds = LIVE_CAUSES.get(code)
+        if holds is None:
+            continue
+        if code not in verdicts:
+            try:
+                verdicts[code] = bool(holds(connection))
+            except Exception:  # noqa: BLE001 — unknown: keep showing the card
+                verdicts[code] = True
+        if not verdicts[code]:
+            out.add(str(row.get("id")))
+    return out
 
 
 def _stuck_builds_moving(connection: Any, rec: Mapping[str, Any],
@@ -697,6 +752,6 @@ def _changed_after(connection: Any, settings: Any, decision: Mapping[str, Any],
         return None
 
 
-__all__ = ["DEPLOY_QUESTIONS", "reconsider_follow_ups", "reconsider_merge_questions", "retry_stranded_merges", "EFFECT_FAILURE_CAUSES", "PULL_REQUEST_QUESTIONS", "STUCK_QUESTIONS",
+__all__ = ["DEPLOY_QUESTIONS", "LIVE_CAUSES", "stale_now", "reconsider_follow_ups", "reconsider_merge_questions", "retry_stranded_merges", "EFFECT_FAILURE_CAUSES", "PULL_REQUEST_QUESTIONS", "STUCK_QUESTIONS",
            "failed_effect_cause", "on_deploy_healthy", "on_effect_succeeded",
            "on_pull_request_settled", "withdraw_cleared"]

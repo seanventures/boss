@@ -29,6 +29,8 @@ export const DEEP_LINK_PARAMS: ReadonlyArray<{ param: string; type: string }> = 
   { param: "self_fix", type: "self_fix" },
   { param: "escalation", type: "shepherd_escalation" },
   { param: "thread", type: "agent_thread" },
+  // A preview link's "Recreate preview in BOSS": the preview id only (preview_wake.recreate_href).
+  { param: "recreate_preview", type: "preview" },
 ];
 
 export type DeepLinkTarget = { param: string; type: string; id: string };

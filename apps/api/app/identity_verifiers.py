@@ -48,6 +48,8 @@ mcp_oauth_state = mcp_oauth.complete
 #: Investigation callbacks (db / host / do): the per-investigation bearer token.
 investigation_callback_token = debug_session.authorise
 #: The preview reverse proxy: an unguessable preview id, live only while the preview runs (TTL).
+#: A page load of one BOSS itself stopped may start that build's preview again (wake on visit,
+#: preview_wake.wake: BOSS-stopped only, 14 days, one start per build, admission-gated).
 preview_capability = preview_service.proxy_preview
 #: Feedback posted from inside a running preview (the same capability).
 preview_feedback_capability = feedback_agent.submit_preview_feedback

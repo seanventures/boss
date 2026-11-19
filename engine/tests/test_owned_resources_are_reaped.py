@@ -434,7 +434,8 @@ def test_preview_container(ending, pg_engine, monkeypatch):
             _sweep(pg_engine)
         elif ending == "timeout":                     # past its TTL
             _row(pg_engine, pid, status="running", cid=cid, expires_in_min=-1)
-            got = preview_service.reap_previews(pg_engine, Settings())
+            # Kept while there is room (2026-11-19); a host short of memory ends it.
+            got = preview_service.reap_previews(pg_engine, Settings(), pressure=lambda: True)
             assert got["expired"] >= 1
         else:                                         # the API died before writing a row
             _sweep(pg_engine)
