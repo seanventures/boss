@@ -1363,6 +1363,32 @@ class SoftwareFactoryService:
                 {},
             )
 
+    @staticmethod
+    def _approved_head_sha(connection: Any, project_id: str, decision_id: str) -> Optional[str]:
+        """The head commit a merge decision was raised for (its recommendation's `head_sha`),
+        or None when it names none."""
+        try:
+            value = connection.execute(sql(
+                "SELECT recommendation->>'head_sha' FROM decisions "
+                "WHERE id = :d AND project_id = :p"),
+                {"d": decision_id, "p": project_id}).scalar()
+        except Exception:  # noqa: BLE001 — unread: the merge proceeds as before, unpinned
+            return None
+        value = str(value or "").strip()
+        return value if re.fullmatch(r"[0-9a-f]{7,64}", value) else None
+
+    def _head_moved_past(self, pull_request_number: int, approved_head: Optional[str]) -> bool:
+        """Whether the pull request's head is no longer the approved commit. Unreadable counts
+        as moved: a recovery that merges the tip is only safe when it is the approved one."""
+        snap = getattr(self.github, "pull_request_snapshot", None)
+        if not approved_head or not callable(snap):
+            return bool(approved_head)
+        try:
+            head = str((snap(int(pull_request_number)) or {}).get("head_sha") or "")
+        except Exception:  # noqa: BLE001
+            return True
+        return not head.startswith(approved_head) and not approved_head.startswith(head or "-")
+
     def _require_approved_effect_decision(
         self,
         connection: Any,
@@ -2963,6 +2989,16 @@ class SoftwareFactoryService:
                     "decision_id": decision_id, "pull_request_url": pull_request_url,
                     "message": f"PR #{pull_request_number} was closed without merging, so "
                                "there is nothing to merge."}
+        # MERGE WHAT WAS APPROVED (neighborhood-board change #1, 2026-11-19). The merge card
+        # names the head the person reviewed; a follow-up build kept committing to the same
+        # branch, and merging the branch TIP swept its unreviewed checkpoint into the base —
+        # the follow-up then finished with no change of its own. A host that can merge an exact
+        # commit (the local repo host) merges that head; later commits stay on the branch and
+        # open their own change (pr_follow_up.prepare_branch restacks them onto the base).
+        approved_head = self._approved_head_sha(connection, project_id, decision_id)
+        pin = ({"head_sha": approved_head}
+               if approved_head and _accepts_kwarg(self.github.merge_pull_request, "head_sha")
+               else {})
         try:
             from .github_adapter import PullRequestMergeResult
 
@@ -2970,7 +3006,7 @@ class SoftwareFactoryService:
                 sha=settled["sha"], merged=True,
                 message=f"PR #{pull_request_number} is already merged")
                 if settled and settled.get("state") == "merged" else
-                self.github.merge_pull_request(pull_request_number, title))
+                self.github.merge_pull_request(pull_request_number, title, **pin))
         except IntegrationConfigurationError as error:
             self.receipts.mark_failed(
                 connection, merge_receipt["id"], {"message": str(error)}
@@ -3018,7 +3054,11 @@ class SoftwareFactoryService:
             # merge, and nothing here even tried).
             from . import merge_failures as _mf
 
-            if _mf.classify(_msg) == _mf.NOT_MERGEABLE and hasattr(
+            # A PINNED merge whose branch MOVED past the approval never recovers by merging
+            # the tip: both tiers below merge whatever the branch holds, which is exactly what
+            # the pin keeps out. Its conflict goes to the failure path (a new approval).
+            moved = bool(pin) and self._head_moved_past(pull_request_number, approved_head)
+            if not moved and _mf.classify(_msg) == _mf.NOT_MERGEABLE and hasattr(
                     self.github, "update_pull_request_branch"):
                 try:
                     if self.github.update_pull_request_branch(pull_request_number):
@@ -3034,7 +3074,7 @@ class SoftwareFactoryService:
                 except Exception as retry_error:  # noqa: BLE001
                     _msg = f"{_msg} | retry after branch update: {retry_error}"
                     merge = None
-            if merge is None and _mf.classify(_msg) == _mf.NOT_MERGEABLE:
+            if not moved and merge is None and _mf.classify(_msg) == _mf.NOT_MERGEABLE:
                 # TIER 1b: the branch still carries an EARLIER pull request's commits that a
                 # squash merge left off the base (PR #237 after #236). Put it back on the base
                 # holding only what changed after that merge, then merge once more.

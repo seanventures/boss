@@ -477,10 +477,15 @@ class LocalGitAdapter:
         return local_repo.diff(self.git_dir, base, head)
 
     def merge_pull_request(self, pull_request_number: int, commit_title: str,
-                           *, merged_by: str = "boss") -> PullRequestMergeResult:
+                           *, merged_by: str = "boss",
+                           head_sha: Optional[str] = None) -> PullRequestMergeResult:
         """Merge the change set's branch into its base: a fast-forward when the base has not
         moved, else a merge commit (`squash` when the install's merge method says so). Only a
-        person's approved decision reaches this (software_factory.merge_pull_request)."""
+        person's approved decision reaches this (software_factory.merge_pull_request).
+
+        `head_sha`: the commit that decision approved. Exactly that is merged and recorded as
+        the change set's head, so commits a follow-up pushed to the branch since stay off the
+        base and become their own change (pr_follow_up.prepare_branch restacks from it)."""
         git_dir = self._require()
         with self._tx("merge_pull_request") as c:
             row = self._row(c, pull_request_number, lock=True)
@@ -490,13 +495,16 @@ class LocalGitAdapter:
             if row["state"] != "open":
                 raise local_repo.LocalRepoError(f"Change #{pull_request_number} is {row['state']}.")
             method = str(getattr(self.settings, "sandbox_merge_method", "merge") or "merge")
+            pinned = (local_repo.rev_parse(git_dir, head_sha) or head_sha) if head_sha else None
             sha = local_repo.merge(git_dir, row["branch"], row["base_branch"],
                                    commit_title or f"Merge change #{pull_request_number}",
-                                   method="squash" if method == "squash" else "merge")
+                                   method="squash" if method == "squash" else "merge",
+                                   at=pinned)
             c.execute(text(
                 "UPDATE local_change_sets SET state = 'merged', merged_sha = :s, merged_by = :by, "
                 "merged_at = now(), head_sha = :h, updated_at = now() WHERE id = :id"),
-                {"s": sha, "by": merged_by, "h": local_repo.branch_sha(git_dir, row["branch"]),
+                {"s": sha, "by": merged_by,
+                 "h": pinned or local_repo.branch_sha(git_dir, row["branch"]),
                  "id": row["id"]})
         return PullRequestMergeResult(sha=sha, merged=True,
                                       message=f"Merged into {row['base_branch']} on this machine.")
@@ -514,7 +522,7 @@ class LocalGitAdapter:
                              "head_ref": expected_head_ref, "base_ref": expected_base_ref}.items():
             if current[field] != value:
                 raise GitHubMergeRejectedError("The change moved after it was approved.")
-        merged = self.merge_pull_request(pull_number, commit_title)
+        merged = self.merge_pull_request(pull_number, commit_title, head_sha=expected_head_sha)
         return {"pull_request_number": pull_number, "commit_sha": merged.sha, "merged": True,
                 "message": merged.message, "merge_method": merge_method,
                 "previous_target_sha": expected_base_sha, "authorized_head_sha": expected_head_sha}
