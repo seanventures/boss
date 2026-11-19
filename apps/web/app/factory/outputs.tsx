@@ -589,6 +589,10 @@ export function stepsWord(p: Pick<PreviewOutput, "status" | "steps" | "stepsDone
   return `${Math.min(finished || p.stepsDone || 0, total)} of ${plural(total, "step")}`;
 }
 
+/** What happens to an app's data in its previews (preview_data.py), said where it matters. */
+export const PREVIEW_DATA_TIP = "What this app saves (its SQLite files and data folder) is kept when the preview stops, idles out or restarts, for every build of this app. Fresh data deletes it and starts the app empty.";
+export const FRESH_DATA_CONFIRM = "Delete the data this app saved in its previews and start it empty? This cannot be undone.";
+
 function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: string; onLogs: () => void; onRefresh: () => void }) {
   const p = c.outputs.preview;
   const [busy, setBusy] = useState(false);
@@ -600,15 +604,16 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
   const [note, setNote] = useState("");
   const [showNote, setShowNote] = useState(false);
   const [showSteps, setShowSteps] = useState(false);
-  const start = async () => {
+  const start = async (freshData = false) => {
     setBusy(true);
     setError("");
     setNote("");
     setStarting(true);
-    showToast("success", "Preview starting");
+    showToast("success", freshData ? "Preview starting with fresh data" : "Preview starting");
     const form = new FormData();
     form.set("run_id", c.run.id);
     form.set("actor", actor);
+    if (freshData) form.set("fresh_data", "true");
     const res = await callAction(startPreviewAction, undefined, "preview:manage")(null, form);
     setBusy(false);
     // A CLIENT TIMEOUT IS NOT A VERDICT: the preview builds on after the console stops waiting.
@@ -666,6 +671,10 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
       <button type="button" className="ag-link" onClick={onLogs} data-testid="fx-preview-logs">Logs ▾</button>
       {/* A stopped preview expires at nothing: its time limit is only news while it runs. */}
       {running && p.expiresAt ? <span className="fx-muted" title={p.expiresAt} data-testid="fx-preview-expires">Expires {localWith(p.expiresAt, { hour: "numeric", minute: "2-digit" })}</span> : null}
+      <span className="fx-muted" data-testid="fx-preview-data" title={PREVIEW_DATA_TIP}>Data kept</span>
+      <GatedButton permission="preview:manage" type="button" className="ag-link" disabled={busy} data-testid="fx-preview-fresh"
+                   title="Delete the data this app saved in its previews, then start it empty"
+                   onClick={() => { if (window.confirm(FRESH_DATA_CONFIRM)) void start(true); }}>Fresh data</GatedButton>
       {p.substrate ? <span className="fx-muted" title="Where the preview runs">{p.substrate}</span> : null}
       {typeof p.stepsDone === "number" && p.stepsTotal ? (
         <button type="button" className="ag-link" aria-expanded={showSteps} data-testid="fx-preview-steps"
