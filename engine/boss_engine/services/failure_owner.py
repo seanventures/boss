@@ -167,7 +167,11 @@ _PLATFORM_FIRST = re.compile(
     r"os error 13|\[Errno 13\]|/var/lib/boss/|lease_lost|lost its holder|"
     r"symlink, special file|Budget admission is busy|control plane crashed|"
     r"Internal Server Error|\b50[0-4]\b|\b409 Conflict\b|timed? ?out|Connection (?:refused|reset)|"
-    r"EAI_AGAIN|stalled \(\d+s", re.I)
+    r"EAI_AGAIN|stalled \(\d+s|"
+    # A credential asked for NO repository ("for /": empty owner and name) is BOSS's own bug —
+    # it never resolved the project's repository — not a repository a person must connect
+    # (docs.update on a project whose code is on this machine, laptop 2026-11-18).
+    r"No GitHub credentials for /[:\s]", re.I)
 
 #: (cause_code, pattern, what a person does) — ordered; the first match wins.
 _PERSON_RULES: tuple[tuple[str, str, str], ...] = (
@@ -873,6 +877,30 @@ class Previews(Surface):
         return None if status == "starting" else False
 
 
+def _docs_update_moot(c: Any, project_id: str) -> Optional[str]:
+    """A docs update that does not apply to this project (its code is in a repository on this
+    machine, or it has no repository): every open docs.update dead letter of the project is
+    resolved at once with the reason — BOSS's own note, never a person's item. 72 of the
+    laptop's 202 "No GitHub credentials for /" docs dead letters were local-repo projects."""
+    from ..config import get_settings
+    from .docs_agent import docs_repository
+
+    _target, why_not = docs_repository(c, get_settings(), project_id)
+    if not why_not:
+        return None
+    resolve_docs_dead_letters(c, project_id)
+    return f"Nothing to do: {why_not}"
+
+
+def resolve_docs_dead_letters(c: Any, project_id: str) -> int:
+    """Close the project's open docs.update dead letters (docs do not apply to it)."""
+    return int(c.execute(text(
+        "UPDATE deadletters d SET status = 'resolved', resolved_by = :a, resolved_at = now(), "
+        "updated_at = now() FROM jobs j WHERE j.id = d.source_id AND d.source_kind = 'job' "
+        "AND d.status = 'open' AND j.kind = 'docs.update' AND j.project_id = :p"),
+        {"a": ACTOR, "p": project_id}).rowcount or 0)
+
+
 #: Job kinds whose failure another surface owns (the deadletter fails that record in words).
 _JOB_KINDS_OWNED_ELSEWHERE = ("code.task", "deployment.stack_apply", "deployment.host_apply")
 #: Kinds whose dedupe key is per attempt (a model check, a docs update per event): their lineage
@@ -949,6 +977,10 @@ class Jobs(Surface):
         if later:
             self._close(c, item, f"superseded: job {later} did the same work since")
             return Said(RESOLVED, f"The same job ran fine since ({later}).")
+        if item.hints["kind"] == "docs.update" and item.project_id:
+            moot = _docs_update_moot(c, str(item.project_id))
+            if moot:
+                return Said(RESOLVED, moot)
         if item.hints["kind"] == "github.pull_request.merge":
             decision = (item.hints["payload"] or {}).get("decision_id")
             status = c.execute(text("SELECT status FROM decisions WHERE id = :d"),
