@@ -13,7 +13,7 @@ You need about 30 minutes, and for the last step a GitHub account (or code kept 
 The installer is written for one of these hosts:
 
 - Ubuntu 22.04 or 24.04, or Debian 12 or 13, with `curl` and `sudo`. It can install Git, Python 3, and Docker.
-- macOS with Docker Desktop running and Apple's command line tools (`xcode-select --install`).
+- macOS with a Docker runtime running ([Colima](COLIMA.md) or Docker Desktop) and Apple's command line tools (`xcode-select --install`).
 - Another Linux host that already has Git, `curl`, Python 3, and Docker Engine with Compose.
 
 A model key is optional. The control plane starts without one.

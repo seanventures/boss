@@ -484,13 +484,18 @@ ARCH="$(uname -m 2>/dev/null || echo unknown)"
 ui_info "OS: $OS  arch: $ARCH"
 
 install_vm_deps() {
-  [[ "$INSTALL_DEPS" -eq 1 ]] || die "Missing dependencies. Remove --no-install-deps to install them."
   if [[ "$OS" == Darwin ]]; then
     need_cmd git || ui_err "git is missing. Install Apple's command line tools: xcode-select --install"
-    need_cmd docker || ui_err "Docker is missing. Install Docker Desktop: https://docs.docker.com/desktop/setup/install/mac-install/"
+    need_cmd docker || ui_err "Docker CLI is missing. For Colima: brew install colima docker docker-compose docker-buildx"
+    if need_cmd docker && ! docker compose version >/dev/null 2>&1; then
+      ui_err "Docker Compose plugin is missing. Install docker-compose and follow Homebrew's CLI plugin instructions."
+    fi
     need_cmd python3 || ui_err "Python 3 is missing. xcode-select --install provides it."
-    die "Install the items above, start Docker Desktop, then run the same install command again."
+    need_cmd curl || ui_err "curl is missing. Install curl before continuing."
+    need_cmd openssl || ui_err "OpenSSL is missing. Install openssl before continuing."
+    die "Install the missing tools and start your Docker runtime (Colima or Docker Desktop), then rerun. See docs/community/COLIMA.md."
   fi
+  [[ "$INSTALL_DEPS" -eq 1 ]] || die "Missing dependencies. Remove --no-install-deps to install them."
   [[ "$OS" == Linux && -f /etc/os-release ]] || die "Automatic dependencies require Ubuntu or Debian Linux. Install git, curl, Docker Engine and Compose manually."
   # shellcheck disable=SC1091
   . /etc/os-release
