@@ -752,6 +752,236 @@
       }
     },
     {
+      "workflow_key": "easy_mode_mvp",
+      "name": "Easy Mode MVP",
+      "description": "Idea to a working app, fast: a short agent panel writes the spec, BOSS builds it, previews it and deploys it after you merge.",
+      "spec": {
+        "entry_step": "meeting",
+        "steps": [
+          {
+            "id": "meeting",
+            "kind": "capability",
+            "binding": {
+              "capability": "meeting",
+              "inputs": {
+                "directive": {
+                  "from_input": "directive"
+                },
+                "compact": true,
+                "time_budget_seconds": 720,
+                "fallback_to_brief": true
+              }
+            },
+            "next": [
+              "build"
+            ],
+            "captain": "pm",
+            "default_captain": "pm",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                },
+                "spec_markdown": {
+                  "from_step": "meeting",
+                  "field": "prd_markdown"
+                }
+              }
+            },
+            "next": [
+              "preview"
+            ],
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "preview",
+            "kind": "capability",
+            "binding": {
+              "capability": "preview",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "report"
+            ],
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "report",
+            "kind": "capability",
+            "binding": {
+              "capability": "report",
+              "inputs": {}
+            },
+            "next": [
+              "deploy"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                },
+                "environment": "staging",
+                "skip_without_host": true
+              }
+            },
+            "next": [
+              "notify"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "follows_policy": true,
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "notify",
+            "kind": "capability",
+            "binding": {
+              "capability": "notify",
+              "inputs": {
+                "message": {
+                  "from_input": "title"
+                },
+                "channel": {
+                  "from_input": "notify_channel"
+                }
+              }
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "Build a working first version (an MVP) of what the person asked for, quickly. The panel is short: agree what the app must do, as 3 to 7 behaviour-level acceptance criteria, and keep the scope to a first version a person can open and use today. No research, no architecture review, no extra process.",
+        "workflow_name": "Easy Mode MVP",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "directive",
+            "title"
+          ],
+          "properties": {
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What should it do?",
+              "description": "Who it is for and what a person can do with it. A short panel turns it into a spec, then BOSS builds, previews and deploys a first version.",
+              "examples": [
+                "A recipe box: save recipes with ingredients and steps, search them by ingredient, and mark favourites. One page, no accounts."
+              ]
+            },
+            "title": {
+              "type": "string",
+              "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app it builds and the written record.",
+              "examples": [
+                "Shift swap board"
+              ]
+            },
+            "repository": {
+              "type": "string",
+              "title": "Repository (optional)",
+              "description": "owner/name of the GitHub repository to build in. Leave blank for this project's primary repository."
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "How you will know it works (optional)",
+              "description": "Each line becomes a check the build is held to. Leave blank and the panel proposes them."
+            },
+            "reference_links": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              },
+              "title": "Links to read first (optional)",
+              "description": "Docs, designs or tickets the builder should read."
+            },
+            "notify_channel": {
+              "type": "string",
+              "title": "Who to tell",
+              "description": "Where the outcome is posted: email:someone@example.com or mattermost:<channel id>. Leave blank and the notify step is skipped and says so.",
+              "examples": [
+                "email:team@example.com"
+              ]
+            }
+          }
+        },
+        "more_tests": false,
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
       "workflow_key": "major_feature",
       "name": "Major Feature",
       "description": "A feature large enough to deserve research and a spec of its own. A person signs off how it looks and works, and again before it ships.",

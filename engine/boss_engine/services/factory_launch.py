@@ -4,6 +4,11 @@ Empty prompt picks a concrete spec (the first template file by id, else a built-
 and then runs the same path as a prompt the person wrote. A non-empty prompt is the spec.
 The path creates the project, assigns the resources the spec names, writes the workflows
 the spec names, reserves a budget, writes one receipt, and only then starts the build.
+
+THE SPEC BEFORE THE BUILD (operator, 2026-11-19): a normal launch starts the Easy Mode MVP
+workflow — a compact agent panel writes minutes and a lean PRD, the person's start approves it,
+and the build runs from it, then the preview and a staging deploy (`spec_first_run`). Its run id
+is that workflow run's. A bug keeps the small path: the code task starts directly.
 The blurb and the prompt are checked before that reserve. A card number or a national id
 blocks, so nothing is reserved and the build does not start. An email or a phone number
 asks, and nothing is reserved until that ask is allowed. A result without a project id
@@ -280,6 +285,7 @@ def launch(
     budget: Any = None,
     auth: Any = None,
     allowed: bool = False,
+    review_plan: bool = False,
 ) -> dict[str, Any]:
     """Create the project and start the build. The builder runs only after the budget is reserved
     and only a result that names a project and a run is returned. Personal data in the blurb or
@@ -290,7 +296,8 @@ def launch(
     # WHOSE launch it is: two people pressing the same template never share a kept or a reused
     # project (nor a consent the other one owes).
     who = str(getattr(getattr(auth, "principal", None), "id", "") or actor or "")
-    dedupe_key = _dedupe_key(org_id, prompt, asked, template_id, ids, repo, who)
+    dedupe_key = _dedupe_key(org_id, prompt, asked, template_id, ids, repo, who,
+                             review_plan=bool(review_plan))
     connection.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": dedupe_key})
     previous = _reuse(connection, org_id, dedupe_key)
     if previous is not None:
@@ -320,6 +327,10 @@ def launch(
             _require_github_repo(connection, org_id, repo)
             spec["github_repo"] = repo
         spec["mode"] = asked or origin
+        # THE SPEC BEFORE THE BUILD (operator, 2026-11-19): a normal launch convenes the panel
+        # (Easy Mode MVP workflow); a bug or a small fix keeps the small path, as New work does.
+        spec["spec_first"] = spec_first(spec["mode"])
+        spec["spec_approval"] = (SPEC_BY_PERSON if review_plan else SPEC_BY_START)
 
     if again is not None and again.get("project_id"):
         project_id = str(again["project_id"])
@@ -400,6 +411,10 @@ def launch(
     body = {
         "project_id": project_id,
         "run_id": run_id,
+        # A SPEC-FIRST LAUNCH's run is its Easy Mode MVP workflow run (the panel, then the
+        # build): `stage` "spec" says the team is writing the spec before anything is built.
+        **({"workflow_run_id": str(built["workflow_run_id"]), "stage": "spec"}
+           if (built or {}).get("workflow_run_id") else {"stage": "build"}),
         "dedupe_key": dedupe_key,
         "reservation_id": reservation_id,
         "mode": spec["mode"],
@@ -445,6 +460,8 @@ def _spec_view(spec: dict[str, Any]) -> dict[str, Any]:
         "attachments": spec.get("attachments") or [],
         "github_repo": spec.get("github_repo"),
         "local_repo": spec.get("local_repo"),
+        "spec_first": bool(spec.get("spec_first")),
+        "spec_approval": spec.get("spec_approval"),
     }
 
 
@@ -578,6 +595,20 @@ def _drop_local_repos(project_id: str, settings: Any) -> None:
                                             project_id, exc_info=True)
 
 
+#: Who approves the panel's PRD on a launch (meeting_service.spec_approval_of): the person's
+#: start (the light lane), or the person after reading it ("Review the plan first").
+SPEC_BY_START = "start"
+SPEC_BY_PERSON = "person"
+
+#: Launch modes that keep the small path (one build, no panel), as New work's Bug does (#191).
+SMALL_PATH_MODES = frozenset({"bug", "bugfix", "fix", "small_change"})
+
+
+def spec_first(mode: Any) -> bool:
+    """Whether a launch of this mode convenes the panel before it builds."""
+    return str(mode or "").strip().lower() not in SMALL_PATH_MODES
+
+
 def build_run(
     connection: Any,
     *,
@@ -588,7 +619,12 @@ def build_run(
     jobs: Any,
     reservation_id: str,
 ) -> dict[str, str]:
-    """Start the existing code-task build. Tests replace this; it does not call a model itself."""
+    """Start the build. A spec-first launch (`spec["spec_first"]`) starts the Easy Mode MVP
+    workflow — the panel writes the spec, then the build runs from it (`spec_first_run`); a small
+    change starts the code-task build directly. Tests replace this; it does not call a model."""
+    if spec.get("spec_first"):
+        return spec_first_run(connection, project_id=project_id, spec=spec, actor=actor,
+                              settings=settings, jobs=jobs, reservation_id=reservation_id)
     from .code_task_service import start_code_task
 
     github = str(spec.get("github_repo") or "")
@@ -617,6 +653,126 @@ def build_run(
 
     build_budget.bind(connection, str(run_id), reservation_id)
     return {"project_id": project_id, "run_id": str(run_id)}
+
+
+def spec_first_run(
+    connection: Any,
+    *,
+    project_id: str,
+    spec: dict[str, Any],
+    actor: str,
+    settings: Any,
+    jobs: Any,
+    reservation_id: str,
+) -> dict[str, str]:
+    """THE TEAM WRITES THE SPEC, THEN BUILDS IT (operator, 2026-11-19: "one of the main features
+    is to have a spec for all the features / project before starting anything").
+
+    Starts the project's Easy Mode MVP workflow (workflow_catalogue.EASY_MODE_WORKFLOW): a compact
+    panel discusses the brief (the template's prompt, the person's words, the attachments) and
+    writes minutes and a lean PRD; the PRD is approved by this start (`spec_approval` "start",
+    recorded as "approved by your Easy Mode start") unless the person chose to review it; the
+    build runs from it, then the preview and the deploy. A panel that fails or overruns builds
+    from the brief and says why (workflow_capability_runner._panel_fallback).
+
+    One consent covers the delivery: the workflow start asks for the grant its steps need
+    (ConsentRequired, kept by the launch like the direct build's). The launch's budget hold was
+    the check that a build may start; it is released here, because each step reserves its own."""
+    from . import workflow_catalogue, workflows as wf
+
+    github = str(spec.get("github_repo") or "")
+    local = str(spec.get("local_repo") or "")
+    if not (github or local):
+        raise FactoryLaunchError(409, "no_repository", NO_REPOSITORY)
+    key = workflow_catalogue.EASY_MODE_WORKFLOW
+    workflow_catalogue.seed(connection, project_id, actor="boss", only=frozenset({key}))
+    running = wf.running_version(connection, project_id, key)
+    if not running or not running.get("version_id"):
+        raise FactoryLaunchError(
+            409, "no_workflow",
+            "BOSS could not install its Easy Mode workflow in this project, so nothing was "
+            "started.")
+    title = str(spec.get("title") or "Easy Mode")[:180]
+    review_first = str(spec.get("spec_approval") or "") == SPEC_BY_PERSON
+    run_input = {
+        "title": title,
+        "directive": str(spec.get("prompt") or title),
+        "repository": github or local,
+        # "Review the plan first": stricter, so a plain input (the panel's PRD waits).
+        **({"spec_approval": SPEC_BY_PERSON} if review_first else {}),
+    }
+    _staging_ships_without_asking(connection, project_id, actor)
+    run = wf.start_run(
+        connection, project_id=project_id, actor=actor, input_data=run_input,
+        dedupe_key=f"easy-mode:{project_id}:{reservation_id}",
+        workflow_version_id=str(running["version_id"]),
+        # THE START APPROVES THE PRD — server-only, with who started it, and only when that
+        # person may approve a PRD here (an enforced request asks the PDP).
+        spec_approved_by_start=None if review_first else _start_approver(project_id, actor))
+    run_id = str((run or {}).get("id") or "")
+    if not run_id:
+        _release_hold(connection, settings, project_id, reservation_id)
+        return {"project_id": project_id}
+    from .workflow_readiness import note_unready_start
+
+    try:
+        with connection.begin_nested():
+            note_unready_start(connection, settings, project_id, actor, run_id,
+                               version_id=str(running["version_id"]), input_data=run_input)
+    except Exception:  # noqa: BLE001 — a note that cannot be computed never stops the start
+        import logging
+
+        logging.getLogger(__name__).warning("readiness note for %s failed", run_id, exc_info=True)
+    _release_hold(connection, settings, project_id, reservation_id)
+    return {"project_id": project_id, "run_id": run_id, "workflow_run_id": run_id}
+
+
+def _release_hold(connection: Any, settings: Any, project_id: str, reservation_id: str) -> None:
+    """The launch's hold was the check that a build may start; each step reserves its own."""
+    try:
+        from .budget import BudgetGovernor
+
+        BudgetGovernor(settings).release(
+            connection, project_id, reservation_id,
+            "Easy Mode started its workflow; each step reserves its own budget")
+    except Exception:  # noqa: BLE001 — a hold left to expire is not a failed start
+        import logging
+
+        logging.getLogger(__name__).warning("launch hold %s not released", reservation_id,
+                                            exc_info=True)
+
+
+def _start_approver(project_id: str, actor: str) -> Optional[str]:
+    """Who approves the panel's PRD by starting Easy Mode: the person whose request this is,
+    when they may approve a PRD on this project. Under an enforced request the PDP answers
+    (decision:approve); without one, the start's actor. None means a person approves it."""
+    from ..identity import lineage, viewer
+
+    if viewer.decide(project_id, "decision:approve") is False:
+        return None
+    ctx = lineage.current_context()
+    person = str(getattr(getattr(ctx, "principal", None), "id", "") or "") if ctx else ""
+    return person or str(actor or "").strip() or None
+
+
+#: Recorded on the staging policy an Easy Mode start sets.
+STAGING_POLICY_NOTE = ("Set by your Easy Mode start: a staging deploy ships without asking. "
+                       "Production still asks.")
+
+
+def _staging_ships_without_asking(connection: Any, project_id: str, actor: str) -> None:
+    """NO DEPLOY APPROVAL BELOW PRODUCTION (operator, 2026-11-19: "one consent covers the whole
+    delivery workflow"). The Easy Mode MVP workflow's deploy is a staging deploy that follows the
+    environment's policy, and no policy row means ask; so the start sets this project's staging
+    policy to ship without asking — only when the project has none. A policy someone set is
+    never changed, and production is untouched."""
+    from .deploy_policy import deploy_policy, set_approval_policy
+
+    if deploy_policy(connection, project_id, "staging").get("policy_id"):
+        return
+    set_approval_policy(connection, project_id=project_id, environment="staging",
+                        requires_approval=False, actor=actor or "boss",
+                        note=STAGING_POLICY_NOTE)
 
 
 def resolve_spec(
@@ -994,11 +1150,19 @@ def _still_live(connection: Any, receipt_id: str, run_id: str) -> bool:
     the answer, however recent: a double press waits on the launch's lock and finds the run
     live, and the resend after "Confirm it's you" follows a refusal, not a launch."""
     from .code_task_service import TERMINAL_RUN_STATUSES
+    from .workflows import TERMINAL_RUN_STATES
 
-    run = connection.execute(text("SELECT status FROM code_task_runs WHERE id = :id"),
-                             {"id": run_id}).first()
+    if str(run_id).startswith("wfr_"):
+        # A spec-first launch's run is its workflow run (the panel, then the build).
+        run = connection.execute(text("SELECT status FROM workflow_runs WHERE id = :id"),
+                                 {"id": run_id}).first()
+        terminal = TERMINAL_RUN_STATES
+    else:
+        run = connection.execute(text("SELECT status FROM code_task_runs WHERE id = :id"),
+                                 {"id": run_id}).first()
+        terminal = TERMINAL_RUN_STATUSES
     if run is not None:
-        return str(run[0] or "") not in TERMINAL_RUN_STATUSES
+        return str(run[0] or "") not in terminal
     row = connection.execute(text(
         "SELECT (now() - updated_at) < make_interval(mins => :mins) AS fresh "
         "FROM receipts WHERE id = :r"), {"r": receipt_id, "mins": REUSE_WINDOW_MINUTES}).first()
@@ -1037,9 +1201,11 @@ def _relaunch(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[st
 
 def _dedupe_key(
     org_id: str, prompt: str, mode: str, template_id: Optional[str],
-    attachment_ids: list[str], github_repo: str, who: str = "",
+    attachment_ids: list[str], github_repo: str, who: str = "", review_plan: bool = False,
 ) -> str:
     raw = json.dumps({
+        # Only when asked, so every launch made before the option keeps its key.
+        **({"review_plan": True} if review_plan else {}),
         "org": org_id,
         "who": who,
         "prompt": str(prompt or ""),

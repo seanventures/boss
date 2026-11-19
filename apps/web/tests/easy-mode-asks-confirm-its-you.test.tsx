@@ -190,6 +190,31 @@ describe("a started build says what happens next", () => {
     expect(tid("build-run-id")?.closest("[aria-hidden=true]")).not.toBeNull();
   });
 
+  it("a spec-first launch says the team writes the spec first, and links to its workflow run", async () => {
+    const sent = server([{ status: 201, body: { project_id: "recipe-box-fd3ab4a3", run_id: "wfr_5e1c",
+                                                workflow_run_id: "wfr_5e1c", stage: "spec",
+                                                spec: { title: "Recipe box" } } }]);
+    await mountAs(<BuildHome />, "owner");
+    await press("build-lucky");
+    expect(tid("build-started-title")?.textContent)
+      .toBe("Recipe box: the team is writing the spec, then building (about 20–30 min)");
+    expect(tid("build-started-next")?.textContent).toMatch(/panel.*spec/);
+    const params = new URLSearchParams(tid("build-watch")?.getAttribute("href")?.replace(/^\?/, "") ?? "");
+    expect(params.get("area")).toBe("delivery_workflows");
+    expect(params.get("wfr")).toBe("wfr_5e1c");
+    // The light lane by default: the start approves the spec, so nothing asks to review it.
+    expect(JSON.parse(launchesOf(sent)[0]!.body).review_plan).toBeUndefined();
+  });
+
+  it("Review the plan first is sent with the launch", async () => {
+    const sent = server([STARTED]);
+    await mountAs(<BuildHome />, "owner");
+    const box = tid("build-review-plan") as HTMLInputElement;
+    await React.act(async () => { box.click(); });
+    await press("build-lucky");
+    expect(JSON.parse(launchesOf(sent)[0]!.body).review_plan).toBe(true);
+  });
+
   it("without a run, Watch the build opens the project", () => {
     expect(watchBuildHref({ projectId: "p1", runId: "" })).toBe(projectHref("p1"));
   });

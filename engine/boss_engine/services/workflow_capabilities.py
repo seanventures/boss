@@ -155,8 +155,13 @@ CAPABILITIES: dict[str, Capability] = {
             # `research` is what makes the difference between a panel arguing from a one-line
             # directive and one arguing from evidence. Optional, because a workflow may skip
             # research entirely — but bindable, so one that does not can hand it over.
-            optional_inputs=("task_id", "research"),
-            produces=("meeting_run_id", "prd_markdown", "task_id"),
+            # `compact`, `time_budget_seconds`, `fallback_to_brief`: Easy Mode's fast panel
+            # (request_meeting) — three seats, one round, and a build from the brief when it
+            # fails or overruns. `spec_approval` can only be "person" here (a person reads the
+            # PRD first): approval by the start is server-only (workflows.SPEC_BY_START_KEY).
+            optional_inputs=("task_id", "research", "compact", "spec_approval",
+                             "time_budget_seconds", "fallback_to_brief"),
+            produces=("meeting_run_id", "prd_markdown", "task_id", "spec_fallback"),
             typical_minutes=20,
             is_async=True,
             needs_model=True,
@@ -491,8 +496,10 @@ CAPABILITIES: dict[str, Capability] = {
             # shipped pass 1, as a new deploy under the same policy (two_pass).
             # `monitoring_step`: the Set up monitoring step whose pack this release carries
             # (monitoring_pack); under `monitoring_gate: block` it cannot ship without one.
+            # `skip_without_host`: Easy Mode's deploy completes as skipped, in words, when the
+            # project has no target and no usable host (the app runs as its preview).
             optional_inputs=("environment", "target_id", "host_id", "pass_2_of",
-                             "monitoring_step"),
+                             "monitoring_step", "skip_without_host"),
             produces=("deployment_id", "deployed_url"),
             requires_project=("deployment_target",),
             typical_minutes=8,

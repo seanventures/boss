@@ -205,6 +205,12 @@ _AML_ALERT_SUBJECT = [
 ]
 
 
+#: Easy Mode's workflow (services/factory_launch.py starts it), and how long its panel may take
+#: before the build starts from the brief instead.
+EASY_MODE_WORKFLOW = "easy_mode_mvp"
+EASY_MODE_PANEL_SECONDS = 12 * 60
+
+
 def _in(field: str) -> dict[str, str]:
     return {"from_input": field}
 
@@ -662,6 +668,50 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
+            _step("notify", "notify", _notify_inputs()),
+        ]),
+    },
+    {
+        # EASY MODE'S ONE FAST PIPELINE (operator, 2026-11-19): "make sure we add panel, workflow
+        # can be build, main P1 test pass, preview and deployment - it should be simple, don't
+        # need much validation, it should be fast and work MVP". A compact panel writes a lean
+        # PRD that the person's start approves (factory_launch: spec_approval "start"); the build
+        # runs on the light lane (standard: only the P1 floor blocks, the rest are follow-ups);
+        # its preview starts when it is ready; the deploy follows the environment's policy (no
+        # person for a non-production target) once the person merges. Merge is the one person
+        # step. A panel that fails or overruns builds from the brief instead (fallback_to_brief).
+        "key": EASY_MODE_WORKFLOW,
+        "name": "Easy Mode MVP",
+        "description": "Idea to a working app, fast: a short agent panel writes the spec, BOSS "
+                       "builds it, previews it and deploys it after you merge.",
+        "objective": (
+            "Build a working first version (an MVP) of what the person asked for, quickly. The "
+            "panel is short: agree what the app must do, as 3 to 7 behaviour-level acceptance "
+            "criteria, and keep the scope to a first version a person can open and use today. "
+            "No research, no architecture review, no extra process."
+        ),
+        # A new project's work; never the class's default route (_DEFAULT_MAPPINGS names
+        # Standard Product Delivery): Easy Mode starts this workflow by key.
+        "work_class": "project.new",
+        # P1 ONLY: no second More tests pass. The build's own tests and its P1 must-haves are
+        # the bar; everything else is a follow-up.
+        "more_tests": False,
+        "steps": _chain([
+            _step("meeting", "meeting", {"directive": _in("directive"), "compact": True,
+                                         "time_budget_seconds": EASY_MODE_PANEL_SECONDS,
+                                         "fallback_to_brief": True}),
+            _step("build", "build", _build_inputs(after_meeting=True)),
+            _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
+            # The run's numbers before it ships, like every workflow that deploys (no model).
+            _step("report", "report"),
+            # STAGING, UNDER ITS POLICY: Easy Mode's start sets the project's staging policy to
+            # ship without asking when the project has none (factory_launch.spec_first_run), so
+            # the deploy needs no person. Production is never this step's environment.
+            # NO SERVER (most laptops): the step is skipped in words — "Your app runs as a
+            # preview. Add a server in Infra to deploy it." — and the preview keeps running.
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id"),
+                                       "environment": "staging", "skip_without_host": True},
+                  follows_policy=True),
             _step("notify", "notify", _notify_inputs()),
         ]),
     },
@@ -1846,6 +1896,15 @@ BRIEFS: dict[str, dict[str, Any]] = {
                     "directive": "In the existing Shift swap board: add a 'Download CSV' button "
                                  "to the approvals page that exports this month's approved "
                                  "swaps."},
+    },
+    EASY_MODE_WORKFLOW: {
+        "directive": ("What should it do?",
+                      "Who it is for and what a person can do with it. A short panel turns it "
+                      "into a spec, then BOSS builds, previews and deploys a first version."),
+        "example": {"title": "Recipe box",
+                    "directive": "A recipe box: save recipes with ingredients and steps, search "
+                                 "them by ingredient, and mark favourites. One page, no "
+                                 "accounts."},
     },
     "major_feature": {
         "directive": ("What is the feature?",

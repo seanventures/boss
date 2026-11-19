@@ -3746,6 +3746,20 @@ def _perform_capability(
     advisory_preview = key == "preview" and bool(inputs.pop("advisory", False))
     pass_2_of = str(inputs.pop("pass_2_of", "") or "") if key == "deploy" else ""
     monitoring_step = str(inputs.pop("monitoring_step", "") or "") if key == "deploy" else ""
+    skip_without_host = key == "deploy" and str(
+        inputs.pop("skip_without_host", "") or "").lower() in ("true", "1")
+    # EASY MODE'S OWN RULES apply only on a run of the catalogue's Easy Mode MVP workflow (never
+    # a copy, never a binding someone else wrote, never a caller's input).
+    easy_mode = key == "deploy" and _is_easy_mode_run(connection, str(context.get("run_id") or ""))
+    if skip_without_host and easy_mode and not _somewhere_to_deploy(connection, project_id):
+        # NO SERVER IS NOT A FAILURE (Easy Mode, 2026-11-19): most people start on a laptop with
+        # no host. The app already runs as its preview; the deploy step says so and the run ends.
+        emit_event(connection, project_id, "workflow.step_skipped", actor,
+                   "workflow_run", str(context.get("run_id") or ""),
+                   {"step_id": step.get("id") if isinstance(step, dict) else None,
+                    "capability": key, "reason": NO_HOST_WORDS})
+        return {"capability": key, "tool": None, "status": "skipped", "skipped": "no_host",
+                "reason": NO_HOST_WORDS, "note": NO_HOST_WORDS, "summary": NO_HOST_WORDS}
     extend = key == "build" and bool(inputs.pop("extend", False))
     increment = inputs.pop("increment", None) if key == "build" else None
     if increment:
@@ -3913,6 +3927,13 @@ def _perform_capability(
     # wfr_3ceaad94, 2026-11-07). It waits for that merge like every deploy.
     if key == "deploy":
         waiting = _merge_wait(connection, project_id, str(inputs.get("run_id") or ""))
+        if not waiting and easy_mode:
+            # EASY MODE SHIPS ONLY WHAT WAS MERGED (review of #233): its staging deploy needs no
+            # person, so a merge approval that chose a MANUAL merge (or a GitHub that could not
+            # be read) must not let it ship the pull request's head. It waits for a merge on
+            # record, which _follow_merge observes.
+            waiting = _merge_wait_on_record(connection, project_id,
+                                            str(inputs.get("run_id") or ""))
         if waiting:
             return waiting
     if key == "deploy":
@@ -4304,6 +4325,8 @@ def _perform_capability(
                                   trusted=trusted_step)
         finally:
             WORKFLOW_RUN_ID.reset(run_token)
+        if key == "meeting":
+            _stamp_start_approval(connection, project_id, context, output)
     # The step's own facts are written AFTER the tool's output: a tool (or anything it relays)
     # cannot rename the capability a step ran (review of #125 — a forged `capability` field).
     result = {**output, "capability": key, "tool": capability.tool,
@@ -6326,6 +6349,16 @@ def resume_awaited(
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "redeploying", "awaited": kind, "build": awaited_id})
             continue
+        if kind == "meeting":
+            # EASY MODE NEVER STOPS AT ITS PANEL (fallback_to_brief): a panel that failed, died
+            # or ran past its time budget is replaced by a build from the brief, with why.
+            fell_back = _panel_fallback(connection, project_id=project_id, run_id=run_id,
+                                        step=step, output=output, meeting_run_id=awaited_id,
+                                        status=status, ok_states=ok_states,
+                                        bad_states=bad_states)
+            if fell_back:
+                done.append(fell_back)
+                continue
         if kind == "meeting" and status in ok_states:
             held = _hold_for_spec(connection, project_id=project_id, run_id=run_id,
                                   step=step, output=output, meeting_run_id=awaited_id)
@@ -6656,6 +6689,26 @@ def _merge_wait(connection: Connection, project_id: str,
     seen = _unmerged_build(connection, project_id, build_run_id)
     if not seen:
         return None
+    return _merge_await(connection, project_id, build_run_id, seen)
+
+
+def _merge_wait_on_record(connection: Connection, project_id: str,
+                          build_run_id: str) -> Optional[dict[str, Any]]:
+    """The same await, from BOSS's record alone: a build with a pull request and no merge on
+    record waits, whatever the merge approval said or GitHub could not tell."""
+    if not build_run_id or not _unmerged_on_record(connection, build_run_id):
+        return None
+    number = connection.execute(
+        text("SELECT pull_request_number FROM code_task_runs WHERE id = :i"),
+        {"i": build_run_id}).scalar()
+    from . import pr_merge
+
+    return _merge_await(connection, project_id, build_run_id,
+                        {"state": pr_merge.MERGE_PENDING, "number": number})
+
+
+def _merge_await(connection: Connection, project_id: str, build_run_id: str,
+                 seen: dict[str, Any]) -> dict[str, Any]:
     from . import pr_merge
 
     if seen.get("state") == pr_merge.CLOSED:
@@ -6726,6 +6779,128 @@ def _follow_merge(connection: Connection, *, project_id: str, run_id: str, step:
                                               "decision_id": qid})
     return {"run_id": run_id, "step_id": step["step_id"], "outcome": "merged_deploying",
             "build": build_run_id}
+
+
+def _is_easy_mode_run(connection: Connection, run_id: str) -> bool:
+    """Is this workflow run one of the catalogue's Easy Mode MVP workflow?"""
+    if not run_id:
+        return False
+    from .workflow_catalogue import EASY_MODE_WORKFLOW
+
+    try:
+        with connection.begin_nested():
+            return bool(connection.execute(text(
+                "SELECT 1 FROM workflow_runs r "
+                "JOIN workflow_versions v ON v.id = r.workflow_version_id "
+                "JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
+                "WHERE r.id = :r AND d.workflow_key = :k AND d.is_catalogue"),
+                {"r": run_id, "k": EASY_MODE_WORKFLOW}).first())
+    except Exception:  # noqa: BLE001 — unknown is not Easy Mode
+        return False
+
+
+def _stamp_start_approval(connection: Connection, project_id: str, context: dict[str, Any],
+                          output: dict[str, Any]) -> None:
+    """THE PERSON'S EASY MODE START APPROVES THIS PANEL'S PRD — and nothing else can say so.
+    `workflows.SPEC_BY_START_KEY` is a server-only run input that only factory_launch writes (with
+    the starting person's id, after it checked they may approve a PRD); it is honoured only on an
+    Easy Mode MVP run, and copied onto the panel the meeting step just convened."""
+    person = str((context.get("input") or {}).get(workflows.SPEC_BY_START_KEY) or "").strip()
+    meeting = (output or {}).get("meeting") if isinstance(output, dict) else None
+    meeting_run_id = str((meeting or {}).get("run_id") or "") if isinstance(meeting, dict) else ""
+    if not person or not meeting_run_id \
+            or not _is_easy_mode_run(connection, str(context.get("run_id") or "")):
+        return
+    connection.execute(
+        text("UPDATE meeting_runs SET constraints = COALESCE(constraints, '{}'::jsonb) || "
+             "jsonb_build_object('spec_approval', 'start', 'approved_by_start', CAST(:who AS text)) "
+             "WHERE id = :m AND project_id = :p AND status = 'running' "
+             "AND COALESCE(constraints->>'spec_approval', '') = ''"),
+        {"who": person, "m": meeting_run_id, "p": project_id})
+
+
+#: What an Easy Mode deploy step says when the project has nowhere to deploy.
+NO_HOST_WORDS = "Your app runs as a preview. Add a server in Infra to deploy it."
+
+
+def _somewhere_to_deploy(connection: Connection, project_id: str) -> bool:
+    """A deployment target, or a verified host this project may use (the Kit's own rule:
+    kit_connections.deps `deploy_target`). Unknown counts as somewhere, so a deploy is tried."""
+    from . import kit_connections
+
+    try:
+        return bool(kit_connections.deploy_targets(connection, project_id)) \
+            or kit_connections.verified_hosts(connection, project_id) > 0
+    except Exception:  # noqa: BLE001
+        return True
+
+
+#: The event a panel step records when it gave way to a build from the brief.
+SPEC_FALLBACK_EVENT = "workflow.spec_fallback"
+
+
+def _panel_fallback(connection: Connection, *, project_id: str, run_id: str, step: Any,
+                    output: dict[str, Any], meeting_run_id: str, status: str,
+                    ok_states: frozenset[str], bad_states: frozenset[str]
+                    ) -> Optional[dict[str, Any]]:
+    """BUILD FROM THE BRIEF WHEN THE PANEL CANNOT GIVE A SPEC IN TIME (Easy Mode, 2026-11-19).
+
+    Only for a panel convened with `fallback_to_brief` (request_meeting's constraints). It failed
+    or was cancelled (and nobody retried it), its step job died, or it ran past its
+    `time_budget_seconds`: the panel is stopped, and the step SUCCEEDS with no PRD and a recorded
+    `spec_fallback` reason, so the build after it starts from the brief. Never a block, never a
+    bare failure. None when none of that applies."""
+    try:
+        row = connection.execute(
+            text("SELECT constraints, error, EXTRACT(EPOCH FROM (now() - created_at)) AS age "
+                 "FROM meeting_runs WHERE id = :m"), {"m": meeting_run_id}).mappings().first()
+    except Exception:  # noqa: BLE001 — an unreadable panel keeps the ordinary path
+        return None
+    if not row:
+        return None
+    constraints = row["constraints"] if isinstance(row["constraints"], dict) else \
+        json.loads(row["constraints"] or "{}")
+    if not constraints.get("fallback_to_brief") or status in ok_states:
+        return None
+    reason = ""
+    if status in bad_states:
+        if _meeting_successor(connection, project_id, meeting_run_id, run_id):
+            return None           # a person retried the panel: the ordinary path follows it
+        error = str(row["error"] or "").strip()
+        reason = f"the panel ended as '{status}'" + (f": {error[:200]}" if error else "")
+    else:
+        job = connection.execute(
+            text("SELECT status, last_error FROM jobs WHERE kind = 'meeting.step' "
+                 "AND payload->>'run_id' = :m ORDER BY created_at DESC LIMIT 1"),
+            {"m": meeting_run_id}).mappings().first() or {}
+        budget = int(constraints.get("time_budget_seconds") or 0)
+        if str(job.get("status") or "") in ("deadlettered", "failed_final"):
+            said = job.get("last_error")
+            said = said.get("message") if isinstance(said, dict) else said
+            reason = "the panel's step failed" + (f": {str(said)[:200]}" if said else "")
+        elif budget and float(row["age"] or 0) > budget:
+            reason = (f"the panel ran past its {max(1, budget // 60)}-minute budget")
+        if not reason:
+            return None
+        stopped = connection.execute(
+            text("UPDATE meeting_runs SET status = 'cancelled', error = :e, updated_at = now() "
+                 "WHERE id = :m AND status = 'running'"),
+            {"m": meeting_run_id, "e": f"Stopped: {reason}. BOSS built from the brief instead."})
+        if not stopped.rowcount:
+            # THE PANEL FINISHED MEANWHILE (its PRD may already be approved and building): the
+            # ordinary path follows it. Building from the brief too would be a second build.
+            return None
+    fallback = {"reason": reason, "meeting_run_id": meeting_run_id,
+                "at": now_utc().isoformat()}
+    workflows.force_complete_waiting_step(
+        connection, project_id=project_id, step_run_id=step["id"],
+        output={**output, "status": "succeeded", "meeting_run_id": meeting_run_id,
+                "prd_markdown": "", "spec_fallback": fallback,
+                "note": f"No spec this time — {reason}. BOSS builds from the brief instead."})
+    emit_event(connection, project_id, SPEC_FALLBACK_EVENT, "boss", "workflow_run", run_id,
+               {"step_id": step["step_id"], **fallback})
+    return {"run_id": run_id, "step_id": step["step_id"], "outcome": "spec_fallback",
+            "awaited": "meeting", "because": reason}
 
 
 def _hold_for_spec(connection: Connection, *, project_id: str, run_id: str,
