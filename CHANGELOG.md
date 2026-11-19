@@ -2,6 +2,18 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.30]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.30.md](docs/community/RELEASE_NOTES_v1.0-rc10.30.md).
+
+### Changed
+
+- Easy Mode runs a quick spec panel, then build, P1 tests, preview and deploy to staging (skipped in plain words when there is no server). It never auto-merges; you press Approve and merge. Every Easy Mode build gets its delivery workflow under the one consent at the start.
+- Merge takes the approved head; a follow-up after merge opens its own change (local repos).
+- Failed deploys say what BOSS is doing about them, and app crashes are caught in about 30 seconds.
+- Every project page shows "Your app" with Open app; previews stay running while memory allows, can be recreated, and sleeping links wake.
+- Every failure in BOSS has an agent owner: fixing, or one action item with the reason and Done - retry. The community candidate version is `1.0.0-rc.10.30`.
+
 ## [v1.0-rc10.29]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.29.md](docs/community/RELEASE_NOTES_v1.0-rc10.29.md).
