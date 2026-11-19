@@ -47,9 +47,16 @@ def may(project_id: Optional[str], permission: str, *, db: Any = None) -> Option
     return permission in held
 
 
-def decide(project_id: Optional[str], permission: str) -> Optional[bool]:
+def decide(project_id: Optional[str], permission: str, *, db: Any = None) -> Optional[bool]:
     """A GATE (audited like every PDP decision): under an enforced request, may the request's
-    principal do `permission` at `project_id`? None when no guard enforced this request."""
+    principal do `permission` at `project_id`? None when no guard enforced this request.
+
+    `db`: THE CALLER'S OPEN TRANSACTION, whenever it has one. Without it the PDP reads on its own
+    connection and audits a deny in its own transaction; a caller that already wrote identity
+    audit events holds the org's audit lock, so that side write waits on the caller forever, and
+    every later audited action in the org (a sign-in's code check) queues behind it (2026-11-19:
+    an Easy Mode launch wedged sign-in at "Checking…"). Its own connection also cannot see a
+    project the caller created and has not committed, so the answer was a wrong deny as well."""
     if not enforced():
         return None
     ctx = lineage.current_context()
@@ -60,7 +67,7 @@ def decide(project_id: Optional[str], permission: str) -> Optional[bool]:
     org = ctx.principal.org_id
     scope = (ResolvedScope.in_project(org, str(project_id)) if project_id
              else ResolvedScope.org_level(org))
-    return authz.check(ctx, permission, scope).allowed
+    return authz.check(ctx, permission, scope, db=db).allowed
 
 
 def roles_granting(project_id: str, permission: str, among: Any) -> list[str]:
