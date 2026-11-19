@@ -248,6 +248,10 @@ compose() {
   # when none). Present before Compose runs, or Docker would create a directory in its place.
   [[ -e "$INSTALL_DIR/.boss/extra-ca.pem" ]] || { mkdir -p "$INSTALL_DIR/.boss" && : > "$INSTALL_DIR/.boss/extra-ca.pem" && chmod 644 "$INSTALL_DIR/.boss/extra-ca.pem"; } 2>/dev/null || true
   local profiles=()
+  local compose_files=(-f "$COMPOSE_FILE")
+  if [[ -n "${BOSS_CODEX_SECCOMP_FILE:-$(env_value BOSS_CODEX_SECCOMP_FILE)}" ]]; then
+    compose_files+=(-f "$INSTALL_DIR/scripts/install/community-codex-sandbox.yml")
+  fi
   [[ "$(env_value BOSS_COMMUNITY_WEB_ENABLED)" == 0 ]] || profiles+=(--profile web)
   [[ "$(env_value BOSS_COMMUNITY_SECRET_STORE)" != infisical ]] || profiles+=(--profile secrets)
   # The local test inbox runs only on an install that opted in (install.sh --with-mailpit).
@@ -256,7 +260,7 @@ compose() {
   # default here Compose looks for boss-community-api:local, which was never built.
   COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME" \
   BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-$COMPOSE_PROJECT_NAME}" \
-    "${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ${profiles[@]+"${profiles[@]}"} "$@"
+    "${DOCKER[@]}" compose "${compose_files[@]}" --env-file "$ENV_FILE" ${profiles[@]+"${profiles[@]}"} "$@"
 }
 
 api_url() {

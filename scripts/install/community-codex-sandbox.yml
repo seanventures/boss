@@ -1,0 +1,9 @@
+services:
+  api:
+    security_opt:
+      - apparmor=boss-codex
+      - seccomp=${BOSS_CODEX_SECCOMP_FILE:?Set BOSS_CODEX_SECCOMP_FILE to the generated absolute profile path}
+  worker:
+    security_opt:
+      - apparmor=boss-codex
+      - seccomp=${BOSS_CODEX_SECCOMP_FILE:?Set BOSS_CODEX_SECCOMP_FILE to the generated absolute profile path}
