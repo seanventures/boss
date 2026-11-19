@@ -261,12 +261,18 @@ def test_the_plan_changes_with_the_kind_and_the_picked_workflow(world, client, p
     with _as(world, world.owner):
         bug = client.get(f"/v1/projects/{pid}/work/plan", params={"kind": "bug"}).json()
         options = [o["key"] for o in bug["options"]]
-        picked_key = next((k for k in ("fast_fix", "major_feature") if k in options), None)
+        picked_key = next((k for k in ("major_feature", "fast_fix") if k in options), None)
         unknown = client.get(f"/v1/projects/{pid}/work/plan",
                              params={"kind": "feature", "workflow_key": "nope"})
         odd = client.get(f"/v1/projects/{pid}/work/plan", params={"kind": "epic"})
-    # No bugfix mapping in this project: a bug goes the feature way (what Start really runs).
-    assert bug["workflow"]["key"] == "minor_feature"
+    # No bugfix mapping in this project: a bug takes the small path, the project's Fast Fix —
+    # one build, no PRD panel (the light lane, 2026-11-18) — else the feature way.
+    if "fast_fix" in options:
+        assert bug["workflow"]["key"] == "fast_fix" and bug["workflow"]["chosen"] == "small"
+        assert "no PRD panel" in bug["workflow"]["why"]
+        assert not any(n["key"] in ("meeting", "panel", "prd") for n in bug["nodes"]), bug["nodes"]
+    else:
+        assert bug["workflow"]["key"] == "minor_feature"
     assert unknown.status_code == 422 and unknown.json()["detail"]["error"] == "unknown_workflow"
     assert odd.status_code == 422
     assert picked_key, options

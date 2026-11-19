@@ -432,7 +432,9 @@ def flag_existing_decision(connection: Any, project_id: str, pull_request_url: s
     found = str(row[0])
     flagged = {**dict(record), "draft": False, "label": LABEL}
     connection.execute(text(
-        "UPDATE decisions SET recommendation = COALESCE(recommendation, '{}'::jsonb) "
+        # A card that read "ready — N follow-ups" (quality_bar.merge_followups) now leads with
+        # its failing checks instead: its follow-ups record goes, so no surface says both.
+        "UPDATE decisions SET recommendation = (COALESCE(recommendation, '{}'::jsonb) - 'followups') "
         "|| jsonb_build_object(CAST(:k AS text), CAST(:r AS JSONB), 'summary', "
         "CAST(:lead AS text) || ' ' || COALESCE(recommendation->>'summary', '')), "
         "question = CASE WHEN question LIKE 'Checks failing%' THEN question "

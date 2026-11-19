@@ -74,9 +74,33 @@ def _bundler(text: str, instructions: str, spec: Optional[Mapping[str, Any]] = N
                               else {"instructions": instructions}) is None
 
 
+#: The preamble every change to an existing app carries (code_task_service.start_followup_task).
+EXISTING_APP_LEAD = "Continue work on an EXISTING application"
+#: finalize_ctx keys that say a build continues an app that already exists.
+_LINEAGE_KEYS = ("root_run_id", "parent_run_id", "deferred_from_run", "after_merged_run_id",
+                 "extends_run_id")
+
+
+def extends_existing_app(instructions: str, fctx: Optional[Mapping[str, Any]] = None) -> bool:
+    """Is this build a change to an app that already exists (a bug fix, a small change, a
+    follow-up), rather than a new app?"""
+    if str(instructions or "").lstrip().startswith(EXISTING_APP_LEAD):
+        return True
+    return any((fctx or {}).get(k) for k in _LINEAGE_KEYS)
+
+
 def decide(title: str, instructions: str, criteria: Iterable[str] = (), *,
            workflow_deploys: bool = False, has_manifest: bool = False,
-           spec: Optional[Mapping[str, Any]] = None) -> dict[str, bool]:
+           spec: Optional[Mapping[str, Any]] = None,
+           light_change: bool = False) -> dict[str, bool]:
+    """`light_change`: a change to an EXISTING app at the light lane (quality_bar below
+    production). Its build is scoped to the request: the ops standard (/metrics, telemetry, a
+    deploy manifest) applies only when the request asks for it or the app already declares a
+    boss.deploy.yaml — never because the workflow happens to deploy. Recipe box's one-test fix
+    (2026-11-18) grew a Dockerfile, docker-compose.yml, boss.deploy.yaml, a metrics endpoint
+    and a telemetry fetch: +2.9k lines nobody asked for."""
+    if light_change:
+        workflow_deploys = False
     text = "\n".join([title or "", instructions or "", *[str(c) for c in criteria or ()]])
     if MORE_TESTS_MARKER in text:
         # PASS 2 (workflow step more_tests): the browser tests pass 1 deferred are written now,

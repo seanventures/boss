@@ -2018,8 +2018,17 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                       approval_decision_id: Optional[str] = None,
                       retire_projects: Optional[list[str]] = None,
                       person_required: bool = False,
-                      rollback_authority: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                      rollback_authority: Optional[dict[str, Any]] = None,
+                      also_judged: Optional[list[str]] = None) -> dict[str, Any]:
     """Record a deployment of `repository@ref` to a stack target, held for approval.
+
+    THE PRODUCTION BAR: every stack plan to a production target passes
+    `quality_bar.stack_plan_decision` (the same chokepoint as plan_deployment_run) here, whichever
+    door called (a workflow's Deploy step, /v1/deployments/stack/plan, the console's deploy,
+    rollback): it must name a build (`run_id`) that passes the production bar and ship the commit
+    that build judged. The one exemption is a rollback (`rollback_of`, server code only) to the
+    target's previous healthy commit. `also_judged`: extra commits TRUSTED callers know the build
+    judged (the merge of its pull request).
 
     `rollback_authority`: a ROLLBACK (`rollback_of`) an incident squad already decided — a
     person's answer on its "Roll back X to Y?" card, or the squad acting within its autonomy
@@ -2071,6 +2080,19 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                                  commit_ref=ref, source_run_id=run_id)
         if refused:
             raise StackDeployError(refused, refused.action, status_code=409)
+        from . import quality_bar as _quality_bar
+
+        bar_refusal, bar_commit = _quality_bar.stack_plan_decision(
+            connection, target=target, run_id=run_id, ref=ref, rollback_of=rollback_of,
+            also_judged=also_judged or [])
+        if bar_refusal:
+            raise StackDeployError(bar_refusal, "Release a build that passes the production bar "
+                                   "(see what is listed), or re-check it at the production bar.",
+                                   status_code=409)
+        if bar_commit:
+            # A production release ships the commit its build judged: a branch name, no commit and
+            # `pull/N` (any PR, or this PR after new pushes) are all replaced by it.
+            ref = bar_commit
         host = get_host(connection, str(target.get("host_id") or "")) if target.get("host_id") \
             else None
         if not host:
@@ -3708,6 +3730,16 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
         run = connection.execute(
             text("SELECT spec, pull_request_number, status FROM code_task_runs WHERE id = :i"),
             {"i": run_id}).mappings().first() if run_id else None
+        # THE BAR FOLLOWS WHERE IT SHIPS (quality_bar.py): the one door every stack release
+        # passes (deploy_build, a workflow's Deploy step), judged by the TARGET's environment.
+        from . import quality_bar as _quality_bar
+
+        if _quality_bar.is_production(target.get("environment")):
+            refused = _quality_bar.production_refusal(connection, code_task_run_id=run_id or None,
+                                                      workflow_run_id=workflow_run_id)
+            if refused:
+                return {"capability": "deploy", "tool": None, "status": "failed",
+                        "error": refused, "quality_bar": "production"}
     if run is None:
         return {"capability": "deploy", "tool": None, "status": "failed",
                 "error": "this deploy step names no build, so there is no commit to deploy."}
@@ -3760,7 +3792,10 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
             workflow_step_id=step_id,
             manifest_path=None if is_stack_target(target) else target.get("manifest_path"),
             approval_decision_id=approval_decision_id, retire_projects=retire_projects,
-            person_required=person_required)
+            person_required=person_required,
+            # The merge commit of the build's own pull request (observed above) is a commit the
+            # build judged: the production chokepoint in plan_stack_deploy accepts it.
+            also_judged=[str(merge.get("sha"))] if merge.get("sha") else [])
     except StackDeployError as exc:
         refused: dict[str, Any] = {"capability": "deploy", "tool": None, "status": "failed",
                                    "error": f"{exc.headline} {exc.action}",

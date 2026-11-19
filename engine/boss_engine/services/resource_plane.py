@@ -2375,8 +2375,12 @@ class ResourcePlaneService:
         actor: str,
         approval_decision_id: Optional[str] = None,
         person_required: bool = False,
+        reships: Optional[str] = None,
     ) -> dict[str, Any]:
-        """`approval_decision_id`: the workflow gate that already approved this deploy, passed
+        """`reships`: TRUSTED callers only (delivery_pipeline.redeploy): the prior production
+        deployment run this release re-ships at the SAME commit (quality_bar.plan_refusal checks
+        it). Never taken from a request body or a release packet.
+        `approval_decision_id`: the workflow gate that already approved this deploy, passed
         explicitly by the runner (deploy_policy.pre_approval decides whether it counts).
         `person_required`: the step that started it promised a person, so no policy answers."""
         if expected_cost_usd_micros < 0:
@@ -2395,6 +2399,18 @@ class ResourcePlaneService:
             from .governed_host_deploy import GovernedHostDeployError
 
             raise GovernedHostDeployError(refused, refused.action)
+        # THE BAR FOLLOWS WHERE IT SHIPS (quality_bar.py): every production deployment is planned
+        # here, so a promotion from staging and a direct deploy meet the same production bar.
+        from . import quality_bar as _quality_bar
+
+        bar_refusal, bar_commit = _quality_bar.plan_decision(
+            connection, target=target, release_packet=release_packet, commit_ref=commit_ref,
+            reships=reships)
+        if bar_refusal:
+            return {"status": "failed", "refused": True, "failure_reason": bar_refusal,
+                    "quality_bar": "production"}
+        if bar_commit:
+            commit_ref = bar_commit     # a production release ships the commit its build judged
         if expected_cost_usd_micros > 0 and not reservation_id:
             decision_id = create_blocking_decision(
                 connection,

@@ -250,6 +250,7 @@ def _attempt_sql() -> str:
         "c.finalize_ctx->'merge'->>'at' AS merged_at, "
         "c.finalize_ctx->'merge'->>'sha' AS merged_sha, "
         "dd.recommendation->'merge_failed'->>'reason' AS merge_failed, "
+        "dd.recommendation->'followups' AS followups, "
         f"{LAST_ACTIVITY_SQL} AS last_activity, {live_job_sql('c')} AS live_job "
         "FROM code_task_runs c LEFT JOIN decisions dd ON dd.id = c.decision_id ")
 
@@ -594,6 +595,17 @@ def _settle_merged(members: list[dict[str, Any]]) -> None:
             m["merge_open"] = False
 
 
+def _followups_of(raw: Any) -> Optional[dict[str, Any]]:
+    """{count, queued, words} of a merge card's follow-ups record, else None."""
+    from ..quality_bar import followup_words
+
+    rec = as_json(raw, None) if not isinstance(raw, Mapping) else raw
+    if not isinstance(rec, Mapping) or not int(rec.get("count") or 0):
+        return None
+    return {"count": int(rec["count"]), "queued": bool(rec.get("queued")),
+            "words": str(rec.get("words") or followup_words(rec))}
+
+
 def _merge_links(members: list[dict[str, Any]], merge: Optional[Mapping[str, Any]]
                  ) -> dict[str, Any]:
     """`merge_pr`: the pull request the open merge question is about (a follow-up after a merged
@@ -614,6 +626,11 @@ def _merge_links(members: list[dict[str, Any]], merge: Optional[Mapping[str, Any
                            "external_url": url, "follow_up_of": after,
                            # Its last merge failed (merge_failures): said, never "Ready".
                            "failed": merge.get("merge_failed") or None}
+        # Ready WITH follow-ups (quality_bar.merge_followups): still "Ready to merge", with how
+        # many BOSS is fixing after it. Only when there are some.
+        _f = _followups_of(merge.get("followups"))
+        if _f:
+            out["merge_pr"]["followups"] = _f
     return out
 
 

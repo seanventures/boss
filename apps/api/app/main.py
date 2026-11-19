@@ -10829,7 +10829,8 @@ def plan_stack_deployment_endpoint(payload: open_bodies.StackDeployPlanBody):
     try:
         deployment = plan_stack_deploy(
             engine, settings, project_id=project_id, target_id=target_id,
-            repository=(payload.get("repository") or None), ref=ref, actor=actor)
+            repository=(payload.get("repository") or None), ref=ref, actor=actor,
+            run_id=(str(payload.get("run_id") or "").strip() or None))
     except StackDeployError as exc:
         raise _stack_error(exc)
     return {"deployment": deployment}
@@ -22758,6 +22759,10 @@ def create_deployment_run(
             )
         except (ProviderAccountNotFoundError, ValueError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        if item.get("refused"):
+            # The production quality bar (quality_bar.plan_refusal): said in words, nothing planned.
+            raise HTTPException(status_code=409, detail=item.get("failure_reason")
+                                or "Deployment policy blocked this run.")
         return DeploymentRunSummary(**item)
 
 
@@ -27947,6 +27952,19 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
         extends["preview_id"] = preview_id
     # THE CONTRACT ITEMS THIS CHANGE REPLACES (a picker's ids, never read from the words):
     # only with extends_run_id, only a person allowed to revise (BOSSAPP-1322, PR #161 C1).
+    # THE QUALITY BAR (quality_bar.py): a bar below the project's, or a per-gate map, is a
+    # PERSON's call with settings:update, checked here and recorded by start_run.
+    bar_override = None
+    _asked_bar = run_input.pop("quality_bar", None)
+    _asked_gates = run_input.pop("quality_bar_gates", None)
+    if _asked_bar or _asked_gates:
+        from boss_engine.services import quality_bar as _quality_bar
+
+        try:
+            _quality_bar.check_override_permission(project_id, actor)
+        except _quality_bar.QualityBarOverrideRefused as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        bar_override = {"bar": _asked_bar, "gates": _asked_gates, "by": actor}
     picked_items = run_input.pop("replaces", None)
     checked_items: list[str] = []
     if picked_items:
@@ -28052,6 +28070,7 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
             run = workflow_runtime.start_run(
                 connection, project_id=project_id, actor=actor, input_data=run_input,
                 checked_replaces=checked_items or None,
+                quality_bar_override=bar_override,
                 # IDEMPOTENT WHEN THE CALLER SAYS SO: the same dedupe_key returns the run it
                 # already started. The console sends one per intent ("replace run X"), so a
                 # second press of Stop-and-run-again cannot start a second workflow.
@@ -31911,6 +31930,8 @@ def code_task_review_pr_again_endpoint(run_id: str, payload: ReviewPrAgainBody) 
 
 class RecheckBody(BaseModel):
     actor: str
+    # "production": re-check at the production quality bar (every review seat convened).
+    quality_bar: Optional[str] = None
 
 
 @app.get("/v1/code-tasks/{run_id}/recheck")
@@ -31947,7 +31968,8 @@ def code_task_recheck_endpoint(run_id: str, payload: RecheckBody) -> dict:
         by_person = is_person(actor, connection, owner)
     try:
         return change_recheck.request(engine, settings, jobs, run_id, project_id=owner,
-                                      actor=actor, by_person=by_person)
+                                      actor=actor, by_person=by_person,
+                                      quality_bar=payload.quality_bar)
     except change_recheck.RecheckRefused as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

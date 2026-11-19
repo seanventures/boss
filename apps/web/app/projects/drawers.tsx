@@ -183,7 +183,7 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
           <span className="px-ny-ico" aria-hidden>!</span>
           {/* "Ready to merge" only for a merge question, about ITS pull request (merge_pr):
               never a merged PR, never a deploy gate's wait (pr_follow_up). */}
-          <b style={{ flex: 1 }} data-testid="px-drawer-work-needs-words">{mp ? (mp.failed ? `Merge failed: ${mp.failed}` : mp.follow_up_of ? `Follow-up fix after #${mp.follow_up_of} · ready to merge` : "Ready to merge") : w.why?.who === "you" ? w.why.words : "Waiting on you"}</b>
+          <b style={{ flex: 1 }} data-testid="px-drawer-work-needs-words">{mp ? (mp.failed ? `Merge failed: ${mp.failed}` : mp.follow_up_of ? `Follow-up fix after #${mp.follow_up_of} · ready to merge` : mp.followups?.words ? `Ready to merge · ${mp.followups.words}` : "Ready to merge") : w.why?.who === "you" ? w.why.words : "Waiting on you"}</b>
           {/* ONE ACTION (screen 05b): merging is approving the build's merge question in BOSS;
               with no question on record it opens the PR on GitHub. */}
           {mp ? (l.decision

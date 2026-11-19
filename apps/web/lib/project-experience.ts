@@ -210,7 +210,9 @@ export type WorkItem = {
     log?: string;
     /** The pull request the open merge question is about; `follow_up_of`: the merged PR it
      *  follows. Null when nothing waits on a merge (a merged PR never asks again). */
-    merge_pr?: { number: number; external_url: string; follow_up_of?: number | null; failed?: string } | null;
+    merge_pr?: { number: number; external_url: string; follow_up_of?: number | null; failed?: string;
+      /** Ready WITH follow-ups (engine quality_bar.merge_followups): BOSS fixes them after; never a failure. */
+      followups?: { count: number; queued: boolean; words: string } | null } | null;
     /** The newest pull request merged on record. */
     merged_pr?: { number: number; external_url: string } | null };
   detail: string; href: string; source: string;
@@ -582,7 +584,8 @@ export const parseWorkItem = (v: unknown): WorkItem => {
     links: { workflow_run: s(l.workflow_run), build: s(l.build), deploy: s(l.deploy), preview: s(l.preview), decision: s(l.decision),
              log: s(l.log) || (s(l.build) ? logOfBuild(s(l.build)) : ""),
              pr: pr.number || pr.external_url ? { number: n(pr.number), external_url: s(pr.external_url) } : null,
-             merge_pr: mp.number || mp.external_url ? { number: n(mp.number), external_url: s(mp.external_url), follow_up_of: nn(mp.follow_up_of), failed: s(mp.failed) } : null,
+             merge_pr: mp.number || mp.external_url ? { number: n(mp.number), external_url: s(mp.external_url), follow_up_of: nn(mp.follow_up_of), failed: s(mp.failed),
+                                                                     followups: n(o(mp.followups).count) ? { count: n(o(mp.followups).count), queued: o(mp.followups).queued === true, words: s(o(mp.followups).words) } : null } : null,
              merged_pr: md.number || md.external_url ? { number: n(md.number), external_url: s(md.external_url) } : null },
     detail: s(x.detail), href: s(x.href), source: s(x.source),
     why: parseWaitReason(x.why), diagnosis: parseDiagnosis(x.diagnosis),

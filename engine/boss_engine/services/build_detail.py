@@ -269,7 +269,7 @@ def _attempt_n(run: Mapping[str, Any]) -> int:
 
 def _gate_row(connection: Any, run_id: str) -> Optional[Mapping[str, Any]]:
     return connection.execute(
-        text("SELECT gates_passed, gates_failed, created_at FROM quality_gates "
+        text("SELECT gates_passed, gates_failed, evidence, created_at FROM quality_gates "
              "WHERE code_task_run_id = :r ORDER BY created_at DESC LIMIT 1"),
         {"r": run_id},
     ).mappings().first()
@@ -380,7 +380,11 @@ def now_summary(connection: Any, settings: Any, project_id: str, run: Mapping[st
                          "at": _iso(g.get("created_at")),
                          "passed": [gate_labels(x) for x in passed],
                          # A failed gate says what went wrong (plain_words.FAILED_WORDS).
-                         "failed": [_failed_words(x) for x in failed]}
+                         "failed": [_failed_words(x) for x in failed],
+                         # Let through by the quality bar: neither passed nor failed.
+                         "followups": [gate_labels(x) for x in (
+                             (_j(g.get("evidence"), {}) or {}).get("quality_bar") or {}
+                         ).get("followups") or {}]}
         if verify is not None and gates is not None:
             break
 

@@ -112,7 +112,7 @@ export function askSuggestions(c: Pick<CockpitData, "app" | "brief" | "lineage" 
 const TEST_GATES = new Set(["tests_strong_enough", "tests_written_first", "coder_did_not_edit_tests", "brief_tests_written",
   "written_tests_pass", "existing_tests_intact"]);
 export function retryTip(c: Pick<CockpitData, "outputs">): string {
-  const failing = (c.outputs.checks?.gates ?? []).filter((g) => !g.ok && !g.waivedBy).map((g) => g.name);
+  const failing = (c.outputs.checks?.gates ?? []).filter((g) => !g.ok && !g.followup && !g.waivedBy).map((g) => g.name);
   const reusesTests = failing.length > 0 && !failing.some((g) => TEST_GATES.has(g));
   return `Resumes on the same branch, reusing the plan${reusesTests ? " and the tests" : ""}`;
 }
