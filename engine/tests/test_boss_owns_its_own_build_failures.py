@@ -129,3 +129,16 @@ def test_the_failed_build_card_says_what_boss_already_did():
     assert "?" not in card["detail"]
     assert build_failure.boss_did("needs_human", "2") is None
     assert build_failure.boss_did("infra", None) is None
+
+
+def test_a_retry_boss_may_not_start_by_itself_asks_for_an_ok_not_a_fix():
+    """A follow-up under a "this build only" grant (review of #222): BOSS may not retry it under
+    that grant, so the card asks for one OK in words — never a red failure to fix."""
+    words = build_failure.needs_ok_words("infra", "true", follow_up=True)
+    assert words.startswith("BOSS needs your OK to retry this follow-up")
+    assert build_failure.needs_ok_words("needs_human", "true") is None
+    assert build_failure.needs_ok_words("infra", None) is None
+    card = build_failure.needs_card({"id": "crun_f", "word": "Needs your OK", "label": "Recipe box",
+                                     "reason": words, "tone": "info",
+                                     "retry": {"run_id": "crun_f"}})
+    assert card["tone"] == "info" and card["retry"] and card["label"].startswith("Needs your OK")

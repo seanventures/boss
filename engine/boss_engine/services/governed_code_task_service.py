@@ -1949,6 +1949,13 @@ def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: 
     except RetryNeedsPerson as withheld:
         try:
             with _transaction(engine) as c:
+                # THE CARD ASKS FOR AN OK, NOT A FIX (build_failure.needs_ok_words): no grant the
+                # person gave covers another attempt (a follow-up under a "this build only"
+                # grant), so one consent press retries it.
+                c.execute(sql("UPDATE code_task_runs SET finalize_ctx = "
+                              "COALESCE(finalize_ctx,'{}'::jsonb) || "
+                              "jsonb_build_object('auto_retry_needs_ok', true) WHERE id=:id"),
+                          {"id": run_id})
                 emit_event(c, project_id, "code_task.auto_retry_withheld", "boss",
                            "code_task_run", run_id, {"why": str(withheld)[:300]})
         except Exception:  # noqa: BLE001

@@ -230,7 +230,9 @@ def latest_failures(connection: Any, project_ids: Iterable[str], *,
         "c.finalize_ctx->>'reason_code' AS reason_code, "
         "c.finalize_ctx->'merge'->>'sha' AS merged_sha, "
         "c.finalize_ctx->>'auto_infra_retry' AS auto_retries, "
-        "c.finalize_ctx->'restart_recovery' AS restart_recovery "
+        "c.finalize_ctx->'restart_recovery' AS restart_recovery, "
+        "c.finalize_ctx->>'auto_retry_needs_ok' AS needs_ok, "
+        "c.finalize_ctx->>'is_followup' AS is_followup "
         "FROM code_task_runs c WHERE c.project_id = ANY(:ids) AND c.created_at >= :since "
         + _internal_clauses(params, "c")), params).mappings().all()]
     runs = [dict(r) for r in connection.execute(text(
@@ -300,6 +302,13 @@ def latest_failures(connection: Any, project_ids: Iterable[str], *,
             doing = boss_did(latest["failure_class"], latest.get("auto_retries"))
             if doing:
                 failure["doing"] = doing
+            ok = needs_ok_words(latest["failure_class"], latest.get("needs_ok"),
+                                follow_up=follow_up or bool(latest.get("is_followup")))
+            if ok:
+                # BOSS would retry it but no grant the person gave covers another attempt: one
+                # OK (Retry, which asks consent) and it runs. Never a red failure to fix.
+                failure.update({"word": "Needs your OK", "reason": ok, "tone": "info"})
+                failure.pop("doing", None)
             stopped = _stopped_by_boss(latest.get("restart_recovery"))
             if stopped:
                 # A BOSS bug, fixed since, stopped it: said as that, never a red "Build failed".
@@ -353,6 +362,18 @@ def _failed_at_ship(connection: Any, run_ids: list[str]) -> set[str]:
         if _station_of(cap, str(r["step_kind"] or "")) == "ship":
             out.add(str(r["workflow_run_id"]))
     return out
+
+
+def needs_ok_words(failure_class: Any, needs_ok: Any, *, follow_up: bool = False
+                   ) -> Optional[str]:
+    """A platform failure BOSS would retry but may not by itself (no grant the person gave
+    covers another attempt), in words — an OK to give, not a problem to fix."""
+    if str(failure_class or "") != "infra" or str(needs_ok or "").lower() not in ("true", "1"):
+        return None
+    what = "this follow-up" if follow_up else "this build"
+    return (f"BOSS needs your OK to retry {what}: it stopped on a platform error on BOSS's side, "
+            "and no grant you gave covers another attempt. Press Retry to allow it, or give "
+            "its agent a standing grant so BOSS retries by itself next time.")
 
 
 def _stopped_by_boss(value: Any) -> Optional[str]:

@@ -205,6 +205,21 @@ def test_the_second_try_waits_longer_and_the_third_is_not_made(monkeypatch):
     assert "?" not in out["next_step"]
 
 
+def test_a_withheld_retry_marks_the_build_as_needing_an_ok(monkeypatch):
+    from boss_engine.services import code_task_service
+
+    log = []
+
+    def retry(*a, **k):
+        raise code_task_service.RetryNeedsPerson("no person's grant covers another attempt")
+
+    g = _wire(monkeypatch, log, retry)
+    out = g._retry_after_infra_failure(None, None, None, "crun_w", "p", {}, {"status": "failed"})
+    assert out["auto_retry"] == "needs_person"
+    marked = [e for e in log if e[0] == "sql" and "auto_retry_needs_ok" in e[1]]
+    assert marked and marked[0][2] == {"id": "crun_w"}
+
+
 def test_automatic_retries_can_be_turned_off(monkeypatch):
     log, retried = [], []
     g = _wire(monkeypatch, log, lambda *a, **k: retried.append(1))
