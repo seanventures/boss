@@ -14,6 +14,11 @@ Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.29.md](docs/community/RELEASE_NOT
 - Template cards show a drawing of each app and fold to two rows with Show all. The community candidate version is `1.0.0-rc.10.29`.
 - The Build with BOSS composer has icons, tinted suggestion chips and a readable Easy Mode button.
 - Top-bar menus (Builds, bell, account) keep their own width; Find a build was squeezed to its button.
+- Light lane for normal builds (quality bar `standard` by default): review findings become follow-ups on a ready card; production stays strict.
+- BOSS retries its own failures (max 2, spaced); person-side failures say what to do; failed builds are visible with fix/Retry; plain words throughout.
+- Easy Mode asks "Confirm it's you" instead of failing; started card with Watch the build.
+- Previews: no garbled Next.js pages, data kept across restarts, working App link.
+- Security: BOSS's git and file work on a build's tree runs as the build's user.
 
 ## [v1.0-rc10.28]
 
