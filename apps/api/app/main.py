@@ -7969,7 +7969,8 @@ def follow_up_code_task_endpoint(run_id: str, payload: CodeTaskFollowUpBody):
         raise HTTPException(status_code=403, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    return {"status": "queued", **result}
+    # An identical follow-up already in flight is returned, never queued twice (review #224).
+    return {"status": "existing" if result.get("existing") else "queued", **result}
 
 
 @app.get("/v1/qa/benchmark-apps/runs/{run_id}/report")

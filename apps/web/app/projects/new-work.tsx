@@ -42,7 +42,7 @@ import {
 import { FX_WORK_PLAN } from "../../lib/project-experience-fixtures";
 import {
   MAX_BRIEF_CHARS, PRIORITIES, PRIORITY_WORDS, addToNext, anchorWords, briefLength, issueIsBug, issueLinkIn, newDraftId, parsePlanDetail, planDetailPath, readDraft, startNewWork,
-  understand, writeDraft, type Brief, type ChatMsg, type IssueChoice, type IssueRead, type PlanDetail, type Priority, type Understanding,
+  readingWords, understand, writeDraft, type Brief, type ChatMsg, type IssueChoice, type IssueRead, type PlanDetail, type Priority, type Understanding,
 } from "../../lib/new-work";
 import { BriefCard, Marked, type BriefRow } from "./brief-card";
 import { Face, Flow, Said } from "./kit";
@@ -275,13 +275,31 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
     if (how === "words") { lastRead.current = `${kind}|${text}`; if (!prev) setStatus("reading"); }
     else setTalking(true);
     try {
-      const u = await understand(pid, { kind, text: words, chat: talk, brief: prev, hint, draft: draftId, workflow_key: picked.v || undefined });
+      let u: Understanding;
+      try {
+        u = await understand(pid, { kind, text: words, chat: talk, brief: prev, hint, draft: draftId, workflow_key: picked.v || undefined });
+      } catch (e) {
+        // Never left "reading": anything that throws is the no-model answer (Start uses the words).
+        u = { status: "no_model", brief: null, reply: "", ask: null, applied: [], settings: {}, issue: null,
+              graph: { indexed: false, files: 0 }, agent: null, why: e instanceof Error ? e.message : "no answer" };
+      }
       if (mine !== turn.current && how === "words") return; // a newer read of the words won
       apply(u, how, prev);
     } finally {
       if (how !== "words") setTalking(false);
     }
   }, [apply, brief, chat, draftId, kind, picked.v, pid, text]);
+
+  // HOW LONG HELM HAS BEEN READING (lib/new-work.ts readingWords): a model turn takes 15-40 s,
+  // so the card counts it and, past the patience bound, says Start does not need it.
+  const [readSecs, setReadSecs] = useState(0);
+  useEffect(() => {
+    setReadSecs(0);
+    if (status !== "reading") return;
+    const t0 = Date.now();
+    const id = setInterval(() => setReadSecs(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [status]);
 
   // Helm reads as you type (a pause, enough words), and again when the kind changes.
   useEffect(() => {
@@ -790,7 +808,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
             {briefState ? (
               <BriefCard state={briefState} agent={helm} heading="Task" rows={rows} editing={editing} confirmed={confirmed}
                          title={b?.title ?? ""} chips={foldChips}
-                         reading={<>Reading your words and the code graph{graph?.indexed ? "" : "…"}</>}
+                         reading={<span data-testid="px-brief-reading-words" data-secs={readSecs}>{readingWords(readSecs, { starting: busy === "start" })}</span>}
                          sub={briefState === "fallback" ? `${helm?.name ?? "Helm"} couldn't read it just now — no model answered in time.`
                            : confirmed ? (updated ? "Brief confirmed · updated from your chat with Helm" : "Brief confirmed")
                            : `Your ${n} line${n === 1 ? "" : "s"} as a change · ${graph?.indexed === false ? "no code graph yet" : "checked against the code graph"} · click any line to edit`}
@@ -816,7 +834,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
         </div>
         <div className="px-nw-foot">
           {estWords ? <span className="px-tag" data-tone="cost" data-testid="px-nw-foot-est">{estWords}</span> : est ? <span className="px-faint" style={{ fontSize: ".56rem" }}>cost after its first run</span> : null}
-          {status === "idle" || status === "reading" ? <span className="px-faint px-hide-phone" style={{ fontSize: ".56rem" }}>Start uses the defaults; {helm?.name ?? "Helm"}&apos;s read takes a few seconds</span> : null}
+          {status === "idle" || status === "reading" ? <span className="px-faint px-hide-phone" style={{ fontSize: ".56rem" }}>Start uses the defaults and never waits for {helm?.name ?? "Helm"}&apos;s read</span> : null}
           <Said text={said.text} tone={said.tone} />
           <span className="px-spacer" />
           {len.over || anchorBad ? (

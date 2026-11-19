@@ -533,6 +533,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
       <NowBand c={c} now={now} />
       <LearnedStrip projectId={projectId} actor={actor} runId={c.run.id} live={c.live} />
       {c.run.status === "completed" ? <ResultReview key={c.run.id} runId={c.run.id}
+        briefCriteria={c.brief.criteria} failedGates={c.summary?.gates?.failed}
         onChangeRequested={(note) => { setReviewChange(note); setChangeIt(true); }} /> : null}
 
       <div className="fx-body">

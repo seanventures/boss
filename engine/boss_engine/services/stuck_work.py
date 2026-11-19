@@ -134,7 +134,9 @@ def _names(titles: list[str]) -> str:
 
 
 def _short_title(title: Any) -> str:
-    first = (str(title or "").splitlines() or [""])[0].strip()
+    from .plain_words import plain_title
+
+    first = plain_title((str(title or "").splitlines() or [""])[0].strip())
     return first if len(first) <= 40 else first[:39].rstrip() + "…"
 
 
@@ -196,9 +198,15 @@ def _job(connection: Any, run_id: str) -> Optional[dict[str, Any]]:
     return dict(row) if row else None
 
 
+def _lineage_root(ctx: Mapping[str, Any], run_id: str) -> str:
+    """The build a lineage of attempts started from (finalize_ctx.root_run_id), else itself."""
+    return str(ctx.get("root_run_id") or run_id)
+
+
 def _running_builds(connection: Any, project_id: Optional[str], exclude: str) -> list[dict[str, Any]]:
     rows = connection.execute(text(
-        "SELECT r.id, r.title, r.project_id, j.created_at AS job_at, j.heartbeat_at "
+        "SELECT r.id, r.title, r.project_id, j.created_at AS job_at, j.heartbeat_at, "
+        "r.finalize_ctx->>'root_run_id' AS root "
         "FROM jobs j JOIN code_task_runs r ON r.id = j.payload->>'run_id' "
         "WHERE j.kind = 'code.task' AND j.status IN ('leased', 'running') "
         "AND j.lease_expires_at > now() AND r.id <> :x ORDER BY j.created_at LIMIT 20"),
@@ -337,14 +345,30 @@ def wait_reason(connection: Any, run: Mapping[str, Any], *, job: Any = "load",
         return out("person", "you", f"Waiting for you: {asked}",
                    _clip((dec or {}).get("question") or "", 300), run.get("updated_at"))
 
+    # HANDED ON, NOT FAILED (continuation.py): an attempt whose repair continued elsewhere says
+    # where it went and how that ended — never "Blocked: … press Retry" on it.
+    from .continuation import continued_in
+
+    cont = continued_in(connection, run)
+    if cont is not None:
+        said = out("continued", "boss", cont["words"], "Open that attempt for its outcome.",
+                   run.get("updated_at"))
+        from .project_experience.common import href as _href
+
+        said["run_id"] = cont["run_id"]
+        said["href"] = _href(run.get("project_id"), area="code_tasks", build=cont["run_id"])
+        return said
+
     if status in ENDED_STATUSES:
         diag = _as_dict(ctx.get("diagnosis"))
         # The Shepherd's words only when they are about THIS ending (not an earlier one).
         fresh = _aware(diag.get("at")) and _aware(run.get("updated_at")) and \
             _aware(diag.get("at")) >= _aware(run.get("updated_at")) - timedelta(minutes=5)
-        words = ("Blocked: " if status == "blocked" else "Failed: ") + _clip(
+        from .plain_words import plain_sentence
+
+        words = ("Blocked: " if status == "blocked" else "Failed: ") + _clip(plain_sentence(
             (diag.get("cause") if fresh else None) or run.get("error") or diag.get("cause")
-            or "no reason was recorded", 140)
+            or "no reason was recorded"), 140)
         return out(status, "you" if diag.get("needs_person") or status == "blocked" else "boss",
                    words, _clip(run.get("error") or "", 300), run.get("updated_at"))
 
@@ -400,6 +424,17 @@ def wait_reason(connection: Any, run: Mapping[str, Any], *, job: Any = "load",
                    _clip(err.get("message") or "Raise the cap or wait for spend to free up.", 300),
                    ctx.get("budget_wait_since") or job.get("updated_at"))
     running = _running_builds(connection, run.get("project_id"), run_id)
+    # ITS OWN REPAIR IS NOT A QUEUE (e2e recipe-box): a slot held by an attempt of this same
+    # build is this build moving, never "Waiting for a build slot … next in about 1h 17m".
+    mine = _lineage_root(ctx, run_id)
+    own = [r for r in running if mine in (str(r.get("root") or ""), str(r["id"]))
+           or str(r.get("root") or "") == run_id]
+    if own and len(own) == len(running):
+        return out("own_repair", "boss",
+                   f"Its repair is running: {_short_title(own[0]['title'])}",
+                   "This build's own next attempt holds the slot; nothing else is ahead of it.",
+                   job.get("updated_at"))
+    running = [r for r in running if r not in own]
     names = _names([_short_title(r["title"]) for r in running[:2]])
     typical = _typical_minutes(connection, run.get("project_id"))
     eta_slot: Optional[int] = None
@@ -697,6 +732,14 @@ def triage(ev: Mapping[str, Any]) -> dict[str, Any]:
                  ["retry_on_this_version", "ask_person"], "retry_on_this_version",
                  "BOSS tries it once on this version; if it stops again, the reason is shown "
                  "here.", "boss")
+    if code == "continued":
+        return t("continued", reason.get("words") or "Its repair continued in the next attempt",
+                 reason.get("detail") or "", ["wait"], "wait",
+                 "Open the next attempt for its outcome; nothing is needed on this one.", "boss")
+    if code == "own_repair":
+        return t("own_repair", reason.get("words") or "Its repair is running",
+                 reason.get("detail") or "", ["wait"], "wait",
+                 "Nothing: its own next attempt is working on it.", "boss")
     if run.get("status") in ENDED_STATUSES:
         return t("failed", "It failed: " + _clip(run.get("error") or "no reason recorded", 120),
                  _clip(run.get("error") or "", 300), ["ask_person"], "ask_person",
