@@ -495,8 +495,10 @@ CAPABILITIES: dict[str, Capability] = {
             # shipped pass 1, as a new deploy under the same policy (two_pass).
             # `monitoring_step`: the Set up monitoring step whose pack this release carries
             # (monitoring_pack); under `monitoring_gate: block` it cannot ship without one.
+            # `skip_without_host`: Easy Mode's deploy completes as skipped, in words, when the
+            # project has no target and no usable host (the app runs as its preview).
             optional_inputs=("environment", "target_id", "host_id", "pass_2_of",
-                             "monitoring_step"),
+                             "monitoring_step", "skip_without_host"),
             produces=("deployment_id", "deployed_url"),
             requires_project=("deployment_target",),
             typical_minutes=8,

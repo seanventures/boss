@@ -707,8 +707,10 @@ CATALOGUE: list[dict[str, Any]] = [
             # STAGING, UNDER ITS POLICY: Easy Mode's start sets the project's staging policy to
             # ship without asking when the project has none (factory_launch.spec_first_run), so
             # the deploy needs no person. Production is never this step's environment.
+            # NO SERVER (most laptops): the step is skipped in words — "Your app runs as a
+            # preview. Add a server in Infra to deploy it." — and the preview keeps running.
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id"),
-                                       "environment": "staging"},
+                                       "environment": "staging", "skip_without_host": True},
                   follows_policy=True),
             _step("notify", "notify", _notify_inputs()),
         ]),

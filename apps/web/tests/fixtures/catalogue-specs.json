@@ -878,7 +878,8 @@
                   "from_step": "build",
                   "field": "code_task_run_id"
                 },
-                "environment": "staging"
+                "environment": "staging",
+                "skip_without_host": true
               }
             },
             "next": [

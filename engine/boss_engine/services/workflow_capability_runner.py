@@ -3746,6 +3746,17 @@ def _perform_capability(
     advisory_preview = key == "preview" and bool(inputs.pop("advisory", False))
     pass_2_of = str(inputs.pop("pass_2_of", "") or "") if key == "deploy" else ""
     monitoring_step = str(inputs.pop("monitoring_step", "") or "") if key == "deploy" else ""
+    skip_without_host = key == "deploy" and str(
+        inputs.pop("skip_without_host", "") or "").lower() in ("true", "1")
+    if skip_without_host and not _somewhere_to_deploy(connection, project_id):
+        # NO SERVER IS NOT A FAILURE (Easy Mode, 2026-11-19): most people start on a laptop with
+        # no host. The app already runs as its preview; the deploy step says so and the run ends.
+        emit_event(connection, project_id, "workflow.step_skipped", actor,
+                   "workflow_run", str(context.get("run_id") or ""),
+                   {"step_id": step.get("id") if isinstance(step, dict) else None,
+                    "capability": key, "reason": NO_HOST_WORDS})
+        return {"capability": key, "tool": None, "status": "skipped", "skipped": "no_host",
+                "reason": NO_HOST_WORDS, "note": NO_HOST_WORDS, "summary": NO_HOST_WORDS}
     extend = key == "build" and bool(inputs.pop("extend", False))
     increment = inputs.pop("increment", None) if key == "build" else None
     if increment:
@@ -6736,6 +6747,22 @@ def _follow_merge(connection: Connection, *, project_id: str, run_id: str, step:
                                               "decision_id": qid})
     return {"run_id": run_id, "step_id": step["step_id"], "outcome": "merged_deploying",
             "build": build_run_id}
+
+
+#: What an Easy Mode deploy step says when the project has nowhere to deploy.
+NO_HOST_WORDS = "Your app runs as a preview. Add a server in Infra to deploy it."
+
+
+def _somewhere_to_deploy(connection: Connection, project_id: str) -> bool:
+    """A deployment target, or a verified host this project may use (the Kit's own rule:
+    kit_connections.deps `deploy_target`). Unknown counts as somewhere, so a deploy is tried."""
+    from . import kit_connections
+
+    try:
+        return bool(kit_connections.deploy_targets(connection, project_id)) \
+            or kit_connections.verified_hosts(connection, project_id) > 0
+    except Exception:  # noqa: BLE001
+        return True
 
 
 #: The event a panel step records when it gave way to a build from the brief.

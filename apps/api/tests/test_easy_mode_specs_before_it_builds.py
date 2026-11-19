@@ -266,3 +266,62 @@ def test_a_bug_keeps_the_small_path(client, engine, monkeypatch, tmp_path):
         assert not connection.execute(text(
             "SELECT 1 FROM workflow_runs WHERE project_id = :p"),
             {"p": body["project_id"]}).first()
+
+
+def _deploy(engine, project_id, run_id="crun_x"):
+    from boss_engine.services import workflow_capability_runner as runner
+    from boss_engine.services.workflow_capabilities import get as capability
+
+    with engine.begin() as connection:
+        return runner._perform_capability(
+            connection, None, project_id=project_id, actor="ceo",
+            step={"id": "deploy"}, context={"run_id": "wfr_none", "input": {}}, key="deploy",
+            capability=capability("deploy"),
+            inputs={"run_id": run_id, "environment": "staging", "skip_without_host": True})
+
+
+def test_with_no_server_the_deploy_is_skipped_in_words(client, engine, monkeypatch, tmp_path):
+    """MOST EASY MODE PEOPLE HAVE NO HOST (a friend on a laptop): the deploy step neither fails
+    nor asks to pick one. It completes as skipped, saying the app runs as its preview."""
+    from boss_engine.services.workflow_capability_runner import NO_HOST_WORDS
+
+    _setup(monkeypatch, tmp_path)
+    _panel(monkeypatch, engine, finish=False)
+    body = _launch(client, prompt="Build a small notes app with pins.")
+    project_id = body["project_id"]
+    with engine.begin() as connection:
+        assert not connection.execute(text(
+            "SELECT 1 FROM deployment_targets WHERE project_id = :p"), {"p": project_id}).first()
+
+    out = _deploy(engine, project_id)
+
+    assert out["status"] == "skipped" and out["skipped"] == "no_host"
+    assert out["note"] == NO_HOST_WORDS == ("Your app runs as a preview. Add a server in Infra "
+                                            "to deploy it.")
+    with engine.begin() as connection:
+        said = connection.execute(text(
+            "SELECT data->>'reason' FROM events WHERE project_id = :p "
+            "AND event_type = 'workflow.step_skipped'"), {"p": project_id}).scalar()
+    assert said == NO_HOST_WORDS
+    # The catalogue's deploy step carries the opt-in; no other deploy step skips.
+    from boss_engine.services.workflow_catalogue import CATALOGUE
+
+    flagged = {e["key"] for e in CATALOGUE for s in e["steps"]
+               if (s.get("binding") or {}).get("inputs", {}).get("skip_without_host")}
+    assert flagged == {"easy_mode_mvp"}
+
+
+def test_with_a_server_the_deploy_is_not_skipped(client, engine, monkeypatch, tmp_path):
+    from boss_engine.services import kit_connections
+
+    _setup(monkeypatch, tmp_path)
+    _panel(monkeypatch, engine, finish=False)
+    body = _launch(client, prompt="Build a small notes app with dates.")
+    from boss_engine.services import workflow_capability_runner as runner
+
+    monkeypatch.setattr(kit_connections, "verified_hosts", lambda *a, **kw: 1)
+    # The real deploy path's first act is to wait for the merge: reaching it is the point.
+    monkeypatch.setattr(runner, "_merge_wait", lambda *a, **kw: {"status": "awaiting",
+                                                                 "reached": "merge_wait"})
+    out = _deploy(engine, body["project_id"])
+    assert out == {"status": "awaiting", "reached": "merge_wait"}
