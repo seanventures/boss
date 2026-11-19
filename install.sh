@@ -588,6 +588,9 @@ boss_sudo_scope_safe() {
 # ---- end scoped sudo Docker fallback --------------------------------------
 
 if ! docker info >/dev/null 2>&1; then
+  if [[ "$OS" == Darwin ]]; then
+    die "Docker daemon is unavailable for the selected context. Start your runtime (for example: colima start boss), check docker context ls and docker info, then rerun."
+  fi
   boss_sudo_scope_safe "$INSTALL_DIR/.env" || { echo "Cannot safely use sudo for this Docker selection. Use direct Docker access for custom projects, contexts or connection settings." >&2; exit 1; }
   if [[ "$OS" == Linux && "$(id -u)" -ne 0 ]] && need_cmd sudo && sudo -n docker --host unix:///var/run/docker.sock info >/dev/null 2>&1; then
     DOCKER=(sudo -n docker --host unix:///var/run/docker.sock)

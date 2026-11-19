@@ -35,3 +35,21 @@ install_vm_deps
         assert "Docker CLI is missing" not in result.stdout
     else:
         assert "brew install colima docker docker-compose docker-buildx" in result.stdout
+
+
+def test_stopped_macos_runtime_reports_start_instructions_before_sudo_fallback():
+    source = (ROOT / "install.sh").read_text()
+    check = source.split("if ! docker info >/dev/null 2>&1; then", 1)[1]
+    check = check.split('ui_ok "Docker daemon is running"', 1)[0]
+    script = """
+OS=Darwin
+docker() { return 1; }
+die() { printf '%s\\n' "$*"; exit 1; }
+boss_sudo_scope_safe() { echo unexpected-sudo-fallback; return 1; }
+if ! docker info >/dev/null 2>&1; then
+""" + check
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=5)
+    assert result.returncode == 1
+    assert "colima start boss" in result.stdout
+    assert "docker context ls" in result.stdout
+    assert "unexpected-sudo-fallback" not in result.stdout
