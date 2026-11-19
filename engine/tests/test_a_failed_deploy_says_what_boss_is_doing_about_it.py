@@ -78,6 +78,30 @@ def test_a_crash_on_start_is_said_in_the_apps_own_words_and_is_the_apps_to_fix()
         assert sd.crash_line(out) == line, line
 
 
+def test_a_crash_line_never_carries_a_credential_the_app_printed():
+    """The app's own words become the headline, the card and the repair's brief: a password in
+    its own database URL or a token on the line is masked by shape (services.redaction)."""
+    for leak, secret in (("Error: connect failed for postgres://app:S3cretPW99@db:5432/app",
+                          "S3cretPW99"),
+                         ("Error: API_TOKEN=abcd1234efgh missing scope", "abcd1234efgh")):
+        out = f"web-1 Exited (1)\n--- web-1 (last lines) ---\n{leak}\n"
+        said = sd.crash_line(out)
+        assert said.startswith("Error: ") and secret not in said, said
+        headline = sd.explain_failure("health", 1, out, host="h", url=URL, timeout=600)
+        assert secret not in headline["headline"]
+    assert "postgres://app:***@db:5432/app" in sd.crash_line(
+        "web-1 Exited (1)\n--- web-1 (last lines) ---\n"
+        "Error: connect failed for postgres://app:S3cretPW99@db:5432/app\n")
+
+
+def test_containers_that_stopped_without_words_say_so_with_the_real_wait():
+    said = sd.explain_failure("health", 1, "BOSS_APP_EXITED 000 35\n", host="h", url=URL,
+                              timeout=600)
+    assert said["headline"] == (f"The app's containers all stopped on start, so nothing "
+                                f"answered at {URL} (BOSS stopped waiting after 35s).")
+    assert said["cause"] == sd.CAUSE_APP
+
+
 def test_an_app_that_never_answered_but_did_not_crash_keeps_the_timeout_words():
     said = sd.explain_failure("health", 1, "BOSS_UNHEALTHY 502", host="h", url=URL, timeout=600)
     assert said["headline"].startswith("The app did not answer as expected")
@@ -95,10 +119,45 @@ def test_the_health_probe_stops_waiting_when_every_container_of_the_app_exited()
     probe = runner._crash_probe(composed)
     assert "label=com.docker.compose.project=recipe-box" in probe
     assert "status=running" in probe and sd.APP_EXITED in probe
+    for alive in ("restarting", "created", "paused"):
+        assert f"status={alive}" in probe, "a container backing off is not a stopped app"
     assert "-ge 20" in probe and "$down -ge 3" in probe, "a grace, then three looks in a row"
     # Without compose there is nothing to look at: only the deadline ends the wait.
     plain = SimpleNamespace(mode="install", rendered={"install": [{"run": "./start.sh"}]})
     assert runner._crash_probe(plain) == ""
+
+
+def _probe_looks(tmp_path, state: str) -> str:
+    """Run the probe's crash look three times against a fake `docker` whose one container is in
+    `state`, past the grace — what the health loop would see over 15 s."""
+    import os
+    import subprocess
+
+    runner = next(c for c in vars(sd).values()
+                  if isinstance(c, type) and hasattr(c, "_crash_probe"))
+    probe = runner._crash_probe(SimpleNamespace(mode="install", rendered={"install": [
+        {"run": "docker compose -p recipe-box up -d --build"}]}))
+    fake = tmp_path / "docker"
+    fake.write_text("#!/bin/bash\n"
+                    "case \"$*\" in *status=\"$FAKE_STATE\"*) echo c1;; *status=*) ;; "
+                    "*) echo c1;; esac\n")
+    fake.chmod(0o755)
+    script = ("started=$(( $(date +%s) - 30 )); down=0; code=000; "
+              "for i in 1 2 3; do " + probe + "done; echo STILL_WAITING")
+    done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+                          env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                               "FAKE_STATE": state})
+    return done.stdout
+
+
+def test_an_app_restarting_until_its_database_is_ready_is_still_waited_for(tmp_path):
+    # restart: unless-stopped, backing off while res-db does its first init: `restarting`.
+    assert _probe_looks(tmp_path, "restarting").strip() == "STILL_WAITING"
+    assert _probe_looks(tmp_path, "created").strip() == "STILL_WAITING"
+    assert _probe_looks(tmp_path, "running").strip() == "STILL_WAITING"
+    # Every container exited (or dead): the app stopped for good — stop waiting.
+    assert _probe_looks(tmp_path, "exited").startswith(sd.APP_EXITED)
+    assert _probe_looks(tmp_path, "dead").startswith(sd.APP_EXITED)
 
 
 def test_the_fixs_deploy_card_says_it_is_the_fix():
@@ -252,11 +311,30 @@ def test_a_retry_after_a_backoff_and_the_agent_reading_the_log_are_said(db):
                            "WHERE workflow_run_id = :r"),
                       {"r": run_id, "o": json.dumps({"await": {
                           "kind": "recovery", "then": "run_again", "action": "retry",
-                          "not_before": "2026-11-19T03:10:00+00:00"}})})
+                          "not_before": (now + timedelta(minutes=4)).isoformat()}})})
             retrying = _told(c, db, target)
+            # The retry's time passed long ago and nothing moved: the words go, re-evaluated.
+            c.execute(text("UPDATE workflow_step_runs SET output = output || CAST(:o AS JSONB) "
+                           "WHERE workflow_run_id = :r"),
+                      {"r": run_id, "o": json.dumps({"await": {
+                          "kind": "recovery", "then": "run_again", "action": "retry",
+                          "not_before": (now - timedelta(hours=2)).isoformat()}})})
+            overdue = _told(c, db, target)
+            # A step "running" whose worker went quiet an hour ago is not looking into anything.
+            c.execute(text("UPDATE workflow_step_runs SET status = 'running', "
+                           "output = output - 'await', heartbeat_at = now() - interval '1 hour', "
+                           "updated_at = now() - interval '1 hour' WHERE workflow_run_id = :r"),
+                      {"r": run_id})
+            dead_worker = _told(c, db, target)
+            c.execute(text("UPDATE workflow_step_runs SET heartbeat_at = now() "
+                           "WHERE workflow_run_id = :r"), {"r": run_id})
+            alive_worker = _told(c, db, target)
         assert looking["state"] == "fixing" and looking["word"] == "BOSS is looking into it"
         assert retrying["state"] == "fixing" and retrying["word"] == "BOSS will deploy again"
-        assert "at 03:10 UTC" in retrying["reason"]
+        assert f"at {(now + timedelta(minutes=4)).strftime('%H:%M')} UTC" in retrying["reason"]
+        assert overdue["state"] == "failed" and overdue["word"] == "Last deploy failed"
+        assert dead_worker["state"] == "failed", dead_worker
+        assert alive_worker["word"] == "BOSS is looking into it"
     finally:
         with db.engine.begin() as c:
             _forget_workflows(c, db)
@@ -288,13 +366,64 @@ def test_a_failure_nobody_is_acting_on_stays_a_persons_last_deploy_failed(db):
                            "WHERE workflow_run_id = :r"),
                       {"r": run_id, "o": json.dumps({"deploy_fixes": [_fix(failed, build)]})})
             repair_failed = _told(c, db, target)
+            # A repair build that finished long ago with no redeploy planned is not "deploying".
+            landed = _build(c, db, "completed")
+            c.execute(text("UPDATE code_task_runs SET updated_at = now() - interval '2 days' "
+                           "WHERE id = :i"), {"i": landed})
+            c.execute(text("UPDATE workflow_step_runs SET output = output || CAST(:o AS JSONB) "
+                           "WHERE workflow_run_id = :r"),
+                      {"r": run_id, "o": json.dumps({"deploy_fixes": [_fix(failed, landed)]})})
+            stale_fix = _told(c, db, target)
             # A deploy outside any workflow has no step to read.
             other = _target(c, db, "Notes", 8015, kind="stack")
             _deployment(c, db, other, None, "failed", at=now)
             loose = _told(c, db, other)
-        for told in (asked, stale, repair_failed, loose):
+        for told in (asked, stale, stale_fix, loose):
             assert told["state"] == "failed" and told["word"] == "Last deploy failed", told
             assert told["repair"] is None
+        # The repair that failed is said, with its build: the person's next step.
+        assert repair_failed["state"] == "failed"
+        assert repair_failed["repair"]["state"] == "stuck"
+        assert "did not finish: it stopped (failed)" in repair_failed["reason"]
+    finally:
+        with db.engine.begin() as c:
+            _forget_workflows(c, db)
+
+
+def test_a_repair_that_stopped_or_waits_on_a_person_is_never_boss_is_fixing(db):
+    """Shepherd marks a build it gave up on `blocked` (phase done); a build that needs a secret
+    waits on a person. Neither is BOSS fixing anything: the deploy stays failed, with why."""
+    now = datetime.now(timezone.utc)
+    try:
+        with db.engine.begin() as c:
+            target = _target(c, db, "Recipe box", 8014, kind="stack")
+            run_id = _run(c, db)
+            failed = _deployment(c, db, target, run_id, "failed", at=now - timedelta(hours=5))
+            build = _build(c, db, "blocked")
+            c.execute(text("UPDATE code_task_runs SET phase = 'done', error = :e WHERE id = :i"),
+                      {"i": build, "e": "Shepherd stopped it: no progress for 40 minutes."})
+            _step(c, db, run_id, "waiting", {
+                "stack_deployment_id": failed, "deploy_fixes": [_fix(failed, build)],
+                "await": {"id": build, "kind": "code_task", "then": "redeploy", "attempt": 1}})
+            blocked = _told(c, db, target)
+            view = deployments.view(c, db.project)
+            c.execute(text("UPDATE code_task_runs SET status = 'waiting_on_person', "
+                           "phase = 'awaiting_secret' WHERE id = :i"), {"i": build})
+            person = _told(c, db, target)
+            # A run somebody cancelled: nobody is acting, whatever its step says.
+            c.execute(text("UPDATE code_task_runs SET status = 'running' WHERE id = :i"),
+                      {"i": build})
+            c.execute(text("UPDATE workflow_runs SET status = 'cancelled' WHERE id = :r"),
+                      {"r": run_id})
+            cancelled = _told(c, db, target)
+        assert blocked["state"] == "failed" and blocked["word"] == "Last deploy failed"
+        assert f"repair build {build} did not finish: it stopped (blocked: Shepherd stopped" \
+            in blocked["reason"]
+        assert blocked["repair"] == {"state": "stuck", "build_run_id": build}
+        row = next(h for h in view["history"] if h["id"] == failed)
+        assert row["state"] == "failed" and row["tone"] != "amber"
+        assert person["state"] == "failed" and "waiting on you" in person["reason"]
+        assert cancelled["state"] == "failed" and cancelled["repair"] is None
     finally:
         with db.engine.begin() as c:
             _forget_workflows(c, db)

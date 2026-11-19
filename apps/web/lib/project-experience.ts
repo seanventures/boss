@@ -907,7 +907,8 @@ export const parseDeployments = (v: unknown): Deployments => {
       return { id: s(y.id), label: s(y.label), sub, at: s(y.at), state: recovered ? "failed" : deployState(y.status, y.state), href: s(y.href),
                word: s(y.state_word), by: s(y.by), by_agent: y.by_agent === true, recovered,
                // BOSS is acting on this failed deploy (engine deploy_repair.underway): amber, its words.
-               repaired: !!s(o(y.repair).state) };
+               // A repair that stopped ("stuck") is not BOSS acting: it stays red.
+               repaired: !!s(o(y.repair).state) && s(o(y.repair).state) !== "stuck" };
     }),
     empty: s(o(x.empty).label) ? { label: s(o(x.empty).label), detail: s(o(x.empty).detail), href: s(o(x.empty).href),
                                    failed: o(x.empty).failed === true, workflow_run_id: s(o(x.empty).workflow_run_id),

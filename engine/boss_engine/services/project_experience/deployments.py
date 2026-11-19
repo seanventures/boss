@@ -184,9 +184,10 @@ def _history(connection: Connection, project_id: str, limit: int = 10) -> list[d
         if recovered:
             state = "recovered"
         doing = acting.get(str(r["id"]))
-        if doing and not recovered:
+        if doing and not recovered and doing["state"] != "stuck":
             # Still failed in the record; in words, what BOSS is doing about it. A repair in
-            # flight reads as moving ("now"); one BOSS finished stays this row's past.
+            # flight reads as moving ("now"); one BOSS finished stays this row's past. A repair
+            # that stopped (stuck) stays red "Failed", with the build's reason below.
             word, tone = doing["word"], "amber"
             if r["status"] == "failed" and doing["state"] != "fixed":
                 state = "now"

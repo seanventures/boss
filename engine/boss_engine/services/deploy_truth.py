@@ -452,7 +452,7 @@ def truth(connection: Connection, targets: list[Mapping[str, Any]], *,
             word = "Update waiting for approval" if was_live else "Setting up · waiting for approval"
             if doing:
                 word = doing["word"]
-        elif a and newer and status in _FAILED and doing:
+        elif a and newer and status in _FAILED and doing and doing["state"] != "stuck":
             state, word = FIXING, doing["word"]
         elif a and newer and status in _FAILED:
             state = FAILED
@@ -465,11 +465,13 @@ def truth(connection: Connection, targets: list[Mapping[str, Any]], *,
         out[tid] = {
             "state": state, "word": word, "live": was_live, "live_url": live_url,
             "address": address,
-            "reason": (doing["reason"] if doing and state in (FIXING, WAITING) else
+            # A STUCK repair (its build stopped) keeps FAILED, with the build's own reason.
+            "reason": (doing["reason"] if doing and state in (FIXING, WAITING, FAILED) else
                        _reason(a) if state == FAILED and a else None),
             # What BOSS is doing about it (deploy_repair.underway), for a link to its build.
             "repair": ({k: doing[k] for k in ("state", "build_run_id", "next_deployment_id")
-                        if doing.get(k)} if doing and state in (FIXING, WAITING) else None),
+                        if doing.get(k)} if doing and state in (FIXING, WAITING, FAILED)
+                       else None),
             "attempt": ({"id": a["id"], "kind": a["kind"], "status": status,
                          "commit": (str(a.get("commit") or "")[:7] or None),
                          "workflow_run_id": a.get("workflow_run_id"),

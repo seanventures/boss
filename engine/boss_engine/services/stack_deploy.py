@@ -908,6 +908,15 @@ def _explained(step: str, returncode: int, output: str, *,
                           "repository (BOSS's repair build does this by itself) and deploy "
                           "again — or roll back to the previous healthy commit.",
                 "cause": CAUSE_APP}
+    stopped = re.search(APP_EXITED + r" \S+ (\d+)", output or "") if step == "health" else None
+    if stopped:
+        # Every container stopped and none said why in a way we recognise: say what happened
+        # and how long BOSS actually waited — not the 600 s it would have.
+        return {"headline": f"The app's containers all stopped on start, so nothing answered "
+                            f"at {url} (BOSS stopped waiting after {stopped.group(1)}s).",
+                "action": "Read the log tail for the containers' last lines, fix it in the "
+                          "repository and deploy again — or roll back to the previous healthy "
+                          "commit.", "cause": CAUSE_APP}
     if step == "health":
         return {"headline": f"The app did not answer as expected at {url} within {timeout}s.",
                 "action": "Read the log tail for what the install printed, fix it and deploy "
@@ -976,7 +985,15 @@ def crash_line(output: str) -> str:
         return ""
     found = _CRASH.search(text_[text_.find("(last lines) ---"):] if "(last lines) ---" in text_
                           else text_)
-    return " ".join(found.group(1).split())[:200] if found else ""
+    if not found:
+        return ""
+    # THE APP'S OWN WORDS BECOME A HEADLINE (failure_reason, the header's tooltip, the repair
+    # build's brief, the fix's approval card), so a credential the app printed itself — a
+    # database URL from its own .env, a token on the line — is masked here, by shape, through
+    # the shared redactor: `redact` only knows the values BOSS handed the app.
+    from .redaction import mask_url_credentials, redact_secrets
+
+    return mask_url_credentials(redact_secrets(" ".join(found.group(1).split())))[:200]
 
 
 def redact(output: str, values: list[str]) -> str:
@@ -1073,7 +1090,8 @@ class StackApplier:
 
     def _crash_probe(self) -> str:
         """Shell for the health loop: stop waiting when the app's compose project has
-        containers and NONE is running, three looks in a row (15 s), after a 20 s grace — the
+        containers and every one is exited or dead, three looks in a row (15 s), after a 20 s
+        grace — the
         app exited on start, and no amount of waiting makes it answer (Recipe box,
         sdep_73c0758f: the container died in its first second and the probe waited 600 s).
         "" without a compose project: then only the deadline ends the wait."""
@@ -1082,11 +1100,17 @@ class StackApplier:
             return ""
         q = shlex.quote(f"label=com.docker.compose.project={project}")
         return (f"if [ $(( $(date +%s) - started )) -ge 20 ]; then "
-                f"up=$(docker ps -q --filter {q} --filter status=running 2>/dev/null | wc -l); "
+                # UP is anything not finished: running, and also restarting (a restart policy
+                # backing off while it waits for its database), created and paused. Only when
+                # EVERY container is exited or dead has the app stopped for good.
+                f"up=$(docker ps -aq --filter {q} --filter status=running "
+                "--filter status=restarting --filter status=created --filter status=paused "
+                "2>/dev/null | wc -l); "
                 f"all=$(docker ps -aq --filter {q} 2>/dev/null | wc -l); "
                 "if [ \"$up\" -eq 0 ] && [ \"$all\" -gt 0 ]; then down=$((down+1)); "
                 "else down=0; fi; "
-                f"if [ $down -ge 3 ]; then echo {APP_EXITED} $code; exit 1; fi; fi; ")
+                f"if [ $down -ge 3 ]; then echo {APP_EXITED} $code "
+                "$(( $(date +%s) - started )); exit 1; fi; fi; ")
 
     def _finish(self, name: str, status: str) -> None:
         self._step(name).update(status=status, ended_at=self.now())
