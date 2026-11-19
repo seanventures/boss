@@ -20,6 +20,7 @@ import json
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -1199,6 +1200,76 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
         with begin(engine) as c:
             return _advance_simulated_phase(c, settings, jobs, run)
 
+    try:
+        return _advance_phase(engine, settings, jobs, run, run_id, phase)
+    except Exception as error:  # noqa: BLE001 — only a model's usage limit is handled here
+        wait = usage_limit_wait(error)
+        if wait is None:
+            raise
+        return _wait_for_model(engine, jobs, run, run_id, wait)
+
+
+def usage_limit_wait(error: BaseException, now: Optional[datetime] = None
+                     ) -> Optional[dict[str, Any]]:
+    """A model's own usage or rate limit ("You've hit your session limit · resets 7:50pm (UTC)",
+    a 429) as {resets_at, words}: a known-reset condition, never a crash. None for anything else
+    — and for a monthly spend limit, which a person lifts, not a clock."""
+    from .model_router.headroom import windows_from_limit_message
+
+    now = now or datetime.now(timezone.utc)
+    body = str(error)
+    # The CLI wraps the provider's sentence in its JSON result ("result":"You've hit … (UTC)",…):
+    # read the sentence itself, so its reset time is not lost to the quote after it.
+    said = re.search(r'"result"\s*:\s*"((?:[^"\\]|\\.)*)"', body)
+    if said:
+        body = said.group(1).replace("\\'", "'")
+    windows = {k: v for k, v in (windows_from_limit_message(body, now=now)
+                                 or windows_from_limit_message(str(error), now=now)).items()
+               if k != "monthly"}
+    if not windows:
+        return None
+    resets = max(datetime.fromisoformat(str(w["resets_at"])) for w in windows.values())
+    if resets.tzinfo is None:
+        resets = resets.replace(tzinfo=timezone.utc)
+    resets = max(resets, now + timedelta(seconds=30))
+    when = resets.astimezone(timezone.utc)
+    label = f"{when.strftime('%I:%M%p').lstrip('0').lower()} UTC"
+    if when.date() != now.astimezone(timezone.utc).date():
+        label = f"{when.strftime('%a')} {label}"
+    return {"resets_at": when.isoformat(), "label": label,
+            "words": (f"Waiting for the model's usage limit to reset at {label}; "
+                      "BOSS resumes it by itself then.")}
+
+
+#: Extra time after the provider's reset before the step runs again (clocks differ).
+RESET_GRACE_SECONDS = 60
+
+
+def _wait_for_model(engine, jobs, run: dict, run_id: str, wait: dict) -> dict:
+    """PARK THE PANEL UNTIL THE MODEL'S LIMIT RESETS (tester, recipe-box, 2026-11-18: a panel
+    step died on "You've hit your session limit · resets 7:50pm (UTC)", the API answered 500,
+    the job was dead-lettered and the run abandoned 21 min later). The phase is kept, the same
+    step is queued to run after the reset (a queued job: never "abandoned"), and the run says
+    why in words."""
+    resets = datetime.fromisoformat(wait["resets_at"])
+    delay = max(0, int((resets - datetime.now(timezone.utc)).total_seconds())) + RESET_GRACE_SECONDS
+    with begin(engine) as c:
+        c.execute(text(
+            "UPDATE meeting_runs SET state = COALESCE(state, '{}'::jsonb) || "
+            "jsonb_build_object('waiting_for_model', CAST(:w AS jsonb)), updated_at = now() "
+            "WHERE id = :id"), {"w": json.dumps(wait), "id": run_id})
+        jobs.create_job(c, project_id=run["project_id"], task_id=run["task_id"],
+                        kind="meeting.step", priority=JOB_PRIORITY_INTERACTIVE,
+                        payload={"run_id": run_id}, run_after_seconds=delay)
+        emit_event(c, run["project_id"], "meeting.waiting_for_model", "boss", "meeting_run",
+                   run_id, {"phase": run["phase"], "resets_at": wait["resets_at"],
+                            "words": wait["words"]})
+    return {"status": "waiting_for_model", "done": False, "phase": run["phase"],
+            "resets_at": wait["resets_at"], "words": wait["words"]}
+
+
+def _advance_phase(engine, settings: Settings, jobs, run: dict, run_id: str, phase: str) -> dict:
+    """One real phase of a meeting (advance_meeting_run), persisted with its next step."""
     with begin(engine) as c:
         personas = resolve_roles(run["role_keys"], load_role_map(c, run["project_id"]))
         # Each seat in the voice of the agent behind it (agent_persona.seat_voices).
@@ -1206,6 +1277,7 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
 
         personas = seat_voices(c, run["project_id"], personas)
     state = dict(run["state"])
+    state.pop("waiting_for_model", None)       # the limit it waited for has reset
     # THE SETTING SAYS "AND MEETINGS", AND THIS LINE WAS NOT READING IT.
     #
     # `chat_llm_engine` is labelled "Console chat, agents and meetings" and its help text

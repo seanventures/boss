@@ -1862,21 +1862,58 @@ def _current_phase_name(engine, run_id: str) -> Optional[str]:
         return None
 
 
+def auto_retries_made(fctx: Optional[dict]) -> int:
+    """How many automatic platform retries led to this attempt (the marker was a bare `true`
+    for the one retry BOSS used to make: that counts as one)."""
+    value = (fctx or {}).get(AUTO_INFRA_RETRY_KEY)
+    if value is True:
+        return 1
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _auto_retry_limits(settings) -> tuple[int, int]:
+    tries = getattr(settings, "build_auto_retries", 2)
+    backoff = getattr(settings, "build_auto_retry_backoff_seconds", 30)
+    try:
+        tries = max(0, int(2 if tries is None else tries))
+    except (TypeError, ValueError):
+        tries = 2
+    try:
+        backoff = max(0, int(30 if backoff is None else backoff))
+    except (TypeError, ValueError):
+        backoff = 30
+    return tries, backoff
+
+
+from .build_failure import spent_words as _spent_words  # noqa: E402 — one sentence, everywhere
+
+
 def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: str,
                                fctx: dict, result: dict) -> dict:
-    """ONE AUTOMATIC RETRY FOR A BUILD THAT DIED OF BOSS, NOT OF ITS CODE.
+    """A BUILD THAT DIED OF BOSS, NOT OF ITS CODE, IS RETRIED BY BOSS — BOUNDED, WITH BACKOFF.
 
     crun_966aa44e ran an hour and then failed `infra` on a permission error in BOSS's own
     bookkeeping; the operator's only way on was to notice and press Retry. A failure_class=infra
-    run now starts one new attempt in the same lineage at once (retry_code_task: the branch's
-    work, the approved design and the completed stages are carried), and the workflow step that
-    waited on it follows the new attempt. An attempt that is itself the automatic retry is not
-    retried again: the second infra failure stays failed, with Retry offered and a plain reason.
+    run now starts a new attempt in the same lineage (retry_code_task: the branch's work, the
+    approved design and the completed stages are carried), and the workflow step that waited on
+    it follows the new attempt. Up to `build_auto_retries` (default 2) such attempts, each queued
+    after a backoff (`build_auto_retry_backoff_seconds`, doubled per try), each said once on the
+    build's activity (code_task.auto_retried). Once they are spent the build stays failed with a
+    plain sentence of what BOSS did (AUTO_RETRY_SPENT_WORDS) — never a question.
+    recipe-box (2026-11-18): crun_6883ec7c died on BOSS's git-index bug and the retry was
+    withheld for want of a grant the person had in fact given (identity.consent same_build).
     Never raises; the failure it was given is returned unchanged when no retry starts."""
-    if (fctx or {}).get(AUTO_INFRA_RETRY_KEY):
+    made = auto_retries_made(fctx)
+    tries, backoff = _auto_retry_limits(settings)
+    if tries <= 0:
+        return {**result, "auto_retry": "off",
+                "next_step": "Automatic retries are off on this install; press Retry."}
+    if made >= tries:
         return {**result, "auto_retry": "not_again",
-                "next_step": ("BOSS already retried this build once after a platform error. "
-                              "Fix the cause shown above, then press Retry.")}
+                "next_step": _spent_words(made)}
     from .code_task_service import RetryNeedsPerson, retry_code_task
 
     try:
@@ -1885,21 +1922,39 @@ def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: 
         # build", because the worker's own key was the caller. Now the attempt carries the grant
         # the person gave the failed build, or is not started and the build stays failed with
         # Retry for a person.
-        retried = retry_code_task(engine, settings, jobs, run_id, automatic=True)
+        retried = retry_code_task(engine, settings, jobs, run_id, automatic=True,
+                                  platform_retry=True)
         if retried.get("delivery_only"):
             return {**result, **retried}               # the same run, delivered (or not) in place
         new_id = str(retried.get("run_id") or "")
+        attempt = made + 1
+        delay = backoff * (2 ** made)
         with _transaction(engine) as c:
             c.execute(sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb)"
-                          " || jsonb_build_object(CAST(:k AS text), true) WHERE id=:id"),
-                      {"k": AUTO_INFRA_RETRY_KEY, "id": new_id})
+                          " || jsonb_build_object(CAST(:k AS text), CAST(:n AS integer)) WHERE id=:id"),
+                      {"k": AUTO_INFRA_RETRY_KEY, "n": attempt, "id": new_id})
+            if delay > 0:
+                # BACKOFF: a platform hiccup (a busy disk, a GitHub 502) gets a moment to pass.
+                c.execute(sql("UPDATE jobs SET run_after = now() + make_interval(secs => :d) "
+                              "WHERE kind = 'code.task' AND payload->>'run_id' = :id "
+                              "AND status = 'queued'"), {"d": delay, "id": new_id})
             emit_event(c, project_id, "code_task.auto_retried", "boss", "code_task_run", run_id,
-                       {"retry_run_id": new_id, "why": "the build stopped on a BOSS platform "
-                        "error, not on its code; retrying once automatically"})
-        return {**result, "auto_retry_run_id": new_id}
+                       {"retry_run_id": new_id, "attempt": attempt, "of": tries,
+                        "after_seconds": delay,
+                        "why": f"the build stopped on a BOSS platform error, not on its code; "
+                               f"BOSS is retrying it (try {attempt} of {tries}), resuming its "
+                               "saved work"})
+        return {**result, "auto_retry_run_id": new_id, "auto_retry_attempt": attempt}
     except RetryNeedsPerson as withheld:
         try:
             with _transaction(engine) as c:
+                # THE CARD ASKS FOR AN OK, NOT A FIX (build_failure.needs_ok_words): no grant the
+                # person gave covers another attempt (a follow-up under a "this build only"
+                # grant), so one consent press retries it.
+                c.execute(sql("UPDATE code_task_runs SET finalize_ctx = "
+                              "COALESCE(finalize_ctx,'{}'::jsonb) || "
+                              "jsonb_build_object('auto_retry_needs_ok', true) WHERE id=:id"),
+                          {"id": run_id})
                 emit_event(c, project_id, "code_task.auto_retry_withheld", "boss",
                            "code_task_run", run_id, {"why": str(withheld)[:300]})
         except Exception:  # noqa: BLE001
@@ -3917,6 +3972,9 @@ def _spawn_deferred_findings_task(
                           # The ledger rows it was sent to fix (acceptance/ledger.py).
                           **({"ledger_ids": plan["ledger_ids"]} if plan is not None else {})},
             jobs=jobs, profile=spec.get("profile"),
+            # THE SAME REPOSITORY HOST as the build it follows: a follow-up of a build on this
+            # machine's local repository is local too (crun_47c3aea2 lost it, 2026-11-18).
+            repo_host=spec.get("repo_host") or None,
             # BOSS ITSELF continues this lineage: it acts under the person and grant the lineage
             # was started under (a standing grant, or the workflow run's), never the worker key's.
             continuation=True,

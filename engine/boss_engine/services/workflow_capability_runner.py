@@ -23,6 +23,7 @@ import contextlib
 import contextvars
 import json
 import logging
+import re
 from datetime import timedelta
 from typing import Any, Callable, Optional
 
@@ -6852,7 +6853,17 @@ def _why_it_ended(connection: Connection, table: str, awaited_id: str) -> str:
             point.commit()
         except Exception:  # noqa: BLE001 — the status is still reportable without this
             point.rollback()
-    return reason[:400]
+    return _without_internal_urls(reason)[:400]
+
+
+#: The HTTP client's own boilerplate around a worker's call to BOSS's API: "for url
+#: 'http://api:8000/v1/meetings/step'" and "For more information check: https://developer.
+#: mozilla.org/…" — internal addresses and a generic link, never words for a person.
+_CLIENT_NOISE = re.compile(r"\s*for url '[^']*'|\s*For more information check: \S+", re.I)
+
+
+def _without_internal_urls(reason: str) -> str:
+    return _CLIENT_NOISE.sub("", reason or "").strip()
 
 
 def _meeting_successor(

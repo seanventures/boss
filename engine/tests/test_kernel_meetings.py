@@ -142,7 +142,8 @@ def test_a_panel_speaks_seat_by_seat_through_the_kernel(monkeypatch):
 
 
 def test_every_seat_of_a_phase_is_wrapped_in_its_governance():
-    source = inspect.getsource(ms.advance_meeting_run)
+    source = (inspect.getsource(ms.advance_meeting_run)
+              + inspect.getsource(ms._advance_phase))  # one phase, inside the limit guard
     assert "adapter = _seat(c, settings, run[\"project_id\"], run_id, adapter)" in source
     assert "_seat(c, settings, run[\"project_id\"], run_id, seat_adapter)" in source
     assert "presets.meeting_seat()" in inspect.getsource(ms._ask)

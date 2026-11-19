@@ -896,4 +896,7 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 .px-needs-item[data-tone="red"] { background: var(--red); color: var(--bg); }
 .px-ny[data-tone="red"] { background: color-mix(in srgb, var(--red) 7%, var(--surface)); border-color: color-mix(in srgb, var(--red) 30%, transparent); }
 .px-ny-ico[data-tone="red"] { background: var(--red); color: var(--bg); }
+/* Stopped by a BOSS bug fixed since (build_restart_recovery): plain amber, never red. */
+.px-ny[data-tone="amber"] { background: color-mix(in srgb, var(--amber) 7%, var(--surface)); border-color: color-mix(in srgb, var(--amber) 30%, transparent); }
+.px-ny-ico[data-tone="amber"] { background: var(--amber); color: var(--bg); }
 .px-wk-failed { color: var(--red); font-weight: 650; }
