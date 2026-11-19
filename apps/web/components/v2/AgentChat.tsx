@@ -8,6 +8,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { V2Agent } from "../../lib/v2/workforce";
 import { apiWrite } from "../../lib/api-write";
 import { TicketBrief, ticketRefOf } from "../../app/tickets/ticket-brief";
+import { ChatFullscreenButton, useChatFullscreen } from "../chat-fullscreen";
 
 /**
  * Talk to one agent.
@@ -47,6 +48,7 @@ export function AgentChat({
   const [busy, setBusy] = useState(false);
   const [threadId, setThreadId] = useState<string | undefined>(undefined);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const fs = useChatFullscreen();
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -98,10 +100,11 @@ export function AgentChat({
   }, [draft, busy, projectId, actor, agent.id, threadId]);
 
   return (
-    <aside className="v2-chat" data-testid="v2-chat" aria-label={`Chat with ${agent.name}`}>
+    <aside className="v2-chat" data-testid="v2-chat" aria-label={`Chat with ${agent.name}`} {...fs.attr}>
       <header className="v2-chat-head">
         <span className="v2-card-name">{agent.name}</span>
         <span className="v2-card-role">{agent.role}</span>
+        <ChatFullscreenButton full={fs.full} onToggle={fs.toggle} className="v2-chat-close v2-chat-full" testid="v2-chat-fullscreen" />
         <button
           type="button"
           className="v2-chat-close"

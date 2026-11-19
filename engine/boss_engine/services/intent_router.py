@@ -21,6 +21,7 @@ from .code_task_service import start_code_task
 from .cli_chat_session import in_turn_scope
 from .core import stable_dedupe_key, emit_event, make_id
 from .offer_label import button_label as _offer_label
+from .reply_style import ACTION_REPLY_STYLE
 from .turn_budget import TurnBudget, continue_steps, for_turn as _budget_for_turn
 from .turn_subject import (
     cites_the_record, id_exists, parse_subject, resolve_subject, stays_on_subject,
@@ -2400,6 +2401,9 @@ class IntentRouter:
             "the first sentence names the cause. Evidence goes underneath. Do not deliver a "
             "standard tour of the subject when a specific thing was asked — and do not repeat "
             "anything you have already said in this conversation; build on it.\n\n"
+            # ONE SENTENCE AND A BUTTON for "do X" (reply_style, operator 2026-11-19): the
+            # captain answered a one-line change with file names, crun ids and a PR question.
+            + ACTION_REPLY_STYLE + "\n"
             "NEVER HAND THE PROBLEM BACK.\n"
             "NEVER ASK THE OPERATOR FOR AN IDENTIFIER. Every run, job, task and target id in "
             "this system is discoverable — list_code_tasks, list_running_work, get_code_task. If "

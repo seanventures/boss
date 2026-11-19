@@ -34,6 +34,7 @@ from ..services import protocol_reply
 from ..tools import ToolError, ToolRegistry, build_discuss_read_registry
 from ..tools.registry import offer_warning
 from ..services.cli_chat_session import in_turn_scope
+from ..services.reply_style import ACTION_REPLY_STYLE
 from ..services.low_trust import Ledger, outside_origin, release, remember
 from ..services.tool_result_text import clip_for_model
 
@@ -142,8 +143,9 @@ checked and there is nothing" is noise on a question that never needed one. \
 Say nothing about what you did not find unless its absence IS the answer.
 - Write tools change real state. If you are not certain the user asked you to \
 create/launch something, ask first — don't fire a write speculatively.
-- Be concise and concrete. Give run ids and URLs when you have them.
-"""
+- Be concise and concrete. Give URLs when you have them; raw run ids only when \
+the person asks for them.
+""" + "\n" + ACTION_REPLY_STYLE
 
 
 @dataclass

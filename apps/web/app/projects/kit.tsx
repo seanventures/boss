@@ -272,13 +272,15 @@ export const closeDrawer = () => {
 };
 
 /** A side drawer: focus moves in, Esc and the scrim close it, focus returns to where it was. */
-export function Drawer({ title, sub, icon, onClose, children, footer, testid = "px-drawer", wide, actions, bodyClass }: {
+export function Drawer({ title, sub, icon, onClose, children, footer, testid = "px-drawer", wide, actions, bodyClass, full }: {
   title: React.ReactNode; sub?: React.ReactNode; icon?: React.ReactNode; onClose: () => void; children: React.ReactNode;
   footer?: React.ReactNode; testid?: string; wide?: boolean;
   /** Icon buttons beside ✕ in the header (expand to the full page, past conversations). */
   actions?: React.ReactNode;
   /** A class on the body, for a drawer whose body is a component of its own (the captain's chat). */
   bodyClass?: string;
+  /** Laid over the whole screen (a chat drawer's full-screen control, components/chat-fullscreen). */
+  full?: boolean;
 }) {
   const id = useId();
   const panel = useRef<HTMLDivElement>(null);
@@ -293,6 +295,7 @@ export function Drawer({ title, sub, icon, onClose, children, footer, testid = "
     <div className="px">
       <div className="px-scrim" onClick={onClose} data-testid={`${testid}-scrim`} />
       <div className="px-drawer" role="dialog" aria-modal="true" aria-labelledby={id} tabIndex={-1} ref={panel} data-testid={testid}
+           data-chat-full={full ? "1" : undefined}
            style={wide ? { width: "min(620px, 100vw)" } : undefined}>
         <div className="px-drawer-h">
           {icon}
