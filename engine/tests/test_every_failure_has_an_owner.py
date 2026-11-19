@@ -105,9 +105,13 @@ def test_the_monitor_tick_runs_the_owner_loop_last():
      "failed to clean up stale arg0 temp dirs: Permission denied (os error 13)", None, None,
      ("platform", "platform")),
     ("RuntimeError: HTTP 401", None, None, ("person", "model_login")),
+    ("No GitHub credentials for acme/web: the App has no installation for it, BOSS_GITHUB_TOKEN "
+     "is not set, and this project has no repository connected in Setup.", None, None,
+     ("person", "no_repository")),
+    # No repository named at all ("/") is BOSS's own bug, never a person's item (2026-11-18).
     ("No GitHub credentials for /: the App has no installation for it, BOSS_GITHUB_TOKEN is not "
      "set, and this project has no repository connected in Setup.", None, None,
-     ("person", "no_repository")),
+     ("platform", "platform")),
     ("Client error '409 Conflict' for url 'http://api:8000/v1/knowledge/repositories/index/execute'",
      None, None, ("platform", "platform")),
     ("Merge failed: PR #5 conflicts with its base branch, so GitHub would not merge it.", None,
@@ -320,12 +324,15 @@ def test_a_workflow_step_whose_agent_asked_a_person_becomes_its_action_item(eng,
 
 
 def test_many_jobs_failing_for_one_person_side_cause_are_one_card(eng, project, stubbed):  # noqa: F811
-    err = ("No GitHub credentials for /: the App has no installation for it, BOSS_GITHUB_TOKEN is "
-           "not set, and this project has no repository connected in Setup.")
+    # (A docs update on a project with no repository is not a person's item at all — it does
+    # not apply, test_docs_update_works_on_a_local_repo — so a GitHub merge stands in here.)
+    err = ("No GitHub credentials for acme/web: the App has no installation for it, "
+           "BOSS_GITHUB_TOKEN is not set, and this project has no repository connected in Setup.")
     with eng.begin() as c:
         for n in range(3):
-            _dead_job(c, project, "docs.update", err, dedupe=f"docs.update:{project}:e{n}",
-                      payload={"subscription_id": f"sub_{n}", "entity_id": f"crun_{n}"})
+            _dead_job(c, project, "github.issue.comment", err,
+                      dedupe=f"gh-comment:{project}:e{n}",
+                      payload={"entity_id": f"crun_{n}"})
     fo.sweep(eng, _settings(), project_id=project)
     with eng.begin() as c:
         cards = _cards(c, project)
