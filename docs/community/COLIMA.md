@@ -23,6 +23,13 @@ Docker configuration selects the macOS keychain helper but the executable is
 absent. Install it with `brew install docker-credential-helper`; do not remove
 stored credentials or replace the entire Docker configuration.
 
+If Docker Hub's image CDN fails certificate verification, diagnose the network
+and certificate chain without disabling TLS. A reachable, trusted registry mirror
+can be configured under `docker.registry-mirrors` in the Colima profile and
+activated with `colima restart boss`. Mirrors only help for images they cache;
+an uncached image can still fall back to Docker Hub and encounter the original
+failure. Back up the profile before changing it.
+
 Create a dedicated profile. These are starting allocations, not minimums; the
 virtual disk grows as used and still needs sufficient free space on the Mac.
 
