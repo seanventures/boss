@@ -283,6 +283,48 @@ def test_an_install_that_fails_with_the_apps_error_is_fixed_with_its_log(
     assert deployment_id in {d["id"] for d in listed["stack_deployments"]}
 
 
+def test_the_project_says_boss_is_fixing_it_and_the_fixs_card_says_it_is_the_fix(
+        client, engine, docker_host, repairs):
+    """Recipe box (sdep_73c0758f, 2026-11-19): the repair ran and the fix waited for approval
+    while every surface said "Last deploy failed" and the card read like any deploy."""
+    from boss_engine.services import deploy_truth
+
+    stack = docker_host
+    stack["manifest"] = {"*": SCRIPT_MANIFEST}
+    stack["host"].install_fails_with = (1, "Error: Cannot find module '/app/server.js'\n")
+    run_id = _deploy_run(engine, _build(engine, '{"owner": "acme", "repo": "shop"}'))
+    _tick(engine)
+    deployment_id = _step(engine, run_id)["output"]["stack_deployment_id"]
+    deployment = client.get(f"/v1/deployments/stack/{deployment_id}").json()["deployment"]
+    done, _ = _approve_and_execute(client, engine, deployment)
+    assert done["deployment"]["status"] == "failed" and done["deployment"]["error"]["cause"] == "app"
+    _tick(engine)
+    assert len(repairs) == 1
+
+    target_id = stack["target"]["id"]
+    with engine.begin() as c:
+        told = deploy_truth.truth(c, [{"id": target_id, "project_id": HOME}])[target_id]
+    assert told["state"] == "fixing" and told["word"] == "BOSS is fixing the deploy", told
+    assert repairs[0]["run_id"] in told["reason"]
+
+    stack["host"].install_fails_with = None
+    stack["github"].refs["pull/7"] = FIXED_HEAD
+    _finish(engine, repairs[0]["run_id"])
+    _tick(engine)
+    _tick(engine)
+    fixed = _deployments(engine, target_id)[-1]
+    assert fixed["status"] == "awaiting_approval" and fixed["commit_sha"] == FIXED_HEAD
+    with engine.begin() as c:
+        asked = c.execute(text("SELECT question, recommendation FROM decisions WHERE id = :d"),
+                          {"d": fixed["decision_id"]}).mappings().one()
+        told = deploy_truth.truth(c, [{"id": target_id, "project_id": HOME}])[target_id]
+    assert asked["question"].startswith("BOSS fixed the "), asked["question"]
+    assert f"Deploy the fix ({FIXED_HEAD[:12]})" in asked["question"]
+    assert asked["recommendation"]["fix_of"]["deployment_id"] == deployment_id
+    assert asked["recommendation"]["fix_of"]["build_run_id"] == repairs[0]["run_id"]
+    assert told["state"] == "waiting" and told["word"] == "Fixed · waiting for your OK", told
+
+
 def test_the_cap_stops_the_repairs_and_the_step_fails_with_every_cause(
         client, engine, docker_host, repairs, monkeypatch):
     stack = docker_host

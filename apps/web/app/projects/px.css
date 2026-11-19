@@ -864,10 +864,13 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 .px-deploy-log { margin: 2px 0 6px 28px; padding: 6px 8px; max-height: 180px; overflow: auto; border-radius: 6px; background: var(--surface-3); font-family: var(--mono); font-size: var(--fs-tag); white-space: pre-wrap; word-break: break-word; }
 .px-deploy-fail { display: flex; flex-direction: column; gap: 6px; color: var(--ink); }
 .px-deploy-fail b { color: var(--red); }
+.px-deploy-fixing { display: flex; align-items: center; gap: 6px; color: var(--ink); }
+.px-deploy-fixing b { color: var(--amber); }
 .px-env-address { font-family: var(--mono); font-size: var(--fs-meta); color: var(--faint); display: inline-flex; gap: 6px; align-items: center; min-width: 0; overflow-wrap: anywhere; }
 .px-hchip-deploy { text-decoration: none; cursor: pointer; }
 .px-hchip-deploy[data-s="deploying"], .px-hchip-deploy[data-s="waiting"] { color: var(--teal); }
 .px-hchip-deploy[data-s="failed"] { color: var(--red); }
+.px-hchip-deploy[data-s="fixing"] { color: var(--amber); }
 @media (prefers-reduced-motion: reduce) { .px-deploy-live .px-spin { animation: none; } }
 /* Needs you › an FYI row (BOSSAPP-922 waiting for GitHub): calm blue, no action, not counted. */
 .px-ny.px-ny-fyi { background: color-mix(in srgb, var(--blue) 7%, var(--surface)); }

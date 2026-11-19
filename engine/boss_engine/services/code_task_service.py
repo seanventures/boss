@@ -508,6 +508,67 @@ def is_simulated_run(run: Optional[dict]) -> bool:
     return bool(run.get("status") == SIMULATED_FIXTURE_STATUS or spec.get("simulated"))
 
 
+def _will_start_outer_run(fctx: Optional[dict]) -> bool:
+    """Does this build start its project's OUTER workflow run (a new piece of work), or is it more
+    work inside a run that already exists? One rule, read where the person is asked for consent
+    (so the one consent covers that workflow) and where the run is started.
+
+    `root_run_id` is deliberately NOT a continuation: a web-app build mints one for the scaffold
+    branch before any task exists, so the FIRST task of a new app carries one."""
+    fctx = fctx or {}
+    _chose_a_workflow = bool(fctx.get("workflow_version_id"))
+    # A LANE OF A MULTI-REPO CHANGE (change_set_id) is governed by its change set.
+    _continuation = ("is_followup", "parent_run_id", "deferred_from_run", "qa_benchmark", "change_set_id")
+    governed = bool(fctx.get("workflow_run_id")) or (
+        not _chose_a_workflow and bool((fctx.get("origin") or {}).get("workflow_run_id")))
+    return (not governed) and (_chose_a_workflow or (
+        not any(fctx.get(k) for k in _continuation)
+        # Slice 1 of a decomposition IS the project; slices 2..N are the rest of the same one.
+        and int(fctx.get("decomposition_index") or 1) <= 1
+    ))
+
+
+def _governing_workflow(connection: Any, project_id: str, task_id: Optional[str],
+                        chosen_id: Optional[str]) -> Optional[dict]:
+    """The workflow a build's outer run follows: the one the person picked, else the mapping."""
+    from .workflows import workflow_by_version, workflow_for_code_task
+
+    governing = None
+    if chosen_id:
+        governing = workflow_by_version(connection, project_id, str(chosen_id))
+    if not governing:
+        governing = workflow_for_code_task(connection, project_id=project_id, task_id=task_id)
+    return governing or None
+
+
+def _delivery_workflow_needs(connection: Any, project_id: str, task_id: Optional[str],
+                             fctx: Optional[dict], repos: list[str]) -> tuple[list[str], frozenset, list[str]]:
+    """(agent roles, permissions, repositories) the build's delivery workflow will use, so the ONE
+    consent the person gives at the start names them (operator, 2026-11-19: starting the
+    workflow never needs its own approval). Only agents this project has: a role with no agent
+    would make identity not apply at all (consent._agents). Empty when nothing resolves."""
+    from boss_engine.identity import consent as _consent
+    from boss_engine.identity import runs as _identity_runs
+    from .workflows import delivery_workflow_spec
+
+    try:
+        with _savepoint(connection):
+            governing = _governing_workflow(connection, project_id, task_id,
+                                            (fctx or {}).get("workflow_version_id"))
+            if not governing or not governing.get("version_id"):
+                return [], frozenset(), []
+            spec = delivery_workflow_spec(connection, project_id, str(governing["version_id"]))
+            if not spec:
+                return [], frozenset(), []
+            roles, perms, wf_repos = _consent.workflow_needs(
+                connection, project_id, spec, {"repository": repos[0]} if repos else {})
+            roles = [r for r in roles if _identity_runs.agent_for_role(connection, project_id, r)]
+            return roles, perms, list(wf_repos)
+    except Exception:  # noqa: BLE001 — the build's own consent still stands; the run says the rest
+        logger.warning("delivery workflow needs not read for %s", project_id, exc_info=True)
+        return [], frozenset(), []
+
+
 def start_code_task(
     connection, *, project_id: str, task_id: Optional[str], title: str,
     instructions: str, acceptance_criteria: list[str], test_commands: list[str],
@@ -706,11 +767,29 @@ def start_code_task(
     if not simulated and identity_acting is None:
         from boss_engine.identity import consent as _consent
 
+        _repos = list(_consent_repos(owner, repo, repo_host))
+        _roles, _perms, _covers = [builder], set(_consent.code_task_permissions(_repos, repo_host)), None
+        from boss_engine.identity import lineage as _start_lineage
+
+        _ctx = _start_lineage.current_context()
+        if _will_start_outer_run(finalize_ctx) and _ctx is not None and _ctx.is_human_session:
+            # A person at the console (Easy Mode, a template, Try a sample, New work). A key or an
+            # MCP client keeps today's ask (the builder): it cannot see a sheet, and a standing
+            # grant it already holds must not stop covering its builds.
+            # ONE CONSENT FOR THE WHOLE DELIVERY WORKFLOW: the build, and every step of the
+            # workflow run it starts below (tests, review, preview, staging deploy, smoke,
+            # monitoring) — the outer run inherits this grant and never asks on its own.
+            _wf_roles, _wf_perms, _wf_repos = _delivery_workflow_needs(
+                connection, project_id, task_id, finalize_ctx, _repos)
+            if _wf_roles:
+                _roles += [r for r in _wf_roles if r not in _roles]
+                _perms |= set(_wf_perms)
+                _repos += [r for r in _wf_repos if r not in _repos]
+                _covers = _consent.DELIVERY_COVERS
         identity_acting = _consent.require_authority(
-            org_id=None, project_id=project_id, role_keys=[builder],
-            permissions=_consent.code_task_permissions(_consent_repos(owner, repo, repo_host), repo_host),
-            repos=_consent_repos(owner, repo, repo_host),
-            task=title, run_id=f"run_ct:{run_id}", db=connection)
+            org_id=None, project_id=project_id, role_keys=_roles,
+            permissions=frozenset(_perms), repos=_repos,
+            task=title, run_id=f"run_ct:{run_id}", db=connection, covers=_covers)
     if substrate:  # per-run substrate override (retry fallback: microvm infra-failure -> local)
         spec["substrate"] = substrate
     if repo_host:  # BOSS-267: per-task SCM provider (github default; bitbucket, ...)
@@ -856,12 +935,7 @@ def start_code_task(
     _already_governed = bool(run_finalize.get("workflow_run_id"))
     # A LANE OF A MULTI-REPO CHANGE (multirepo/change_sets.py) is governed by its change set:
     # never an outer workflow run of its own per repository.
-    _continuation = ("is_followup", "parent_run_id", "deferred_from_run", "qa_benchmark", "change_set_id")
-    _is_new_project = (not _already_governed) and (_chose_a_workflow or (
-        not any(run_finalize.get(k) for k in _continuation)
-        # Slice 1 of a decomposition IS the project; slices 2..N are the rest of the same one.
-        and int(run_finalize.get("decomposition_index") or 1) <= 1
-    ))
+    _is_new_project = (not _already_governed) and _will_start_outer_run(run_finalize)
 
     try:
         from .workflows import workflow_by_version, workflow_for_code_task
@@ -1034,63 +1108,19 @@ def start_code_task(
     # `build` waits on this code task instead of starting a second one, and — when the project
     # came from a panel — `meeting` waits on that panel instead of convening another.
     if _is_new_project:
-        try:
-            from .workflows import start_project_run
-
-            origin = run_finalize.get("origin") or {}
-            # UNDER THE BUILD'S OWN AUTHORITY. Started outside it, a build asked for with an API
-            # key (or by MCP or an agent) gave its outer run no recorded authority
-            # (consent.require_for_workflow sees no grant), so every later step that acts on the
-            # branch ran bare as the worker and was refused: on boss-1 all 18 launch-readiness and
-            # More tests attempts in ten days, "needs Retry builds (code_task:retry)", while the
-            # person's standing grant held it. The run now records the grant the build runs under.
-            def _start_outer_run():
-                return start_project_run(
-                    connection,
-                    project_id=project_id,
-                    actor="boss",
-                    title=title,
-                    directive=instructions,
-                    # THE SAME WORKFLOW THE TASK RECORDS. It was already resolved above —
-                    # honouring the picker on the New project form, then any mapping, then the
-                    # default. Letting start_project_run resolve it a second time would let the
-                    # two disagree: the project page naming one workflow and the run that
-                    # governs it following another.
-                    workflow_version_id=(run_finalize.get("workflow") or {}).get("version_id"),
-                    extra_input={
-                        "acceptance_criteria": acceptance_criteria,
-                        "test_commands": test_commands,
-                        "repository": repo,
-                        "adopt_code_task_run_id": run_id,
-                        "adopt_meeting_run_id": origin.get("meeting_run_id"),
-                        "adopt_discovery_run_id": origin.get("discovery_run_id"),
-                        "adopt_decision_id": origin.get("decision_id"),
-                    },
-                )
-
-            from boss_engine.identity import consent as _consent_errors
-
-            try:
-                with (_identity_lineage.acting(identity_acting) if identity_acting is not None
-                      else _identity_lineage.nullcontext()):
-                    started = _start_outer_run()
-            except (_consent_errors.ConsentRequired, _consent_errors.AuthorityLost) as exc:
-                # The build's grant does not cover every step the workflow will run (a deploy
-                # agent it never named). The build must still have its run; its later steps then
-                # ask for authority as they always did. Said, not silent.
-                logger.warning("outer run for %s starts without the build's authority: %s",
-                               run_id, type(exc).__name__)
-                started = _start_outer_run()
-            if started:
-                connection.execute(
-                    sql("UPDATE code_task_runs SET finalize_ctx = "
-                        "COALESCE(finalize_ctx,'{}'::jsonb) || "
-                        "jsonb_build_object('workflow_run_id', CAST(:w AS text)) "
-                        "WHERE id = :r"),
-                    {"w": started.get("id"), "r": run_id},
-                )
-        except Exception as exc:  # noqa: BLE001 — a project must start without an outer run
-            logger.warning("could not start the outer workflow run for %s: %s", run_id, exc)
+        # UNDER THE BUILD'S OWN AUTHORITY, and never a second consent. Started outside it, a build
+        # asked for with an API key (or by MCP or an agent) gave its outer run no recorded
+        # authority, so every later step that acts on the branch ran bare as the worker and was
+        # refused (boss-1: 18 launch-readiness / More tests attempts in ten days). Started under it
+        # but asked for its own consent, a person's Easy Mode build was refused `consent_required`
+        # for scope workflow_run and the refusal was swallowed: the build ran with no workflow, so
+        # its deploy, smoke test and monitoring never happened (2026-11-19). The run now INHERITS
+        # the grant the build runs under (consent.inherit_build_authority).
+        start_delivery_workflow(
+            connection, project_id=project_id, task_id=task_id, run_id=run_id, title=title,
+            instructions=instructions, acceptance_criteria=acceptance_criteria,
+            test_commands=test_commands, repo=repo, finalize_ctx=run_finalize,
+            identity_acting=identity_acting)
 
         # AND SOMEBODY LEADS IT.
         #
@@ -1122,6 +1152,156 @@ def start_code_task(
         except Exception as exc:  # noqa: BLE001 — an unled build is better than no build
             logger.warning("could not put a captain on %s: %s", run_id, exc)
     return run_id
+
+
+WORKFLOW_NOT_STARTED_ACTION = "start_delivery_workflow"
+
+
+def _savepoint(connection: Any) -> Any:
+    """A failure inside must not abort the build's own transaction (Postgres would refuse every
+    later statement of the start). A persistence without savepoints just runs the block."""
+    import contextlib
+
+    nested = getattr(connection, "begin_nested", None)
+    return nested() if callable(nested) else contextlib.nullcontext()
+
+
+def start_delivery_workflow(
+    connection: Any, *, project_id: str, task_id: Optional[str], run_id: str, title: str,
+    instructions: str, acceptance_criteria: Any = None, test_commands: Any = None,
+    repo: Optional[str] = None, finalize_ctx: Optional[dict] = None, identity_acting: Any = None,
+    raise_card: bool = True,
+) -> Optional[dict]:
+    """Start (or attach) the OUTER workflow run of the build `run_id`, adopting that build.
+
+    Every path a person starts work on (Easy Mode, a template, Try a sample, New work, a PRD's
+    approval) comes here. The run inherits the authority the build was started under, so it
+    never asks for its own consent. If it still cannot start, that is NEVER only a log line: the
+    build records why (`finalize_ctx.workflow_start_error`), an event says so, and the person
+    gets one card — "Start <app>'s delivery workflow" — whose approval starts it (the same call).
+
+    Returns the started run, or None (no workflow resolves for the project, or it did not start)."""
+    from boss_engine.identity import consent as _consent
+    from boss_engine.identity import lineage as _identity_lineage
+    from .workflows import start_project_run
+
+    fctx = finalize_ctx if finalize_ctx is not None else {}
+    origin = fctx.get("origin") or {}
+    started = None
+    error: Optional[str] = None
+    consent_needed = False
+    try:
+        with _savepoint(connection):
+            with (_identity_lineage.acting(identity_acting) if identity_acting is not None
+                  else _identity_lineage.nullcontext()):
+                started = start_project_run(
+                    connection,
+                    project_id=project_id,
+                    actor="boss",
+                    title=title,
+                    directive=instructions,
+                    # THE SAME WORKFLOW THE TASK RECORDS (resolved once, at creation: the picker,
+                    # then any mapping — Easy Mode's own — then the default). Resolving it again
+                    # here would let the project page name one workflow and the run follow another.
+                    workflow_version_id=(fctx.get("workflow") or {}).get("version_id"),
+                    extra_input={
+                        "acceptance_criteria": acceptance_criteria,
+                        "test_commands": test_commands,
+                        "repository": repo,
+                        "adopt_code_task_run_id": run_id,
+                        "adopt_meeting_run_id": origin.get("meeting_run_id"),
+                        "adopt_discovery_run_id": origin.get("discovery_run_id"),
+                        "adopt_decision_id": origin.get("decision_id"),
+                    },
+                    inherit_authority=identity_acting,
+                )
+    except (_consent.ConsentRequired, _consent.AuthorityLost) as exc:
+        consent_needed = True
+        error = "it needs your OK to act for you" if isinstance(exc, _consent.ConsentRequired) \
+            else "the authority it would run under has ended"
+    except Exception as exc:  # noqa: BLE001 — the build keeps running; the person is told below
+        error = (str(exc) or type(exc).__name__)[:300]
+    if started:
+        connection.execute(
+            sql("UPDATE code_task_runs SET finalize_ctx = "
+                "(COALESCE(finalize_ctx,'{}'::jsonb) - 'workflow_start_error') || "
+                "jsonb_build_object('workflow_run_id', CAST(:w AS text)) WHERE id = :r"),
+            {"w": started.get("id"), "r": run_id},
+        )
+        fctx["workflow_run_id"] = started.get("id")
+        return started
+    if error is None:
+        return None                              # no workflow for this project: nothing to start
+    logger.warning("the delivery workflow of %s did not start: %s", run_id, error)
+    _workflow_not_started(connection, project_id=project_id, task_id=task_id, run_id=run_id,
+                          title=title, error=error, consent_needed=consent_needed,
+                          raise_card=raise_card)
+    return None
+
+
+def _workflow_not_started(connection: Any, *, project_id: str, task_id: Optional[str], run_id: str,
+                          title: str, error: str, consent_needed: bool, raise_card: bool) -> None:
+    """Said, not swallowed: on the build, as an event, and as ONE open card per build."""
+    from .core import create_blocking_decision, now_utc
+    from .decision_actions import OPEN_STATUSES
+
+    try:
+        with _savepoint(connection):
+            app = title or "this app"
+            question = (f"BOSS needs your OK to run {app}'s delivery workflow" if consent_needed
+                        else f"{app}'s delivery workflow did not start")
+            decision_id = None
+            if raise_card:
+                decision_id = connection.execute(sql(
+                    "SELECT id FROM decisions WHERE project_id = :p AND status = ANY(:s) "
+                    "AND recommendation->>'action' = :a AND recommendation->>'run_id' = :r LIMIT 1"),
+                    {"p": project_id, "s": sorted(OPEN_STATUSES), "a": WORKFLOW_NOT_STARTED_ACTION,
+                     "r": run_id}).scalar()
+                if not decision_id:
+                    decision_id = create_blocking_decision(
+                        connection, project_id, task_id, question,
+                        {"action": WORKFLOW_NOT_STARTED_ACTION, "run_id": run_id,
+                         "summary": (f"The build is running, but the workflow that carries it "
+                                     f"through tests, review, preview, deploy and monitoring did "
+                                     f"not start: {error}. Approve to start it now."),
+                         "why": error},
+                        {}, "delivery_workflow_not_started", risk_tier=1)
+            connection.execute(
+                sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) || "
+                    "jsonb_build_object('workflow_start_error', CAST(:e AS jsonb)) WHERE id = :r"),
+                {"e": json.dumps({"reason": error, "consent_needed": consent_needed,
+                                  "decision_id": decision_id, "at": now_utc().isoformat()}),
+                 "r": run_id})
+            emit_event(connection, project_id, "code_task.workflow_not_started", "boss",
+                       "code_task_run", run_id, {"reason": error, "decision_id": decision_id,
+                                                  "consent_needed": consent_needed})
+    except Exception:  # noqa: BLE001 — the build must still start; the warning above stands
+        logger.exception("could not record that the delivery workflow of %s did not start", run_id)
+
+
+def attach_delivery_workflow(connection: Any, run_id: str, *, raise_card: bool = False) -> Optional[dict]:
+    """RECOVERY: give a build that ran without its outer workflow run one now (the card's
+    approval; any later pass that finds such a build). Adopts the build as it is, under the
+    authority it was started under. None when it already has one or none can be started."""
+    from boss_engine.identity import runs as _identity_runs
+
+    row = connection.execute(sql(
+        "SELECT project_id, task_id, title, spec, finalize_ctx FROM code_task_runs WHERE id = :r"),
+        {"r": run_id}).mappings().first()
+    if row is None:
+        return None
+    fctx = dict(row["finalize_ctx"] or {})
+    if fctx.get("workflow_run_id"):
+        return None
+    spec = dict(row["spec"] or {})
+    return start_delivery_workflow(
+        connection, project_id=str(row["project_id"]), task_id=row["task_id"], run_id=run_id,
+        title=str(row["title"] or spec.get("title") or ""),
+        instructions=str(spec.get("instructions") or row["title"] or ""),
+        acceptance_criteria=spec.get("acceptance_criteria"),
+        test_commands=spec.get("test_commands"), repo=spec.get("repo"), finalize_ctx=fctx,
+        identity_acting=_identity_runs.original_build_authority(connection, run_id),
+        raise_card=raise_card)
 
 
 def work_branch_for(run: dict) -> str:

@@ -896,6 +896,27 @@ def _explained(step: str, returncode: int, output: str, *,
                           "and build on the same base image family (musl vs glibc) the deploy "
                           "runs. Then deploy again.",
                 "cause": CAUSE_APP}
+    crashed = crash_line(output or "") if step == "health" else ""
+    if crashed:
+        # THE APP EXITED ON START, and its own last words say why (Recipe box,
+        # sdep_73c0758f: `Error: Cannot find module '/app/server.js'`). Said as such, not as
+        # "did not answer within 600s" — the card, the repair build's brief and the project
+        # page all read this headline.
+        return {"headline": f"The app crashed on start ({crashed.rstrip('.')}), so nothing "
+                            f"answered at {url}.",
+                "action": "The app's container stopped with this error. Fix it in the "
+                          "repository (BOSS's repair build does this by itself) and deploy "
+                          "again — or roll back to the previous healthy commit.",
+                "cause": CAUSE_APP}
+    stopped = re.search(APP_EXITED + r" \S+ (\d+)", output or "") if step == "health" else None
+    if stopped:
+        # Every container stopped and none said why in a way we recognise: say what happened
+        # and how long BOSS actually waited — not the 600 s it would have.
+        return {"headline": f"The app's containers all stopped on start, so nothing answered "
+                            f"at {url} (BOSS stopped waiting after {stopped.group(1)}s).",
+                "action": "Read the log tail for the containers' last lines, fix it in the "
+                          "repository and deploy again — or roll back to the previous healthy "
+                          "commit.", "cause": CAUSE_APP}
     if step == "health":
         return {"headline": f"The app did not answer as expected at {url} within {timeout}s.",
                 "action": "Read the log tail for what the install printed, fix it and deploy "
@@ -929,6 +950,50 @@ def _explained(step: str, returncode: int, output: str, *,
     return {"headline": f"The step '{step}' failed on {host} (exit {returncode}).",
             "action": "Read the log tail for the command's own error, fix it in the repository "
                       "and deploy again — or roll back to the previous healthy commit."}
+
+
+#: An app's own last words when it stops: `Error: Cannot find module …` (Node),
+#: `ModuleNotFoundError: …` (Python), `panic: …` (Go), `Exception in thread …` (JVM).
+_CRASH = re.compile(
+    r"^\s*((?:[A-Za-z_][\w.$]*)?(?:Error|Exception)(?::| in thread)\s+\S.{0,200}"
+    r"|panic: .{1,200}|fatal error: .{1,200}|Fatal error: .{1,200})$", re.M)
+#: The health probe's own word for "the app's containers all stopped" (`_crash_probe`).
+APP_EXITED = "BOSS_APP_EXITED"
+
+
+def compose_project_of(rendered: Mapping[str, Any], mode: str = "install") -> str:
+    """The compose project the app comes up as: the step that BRINGS THE APP UP names it
+    (`-p <project> … up`); the step before it may retire an older project of the app
+    (join_resource_project), whose containers are not the answer. "" without compose."""
+    for section in dict.fromkeys((mode, "install")):
+        for step in reversed(list(rendered.get(section) or [])):
+            run = str(step.get("run") or "")
+            m = re.search(r"\s-p\s+([A-Za-z0-9._-]+)", run)
+            if m and " up " in run:
+                return m.group(1)
+    return ""
+
+
+def crash_line(output: str) -> str:
+    """The error an app's stopped container printed, from the health step's diagnosis (the
+    compose project's exited containers' last lines, `_compose_state`) — "" when no container
+    exited or it said nothing recognisable."""
+    text_ = output or ""
+    if "(last lines) ---" not in text_ and APP_EXITED not in text_:
+        return ""
+    if not re.search(r"\bExited \(\d+\)|" + APP_EXITED, text_):
+        return ""
+    found = _CRASH.search(text_[text_.find("(last lines) ---"):] if "(last lines) ---" in text_
+                          else text_)
+    if not found:
+        return ""
+    # THE APP'S OWN WORDS BECOME A HEADLINE (failure_reason, the header's tooltip, the repair
+    # build's brief, the fix's approval card), so a credential the app printed itself — a
+    # database URL from its own .env, a token on the line — is masked here, by shape, through
+    # the shared redactor: `redact` only knows the values BOSS handed the app.
+    from .redaction import mask_url_credentials, redact_secrets
+
+    return mask_url_credentials(redact_secrets(" ".join(found.group(1).split())))[:200]
 
 
 def redact(output: str, values: list[str]) -> str:
@@ -1010,15 +1075,7 @@ class StackApplier:
     def _compose_state(self) -> str:
         """The compose project's containers and the last lines of each one not running, from
         the install command's `-p <project>`; "" for a manifest that runs no compose. Read-only."""
-        project = ""
-        # The step that BRINGS THE APP UP names its project; the step before it may retire an
-        # older project of the app (join_resource_project), whose containers are not the answer.
-        for step in reversed(list(self.rendered.get("install") or [])):
-            run = str(step.get("run") or "")
-            m = re.search(r"\s-p\s+([A-Za-z0-9._-]+)", run)
-            if m and " up " in run:
-                project = m.group(1)
-                break
+        project = compose_project_of(self.rendered, getattr(self, "mode", "install"))
         if not project:
             return ""
         q = shlex.quote(f"label=com.docker.compose.project={project}")
@@ -1030,6 +1087,30 @@ class StackApplier:
         except Exception:  # noqa: BLE001 — diagnosis only; the health verdict stands
             return ""
         return redact(result.output[-3000:], self.redact_values) if result.output.strip() else ""
+
+    def _crash_probe(self) -> str:
+        """Shell for the health loop: stop waiting when the app's compose project has
+        containers and every one is exited or dead, three looks in a row (15 s), after a 20 s
+        grace — the
+        app exited on start, and no amount of waiting makes it answer (Recipe box,
+        sdep_73c0758f: the container died in its first second and the probe waited 600 s).
+        "" without a compose project: then only the deadline ends the wait."""
+        project = compose_project_of(self.rendered, getattr(self, "mode", "install"))
+        if not project:
+            return ""
+        q = shlex.quote(f"label=com.docker.compose.project={project}")
+        return (f"if [ $(( $(date +%s) - started )) -ge 20 ]; then "
+                # UP is anything not finished: running, and also restarting (a restart policy
+                # backing off while it waits for its database), created and paused. Only when
+                # EVERY container is exited or dead has the app stopped for good.
+                f"up=$(docker ps -aq --filter {q} --filter status=running "
+                "--filter status=restarting --filter status=created --filter status=paused "
+                "2>/dev/null | wc -l); "
+                f"all=$(docker ps -aq --filter {q} 2>/dev/null | wc -l); "
+                "if [ \"$up\" -eq 0 ] && [ \"$all\" -gt 0 ]; then down=$((down+1)); "
+                "else down=0; fi; "
+                f"if [ $down -ge 3 ]; then echo {APP_EXITED} $code "
+                "$(( $(date +%s) - started )); exit 1; fi; fi; ")
 
     def _finish(self, name: str, status: str) -> None:
         self._step(name).update(status=status, ended_at=self.now())
@@ -1164,11 +1245,12 @@ class StackApplier:
             expect = int(check["expect"])
             limit = int(check["timeout_seconds"])
             probe = (
-                f"deadline=$(( $(date +%s) + {limit} )); code=000; "
+                f"started=$(date +%s); deadline=$(( started + {limit} )); code=000; down=0; "
                 "while :; do "
                 f"code=$(curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 {url} || true); "
                 f"if [ \"$code\" = \"{expect}\" ]; then echo BOSS_HEALTHY $code; exit 0; fi; "
                 "if [ $(date +%s) -ge $deadline ]; then echo BOSS_UNHEALTHY $code; exit 1; fi; "
+                + self._crash_probe() +
                 "sleep 5; done")
             result = self.access.run(probe, timeout=limit + 60, write=False)
             self._append(result.output[-2000:])
@@ -2019,8 +2101,15 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                       retire_projects: Optional[list[str]] = None,
                       person_required: bool = False,
                       rollback_authority: Optional[dict[str, Any]] = None,
-                      also_judged: Optional[list[str]] = None) -> dict[str, Any]:
+                      also_judged: Optional[list[str]] = None,
+                      fixed: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """Record a deployment of `repository@ref` to a stack target, held for approval.
+
+    `fixed`: this deployment ships BOSS's repair of a deployment that failed for the app's
+    reason (deploy_repair's newest `deploy_fixes` entry). Its card says so in plain words —
+    "BOSS fixed the Recipe box deploy: … Deploy the fix (0951212) to staging on vm-1?" — not a
+    bare "Deploy owner/repo@sha to host (dir)?" that reads like any other deploy (Recipe box,
+    sdep_5be0890e, 2026-11-19: the fix waited on a card nobody recognised as the fix).
 
     THE PRODUCTION BAR: every stack plan to a production target passes
     `quality_bar.stack_plan_decision` (the same chokepoint as plan_deployment_run) here, whichever
@@ -2316,6 +2405,9 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
         from .run_decisions import open_step_decision
 
         question = f"Deploy {owner}/{repo}@{short} to {host['name']} ({manifest.dir})?"
+        if fixed:
+            question = fix_question(fixed, app=target.get("app_name"), short=short,
+                                    environment=target.get("environment"), host=host["name"])
         if infra_doc:
             from ..platform.deploy import preview as _infra_preview
             from ..platform.planner import summary_words
@@ -2328,6 +2420,10 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
             "env_keys": summary["env_keys"],
             # THIS APP'S OWN EARLIER RELEASES to take down first (step_recovery), by name.
             **({"retire_projects": retire} if retire else {}),
+            # THE REPAIR THIS SHIPS (deploy_repair): which deployment failed, why, which build.
+            **({"fix_of": {k: fixed.get(k) for k in ("deployment_id", "build_run_id", "cause",
+                                                      "attempt") if fixed.get(k)}}
+               if fixed else {}),
             # Which BOSS secret each key carries to the host: the approver sees the names.
             "env_secrets": dict(rendered["env_secrets"]),
             "generated_env_keys": summary["generated_env_keys"],
@@ -2453,6 +2549,20 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                                   "recommendation": {"deployment_id": deployment_id}},
                                  approval["approved_by"])
         return get_stack_deployment(connection, deployment_id)
+
+
+def fix_question(fixed: Mapping[str, Any], *, app: Any, short: str, environment: Any,
+                 host: Any) -> str:
+    """The card of a deployment that ships BOSS's repair, in plain words."""
+    cause = " ".join(str(fixed.get("cause") or fixed.get("headline") or "").split()).rstrip(".")
+    if len(cause) > 160:
+        cause = cause[:158].rstrip() + "…"
+    what = f"the {app} deploy" if app else "the deploy"
+    env = str(environment or "").strip() or "its environment"
+    if cause.startswith(("The ", "A ", "An ")):
+        cause = cause[0].lower() + cause[1:]
+    return (f"BOSS fixed {what}" + (f": {cause}" if cause else "")
+            + f". Deploy the fix ({short}) to {env} on {host}?")
 
 
 def rollback_approval(connection: Connection, project_id: str, authority: dict[str, Any], *,
@@ -3708,8 +3818,11 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
                            approval_decision_id: Optional[str] = None,
                            commit: Optional[str] = None,
                            retire_projects: Optional[list[str]] = None,
-                           person_required: bool = False) -> dict[str, Any]:
+                           person_required: bool = False,
+                           fixed: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """Plan the build's pull-request head onto a stack target; the step waits on it.
+
+    `fixed`: the repair this deployment ships (plan_stack_deploy says so on its card).
 
     `person_required`: the step promised a person (deploy_policy.promises_a_person), so the
     environment's policy may not approve this deployment.
@@ -3792,7 +3905,7 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
             workflow_step_id=step_id,
             manifest_path=None if is_stack_target(target) else target.get("manifest_path"),
             approval_decision_id=approval_decision_id, retire_projects=retire_projects,
-            person_required=person_required,
+            person_required=person_required, fixed=fixed,
             # The merge commit of the build's own pull request (observed above) is a commit the
             # build judged: the production chokepoint in plan_stack_deploy accepts it.
             also_judged=[str(merge.get("sha"))] if merge.get("sha") else [])
