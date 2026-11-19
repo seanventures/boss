@@ -53,8 +53,34 @@ def _github_summary(needs: dict[str, str], pattern: str) -> str:
 LOCAL_SUMMARY = "on this machine"
 
 
+def local_repo_names(repos: Iterable[str], db: Any = None) -> list[str]:
+    """What the sheet calls each repository on this machine: its app's name ("CSV quality desk"),
+    never the id `local_<project>/csv-quality-desk` (stranger test r8, 2026-11-19). A local
+    project's repository is its app, named after the project; without the project's name, the
+    repository's own name in words."""
+    from sqlalchemy import text
+
+    out: list[str] = []
+    for full in repos:
+        owner, _, name = str(full).partition("/")
+        label = ""
+        if db is not None and owner.startswith("local_"):
+            try:
+                with db.begin_nested():
+                    label = str(db.execute(text("SELECT name FROM projects WHERE id = :p"),
+                                           {"p": owner[len("local_"):]}).scalar() or "")
+            except Exception:  # noqa: BLE001 — the repository's own name below
+                label = ""
+        if not label.strip():
+            words = (name or owner).replace("-", " ").replace("_", " ").strip()
+            label = words[:1].upper() + words[1:]
+        if label not in out:
+            out.append(label.strip())
+    return out
+
+
 def repo_blocks(repos: Iterable[str], needs: Optional[dict[str, str]] = None, *,
-                summary: bool = True) -> dict[str, Any]:
+                summary: bool = True, db: Any = None) -> dict[str, Any]:
     """The consent body's `github` and `local` blocks for the repositories the work names
     (BOSSAPP-1163). A repository on this machine (`local_<project>/<name>`) is no GitHub access:
     it is asked for, and granted, as `local` — the sheet's grant body sends both back as
@@ -70,7 +96,8 @@ def repo_blocks(repos: Iterable[str], needs: Optional[dict[str, str]] = None, *,
         if summary:
             gh["summary"] = _github_summary(needs, "boss/*")
     return {"github": gh,
-            "local": {"repo": local[0], "repos": local, "summary": LOCAL_SUMMARY} if local else None}
+            "local": {"repo": local[0], "repos": local, "summary": LOCAL_SUMMARY,
+                      "names": local_repo_names(local, db)} if local else None}
 
 
 def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, project_id: Optional[str],
@@ -278,7 +305,7 @@ def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_
             "error": "consent_required", "task": task[:200], "task_run_id": None,
             "agents": [{"id": p.agent_id, "name": _name(db, p.agent_id), "role_key": p.role_key} for p in agents],
             "permissions": sorted(needed), "projects": [project_id] if project_id else [],
-            **repo_blocks(repos, needs, summary=False),
+            **repo_blocks(repos, needs, summary=False, db=db),
             "durations": [{"kind": "standing", "label": f"For {int(pol.delegation_default_days)} days",
                            "days": int(pol.delegation_default_days)}],
             "max_days": int(pol.delegation_max_days),
@@ -293,7 +320,7 @@ def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_
         "agents": [{"id": p.agent_id, "name": _name(db, p.agent_id), "role_key": p.role_key} for p in agents],
         "permissions": sorted(needed),
         "projects": [project_id] if project_id else [],
-        **repo_blocks(repos, needs),
+        **repo_blocks(repos, needs, db=db),
         "durations": [{"kind": "task", "label": "For this build only", "days": None},
                       {"kind": "standing", "label": f"For {int(pol.delegation_default_days)} days",
                        "days": int(pol.delegation_default_days)}],
@@ -750,7 +777,7 @@ def _consent_body(db: Any, *, ctx_person: str, org_id: str, agents, needed, proj
         "task_run_id": None if standing_only else grants.PENDING_PREFIX + secrets.token_urlsafe(12),
         "agents": [{"id": p.agent_id, "name": _name(db, p.agent_id), "role_key": p.role_key} for p in agents],
         "permissions": sorted(needed), "projects": [project_id] if project_id else [],
-        **repo_blocks(repos, needs),
+        **repo_blocks(repos, needs, db=db),
         "durations": durations, "max_days": int(pol.delegation_max_days),
     }
 
@@ -920,6 +947,10 @@ def require_for_workflow(db: Any, *, project_id: str, spec: Any, input_data: Any
                                  agents=agents, needed=needed, project_id=project_id, repos=repos,
                                  task=title or "this workflow run", scope="workflow_run",
                                  standing_only=False)
+            # THE PERSON'S OWN START OF A WORKFLOW (Easy Mode's easy_mode_mvp, a template): one
+            # consent covers the whole delivery workflow, and the sheet says so in the same one
+            # line as a build's (stranger test r8: Easy Mode's sheet lacked it).
+            body["covers"] = DELIVERY_COVERS
             multi = _multirepo_app(db, project_id, input_data)
             if multi:
                 # The consent sheet's multi-repo layout: which repositories, with which access,

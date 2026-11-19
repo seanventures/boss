@@ -1244,11 +1244,75 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
 
     try:
         return _advance_phase(engine, settings, jobs, run, run_id, phase)
-    except Exception as error:  # noqa: BLE001 — only a model's usage limit is handled here
+    except Exception as error:  # noqa: BLE001 — a usage limit waits; the person's setup is theirs
         wait = usage_limit_wait(error)
-        if wait is None:
+        if wait is not None:
+            return _wait_for_model(engine, jobs, run, run_id, wait)
+        person = person_side_failure(error)
+        if person is None:
             raise
-        return _wait_for_model(engine, jobs, run, run_id, wait)
+        return _fail_for_person(engine, settings, run, run_id, person)
+
+
+def person_side_failure(error: object) -> Optional[dict[str, str]]:
+    """{reason_code, words} when the panel's model refused for a reason only the person's own
+    setup can fix (a plain-http model address, a key bound to another host, a key the provider
+    rejected) — the build pipeline's own classifier (code_task_service.person_side_reason), so a
+    panel and a build say the same thing. None for anything else."""
+    from .build_failure import failure_words
+    from .code_task_service import person_side_reason
+
+    raw = str(error or "")
+    code = person_side_reason(raw)
+    if code is None or code == "repo_access_denied":
+        return None
+    # The refusal's own sentence (env_refs.CredentialMisdirected), whatever a seat wrapped it in.
+    own = re.search(r"Your model at \S+ is plain http;.*?\(Setup › Models\)\.", raw) or \
+        re.search(r"\S+ belongs to .*? is sent only to .*?refusing to send it[^.]*\.", raw)
+    return {"reason_code": code, "words": own.group(0) if own else failure_words(raw)}
+
+
+def release_meeting_hold(connection, settings: Settings, run_id: str, why: str) -> None:
+    """Release the panel's own "Multi-agent PRD meeting" reservation once the panel has ended
+    without finishing (failed, cancelled, built from the brief instead). Stranger test r8
+    (2026-11-19): a failed panel kept its $6 hold and the build after it sat in budget_wait
+    ("the project's budget cap is reached") with $0 spent. Its seats' turns are governed and
+    settled on their own, so the hold is pure headroom. Never raises."""
+    point = connection.begin_nested()
+    try:
+        row = connection.execute(text(
+            "SELECT project_id, finalize_ctx->>'reservation_id' AS r FROM meeting_runs "
+            "WHERE id = :id"), {"id": run_id}).mappings().first()
+        if row and row["r"]:
+            from .budget import BudgetGovernor
+
+            BudgetGovernor(settings).release(connection, row["project_id"], row["r"], why)
+        point.commit()
+    except Exception:  # noqa: BLE001 — the budget's own guard releases it on its next read
+        point.rollback()
+
+
+def _fail_for_person(engine, settings: Settings, run: dict, run_id: str,
+                     person: dict[str, str]) -> dict:
+    """THE PANEL'S MODEL REFUSED FOR THE PERSON'S OWN SETUP (stranger test r8: a plain-http "Other"
+    model). Not a server error: the run fails with the refusal in plain words and its reason
+    (state.failure_class / reason_code, which failure_owner reads as the person's), its hold is
+    released, and the step answers 200 — the job is not retried into a dead letter. The person's
+    "Done — retry" resumes it from this phase (failure_owner.Meetings)."""
+    with begin(engine) as c:
+        c.execute(text(
+            "UPDATE meeting_runs SET status = 'failed', error = :e, updated_at = now(), "
+            "state = COALESCE(state, '{}'::jsonb) || jsonb_build_object("
+            "'failure_class', 'needs_human', 'reason_code', CAST(:rc AS text)) "
+            "WHERE id = :id AND status = 'running'"),
+            {"e": person["words"][:500], "rc": person["reason_code"], "id": run_id})
+        release_meeting_hold(c, settings, run_id, "panel stopped: " + person["words"][:200])
+        emit_event(c, run["project_id"], "meeting.failed", "boss", "meeting_run", run_id,
+                   {"phase": run["phase"], "failure_class": "needs_human",
+                    "reason_code": person["reason_code"], "words": person["words"][:300]})
+    return {"status": "failed", "done": True, "phase": run["phase"],
+            "failure_class": "needs_human", "reason_code": person["reason_code"],
+            "words": person["words"]}
 
 
 def usage_limit_wait(error: BaseException, now: Optional[datetime] = None
@@ -1447,6 +1511,7 @@ def _advance_phase(engine, settings: Settings, jobs, run: dict, run_id: str, pha
         with begin(engine) as c:
             c.execute(text("UPDATE meeting_runs SET status='failed', error=:e, updated_at=now() WHERE id=:id"),
                       {"e": f"unknown phase {phase}", "id": run_id})
+            release_meeting_hold(c, settings, run_id, f"panel failed: unknown phase {phase}")
         return {"status": "failed", "done": True}
 
     # persist this phase + enqueue the next step ATOMICALLY (no stall on crash)

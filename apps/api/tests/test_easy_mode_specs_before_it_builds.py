@@ -211,12 +211,69 @@ def test_a_failed_panel_builds_from_the_brief_and_says_why(client, engine, monke
     assert step["status"] == "succeeded"
     fallback = step["output"]["spec_fallback"]
     assert "the model did not answer" in fallback["reason"]
+    # A failure that is not the person's own model (here: no answer) still builds from the brief,
+    # and the failed panel's hold never blocks that build (stranger test r8's budget_wait).
+    assert not _active_hold(engine, convened[0]["run_id"])
     assert "THE PRODUCT SPEC BELOW IS THE BRIEF" not in built[0]["spec"]["instructions"]
     assert "notes app" in built[0]["spec"]["instructions"]
     with engine.begin() as connection:
         assert connection.execute(text(
             "SELECT count(*) FROM events WHERE event_type = 'workflow.spec_fallback' AND entity_id = :w"),
             {"w": workflow_run_id}).scalar() == 1
+
+
+def _active_hold(engine, meeting_run_id):
+    with engine.begin() as connection:
+        return connection.execute(text(
+            "SELECT r.id FROM meeting_runs m JOIN budget_reservations r ON "
+            "r.id = m.finalize_ctx->>'reservation_id' WHERE m.id = :m AND r.status = 'active'"),
+            {"m": meeting_run_id}).scalar()
+
+
+#: env_refs.CredentialMisdirected's words for a plain-http model (#227; stranger test r8).
+PLAIN_HTTP = ("Your model at http://10.0.0.7:8080 is plain http; BOSS only sends keys over https. "
+              "Use an https address (Setup › Models).")
+
+
+def test_a_panel_whose_model_is_unusable_waits_on_the_person_and_builds_nothing(
+        client, engine, monkeypatch, tmp_path):
+    """STRANGER TEST r8: the panel failed on a plain-http model and the workflow went on to
+    "Build, review and test" without a spec — a build on the same model, failing the same way.
+    A person-side panel failure parks the workflow on the person's item; their "Done — retry"
+    resumes the panel, and the build runs from its PRD."""
+    from boss_engine.services import failure_owner as fo
+
+    _setup(monkeypatch, tmp_path)
+    convened = _panel(monkeypatch, engine, finish=False)
+    body = _launch(client, prompt="Build a CSV quality desk.")
+    project_id, workflow_run_id = body["project_id"], body["workflow_run_id"]
+    _tick(client, project_id)
+    assert convened
+    meeting_run_id = convened[0]["run_id"]
+    with engine.begin() as connection:
+        connection.execute(text(
+            "UPDATE meeting_runs SET status = 'failed', error = :e, state = state || "
+            "jsonb_build_object('failure_class', 'needs_human', 'reason_code', "
+            "'credential_plain_http') WHERE id = :m"), {"m": meeting_run_id, "e": PLAIN_HTTP})
+    for _ in range(3):
+        _tick(client, project_id)
+    assert not _builds(engine, workflow_run_id), "nothing is built on a model that cannot answer"
+    step = _step(engine, workflow_run_id, "meeting")
+    assert step["status"] == "waiting" and "spec_fallback" not in step["output"]
+    assert step["output"]["waiting_on_person"] == PLAIN_HTTP
+    assert step["output"]["awaited_note"].startswith("Waiting on you: Your model at")
+    assert not _active_hold(engine, meeting_run_id), "the failed panel holds no budget"
+
+    # The person fixed the model and pressed Done — retry on the panel's item.
+    did = fo.SURFACES["meeting"].person_retry(
+        engine, get_settings(), None,
+        {"id": meeting_run_id, "project_id": project_id, "hints": {}}, "user:ceo")
+    assert "resuming the panel" in did
+    _finish(engine, meeting_run_id)
+    built = _tick_until_built(client, engine, project_id, workflow_run_id)
+    assert "THE PRODUCT SPEC BELOW IS THE BRIEF" in built[0]["spec"]["instructions"]
+    step = _step(engine, workflow_run_id, "meeting")
+    assert step["status"] == "succeeded" and "waiting_on_person" not in step["output"]
 
 
 def test_a_panel_past_its_time_budget_is_stopped_and_the_build_starts(client, engine, monkeypatch,
@@ -242,6 +299,7 @@ def test_a_panel_past_its_time_budget_is_stopped_and_the_build_starts(client, en
             "SELECT status, error FROM meeting_runs WHERE id = :m"),
             {"m": meeting_run_id}).mappings().first()
     assert meeting["status"] == "cancelled" and "budget" in meeting["error"]
+    assert not _active_hold(engine, meeting_run_id), "a stopped panel's hold is released"
     assert "12-minute budget" in _step(engine, workflow_run_id, "meeting")["output"][
         "spec_fallback"]["reason"]
 

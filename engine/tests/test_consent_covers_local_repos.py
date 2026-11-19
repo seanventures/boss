@@ -62,7 +62,9 @@ def test_split_and_blocks_keep_github_and_this_machine_apart():
     assert grants.split_repos(["acme/web", LOCAL]) == (["acme/web"], [LOCAL])
     only_local = consent.repo_blocks([LOCAL])
     assert only_local["github"] is None
-    assert only_local["local"] == {"repo": LOCAL, "repos": [LOCAL], "summary": "on this machine"}
+    assert only_local["local"] == {"repo": LOCAL, "repos": [LOCAL], "summary": "on this machine",
+                                   "names": consent.local_repo_names([LOCAL])}
+    assert LOCAL not in only_local["local"]["names"], "the sheet names the app, never the id"
     both = consent.repo_blocks(["acme/web", LOCAL])
     assert both["github"]["repos"] == ["acme/web"] and "pull requests write" in both["github"]["summary"]
     assert both["local"]["repos"] == [LOCAL]

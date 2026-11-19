@@ -66,6 +66,15 @@ def _sentence(line: str) -> str:
     return line if line[-1] in ".!?…)" else line + "."
 
 
+#: A worker's HTTP client failing on BOSS's own API ("Server error '500 Internal Server Error' for
+#: url 'http://api:8000/v1/meetings/step'\nFor more information check: https://…"): an internal
+#: address and a status line, never words for a person (stranger test r8, 2026-11-19).
+_CLIENT_SERVER_ERROR = re.compile(r"^(?:\w+:\s*)?Server error '5\d\d[^']*'", re.I)
+_CLIENT_NOISE = re.compile(r"\s*for url '[^']*'|\s*For more information check: \S+", re.I)
+SERVER_ERROR_WORDS = ("BOSS hit an error of its own while running it; what broke is in BOSS's "
+                      "Activity Log.")
+
+
 def failure_words(error: Any) -> str:
     """A failure as a person reads it: one sentence, never a stack, a sandbox tag, a token or a
     host path. The raw error stays on the run's own page for whoever needs it."""
@@ -74,6 +83,9 @@ def failure_words(error: Any) -> str:
     from .harness_failures import parse_sentence
 
     raw = _LOG_PREFIX.sub("", redact_text(str(error or "").strip(), public=True))
+    if _CLIENT_SERVER_ERROR.search(raw.strip()):
+        return SERVER_ERROR_WORDS
+    raw = _CLIENT_NOISE.sub("", raw).strip()
     if not raw:
         return "BOSS didn't record why it stopped."
     said = parse_sentence(raw)

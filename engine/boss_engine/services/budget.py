@@ -524,6 +524,7 @@ class BudgetGovernor:
             query_params["project_id"] = project_id
 
         rows = connection.execute(query, query_params).mappings().all()
+        self.release_ended_meeting_holds(connection, project_id)
 
         # Expiry revokes authority; it is not evidence that a provider never accepted work.
         # Keep positive exposure until explicit settlement or a known no-call release. The
@@ -549,6 +550,40 @@ class BudgetGovernor:
                 {},
             )
         return expired_ids
+
+    #: Why a hold of a panel that ended is released (budget.reservation_released `reason`).
+    ENDED_MEETING_NOTE = ("The panel this was held for has ended ({status}), so its hold no longer "
+                          "blocks other work; its turns were governed and settled on their own.")
+
+    def release_ended_meeting_holds(self, connection: Connection,
+                                    project_id: Optional[str] = None) -> list[str]:
+        """A HOLD FOR A PANEL THAT HAS ENDED NEVER BLOCKS (stranger test r8, 2026-11-19): a failed
+        "Multi-agent PRD meeting" kept its $6 reservation and the build after it sat in
+        budget_wait with $0 spent. Every path that ends a panel (failed, cancelled by the
+        shepherd or the brief fallback, completed) is covered here, on every budget read, so no
+        path that forgets to release can block work again. The panel's seats reserve and settle
+        their own turns, so the meeting-level hold is headroom, never spend."""
+        point = connection.begin_nested()
+        try:
+            rows = connection.execute(text(
+                "UPDATE budget_reservations r SET status = 'released' FROM meeting_runs m "
+                "WHERE r.status = 'active' AND m.finalize_ctx->>'reservation_id' = r.id "
+                "AND m.project_id = r.project_id "
+                "AND m.status IN ('failed', 'cancelled', 'completed') "
+                "AND (CAST(:p AS text) IS NULL OR r.project_id = :p) "
+                "RETURNING r.id, r.project_id, r.category, r.amount_usd_micros, m.status"),
+                {"p": project_id}).mappings().all()
+            point.commit()
+        except Exception:  # noqa: BLE001 — a missing table must never break a budget read
+            point.rollback()
+            return []
+        for row in rows:
+            emit_event(connection, row["project_id"], "budget.reservation_released",
+                       "budget_governor", "budget_reservation", row["id"],
+                       {"reason": self.ENDED_MEETING_NOTE.format(status=row["status"]),
+                        "category": row["category"],
+                        "amount_usd_micros": int(row["amount_usd_micros"] or 0)})
+        return [str(r["id"]) for r in rows]
 
     def _recorded_outcome(self, connection: Connection, reservation_id: str) -> Optional[dict]:
         """What BOSS's own ledger says happened to the call a reservation paid for, or None when
