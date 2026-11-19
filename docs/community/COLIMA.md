@@ -71,6 +71,33 @@ colima start boss
 Stopping preserves the VM and its volumes. Deleting the profile deletes its data.
 Use the BOSS backup workflow before deleting or replacing a profile.
 
+## Node package downloads behind a corporate gateway
+
+When npm reports `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, supply your organization's
+approved public CA chain in PEM format through `BOSS_BUILD_CA_FILE`:
+
+```bash
+export BOSS_BUILD_CA_FILE=/absolute/path/to/approved-corporate-ca.pem
+DOCKER_CONTEXT=colima-boss ./install.sh --dir "$PWD" --ref v1.0-rc10.31 \
+  --no-install-deps --no-discover --no-local-model --skip-model-key --yes
+```
+
+Use an absolute path outside the checkout. Compose passes the file as a BuildKit
+secret only to the application image builds. The affected npm, pnpm and Playwright
+build steps use `NODE_EXTRA_CA_CERTS`, which extends Node's normal trust store.
+TLS and hostname verification remain enabled. The certificate is not copied into
+the resulting image or committed to the repository. With no file configured,
+Node uses its existing trust configuration as before.
+
+This option fixes missing build-time Node trust configuration; it cannot create
+the correct corporate CA. It does not configure Docker daemon image pulls,
+Python package downloads, or runtime model connections. Keep the export set for
+later rebuilds, or store the absolute path in the private `.env`.
+
+BuildKit does not invalidate cached layers when secret contents change. After a
+CA rotation, rebuild the affected service with `docker compose ... build
+--no-cache SERVICE` using this install's Compose file and `.env`.
+
 ## Models running on macOS
 
 The Compose `host.docker.internal:host-gateway` mapping points to the Linux VM's

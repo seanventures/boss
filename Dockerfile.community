@@ -227,7 +227,9 @@ COPY --from=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e3395
 # build-essential: a C/C++ toolchain for npm packages that compile on install (better-sqlite3,
 # bcrypt: node-gyp needs make and g++). About 300 MB; agents had been told to avoid such packages
 # (BOSSAPP-515, test_the_build_image_can_compile_native_modules).
-RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+COPY scripts/install/node-build-with-ca.sh /usr/local/libexec/boss-node-build-with-ca
+RUN --mount=type=secret,id=boss_build_ca \
+    ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -241,7 +243,7 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && chmod 700 /var/lib/boss/identity /home/boss && chmod 750 /var/lib/boss/artifacts \
     && chmod 711 /var/lib/boss/sandboxes /run/boss-shim \
     && chmod 700 /home/boss/.codex /home/boss/.claude \
-    && npm install -g @anthropic-ai/claude-code@2.1.197 @openai/codex@0.158.0 @xai-official/grok@1.0.41 \
+    && sh /usr/local/libexec/boss-node-build-with-ca npm install -g @anthropic-ai/claude-code@2.1.197 @openai/codex@0.158.0 @xai-official/grok@1.0.41 \
        pnpm@9.15.0 \
     && npm cache clean --force \
     && rm -rf /home/boss/.npm /home/boss/.cache /var/lib/apt/lists/*
@@ -275,7 +277,8 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r /tmp/api-requirements.txt -r /tmp/worker-requirements.txt
 
 # Download the browser revision matched to the pinned Python Playwright package.
-RUN python -m playwright install --with-deps chromium \
+RUN --mount=type=secret,id=boss_build_ca \
+    sh /usr/local/libexec/boss-node-build-with-ca python -m playwright install --with-deps chromium \
     && chmod -R a+rX /opt/pw-browsers \
     && rm -rf /var/lib/apt/lists/*
 
@@ -400,13 +403,16 @@ CMD ["python", "-m", "tools.mcp_tools_mux"]
 
 FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS web-builder
 WORKDIR /app
+COPY scripts/install/node-build-with-ca.sh /usr/local/libexec/boss-node-build-with-ca
 COPY EXPORT_CANDIDATE_STATUS.json /tmp/community-export-status.json
 RUN node -e 'if (!require("/tmp/community-export-status.json").mechanically_complete) throw Error("Community source export is blocked")'
-RUN npm install --global pnpm@9.15.0
+RUN --mount=type=secret,id=boss_build_ca \
+    sh /usr/local/libexec/boss-node-build-with-ca npm install --global pnpm@9.15.0
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json ./apps/web/package.json
 COPY packages/api-client/package.json ./packages/api-client/package.json
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=secret,id=boss_build_ca \
+    sh /usr/local/libexec/boss-node-build-with-ca pnpm install --frozen-lockfile
 
 ARG NEXT_PUBLIC_BOSS_API_URL=
 ARG NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
@@ -416,9 +422,11 @@ COPY apps/web ./apps/web
 COPY packages/api-client ./packages/api-client
 RUN test -n "$NEXT_PUBLIC_BOSS_API_URL" \
     || { echo 'NEXT_PUBLIC_BOSS_API_URL is required for the Community web build' >&2; exit 1; }
-RUN pnpm --filter boss-web build
+RUN --mount=type=secret,id=boss_build_ca \
+    sh /usr/local/libexec/boss-node-build-with-ca pnpm --filter boss-web build
 
 FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS web
+COPY scripts/install/node-build-with-ca.sh /usr/local/libexec/boss-node-build-with-ca
 ARG NEXT_PUBLIC_BOSS_API_URL=
 ARG NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
 # Only a host whose network/SSO already decides who gets in builds with "network"
@@ -430,7 +438,8 @@ ENV NODE_ENV=production \
     NEXT_PUBLIC_BOSS_API_URL=$NEXT_PUBLIC_BOSS_API_URL \
     NEXT_PUBLIC_BOSS_PROJECT_ID=$NEXT_PUBLIC_BOSS_PROJECT_ID
 WORKDIR /app
-RUN npm install --global pnpm@9.15.0 \
+RUN --mount=type=secret,id=boss_build_ca \
+    sh /usr/local/libexec/boss-node-build-with-ca npm install --global pnpm@9.15.0 \
     && addgroup --system boss \
     && adduser --system --ingroup boss boss
 COPY --chown=boss:boss LICENSE ./LICENSE

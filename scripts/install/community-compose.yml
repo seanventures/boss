@@ -340,6 +340,8 @@ services:
       context: ../..
       dockerfile: Dockerfile.community
       target: api
+      secrets:
+        - boss_build_ca
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
@@ -741,6 +743,8 @@ services:
       context: ../..
       dockerfile: Dockerfile.community
       target: worker
+      secrets:
+        - boss_build_ca
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
@@ -1035,6 +1039,8 @@ services:
       context: ../..
       dockerfile: Dockerfile.community
       target: mcp-tools
+      secrets:
+        - boss_build_ca
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
@@ -1085,6 +1091,8 @@ services:
       context: ../..
       dockerfile: Dockerfile.community
       target: worker
+      secrets:
+        - boss_build_ca
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
@@ -1123,6 +1131,8 @@ services:
       context: ../..
       dockerfile: Dockerfile.community
       target: egress
+      secrets:
+        - boss_build_ca
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
@@ -1255,6 +1265,8 @@ services:
       context: ../..
       dockerfile: Dockerfile.community
       target: runner
+      secrets:
+        - boss_build_ca
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
@@ -1312,6 +1324,8 @@ services:
       context: ../..
       dockerfile: Dockerfile.community
       target: web
+      secrets:
+        - boss_build_ca
       args:
         # THE PORT IS DECLARED ONCE, ABOVE, AND EVERYTHING DERIVES FROM IT.
         #
@@ -1371,6 +1385,10 @@ services:
 # `boss dev up`, after the services have moved) removes them once nothing mounts them, and the
 # helper reports one it could not as "unlabelled BOSS volume — needs relabel".
 # steward.REBUILDABLE_COMPOSE_VOLUMES lists the rebuildable ones; a guard test keeps both equal.
+secrets:
+  boss_build_ca:
+    file: ${BOSS_BUILD_CA_FILE:-/dev/null}
+
 volumes:
   boss_community_cli_home:
   boss_community_build_services_secret:
