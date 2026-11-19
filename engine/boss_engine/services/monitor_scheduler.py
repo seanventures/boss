@@ -584,6 +584,16 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
 
         return stuck_work.sweep(engine, settings, now=now, adapter=adapter)
     out["stuck_work"] = guard("stuck_work", stuck_sweep)
+
+    # EVERY FAILURE HAS AN OWNER (failure_owner): after every other owner had its turn (a
+    # build's retry, a step's recovery, the Shepherd's diagnosis, the restart after an update),
+    # each failed item left is given one — BOSS's bounded attempt, or ONE action item for a
+    # person with the reason BOSS could not fix it. Never a bare "failed".
+    def failure_owner_sweep():
+        from . import failure_owner
+
+        return failure_owner.sweep(engine, settings, now=now)
+    out["failure_owner"] = guard("failure_owner", failure_owner_sweep)
     return out
 
 

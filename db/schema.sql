@@ -16458,3 +16458,41 @@ DO $$ BEGIN
       ON code_task_runs FOR EACH ROW EXECUTE FUNCTION code_task_runs_no_silent_completion();
   END IF;
 END $$;
+
+-- EVERY FAILURE HAS AN OWNER (services/failure_owner.py, 2026-11-19). One row per failed item's
+-- lineage (a build and its retries, a workflow run, a job and its re-runs): who owns it now —
+-- an agent acting on it (`fixing`, "BOSS is fixing this: attempt 1 of 2 — …"), a person's action
+-- item with the reason BOSS could not fix it (`needs_person`, `decision_id`), or `resolved`.
+-- engine/tests/test_every_failure_has_an_owner.py enforces that no failure is left bare.
+CREATE TABLE IF NOT EXISTS failure_owners (
+  id TEXT PRIMARY KEY,
+  surface TEXT NOT NULL,
+  item_key TEXT NOT NULL,
+  item_id TEXT,
+  project_id TEXT,
+  title TEXT,
+  state TEXT NOT NULL CHECK (state IN ('fixing', 'needs_person', 'resolved')),
+  class TEXT CHECK (class IS NULL OR class IN ('app', 'platform', 'person')),
+  cause_code TEXT,
+  cause TEXT NOT NULL DEFAULT '',
+  owner TEXT,
+  owned_by TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 2,
+  next_attempt_at TIMESTAMPTZ,
+  words TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL DEFAULT '',
+  decision_id TEXT,
+  hints JSONB NOT NULL DEFAULT '{}'::jsonb,
+  history JSONB NOT NULL DEFAULT '[]'::jsonb,
+  failed_at TIMESTAMPTZ,
+  opened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ,
+  UNIQUE (surface, item_key)
+);
+CREATE INDEX IF NOT EXISTS idx_failure_owners_open ON failure_owners (project_id, updated_at DESC)
+  WHERE state <> 'resolved';
+CREATE INDEX IF NOT EXISTS idx_failure_owners_decision ON failure_owners (decision_id)
+  WHERE decision_id IS NOT NULL;
