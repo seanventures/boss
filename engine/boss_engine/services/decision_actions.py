@@ -168,6 +168,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # ticket's changed acceptance criteria.
     "ticket_pickup",
     "ticket_changed_mid_run",
+    # A build's delivery workflow did not start (code_task_service.start_delivery_workflow):
+    # approving starts it now, adopting the running build (attach_delivery_workflow).
+    "start_delivery_workflow",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on

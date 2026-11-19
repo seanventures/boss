@@ -3356,6 +3356,7 @@ def start_run(
     rerun_of: Optional[dict[str, Any]] = None,
     checked_replaces: Optional[list[str]] = None,
     quality_bar_override: Optional[dict[str, Any]] = None,
+    inherit_authority: Any = None,
 ) -> dict[str, Any]:
     """Start a run.
 
@@ -3486,7 +3487,10 @@ def start_run(
         connection, project_id=project_id, spec=spec, input_data=input_data, run_id=run_id,
         parent_run_id=parent_run_id,
         title=consent_task_title(connection, project_id, version["workflow_definition_id"],
-                                 input_data))
+                                 input_data),
+        # The delivery workflow of a person's own new work runs under the consent that started
+        # the build (consent.inherit_build_authority): never a second consent of its own.
+        inherit=inherit_authority)
     policy_snapshot = _consent.record_on_run(policy_snapshot, identity_acting)
     if parent_run_id:
         parent = connection.execute(
@@ -8697,6 +8701,17 @@ def workflow_by_version(
 PROJECT_WORK_CLASS = "project.new"
 
 
+def delivery_workflow_spec(connection: Connection, project_id: str,
+                           workflow_version_id: str) -> Optional[dict[str, Any]]:
+    """The published spec of the workflow version a project's outer run will follow (what its
+    steps will use, for the consent the person gives when they start the work)."""
+    try:
+        version = _version_row(connection, project_id, str(workflow_version_id))
+    except Exception:  # noqa: BLE001 — no such version here: nothing to add to the consent
+        return None
+    return _published_spec(version["spec"], project_roster(connection, project_id))
+
+
 def start_project_run(
     connection: Connection,
     *,
@@ -8706,8 +8721,12 @@ def start_project_run(
     directive: str,
     workflow_version_id: Optional[str] = None,
     extra_input: Optional[dict[str, Any]] = None,
+    inherit_authority: Any = None,
 ) -> Optional[dict[str, Any]]:
     """Start the OUTER workflow for a project, and return the run.
+
+    `inherit_authority`: the Acting the project's build was started under. The outer run records
+    it (consent.inherit_build_authority) instead of asking the person to consent a second time.
 
     A project's life is research → panel → approve the spec → build → review → test → preview →
     deploy → monitor. Every one of those is a workflow step with a duration, a status and
@@ -8749,6 +8768,7 @@ def start_project_run(
         # of the request — must not produce two nine-step pipelines racing each other over one
         # repository.
         dedupe_key=f"project:{project_id}:{title[:80]}:{directive[:120]}",
+        inherit_authority=inherit_authority,
     )
     # CHECKED, NOT REFUSED. The build this run governs is already going, so refusing would only
     # leave it unwatched — but the run still ends in a deploy, and on a project with no host it
