@@ -693,19 +693,25 @@ def spec_first_run(
             "BOSS could not install its Easy Mode workflow in this project, so nothing was "
             "started.")
     title = str(spec.get("title") or "Easy Mode")[:180]
+    review_first = str(spec.get("spec_approval") or "") == SPEC_BY_PERSON
     run_input = {
         "title": title,
         "directive": str(spec.get("prompt") or title),
         "repository": github or local,
-        "spec_approval": str(spec.get("spec_approval") or SPEC_BY_START),
+        # "Review the plan first": stricter, so a plain input (the panel's PRD waits).
+        **({"spec_approval": SPEC_BY_PERSON} if review_first else {}),
     }
     _staging_ships_without_asking(connection, project_id, actor)
     run = wf.start_run(
         connection, project_id=project_id, actor=actor, input_data=run_input,
         dedupe_key=f"easy-mode:{project_id}:{reservation_id}",
-        workflow_version_id=str(running["version_id"]))
+        workflow_version_id=str(running["version_id"]),
+        # THE START APPROVES THE PRD — server-only, with who started it, and only when that
+        # person may approve a PRD here (an enforced request asks the PDP).
+        spec_approved_by_start=None if review_first else _start_approver(project_id, actor))
     run_id = str((run or {}).get("id") or "")
     if not run_id:
+        _release_hold(connection, settings, project_id, reservation_id)
         return {"project_id": project_id}
     from .workflow_readiness import note_unready_start
 
@@ -717,6 +723,12 @@ def spec_first_run(
         import logging
 
         logging.getLogger(__name__).warning("readiness note for %s failed", run_id, exc_info=True)
+    _release_hold(connection, settings, project_id, reservation_id)
+    return {"project_id": project_id, "run_id": run_id, "workflow_run_id": run_id}
+
+
+def _release_hold(connection: Any, settings: Any, project_id: str, reservation_id: str) -> None:
+    """The launch's hold was the check that a build may start; each step reserves its own."""
     try:
         from .budget import BudgetGovernor
 
@@ -728,7 +740,19 @@ def spec_first_run(
 
         logging.getLogger(__name__).warning("launch hold %s not released", reservation_id,
                                             exc_info=True)
-    return {"project_id": project_id, "run_id": run_id, "workflow_run_id": run_id}
+
+
+def _start_approver(project_id: str, actor: str) -> Optional[str]:
+    """Who approves the panel's PRD by starting Easy Mode: the person whose request this is,
+    when they may approve a PRD on this project. Under an enforced request the PDP answers
+    (decision:approve); without one, the start's actor. None means a person approves it."""
+    from ..identity import lineage, viewer
+
+    if viewer.decide(project_id, "decision:approve") is False:
+        return None
+    ctx = lineage.current_context()
+    person = str(getattr(getattr(ctx, "principal", None), "id", "") or "") if ctx else ""
+    return person or str(actor or "").strip() or None
 
 
 #: Recorded on the staging policy an Easy Mode start sets.

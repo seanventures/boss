@@ -2566,10 +2566,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "(Easy Mode's fast spec).",
                 },
                 "spec_approval": {
-                    "type": "string", "enum": ["", "start", "person"],
-                    "description": "who approves the PRD: 'start' — the person's own start "
-                                   "covers it (Easy Mode); 'person' — a person reads it first; "
-                                   "empty — the install's setting.",
+                    "type": "string", "enum": ["", "person"],
+                    "description": "'person' — a person reads and approves the PRD first, "
+                                   "whatever the install's setting; empty — the setting.",
                 },
                 "time_budget_seconds": {
                     "type": "integer",
@@ -2667,9 +2666,10 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             out["purpose"] = "security_review"
         if str(args.get("compact") or "").lower() in ("true", "1"):
             out["compact"] = True
-        approval = str(args.get("spec_approval") or "").strip().lower()
-        if approval in ("start", "person"):
-            out["spec_approval"] = approval
+        # Only stricter: approval by a person's Easy Mode start is never a tool argument (it is
+        # server-only, workflow_capability_runner._stamp_start_approval).
+        if str(args.get("spec_approval") or "").strip().lower() == "person":
+            out["spec_approval"] = "person"
         try:
             budget = int(args.get("time_budget_seconds") or 0)
         except (TypeError, ValueError):

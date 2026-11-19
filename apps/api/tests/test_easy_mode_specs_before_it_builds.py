@@ -68,6 +68,19 @@ def _panel(monkeypatch, engine, *, finish: bool, auto_approve_setting: bool = Fa
     return convened
 
 
+def _finish(engine, meeting_run_id, *, auto_approve_setting=False):
+    """The PRD a panel would write lands where its phases write it; the real finalizer runs."""
+    from boss_engine.services.meeting_service import _finalize_meeting
+
+    settings = get_settings().model_copy(update={
+        "meeting_prd_auto_approve": auto_approve_setting, "auto_code_task_after_prd": False})
+    with engine.begin() as connection:
+        connection.execute(text(
+            "UPDATE meeting_runs SET state = jsonb_build_object('prd_markdown', "
+            "CAST(:prd AS text)) WHERE id = :id"), {"id": meeting_run_id, "prd": PRD})
+        _finalize_meeting(connection, settings, meeting_run_id)
+
+
 def _launch(client, **body):
     response = client.post("/v1/factory/launch", json={"prompt": "", **body})
     assert response.status_code == 201, response.text
@@ -108,7 +121,7 @@ def test_an_easy_mode_launch_writes_the_spec_then_builds_from_it(client, engine,
     """Launch → the Easy Mode MVP workflow → a compact panel → its PRD approved by the start
     (even with the install's PRD auto-approval off) → the build's brief is that PRD."""
     _setup(monkeypatch, tmp_path)
-    convened = _panel(monkeypatch, engine, finish=True, auto_approve_setting=False)
+    convened = _panel(monkeypatch, engine, finish=False)
 
     body = _launch(client, prompt="Build a small notes app: a list and an editor.")
     project_id, workflow_run_id = body["project_id"], body["workflow_run_id"]
@@ -142,13 +155,18 @@ def test_an_easy_mode_launch_writes_the_spec_then_builds_from_it(client, engine,
             "SELECT environment, requires_approval FROM deployment_environment_policies "
             "WHERE project_id = :p"), {"p": project_id}).all())
     assert policies == {"staging": False}
-    assert run["input"]["spec_approval"] == "start"
+    # The start's approval is a SERVER-ONLY input naming who started it, never `spec_approval`.
+    assert "spec_approval" not in run["input"]
+    assert run["input"]["_spec_approved_by_start"]
     assert run["input"]["repository"] == body["spec"]["local_repo"]
 
-    built = _tick_until_built(client, engine, project_id, workflow_run_id)
-
+    _tick(client, project_id)
     assert len(convened) == 1
     meeting_run_id = convened[0]["run_id"]
+    assert "spec_approval" not in convened[0]["args"]
+    _finish(engine, meeting_run_id, auto_approve_setting=False)
+    built = _tick_until_built(client, engine, project_id, workflow_run_id)
+
     assert convened[0]["args"]["compact"] is True and convened[0]["args"]["fallback_to_brief"]
     with engine.begin() as connection:
         meeting = connection.execute(text(
@@ -164,6 +182,7 @@ def test_an_easy_mode_launch_writes_the_spec_then_builds_from_it(client, engine,
     assert 1 <= len(meeting["role_keys"]) <= 3
     assert meeting["constraints"]["compact"] is True
     assert meeting["constraints"]["spec_approval"] == "start"
+    assert meeting["constraints"]["approved_by_start"] == run["input"]["_spec_approved_by_start"]
     assert meeting["meeting_id"], "the panel's minutes are a meeting on the project"
     assert decision["status"] in ("approved", "executed", "completed")
     assert "Easy Mode start" in str(decision["resolution_note"] or "")
@@ -268,14 +287,14 @@ def test_a_bug_keeps_the_small_path(client, engine, monkeypatch, tmp_path):
             {"p": body["project_id"]}).first()
 
 
-def _deploy(engine, project_id, run_id="crun_x"):
+def _deploy(engine, project_id, workflow_run_id, run_id="crun_x"):
     from boss_engine.services import workflow_capability_runner as runner
     from boss_engine.services.workflow_capabilities import get as capability
 
     with engine.begin() as connection:
         return runner._perform_capability(
             connection, None, project_id=project_id, actor="ceo",
-            step={"id": "deploy"}, context={"run_id": "wfr_none", "input": {}}, key="deploy",
+            step={"id": "deploy"}, context={"run_id": workflow_run_id, "input": {}}, key="deploy",
             capability=capability("deploy"),
             inputs={"run_id": run_id, "environment": "staging", "skip_without_host": True})
 
@@ -293,7 +312,7 @@ def test_with_no_server_the_deploy_is_skipped_in_words(client, engine, monkeypat
         assert not connection.execute(text(
             "SELECT 1 FROM deployment_targets WHERE project_id = :p"), {"p": project_id}).first()
 
-    out = _deploy(engine, project_id)
+    out = _deploy(engine, project_id, body["workflow_run_id"])
 
     assert out["status"] == "skipped" and out["skipped"] == "no_host"
     assert out["note"] == NO_HOST_WORDS == ("Your app runs as a preview. Add a server in Infra "
@@ -323,5 +342,112 @@ def test_with_a_server_the_deploy_is_not_skipped(client, engine, monkeypatch, tm
     # The real deploy path's first act is to wait for the merge: reaching it is the point.
     monkeypatch.setattr(runner, "_merge_wait", lambda *a, **kw: {"status": "awaiting",
                                                                  "reached": "merge_wait"})
-    out = _deploy(engine, body["project_id"])
+    out = _deploy(engine, body["project_id"], body["workflow_run_id"])
     assert out == {"status": "awaiting", "reached": "merge_wait"}
+
+
+def test_another_workflow_run_skips_nothing_and_its_deploy_goes_on(client, engine, monkeypatch,
+                                                                    tmp_path):
+    """skip_without_host is Easy Mode's own: on any other run the step is not skipped."""
+    _setup(monkeypatch, tmp_path)
+    _panel(monkeypatch, engine, finish=False)
+    body = _launch(client, prompt="Build a small notes app with stars.")
+    from boss_engine.services import workflow_capability_runner as runner
+
+    monkeypatch.setattr(runner, "_merge_wait", lambda *a, **kw: {"status": "awaiting",
+                                                                 "reached": "merge_wait"})
+    out = _deploy(engine, body["project_id"], "wfr_not_easy_mode")
+    assert out == {"status": "awaiting", "reached": "merge_wait"}
+
+
+def test_a_start_cannot_claim_the_easy_mode_approval(client, engine, monkeypatch, tmp_path):
+    """REVIEW OF #233: approval by an Easy Mode start is server-only. A start of another workflow
+    that says `spec_approval: "start"` (and forges the server key) leaves the PRD pending where
+    a person approves PRDs (BOSS_MEETING_PRD_AUTO_APPROVE off, as under enforce)."""
+    from apps.api.app import main as api_main
+
+    monkeypatch.setattr(api_main.settings, "meeting_prd_auto_approve", False)
+    project_id = get_settings().default_project_id
+    installed = client.post("/v1/delivery-workflows/catalogue/install",
+                            json={"project_id": project_id, "actor": "ceo"})
+    assert installed.status_code == 200, installed.text
+    convened = _panel(monkeypatch, engine, finish=False)
+    body = {"project_id": project_id, "actor": "ceo", "workflow_key": "minor_feature",
+            "input": {"title": "CSV export", "directive": "Add a Download CSV button.",
+                      "spec_approval": "start", "_spec_approved_by_start": "usr_forged"}}
+    started = client.post("/v1/delivery-workflows/start", json=body)
+    if started.status_code == 409 and isinstance(started.json().get("detail"), dict):
+        missing = [m["key"] for m in started.json()["detail"]["readiness"]["missing"]]
+        started = client.post("/v1/delivery-workflows/start",
+                              json={**body, "start_anyway": missing})
+    assert started.status_code == 200, started.text
+    run_input = started.json()["run"]["input"]
+    assert "_spec_approved_by_start" not in run_input
+    for _ in range(3):
+        _tick(client, project_id)
+        if convened:
+            break
+    assert convened
+    with engine.begin() as connection:
+        constraints = connection.execute(text(
+            "SELECT constraints FROM meeting_runs WHERE id = :m"),
+            {"m": convened[0]["run_id"]}).scalar()
+    assert constraints.get("spec_approval") != "start" and not constraints.get("approved_by_start")
+    _finish(engine, convened[0]["run_id"], auto_approve_setting=False)
+    with engine.begin() as connection:
+        status = connection.execute(text(
+            "SELECT d.status FROM meeting_runs m JOIN decisions d ON d.id = m.decision_id "
+            "WHERE m.id = :m"), {"m": convened[0]["run_id"]}).scalar()
+    assert status == "pending"
+
+
+def test_a_panel_that_finished_meanwhile_is_not_replaced(client, engine, monkeypatch, tmp_path):
+    """REVIEW OF #233: the panel finishes between the tick reading it and the fallback's cancel;
+    the cancel changes nothing, so the fallback steps back (no second build from the brief)."""
+    from boss_engine.services import workflow_capability_runner as runner
+
+    _setup(monkeypatch, tmp_path)
+    convened = _panel(monkeypatch, engine, finish=False)
+    body = _launch(client, prompt="Build a small notes app with folders.")
+    _tick(client, body["project_id"])
+    assert convened
+    meeting_run_id = convened[0]["run_id"]
+    with engine.begin() as connection:
+        connection.execute(text(
+            "UPDATE meeting_runs SET status = 'completed', "
+            "created_at = now() - interval '30 minutes' WHERE id = :m"), {"m": meeting_run_id})
+        step = connection.execute(text(
+            "SELECT id, step_id FROM workflow_step_runs WHERE workflow_run_id = :w "
+            "AND step_id = 'meeting'"), {"w": body["workflow_run_id"]}).mappings().first()
+        out = runner._panel_fallback(
+            connection, project_id=body["project_id"], run_id=body["workflow_run_id"],
+            step=dict(step), output={}, meeting_run_id=meeting_run_id, status="running",
+            ok_states=frozenset({"completed"}), bad_states=frozenset({"failed", "cancelled"}))
+    assert out is None
+    assert _step(engine, body["workflow_run_id"], "meeting")["status"] == "waiting"
+
+
+def test_easy_mode_deploys_only_a_merge_on_record(client, engine, monkeypatch, tmp_path):
+    """REVIEW OF #233: a merge approval that chose a MANUAL merge lets the ordinary wait go on;
+    Easy Mode's staging deploy needs no person, so it waits until a merge is on record."""
+    from boss_engine.services import kit_connections
+    from boss_engine.services import workflow_capability_runner as runner
+
+    _setup(monkeypatch, tmp_path)
+    _panel(monkeypatch, engine, finish=False)
+    body = _launch(client, prompt="Build a small notes app with labels.")
+    project_id = body["project_id"]
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO code_task_runs (id, project_id, status, phase, title, pull_request_url, "
+            "pull_request_number, spec, state, finalize_ctx) VALUES ('crun_easy_pr', :p, "
+            "'completed', 'done', 'Notes', 'https://github.com/acme/notes/pull/7', 7, "
+            "'{}'::jsonb, '{}'::jsonb, '{}'::jsonb)"), {"p": project_id})
+    monkeypatch.setattr(kit_connections, "verified_hosts", lambda *a, **kw: 1)
+    # The ordinary wait lets it through (as a manual-merge approval does).
+    monkeypatch.setattr(runner, "_merge_wait", lambda *a, **kw: None)
+
+    out = _deploy(engine, project_id, body["workflow_run_id"], run_id="crun_easy_pr")
+
+    assert out["status"] == "awaiting"
+    assert out["await"]["kind"] == runner.MERGE_AWAIT_KIND and out["await"]["id"] == "crun_easy_pr"

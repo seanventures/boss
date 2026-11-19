@@ -3748,7 +3748,10 @@ def _perform_capability(
     monitoring_step = str(inputs.pop("monitoring_step", "") or "") if key == "deploy" else ""
     skip_without_host = key == "deploy" and str(
         inputs.pop("skip_without_host", "") or "").lower() in ("true", "1")
-    if skip_without_host and not _somewhere_to_deploy(connection, project_id):
+    # EASY MODE'S OWN RULES apply only on a run of the catalogue's Easy Mode MVP workflow (never
+    # a copy, never a binding someone else wrote, never a caller's input).
+    easy_mode = key == "deploy" and _is_easy_mode_run(connection, str(context.get("run_id") or ""))
+    if skip_without_host and easy_mode and not _somewhere_to_deploy(connection, project_id):
         # NO SERVER IS NOT A FAILURE (Easy Mode, 2026-11-19): most people start on a laptop with
         # no host. The app already runs as its preview; the deploy step says so and the run ends.
         emit_event(connection, project_id, "workflow.step_skipped", actor,
@@ -3924,6 +3927,13 @@ def _perform_capability(
     # wfr_3ceaad94, 2026-11-07). It waits for that merge like every deploy.
     if key == "deploy":
         waiting = _merge_wait(connection, project_id, str(inputs.get("run_id") or ""))
+        if not waiting and easy_mode:
+            # EASY MODE SHIPS ONLY WHAT WAS MERGED (review of #233): its staging deploy needs no
+            # person, so a merge approval that chose a MANUAL merge (or a GitHub that could not
+            # be read) must not let it ship the pull request's head. It waits for a merge on
+            # record, which _follow_merge observes.
+            waiting = _merge_wait_on_record(connection, project_id,
+                                            str(inputs.get("run_id") or ""))
         if waiting:
             return waiting
     if key == "deploy":
@@ -4315,6 +4325,8 @@ def _perform_capability(
                                   trusted=trusted_step)
         finally:
             WORKFLOW_RUN_ID.reset(run_token)
+        if key == "meeting":
+            _stamp_start_approval(connection, project_id, context, output)
     # The step's own facts are written AFTER the tool's output: a tool (or anything it relays)
     # cannot rename the capability a step ran (review of #125 — a forged `capability` field).
     result = {**output, "capability": key, "tool": capability.tool,
@@ -6677,6 +6689,26 @@ def _merge_wait(connection: Connection, project_id: str,
     seen = _unmerged_build(connection, project_id, build_run_id)
     if not seen:
         return None
+    return _merge_await(connection, project_id, build_run_id, seen)
+
+
+def _merge_wait_on_record(connection: Connection, project_id: str,
+                          build_run_id: str) -> Optional[dict[str, Any]]:
+    """The same await, from BOSS's record alone: a build with a pull request and no merge on
+    record waits, whatever the merge approval said or GitHub could not tell."""
+    if not build_run_id or not _unmerged_on_record(connection, build_run_id):
+        return None
+    number = connection.execute(
+        text("SELECT pull_request_number FROM code_task_runs WHERE id = :i"),
+        {"i": build_run_id}).scalar()
+    from . import pr_merge
+
+    return _merge_await(connection, project_id, build_run_id,
+                        {"state": pr_merge.MERGE_PENDING, "number": number})
+
+
+def _merge_await(connection: Connection, project_id: str, build_run_id: str,
+                 seen: dict[str, Any]) -> dict[str, Any]:
     from . import pr_merge
 
     if seen.get("state") == pr_merge.CLOSED:
@@ -6749,6 +6781,44 @@ def _follow_merge(connection: Connection, *, project_id: str, run_id: str, step:
             "build": build_run_id}
 
 
+def _is_easy_mode_run(connection: Connection, run_id: str) -> bool:
+    """Is this workflow run one of the catalogue's Easy Mode MVP workflow?"""
+    if not run_id:
+        return False
+    from .workflow_catalogue import EASY_MODE_WORKFLOW
+
+    try:
+        with connection.begin_nested():
+            return bool(connection.execute(text(
+                "SELECT 1 FROM workflow_runs r "
+                "JOIN workflow_versions v ON v.id = r.workflow_version_id "
+                "JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
+                "WHERE r.id = :r AND d.workflow_key = :k AND d.is_catalogue"),
+                {"r": run_id, "k": EASY_MODE_WORKFLOW}).first())
+    except Exception:  # noqa: BLE001 — unknown is not Easy Mode
+        return False
+
+
+def _stamp_start_approval(connection: Connection, project_id: str, context: dict[str, Any],
+                          output: dict[str, Any]) -> None:
+    """THE PERSON'S EASY MODE START APPROVES THIS PANEL'S PRD — and nothing else can say so.
+    `workflows.SPEC_BY_START_KEY` is a server-only run input that only factory_launch writes (with
+    the starting person's id, after it checked they may approve a PRD); it is honoured only on an
+    Easy Mode MVP run, and copied onto the panel the meeting step just convened."""
+    person = str((context.get("input") or {}).get(workflows.SPEC_BY_START_KEY) or "").strip()
+    meeting = (output or {}).get("meeting") if isinstance(output, dict) else None
+    meeting_run_id = str((meeting or {}).get("run_id") or "") if isinstance(meeting, dict) else ""
+    if not person or not meeting_run_id \
+            or not _is_easy_mode_run(connection, str(context.get("run_id") or "")):
+        return
+    connection.execute(
+        text("UPDATE meeting_runs SET constraints = COALESCE(constraints, '{}'::jsonb) || "
+             "jsonb_build_object('spec_approval', 'start', 'approved_by_start', CAST(:who AS text)) "
+             "WHERE id = :m AND project_id = :p AND status = 'running' "
+             "AND COALESCE(constraints->>'spec_approval', '') = ''"),
+        {"who": person, "m": meeting_run_id, "p": project_id})
+
+
 #: What an Easy Mode deploy step says when the project has nowhere to deploy.
 NO_HOST_WORDS = "Your app runs as a preview. Add a server in Infra to deploy it."
 
@@ -6812,10 +6882,14 @@ def _panel_fallback(connection: Connection, *, project_id: str, run_id: str, ste
             reason = (f"the panel ran past its {max(1, budget // 60)}-minute budget")
         if not reason:
             return None
-        connection.execute(
+        stopped = connection.execute(
             text("UPDATE meeting_runs SET status = 'cancelled', error = :e, updated_at = now() "
                  "WHERE id = :m AND status = 'running'"),
             {"m": meeting_run_id, "e": f"Stopped: {reason}. BOSS built from the brief instead."})
+        if not stopped.rowcount:
+            # THE PANEL FINISHED MEANWHILE (its PRD may already be approved and building): the
+            # ordinary path follows it. Building from the brief too would be a second build.
+            return None
     fallback = {"reason": reason, "meeting_run_id": meeting_run_id,
                 "at": now_utc().isoformat()}
     workflows.force_complete_waiting_step(

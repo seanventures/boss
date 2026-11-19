@@ -3332,8 +3332,14 @@ CHECKED_REPLACES_KEY = "_checked_replaces"
 #: `quality_bar_gates` and `_quality_bar_by` are dropped, so an agent's start_workflow inputs can
 #: never lower (or set) a bar; only `quality_bar_override`, filled by the start door after its
 #: permission check, writes them.
+#: Easy Mode (factory_launch.spec_first_run): the person whose start approves the panel's PRD —
+#: written only through start_run's `spec_approved_by_start`, honoured only on an Easy Mode MVP
+#: run (workflow_capability_runner._stamp_start_approval). `skip_without_host` is the Easy Mode
+#: deploy step's own binding; a caller's input never reaches a deploy step with it.
+SPEC_BY_START_KEY = "_spec_approved_by_start"
 SERVER_ONLY_INPUTS = frozenset({"replaces", CHECKED_REPLACES_KEY, "quality_bar",
-                                "quality_bar_gates", "_quality_bar_by"})
+                                "quality_bar_gates", "_quality_bar_by", SPEC_BY_START_KEY,
+                                "skip_without_host"})
 
 
 def start_run(
@@ -3357,6 +3363,7 @@ def start_run(
     checked_replaces: Optional[list[str]] = None,
     quality_bar_override: Optional[dict[str, Any]] = None,
     inherit_authority: Any = None,
+    spec_approved_by_start: Optional[str] = None,
 ) -> dict[str, Any]:
     """Start a run.
 
@@ -3412,6 +3419,8 @@ def start_run(
         input_data[_qb.BY_KEY] = str(quality_bar_override["by"])
     if precheck_record:
         input_data[PRECHECK_KEY] = dict(precheck_record)
+    if str(spec_approved_by_start or "").strip():
+        input_data[SPEC_BY_START_KEY] = str(spec_approved_by_start).strip()
     for key, value in (adopted or {}).items():
         if not str(key).startswith(ADOPT_PREFIX):
             raise WorkflowValidationError(f"{key!r} is not an adoption key")

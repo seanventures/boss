@@ -945,8 +945,12 @@ def is_compact(constraints: Optional[dict]) -> bool:
 
 
 def spec_approval_of(constraints: Optional[dict]) -> str:
-    """Who approves this panel's PRD: SPEC_APPROVED_BY_START, SPEC_APPROVED_BY_PERSON or ""."""
+    """Who approves this panel's PRD: SPEC_APPROVED_BY_START (only with the person the runner
+    stamped, `approved_by_start`), SPEC_APPROVED_BY_PERSON, or ""."""
     said = str((constraints or {}).get("spec_approval") or "").strip().lower()
+    if said == SPEC_APPROVED_BY_START and not str(
+            (constraints or {}).get("approved_by_start") or "").strip():
+        return ""
     return said if said in (SPEC_APPROVED_BY_START, SPEC_APPROVED_BY_PERSON) else ""
 
 
@@ -1097,6 +1101,11 @@ def convene_prd_meeting_core(
     for a workflow step, and the accountable {actor} — so its seats are signed under that
     work (agent_acts.sync_meeting), never under a made-up person."""
     constraints = dict(constraints or {})
+    # APPROVAL BY A PERSON'S EASY MODE START IS NEVER A CALLER'S TO CLAIM: only the workflow
+    # runner stamps it, on an Easy Mode MVP run (workflow_capability_runner._stamp_start_approval).
+    constraints.pop("approved_by_start", None)
+    if str(constraints.get("spec_approval") or "").strip().lower() == SPEC_APPROVED_BY_START:
+        constraints.pop("spec_approval")
     constraints.setdefault("meeting_type", DEFAULT_MEETING_TYPE)
     constraints["meeting_type"] = normalize_meeting_type(constraints.get("meeting_type"))
     # WHAT THE PERSON ASKED, kept apart from the prompt BOSS built around it (meeting_brief):
