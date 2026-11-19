@@ -363,7 +363,7 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
           {/* THE DEPLOY CHIP (BOSSAPP-932): a deploy moving now ("Deploying · 2/7"), one waiting
               for its approval, or the last one that failed — a link to the Deployments card
               that shows its steps and log live. */}
-          {p.deploy && ["deploying", "waiting", "failed"].includes(p.deploy.state) ? (
+          {p.deploy && ["deploying", "waiting", "fixing", "failed"].includes(p.deploy.state) ? (
             <>
               <a className="px-hchip px-hchip-deploy" data-s={p.deploy.state} data-testid="px-head-deploy"
                  href={pxHref(`?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=deployments`)}
@@ -371,7 +371,9 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
                  title={[`${p.deploy.app || "The app"} · ${p.deploy.environment || "staging"}`, p.deploy.reason].filter(Boolean).join(": ") + " — opens Deployments"}>
                 {p.deploy.state === "failed" ? <WarningCircle size={11} aria-hidden /> : <CircleNotch size={11} className="px-spin" aria-hidden />}
                 {p.deploy.state === "deploying" ? `Deploying${p.deploy.total ? ` · ${p.deploy.index}/${p.deploy.total}` : ""}`
-                  : p.deploy.state === "waiting" ? "Deploy waiting for approval" : "Last deploy failed"}</a>
+                  // BOSS acting on a failed deploy, or the fix waiting on approval: the engine's words.
+                  : p.deploy.state === "fixing" ? (p.deploy.word || "BOSS is fixing the deploy")
+                  : p.deploy.state === "waiting" ? (p.deploy.word.startsWith("Fixed") ? p.deploy.word : "Deploy waiting for approval") : "Last deploy failed"}</a>
               <DeployChipWhy sentence={deployChipReasonSentence(p.deploy.reason)} />
             </>
           ) : null}
