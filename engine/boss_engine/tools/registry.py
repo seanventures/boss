@@ -880,7 +880,11 @@ def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str],
         return None
     body = outcome.error_body()
     needs = outcome.permission or permission
-    if outcome.reason == DenyReason.NOT_FOUND:
+    if outcome.reason == DenyReason.NOT_EVALUATED:
+        message = (f"Cannot authorize '{getattr(spec, 'name', '?')}': verified identity is "
+                   "unavailable. Restore the caller's scoped run identity before retrying; "
+                   "this does not establish that a Passport permission is missing.")
+    elif outcome.reason == DenyReason.NOT_FOUND:
         message = (f"'{getattr(spec, 'name', '?')}': an id in the arguments names nothing in this "
                    "project.")
     else:

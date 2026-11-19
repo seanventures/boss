@@ -4770,9 +4770,11 @@ def _recovery_begin(connection: Connection, ctx: Any, *, project_id: str, run_id
             pass
     spec_step = workflows._step_map(workflows._run_spec(connection, run_id)).get(step_id) or {}
     agent = step_recovery.agent_of(connection, project_id, spec_step)
-    entry = step_recovery.decide(connection, settings, project_id=project_id, run_id=run_id,
-                                 step_id=step_id, kind=kind, evidence=evidence, state=state,
-                                 agent=agent)
+    with _step_authority(ctx, connection, project_id, {"run_id": run_id},
+                         {"id": f"{step_id}.recovery"}, agent.get("role")):
+        entry = step_recovery.decide(connection, settings, project_id=project_id, run_id=run_id,
+                                     step_id=step_id, kind=kind, evidence=evidence, state=state,
+                                     agent=agent)
     return entry, state, agent
 
 
