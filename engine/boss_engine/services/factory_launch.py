@@ -708,7 +708,7 @@ def spec_first_run(
         workflow_version_id=str(running["version_id"]),
         # THE START APPROVES THE PRD — server-only, with who started it, and only when that
         # person may approve a PRD here (an enforced request asks the PDP).
-        spec_approved_by_start=None if review_first else _start_approver(project_id, actor))
+        spec_approved_by_start=None if review_first else _start_approver(connection, project_id, actor))
     run_id = str((run or {}).get("id") or "")
     if not run_id:
         _release_hold(connection, settings, project_id, reservation_id)
@@ -742,13 +742,14 @@ def _release_hold(connection: Any, settings: Any, project_id: str, reservation_i
                                             exc_info=True)
 
 
-def _start_approver(project_id: str, actor: str) -> Optional[str]:
+def _start_approver(connection: Any, project_id: str, actor: str) -> Optional[str]:
     """Who approves the panel's PRD by starting Easy Mode: the person whose request this is,
     when they may approve a PRD on this project. Under an enforced request the PDP answers
     (decision:approve); without one, the start's actor. None means a person approves it."""
     from ..identity import lineage, viewer
 
-    if viewer.decide(project_id, "decision:approve") is False:
+    # In the launch's own transaction: it holds the org's audit lock and the uncommitted project.
+    if viewer.decide(project_id, "decision:approve", db=connection) is False:
         return None
     ctx = lineage.current_context()
     person = str(getattr(getattr(ctx, "principal", None), "id", "") or "") if ctx else ""

@@ -3911,7 +3911,7 @@ class IntentRouter:
         legacy members table, which names no identity person (R2 #1)."""
         from ..identity import viewer as _viewer
 
-        decision = _viewer.decide(project_id, catalogue_permission)
+        decision = _viewer.decide(project_id, catalogue_permission, db=connection)
         if decision is not None:
             if not decision:
                 raise ProjectMemberPermissionError(
