@@ -203,3 +203,38 @@ def test_the_preview_origin_shows_the_app_at_its_own_paths(client, monkeypatch):
     TestClient(preview_only(api_main.app), base_url="http://prv-x.localhost").get("/v1/previews/prv_x/web/")
     client.get("/v1/previews/prv_x/web/")
     assert asked == [True, False]
+
+
+def test_a_root_path_on_a_previews_own_host_is_served_by_that_preview():
+    """Next.js's loader adds `/_next/static/chunks/…` at the ROOT before any shim can prefix it,
+    and every one was a 404 under the preview's host (recipe-box, 2026-11-18). On a preview's own
+    host the host names the preview, so its root paths are its gateway paths; credentials are
+    still stripped and the sandbox CSP still set."""
+    from apps.api.app.preview_origin import preview_of_host
+
+    inner, seen = _recorder()
+    client = TestClient(preview_only(inner))
+    host = {"host": "prev-a8fb5bebdb6a4b29b50e.localhost:3001",
+            "cookie": f"{SESSION}=bss_secret", "authorization": "Bearer secret"}
+    for path, want in (("/_next/static/chunks/pages/index.js",
+                        "/v1/previews/prev_a8fb5bebdb6a4b29b50e/web/_next/static/chunks/pages/index.js"),
+                       ("/favicon.ico", "/v1/previews/prev_a8fb5bebdb6a4b29b50e/web/favicon.ico"),
+                       ("/v1/recipes", "/v1/previews/prev_a8fb5bebdb6a4b29b50e/web/v1/recipes"),
+                       ("/", "/v1/previews/prev_a8fb5bebdb6a4b29b50e/web/")):
+        seen.clear()
+        answer = client.get(path + "?v=1", headers={**host, "sec-fetch-dest": "script"})
+        assert answer.status_code == 200, path
+        assert seen["path"] == want
+        assert "cookie" not in seen["headers"] and "authorization" not in seen["headers"]
+        assert "set-cookie" not in answer.headers
+        assert "sandbox" in answer.headers["content-security-policy"]
+    # The gateway's own paths are left alone; another preview's gateway path on this host is not served.
+    seen.clear()
+    assert client.get("/v1/previews/prev_other/web/x", headers=host).status_code == 404
+    assert seen == {}
+    # A host that names no preview is unchanged: its root paths are still a 404.
+    assert client.get("/_next/static/chunks/main.js",
+                      headers={"host": "localhost:3001"}).status_code == 404
+    assert preview_of_host({"headers": [(b"host", b"prev-abc.localhost:3001")]}) == "prev_abc"
+    assert preview_of_host({"headers": [(b"host", b"localhost:3001")]}) is None
+    assert preview_of_host({"headers": [(b"host", b"prev--abc.localhost")]}) is None

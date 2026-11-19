@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -414,6 +415,34 @@ def acquire(owner_id: str, *, project_id: Optional[str] = None,
     return ident
 
 
+def held_identity(owner_id: str) -> Optional[SandboxIdentity]:
+    """The uid and directory `owner_id` holds: this process's lease, or — after an API restart,
+    or from another process — the one its run directory names (its owner is the uid that held
+    it). None when it holds none (isolation off, or already released)."""
+    with _ACTIVE_LOCK:
+        ident = _ACTIVE.get(owner_id)
+    if ident is not None:
+        return ident
+    try:
+        run_dir = run_root() / owner_key(owner_id)
+        st = os.lstat(run_dir)
+    except OSError:
+        return None
+    if stat.S_ISDIR(st.st_mode) and UID_BASE <= st.st_uid < UID_BASE + UID_COUNT:
+        return SandboxIdentity(key=run_dir.name, uid=st.st_uid, run_dir=run_dir)
+    return None
+
+
+def stop_owner(owner_id: str) -> Optional[SandboxIdentity]:
+    """Kill every process of the uid `owner_id` holds, and say which identity that was (None when
+    it holds none). Raises SandboxUnavailable when the kill could not be done: a caller about to
+    read the owner's tree as BOSS must not read it while its uid can still change it."""
+    ident = held_identity(owner_id)
+    if ident is not None:
+        ident._helper("kill", str(ident.uid))
+    return ident
+
+
 def release(owner_id: str, *, project_id: Optional[str] = None) -> None:
     """End what `acquire` started: every process of the uid is killed, the directory removed and
     the uid freed. Idempotent; never raises. A lease this process does not hold (an API restart)
@@ -422,10 +451,8 @@ def release(owner_id: str, *, project_id: Optional[str] = None) -> None:
         ident = _ACTIVE.pop(owner_id, None)
     if ident is None:
         with contextlib.suppress(Exception):
-            run_dir = run_root() / owner_key(owner_id)
-            st = os.lstat(run_dir)
-            if UID_BASE <= st.st_uid < UID_BASE + UID_COUNT:
-                orphan = SandboxIdentity(key=run_dir.name, uid=st.st_uid, run_dir=run_dir)
+            orphan = held_identity(owner_id)
+            if orphan is not None:
                 orphan.killall()
                 _purge(orphan)
         return

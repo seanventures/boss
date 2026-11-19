@@ -7969,7 +7969,8 @@ def follow_up_code_task_endpoint(run_id: str, payload: CodeTaskFollowUpBody):
         raise HTTPException(status_code=403, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    return {"status": "queued", **result}
+    # An identical follow-up already in flight is returned, never queued twice (review #224).
+    return {"status": "existing" if result.get("existing") else "queued", **result}
 
 
 @app.get("/v1/qa/benchmark-apps/runs/{run_id}/report")
@@ -12211,6 +12212,16 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
             stop_preview(engine, _pid, settings)
         except Exception:  # noqa: BLE001 — best-effort cleanup
             pass
+    # FRESH DATA: an app's preview data is kept across stops and restarts (preview_data); the
+    # operator's "Fresh data" deletes it, after the stop above has saved it, so the app starts empty.
+    fresh_data = p.get("fresh_data") in (True, "true", "1", 1, "on")
+    if fresh_data:
+        from .services.preview_service import reset_preview_data
+
+        try:
+            reset_preview_data(engine, settings, run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
 
     # ASYNC, BECAUSE THE WORK OUTLASTS THE REQUEST.
     #

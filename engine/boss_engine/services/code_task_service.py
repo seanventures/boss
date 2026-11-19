@@ -1184,6 +1184,18 @@ def change_request(instructions: str, *, title: Optional[str] = None,
             "replaces": [str(x) for x in (replaces or []) if str(x).strip()]}
 
 
+#: A follow-up still on its way: a second identical request joins it instead of queuing another.
+FOLLOWUP_IN_FLIGHT = ("queued", "running", "repairing", "waiting_for_github", "waiting_on_person")
+
+
+def followup_brief_key(instructions: Any) -> str:
+    """The identity of a follow-up's brief: its words, whitespace-normalised."""
+    import hashlib
+
+    words = " ".join(str(instructions or "").split())
+    return hashlib.sha256(words.encode()).hexdigest()[:24]
+
+
 def start_followup_task(
     connection, *, parent_run_id: str, instructions: str, jobs,
     title: Optional[str] = None, acceptance_criteria: Optional[list] = None,
@@ -1335,6 +1347,28 @@ def start_followup_task(
         child_fctx["change_request"] = change_request(
             instructions, title=title, criteria=acceptance_criteria, actor=actor,
             replaces=replaces)
+
+    # ONE FOLLOW-UP PER BRIEF IN FLIGHT (review #224): a second press of "Let BOSS fix these",
+    # another tab, or a retried request queued a second paid build with the very same brief.
+    # The same parent and the same words while one is still queued or running returns that one.
+    brief = followup_brief_key(instructions)
+    child_fctx["followup_brief"] = brief
+    live = None
+    if connection is not None and getattr(getattr(connection, "dialect", None), "name", "") \
+            == "postgresql":
+        # Two presses at once: the second waits for the first's row, then finds it.
+        connection.execute(sql("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                           {"k": f"followup:{parent_run_id}:{brief}"})
+        in_flight = ", ".join(f"'{s_}'" for s_ in FOLLOWUP_IN_FLIGHT)
+        live = connection.execute(sql(
+            "SELECT id FROM code_task_runs WHERE project_id = :p "
+            "AND finalize_ctx->>'parent_run_id' = :r AND finalize_ctx->>'followup_brief' = :b "
+            f"AND status IN ({in_flight}) ORDER BY created_at DESC LIMIT 1"),
+            {"p": run["project_id"], "r": parent_run_id, "b": brief}).scalar()
+    if live:
+        return {"run_id": str(live), "root_run_id": root, "base_branch": base_branch,
+                "owner": spec.get("owner"), "repo": spec.get("repo"),
+                "process_run_id": None, "existing": True}
 
     run_id = start_code_task(
         connection,

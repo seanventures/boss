@@ -3152,7 +3152,7 @@ export async function deleteMeetingRoleAction(formData: FormData): Promise<Actio
  */
 export async function followUpCodeTaskAction(
   formData: FormData,
-): Promise<{ run_id?: string; error?: string }> {
+): Promise<{ run_id?: string; existing?: boolean; error?: string }> {
   const runId = String(formData.get("run_id") ?? "").trim();
   const instructions = String(formData.get("instructions") ?? "").trim();
   if (!runId) return { error: "no run named" };
@@ -3162,7 +3162,8 @@ export async function followUpCodeTaskAction(
     // No revalidatePath: it replaces the client tree while this promise resolves, so the
     // component that awaited it is remounted and the result lands on an instance nobody
     // renders -- the "nothing happened" defect this console has had repeatedly.
-    return { run_id: out?.run_id };
+    // `existing`: an identical follow-up was already in flight; the API returned that one.
+    return { run_id: out?.run_id, existing: (out as { existing?: boolean } | undefined)?.existing === true };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
@@ -3591,7 +3592,7 @@ export async function startPreviewAction(
   const runId = String(formData.get("run_id") ?? "").trim();
   if (!runId) return { error: "missing run_id" };
   try {
-    const res = await client.startPreview(runId, 60, getActor(formData));
+    const res = await client.startPreview(runId, 60, getActor(formData), formData.get("fresh_data") === "true");
     revalidatePath("/");
     // A same-origin gateway path: neither the preview's 127.0.0.1 port nor this server's API
     // address is reachable from the operator's browser (see lib/browser-links).
