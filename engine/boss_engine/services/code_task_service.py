@@ -524,6 +524,7 @@ def start_code_task(
     automatic_retry: bool = False,
     continuation: bool = False,
     outcome: Optional[dict] = None,
+    run_after_seconds: int = 0,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job.
 
@@ -1014,7 +1015,11 @@ def start_code_task(
         jobs.create_job(connection, project_id=project_id, task_id=task_id,
                         kind="code.task",
                         priority=code_task_job_priority(connection, run_finalize, job_priority),
-                        payload={"run_id": run_id})
+                        payload={"run_id": run_id},
+                        # NOT BEFORE, IN THE SAME WRITE AS THE JOB (stranger test r6): a backoff
+                        # written after the job was queued let the worker take it at once.
+                        **({"run_after_seconds": int(run_after_seconds)}
+                           if run_after_seconds and run_after_seconds > 0 else {}))
     emit_event(connection, project_id, "code_task.started", "boss", "code_task_run", run_id,
                {"task_id": task_id, "title": title, "repo": f"{owner}/{repo}"})
 
@@ -2118,6 +2123,8 @@ def retry_code_task(
     recheck_bar: Optional[str] = None,
     platform_retry: bool = False,
     after_update: bool = False,
+    auto_retry_attempt: Optional[int] = None,
+    run_after_seconds: int = 0,
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
@@ -2375,6 +2382,10 @@ def retry_code_task(
             base_branch=spec.get("base_branch") or None,
             role_key=spec.get("role_key"),
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
+                          # WHICH AUTOMATIC PLATFORM RETRY THIS IS, written WITH the row — never
+                          # after the job is queued (a fast-failing attempt read it as 0).
+                          **({"auto_infra_retry": int(auto_retry_attempt)}
+                             if auto_retry_attempt else {}),
                           # RE-CHECK THIS CHANGE (change_recheck): every gate on the branch
                           # head, no code written, no repair round.
                           **({"recheck_only": True, "recheck_of": run_id} if recheck else {}),
@@ -2503,6 +2514,7 @@ def retry_code_task(
             job_priority=job_priority,
             automatic_retry=automatic,
             outcome=started,
+            run_after_seconds=run_after_seconds,
         )
         if pr_url and new_id:
             # A NEWER BUILD OF THE CHANGE makes every "Fix these" card of its PR a stale
@@ -2906,6 +2918,39 @@ def is_rules_forbidden(reason: str) -> bool:
     return _RULES_403.search(text) is not None
 
 
+#: FAILURES ONLY THE PERSON'S OWN SETUP CAN FIX (stranger test r6, 2026-11-18: a plain-http custom
+#: model's key refusal was classed `infra`, retried 14 times and filed as a BOSS self-fix). Each is
+#: a refusal of what the person connected — a credential, a model's login, a repository's access —
+#: so another attempt meets the same answer: needs_human, never an automatic retry.
+_PERSON_SIDE: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("credential_plain_http", ("boss only sends keys over https",)),
+    ("credential_misdirected", ("is sent only to", "boss_credential_hosts",
+                                "credential stored for that integration")),
+    ("model_auth_rejected", ("invalid x-api-key", "invalid api key", "incorrect api key",
+                             "authentication_error", "invalid_api_key", "permission_error",
+                             "401 unauthorized", "403 forbidden: model")),
+    ("repo_access_denied", ("repository not found", "could not read username",
+                            "authentication failed for", "access denied to repository",
+                            "not have access to this repository")),
+)
+
+
+def _person_side(lowered: str) -> Optional[str]:
+    for code, signs in _PERSON_SIDE:
+        if code == "credential_misdirected":
+            if "is sent only to" in lowered and "refusing to send" in lowered:
+                return code
+            if any(s in lowered for s in signs[1:]) and "refusing to send" in lowered:
+                return code
+            continue
+        if any(s in lowered for s in signs):
+            return code
+    if ("permission to " in lowered and " denied to " in lowered) or re.search(
+            r"repository '[^']*' not found", lowered):
+        return "repo_access_denied"          # git: "Permission to o/r.git denied to user."
+    return None
+
+
 def classify_pipeline_exception(reason: str) -> tuple[str, str]:
     """Map a pipeline exception onto the failure taxonomy. Most unexpected exceptions ARE infra
     (platform's fault) — but an agent that exhausted its turn cap is a RECOVERABLE task-shaped
@@ -2923,6 +2968,9 @@ def classify_pipeline_exception(reason: str) -> tuple[str, str]:
         # or account. Not `infra` — an automatic retry meets the same broken engine — and not
         # the code's fault: the operator makes the fix the verdict names, then retries.
         return "needs_human", "harness_unavailable"
+    person = _person_side(r)
+    if person is not None:
+        return "needs_human", person
     if "build services unavailable" in r:
         # The run declared a database BOSS could not give it: an operator starts build-services
         # (or removes the declaration). Retrying without it would only fail the same way.

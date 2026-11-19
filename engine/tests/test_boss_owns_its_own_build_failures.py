@@ -125,7 +125,7 @@ def test_the_failed_build_card_says_what_boss_already_did():
                "reason": "Git refused this checkout's index.",
                "doing": build_failure.boss_did("infra", "2")}
     card = build_failure.needs_card(failure)
-    assert card["detail"].startswith("BOSS retried this build twice")
+    assert card["detail"].startswith("BOSS tried this build 3 times")
     assert "?" not in card["detail"]
     assert build_failure.boss_did("needs_human", "2") is None
     assert build_failure.boss_did("infra", None) is None
