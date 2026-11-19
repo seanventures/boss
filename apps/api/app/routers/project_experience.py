@@ -186,6 +186,21 @@ def project_work_story(project_id: str, work_id: str) -> dict[str, Any]:
             raise _missing(error) from None
 
 
+@router.get("/v1/projects/{project_id}/builds/{run_id}/explained")
+@permit(P.PROJECT_READ, scope=Scope.project(path="project_id"))
+def project_build_explained(project_id: str, run_id: str) -> dict[str, Any]:
+    """The build page's "What was discussed / What was built": the panel's decisions and the
+    build's outputs in a few bullets (explained.for_build), stored once the build completed."""
+    from boss_engine.services.project_experience import explained
+
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        try:
+            return explained.for_build(connection, project_id, run_id)
+        except LookupError as error:
+            raise _missing(error) from None
+
+
 class UnderstandBody(BaseModel):
     kind: str = Field("feature", description="feature | bug | ticket")
     text: str = Field("", description="The person's words, as typed (an issue link is read).")

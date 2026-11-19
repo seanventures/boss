@@ -21,6 +21,7 @@ import { IdentityError, idPost, refusalSentence } from "../../lib/identity/api";
 import { withdrawnNote, withdrawnSentence } from "../../lib/decision-withdrawn";
 import { isPxDemo, pxHref, workWhen } from "../../lib/project-experience";
 import { PrdRecordView } from "../prd-record";
+import { WorkExplained } from "./work-explained";
 import { notifyChanged } from "../changed";
 import {
   PX_PATHS, parseDeployments, parseWorkStory, startOnboarding, usePxRead, type Agent, type Deployments, type NeedsYou, type Node,
@@ -98,6 +99,7 @@ export function WorkStoryBody({ ctx, w, story }: { ctx: PxCtx; w: WorkItem; stor
           </div>
         </div>
       ) : null}
+      <WorkExplained explained={story?.explained} testid="px-drawer-work-explained" />
       {story?.prd ? <PrdRecordView prd={story.prd} link={(h) => pxHref(h)} testid="px-drawer-work-prd" /> : null}
       {preview || parts.length ? (
         <div className="px-grid px-g2 px-wk-minis" data-testid="px-drawer-work-minis">

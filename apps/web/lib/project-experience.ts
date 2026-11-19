@@ -16,6 +16,7 @@
 import { parsePrdRecord, type PrdRecord } from "./prd-record";
 import { parseCiHold, type CiHold } from "./ci-hold";
 import { parseYourApp, type YourApp } from "./your-app";
+import { parseAbout, parseExplained, type About, type Explained } from "./explained";
 import { parseDiagnosis, parseWaitReason, type Diagnosis, type WaitReason } from "./stuck-work";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -326,6 +327,8 @@ export type Overview = {
   try_it: { url: string; demo_logins: DemoLogin[] } | null;
   /** YOUR APP (engine your_app.py): the app, which version it shows, its preview's state. */
   app?: YourApp | null;
+  /** ABOUT THIS APP (engine explained.about): the PRD's summary, criteria, approval, spec link. */
+  about?: About | null;
   week: { at: string; label: string; kind: string; href: string; detail?: string; sha7?: string }[];
 };
 export type Captain = { agent_id: string; name: string; role_key: string; avatar: string; status: string; squad: Agent[]; last_said: string;
@@ -722,6 +725,8 @@ export type WorkStory = {
             link: { label: string; href: string; external_url: string } | null }[];
   /** The PRD this work was built from (BOSSAPP-929), with its meeting and repo file. */
   prd?: PrdRecord | null;
+  /** What was discussed / What was built (engine explained.for_work): decisions + bullets. */
+  explained?: Explained | null;
 };
 export const parseWorkStory = (v: unknown): WorkStory => {
   const x = o(v); const pr = o(x.pr);
@@ -735,6 +740,7 @@ export const parseWorkStory = (v: unknown): WorkStory => {
                link: s(l.label) ? { label: s(l.label), href: s(l.href), external_url: s(l.external_url) } : null };
     }),
     prd: parsePrdRecord(x.prd),
+    explained: parseExplained(x.explained),
   };
 };
 
@@ -793,6 +799,7 @@ export const parseOverview = (v: unknown): Overview => {
     errors: Object.fromEntries(Object.entries(o(x.errors)).map(([k, v]) => [k, s(v, "Couldn't load")])),
     try_it: Object.keys(ti).length ? { url: s(ti.url), demo_logins: a(ti.demo_logins).map(parseLogin) } : null,
     app: parseYourApp(x.app),
+    about: parseAbout(x.about),
     // A week's event opens its record in the console (a PR's build, a deploy), else where it lives.
     // sha7 is the deploy's short commit when the engine sent one. Never derived from another field.
     week: a(x.week).map((w) => {

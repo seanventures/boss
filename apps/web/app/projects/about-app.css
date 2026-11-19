@@ -1,0 +1,36 @@
+/* ABOUT THIS APP (about-app.tsx) and WHAT WAS DISCUSSED / BUILT (work-explained.tsx). Tokens only. */
+.ab-title { font-weight: 600; font-size: var(--fs-row); }
+.ab-summary { margin: 4px 0 0; font-size: var(--fs-body); line-height: 1.55; color: var(--ink-soft, var(--ink)); max-width: 78ch; }
+.ab-note { margin: 4px 0 0; font-size: var(--fs-meta); }
+.ab-approved { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; font-size: var(--fs-meta); color: var(--green); }
+.ab-approved span { color: var(--muted); }
+.ab-crit { margin-top: 12px; }
+.ab-crit-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.ab-verdict { font-size: var(--fs-meta); color: var(--muted); }
+.ab-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.ab-item { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 5px 8px;
+  border-radius: var(--r-sm); background: var(--surface-2); font-size: var(--fs-body); }
+.ab-text { min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.45; }
+.ab-mark { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; margin-top: 1px;
+  color: var(--muted); background: var(--surface-3); }
+.ab-mark[data-tone="green"] { color: var(--green); background: color-mix(in srgb, var(--green) 16%, transparent); }
+.ab-mark[data-tone="amber"] { color: var(--amber); background: color-mix(in srgb, var(--amber) 16%, transparent); }
+.ab-mark[data-tone="red"] { color: var(--red); background: color-mix(in srgb, var(--red) 16%, transparent); }
+.ab-later { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 10px; font-size: var(--fs-meta); }
+
+.wx { display: grid; gap: 10px; container-type: inline-size; }
+.wx-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.wx-col { min-width: 0; padding: 10px 12px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--border); }
+.wx-col-h { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-weight: 600; font-size: var(--fs-row); }
+.wx-col-h .px-more, .wx-col-h .px-chip { margin-left: auto; font-size: var(--fs-meta); }
+.wx-list { margin: 0; padding-left: 16px; display: grid; gap: 4px; font-size: var(--fs-body); line-height: 1.45; }
+.wx-list li { overflow-wrap: anywhere; }
+.wx-sub { margin-top: 6px; font-size: var(--fs-meta); color: var(--muted); }
+.wx-sub b { color: var(--amber); font-weight: 600; }
+.wx-groups { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.wx-group { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: var(--fs-tag);
+  background: var(--surface-3); color: var(--ink-soft, var(--ink)); cursor: default; }
+.wx-group b { font-weight: 600; color: var(--muted); }
+.wx-later { font-size: var(--fs-meta); color: var(--muted); display: grid; gap: 2px; margin-top: 6px; }
+/* Two columns only where they fit: a 460px drawer stacks them, a wide build page sits them side by side. */
+@container (max-width: 640px) { .wx-grid { grid-template-columns: minmax(0, 1fr); } }

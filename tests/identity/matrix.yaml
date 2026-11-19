@@ -1700,6 +1700,7 @@
 "GET /v1/projects/{project_id}/archive": ["permit project:read @ project(path=project_id)", "OAPVU"]
 "POST /v1/projects/{project_id}/archive": ["permit project:delete @ org", "O"]
 "PUT /v1/projects/{project_id}/autonomy": ["permit autonomy:manage @ project(path=project_id)", "OA"]
+"GET /v1/projects/{project_id}/builds/{run_id}/explained": ["permit project:read @ project(path=project_id)", "OAPVU"]
 "GET /v1/projects/{project_id}/captain": ["permit project:read @ project(path=project_id)", "OAPVU"]
 "POST /v1/projects/{project_id}/captain": ["permit project:update @ project(path=project_id)", "OA"]
 "GET /v1/projects/{project_id}/change-sets": ["permit code_task:read @ project(path=project_id)", "OAPVU"]

@@ -509,7 +509,7 @@ def _facts(connection: Connection, project_id: str, items: list[dict[str, Any]],
 
 #: The Overview's cards, each of which loads or fails on its own (04 "Couldn't load · Retry").
 CARDS = ("journey", "tile_work", "tile_running", "tile_staging", "tile_cost", "needs_you",
-         "recent_work", "week", "captain", "next", "try_it", "app")
+         "recent_work", "week", "captain", "next", "try_it", "app", "about")
 
 
 def _chip(told: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
@@ -658,6 +658,9 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
         # YOUR APP (your_app.py): the app, always one press away — which version it shows and
         # whether its preview runs; asleep wakes on Open app. Beside Try it, never instead of it.
         "app": part(("app",), lambda: _your_app(connection, project_id, url), None),
+        # ABOUT THIS APP (explained.about): what the project is — the founding PRD's summary,
+        # its acceptance criteria with the latest check's verdicts, who approved it, the spec.
+        "about": part(("about",), lambda: _about(connection, project_id), None),
         "try_it": {"url": url, "env": try_env["key"] if try_env else None,
                    "demo_logins": try_env["logins"] if try_env else [],
                    "users_from": logins["source"]},
@@ -668,6 +671,12 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
         # Cards that could not load this time, in words: each shows "Couldn't load · Retry".
         "errors": errors,
     }
+
+
+def _about(connection: Connection, project_id: str) -> dict[str, Any]:
+    from . import explained
+
+    return explained.about(connection, project_id)
 
 
 def _your_app(connection: Connection, project_id: str, live_url: Optional[str]
