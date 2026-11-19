@@ -219,7 +219,9 @@ def latest_failures(connection: Any, project_ids: Iterable[str], *,
         "c.finalize_ctx->>'reason_code' AS reason_code, "
         "c.finalize_ctx->'merge'->>'sha' AS merged_sha, "
         "c.finalize_ctx->>'deferred_from_run' AS deferred_from, "
-        "(SELECT d.status FROM decisions d WHERE d.id = c.decision_id) AS decision_status "
+        "(SELECT d.status FROM decisions d WHERE d.id = c.decision_id) AS decision_status, "
+        "c.finalize_ctx->'merge'->>'at' AS merged_at, "
+        "(c.finalize_ctx ? 'change_request') AS asks_change "
         "FROM code_task_runs c WHERE c.project_id = ANY(:ids) AND c.created_at >= :since "
         + _internal_clauses(params, "c")), params).mappings().all()]
     runs = [dict(r) for r in connection.execute(text(
@@ -276,9 +278,26 @@ def latest_failures(connection: Any, project_ids: Iterable[str], *,
         else:
             if latest is None or str(latest["status"]) != "failed":
                 continue
-            if _followups_only(latest, members[:-1]):
+            # Not the project's failure: a follow-up of a build still ready on its merge card
+            # (the light lane), or an attempt the lineage moved past (a later merge).
+            if _followups_only(latest, members[:-1]) or _moved_on(members, latest):
                 continue
             root = key.split(":", 1)[1]
+            waits = waits_on(connection, pid, latest)
+            if waits is not None and waits.get("resolved"):
+                continue                     # its stated cause is gone: nothing to say
+            if waits is not None:
+                # A REFUSAL THAT WAITS ON A PERSON'S MERGE is that merge, not a red failure.
+                out[pid] = {"id": root, "source": "code_task", "build_id": str(latest["id"]),
+                            "label": short_title(_root_title(members, root) or "Build"),
+                            "word": waits["label"], "waits_on": waits, "follow_up": False,
+                            "at": _iso(latest["updated_at"]), "reason": waits["detail"],
+                            "work_href": project_href(pid, tab="work", drawer=f"build:{root}"),
+                            "see_href": href(pid, area="code_tasks", build=latest["id"]),
+                            "retry": None, "fix": {"label": waits["label"], "href": waits["href"],
+                                                   "detail": waits["detail"]},
+                            "retry_reason": "Merge it first; then this build isn't needed"}
+                continue
             follow_up = len(members) > 1 and any(
                 m["pull_request_url"] or m["merged_sha"] for m in members[:-1])
             see = href(pid, area="code_tasks", build=latest["id"])
@@ -362,3 +381,67 @@ def needs_card(failure: Mapping[str, Any]) -> dict[str, Any]:
             "created_at": failure.get("at"), "retry": failure.get("retry"),
             "fix": failure.get("fix"), "retry_reason": failure.get("retry_reason"),
             "see_href": failure.get("see_href"), "action": None}
+
+
+def is_failure(entry: Optional[Mapping[str, Any]]) -> bool:
+    """A real failure (red), as opposed to work waiting on a person's merge (`waits_on`)."""
+    return bool(entry) and not entry.get("waits_on")
+
+
+def _when(v: Any) -> Optional[datetime]:
+    if isinstance(v, str):
+        try:
+            return _aware(datetime.fromisoformat(v.replace("Z", "+00:00")))
+        except ValueError:
+            return None
+    return _aware(v)
+
+
+def _moved_on(members: list[Mapping[str, Any]], latest: Mapping[str, Any]) -> bool:
+    """THE LINEAGE MOVED ON: another attempt's change was merged (its `merge.at`) after this
+    attempt failed — a retry or automatic follow-up that failed before change #1 was merged is
+    an earlier attempt. A follow-up that carried its OWN change request ("add X") is not: X
+    never landed, so its failure stays visible (review #221)."""
+    if latest.get("asks_change"):
+        return False
+    failed_at = _when(latest.get("updated_at"))
+    for m in members:
+        if m is latest or not m.get("merged_sha"):
+            continue
+        merged_at = _when(m.get("merged_at")) or _when(m.get("updated_at"))
+        if failed_at is None or (merged_at is not None and merged_at > failed_at):
+            return True
+    return False
+
+
+#: A build refused because the app's code waits, unmerged, on another build's branch.
+_WAITS_BRANCH = re.compile(r"boss/code/(crun_[0-9a-f]+)\b[^.]*\bnot merged", re.I)
+
+
+def waits_on(connection: Any, project_id: str, run: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """What a refused build waits for, when its error names it — "its code is on
+    boss/code/crun_d8b…, not merged into main … Merge that change" (app_missing): that build's
+    change. `resolved` once that change is merged (the refusal's cause is gone); otherwise the
+    merge to do, linked to its merge decision. None for any other failure."""
+    from .project_experience.common import href
+    from .repo_links import change_ref
+
+    found = _WAITS_BRANCH.search(str(run.get("error") or ""))
+    if not found:
+        return None
+    other = connection.execute(text(
+        "SELECT id, pull_request_url, pull_request_number, decision_id, "
+        "finalize_ctx->'merge'->>'sha' AS merged_sha FROM code_task_runs "
+        "WHERE project_id = :p AND id = :i"), {"p": project_id, "i": found.group(1)}
+    ).mappings().first()
+    if other is None:
+        return None
+    ref = change_ref(other["pull_request_url"], other["pull_request_number"], lower=True)
+    if other["merged_sha"]:
+        return {"resolved": True, "run_id": other["id"], "detail": f"Not needed: {ref} was merged."}
+    link = (href(project_id, area="decisions", decision=other["decision_id"])
+            if other["decision_id"] else href(project_id, area="code_tasks", build=other["id"]))
+    return {"resolved": False, "run_id": other["id"], "decision_id": other["decision_id"],
+            "label": f"Merge {ref} first", "href": link,
+            "detail": f"This build waits on {ref}: the app's code is there, not merged yet. "
+                      "Merge it, then build onto it."}

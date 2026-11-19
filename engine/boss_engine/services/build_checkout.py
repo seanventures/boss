@@ -14,7 +14,6 @@ before. The build fails with the branches that hold it, never a from-scratch bui
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -27,13 +26,14 @@ _NOT_APP = ("readme", "license", "licence", "notice", "contributing", "changelog
 
 def app_files(root: Path | str) -> Optional[list[str]]:
     """The tracked files of the checkout that are application files; None when `root` is not a git
-    checkout (nothing to prove)."""
+    checkout (nothing to prove). Read-only git on the run's tree (git_safety.tree_git)."""
+    from .git_safety import tree_git
+
     try:
-        got = subprocess.run(["git", "-C", str(root), "ls-files"], capture_output=True, text=True,
-                             timeout=30)
+        got = tree_git(root, "ls-files", timeout=30)
     except Exception:  # noqa: BLE001
         return None
-    if got.returncode != 0:
+    if got is None or got.returncode != 0:
         return None
     out = []
     for rel in got.stdout.splitlines():

@@ -400,23 +400,19 @@ def _words(text: Any) -> set[str]:
     return {w for w in re.split(r"[^a-z0-9]+", str(text or "").lower()) if len(w) >= 5}
 
 
-def broken_tests_block(bar: str, failing: Iterable[str], changed: Iterable[str],
-                       p1_words: Iterable[str] = ()) -> tuple[bool, str]:
+def broken_tests_block(bar: str, failing: Iterable[str]) -> tuple[bool, str]:
     """(does a broken EXISTING test block at `bar`, why it did not when it does not).
 
     production: always. prototype and standard (the light lane): only a P0 test (its name or
-    file marks startup, health, auth or sign-in) holds; the rest is a follow-up. Failing tests that cannot be named block at production
-    and are a follow-up below it."""
+    file marks startup, health, auth or sign-in) holds; the rest is a follow-up. Failing tests
+    that cannot be named block at production and are a follow-up below it."""
     bar = normalize(bar) or DEFAULT
     if bar == PRODUCTION:
         return True, ""
     names = [str(n) for n in failing or () if str(n).strip()]
     if not names:
-        return False, (f"failing existing tests could not be named; not a P0 at the {bar} bar")
-    low = [n.lower() for n in names]
-    p0 = any(w in n for n in low for w in P0_TEST_WORDS)
-    # THE LIGHT LANE (prototype, standard): only a P0 test (startup, auth, health) holds; the
-    # rest is a follow-up. (`changed`, `p1_words`: kept for callers; production blocks on all.)
+        return False, f"failing existing tests could not be named; not a P0 at the {bar} bar"
+    p0 = any(w in n.lower() for n in names for w in P0_TEST_WORDS)
     return p0, (f"{len(names)} existing test(s) failing, none on a P0 path "
                 f"(startup, auth, health): {'; '.join(names[:5])}")
 

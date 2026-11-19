@@ -276,21 +276,20 @@ def test_the_prototype_skips_only_the_default_sensitive_tiers_plan_signoff():
 # ── broken EXISTING tests: by path, not by name of the gate ──────────────────────────────────
 
 def test_broken_existing_tests_block_by_where_they_are():
-    changed = ["src/tickets/list.js"]
     off = ["test/billing/invoice.test.js > rounds up"]
     p0 = ["test/auth/login.test.js > rejects a bad password"]
     near = ["test/tickets/list.test.js > sorts"]
-    assert qb.broken_tests_block(R, off, changed)[0] is True
+    assert qb.broken_tests_block(R, off)[0] is True
     # standard (the light lane): only a P0 (startup, auth, health) test holds
-    assert qb.broken_tests_block(S, near, changed)[0] is False
-    assert qb.broken_tests_block(S, p0, changed)[0] is True
-    blocks, why = qb.broken_tests_block(S, off, changed)
+    assert qb.broken_tests_block(S, near)[0] is False
+    assert qb.broken_tests_block(S, p0)[0] is True
+    blocks, why = qb.broken_tests_block(S, off)
     assert blocks is False and "invoice" in why
-    assert qb.broken_tests_block(S, [], changed)[0] is False      # unnamed: a follow-up
+    assert qb.broken_tests_block(S, [])[0] is False      # unnamed: a follow-up
     # prototype: only a P0 (startup, auth, health) test
-    assert qb.broken_tests_block(P, p0, changed)[0] is True
-    assert qb.broken_tests_block(P, near, changed)[0] is False
-    assert qb.broken_tests_block(P, [], changed)[0] is False
+    assert qb.broken_tests_block(P, p0)[0] is True
+    assert qb.broken_tests_block(P, near)[0] is False
+    assert qb.broken_tests_block(P, [])[0] is False
 
 
 # ── the same outcome under each preset: pass/fail and the follow-ups list ────────────────────
