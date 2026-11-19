@@ -168,6 +168,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # ticket's changed acceptance criteria.
     "ticket_pickup",
     "ticket_changed_mid_run",
+    # EVERY FAILURE HAS AN OWNER (failure_owner.on_answered): "Done — retry" runs each failure on
+    # the card again as the person; "Leave it" ends BOSS's ownership, saying who decided.
+    "failure_owner.retry",
     # A build's delivery workflow did not start (code_task_service.start_delivery_workflow):
     # approving starts it now, adopting the running build (attach_delivery_workflow).
     "start_delivery_workflow",
@@ -793,6 +796,17 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "that the secret is set."),
             _action("reject", "Stop waiting", "reject",
                     "The build stops waiting; its draft pull request stays open."),
+            _delegate(),
+        ]
+    if _action_of(decision) == "failure_owner.retry":
+        # A FAILURE BOSS COULD NOT FIX ITSELF (failure_owner): the card says what to do and why
+        # BOSS could not; the person does it, then says so here.
+        return [
+            _action("approve", "Done — retry", "approve",
+                    "Runs it again now, as you. BOSS keeps owning it: if it fails again, BOSS "
+                    "tries its fixes once more before it asks you."),
+            _action("reject", "Leave it", "reject",
+                    "BOSS stops trying. The failure stays on its page, marked as your call."),
             _delegate(),
         ]
     if _action_of(decision) == "answer_form":

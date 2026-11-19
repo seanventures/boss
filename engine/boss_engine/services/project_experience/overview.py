@@ -600,7 +600,12 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
     if failed is not None:
         failed = {**failed, "beside": bool(facts["got"].get("staging")
                                             or facts["got"].get("production"))}
-        waiting = [build_failure.needs_card(failed)] + waiting
+        # Its owner's action item, when it is already listed, is the one card (failure_owner).
+        card_id = (failed.get("owner") or {}).get("decision_id")
+        if not (card_id and any((n.get("action") or {}).get("decision_id") == card_id
+                                or n.get("decision_id") == card_id or n.get("id") == card_id
+                                for n in waiting)):
+            waiting = [build_failure.needs_card(failed)] + waiting
         subs = {**subs, "working": failed["word"]}
         details = {**details, "working": f"{failed['word']}: {failed['reason']}"}
         # Beside whatever else moves (an onboarding pass): the tile shows it when nothing does.
@@ -796,7 +801,9 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
         failed = failed_now.get(pid) if build_failure.is_failure(failed_now.get(pid)) else None
         # The project page's Needs you leads with a failed latest build (build_failure.needs_card): the
         # card counts it too, so the two numbers agree.
-        waiting = decided + setup_n + (1 if failed else 0)
+        # A failure BOSS is fixing does not wait on anyone; one whose action item is a decision
+        # is already counted in `decided` (failure_owner).
+        waiting = decided + setup_n + (1 if failed and not failed.get("owner") else 0)
         # THE ONE COUNT of what moves now (cards.live_work): the Running tile, this card's
         # Working pill and its "N building" line read the same pieces of work.
         live = int((moving_now.get(pid) or {}).get("count") or 0)

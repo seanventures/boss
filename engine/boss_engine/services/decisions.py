@@ -1703,6 +1703,14 @@ class DecisionService:
                                           run_id=granted["run_id"])
 
                 _spawn_as_this_request(_resume)
+        elif action == "failure_owner.retry":
+            # DONE — RETRY (failure_owner): the person did what the card asked; every failure on
+            # it runs again AS THEM once this approval commits, and BOSS keeps owning each one.
+            from . import failure_owner
+
+            failure_owner.on_answered(connection, self.settings, self.jobs, row,
+                                      verdict="approve", actor=actor,
+                                      spawn=_spawn_as_this_request)
         elif action in ("architecture_reconciliation", "typed_decision_reconciliation"):
             # A paid call whose outcome was never settled. Approving settles it: a reply the
             # receipt holds is recorded (usage and cost) and replayed by the step, never paid
@@ -1874,6 +1882,13 @@ class DecisionService:
             # a promotion is re-asked by promoting again).
             agent_deployments.on_promotion_answered(connection, row, verdict="reject",
                                                     actor=actor)
+            return
+        if action == "reject" and recommendation.get("action") == "failure_owner.retry":
+            # "Leave it" (failure_owner): BOSS stops owning those failures, saying who decided.
+            from . import failure_owner
+
+            failure_owner.on_answered(connection, self.settings, self.jobs, row,
+                                      verdict="reject", actor=actor)
             return
         if recommendation_action == "storage_delete" and action == "reject":
             # "Not now" (BOSSAPP-1157): the step is re-asked in an hour or on a further fall.

@@ -362,7 +362,44 @@ def latest_failures(connection: Any, project_ids: Iterable[str], *,
                 failure_class=latest["failure_class"], reason_code=latest["reason_code"],
                 error=latest["error"], merged=bool(latest["merged_sha"]), see_href=see))
         out[pid] = failure
-    return out
+    return with_owners(connection, out)
+
+
+def with_owners(connection: Any, failures: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """NEVER A BARE "FAILED" (failure_owner): each failure says who owns it now. BOSS fixing it
+    reads "BOSS is fixing it" with the attempt ("attempt 1 of 2 — …"), in the calm tone; a
+    person's action item reads "Needs you" with what to do and why BOSS could not, linked to
+    that card. The owner rides on the entry as `owner` for every surface that reads it."""
+    from . import failure_owner
+    from .project_experience.common import href
+
+    by_surface: dict[str, list[str]] = {}
+    for f in failures.values():
+        if is_failure(f):
+            surface = "workflow_run" if f.get("source") == "workflow_run" else "code_task"
+            by_surface.setdefault(surface, []).append(str(f["id"]))
+    owned = {(s, k): o for s, keys in by_surface.items()
+             for k, o in failure_owner.owners(connection, s, keys).items()}
+    for pid, f in failures.items():
+        if not is_failure(f):
+            continue
+        surface = "workflow_run" if f.get("source") == "workflow_run" else "code_task"
+        owner = owned.get((surface, str(f["id"])))
+        if owner is None or owner["state"] == failure_owner.RESOLVED:
+            continue
+        f["owner"] = owner
+        if owner["state"] == failure_owner.FIXING:
+            f.update({"word": "BOSS is fixing it", "doing": owner["words"], "tone": "info"})
+        else:
+            f.update({"word": "Needs you", "reason": " ".join(
+                p for p in (owner["action"], f"Why BOSS could not: {owner['reason']}"
+                            if owner["reason"] else "") if p).strip() or f.get("reason")})
+            f.pop("doing", None)
+            if owner.get("decision_id"):
+                f["fix"] = {"label": "Open the action item",
+                            "href": href(pid, area="decisions", decision=owner["decision_id"]),
+                            "detail": owner["action"], "decision_id": owner["decision_id"]}
+    return failures
 
 
 def _followups_only(latest: Mapping[str, Any], earlier: list[Mapping[str, Any]]) -> bool:
