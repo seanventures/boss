@@ -23,6 +23,7 @@ Every wake is an `app_preview.woken` event by `boss:wake-on-visit`.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -34,6 +35,15 @@ log = logging.getLogger(__name__)
 
 WAKE_ACTOR = "boss:wake-on-visit"
 WAKE_WINDOW_DAYS = 14
+
+
+def wake_window_days() -> int:
+    """BOSS_PREVIEW_WAKE_DAYS (default 14): how old a sleeping link may be and still wake; 0
+    turns wake on visit off."""
+    try:
+        return int(os.environ.get("BOSS_PREVIEW_WAKE_DAYS", WAKE_WINDOW_DAYS))
+    except ValueError:
+        return WAKE_WINDOW_DAYS
 #: Seconds between the waking page's own refreshes.
 REFRESH_SECONDS = 4
 
@@ -74,36 +84,43 @@ def wake(engine: Any, settings: Any, preview_id: str, *, page: bool,
     if str(row.get("mode") or "") == FIXTURE_MODE or not row["run_id"]:
         return {"do": "gone", "why": "This preview is not running."}
     run_id = str(row["run_id"])
+    # THE REQUESTED LINK DECIDES FIRST (security review #230): only a link BOSS itself put to
+    # sleep, inside the wake window, may follow its build's newer preview or wake it. A link a
+    # person stopped, one whose start failed, and one past the window are gone — never a door
+    # to whatever preview the build runs next.
+    mine = {"preview_id": preview_id}
+    own = sleep_state(row["status"], row["error"])
+    if own == "starting":
+        return {"do": "wait", "id": preview_id, "woke": False}
+    if own == "stopped":
+        return {"do": "gone", "why": "This preview was stopped. Recreate it from BOSS: it "
+                                     "starts again from the same build, with its data.", **mine}
+    if own != "asleep":
+        return {"do": "gone", "why": "This preview could not start. Recreate it from BOSS to "
+                                     "try again from the same build.", **mine}
+    days = wake_window_days()
+    made = row["created_at"]
+    if made is not None and made.tzinfo is None:
+        made = made.replace(tzinfo=timezone.utc)
+    if days <= 0 or (made is not None and now - made > timedelta(days=days)):
+        return {"do": "gone", "why": "This preview link is too old to wake. Recreate it from "
+                                     "BOSS: it starts again from the same build, with its "
+                                     "data.", **mine}
     with begin(engine) as c:
         # ONE START PER BUILD: two tabs loading the same sleeping link start one preview.
         c.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"preview-wake:{run_id}"})
         latest = _latest_of_run(c, run_id) or dict(row)
         if latest["id"] != preview_id:
             st = sleep_state(latest["status"], latest["error"])
-            if st == "running" and latest["status"] == "running":
+            if latest["status"] == "running":
                 return {"do": "redirect", "to": str(latest["id"])}
             if st == "starting":
                 return {"do": "wait", "id": str(latest["id"]), "woke": False}
-            if latest["status"] == "verified":
-                return {"do": "gone", "why": "This build has no live app: its tests ran instead."}
-        else:
-            st = sleep_state(row["status"], row["error"])
-            if st == "starting":
-                return {"do": "wait", "id": preview_id, "woke": False}
-        mine = {"project_id": str(row["project_id"]), "run_id": run_id}
-        if st == "stopped":
-            return {"do": "gone", "why": "This preview was stopped. Recreate it from BOSS: it "
-                                         "starts again from the same build, with its data.", **mine}
-        if st == "failed":
-            return {"do": "gone", "why": "This preview could not start. Recreate it from BOSS to "
-                                         "try again from the same build.", **mine}
-        made = row["created_at"]
-        if made is not None and made.tzinfo is None:
-            made = made.replace(tzinfo=timezone.utc)
-        if made is not None and now - made > timedelta(days=WAKE_WINDOW_DAYS):
-            return {"do": "gone", "why": "This preview link is too old to wake. Recreate it from "
-                                         "BOSS: it starts again from the same build, with its "
-                                         "data.", **mine}
+            if st != "asleep":
+                # Its replacement was stopped by a person, failed, or has no live app: an old
+                # link never overrides that.
+                return {"do": "gone", "why": "This preview was replaced and is not running. "
+                                             "Recreate it from BOSS.", **mine}
         if not page:
             return {"do": "wait", "id": preview_id, "woke": False}
         if not _room(engine, settings):
@@ -158,13 +175,15 @@ def _recreate_link(href: str) -> str:
             "style='color:#0d9488;font-weight:600'>Recreate preview in BOSS</a></p>")
 
 
-def recreate_href(console_base: str, project_id: str, run_id: str) -> str:
-    """The console's door to Recreate preview: the project's Your app card, asked to offer it."""
+def recreate_href(console_base: str, preview_id: str) -> str:
+    """The console's door to Recreate preview: the project's Your app card, asked to offer it.
+    Only the preview id rides in the link (the console's deep-link resolver finds its project
+    for a person who may read it); no project or build id is shown on an unauthenticated page."""
     from urllib.parse import urlencode
 
-    if not project_id or not run_id:
+    if not preview_id:
         return ""
-    query = urlencode({"area": "project", "project_id": project_id, "recreate_preview": run_id})
+    query = urlencode({"area": "project", "recreate_preview": preview_id})
     return f"{console_base.rstrip('/')}/?{query}"
 
 

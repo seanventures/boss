@@ -181,7 +181,8 @@ def test_a_persons_stop_and_a_failed_start_are_not_woken(client, engine, starts)
     stopped = _preview(engine, run, status="stopped", error=None)
     r = client.get(f"/v1/previews/{stopped}/web/", headers=PAGE)
     assert r.status_code == 409 and "Recreate preview in BOSS" in r.text
-    assert f"recreate_preview={run}" in r.text and f"project_id={P}" in r.text
+    assert f"recreate_preview={stopped}" in r.text
+    assert P not in r.text and run not in r.text      # no project or build id on an open page
     run2 = _run(engine, pr=3)
     failed = _preview(engine, run2, status="failed", error="port_timeout")
     assert client.get(f"/v1/previews/{failed}/web/", headers=PAGE).status_code == 409
@@ -301,3 +302,28 @@ def test_a_preview_stopped_to_free_memory_says_so_and_offers_recreate(engine):
     assert card["words"].startswith("Stopped to free memory")
     live = _preview(engine, run, status="running", url="http://127.0.0.1:1")
     assert _card(engine)["recreate"] is False and _card(engine)["preview_id"] == live
+
+
+@pytest.mark.parametrize("kind", ["person_stopped", "failed", "too_old"])
+def test_a_link_that_may_not_wake_never_follows_the_builds_next_preview(client, engine, starts,
+                                                                        kind):
+    """Security review #230: a person-stopped, failed or out-of-window link answered 307 to the
+    build's newer running preview. The requested link decides first; those are gone."""
+    run = _run(engine, pr=2)
+    old = (_preview(engine, run, status="stopped", error=None, minutes_ago=30)
+           if kind == "person_stopped" else
+           _preview(engine, run, status="failed", error="port_timeout", minutes_ago=30)
+           if kind == "failed" else
+           _preview(engine, run, status="stopped", error=IDLE, minutes_ago=60 * 24 * 60))
+    _preview(engine, run, status="running", url="http://127.0.0.1:1", minutes_ago=1)
+    r = client.get(f"/v1/previews/{old}/web/", headers=PAGE, follow_redirects=False)
+    assert r.status_code == 409, (r.status_code, r.headers.get("location"))
+    assert "location" not in r.headers and starts == []
+
+
+def test_wake_days_is_a_setting_and_zero_turns_waking_off(client, engine, starts, monkeypatch):
+    monkeypatch.setenv("BOSS_PREVIEW_WAKE_DAYS", "0")
+    run = _run(engine, pr=2)
+    old = _preview(engine, run, status="stopped", error=IDLE)
+    r = client.get(f"/v1/previews/{old}/web/", headers=PAGE, follow_redirects=False)
+    assert r.status_code == 409 and starts == []

@@ -12357,8 +12357,7 @@ def _preview_wake_answer(request: Request, preview_id: str, path: str,
     # RECREATE PREVIEW lives in the console (a person's write, with consent): BOSS's public URL,
     # else this same host when the request did not come through the preview origin.
     console = str(getattr(settings, "public_url", "") or "") or ("" if on_origin else "/")
-    recreate = (preview_wake.recreate_href(console, str(verdict.get("project_id") or ""),
-                                           str(verdict.get("run_id") or ""))
+    recreate = (preview_wake.recreate_href(console, str(verdict.get("preview_id") or ""))
                 if console else "")
     if todo == "redirect":
         where = preview_wake.sibling_location(

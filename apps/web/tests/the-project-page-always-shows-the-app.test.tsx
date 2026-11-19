@@ -101,7 +101,7 @@ describe("Your app", () => {
   });
 
   it("the waking page's Recreate link lands on the card, asking, never starting by itself", async () => {
-    window.history.replaceState(null, "", "/?area=project&project_id=p1&recreate_preview=crun_1");
+    window.history.replaceState(null, "", "/?area=project&recreate_preview=prev_old");
     await mount(<YourAppCard app={parseYourApp({ ...RAW, state: "stopped" })!} projectId="p1" />);
     expect($('[data-testid="px-ov-app"]')?.getAttribute("data-asked")).toBe("1");
     expect($('[data-testid="px-ov-app-recreate"]')?.getAttribute("data-kind")).toBe("primary");

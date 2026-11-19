@@ -69,12 +69,13 @@ const STATE_WORD: Record<YourApp["state"], string> = {
 };
 
 /** The Overview's card: the app's tile, its version, its state, and one Open app. */
-/** `recreate_preview=<run>` in the address (the waking page's "Recreate preview in BOSS"): the
- *  card offers Recreate preview first. Never started by the link itself: a person presses it. */
+/** `recreate_preview=<preview id>` in the address (a preview link's "Recreate preview in BOSS";
+ *  the console's deep-link resolver opened this project for it): the card offers Recreate
+ *  preview first. Never started by the link itself: a person presses it. */
 function useAskedToRecreate(runId: string): boolean {
   const [asked, setAsked] = useState(false);
   useEffect(() => {
-    try { setAsked(new URLSearchParams(window.location.search).get("recreate_preview") === runId); } catch { /* none */ }
+    try { setAsked(/^prev_[A-Za-z0-9_]+$/.test(new URLSearchParams(window.location.search).get("recreate_preview") ?? "")); } catch { /* none */ }
   }, [runId]);
   return asked;
 }
