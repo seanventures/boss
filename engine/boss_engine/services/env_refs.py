@@ -258,8 +258,22 @@ class CredentialMisdirected(ValueError):
     """A host credential was about to be sent somewhere other than its provider. The message names
     the credential and the host, never the value."""
 
-    def __init__(self, label: str, binding: Binding, host: str):
-        self.label, self.binding, self.host = label, binding, host
+    def __init__(self, label: str, binding: Binding, host: str, url: str = ""):
+        self.label, self.binding, self.host, self.url = label, binding, host, url
+        parts = urlsplit(url or "")
+        #: THE RIGHT HOST OVER PLAIN HTTP (stranger test r6, 2026-11-18): the key's own host,
+        #: refused only because the address is http — said as that, never "sent only to X;
+        #: refusing to send it to X".
+        self.plain_http = bool(
+            host and (parts.scheme or "").lower() in ("http", "ws")
+            and any(_host_matches(host.lower().rstrip("."), p) for p in binding.hosts))
+        if self.plain_http:
+            # Host and port only: a URL's userinfo is never repeated in words.
+            address = f"{parts.scheme}://{parts.hostname}" + (f":{parts.port}" if parts.port else "")
+            super().__init__(
+                f"Your model at {address} is plain http; BOSS only sends keys over https. "
+                "Use an https address (Setup › Models).")
+            return
         where = ", ".join(_official_and_operator_hosts(binding)) or "nowhere over HTTP"
         super().__init__(
             f"{label} belongs to {binding.provider} and is sent only to {where}; refusing to send "
@@ -365,7 +379,7 @@ def assert_may_send(name: str, url: str) -> None:
     binding = binding_for(name)
     if binding is not None and not destination_allowed(binding, url):
         raise CredentialMisdirected(f"The host credential {name}", binding,
-                                    (urlsplit(url or "").hostname or ""))
+                                    (urlsplit(url or "").hostname or ""), url)
 
 
 # ---- credentials resolved from org-level material (not in the environment) -----------------------
@@ -467,7 +481,7 @@ def check_outbound(url: str, headers: Any = None, body: Any = None) -> None:
         else:
             refused.setdefault(value, (label, binding))
     for label, binding in refused.values():
-        raise CredentialMisdirected(label, binding, (urlsplit(url or "").hostname or ""))
+        raise CredentialMisdirected(label, binding, (urlsplit(url or "").hostname or ""), url)
 
 
 def misdirection_in(exc: Optional[BaseException]) -> Optional["CredentialMisdirected"]:

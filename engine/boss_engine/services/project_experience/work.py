@@ -249,6 +249,9 @@ def _attempt_sql() -> str:
         "(c.finalize_ctx ? 'change_request') AS asks_change, "
         "c.finalize_ctx->'merge'->>'at' AS merged_at, "
         "c.finalize_ctx->'merge'->>'sha' AS merged_sha, "
+        "COALESCE(jsonb_typeof(c.finalize_ctx->'completed_stages') = 'array' AND "
+        " jsonb_array_length(c.finalize_ctx->'completed_stages') > 0, false) AS built, "
+        "c.finalize_ctx->>'auto_infra_retry' AS auto_retry, "
         "dd.recommendation->'merge_failed'->>'reason' AS merge_failed, "
         "dd.recommendation->'followups' AS followups, "
         f"{LAST_ACTIVITY_SQL} AS last_activity, {live_job_sql('c')} AS live_job "
@@ -425,6 +428,16 @@ def _build_strip(r: Mapping[str, Any], state: str) -> list[dict[str, str]]:
             return "now"
         return "todo"
 
+    if (state == "failed" and at == len(phases) - 1 and not pr_url and not merge_open
+            and r.get("built") is False):
+        # IT NEVER BUILT (stranger test r6: a model refusal before any stage ran read
+        # "Build done, Review & test done"): the failure is the build's, nothing after it ran.
+        return [{"key": "plan", "label": "P", "name": "Plan", "state": "skipped"},
+                {"key": "design", "label": "D", "name": "Decide", "state": "skipped"},
+                {"key": "build", "label": "B", "name": "Build", "state": "failed"},
+                {"key": "review", "label": "R", "name": "Review", "state": "todo"},
+                {"key": "pr", "label": "PR", "name": "PR", "state": "todo"},
+                {"key": "ship", "label": "S", "name": "Ship", "state": "skipped"}]
     review = "failed" if repairing else st(3, 3)
     pr = "waiting" if merge_open else "done" if pr_url else "todo" if repairing else st(4, 4)
     if state == "failed" and at == len(phases) - 1 and not pr_url and not merge_open:
@@ -469,13 +482,36 @@ def _group_fields(project_id: str, members: list[dict[str, Any]], root_id: str,
     label_attempts(members, root_id)
     ordered = sorted(members, key=lambda x: str(iso(x.get("created_at")) or ""), reverse=True)
     latest = ordered[0] if ordered else None
-    attempts = [_attempt_item(project_id, m, costs, str(latest["id"]) if latest else "")
-                for m in ordered]
+    attempts = _collapse_auto_retries(
+        [(_attempt_item(project_id, m, costs, str(latest["id"]) if latest else ""), m)
+         for m in ordered])
     return {"attempts": attempts if len(attempts) > 1 else [],
             "attempt_count": len(attempts),
             "followups": sum(1 for a in attempts if a["kind"] == "followup"),
             "retries": sum(1 for a in attempts if a["kind"] == "retry"),
             "latest": latest}
+
+
+def _collapse_auto_retries(pairs: list[tuple[dict[str, Any], Mapping[str, Any]]]
+                           ) -> list[dict[str, Any]]:
+    """BOSS's automatic platform retries of one attempt are ONE line, "BOSS tried 3 times" —
+    never "Retry 14 … Retry 1" (stranger test r6). Newest first; the line is the newest automatic
+    attempt, counting the attempt it retried."""
+    out: list[dict[str, Any]] = []
+    run: list[dict[str, Any]] = []
+    for item, row in pairs:
+        if str(row.get("auto_retry") or "").strip() not in ("", "0", "false"):
+            run.append(item)
+            continue
+        if run:
+            out.append({**run[0], "kind": "auto_retry", "auto_retries": len(run),
+                        "label": f"BOSS tried {len(run) + 1} times"})
+            run = []
+        out.append(item)
+    if run:
+        out.append({**run[0], "kind": "auto_retry", "auto_retries": len(run),
+                    "label": f"BOSS tried {len(run) + 1} times"})
+    return out
 
 
 class Costs(dict):
@@ -864,7 +900,9 @@ def _build_items(connection: Connection, project_id: str,
             "decision_ids": [merge["decision_id"]] if merge is not None else [],
             "action_label": ("Merge" if merge is not None else
                              waits["label"] if waits and not waits.get("resolved") else None),
-            "detail": (waits["detail"] if waits else latest.get("error") or title),
+            # In words, never the raw error ("[substrate=local_subprocess]", a secret's id).
+            "detail": (waits["detail"] if waits else
+                       failure_words(latest.get("error")) if latest.get("error") else title),
             "resolved": ({"words": waits["detail"]} if waits and waits.get("resolved") else None),
             "build_id": str(latest["id"]),
             "href": project_href(project_id, tab="work", drawer=f"build:{key}"),

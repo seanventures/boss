@@ -171,6 +171,14 @@ def register_configured_secrets(settings: Any = None) -> None:
 #: reference ids, and paths on the BOSS host — a sandbox path keeps only its repo-relative
 #: tail, any other host path only its file name. Logs keep both: operators need them there.
 _SREF = re.compile(r"\bsref_[A-Za-z0-9_\-]+")
+#: "The org secret sref_…" names the secret twice once the id is replaced (stranger test r6:
+#: "The org secret a stored secret belongs to …"): the phrase around the id goes with it.
+_SREF_PHRASE = re.compile(r"\b(?:(?:[Tt]he|[Aa]n?|[Yy]our) )?(?:(?:org|project|workspace|host) )?"
+                          r"secret (?:reference )?sref_[A-Za-z0-9_\-]+")
+
+
+def _sref_words(m: "re.Match[str]") -> str:
+    return "A stored secret" if m.group(0)[:1].isupper() else "a stored secret"
 _SANDBOX_PATH = re.compile(r"/var/lib/boss/sandboxes/[^/\s'\"]+/[^/\s'\"]+/"
                            r"(?:(?:app|repo|src|work|workspace)/)?([^\s'\"]*)")
 #: Only a path that STARTS here: never one inside a URL (https://example.com/home/…) or after a
@@ -196,6 +204,7 @@ def redact_text(text: str, *, public: bool = False) -> str:
     for pattern, repl in _SHAPES:
         out = pattern.sub(repl, out)
     if public:
+        out = _SREF_PHRASE.sub(_sref_words, out)
         out = _SREF.sub("a stored secret", out)
         out = _SANDBOX_PATH.sub(lambda m: m.group(1) or "the build's copy of the repo", out)
         out = _HOST_PATH.sub(_path_tail, out)

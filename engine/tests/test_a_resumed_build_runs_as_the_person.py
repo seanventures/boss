@@ -35,9 +35,10 @@ class _Jobs:
     """Enqueues the code.task job the real way, so it carries the ambient authority."""
     settings = None
 
-    def create_job(self, db, *, project_id, task_id, kind, priority, payload):
+    def create_job(self, db, *, project_id, task_id, kind, priority, payload,
+                   run_after_seconds=0):
         return jobs_service.enqueue_job(db, project_id, kind, payload, task_id=task_id,
-                                        priority=priority)
+                                        priority=priority, run_after_seconds=run_after_seconds)
 
 
 def _failed_build(env, run_id: str) -> str:

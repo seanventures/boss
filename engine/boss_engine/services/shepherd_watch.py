@@ -345,6 +345,14 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
     # healthy worker while a budget gate quietly defers their work is worse than saying
     # nothing. The claim path writes the reason to `jobs.last_error` and pushes out
     # `run_after`; the shepherd's job is to read what is already there rather than guess.
+    if snap.job_deferred_minutes and snap.job_deferred_minutes > 0 and not snap.job_last_error:
+        # A START TIME, NOT A HOLD (stranger test r6): BOSS's own retry backoff queues the next
+        # attempt for later and records no reason, because nothing is holding it. Asking a
+        # person "the platform is holding this job for another 0 minutes: no reason recorded —
+        # continue or cancel?" about a timer was noise; it is progressing as planned.
+        return WatchVerdict(HEALTHY, f"scheduled to start in about "
+                                     f"{max(1, round(snap.job_deferred_minutes))} min",
+                            action="none", autonomous=False, evidence=ev)
     if snap.job_deferred_minutes and snap.job_deferred_minutes > 0:
         detail = snap.job_last_error or "no reason recorded"
         return WatchVerdict(

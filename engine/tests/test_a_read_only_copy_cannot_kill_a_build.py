@@ -173,36 +173,44 @@ def test_an_infra_failure_is_retried_automatically_with_backoff(monkeypatch):
     log, retried = [], []
 
     def retry(engine, settings, jobs, run_id, **kw):
-        retried.append((run_id, kw.get("automatic"), kw.get("platform_retry")))
+        retried.append((run_id, kw.get("automatic"), kw.get("platform_retry"),
+                        kw.get("auto_retry_attempt"), kw.get("run_after_seconds")))
         return {"status": "queued", "run_id": "crun_next"}
 
     g = _wire(monkeypatch, log, retry)
+    monkeypatch.setattr(g, "lineage_auto_retries", lambda *a: 0)
     out = g._retry_after_infra_failure(None, None, None, "crun_a", "p", {}, {"status": "failed"})
-    assert retried == [("crun_a", True, True)]
+    # The count and the backoff (30 s, doubled per try) go WITH the new attempt's row and job —
+    # never written after it is queued (stranger test r6).
+    assert retried == [("crun_a", True, True, 1, 30)]
     assert out["auto_retry_run_id"] == "crun_next" and out["status"] == "failed"
     assert out["auto_retry_attempt"] == 1
-    flagged = [e for e in log if e[0] == "sql"]
-    assert flagged and flagged[0][2] == {"k": g.AUTO_INFRA_RETRY_KEY, "n": 1, "id": "crun_next"}
-    # The backoff: the new attempt's job waits (30 s by default, doubled per try).
-    assert flagged[1][2] == {"d": 30, "id": "crun_next"} and "run_after" in flagged[1][1]
+    assert not [e for e in log if e[0] == "sql"], "nothing is written after the job is queued"
     said = [e for e in log if e[0] == "event" and e[1] == "code_task.auto_retried"]
     assert said and said[0][2]["attempt"] == 1 and said[0][2]["of"] == 2
 
 
-def test_the_second_try_waits_longer_and_the_third_is_not_made(monkeypatch):
+def test_the_count_comes_from_the_lineage_not_the_runs_own_field(monkeypatch):
+    """A fast-failing attempt whose own field was never written (r6: 15 builds, ~7 s apart)."""
     log, retried = [], []
-    g = _wire(monkeypatch, log, lambda *a, **k: retried.append(1) or {"run_id": "crun_n"})
-    # The marker was a bare `true` for BOSS's old single retry: that counts as one.
-    out = g._retry_after_infra_failure(None, None, None, "crun_b", "p",
-                                       {g.AUTO_INFRA_RETRY_KEY: True}, {"status": "failed"})
-    assert retried == [1] and out["auto_retry_attempt"] == 2
-    assert [e[2] for e in log if e[0] == "sql"][1]["d"] == 60
-    out = g._retry_after_infra_failure(None, None, None, "crun_n", "p",
-                                       {g.AUTO_INFRA_RETRY_KEY: 2}, {"status": "failed"})
-    assert retried == [1], "bounded: two tries, then it stops"
-    # Said as what BOSS did, never a question to the person.
-    assert out["auto_retry"] == "not_again" and "BOSS retried this build twice" in out["next_step"]
+    g = _wire(monkeypatch, log, lambda *a, **k: retried.append(k) or {"run_id": "crun_n"})
+    monkeypatch.setattr(g, "lineage_auto_retries", lambda *a: 1)
+    out = g._retry_after_infra_failure(None, None, None, "crun_b", "p", {}, {"status": "failed"})
+    assert out["auto_retry_attempt"] == 2 and retried[0]["run_after_seconds"] == 60
+    monkeypatch.setattr(g, "lineage_auto_retries", lambda *a: 2)
+    out = g._retry_after_infra_failure(None, None, None, "crun_n", "p", {}, {"status": "failed"})
+    assert len(retried) == 1, "bounded: two tries, then it stops"
+    assert out["auto_retry"] == "not_again" and "tried this build 3 times" in out["next_step"]
     assert "?" not in out["next_step"]
+
+
+def test_the_hard_cap_holds_whatever_the_setting_says(monkeypatch):
+    log, retried = [], []
+    g = _wire(monkeypatch, log, lambda *a, **k: retried.append(k) or {"run_id": "crun_n"})
+    monkeypatch.setattr(g, "lineage_auto_retries", lambda *a: 2)
+    many = type("S", (), {"build_auto_retries": 5, "build_auto_retry_backoff_seconds": 30})()
+    out = g._retry_after_infra_failure(None, many, None, "crun_c", "p", {}, {"status": "failed"})
+    assert retried == [] and out["auto_retry"] == "not_again"
 
 
 def test_a_withheld_retry_marks_the_build_as_needing_an_ok(monkeypatch):
