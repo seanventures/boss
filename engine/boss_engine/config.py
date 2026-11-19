@@ -1337,6 +1337,14 @@ class Settings(BaseSettings):
     # spent: a cost ceiling in cents (its model turns plus the repair builds it starts) and a
     # wall-time ceiling in minutes. 0 turns the agent off (failures go to a person as before).
     step_recovery: int = Field(default=1, alias="BOSS_STEP_RECOVERY")
+    # BUILDS RECOVER THEMSELVES (governed_code_task_service._retry_after_infra_failure): a build
+    # that stops on BOSS's own platform error (failure_class `infra`, never a needs_human one: a
+    # login, a toolchain, a budget) is retried by BOSS, resuming its saved work, up to this many
+    # times, each after a backoff (base seconds, doubled per try). ON by default for every
+    # install; 0 turns it off (the build then stays failed with Retry for a person).
+    build_auto_retries: int = Field(default=2, alias="BOSS_BUILD_AUTO_RETRIES", ge=0, le=5)
+    build_auto_retry_backoff_seconds: int = Field(
+        default=30, alias="BOSS_BUILD_AUTO_RETRY_BACKOFF_SECONDS", ge=0, le=3600)
     recovery_budget_cents: int = Field(default=500, alias="BOSS_RECOVERY_BUDGET_CENTS", ge=0)
     recovery_max_minutes: int = Field(default=120, alias="BOSS_RECOVERY_MAX_MINUTES", ge=1)
     # BOSS FIXES ITSELF (services/self_fix.py, docs/product/BOSS_FIXES_ITSELF.md §8.4, §11.5). A

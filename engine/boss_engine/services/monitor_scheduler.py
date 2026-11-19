@@ -526,6 +526,14 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
         return work_watchdogs.sweep(engine, settings, now=now)
     out["watchdogs"] = guard("watchdogs", watchdogs)
 
+    # A BUILD A BOSS BUG STOPPED, RESTARTED ONCE BOSS IS UPDATED (build_restart_recovery): a
+    # platform failure from before this update is retried on the new code, or said in words.
+    def restart_recovery():
+        from . import build_restart_recovery
+
+        return build_restart_recovery.sweep(engine, settings, now=now)
+    out["restart_recovery"] = guard("restart_recovery", restart_recovery)
+
     # STATUS CARDS (BOSSAPP-883, status_cards): each card whose refresh time passed is
     # recomposed; a changed document is stored as its next revision.
     def cards():

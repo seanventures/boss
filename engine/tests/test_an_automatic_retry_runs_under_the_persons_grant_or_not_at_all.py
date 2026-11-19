@@ -127,15 +127,72 @@ def test_a_build_stamped_as_boss_itself_carries_nothing(env, staffed):  # noqa: 
     assert _children(env, crun) == 0
 
 
-def test_a_this_build_only_grant_is_not_carried_past_its_build(env, staffed):  # noqa: F811
+def _standalone_build(env):
+    """An Easy Mode build (no workflow run) the person consented to "for this build only":
+    the grant is bound to `run_ct:<build>` and the build's job runs under it."""
     _, crun, grant = _workflow_build(env)
     with env.engine.begin() as c:
         c.execute(text("UPDATE identity_delegation_grants SET task_run_id=:t WHERE id=:g"),
                   {"t": f"run_ct:{crun}", "g": grant})
+        c.execute(text("UPDATE code_task_runs SET finalize_ctx = finalize_ctx - 'workflow_run_id' "
+                       "WHERE id=:r"), {"r": crun})
+        c.execute(text("UPDATE jobs SET chain=NULL, payload = jsonb_set(payload, '{_identity,run_id}', "
+                       "to_jsonb(CAST(:t AS text))) WHERE kind='code.task' AND payload->>'run_id'=:r"),
+                  {"t": f"run_ct:{crun}", "r": crun})
+    return crun, grant
+
+
+def test_boss_retries_a_this_build_only_build_under_that_same_grant(env, staffed):  # noqa: F811
+    """recipe-box (2026-11-18): crun_6883ec7c died on BOSS's own git-index bug; the person's
+    "this build only" grant was live, yet BOSS withheld its retry and asked the person to press
+    Retry — under that very grant. BOSS's retry of the SAME build now carries it, bound to it."""
+    crun, grant = _standalone_build(env)
+    with lineage.acting(WORKER_KEY):
+        new = cts.retry_code_task(env.engine, get_settings(), _Jobs(), crun, automatic=True)["run_id"]
+    job = _job_of(env, new)
+    assert job["on_behalf_of"] == ALICE and job["grant_id"] == grant and not job["on_behalf_system"]
+    assert str(job["payload"]["_identity"]["run_id"]).startswith(f"run_ct:{crun}/retry:")
+
+
+def test_boss_retries_its_own_retry_under_the_same_this_build_only_grant(env, staffed):  # noqa: F811
+    """The build's own retry chain is the same build: BOSS's retry R2 of its retry R1 of build B
+    still carries B's "this build only" grant (no lineage walk: R1 ran as the person), bound to
+    run_ct:B/retry:R1/retry:R2."""
+    crun, grant = _standalone_build(env)
+    with lineage.acting(WORKER_KEY):
+        r1 = cts.retry_code_task(env.engine, get_settings(), _Jobs(), crun, automatic=True)["run_id"]
+    with env.engine.begin() as c:
+        c.execute(text("UPDATE code_task_runs SET status='failed', phase='done', error='git: 502', "
+                       "finalize_ctx = finalize_ctx || '{\"failure_class\": \"infra\"}'::jsonb "
+                       "WHERE id=:r"), {"r": r1})
+    with lineage.acting(WORKER_KEY):
+        r2 = cts.retry_code_task(env.engine, get_settings(), _Jobs(), r1, automatic=True)["run_id"]
+    job = _job_of(env, r2)
+    assert job["on_behalf_of"] == ALICE and job["grant_id"] == grant
+    assert str(job["payload"]["_identity"]["run_id"]).startswith(f"run_ct:{crun}/retry:{r1}/retry:")
+
+
+def test_a_this_build_only_grant_is_not_carried_to_another_build(env, staffed):  # noqa: F811
+    _, crun, grant = _workflow_build(env)
+    with env.engine.begin() as c:
+        # The grant is for ANOTHER build: never carried past the one it was given for.
+        c.execute(text("UPDATE identity_delegation_grants SET task_run_id=:t WHERE id=:g"),
+                  {"t": "run_ct:crun_someotherbuild", "g": grant})
     with pytest.raises(cts.RetryNeedsPerson):
         with lineage.acting(WORKER_KEY):
             cts.retry_code_task(env.engine, get_settings(), _Jobs(), crun, automatic=True)
     assert _children(env, crun) == 0
+
+
+def test_a_follow_up_boss_starts_does_not_ride_a_this_build_only_grant():
+    """Only BOSS's RETRY of the same build carries it (same_build); a continuation does not."""
+    import inspect
+
+    from boss_engine.identity import consent
+
+    src = inspect.getsource(cts.start_code_task)
+    assert "same_build=automatic_retry" in src
+    assert "same_build" in inspect.signature(consent.carry_retry_authority).parameters
 
 
 def test_a_build_that_failed_before_boss_started_is_not_retried_automatically(env, staffed, monkeypatch):  # noqa: F811

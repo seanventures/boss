@@ -693,7 +693,7 @@ def start_code_task(
                 role_keys=[builder], permissions=_consent.code_task_permissions(
                     _consent_repos(owner, repo, repo_host), repo_host),
                 repos=_consent_repos(owner, repo, repo_host), by_boss=automatic_retry or continuation,
-                workflow_run_id=_wf, gap=authority_gap)
+                workflow_run_id=_wf, gap=authority_gap, same_build=automatic_retry)
         if automatic_retry and identity_acting is None:
             # NOT STARTED rather than started to be refused: no person's grant covers this
             # attempt, so identity would block it the moment it ran (crun_da5f6f72: "No one's
@@ -2096,6 +2096,17 @@ def redeliver_code_task(engine, settings: Settings, run_id: str, *, automatic: b
             "decision_id": proposal.get("decision_id")}
 
 
+def _within_auto_retry_budget(settings, fctx_prev: dict, automatic: bool) -> bool:
+    """BOSS's own platform retry inside its bound (build_auto_retries): the caller
+    (_retry_after_infra_failure) already caps the lineage's automatic retries, so the breaker
+    below does not refuse the second of them as a "blind" one."""
+    if not automatic:
+        return False
+    from .governed_code_task_service import _auto_retry_limits, auto_retries_made
+
+    return auto_retries_made(fctx_prev) < _auto_retry_limits(settings)[0]
+
+
 def retry_code_task(
     engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "",
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
@@ -2105,6 +2116,8 @@ def retry_code_task(
     change_request: Optional[dict] = None,
     recheck: bool = False,
     recheck_bar: Optional[str] = None,
+    platform_retry: bool = False,
+    after_update: bool = False,
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
@@ -2123,14 +2136,23 @@ def retry_code_task(
     That is the explicit "I know, proceed" the infra circuit breaker below waits for, exactly as
     a fix note is: northgate-gateway's build died twice on a BOSS bug fixed since, the person
     retried the step, and the breaker refused it for want of a note — so the step started
-    nothing and was dead-lettered (wfr_b4dbf0868f224963b793, 2026-11-16)."""
+    nothing and was dead-lettered (wfr_b4dbf0868f224963b793, 2026-11-16).
+
+    `platform_retry=True` (with automatic): BOSS's bounded retry of a build that died of BOSS's
+    own platform error (_retry_after_infra_failure). It is already capped there
+    (build_auto_retries), so the infra circuit breaker lets it through within that cap.
+
+    `after_update=True` (with automatic): BOSS restarting, once, a build that a BOSS bug stopped
+    before BOSS was UPDATED (build_restart_recovery): it ran older code, so the "failed before
+    BOSS last started" refusal does not apply to it."""
     with _transaction(engine) as c:
         prev = load_code_task_run(c, run_id)
         prev_gates_failed = _recorded_failed_gates(c, run_id) if prev is not None else []
         failed_at = _failed_at(c, run_id) if (prev is not None and automatic) else None
     if prev is None:
         raise ValueError(f"code task run not found: {run_id}")
-    if automatic and failed_at is not None and failed_at < PROCESS_STARTED_AT:
+    if (automatic and not after_update and failed_at is not None
+            and failed_at < PROCESS_STARTED_AT):
         raise RetryNeedsPerson(
             "BOSS did not retry this build by itself: it failed before BOSS last started "
             "(an upgrade or a restart), and a build that died before a restart is only run "
@@ -2196,7 +2218,8 @@ def retry_code_task(
             "NOTE: the previous attempt failed with an infrastructure error on the micro-VM "
             "substrate; this attempt runs on the local substrate (degraded mode).")
     elif (prev_infra and prev_substrate == "local_subprocess" and attempt >= 3
-          and not fix_note and not (by_person and not automatic)):
+          and not fix_note and not (by_person and not automatic)
+          and not (platform_retry and _within_auto_retry_budget(settings, fctx_prev, automatic))):
         raise ValueError(
             f"circuit breaker: {attempt - 1} attempts in this lineage have failed with "
             f"infrastructure errors (last: {str(prev.get('error') or '')[:200]!r}) and the run is "
@@ -2473,6 +2496,10 @@ def retry_code_task(
             repair_retries=(repair_retries if isinstance(repair_retries, int)
                             else spec.get("repair_retries")),
             substrate=substrate_override,
+            # THE SAME REPOSITORY HOST: a retry of a build on this machine's local repository
+            # stays local (it lost `local` and was read as a GitHub repository nothing could
+            # clone).
+            repo_host=spec.get("repo_host") or None,
             job_priority=job_priority,
             automatic_retry=automatic,
             outcome=started,
