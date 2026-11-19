@@ -353,16 +353,36 @@ def worktree(git_dir: Path, ref: Optional[str] = None):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def merge(git_dir: Path, head: str, base: str, message: str, *, method: str = "merge") -> str:
+class LocalMergeMoved(LocalRepoError):
+    """The commit a person approved is no longer on the change's branch (it was rewritten)."""
+
+
+def merge(git_dir: Path, head: str, base: str, message: str, *, method: str = "merge",
+          at: Optional[str] = None) -> str:
     """Merge branch `head` into branch `base` (fast-forward when possible, else a merge commit;
     `squash` makes one commit). Returns the new head of `base`. A conflict changes nothing and
-    raises LocalMergeConflict with the conflicting paths."""
+    raises LocalMergeConflict with the conflicting paths.
+
+    `at`: merge exactly that commit of `head` — the one a person approved — and not whatever
+    the branch holds now. A follow-up build keeps committing to its lineage's branch, so the
+    tip can be newer than the approval (neighborhood-board change #1, 2026-11-19: the merge
+    swept in a follow-up's unreviewed checkpoint, and the follow-up then had no change of its
+    own). Commits after `at` stay on the branch for their own change. `at` no longer on the
+    branch raises LocalMergeMoved and changes nothing."""
     head_sha = branch_sha(git_dir, head)
     base_sha = branch_sha(git_dir, base)
     if not head_sha:
         raise LocalRepoError(f"There is no branch {head!r} to merge.")
     if not base_sha:
         raise LocalRepoError(f"There is no branch {base!r} to merge into.")
+    if at:
+        pinned = rev_parse(git_dir, at)
+        # Words only, no sha or branch name: merge_failures.classify reads digits like "409"
+        # in hex as a moved GitHub head and would retry this forever.
+        if not pinned or merge_base(git_dir, pinned, head_sha) != pinned:
+            raise LocalMergeMoved("The approved commit is no longer on the change's branch "
+                                  "(it was rewritten after the approval); nothing was merged.")
+        head_sha = pinned
     if merge_base(git_dir, head_sha, base_sha) == head_sha:
         return base_sha                                   # already in
     if method != "squash" and merge_base(git_dir, head_sha, base_sha) == base_sha:
@@ -370,11 +390,12 @@ def merge(git_dir: Path, head: str, base: str, message: str, *, method: str = "m
         return head_sha                                   # fast-forward
     with worktree(git_dir, base) as wt:
         git(["fetch", "--quiet", "origin", f"refs/heads/{head}:refs/remotes/origin/{head}"], cwd=wt)
+        # The commit itself (an ancestor of the fetched branch), never the moving branch name.
         if method == "squash":
-            done = subprocess.run(["git", "merge", "--squash", f"origin/{head}"], cwd=str(wt),
+            done = subprocess.run(["git", "merge", "--squash", head_sha], cwd=str(wt),
                                   capture_output=True, env=_env(), timeout=300)
         else:
-            done = subprocess.run(["git", "merge", "--no-ff", "-m", message, f"origin/{head}"],
+            done = subprocess.run(["git", "merge", "--no-ff", "-m", message, head_sha],
                                   cwd=str(wt), capture_output=True, env=_env(), timeout=300)
         if done.returncode != 0:
             conflicted = git(["diff", "--name-only", "--diff-filter=U"], cwd=wt, check=False)
