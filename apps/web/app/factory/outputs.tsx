@@ -37,6 +37,7 @@ import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { missingWord } from "../../lib/build-detail";
 import { failedTestName } from "../../lib/failed-test-name";
 import { nowInput } from "./now-band";
+import { WorkPreviewButton, buildPreviewApp } from "../projects/work-preview";
 
 export type OutputKey = "brief" | "pr" | "checks" | "tests" | "changes" | "comments" | "preview" | "deploy" | "cost";
 
@@ -146,6 +147,7 @@ export function Outputs({ projectId, actor, cockpit: c, open, onOpen, onLogs, on
           const isOpen = open === k;
           return (
             <li key={k} className="fx-out" data-key={k} data-open={isOpen || undefined} data-testid={`fx-out-${k}`}>
+              <div className="fx-out-row">
               <button type="button" className="fx-out-head" aria-expanded={isOpen} data-testid={`fx-out-head-${k}`}
                       title={k === "changes" ? "Files only. Open the PR for the diff." : undefined}
                       onClick={() => onOpen(isOpen ? null : k)}>
@@ -159,6 +161,16 @@ export function Outputs({ projectId, actor, cockpit: c, open, onOpen, onLogs, on
                 <span className="fx-out-maker">{makers[k]}</span>
                 {isOpen ? <CaretDown size={10} weight="bold" aria-hidden /> : <CaretRight size={10} weight="bold" aria-hidden />}
               </button>
+              {/* THE PREVIEW, ONE PRESS FROM THE ROW (operator, 2026-11-19): Start preview (never
+                  had one), Recreate preview (stopped or expired), Open preview (running) — the
+                  Your app card's one open. Only once there is a branch to preview. */}
+              {k === "preview" && previewCanRun(c) ? (
+                <span className="fx-out-inline">
+                  <WorkPreviewButton app={buildPreviewApp(c.run.id, o.preview)} projectId={projectId} actor={actor}
+                                     testid="fx-out-preview-act" onStarted={onRefresh} className="ag-btn" />
+                </span>
+              ) : null}
+              </div>
               {isOpen ? (
                 <div className="fx-out-body" data-testid={`fx-out-body-${k}`}>
                   {k === "brief" ? <BriefBody c={c} /> : null}
@@ -641,6 +653,11 @@ export function stepsWord(p: Pick<PreviewOutput, "status" | "steps" | "stepsDone
 export const PREVIEW_DATA_TIP = "What this app saves (its SQLite files and data folder) is kept when the preview stops, idles out or restarts, for every build of this app. Fresh data deletes it and starts the app empty.";
 export const FRESH_DATA_CONFIRM = "Delete the data this app saved in its previews and start it empty? This cannot be undone.";
 
+/** A preview runs a branch: only once the build opened its PR (or GitHub waits on it). */
+export function previewCanRun(c: Pick<Cockpit, "state">): boolean {
+  return ["pr_open", "merged", "deployed", "github_wait"].includes(c.state.state);
+}
+
 function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: string; onLogs: () => void; onRefresh: () => void }) {
   const p = c.outputs.preview;
   const [busy, setBusy] = useState(false);
@@ -683,7 +700,7 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
   // A PREVIEW RUNS A BRANCH: a build that opened no PR has none, and the press answered with an
   // internal error (tester P2). Disabled, and it says why.
   // A build waiting for GitHub previews from this machine's copy (BOSSAPP-922).
-  const canRun = ["pr_open", "merged", "deployed", "github_wait"].includes(c.state.state);
+  const canRun = previewCanRun(c);
   const cannotRun = canRun ? undefined : c.state.state === "done_no_pr"
     ? "This build opened no PR, so there is no branch to preview"
     : "Runs once the build has opened its PR";

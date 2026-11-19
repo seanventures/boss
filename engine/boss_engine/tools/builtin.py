@@ -1386,7 +1386,10 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         "BOSS and auto-starts this code task once the PRD is approved.",
         _obj(
             {
-                "title": {"type": "string"},
+                "title": {"type": "string",
+                          "description": "the work's short human name, at most six words, in "
+                                         "your words (e.g. 'Bench name on map bubble') — never "
+                                         "the first words of the request"},
                 "instructions": {"type": "string", "description": "what to build/change"},
                 "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
                 "test_commands": {"type": "array", "items": {"type": "string"}},
@@ -2357,7 +2360,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 "workflow_key": {"type": "string",
                                  "description": "which workflow to run, by key"},
                 "title": {"type": "string",
-                          "description": "short name for the run and its document"},
+                          "description": "short name for the run and its document: at most "
+                                         "six words, in your words (e.g. 'Bench name on map "
+                                         "bubble') — never the first words of the request"},
                 "from_discovery": {
                     "type": "string",
                     "description": "a COMPLETED discovery run (drun_…) whose dossier this run "

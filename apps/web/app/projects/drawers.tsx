@@ -9,7 +9,7 @@
  * Prose lives here, never on the page.
  */
 import { FailedActions } from "./build-failed";
-import { changeHref, changeRef, isLocalChangeUrl, linkTarget, reviewChangeWords } from "../../lib/repo-links";
+import { changeRef, linkTarget, reviewChangeWords } from "../../lib/repo-links";
 import { ChangeLink } from "../change-link";
 import { DiagnosisFlow, WhyLine } from "../../components/stuck-work";
 import React, { useEffect, useState } from "react";
@@ -35,6 +35,8 @@ import { LOCAL, whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 import { LearnedStrip } from "../knowledge/learned-strip";
 import { LinkedTicket } from "./linked-ticket";
+import { mergeWaitOf, workNextStep } from "../../lib/work-next-step";
+import { WorkPreviewButton } from "./work-preview";
 
 const STEP_WORDS: Record<string, string> = { plan: "Plan", design: "You approved", decide: "You approved", build: "Build", review: "Review & test", pr: "Merge", ship: "Staging" };
 
@@ -165,8 +167,9 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
   const l = w.links;
   // The PR a merge waits on: the engine's merge_pr; an older payload's "Merge" row its pr.
   // A pull request already merged is not that wait (merged_pr), even when the row still says Merge.
-  const mp = l.merge_pr ?? (w.action_label === "Merge" && l.pr && !l.merged_pr
-    ? { ...l.pr, follow_up_of: null, failed: "" } : null);
+  const mp = mergeWaitOf(w);
+  // ONE NEXT STEP (workNextStep): the row's button says these same words.
+  const next = workNextStep(w);
   const story = useWorkStory(ctx, w.id).data;
   const full = l.build || l.workflow_run;
   const failure = ctx.overview.project.build_failed ?? null;
@@ -183,14 +186,19 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
           <span className="px-ny-ico" aria-hidden>!</span>
           {/* "Ready to merge" only for a merge question, about ITS pull request (merge_pr):
               never a merged PR, never a deploy gate's wait (pr_follow_up). */}
-          <b style={{ flex: 1 }} data-testid="px-drawer-work-needs-words">{mp ? (mp.failed ? `Merge failed: ${mp.failed}` : mp.follow_up_of ? `Follow-up fix after #${mp.follow_up_of} · ready to merge` : mp.followups?.words ? `Ready to merge · ${mp.followups.words}` : "Ready to merge") : w.why?.who === "you" ? w.why.words : "Waiting on you"}</b>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <b data-testid="px-drawer-work-needs-words">{next?.words ?? "Waiting on you"}</b>
+            {next?.hint ? <small className="px-faint" style={{ display: "block" }} data-testid="px-drawer-work-needs-hint">{next.hint[0].toUpperCase() + next.hint.slice(1)} the merge</small> : null}
+          </span>
+          {/* THE CHANGE'S OWN PREVIEW, beside the merge: verify it before merging. */}
+          {w.preview_app ? <WorkPreviewButton app={w.preview_app} projectId={ctx.projectId} actor={ctx.actor} testid="px-drawer-work-preview" /> : null}
           {/* ONE ACTION (screen 05b): merging is approving the build's merge question in BOSS;
               with no question on record it opens the PR on GitHub. */}
-          {mp ? (l.decision
-            ? <a className="px-btn" data-kind="amber" data-size="s" href={pxHref(l.decision)} data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> Merge {changeRef(mp.external_url, mp.number, true)}</a>
-            : <a className="px-btn" data-kind="amber" data-size="s" href={changeHref(mp.external_url) ?? undefined} {...linkTarget(mp.external_url)} data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> {isLocalChangeUrl(mp.external_url) ? `Open ${changeRef(mp.external_url, mp.number, true)}` : `Merge ${changeRef(mp.external_url, mp.number)} ↗`}</a>)
-            : l.decision ? <PxLink href={l.decision} className="px-btn" testid="px-drawer-work-decide">Decide</PxLink>
-            : l.workflow_run ? <PxLink href={l.workflow_run} className="px-btn">Decide</PxLink> : null}
+          {next?.kind === "merge" && mp ? (l.decision
+            ? <a className="px-btn" data-kind="amber" data-size="s" href={pxHref(next.href)} data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> {next.label}</a>
+            : <a className="px-btn" data-kind="amber" data-size="s" href={next.href || undefined} {...linkTarget(mp.external_url)} data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> {next.label}</a>)
+            : l.decision ? <PxLink href={l.decision} className="px-btn" testid="px-drawer-work-decide">{next?.label ?? "Decide"}</PxLink>
+            : l.workflow_run ? <PxLink href={l.workflow_run} className="px-btn">{next?.label ?? "Decide"}</PxLink> : null}
         </div>
       ) : null}
       {w.state === "stalled" ? (
