@@ -664,7 +664,8 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
       <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled={busy} data-testid="fx-preview-restart" onClick={() => void start()}>Restart</GatedButton>
       {running ? <GatedButton permission="preview:manage" type="button" className="ag-link" disabled={busy} data-testid="fx-preview-stop" onClick={() => void stop()}>Stop</GatedButton> : null}
       <button type="button" className="ag-link" onClick={onLogs} data-testid="fx-preview-logs">Logs ▾</button>
-      {p.expiresAt ? <span className="fx-muted" title={p.expiresAt}>Expires {localWith(p.expiresAt, { hour: "numeric", minute: "2-digit" })}</span> : null}
+      {/* A stopped preview expires at nothing: its time limit is only news while it runs. */}
+      {running && p.expiresAt ? <span className="fx-muted" title={p.expiresAt} data-testid="fx-preview-expires">Expires {localWith(p.expiresAt, { hour: "numeric", minute: "2-digit" })}</span> : null}
       {p.substrate ? <span className="fx-muted" title="Where the preview runs">{p.substrate}</span> : null}
       {typeof p.stepsDone === "number" && p.stepsTotal ? (
         <button type="button" className="ag-link" aria-expanded={showSteps} data-testid="fx-preview-steps"
