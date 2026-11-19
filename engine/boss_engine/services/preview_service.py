@@ -2293,12 +2293,22 @@ def _diagnose_listening_port(log_path: str, port_hint: int,
         try:
             response = urllib.request.urlopen(
                 f"http://127.0.0.1:{port}{path if path != '/' else ''}", timeout=2)
-            status, body = int(response.status), response.read(4096)
+            status, body = int(response.status), response.read(65536)
             if not body.strip():
                 return (f"the app IS listening on port {port}, but GET {path} returned {status} "
                         f"with an empty body, so there is no page to preview.")
-            return (f"the app IS listening on port {port} and GET {path} returned {status}, but "
-                    f"the health check rejected the page it served.")
+            from .visual_gate import error_page_marker
+
+            # THE REASON, never "the health check rejected the page": _url_ok rejects a 2xx
+            # body only when it renders an error page, so name the words it rendered.
+            marker = error_page_marker(body.decode("utf-8", "ignore"))
+            if marker:
+                return (f"the app IS listening on port {port} and GET {path} returned {status}, "
+                        f"but the page it rendered is an error page (it shows "
+                        f"\"{marker.strip()}\").")
+            # It answers with a real page NOW: it was slow, not broken.
+            return (f"the app IS listening on port {port} and GET {path} now returns {status} "
+                    f"with a page, but it did not answer within the start window.")
         except urllib.error.HTTPError as http_error:
             if path != "/":
                 return (f"the app IS listening on port {port}, but GET {path} returned "
@@ -2752,6 +2762,7 @@ def app_serves_headline(record: Optional[dict]) -> str:
         # it crashed without — never only the crash.
         return error.split(". ", 1)[0][:300]
     verb = ("the app did not start" if rec.get("exit_code") is not None or "exited" in error
+            else "the app did not serve a usable page" if "is listening on port" in error.lower()
             else "the app did not serve HTTP")
     line = ""
     if "error: " in error:
@@ -2980,10 +2991,14 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
                     record["error"] = f"the app {run_env.explain_crash(log_text)}. {record['error']}"
             else:
                 listening = _diagnose_listening_port(log_path, port_hint, health)
-                record.update(ok=False, error=(
-                    f"the app started and kept running but did not answer HTTP within "
-                    f"{timeout:g}s. " + (listening + " " if listening else "")
-                    + why_it_failed_text(_app_text())))
+                # ONE STORY. "did not answer HTTP" followed by "GET / returned 200" contradicted
+                # itself (crun_33379dfc): an app that is listening DID answer, so say what it
+                # answered instead of claiming it never did.
+                head = (f"the app started and kept running but did not serve a usable page "
+                        f"within {timeout:g}s: {listening}" if listening else
+                        f"the app started and kept running but did not answer HTTP within "
+                        f"{timeout:g}s.")
+                record.update(ok=False, error=head + " " + why_it_failed_text(_app_text()))
         finally:
             _kill(proc.pid)
             # THE START'S RECORD, on every outcome (app_start): command, cwd, the variables by
