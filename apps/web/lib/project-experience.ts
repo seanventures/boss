@@ -384,7 +384,9 @@ export type Environment = {
 export type DeployPhaseRow = { key: string; label: string; status: "done" | "running" | "failed" | "pending" | "skipped";
   started_at: string; ended_at: string; elapsed_s: number | null; log: string };
 export type DeployProgress = { phases: DeployPhaseRow[]; index: number; total: number; current: string; failed_phase: string };
-export type TargetDeployState = "not_deployed" | "setting_up" | "deploying" | "waiting" | "live" | "failed";
+/** `fixing`: the newest deploy failed and BOSS is acting on it (engine deploy_repair.underway): a
+ *  repair build, a retry after a backoff, or the deploy's agent reading the log. */
+export type TargetDeployState = "not_deployed" | "setting_up" | "deploying" | "waiting" | "live" | "failed" | "fixing";
 export type TargetDeploy = {
   state: TargetDeployState; word: string; live: boolean; reason: string;
   attempt: DeployAttempt | null;
@@ -395,7 +397,7 @@ export type TargetDeploy = {
  *  Retry puts back in the queue, and `run_href` opens that run. */
 export type DeployAttempt = { id: string; kind: string; status: string; commit: string; at: string;
   workflow_run_id: string; step_id: string; run_href: string };
-const DEPLOY_STATES = ["not_deployed", "setting_up", "deploying", "waiting", "live", "failed"] as const;
+const DEPLOY_STATES = ["not_deployed", "setting_up", "deploying", "waiting", "live", "failed", "fixing"] as const;
 const PHASE_STATES = ["done", "running", "failed", "pending", "skipped"] as const;
 export const parseDeployProgress = (v: unknown): DeployProgress | null => {
   const x = o(v);
@@ -432,7 +434,9 @@ export type Deployments = {
   add_server_href: string;
   history: { id: string; label: string; sub: string; at: string; state: StepState; href: string; word: string; by: string; by_agent: boolean;
     /** A deploy that failed and an agent recovered (a later deploy went live): amber ↺. */
-    recovered: boolean }[];
+    recovered: boolean;
+    /** A failed deploy BOSS is fixing or fixed (engine deploy_repair.underway): amber, in its words. */
+    repaired?: boolean }[];
   /** No environment yet. `failed`: the first deploy failed before it had a target or a record —
    *  "Last deploy failed: <reason>" with the run whose step a Retry puts back. */
   empty: { label: string; detail: string; href: string; failed: boolean; workflow_run_id: string; step_id: string } | null;
@@ -901,7 +905,9 @@ export const parseDeployments = (v: unknown): Deployments => {
       const sub = s(y.sub) || [s(y.duration), s(y.smoke), s(y.reason)].filter(Boolean).join(" · ");
       const recovered = y.recovered === true || y.state === "recovered";
       return { id: s(y.id), label: s(y.label), sub, at: s(y.at), state: recovered ? "failed" : deployState(y.status, y.state), href: s(y.href),
-               word: s(y.state_word), by: s(y.by), by_agent: y.by_agent === true, recovered };
+               word: s(y.state_word), by: s(y.by), by_agent: y.by_agent === true, recovered,
+               // BOSS is acting on this failed deploy (engine deploy_repair.underway): amber, its words.
+               repaired: !!s(o(y.repair).state) };
     }),
     empty: s(o(x.empty).label) ? { label: s(o(x.empty).label), detail: s(o(x.empty).detail), href: s(o(x.empty).href),
                                    failed: o(x.empty).failed === true, workflow_run_id: s(o(x.empty).workflow_run_id),

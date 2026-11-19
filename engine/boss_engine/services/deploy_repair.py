@@ -415,6 +415,175 @@ def fixes_sentence(fixes: list[Mapping[str, Any]]) -> str:
         for f in fixes if isinstance(f, Mapping))
 
 
+# ── what BOSS is doing about a failed deployment, for every surface ─────────────────────────
+#
+# THE CASE (laptop, Recipe box, sdep_73c0758fb5a143fa81c2, 2026-11-19). The deploy failed its
+# health check (the container exited: `Cannot find module '/app/server.js'`). Two minutes later
+# the deploy step's agent (Pilot) decided fix_app, a repair build ran 02:54-03:00 and the fixed
+# version was planned at 03:02 (sdep_5be0890e60504d839c89), waiting on its approval. Every
+# project surface still said "Last deploy failed" in red, and the operator asked why no agent
+# was fixing it. The work was happening; nothing read it. `underway` is the ONE answer the
+# Deployments card, its history, the header chip and the agents' list_deployments read.
+
+#: What a failed (or a fix's waiting) deployment is now, in `underway`'s answers.
+FIXING, RETRYING, LOOKING, DEPLOYING_FIX, FIXED_WAITING, FIXED = (
+    "fixing", "retrying", "looking", "deploying_fix", "fixed_waiting", "fixed")
+
+_BUILD_DONE = ("completed", "failed", "cancelled", "simulated")
+_STEP_MOVING = ("ready", "running", "pending", "queued", "leased")
+
+
+#: How long after a failure a step parked on it still reads as "BOSS is looking into it".
+LOOKING_MINUTES = 15
+
+
+def _fresh(finished_at: Any) -> bool:
+    from datetime import datetime, timedelta, timezone
+
+    if isinstance(finished_at, str):
+        try:
+            finished_at = datetime.fromisoformat(finished_at)
+        except ValueError:
+            return False
+    if not isinstance(finished_at, datetime):
+        return False
+    if finished_at.tzinfo is None:
+        finished_at = finished_at.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - finished_at < timedelta(minutes=LOOKING_MINUTES)
+
+
+def _deploy_steps(connection: Connection, run_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    """Per workflow run, its deploy steps' newest iterations (status + output)."""
+    if not run_ids:
+        return {}
+    try:
+        with connection.begin_nested():
+            rows = connection.execute(text(
+                "SELECT DISTINCT ON (workflow_run_id, step_id) workflow_run_id, step_id, "
+                "       status, output, updated_at FROM workflow_step_runs "
+                "WHERE workflow_run_id = ANY(:r) AND (output ? 'deploy_fixes' "
+                "   OR output ? 'stack_deployment_id' OR output->>'capability' = 'deploy' "
+                "   OR binding_snapshot->>'capability' = 'deploy') "
+                "ORDER BY workflow_run_id, step_id, iteration DESC"),
+                {"r": sorted(set(run_ids))}).mappings().all()
+    except Exception:  # noqa: BLE001 — an install without workflows has no deploy steps
+        return {}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        output = _json(r["output"]) or {}
+        out.setdefault(str(r["workflow_run_id"]), []).append(
+            {"step_id": r["step_id"], "status": str(r["status"] or ""),
+             "output": output if isinstance(output, dict) else {}})
+    return out
+
+
+def _builds(connection: Connection, ids: list[str]) -> dict[str, str]:
+    if not ids:
+        return {}
+    return {str(r["id"]): str(r["status"] or "") for r in connection.execute(
+        text("SELECT id, status FROM code_task_runs WHERE id = ANY(:i)"),
+        {"i": sorted(set(ids))}).mappings()}
+
+
+def _error_of(row: Mapping[str, Any]) -> dict[str, Any]:
+    err = _json(row.get("error")) if row.get("error") is not None else {}
+    return err if isinstance(err, dict) else {}
+
+
+def _cause_words(row: Mapping[str, Any]) -> str:
+    err = _error_of(row)
+    headline = str(err.get("headline") or row.get("failure_reason") or "").strip()
+    return short_cause({"headline": headline, "log_tail": row.get("log_tail") or ""}) \
+        if headline else "the deploy failed"
+
+
+def underway(connection: Connection, rows: list[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Per deployment id (failed, or a fix's redeploy waiting on approval): what BOSS is doing
+    about it, in words — {state, word, reason, build_run_id?, next_deployment_id?}. A failed
+    deployment nothing is acting on is absent: it stays "Last deploy failed", because then it
+    really is a person's.
+
+    Read from the deploy step that owns the deployment (deploy_fixes, its await handle, the
+    recovery loop's last decision) — never a second record of the same facts. `rows` need
+    id, status, workflow_run_id, error, failure_reason, log_tail, finished_at."""
+    wanted = [r for r in rows if r.get("workflow_run_id")
+              and str(r.get("status") or "") in ("failed", "awaiting_approval")]
+    if not wanted:
+        return {}
+    steps = _deploy_steps(connection, [str(r["workflow_run_id"]) for r in wanted])
+    fix_ids = [str(f.get("build_run_id")) for ss in steps.values() for s in ss
+               for f in (s["output"].get(FIXES_KEY) or []) if isinstance(f, dict)
+               and f.get("build_run_id")]
+    builds = _builds(connection, fix_ids)
+    out: dict[str, dict[str, Any]] = {}
+    for r in wanted:
+        dep = str(r["id"])
+        for s in steps.get(str(r["workflow_run_id"]), []):
+            said = _step_says(s, dep, r, builds)
+            if said:
+                out[dep] = said
+                break
+    return out
+
+
+def _step_says(step: Mapping[str, Any], dep: str, row: Mapping[str, Any],
+               builds: Mapping[str, str]) -> Optional[dict[str, Any]]:
+    output = step["output"]
+    status = step["status"]
+    fixes = [f for f in output.get(FIXES_KEY) or [] if isinstance(f, dict)]
+    mine = [f for f in fixes if str(f.get("deployment_id") or "") == dep]
+    current = str(output.get("stack_deployment_id") or "")
+    handle = output.get("await") if isinstance(output.get("await"), dict) else {}
+    if status in ("cancelled", "skipped", "deadlettered"):
+        return None
+    if str(row.get("status")) == "awaiting_approval":
+        # THE FIX'S REDEPLOY, waiting on its approval: say it is the fix, and what it fixed.
+        if current == dep and output.get(REDEPLOY_KEY) and fixes:
+            last = fixes[-1]
+            return {"state": FIXED_WAITING, "word": "Fixed · waiting for your OK",
+                    "reason": (f"BOSS fixed the app ({str(last.get('cause') or 'the failed deploy').rstrip('.')}) "
+                               "and the fixed version waits for your approval."),
+                    "build_run_id": last.get("build_run_id")}
+        return None
+    cause = _cause_words(row)
+    if mine:
+        fix = mine[-1]
+        build = str(fix.get("build_run_id") or "")
+        if current and current != dep:
+            return {"state": FIXED, "word": "Fixed by BOSS",
+                    "reason": f"{cause}. BOSS fixed the app (build {build}) and deployed again.",
+                    "build_run_id": build, "next_deployment_id": current}
+        built = builds.get(build, "")
+        if status == "failed" or built in ("failed", "cancelled"):
+            return None
+        if built and built not in _BUILD_DONE:
+            return {"state": FIXING, "word": "BOSS is fixing the deploy",
+                    "reason": f"{cause}. BOSS is fixing the app (build {build}), then deploys "
+                              "again.", "build_run_id": build}
+        return {"state": DEPLOYING_FIX, "word": "BOSS is deploying the fix",
+                "reason": f"{cause}. BOSS fixed the app (build {build}) and is deploying it.",
+                "build_run_id": build}
+    if current != dep and str(handle.get("id") or "") != dep:
+        return None
+    if status == "waiting" and str(handle.get("kind") or "") == "recovery":
+        if str(handle.get("then") or "") == "boss_update":
+            return {"state": RETRYING, "word": "Waiting on a BOSS fix",
+                    "reason": f"{cause}. BOSS placed the cause in its own code and deploys "
+                              "again once that is fixed."}
+        when = str(handle.get("not_before") or "")[11:16]
+        return {"state": RETRYING, "word": "BOSS will deploy again",
+                "reason": f"{cause}. BOSS will try the deploy again"
+                          + (f" at {when} UTC." if when else " shortly.")}
+    if status in _STEP_MOVING or (status == "waiting" and _fresh(row.get("finished_at"))
+                                   and str(handle.get("kind") or "") == "stack_deployment"):
+        # The deploy step's agent is reading the failure (step_recovery) right now — or is
+        # about to: the sweep that wakes it runs within minutes of the failure. Past that, a
+        # step still parked on a failed deployment is nobody's work, and says so (None).
+        return {"state": LOOKING, "word": "BOSS is looking into it",
+                "reason": f"{cause}. The deploy's agent is reading the log to fix it."}
+    return None
+
+
 def _usable_hosts(alias: str = "") -> str:
     """deployment_fleet.usable_hosts_sql: a project's hosts include the ones its organisation shares."""
     from .deployment_fleet import usable_hosts_sql

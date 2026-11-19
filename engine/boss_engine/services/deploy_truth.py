@@ -42,9 +42,11 @@ PHASES: tuple[tuple[str, str], ...] = (
     ("switch", "Switch"), ("install", "Install"), ("health", "Health"), ("smoke", "Smoke"))
 PHASE_KEYS = tuple(k for k, _ in PHASES)
 
-#: Target states (`state`) and their words when nothing more specific applies.
-NOT_DEPLOYED, SETTING_UP, DEPLOYING, WAITING, LIVE, FAILED = (
-    "not_deployed", "setting_up", "deploying", "waiting", "live", "failed")
+#: Target states (`state`) and their words when nothing more specific applies. FIXING: the
+#: newest deploy failed and BOSS is acting on it (deploy_repair.underway) — a repair build, a
+#: retry after a backoff, or the deploy's agent reading the log — never a bare red failure.
+NOT_DEPLOYED, SETTING_UP, DEPLOYING, WAITING, LIVE, FAILED, FIXING = (
+    "not_deployed", "setting_up", "deploying", "waiting", "live", "failed", "fixing")
 
 _RUNNING = {"running", "applying", "deploying"}
 _WAITING = {"planned", "awaiting_approval", "pending_approval", "pending", "queued"}
@@ -404,12 +406,20 @@ def truth(connection: Connection, targets: list[Mapping[str, Any]], *,
 
     `live_url` is set ONLY when a deploy to the target succeeded; `address` is where it will
     answer, for "Setting up" words without a link."""
+    from .deploy_repair import underway
     from .deployment_health import newest_deploys
     from .project_experience.common import web_url
 
     ids = [str(t["id"]) for t in targets]
     live = newest_deploys(connection, ids)
     attempts = _attempts(connection, ids)
+    # WHAT BOSS IS DOING ABOUT IT (Recipe box, sdep_73c0758f, 2026-11-19): a failed deploy a
+    # repair build is fixing read "Last deploy failed" while the fix ran and waited.
+    try:
+        with connection.begin_nested():
+            acting = underway(connection, [a for a in attempts.values() if a["kind"] == "stack"])
+    except Exception:  # noqa: BLE001 — words are a nicety; the deploy's own state still shows
+        acting = {}
     stack_live = {str(r["t"]): r["open_url"] for r in connection.execute(text(
         "SELECT DISTINCT ON (target_id) target_id AS t, open_url FROM stack_deployments "
         "WHERE target_id = ANY(:ids) AND status = 'healthy' "
@@ -427,6 +437,9 @@ def truth(connection: Connection, targets: list[Mapping[str, Any]], *,
                              > (_ts(live[tid].get("finished_at")) or datetime.min.replace(
                                  tzinfo=timezone.utc)))
         prog = None
+        doing = acting.get(str(a["id"])) if a else None
+        if doing and doing["state"] == "fixed":   # history's word; the newer attempt is newest
+            doing = None
         if a and a["kind"] == "stack" and (status in _RUNNING or status in _FAILED):
             prog = progress(a.get("steps") or [], status, log_tail=a.get("log_tail") or "",
                             now=now)
@@ -437,6 +450,10 @@ def truth(connection: Connection, targets: list[Mapping[str, Any]], *,
         elif a and newer and status in _WAITING:
             state = WAITING
             word = "Update waiting for approval" if was_live else "Setting up · waiting for approval"
+            if doing:
+                word = doing["word"]
+        elif a and newer and status in _FAILED and doing:
+            state, word = FIXING, doing["word"]
         elif a and newer and status in _FAILED:
             state = FAILED
             word = "Last deploy failed"
@@ -448,7 +465,11 @@ def truth(connection: Connection, targets: list[Mapping[str, Any]], *,
         out[tid] = {
             "state": state, "word": word, "live": was_live, "live_url": live_url,
             "address": address,
-            "reason": _reason(a) if state == FAILED and a else None,
+            "reason": (doing["reason"] if doing and state in (FIXING, WAITING) else
+                       _reason(a) if state == FAILED and a else None),
+            # What BOSS is doing about it (deploy_repair.underway), for a link to its build.
+            "repair": ({k: doing[k] for k in ("state", "build_run_id", "next_deployment_id")
+                        if doing.get(k)} if doing and state in (FIXING, WAITING) else None),
             "attempt": ({"id": a["id"], "kind": a["kind"], "status": status,
                          "commit": (str(a.get("commit") or "")[:7] or None),
                          "workflow_run_id": a.get("workflow_run_id"),
@@ -467,12 +488,13 @@ def truth(connection: Connection, targets: list[Mapping[str, Any]], *,
 
 def project_deploy(connection: Connection, project_id: str, *,
                    now: Optional[datetime] = None) -> Optional[dict[str, Any]]:
-    """The header chip's one deploy: the newest attempt that is running, else one that failed
-    and has not been followed by a success. None when nothing is moving or broken."""
+    """The header chip's one deploy: the newest attempt that is running, else one waiting, else
+    one BOSS is fixing, else one that failed and has not been followed by a success. None when
+    nothing is moving or broken."""
     targets = project_targets(connection, project_id)
     told = truth(connection, targets, now=now)
     named = {str(t["id"]): t for t in targets}
-    for want in (DEPLOYING, WAITING, FAILED):
+    for want in (DEPLOYING, WAITING, FIXING, FAILED):
         hits = [(tid, v) for tid, v in told.items() if v["state"] == want]
         if hits:
             tid, v = max(hits, key=lambda kv: (kv[1]["attempt"] or {}).get("at") or "")

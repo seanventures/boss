@@ -136,6 +136,7 @@ def _history(connection: Connection, project_id: str, limit: int = 10) -> list[d
     rows = connection.execute(text(
         "SELECT s.id, s.target_id, s.commit_sha, s.status, s.created_by, s.created_at, "
         "s.apply_started_at, s.finished_at, s.failure_reason, s.rollback_of, "
+        "s.workflow_run_id, s.error, s.log_tail, "
         "t.environment, t.app_name, d.status AS decision_status, d.approved_by "
         "FROM stack_deployments s JOIN deployment_targets t ON t.id = s.target_id "
         "LEFT JOIN decisions d ON d.id = s.decision_id "
@@ -148,6 +149,15 @@ def _history(connection: Connection, project_id: str, limit: int = 10) -> list[d
     firsts = {str(t): at for t, at in connection.execute(text(
         "SELECT target_id, min(created_at) FROM stack_deployments WHERE project_id = :p "
         "GROUP BY target_id"), {"p": project_id}).all()}
+    # WHAT BOSS IS DOING ABOUT A FAILED DEPLOY (deploy_repair.underway): "BOSS is fixing the
+    # deploy" / "Fixed by BOSS", amber, never a bare red "Failed" over a repair under way.
+    from ..deploy_repair import underway
+
+    try:
+        with connection.begin_nested():
+            acting = underway(connection, rows)
+    except Exception:  # noqa: BLE001 — words are a nicety; the raw state still shows
+        acting = {}
     for r in rows:
         if r["status"] == "healthy":
             t = str(r["target_id"])
@@ -173,11 +183,20 @@ def _history(connection: Connection, project_id: str, limit: int = 10) -> list[d
                      and live_after[str(r["target_id"])] > r["created_at"])
         if recovered:
             state = "recovered"
+        doing = acting.get(str(r["id"]))
+        if doing and not recovered:
+            # Still failed in the record; in words, what BOSS is doing about it. A repair in
+            # flight reads as moving ("now"); one BOSS finished stays this row's past.
+            word, tone = doing["word"], "amber"
+            if r["status"] == "failed" and doing["state"] != "fixed":
+                state = "now"
         took = _duration(r["apply_started_at"], r["finished_at"])
         smoke = ("smoke ✓" if r["status"] == "healthy" else
                  "smoke ✗" if r["status"] == "failed" and r["apply_started_at"] else None)
         reason = None if r["status"] in ("healthy", "awaiting_approval") else \
             (" ".join(str(r["failure_reason"] or "").split())[:110].rstrip(".") or None)
+        if doing and not recovered:
+            reason = doing["reason"][:200].rstrip(".")
         out.append({"id": r["id"], "label": f"{env_label(r['environment'])} · {what}".strip(" ·"),
                     "env": r["environment"], "app": r["app_name"], "status": r["status"],
                     "state": state, "state_word": word, "tone": tone,
@@ -185,6 +204,9 @@ def _history(connection: Connection, project_id: str, limit: int = 10) -> list[d
                     "commit": (r["commit_sha"] or "")[:7] or None,
                     "duration": None if recovered else took, "smoke": None if recovered else smoke,
                     "reason": reason, "recovered": recovered,
+                    "repair": ({k: doing[k] for k in ("state", "build_run_id",
+                                                     "next_deployment_id") if doing.get(k)}
+                               if doing and not recovered else None),
                     "by": who(actor, connection) if actor else None,
                     "by_agent": str(actor or "") in ("boss", "auto_approval") or
                     str(actor or "").startswith(("agt_", "policy:")),

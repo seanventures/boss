@@ -42,7 +42,7 @@ function PhaseIcon({ status }: { status: DeployPhaseRow["status"] }) {
 export function followedDeploy(e: Environment): string | null {
   const d = e.deploy;
   if (!d || !d.attempt || d.attempt.kind !== "stack") return null;
-  return d.state === "deploying" || d.state === "failed" ? `stack:${d.attempt.id}` : null;
+  return d.state === "deploying" || d.state === "failed" || d.state === "fixing" ? `stack:${d.attempt.id}` : null;
 }
 
 export function DeployLive({ e, projectId, actor, onFix, onChanged }: {
@@ -101,7 +101,14 @@ export function DeployLive({ e, projectId, actor, onFix, onChanged }: {
           );
         })}
       </ol>
-      {failed ? (
+      {failed && e.deploy.state === "fixing" ? (
+        // BOSS IS ACTING ON IT (engine deploy_repair.underway): a repair build, a retry after a
+        // backoff, or the deploy's agent reading the log — said in its words, not a red alert
+        // with a Fix button that would start a second repair beside the first.
+        <div className="px-deploy-fixing" role="status" data-testid={`px-env-fixing-${k}`}>
+          <span><Wrench size={12} aria-hidden /> <b>{e.deploy.word}.</b> {e.deploy.reason}</span>
+        </div>
+      ) : failed ? (
         <div className="px-deploy-fail" role="alert" data-testid={`px-env-fail-${k}`}>
           <span><b>Last deploy failed.</b> {reason}</span>
           <div className="px-row px-wrap" style={{ gap: 6 }}>
