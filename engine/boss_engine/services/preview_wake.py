@@ -90,22 +90,25 @@ def wake(engine: Any, settings: Any, preview_id: str, *, page: bool,
             st = sleep_state(row["status"], row["error"])
             if st == "starting":
                 return {"do": "wait", "id": preview_id, "woke": False}
+        mine = {"project_id": str(row["project_id"]), "run_id": run_id}
         if st == "stopped":
-            return {"do": "gone", "why": "This preview was stopped. Open the app again from BOSS "
-                                         "(the project's Your app card) to start it."}
+            return {"do": "gone", "why": "This preview was stopped. Recreate it from BOSS: it "
+                                         "starts again from the same build, with its data.", **mine}
         if st == "failed":
-            return {"do": "gone", "why": "This preview could not start. Open the build in BOSS to "
-                                         "see why, or press Open app to try again."}
+            return {"do": "gone", "why": "This preview could not start. Recreate it from BOSS to "
+                                         "try again from the same build.", **mine}
         made = row["created_at"]
         if made is not None and made.tzinfo is None:
             made = made.replace(tzinfo=timezone.utc)
         if made is not None and now - made > timedelta(days=WAKE_WINDOW_DAYS):
-            return {"do": "gone", "why": "This preview link is too old to wake. Open the app again "
-                                         "from BOSS."}
+            return {"do": "gone", "why": "This preview link is too old to wake. Recreate it from "
+                                         "BOSS: it starts again from the same build, with its "
+                                         "data.", **mine}
         if not page:
             return {"do": "wait", "id": preview_id, "woke": False}
         if not _room(engine, settings):
-            return {"do": "wait", "id": preview_id, "woke": False}
+            # NO ROOM TO WAKE IT NOW: the page keeps trying, and offers Recreate in BOSS.
+            return {"do": "wait", "id": preview_id, "woke": False, "room": False, **mine}
         from .preview_service import start_preview_async
 
         try:
@@ -147,24 +150,46 @@ _STYLE = (
 )
 
 
-def waking_page(*, woke: bool, seconds: int = REFRESH_SECONDS) -> bytes:
+def _recreate_link(href: str) -> str:
+    import html
+
+    return ("" if not href else
+            f"<p style='margin-top:14px'><a href=\"{html.escape(href, quote=True)}\" target=_top "
+            "style='color:#0d9488;font-weight:600'>Recreate preview in BOSS</a></p>")
+
+
+def recreate_href(console_base: str, project_id: str, run_id: str) -> str:
+    """The console's door to Recreate preview: the project's Your app card, asked to offer it."""
+    from urllib.parse import urlencode
+
+    if not project_id or not run_id:
+        return ""
+    query = urlencode({"area": "project", "project_id": project_id, "recreate_preview": run_id})
+    return f"{console_base.rstrip('/')}/?{query}"
+
+
+def waking_page(*, woke: bool, seconds: int = REFRESH_SECONDS, room: bool = True,
+                recreate: str = "") -> bytes:
     """The friendly page a sleeping (or starting) preview answers while it starts. It reloads
     itself (meta refresh: allowed under the preview sandbox, which has allow-scripts); no script,
     no request of its own, no credential."""
-    lead = "Waking up your app…" if woke else "Starting your app…"
-    said = ("It was asleep to save room. " if woke else "") + (
-        "This takes about a minute; the page opens the app by itself when it is ready.")
+    lead = ("Waiting for room to start your app…" if not room
+            else "Waking up your app…" if woke else "Starting your app…")
+    said = ("This machine is short of memory right now; the page keeps trying by itself."
+            if not room else ("It was asleep to save room. " if woke else "") + (
+                "This takes about a minute; the page opens the app by itself when it is ready."))
     return (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         f"<meta http-equiv=refresh content={int(seconds)}>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
         f"<title>{lead}</title>{_STYLE}</head><body>"
         "<div class=c role=status aria-live=polite><div class=s aria-hidden=true></div>"
-        f"<h1>{lead}</h1><p>{said}</p></div></body></html>"
+        f"<h1>{lead}</h1><p>{said}</p>{_recreate_link(recreate if not room else '')}</div>"
+        "</body></html>"
     ).encode()
 
 
-def gone_page(why: str) -> bytes:
+def gone_page(why: str, recreate: str = "") -> bytes:
     import html
 
     return (
@@ -173,7 +198,7 @@ def gone_page(why: str) -> bytes:
         "<style>:root{color-scheme:light dark}body{font:15px/1.5 system-ui,sans-serif;"
         "max-width:480px;margin:48px auto;padding:0 16px}</style></head><body>"
         "<h1 style='font-size:18px'>This preview is not running</h1>"
-        f"<p>{html.escape(why)}</p></body></html>"
+        f"<p>{html.escape(why)}</p>{_recreate_link(recreate)}</body></html>"
     ).encode()
 
 
@@ -209,5 +234,5 @@ def is_page_load(headers: Any) -> bool:
     return "text/html" in get("accept")
 
 
-__all__ = ["REFRESH_SECONDS", "WAKE_ACTOR", "WAKE_WINDOW_DAYS", "gone_page", "is_page_load",
+__all__ = ["recreate_href", "REFRESH_SECONDS", "WAKE_ACTOR", "WAKE_WINDOW_DAYS", "gone_page", "is_page_load",
            "sibling_location", "wake", "waking_page"]

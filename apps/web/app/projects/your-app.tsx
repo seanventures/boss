@@ -11,8 +11,8 @@
  * it; the link itself shows "Starting your app…" until the app serves. A preview BOSS stopped for
  * idle is never shown as gone: it is asleep and wakes on Open.
  */
-import React, { useState } from "react";
-import { AppWindow, ArrowSquareOut, Globe, Moon, Play } from "@phosphor-icons/react";
+import React, { useEffect, useState } from "react";
+import { AppWindow, ArrowClockwise, ArrowSquareOut, Globe, Moon, Play } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import { callAction } from "../../lib/call-action";
@@ -69,13 +69,25 @@ const STATE_WORD: Record<YourApp["state"], string> = {
 };
 
 /** The Overview's card: the app's tile, its version, its state, and one Open app. */
+/** `recreate_preview=<run>` in the address (the waking page's "Recreate preview in BOSS"): the
+ *  card offers Recreate preview first. Never started by the link itself: a person presses it. */
+function useAskedToRecreate(runId: string): boolean {
+  const [asked, setAsked] = useState(false);
+  useEffect(() => {
+    try { setAsked(new URLSearchParams(window.location.search).get("recreate_preview") === runId); } catch { /* none */ }
+  }, [runId]);
+  return asked;
+}
+
 export function YourAppCard({ app, projectId, actor, onStarted }: { app: YourApp; projectId: string; actor?: string; onStarted?: () => void }) {
   const o = useOpenApp(app, actor, onStarted);
+  const asked = useAskedToRecreate(app.run_id);
   const starting = o.starting || app.state === "starting";
   const state = starting ? "starting" : app.state;
   const line = o.error ? "" : starting ? "Starting… about a minute. It opens in a new tab." : app.words;
   return (
-    <section className="px-card ya-card" aria-labelledby="px-ov-app" data-testid="px-ov-app" data-state={state}>
+    <section className="px-card ya-card" aria-labelledby="px-ov-app" data-testid="px-ov-app" data-state={state}
+             data-asked={asked && app.recreate ? "1" : undefined}>
       <div className="ya-body">
         <div className="ya-thumb" aria-hidden data-state={state}>
           <span>{appInitials(app.name)}</span>
@@ -100,6 +112,14 @@ export function YourAppCard({ app, projectId, actor, onStarted }: { app: YourApp
             {opensDirectly(app) ? <ArrowSquareOut size={14} weight="bold" aria-hidden /> : <Play size={14} weight="fill" aria-hidden />}
             {o.busy ? "Starting…" : "Open app"}
           </GatedButton>
+          {app.recreate && !starting ? (
+            <GatedButton permission="preview:manage" projectId={projectId} className="px-btn" data-size="s"
+                         data-kind={asked ? "primary" : undefined} data-testid="px-ov-app-recreate" disabled={o.busy}
+                         title="Start it again from the same build. What the app saved is kept."
+                         onClick={() => void o.open()}>
+              <ArrowClockwise size={12} weight="bold" aria-hidden /> Recreate preview
+            </GatedButton>
+          ) : null}
           {o.link ? <a className="px-more" href={browserHref(o.link)} target="_blank" rel="noreferrer noopener" data-testid="px-ov-app-link">Open in a new tab ↗</a> : null}
           {app.live_url ? (
             <a className="px-more ya-live" href={app.live_url} target="_blank" rel="noreferrer noopener" data-testid="px-ov-app-live">

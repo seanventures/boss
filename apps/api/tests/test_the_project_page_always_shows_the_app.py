@@ -180,7 +180,8 @@ def test_a_persons_stop_and_a_failed_start_are_not_woken(client, engine, starts)
     run = _run(engine, pr=2)
     stopped = _preview(engine, run, status="stopped", error=None)
     r = client.get(f"/v1/previews/{stopped}/web/", headers=PAGE)
-    assert r.status_code == 409 and "Open the app again from BOSS" in r.text
+    assert r.status_code == 409 and "Recreate preview in BOSS" in r.text
+    assert f"recreate_preview={run}" in r.text and f"project_id={P}" in r.text
     run2 = _run(engine, pr=3)
     failed = _preview(engine, run2, status="failed", error="port_timeout")
     assert client.get(f"/v1/previews/{failed}/web/", headers=PAGE).status_code == 409
@@ -278,3 +279,25 @@ def test_boss_never_raises_a_no_worker_card_when_a_worker_is_taking_work(engine)
             {"cause_code": "no_worker", "cause": "No worker is taking work from the queue"},
             "Restart BOSS's worker", "headline", chain=False)
     assert made is None
+
+
+def test_no_room_to_wake_says_so_and_offers_recreate(client, engine, starts, monkeypatch):
+    from boss_engine.services import preview_service
+
+    monkeypatch.setattr(preview_service, "_respawn_allowed", lambda *a, **k: False)
+    run = _run(engine, pr=2)
+    old = _preview(engine, run, status="stopped", error=IDLE)
+    r = client.get(f"/v1/previews/{old}/web/", headers=PAGE)
+    assert r.status_code == 503 and "Waiting for room" in r.text
+    assert "Recreate preview in BOSS" in r.text and starts == []
+
+
+def test_a_preview_stopped_to_free_memory_says_so_and_offers_recreate(engine):
+    run = _run(engine, pr=2)
+    _preview(engine, run, status="stopped",
+             error="Stopped by BOSS: to free memory (nobody opened it for 20 min).")
+    card = _card(engine)
+    assert card["state"] == "asleep" and card["recreate"] is True
+    assert card["words"].startswith("Stopped to free memory")
+    live = _preview(engine, run, status="running", url="http://127.0.0.1:1")
+    assert _card(engine)["recreate"] is False and _card(engine)["preview_id"] == live

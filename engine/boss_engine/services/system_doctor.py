@@ -748,7 +748,8 @@ def _auto(engine: Any, settings: Any, action: str, sig: Signals, target: str = "
     if action == "reap_previews":
         return json.dumps(preview_service.reap_previews(engine, settings))
     if action == "stop_idle_previews":
-        return json.dumps(preview_service.reap_previews(engine, settings, idle_minutes=5))
+        return json.dumps(preview_service.reap_previews(engine, settings, idle_minutes=5,
+                                                         pressure=lambda: True))
     if action == "end_orphaned_processes":
         return json.dumps(owned_process.sweep_orphans())
     if action == "remove_orphan_containers":

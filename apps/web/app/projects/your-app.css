@@ -34,3 +34,4 @@
 .ya-chip-btn:hover { background: color-mix(in srgb, var(--teal) 18%, transparent); }
 .ya-chip-btn:disabled { opacity: .6; cursor: progress; }
 .ya-chip[data-state="asleep"] .ya-chip-btn { color: var(--muted); }
+.ya-card[data-asked="1"] { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }

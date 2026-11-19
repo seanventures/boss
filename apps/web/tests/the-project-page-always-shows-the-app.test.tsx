@@ -82,6 +82,40 @@ describe("Your app", () => {
     expect(open).not.toHaveBeenCalled();
   });
 
+  it("a stopped, failed or asleep preview always offers Recreate preview; a running one does not", async () => {
+    vi.spyOn(window, "open").mockImplementation(() => null);
+    reply.value = { url: "/v1/previews/prev_new/web/", id: "prev_new", starting: true };
+    for (const state of ["asleep", "stopped", "failed"]) {
+      await mount(<YourAppCard app={parseYourApp({ ...RAW, state })!} projectId="p1" />);
+      expect($('[data-testid="px-ov-app-recreate"]')?.textContent).toMatch(/Recreate preview/);
+      unmount();
+    }
+    await mount(<YourAppCard app={parseYourApp({ ...RAW, state: "running" })!} projectId="p1" />);
+    expect($('[data-testid="px-ov-app-recreate"]')).toBeNull();
+    unmount();
+    await mount(<YourAppCard app={parseYourApp({ ...RAW, state: "stopped", recreate: true })!} projectId="p1" />);
+    await click($('[data-testid="px-ov-app-recreate"]'));
+    expect(forms).toHaveLength(1);
+    expect(forms[0].get("run_id")).toBe("crun_1");
+    expect(forms[0].get("fresh_data")).toBeNull();          // kept data comes back
+  });
+
+  it("the waking page's Recreate link lands on the card, asking, never starting by itself", async () => {
+    window.history.replaceState(null, "", "/?area=project&project_id=p1&recreate_preview=crun_1");
+    await mount(<YourAppCard app={parseYourApp({ ...RAW, state: "stopped" })!} projectId="p1" />);
+    expect($('[data-testid="px-ov-app"]')?.getAttribute("data-asked")).toBe("1");
+    expect($('[data-testid="px-ov-app-recreate"]')?.getAttribute("data-kind")).toBe("primary");
+    expect(forms).toHaveLength(0);
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("the build page says why BOSS stopped it", async () => {
+    const { previewErrorSentence } = await import("../app/factory/outputs");
+    expect(previewErrorSentence("Stopped by BOSS: to free memory (nobody opened it for 20 min)."))
+      .toBe("Stopped to free memory (nobody opened it for 20 min).");
+    expect(previewErrorSentence("port in use")).toBe("port in use");
+  });
+
   it("the small Open app on a list card starts it the same way", async () => {
     vi.spyOn(window, "open").mockImplementation(() => null);
     reply.value = { url: "/v1/previews/prev_new/web/", id: "prev_new", starting: true };

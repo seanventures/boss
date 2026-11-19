@@ -602,7 +602,8 @@ export function isPassedOver(p: Pick<PreviewOutput, "status" | "steps">, i: numb
 /** The preview's error, visible. Blank is nothing. */
 export function previewErrorSentence(error: string | null | undefined): string | null {
   const trimmed = error?.trim() ?? "";
-  return trimmed ? trimmed : null;
+  // Why BOSS stopped it, said plainly: "Stopped to free memory (nobody opened it for 20 min)."
+  return trimmed ? trimmed.replace(/^Stopped by BOSS: to /, "Stopped to ") : null;
 }
 
 /** Stopped or Failed, with the error beside it. More than six words is a paragraph. */
@@ -713,7 +714,11 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
     <span className="fx-out-links">
       {booting ? <span className="fx-muted" data-testid="fx-preview-starting">Starting…</span> : null}
       {running ? <a className="ag-link" href={previewWebHref(p.id)} target="_blank" rel="noreferrer" data-testid="fx-preview-open">Open ↗</a> : null}
-      <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled={busy} data-testid="fx-preview-restart" onClick={() => void start()}>Restart</GatedButton>
+      {/* RECREATE PREVIEW (operator, 2026-11-19): a preview that is not running starts again
+          from the same build, its kept data restored. A running one restarts. */}
+      <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled={busy} data-testid="fx-preview-restart"
+                   title={running || p.status === "starting" ? "Start it again" : "Start it again from the same build. What the app saved is kept."}
+                   onClick={() => void start()}>{running || p.status === "starting" ? "Restart" : "Recreate preview"}</GatedButton>
       {running ? <GatedButton permission="preview:manage" type="button" className="ag-link" disabled={busy} data-testid="fx-preview-stop" onClick={() => void stop()}>Stop</GatedButton> : null}
       <button type="button" className="ag-link" onClick={onLogs} data-testid="fx-preview-logs">Logs ▾</button>
       {/* A stopped preview expires at nothing: its time limit is only news while it runs. */}

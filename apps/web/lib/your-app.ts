@@ -14,6 +14,8 @@ export type YourApp = {
   preview_id: string; state: YourAppState; words: string;
   /** The preview's console link (running, starting or asleep); "" when there is none. */
   href: string; error: string;
+  /** Not running (asleep, stopped, failed): Recreate preview starts it again from the same build. */
+  recreate: boolean;
   /** The deployed app (staging/prod), when there is one: Try it stays beside Open app. */
   live_url: string;
 };
@@ -37,6 +39,7 @@ export function parseYourApp(v: unknown): YourApp | null {
     pr_number: pr, pr_url: s(x.pr_url),
     preview_id: s(x.preview_id), state, words: s(x.words),
     href: s(x.href), error: s(x.error), live_url: s(x.live_url),
+    recreate: x.recreate === true || state === "asleep" || state === "stopped" || state === "failed",
   };
 }
 

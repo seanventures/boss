@@ -12353,8 +12353,14 @@ def _preview_wake_answer(request: Request, preview_id: str, path: str,
     if todo == "serve":
         return None
     no_store = {**isolation, "Cache-Control": "no-store"}
+    on_origin = bool((request.scope.get("state") or {}).get("boss_preview_origin"))
+    # RECREATE PREVIEW lives in the console (a person's write, with consent): BOSS's public URL,
+    # else this same host when the request did not come through the preview origin.
+    console = str(getattr(settings, "public_url", "") or "") or ("" if on_origin else "/")
+    recreate = (preview_wake.recreate_href(console, str(verdict.get("project_id") or ""),
+                                           str(verdict.get("run_id") or ""))
+                if console else "")
     if todo == "redirect":
-        on_origin = bool((request.scope.get("state") or {}).get("boss_preview_origin"))
         where = preview_wake.sibling_location(
             request.headers.get("host"), request.url.scheme, preview_id, str(verdict["to"]),
             path, request.url.query, on_preview_origin=on_origin)
@@ -12366,12 +12372,14 @@ def _preview_wake_answer(request: Request, preview_id: str, path: str,
                             status_code=503, media_type="text/plain",
                             headers={**no_store, "Retry-After": str(secs)})
         return Response(content=preview_wake.waking_page(woke=bool(verdict.get("woke"))
-                                                         or verdict.get("id") != preview_id),
+                                                         or verdict.get("id") != preview_id,
+                                                         room=verdict.get("room", True) is not False,
+                                                         recreate=recreate),
                         status_code=503, media_type="text/html; charset=utf-8",
                         headers={**no_store, "Retry-After": str(secs), "Refresh": str(secs)})
     if not page:
         return None
-    return Response(content=preview_wake.gone_page(str(verdict.get("why") or "")),
+    return Response(content=preview_wake.gone_page(str(verdict.get("why") or ""), recreate),
                     status_code=409, media_type="text/html; charset=utf-8", headers=no_store)
 
 

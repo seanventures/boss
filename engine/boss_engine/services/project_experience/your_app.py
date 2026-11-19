@@ -143,6 +143,12 @@ def _cards(connection: Connection, ids: list[str]) -> dict[str, dict[str, Any]]:
         number = run.get("pull_request_number")
         version_label = ("Main" if run["version"] == "main"
                          else f"Change #{number}" if number else "Latest change")
+        words = STATE_WORDS[state]
+        why = str((prev or {}).get("error") or "")
+        if state == "asleep" and "to free memory" in why:
+            words = "Stopped to free memory · Open app starts it again"
+        elif state == "asleep" and "to make room" in why:
+            words = "Stopped to make room for other previews · Open app starts it again"
         out[pid] = {
             "run_id": str(run["id"]),
             "name": names.get(pid) or pid,
@@ -156,7 +162,10 @@ def _cards(connection: Connection, ids: list[str]) -> dict[str, dict[str, Any]]:
             "pr_url": run.get("pull_request_url"),
             "preview_id": prev["id"] if prev else None,
             "state": state,
-            "words": STATE_WORDS[state],
+            "words": words,
+            # RECREATE PREVIEW (operator, 2026-11-19): a preview that is not running can always be
+            # started again from the same build, its kept data restored.
+            "recreate": state in ("asleep", "stopped", "failed"),
             # Opening a running or starting preview's link shows it (or "Waking up your app…"
             # until it serves); an asleep one wakes on that same link (preview_wake).
             "href": preview_href(prev["id"]) if prev and state in ("running", "starting", "asleep")
