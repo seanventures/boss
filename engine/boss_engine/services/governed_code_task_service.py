@@ -11816,9 +11816,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _final_head = str((proposal.get("head_sha") if isinstance(proposal, dict) else "") or "")
             if not _final_head:
                 try:
-                    _final_head = subprocess.run(
-                        ["git", "rev-parse", "HEAD"], cwd=str(root), timeout=10,
-                        capture_output=True, text=True).stdout.strip()
+                    # Read-only, as the run's uid, pinned to the tree (git_safety.tree_git).
+                    from .git_safety import tree_git
+
+                    _got = tree_git(root, "rev-parse", "HEAD", timeout=10)
+                    _final_head = (_got.stdout.strip()
+                                   if _got is not None and _got.returncode == 0 else "")
                 except Exception:  # noqa: BLE001
                     _final_head = ""
         if _final_head and not re.fullmatch(r"[0-9a-fA-F]{7,40}", _final_head):
