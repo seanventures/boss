@@ -2920,33 +2920,42 @@ def is_rules_forbidden(reason: str) -> bool:
 
 #: FAILURES ONLY THE PERSON'S OWN SETUP CAN FIX (stranger test r6, 2026-11-18: a plain-http custom
 #: model's key refusal was classed `infra`, retried 14 times and filed as a BOSS self-fix). Each is
-#: a refusal of what the person connected — a credential, a model's login, a repository's access —
-#: so another attempt meets the same answer: needs_human, never an automatic retry.
-_PERSON_SIDE: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("credential_plain_http", ("boss only sends keys over https",)),
-    ("credential_misdirected", ("is sent only to", "boss_credential_hosts",
-                                "credential stored for that integration")),
-    ("model_auth_rejected", ("invalid x-api-key", "invalid api key", "incorrect api key",
-                             "authentication_error", "invalid_api_key", "permission_error",
-                             "401 unauthorized", "403 forbidden: model")),
-    ("repo_access_denied", ("repository not found", "could not read username",
-                            "authentication failed for", "access denied to repository",
-                            "not have access to this repository")),
-)
+#: a refusal of what the person connected — a credential, their model's key, a repository's
+#: access — so another attempt meets the same answer: needs_human, never an automatic retry.
+#:
+#: NEVER BOSS'S OWN (review of #227): in egress mode the person never holds the git credential —
+#: BOSS's helper or the run's shim socket does — and the egress proxy answers 401 for its own
+#: run tokens and handles. A failure that names BOSS's egress, its model gateway or its own
+#: tokens is BOSS's, whatever words git or a client wraps it in; so is "could not read Username"
+#: (BOSS's credential helper not answering, every time it was seen).
+_BOSS_OWN_AUTH = re.compile(
+    r"boss-egress|boss_egress|model[ _-]gateway|run_token_|handle_(?:expired|revoked|replay)|"
+    r"egress_not_registered|host_proof_required|could not read username", re.I)
+#: The person's model provider refusing its key, in the provider's own words (a bare "401
+#: Unauthorized" can be BOSS's gateway or egress and is not enough).
+_PROVIDER_KEY_REFUSED = ("invalid x-api-key", "invalid api key", "incorrect api key",
+                         "authentication_error", "invalid_api_key")
 
 
 def _person_side(lowered: str) -> Optional[str]:
-    for code, signs in _PERSON_SIDE:
-        if code == "credential_misdirected":
-            if "is sent only to" in lowered and "refusing to send" in lowered:
-                return code
-            if any(s in lowered for s in signs[1:]) and "refusing to send" in lowered:
-                return code
-            continue
-        if any(s in lowered for s in signs):
-            return code
+    if "boss only sends keys over https" in lowered:
+        return "credential_plain_http"
+    if "is sent only to" in lowered and "refusing to send" in lowered:
+        return "credential_misdirected"
+    if _BOSS_OWN_AUTH.search(lowered):
+        return None
+    import os
+    from urllib.parse import urlsplit
+
+    egress = (urlsplit(os.environ.get("BOSS_EGRESS_URL") or "").hostname or "").lower()
+    if egress and egress in lowered:
+        return None                          # BOSS's egress under another name
+    if any(s in lowered for s in _PROVIDER_KEY_REFUSED):
+        return "model_auth_rejected"
     if ("permission to " in lowered and " denied to " in lowered) or re.search(
-            r"repository '[^']*' not found", lowered):
+            r"repository '[^']*' not found", lowered) or any(
+            s in lowered for s in ("repository not found", "access denied to repository",
+                                   "not have access to this repository")):
         return "repo_access_denied"          # git: "Permission to o/r.git denied to user."
     return None
 

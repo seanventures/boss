@@ -1980,6 +1980,41 @@ def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: 
     # COUNTED FROM THE LINEAGE, NOT FROM A FIELD ON THIS RUN (stranger test r6, 2026-11-18: one
     # press made 15 failed builds ~7 s apart — the counter was written after the next attempt
     # was queued, so a fast-failing attempt read 0 and started its own "first" retry).
+    with _lineage_lock(engine, run_id, fctx):
+        return _retry_after_infra_failure_locked(engine, settings, jobs, run_id, project_id,
+                                                 fctx, result)
+
+
+@contextlib.contextmanager
+def _lineage_lock(engine, run_id: str, fctx: Optional[dict]):
+    """ONE AUTOMATIC-RETRY DECISION PER LINEAGE AT A TIME (review of #227, LOW): two attempts of
+    one lineage failing at the same instant could both read count n. A session advisory lock on
+    the lineage root, held across the count and the enqueue; best effort (no lock off Postgres)."""
+    conn = None
+    key = str((fctx or {}).get("root_run_id") or run_id)
+    try:
+        conn = engine.connect()
+        key = str(conn.execute(sql(
+            "SELECT COALESCE(finalize_ctx->>'root_run_id', id) FROM code_task_runs "
+            "WHERE id = :r"), {"r": run_id}).scalar() or key)
+        conn.execute(sql("SELECT pg_advisory_lock(hashtext(:k))"), {"k": f"auto_retry:{key}"})
+    except Exception:  # noqa: BLE001 — no lock, the hard cap still bounds it
+        if conn is not None:
+            conn.close()
+        conn = None
+    try:
+        yield
+    finally:
+        if conn is not None:
+            try:
+                conn.execute(sql("SELECT pg_advisory_unlock(hashtext(:k))"),
+                             {"k": f"auto_retry:{key}"})
+            finally:
+                conn.close()
+
+
+def _retry_after_infra_failure_locked(engine, settings, jobs, run_id: str, project_id: str,
+                                      fctx: dict, result: dict) -> dict:
     made = max(auto_retries_made(fctx), lineage_auto_retries(engine, run_id, fctx))
     tries, backoff = _auto_retry_limits(settings)
     tries = min(tries, AUTO_RETRY_HARD_CAP)

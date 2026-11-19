@@ -47,6 +47,15 @@ def test_a_refusal_of_what_the_person_connected_is_needs_human(reason, code):
 @pytest.mark.parametrize("reason", [
     "git add failed: fatal: .git/index: index file open failed: Permission denied",
     "git -c failed: Cloning into '.'...\nerror: RPC failed; HTTP 502",
+    # BOSS's OWN authentication (review of #227): its egress, its credential helper, its tokens.
+    "git fetch failed: fatal: Authentication failed for "
+    "'http://boss-egress:8090/git/github/acme/web.git/'",
+    "git clone failed: fatal: could not read Username for 'https://github.com': "
+    "No such device or address",
+    "remote: Repository not found. fatal: repository "
+    "'http://boss-egress:8090/git/github/acme/web.git/' not found",
+    "egress refused: 401 Unauthorized handle_expired",
+    "401 Unauthorized",
 ])
 def test_boss_side_failures_stay_infra(reason):
     assert classify_pipeline_exception(reason)[0] == "infra"
