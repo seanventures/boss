@@ -155,8 +155,12 @@ CAPABILITIES: dict[str, Capability] = {
             # `research` is what makes the difference between a panel arguing from a one-line
             # directive and one arguing from evidence. Optional, because a workflow may skip
             # research entirely — but bindable, so one that does not can hand it over.
-            optional_inputs=("task_id", "research"),
-            produces=("meeting_run_id", "prd_markdown", "task_id"),
+            # `compact`, `spec_approval`, `time_budget_seconds`, `fallback_to_brief`: Easy
+            # Mode's fast panel (request_meeting) — three seats, one round, its PRD approved by
+            # the person's start, and a build from the brief when it fails or overruns.
+            optional_inputs=("task_id", "research", "compact", "spec_approval",
+                             "time_budget_seconds", "fallback_to_brief"),
+            produces=("meeting_run_id", "prd_markdown", "task_id", "spec_fallback"),
             typical_minutes=20,
             is_async=True,
             needs_model=True,

@@ -1,6 +1,9 @@
 """Easy Mode (BOSSAPP-1274) and its attachments (BOSSAPP-1275).
 
-POST /v1/factory/launch        {prompt, mode, template_id, attachment_ids, github_repo}
+POST /v1/factory/launch        {prompt, mode, template_id, attachment_ids, github_repo, review_plan}
+                               a normal launch starts the Easy Mode MVP workflow (panel → spec →
+                               build → preview → deploy): `run_id` is that workflow run, also
+                               given as `workflow_run_id`, with `stage: "spec"`
 POST /v1/factory/attachments   multipart specs, files and images, or a connected Drive source
 GET  /v1/factory/templates     the yaml catalogue, skipping files that are not the schema; each
                                template says whether this install can build it (`available`,
@@ -39,6 +42,9 @@ class LaunchBody(BaseModel):
     template_id: Optional[str] = Field(default=None, max_length=80)
     attachment_ids: list[str] = Field(default_factory=list, max_length=20)
     github_repo: Optional[str] = Field(default=None, max_length=200)
+    #: "Review the plan first": the panel's PRD waits for the person instead of being approved
+    #: by this start (the light lane's default).
+    review_plan: bool = False
 
 
 def _caller(request: Request) -> tuple[Any, str, str]:
@@ -121,7 +127,7 @@ def factory_launch(payload: LaunchBody, request: Request) -> Any:
                     connection, _settings, org_id=org_id, actor=actor, auth=auth,
                     prompt=payload.prompt, mode=payload.mode, template_id=payload.template_id,
                     attachment_ids=payload.attachment_ids, github_repo=payload.github_repo,
-                    jobs=_jobs())
+                    review_plan=payload.review_plan, jobs=_jobs())
             except ConsentRequired as consent_asked:
                 # KEPT, NOT ROLLED BACK: the project and its agents the consent body names are
                 # committed with this transaction; the same launch sent again after the grant

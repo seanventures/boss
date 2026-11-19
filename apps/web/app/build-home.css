@@ -189,7 +189,12 @@
 
 .bh svg { flex: 0 0 auto; }
 
-.bh-add, .bh-mic, .bh-mode-pill {
+.bh-add, .bh-mic, .bh-review input {
+  margin: 0;
+  accent-color: var(--accent, currentColor);
+}
+
+.bh-mode-pill {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;

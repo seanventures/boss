@@ -2560,6 +2560,28 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "Unknown or disabled keys are left out; none left = the "
                                    "project's default panel.",
                 },
+                "compact": {
+                    "type": "boolean",
+                    "description": "a compact panel: three seats and one round, then the PRD "
+                                   "(Easy Mode's fast spec).",
+                },
+                "spec_approval": {
+                    "type": "string", "enum": ["", "start", "person"],
+                    "description": "who approves the PRD: 'start' — the person's own start "
+                                   "covers it (Easy Mode); 'person' — a person reads it first; "
+                                   "empty — the install's setting.",
+                },
+                "time_budget_seconds": {
+                    "type": "integer",
+                    "description": "how long the workflow waits for this panel before it "
+                                   "builds from the brief instead (with fallback_to_brief).",
+                },
+                "fallback_to_brief": {
+                    "type": "boolean",
+                    "description": "when the panel fails or runs past its time budget, the "
+                                   "workflow builds from the brief and records why, rather "
+                                   "than stopping.",
+                },
                 "purpose": {
                     "type": "string", "enum": ["prd", "security_review"],
                     "description": "what the panel's document is: a PRD (the default; "
@@ -2633,10 +2655,30 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 # Who convened it (agent_acts.origin): its seats sit under that work.
                 origin=services_module("agent_acts").current_origin(actor),
                 role_keys=[str(k) for k in (args.get("seats") or []) if str(k).strip()][:8] or None,
-                constraints=({"purpose": "security_review"}
-                             if args.get("purpose") == "security_review" else None),
+                constraints=_meeting_constraints(args),
             )
         return {"status": "running", "meeting": _json_safe(result), "project_id": pid}
+
+    def _meeting_constraints(args):
+        """The panel's constraints from the tool's arguments: a security review's purpose, and
+        Easy Mode's compact panel, who approves its PRD, and its time budget and fallback."""
+        out = {}
+        if args.get("purpose") == "security_review":
+            out["purpose"] = "security_review"
+        if str(args.get("compact") or "").lower() in ("true", "1"):
+            out["compact"] = True
+        approval = str(args.get("spec_approval") or "").strip().lower()
+        if approval in ("start", "person"):
+            out["spec_approval"] = approval
+        try:
+            budget = int(args.get("time_budget_seconds") or 0)
+        except (TypeError, ValueError):
+            budget = 0
+        if budget > 0:
+            out["time_budget_seconds"] = budget
+        if str(args.get("fallback_to_brief") or "").lower() in ("true", "1"):
+            out["fallback_to_brief"] = True
+        return out or None
 
     @reg.tool(
         "start_preview",

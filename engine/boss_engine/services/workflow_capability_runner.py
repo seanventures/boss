@@ -6324,6 +6324,16 @@ def resume_awaited(
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "redeploying", "awaited": kind, "build": awaited_id})
             continue
+        if kind == "meeting":
+            # EASY MODE NEVER STOPS AT ITS PANEL (fallback_to_brief): a panel that failed, died
+            # or ran past its time budget is replaced by a build from the brief, with why.
+            fell_back = _panel_fallback(connection, project_id=project_id, run_id=run_id,
+                                        step=step, output=output, meeting_run_id=awaited_id,
+                                        status=status, ok_states=ok_states,
+                                        bad_states=bad_states)
+            if fell_back:
+                done.append(fell_back)
+                continue
         if kind == "meeting" and status in ok_states:
             held = _hold_for_spec(connection, project_id=project_id, run_id=run_id,
                                   step=step, output=output, meeting_run_id=awaited_id)
@@ -6724,6 +6734,70 @@ def _follow_merge(connection: Connection, *, project_id: str, run_id: str, step:
                                               "decision_id": qid})
     return {"run_id": run_id, "step_id": step["step_id"], "outcome": "merged_deploying",
             "build": build_run_id}
+
+
+#: The event a panel step records when it gave way to a build from the brief.
+SPEC_FALLBACK_EVENT = "workflow.spec_fallback"
+
+
+def _panel_fallback(connection: Connection, *, project_id: str, run_id: str, step: Any,
+                    output: dict[str, Any], meeting_run_id: str, status: str,
+                    ok_states: frozenset[str], bad_states: frozenset[str]
+                    ) -> Optional[dict[str, Any]]:
+    """BUILD FROM THE BRIEF WHEN THE PANEL CANNOT GIVE A SPEC IN TIME (Easy Mode, 2026-11-19).
+
+    Only for a panel convened with `fallback_to_brief` (request_meeting's constraints). It failed
+    or was cancelled (and nobody retried it), its step job died, or it ran past its
+    `time_budget_seconds`: the panel is stopped, and the step SUCCEEDS with no PRD and a recorded
+    `spec_fallback` reason, so the build after it starts from the brief. Never a block, never a
+    bare failure. None when none of that applies."""
+    try:
+        row = connection.execute(
+            text("SELECT constraints, error, EXTRACT(EPOCH FROM (now() - created_at)) AS age "
+                 "FROM meeting_runs WHERE id = :m"), {"m": meeting_run_id}).mappings().first()
+    except Exception:  # noqa: BLE001 — an unreadable panel keeps the ordinary path
+        return None
+    if not row:
+        return None
+    constraints = row["constraints"] if isinstance(row["constraints"], dict) else \
+        json.loads(row["constraints"] or "{}")
+    if not constraints.get("fallback_to_brief") or status in ok_states:
+        return None
+    reason = ""
+    if status in bad_states:
+        if _meeting_successor(connection, project_id, meeting_run_id, run_id):
+            return None           # a person retried the panel: the ordinary path follows it
+        error = str(row["error"] or "").strip()
+        reason = f"the panel ended as '{status}'" + (f": {error[:200]}" if error else "")
+    else:
+        job = connection.execute(
+            text("SELECT status, last_error FROM jobs WHERE kind = 'meeting.step' "
+                 "AND payload->>'run_id' = :m ORDER BY created_at DESC LIMIT 1"),
+            {"m": meeting_run_id}).mappings().first() or {}
+        budget = int(constraints.get("time_budget_seconds") or 0)
+        if str(job.get("status") or "") in ("deadlettered", "failed_final"):
+            said = job.get("last_error")
+            said = said.get("message") if isinstance(said, dict) else said
+            reason = "the panel's step failed" + (f": {str(said)[:200]}" if said else "")
+        elif budget and float(row["age"] or 0) > budget:
+            reason = (f"the panel ran past its {max(1, budget // 60)}-minute budget")
+        if not reason:
+            return None
+        connection.execute(
+            text("UPDATE meeting_runs SET status = 'cancelled', error = :e, updated_at = now() "
+                 "WHERE id = :m AND status = 'running'"),
+            {"m": meeting_run_id, "e": f"Stopped: {reason}. BOSS built from the brief instead."})
+    fallback = {"reason": reason, "meeting_run_id": meeting_run_id,
+                "at": now_utc().isoformat()}
+    workflows.force_complete_waiting_step(
+        connection, project_id=project_id, step_run_id=step["id"],
+        output={**output, "status": "succeeded", "meeting_run_id": meeting_run_id,
+                "prd_markdown": "", "spec_fallback": fallback,
+                "note": f"No spec this time — {reason}. BOSS builds from the brief instead."})
+    emit_event(connection, project_id, SPEC_FALLBACK_EVENT, "boss", "workflow_run", run_id,
+               {"step_id": step["step_id"], **fallback})
+    return {"run_id": run_id, "step_id": step["step_id"], "outcome": "spec_fallback",
+            "awaited": "meeting", "because": reason}
 
 
 def _hold_for_spec(connection: Connection, *, project_id: str, run_id: str,

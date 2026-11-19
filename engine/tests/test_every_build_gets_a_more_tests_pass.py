@@ -63,6 +63,10 @@ OPTED_OUT = {
     # Users are failing now: the fix's own criteria demand the regression test and its gates run
     # the whole existing suite; a second pass and its second deploy would hold the recovery.
     "incident_response",
+    # Easy Mode's MVP pipeline (operator, 2026-11-19: "main P1 test pass ... it should be fast
+    # and work MVP"): the build's own tests and its P1 must-haves are the bar; the rest are
+    # follow-ups, so a second pass and a second deploy would only make it slower.
+    "easy_mode_mvp",
 }
 
 
@@ -71,7 +75,7 @@ def test_the_catalogue_workflows_that_build_are_the_ones_expected():
         "standard_product_delivery", "minor_feature", "major_feature", "fast_fix",
         "backend_service_setup", "ux_certification", "security_hardening", "data_migration",
         "compliance_release", "third_party_integration", "deprecation_sunset",
-        "incremental_build", "incident_response"}
+        "incremental_build", "incident_response", "easy_mode_mvp"}
 
 
 def _the_rule_holds(spec, key):

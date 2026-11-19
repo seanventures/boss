@@ -98,7 +98,10 @@ function needsOf(record: Record<string, unknown>): TemplateCard["needs"] {
 
 type Attachment = { id: string; name: string };
 
-type LaunchIds = { projectId: string; runId: string; title: string; reused: boolean };
+/** `workflowRunId`: a spec-first launch's Easy Mode MVP workflow run (the panel writes the spec,
+ *  then BOSS builds it); `stage` "spec" while that is the next thing that happens. */
+type LaunchIds = { projectId: string; runId: string; title: string; reused: boolean;
+                   workflowRunId?: string; stage?: string };
 
 type Gallery =
   | { state: "loading" }
@@ -244,7 +247,9 @@ function launchIds(data: unknown): LaunchIds | null {
   const runId = first(record, ["run_id", "runId"]);
   if (!projectId && !runId) return null;
   const spec = record.spec && typeof record.spec === "object" ? record.spec as Record<string, unknown> : {};
-  return { projectId, runId, title: first(spec, ["title"]), reused: record.reused === true };
+  const workflowRunId = first(record, ["workflow_run_id", "workflowRunId"]);
+  return { projectId, runId, title: first(spec, ["title"]), reused: record.reused === true,
+           ...(workflowRunId ? { workflowRunId } : {}), stage: first(record, ["stage"]) || undefined };
 }
 
 function rowsFor(files: File[], ids: string[]): Attachment[] {
@@ -257,7 +262,12 @@ function rowsFor(files: File[], ids: string[]): Attachment[] {
 
 /** Where a started build is watched: its build page in Code Tasks (the Work tab's Build link,
  *  services/stuck_work.py), else the project's page. Through consoleHref, so org= is kept. */
-export function watchBuildHref(launch: { projectId: string; runId: string }): string {
+export function watchBuildHref(launch: { projectId: string; runId: string; workflowRunId?: string }): string {
+  // A SPEC-FIRST LAUNCH is watched as its workflow run: the panel, its spec, then the build.
+  if (launch.workflowRunId) {
+    return consoleHref({ ...(launch.projectId ? { project_id: launch.projectId } : {}),
+                         area: "delivery_workflows", wfr: launch.workflowRunId, tab: undefined, build: undefined });
+  }
   if (launch.runId) {
     return consoleHref({ ...(launch.projectId ? { project_id: launch.projectId } : {}),
                          area: "code_tasks", build: launch.runId, tab: undefined });
@@ -278,10 +288,17 @@ function StartedCard({ launch, fallbackTitle }: { launch: LaunchIds; fallbackTit
   // THE SAME LAUNCH, STILL GOING (`reused`: the server handed back the run already under way —
   // a double press, or this build pressed again while it runs): it is not "building, 15–25 min"
   // from now, it is the one already started.
-  const said = launch.reused ? `${title} already started` : `${title} is building`;
+  // THE SPEC COMES FIRST (operator, 2026-11-19): a normal launch convenes the panel, which
+  // writes the spec the build then follows — the card says so, and how long the whole takes.
+  const specFirst = launch.stage === "spec" || !!launch.workflowRunId;
+  const said = launch.reused ? `${title} already started`
+    : specFirst ? `${title}: the team is writing the spec, then building (about 20–30 min)`
+    : `${title} is building`;
   const next = launch.reused
     ? "This build was started earlier and is still going. Watch it to see where it is."
-    : "BOSS writes tests, builds, reviews and opens a pull request — about 15–25 min.";
+    : specFirst
+      ? "A short agent panel agrees what the app must do and writes it down; BOSS then builds it, opens a pull request and starts a preview. Read the spec under Meetings."
+      : "BOSS writes tests, builds, reviews and opens a pull request — about 15–25 min.";
   return (
     <section className="bh-started" data-testid="build-launch" data-reused={launch.reused ? "true" : "false"}
              aria-labelledby="bh-started-h">
@@ -291,7 +308,7 @@ function StartedCard({ launch, fallbackTitle }: { launch: LaunchIds; fallbackTit
         <p className="bh-started-next" data-testid="build-started-next">{next}</p>
         <div className="bh-started-actions">
           <a className="bh-started-go" href={watchBuildHref(launch)} data-testid="build-watch">
-            Watch the build <ArrowRight {...ICON} />
+            {specFirst ? "Watch it" : "Watch the build"} <ArrowRight {...ICON} />
           </a>
           {launch.projectId ? (
             <a className="bh-started-open" href={projectHref(launch.projectId)} data-testid="build-open-project">Open project</a>
@@ -327,6 +344,9 @@ export function BuildHome() {
 
   const [prompt, setPrompt] = useState("");
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("build");
+  /** "Review the plan first": the panel's spec waits for you instead of being approved by this
+   *  start (the light lane's default). */
+  const [reviewPlan, setReviewPlan] = useState(false);
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [phase, setPhase] = useState<Phase>("ready");
@@ -436,6 +456,7 @@ export function BuildHome() {
     const body = {
       prompt,
       mode,
+      ...(reviewPlan ? { review_plan: true } : {}),
       template_id: templateId,
       attachment_ids: [...new Set(attachments.map((item) => item.id))],
     };
@@ -670,6 +691,11 @@ export function BuildHome() {
                 </select>
                 <CaretDown {...ICON} className="bh-mode-caret" />
               </span>
+            </label>
+            <label className="bh-mode bh-review" title="The agent panel writes a spec before anything is built. Tick this to read and approve it yourself; otherwise your start approves it.">
+              <input type="checkbox" data-testid="build-review-plan" checked={reviewPlan}
+                     onChange={(event) => { setReviewPlan(event.target.checked); touch(); }} />
+              <span>Review the plan first</span>
             </label>
             {canDictate ? (
               <button

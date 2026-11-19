@@ -924,6 +924,32 @@ def completed_benchmark_build(connection, project_id: str, benchmark_id: str,
     }
 
 
+#: How many seats a compact panel has (Easy Mode): the chair and two more.
+COMPACT_SEATS = 3
+
+#: Who approves a panel's PRD, when the caller says (`constraints.spec_approval`):
+#: "start" — the person's own start covers it (Easy Mode's light lane: the PRD is approved under
+#: the consent they gave when they pressed it, and recorded so); "person" — a person reads it
+#: first (Easy Mode's "Review the plan first"). Absent: the install's setting decides.
+SPEC_APPROVED_BY_START = "start"
+SPEC_APPROVED_BY_PERSON = "person"
+
+#: The PRD decision's note when the person's start approved it.
+APPROVED_BY_START_NOTE = ("Approved by your Easy Mode start: you asked BOSS to build this, and "
+                          "the panel's spec is what it builds. Read it under Meetings.")
+
+
+def is_compact(constraints: Optional[dict]) -> bool:
+    """A compact panel: a few seats, one round, then the PRD (constraints.compact)."""
+    return str((constraints or {}).get("compact") or "").lower() in ("true", "1", "yes")
+
+
+def spec_approval_of(constraints: Optional[dict]) -> str:
+    """Who approves this panel's PRD: SPEC_APPROVED_BY_START, SPEC_APPROVED_BY_PERSON or ""."""
+    said = str((constraints or {}).get("spec_approval") or "").strip().lower()
+    return said if said in (SPEC_APPROVED_BY_START, SPEC_APPROVED_BY_PERSON) else ""
+
+
 def start_meeting_run(connection, *, project_id, task_id, directive, url, constraints, role_keys,
                       finalize_ctx, title: Optional[str] = None) -> str:
     run_id = make_id("mrun")
@@ -932,14 +958,21 @@ def start_meeting_run(connection, *, project_id, task_id, directive, url, constr
     constraints = dict(constraints or {})
     constraints.setdefault("meeting_type", DEFAULT_MEETING_TYPE)
     constraints["meeting_type"] = normalize_meeting_type(constraints.get("meeting_type"))
+    # A COMPACT PANEL (Easy Mode, 2026-11-19): a few seats and one round, so the spec is written
+    # in minutes. With no site to study it starts at its one round, not at research.
+    compact = is_compact(constraints)
+    if compact:
+        personas = personas[:COMPACT_SEATS]
+    first_phase = "round1" if compact and not str(url or "").strip() else "research"
     connection.execute(
         text("""
             INSERT INTO meeting_runs (id, project_id, task_id, status, phase, directive, url,
                                       role_keys, constraints, finalize_ctx, title)
-            VALUES (:id, :p, :t, 'running', 'research', :d, :url,
+            VALUES (:id, :p, :t, 'running', :phase, :d, :url,
                     CAST(:rk AS JSONB), CAST(:c AS JSONB), CAST(:fc AS JSONB), :title)
         """),
         {"id": run_id, "p": project_id, "t": task_id, "d": directive, "url": url, "title": title,
+         "phase": first_phase,
          "rk": json.dumps([p["key"] for p in personas]),
          "c": json.dumps(constraints or {}), "fc": json.dumps(finalize_ctx or {})},
     )
@@ -1346,7 +1379,8 @@ def _advance_phase(engine, settings: Settings, jobs, run: dict, run_id: str, pha
         # EACH TURN CARRIES ITS GIST: the seat's own headline and key points, taken off the
         # reply and stored beside it, so the meeting room never cuts a card out of markdown.
         state["round1"], state["round1_gists"] = with_gists(r1)
-        next_phase = "round2"
+        # A compact panel has one round: its facilitator reconciles round 1 directly.
+        next_phase = "synthesis" if is_compact(run.get("constraints")) else "round2"
     elif phase == "round2":
         base = _make_base(run["directive"], run["constraints"], state.get("research") or {}, run["url"])
         r1_blob = _panel_blob(personas, state.get("round1") or {})
@@ -1359,7 +1393,7 @@ def _advance_phase(engine, settings: Settings, jobs, run: dict, run_id: str, pha
         next_phase = "synthesis"
     elif phase == "synthesis":
         base = _make_base(run["directive"], run["constraints"], state.get("research") or {}, run["url"])
-        r2_blob = _panel_blob(personas, state.get("round2") or {})
+        r2_blob = _panel_blob(personas, state.get("round2") or state.get("round1") or {})
         fac_sys = (f"You are the {FACILITATOR_TITLE}. You ran a cross-functional meeting and must reconcile "
                    "the team's debate into a single agreed direction. Be decisive, resolve conflicts explicitly, "
                    "and surface genuine open questions rather than papering over them.")
@@ -1489,6 +1523,13 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     # reader can always tell which approvals a human made. The follow-on (start the governed
     # build) is the same code path a human approval runs.
     auto_approve = bool(decision_id and getattr(settings, "meeting_prd_auto_approve", False))
+    # WHO APPROVES THIS PRD, WHEN THE CALLER SAID (Easy Mode): the person's start covers it on
+    # the light lane, whatever the install's setting; "Review the plan first" always waits.
+    approval = spec_approval_of(run.get("constraints"))
+    if approval == SPEC_APPROVED_BY_START:
+        auto_approve = bool(decision_id)
+    elif approval == SPEC_APPROVED_BY_PERSON:
+        auto_approve = False
     # A swapped stack is the blocking question, not a silent start. The spec gate asks
     # enable / accept / stop; approving the PRD here would build the substitute.
     if auto_approve and prd_blocks_auto_approve(run.get("directive"), state.get("prd_markdown")):
@@ -1504,8 +1545,13 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
             DecisionService(settings).transition(
                 connection, decision_id, action="approve", actor=SYSTEM_ACTOR,
                 system_policy=True,
-                note="Approved automatically: the agent panel reviewed and drafted this PRD. "
-                     "Set BOSS_MEETING_PRD_AUTO_APPROVE=false to require a human approval.")
+                note=(APPROVED_BY_START_NOTE if approval == SPEC_APPROVED_BY_START else
+                      "Approved automatically: the agent panel reviewed and drafted this PRD. "
+                      "Set BOSS_MEETING_PRD_AUTO_APPROVE=false to require a human approval."))
+            if approval == SPEC_APPROVED_BY_START:
+                emit_event(connection, project_id, "meeting.prd_approved_by_start", "boss",
+                           "decision", decision_id,
+                           {"meeting_run_id": run_id, "why": APPROVED_BY_START_NOTE})
         except Exception as error:  # noqa: BLE001
             # A failed auto-approval must not lose the meeting's work. The decision stays
             # pending and a human can approve it in the console exactly as before.
