@@ -51,9 +51,33 @@ def has_real_content(html: str, *, min_chars: int = 40) -> bool:
     return len(visible_text(html)) >= min_chars
 
 
+_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def rendered_markup(html: str) -> str:
+    """The page's own markup — tags and text — without what the browser does not render:
+    <script>/<style> bodies and HTML comments. Tags stay, so a structural marker such as
+    `<html id="__next_error__">` is still seen."""
+    return _COMMENT.sub(" ", _SCRIPT_STYLE.sub(" ", html or ""))
+
+
+def error_page_marker(html: str) -> Optional[str]:
+    """The error-page marker a page RENDERS, or None.
+
+    ONLY WHAT IS RENDERED COUNTS. A Next.js App Router page inlines its whole flight payload in
+    `<script>self.__next_f.push(...)</script>`, and that payload carries the framework's default
+    not-found tree — `"404: This page could not be found."` — on EVERY page, working or not. The
+    markers were matched against the raw HTML, so every working Next.js App Router page read as
+    an error page: invoice-desk (crun_33379dfc, 2026-11-18) answered 200 at `/` with its real
+    page and its app_serves gate failed with "the health check rejected the page it served",
+    which held the build at "Checks failing". Script bodies, styles and comments are not the
+    page; a real error page renders its error (or marks its markup, `__next_error__`)."""
+    low = rendered_markup(html).lower()
+    return next((m for m in _ERROR_MARKERS if m in low), None)
+
+
 def is_error_page(html: str, console_errors: Optional[list[str]] = None) -> bool:
-    low = (html or "").lower()
-    if any(m in low for m in _ERROR_MARKERS):
+    if error_page_marker(html):
         return True
     return bool(console_errors)
 

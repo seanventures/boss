@@ -234,7 +234,9 @@ def recipe_box(world, client, engine):
             "created_at, updated_at) VALUES (:i, :p, 'failed', 'done', 'Recipe box', :e, "
             "CAST(:f AS JSONB), :at, :up)"),
             {"i": run_id, "p": slug, "e": REAL_ERROR,
-             "f": json.dumps({"failure_class": "infra", "reason_code": "pipeline_exception"}), "at": at,
+             # Its stages ran before it failed saving (crun_6883ec7c: completed ["write_tests"]).
+             "f": json.dumps({"failure_class": "infra", "reason_code": "pipeline_exception",
+                              "completed_stages": ["write_tests"]}), "at": at,
              "up": at + timedelta(minutes=9, seconds=22)})
     return {"id": slug, "run": run_id}
 

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Optional
@@ -117,8 +118,12 @@ def span_words(minutes: int) -> str:
 def _clip(value: Any, n: int = 160) -> str:
     from .redaction import redact_secrets
 
-    s = " ".join(str(value or "").split())
+    # The sandbox tag is BOSS's bookkeeping, never words for a person (stranger test r6).
+    s = " ".join(re.sub(r"\s*\[substrate=[^\]]*\]", "", str(value or "")).split())
     s = redact_secrets(s)
+    from ..identity.redaction import redact_text
+
+    s = redact_text(s, public=True)          # a secret's id is not words for a person either
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
 
 

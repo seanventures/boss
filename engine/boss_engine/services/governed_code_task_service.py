@@ -1912,6 +1912,39 @@ def auto_retries_made(fctx: Optional[dict]) -> int:
         return 1
 
 
+#: However the setting reads and whatever a run's own fields say: never more automatic platform
+#: retries than this in one lineage.
+AUTO_RETRY_HARD_CAP = 2
+
+
+def lineage_auto_retries(engine, run_id: str, fctx: Optional[dict]) -> int:
+    """How many automatic platform retries BOSS already started in this build's lineage: the
+    attempts that carry the marker, and the retries its events say it started (either alone
+    is enough — a lost write on one never resets the count). 0 when it cannot be read."""
+    try:
+        with _transaction(engine) as c:
+            # THE LINEAGE'S ROOT FROM THE ROW, never from the caller's copy of finalize_ctx
+            # (loaded when the attempt started, it may predate what was written since).
+            root = str(c.execute(sql(
+                "SELECT COALESCE(finalize_ctx->>'root_run_id', id) FROM code_task_runs "
+                "WHERE id = :r"), {"r": run_id}).scalar()
+                or (fctx or {}).get("root_run_id") or run_id)
+            marked = c.execute(sql(
+                "SELECT count(*) FROM code_task_runs WHERE (id = :root OR "
+                "finalize_ctx->>'root_run_id' = :root) "
+                "AND finalize_ctx ? 'auto_infra_retry'"), {"root": root}).scalar() or 0
+            said = c.execute(sql(
+                "SELECT count(DISTINCT e.data->>'retry_run_id') FROM events e "
+                "JOIN code_task_runs r ON r.id = e.entity_id "
+                "WHERE e.event_type = 'code_task.auto_retried' "
+                "AND (r.id = :root OR r.finalize_ctx->>'root_run_id' = :root)"),
+                {"root": root}).scalar() or 0
+        return max(int(marked), int(said))
+    except Exception:  # noqa: BLE001 — the field count still bounds it
+        _log_caught(logger)
+        return 0
+
+
 def _auto_retry_limits(settings) -> tuple[int, int]:
     tries = getattr(settings, "build_auto_retries", 2)
     backoff = getattr(settings, "build_auto_retry_backoff_seconds", 30)
@@ -1944,8 +1977,47 @@ def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: 
     recipe-box (2026-11-18): crun_6883ec7c died on BOSS's git-index bug and the retry was
     withheld for want of a grant the person had in fact given (identity.consent same_build).
     Never raises; the failure it was given is returned unchanged when no retry starts."""
-    made = auto_retries_made(fctx)
+    # COUNTED FROM THE LINEAGE, NOT FROM A FIELD ON THIS RUN (stranger test r6, 2026-11-18: one
+    # press made 15 failed builds ~7 s apart — the counter was written after the next attempt
+    # was queued, so a fast-failing attempt read 0 and started its own "first" retry).
+    with _lineage_lock(engine, run_id, fctx):
+        return _retry_after_infra_failure_locked(engine, settings, jobs, run_id, project_id,
+                                                 fctx, result)
+
+
+@contextlib.contextmanager
+def _lineage_lock(engine, run_id: str, fctx: Optional[dict]):
+    """ONE AUTOMATIC-RETRY DECISION PER LINEAGE AT A TIME (review of #227, LOW): two attempts of
+    one lineage failing at the same instant could both read count n. A session advisory lock on
+    the lineage root, held across the count and the enqueue; best effort (no lock off Postgres)."""
+    conn = None
+    key = str((fctx or {}).get("root_run_id") or run_id)
+    try:
+        conn = engine.connect()
+        key = str(conn.execute(sql(
+            "SELECT COALESCE(finalize_ctx->>'root_run_id', id) FROM code_task_runs "
+            "WHERE id = :r"), {"r": run_id}).scalar() or key)
+        conn.execute(sql("SELECT pg_advisory_lock(hashtext(:k))"), {"k": f"auto_retry:{key}"})
+    except Exception:  # noqa: BLE001 — no lock, the hard cap still bounds it
+        if conn is not None:
+            conn.close()
+        conn = None
+    try:
+        yield
+    finally:
+        if conn is not None:
+            try:
+                conn.execute(sql("SELECT pg_advisory_unlock(hashtext(:k))"),
+                             {"k": f"auto_retry:{key}"})
+            finally:
+                conn.close()
+
+
+def _retry_after_infra_failure_locked(engine, settings, jobs, run_id: str, project_id: str,
+                                      fctx: dict, result: dict) -> dict:
+    made = max(auto_retries_made(fctx), lineage_auto_retries(engine, run_id, fctx))
     tries, backoff = _auto_retry_limits(settings)
+    tries = min(tries, AUTO_RETRY_HARD_CAP)
     if tries <= 0:
         return {**result, "auto_retry": "off",
                 "next_step": "Automatic retries are off on this install; press Retry."}
@@ -1960,22 +2032,18 @@ def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: 
         # build", because the worker's own key was the caller. Now the attempt carries the grant
         # the person gave the failed build, or is not started and the build stays failed with
         # Retry for a person.
+        attempt = made + 1
+        delay = backoff * (2 ** made)
+        # THE COUNT AND THE NOT-BEFORE ARE WRITTEN WITH THE NEW ATTEMPT'S ROW AND JOB, in the one
+        # transaction that queues it: the worker can never take it before its backoff, nor read
+        # a count of zero.
         retried = retry_code_task(engine, settings, jobs, run_id, automatic=True,
-                                  platform_retry=True)
+                                  platform_retry=True, auto_retry_attempt=attempt,
+                                  run_after_seconds=delay)
         if retried.get("delivery_only"):
             return {**result, **retried}               # the same run, delivered (or not) in place
         new_id = str(retried.get("run_id") or "")
-        attempt = made + 1
-        delay = backoff * (2 ** made)
         with _transaction(engine) as c:
-            c.execute(sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb)"
-                          " || jsonb_build_object(CAST(:k AS text), CAST(:n AS integer)) WHERE id=:id"),
-                      {"k": AUTO_INFRA_RETRY_KEY, "n": attempt, "id": new_id})
-            if delay > 0:
-                # BACKOFF: a platform hiccup (a busy disk, a GitHub 502) gets a moment to pass.
-                c.execute(sql("UPDATE jobs SET run_after = now() + make_interval(secs => :d) "
-                              "WHERE kind = 'code.task' AND payload->>'run_id' = :id "
-                              "AND status = 'queued'"), {"d": delay, "id": new_id})
             emit_event(c, project_id, "code_task.auto_retried", "boss", "code_task_run", run_id,
                        {"retry_run_id": new_id, "attempt": attempt, "of": tries,
                         "after_seconds": delay,

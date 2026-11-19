@@ -948,6 +948,13 @@ def shepherd_escalation_cards(connection: Any, project_id: str) -> list[dict[str
         return []
     out = []
     for r in rows:
+        build = builds.get(str(r["task_ref"] or ""))
+        if build is not None and str(build.get("status") or "") in _ENDED_BUILD:
+            # A QUESTION ABOUT A BUILD THAT HAS ENDED IS HISTORY (stranger test r6: "retry 11:
+            # the platform is holding this job … Let it continue, or cancel it?" stayed on the
+            # Command Center after that attempt had failed and the work was done). The build's
+            # own card says how it ended; there is nothing left to continue or cancel.
+            continue
         options = r["options"] if isinstance(r["options"], list) else json.loads(
             r["options"] or "[]")
         title, detail = escalation_words(str(r["question"] or ""), str(r["task_ref"] or ""),

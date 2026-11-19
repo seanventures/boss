@@ -30,14 +30,14 @@ from sqlalchemy import text
 
 #: What BOSS says once its own platform retries of a build are spent (the pipeline's
 #: _retry_after_infra_failure and the failed-build card): what it did, never a question.
-AUTO_RETRY_SPENT_WORDS = ("BOSS retried this build {times} after a platform error on its own "
-                          "side; it failed the same way, so BOSS handed it to its engineer agent "
-                          "as a BOSS fix. Retry once BOSS is updated.")
+AUTO_RETRY_SPENT_WORDS = ("BOSS tried this build {tries} times; each stopped the same way, on "
+                          "BOSS's side, so BOSS stopped retrying. Press Retry to try again.")
 
 
 def spent_words(n: int) -> str:
-    times = {1: "once", 2: "twice"}.get(int(n), f"{int(n)} times")
-    return AUTO_RETRY_SPENT_WORDS.format(times=times)
+    """`n` automatic retries: n + 1 tries in all, counted from the lineage (never a field on the
+    last run — stranger test r6's card said "retried twice" after 14)."""
+    return AUTO_RETRY_SPENT_WORDS.format(tries=int(n) + 1)
 
 #: How far back a failure still speaks for the project, on every surface.
 REACH_DAYS = 14
@@ -153,7 +153,9 @@ def action_for(project_id: str, *, source: str, run_id: Optional[str],
                            "detail": "It hit its spending cap. Raise the cap, then retry."},
                    "It hit its spending cap: raise the cap first")
     if fc == "needs_human" or rc in ("harness_unavailable", "stack_unsupported",
-                                     "build_services_unavailable", "no_test_files"):
+                                     "build_services_unavailable", "no_test_files",
+                                     "credential_plain_http", "credential_misdirected",
+                                     "model_auth_rejected", "repo_access_denied"):
         tool = _TOOLCHAIN.search(raw)
         said = parse_sentence(raw)
         cannot = _CANNOT_BUILD.search(raw)
@@ -176,6 +178,20 @@ def action_for(project_id: str, *, source: str, run_id: Optional[str],
                    "href": href(project_id, area="setup", focus="models"),
                    "detail": (_sentence(said["fix"]) if said else
                               "Reconnect the model's account in Setup, then retry.")}
+        elif rc in ("credential_plain_http", "credential_misdirected", "model_auth_rejected"):
+            # THE PERSON'S OWN MODEL SETUP (stranger test r6): a plain-http address, a key bound
+            # to another host, a key the provider rejected. Said in the refusal's own words.
+            plain = "plain http" in raw.lower()
+            fix = {"label": "Use an https address in Setup › Models" if plain
+                   else "Fix the model in Setup › Models",
+                   "href": href(project_id, area="setup", focus="models"),
+                   "detail": (failure_words(raw) if plain else
+                              "The model you connected refused BOSS's request with its key. "
+                              "Fix the key or address in Setup › Models, then retry.")}
+        elif rc == "repo_access_denied":
+            fix = {"label": "Check repository access", "href": href(project_id, area="setup"),
+                   "detail": "The repository refused BOSS (not found, or no access for this "
+                             "account). Connect it with access in Setup, then retry."}
         elif rc == "build_services_unavailable":
             fix = {"label": "Start build services", "href": href(project_id, area="infra"),
                    "detail": "BOSS can't reach its build services. Start them on the BOSS host, "
@@ -322,7 +338,10 @@ def latest_failures(connection: Any, project_ids: Iterable[str], *,
                        "follow_up": follow_up, "at": _iso(latest["updated_at"]),
                        "work_href": project_href(pid, tab="work", drawer=f"build:{root}"),
                        "see_href": see, "reason": failure_words(latest["error"])}
-            doing = boss_did(latest["failure_class"], latest.get("auto_retries"))
+            # HOW MANY AUTOMATIC RETRIES, FROM THE LINEAGE: every attempt BOSS started itself.
+            auto_n = sum(1 for m in members if str(m.get("auto_retries") or "").strip()
+                         not in ("", "0", "false"))
+            doing = boss_did(latest["failure_class"], auto_n)
             if doing:
                 failure["doing"] = doing
             ok = needs_ok_words(latest["failure_class"], latest.get("needs_ok"),

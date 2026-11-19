@@ -524,6 +524,7 @@ def start_code_task(
     automatic_retry: bool = False,
     continuation: bool = False,
     outcome: Optional[dict] = None,
+    run_after_seconds: int = 0,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job.
 
@@ -1014,7 +1015,11 @@ def start_code_task(
         jobs.create_job(connection, project_id=project_id, task_id=task_id,
                         kind="code.task",
                         priority=code_task_job_priority(connection, run_finalize, job_priority),
-                        payload={"run_id": run_id})
+                        payload={"run_id": run_id},
+                        # NOT BEFORE, IN THE SAME WRITE AS THE JOB (stranger test r6): a backoff
+                        # written after the job was queued let the worker take it at once.
+                        **({"run_after_seconds": int(run_after_seconds)}
+                           if run_after_seconds and run_after_seconds > 0 else {}))
     emit_event(connection, project_id, "code_task.started", "boss", "code_task_run", run_id,
                {"task_id": task_id, "title": title, "repo": f"{owner}/{repo}"})
 
@@ -2118,6 +2123,8 @@ def retry_code_task(
     recheck_bar: Optional[str] = None,
     platform_retry: bool = False,
     after_update: bool = False,
+    auto_retry_attempt: Optional[int] = None,
+    run_after_seconds: int = 0,
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
@@ -2375,6 +2382,10 @@ def retry_code_task(
             base_branch=spec.get("base_branch") or None,
             role_key=spec.get("role_key"),
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
+                          # WHICH AUTOMATIC PLATFORM RETRY THIS IS, written WITH the row — never
+                          # after the job is queued (a fast-failing attempt read it as 0).
+                          **({"auto_infra_retry": int(auto_retry_attempt)}
+                             if auto_retry_attempt else {}),
                           # RE-CHECK THIS CHANGE (change_recheck): every gate on the branch
                           # head, no code written, no repair round.
                           **({"recheck_only": True, "recheck_of": run_id} if recheck else {}),
@@ -2503,6 +2514,7 @@ def retry_code_task(
             job_priority=job_priority,
             automatic_retry=automatic,
             outcome=started,
+            run_after_seconds=run_after_seconds,
         )
         if pr_url and new_id:
             # A NEWER BUILD OF THE CHANGE makes every "Fix these" card of its PR a stale
@@ -2906,6 +2918,48 @@ def is_rules_forbidden(reason: str) -> bool:
     return _RULES_403.search(text) is not None
 
 
+#: FAILURES ONLY THE PERSON'S OWN SETUP CAN FIX (stranger test r6, 2026-11-18: a plain-http custom
+#: model's key refusal was classed `infra`, retried 14 times and filed as a BOSS self-fix). Each is
+#: a refusal of what the person connected — a credential, their model's key, a repository's
+#: access — so another attempt meets the same answer: needs_human, never an automatic retry.
+#:
+#: NEVER BOSS'S OWN (review of #227): in egress mode the person never holds the git credential —
+#: BOSS's helper or the run's shim socket does — and the egress proxy answers 401 for its own
+#: run tokens and handles. A failure that names BOSS's egress, its model gateway or its own
+#: tokens is BOSS's, whatever words git or a client wraps it in; so is "could not read Username"
+#: (BOSS's credential helper not answering, every time it was seen).
+_BOSS_OWN_AUTH = re.compile(
+    r"boss-egress|boss_egress|model[ _-]gateway|run_token_|handle_(?:expired|revoked|replay)|"
+    r"egress_not_registered|host_proof_required|could not read username", re.I)
+#: The person's model provider refusing its key, in the provider's own words (a bare "401
+#: Unauthorized" can be BOSS's gateway or egress and is not enough).
+_PROVIDER_KEY_REFUSED = ("invalid x-api-key", "invalid api key", "incorrect api key",
+                         "authentication_error", "invalid_api_key")
+
+
+def _person_side(lowered: str) -> Optional[str]:
+    if "boss only sends keys over https" in lowered:
+        return "credential_plain_http"
+    if "is sent only to" in lowered and "refusing to send" in lowered:
+        return "credential_misdirected"
+    if _BOSS_OWN_AUTH.search(lowered):
+        return None
+    import os
+    from urllib.parse import urlsplit
+
+    egress = (urlsplit(os.environ.get("BOSS_EGRESS_URL") or "").hostname or "").lower()
+    if egress and egress in lowered:
+        return None                          # BOSS's egress under another name
+    if any(s in lowered for s in _PROVIDER_KEY_REFUSED):
+        return "model_auth_rejected"
+    if ("permission to " in lowered and " denied to " in lowered) or re.search(
+            r"repository '[^']*' not found", lowered) or any(
+            s in lowered for s in ("repository not found", "access denied to repository",
+                                   "not have access to this repository")):
+        return "repo_access_denied"          # git: "Permission to o/r.git denied to user."
+    return None
+
+
 def classify_pipeline_exception(reason: str) -> tuple[str, str]:
     """Map a pipeline exception onto the failure taxonomy. Most unexpected exceptions ARE infra
     (platform's fault) — but an agent that exhausted its turn cap is a RECOVERABLE task-shaped
@@ -2923,6 +2977,9 @@ def classify_pipeline_exception(reason: str) -> tuple[str, str]:
         # or account. Not `infra` — an automatic retry meets the same broken engine — and not
         # the code's fault: the operator makes the fix the verdict names, then retries.
         return "needs_human", "harness_unavailable"
+    person = _person_side(r)
+    if person is not None:
+        return "needs_human", person
     if "build services unavailable" in r:
         # The run declared a database BOSS could not give it: an operator starts build-services
         # (or removes the declaration). Retrying without it would only fail the same way.

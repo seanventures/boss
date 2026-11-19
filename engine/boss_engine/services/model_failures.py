@@ -386,7 +386,8 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
     from .env_refs import misdirection_in
 
     misdirected = misdirection_in(error) if isinstance(error, BaseException) else None
-    if misdirected is not None or ("is sent only to" in lowered and "refusing to send it" in lowered):
+    if misdirected is not None or ("is sent only to" in lowered and "refusing to send it" in lowered) \
+            or "boss only sends keys over https" in lowered:
         said = str(misdirected or text).strip()
         return {
             "kind": "credential_misdirected", "headline": said,
