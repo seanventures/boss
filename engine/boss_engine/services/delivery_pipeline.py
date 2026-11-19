@@ -394,6 +394,12 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
         if target.get("paused"):
             return {"status": "failed",
                     "reason": f"target {target['id']} is paused; un-pause it first"}
+        from . import quality_bar as _quality_bar
+
+        if _quality_bar.is_production(target.get("environment")):
+            refused = _quality_bar.production_refusal(c, code_task_run_id=run_id)
+            if refused:
+                return {"status": "failed", "reason": refused, "quality_bar": "production"}
 
         from .resource_plane import ResourcePlaneService
 
@@ -748,6 +754,9 @@ def redeploy(engine, settings: Settings, deployment_run_id: str, *,
             expected_cost_usd_micros=expected_cost_usd_micros,
             reservation_id=reservation_id,
             actor=actor,
+            # TRUSTED: exempt from the production bar only when this re-ships the exact commit
+            # of this prior production run on its own target (quality_bar.plan_refusal).
+            reships=deployment_run_id,
         )
         new_id = planned.get("deployment_run_id") or planned.get("id")
         if planned.get("status") in {"failed", "blocked"}:

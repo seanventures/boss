@@ -693,7 +693,7 @@ def start_code_task(
                 role_keys=[builder], permissions=_consent.code_task_permissions(
                     _consent_repos(owner, repo, repo_host), repo_host),
                 repos=_consent_repos(owner, repo, repo_host), by_boss=automatic_retry or continuation,
-                workflow_run_id=_wf, gap=authority_gap)
+                workflow_run_id=_wf, gap=authority_gap, same_build=automatic_retry)
         if automatic_retry and identity_acting is None:
             # NOT STARTED rather than started to be refused: no person's grant covers this
             # attempt, so identity would block it the moment it ran (crun_da5f6f72: "No one's
@@ -1184,6 +1184,18 @@ def change_request(instructions: str, *, title: Optional[str] = None,
             "replaces": [str(x) for x in (replaces or []) if str(x).strip()]}
 
 
+#: A follow-up still on its way: a second identical request joins it instead of queuing another.
+FOLLOWUP_IN_FLIGHT = ("queued", "running", "repairing", "waiting_for_github", "waiting_on_person")
+
+
+def followup_brief_key(instructions: Any) -> str:
+    """The identity of a follow-up's brief: its words, whitespace-normalised."""
+    import hashlib
+
+    words = " ".join(str(instructions or "").split())
+    return hashlib.sha256(words.encode()).hexdigest()[:24]
+
+
 def start_followup_task(
     connection, *, parent_run_id: str, instructions: str, jobs,
     title: Optional[str] = None, acceptance_criteria: Optional[list] = None,
@@ -1335,6 +1347,28 @@ def start_followup_task(
         child_fctx["change_request"] = change_request(
             instructions, title=title, criteria=acceptance_criteria, actor=actor,
             replaces=replaces)
+
+    # ONE FOLLOW-UP PER BRIEF IN FLIGHT (review #224): a second press of "Let BOSS fix these",
+    # another tab, or a retried request queued a second paid build with the very same brief.
+    # The same parent and the same words while one is still queued or running returns that one.
+    brief = followup_brief_key(instructions)
+    child_fctx["followup_brief"] = brief
+    live = None
+    if connection is not None and getattr(getattr(connection, "dialect", None), "name", "") \
+            == "postgresql":
+        # Two presses at once: the second waits for the first's row, then finds it.
+        connection.execute(sql("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                           {"k": f"followup:{parent_run_id}:{brief}"})
+        in_flight = ", ".join(f"'{s_}'" for s_ in FOLLOWUP_IN_FLIGHT)
+        live = connection.execute(sql(
+            "SELECT id FROM code_task_runs WHERE project_id = :p "
+            "AND finalize_ctx->>'parent_run_id' = :r AND finalize_ctx->>'followup_brief' = :b "
+            f"AND status IN ({in_flight}) ORDER BY created_at DESC LIMIT 1"),
+            {"p": run["project_id"], "r": parent_run_id, "b": brief}).scalar()
+    if live:
+        return {"run_id": str(live), "root_run_id": root, "base_branch": base_branch,
+                "owner": spec.get("owner"), "repo": spec.get("repo"),
+                "process_run_id": None, "existing": True}
 
     run_id = start_code_task(
         connection,
@@ -2062,6 +2096,17 @@ def redeliver_code_task(engine, settings: Settings, run_id: str, *, automatic: b
             "decision_id": proposal.get("decision_id")}
 
 
+def _within_auto_retry_budget(settings, fctx_prev: dict, automatic: bool) -> bool:
+    """BOSS's own platform retry inside its bound (build_auto_retries): the caller
+    (_retry_after_infra_failure) already caps the lineage's automatic retries, so the breaker
+    below does not refuse the second of them as a "blind" one."""
+    if not automatic:
+        return False
+    from .governed_code_task_service import _auto_retry_limits, auto_retries_made
+
+    return auto_retries_made(fctx_prev) < _auto_retry_limits(settings)[0]
+
+
 def retry_code_task(
     engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "",
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
@@ -2070,6 +2115,9 @@ def retry_code_task(
     title: Optional[str] = None, automatic: bool = False, by_person: bool = False,
     change_request: Optional[dict] = None,
     recheck: bool = False,
+    recheck_bar: Optional[str] = None,
+    platform_retry: bool = False,
+    after_update: bool = False,
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
@@ -2088,14 +2136,23 @@ def retry_code_task(
     That is the explicit "I know, proceed" the infra circuit breaker below waits for, exactly as
     a fix note is: northgate-gateway's build died twice on a BOSS bug fixed since, the person
     retried the step, and the breaker refused it for want of a note — so the step started
-    nothing and was dead-lettered (wfr_b4dbf0868f224963b793, 2026-11-16)."""
+    nothing and was dead-lettered (wfr_b4dbf0868f224963b793, 2026-11-16).
+
+    `platform_retry=True` (with automatic): BOSS's bounded retry of a build that died of BOSS's
+    own platform error (_retry_after_infra_failure). It is already capped there
+    (build_auto_retries), so the infra circuit breaker lets it through within that cap.
+
+    `after_update=True` (with automatic): BOSS restarting, once, a build that a BOSS bug stopped
+    before BOSS was UPDATED (build_restart_recovery): it ran older code, so the "failed before
+    BOSS last started" refusal does not apply to it."""
     with _transaction(engine) as c:
         prev = load_code_task_run(c, run_id)
         prev_gates_failed = _recorded_failed_gates(c, run_id) if prev is not None else []
         failed_at = _failed_at(c, run_id) if (prev is not None and automatic) else None
     if prev is None:
         raise ValueError(f"code task run not found: {run_id}")
-    if automatic and failed_at is not None and failed_at < PROCESS_STARTED_AT:
+    if (automatic and not after_update and failed_at is not None
+            and failed_at < PROCESS_STARTED_AT):
         raise RetryNeedsPerson(
             "BOSS did not retry this build by itself: it failed before BOSS last started "
             "(an upgrade or a restart), and a build that died before a restart is only run "
@@ -2161,7 +2218,8 @@ def retry_code_task(
             "NOTE: the previous attempt failed with an infrastructure error on the micro-VM "
             "substrate; this attempt runs on the local substrate (degraded mode).")
     elif (prev_infra and prev_substrate == "local_subprocess" and attempt >= 3
-          and not fix_note and not (by_person and not automatic)):
+          and not fix_note and not (by_person and not automatic)
+          and not (platform_retry and _within_auto_retry_budget(settings, fctx_prev, automatic))):
         raise ValueError(
             f"circuit breaker: {attempt - 1} attempts in this lineage have failed with "
             f"infrastructure errors (last: {str(prev.get('error') or '')[:200]!r}) and the run is "
@@ -2320,6 +2378,9 @@ def retry_code_task(
                           # RE-CHECK THIS CHANGE (change_recheck): every gate on the branch
                           # head, no code written, no repair round.
                           **({"recheck_only": True, "recheck_of": run_id} if recheck else {}),
+                          # A re-check AT THE PRODUCTION BAR (change_recheck._bar_asked): raises
+                          # this run's bar so every review seat sits (governed _bar_for_run).
+                          **({"recheck_bar": recheck_bar} if recheck and recheck_bar else {}),
                           # A fresh build of the same brief, not a repair (see `fresh` above).
                           **({"fresh_build": True} if fresh else {}),
                           # AN EXPLICIT CHOICE MAKES THIS A PIECE OF WORK IN ITS OWN RIGHT.
@@ -2435,6 +2496,10 @@ def retry_code_task(
             repair_retries=(repair_retries if isinstance(repair_retries, int)
                             else spec.get("repair_retries")),
             substrate=substrate_override,
+            # THE SAME REPOSITORY HOST: a retry of a build on this machine's local repository
+            # stays local (it lost `local` and was read as a GitHub repository nothing could
+            # clone).
+            repo_host=spec.get("repo_host") or None,
             job_priority=job_priority,
             automatic_retry=automatic,
             outcome=started,

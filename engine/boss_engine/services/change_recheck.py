@@ -85,7 +85,7 @@ def is_recheck(fctx: Optional[Mapping[str, Any]]) -> bool:
     return bool((fctx or {}).get(KEY))
 
 
-def refusal(run: Optional[Mapping[str, Any]]) -> Optional[str]:
+def refusal(run: Optional[Mapping[str, Any]], *, quality_bar: Optional[str] = None) -> Optional[str]:
     """Why this run cannot be re-checked, or None: it must have finished with its pull request
     open (a running build is still checking; a build with no PR has no change to re-check)."""
     if not run:
@@ -96,6 +96,11 @@ def refusal(run: Optional[Mapping[str, Any]]) -> Optional[str]:
         return "this build has no pull request: there is no change to re-check"
     merge = (run.get("finalize_ctx") or {}).get("merge")
     if isinstance(merge, Mapping) and str(merge.get("sha") or "").strip():
+        # A MERGED change can still be re-checked AT THE PRODUCTION BAR: production releases come
+        # after the merge, and the re-check only runs checks on the commit as it stands and writes
+        # no code (it holds every push). Only code-writing follow-ups are refused for a merged one.
+        if quality_bar and quality_bar == _bar_asked(quality_bar):
+            return None
         return "this change is already merged"
     return None
 
@@ -138,8 +143,19 @@ def preview(connection: Any, run_id: str, project_id: str) -> dict:
             "estimate": estimate(connection, run)}
 
 
+def _bar_asked(value: Any) -> Optional[str]:
+    """RE-CHECK AT THE PRODUCTION BAR: a build whose profile never convened every review seat
+    (a tier-0 build, a fast fix) is refused for production (quality_bar.production_refusal names
+    this action). The re-check is the way to the bar: it raises the run's bar to production, so
+    the pipeline convenes EVERY seat whatever the build's original profile. Only a raise is
+    honoured; any other value is ignored."""
+    from . import quality_bar
+
+    return quality_bar.PRODUCTION if quality_bar.normalize(value) == quality_bar.PRODUCTION else None
+
+
 def request(engine: Any, settings: Any, jobs: Any, run_id: str, *, project_id: str,
-            actor: str, by_person: bool = False) -> dict:
+            actor: str, by_person: bool = False, quality_bar: Optional[str] = None) -> dict:
     """Start the re-check: a new attempt of the lineage, marked `recheck_only`. Refused, in
     words, when the build cannot be re-checked or another run already works on its branch."""
     from ..db import begin
@@ -150,13 +166,14 @@ def request(engine: Any, settings: Any, jobs: Any, run_id: str, *, project_id: s
         run = load_code_task_run(c, run_id)
         if not run or run.get("project_id") != project_id:
             raise RecheckRefused("no such build in this project")
-        why = refusal(run)
+        why = refusal(run, quality_bar=_bar_asked(quality_bar))
         if why:
             raise RecheckRefused(why)
         cost = estimate(c, run)
     try:
         started = retry_code_task(engine, settings, jobs, run_id, fix_note=NOTE,
-                                  by_person=by_person, recheck=True)
+                                  by_person=by_person, recheck=True,
+                                  recheck_bar=_bar_asked(quality_bar))
     except RetryRefused as exc:
         raise RecheckRefused(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 — BranchOwned and kin: say why, start nothing

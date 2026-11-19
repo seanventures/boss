@@ -1012,9 +1012,6 @@ class ModelGatewayService:
                 int(lease["estimated_cost_usd_micros"]), actual_cost_usd_micros, worker_id,
                 included_in_subscription=included, allow_expired=allow_expired_reservation,
             )
-        elif reservation_id:
-            self.budget.release(connection, project_id, reservation_id, "Model invocation failed before billable use.")
-
         status = "succeeded" if succeeded else "failed"
         usage_overruns = {
             key: {"allowed": int(limit), "actual": int(usage_units.get(key, 0))}
@@ -1046,6 +1043,14 @@ class ModelGatewayService:
             {"status": status, "provider_ref": provider_ref, "usage": json.dumps(usage_units),
              "actual": money_usd_micros, "error": json.dumps(error or {}), "id": invocation_id},
         ).mappings().one()
+        if reservation_id and not chargeable:
+            # RELEASED ONLY ONCE THE INVOCATION SAYS IT FAILED. Release reads the project's
+            # budget state, and that read asks whether any released reservation still has an
+            # invocation `in_progress` (legacy_model_reconciliation): released first, this very
+            # invocation was one, and a refused API-key proof (HTTP 401, no use) raised
+            # "Reconcile historical unresolved model exposure before paid work" on a person
+            # (dec_e77ed3f1, recipe-box, 2026-11-18).
+            self.budget.release(connection, project_id, reservation_id, "Model invocation failed before billable use.")
         connection.execute(
             text("UPDATE model_gateway_leases SET status=:status, completed_at=now(), result=CAST(:result AS JSONB) WHERE id=:id"),
             {"status": "completed" if succeeded else "failed", "id": lease_id,

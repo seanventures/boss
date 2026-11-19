@@ -896,18 +896,20 @@ def checkout_problem(root: Path | str, *, branch: str = "", owner: str = "",
     head (the branch's remote head is not in its history). Never the stack, never an empty or
     small tree: a follow-up that rewrites Node into Go, a retry of an empty first build, an empty
     slice branch and a polyglot repo all build on exactly what the branch holds (PR #164 E2).
-    None when git cannot say (no checkout, no remote ref): nothing to prove wrong."""
-    import subprocess
+    None when git cannot say (no checkout, no remote ref): nothing to prove wrong.
+
+    Read-only git on the run's tree (git_safety.tree_git): as the run's uid, so a planted
+    objects/info/alternates cannot make BOSS read another repository's objects."""
+    from .git_safety import tree_git
 
     base = Path(root)
 
     def git(*args: str) -> str | None:
         try:
-            got = subprocess.run(["git", "-C", str(base), *args], capture_output=True, text=True,
-                                 timeout=20)
+            got = tree_git(base, *args, timeout=20)
         except Exception:  # noqa: BLE001
             return None
-        return got.stdout.strip() if got.returncode == 0 else None
+        return got.stdout.strip() if got is not None and got.returncode == 0 else None
 
     if git("rev-parse", "--is-inside-work-tree") != "true":
         return None
@@ -1787,3 +1789,39 @@ def qa_static_findings(output: str, qa_files, *, app_rel: str = "") -> list[str]
         if re.search(r"\berror\b", line, re.I) and _about_qa(line):
             out.append(line.strip())
     return out[:60]
+
+
+#: A bare package the code or its tests import that is not installed (Node's own wording, and
+#: Python's): `Cannot find package 'jsdom' imported from …`, `Cannot find module 'jsdom'`,
+#: `ModuleNotFoundError: No module named 'httpx'`. A relative path ('./x') is the app's own file.
+_MISSING_PACKAGE = re.compile(
+    r"Cannot find (?:package|module) ['\"](?P<node>(?:@[\w.-]+/)?[\w][\w.-]*)(?:/[^'\"]*)?['\"]"
+    r"|No module named ['\"](?P<py>[\w][\w.]*)['\"]")
+
+
+def missing_packages(output: Any) -> list[str]:
+    """The packages a failed run could not load because they are not installed."""
+    found = []
+    for m in _MISSING_PACKAGE.finditer(str(output or "")):
+        name = m.group("node") or (m.group("py") or "").split(".")[0]
+        if name and name not in found:
+            found.append(name)
+    return found[:8]
+
+
+def missing_package_note(output: Any) -> str:
+    """THE BUILD'S OWN TESTS COULD NOT RUN: a package they load is not installed (Recipe box,
+    2026-11-18: `node --test` exited before any test ran because jsdom was absent). A floor
+    failure the AGENTS fix — declare the package so BOSS's install installs it — never a
+    question for a person. "" when nothing is missing."""
+    names = missing_packages(output)
+    if not names:
+        return ""
+    listed = ", ".join(f"`{n}`" for n in names)
+    return ("\n\nTHE SUITE COULD NOT LOAD " + listed + ": not installed. Declare "
+            + ("it" if len(names) == 1 else "them")
+            + " in the project's manifest (package.json devDependencies for a test-only package, "
+            "or the Python requirements) at a version that works with the code; BOSS's install "
+            "step then installs it before the tests run again. Do not remove or skip the tests "
+            "that need it.")
+

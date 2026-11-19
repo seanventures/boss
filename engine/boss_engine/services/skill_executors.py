@@ -492,12 +492,19 @@ def execute_deployment_run_plan(
         deployment_target_id=_required_text(inputs, "deployment_target_id"),
         commit_ref=inputs.get("commit_ref"),
         release_packet={
-            "artifact_id": _required_text(inputs, "release_packet_artifact_id")
+            "artifact_id": _required_text(inputs, "release_packet_artifact_id"),
+            # The build this release is of: a production target needs one that passes the
+            # production bar (quality_bar.plan_refusal); a skill may name it.
+            **({"code_task_run_id": str(inputs["code_task_run_id"])}
+               if inputs.get("code_task_run_id") else {}),
         },
         expected_cost_usd_micros=int(inputs.get("expected_cost_usd_micros") or 0),
         reservation_id=inputs.get("reservation_id"),
         actor=context.actor,
     )
+    if run.get("refused"):
+        # The production quality bar refused it (quality_bar.plan_refusal): nothing was planned.
+        raise ValueError(run.get("failure_reason") or "Deployment policy blocked this run.")
     return {
         "deployment_run_id": run["id"],
         "changeset_id": run.get("changeset_id"),

@@ -2507,6 +2507,15 @@ class SoftwareFactoryService:
         # A local change set is "change #N", never a PR (BOSSAPP-946).
         _local = getattr(self.github, "kind", "") == "local"
         _ref = f"change #{pr.number}" if _local else f"PR #{pr.number}"
+        # FOLLOW-UPS ARE NOT A FAILURE (quality_bar.merge_followups, operator 2026-11-18): a
+        # build whose only open items are follow-ups — review findings below the bar's blocking
+        # severity, gates the bar let through — gets the normal ready-to-merge card, "Recipe box
+        # is ready — 1 follow-up queued, BOSS is fixing it", never "Checks failing — decide" and
+        # never a reason to type. BOSS's follow-up build fixes them; the PR lists them.
+        from . import quality_bar as _quality_bar
+
+        _followups = (None if card_checks else
+                      _quality_bar.merge_followups(evidence if isinstance(evidence, dict) else {}))
         decision_id = None if set_member else self.decisions.create_blocking(
             connection,
             project_id,
@@ -2515,6 +2524,8 @@ class SoftwareFactoryService:
              if card_checks else
              f"Approve follow-up fix after #{follow_up['after']}: "
              f"{pr_follow_up.work_name(title)} ({_ref})" if follow_up else
+             f"{_quality_bar.ready_words(pr_follow_up.work_name(title) or title, _followups)}"
+             f" ({_ref})" if _followups else
              f"Approve code change: {title} ({_ref})"),
             {
                 # FIRST, so nothing it carries can replace the action below. Its keys are the
@@ -2525,6 +2536,12 @@ class SoftwareFactoryService:
                 "summary": (
                     (_checks_failing.decision_summary(card_checks) + " "
                      if card_checks else "")
+                    + (f"Ready to merge — {_quality_bar.followup_words(_followups)}. "
+                       f"{'They' if _followups['count'] != 1 else 'It'} did not block at the "
+                       f"{_followups['bar']} quality bar and "
+                       f"{'are' if _followups['count'] != 1 else 'is'} listed on the "
+                       f"{'change' if _local else 'pull request'}. "
+                       if _followups else "")
                     + f"BOSS built “{title}” in a sandbox and opened "
                     + (f"change #{pr.number}. " if _local else f"pull request #{pr.number}. ")
                     + (f"{_acceptance_gate.headline(acceptance)}. "
@@ -2598,6 +2615,9 @@ class SoftwareFactoryService:
                 # The knowledge the card is "based on": facts matched to this change's symbols
                 # (knowledge/runtime.remember_written_files). Empty when none matched.
                 "cited_fact_ids": citations,
+                # THE FOLLOW-UPS (quality_bar.merge_followups): what the card lists under its
+                # normal Merge, P1 first, and whether BOSS's follow-up build is fixing them.
+                **({_quality_bar.CARD_KEY: _followups} if _followups else {}),
                 # A follow-up after the merge of #N (pr_follow_up): named, with its reason.
                 **({"follow_up_of": follow_up["after"],
                     "follow_up_reason": follow_up.get("reason")} if follow_up else {}),

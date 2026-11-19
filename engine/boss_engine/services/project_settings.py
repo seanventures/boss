@@ -140,6 +140,19 @@ KNOBS: dict[str, dict[str, Any]] = {
         "help": "How long one failed step's recovery may go on before it asks you.",
         "kind": "int", "min": 5, "max": 1440,
     },
+    # THE QUALITY BAR (quality_bar.py, BOSSAPP-1362): one dial for how strict every gate is.
+    # Read by each build's gates (resolve_for_run) and by a production deploy/promote step.
+    "quality_bar": {
+        "attr": "quality_bar",
+        "label": "Quality bar",
+        "help": "prototype: blocks only when the app does not build or start, the tests it wrote "
+                "fail, or a security issue is found; everything else becomes a follow-up. "
+                "standard: also blocks on the must-haves that matter (P1), a review blocker and "
+                "broken existing tests; the rest becomes a follow-up. production: blocks on "
+                "everything, and a production release refuses a build that passed at a lighter "
+                "bar. A workflow or a single run may set its own.",
+        "kind": "choice", "choices": ["prototype", "standard", "production"],
+    },
     # OPEN THE PR WHEN CHECKS FAIL (checks_failing.py): after its repair rounds a build whose
     # checks still fail opens a draft PR labelled `checks failing` instead of waiting for a waiver.
     "open_pr_when_checks_fail": {

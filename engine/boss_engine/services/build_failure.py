@@ -28,6 +28,17 @@ from typing import Any, Iterable, Mapping, Optional
 
 from sqlalchemy import text
 
+#: What BOSS says once its own platform retries of a build are spent (the pipeline's
+#: _retry_after_infra_failure and the failed-build card): what it did, never a question.
+AUTO_RETRY_SPENT_WORDS = ("BOSS retried this build {times} after a platform error on its own "
+                          "side; it failed the same way, so BOSS handed it to its engineer agent "
+                          "as a BOSS fix. Retry once BOSS is updated.")
+
+
+def spent_words(n: int) -> str:
+    times = {1: "once", 2: "twice"}.get(int(n), f"{int(n)} times")
+    return AUTO_RETRY_SPENT_WORDS.format(times=times)
+
 #: How far back a failure still speaks for the project, on every surface.
 REACH_DAYS = 14
 
@@ -217,7 +228,15 @@ def latest_failures(connection: Any, project_ids: Iterable[str], *,
         "COALESCE(c.finalize_ctx->>'root_run_id', c.id) AS root, "
         "c.finalize_ctx->>'failure_class' AS failure_class, "
         "c.finalize_ctx->>'reason_code' AS reason_code, "
-        "c.finalize_ctx->'merge'->>'sha' AS merged_sha "
+        "c.finalize_ctx->'merge'->>'sha' AS merged_sha, "
+        "c.finalize_ctx->>'deferred_from_run' AS deferred_from, "
+        "(SELECT d.status FROM decisions d WHERE d.id = c.decision_id) AS decision_status, "
+        "c.finalize_ctx->'merge'->>'at' AS merged_at, "
+        "(c.finalize_ctx ? 'change_request') AS asks_change, "
+        "c.finalize_ctx->>'auto_infra_retry' AS auto_retries, "
+        "c.finalize_ctx->'restart_recovery' AS restart_recovery, "
+        "c.finalize_ctx->>'auto_retry_needs_ok' AS needs_ok, "
+        "c.finalize_ctx->>'is_followup' AS is_followup "
         "FROM code_task_runs c WHERE c.project_id = ANY(:ids) AND c.created_at >= :since "
         + _internal_clauses(params, "c")), params).mappings().all()]
     runs = [dict(r) for r in connection.execute(text(
@@ -274,7 +293,26 @@ def latest_failures(connection: Any, project_ids: Iterable[str], *,
         else:
             if latest is None or str(latest["status"]) != "failed":
                 continue
+            # Not the project's failure: a follow-up of a build still ready on its merge card
+            # (the light lane), or an attempt the lineage moved past (a later merge).
+            if _followups_only(latest, members[:-1]) or _moved_on(members, latest):
+                continue
             root = key.split(":", 1)[1]
+            waits = waits_on(connection, pid, latest)
+            if waits is not None and waits.get("resolved"):
+                continue                     # its stated cause is gone: nothing to say
+            if waits is not None:
+                # A REFUSAL THAT WAITS ON A PERSON'S MERGE is that merge, not a red failure.
+                out[pid] = {"id": root, "source": "code_task", "build_id": str(latest["id"]),
+                            "label": short_title(_root_title(members, root) or "Build"),
+                            "word": waits["label"], "waits_on": waits, "follow_up": False,
+                            "at": _iso(latest["updated_at"]), "reason": waits["detail"],
+                            "work_href": project_href(pid, tab="work", drawer=f"build:{root}"),
+                            "see_href": href(pid, area="code_tasks", build=latest["id"]),
+                            "retry": None, "fix": {"label": waits["label"], "href": waits["href"],
+                                                   "detail": waits["detail"]},
+                            "retry_reason": "Merge it first; then this build isn't needed"}
+                continue
             follow_up = len(members) > 1 and any(
                 m["pull_request_url"] or m["merged_sha"] for m in members[:-1])
             see = href(pid, area="code_tasks", build=latest["id"])
@@ -284,12 +322,43 @@ def latest_failures(connection: Any, project_ids: Iterable[str], *,
                        "follow_up": follow_up, "at": _iso(latest["updated_at"]),
                        "work_href": project_href(pid, tab="work", drawer=f"build:{root}"),
                        "see_href": see, "reason": failure_words(latest["error"])}
+            doing = boss_did(latest["failure_class"], latest.get("auto_retries"))
+            if doing:
+                failure["doing"] = doing
+            ok = needs_ok_words(latest["failure_class"], latest.get("needs_ok"),
+                                follow_up=follow_up or bool(latest.get("is_followup")))
+            if ok:
+                # BOSS would retry it but no grant the person gave covers another attempt: one
+                # OK (Retry, which asks consent) and it runs. Never a red failure to fix.
+                failure.update({"word": "Needs your OK", "reason": ok, "tone": "info"})
+                failure.pop("doing", None)
+            stopped = _stopped_by_boss(latest.get("restart_recovery"))
+            if stopped:
+                # A BOSS bug, fixed since, stopped it: said as that, never a red "Build failed".
+                failure.update({"word": "Stopped by a BOSS bug", "reason": stopped,
+                                "tone": "info", "boss_bug": True})
+                failure.pop("doing", None)
             failure.update(action_for(
                 pid, source="code_task", run_id=str(latest["id"]),
                 failure_class=latest["failure_class"], reason_code=latest["reason_code"],
                 error=latest["error"], merged=bool(latest["merged_sha"]), see_href=see))
         out[pid] = failure
     return out
+
+
+def _followups_only(latest: Mapping[str, Any], earlier: list[Mapping[str, Any]]) -> bool:
+    """A FOLLOW-UP-ONLY OUTCOME IS NOT A FAILURE (quality_bar.merge_followups, operator
+    2026-11-18). The failed build is the follow-up BOSS started on its own for a ready build's
+    follow-ups (`deferred_from_run`), and the build it follows still waits, ready, on its merge
+    card: the project reads "ready to merge", never "Follow-up failed" with a Retry for a
+    person. The follow-up's own page keeps its failure; agents pick it up from there."""
+    from .decision_actions import OPEN_STATUSES
+
+    parent = str(latest.get("deferred_from") or "")
+    if not parent:
+        return False
+    return any(str(m["id"]) == parent and m.get("pull_request_url") and not m.get("merged_sha")
+               and str(m.get("decision_status") or "") in OPEN_STATUSES for m in earlier)
 
 
 def latest_failure(connection: Any, project_id: str, *, now: Optional[datetime] = None
@@ -333,13 +402,113 @@ def _failed_at_ship(connection: Any, run_ids: list[str]) -> set[str]:
     return out
 
 
+def needs_ok_words(failure_class: Any, needs_ok: Any, *, follow_up: bool = False
+                   ) -> Optional[str]:
+    """A platform failure BOSS would retry but may not by itself (no grant the person gave
+    covers another attempt), in words — an OK to give, not a problem to fix."""
+    if str(failure_class or "") != "infra" or str(needs_ok or "").lower() not in ("true", "1"):
+        return None
+    what = "this follow-up" if follow_up else "this build"
+    return (f"BOSS needs your OK to retry {what}: it stopped on a platform error on BOSS's side, "
+            "and no grant you gave covers another attempt. Press Retry to allow it, or give "
+            "its agent a standing grant so BOSS retries by itself next time.")
+
+
+def _stopped_by_boss(value: Any) -> Optional[str]:
+    from .build_restart_recovery import words_for
+    from .project_experience.common import as_json
+
+    said = words_for({"restart_recovery": as_json(value, None)}) if value else None
+    return said["words"] if said and said["state"] == "cannot_resume" else None
+
+
+def boss_did(failure_class: Any, auto_retries: Any) -> Optional[str]:
+    """What BOSS already did about a build that died of BOSS's own platform error, in one
+    sentence — said in place of a question: "BOSS retried it twice; …". None when BOSS made no
+    automatic retry (a needs_human failure, or one whose retries are off)."""
+    if str(failure_class or "") != "infra":
+        return None
+    raw = str(auto_retries or "").strip().lower()
+    n = 1 if raw == "true" else int(raw) if raw.isdigit() else 0
+    if n <= 0:
+        return None
+    return spent_words(n)
+
+
 def needs_card(failure: Mapping[str, Any]) -> dict[str, Any]:
     """The failure as a Needs-you card (kind `failed`). It carries no generic `action`: its
     buttons are its own (Retry is a POST, never a link), so a generic renderer — the needs
     drawer — draws the same Retry / fix / See what happened, never an API URL as a link."""
     return {"id": f"failed:{failure['id']}", "kind": "failed",
             "label": f"{failure['word']}: {failure['label']}", "word": failure["word"],
-            "detail": failure["reason"], "mini": [], "work_id": failure["id"],
+            "detail": (f"{failure['doing']} {failure['reason']}".strip() if failure.get("doing")
+                       else failure["reason"]),
+            "doing": failure.get("doing"), "mini": [], "work_id": failure["id"],
             "created_at": failure.get("at"), "retry": failure.get("retry"),
             "fix": failure.get("fix"), "retry_reason": failure.get("retry_reason"),
-            "see_href": failure.get("see_href"), "action": None}
+            "see_href": failure.get("see_href"), "action": None,
+            **({"tone": failure["tone"]} if failure.get("tone") else {})}
+
+
+def is_failure(entry: Optional[Mapping[str, Any]]) -> bool:
+    """A real failure (red), as opposed to work waiting on a person's merge (`waits_on`)."""
+    return bool(entry) and not entry.get("waits_on")
+
+
+def _when(v: Any) -> Optional[datetime]:
+    if isinstance(v, str):
+        try:
+            return _aware(datetime.fromisoformat(v.replace("Z", "+00:00")))
+        except ValueError:
+            return None
+    return _aware(v)
+
+
+def _moved_on(members: list[Mapping[str, Any]], latest: Mapping[str, Any]) -> bool:
+    """THE LINEAGE MOVED ON: another attempt's change was merged (its `merge.at`) after this
+    attempt failed — a retry or automatic follow-up that failed before change #1 was merged is
+    an earlier attempt. A follow-up that carried its OWN change request ("add X") is not: X
+    never landed, so its failure stays visible (review #221)."""
+    if latest.get("asks_change"):
+        return False
+    failed_at = _when(latest.get("updated_at"))
+    for m in members:
+        if m is latest or not m.get("merged_sha"):
+            continue
+        merged_at = _when(m.get("merged_at")) or _when(m.get("updated_at"))
+        if failed_at is None or (merged_at is not None and merged_at > failed_at):
+            return True
+    return False
+
+
+#: A build refused because the app's code waits, unmerged, on another build's branch.
+_WAITS_BRANCH = re.compile(r"boss/code/(crun_[0-9a-f]+)\b[^.]*\bnot merged", re.I)
+
+
+def waits_on(connection: Any, project_id: str, run: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """What a refused build waits for, when its error names it — "its code is on
+    boss/code/crun_d8b…, not merged into main … Merge that change" (app_missing): that build's
+    change. `resolved` once that change is merged (the refusal's cause is gone); otherwise the
+    merge to do, linked to its merge decision. None for any other failure."""
+    from .project_experience.common import href
+    from .repo_links import change_ref
+
+    found = _WAITS_BRANCH.search(str(run.get("error") or ""))
+    if not found:
+        return None
+    other = connection.execute(text(
+        "SELECT id, pull_request_url, pull_request_number, decision_id, "
+        "finalize_ctx->'merge'->>'sha' AS merged_sha FROM code_task_runs "
+        "WHERE project_id = :p AND id = :i"), {"p": project_id, "i": found.group(1)}
+    ).mappings().first()
+    if other is None:
+        return None
+    ref = change_ref(other["pull_request_url"], other["pull_request_number"], lower=True)
+    if other["merged_sha"]:
+        return {"resolved": True, "run_id": other["id"], "detail": f"Not needed: {ref} was merged."}
+    link = (href(project_id, area="decisions", decision=other["decision_id"])
+            if other["decision_id"] else href(project_id, area="code_tasks", build=other["id"]))
+    return {"resolved": False, "run_id": other["id"], "decision_id": other["decision_id"],
+            "label": f"Merge {ref} first", "href": link,
+            "detail": f"This build waits on {ref}: the app's code is there, not merged yet. "
+                      "Merge it, then build onto it."}

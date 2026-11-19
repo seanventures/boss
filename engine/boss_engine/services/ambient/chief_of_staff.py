@@ -172,6 +172,44 @@ def _non_prod_envs() -> frozenset[str]:
 WIDE_BLAST_APPS = 2
 
 
+#: Signals about BOSS's OWN failures (a build, a workflow step). Their agents own them: the
+#: Chief of Staff never asks a person "what kind of problem is this?" about one (recipe-box,
+#: 2026-11-18: a build that died on BOSS's git-index bug became that question on a card).
+OWN_FAILURE_KINDS = frozenset({"build.failed", "workflow.step_failed"})
+
+
+def build_facts(connection: Connection, signal: Mapping[str, Any]) -> dict[str, Any]:
+    """The structured facts behind a failed-build signal, read from the build row it names:
+    the failure class the pipeline recorded (`infra`: BOSS's own platform error) and whether a
+    newer attempt already continues it (BOSS is retrying it). {} when it names no build."""
+    if signal.get("kind") != "build.failed" or signal.get("subject_kind") != "code_task":
+        return {}
+    run_id = str(signal.get("subject_id") or "")
+    if not run_id:
+        return {}
+    try:
+        with connection.begin_nested():
+            row = connection.execute(text(
+                "SELECT c.finalize_ctx->>'failure_class' AS failure_class, "
+                "c.finalize_ctx->>'reason_code' AS reason_code, EXISTS (SELECT 1 FROM "
+                "code_task_runs n WHERE n.project_id = c.project_id "
+                "AND n.finalize_ctx->>'parent_run_id' = c.id) AS continued "
+                "FROM code_task_runs c WHERE c.id = :r"), {"r": run_id}).mappings().first()
+    except Exception:  # noqa: BLE001 — facts are a help, never a reason to fail the tick
+        return {}
+    if row is None:
+        return {}
+    return {"failure_class": row["failure_class"] or None, "reason_code": row["reason_code"] or None,
+            "continued": bool(row["continued"])}
+
+
+def being_retried(connection: Connection, group: Sequence[Mapping[str, Any]]) -> bool:
+    """Every failed build this group is about is already continued by a newer attempt."""
+    builds = [s for s in group if s.get("kind") == "build.failed"]
+    return bool(builds) and len(builds) == len(group) and all(
+        build_facts(connection, s).get("continued") for s in builds)
+
+
 def alert_facts(connection: Connection, signal: Mapping[str, Any]) -> dict[str, Any]:
     """The structured facts behind an alert signal, read from the rows it cites (never from its
     title): the target's environment, the rule's metric kind and layer, the alert's severity
@@ -259,8 +297,15 @@ def rule_candidates(signal: Mapping[str, Any],
             out = [("workflow_failure", 0.7, f"the same step failed {occurrences} times"),
                    ("platform_self_fix", 0.65, "a repeating failure may be BOSS's own")]
     elif kind == "build.failed":
-        out = [("workflow_failure", 0.6, "a build failed"),
-               ("platform_self_fix", 0.5, "a build failure may be BOSS's own")]
+        fclass = str((facts or {}).get("failure_class") or "")
+        if fclass == "infra":
+            # The pipeline already said whose failure it is: BOSS's own platform, not the code.
+            out = [("platform_self_fix", 0.9, "the build stopped on BOSS's own platform error")]
+        elif fclass == "needs_human":
+            out = [("workflow_failure", 0.9, "the build needs a fix only a person can make")]
+        else:
+            out = [("workflow_failure", 0.6, "a build failed"),
+                   ("platform_self_fix", 0.5, "a build failure may be BOSS's own")]
     elif kind.startswith("doctor."):
         out = [("system_health", 0.9, "the system doctor found a problem")]
     elif kind in ("shepherd.escalation", "pr.stale"):
@@ -337,14 +382,15 @@ def _signal_context(signal: Mapping[str, Any],
             "occurrences", "first_seen_at", "last_seen_at", "evidence")
     out = {k: signal.get(k) for k in keep}
     if facts:
-        out["alert_facts"] = dict(facts)
+        out["alert_facts" if signal.get("kind") == "alert.firing" else "build_facts"] = dict(facts)
     return out
 
 
 def classify(connection: Connection, settings: Any, project_id: str,
              signal: Mapping[str, Any], *, budget: Budget, bar: float) -> Reading:
     """Rules first; the model only when the rules are ambiguous; a question when nobody is sure."""
-    facts = alert_facts(connection, signal) if signal.get("kind") == "alert.firing" else {}
+    facts = (alert_facts(connection, signal) if signal.get("kind") == "alert.firing"
+             else build_facts(connection, signal))
     rules = rule_candidates(signal, facts)
     top_key, top_conf, top_why = rules[0]
     second = rules[1][1] if len(rules) > 1 else 0.0
@@ -373,9 +419,13 @@ def classify(connection: Connection, settings: Any, project_id: str,
         if decision.status == CLARIFY:
             chosen = decision.action if decision.action in tc.TASK_CLASSES else top_key
             return Reading(chosen, float(decision.confidence or top_conf), "model",
-                           "the model was not sure", candidates, asked=True,
+                           "the model was not sure", candidates,
+                           asked=signal.get("kind") not in OWN_FAILURE_KINDS,
                            cost_usd_micros=int(decision.cost_usd_micros or 0))
-    return Reading(top_key, top_conf, "rule", top_why, candidates, asked=top_conf < bar)
+    # BOSS's own failure is never a classification question for a person: its best reading
+    # stands and its owner agent takes it from there.
+    return Reading(top_key, top_conf, "rule", top_why, candidates,
+                   asked=top_conf < bar and signal.get("kind") not in OWN_FAILURE_KINDS)
 
 
 # ── routing ──────────────────────────────────────────────────────────────────────────────────
@@ -886,6 +936,7 @@ _ONE = {"missing_tests": "tests for {name}", "doc_drift": "docs for {name}",
         "stale_handoff": "a nudge on “{title}”", "workflow_failure": "a fix for “{title}”",
         "system_health": "a check on “{title}”", "ci_fix_boss_pr": "a CI fix on {name}",
         "red_main": "red main on {name}", "incident_response": "the incident on {name}",
+        "platform_self_fix": "a BOSS fix for “{title}”",
         "incident_staging_mitigation": "the incident on {name}"}
 #: Several of one kind on a batched card.
 _MANY = {"missing_tests": "tests for {n} hot files", "doc_drift": "docs for {n} repos",
@@ -944,6 +995,10 @@ def batch_question(entries: Sequence[Mapping[str, Any]]) -> str:
         if e.get("owner") == PARTY:
             action = tc.ACTIONS.get(str(e.get("next_action")), tc.ACTIONS["propose"]).title
             return f"{action}: “{_short_title(e.get('title'))}”?"
+        if e.get("task_class") == "platform_self_fix":
+            # Said as what BOSS is doing about its own failure, never "what kind of problem".
+            return (f"BOSS filed a fix for itself: “{_short_title(e.get('title'))}” — "
+                    f"{e['owner_label']} opens it once you agree")
         return f"Hand to {e['owner_label']}: {e['words']}?"
     named = _stalled_words(entries)
     if named and all(e.get("owner") == PARTY and not e.get("asked") for e in entries):
@@ -1109,11 +1164,17 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
     board.assert_lease(connection, item_id, owner=PARTY, token=token, lock=True)
     disp = disposition(connection, project_id, klass.key, asked=reading.asked, mode=mode,
                        owner_role=owner_role)
+    retrying = being_retried(connection, group)
+    if retrying:
+        # BOSS IS ALREADY RECOVERING IT: a newer attempt continues the failed build (its own
+        # bounded platform retry), so nobody is asked and nothing is handed over.
+        disp = "observe"
 
     if disp in ("observe", "roadmap"):
         # OBSERVE: recorded for the digest; nobody is asked, nothing is handed over.
         why = ("the Recommended roadmap ranks these and a person reviews them there"
-               if disp == "roadmap" else f"{klass.title} is {level} here")
+               if disp == "roadmap" else "BOSS is already retrying the build" if retrying
+               else f"{klass.title} is {level} here")
         act = ledger.record_decision(
             connection, **common, question=f"What to do with this {klass.title.lower()}?",
             chosen="observe", action="observe", options=options,
@@ -1121,6 +1182,8 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
             rationale=(f"{klass.title}: {reading.why}. "
                        + ("The Recommended roadmap ranks it, so BOSS asks nobody here."
                           if disp == "roadmap" else
+                          "BOSS is already retrying the build, so it asks nobody."
+                          if retrying else
                           f"It runs at {level} here, so BOSS records it for the digest and "
                           "asks nobody.")))
         board.release(connection, item_id, owner=PARTY, token=token, reason="observed")

@@ -244,8 +244,13 @@ def _attempt_sql() -> str:
         "c.finalize_ctx->>'parent_run_id' AS parent, "
         "c.finalize_ctx->>'deferred_from_run' AS deferred, "
         "c.finalize_ctx->>'attempt' AS attempt, "
+        "c.finalize_ctx->>'app_id' AS app_id, "
+        "md5(COALESCE(c.spec->>'instructions', '')) AS brief, "
+        "(c.finalize_ctx ? 'change_request') AS asks_change, "
+        "c.finalize_ctx->'merge'->>'at' AS merged_at, "
         "c.finalize_ctx->'merge'->>'sha' AS merged_sha, "
         "dd.recommendation->'merge_failed'->>'reason' AS merge_failed, "
+        "dd.recommendation->'followups' AS followups, "
         f"{LAST_ACTIVITY_SQL} AS last_activity, {live_job_sql('c')} AS live_job "
         "FROM code_task_runs c LEFT JOIN decisions dd ON dd.id = c.decision_id ")
 
@@ -422,10 +427,11 @@ def _build_strip(r: Mapping[str, Any], state: str) -> list[dict[str, str]]:
 
     review = "failed" if repairing else st(3, 3)
     pr = "waiting" if merge_open else "done" if pr_url else "todo" if repairing else st(4, 4)
-    if state == "failed" and at == len(phases) - 1 and not pr_url:
+    if state == "failed" and at == len(phases) - 1 and not pr_url and not merge_open:
         # FAILED AFTER ITS LAST PHASE (phase 'done', no PR): it stopped saving or opening its
         # change — the PR station failed, never a strip of ticks over a build that failed
-        # (recipe-box 2026-11-18: "git add failed" read B ✓ R ✓ PR ✓).
+        # (recipe-box 2026-11-18: "git add failed" read B ✓ R ✓ PR ✓). A merge still pending
+        # on an earlier attempt keeps PR waiting (amber), never a red ✗ over it.
         pr = "failed"
     return [{"key": "plan", "label": "P", "name": "Plan", "state": "skipped"},
             {"key": "design", "label": "D", "name": "Decide", "state": "skipped"},
@@ -589,6 +595,17 @@ def _settle_merged(members: list[dict[str, Any]]) -> None:
             m["merge_open"] = False
 
 
+def _followups_of(raw: Any) -> Optional[dict[str, Any]]:
+    """{count, queued, words} of a merge card's follow-ups record, else None."""
+    from ..quality_bar import followup_words
+
+    rec = as_json(raw, None) if not isinstance(raw, Mapping) else raw
+    if not isinstance(rec, Mapping) or not int(rec.get("count") or 0):
+        return None
+    return {"count": int(rec["count"]), "queued": bool(rec.get("queued")),
+            "words": str(rec.get("words") or followup_words(rec))}
+
+
 def _merge_links(members: list[dict[str, Any]], merge: Optional[Mapping[str, Any]]
                  ) -> dict[str, Any]:
     """`merge_pr`: the pull request the open merge question is about (a follow-up after a merged
@@ -609,6 +626,11 @@ def _merge_links(members: list[dict[str, Any]], merge: Optional[Mapping[str, Any
                            "external_url": url, "follow_up_of": after,
                            # Its last merge failed (merge_failures): said, never "Ready".
                            "failed": merge.get("merge_failed") or None}
+        # Ready WITH follow-ups (quality_bar.merge_followups): still "Ready to merge", with how
+        # many BOSS is fixing after it. Only when there are some.
+        _f = _followups_of(merge.get("followups"))
+        if _f:
+            out["merge_pr"]["followups"] = _f
     return out
 
 
@@ -775,14 +797,30 @@ def _build_items(connection: Connection, project_id: str,
             continue
         _settle_merged(members)
         _states(members, now, horizon)
+        newest = max(members, key=lambda m: str(iso(m.get("created_at")) or ""))
+        from ..build_failure import _moved_on, waits_on  # noqa: SLF001 — the one rule
+
+        moved_on = newest["_state"] == "failed" and _moved_on(members, newest)
+        if moved_on:
+            # THE LINEAGE MOVED ON: a change merged after this attempt failed — it is an earlier
+            # attempt, never the work's red state (recipe-box: crun_47c3 failed, then change #1
+            # of its parent was merged).
+            newest["_state"] = "handed_on"
+        waits = waits_on(connection, project_id, newest) if newest["_state"] == "failed" else None
         group = _group_fields(project_id, members, key, costs)
         latest = group.pop("latest")
         root = g["root"] or min(members, key=lambda m: str(iso(m.get("created_at")) or ""))
         merge = next((m for m in sorted(members, key=lambda m: str(iso(m["created_at"])),
                                         reverse=True) if m.get("merge_open")), None)
         state = latest["_state"]
+        if state == "handed_on":
+            state = "done"
         if merge is not None and state != "failed":
             state = "needs_you"
+        if waits is not None:
+            # A REFUSAL THAT WAITS ON A MERGE (build_failure.waits_on): the merge to do while it
+            # is open; once merged, the refusal's cause is gone — done, said faint.
+            state = "done" if waits.get("resolved") else "needs_you"
         merge_links = _merge_links(members, merge)
         shown = merge_links["merge_pr"] or merge_links["merged_pr"]
         with_pr = next((m for m in sorted(members, key=lambda m: str(iso(m["created_at"])),
@@ -790,6 +828,11 @@ def _build_items(connection: Connection, project_id: str,
         pr_url = (shown or {}).get("external_url") or (
             with_pr["pull_request_url"] if with_pr else None)
         strip = _build_strip({**latest, "merge_open": bool(merge)}, latest["_state"])
+        if waits is not None:
+            # Not a failure: it waits on a merge (PR amber) or its cause is gone (quiet).
+            strip = ([{**st, "state": "skipped"} for st in strip] if waits.get("resolved")
+                     else [{**st, "state": "waiting"} if st["state"] == "failed" else st
+                           for st in strip])
         raw_title = root.get("title") or "Build"
         title = clean_title(raw_title)
         out.append({
@@ -815,16 +858,56 @@ def _build_items(connection: Connection, project_id: str,
                               "external_url": pr_url} if pr_url else None),
                       **merge_links,
                       "deploy": None, "preview": previews.get(str(latest["id"])),
-                      "decision": href(project_id, area="decisions", decision=merge["decision_id"])
-                      if merge is not None else None},
+                      "decision": (href(project_id, area="decisions", decision=merge["decision_id"])
+                                   if merge is not None else waits["href"]
+                                   if waits and not waits.get("resolved") else None)},
             "decision_ids": [merge["decision_id"]] if merge is not None else [],
-            "action_label": "Merge" if merge is not None else None,
-            "detail": latest.get("error") or title,
+            "action_label": ("Merge" if merge is not None else
+                             waits["label"] if waits and not waits.get("resolved") else None),
+            "detail": (waits["detail"] if waits else latest.get("error") or title),
+            "resolved": ({"words": waits["detail"]} if waits and waits.get("resolved") else None),
             "build_id": str(latest["id"]),
             "href": project_href(project_id, tab="work", drawer=f"build:{key}"),
+            "app_id": root.get("app_id") or latest.get("app_id") or None,
+            # What was asked (the root's brief, hashed): `_replaced` matches the SAME request.
+            "brief": root.get("brief") if root.get("brief") != _NO_BRIEF else None,
+            # Some attempt of it is moving or completed: it can take over a failed twin.
+            "takes_over": any(str(m.get("status") or "") in _TAKES_OVER for m in members),
             **group,
         })
+    _replaced(out)
     return out
+
+
+#: md5('') — a build with no brief names no request, so it never "replaces" another.
+_NO_BRIEF = "d41d8cd98f00b204e9800998ecf8427e"
+#: A newer build that can take over: still moving, or completed. A failed or cancelled one can't.
+_TAKES_OVER = ("completed", "running", "queued", "provisioning", "repairing",
+               "waiting_for_github")
+
+
+def _replaced(found: list[dict[str, Any]]) -> None:
+    """A FAILED BUILD A LATER ONE REPLACED is history, not a failure: THE SAME REQUEST built
+    again from the start (Easy Mode's relaunch is a new root with the same brief, not a retry)
+    by a build that is moving or completed. The older row reads "Replaced by a later build" —
+    done, faint — never a red Failed beside the build that took over (recipe-box 2026-11-18:
+    crun_6883 Failed under its completed relaunch). An app is NOT a request: a failed feature
+    on an app with later, different features stays red (review #221: "Login with Google"
+    failed, then an unrelated fix ran on the same app)."""
+    by_request: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for w in found:
+        if w.get("app_id") and w.get("brief"):
+            by_request.setdefault((str(w["app_id"]), str(w["brief"])), []).append(w)
+    for rows in by_request.values():
+        rows.sort(key=lambda w: str(w.get("created_at") or ""))
+        for i, older in enumerate(rows):
+            newer = next((n for n in rows[i + 1:] if n.get("takes_over")), None)
+            if older["state"] == "failed" and newer is not None:
+                older["state"] = "done"
+                older["replaced_by"] = {"id": newer["id"], "label": newer.get("label"),
+                                        "href": newer.get("href")}
+                older["stages"] = [{**st, "state": "skipped"} if st["state"] in ("failed", "now")
+                                   else st for st in older["stages"]]
 
 
 #: An accepted item's kind of work, from the roadmap recommendation's kind.
@@ -1096,9 +1179,35 @@ def everything(connection: Connection, project_id: str, *, limit: int = 60,
     ready = _ticket_ready_items(connection, project_id, now, tickets)
     out = found[:limit] + planned + ready
     _with_tickets(out, tickets)
+    _in_plain_words(out)
     if is_local_project(connection, project_id):
         _in_local_words(out)
     return out
+
+
+def _in_plain_words(found: list[dict[str, Any]]) -> None:
+    """THE ONE PLAIN-WORDS PASS (plain_words.py): no "· retry N", raw repair prompt or gate key
+    in a row's name, its reason or its attempts (e2e recipe-box walk, 2026-11-18)."""
+    from ..plain_words import plain_sentence, plain_title
+
+    def plain(item: dict[str, Any], keys: tuple[str, ...] = ("label", "title")) -> None:
+        for key in keys:
+            if isinstance(item.get(key), str):
+                item[key] = plain_title(item[key])
+        if isinstance(item.get("detail"), str):
+            item["detail"] = plain_sentence(item["detail"])
+        why = item.get("why")
+        if isinstance(why, dict) and isinstance(why.get("words"), str):
+            item["why"] = {**why, "words": plain_sentence(why["words"])}
+
+    for w in found:
+        if isinstance(w, dict):
+            plain(w)
+            for a in w.get("attempts") or []:
+                if isinstance(a, dict):
+                    # An attempt's `label` ("Follow-up 2 · retry 1") is its place in the list,
+                    # said beside its name; its `title` is the work's name.
+                    plain(a, ("title",))
 
 
 #: A LOCAL PROJECT'S PR STATION IS ITS CHANGE SET (BOSSAPP-946): no GitHub word on a project

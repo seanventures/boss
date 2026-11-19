@@ -23,6 +23,7 @@ import contextlib
 import contextvars
 import json
 import logging
+import re
 from datetime import timedelta
 from typing import Any, Callable, Optional
 
@@ -1696,6 +1697,9 @@ def _observed_from_the_build(
         "code_task_run_id": run_id,
         "gates_passed": passed,
         "gates_failed": failed,
+        # Let through by the quality bar (neither passed nor failed): reported, never "passed".
+        "gates_followup": [g for g in (((evidence.get("quality_bar") or {}).get("followups")) or {})
+                           if g in gate_names],
         "risk_tier": row["risk_tier"],
         "seats": evidence.get("steps_run") or [],
     }
@@ -1712,6 +1716,8 @@ def _observed_from_the_build(
         detail["note"] = (
             f"{', '.join(passed) if passed else 'nothing'} passed on the build "
             f"(risk tier {row['risk_tier']})."
+            + (f" Follow-ups (quality bar): {', '.join(detail['gates_followup'])}."
+               if detail["gates_followup"] else "")
         )
         return detail
 
@@ -4331,7 +4337,9 @@ def _perform_capability(
         raise CapabilityExecutionError(failed)
 
     # STARTED IS NOT FINISHED. See `_settle_started_work`.
-    return _settle_started_work(capability, key, result)
+    settled = _settle_started_work(capability, key, result)
+    _record_launch(connection, context, step, key, settled)
+    return settled
 
 
 def prd_acceptance_inputs(inputs: dict[str, Any], spec_markdown: str) -> dict[str, Any]:
@@ -5375,6 +5383,32 @@ _CANONICAL_FIELD: dict[str, str] = {kind: fields[0] for kind, fields in _AWAIT_K
 #: A step that reports it did not do the thing must not be recorded as having done it. What
 #: happens next is a policy question; claiming success is not an answer to it.
 _DID_NOT_SHIP = workflow_outcomes.DID_NOT_SHIP
+
+
+def _record_launch(connection: Connection, context: dict[str, Any], step: dict[str, Any],
+                   key: str, result: dict[str, Any]) -> None:
+    """THE BUILD A STEP LAUNCHED, ON ITS STEP RUN, WHEN IT IS LAUNCHED (not when it finishes).
+
+    The build's pipeline reads its workflow's quality bar at plan sign-off and at the gates, long
+    before the step's output is final; `quality_bar.launched_by` believes a build's
+    `finalize_ctx.workflow_run_id` only when this record names it. Written in the launching
+    transaction, so it is visible to the worker as soon as the job is. Never fails the step."""
+    run_id = str(result.get("code_task_run_id") or result.get("run_id") or "").strip()
+    if key not in ("build", "more_tests", "plrr") or not run_id.startswith("crun_"):
+        return
+    # In the result itself, so the step's own output write carries it (that write replaces the
+    # row's output), and on the row now for anything that reads before that write.
+    result["launched_code_task_run_id"] = run_id
+    try:
+        with connection.begin_nested():
+            connection.execute(text(
+                "UPDATE workflow_step_runs SET output = COALESCE(output,'{}'::jsonb) || "
+                "jsonb_build_object('launched_code_task_run_id', CAST(:r AS text)) "
+                "WHERE workflow_run_id = :w AND step_id = :s"),
+                {"r": run_id, "w": str(context.get("run_id") or ""),
+                 "s": str(step.get("id") or "")})
+    except Exception:  # noqa: BLE001 — bookkeeping: the bar then falls back to the project's
+        log.warning("could not record the launched build on its step run", exc_info=True)
 
 
 def _settle_started_work(capability: Any, key: str, result: dict[str, Any]) -> dict[str, Any]:
@@ -6852,7 +6886,17 @@ def _why_it_ended(connection: Connection, table: str, awaited_id: str) -> str:
             point.commit()
         except Exception:  # noqa: BLE001 — the status is still reportable without this
             point.rollback()
-    return reason[:400]
+    return _without_internal_urls(reason)[:400]
+
+
+#: The HTTP client's own boilerplate around a worker's call to BOSS's API: "for url
+#: 'http://api:8000/v1/meetings/step'" and "For more information check: https://developer.
+#: mozilla.org/…" — internal addresses and a generic link, never words for a person.
+_CLIENT_NOISE = re.compile(r"\s*for url '[^']*'|\s*For more information check: \S+", re.I)
+
+
+def _without_internal_urls(reason: str) -> str:
+    return _CLIENT_NOISE.sub("", reason or "").strip()
 
 
 def _meeting_successor(

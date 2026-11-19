@@ -342,6 +342,8 @@ def test_a_build_ends_at_its_pr_and_a_preview_is_a_link_never_a_stage():
     assert "preview" not in failed
     assert all(s["status"] != "stuck" for s in failed.values())
     up = line(run("completed", "done", **done), acts,
-              preview={"status": "running", "url": "http://app/"})
+              preview={"id": "prev_up", "status": "running", "url": "http://127.0.0.1:19862"})
+    # The link the Preview button opens (recipe-box 2026-11-18: "App ↗" was the loopback port
+    # inside the API container, unreachable from the operator's browser).
     assert up["pr"]["links"] == [{"label": "#2 ↗", "url": "https://x/pull/2"},
-                                 {"label": "App ↗", "url": "http://app/"}]
+                                 {"label": "App ↗", "url": "/v1/previews/prev_up/web/"}]

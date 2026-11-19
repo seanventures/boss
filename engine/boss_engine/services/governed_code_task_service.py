@@ -28,7 +28,6 @@ import hashlib
 import json
 import re
 import stat
-import subprocess
 import threading
 from pathlib import Path
 import tempfile
@@ -53,6 +52,7 @@ from . import agent_acts, baseline_verify, ci_gate, design_prompts, plane_sync, 
 from . import red_first, repair_review_scope, review_input, review_panel, review_tools
 from . import approved_prd_design
 from .checks_failing import wait_for_person as _checks_failing_wait
+from . import quality_bar as _quality_bar
 from . import plan_coverage as _plan_coverage
 from . import acceptance_gate as _acceptance_gate
 from . import seat_policy as _seat_policy
@@ -655,9 +655,14 @@ def should_create_followup_for_pr(gh, *, pull_request_number: int) -> tuple[bool
                  if (f.get("path") or f.get("filename")) and f.get("status") != "removed"]
         if paths:
             try:
-                already_in_base = all(
-                    gh.read_text_file(base_ref, path) == gh.read_text_file(head_ref, path)
-                    for path in paths)
+                # A file the head cannot be read at proves nothing: two missing reads are
+                # equal, and "already present on its base" then cancelled the follow-up of a
+                # ready build (a ref the host did not decode read every head file as missing).
+                def _same(path: str) -> bool:
+                    head = gh.read_text_file(head_ref, path)
+                    return head is not None and gh.read_text_file(base_ref, path) == head
+
+                already_in_base = all(_same(path) for path in paths)
             except Exception:  # noqa: BLE001
                 _log_caught(logger)
                 already_in_base = False
@@ -679,7 +684,8 @@ def _guidance_block(items: list[dict]) -> str:
     )
 
 
-def review_panel_seats(lane: str, risk_tier: int, profile: dict, *, ci_files: bool) -> set:
+def review_panel_seats(lane: str, risk_tier: int, profile: dict, *, ci_files: bool,
+                       full_panel: bool = False) -> set:
     """Which review-panel seats sit for a build. Tests do not enter into it.
 
     EVERY BUILD IS REVIEWED, WHATEVER ITS TESTS SAY (operator, 2026-10-30). Tests decide a
@@ -703,6 +709,8 @@ def review_panel_seats(lane: str, risk_tier: int, profile: dict, *, ci_files: bo
     # fix lane, where follow-ups usually run — exactly the runs whose clean result must not read
     # as "the must-haves are delivered" (acceptance_gate.py, BOSSAPP-1211).
     seats |= {_acceptance_gate.SEAT}
+    if full_panel:                  # the production quality bar: every seat, whatever the profile
+        seats |= set(_ALL_PANEL_SEATS)
     return seats
 
 
@@ -1669,12 +1677,41 @@ def _gate_failure_action(
     return "ship_with_dissent" if (never_block and open_pr) else "block"
 
 
+def _bar_for_run(engine, settings, project_id, spec, fctx, run_id=None) -> tuple[str, dict, dict]:
+    """(the quality bar, its per-gate overrides, {source, lowered_by, review_severity}) for this
+    build (quality_bar.resolve_for_run). An unreadable bar is the default bar, never a failed
+    build."""
+    try:
+        with _transaction(engine) as _qc:
+            bar, over, info = _quality_bar.resolve_for_run(
+                _qc, settings, project_id, spec=spec,
+                workflow_run_id=(fctx or {}).get("workflow_run_id"), run_id=run_id)
+    except Exception:  # noqa: BLE001
+        _log_caught(logger)
+        return _quality_bar.DEFAULT, {}, {}
+    # A re-check AT THE PRODUCTION BAR raises this run's bar (only ever a raise).
+    asked = _quality_bar.normalize((fctx or {}).get("recheck_bar"))
+    if asked and _quality_bar.RANK[asked] > _quality_bar.RANK[bar]:
+        bar, info = asked, {**info, "source": "recheck", "lowered_by": None}
+    return bar, over, info
+
+
 def _record_quality_gate(connection, *, run_id, project_id, task_id, job_id, evidence, gates):
     # A gate whose check did not run is SKIPPED with its reason (evidence.gates_skipped), never
     # a pass: it is in neither list, and a reader that wants it asks seat_policy.skipped_gates.
     skipped = _seat_policy.skipped_gates(evidence)
-    passed = [k for k, v in gates.items() if v and k not in skipped]
+    # A gate the quality bar let through is a FOLLOW-UP, in neither list (like a skipped one):
+    # it did not pass and it does not fail the build. evidence["quality_bar"] names it.
+    followups = _quality_bar.followups_of(gates)
+    passed = [k for k, v in gates.items() if v and k not in skipped and k not in followups]
     failed = [k for k, v in gates.items() if not v]
+    if hasattr(gates, "bar"):
+        _quality_bar.stamp(evidence, gates, flaky=getattr(gates, "flaky_ref", None) or ())
+        connection.execute(
+            sql("UPDATE code_task_runs SET state = COALESCE(state,'{}'::jsonb) || CAST(:s AS JSONB) "
+                "WHERE id = :id"),
+            {"s": json.dumps({_quality_bar.KEY: evidence[_quality_bar.KEY],
+                              "gates_followup": evidence["gates_followup"]}), "id": run_id})
     status = "pass" if not failed else "fail"
     qg_id = make_id("qg")
     connection.execute(
@@ -1863,21 +1900,58 @@ def _current_phase_name(engine, run_id: str) -> Optional[str]:
         return None
 
 
+def auto_retries_made(fctx: Optional[dict]) -> int:
+    """How many automatic platform retries led to this attempt (the marker was a bare `true`
+    for the one retry BOSS used to make: that counts as one)."""
+    value = (fctx or {}).get(AUTO_INFRA_RETRY_KEY)
+    if value is True:
+        return 1
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _auto_retry_limits(settings) -> tuple[int, int]:
+    tries = getattr(settings, "build_auto_retries", 2)
+    backoff = getattr(settings, "build_auto_retry_backoff_seconds", 30)
+    try:
+        tries = max(0, int(2 if tries is None else tries))
+    except (TypeError, ValueError):
+        tries = 2
+    try:
+        backoff = max(0, int(30 if backoff is None else backoff))
+    except (TypeError, ValueError):
+        backoff = 30
+    return tries, backoff
+
+
+from .build_failure import spent_words as _spent_words  # noqa: E402 — one sentence, everywhere
+
+
 def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: str,
                                fctx: dict, result: dict) -> dict:
-    """ONE AUTOMATIC RETRY FOR A BUILD THAT DIED OF BOSS, NOT OF ITS CODE.
+    """A BUILD THAT DIED OF BOSS, NOT OF ITS CODE, IS RETRIED BY BOSS — BOUNDED, WITH BACKOFF.
 
     crun_966aa44e ran an hour and then failed `infra` on a permission error in BOSS's own
     bookkeeping; the operator's only way on was to notice and press Retry. A failure_class=infra
-    run now starts one new attempt in the same lineage at once (retry_code_task: the branch's
-    work, the approved design and the completed stages are carried), and the workflow step that
-    waited on it follows the new attempt. An attempt that is itself the automatic retry is not
-    retried again: the second infra failure stays failed, with Retry offered and a plain reason.
+    run now starts a new attempt in the same lineage (retry_code_task: the branch's work, the
+    approved design and the completed stages are carried), and the workflow step that waited on
+    it follows the new attempt. Up to `build_auto_retries` (default 2) such attempts, each queued
+    after a backoff (`build_auto_retry_backoff_seconds`, doubled per try), each said once on the
+    build's activity (code_task.auto_retried). Once they are spent the build stays failed with a
+    plain sentence of what BOSS did (AUTO_RETRY_SPENT_WORDS) — never a question.
+    recipe-box (2026-11-18): crun_6883ec7c died on BOSS's git-index bug and the retry was
+    withheld for want of a grant the person had in fact given (identity.consent same_build).
     Never raises; the failure it was given is returned unchanged when no retry starts."""
-    if (fctx or {}).get(AUTO_INFRA_RETRY_KEY):
+    made = auto_retries_made(fctx)
+    tries, backoff = _auto_retry_limits(settings)
+    if tries <= 0:
+        return {**result, "auto_retry": "off",
+                "next_step": "Automatic retries are off on this install; press Retry."}
+    if made >= tries:
         return {**result, "auto_retry": "not_again",
-                "next_step": ("BOSS already retried this build once after a platform error. "
-                              "Fix the cause shown above, then press Retry.")}
+                "next_step": _spent_words(made)}
     from .code_task_service import RetryNeedsPerson, retry_code_task
 
     try:
@@ -1886,21 +1960,39 @@ def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: 
         # build", because the worker's own key was the caller. Now the attempt carries the grant
         # the person gave the failed build, or is not started and the build stays failed with
         # Retry for a person.
-        retried = retry_code_task(engine, settings, jobs, run_id, automatic=True)
+        retried = retry_code_task(engine, settings, jobs, run_id, automatic=True,
+                                  platform_retry=True)
         if retried.get("delivery_only"):
             return {**result, **retried}               # the same run, delivered (or not) in place
         new_id = str(retried.get("run_id") or "")
+        attempt = made + 1
+        delay = backoff * (2 ** made)
         with _transaction(engine) as c:
             c.execute(sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb)"
-                          " || jsonb_build_object(CAST(:k AS text), true) WHERE id=:id"),
-                      {"k": AUTO_INFRA_RETRY_KEY, "id": new_id})
+                          " || jsonb_build_object(CAST(:k AS text), CAST(:n AS integer)) WHERE id=:id"),
+                      {"k": AUTO_INFRA_RETRY_KEY, "n": attempt, "id": new_id})
+            if delay > 0:
+                # BACKOFF: a platform hiccup (a busy disk, a GitHub 502) gets a moment to pass.
+                c.execute(sql("UPDATE jobs SET run_after = now() + make_interval(secs => :d) "
+                              "WHERE kind = 'code.task' AND payload->>'run_id' = :id "
+                              "AND status = 'queued'"), {"d": delay, "id": new_id})
             emit_event(c, project_id, "code_task.auto_retried", "boss", "code_task_run", run_id,
-                       {"retry_run_id": new_id, "why": "the build stopped on a BOSS platform "
-                        "error, not on its code; retrying once automatically"})
-        return {**result, "auto_retry_run_id": new_id}
+                       {"retry_run_id": new_id, "attempt": attempt, "of": tries,
+                        "after_seconds": delay,
+                        "why": f"the build stopped on a BOSS platform error, not on its code; "
+                               f"BOSS is retrying it (try {attempt} of {tries}), resuming its "
+                               "saved work"})
+        return {**result, "auto_retry_run_id": new_id, "auto_retry_attempt": attempt}
     except RetryNeedsPerson as withheld:
         try:
             with _transaction(engine) as c:
+                # THE CARD ASKS FOR AN OK, NOT A FIX (build_failure.needs_ok_words): no grant the
+                # person gave covers another attempt (a follow-up under a "this build only"
+                # grant), so one consent press retries it.
+                c.execute(sql("UPDATE code_task_runs SET finalize_ctx = "
+                              "COALESCE(finalize_ctx,'{}'::jsonb) || "
+                              "jsonb_build_object('auto_retry_needs_ok', true) WHERE id=:id"),
+                          {"id": run_id})
                 emit_event(c, project_id, "code_task.auto_retry_withheld", "boss",
                            "code_task_run", run_id, {"why": str(withheld)[:300]})
         except Exception:  # noqa: BLE001
@@ -2759,12 +2851,15 @@ def _generated_pr_summary(engine, settings, run_id: str, project_id: str, *, tit
         from .pr_review_post import legacy_round
 
         rounds = [legacy_round(evidence, paths)]
-    return pr_description.render(
+    body = pr_description.render(
         title=title, evidence=evidence, gates=gates, paths=paths,
         additions=evidence.get("additions"), deletions=evidence.get("deletions"),
         rounds=rounds, comments=comments, deferred=evidence.get("deferred_findings") or [],
         build_url=pr_description.build_url(settings, run_id, project_id), run_id=run_id,
         quality_gate_id=qg_id or "", baseline=evidence.get("baseline"))
+    # The follow-ups the quality bar let through ride the PR, in one list.
+    section = _quality_bar.pr_section(evidence)
+    return f"{body.rstrip()}\n\n{section}" if section else body
 
 
 def _ledger_review(engine, run_id: str, project_id: str, comments: list, *,
@@ -2802,8 +2897,10 @@ def _ledger_acceptance_check(engine, run_id: str, project_id: str, record: dict,
     head = None
     if root is not None:
         try:
-            head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(root), timeout=10,
-                                  capture_output=True, text=True).stdout.strip() or None
+            from .git_safety import tree_git
+
+            got = tree_git(root, "rev-parse", "HEAD", timeout=10)
+            head = (got.stdout.strip() or None) if got is not None and got.returncode == 0 else None
         except Exception:  # noqa: BLE001 — a check without its sha is still a check
             head = None
     try:
@@ -3508,6 +3605,10 @@ def _review_prompt(title, criteria, *, instructions="", ui=False, change="", ope
         + "Judge ONLY against the stated task and acceptance criteria. A concern that is OUT OF SCOPE "
         "— a feature that was not asked for, or a spec stricter than what was agreed — is NOT a "
         "defect; note it but do not fail the change for it.\n\n"
+        "SCOPE CREEP IS THE ISSUE, NEVER THE CURE: in a change to an existing app, files or "
+        "machinery the request did not ask for (a Dockerfile, a compose or deploy manifest, a "
+        "metrics endpoint, telemetry calls, new documents) are a MINOR finding — 'not asked for, "
+        "remove it'. Never ask a change to add more of them.\n\n"
         "Triage by SEVERITY: a MINOR finding (style, a robustness nicety, a missed edge case that "
         "no acceptance criterion requires) is a RECOMMENDATION — list it, but it must NOT drive the "
         "verdict. Refute ONLY for a defect that materially violates the task or a criterion.\n\n"
@@ -3570,11 +3671,28 @@ def _review_gate_from_findings(
     """
     findings = _parse_findings(summary)
     if not findings:
+        light = str(block_severity or "").strip().lower() in ("blocker", "none")
+        if light and verdict in ("refuted", "not_run", "hollow"):
+            # THE LIGHT LANE (quality_bar, standard/prototype): a review that refuted the change
+            # but named no issue, or that never saw the change, cannot block a normal build —
+            # nobody could act on it. It is a FOLLOW-UP on the gate (`bar_followup`: the caller
+            # records it with gates.note_followup, never as a plain pass), carrying the
+            # reviewer's own words; BOSS's follow-up build re-reviews. Production re-checks it
+            # (quality_bar.production_needs).
+            words = " ".join(str(summary or "").split())[-600:]
+            text = ("The review refuted the change but couldn't name its issue (no FINDING "
+                    f"line); re-review and fix what it meant. Its words: {words or '(none)'}"
+                    if verdict == "refuted" else
+                    "The review did not see the change; BOSS re-reviews it in the follow-up.")
+            return True, [], [{"severity": "major", "path": None, "line": None, "stage": None,
+                               "end_line": None, "bar_followup": True, "text": text}]
         return verdict == "survived", [], []
     try:
         floor = _SEVERITY_ORDER.index((block_severity or "major").strip().lower())
     except ValueError:
-        floor = _SEVERITY_ORDER.index("major")
+        # "none" (the prototype bar): no severity blocks; anything else unknown is "major".
+        floor = (len(_SEVERITY_ORDER) if str(block_severity).strip().lower() == "none"
+                 else _SEVERITY_ORDER.index("major"))
     blocking = [f for f in findings if _SEVERITY_ORDER.index(f["severity"]) >= floor]
     non_blocking = [f for f in findings if _SEVERITY_ORDER.index(f["severity"]) < floor]
     return (not blocking), blocking, non_blocking
@@ -3628,6 +3746,33 @@ def _test_amend_prompt(criteria, ruling_target: str, rationale: str) -> str:
         "and do NOT touch the implementation — you are fixing the oracle, not making it pass. "
         "State in one line what you changed and why it still enforces the criteria."
     )
+
+
+def _correct_followup_card(engine, decision_id: str) -> None:
+    """A merge card that said "N follow-ups queued, BOSS is fixing it" when no follow-up build
+    started: its words become "listed for later". Never raises (the card is extra)."""
+    try:
+        with _transaction(engine) as c:
+            row = c.execute(sql("SELECT question, recommendation FROM decisions WHERE id = :d"),
+                            {"d": decision_id}).mappings().first()
+            rec = (row or {}).get("recommendation")
+            rec = json.loads(rec) if isinstance(rec, str) else rec
+            card = (rec or {}).get(_quality_bar.CARD_KEY) if isinstance(rec, dict) else None
+            if not isinstance(card, dict) or not card.get("queued"):
+                return
+            fixed = {**card, "queued": False, "handled_by": None}
+            before, after = (_quality_bar.followup_words(card),
+                             _quality_bar.followup_words(fixed))
+            fixed["words"] = after
+            c.execute(sql(
+                "UPDATE decisions SET question = replace(question, :b, :a), recommendation = "
+                "jsonb_set(recommendation || jsonb_build_object('summary', "
+                "replace(recommendation->>'summary', :b, :a)), CAST(:path AS text[]), "
+                "CAST(:card AS jsonb)), updated_at = now() WHERE id = :d"),
+                {"b": before, "a": after, "path": "{" + _quality_bar.CARD_KEY + "}",
+                 "card": json.dumps(fixed), "d": decision_id})
+    except Exception:  # noqa: BLE001
+        _log_caught(logger)
 
 
 def _already_spawned_followup(engine, parent_run_id: str) -> bool:
@@ -3916,6 +4061,9 @@ def _spawn_deferred_findings_task(
                           # The ledger rows it was sent to fix (acceptance/ledger.py).
                           **({"ledger_ids": plan["ledger_ids"]} if plan is not None else {})},
             jobs=jobs, profile=spec.get("profile"),
+            # THE SAME REPOSITORY HOST as the build it follows: a follow-up of a build on this
+            # machine's local repository is local too (crun_47c3aea2 lost it, 2026-11-18).
+            repo_host=spec.get("repo_host") or None,
             # BOSS ITSELF continues this lineage: it acts under the person and grant the lineage
             # was started under (a standing grant, or the workflow run's), never the worker key's.
             continuation=True,
@@ -4142,14 +4290,13 @@ def failing_tests(output: str, limit: int = 20) -> list[str]:
 
 def _base_commit_sha(root: Path, base_branch: str) -> Optional[str]:
     """The base commit a build started from, as a sha — None when it cannot be resolved (no
-    git, no such ref): a classification that cannot run never blocks the build."""
-    from . import owned_process
+    git, no such ref): a classification that cannot run never blocks the build. Read-only git
+    on the run's tree: as the run's uid, pinned, nothing the tree configured (git_safety.tree_git)."""
+    from .git_safety import tree_git
 
     try:
-        out = owned_process.boss_run(
-            ["git", "-C", str(root), "rev-parse", str(base_branch)],
-            capture_output=True, text=True, timeout=30)
-        if out.returncode == 0:
+        out = tree_git(root, "rev-parse", str(base_branch), timeout=30)
+        if out is not None and out.returncode == 0:
             return out.stdout.strip() or None
     except Exception:  # noqa: BLE001
         _log_caught(logger)
@@ -5142,10 +5289,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     except Exception:  # noqa: BLE001
         _log_caught(logger)
         _deploys = False
+    # A CHANGE TO AN EXISTING APP AT THE LIGHT LANE is scoped to its request (build_scope).
+    _light_change = (_build_scope.extends_existing_app(
+        str((spec or {}).get("instructions") or ""), fctx)
+        and _bar_for_run(engine, settings, project_id, spec, fctx, run_id)[0]
+        != _quality_bar.PRODUCTION)
     _scope = _build_scope.decide(
         str((spec or {}).get("title") or ""), str((spec or {}).get("instructions") or ""),
         (spec or {}).get("acceptance_criteria") or (), workflow_deploys=_deploys,
-        has_manifest=bool(fctx.get("deploy_manifest")), spec=spec or {})
+        has_manifest=bool(fctx.get("deploy_manifest")), spec=spec or {},
+        light_change=_light_change)
     _build_scope.set_scope(_scope)
     logger.info("code_task.build_scope run=%s scope=%s", run_id, _scope)
     _n_refs = load_reference_links((spec or {}).get("reference_links"))
@@ -5492,8 +5645,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if not path:
             return None
         try:
-            out = subprocess.run(["git", "-C", str(path), "ls-files", "-z"], capture_output=True,
-                                 timeout=20, check=False).stdout
+            from .git_safety import tree_git
+
+            got = tree_git(path, "ls-files", "-z", timeout=20, text=False)
+            out = got.stdout if got is not None and got.returncode == 0 else b""
             n = out.count(b"\0")
         except Exception:  # noqa: BLE001 — an uncountable repo is sized as a medium one
             n = 0
@@ -7150,11 +7305,33 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if _needs_person[0] is not None:
                 raise _needs_person[0]
 
+        # FLAKY TESTS NEVER BLOCK (quality_bar.py): a suite that fails, then passes on TWO
+        # immediate re-runs (the test failed 1 of 3), is reported — the failing tests named — as
+        # a follow-up, never a failure. One re-run that fails again is a real failure. The
+        # retries are per verify call: a repair round's failure is judged the same way.
+        _flaky_tests: list[str] = []
+
         def _run_verify(*, record: bool = True):
             """Authoritative test command, scoped to the official app directory. BOSS's own
             install (NPM_INSTALL_CMD, the one every gate runs) is its first step."""
             _halt_if_needs_person()
             result = _run_verify_once(record=record)
+            if (record and not result.ok and not verification_target.install_failure(result)
+                    and not getattr(result, "timed_out", False)):
+                _first_names = [n for n in failing_tests(last_verify_output or "", limit=20)
+                                if not str(n).rstrip().endswith(":")]
+                if not _first_names:
+                    _fc = verification_target.failed_check(result) or {}
+                    _first_names = [f"{_fc.get('command') or 'the test suite'}: "
+                                    f"{_fc.get('line') or 'failed'}"]
+                _again = _run_verify_once(record=record)
+                if _again.ok:
+                    _third = _run_verify_once(record=record)
+                    if _third.ok:
+                        _flaky_tests.extend(n[:300] for n in _first_names)
+                    result = _third
+                else:
+                    result = _again
             env = None
             if record and not result.ok:
                 # COULD THE SUITE RUN AT ALL? (suite_environment) When its failures share one
@@ -7373,6 +7550,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # Future.cancel() is a no-op on a running future. Both are fixed (concurrency 4;
         # _kill_stray_review_processes), so the panel costs ~3 min of WALL time, not 25.
         do_review = risk_tier >= 1
+        # THE PRODUCTION BAR CONVENES EVERY SEAT, whatever the build's profile or tier: a tier-0
+        # build is re-checked at the production bar (change_recheck) to reach it.
+        _full_panel = (_bar_for_run(engine, settings, project_id, spec, fctx, run_id)[0]
+                       == _quality_bar.PRODUCTION)
+        if _full_panel:
+            do_review = True
         # ADVISORY GATE: when True, failing quality checks are SURFACED but do NOT block the PR —
         # the build still ships a PR + preview and the user retries-to-improve. Quality feedback
         # without a dead-end (product decision: always produce a result on the first pass).
@@ -7620,7 +7803,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # A PLAN A PERSON SENT BACK GOES BACK TO THAT PERSON (AR-24 review): the re-plan is
             # never approved by the run itself, whatever the tier or the coverage says.
             _asked_again = bool(prior_state.get("plan_change_request"))
+            # THE QUALITY BAR: a prototype needs no plan sign-off (a plan a person sent back
+            # still goes back to them). Standard and production keep it.
+            _plan_signoff = _quality_bar.plan_signoff_required(
+                _bar_for_run(engine, settings, project_id, spec, fctx, run_id)[0], risk_tier,
+                bool(sensitive_markers_in({**spec, "title": title})))
             if _requires_plan_approval(risk_tier) or _gaps or _asked_again:
+              if _plan_signoff or _asked_again:
                 return _block_for_plan_approval(
                     engine, budget, run_id=run_id, project_id=project_id, task_id=task_id,
                     reservation_id=reservation_id, design=design, risk_tier=max(risk_tier, 2),
@@ -8699,7 +8888,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     repair_findings.evidence_block(
                         fail_output, command=test_cmd, exit_code=test_exit_code),
                     root,
-                )
+                ) + verification_target.missing_package_note(fail_output)
                 if (_warm_fix[0] and do_separate_tests and not use_microvm
                         and getattr(settings, "code_test_arbiter_enabled", True)):
                     # THE ARBITER BEFORE THE SAME-MODEL WARM FIX: the implementer may not edit
@@ -9198,7 +9387,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # seat list survived that override, `lean` would become a way to ship credential
             # handling with no security review at all. Above tier 1 the full panel is restored
             # no matter what the profile asked for.
-            enabled_seats = review_panel_seats(lane, risk_tier, profile, ci_files=bool(_ci_files))
+            enabled_seats = review_panel_seats(lane, risk_tier, profile, ci_files=bool(_ci_files),
+                                               full_panel=_full_panel)
 
             # ONE SESSION SITS EVERY LLM SEAT (BOSSAPP-1000, audit 997 §7.3). The three seats
             # were three separate full CLI sessions over the SAME inline change — $375.98/month
@@ -9527,6 +9717,56 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "web_package_honest": True,
             # recorded below whether allowed or not, so the PR always states what went
         }
+        # THE QUALITY BAR (quality_bar.py): from here every assignment to `gates` goes through
+        # the bar, so a gate that fails but does not block at this bar is a follow-up, never a
+        # failure, at the first judgement and at every re-judgement after a fix round.
+        _qbar, _qover, _qinfo = _bar_for_run(engine, settings, project_id, spec, fctx, run_id)
+        gates = _quality_bar.BarGates(_qbar, _qover, gates)
+        gates.info = dict(_qinfo)
+        if _qinfo.get("lowered_by"):
+            # A bar BELOW the project's (or a per-gate map) was granted at the start door to a
+            # person with settings:update: on the run's record, never silent.
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "quality_bar.lowered", "boss", "code_task_run", run_id,
+                           {"bar": _qbar, "source": _qinfo.get("source"),
+                            "by": _qinfo.get("lowered_by"), "gate_overrides": dict(_qover)})
+        gates.flaky_ref = _flaky_tests
+
+        def _set_acceptance_gate(rec) -> None:
+            # The acceptance gate at this bar: P1 must-haves block at standard, P1+P2 at
+            # production, nothing at prototype; what the bar lets through is a follow-up, and
+            # the record says so (acceptance_gate._unresolved skips a record the bar accepted).
+            _ok, _soft = _quality_bar.acceptance_verdict(rec, gates.bar)
+            gates.set_bar_aware(_acceptance_gate.GATE, _ok, _soft)
+            if _ok and isinstance(rec, dict) and not _acceptance_gate.passed(rec):
+                rec["bar"] = {"bar": gates.bar, "nonblocking": True}
+
+        def _set_nothing_broke(ok_) -> None:
+            # BROKEN EXISTING TESTS at this bar (quality_bar.broken_tests_block): standard blocks
+            # when a failing test is on a P0/P1 path or touches the changed area; prototype only
+            # for P0 (startup, auth, health); production always. The rest is a follow-up.
+            if ok_:
+                gates["nothing_broke"] = True
+                return
+            _names = failing_tests(official_verify_output or last_verify_output or "", limit=40)
+            _blocks, _why = _quality_bar.broken_tests_block(gates.bar, _names)
+            gates.set_bar_aware("nothing_broke", not _blocks, [_why] if not _blocks else [])
+
+        def _set_review(ok_, deferred_) -> None:
+            # The review at this bar: a refutation that named no issue, or a review that never
+            # saw the change, is a FOLLOW-UP on the gate below production (never "passed"), so
+            # the PR, the console and production_needs all see it was not judged here.
+            gates["code_review_passed"] = ok_
+            _lines = [str(f.get("text")) for f in deferred_ or ()
+                      if isinstance(f, dict) and f.get("bar_followup")]
+            if ok_ and _lines:
+                gates.note_followup("code_review_passed", _lines)
+
+        def _set_consistent(verdict_, summary_) -> None:
+            _ok, _follow = _quality_bar.consistency_passes(gates.bar, verdict_, summary_)
+            gates["consistent"] = _ok
+            if _ok and _follow:
+                gates.note_followup("consistent", [])
         _web_contract: dict | None = None
         if _manifest_governs:
             # The repo defines its own verification (boss.verify.yaml): its suites ran above.
@@ -9755,9 +9995,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # task after the PR opens, so nothing the reviewer caught is lost.
             _rev_pass, _blocking, _deferred = _review_gate_from_findings(
                 r3.get("summary", ""), verdict,
-                getattr(settings, "code_review_block_severity", "major"))
+                _quality_bar.review_block_severity(_qbar, _qinfo.get("review_severity")))
             deferred_findings = _deferred
-            gates["code_review_passed"] = _rev_pass
+            _set_review(_rev_pass, _deferred)
             gates["security_clean"] = sec_verdict == "clean"
             # A SEAT THE PROFILE DID NOT CONVENE IS NOT A FAILED CHECK.
             # Removing a reviewer from the panel while leaving its gate expecting a verdict
@@ -9783,9 +10023,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if mutation_caught is not None and not _strength_advisory:
                 gates["tests_strong_enough"] = mutation_caught
             if regressions_ok is not None:
-                gates["nothing_broke"] = regressions_ok
+                _set_nothing_broke(regressions_ok)
             # block on explicit drift, and on a check that never saw the change (review_input)
-            gates["consistent"] = cons_verdict not in ("drift", "hollow")
+            _set_consistent(cons_verdict, r6.get("summary", ""))
 
             # THE ACCEPTANCE CHECK (acceptance_gate.py, BOSSAPP-1211): the WHOLE branch held
             # against the root run's must-haves and the PRD's tested-and-gating list, by an
@@ -9855,7 +10095,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _phase(c, _acceptance_gate.SEAT)
                 _acceptance_record, _acc_cost = _run_acceptance_check()
                 cost += _acc_cost
-                gates[_acceptance_gate.GATE] = _acceptance_gate.passed(_acceptance_record)
+                _set_acceptance_gate(_acceptance_record)
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.acceptance_checked", "boss",
                                "code_task_run", run_id,
@@ -10128,6 +10368,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _fix_rounds_run = 0
             if _recheck:
                 inrun_max = 0          # a re-check reports; it never runs a fix round
+            # THE LIGHT LANE: at most one fix round below production (quality_bar.fix_rounds).
+            inrun_max = _quality_bar.fix_rounds(getattr(gates, "bar", _qbar), inrun_max)
             if inrun_max:
               try:  # a convergence failure must DEGRADE to the legacy paths, never kill the run
                 for round_i in range(1, inrun_max + 1):
@@ -10274,7 +10516,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     official_verify_output = last_verify_output
                     gates["written_tests_pass"] = tests_passed
                     if "nothing_broke" in gates:
-                        gates["nothing_broke"] = tests_passed
+                        _set_nothing_broke(tests_passed)
                     if tests_passed and "app_serves" in gates:
                         # Green again: re-prove the app against the code as it now stands.
                         app_serves_record = _check_app_serves(
@@ -10416,7 +10658,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         review_confidence = 1.0 if verdict == "survived" else 0.0
                         _rev_pass, _blocking, _deferred = _review_gate_from_findings(
                             rr.get("summary", ""), verdict,
-                            getattr(settings, "code_review_block_severity", "major"))
+                            _quality_bar.review_block_severity(_qbar, _qinfo.get("review_severity")))
                         deferred_findings = _deferred
                         # Materialise the panel's findings as comments NOW, before any fix
                         # round runs, so the implementer and the pull request read the
@@ -10431,7 +10673,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             "review_code": {"verdict": verdict, "summary": rr.get("summary", ""),
                                             "hollow": _hollow}},
                             reviewed=repair_review_scope.snapshot(_review_change))
-                        gates["code_review_passed"] = _rev_pass
+                        _set_review(_rev_pass, _deferred)
                     if "consistent" in failing:
                         rc2, _hollow = _reseat["consistency_check"]
                         cost += int(rc2.get("cost_usd_micros") or 0)
@@ -10442,7 +10684,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         cons_verdict = ("hollow" if _hollow
                                         else _parse_consistency(rc2.get("summary", "")))
                         r6 = rc2
-                        gates["consistent"] = cons_verdict not in ("drift", "hollow")
+                        _set_consistent(cons_verdict, r6.get("summary", ""))
                     if "security_clean" in failing:
                         rs2, _hollow = _reseat["security_check"]
                         cost += int(rs2.get("cost_usd_micros") or 0)
@@ -10467,7 +10709,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         evidence[_acceptance_gate.KEY] = _acceptance_record
                         evidence[_acceptance_gate.SUMMARY_KEY] = (
                             _acceptance_gate.findings_summary(_acceptance_record))
-                        gates[_acceptance_gate.GATE] = _acceptance_gate.passed(_acceptance_record)
+                        _set_acceptance_gate(_acceptance_record)
                     if "tests_strong_enough" in failing:
                         # THE WEAK-SUITE SEAT RE-JUDGES: plant one bug again and expect the
                         # strengthened suite to catch it. Serial, after the read-only seats: it
@@ -10631,7 +10873,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     if "written_tests_pass" in gates:
                         gates["written_tests_pass"] = tests_passed
                     if "nothing_broke" in gates:
-                        gates["nothing_broke"] = tests_passed
+                        _set_nothing_broke(tests_passed)
                 if "serve" in _rj and "app_serves" in gates:
                     app_serves_record = _rj["serve"]
                     gates["app_serves"] = bool(app_serves_record.get("ok"))
@@ -10659,6 +10901,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             rounds_used = max(0, int(fctx.get("attempt", 1)) - 1)
             # Fallback 2 (not 0): a missing/blank config field must never SILENTLY disable the moat.
             max_repair_rounds = review_repair_rounds(settings)
+            # THE LIGHT LANE: at most one cold repair round below production, then hand over.
+            max_repair_rounds = _quality_bar.fix_rounds(getattr(gates, "bar", _qbar),
+                                                        max_repair_rounds)
             gate_faults = classify_gate_faults(failing=failing, evidence=evidence)
             # Non-final decomposition slices suppress the PR and advance the chain on
             # completed_no_pr. They must NOT take ship_with_dissent: that path marks the
@@ -10859,7 +11104,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         r3 = rr
                         _rev_pass, _blocking, _deferred = _review_gate_from_findings(
                             rr.get("summary", ""), verdict,
-                            getattr(settings, "code_review_block_severity", "major"))
+                            _quality_bar.review_block_severity(_qbar, _qinfo.get("review_severity")))
                         deferred_findings = _deferred
                         # Materialise the panel's findings as comments NOW, before any fix
                         # round runs, so the implementer and the pull request read the
@@ -10874,7 +11119,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                                  "verdict": verdict,
                                                  "summary": rr.get("summary", ""),
                                                  "hollow": _hollow}})
-                        gates["code_review_passed"] = _rev_pass
+                        _set_review(_rev_pass, _deferred)
                         evidence["review_summary"] = (rr.get("summary") or "")[:4000]
                         evidence["adversarial_verdict"] = verdict
                         evidence["review_escalated_turns"] = escalated
@@ -10902,8 +11147,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             evidence[_acceptance_gate.KEY] = _acceptance_record
                             evidence[_acceptance_gate.SUMMARY_KEY] = (
                                 _acceptance_gate.findings_summary(_acceptance_record))
-                            gates[_acceptance_gate.GATE] = _acceptance_gate.passed(
-                                _acceptance_record)
+                            _set_acceptance_gate(_acceptance_record)
                     failing = [k for k, v in gates.items() if not v]
                     with _transaction(engine) as c:
                         c.execute(sql(
@@ -11200,6 +11444,60 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _rescue_pr(_blocked_reason)
                 return {"status": "blocked", "done": True, "awaiting_gate_override": _held is None,
                         "quality_gate_id": qg_id, "failing_gates": failing}
+
+        # THE QUALITY BAR'S FOLLOW-UPS are never dropped: what the bar let through (a gate that
+        # did not block, a flaky test) joins the deferred findings, so the PR body, the Pass 2
+        # hand-off and the follow-up build carry one list.
+        _bar_followups = _quality_bar.followup_findings(
+            _quality_bar.followups_of(gates), evidence, flaky=_flaky_tests)
+        if _bar_followups:
+            _have = {" ".join(str(f.get("text") or "").split()).lower()
+                     for f in deferred_findings}
+            deferred_findings = list(deferred_findings) + [
+                f for f in _bar_followups
+                if " ".join(str(f.get("text") or "").split()).lower() not in _have]
+        # THE ONE LIST every reader of this build's follow-ups reads (the PR body, the merge
+        # card): the final deferred findings, whichever fix round last changed them.
+        evidence["deferred_findings"] = list(deferred_findings or [])
+        # WHO TAKES THE FOLLOW-UPS (quality_bar.QUEUED_KEY), decided with the same rules the
+        # spawn below applies, so the merge card and the PR say what will really happen: a
+        # follow-up build ("queued, BOSS is fixing it"), the workflow's More tests pass, the
+        # build already on this branch, or listed for later. Corrected after the PR opens if the
+        # follow-up build then does not start (_correct_followup_card).
+        _takes = None
+        if (deferred_findings and not fctx.get("is_followup") and not _recheck
+                and (getattr(settings, "code_review_followup_tasks", True)
+                     or isinstance(evidence.get("checks_failing"), dict))):
+            _takes = "queued"
+            try:
+                from .code_task_service import lineage_branch_owner
+                from .workflow_capability_runner import pass_two_pending
+
+                with _transaction(engine) as c:
+                    if (fctx.get("workflow_run_id") and not isinstance(
+                            evidence.get("checks_failing"), dict)
+                            and pass_two_pending(c, str(fctx.get("workflow_run_id")))):
+                        _takes = "pass_two"
+                    elif lineage_branch_owner(c, project_id, str(fctx.get("root_run_id")
+                                                                 or run_id), exclude=(run_id,)):
+                        _takes = "owner"
+            except Exception:  # noqa: BLE001 — unknown: the spawn decides; the card is corrected
+                _log_caught(logger)
+        evidence[_quality_bar.QUEUED_KEY] = _takes or False
+        if hasattr(gates, "bar"):
+            _quality_bar.stamp(evidence, gates, flaky=_flaky_tests)
+            try:  # the final list, on the run and its gate row (a fix round may have changed it)
+                _final = json.dumps({_quality_bar.KEY: evidence[_quality_bar.KEY],
+                                     "gates_followup": evidence["gates_followup"],
+                                     "deferred_findings": evidence.get("deferred_findings") or []})
+                with _transaction(engine) as c:
+                    c.execute(sql("UPDATE code_task_runs SET state = COALESCE(state,'{}'::jsonb) "
+                                  "|| CAST(:s AS JSONB) WHERE id = :id"), {"s": _final, "id": run_id})
+                    c.execute(sql("UPDATE quality_gates SET evidence = COALESCE(evidence,'{}'::jsonb) "
+                                  "|| CAST(:s AS JSONB) WHERE code_task_run_id = :id"),
+                              {"s": _final, "id": run_id})
+            except Exception:  # noqa: BLE001 — bookkeeping: the PR still carries the list
+                _log_caught(logger)
 
         # GATE PASSED — open the PR via the existing software-factory path.
         # (A re-check reaches the PR terminal with no files: its verdict and card, no commit.)
@@ -11502,20 +11800,42 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # by — in its OWN transaction, committed first, never nested inside the one the
         # terminal write runs in.
         _close_phase()
-        # THE COMMIT THIS RUN SHIPPED, recorded with it (finalize_ctx.final_head_sha): what a
+        # THE COMMIT THIS RUN SHIPPED/JUDGED, recorded with it (finalize_ctx.final_head_sha): what a
         # config deploy of this build reads its files at (config_deploy.files_from_build), never the
-        # lineage branch's tip, which a later run may have moved.
+        # lineage branch's tip, which a later run may have moved; and what a production release of
+        # this build must ship (quality_bar.build_commits / _commit_check). Recorded on every
+        # finished build, a re-check too (it judges the branch head and pushes nothing).
         _final_head = ""
         try:
             _snap = sf.github.branch_snapshot(str(proposal.get("branch_name") or work_branch))
             _final_head = str(_snap.get("sha") or _snap.get("commit_sha") or "")
         except Exception:  # noqa: BLE001 — unrecorded: a config deploy of this run then refuses
             _log_caught(logger)
-        with _transaction(engine) as c:
-            if _final_head:
+        if not _final_head:
+            # the proposal's own head, else the checked-out HEAD (quality_bar reads it too)
+            _final_head = str((proposal.get("head_sha") if isinstance(proposal, dict) else "") or "")
+            if not _final_head:
+                try:
+                    # Read-only, as the run's uid, pinned to the tree (git_safety.tree_git).
+                    from .git_safety import tree_git
+
+                    _got = tree_git(root, "rev-parse", "HEAD", timeout=10)
+                    _final_head = (_got.stdout.strip()
+                                   if _got is not None and _got.returncode == 0 else "")
+                except Exception:  # noqa: BLE001
+                    _final_head = ""
+        if _final_head and not re.fullmatch(r"[0-9a-fA-F]{7,40}", _final_head):
+            _final_head = ""
+        _final_head = _final_head.lower()
+        if _final_head:
+            # ITS OWN TRANSACTION, committed before the terminal write: `_fenced_status` opens
+            # another connection on the same row, so holding this UPDATE open across it waits on
+            # itself until the statement timeout.
+            with _transaction(engine) as c:
                 c.execute(sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, "
                               "'{}'::jsonb) || jsonb_build_object('final_head_sha', CAST(:h AS text)) "
                               "WHERE id = :id"), {"h": _final_head, "id": run_id})
+        with _transaction(engine) as c:
             _ok = _fenced_status(
                 "completed",
                 "phase='done', pull_request_url=:u, pull_request_number=:n, decision_id=:d",
@@ -11652,6 +11972,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                "code_task_run", run_id,
                                {"error": f"{type(exc).__name__}: {exc}"[:300],
                                 "findings": deferred_findings[:20]})
+        # THE CARD SAYS WHAT HAPPENED: it promised a follow-up build ("queued, BOSS is fixing
+        # it") and none started (the PR was merged or closed meanwhile, the spawn failed, the
+        # ledger already held every row) — it now says the follow-ups are listed for later.
+        if (evidence.get(_quality_bar.QUEUED_KEY) == "queued" and not followup_run_id
+                and proposal.get("decision_id")):
+            _correct_followup_card(engine, str(proposal["decision_id"]))
         # A SECRET ONLY A PERSON CAN SET (checks_failing.wait_for_person): the draft PR is
         # open, and the build now waits for that person — one card saying what to set and
         # where, whose "Retry once set" runs the gates again on this branch and PR.

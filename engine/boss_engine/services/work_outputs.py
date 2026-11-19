@@ -235,7 +235,17 @@ def collect(connection: Connection, *, project_id: str, item_id: str,
         for r in _rows(connection,
                        "SELECT id, url, status FROM app_previews WHERE run_id = ANY(:ids)",
                        {"ids": builds}):
-            put("preview", r["url"] or r["id"], "Preview", r["status"], "app_preview", r["id"])
+            # The browser's address for it (the Preview button's), never `url`: that is the
+            # app's loopback port inside the API container, which no browser reaches.
+            from .factory_view import preview_open_href
+
+            href = preview_open_href(r["id"]) or r["id"]
+            put("preview", href, "Preview", r["status"], "app_preview", r["id"])
+            # A row an earlier collect keyed by the loopback url is the same preview: one line.
+            connection.execute(text(
+                "DELETE FROM work_item_outputs WHERE work_item_id = :w AND kind = 'preview' "
+                "AND source_kind = 'app_preview' AND source_id = :si AND ref <> :r"),
+                {"w": item_id, "si": str(r["id"]), "r": href})
         for r in _rows(connection,
                        "SELECT id, url, status FROM preview_sandboxes WHERE run_id = ANY(:ids)",
                        {"ids": builds}):

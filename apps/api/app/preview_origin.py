@@ -122,6 +122,29 @@ def _host_decision(scope: Scope, preview_id: str) -> str:
     return "redirect"
 
 
+def preview_of_host(scope: Scope) -> Optional[str]:
+    """The preview a host names (`prev-abc.localhost:3001` → `prev_abc`), or None. Ids are
+    `<prefix>_<hex>` (core.make_id), so the label (preview_host_label) maps back to exactly one."""
+    host, _port = _host_of(scope)
+    first, dot, _rest = host.partition(".")
+    if not dot or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)+", first):
+        return None
+    candidate = first.replace("-", "_")
+    return candidate if preview_host_label(candidate) == first else None
+
+
+def _at_its_preview(scope: Scope, preview_id: str) -> Scope:
+    """`scope` with its root path moved under the preview's gateway path."""
+    path, raw = _paths_of(scope)
+    prefix = f"/v1/previews/{preview_id}/web"
+    raw_full = scope.get("raw_path")
+    query = b""
+    if isinstance(raw_full, (bytes, bytearray)) and b"?" in raw_full:
+        query = b"?" + bytes(raw_full).split(b"?", 1)[1]
+    return {**scope, "path": prefix + path,
+            "raw_path": (prefix + raw).encode("latin-1") + query}
+
+
 def _redirect_location(scope: Scope, preview_id: str, path: str) -> str:
     label = preview_host_label(preview_id)
     host, port = _host_of(scope)
@@ -225,6 +248,18 @@ def preview_only(app: ASGIApp) -> ASGIApp:
         if kind not in ("http", "websocket"):
             return
         path, raw = _paths_of(scope)
+        # A ROOT PATH ON A PREVIEW'S OWN HOST IS THAT PREVIEW'S. The app is shown at its own
+        # paths here (the shim, at_root), and what it asks for at the root — a chunk Next.js's
+        # loader adds as `/_next/static/chunks/…` before any shim can prefix it, a favicon, a
+        # fetch the shim never saw, a reload in a tab that lost its window.name — was a 404
+        # (recipe-box, 2026-11-18). The host already names one preview, so it is served there.
+        hosted = preview_of_host(scope)
+        # Only the gateway's own paths are left as they are; anything else (an app's own
+        # `/v1/...` API included) is the app's, and still reaches only the app.
+        if hosted and path.startswith("/") and not path.startswith("/v1/previews/") and \
+                "\\" not in path and "\x00" not in path and not raw.startswith("/v1/previews/"):
+            scope = _at_its_preview(scope, hosted)
+            path, raw = _paths_of(scope)
         # Both spellings must be preview paths: the decoded one is what the router matches.
         if not (is_preview_capability_path(path) and is_preview_capability_path(raw)) or \
                 "\\" in path or "\x00" in path:

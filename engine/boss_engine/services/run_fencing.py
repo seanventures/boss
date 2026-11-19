@@ -280,9 +280,11 @@ def build_not_passed(connection, run_id: str) -> Optional[str]:
     if row is None:
         return None
     if str(row["status"] or "") == "repairing" or row["nxt"]:
+        from .plain_words import gate_failed_words as _gate_label
+
         failing = row["failing"] if isinstance(row["failing"], list) else []
         return ("Blocked: this attempt failed its checks"
-                + (f" ({', '.join(str(g) for g in failing)})" if failing else "")
+                + (f" ({', '.join(_gate_label(str(g)) for g in failing)})" if failing else "")
                 + (f"; its repair continued in {row['nxt']}" if row["nxt"] else "")
                 + ". It is not a passed build, so nothing ships from it.")
     return None

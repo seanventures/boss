@@ -6,6 +6,7 @@ import { GatedButton } from "../../components/gated";
 import { postJson } from "./cockpit-actions";
 import { SavedChecks } from "./saved-checks";
 import { actorWords } from "../../lib/actor-words";
+import { gateLabel } from "../../lib/plain-words";
 
 type Review = {
   id: string; actor: string; outcome: "accepted" | "changes_requested"; note: string;
@@ -33,8 +34,24 @@ function safeLink(value: string | null): string | undefined {
   catch { return undefined; }
 }
 
-export function ResultReview({ runId, onChangeRequested }: {
+/**
+ * ONE SOURCE PER FACT (e2e recipe-box walk): this block said "No acceptance criteria recorded"
+ * under a brief of 12, and "Checks: passed  Quality: fail" beside "Review passed ✗". The page
+ * hands it the brief's criteria and the failed gates' labels the Now band shows, so the two
+ * say the same thing in the same words.
+ */
+export function checksSentence(state: string, failedGates: string[]): string {
+  const tests = state === "not_recorded" ? "no test report" : `tests ${state.replaceAll("_", " ")}`;
+  if (!failedGates.length) return `Checks: ${tests}, every gate passed.`;
+  return `Checks: ${tests}; ${failedGates.length} gate${failedGates.length === 1 ? "" : "s"} failed (${failedGates.join(", ")}).`;
+}
+
+export function ResultReview({ runId, onChangeRequested, briefCriteria = [], failedGates }: {
   runId: string; onChangeRequested: (note: string) => void;
+  /** The brief's criteria (the cockpit's `brief`): shown when the delivery record has none. */
+  briefCriteria?: string[];
+  /** The failed gates' labels (the cockpit's Now band), over the record's raw keys. */
+  failedGates?: string[];
 }) {
   const [data, setData] = useState<ResultReviewData | null>(null);
   const [error, setError] = useState("");
@@ -75,6 +92,8 @@ export function ResultReview({ runId, onChangeRequested }: {
   }
 
   const snapshot = data?.snapshot;
+  const criteria = snapshot?.criteria.length ? snapshot.criteria : briefCriteria;
+  const gatesFailed = failedGates ?? (snapshot?.checks.gates_failed ?? []).map(gateLabel);
   const rawPr = snapshot?.pull_request_url ?? null;
   // A local change set (boss-local) opens in BOSS's own change-set view (lib/repo-links.ts).
   const pr = isLocalChangeUrl(rawPr) ? changeHref(rawPr) ?? undefined : safeLink(rawPr);
@@ -88,11 +107,11 @@ export function ResultReview({ runId, onChangeRequested }: {
       <div>Delivered revision: {revision ? <a href={revision} target="_blank" rel="noreferrer">{snapshot.delivered_head?.slice(0, 12)} ↗</a> : "Revision unavailable"}.
         {pr ? <> <a href={pr} target="_blank" rel="noreferrer">Open pull request ↗</a></> : null}</div>
       <span className="fx-out-sub" title="Acceptance records usefulness of the saved revision. It does not pass checks, merge code, deploy, or authorize more work.">Usefulness only, approvals unchanged</span>
-      {snapshot.criteria.length ? <ul>{snapshot.criteria.map((criterion, index) => <li key={index} data-user-text>{criterion}</li>)}</ul> : <div>No acceptance criteria recorded.</div>}
-      <div className="fx-out-links"><span>Checks: {snapshot.checks.state.replaceAll("_", " ")}</span><span>Quality: {snapshot.checks.quality_status ?? "Not recorded"}</span></div>
+      {criteria.length ? <ul data-testid="fx-result-criteria">{criteria.map((criterion, index) => <li key={index} data-user-text>{criterion}</li>)}</ul> : <div>No acceptance criteria recorded.</div>}
+      <div className="fx-out-links" data-testid="fx-result-checks"><span>{checksSentence(snapshot.checks.state, gatesFailed)}</span></div>
       <details><summary>Evidence and receipts</summary>
         <div>Checked revision: <code>{snapshot.checks.checked_head ?? "Unknown"}</code></div>
-        {snapshot.checks.gates_failed.length ? <div>Failed gates: {snapshot.checks.gates_failed.join(", ")}.</div> : null}
+        {snapshot.checks.gates_failed.length ? <div>Failed gates: {gatesFailed.join(", ")} <span className="fx-mono fx-muted">({snapshot.checks.gates_failed.join(", ")})</span>.</div> : null}
         {snapshot.checks.commands.length ? <ul>{snapshot.checks.commands.map((command, i) => <li key={i} data-user-text>{command}</li>)}</ul> : <div>No test commands recorded.</div>}
         <div>Test evidence: {snapshot.checks.artifact_id ? <a href={`/v1/artifacts/${encodeURIComponent(snapshot.checks.artifact_id)}`} target="_blank" rel="noreferrer">Open recorded report ↗</a> : "Not recorded"}.
           {" "}<span>Delivery receipt: {snapshot.receipt_status ?? "Not recorded"}</span></div>

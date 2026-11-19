@@ -169,6 +169,7 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
     ? { ...l.pr, follow_up_of: null, failed: "" } : null);
   const story = useWorkStory(ctx, w.id).data;
   const full = l.build || l.workflow_run;
+  const failure = ctx.overview.project.build_failed ?? null;
   return (
     <Drawer title={w.label} icon={<Ico icon={w.state === "needs_you" ? GitPullRequest : w.state === "stalled" ? PauseCircle : FlowArrow} c={w.state === "needs_you" || w.state === "stalled" ? "amber" : "teal"} />} onClose={onClose} testid="px-drawer-work"
             sub={<><Tag>{KIND_WORDS[w.kind] ?? w.kind}</Tag>{w.state === "stalled" ? <Tag tone="amber">Stalled</Tag> : null}
@@ -182,7 +183,7 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
           <span className="px-ny-ico" aria-hidden>!</span>
           {/* "Ready to merge" only for a merge question, about ITS pull request (merge_pr):
               never a merged PR, never a deploy gate's wait (pr_follow_up). */}
-          <b style={{ flex: 1 }} data-testid="px-drawer-work-needs-words">{mp ? (mp.failed ? `Merge failed: ${mp.failed}` : mp.follow_up_of ? `Follow-up fix after #${mp.follow_up_of} · ready to merge` : "Ready to merge") : w.why?.who === "you" ? w.why.words : "Waiting on you"}</b>
+          <b style={{ flex: 1 }} data-testid="px-drawer-work-needs-words">{mp ? (mp.failed ? `Merge failed: ${mp.failed}` : mp.follow_up_of ? `Follow-up fix after #${mp.follow_up_of} · ready to merge` : mp.followups?.words ? `Ready to merge · ${mp.followups.words}` : "Ready to merge") : w.why?.who === "you" ? w.why.words : "Waiting on you"}</b>
           {/* ONE ACTION (screen 05b): merging is approving the build's merge question in BOSS;
               with no question on record it opens the PR on GitHub. */}
           {mp ? (l.decision
@@ -209,6 +210,21 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
       {w.why && w.state !== "stalled" && !(w.state === "needs_you" && w.why.who === "you") ? (
         <div data-testid="px-drawer-work-why"><WhyLine why={w.why} testId="px-drawer-why" /></div>
       ) : null}
+      {/* THE PROJECT'S FAILURE IS THIS WORK: the same answers as its Needs-you card — the fix
+          first when a person must act, Retry (a POST on the failed attempt), See what happened.
+          Never "press Retry" with no Retry to press (laptop 2026-11-18). */}
+      {failure && failure.id === w.id ? (
+        <div className="px-ny" data-tone="red" data-testid="px-drawer-work-failed" style={{ flexWrap: "wrap" }}>
+          <span className="px-ny-ico" data-tone="red" aria-hidden>!</span>
+          <span style={{ flex: "1 1 240px", minWidth: 0 }}><b>{failure.word}</b>
+            <small className="px-faint" style={{ display: "block" }}>{failure.reason}</small>
+            {failure.fix?.detail ? <small className="px-faint" style={{ display: "block" }}>{failure.fix.detail}</small> : null}</span>
+          <FailedActions retry={failure.retry} fix={failure.fix} retryReason={failure.retry_reason} seeHref={failure.see_href}
+                         projectId={ctx.projectId} actor={ctx.actor} testid="px-drawer-work-failed"
+                         onDone={() => { ctx.refreshWork(); ctx.refreshOverview?.(); }} />
+        </div>
+      ) : null}
+      {w.replaced_by ? <p className="px-faint" style={{ margin: 0 }} data-testid="px-drawer-work-replaced">Replaced by a later build: {w.replaced_by.label}</p> : null}
       <DiagnosisFlow d={w.diagnosis} testId="px-drawer-diagnosis" />
       {/* T6 (BOSSAPP-1047): the ticket this work came from — its status steps, a mid-run change
           to decide, and what BOSS wrote back. Nothing for work that did not come from a ticket. */}

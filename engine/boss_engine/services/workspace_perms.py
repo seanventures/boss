@@ -78,6 +78,31 @@ def _identity(root: Path) -> Any:
         return None
 
 
+def shared_mode(path: Any, shared: int, private: int = 0o600, *, ident: Any = None) -> int:
+    """`shared` (a mode the run's uid can read, e.g. 0604 / 0666) ONLY when `path` lies inside the
+    bound sandbox identity's run directory and that directory admits no one else (no "other"
+    bits: <uid>:boss 2770) — that directory is what keeps every other uid out. `private` otherwise:
+    no identity bound, a checkout outside its run directory (the warm-lineage path), or a run
+    directory others can enter. Never raises."""
+    try:
+        if ident is None:
+            from . import sandbox_identity
+
+            ident = sandbox_identity.current()
+        if ident is None:
+            return private
+        run_dir = os.path.realpath(str(ident.run_dir))
+        st = os.lstat(run_dir)
+        if not stat.S_ISDIR(st.st_mode) or stat.S_IMODE(st.st_mode) & 0o007:
+            return private
+        target = os.path.realpath(str(path))
+        if os.path.commonpath([run_dir, target]) != run_dir or target == run_dir:
+            return private
+        return shared
+    except Exception:  # noqa: BLE001 — cannot tell: private
+        return private
+
+
 def _as_run_uid(ident: Any, script: str, *args: str) -> bool:
     """Run `script` as the run's sandbox uid (boss-sandbox-exec), never as BOSS. Never raises."""
     try:
@@ -246,7 +271,7 @@ def _parent_fd(root: Any, rel: str, *, trusted: Any = None, create_mode: Optiona
 
 def read_nofollow(root: Any, rel: str, *, trusted: Any = None) -> Optional[bytes]:
     """`rel` under `root`, read WITHOUT following a link anywhere on its path. None when absent,
-    not a regular file, or refused. Never raises."""
+    not a regular file, a file with more than one hard link, or refused. Never raises."""
     got = _parent_fd(root, rel, trusted=trusted)
     if got is None:
         return None
@@ -258,7 +283,10 @@ def read_nofollow(root: Any, rel: str, *, trusted: Any = None) -> Optional[bytes
         os.close(dfd)
         return None
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        st = os.fstat(fd)
+        # ONE link only (as the repairs): a hardlink the run's uid planted to a BOSS file would
+        # otherwise be read here and its content written back somewhere the run can read.
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
             return None
         chunks = []
         while True:

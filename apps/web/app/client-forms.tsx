@@ -199,7 +199,9 @@ export function ActionForm({
     // consent_required as `{ok: false, data: {consent}}` (lib/server-action.ts act): the consent
     // sheet opens here, with the exact agents and repositories the API named, and once the
     // person grants, the same submit is sent once more. Cancelled, the refusal stands as written.
-    const asked = !outcome.ok ? consentFromBody(outcome.data?.consent) : null;
+    // callAction asks once for every action now (data.consentAsked): never a second sheet.
+    const asked = !outcome.ok && !(outcome.data as { consentAsked?: boolean } | undefined)?.consentAsked
+      ? consentFromBody(outcome.data?.consent) : null;
     if (asked && await askConsent(asked)) outcome = await submit();
     setResult(outcome);
     onResult?.(outcome);

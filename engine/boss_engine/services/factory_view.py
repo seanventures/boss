@@ -353,6 +353,7 @@ class Cockpit(TypedDict, total=False):
     summary: dict[str, Any]        # build_detail.now_summary: what it is doing now
     why: Optional[dict[str, Any]]  # stuck_work.wait_reason: what it waits for, in words
     diagnosis: Optional[dict[str, Any]]  # stuck_work.public_diagnosis: what the Shepherd found
+    continued: Optional[dict[str, Any]]  # continuation.continued_in: where its repair went
 
 
 # ── labels and sentences (§5.1) ─────────────────────────────────────────────────────────────
@@ -865,7 +866,20 @@ def preview_flag(preview: Optional[Mapping[str, Any]], now: Optional[datetime] =
     if status == "running" and steps and any(
             x.get("status") not in ("ok", "skipped", "failed") for x in steps):
         status = "starting"
-    return {"status": status, "url": preview.get("url") if status == "running" else None}
+    return {"status": status,
+            "url": preview_open_href(preview.get("id")) if status == "running" else None}
+
+
+def preview_open_href(preview_id: Any) -> Optional[str]:
+    """Where a browser opens a preview: the gateway path the console's Preview button opens
+    (apps/web/lib/browser-links.ts previewWebHref), which sends it on to the preview's own
+    origin. NEVER app_previews.url: that is the app's loopback port inside the API container
+    (http://127.0.0.1:19862), reachable from no browser — the merged build's "App ↗" pointed
+    there (recipe-box, 2026-11-18)."""
+    from urllib.parse import quote
+
+    pid = str(preview_id or "").strip()
+    return f"/v1/previews/{quote(pid, safe='')}/web/" if pid else None
 
 
 def _who_stopped(fctx: Mapping[str, Any], viewer: Optional[str]) -> str:
@@ -933,6 +947,13 @@ def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]
         # itself once the blocker clears.
         return out("needs_person", "Needs you · reply",
                    "Paused for a person's reply. Costs nothing meanwhile.", "Needs you")
+    from .continuation import handed_on as _handed_on
+
+    if _handed_on(run):
+        # ITS REPAIR CONTINUED IN THE NEXT ATTEMPT (continuation.py): history, not a failure
+        # and not a stall; the page says where it went and offers no Retry, Steer or Stop.
+        return out("blocked", "Continued", "Its repair continued in the next attempt",
+                   "Handed on")
     if status == "blocked":
         if phase == "awaiting_plan_approval":
             return out("needs_plan", "Needs you · plan", "Approve the plan to start building",
@@ -1453,8 +1474,8 @@ def build_attention_rows(connection: Any, project_id: str,
         for r in connection.execute(
             text("SELECT r.id, r.title, r.spec, r.finalize_ctx, r.decision_id, r.pull_request_url, "
                  "r.pull_request_number, r.status, r.phase, "
-                 "(SELECT url FROM app_previews p WHERE p.run_id = r.id AND p.status = 'running' "
-                 " ORDER BY p.created_at DESC LIMIT 1) AS preview_url "
+                 "(SELECT id FROM app_previews p WHERE p.run_id = r.id AND p.status = 'running' "
+                 " ORDER BY p.created_at DESC LIMIT 1) AS preview_id "
                  "FROM code_task_runs r WHERE r.project_id = :p "
                  "AND (r.decision_id = ANY(:ids) OR r.id = ANY(:runs))"),
             {"p": project_id, "ids": ids, "runs": list(plan_runs)},
@@ -1470,7 +1491,7 @@ def build_attention_rows(connection: Any, project_id: str,
                 by_decision[str(row["decision_id"])] = {
                     "kind": "pr", "run_id": row["id"], "app": app_name(row), "where": "PR open",
                     "pr_number": _pr_number(row), "pr_url": row.get("pull_request_url"),
-                    "preview_url": row.get("preview_url")}
+                    "preview_url": preview_open_href(row.get("preview_id"))}
     return {"blocked": rows, "by_decision": by_decision}
 
 
@@ -1482,8 +1503,11 @@ def failed_build_rows(connection: Any, project_id: str) -> list[dict[str, Any]]:
     run's failure is left to that run's failed-step card (its Retry moves the run)."""
     from .build_failure import latest_failure
 
+    from .build_failure import is_failure
+
     failed = latest_failure(connection, project_id)
-    if failed is None or failed["source"] != "code_task":
+    # A build waiting on a merge is that merge's card (already listed), not a failure card.
+    if not is_failure(failed) or failed["source"] != "code_task":
         return []
     return [{"kind": "build_failed", "run_id": failed["build_id"], "app": failed["label"],
              "role_key": None, "failing": [], "where": failed["word"], "word": failed["word"],
@@ -2666,15 +2690,25 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
         # A gate whose check did not run is listed as SKIPPED with why, never as passed.
         skipped = {g: w for g, w in _seat_policy.skipped_gates(gate_evidence or evidence).items()
                    if g not in passed and g not in failed}
+        # A gate the quality bar let through is a FOLLOW-UP (quality_bar.py): not passed, not
+        # failed, never counted in "All N passed".
+        followups = {g: (lines or [None])[0] for g, lines in
+                     ((gate_evidence.get("quality_bar") or {}).get("followups") or {}).items()
+                     if g not in passed and g not in failed}
         for name, ok in ([(g, True) for g in passed] + [(g, False) for g in failed]
-                         + [(g, False) for g in skipped]):
-            ev = skipped.get(name) or gate_evidence.get(name)
+                         + [(g, False) for g in skipped] + [(g, False) for g in followups]):
+            ev = skipped.get(name) or followups.get(name) or gate_evidence.get(name)
+            if name in skipped:
+                from .plain_words import plain_skip
+
+                ev = plain_skip(ev)
             if not isinstance(ev, str) or not ev.strip():
                 # The row's evidence is keyed by evidence names, not gate names (gate_reason).
                 ev = gate_reason(name, ok, gate_evidence or evidence, run)
             gates.append({
                 "name": name, "label": gate_label(name), "ok": ok,
                 **({"skipped": True} if name in skipped else {}),
+                **({"followup": True} if name in followups else {}),
                 "waived_by": waived.get("by") if name in (waived.get("gates") or []) else None,
                 "role_key": gate_owner(name, acts), "station": gate_station(name),
                 "evidence": ev[:160] if isinstance(ev, str) else None,
@@ -2687,6 +2721,8 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
                 f"{len(failed)} failed" + (" · shipped anyway" if advisory else ""))
         if skipped:
             word += f" · {len(skipped)} skipped"
+        if followups:
+            word += f" · {len(followups)} follow-up{'s' if len(followups) != 1 else ''}"
         checks = {"word": word, "advisory": advisory, "gates": gates,
                   "tip": "First pass: checks advise, they don't block" if advisory else None}
     elif running:
@@ -2877,7 +2913,19 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
     agent_list = sorted(({"role_key": k, "state": v} for k, v in agents.items()),
                         key=lambda a: a["state"] != "working")
     ok, why = _retry_offer(run)
-    live = row["state"] in ("building", "queued", "quiet", "budget_wait", "needs_plan")
+    # HANDED ON (continuation.py): where its repair went, on the header, the wait line and the
+    # diagnosis — the stored "press Retry" diagnosis of the blocked attempt is not shown.
+    from .continuation import continued_in
+
+    try:
+        cont = continued_in(connection, run)
+    except Exception:  # noqa: BLE001 — the page still renders the attempt as it is
+        cont = None
+    if cont is not None:
+        st["word"], st["tip"], st["verb"] = "Continued", cont["words"], "Handed on"
+        ok, why = False, cont["words"]
+    live = row["state"] in ("building", "queued", "quiet", "budget_wait", "needs_plan") \
+        and cont is None
     fctx = run.get("finalize_ctx") or {}
     origin = row.get("origin") or lineage_origin(connection, project_id, run)
     out: Cockpit = {
@@ -2887,7 +2935,8 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
         "started_at": row.get("started_at"), "station_since": row.get("station_since"),
         "cost_usd": row["cost_usd"], "included_usd": row.get("included_usd") or 0,
         "metered": row["metered"], "live": live,
-        "stoppable": str(run.get("status")) in ("running", "repairing", "blocked"),
+        "stoppable": str(run.get("status")) in ("running", "repairing", "blocked")
+        and cont is None,
         "retryable": ok, "retry_reason": why,
         "failure": failure_line(fctx, run.get("error")) if row["state"] == "failed" else None,
         "lineage": _lineage(connection, project_id, run, now, viewer),
@@ -2905,8 +2954,20 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
         "routes": _routes(connection, run_id),
         # Why it waits, and what the Shepherd found when it stopped moving (stuck_work).
         "why": waiting,
-        "diagnosis": stuck_work.public_diagnosis(fctx, connection=connection, run=run),
+        "diagnosis": (None if cont is not None else
+                      stuck_work.public_diagnosis(fctx, connection=connection, run=run)),
+        "continued": cont,
     }
+    # THE ONE PLAIN-WORDS PASS (plain_words.py): the attempt counter, the raw repair prompt and
+    # gate keys never reach the page; the records keep them.
+    from .plain_words import plain_note, plain_title
+
+    out["run"]["title"] = plain_title(out["run"].get("title"))
+    for entry in out["lineage"] or []:
+        if isinstance(entry, dict) and entry.get("title"):
+            entry["title"] = plain_title(entry["title"])
+    if isinstance(out["summary"], dict) and out["summary"].get("note"):
+        out["summary"]["note"] = plain_note(out["summary"]["note"])
     for key in ("finalize_ctx", "spec", "state"):
         out["run"].pop(key, None)
     out["etag"] = _etag({k: v for k, v in out.items() if k != "etag"})

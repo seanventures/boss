@@ -36,7 +36,7 @@ const card = (recommendation: Record<string, unknown>) =>
 describe("a merge card with a failing lineage", () => {
   it("never says the automated checks passed", () => {
     const text = formatRecommendation(card(REC));
-    expect(text).toContain("Automated checks: failing (Must-haves met)");
+    expect(text).toContain("Automated checks: failing (Must-haves not all met)");
     expect(text).not.toContain("Automated checks: passed");
   });
 

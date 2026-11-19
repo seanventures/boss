@@ -112,7 +112,7 @@ export function askSuggestions(c: Pick<CockpitData, "app" | "brief" | "lineage" 
 const TEST_GATES = new Set(["tests_strong_enough", "tests_written_first", "coder_did_not_edit_tests", "brief_tests_written",
   "written_tests_pass", "existing_tests_intact"]);
 export function retryTip(c: Pick<CockpitData, "outputs">): string {
-  const failing = (c.outputs.checks?.gates ?? []).filter((g) => !g.ok && !g.waivedBy).map((g) => g.name);
+  const failing = (c.outputs.checks?.gates ?? []).filter((g) => !g.ok && !g.followup && !g.waivedBy).map((g) => g.name);
   const reusesTests = failing.length > 0 && !failing.some((g) => TEST_GATES.has(g));
   return `Resumes on the same branch, reusing the plan${reusesTests ? " and the tests" : ""}`;
 }
@@ -533,6 +533,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
       <NowBand c={c} now={now} />
       <LearnedStrip projectId={projectId} actor={actor} runId={c.run.id} live={c.live} />
       {c.run.status === "completed" ? <ResultReview key={c.run.id} runId={c.run.id}
+        briefCriteria={c.brief.criteria} failedGates={c.summary?.gates?.failed}
         onChangeRequested={(note) => { setReviewChange(note); setChangeIt(true); }} /> : null}
 
       <div className="fx-body">

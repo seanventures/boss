@@ -13,7 +13,7 @@ import { ActionForm, DecisionResolveForm } from "./client-forms";
 import { ActionPreview, actionPreviewOf, previewLead } from "./action-preview";
 import { HeldArguments } from "./held-arguments";
 import { ArchitectureDoc } from "./architecture-doc";
-import { automatedChecksLine, ChecksFailing, checksFailingOf, MustHaves, mustHavesOf } from "./checks-failing";
+import { automatedChecksLine, ChecksFailing, checksFailingOf, FollowUps, followUpsOf, MustHaves, mustHavesOf } from "./checks-failing";
 import { architectureDocOf } from "../lib/architecture";
 import { AreaLink } from "./area-link";
 import { linkTo, navigate } from "./agents/live-util";
@@ -51,6 +51,7 @@ import { SelfFixCard, cardOf, isSelfFixDecision } from "./self-fix/approval-card
 import { GrantAccessCard, grantOf } from "./skills/grant-card";
 import { SecretProposalCard, secretProposalOf } from "./secret-proposal-card";
 import { MonitoringPackCard, monitoringPackOf } from "./workflows/monitoring-pack";
+import { plainSentence, plainTitle } from "../lib/plain-words";
 
 /**
  * A decision-card excerpt (output/evidence/why) that never cuts mid-word or mid-sentence
@@ -93,6 +94,16 @@ function formatDeadline(deadlineAt?: string): string {
   return formatDateTimeShared(deadlineAt, "No deadline");
 }
 
+/** The card's deadline, labelled (a bare future date in the evidence row read as an unexplained
+ *  timestamp): "Decide by …" before it, "Deadline passed …" after, nothing when there is none. */
+export function deadlineLabel(deadlineAt?: string | null, now: number = Date.now()): string {
+  if (!deadlineAt) return "";
+  const at = Date.parse(deadlineAt);
+  const when = formatDateTimeShared(deadlineAt, "");
+  if (!when || Number.isNaN(at)) return "";
+  return at >= now ? `Decide by ${when}` : `Deadline passed ${when}`;
+}
+
 function roleInitials(name: string): string {
   const words = name.replace(/[_-]+/g, " ").trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return "CP";
@@ -105,7 +116,7 @@ export function formatRecommendation(decision: DecisionFeedItem): string {
   const r = decision.recommendation || {};
   const str = (k: string): string => (typeof r[k] === "string" ? (r[k] as string) : "");
   const action = str("action");
-  const title = str("title");
+  const title = plainTitle(str("title"));
   const pr = str("pull_request_url");
   const prNum = pr ? `#${pr.split("/").pop()}` : "";
 
@@ -348,7 +359,7 @@ function approvalEffectLabel(recommendation: Record<string, unknown>): string {
     action === "execute_agent_tool" &&
     (recommendation.start_code_task === true || recommendation.tool === "publish_document")
   ) {
-    return "Approving publishes the PRD and starts a governed project for this task.";
+    return "Approving publishes the PRD and starts the build from it.";
   }
   switch (action) {
     case "review_plan_draft": return "Approving queues a PR proposal (code work) for this task.";
@@ -427,6 +438,25 @@ const REASON_WORDS: Record<string, string> = {
   missing_active_reservation: "no budget was reserved for this work",
   budget_exceeded: "it would go over the budget",
   live_secret_requires_approval: "a live key needs a person's approval",
+  meeting_prd_ready_to_publish: "the panel finished the PRD; it needs your go-ahead to publish",
+  plan_ready_for_review: "the plan is ready for your review",
+  merge_decision_required: "merging needs a person's decision",
+  ambient_needs_you: "always-on agents need your answer",
+  legacy_model_outcome_unknown: "BOSS could not tell whether some earlier model calls were charged",
+  model_outcome_unknown: "BOSS could not tell whether a model call was charged",
+  budget_outcome_unknown: "BOSS could not tell whether a budget hold was spent",
+  budget_denied: "it would go over the budget",
+  model_capacity_denied: "no model had room to take this work",
+  missing_github_credentials: "BOSS has no GitHub access for this repository",
+  no_worker: "no worker is taking work from the queue",
+  agent_skill_requires_approval: "an agent's new skill needs a person's approval",
+  provider_changeset_requires_approval: "a provider change needs a person's approval",
+  connection_reconciliation: "a connection's records disagree and need a person to settle them",
+  architecture_reconciliation: "the architecture records disagree and need a person to settle them",
+  conversation_reconciliation: "a conversation's records disagree and need a person to settle them",
+  orange_defers_non_critical_work: "the system is under strain, so non-critical work waits",
+  change_sync: "a change needs syncing with its repository",
+  quiet: "the work stopped moving",
 };
 /** The sentences a workflow gate wrote before it said where it was in words (engine
  *  workflows._gate_reason): a run id and step keys, which a card that is still open shows. */
@@ -1030,11 +1060,13 @@ function DecisionInboxRow({
           {/* A refusal's question is internal plumbing ("Model capacity refused typed decision
               setup:typesafe-key/key-proof-fa84…"); the guidance says it in words. */}
           <h3 className="dq-title">
-            {refusal && guidance ? guidance.what_happened : decision.question}
+            {refusal && guidance ? guidance.what_happened : plainSentence(decision.question)}
           </h3>
           {/* A PR that opened with its checks failing says so FIRST, security first: its merge
               is the person's stated decision, never a click (engine checks_failing.py). */}
           {checksFailingOf(rec) ? <ChecksFailing record={checksFailingOf(rec)!} /> : null}
+          {/* Follow-ups only: a normal ready card, the list folded (engine quality_bar.py). */}
+          {followUpsOf(rec) ? <FollowUps record={followUpsOf(rec)!} /> : null}
           {mustHavesOf(rec) ? <MustHaves data={mustHavesOf(rec)!} /> : null}
           {/* An expired card says so before its buttons: "Approve and merge" on a pull request
               from weeks ago is a different act from the same button on one raised today. */}
@@ -1052,7 +1084,7 @@ function DecisionInboxRow({
             </div>
           ) : (
             <p className="dq-rationale" data-testid="decision-subtitle">
-              {why || (preview ? previewLead(preview) : formatRecommendation(decision))}
+              {plainSentence(why || (preview ? previewLead(preview) : formatRecommendation(decision)))}
             </p>
           )}
           {gateCard && (gateCard.summary || gateCard.runId) ? (
@@ -1144,7 +1176,9 @@ function DecisionInboxRow({
             {estimatedCost != null ? (
               <span className="dq-ev">{formatMicros(estimatedCost)}</span>
             ) : null}
-            <span className="dq-ev">{formatDeadline(decision.deadlineAt)}</span>
+            {deadlineLabel(decision.deadlineAt) ? (
+              <span className="dq-ev" data-testid="decision-deadline">{deadlineLabel(decision.deadlineAt)}</span>
+            ) : null}
             {refusal ? (
               <span className="dq-ev" title={decision.question}>
                 {decision.question.slice(0, 60)}{decision.question.length > 60 ? "…" : ""}

@@ -136,10 +136,17 @@ def workflow_failures(connection: Connection, since: Any,
 @adapter("build_failures")
 def build_failures(connection: Connection, since: Any,
                    project_id: Optional[str] = None) -> Iterable[dict[str, Any]]:
+    # A failed build BOSS is already retrying (a newer attempt continues it) is not a signal:
+    # its recovery is under way. A failure only a person can fix (needs_human: a login, a
+    # toolchain, a budget) is not one either: the build's own card names that fix
+    # (build_failure.action_for), and a second card from the Chief of Staff is noise.
     builds = connection.execute(text(
-        "SELECT id, project_id, title, error, updated_at FROM code_task_runs "
-        f"WHERE status = 'failed' AND updated_at > :s {_SCOPE.format(t='')} "
-        "ORDER BY updated_at LIMIT 500"), {"s": since, "p": project_id}).mappings().all()
+        "SELECT c.id, c.project_id, c.title, c.error, c.updated_at FROM code_task_runs c "
+        f"WHERE c.status = 'failed' AND c.updated_at > :s {_SCOPE.format(t='c.')} "
+        "AND COALESCE(c.finalize_ctx->>'failure_class', '') <> 'needs_human' "
+        "AND NOT EXISTS (SELECT 1 FROM code_task_runs n WHERE n.project_id = c.project_id "
+        "  AND n.finalize_ctx->>'parent_run_id' = c.id) "
+        "ORDER BY c.updated_at LIMIT 500"), {"s": since, "p": project_id}).mappings().all()
     for r in builds:
         klass = error_class(r["error"])
         yield {
