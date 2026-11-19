@@ -61,12 +61,21 @@ function env(state: "deploying" | "failed") {
                      progress: state === "failed" ? FAILED : RUNNING } };
 }
 
-function engine(state: "deploying" | "failed", opts: { rollback?: boolean } = {}) {
+/** BOSS acting on the failed deploy (engine deploy_repair.underway): Recipe box, sdep_73c0758f. */
+const FIXING_WORD = "BOSS is fixing the deploy";
+const FIXING_REASON = "The app crashed on start (Error: Cannot find module '/app/server.js'). BOSS is fixing the app (build crun_68a2), then deploys again.";
+
+function engine(state: "deploying" | "failed", opts: { rollback?: boolean; fixing?: boolean } = {}) {
+  const fixing = (d: Record<string, unknown>) => opts.fixing ? { ...d, state: "fixing", word: FIXING_WORD, reason: FIXING_REASON } : d;
   const overview = { ...FX_OVERVIEW, project: { ...FX_OVERVIEW.project, id: P, name: "Hello World", live_url: "",
-    deploy: { state, word: state === "failed" ? "Last deploy failed" : "Setting up · 4/7", target_id: "deptgt_362", app: "Hello World REST API",
+    deploy: fixing({ state, word: state === "failed" ? "Last deploy failed" : "Setting up · 4/7", target_id: "deptgt_362", app: "Hello World REST API",
               environment: "staging", reason: state === "failed" ? REASON : "", index: state === "failed" ? 6 : 4, total: 7,
-              deployment_id: state === "failed" ? "sdep_f86f" : "sdep_run" } } };
-  const deployments = { ...FX_DEPLOYMENTS, environments: [env(state)], history: [] };
+              deployment_id: state === "failed" ? "sdep_f86f" : "sdep_run" }) } };
+  const one = env(state);
+  const deployments = { ...FX_DEPLOYMENTS, environments: [{ ...one, deploy: fixing(one.deploy) }],
+    history: opts.fixing ? [{ id: "sdep_f86f", label: "Staging · first deploy", status: "failed", state: "now", state_word: FIXING_WORD,
+      tone: "amber", reason: FIXING_REASON, recovered: false, repair: { state: "fixing", build_run_id: "crun_68a2" },
+      by: "Pilot", by_agent: true, at: "2026-11-19T02:51:57+00:00", href: "?area=infra" }] : [] };
   const detail = {
     row: { ref: `stack:${state === "failed" ? "sdep_f86f" : "sdep_run"}`, kind: "stack", state: state === "failed" ? "failed" : "running",
            can: { rollback: !!opts.rollback } },
@@ -145,6 +154,24 @@ describe("a deploy you can watch (BOSSAPP-932)", () => {
     await press(tid("px-env-rollback-staging"));
     await settle();
     expect(calls.find((c) => c.method === "POST" && /^\/v1\/infra\/deploys\/stack(%3A|:)sdep_f86f\/rollback$/.test(c.path))).toBeTruthy();
+  });
+
+  it("a failed deploy BOSS is fixing says so in amber, with no Fix that would start a second repair", async () => {
+    engine("failed", { fixing: true });
+    await openDeployments();
+    expect(tid("px-env-state-staging")!.textContent).toBe(FIXING_WORD);
+    expect(tid("px-env-address-staging")!.textContent).toContain("Not live");
+    expect(tid("px-env-fixing-staging")!.textContent).toContain(FIXING_REASON);
+    expect(tid("px-env-fail-staging")).toBeNull();
+    expect(tid("px-env-fix-staging")).toBeNull();
+    expect(tid("px-env-live-count-staging")!.textContent).toBe("Failed at health");
+    const chip = tid("px-head-deploy")!;
+    expect(chip.getAttribute("data-s")).toBe("fixing");
+    expect(chip.textContent).toContain(FIXING_WORD);
+    expect(chip.textContent).not.toContain("Last deploy failed");
+    const row = tid("px-dep-h-sdep_f86f")!;
+    expect(row.textContent).toContain(FIXING_WORD);
+    expect(row.querySelector(".px-tag")?.getAttribute("data-tone")).toBe("amber");
   });
 
   it("Roll back is offered only when the engine says there is a release to go back to", async () => {

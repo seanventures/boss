@@ -91,6 +91,8 @@ function PlainConsentSheet({ request, onClose }: { request: ConsentRequest; onCl
       <p className="idn-lede2" data-copy="prose">
         To run <b>{request.task}</b> they need a little of your access, and never more than you have.
       </p>
+      {/* ONE CONSENT FOR THE WORK: a new build's consent also covers its delivery workflow. */}
+      {request.covers ? <p className="idn-fine" data-copy="prose" data-testid="consent-covers">{request.covers}</p> : null}
       <div className="idn-need">
         {known.map((p) => <Perm key={p} p={p} sm />)}
         {other.map((p) => <Perm key={p} p={p} sm />)}

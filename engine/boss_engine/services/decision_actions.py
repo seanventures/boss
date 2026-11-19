@@ -171,6 +171,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # EVERY FAILURE HAS AN OWNER (failure_owner.on_answered): "Done — retry" runs each failure on
     # the card again as the person; "Leave it" ends BOSS's ownership, saying who decided.
     "failure_owner.retry",
+    # A build's delivery workflow did not start (code_task_service.start_delivery_workflow):
+    # approving starts it now, adopting the running build (attach_delivery_workflow).
+    "start_delivery_workflow",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on

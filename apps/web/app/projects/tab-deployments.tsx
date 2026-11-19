@@ -10,7 +10,7 @@
 import React, { useState } from "react";
 import {
   ArrowCounterClockwise, ArrowSquareOut, ArrowsClockwise, Buildings, Check, CheckCircle, ClockCounterClockwise, Cloud, Flask, GearSix, GitMerge, Globe,
-  HardDrives, Key, LockSimple, Package, RocketLaunch, TerminalWindow, X,
+  HardDrives, Key, LockSimple, Package, RocketLaunch, TerminalWindow, Wrench, X,
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
@@ -31,7 +31,7 @@ import type { PxCtx } from "./project-page";
 const BEACON = { name: "Beacon", role_key: "sre" };
 /** A target's deploy state as a tag tone (engine deploy_truth): only a success is green. */
 const DEPLOY_TONE: Record<string, "green" | "amber" | "red" | "teal" | "idle"> = {
-  live: "green", deploying: "teal", waiting: "amber", setting_up: "teal", failed: "red", not_deployed: "idle" };
+  live: "green", deploying: "teal", waiting: "amber", setting_up: "teal", failed: "red", fixing: "amber", not_deployed: "idle" };
 /** A history row's state in a word, when the engine sent none (X-77: badge + colour + word). */
 const HIST_WORD: Record<string, string> = { failed: "Failed", waiting: "Needs you", now: "Deploying", skipped: "Not approved", todo: "Queued" };
 /** Where every p95 on the project pages comes from (one source, obs_view.probe_window), in words. */
@@ -175,10 +175,10 @@ export function DeploymentsTab({ ctx }: { ctx: PxCtx }) {
                   <a key={h.id} className="px-li px-hist" data-s={h.recovered ? "recovered" : h.state} data-testid={`px-dep-h-${h.id}`} href={pxHref(h.href)}
                      title={`${h.word} — opens this deploy in Infra`}>
                     <span className="px-ck-b" aria-hidden>
-                      {h.recovered ? <ArrowCounterClockwise size={11} weight="bold" /> : h.state === "done" ? <Check size={11} weight="bold" /> : h.state === "failed" ? <X size={11} weight="bold" />
+                      {h.recovered ? <ArrowCounterClockwise size={11} weight="bold" /> : h.repaired ? <Wrench size={11} weight="bold" /> : h.state === "done" ? <Check size={11} weight="bold" /> : h.state === "failed" ? <X size={11} weight="bold" />
                         : h.state === "waiting" ? <LockSimple size={10} weight="fill" /> : h.state === "skipped" ? <X size={10} /> : <ArrowsClockwise size={11} />}</span>
                     <span style={{ minWidth: 0 }}><b className="px-ell" style={{ display: "block" }}>{h.label}
-                      {h.state !== "done" ? <> <Tag tone={h.recovered || h.state === "waiting" || h.state === "now" ? "amber" : h.state === "failed" ? "red" : undefined}>
+                      {h.state !== "done" ? <> <Tag tone={h.recovered || h.repaired || h.state === "waiting" || h.state === "now" ? "amber" : h.state === "failed" ? "red" : undefined}>
                         {h.recovered ? "Recovered" : h.word || HIST_WORD[h.state] || h.state}</Tag></> : null}</b>
                       <small>{[h.at ? dayTime(h.at) : "", h.sub, h.state === "waiting" ? "needs your approval" : ""].filter(Boolean).join(" · ")}</small>
                       {historyWho(h) ? ` ${historyWho(h)}` : null}</span>
@@ -291,7 +291,7 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
         <Globe size={12} aria-hidden />{url}<ArrowSquareOut size={10} aria-label="opens in a new tab" /></a>
         : e.address ? <span className="px-env-address" data-testid={`px-env-address-${e.key}`}
                             title="Not live yet: this address answers once a deploy here succeeds">
-          <Globe size={12} aria-hidden />{e.deploy?.state === "failed" ? "Not live" : e.deploy?.state === "not_deployed" || !e.deploy ? "Not deployed yet" : "Setting up"} · will answer at {e.address.replace(/^https?:\/\//, "")}</span> : null}
+          <Globe size={12} aria-hidden />{e.deploy?.state === "failed" || e.deploy?.state === "fixing" ? "Not live" : e.deploy?.state === "not_deployed" || !e.deploy ? "Not deployed yet" : "Setting up"} · will answer at {e.address.replace(/^https?:\/\//, "")}</span> : null}
       <DeployLive e={e} projectId={ctx.projectId} actor={ctx.actor} onFix={(q) => ctx.ask(q)} onChanged={() => ctx.refreshWork()} />
       {e.deploy?.state === "failed" && e.deploy.attempt?.kind === "step" ? (
         <DeployStepFailed projectId={ctx.projectId} actor={ctx.actor} where={`${e.app || "the app"} on ${e.label}`} reason={e.deploy.reason}

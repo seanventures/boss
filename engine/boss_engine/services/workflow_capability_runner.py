@@ -3986,7 +3986,9 @@ def _perform_capability(
                 commit=(None if (pass_2_of or redeploy) else
                         (release_scope.approved_head(connection, run_id)
                          or pinned_pass_one_commit(connection, run_id))),
-                retire_projects=retire or None)
+                retire_projects=retire or None,
+                # THE FIX THIS SHIPS: its card says so in plain words (stack_deploy.fix_question).
+                fixed=(fixes[-1] if redeploy and fixes else None))
             if redeploy:
                 planned = {**planned, deploy_repair.FIXES_KEY: fixes,
                            deploy_repair.REDEPLOY_KEY: redeploy}
