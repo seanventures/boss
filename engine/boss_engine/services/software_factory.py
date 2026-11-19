@@ -2504,9 +2504,6 @@ class SoftwareFactoryService:
             connection, run_id=run_id, evidence=evidence, checks_failing=checks_failing,
             pr_url=pr.url)
 
-        # The card names the work, never the attempt ("· retry 2", plain_words.py).
-        from .plain_words import plain_title as _plain_title
-
         # A local change set is "change #N", never a PR (BOSSAPP-946).
         _local = getattr(self.github, "kind", "") == "local"
         _ref = f"change #{pr.number}" if _local else f"PR #{pr.number}"
@@ -2514,11 +2511,11 @@ class SoftwareFactoryService:
             connection,
             project_id,
             task_id,
-            (f"Checks failing — decide the merge: {_plain_title(title)} ({_ref})"
+            (f"Checks failing — decide the merge: {title} ({_ref})"
              if card_checks else
              f"Approve follow-up fix after #{follow_up['after']}: "
              f"{pr_follow_up.work_name(title)} ({_ref})" if follow_up else
-             f"Approve code change: {_plain_title(title)} ({_ref})"),
+             f"Approve code change: {title} ({_ref})"),
             {
                 # FIRST, so nothing it carries can replace the action below. Its keys are the
                 # sealed evidence keys (ui/ux/capability_evidence) and collide with none here;
@@ -2528,7 +2525,7 @@ class SoftwareFactoryService:
                 "summary": (
                     (_checks_failing.decision_summary(card_checks) + " "
                      if card_checks else "")
-                    + f"BOSS built “{_plain_title(title)}” in a sandbox and opened "
+                    + f"BOSS built “{title}” in a sandbox and opened "
                     + (f"change #{pr.number}. " if _local else f"pull request #{pr.number}. ")
                     + (f"{_acceptance_gate.headline(acceptance)}. "
                        if _acceptance_gate.headline(acceptance) else "")

@@ -2,8 +2,13 @@
  * A BUILD'S REVIEW COMMENTS, ONCE EACH (recipe-box walk, 2026-11-18). Review rounds re-raise
  * the same finding: the first build page read "Comments 11 open · 0 fixed" with
  * tests/recipes.test.js:43 listed three times in near-identical words. One finding is one row:
- * the same file and line (or no place at all) and nearly the same words fold into the first, and
- * the row knows every id it stands for, so Resolve or Dismiss settles all of them.
+ * the same file AND line and near-identical words fold into the first, and the row knows every
+ * id it stands for, so Resolve or Dismiss settles all of them.
+ *
+ * ONLY EXACT REPEATS (review #224): a fold hides a finding and settles it with its twin, so two
+ * findings that differ in what they point at ("…the delete recipe endpoint" / "…the update
+ * recipe endpoint", "…the title field" / "…the servings field") never fold. A comment with no
+ * file or no line never folds; the words must be the same text or nearly all the same words.
  */
 import type { ReviewComment } from "./cockpit";
 
@@ -17,23 +22,33 @@ export type FoldedComment = ReviewComment & {
 const words = (text: string): string[] =>
   text.toLowerCase().replace(/[`*_"'“”‘’.,:;()[\]{}!?]/g, " ").split(/\s+/).filter((w) => w.length > 2);
 
-/** Nearly the same words: the smaller set mostly inside the larger (Dice over word sets). */
+/** Near-identical words: the same normalised text, or (on a longer finding) Dice ≥ 0.8 over
+ *  word sets with at most two words differing on either side. */
 export function sameFinding(a: string, b: string): boolean {
-  const x = new Set(words(a));
-  const y = new Set(words(b));
-  if (!x.size || !y.size) return a.trim().toLowerCase() === b.trim().toLowerCase();
+  const wa = words(a);
+  const wb = words(b);
+  if (wa.join(" ") === wb.join(" ")) return true;
+  const x = new Set(wa);
+  const y = new Set(wb);
+  if (x.size < 8 || y.size < 8) return false;   // a short finding folds only on the same text
   let shared = 0;
   for (const w of x) if (y.has(w)) shared += 1;
-  return (2 * shared) / (x.size + y.size) >= 0.6;
+  const onlyX = x.size - shared;
+  const onlyY = y.size - shared;
+  return (2 * shared) / (x.size + y.size) >= 0.8 && onlyX <= 2 && onlyY <= 2;
 }
 
-const place = (c: ReviewComment): string => `${c.path ?? ""}:${c.line ?? ""}`;
+/** The exact place a finding points at, or null when it has no file or no line (never folds). */
+const place = (c: ReviewComment): string | null =>
+  c.path && c.line ? `${c.path}:${c.line}` : null;
 
 /** One row per finding, in the order first raised. An open repeat keeps the row open. */
 export function foldComments(items: ReviewComment[]): FoldedComment[] {
   const out: FoldedComment[] = [];
   for (const c of items) {
-    const twin = out.find((r) => place(r) === place(c) && sameFinding(r.body, c.body));
+    const here = place(c);
+    const twin = here === null ? undefined
+      : out.find((r) => place(r) === here && sameFinding(r.body, c.body));
     if (!twin) { out.push({ ...c, ids: [c.id], repeats: 0 }); continue; }
     twin.ids.push(c.id);
     twin.repeats += 1;

@@ -70,8 +70,10 @@ def test_every_gate_has_failed_words_and_the_web_tables_are_the_same():
 
 
 def test_a_suite_that_did_not_load_never_reads_passed():
-    jest = "Test Suites: 1 failed, 2 passed, 3 total\nTests:       9 passed, 9 total\n"
-    vitest = " Test Files  1 failed | 2 passed (3)\n      Tests  9 passed (9)\n"
+    jest = ("FAIL tests/a.test.js\n  ● Test suite failed to run\n\n"
+            "Test Suites: 1 failed, 2 passed, 3 total\nTests:       9 passed, 9 total\n")
+    vitest = (" FAIL  tests/a.test.ts [ tests/a.test.ts ]\nError: Failed to load url ./missing\n"
+              " Test Files  1 failed | 2 passed (3)\n      Tests  9 passed (9)\n")
     node = ("not ok 1 - tests/recipes.test.js\n  error: Cannot find module 'jsdom'\n"
             "# tests 1\n# pass 0\n# fail 1\n")
     # The very run that added this guard: jsdom missing, every file "passed".
@@ -80,6 +82,19 @@ def test_a_suite_that_did_not_load_never_reads_passed():
     for output in (jest, vitest, node, vitest_env):
         assert verify_counts(output)["load_error"], output
     assert "jsdom" in verify_counts(node)["load_error"]
+    # ORDINARY FAILURES ARE NOT LOAD FAILURES (review #224): the summary lines every failing
+    # jest / vitest run prints, and a pytest assertion whose traceback names a missing module.
+    plain_jest = ("Test Suites: 1 failed, 3 passed, 4 total\n"
+                  "Tests:       1 failed, 11 passed, 12 total\n")
+    plain_vitest = " Test Files  1 failed | 3 passed (4)\n      Tests  1 failed | 11 passed (12)\n"
+    plain_pytest = ("FAILED tests/test_a.py::test_x - ModuleNotFoundError: No module named 'foo'\n"
+                    "========== 1 failed, 4 passed in 0.3s ==========\n")
+    for output in (plain_jest, plain_vitest, plain_pytest):
+        got = verify_counts(output)
+        assert got["load_error"] is None and got["failed"] == 1, output
+    collecting = ("ERROR collecting tests/test_a.py\nModuleNotFoundError: No module named 'foo'\n"
+                  "1 error in 0.2s\n")
+    assert "foo" in verify_counts(collecting)["load_error"]
     # A clean run, and an install log that merely mentions a module, load fine.
     assert verify_counts("# tests 9\n# pass 9\n# fail 0\n")["load_error"] is None
     assert verify_counts("npm WARN Cannot find module 'fsevents'\n# tests 9\n# pass 9\n"

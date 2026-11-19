@@ -142,19 +142,19 @@ _DURATION = re.compile(r"\s*\(\s*\d+(?:\.\d+)?\s*m?s\s*\)\s*$")
 _NOT_LOADED = (
     re.compile(r"ImportError while importing test module '([^']+)'"),    # pytest
     re.compile(r"Test suite failed to run()"),                          # jest
-    re.compile(r"^\s*Test Suites:\s*([1-9]\d*) failed", re.M),          # jest summary
-    re.compile(r"^\s*Test Files\s+([1-9]\d*) failed", re.M),            # vitest summary
     # vitest: a file whose environment or import failed still counts its file as passed and
     # says it only here ("Errors  1 error" after "Test Files  4 passed (4)").
     re.compile(r"^\s*Errors\s+([1-9]\d*) errors?\s*$", re.M),
     re.compile(r"\bFailed to load (?:url|test file)\s+(\S+)", re.I),     # vite / vitest
 )
-#: A missing module: named in the words only when the run failed too (an install log can print
-#: one on a run that passed).
-_MISSING_MODULE = (
-    re.compile(r"Cannot find (?:module|package) '([^']+)'"),           # node (CJS / ESM)
-    re.compile(r"ModuleNotFoundError: No module named '([^']+)'"),       # python
-)
+#: A missing module is a suite that did not load only when the runner failed the FILE itself:
+#: node:test reports a file it could not import as `not ok N - path/to/file.test.js`; pytest says
+#: "ERROR collecting". A traceback of an ordinary failing test that mentions a missing optional
+#: module is a test failure, not a load failure (review #224).
+_NODE_MISSING = re.compile(r"Cannot find (?:module|package) '([^']+)'")
+_PY_MISSING = re.compile(r"ModuleNotFoundError: No module named '([^']+)'")
+_PY_COLLECTING = re.compile(r"ERROR collecting|errors? during collection", re.I)
+_TEST_FILE = re.compile(r"\.(?:test|spec)\.[cm]?[jt]sx?$|\.[cm]?[jt]sx?$")
 _FAILING = (
     re.compile(r"^FAILED\s+(\S+::\S+?)(?:\s+-\s.*)?$"),               # pytest short summary
     re.compile(r"^(?:FAIL|ERROR):\s+(\S+\s+\(.+\))"),                  # unittest
@@ -214,8 +214,12 @@ def verify_counts(output: str) -> dict[str, Any]:
             break
     load_error = None
     said = next((m for m in (p.search(clean) for p in _NOT_LOADED) if m), None)
-    missing = next((m for m in (p.search(clean) for p in _MISSING_MODULE) if m), None)
-    if said is not None or (missing is not None and (failed or 0) > 0):
+    missing = None
+    if any(_TEST_FILE.search(name) for name in failing):
+        missing = _NODE_MISSING.search(clean)
+    if missing is None and _PY_COLLECTING.search(clean):
+        missing = _PY_MISSING.search(clean)
+    if said is not None or missing is not None:
         what = (said.group(1) or "").strip() if said is not None else ""
         if missing is not None and (not what or what.isdigit()):
             what = f"missing {missing.group(1)}"

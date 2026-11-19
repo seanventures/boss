@@ -78,6 +78,22 @@ describe("review comments, once each", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].status).toBe("open");
   });
+  it("findings that differ in what they point at never fold (review #224)", () => {
+    const noPlace = foldComments([
+      c("p1", "Missing test for the delete recipe endpoint", { path: undefined, line: undefined }),
+      c("p2", "Missing test for the update recipe endpoint", { path: undefined, line: undefined }),
+    ]);
+    expect(noPlace.map((r) => r.id)).toEqual(["p1", "p2"]);
+    const noLine = foldComments([
+      c("l1", "No input validation on the title field", { path: "src/api.js", line: undefined }),
+      c("l2", "No input validation on the servings field", { path: "src/api.js", line: undefined }),
+    ]);
+    expect(noLine.map((r) => r.id)).toEqual(["l1", "l2"]);
+    // Even at the same file and line, one differing word on a short finding is another finding.
+    expect(foldComments([c("s1", "No input validation on the title field"),
+                         c("s2", "No input validation on the servings field")])).toHaveLength(2);
+    expect(sameFinding("Missing test for the delete recipe endpoint", "Missing test for the update recipe endpoint")).toBe(false);
+  });
   it("different findings stay apart", () => {
     expect(sameFinding("The search input never updates local state", "A named ingredient with an empty amount is saved as 0")).toBe(false);
   });

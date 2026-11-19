@@ -127,3 +127,37 @@ def test_its_own_repair_holding_the_slot_is_not_a_queue_wait(engine, monkeypatch
         why = stuck_work.wait_reason(c, run, job=job)
     assert why["code"] == "slot" and "Another app" in why["words"] and "Recipe box" not in why["words"]
     assert json.dumps(why)
+
+
+def test_one_follow_up_per_brief_in_flight(client, engine):
+    """"Let BOSS fix these" pressed twice (or from another tab) queues ONE paid build: the same
+    parent and the same brief while it is queued or running returns that build (review #224).
+    A different brief, or the same brief once the first has ended, starts its own."""
+    from apps.api.tests.test_a_feature_builds_onto_its_app import APP_RUN, _the_app
+
+    _the_app(engine)
+    brief = "Fix the open review findings on this build:\n- tests/recipes.test.js:43: calls it directly"
+
+    def press(words):
+        got = client.post(f"/v1/code-tasks/{APP_RUN}/follow-up",
+                          json={"instructions": words, "actor": "ceo"})
+        assert got.status_code in (200, 201), got.text
+        return got.json()
+
+    first = press(brief)
+    again = press("  " + brief.replace("\n", "\n  ") + "\n")   # whitespace is not a new brief
+    assert first["status"] == "queued"
+    assert again["status"] == "existing" and again["run_id"] == first["run_id"]
+    with engine.begin() as c:
+        n = c.execute(text("SELECT count(*) FROM code_task_runs WHERE "
+                           "finalize_ctx->>'parent_run_id' = :p AND finalize_ctx->>'followup_brief' "
+                           "IS NOT NULL AND status IN ('queued', 'running')"),
+                      {"p": APP_RUN}).scalar()
+    assert n == 1
+    other = press(brief + "\n- pages/index.js:67: stale search prop")
+    assert other["status"] == "queued" and other["run_id"] != first["run_id"]
+    with engine.begin() as c:
+        c.execute(text("UPDATE code_task_runs SET status = 'completed' WHERE id = :i"),
+                  {"i": first["run_id"]})
+    after = press(brief)
+    assert after["status"] == "queued" and after["run_id"] != first["run_id"]
