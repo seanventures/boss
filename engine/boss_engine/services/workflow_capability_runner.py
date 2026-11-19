@@ -1364,6 +1364,21 @@ def release_base_for(connection: Connection, context: dict[str, Any]) -> Optiona
     return str(row).strip() if row else None
 
 
+def build_named_from_prd(context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """THE BUILD IS NAMED ONCE, FROM ITS PRD (titles.prd_title): the panel's heading ("Bench Name
+    Label on Map Bubble"), never the person's first words ("The bubble present") — the Work row,
+    its drawer and the build page then say the same short name. Only over the run's own title:
+    a step that names its build (an incident's "Fix …") keeps it."""
+    from .project_experience.titles import prd_title
+
+    run_title = str((context.get("input") or {}).get("title") or "").strip()
+    named = prd_title(_from_any_step(context, "prd_markdown"))
+    given = str(inputs.get("title") or "").strip()
+    if named and given in ("", run_title) and not given.startswith("Fix "):
+        return {**inputs, "title": named}
+    return inputs
+
+
 def _from_any_step(context: dict[str, Any], field: str) -> Any:
     """The first step that produced `field`, whatever the step happens to be called.
 
@@ -4210,6 +4225,8 @@ def _perform_capability(
             fixed_title = str(_from_any_step(context, "title") or "").strip()
             if fixed_title.startswith("Fix "):
                 inputs = {**inputs, "title": fixed_title}
+    if key == "build":
+        inputs = build_named_from_prd(context, inputs)
     if key == "build":
         # THE TICKET IS THE BUILD'S BRIEF TOO (BOSSAPP-1047), the same way the incident's is:
         # before the directive, delimited as outside input, its acceptance criteria the build's

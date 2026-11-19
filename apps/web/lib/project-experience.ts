@@ -252,6 +252,9 @@ export type WorkItem = {
   work_item_id?: string; parent_work_item_id?: string | null; ticket_type?: string;
   /** The FULL title (`label` is a short name of a few words): a ticket's own title is shown whole. */
   title?: string;
+  /** The change's own preview (the build whose merge is open), shaped as the Your app card's:
+   *  Open preview / Recreate preview beside the merge. null when no attempt has one to show. */
+  preview_app?: YourApp | null;
 };
 export type WorkTicket = {
   provider: string; key: string; url: string; status: string; status_category: string; sync_status: string; connection_id: string;
@@ -621,6 +624,7 @@ export const parseWorkItem = (v: unknown): WorkItem => {
     ...(s(x.work_item_id) ? { work_item_id: s(x.work_item_id) } : {}),
     ...(x.origin === "ticket_import" ? { parent_work_item_id: s(x.parent_work_item_id) || null, ticket_type: s(x.ticket_type, "other") } : {}),
     ...(s(x.title) ? { title: s(x.title) } : {}),
+    preview_app: parseYourApp(x.preview_app ? { ...o(x.preview_app), name: s(x.label) } : null),
   };
 };
 const parseWorkTicket = (v: unknown): WorkTicket | null => {

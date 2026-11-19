@@ -34,6 +34,8 @@ import { TicketImportPage } from "./ticket-import";
 import type { Connection } from "../../lib/tickets";
 import type { PxCtx } from "./project-page";
 import { WhyLine } from "../../components/stuck-work";
+import { workNextStep } from "../../lib/work-next-step";
+import { WorkPreviewButton } from "./work-preview";
 import "./work.css";
 
 /** The row's tile (05-29): what the work is waiting on, else what kind it is and where it came from. */
@@ -333,6 +335,7 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
   const [said, setSaid] = useState("");
   const [open, setOpen] = useState(false);
   const setup = w.kind === "setup" && w.source === "onboarding";
+  const next = setup ? null : workNextStep(w);
   const startNow = async () => {
     // A planned item starts as itself, through the body BOSS wrote for it (its title, the item it
     // came from and the issue it names); an older engine's row, from its words.
@@ -406,9 +409,15 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
           {w.links.deploy ? <PxLink href={w.links.deploy} title="Where it is deployed"><Globe size={11} aria-hidden /> Staging</PxLink> : null}
         </span>
         <span className="px-row">
+          {w.state === "needs_you" && w.preview_app ? (
+            <WorkPreviewButton app={w.preview_app} projectId={ctx.projectId} actor={ctx.actor} testid={`px-work-preview-${w.id}`} />
+          ) : null}
           {w.state === "needs_you" ? (
-            <button type="button" className="px-btn" data-kind="amber" data-size="s" data-testid={`px-work-act-${w.id}`} onClick={() => openItem(ctx, w)}>
-              {w.action_label || (w.links.pr ? "Merge" : "Decide")}</button>
+            // ONE NEXT STEP (workNextStep): the same words the drawer's top card says.
+            <button type="button" className="px-btn" data-kind="amber" data-size="s" data-testid={`px-work-act-${w.id}`} onClick={() => openItem(ctx, w)}
+                    title={next?.hint ? `${next.label} · ${next.hint}` : undefined}>
+              {setup ? (w.action_label || "Decide") : next?.label ?? "Decide"}
+              {next?.hint ? <small className="px-faint px-hide-phone" data-testid={`px-work-act-hint-${w.id}`} style={{ marginLeft: 6, fontWeight: 400 }}>{next.hint}</small> : null}</button>
           ) : w.state === "planned" ? (
             <>
               {rank ? (

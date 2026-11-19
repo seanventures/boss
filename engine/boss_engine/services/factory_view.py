@@ -2647,6 +2647,13 @@ def pr_review_line(fctx: Mapping[str, Any]) -> dict[str, Any]:
             "permission": bool(posted.get("permission")), "rounds": rounds}
 
 
+def _gate_failed(g: Mapping[str, Any]) -> bool:
+    """A check that FAILED: not passed, not skipped, not a follow-up, not waived. The one rule
+    the Checks row's word and the Outputs header's merge readiness both count by."""
+    return (not g.get("ok") and not g.get("skipped") and not g.get("followup")
+            and not g.get("waived_by"))
+
+
 def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildState,
              stations: list[Station], comments: list[dict[str, Any]],
              decision: Optional[Mapping[str, Any]], now: datetime) -> dict[str, Any]:
@@ -2806,11 +2813,12 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
     if running:
         ready = {"ready": False, "word": "Building"}
     else:
-        failed_checks = bool(checks and any(not g["ok"] and not g.get("waived_by")
-                                            for g in checks["gates"]))
+        # ONE COUNT OF FAILED CHECKS, the Checks row's own (_gate_failed): a skipped gate and a
+        # quality-bar follow-up are not failures. The header said "Not ready · 3 checks failed"
+        # beside "All 9 passed · 2 skipped · 1 follow-up" (park-bench-map change #2, 2026-11-19).
+        n_failed = sum(1 for g in (checks or {}).get("gates") or [] if _gate_failed(g))
+        failed_checks = bool(n_failed)
         tests_ok = not commands or all(c["ok"] for c in commands)
-        n_failed = sum(1 for g in (checks or {}).get("gates") or []
-                       if not g["ok"] and not g.get("waived_by"))
         # MERGED ONLY WHEN IT WAS. A deployed build is not a merged one: the OUTPUTS header said
         # "Merged" while PR #223 was open, because the build had been deployed from its branch.
         if st["state"] == "merged" or (st["state"] == "deployed" and merge == pr_merge.MERGED):
