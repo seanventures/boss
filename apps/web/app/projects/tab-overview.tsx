@@ -27,6 +27,7 @@ import { ExtensionSlots } from "../extension-frame";
 import { addFeaturePatch } from "../../lib/compose-links";
 import { FailedActions } from "./build-failed";
 import { YourAppCard } from "./your-app";
+import { AboutCard } from "./about-app";
 
 /** Each Needs-you card's icon, by what it asks. */
 const NEED_ICON: Record<string, Icon> = { merge: GitMerge, deploy: RocketLaunch, plan: ListChecks, setup: Wrench, question: Question };
@@ -155,6 +156,9 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
           {failed("journey") ?? <Journey nodes={ov.journey} onOpen={(n) => goHref(ctx, n.href, () => ctx.open("stage", n.key))} />}
         </section>
       ) : null}
+
+      {/* ABOUT THIS APP: what the project is — its spec's summary, criteria and approval. */}
+      {failed("about") ?? (ov.about ? <AboutCard about={ov.about} /> : null)}
 
       {/* YOUR APP: the app, always one press away (asleep wakes on Open app). */}
       {ov.app ? <YourAppCard app={ov.app} projectId={ctx.projectId} actor={ctx.actor} onStarted={ctx.refreshOverview} /> : null}

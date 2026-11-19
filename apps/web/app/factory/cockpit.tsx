@@ -62,6 +62,7 @@ import { plural } from "../../lib/factory-floor";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { ChangeSetCockpit, useRunChangeSet } from "../multirepo/change-set-cockpit";
 import { LearnedStrip } from "../knowledge/learned-strip";
+import { BuildExplained } from "../projects/work-explained";
 import { useAreaKeydown } from "../../lib/area-keys";
 import { explainObjectMiss, objectMissWords, type ObjectMiss } from "../console-owner";
 
@@ -577,6 +578,8 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
       {c.run.status === "completed" ? <ResultReview key={c.run.id} runId={c.run.id}
         briefCriteria={c.brief.criteria} failedGates={c.summary?.gates?.failed}
         onChangeRequested={(note) => { setReviewChange(note); setChangeIt(true); }} /> : null}
+
+      <BuildExplained projectId={projectId} runId={c.run.id} status={c.run.status} />
 
       <div className="fx-body">
         <Story log={log} projectId={projectId} runId={c.run.id} viewer={actor} rows={c.story} stations={c.stations} now={c.now}

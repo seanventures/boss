@@ -244,7 +244,25 @@ def story(connection: Connection, project_id: str, work_id: str) -> dict[str, An
             # THE PRD THIS WORK WAS BUILT FROM (prd_record, BOSSAPP-929): readable in the drawer,
             # with the meeting that argued it and its file in the repository.
             "prd": _prd(connection, project_id, meeting, fctx),
+            # WHAT WAS DISCUSSED / WHAT WAS BUILT (explained.for_work): the panel's decisions and
+            # the build's own outputs in a few bullets, stored once per build — never the chat.
+            "explained": _explained(connection, project_id, meeting, builds),
             "stages": out_stages}
+
+
+def _explained(connection: Connection, project_id: str, meeting: dict, builds: list[dict]
+               ) -> Optional[dict]:
+    import logging
+
+    from . import explained
+
+    try:
+        with connection.begin_nested():
+            return explained.for_work(connection, project_id,
+                                      meeting_run_id=meeting.get("meeting_run_id"), builds=builds)
+    except Exception:  # noqa: BLE001 — the drawer shows its stations without the explanation
+        logging.getLogger(__name__).warning("work explanation failed", exc_info=True)
+        return None
 
 
 def _prd(connection: Connection, project_id: str, meeting: dict, fctx: dict) -> Optional[dict]:
