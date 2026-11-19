@@ -11,6 +11,7 @@ This is a test candidate. Cutting the tag does not deploy a host or publish an i
 - Easy Mode runs a quick spec panel first, then build, P1 tests, preview, and deploy to staging. When there is no server to deploy to, the deploy step is skipped and says so in plain words.
 - Every Easy Mode build always gets its delivery workflow, under the one consent you give at the start.
 - Easy Mode never auto-merges. You press **Approve and merge**.
+- Starting Easy Mode no longer holds up sign-in while the spec panel launches.
 
 **Merging**
 
