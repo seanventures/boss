@@ -39,7 +39,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from . import owned_process, review_tools
+from . import harness_failures, owned_process, review_tools
 from .cli_harness import CliHarnessUnavailable, GenericCliCodeAgent, _proxy_scoped
 from .engine_contract import EngineCapabilities
 from .workspace_perms import tidies_workspace
@@ -257,6 +257,7 @@ class CodexCodeAgent(GenericCliCodeAgent):
             except Exception:  # noqa: BLE001
                 pass
             for turn in produced:
+                harness_failures.check_turn(turn, engine=self.engine)
                 try:
                     if on_turn:
                         on_turn(turn)
@@ -303,6 +304,9 @@ class CodexCodeAgent(GenericCliCodeAgent):
                     restored = self._authorise_from_file(cli_reports_signed_in=False)
                     if restored.get("authorised"):
                         proc = _attempt(resume)
+        except harness_failures.HarnessFailure:
+            _unlink(final_path)
+            raise
         except subprocess.TimeoutExpired:
             record_llm_call(engine_name=self.engine, usage={"model": model or ""},
                             latency_ms=int((time.monotonic() - started) * 1000),

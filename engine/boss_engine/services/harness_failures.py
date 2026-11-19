@@ -51,6 +51,13 @@ WHERE = ("tool_result", "stream", "engine")
 #: registry (`register_harness(failure_patterns=…)`).
 GENERIC_PATTERNS: tuple[FailurePattern, ...] = (
     FailurePattern("sandbox_unavailable",
+                   r"\bbwrap: (?:No permissions to create a new namespace"
+                   r"|Creating new namespace failed: (?:Operation not permitted|Permission denied))",
+                   "have the BOSS host administrator enable the engine's required nested "
+                   "user namespaces in the container seccomp and AppArmor policies; "
+                   "verify sandbox startup before retrying (changing the task or connecting "
+                   "a GitHub repository will not fix this)"),
+    FailurePattern("sandbox_unavailable",
                    r"failed to (?:initiali[sz]e|start|create) (?:the |its )?sandbox"
                    r"|sandbox (?:failed to (?:initiali[sz]e|start)|initiali[sz]ation failed)",
                    "install what {engine}'s sandbox needs where BOSS runs it, then retry"),

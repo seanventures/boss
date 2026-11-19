@@ -4591,13 +4591,15 @@ def write_tests_exhausted_message(*, stronger_lane: bool) -> str:
     if stronger_lane:
         return (
             "Test author produced no test files even after escalating to a frontier "
-            "model — likely an ambiguous task or a repo without a test setup. Review "
-            "the spec/acceptance criteria and retry."
+            "model. No recognized test-file changes were found in the run workspace. "
+            "The cause is not established: inspect the test-author tool output and "
+            "changed paths before retrying. No application test result is available."
         )
     return (
-        "Test author produced no test files. No stronger lane is configured — "
-        "likely an ambiguous task or a repo without a test setup. Review the "
-        "spec/acceptance criteria and retry."
+        "Test author produced no test files. No stronger lane is configured. "
+        "No recognized test-file changes were found in the run workspace. "
+        "The cause is not established: inspect the test-author tool output and "
+        "changed paths before retrying. No application test result is available."
     )
 
 
@@ -8343,7 +8345,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     emit_event(c, project_id, "code_task.step_exhausted", "boss",
                                "code_task_run", run_id,
                                {"step": "write_tests",
-                                "reason": "no_test_files_after_escalation"})
+                                "reason": ("no_test_files_after_escalation"
+                                           if _tests_escalation["stronger"]
+                                           else "no_test_files_no_stronger_lane")})
                     _release(budget, c, project_id, reservation_id, "no independent tests authored", run_id=run_id)
                 _rescue_pr("the test author produced no test files")
                 with _transaction(engine) as c:
