@@ -21,6 +21,7 @@ import { DemoBanner, Empty, Face, openAddProject, usePxUrl, HEALTH_WORD, Ico, Jo
 import { FirstRun } from "./first-run";
 import { StartProjectHost } from "../start-project/start-host";
 import "./px.css";
+import { OpenAppChip } from "./your-app";
 
 export type ProjectsHomeProps = {
   projectId: string; actor: string; orgId?: string | null;
@@ -274,6 +275,8 @@ export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChan
         {card.crew.length ? <span className="px-faces" title={card.crew.map((g) => `${g.name}${g.state === "working" ? " (working now)" : ""}`).join(", ")} data-testid={`px-card-crew-${card.id}`}>
           {card.crew.map((g) => <Face key={g.role_key} agent={g} size={20} state={g.state === "working" ? "working" : "idle"} />)}</span> : null}
         <span className="px-spacer" />
+        {/* YOUR APP: one press to the app, from the card (asleep wakes on Open app). */}
+        {card.app && !card.archived ? <OpenAppChip app={card.app} projectId={card.id} testid={`px-card-app-${card.id}`} /> : null}
         <Cost usd={card.cost_week} list={card.list_week} testid={`px-card-cost-${card.id}`} />
       </div>
     </article>

@@ -1128,7 +1128,13 @@ def waiting_on_operator(connection, project_id: str, *, now: Optional[datetime] 
     ).bindparams(*binds)
     wanted = {"needs_action", "expired"} if include_expired else {"needs_action"}
     rows = [dict(r) for r in connection.execute(statement, params).mappings().all()]
-    return sorted(one_question_per_pull_request(r for r in rows if attention(r, now) in wanted),
+    # A STUCK CARD WHOSE CAUSE BOSS CAN RE-CHECK LIVE ("no worker is taking work") is shown only
+    # while that cause still holds now (cleared_causes.stale_now); the sweep withdraws the rest.
+    from .cleared_causes import stale_now
+
+    stale = stale_now(connection, rows)
+    return sorted(one_question_per_pull_request(r for r in rows if attention(r, now) in wanted
+                                                and str(r.get("id")) not in stale),
                   key=_sort_key)
 
 

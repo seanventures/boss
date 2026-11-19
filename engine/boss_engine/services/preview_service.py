@@ -3927,7 +3927,7 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         with begin(engine) as c:
             c.execute(text(
                 "UPDATE app_previews SET status='running', pid=:pid, port=:port, url=:url, "
-                "log_path=:lg WHERE id=:id"),
+                "log_path=:lg, error=NULL WHERE id=:id"),
                 {"pid": proc.pid, "port": port, "url": url, "lg": log_path, "id": preview_id})
     except Exception:  # noqa: BLE001 — best-effort; a failed respawn just leaves it 'stopped'
         _release_preview_sandbox(preview_id)
@@ -3979,8 +3979,11 @@ def reconcile_previews(engine, settings: Settings) -> dict[str, int]:
             _teardown(row, settings)
         with begin(engine) as c:
             c.execute(
-                text("UPDATE app_previews SET status=:status WHERE id=:id AND status='running'"),
-                {"status": target_status, "id": row["id"]},
+                text("UPDATE app_previews SET status=:status, error=COALESCE(error, :why) "
+                     "WHERE id=:id AND status='running'"),
+                {"status": target_status, "id": row["id"],
+                 "why": ("Stopped by BOSS: past its time limit." if target_status == "expired"
+                         else "Stopped by BOSS: it stopped answering.")},
             )
         if target_status == "expired":
             expired += 1
@@ -4495,7 +4498,9 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     except Exception as e:  # noqa: BLE001 — process gone (e.g. after an api restart): self-heal
         try:
             with begin(engine) as c2:
-                c2.execute(text("UPDATE app_previews SET status='stopped' WHERE id=:id AND status='running'"),
+                c2.execute(text("UPDATE app_previews SET status='stopped', error=COALESCE(error, "
+                                "'Stopped by BOSS: its process ended.') "
+                                "WHERE id=:id AND status='running'"),
                            {"id": preview_id})
         except Exception:
             pass

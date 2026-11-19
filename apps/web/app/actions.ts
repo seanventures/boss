@@ -3586,9 +3586,9 @@ export async function attachTargetToHostAction(
 }
 
 export async function startPreviewAction(
-  _prev: { url?: string; error?: string; note?: string } | null,
+  _prev: { url?: string; error?: string; note?: string; id?: string; starting?: boolean } | null,
   formData: FormData,
-): Promise<{ url?: string; error?: string; note?: string }> {
+): Promise<{ url?: string; error?: string; note?: string; id?: string; starting?: boolean }> {
   const runId = String(formData.get("run_id") ?? "").trim();
   if (!runId) return { error: "missing run_id" };
   try {
@@ -3597,7 +3597,12 @@ export async function startPreviewAction(
     // A same-origin gateway path: neither the preview's 127.0.0.1 port nor this server's API
     // address is reachable from the operator's browser (see lib/browser-links).
     if (res.status === "running" && res.id) {
-      return { url: previewWebHref(res.id) };
+      return { url: previewWebHref(res.id), id: res.id };
+    }
+    // STARTED, NOT FAILED: the engine builds it in the background (start_preview_async) and
+    // its link says "Starting your app…" until it serves (preview_wake).
+    if (res.status === "starting" && res.id) {
+      return { url: previewWebHref(res.id), id: res.id, starting: true };
     }
     // Library/CLI build — there is no live web app to serve, so it was "run" by executing its
     // tests. Show that outcome instead of mislabeling a passing test run as a failure.

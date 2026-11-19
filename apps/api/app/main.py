@@ -12337,6 +12337,44 @@ def _preview_served_elsewhere(request: Request, preview_id: str, path: str,
     return Response(status_code=307, headers={**isolation, "Location": target, "Cache-Control": "no-store"})
 
 
+def _preview_wake_answer(request: Request, preview_id: str, path: str,
+                         isolation: dict) -> Optional[Response]:
+    """The answer for a preview that is not running (preview_wake.wake), or None to keep the
+    gateway's own answer (it runs after all)."""
+    from boss_engine.services import preview_wake
+
+    page = request.method == "GET" and preview_wake.is_page_load(request.headers)
+    try:
+        verdict = preview_wake.wake(engine, settings, preview_id, page=page)
+    except Exception:  # noqa: BLE001 — the gateway's own answer stands
+        LOGGER.warning("preview %s: wake-on-visit failed", preview_id, exc_info=True)
+        return None
+    todo = verdict.get("do")
+    if todo == "serve":
+        return None
+    no_store = {**isolation, "Cache-Control": "no-store"}
+    if todo == "redirect":
+        on_origin = bool((request.scope.get("state") or {}).get("boss_preview_origin"))
+        where = preview_wake.sibling_location(
+            request.headers.get("host"), request.url.scheme, preview_id, str(verdict["to"]),
+            path, request.url.query, on_preview_origin=on_origin)
+        return Response(status_code=307, headers={**no_store, "Location": where})
+    if todo == "wait":
+        secs = preview_wake.REFRESH_SECONDS
+        if not page:
+            return Response(content=b"This preview is starting; try again shortly.",
+                            status_code=503, media_type="text/plain",
+                            headers={**no_store, "Retry-After": str(secs)})
+        return Response(content=preview_wake.waking_page(woke=bool(verdict.get("woke"))
+                                                         or verdict.get("id") != preview_id),
+                        status_code=503, media_type="text/html; charset=utf-8",
+                        headers={**no_store, "Retry-After": str(secs), "Refresh": str(secs)})
+    if not page:
+        return None
+    return Response(content=preview_wake.gone_page(str(verdict.get("why") or "")),
+                    status_code=409, media_type="text/html; charset=utf-8", headers=no_store)
+
+
 @app.api_route("/v1/previews/{preview_id}/web", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 @app.api_route("/v1/previews/{preview_id}/web/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 @public(reason=PublicReason.PREVIEW_CAPABILITY_URL, verifier=_identity_verifiers.preview_capability)
@@ -12364,6 +12402,12 @@ async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
         # On the preview origin the app is shown at its own paths, so its router matches them.
         serve_at_root=bool((request.scope.get("state") or {}).get("boss_preview_origin")),
     )
+    if status in (409, 502):
+        # ASLEEP, NOT GONE (preview_wake): a preview BOSS stopped wakes on a page load and says
+        # "Waking up your app…" until it serves; an old link follows its replacement.
+        woken = _preview_wake_answer(request, preview_id, path, isolation)
+        if woken is not None:
+            return woken
     set_cookies = list((headers or {}).pop("Set-Cookie", None) or [])
     # The previewed app's own CSP / CORS answers never replace the isolation.
     headers = {k: v for k, v in (headers or {}).items()

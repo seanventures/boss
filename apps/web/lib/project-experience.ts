@@ -15,6 +15,7 @@
  */
 import { parsePrdRecord, type PrdRecord } from "./prd-record";
 import { parseCiHold, type CiHold } from "./ci-hold";
+import { parseYourApp, type YourApp } from "./your-app";
 import { parseDiagnosis, parseWaitReason, type Diagnosis, type WaitReason } from "./stuck-work";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -121,6 +122,8 @@ export type ProjectCard = {
   crew: Agent[]; merged: number; building: number; week_cap_usd: number | null;
   /** 02-05 the agents acting right now (the Running tile's working faces). */
   live_agents: Agent[];
+  /** YOUR APP (engine your_app.py): its small "Open app", when the project has one. */
+  app?: YourApp | null;
 };
 export type ProjectsSummary = { items: ProjectCard[]; week_cap_usd: number | null };
 export type Repo = { full_name: string; branch: string; access: { read: boolean; write: boolean; pr: boolean }; external_url: string };
@@ -321,6 +324,8 @@ export type Overview = {
   /** The Backlog stage's list: the items its count is made of (open + accepted on the Roadmap). */
   backlog?: NextItem[];
   try_it: { url: string; demo_logins: DemoLogin[] } | null;
+  /** YOUR APP (engine your_app.py): the app, which version it shows, its preview's state. */
+  app?: YourApp | null;
   week: { at: string; label: string; kind: string; href: string; detail?: string; sha7?: string }[];
 };
 export type Captain = { agent_id: string; name: string; role_key: string; avatar: string; status: string; squad: Agent[]; last_said: string;
@@ -559,6 +564,7 @@ export const parseCard = (v: unknown): ProjectCard => {
     crew: a(x.crew).map(parseAgent).filter((g): g is Agent => g !== null),
     live_agents: a(x.live_agents).map(parseAgent).filter((g): g is Agent => g !== null),
     merged: n(x.merged), building: n(x.building), week_cap_usd: nn(x.week_cap_usd),
+    app: parseYourApp(x.app),
   };
 };
 export const parseSummary = (v: unknown): ProjectsSummary => ({ items: a(o(v).items).map(parseCard).filter((c) => c.id), week_cap_usd: nn(o(v).week_cap_usd) });
@@ -782,6 +788,7 @@ export const parseOverview = (v: unknown): Overview => {
     backlog: a(x.backlog).map(parseNext),
     errors: Object.fromEntries(Object.entries(o(x.errors)).map(([k, v]) => [k, s(v, "Couldn't load")])),
     try_it: Object.keys(ti).length ? { url: s(ti.url), demo_logins: a(ti.demo_logins).map(parseLogin) } : null,
+    app: parseYourApp(x.app),
     // A week's event opens its record in the console (a PR's build, a deploy), else where it lives.
     // sha7 is the deploy's short commit when the engine sent one. Never derived from another field.
     week: a(x.week).map((w) => {

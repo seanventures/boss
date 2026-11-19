@@ -333,7 +333,8 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
       {infraIncident ? <InfraCriticalCardView incident={infraIncident} projectId={projectId} actor={actor} orgId={orgId} sample={infra.sample} /> : null}
       {nowCards}
       <AgentsAtWorkCard view={ambient} orgId={orgId} />
-      <AppsShelf apps={appRows} attention={attention} orgId={orgId} projectId={projectId} />
+      <AppsShelf apps={appRows} attention={attention} orgId={orgId} projectId={projectId} actor={actor}
+                 openApp={pxSummary.data?.items.find((c) => c.id === projectId)?.app ?? null} />
       <details className="cc-secondary" data-testid="cc-template-details"
                onToggle={(e) => setTemplatesOpen((e.currentTarget as HTMLDetailsElement).open)}>
         <summary title="Ideas start a new app; connectors add a capability such as sign-in or payments to any app">Ideas and connectors</summary>
