@@ -168,13 +168,14 @@ def _build(c, pid, *, status="failed", fctx=None, error="boom", at=None, title="
     return rid
 
 
-def _dead_job(c, pid, kind, error, *, dedupe=None, payload=None, at=None):
+def _dead_job(c, pid, kind, error, *, dedupe=None, payload=None, at=None,
+              principal="sys_worker"):
     jid, dl = f"job_{uuid4().hex[:20]}", f"dlq_{uuid4().hex[:20]}"
     c.execute(text(
         "INSERT INTO jobs (id, project_id, kind, status, payload, last_error, dedupe_key, "
-        "on_behalf_system, created_at, updated_at) VALUES (:i, :p, :k, 'deadlettered', "
-        "CAST(:pl AS JSONB), CAST(:e AS JSONB), :d, true, :at, :at)"),
-        {"i": jid, "p": pid, "k": kind, "pl": json.dumps(payload or {}),
+        "on_behalf_of, on_behalf_system, created_at, updated_at) VALUES (:i, :p, :k, "
+        "'deadlettered', CAST(:pl AS JSONB), CAST(:e AS JSONB), :d, :who, false, :at, :at)"),
+        {"i": jid, "p": pid, "k": kind, "pl": json.dumps(payload or {}), "who": principal,
          "e": json.dumps({"message": error}), "d": dedupe, "at": at or _ago(minutes=5)})
     c.execute(text(
         "INSERT INTO deadletters (id, project_id, source_kind, source_id, reason, created_at) "
@@ -183,7 +184,7 @@ def _dead_job(c, pid, kind, error, *, dedupe=None, payload=None, at=None):
     return jid, dl
 
 
-def _workflow(c, pid, *, step_output=None, step_error="deploy failed"):
+def _workflow(c, pid, *, step_output=None, step_error="deploy failed", at=None):
     wd, wv, wr = (f"wdef_{uuid4().hex[:12]}", f"wver_{uuid4().hex[:12]}",
                   f"wfr_{uuid4().hex[:20]}")
     c.execute(text("INSERT INTO workflow_definitions (id, project_id, workflow_key, name, "
@@ -193,8 +194,9 @@ def _workflow(c, pid, *, step_output=None, step_error="deploy failed"):
                    "version, spec, content_hash, created_by) VALUES (:i, :p, :d, 1, "
                    "'{}'::jsonb, :h, 'test')"), {"i": wv, "p": pid, "d": wd, "h": wv})
     c.execute(text("INSERT INTO workflow_runs (id, project_id, workflow_definition_id, "
-                   "workflow_version_id, actor, status, error) VALUES (:i, :p, :d, :v, 'test', "
-                   "'failed', :e)"), {"i": wr, "p": pid, "d": wd, "v": wv, "e": step_error})
+                   "workflow_version_id, actor, status, error, updated_at) VALUES (:i, :p, :d, "
+                   ":v, 'test', 'failed', :e, :at)"),
+              {"i": wr, "p": pid, "d": wd, "v": wv, "e": step_error, "at": at or _ago(minutes=2)})
     c.execute(text("INSERT INTO workflow_step_runs (id, project_id, workflow_run_id, step_id, "
                    "step_kind, status, last_error, output) VALUES (:i, :p, :r, 'deploy', "
                    "'capability', 'failed', :e, CAST(:o AS JSONB))"),
@@ -344,9 +346,10 @@ def test_boss_s_own_background_job_is_requeued_by_boss_under_its_own_identity(en
         row = _owner(c, "job", f"knowledge.repository.index:kg-index:{project}")
         dead = c.execute(text("SELECT status, requeued_job_id FROM deadletters WHERE id = :d"),
                          {"d": dl}).mappings().first()
-        new = c.execute(text("SELECT status, on_behalf_system, run_after FROM jobs WHERE id = :j"),
+        new = c.execute(text("SELECT status, on_behalf_of, run_after FROM jobs WHERE id = :j"),
                         {"j": dead["requeued_job_id"]}).mappings().first()
-    assert dead["status"] == "requeued" and new["status"] == "queued" and new["on_behalf_system"]
+    assert dead["status"] == "requeued" and new["status"] == "queued"
+    assert new["on_behalf_of"] == "sys_worker", "the dead job's own principal, never wider"
     assert row["state"] == "fixing" and "attempt 1 of 2" in row["words"]
     assert fo.unowned(eng, project_id=project) == []
 
@@ -480,3 +483,107 @@ if os.environ.get("BOSS_FAILURE_OWNER_LIVE_CHECK"):          # pragma: no cover 
 def test_owner_words_never_lose_the_attempt_count():
     assert fo.fixing_words(1, "running it again") == \
         "BOSS is fixing this: attempt 1 of 2 — running it again."
+
+
+# ───────────────────────────── review #232 ─────────────────────────────
+
+
+def test_a_person_s_done_on_a_host_deploy_plans_it_and_needs_their_deploy_permission(
+        eng, project, monkeypatch):  # noqa: F811
+    from boss_engine.services import delivery_pipeline, members
+
+    got: list[dict] = []
+    monkeypatch.setattr(delivery_pipeline, "redeploy",
+                        lambda engine, settings, rid, **kw: got.append({"id": rid, **kw}) or
+                        {"id": "dep_new"})
+    ref = {"id": "dep_old", "key": "dep_old", "project_id": project, "hints": {"kind": "host"}}
+    with pytest.raises(fo.NeedsPerson):          # not a member who may deploy here
+        fo.SURFACES["deployment"].person_retry(eng, _settings(), None, ref, "user:stranger")
+    assert got == []
+    monkeypatch.setattr(members.MemberDirectoryService, "require_member",
+                        lambda self, c, pid, actor, permission=None: got.append(
+                            {"perm": permission}))
+    fo.SURFACES["deployment"].person_retry(eng, _settings(), None, ref, "user:ceo")
+    assert got[0] == {"perm": "providerops_manage"}
+    assert got[1]["id"] == "dep_old" and got[1]["execute"] is False
+
+
+def test_only_boss_s_own_dead_job_is_rerun_by_boss_a_person_s_is_their_item(eng, project):  # noqa: F811
+    from boss_engine.services.deadletters import (DeadletterRemediationBlocked,
+                                                  DeadletterRemediationService)
+
+    with eng.begin() as c:
+        _, dl = _dead_job(c, project, "knowledge.repository.index", "HTTP 500 from the indexer",
+                          dedupe=f"kg-index:{project}:p", principal="usr_someone")
+    with eng.begin() as c, pytest.raises(DeadletterRemediationBlocked):
+        DeadletterRemediationService(_settings()).requeue_job_deadletter(
+            c, deadletter_id=dl, actor=fo.ACTOR, as_boss=True)
+    fo.sweep(eng, _settings(), project_id=project)
+    with eng.begin() as c:
+        status = c.execute(text("SELECT status FROM deadletters WHERE id = :d"),
+                           {"d": dl}).scalar()
+        row = c.execute(text("SELECT state, reason FROM failure_owners WHERE project_id = :p "
+                             "AND surface = 'job'"), {"p": project}).mappings().first()
+    assert status == "open"
+    assert row["state"] == "needs_person" and "ran for a person" in row["reason"]
+
+
+@pytest.mark.parametrize("state, want", [("fixing", "fixing"), ("stuck", "needs_person")])
+def test_only_a_deploy_repair_that_is_really_under_way_counts_as_fixing(
+        eng, project, monkeypatch, state, want):  # noqa: F811
+    from boss_engine.services import deploy_repair
+
+    with eng.begin() as c:
+        tgt, dep = f"deptgt_{uuid4().hex[:12]}", f"sdep_{uuid4().hex[:12]}"
+        c.execute(text("INSERT INTO deployment_targets (id, project_id, app_name, repo, "
+                       "environment, target_kind, target_ref, created_by) VALUES (:t, :p, "
+                       "'recipe-box', 'o/r', 'staging', 'stack', 'h', 'test')"),
+                  {"t": tgt, "p": project})
+        c.execute(text("INSERT INTO stack_deployments (id, project_id, target_id, repository, "
+                       "ref, commit_sha, created_by, status, failure_reason, workflow_run_id) "
+                       "VALUES (:d, :p, :t, 'o/r', 'main', 'abc', 'test', 'failed', "
+                       "'Cannot find module /app/server.js', 'wfr_gone')"),
+                  {"d": dep, "p": project, "t": tgt})
+    monkeypatch.setattr(deploy_repair, "underway", lambda c, rows: {
+        dep: {"state": state, "word": "x", "reason": f"repair is {state}"}})
+    fo.sweep(eng, _settings(), project_id=project)
+    with eng.begin() as c:
+        row = _owner(c, "deployment", dep)
+    assert row["state"] == want
+    if want == "fixing":
+        assert row["owned_by"] == "deploy_repair"
+
+
+def test_an_old_build_is_never_rebuilt_whatever_was_tried_before(eng, project, stubbed):  # noqa: F811
+    with eng.begin() as c:
+        root = _build(c, project, fctx={"failure_class": "infra"}, error="lease_lost",
+                      at=_ago(days=5, minutes=5))
+        _build(c, project, error="lease_lost", at=_ago(days=5),
+               fctx={"failure_class": "infra", "root_run_id": root, "parent_run_id": root,
+                     "auto_infra_retry": 1})
+    fo.sweep(eng, _settings(), project_id=project)
+    with eng.begin() as c:
+        row = _owner(c, "code_task", root)
+    assert stubbed == []
+    assert row["state"] == "needs_person" and "within 72 hours" in row["reason"]
+
+
+def test_a_workflow_whose_authority_ended_is_the_person_s_and_one_from_before_a_restart_is_not_rerun(
+        eng, project, monkeypatch):  # noqa: F811
+    from boss_engine.services import code_task_service
+
+    with eng.begin() as c:
+        ended = _workflow(c, project, step_error="this run's authority has ended "
+                          "(grant_does_not_name_agent:agt_x); renew it to continue.")
+        expired = _workflow(c, project, step_error="the approval expired before anybody answered")
+        before = _workflow(c, project, step_error="KeyError: 'monitoring_pack'",
+                           at=_ago(hours=2))
+    monkeypatch.setattr(code_task_service, "PROCESS_STARTED_AT", _ago(hours=1))
+    fo.sweep(eng, _settings(), project_id=project)
+    with eng.begin() as c:
+        rows = {k: _owner(c, "workflow_run", k) for k in (ended, expired, before)}
+    assert rows[ended]["state"] == "needs_person" and rows[ended]["cause_code"] == "grant"
+    assert rows[expired]["state"] == "needs_person" and \
+        rows[expired]["cause_code"] == "approval_expired"
+    assert rows[before]["state"] == "needs_person" and "before BOSS last started" in \
+        rows[before]["reason"]

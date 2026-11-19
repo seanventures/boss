@@ -18,6 +18,12 @@ from .core import (
 from .jobs import JobLeaseService, job_run_id
 
 
+def is_boss_principal(principal_id: Any) -> bool:
+    """True when a job's principal is BOSS itself (a `sys_` system principal), not a person,
+    a service account or an agent acting for someone."""
+    return str(principal_id or "").startswith("sys_")
+
+
 class DeadletterRemediationBlocked(ValueError):
     """Expected operator-visible block (non-job source, not requeueable). Not a silent drop."""
 
@@ -869,9 +875,14 @@ class DeadletterRemediationService:
 
         acting_as: Any = contextlib.nullcontext()
         if as_boss:
-            if job["kind"] in lineage.DELEGATED_JOB_KINDS:
+            # ONLY BOSS'S OWN WORK: the dead job's principal must be BOSS itself (a `sys_`
+            # principal — sys_worker, the legacy system stamp). `on_behalf_system` is false on
+            # every laptop row, so it is not the test. A job run for a person or a service
+            # account is theirs to re-run, never BOSS's.
+            if not is_boss_principal(job.get("on_behalf_of")) or \
+                    job["kind"] in lineage.DELEGATED_JOB_KINDS:
                 raise DeadletterRemediationBlocked(
-                    "This job acts for a person; BOSS re-runs it only when that person asks.")
+                    "This job ran for a person; BOSS re-runs it only when that person asks.")
             try:
                 who = lineage.acting_for_job(dict(job)) or lineage.SYSTEM_ACTING
             except lineage.PrincipalRequired:

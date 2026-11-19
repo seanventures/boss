@@ -191,8 +191,12 @@ _PERSON_RULES: tuple[tuple[str, str, str], ...] = (
      "Sign in to the model again (or fix its key or address) in Setup › Models, then press "
      "Done — retry."),
     ("grant", r"no person's grant|no one's authority|consent_required|authority carries over|"
-              r"no grant you gave|no_authority|needs your go-ahead|needs your OK",
+              r"no grant you gave|no_authority|needs your go-ahead|needs your OK|"
+              r"authority has ended|grant_does_not_name|renew it to continue|consent|"
+              r"No granted tool",
      "Give the agent a grant for this work: press Done — retry and accept the grant it asks for."),
+    ("approval_expired", r"approval expired|expired before anybody answered",
+     "Answer its approval this time: press Done — retry and the step asks you again."),
     ("merge_conflict", r"does not merge cleanly|conflicts with its base branch|merge conflict",
      "Resolve the conflict on the pull request (or merge its base into it), then press "
      "Done — retry."),
@@ -216,6 +220,8 @@ _WHY_PERSON = {
     "toolchain": "Turning on a toolchain changes the BOSS host; a person does that.",
     "model_login": "Only a person can sign in to their model account or set its key.",
     "grant": "Only a person can let an agent act for them.",
+    "approval_expired": "The step waited for a person's approval and nobody answered; only a "
+                        "person can give it.",
     "merge_conflict": "Merging needs a choice about whose change wins; BOSS does not pick for you.",
     "host": "The host is yours: BOSS does not change its access, sudo or disk by itself.",
     "needs_human": "Only a person can do what it needs.",
@@ -534,6 +540,14 @@ class WorkflowRuns(Surface):
         return super().classify(c, item)
 
     def retry(self, engine, settings, jobs, item, *, cls, attempt, note):
+        from .code_task_service import PROCESS_STARTED_AT
+
+        if item.failed_at is not None and item.failed_at < _aware(PROCESS_STARTED_AT):
+            # The same rule as a build's automatic retry: a step that failed before BOSS last
+            # started (an upgrade or a restart) ran other code, and is a person's to re-run.
+            raise NeedsPerson("It failed before BOSS last started (an upgrade or a restart), and "
+                              "BOSS re-runs work from before a restart only when a person asks.",
+                              "Press Done — retry to run its failed step again.")
         return self._retry(engine, item.project_id, item.id, item.hints.get("step_id"),
                            actor=ACTOR, note=note)
 
@@ -609,6 +623,10 @@ class Deployments(Surface):
         ).mappings().first()
 
     def settled(self, c, item):
+        said = _underway(c, item)
+        if said and str(said.get("state") or "") == "fixed":
+            return Said(RESOLVED, str(said.get("reason") or "BOSS fixed it and deployed again."),
+                        by="deploy_repair")
         newer = self._newer(c, item)
         if newer is not None and newer["status"] in ("healthy", "succeeded", "live", "active"):
             return Said(RESOLVED, f"A later deploy ({newer['id']}) went live.")
@@ -630,20 +648,13 @@ class Deployments(Surface):
     def held(self, c, item):
         # THE DEPLOY'S OWN AGENT FIRST (deploy_repair.underway, fix/agents-fix-failed-deploys-
         # themselves): what it says BOSS is doing about this deployment is the one answer.
-        from . import deploy_repair
-
-        underway = getattr(deploy_repair, "underway", None)
-        if callable(underway) and item.hints.get("kind") == "stack":
-            try:
-                with c.begin_nested():
-                    said = underway(c, [{**item.hints, "status": "failed", "error": None,
-                                         "failure_reason": item.error, "log_tail": "",
-                                         "finished_at": item.failed_at}]).get(item.id)
-            except Exception:  # noqa: BLE001 — its reading never costs this one
-                said = None
-            if said:
-                return Said(FIXING, str(said.get("reason") or said.get("word") or ""),
-                            by="deploy_repair")
+        said = _underway(c, item)
+        # ONLY WHAT IS REALLY UNDER WAY is fixing. `stuck` (its repair build stopped) is nobody's
+        # work and falls through; `fixed` resolves in `settled`; a fixed version waiting for
+        # approval is that approval's card, below.
+        if said and str(said.get("state") or "") in _UNDERWAY_ACTIVE:
+            return Said(FIXING, str(said.get("reason") or said.get("word") or ""),
+                        by="deploy_repair")
         newer = self._newer(c, item)
         if newer is not None and newer["status"] == "awaiting_approval":
             card = _open_decision(c, newer["decision_id"])
@@ -702,11 +713,17 @@ class Deployments(Surface):
 
     def person_retry(self, engine, settings, jobs, ref, actor):
         hints = ref.get("hints") or {}
+        # THE REDEPLOY ROUTE'S OWN RULE: the person who answered may deploy to this project
+        # (deployment:create under identity; providerops_manage as a member otherwise).
+        with engine.begin() as c:
+            require_deploy_permission(c, settings, str(ref.get("project_id") or ""), actor)
         if hints.get("kind") == "host":
             from .delivery_pipeline import redeploy
 
-            got = redeploy(engine, settings, str(ref["id"]), actor=actor)
-            return f"deploy {got.get('id') or ''}"
+            # A PLAN, never a direct execution: a new run and ChangeSet, approved then applied
+            # (the same as POST /v1/delivery/deployments/{id}/redeploy).
+            got = redeploy(engine, settings, str(ref["id"]), actor=actor, execute=False)
+            return f"deploy {got.get('id') or got.get('deployment_run_id') or ''}, planned"
         return self._plan(engine, settings, ref.get("project_id"), hints, actor=actor)
 
     def still_failed(self, c, ref):
@@ -715,6 +732,55 @@ class Deployments(Surface):
         status = c.execute(text(f"SELECT status FROM {table} WHERE id = :i"),
                            {"i": ref["id"]}).scalar()
         return True if status == "failed" else False
+
+
+#: deploy_repair.underway's states in which an agent is genuinely acting on the deployment.
+_UNDERWAY_ACTIVE = ("fixing", "retrying", "looking", "deploying_fix")
+
+
+def _underway(c: Any, item: Item) -> Optional[dict[str, Any]]:
+    """What the deploy's own agent says it is doing (deploy_repair.underway, #229), or None."""
+    from . import deploy_repair
+
+    if item.hints.get("kind") != "stack" or not item.hints.get("workflow_run_id"):
+        return None
+    try:
+        with c.begin_nested():
+            return deploy_repair.underway(c, [{**item.hints, "status": "failed", "error": None,
+                                               "failure_reason": item.error, "log_tail": "",
+                                               "finished_at": item.failed_at}]).get(item.id)
+    except Exception:  # noqa: BLE001 — its reading never costs this one
+        return None
+
+
+def require_deploy_permission(c: Any, settings: Any, project_id: str, actor: str) -> None:
+    """Raise NeedsPerson unless `actor` may plan a deploy in the project: the catalogue's
+    deployment:create through the PDP when identity is enforced (the route's @permit), else the
+    member permission providerops_manage (the route's require_project_actor)."""
+    from ..identity import lineage
+
+    ctx = lineage.current_context()
+    if lineage._enforced():  # noqa: SLF001 — the one mode source
+        from ..identity import authz
+        from ..identity.permissions_gen import P
+        from ..identity.scope import ResolvedScope
+
+        if ctx is None:
+            raise NeedsPerson("Only a signed-in person who may deploy here can redeploy it.")
+        decision = authz.check(ctx, P.DEPLOYMENT_CREATE,
+                               ResolvedScope.in_project(ctx.principal.org_id, project_id), db=c)
+        if not decision.allowed:
+            raise NeedsPerson("You may not deploy in this project; ask someone who may "
+                              "(deployment:create) to press Done — retry.")
+        return
+    from .members import (MemberDirectoryService, ProjectMemberNotFoundError,
+                          ProjectMemberPermissionError)
+
+    try:
+        MemberDirectoryService(settings).require_member(c, project_id, actor,
+                                                        permission="providerops_manage")
+    except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as refused:
+        raise NeedsPerson(f"You may not deploy in this project: {refused}") from None
 
 
 class Previews(Surface):
@@ -833,7 +899,7 @@ class Jobs(Surface):
     def failed(self, c, since, pid=None):
         rows = c.execute(text(
             "SELECT d.id AS dl_id, d.created_at, d.reason, j.id, j.project_id, j.kind, "
-            "j.dedupe_key, j.payload, j.last_error, j.on_behalf_system "
+            "j.dedupe_key, j.payload, j.last_error, j.on_behalf_of "
             "FROM deadletters d JOIN jobs j ON j.id = d.source_id "
             "WHERE d.status = 'open' AND d.source_kind = 'job' AND d.created_at >= :since "
             "AND j.kind <> ALL(:owned) AND (CAST(:pid AS text) IS NULL OR j.project_id = :pid) "
@@ -854,7 +920,7 @@ class Jobs(Surface):
                             _aware(r["created_at"]),
                             {"job_id": r["id"], "kind": r["kind"], "dedupe_key": r["dedupe_key"],
                              "subject": subject, "payload": payload,
-                             "system": bool(r["on_behalf_system"])}))
+                             "principal": r["on_behalf_of"]}))
         # ONE ITEM PER LINEAGE: the newest dead letter of it.
         seen: dict[str, Item] = {}
         for it in out:
@@ -956,10 +1022,12 @@ class Jobs(Surface):
 
     def retry(self, engine, settings, jobs, item, *, cls, attempt, note):
         from ..identity.lineage import DELEGATED_JOB_KINDS
+        from .deadletters import is_boss_principal
 
-        if item.hints["kind"] in DELEGATED_JOB_KINDS and not item.hints.get("system"):
-            raise NeedsPerson("This job acts for a person; BOSS runs it again only under their "
-                              "OK.", "Press Done — retry to run it again as you.")
+        if not is_boss_principal(item.hints.get("principal")) or \
+                item.hints["kind"] in DELEGATED_JOB_KINDS:
+            raise NeedsPerson("This job ran for a person, so BOSS runs it again only when they "
+                              "say so.", "Press Done — retry to run it again as you.")
         delay = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS)) - 1]
         return self._requeue(engine, settings, item.id, actor=ACTOR, as_boss=True,
                              run_after_seconds=delay)
@@ -1371,7 +1439,8 @@ def _own(engine: Any, settings: Any, jobs: Any, surface: Surface, item: Item, no
                                f"{rec.get('reasoning') or cause}", 600)
             return _hand_over(c, item, cls=cls, cause_code=cause_code, cause=cause,
                               action=action, reason=reason, attempts=made, now=now)
-        if old and made == 0:
+        if old:
+            # OLD WORK IS NEVER RE-RUN BY ITSELF, whatever was tried before (review #232).
             return _hand_over(
                 c, item, cls=cls, cause_code=f"{cause_code}:old", cause=cause,
                 action="Press Done — retry to run it again now.",
