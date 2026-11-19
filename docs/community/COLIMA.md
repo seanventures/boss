@@ -18,6 +18,11 @@ plugins discoverable. Preserve existing Docker configuration and credentials.
 Old plugins in `~/.docker/cli-plugins` can shadow Homebrew's plugins; check the
 versions below and back up old links before changing them.
 
+If a build reports that `docker-credential-osxkeychain` is missing, an existing
+Docker configuration selects the macOS keychain helper but the executable is
+absent. Install it with `brew install docker-credential-helper`; do not remove
+stored credentials or replace the entire Docker configuration.
+
 Create a dedicated profile. These are starting allocations, not minimums; the
 virtual disk grows as used and still needs sufficient free space on the Mac.
 
