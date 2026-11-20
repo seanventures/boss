@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Iterable, Mapping
+from urllib.parse import urlsplit
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +100,18 @@ SECRET_SHAPED: tuple[str, ...] = (
 EXTRA_ALLOW_VAR = "BOSS_AGENT_ENV_ALLOW"
 
 
+def npm_registry_environment(source: Mapping[str, str]) -> dict[str, str]:
+    registry = source.get("BOSS_NPM_REGISTRY", "").strip()
+    if not registry:
+        return {}
+    parsed = urlsplit(registry)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username is not None
+            or parsed.password is not None or parsed.query or parsed.fragment
+            or any(character.isspace() for character in registry)):
+        raise ValueError("BOSS_NPM_REGISTRY must be an HTTPS registry URL without credentials, query, or fragment")
+    return {"npm_config_registry": registry, "npm_config_strict_ssl": "true"}
+
+
 def _extra_allowed(source: Mapping[str, str]) -> set[str]:
     raw = (source.get(EXTRA_ALLOW_VAR) or "").strip()
     return {n.strip() for n in raw.split(",") if n.strip()} if raw else set()
@@ -139,6 +152,11 @@ def agent_environment(
     for key, value in (overrides or {}).items():
         if is_allowed(key, extra):
             kept[key] = value
+    registry_env = npm_registry_environment(source)
+    if registry_env:
+        kept.pop("NPM_CONFIG_REGISTRY", None)
+        kept.pop("NPM_CONFIG_STRICT_SSL", None)
+        kept.update(registry_env)
 
     # A BUILD's cross-app links (app_links.run_env, F5 §5.3): BOSS_LINK_<ALIAS>_* computed for
     # THIS run when it started, added after the filter on purpose (they are values BOSS minted

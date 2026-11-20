@@ -49,7 +49,7 @@ _SHELL_ENV_KEYS = frozenset({
     "HOSTNAME", "CI", "LANG", "LC_ALL", "LC_CTYPE", "SSL_CERT_FILE",
     "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "CURL_CA_BUNDLE",
     "GIT_TERMINAL_PROMPT", "npm_config_cache", "PLAYWRIGHT_BROWSERS_PATH",
-    "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "npm_config_registry", "npm_config_strict_ssl",
 })
 
 

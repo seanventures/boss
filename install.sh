@@ -1265,6 +1265,7 @@ cat > "$_new_env" <<EOF
 # Keep this file private. Do not commit.
 
 BOSS_EDITION=community
+BOSS_NPM_REGISTRY=${BOSS_NPM_REGISTRY:-}
 # This install's Compose project: boss, upgrades and reruns act on it (a second install on this
 # machine has its own name, so it never touches this one's containers or volumes).
 COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
