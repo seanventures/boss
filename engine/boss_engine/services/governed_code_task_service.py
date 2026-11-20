@@ -385,6 +385,10 @@ def classify_gate_faults(
     seat_of = {"code_review_passed": "review_code", "consistent": "consistency_check",
                "security_clean": "security_check", "no_security_findings": "security_check"}
     for gate in failing:
+        if gate == "written_tests_pass" and verification_target.install_environment_failure(
+                evidence.get("install_failure")):
+            faults[gate] = "HARNESS"
+            continue
         if seat_of.get(gate) in hollow:
             faults[gate] = "HARNESS"
             continue
@@ -7284,14 +7288,22 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         def _install_timeout() -> int:
             return max(300, int(getattr(settings, "sandbox_validation_timeout_seconds", 120) or 120))
 
+        _install_circuit = verification_target.InstallCircuitBreaker()
+
         def _boss_install(app_cwd, prep):
             """BOSS's one install (NPM_INSTALL_CMD), the command every gate runs."""
-            install = sandbox.run(
-                str(prep.get("install_command") or verification_target.NPM_INSTALL_CMD),
-                cwd=str(app_cwd),
-                timeout=_install_timeout(),
+            command = str(prep.get("install_command") or verification_target.NPM_INSTALL_CMD)
+            install, reused = _install_circuit.run(
+                command, app_cwd,
+                lambda: sandbox.run(command, cwd=str(app_cwd), timeout=_install_timeout()),
             )
-            _emit_cmd("install dependencies", install)
+            if reused:
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.install_retry_suppressed", "boss",
+                               "code_task_run", run_id, {"command": command,
+                               "reason": "prior installation timeout or infrastructure failure"})
+            else:
+                _emit_cmd("install dependencies", install)
             return install
 
         def _qa_static_check(files) -> list[str]:
@@ -8938,6 +8950,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                     **escalation_route_record(_before, r2),
                                     "instead": "warm_fix_round"})
             repair_attempts += 1
+            if verification_target.install_environment_failure(_install_fail[0]):
+                break
             # Evidence for the router: the next implement boundary may move up a tier
             # (Smart mode's escalation rules; Fixed mode ignores the ledger).
             stage_router.signal("implement", "tests_failed")
@@ -10461,6 +10475,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                         template_evidence=_tpl_evidence(),
                                         coder_owned_secrets=_coder_owned_secrets())
             _fix_rounds_run = 0
+            if verification_target.install_environment_failure(_install_fail[0]):
+                inrun_max = 0
             if _recheck:
                 inrun_max = 0          # a re-check reports; it never runs a fix round
             # THE LIGHT LANE: at most one fix round below production (quality_bar.fix_rounds).
@@ -11000,6 +11016,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             max_repair_rounds = _quality_bar.fix_rounds(getattr(gates, "bar", _qbar),
                                                         max_repair_rounds)
             gate_faults = classify_gate_faults(failing=failing, evidence=evidence)
+            if verification_target.install_environment_failure(_install_fail[0]):
+                evidence["install_failure"] = _install_fail[0]
+                gate_faults = classify_gate_faults(failing=failing, evidence=evidence)
             # Non-final decomposition slices suppress the PR and advance the chain on
             # completed_no_pr. They must NOT take ship_with_dissent: that path marks the
             # slice completed, skips the deferred-findings follow-up (spawned only after a
@@ -11148,6 +11167,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     fix_round_ran=_fix_rounds_run > 0,
                     open_pr_when_failing=_open_when_failing,
                 )
+            if action == "inconclusive" and verification_target.install_environment_failure(
+                    _install_fail[0]):
+                action = "block"
             if action == "inconclusive":
                 # The checks never finished, so nothing is known about the code. Re-run the
                 # CHECK with an escalated budget — never the coding agent. Bounded; if it is
@@ -11320,6 +11342,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # card a person answers with a reason. Both terminals record it: a PR with
                 # failing checks is one thing, whichever rule let it open.
                 _details = {}
+                if verification_target.install_environment_failure(_install_fail[0]):
+                    _details["written_tests_pass"] = verification_target.install_repair_evidence(
+                        _install_fail[0])[:700]
                 if "app_serves" in failing:
                     _details["app_serves"] = _app_serves_sentence(app_serves_record)[:700]
                 if _blockers:

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -165,9 +165,39 @@ def install_repair_evidence(failure: dict, output: str = "") -> str:
     command BOSS runs, npm's error text, and the one instruction."""
     how = "timed out" if failure.get("timed_out") else f"exit {failure.get('exit_code')}"
     tail = "\n".join(_meaningful_lines(output)[-VERIFY_FAILURE_LINES:])
+    instruction = ("Dependency installation could not complete. Inspect registry connectivity, "
+                   "approved CA trust, and install logs before retrying. No application test "
+                   "result is available; do not change application code to bypass this failure."
+                   if install_environment_failure(failure) else INSTALL_REPAIR_INSTRUCTION)
     return (f"BOSS's dependency install failed, so nothing else ran: `{failure.get('command')}` "
-            f"({how}) in a clean sandbox.\n{tail}\n\n{INSTALL_REPAIR_INSTRUCTION} Then run "
+            f"({how}) in a clean sandbox.\n{tail}\n\n{instruction} Then run "
             f"exactly `{failure.get('command')}` yourself and make sure it passes.")
+
+
+def install_environment_failure(failure) -> bool:
+    if not isinstance(failure, dict):
+        return False
+    return bool(failure.get("timed_out") or any(code in str(failure.get("summary", "")) for code in (
+        "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "SELF_SIGNED_CERT_IN_CHAIN",
+        "UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "CERT_HAS_EXPIRED", "EAI_AGAIN", "ENETUNREACH",
+    )))
+
+
+class InstallCircuitBreaker:
+    def __init__(self):
+        self.failures = {}
+
+    def run(self, command, cwd, execute):
+        key = (str(cwd), command)
+        if key in self.failures:
+            previous = self.failures[key]
+            return replace(previous, duration_ms=0, stderr=(previous.stderr or "") +
+                           "\n[ boss ] Dependency install retry suppressed for this run after "
+                           "an installation timeout or infrastructure failure. Tests did not run.\n"), True
+        result = execute()
+        if install_environment_failure(install_failure(result)):
+            self.failures[key] = result
+        return result, False
 
 
 #: How many times one hand-off may go back to the warm session for BOSS's install alone (the
@@ -210,7 +240,7 @@ def install_rounds(check, ask, *, rounds: int = INSTALL_FIX_ROUNDS, over_budget=
         emit("code_task.install_failed", {"round": round_i, "command": failure.get("command"),
                                           "summary": failure.get("summary"),
                                           "boss_added": failure.get("boss_added") or []})
-        if round_i > rounds or over_budget():
+        if install_environment_failure(failure) or round_i > rounds or over_budget():
             return False
         if not ask(install_fix_prompt(failure, output, round_i)):
             return False
@@ -1824,4 +1854,3 @@ def missing_package_note(output: Any) -> str:
             "or the Python requirements) at a version that works with the code; BOSS's install "
             "step then installs it before the tests run again. Do not remove or skip the tests "
             "that need it.")
-
