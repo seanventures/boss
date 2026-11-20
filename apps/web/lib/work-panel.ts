@@ -21,14 +21,23 @@ import { changeRef } from "./repo-links";
 export type FlowState = "done" | "live" | "wait" | "todo" | "failed" | "skipped";
 export type FlowNote = { tone: "boss" | "you"; title: string; text: string; action?: { label: string; href: string } | null };
 export type FlowNode = {
-  key: "spec" | "build" | "review" | "merge" | "staging" | "production";
+  /** Code work: spec | build | review | merge | staging | production; any other work: its first step's id. */
+  key: string;
   name: string; state: FlowState;
   /** The face on the ring: an agent, or the person (`you`). */
   agent: Agent | null; you: boolean;
   /** The mono line under the name ("PRD agreed · 6 m") and the dim line ("Juno + panel of 5"). */
   sub: string; who: string;
   note: FlowNote | null;
+  /** The node's own words on hover: the steps in it and what the lead step said. */
+  title?: string;
 };
+
+/** Work that changes an app (a build, a change, a deploy): the code-delivery stations. Any other
+ *  workflow run (an investigation, a job) is drawn as its own steps and told by its outcome. */
+export function isCodeWork(w: Pick<WorkItem, "shape">): boolean {
+  return !w.shape || w.shape === "code";
+}
 
 /** "6 m", "1 h 6 m", "45 s" — a duration in the panel's mono words. */
 export function durationWords(seconds: number | null | undefined): string {
@@ -92,8 +101,36 @@ function storyStage(story: WorkStory | null, key: string) {
   return story?.stages.find((s) => s.key === key);
 }
 
-/** The six nodes of "Who did what". */
-export function flowNodes({ w, story, next, deployments, crew = [], nowMs = Date.now(), hhmm = (x) => x }: Ctx): FlowNode[] {
+/** "Who did what" for a workflow run that changes no app: the workflow's own steps (engine
+ *  work_outcome.step_flow, about six nodes), each with its agent or the person who decided. */
+export function workflowNodes({ w, next, hhmm = (x) => x }: Pick<Ctx, "w" | "next" | "hhmm">): FlowNode[] {
+  return w.flow.map((f) => {
+    const state = toFlow(f.state);
+    const more = (f.steps?.length ?? 0) > 1 ? `${f.steps!.length} steps` : "";
+    const decided = f.you
+      ? [f.decided_by, f.decided ? f.decided.replace(/_/g, " ") : "", f.decided_at ? hhmm(f.decided_at) : ""].filter(Boolean).join(" ")
+      : "";
+    let note: FlowNote | null = null;
+    if (state === "wait" && next) note = { tone: "you", title: "Your move", text: next.words };
+    else if (state === "failed" && w.why) note = { tone: w.why.who === "you" ? "you" : "boss", title: w.why.who === "you" ? "Your move" : "BOSS is fixing", text: w.why.words };
+    return {
+      key: f.key || f.label, name: f.label, state, agent: f.you ? null : f.agent ?? null, you: !!f.you,
+      sub: f.you ? (state === "wait" ? "waiting on you" : decided || "") : [durationWords(f.duration_s), more].filter(Boolean).join(" · "),
+      who: f.you ? (state === "wait" ? "Only a person decides" : "") : f.agent?.name ?? "",
+      note,
+      title: [(f.steps?.length ?? 0) > 1 ? f.steps!.join(" → ") : "", f.sub ?? ""].filter(Boolean).join("\n"),
+    };
+  });
+}
+
+/** The nodes of "Who did what": the code-delivery stations for code work, else the workflow's own steps. */
+export function flowNodes(ctx: Ctx): FlowNode[] {
+  if (!isCodeWork(ctx.w) && ctx.w.flow.length) return workflowNodes(ctx);
+  return codeNodes(ctx);
+}
+
+/** The six nodes of code-delivery work. */
+function codeNodes({ w, story, next, deployments, crew = [], nowMs = Date.now(), hhmm = (x) => x }: Ctx): FlowNode[] {
   const mp = mergeWaitOf(w);
   const fix = mp?.fixing ?? null;
   const built = story?.explained?.built ?? null;
@@ -240,6 +277,15 @@ export function stateSentence(w: WorkItem, next: NextStep | null): { lead: strin
     }
     return { lead: "Needs you.", tone: "amber", rest: next.words };
   }
+  if (!isCodeWork(w)) {
+    const now = w.flow.find((f) => f.state === "now");
+    if (w.state === "running") return { lead: "BOSS is working.", tone: "mint", rest: w.why?.words || (now ? `On ${now.label}.` : "") };
+    if (w.state === "done") return { lead: "Done.", tone: "green", rest: w.outcome?.line ? `${w.outcome.line}.`.replace(/([.…])\.$/, "$1") : "" };
+    if (w.state === "failed") {
+      const at = w.flow.find((f) => f.state === "failed");
+      return { lead: "Failed.", tone: "red", rest: [at ? `At ${at.label}.` : "", w.why?.words || ""].filter(Boolean).join(" ") || w.detail };
+    }
+  }
   if (w.state === "running") return { lead: "BOSS is working.", tone: "mint", rest: w.why?.words || "" };
   if (w.state === "stalled") return { lead: "Stalled.", tone: "amber", rest: w.why?.words || "Nothing is working on it." };
   if (w.state === "failed") return { lead: "Failed.", tone: "red", rest: w.detail };
@@ -253,6 +299,14 @@ export function stateSentence(w: WorkItem, next: NextStep | null): { lead: strin
 /** Three questions for Helm, fixed per state (spec §5). */
 export function helmSuggestions(w: WorkItem, opts: { noProdHost?: boolean } = {}): string[] {
   const out: string[] = [];
+  if (!isCodeWork(w)) {
+    if (w.state === "needs_you") out.push("What should I decide here?");
+    if (w.state === "running") out.push("What is BOSS doing right now?");
+    if (w.state === "failed" || w.state === "stalled") out.push("Why did it stop?");
+    if (w.shape === "investigation") out.push("What was the root cause?", "What evidence backs it?", "What was done about it?");
+    else out.push("What did it produce?", "How was it checked?");
+    return Array.from(new Set(out)).slice(0, 3);
+  }
   const mp = mergeWaitOf(w);
   if (w.state === "needs_you" && mp) out.push("Is it safe to merge now?");
   if (w.state === "running") out.push("What is BOSS doing right now?");

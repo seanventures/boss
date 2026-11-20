@@ -253,8 +253,9 @@ export type WorkItem = {
   where: string;
   /** Planned work: THE start door with its body (Start now), and the re-rank route (drag). */
   start: Accept | null; move: { href: string; method: string } | null;
-  /** The onboarding row: its mini flow (Discover → Ready → Backlog), what waits on you, its drawer. */
-  flow: { key: string; label: string; state: StepState }[]; waiting: { key: string; label: string }[]; onboarding: string;
+  /** The onboarding row: its mini flow (Discover → Ready → Backlog), what waits on you, its drawer.
+   *  A workflow run that changes no app: ITS OWN steps, condensed (engine work_outcome.step_flow). */
+  flow: WorkFlowNode[]; waiting: { key: string; label: string }[]; onboarding: string;
   /** The ticket it came from or works on (BOSSAPP-1047): the binding's provider, key, link,
    *  status and sync state; null when it is no ticket's. */
   ticket?: WorkTicket | null;
@@ -268,6 +269,36 @@ export type WorkItem = {
   /** The change's own preview (the build whose merge is open), shaped as the Your app card's:
    *  Open preview / Recreate preview beside the merge. null when no attempt has one to show. */
   preview_app?: YourApp | null;
+  /** What the work is (engine work_outcome): `code` changes an app (Spec → … → Production);
+   *  `investigation` / `job` run a workflow drawn as its own steps. Absent → code. */
+  shape?: WorkShape;
+  /** What an investigation found or a job produced, from the run's step outputs. */
+  outcome?: WorkOutcome | null;
+};
+export type WorkShape = "code" | "investigation" | "job";
+/** One node of a workflow's own steps (several steps merge into one when there are many). */
+export type WorkFlowNode = {
+  key: string; label: string; state: StepState;
+  agent?: Agent | null; you?: boolean; duration_s?: number | null; started_at?: string;
+  /** The lead step's own sentence; every step name in the node. */
+  sub?: string; steps?: string[];
+  /** A person's decision: what they said, who, when. */
+  decided?: string; decided_by?: string; decided_at?: string;
+};
+export type OutcomeEntry = { step: string; text: string; state: string; person: boolean; who: string; at: string };
+export type WorkOutcome = {
+  shape: "investigation" | "job";
+  asked: { text: string; trigger: string; trigger_step: string; facts: { label: string; value: string }[] };
+  found: { step: string; text: string; short: string; confidence: number | null; rationale: string; refs: string[]; cited: number;
+           others: { text: string; confidence: number | null }[] } | null;
+  evidence: { step: string; text: string }[];
+  remediation: OutcomeEntry[];
+  produced: { step: string; text: string }[];
+  counts: { label: string; value: number }[];
+  links: { label: string; href: string }[];
+  run_href: string;
+  /** The one-line outcome the header and the row say. */
+  line: string;
 };
 export type WorkTicket = {
   provider: string; key: string; url: string; status: string; status_category: string; sync_status: string; connection_id: string;
@@ -636,7 +667,9 @@ export const parseWorkItem = (v: unknown): WorkItem => {
     origin: s(x.origin), origin_label: s(x.origin_label), next_up: x.next_up === true,
     lane: x.lane === "next" || x.lane === "later" ? x.lane : "", rank: nn(x.rank), where: s(x.where),
     start: parseAccept(x.start), move: o(x.move).href ? { href: s(o(x.move).href), method: s(o(x.move).method, "POST") } : null,
-    flow: a(x.flow).map((f) => ({ key: s(o(f).key), label: s(o(f).label), state: oneOf(o(f).state, STEP_STATES, "todo") })),
+    flow: a(x.flow).map(parseFlowNode),
+    ...(x.shape === "investigation" || x.shape === "job" || x.shape === "code" ? { shape: x.shape } : {}),
+    ...(o(x.outcome).shape ? { outcome: parseOutcome(x.outcome) } : {}),
     waiting: a(x.waiting).map((z) => ({ key: s(o(z).key), label: s(o(z).label) })).filter((z) => z.label),
     onboarding: s(l.onboarding),
     ticket: parseWorkTicket(x.ticket),
@@ -645,6 +678,42 @@ export const parseWorkItem = (v: unknown): WorkItem => {
     ...(s(x.title) ? { title: s(x.title) } : {}),
     ...(s(x.workflow) ? { workflow: s(x.workflow) } : {}),
     preview_app: parseYourApp(x.preview_app ? { ...o(x.preview_app), name: s(x.label) } : null),
+  };
+};
+const parseFlowNode = (v: unknown): WorkFlowNode => {
+  const f = o(v);
+  return {
+    key: s(f.key), label: s(f.label), state: oneOf(f.state, STEP_STATES, "todo"),
+    ...(f.agent !== undefined ? { agent: parseAgent(f.agent) } : {}),
+    ...(f.you === true ? { you: true } : {}),
+    ...(f.duration_s !== undefined ? { duration_s: nn(f.duration_s) } : {}),
+    ...(s(f.started_at) ? { started_at: s(f.started_at) } : {}),
+    ...(s(f.sub) ? { sub: s(f.sub) } : {}),
+    ...(Array.isArray(f.steps) ? { steps: a(f.steps).map((z) => s(z)).filter(Boolean) } : {}),
+    ...(s(f.decided) ? { decided: s(f.decided) } : {}), ...(s(f.decided_by) ? { decided_by: s(f.decided_by) } : {}),
+    ...(s(f.decided_at) ? { decided_at: s(f.decided_at) } : {}),
+  };
+};
+const parseEntry = (v: unknown): OutcomeEntry => {
+  const e = o(v);
+  return { step: s(e.step), text: s(e.text), state: s(e.state), person: e.person === true, who: s(e.who), at: s(e.at) };
+};
+export const parseOutcome = (v: unknown): WorkOutcome | null => {
+  const x = o(v); const ask = o(x.asked); const f = o(x.found);
+  if (x.shape !== "investigation" && x.shape !== "job") return null;
+  return {
+    shape: x.shape,
+    asked: { text: s(ask.text), trigger: s(ask.trigger), trigger_step: s(ask.trigger_step),
+             facts: a(ask.facts).map((z) => ({ label: s(o(z).label), value: s(o(z).value) })).filter((z) => z.value) },
+    found: s(f.text) ? { step: s(f.step), text: s(f.text), short: s(f.short), confidence: nn(f.confidence), rationale: s(f.rationale),
+                         refs: a(f.refs).map((z) => s(z)).filter(Boolean), cited: n(f.cited),
+                         others: a(f.others).map((z) => ({ text: s(o(z).text), confidence: nn(o(z).confidence) })).filter((z) => z.text) } : null,
+    evidence: a(x.evidence).map((z) => ({ step: s(o(z).step), text: s(o(z).text) })).filter((z) => z.text),
+    remediation: a(x.remediation).map(parseEntry).filter((z) => z.text),
+    produced: a(x.produced).map((z) => ({ step: s(o(z).step), text: s(o(z).text) })).filter((z) => z.text),
+    counts: a(x.counts).map((z) => ({ label: s(o(z).label), value: n(o(z).value) })).filter((z) => z.label),
+    links: a(x.links).map((z) => ({ label: s(o(z).label), href: s(o(z).href) })).filter((z) => z.href),
+    run_href: s(x.run_href), line: s(x.line),
   };
 };
 const parseWorkTicket = (v: unknown): WorkTicket | null => {
@@ -699,7 +768,7 @@ export function attemptsPill(w: Pick<WorkItem, "attempt_count" | "followups" | "
   if (w.followups && !w.retries) return `↻ ${w.followups} follow-up${w.followups === 1 ? "" : "s"}`;
   return `${w.attempt_count} attempts`;
 }
-export const KIND_WORDS: Record<string, string> = { feature: "Feature", bug: "Bug", fix: "Fix", ticket: "Ticket", chore: "Chore", incident: "Incident", setup: "Setup" };
+export const KIND_WORDS: Record<string, string> = { feature: "Feature", bug: "Bug", fix: "Fix", ticket: "Ticket", chore: "Chore", incident: "Incident", setup: "Setup", job: "Job" };
 export const ATTEMPT_WORDS: Record<AttemptState, string> = {
   planned: "Queued", running: "Running", stalled: "Stalled", handed_on: "Earlier attempt", needs_you: "Needs you", done: "Done", failed: "Failed",
 };
