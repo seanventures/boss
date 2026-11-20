@@ -1,4 +1,5 @@
 from dataclasses import replace
+import pytest
 
 from boss_engine.services import governed_code_task_service as gov
 from boss_engine.services import verification_target as vt
@@ -63,3 +64,11 @@ def test_install_timeout_opens_failing_draft_without_cold_code_repair():
 def test_real_test_failure_stays_work():
     assert gov.classify_gate_faults(failing=["written_tests_pass"], evidence={}) == {
         "written_tests_pass": "WORK"}
+
+
+@pytest.mark.parametrize("code", ["E401", "E403"])
+def test_registry_access_failure_is_not_a_code_repair(code):
+    failure = vt.install_failure(result(timed_out=False, exit_code=1,
+                                       stderr=f"npm error code {code}"))
+    assert vt.install_environment_failure(failure)
+    assert not vt.install_rounds(lambda: (failure, ""), lambda prompt: 1 / 0)

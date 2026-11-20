@@ -180,6 +180,7 @@ def install_environment_failure(failure) -> bool:
     return bool(failure.get("timed_out") or any(code in str(failure.get("summary", "")) for code in (
         "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "SELF_SIGNED_CERT_IN_CHAIN",
         "UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "CERT_HAS_EXPIRED", "EAI_AGAIN", "ENETUNREACH",
+        "E401", "E403",
     )))
 
 
