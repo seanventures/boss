@@ -9,25 +9,24 @@
  * count); Planned is Marshal's rank, re-ranked by drag or Alt+↑/↓ and saved through the plan
  * route. A row opens its drawer in place. List or Board.
  */
-import { changeRef, changeWords, projectIsLocal } from "../../lib/repo-links";
-import { ChangeLink } from "../change-link";
+import { changeWords, projectIsLocal } from "../../lib/repo-links";
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  ArrowBendDownRight, ArrowDown, ArrowUp, Bug, CaretDown, Check, Code, Compass, Database, DotsSixVertical, EnvelopeSimple, FlowArrow, GitMerge,
-  GithubLogo, Globe, HandWaving, Kanban, Lightning, ListBullets, PauseCircle, Play,
-  TerminalWindow, Ticket, Tray, TreeStructure, XCircle,
+  ArrowDown, ArrowUp, Bug, Check, Compass, Database, DotsSixVertical, EnvelopeSimple, FlowArrow, GitMerge,
+  GithubLogo, HandWaving, Kanban, Lightning, ListBullets, PauseCircle, Play,
+  Ticket, Tray, TreeStructure, XCircle,
 } from "@phosphor-icons/react";
 import { WorkTreeView } from "./work-tree";
 import { InboxView } from "./work-inbox";
 
 import { GatedButton, useGate } from "../../components/gated";
 import {
-  ATTEMPT_WORDS, KIND_WORDS, WORK_ORDER, WORK_WORDS, attemptsPill, movePlanItem, needsYouCards,
+  KIND_WORDS, WORK_ORDER, WORK_WORDS, attemptsPill, movePlanItem, needsYouCards,
   pxHref, reRank, runAccept, startWork, workWhen, writePxUrl,
-  type Attempt, type NeedsYou, type WorkItem, type WorkState,
+  type NeedsYou, type WorkItem, type WorkState,
 } from "../../lib/project-experience";
-import { localWith, stampLocal, whenLocal } from "../../lib/local-time";
-import { Empty, Face, Flow, Loading, Failed, EngineNotReady, PxLink, Said, Stations, Cost } from "./kit";
+import { stampLocal, whenLocal } from "../../lib/local-time";
+import { Empty, Face, Flow, Loading, Failed, EngineNotReady, PxLink, Said, Stations } from "./kit";
 import { NewWorkBar } from "./new-work";
 import { RowChipsProvider, RowTicket, TicketWorkBand, useRowChips, useTicketConnections, useTicketsParam } from "./ticket-work";
 import { TicketImportPage } from "./ticket-import";
@@ -35,8 +34,10 @@ import type { Connection } from "../../lib/tickets";
 import type { PxCtx } from "./project-page";
 import { WhyLine } from "../../components/stuck-work";
 import { workNextStep } from "../../lib/work-next-step";
+import { stateSentence } from "../../lib/work-panel";
 import { WorkPreviewButton } from "./work-preview";
 import "./work.css";
+import "./work-panel.css";
 
 /** The row's tile (05-29): what the work is waiting on, else what kind it is and where it came from. */
 function RowTile({ w }: { w: WorkItem }) {
@@ -239,7 +240,8 @@ const NO_CONNECTIONS: Connection[] = [];
 /** Opening a row: the work drawer (05b) in place; the onboarding row opens the onboarding page (screen 10). */
 function openItem(ctx: PxCtx, w: WorkItem) {
   if (w.kind === "setup" && w.source === "onboarding") writePxUrl({ tab: "onboarding", drawer: null });
-  else ctx.open("work", w.id);
+  // The row lands on the Work panel's whole page (the drawer's short preview is for other doors).
+  else ctx.open("work", w.id, { wp: "full" });
 }
 
 /** A Needs-you card that is no piece of work's (Pick a prod host, a setup gap): its own row, the
@@ -331,11 +333,34 @@ export function StalledTag({ w }: { w: Pick<WorkItem, "stalled_since" | "id"> })
 
 type Rank = { up: (() => void) | null; down: (() => void) | null; position: number; total: number };
 
+/** The row's compact flow: Spec · Build · Review & tests · Merge · Staging, one dot each (the
+ *  panel's "Who did what" in miniature); the onboarding row's own Discover → Ready → Backlog. */
+function rowFlow(w: WorkItem, local = false): { key: string; name: string; s: string }[] {
+  const S: Record<string, string> = { done: "done", now: "live", waiting: "wait", failed: "failed", skipped: "skipped", todo: "todo" };
+  if (w.flow.length) return w.flow.map((f) => ({ key: f.key, name: f.label, s: S[f.state] ?? "todo" }));
+  const st = (k: string) => w.stages.find((x) => x.key === k)?.state;
+  const plan = st("plan"); const design = st("design");
+  const spec = design === "waiting" ? "waiting" : [plan, design].includes("failed") ? "failed" : [plan, design].includes("now") ? "now"
+    : [plan, design].includes("done") ? "done" : [plan, design].every((x) => !x || x === "skipped") ? "skipped" : "todo";
+  const merge = w.state === "needs_you" && (w.links.merge_pr || w.action_label === "Merge") ? "waiting" : st("pr") ?? "todo";
+  const review = w.links.merge_pr?.fixing ? "now" : st("review") ?? "todo";
+  return [
+    { key: "spec", name: "Spec", s: S[spec] }, { key: "build", name: "Build", s: S[st("build") ?? "todo"] },
+    { key: "review", name: "Review & tests", s: S[review] }, { key: "pr", name: local ? changeWords(local).station : "Merge", s: S[merge] },
+    { key: "ship", name: "Staging", s: S[st("ship") ?? "todo"] },
+  ];
+}
+const FLOW_WORD: Record<string, string> = { done: "done", live: "in progress", wait: "waiting on you", failed: "failed", skipped: "skipped", todo: "next" };
+
+/** A WORK ROW (operator 2026-11-19: "the current one does not look good" — run/build/change chips,
+ *  a letter-dot pipeline, truncated titles, two buttons). Now: the title (short), one line of
+ *  state, a compact flow, and ONE action (+ the change's preview). Everything else — links,
+ *  attempts, cost, faces — is in the Work panel the row opens. */
 export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; ctx: PxCtx; fresh?: boolean; rank?: Rank | null }) {
   const [said, setSaid] = useState("");
-  const [open, setOpen] = useState(false);
   const setup = w.kind === "setup" && w.source === "onboarding";
   const next = setup ? null : workNextStep(w);
+  const local = projectIsLocal(ctx.overview?.project?.repos);
   const startNow = async () => {
     // A planned item starts as itself, through the body BOSS wrote for it (its title, the item it
     // came from and the issue it names); an older engine's row, from its words.
@@ -345,151 +370,77 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
     setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : "Started.") : (r.error ?? "It didn't start."));
     if (r.ok && !r.demo) ctx.refreshWork();
   };
-  const pill = attemptsPill(w);
-  const grouped = w.attempts.length > 1;
-  const regionId = `px-attempts-${w.id}`;
-  // Never a raw internal string ("code_task"): the source's human word, or the source as given.
-  const source = w.source === "roadmap" || setup ? "" : w.source_label || (/^[a-z]+_[a-z_]+$/.test(w.source) ? "" : w.source);
+  const said1 = setup ? null : stateSentence(w, next);
+  const flow = rowFlow(w, local);
   const tag = rowTag(w);
   return (
-    <>
-      <div className="px-wk" data-s={w.state} data-open={open || undefined} data-fresh={fresh || undefined} data-testid={`px-work-${w.id}`}
-           tabIndex={rank ? 0 : undefined} aria-label={rank ? `${w.label}, ${rank.position} of ${rank.total} in the rank. Alt+Up or Alt+Down moves it.` : undefined}
-           onClick={(e) => { if (!(e.target as HTMLElement).closest("a,button")) openItem(ctx, w); }}>
-        <RowTile w={w} />
-        <span style={{ minWidth: 0 }}>
-          <span className="px-row" style={{ gap: 6, flexWrap: "nowrap", minWidth: 0 }}>
-            <button type="button" className="px-wk-t px-ell" style={{ display: "block", minWidth: 0 }} onClick={() => openItem(ctx, w)} data-testid={`px-work-open-${w.id}`}>{w.label}</button>
-            {grouped ? (
-              <button type="button" className="px-attempts-pill" aria-expanded={open} aria-controls={regionId} data-testid={`px-work-attempts-${w.id}`}
-                      title={`${w.attempt_count} attempts: ${w.followups} follow-up${w.followups === 1 ? "" : "s"}, ${w.retries} retr${w.retries === 1 ? "y" : "ies"}`}
-                      onClick={() => setOpen((v) => !v)}>
-                {pill}<CaretDown size={10} weight="bold" className="px-chev" aria-hidden /></button>
-            ) : null}
-          </span>
-          <span className="px-wk-sub">
-            <span className="px-tag" data-tone={tag.tone} data-testid={`px-work-tag-${w.id}`}>{tag.label}</span>
-            {w.issue ? (
-              <a className="px-chip" href={w.issue.external_url} target="_blank" rel="noreferrer noopener" data-testid={`px-work-issue-${w.id}`}
-                 title={w.issue.provider === "github" ? `${w.issue.kind === "pr" ? "Pull request" : "Issue"} ${w.issue.label} on GitHub` : `Issue ${w.issue.label}`}
-                 onClick={(e) => e.stopPropagation()}>
-                {w.issue.provider === "github" ? <GithubLogo size={11} aria-hidden /> : <Ticket size={11} aria-hidden />}{w.issue.label}</a>
-            ) : null}
-            <RowTicket w={w} />
-            {w.where ? <span className="px-mono px-ell" data-testid={`px-work-where-${w.id}`} title="The file its failing check names">{w.where}</span> : null}
-            {source && w.source !== "code_task" && w.source !== "workflow_run" ? <span>{source}</span> : null}
-            {w.state === "stalled" && !w.why ? <StalledTag w={w} /> : null}
-            {/* WAITING FOR WHAT, from the server (stuck_work.wait_reason): replaces the bare
-                stage/age words whenever the build is not working. */}
-            {w.why ? <WhyLine why={w.why} testId={`px-work-why-${w.id}`} compact />
-              : w.state === "needs_you" ? (setup && w.waiting.length ? <span>Waiting: {w.waiting[0].label}</span> : w.age ? <span>Waiting {w.age}</span> : null)
-              : w.state === "running" ? <span>{whereNow(w, projectIsLocal(ctx.overview?.project?.repos))}</span>
-              : w.state === "planned" ? (w.next_up ? <span data-testid={`px-work-next-${w.id}`}>Next up</span> : null)
-              : w.state === "done" || w.state === "failed" ? <span>{doneDay(w)}</span>
-              : w.state === "stalled" ? null : w.age ? <span>{w.age}</span> : null}
-            <Cost usd={w.cost_usd} list={w.list_usd} testid={`px-work-cost-${w.id}`} />
-          </span>
-        </span>
-        {w.flow.length ? (
-          <span className="px-hide-phone" data-testid={`px-work-flow-${w.id}`}>
-            <Flow nodes={w.flow.map((f) => ({ label: f.label, state: f.state, type: f.state === "skipped" ? "todo" : f.state }))} />
-          </span>
-        ) : <Stations stages={w.stages} />}
-        <span className="px-faces">{w.agents.slice(0, 3).map((a, i) => <Face key={`${a.name}-${i}`} agent={a} size={20} state={w.state === "running" && i === w.agents.length - 1 ? "working" : "idle"} />)}</span>
-        <span className="px-wk-links">
-          {w.links.workflow_run ? <PxLink href={w.links.workflow_run} title="Workflow run" testid={`px-work-run-${w.id}`}><FlowArrow size={11} aria-hidden /> {w.run_number ? `Run #${w.run_number}` : "Run"}</PxLink> : null}
-          {setup ? (
-            <button type="button" className="px-chip" title="What the onboarding agent did, step by step" data-testid={`px-work-onb-${w.id}`}
-                    onClick={() => writePxUrl({ tab: "onboarding", drawer: null })}><FlowArrow size={11} aria-hidden /> Onboarding run</button>
+    <div className="px-wk wr" data-s={w.state} data-fresh={fresh || undefined} data-testid={`px-work-${w.id}`}
+         tabIndex={rank ? 0 : undefined} aria-label={rank ? `${w.label}, ${rank.position} of ${rank.total} in the rank. Alt+Up or Alt+Down moves it.` : undefined}
+         onClick={(e) => { if (!(e.target as HTMLElement).closest("a,button,input")) openItem(ctx, w); }}>
+      <RowTile w={w} />
+      <span className="wr-main">
+        <span className="px-row" style={{ gap: 6, flexWrap: "nowrap", minWidth: 0 }}>
+          <button type="button" className="wr-t" title={w.title && w.title !== w.label ? w.title : undefined} onClick={() => openItem(ctx, w)} data-testid={`px-work-open-${w.id}`}>{w.label}</button>
+          {w.issue ? (
+            <a className="px-chip" href={w.issue.external_url} target="_blank" rel="noreferrer noopener" data-testid={`px-work-issue-${w.id}`}
+               title={w.issue.provider === "github" ? `${w.issue.kind === "pr" ? "Pull request" : "Issue"} ${w.issue.label} on GitHub` : `Issue ${w.issue.label}`}
+               onClick={(e) => e.stopPropagation()}>
+              {w.issue.provider === "github" ? <GithubLogo size={11} aria-hidden /> : <Ticket size={11} aria-hidden />}{w.issue.label}</a>
           ) : null}
-          {w.links.build && w.state !== "done" ? <PxLink href={w.links.build} title="Build page in Code Tasks" testid={`px-work-build-${w.id}`}><Code size={11} aria-hidden /> Build</PxLink> : null}
-          {w.links.log && (w.state === "running" || w.state === "stalled" || (w.state === "needs_you" && !!w.why)) ? <PxLink href={w.links.log} title="This build's live log" testid={`px-work-log-${w.id}`}><TerminalWindow size={11} aria-hidden /> Live log</PxLink> : null}
-          {w.links.pr ? <ChangeLink url={w.links.pr.external_url} number={w.links.pr.number} className="px-chip" merged={w.state === "done"} testid={`px-work-pr-${w.id}`} /> : null}
-          {w.links.preview ? <PxLink href={w.links.preview} title="The running preview"><Globe size={11} aria-hidden /> Preview</PxLink> : null}
-          {w.links.deploy ? <PxLink href={w.links.deploy} title="Where it is deployed"><Globe size={11} aria-hidden /> Staging</PxLink> : null}
+          <RowTicket w={w} />
         </span>
-        <span className="px-row">
-          {w.state === "needs_you" && w.preview_app ? (
-            <WorkPreviewButton app={w.preview_app} projectId={ctx.projectId} actor={ctx.actor} testid={`px-work-preview-${w.id}`} />
-          ) : null}
-          {w.state === "needs_you" ? (
-            // ONE NEXT STEP (workNextStep): the same words the drawer's top card says.
-            <button type="button" className="px-btn" data-kind="amber" data-size="s" data-testid={`px-work-act-${w.id}`} onClick={() => openItem(ctx, w)}
-                    title={next?.hint ? `${next.label} · ${next.hint}` : undefined}>
-              {setup ? (w.action_label || "Decide") : next?.label ?? "Decide"}
-              {next?.hint ? <small className="px-faint px-hide-phone" data-testid={`px-work-act-hint-${w.id}`} style={{ marginLeft: 6, fontWeight: 400 }}>{next.hint}</small> : null}</button>
-          ) : w.state === "planned" ? (
-            <>
-              {rank ? (
-                <span className="px-rank" role="group" aria-label={`Rank of ${w.label}`}>
-                  <span className="px-rank-handle px-hide-phone" title="Drag to re-rank" aria-hidden><DotsSixVertical size={13} /></span>
-                  <button type="button" aria-label={`Move ${w.label} up`} title="Move up (Alt+↑)" disabled={!rank.up} data-testid={`px-rank-up-${w.id}`}
-                          onClick={() => rank.up?.()}><ArrowUp size={11} aria-hidden /></button>
-                  <button type="button" aria-label={`Move ${w.label} down`} title="Move down (Alt+↓)" disabled={!rank.down} data-testid={`px-rank-down-${w.id}`}
-                          onClick={() => rank.down?.()}><ArrowDown size={11} aria-hidden /></button>
-                </span>
-              ) : null}
-              <GatedButton permission="workflow_run:start" projectId={ctx.projectId} className="px-btn" data-size="s" data-testid={`px-work-start-${w.id}`}
-                           onClick={() => void startNow()}><Play size={11} weight="fill" aria-hidden /> Start now</GatedButton>
-            </>
-          ) : null}
-          <Said text={said} />
+        <span className="wr-line" data-testid={`px-work-line-${w.id}`}>
+          {/* WAITING FOR WHAT, from the server (stuck_work.wait_reason), when the build is not working. */}
+          {w.why && w.state !== "needs_you" ? <WhyLine why={w.why} testId={`px-work-why-${w.id}`} compact />
+            : w.state === "stalled" ? <StalledTag w={w} />
+            : setup ? <span><span className="px-tag" data-testid={`px-work-tag-${w.id}`} style={{ marginRight: 6 }}>{tag.label}</span>
+                {w.state === "needs_you" && w.waiting.length ? `Waiting: ${w.waiting[0].label}` : w.detail}</span>
+            : w.state === "planned" ? <span className="px-row" style={{ gap: 6, flexWrap: "nowrap" }}>
+                <span className="px-tag" data-tone={tag.tone} data-testid={`px-work-tag-${w.id}`}>{tag.label}</span>
+                {w.next_up ? <><span data-testid={`px-work-next-${w.id}`}>Next up</span>
+                  {w.agents[0] ? <span className="px-faces" title={`${w.agents[0].name} plans it`}><Face agent={w.agents[0]} size={18} /></span> : null}</>
+                  : w.where ? <span className="px-mono" data-testid={`px-work-where-${w.id}`}>{w.where}</span> : null}</span>
+            : said1 ? <span><b data-tone={said1.tone}>{said1.lead}</b>{" "}
+                {w.state === "running" ? whereNow(w, local) : w.state === "done" || w.state === "failed" ? [said1.rest, doneDay(w)].filter(Boolean).join(" · ") : said1.rest}</span> : null}
         </span>
-      </div>
-      {grouped ? (
-        <div className="px-attempts" id={regionId} data-open={open || undefined} role="region" aria-label={`Attempts of ${w.label}`} hidden={!open} data-testid={`px-work-attempts-list-${w.id}`}>
-          <div className="px-attempts-in">
-            {w.attempts.map((t) => <AttemptRow key={t.id} t={t} ctx={ctx} />)}
-          </div>
-        </div>
-      ) : null}
-    </>
-  );
-}
-
-const ATTEMPT_DOT: Record<Attempt["state"], string | undefined> = {
-  running: "now", stalled: "stalled", needs_you: "you", done: "done", failed: "bad", handed_on: undefined, planned: undefined,
-};
-
-/** One attempt in a group's expander: what it was, when (local), how it ended, its PR, open it. */
-function AttemptRow({ t, ctx }: { t: Attempt; ctx: PxCtx }) {
-  const when = localWith(t.created_at, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-  return (
-    <div className="px-att" data-s={t.state} data-testid={`px-attempt-${t.id}`}>
-      <ArrowBendDownRight size={12} className="px-faint" aria-hidden />
-      <span className="px-dot" data-s={ATTEMPT_DOT[t.state]} aria-hidden />
-      <span style={{ minWidth: 0 }}>
-        <b className="px-ell" style={{ display: "block" }}>{t.label}</b>
-        <small className="px-faint">{when}</small>
       </span>
-      <span className="px-tag" data-tone={t.state === "stalled" || t.state === "needs_you" ? "amber" : t.state === "failed" ? "red" : t.state === "done" ? "green" : t.state === "running" ? "blue" : "idle"}
-            title={t.state === "handed_on" ? "Its checks failed; the repair continued in the next attempt." : t.stalled_since ? `No progress since ${stampLocal(t.stalled_since)}` : undefined}>
-        {ATTEMPT_WORDS[t.state]}</span>
-      <span className="px-faint px-hide-phone"><Cost usd={t.cost_usd} list={t.list_usd} /></span>
-      <span className="px-row" style={{ gap: 4, justifyContent: "flex-end" }}>
-        {t.pr ? <ChangeLink url={t.pr.external_url} number={t.pr.number} className="px-chip" merged={t.state === "done"} testid={`px-attempt-pr-${t.id}`} /> : null}
-        <button type="button" className="px-btn" data-size="s" onClick={() => ctx.open("work", t.id)} data-testid={`px-attempt-open-${t.id}`}>Open</button>
+      <span className="wr-flow" role="img" data-testid={`px-work-flow-${w.id}`}
+            aria-label={flow.map((f) => `${f.name} ${FLOW_WORD[f.s]}`).join(", ")} title={flow.map((f) => `${f.name}: ${FLOW_WORD[f.s]}`).join("\n")}>
+        {flow.map((f) => <i key={f.key} data-s={f.s} />)}
       </span>
-    </div>
-  );
-}
-
-/** A grouped item's attempts in its drawer (05b): newest first, each opens as itself. */
-export function DrawerAttempts({ w, ctx }: { w: WorkItem; ctx: PxCtx }) {
-  if (w.attempts.length <= 1) return null;
-  return (
-    <div data-testid="px-drawer-work-attempts">
-      <span className="px-lbl">{w.attempt_count} attempts</span>
-      <div className="px-steps" style={{ marginTop: 6 }}>
-        {w.attempts.map((t) => (
-          <button key={t.id} type="button" className="px-li" style={{ width: "100%", background: "none", border: 0, font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer" }}
-                  onClick={() => ctx.open("work", t.id)} data-testid={`px-drawer-attempt-${t.id}`}>
-            <span className="px-dot" data-s={ATTEMPT_DOT[t.state]} aria-hidden />
-            <span style={{ minWidth: 0 }}><b>{t.label}</b><small>{whenLocal(t.created_at)}{t.pr ? ` · ${changeRef(t.pr.external_url, t.pr.number)}` : ""}</small></span>
-            <span className="px-tag" data-tone={t.state === "stalled" ? "amber" : t.state === "failed" ? "red" : t.state === "done" ? "green" : undefined}>{ATTEMPT_WORDS[t.state]}</span>
-          </button>
-        ))}
-      </div>
+      <span className="wr-act">
+        {w.state === "needs_you" && w.preview_app ? (
+          <WorkPreviewButton app={w.preview_app} projectId={ctx.projectId} actor={ctx.actor} testid={`px-work-preview-${w.id}`} />
+        ) : null}
+        {w.state === "needs_you" ? (
+          // ONE NEXT STEP (workNextStep): the same words the panel's header says; while BOSS still
+          // fixes the change, Merge is offered but not as the amber call.
+          <button type="button" className="px-btn" data-kind={next?.secondary ? undefined : "amber"} data-size="s" data-testid={`px-work-act-${w.id}`} onClick={() => openItem(ctx, w)}
+                  title={next?.secondary ? next.words : next?.hint ? `${next.label} · ${next.hint}` : undefined}>
+            {setup ? (w.action_label || "Decide") : next?.label ?? "Decide"}</button>
+        ) : w.state === "planned" ? (
+          <>
+            {rank ? (
+              <span className="px-rank" role="group" aria-label={`Rank of ${w.label}`}>
+                <span className="px-rank-handle px-hide-phone" title="Drag to re-rank" aria-hidden><DotsSixVertical size={13} /></span>
+                <button type="button" aria-label={`Move ${w.label} up`} title="Move up (Alt+↑)" disabled={!rank.up} data-testid={`px-rank-up-${w.id}`}
+                        onClick={() => rank.up?.()}><ArrowUp size={11} aria-hidden /></button>
+                <button type="button" aria-label={`Move ${w.label} down`} title="Move down (Alt+↓)" disabled={!rank.down} data-testid={`px-rank-down-${w.id}`}
+                        onClick={() => rank.down?.()}><ArrowDown size={11} aria-hidden /></button>
+              </span>
+            ) : null}
+            <GatedButton permission="workflow_run:start" projectId={ctx.projectId} className="px-btn" data-size="s" data-testid={`px-work-start-${w.id}`}
+                         onClick={() => void startNow()}><Play size={11} weight="fill" aria-hidden /> Start now</GatedButton>
+          </>
+        ) : (w.state === "running" || w.state === "stalled") && w.links.log ? (
+          // BOSS is working: the one thing to do is watch it (the build's own live log).
+          <PxLink href={w.links.log} title="This build's live log" testid={`px-work-log-${w.id}`}>Watch live</PxLink>
+        ) : setup ? (
+          <button type="button" className="px-chip" title="What the onboarding agent did, step by step" data-testid={`px-work-onb-${w.id}`}
+                  onClick={() => writePxUrl({ tab: "onboarding", drawer: null })}><FlowArrow size={11} aria-hidden /> Onboarding run</button>
+        ) : null}
+        <Said text={said} />
+      </span>
     </div>
   );
 }

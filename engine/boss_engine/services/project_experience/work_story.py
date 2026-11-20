@@ -246,12 +246,31 @@ def story(connection: Connection, project_id: str, work_id: str) -> dict[str, An
             "prd": _prd(connection, project_id, meeting, fctx),
             # WHAT WAS DISCUSSED / WHAT WAS BUILT (explained.for_work): the panel's decisions and
             # the build's own outputs in a few bullets, stored once per build — never the chat.
-            "explained": _explained(connection, project_id, meeting, builds),
+            "explained": (said := _explained(connection, project_id, meeting, builds, merge_pr)),
+            # THE REVIEW'S COMMENTS, ONCE EACH (the Work panel): the explained build's deferred
+            # findings and its merge card's follow-ups, deduped (explained.review_comments).
+            "review_comments": _comments(connection, builds, said),
             "stages": out_stages}
 
 
-def _explained(connection: Connection, project_id: str, meeting: dict, builds: list[dict]
-               ) -> Optional[dict]:
+def _comments(connection: Connection, builds: list[dict], said: Optional[dict]) -> dict:
+    from .explained import review_comments
+
+    bid = str(((said or {}).get("built") or {}).get("build_id") or "")
+    run = next((b for b in builds if str(b["id"]) == bid), None) or (builds[-1] if builds else None)
+    if run is None:
+        return {"items": [], "raw": 0}
+    state = as_json(run.get("state"), {}) or {}
+    rec = connection.execute(text(
+        "SELECT recommendation->'followups'->'items' FROM decisions WHERE id = :d"),
+        {"d": run.get("decision_id")}).scalar() if run.get("decision_id") else None
+    shown = bool((((said or {}).get("built") or {}).get("acceptance") or {}).get("items"))
+    return review_comments(state.get("deferred_findings") or [], as_json(rec, []) or [],
+                           must_haves_shown=shown)
+
+
+def _explained(connection: Connection, project_id: str, meeting: dict, builds: list[dict],
+               merge_pr: Optional[dict] = None) -> Optional[dict]:
     import logging
 
     from . import explained
@@ -259,7 +278,9 @@ def _explained(connection: Connection, project_id: str, meeting: dict, builds: l
     try:
         with connection.begin_nested():
             return explained.for_work(connection, project_id,
-                                      meeting_run_id=meeting.get("meeting_run_id"), builds=builds)
+                                      meeting_run_id=meeting.get("meeting_run_id"), builds=builds,
+                                      merge_pr=merge_pr,
+                                      prd_markdown=str(meeting.get("prd_markdown") or ""))
     except Exception:  # noqa: BLE001 — the drawer shows its stations without the explanation
         logging.getLogger(__name__).warning("work explanation failed", exc_info=True)
         return None

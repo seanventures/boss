@@ -474,9 +474,116 @@ def built_from(state: Mapping[str, Any], fctx: Mapping[str, Any],
 
 def _check_of(connection: Connection, run_id: str) -> Optional[dict[str, Any]]:
     row = connection.execute(text(
-        "SELECT verdict, counts FROM acceptance_checks WHERE code_task_run_id = :r "
+        "SELECT verdict, counts, items FROM acceptance_checks WHERE code_task_run_id = :r "
         "ORDER BY created_at DESC LIMIT 1"), {"r": run_id}).mappings().first()
-    return {"verdict": row["verdict"], "counts": as_json(row["counts"], {})} if row else None
+    return ({"verdict": row["verdict"], "counts": as_json(row["counts"], {}),
+             "items": as_json(row["items"], [])} if row else None)
+
+
+def acceptance_items(check: Optional[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """THE MUST-HAVES, EACH WITH ITS VERDICT (the Work panel's Asked column): the newest
+    acceptance check's items as {n, text, verdict, evidence} — met | partial | not_met |
+    unchecked — read from the check, never parsed out of "Must-have N (P1) partial: …" lines."""
+    out = []
+    for i, item in enumerate((check or {}).get("items") or []):
+        if not isinstance(item, Mapping) or not plain(item.get("text")):
+            continue
+        status = str(item.get("status") or "")
+        out.append({"n": int(item.get("n") or i + 1), "text": clip(item.get("text"), 220),
+                    "verdict": _STATUS.get(status, "unchecked"),
+                    "evidence": clip(item.get("evidence"), 220) or None})
+    return out[:MAX_CRITERIA * 2]
+
+
+# ── review comments, deduped ─────────────────────────────────────────────────────────────────
+
+_GATE = re.compile(r"^Failing gate '([^']+)'\s*(?:\(([^)]+)\))?", re.I)
+_MUST = re.compile(r"^Must-have\s+(\d+)\s*(?:\((P\d)\))?\s*(partial|missing|not met|unmet)?\s*:?\s*(.*)$",
+                   re.I | re.S)
+_AT = re.compile(r"^([\w./@-]+\.[A-Za-z0-9]+):(\d+)\s*[—–-]\s*(.*)$", re.S)
+_SEV = {"blocker": "P1", "critical": "P1", "major": "P1", "high": "P1", "minor": "P2",
+        "medium": "P2", "low": "P3", "nit": "P3", "finding": "P2"}
+
+
+def review_comments(deferred: Iterable[Any], extra: Iterable[Any] = (), *,
+                    must_haves_shown: bool = True) -> dict[str, Any]:
+    """THE REVIEW'S COMMENTS, ONCE EACH (the Work panel): a build's deferred findings plus the
+    merge card's follow-up items, deduped — a failing gate once however often it repeats ("2
+    findings merged"), one comment per file and line, the same words once. "Must-have N partial"
+    lines are the Asked column's meter (`must_haves_shown`), counted but not listed again.
+    Each: {key, text, severity (gate | P1 | P2 | P3), source, path, line, merged}. Sorted gate →
+    P1 → P2 → P3. Returns {items, raw}: `raw` is how many came in."""
+    found: dict[str, dict[str, Any]] = {}
+    raw = 0
+    for entry in list(deferred or []) + list(extra or []):
+        if not isinstance(entry, Mapping):
+            continue
+        words = str(entry.get("text") or "").strip()
+        if not words:
+            continue
+        raw += 1
+        sev_word = str(entry.get("severity") or entry.get("tier") or "").lower()
+        severity = (str(entry.get("tier")).upper() if str(entry.get("tier") or "").upper()
+                    in ("P1", "P2", "P3") else _SEV.get(sev_word, "P2"))
+        path, line = entry.get("path"), entry.get("line")
+        source = "review"
+        if words.startswith("(") and ")" in words[:40]:
+            source = words[1:words.index(")")]
+            words = words[words.index(")") + 1:].strip()
+            words = re.sub(r"\s*\n+\s*[A-Z ]+:\s*(YES|NO)\s*$", "", words)
+        gate = _GATE.match(words)
+        must = _MUST.match(words)
+        at = _AT.match(words) if not path else None
+        if at:
+            path, line, words = at.group(1), int(at.group(2)), at.group(3)
+        if gate:
+            key = f"gate:{gate.group(1)}"
+            name = gate.group(2) or gate.group(1).replace("_", " ")
+            text_ = f"\u201c{name}\u201d check failed when the change opened"
+            severity, source = "gate", gate.group(1)
+        elif must:
+            if must_haves_shown:
+                continue
+            key = f"must:{must.group(1)}"
+            text_ = f"Must-have {must.group(1)} {(must.group(3) or 'partial').lower()}: {plain(must.group(4))}"
+        elif path:
+            key = f"at:{path}:{line or ''}"
+            text_ = plain(words)
+        else:
+            key = "said:" + _norm(words)[:120]
+            text_ = plain(words)
+        if key in found:
+            found[key]["merged"] += 1
+            continue
+        found[key] = {"key": key, "text": clip(text_, 240), "severity": severity,
+                      "source": source, "path": str(path) if path else None,
+                      "line": int(line) if isinstance(line, int) or str(line or "").isdigit() else None,
+                      "merged": 1}
+    order = {"gate": 0, "P1": 1, "P2": 2, "P3": 3}
+    items = sorted(found.values(), key=lambda c: order.get(c["severity"], 4))
+    return {"items": items, "raw": raw}
+
+
+#: Tooling words that make a poor "what was built" line ("playwright devDependency was pinned…").
+_NOISE = re.compile(r"devDependenc|lockfile|lock file|pinned|sandbox|npm install|cache|revision|"
+                    r"node_modules|chromium|ci config|eslint", re.I)
+
+
+def summary_of(built: Mapping[str, Any], prd_markdown: str = "") -> Optional[str]:
+    """ONE PLAIN SENTENCE ABOUT THE USER-VISIBLE CHANGE (the Work panel's Built column), from
+    what is stored: the PRD's first goal (what the person sees change), else the builder's first
+    highlight that is not tooling noise. Never a model call; None when nothing says it."""
+    goals = _items(_section(prd_markdown, r"\bgoals?\b")) if prd_markdown else []
+    lead = next((g for g in goals if not re.match(r"^(no|not)\b", g, re.I)), "")
+    if not lead:
+        lead = next((h for h in built.get("highlights") or [] if not _NOISE.search(str(h))), "")
+    if not lead:
+        return None
+    one = clip(lead, 160).rstrip(".…")
+    tests = built.get("tests") if isinstance(built.get("tests"), Mapping) else {}
+    tail = (" Tests pass." if tests.get("passed") is True else
+            " Tests were failing at the end." if tests.get("passed") is False else "")
+    return one[:1].upper() + one[1:] + "." + tail
 
 
 def _merge_words(fctx: Mapping[str, Any], number: Any, status: str) -> Optional[str]:
@@ -502,8 +609,14 @@ def build(connection: Connection, run: Mapping[str, Any], *, store: bool = True)
             _keep(connection, "code_task_runs", str(run["id"]), kept)
     merged = _merge_words(fctx, run.get("pull_request_number"), status)
     bullets = compose(list(kept.get("highlights") or []), list(kept.get("facts") or []), merged)
+    check = _check_of(connection, str(run["id"]))
+    items = acceptance_items(check)
+    counts = dict(kept.get("acceptance") or (check or {}).get("counts") or {})
+    if items:
+        counts = {**counts, "items": items}
     return {**kept, "bullets": bullets, "build_id": str(run["id"]), "status": status,
-            "title": run.get("title"), "number": run.get("pull_request_number")}
+            "title": run.get("title"), "number": run.get("pull_request_number"),
+            "acceptance": counts or None}
 
 
 def store_build(connection: Connection, run_id: str) -> None:
@@ -557,16 +670,42 @@ def for_build(connection: Connection, project_id: str, run_id: str) -> dict[str,
             "built": build(connection, run), "later": []}
 
 
+def main_build(builds: list[Mapping[str, Any]], merge_pr: Optional[Mapping[str, Any]] = None
+               ) -> Optional[Mapping[str, Any]]:
+    """THE BUILD "WHAT WAS BUILT" READS (park-bench-map 2026-11-19: the drawer read the running
+    follow-up, whose record is empty, and showed nothing). The build that opened the change
+    waiting on a merge (`merge_pr.build_id`), else the newest COMPLETED build with that change
+    number, else the merged one, else the newest completed, else the newest."""
+    if not builds:
+        return None
+    mp = merge_pr or {}
+    if mp.get("build_id"):
+        hit = next((b for b in builds if str(b["id"]) == str(mp["build_id"])), None)
+        if hit is not None:
+            return hit
+    done = [b for b in builds if str(b.get("status") or "") == "completed"]
+    if mp.get("number"):
+        hit = next((b for b in reversed(done)
+                    if str(b.get("pull_request_number") or "") == str(mp["number"])), None)
+        if hit is not None:
+            return hit
+    merged = next((b for b in builds
+                   if ((as_json(b.get("finalize_ctx"), {}) or {}).get("merge") or {}).get("sha")), None)
+    return merged or (done[-1] if done else builds[-1])
+
+
 def for_work(connection: Connection, project_id: str, *, meeting_run_id: Optional[str],
-             builds: list[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
-    """A work item's: the panel's decisions, and the build that delivered it (the merged one, else
-    the newest), with each later build named in one line."""
+             builds: list[Mapping[str, Any]], merge_pr: Optional[Mapping[str, Any]] = None,
+             prd_markdown: str = "") -> Optional[dict[str, Any]]:
+    """A work item's: the panel's decisions, and the build that delivered it (main_build: the
+    one that opened the change waiting on a merge, else the merged one, else the newest
+    completed), with each later build named in one line, a one-sentence summary and the must-
+    haves with their verdicts."""
     if not builds and not meeting_run_id:
         return None
     if not meeting_run_id and builds:
         meeting_run_id = _meeting_for_build(connection, project_id, builds[-1])
-    main = next((b for b in builds if ((as_json(b.get("finalize_ctx"), {}) or {}).get("merge") or {}).get("sha")),
-                builds[-1] if builds else None)
+    main = main_build(builds, merge_pr)
     later = []
     for b in builds:
         if main is None or b["id"] == main["id"] or str(b.get("status")) != "completed":
@@ -576,11 +715,14 @@ def for_work(connection: Connection, project_id: str, *, meeting_run_id: Optiona
         one = build(connection, b)
         later.append({"build_id": str(b["id"]), "title": b.get("title"), "number": b.get("pull_request_number"),
                       "line": next(iter(one.get("bullets") or []), "") if one else ""})
+    built = build(connection, main) if main is not None else None
+    if built is not None:
+        built["summary"] = summary_of(built, prd_markdown)
     return {"discussed": discussed(connection, project_id, meeting_run_id),
-            "built": build(connection, main) if main is not None else None,
-            "later": later[:3]}
+            "built": built, "later": later[:3]}
 
 
-__all__ = ["VERSION", "about", "build", "built_from", "clip", "discussed", "discussed_from",
+__all__ = ["VERSION", "about", "acceptance_items", "build", "built_from", "main_build",
+           "review_comments", "summary_of", "clip", "discussed", "discussed_from",
            "for_build", "for_work", "group_files", "plain", "prd_criteria", "prd_summary",
            "prd_title", "purpose_of", "store_build"]

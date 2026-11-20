@@ -50,7 +50,10 @@ export function CaptainDrawer({ ctx, onClose }: { ctx: PxCtx; onClose: () => voi
   const asked = useAsked();
   const draft = useDraft();
   const [history, setHistory] = useState(false);
-  const fs = useChatFullscreen();
+  // `&cap_full=1` (the Work panel's Ask Helm ⤢): open full screen, taken once.
+  const [askedFull] = useState(() => { try { return new URLSearchParams(window.location.search).get("cap_full") === "1"; } catch { return false; } });
+  useEffect(() => { if (askedFull) writePxUrl({ cap_full: null }, "replace"); }, [askedFull]);
+  const fs = useChatFullscreen(askedFull);
   const base = ctx.overview.captain;
   const c = read.data;
   const name = c?.name || base?.name || "BOSS";

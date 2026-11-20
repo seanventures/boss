@@ -60,7 +60,7 @@ export type PxCtx = {
   onboarding: Onboarding | null;
   /** Switch tab (push: Back returns). */
   tab: (t: Tab, extra?: Record<string, string | null>) => void;
-  open: (kind: string, id: string) => void;
+  open: (kind: string, id: string, extra?: Record<string, string | null>) => void;
   ask: (question?: string) => void;
   /** NEW WORK, the modal, on any tab (header, the Work tab's bar, N, an answer's Edit). */
   newWork?: (prefill?: Prefill) => void;

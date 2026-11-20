@@ -201,6 +201,9 @@ export function workWhen(w: { state: string; age?: string; updated_at?: string |
   return ago < 6 * 86_400_000 ? localWith(at, { weekday: "short" }) : localWith(at, { month: "short", day: "numeric" });
 }
 
+export type WorkStage = { key: string; label: string; state: StepState; agent?: Agent | null; started_at?: string; duration_s?: number | null };
+export type MergeFixing = { attempt: string; label: string; state: string; since: string; findings: number | null };
+
 export type WorkItem = {
   id: string; label: string; kind: string; state: WorkState; age: string;
   /** A failed build a later build of the same app replaced (engine work._replaced): history,
@@ -208,7 +211,9 @@ export type WorkItem = {
   replaced_by?: { id: string; label: string; href: string } | null;
   /** A refused build whose stated cause is gone (engine build_failure.waits_on): said faint. */
   resolved?: { words: string } | null;
-  stages: { key: string; label: string; state: StepState }[]; agents: Agent[]; cost_usd: number | null;
+  /** The stations. `agent` / `started_at` / `duration_s` (engine work._with_station_facts): who
+   *  did it and how long it took — the Work panel's "Who did what"; absent on an older engine. */
+  stages: WorkStage[]; agents: Agent[]; cost_usd: number | null;
   /** What the subscription calls would have cost at list price (costWords). */
   list_usd?: number | null;
   links: { workflow_run: string; build: string; pr: { number: number; external_url: string } | null; deploy: string; preview: string; decision: string;
@@ -218,7 +223,13 @@ export type WorkItem = {
      *  follows. Null when nothing waits on a merge (a merged PR never asks again). */
     merge_pr?: { number: number; external_url: string; follow_up_of?: number | null; failed?: string;
       /** Ready WITH follow-ups (engine quality_bar.merge_followups): BOSS fixes them after; never a failure. */
-      followups?: { count: number; queued: boolean; words: string } | null } | null;
+      followups?: { count: number; queued: boolean; words: string } | null;
+      /** The build that opened this change (What was built reads it). */
+      build_id?: string;
+      /** A later attempt still fixing this same change (engine work._fixing): merge now or wait. */
+      fixing?: MergeFixing | null;
+      /** Its acceptance check's counts: never "Ready to merge" over 0 met. */
+      acceptance?: { met: number; partial: number; missing: number; total: number } | null } | null;
     /** The newest pull request merged on record. */
     merged_pr?: { number: number; external_url: string } | null };
   detail: string; href: string; source: string;
@@ -252,6 +263,8 @@ export type WorkItem = {
   work_item_id?: string; parent_work_item_id?: string | null; ticket_type?: string;
   /** The FULL title (`label` is a short name of a few words): a ticket's own title is shown whole. */
   title?: string;
+  /** The workflow it runs ("Minor Feature"), said beside its run number. */
+  workflow?: string;
   /** The change's own preview (the build whose merge is open), shaped as the Your app card's:
    *  Open preview / Recreate preview beside the merge. null when no attempt has one to show. */
   preview_app?: YourApp | null;
@@ -263,7 +276,7 @@ export type WorkIssue = { provider: string; number: number | null; label: string
 /** One attempt of a piece of work: the build, a retry, or a follow-up (§3 `attempts[]`). */
 export type Attempt = {
   id: string; label: string; kind: "build" | "retry" | "followup"; title: string;
-  state: AttemptState; status: string; created_at: string; stalled_since: string;
+  state: AttemptState; status: string; created_at: string; updated_at?: string; stalled_since: string;
   cost_usd: number | null; list_usd?: number | null; pr: { number: number; external_url: string } | null; build: string; href: string;
 };
 export type AttemptState = (typeof ATTEMPT_STATES)[number];
@@ -597,13 +610,19 @@ export const parseWorkItem = (v: unknown): WorkItem => {
     id: s(x.id), label: s(x.label), kind: s(x.kind, "feature"), state: oneOf(x.state, WORK_STATES, "planned"), age: s(x.age),
     resolved: s(o(x.resolved).words) ? { words: s(o(x.resolved).words) } : null,
     replaced_by: s(o(x.replaced_by).id) ? { id: s(o(x.replaced_by).id), label: s(o(x.replaced_by).label), href: s(o(x.replaced_by).href) } : null,
-    stages: a(x.stages).map((st) => ({ key: s(o(st).key), label: s(o(st).label), state: oneOf(o(st).state, STEP_STATES, "todo") })),
+    stages: a(x.stages).map((st) => ({ key: s(o(st).key), label: s(o(st).label), state: oneOf(o(st).state, STEP_STATES, "todo"),
+                                       agent: parseAgent(o(st).agent), started_at: s(o(st).started_at), duration_s: nn(o(st).duration_s) })),
     agents: agents(x.agents), cost_usd: nn(x.cost_usd), list_usd: nn(x.list_usd),
     links: { workflow_run: s(l.workflow_run), build: s(l.build), deploy: s(l.deploy), preview: s(l.preview), decision: s(l.decision),
              log: s(l.log) || (s(l.build) ? logOfBuild(s(l.build)) : ""),
              pr: pr.number || pr.external_url ? { number: n(pr.number), external_url: s(pr.external_url) } : null,
              merge_pr: mp.number || mp.external_url ? { number: n(mp.number), external_url: s(mp.external_url), follow_up_of: nn(mp.follow_up_of), failed: s(mp.failed),
-                                                                     followups: n(o(mp.followups).count) ? { count: n(o(mp.followups).count), queued: o(mp.followups).queued === true, words: s(o(mp.followups).words) } : null } : null,
+                                                                     followups: n(o(mp.followups).count) ? { count: n(o(mp.followups).count), queued: o(mp.followups).queued === true, words: s(o(mp.followups).words) } : null,
+                                                                     build_id: s(mp.build_id),
+                                                                     fixing: s(o(mp.fixing).attempt) ? { attempt: s(o(mp.fixing).attempt), label: s(o(mp.fixing).label, "Follow-up"), state: s(o(mp.fixing).state),
+                                                                                                         since: s(o(mp.fixing).since), findings: nn(o(mp.fixing).findings) } : null,
+                                                                     acceptance: n(o(mp.acceptance).total) ? { met: n(o(mp.acceptance).met), partial: n(o(mp.acceptance).partial),
+                                                                                                               missing: n(o(mp.acceptance).missing), total: n(o(mp.acceptance).total) } : null } : null,
              merged_pr: md.number || md.external_url ? { number: n(md.number), external_url: s(md.external_url) } : null },
     detail: s(x.detail), href: s(x.href), source: s(x.source),
     why: parseWaitReason(x.why), diagnosis: parseDiagnosis(x.diagnosis),
@@ -624,6 +643,7 @@ export const parseWorkItem = (v: unknown): WorkItem => {
     ...(s(x.work_item_id) ? { work_item_id: s(x.work_item_id) } : {}),
     ...(x.origin === "ticket_import" ? { parent_work_item_id: s(x.parent_work_item_id) || null, ticket_type: s(x.ticket_type, "other") } : {}),
     ...(s(x.title) ? { title: s(x.title) } : {}),
+    ...(s(x.workflow) ? { workflow: s(x.workflow) } : {}),
     preview_app: parseYourApp(x.preview_app ? { ...o(x.preview_app), name: s(x.label) } : null),
   };
 };
@@ -649,7 +669,7 @@ const parseAttempt = (v: unknown): Attempt => {
   const x = o(v); const pr = o(x.pr);
   return {
     id: s(x.id), label: s(x.label, "Build"), kind: oneOf(x.kind, ["build", "retry", "followup"] as const, "build"), title: s(x.title),
-    state: oneOf(x.state, ATTEMPT_STATES, "done"), status: s(x.status), created_at: s(x.created_at), stalled_since: s(x.stalled_since),
+    state: oneOf(x.state, ATTEMPT_STATES, "done"), status: s(x.status), created_at: s(x.created_at), updated_at: s(x.updated_at), stalled_since: s(x.stalled_since),
     cost_usd: nn(x.cost_usd), list_usd: nn(x.list_usd), pr: pr.number || pr.external_url ? { number: n(pr.number), external_url: s(pr.external_url) } : null,
     build: s(x.build), href: s(x.href),
   };
@@ -733,6 +753,14 @@ export type WorkStory = {
   prd?: PrdRecord | null;
   /** What was discussed / What was built (engine explained.for_work): decisions + bullets. */
   explained?: Explained | null;
+  /** The review's comments, once each (engine explained.review_comments); `raw` before dedupe. */
+  review_comments?: { items: ReviewComment[]; raw: number };
+};
+export type ReviewComment = { key: string; text: string; severity: "gate" | "P1" | "P2" | "P3"; source: string; path: string; line: number | null; merged: number };
+const parseComment = (v: unknown): ReviewComment => {
+  const x = o(v);
+  return { key: s(x.key), text: s(x.text), severity: oneOf(x.severity, ["gate", "P1", "P2", "P3"] as const, "P2"), source: s(x.source),
+           path: s(x.path), line: nn(x.line), merged: n(x.merged) || 1 };
 };
 export const parseWorkStory = (v: unknown): WorkStory => {
   const x = o(v); const pr = o(x.pr);
@@ -747,6 +775,7 @@ export const parseWorkStory = (v: unknown): WorkStory => {
     }),
     prd: parsePrdRecord(x.prd),
     explained: parseExplained(x.explained),
+    review_comments: { items: a(o(x.review_comments).items).map(parseComment).filter((c) => c.text), raw: n(o(x.review_comments).raw) },
   };
 };
 

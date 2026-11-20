@@ -103,7 +103,8 @@ describe("one next step for the row and the drawer", () => {
     const act = $('[data-testid="px-work-act-wfr_bubble"]')!;
     expect(act.textContent).toContain("Merge change #3");
     expect(act.textContent).not.toContain("Approve deploy");
-    expect($('[data-testid="px-work-act-hint-wfr_bubble"]')?.textContent).toBe("deploys to staging after");
+    // One action on the row: what happens after the merge rides in its title (the panel says it).
+    expect(act.getAttribute("title")).toContain("deploys to staging after");
     expect($('[data-testid="px-work-preview-wfr_bubble"]')?.textContent).toContain("Open preview");
   });
 

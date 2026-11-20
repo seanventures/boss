@@ -194,7 +194,7 @@ describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
     expect(planned()).toEqual(["wi_email", "wi_sla", "wi_tests", "wi_index"]);
     expect(tid("px-work-next-wi_email")!.textContent).toBe("Next up");
     expect(tid("px-work-next-wi_sla")).toBeNull();
-    expect(tid("px-work-wi_email")!.querySelectorAll(".px-faces > *").length).toBe(1);
+    expect(tid("px-work-wi_email")!.querySelectorAll(".px-faces").length).toBe(1);
     const chip = tid("px-work-issue-wi_sla")!;
     expect(chip.textContent).toBe("#12");
     expect(chip.getAttribute("href")).toBe("https://github.com/paramg/helpdesk-ai-demo/issues/12");
@@ -310,9 +310,11 @@ describe("Onboarding is a row (05-27)", () => {
     await openWork();
     const row = tid("px-work-onb_36")!;
     expect(tid("px-work-tag-onb_36")!.textContent).toBe("Setup");
-    expect(row.textContent).toContain("$1.20");
-    expect($$("[data-testid='px-work-flow-onb_36'] .px-fl-n").map((n) => n.textContent)).toEqual(["Discover", "Ready", "Backlog"]);
-    expect(row.querySelectorAll(".px-faces > *").length).toBe(2);
+    // A clean row: its mini flow as dots (named in words for a screen reader); the cost and
+    // the faces are on the onboarding page it opens.
+    expect(tid("px-work-flow-onb_36")!.querySelectorAll("i").length).toBe(3);
+    expect(tid("px-work-flow-onb_36")!.getAttribute("aria-label")).toMatch(/^Discover .*, Ready .*, Backlog /);
+    expect(row.textContent).not.toContain("$1.20");
     expect(row.querySelector(".px-wk-ico")!.getAttribute("data-c")).toBe("green");
     await press(tid("px-work-onb-onb_36"));
     expect(new URLSearchParams(window.location.search).get("tab")).toBe("onboarding");
