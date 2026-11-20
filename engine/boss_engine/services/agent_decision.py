@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator, Mapping, Optional, Sequence
 
@@ -56,16 +57,45 @@ NO_MODEL_REPLY = (
 
 def no_model_reply(decision: "AgentDecision") -> str:
     """What to tell a person when `decision.status == NO_MODEL`: the generic NO_MODEL_REPLY,
-    unless the provider's own words said plainly that the account is out of credit — then
-    exactly that, with the provider named when it is known, up front rather than buried in a
-    truncated error nobody reads."""
+    unless the provider's own words say why — see `unavailable_reply`."""
+    return unavailable_reply(decision.error, decision.provider) or NO_MODEL_REPLY
+
+
+_PROVIDER_SENTENCE = re.compile(r'"result"\s*:\s*"(?P<said>[^"]{3,300})"')
+
+
+def _provider_sentence(error: str, fallback: str) -> str:
+    """The provider's own sentence out of an error: Claude Code wraps it in its JSON result
+    ("You've hit your weekly limit · resets 6pm (UTC)"); other providers say it in a line."""
+    match = _PROVIDER_SENTENCE.search(error or "")
+    said = (match.group("said") if match else fallback).strip()
+    return said if len(said) <= 200 else said[:199].rstrip() + "…"
+
+
+def unavailable_reply(error: Optional[str], provider: Optional[str] = None) -> Optional[str]:
+    """Why no model answered, in the provider's own words, or None when they say nothing
+    specific. Two causes a person must never be sent to Setup to "connect a model" for:
+
+      * OUT OF CREDIT (BOSSAPP-604): add credit or switch provider;
+      * A USAGE LIMIT (laptop 2026-11-20): the model IS connected and signed in — its
+        subscription window is used up ("You've hit your weekly limit · resets 6pm (UTC)").
+        Ask BOSS answered "connect one in Setup" for a whole day while Setup showed the model
+        connected; the person needs the reset time, and that another connected model can take
+        the work meanwhile."""
     from . import provider_limits
 
-    if not provider_limits.credit_exhausted(decision.error):
-        return NO_MODEL_REPLY
-    who = decision.provider or "its provider"
-    return (f"BOSS could not get an answer: credit balance too low on {who}. Add credit there "
-            "(or connect a different model in Setup), then ask again.")
+    who = (provider or "").strip() or "its provider"
+    if provider_limits.credit_exhausted(error):
+        return (f"BOSS could not get an answer: credit balance too low on {who}. Add credit there "
+                "(or connect a different model in Setup), then ask again.")
+    signal = provider_limits.classify_limit(error)
+    if signal is None:
+        return None
+    said = _provider_sentence(str(error or ""), signal.detail)
+    return (f"BOSS could not get an answer: {who} has reached its usage limit — \u201c{said}\u201d. "
+            "It is still connected; nothing was done. Ask again after it resets, or choose "
+            "another connected model for this project in Setup › Models.")
+
 
 #: Below this confidence the agent asks ONE question instead of acting. An operator can lower
 #: or raise it per install (`agent_decision_confidence`).

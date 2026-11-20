@@ -85,6 +85,33 @@ def test_out_of_credit_says_so_up_front_not_just_no_model_is_answering():
     assert ad.no_model_reply(plain) == ad.NO_MODEL_REPLY
 
 
+def test_a_model_at_its_usage_limit_is_named_with_its_reset_never_connect_one():
+    """Laptop 2026-11-20: Claude Code's subscription hit its weekly limit and Ask BOSS answered
+    "Connect one in Setup" for a day while Setup showed the model connected. A usage limit is
+    said in the provider's own words, with the provider named and the way round it."""
+    class AtLimit:
+        _boss_choice = SimpleNamespace(engine="claude_code")
+
+        def create_text_response(self, *_a, **_k):
+            raise RuntimeError(
+                'claude CLI exited 1: {"type":"result","subtype":"success","is_error":true,'
+                '"api_error_status":429,"num_turns":1,"result":"You\'ve hit your weekly limit '
+                '\u00b7 resets 6pm (UTC)","stop_reason":"stop_sequence"}')
+
+    got = _decide(AtLimit())
+    assert got.status == ad.NO_MODEL and not got.decided
+    reply = ad.no_model_reply(got)
+    assert reply != ad.NO_MODEL_REPLY and "Connect one in Setup" not in reply
+    assert "claude_code has reached its usage limit" in reply
+    assert "You've hit your weekly limit \u00b7 resets 6pm (UTC)" in reply
+    assert "{" not in reply and "api_error_status" not in reply
+    assert "another connected model" in reply
+    # The same words wherever a turn has no model (the SRE planner's reason, too).
+    assert ad.unavailable_reply("connection refused") is None
+    assert "credit balance too low on x" in ad.unavailable_reply(
+        "Your credit balance is too low to access the Claude API.", "x")
+
+
 def test_prose_around_the_json_is_read_and_garbage_is_asked_once_more():
     model = DecisionModel("x", reply='Sure! {"action": "operate", "confidence": 0.8} hope it helps')
     assert _decide(model).action == "operate"
