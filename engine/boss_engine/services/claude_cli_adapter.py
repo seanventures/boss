@@ -439,7 +439,7 @@ class CliChatBrain:
             for i, c in enumerate(raw_calls):
                 if not isinstance(c, dict) or not c.get("name"):
                     continue
-                args = c.get("arguments")
+                args = protocol_reply.call_arguments(c)
                 args_str = args if isinstance(args, str) else json.dumps(args or {})
                 cid = f"call_{i + 1}"
                 tool_calls.append({"id": cid, "name": c["name"], "arguments": args_str})

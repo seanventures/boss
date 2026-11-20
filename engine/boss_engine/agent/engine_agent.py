@@ -289,7 +289,7 @@ def _calls_meant(structure: dict) -> list[dict]:
     for i, call in enumerate(raw or []):
         if not isinstance(call, dict) or not call.get("name"):
             continue
-        args = call.get("arguments")
+        args = protocol_reply.call_arguments(call)
         calls.append({"id": f"call_meant_{i + 1}", "name": str(call["name"]),
                       "arguments": args if isinstance(args, str) else json.dumps(args or {})})
     return calls

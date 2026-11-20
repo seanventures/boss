@@ -18,6 +18,7 @@ require confirmation before invoking them.
 """
 from __future__ import annotations
 
+import json
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Literal, Optional
@@ -537,6 +538,14 @@ class ToolRegistry:
         refused = identity_gate(spec, effective_auth, project_id, safe_args)
         if refused is not None:
             return refused
+        # A REQUIRED ARGUMENT THE CALL LEFT OUT IS REFUSED, NEVER RUN EMPTY. find_tools called
+        # with `{}` searched for nothing, returned no tools, and the agent reported that no
+        # deploy tool existed (2026-11-20). Every tool, one rule, checked after
+        # every gate (a refusal there says more) and before the handler: the model is told which
+        # argument is missing and what the tool takes, so it can call again.
+        missing = missing_required(spec, safe_args)
+        if missing:
+            return missing_args_result(spec, missing, ignored)
         # The handler sees the identity the gate decided: an explicit `auth` is this call's
         # caller for the handler too (one that records who acted reads CURRENT_TOOL_AUTH).
         auth_token = CURRENT_TOOL_AUTH.set(auth) if auth is not None else None
@@ -704,6 +713,45 @@ CURRENT_TOOL_AUTH: ContextVar[Any] = ContextVar("boss_tool_auth", default=None)
 #: Keys every tool accepts whatever its schema: the acting project (acting_project) and the
 #: named other project (PROJECT_ARG), both decided by `invoke` itself.
 TRANSPORT_ARGS = frozenset({"project_id", PROJECT_ARG})
+
+
+def missing_required(spec: "ToolSpec", args: dict) -> list[str]:
+    """The schema's `required` arguments `args` does not carry: absent, null, or (for a string
+    argument) blank. Blank text is no query, no path, no name. `project_id` and the named-
+    project argument are never missing: the call acts in the session's project without them
+    (`acting_project`)."""
+    schema = spec.parameters or {}
+    props = schema.get("properties") or {}
+    out = []
+    for key in schema.get("required") or []:
+        if key in ("project_id", PROJECT_ARG):
+            continue
+        value = args.get(key)
+        declared = (props.get(key) or {}).get("type")
+        is_string = declared == "string" or (isinstance(declared, list) and "string" in declared)
+        if value is None or (is_string and isinstance(value, str) and not value.strip()):
+            out.append(str(key))
+    return out
+
+
+def missing_args_result(spec: "ToolSpec", missing: list[str], ignored: list[str]) -> dict:
+    """The refusal for a call missing required arguments: what is missing, what the tool
+    takes, and that the call can be made again — a result the model reads and acts on."""
+    props = (spec.parameters or {}).get("properties") or {}
+    takes = {k: str((v or {}).get("description") or (v or {}).get("type") or "")
+             for k, v in props.items()}
+    example = json.dumps({"name": spec.name, "arguments": {m: "..." for m in missing}})
+    out = {
+        "ok": False, "tool": spec.name, "error": "missing_required_arguments",
+        "missing": list(missing), "takes": takes,
+        "message": (f"'{spec.name}' was called without its required argument(s) "
+                    + ", ".join(repr(m) for m in missing)
+                    + ", so nothing ran. Call it again with them inside \"arguments\", e.g. "
+                    + example + "."),
+    }
+    if ignored:
+        out["ignored_args"] = list(ignored)
+    return out
 
 
 def schema_args(spec: "ToolSpec", args: Optional[dict]) -> tuple[dict, list[str]]:
