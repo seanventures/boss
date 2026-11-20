@@ -180,6 +180,28 @@ BURST_WINDOW_SECONDS = 60
 BURST_WAITER_GRACE_SECONDS = 30
 
 
+def reserve_apart(governor: Any, connection: Any, project_id: str, category: str,
+                  amount_usd_micros: int, reason: str, expires_in_minutes: int,
+                  **kwargs: Any) -> dict:
+    """`governor.reserve`, committed in its OWN short transaction — for a caller that keeps
+    its own transaction open across provider I/O or tool calls (a chat turn).
+
+    THE ADMISSION LOCK IS TRANSACTION-SCOPED (`_try_admit`), so a reservation taken on a
+    chat turn's connection held the project's admission for the whole turn — minutes of
+    model calls and tools. Every tool in that turn that reserved on its own connection
+    (deploy_app, deploy_config, a build) was refused "Budget admission is busy with another
+    transaction", every time: laptop 2026-11-20, four deploy_app attempts in a row, with
+    nothing else running on the project. Reserved apart, the lock is released at once;
+    the caller still releases or settles the reservation on its own connection, by id."""
+    engine = getattr(connection, "engine", None)
+    if engine is None:   # a stub connection in a unit test: nothing to hold apart
+        return governor.reserve(connection, project_id, category, amount_usd_micros, reason,
+                                expires_in_minutes, **kwargs)
+    with engine.begin() as own:
+        return governor.reserve(own, project_id, category, amount_usd_micros, reason,
+                                expires_in_minutes, **kwargs)
+
+
 def burst_waiter_key(category: str, reason: str) -> str:
     """Who is waiting, stable across that request's retries — even when each retry is a fresh
     job, as a deferred discovery stage is. A request with a job is ALSO matched by its job, so
