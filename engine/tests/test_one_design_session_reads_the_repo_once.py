@@ -88,4 +88,4 @@ def test_the_pipeline_runs_one_design_session_and_falls_back_per_part():
     assert 'plan_parts["plan_review"]' in design
     # … and the separate review session remains ONLY as the fallback for a skipped section.
     fallback = design[design.index('if not str(d4.get("summary") or "").strip()'):]
-    assert '_review_plan_prompt(title, d3.get("summary", ""))' in fallback
+    assert '_review_plan_prompt(title, d3.get("summary", ""),' in fallback
