@@ -13,7 +13,7 @@ from sqlalchemy.engine import Connection
 from ..config import Settings
 from .agent_process import AgentProcessService
 from .process_compiler import ProcessVocabularyError
-from .budget import BudgetGovernor
+from .budget import BudgetGovernor, reserve_apart
 from .canonical import CanonicalObjectService
 from .capability_manifest import CapabilityManifest
 from . import agent_decision, model_routing
@@ -2279,8 +2279,9 @@ class IntentRouter:
         """
         from .subject_answer import answer_first, answer_seconds
 
-        reservation = self.budget.reserve(
-            connection, project_id, "model", self.settings.agent_router_budget_usd_micros,
+        reservation = reserve_apart(
+            self.budget, connection, project_id, "model",
+            self.settings.agent_router_budget_usd_micros,
             "Orchestration first answer from a subject's record.", 10)
         if reservation.get("status") != "reserved":
             return None
@@ -2850,8 +2851,8 @@ class IntentRouter:
         tool_calls: list[dict[str, Any]] = []
         proposed: list[dict[str, Any]] = []
         try:
-            reservation = self.budget.reserve(
-                connection, project_id, "model",
+            reservation = reserve_apart(
+                self.budget, connection, project_id, "model",
                 self.settings.agent_router_budget_usd_micros,
                 "Orchestration conversational answer.", 10)
             if reservation.get("status") == "reserved":
@@ -4263,7 +4264,8 @@ class IntentRouter:
             return (result["name"], result.get("arguments") or {}) if result.get("name") else None
         if existing:
             return None
-        reservation = self.budget.reserve(
+        reservation = reserve_apart(
+            self.budget,
             connection,
             project_id,
             "model",
