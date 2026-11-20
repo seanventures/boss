@@ -143,8 +143,7 @@ def plan_query(project_id: str, question: str, *, connection: Any = None, settin
     by BOSS. Never executes the plan. No model: `no_model`, said plainly."""
     import json as _json
 
-    from . import provider_limits
-    from .agent_decision import NO_MODEL_REPLY, _provider_name
+    from .agent_decision import NO_MODEL_REPLY, _provider_name, unavailable_reply
 
     def parse(text_out: str):
         import re as _re
@@ -175,11 +174,7 @@ def plan_query(project_id: str, question: str, *, connection: Any = None, settin
         answer = parse(str(text_out or ""))
     except Exception as exc:  # noqa: BLE001 — no model is an answer, never a crash
         answer = None
-        if provider_limits.credit_exhausted(str(exc)):
-            who = _provider_name(adapter) or "its provider"
-            no_model_reason = (f"BOSS could not get an answer: credit balance too low on "
-                               f"{who}. Add credit there (or connect a different model in "
-                               "Setup), then ask again.")
+        no_model_reason = unavailable_reply(str(exc), _provider_name(adapter)) or NO_MODEL_REPLY
     if not isinstance(answer, dict) or not answer.get("status"):
         return {**base, "status": "no_model", "reason": no_model_reason, "connector_kind": None,
                 "suggested_query": None, "window": None}
