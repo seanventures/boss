@@ -26,7 +26,7 @@ import {
   type NeedsYou, type WorkItem, type WorkState,
 } from "../../lib/project-experience";
 import { stampLocal, whenLocal } from "../../lib/local-time";
-import { Empty, Face, Flow, Loading, Failed, EngineNotReady, PxLink, Said, Stations } from "./kit";
+import { Empty, Face, Loading, Failed, EngineNotReady, PxLink, Said } from "./kit";
 import { NewWorkBar } from "./new-work";
 import { RowChipsProvider, RowTicket, TicketWorkBand, useRowChips, useTicketConnections, useTicketsParam } from "./ticket-work";
 import { TicketImportPage } from "./ticket-import";
@@ -74,7 +74,7 @@ const STATION_NAME: Record<string, string> = { plan: "Plan", design: "Decide", b
 const whereNow = (w: WorkItem, local = false) => {
   const now = w.flow.length ? w.flow.find((f) => f.state === "now") : w.stages.find((st) => st.state === "now") ?? w.stages.find((st) => st.state === "todo");
   // A local project's PR station is its change set (BOSSAPP-946).
-  const name = now ? (now.key === "pr" ? changeWords(local).station : STATION_NAME[now.key] ?? now.label) : "";
+  const name = !now ? "" : w.flow.length ? now.label : now.key === "pr" ? changeWords(local).station : STATION_NAME[now.key] ?? now.label;
   return [name, w.age].filter(Boolean).join(" · ");
 };
 /** A finished item's time: the one basis every surface uses (workWhen). */
@@ -159,10 +159,6 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
           ))}
         </div>
         <span className="px-spacer" />
-        <span className="px-legend px-hide-phone" aria-hidden>
-          {[["P", "Plan"], ["D", "Decide"], ["B", "Build"], ["R", "Review"],
-            projectIsLocal(ctx.overview?.project?.repos) ? ["CS", "Change set"] : ["PR", "PR"], ["S", "Staging"]].map(([k, v]) => <span key={k}><span className="px-st-n">{k}</span>{v}</span>)}
-        </span>
         <div className="px-seg px-hide-phone" role="group" aria-label="View">
           <button type="button" aria-pressed={view === "list"} onClick={() => setView("list")} data-testid="px-work-list"><ListBullets size={13} /> List</button>
           <button type="button" aria-pressed={view === "board"} onClick={() => setView("board")} data-testid="px-work-board"><Kanban size={13} /> Board</button>
@@ -210,7 +206,7 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
                 <button key={w.id} type="button" className="px-card" data-link onClick={() => openItem(ctx, w)} data-testid={`px-board-${w.id}`}
                         {...(k === "planned" ? boardDrag.props(w) : {})}
                         style={{ width: "100%", textAlign: "left", font: "inherit", color: "inherit", marginBottom: 8, display: "flex", flexDirection: "column", gap: 6, padding: 10 }}>
-                  <b style={{ fontSize: ".66rem" }}>{w.label}</b>{w.flow.length ? <Flow nodes={w.flow.map((f) => ({ label: f.label, state: f.state, type: f.state }))} /> : <Stations stages={w.stages} />}
+                  <b style={{ fontSize: ".66rem" }}>{w.label}</b><RowDots w={w} local={projectIsLocal(ctx.overview?.project?.repos)} testid={`px-board-flow-${w.id}`} />
                   {attemptsPill(w) || w.state === "stalled" || w.next_up ? (
                     <span className="px-row px-wrap" style={{ gap: 6 }}>
                       {w.next_up ? <span className="px-tag" data-tone="blue">Next up</span> : null}
@@ -333,8 +329,9 @@ export function StalledTag({ w }: { w: Pick<WorkItem, "stalled_since" | "id"> })
 
 type Rank = { up: (() => void) | null; down: (() => void) | null; position: number; total: number };
 
-/** The row's compact flow: Spec · Build · Review & tests · Merge · Staging, one dot each (the
- *  panel's "Who did what" in miniature); the onboarding row's own Discover → Ready → Backlog. */
+/** The row's compact flow, one dot per node (the panel's "Who did what" in miniature): code work's
+ *  Spec · Build · Review & tests · Merge · Staging; a workflow run that changes no app, its own
+ *  steps (engine work_outcome.step_flow); the onboarding row's Discover → Ready → Backlog. */
 function rowFlow(w: WorkItem, local = false): { key: string; name: string; s: string }[] {
   const S: Record<string, string> = { done: "done", now: "live", waiting: "wait", failed: "failed", skipped: "skipped", todo: "todo" };
   if (w.flow.length) return w.flow.map((f) => ({ key: f.key, name: f.label, s: S[f.state] ?? "todo" }));
@@ -351,6 +348,17 @@ function rowFlow(w: WorkItem, local = false): { key: string; name: string; s: st
   ];
 }
 const FLOW_WORD: Record<string, string> = { done: "done", live: "in progress", wait: "waiting on you", failed: "failed", skipped: "skipped", todo: "next" };
+
+/** The dots themselves (the list row and the board card): no letters, the names on hover. */
+function RowDots({ w, local = false, testid = `px-work-flow-${w.id}` }: { w: WorkItem; local?: boolean; testid?: string }) {
+  const flow = rowFlow(w, local);
+  return (
+    <span className="wr-flow" role="img" data-testid={testid}
+          aria-label={flow.map((f) => `${f.name} ${FLOW_WORD[f.s]}`).join(", ")} title={flow.map((f) => `${f.name}: ${FLOW_WORD[f.s]}`).join("\n")}>
+      {flow.map((f) => <i key={f.key} data-s={f.s} />)}
+    </span>
+  );
+}
 
 /** A WORK ROW (operator 2026-11-19: "the current one does not look good" — run/build/change chips,
  *  a letter-dot pipeline, truncated titles, two buttons). Now: the title (short), one line of
@@ -371,7 +379,6 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
     if (r.ok && !r.demo) ctx.refreshWork();
   };
   const said1 = setup ? null : stateSentence(w, next);
-  const flow = rowFlow(w, local);
   const tag = rowTag(w);
   return (
     <div className="px-wk wr" data-s={w.state} data-fresh={fresh || undefined} data-testid={`px-work-${w.id}`}
@@ -404,10 +411,7 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
                 {w.state === "running" ? whereNow(w, local) : w.state === "done" || w.state === "failed" ? [said1.rest, doneDay(w)].filter(Boolean).join(" · ") : said1.rest}</span> : null}
         </span>
       </span>
-      <span className="wr-flow" role="img" data-testid={`px-work-flow-${w.id}`}
-            aria-label={flow.map((f) => `${f.name} ${FLOW_WORD[f.s]}`).join(", ")} title={flow.map((f) => `${f.name}: ${FLOW_WORD[f.s]}`).join("\n")}>
-        {flow.map((f) => <i key={f.key} data-s={f.s} />)}
-      </span>
+      <RowDots w={w} local={local} />
       <span className="wr-act">
         {w.state === "needs_you" && w.preview_app ? (
           <WorkPreviewButton app={w.preview_app} projectId={ctx.projectId} actor={ctx.actor} testid={`px-work-preview-${w.id}`} />

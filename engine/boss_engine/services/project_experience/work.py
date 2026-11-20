@@ -25,6 +25,7 @@ from typing import Any, Iterable, Mapping, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from . import work_outcome
 from .new_work import issue_of
 from .titles import prd_title, short_title
 from .common import (LIVE_RUN, age, agents, as_json, aware, face, href, is_local_project, iso,
@@ -66,7 +67,7 @@ def kind_of(workflow_key: Optional[str], given: Any = None) -> str:
     if str(given or "") in ("feature", "bug", "fix", "ticket", "chore", "incident"):
         return str(given)
     key = str(workflow_key or "").lower()
-    if "incident" in key:
+    if "incident" in key or "investigat" in key:
         return "incident"
     if "fix" in key or "bug" in key:
         return "bug"
@@ -308,6 +309,27 @@ def _with_station_facts(strip: list[dict[str, Any]], spec: Mapping[str, Any],
                 total = 0.0       # the build's time is the build's; review has no time of its own
         out.append({**st, "agent": agent, "started_at": iso(min(starts)) if starts else None,
                     "duration_s": int(total) if total else None})
+    return out
+
+
+def _decisions(connection: Connection, ids: Iterable[Any]) -> dict[str, dict[str, Any]]:
+    """A person's decisions on workflow steps: who decided (in words) and when."""
+    from ..people_names import who
+
+    wanted = sorted({str(i) for i in ids if i})
+    if not wanted:
+        return {}
+    rows = connection.execute(text(
+        "SELECT id, status, approved_by, approved_at FROM decisions WHERE id = ANY(:ids)"),
+        {"ids": wanted}).mappings().all()
+    names: dict[str, str] = {}
+    out = {}
+    for r in rows:
+        actor = str(r["approved_by"] or "")
+        if actor and actor not in names:
+            names[actor] = who(actor, connection)
+        out[str(r["id"])] = {"status": r["status"], "who": names.get(actor) if actor else None,
+                             "at": iso(r["approved_at"])}
     return out
 
 
@@ -881,7 +903,7 @@ def _run_items(connection: Connection, project_id: str, limit: int,
         "r.input->>'short_title' AS short_title, "
         "r.input->>'work_kind' AS work_kind, r.input->>'source_ref' AS source_ref, "
         "r.input->>'source_url' AS source_url, r.input->>'repository' AS repository, "
-        "r.error, r.blocked_reason, d.name AS workflow, "
+        "r.error, r.blocked_reason, d.name AS workflow, r.input AS run_input, "
         "d.workflow_key, (SELECT count(*) FROM workflow_runs n WHERE n.project_id = r.project_id "
         "AND n.created_at <= r.created_at) AS run_number "
         "FROM workflow_runs r JOIN workflow_definitions d ON "
@@ -907,6 +929,8 @@ def _run_items(connection: Connection, project_id: str, limit: int,
     deploys = _deploys(connection, project_id, ids)
     previews = _previews(connection, all_builds)
     preview_rows = _preview_rows(connection, all_builds)
+    decided = _decisions(connection, [st.get("decision_id") for rs in steps.values()
+                                      for st in rs.values() if st.get("step_kind") == "decision"])
     out = []
     for r in runs:
         rid = str(r["id"])
@@ -971,13 +995,30 @@ def _run_items(connection: Connection, project_id: str, limit: int,
         prd = next((st["output"].get("prd_markdown") for st in run_steps.values()
                     if st["output"].get("prd_markdown")), None)
         named = r.get("short_title") or prd_title(prd)
+        kind = kind_of(r["workflow_key"], r["work_kind"])
+        # WHAT THE WORK IS (work_outcome): code-delivery work keeps its stations; any other run
+        # is drawn as its workflow's own steps and told by what it found or produced.
+        shape, flow, told = "code", [], None
+        if not work_outcome.delivers_code(spec, has_builds=bool(members), has_pr=bool(pr_url)):
+            flow = work_outcome.step_flow(spec, run_steps, roster=roster, now=now,
+                                          finished=finished, decisions=decided)
+            told = work_outcome.outcome(
+                spec, run_steps, kind=kind, title=title, directive=r["directive"],
+                run_input=as_json(r["run_input"], {}) or {}, state=state, decisions=decided,
+                run_href=href(project_id, area="delivery_workflows", wfr=rid))
+            shape = told["shape"]
+            if shape == "job" and not r["work_kind"]:
+                kind = "job"
         out.append({
             "id": rid, "source": "workflow_run", "source_label": "Workflow",
             # "Run #43": the run's number in its project (the drawer's story counts the same way).
             "run_number": int(r["run_number"] or 0) or None,
             # A short NAME (titles.short_title), never the brief's first words.
             "label": short_title(title, r["directive"], stored=named), "title": title,
-            "kind": kind_of(r["workflow_key"], r["work_kind"]), "state": state, "status": status,
+            "kind": kind, "state": state, "status": status,
+            # code | investigation | job, its workflow's own steps (code work: none — its
+            # stations), and what it found or produced (work_outcome.outcome).
+            "shape": shape, "flow": flow, "outcome": told,
             "age": age(r["created_at"], now), "created_at": iso(r["created_at"]),
             "updated_at": iso(r["updated_at"]),
             "last_attempt_at": iso((latest or {}).get("created_at")) or iso(r["created_at"]),

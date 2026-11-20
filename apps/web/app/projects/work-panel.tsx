@@ -20,15 +20,17 @@
 import React, { useMemo, useState } from "react";
 import {
   ArrowRight, ArrowsOut, Bug, ChatCircleDots, ChatsCircle, Code, CurrencyDollar, DotsThree, FlowArrow, GitMerge, Graph, Hammer,
-  Lightbulb, Monitor, PaperPlaneRight, Stack, Terminal, Ticket, Wrench,
+  Gear, Lightbulb, LinkSimple, MagnifyingGlass, Monitor, PaperPlaneRight, Stack, Terminal, Ticket, Wrench,
 } from "@phosphor-icons/react";
 
 import { changeRef, linkTarget } from "../../lib/repo-links";
 import { mergeWaitOf, workNextStep, type NextStep } from "../../lib/work-next-step";
 import {
-  attemptsLine, connectorState, costPoints, durationWords, flowNodes, helmSuggestions, secondsBetween, stateSentence, type FlowNode,
+  attemptsLine, connectorState, costPoints, durationWords, flowNodes, helmSuggestions, isCodeWork, secondsBetween, stateSentence, type FlowNode,
 } from "../../lib/work-panel";
-import { KIND_WORDS, ATTEMPT_WORDS, pxHref, pxWrite, writePxUrl, type Agent, type Deployments, type WorkItem, type WorkStory } from "../../lib/project-experience";
+import {
+  KIND_WORDS, ATTEMPT_WORDS, pxHref, pxWrite, writePxUrl, type Agent, type Deployments, type OutcomeEntry, type WorkItem, type WorkOutcome, type WorkStory,
+} from "../../lib/project-experience";
 import { localWith } from "../../lib/local-time";
 import { GatedButton } from "../../components/gated";
 import { ChangeLink } from "../change-link";
@@ -43,7 +45,7 @@ const WORK_WORD: Record<string, { word: string; s: string; tone: string }> = {
   stalled: { word: "Stalled", s: "wait", tone: "amber" }, done: { word: "Done", s: "done", tone: "green" },
   failed: { word: "Failed", s: "failed", tone: "red" }, planned: { word: "Planned", s: "todo", tone: "" },
 };
-const KIND_ICON: Record<string, typeof Lightbulb> = { feature: Lightbulb, bug: Bug, fix: Wrench, ticket: Ticket, chore: Wrench, incident: Bug, setup: Stack };
+const KIND_ICON: Record<string, typeof Lightbulb> = { feature: Lightbulb, bug: Bug, fix: Wrench, ticket: Ticket, chore: Wrench, incident: MagnifyingGlass, setup: Stack, job: Gear };
 const FLOW_WORD: Record<string, string> = { done: "done", live: "BOSS working", wait: "waiting on you", todo: "next", failed: "failed", skipped: "skipped" };
 const BADGE: Record<string, string> = { done: "✓", live: "↻", wait: "!", failed: "✕" };
 
@@ -145,13 +147,15 @@ function Header({ ctx, w, story, next, short, testid }: { ctx: PxCtx; w: WorkIte
 
 // ── 2 who did what ─────────────────────────────────────────────────────────────────────────
 
-export function WhoDidWhat({ nodes, logHref, vertical, testid }: { nodes: FlowNode[]; logHref: string; vertical?: boolean; testid: string }) {
+export function WhoDidWhat({ nodes, logHref, logLabel = "Full timeline & live log", vertical, testid }: {
+  nodes: FlowNode[]; logHref: string; logLabel?: string; vertical?: boolean; testid: string;
+}) {
   return (
     <section className="wp-card wp-flow" aria-label="Who did what" data-vertical={vertical || undefined} data-testid={`${testid}-flow`}>
       <h2 className="wp-sec-h">Who did what <span className="wp-ln" /></h2>
-      <ol className="wp-lane">
+      <ol className="wp-lane" style={{ "--wp-n": Math.max(nodes.length, 1) } as React.CSSProperties}>
         {nodes.map((n, i) => (
-          <li key={n.key} className="wp-node" data-s={n.state} data-testid={`${testid}-node-${n.key}`}
+          <li key={n.key} className="wp-node" data-s={n.state} data-testid={`${testid}-node-${n.key}`} title={n.title || undefined}
               aria-label={`${n.name}: ${FLOW_WORD[n.state]}${n.sub ? `, ${n.sub}` : ""}`}>
             <div className="wp-ring">
               {n.you ? <Face agent={{ name: "You" }} size={34} /> : n.agent ? <Face agent={n.agent} size={34} state={n.state === "live" ? "working" : "idle"} /> : <span />}
@@ -175,7 +179,7 @@ export function WhoDidWhat({ nodes, logHref, vertical, testid }: { nodes: FlowNo
           <span><span className="wp-dot" data-s="done" />done</span><span><span className="wp-dot" data-s="live" />BOSS working</span>
           <span><span className="wp-dot" data-s="wait" />you</span><span><span className="wp-dot" />next</span>
         </span>
-        {logHref ? <a href={pxHref(logHref)} data-testid={`${testid}-log`}>Full timeline &amp; live log <ArrowRight size={12} aria-hidden /></a> : null}
+        {logHref ? <a href={pxHref(logHref)} data-testid={`${testid}-log`}>{logLabel} <ArrowRight size={12} aria-hidden /></a> : null}
       </div>
     </section>
   );
@@ -264,6 +268,114 @@ function Story({ w, story, testid }: { w: WorkItem; story: WorkStory | null; tes
           </>
         ) : <p className="wp-p wp-dim">Nothing built yet.</p>}
       </div>
+    </section>
+  );
+}
+
+// ── 3' what a workflow run found or produced (work that changes no app) ──────────────────
+
+const ENTRY_MARK: Record<string, { s: string; mark: string; word: string }> = {
+  approved: { s: "done", mark: "✓", word: "approved" }, done: { s: "done", mark: "✓", word: "done" },
+  proposed: { s: "live", mark: "→", word: "proposed" }, running: { s: "live", mark: "↻", word: "running" },
+  waiting: { s: "wait", mark: "!", word: "waiting on you" }, failed: { s: "failed", mark: "✕", word: "failed" },
+  rejected: { s: "failed", mark: "✕", word: "declined" }, declined: { s: "failed", mark: "✕", word: "declined" },
+};
+
+function Entry({ e, testid }: { e: OutcomeEntry; testid: string }) {
+  const m = ENTRY_MARK[e.state] ?? { s: "done", mark: "·", word: e.state };
+  return (
+    <li className="wp-oc-e" data-s={m.s} data-testid={testid}>
+      <span className="wp-oc-mark" aria-label={m.word}>{m.mark}</span>
+      <div style={{ minWidth: 0 }}>
+        <div className="wp-oc-step">{e.step}{e.person ? <span className="wp-pill" data-tone={m.s === "failed" ? "red" : m.s === "wait" ? "amber" : "green"}>{m.word}</span> : null}</div>
+        {e.person ? <div className="wp-oc-who">{[e.who ? `${e.who}` : "", e.at ? hhmm(e.at) : ""].filter(Boolean).join(" · ") || "a person decides"}</div>
+          : <p className="wp-p">{e.text}</p>}
+      </div>
+    </li>
+  );
+}
+
+/** ASKED · FOUND · REMEDIATION (an investigation) or ASKED · PRODUCED (a job), from the run's
+ *  own step outputs. A section with nothing on record is left out, never drawn empty. */
+export function Outcome({ w, oc, testid }: { w: WorkItem; oc: WorkOutcome; testid: string }) {
+  const ask = oc.asked;
+  const asked = ask.text || w.title || w.label;
+  const f = oc.found;
+  let n = 0;
+  const num = () => <span className="wp-n">{++n}</span>;
+  return (
+    <section className="wp-card wp-oc" aria-label={oc.shape === "investigation" ? "What was asked, found and done" : "What was asked and produced"} data-testid={`${testid}-outcome`} data-shape={oc.shape}>
+      <div data-testid={`${testid}-asked`}>
+        <h3 className="wp-k">{num()}Asked</h3>
+        <p className="wp-quote">“{asked}”</p>
+        {ask.trigger ? (
+          <div className="wp-oc-trig" data-testid={`${testid}-trigger`}>
+            <span className="wp-oc-step">{ask.trigger_step || "What triggered it"}</span>
+            <p className="wp-p">{ask.trigger}</p>
+          </div>
+        ) : null}
+        {ask.facts.length ? <div className="wp-files">{ask.facts.map((x) => <span key={x.label} className="wp-fchip">{x.label} <b>{x.value}</b></span>)}</div> : null}
+      </div>
+      {f ? (
+        <div data-testid={`${testid}-found`}>
+          <h3 className="wp-k">{num()}Found
+            <span className="wp-r">{[f.step, f.confidence !== null ? `confidence ${f.confidence.toFixed(2)}` : ""].filter(Boolean).join(" · ")}</span></h3>
+          <p className="wp-oc-head" data-testid={`${testid}-cause`}>{f.text}</p>
+          {f.rationale ? <p className="wp-p wp-muted" style={{ marginTop: 8 }}>{f.rationale}</p> : null}
+          {f.refs.length || f.cited ? (
+            <div className="wp-files" data-testid={`${testid}-refs`}>
+              {f.refs.map((r) => <span key={r} className="wp-fchip">{r}</span>)}
+              {f.cited ? <span className="wp-fchip">facts cited <b>{f.cited}</b></span> : null}
+            </div>
+          ) : null}
+          {oc.evidence.length ? (
+            <details className="wp-oc-more" data-testid={`${testid}-evidence`}>
+              <summary className="wp-more">Evidence · {oc.evidence.length} step{oc.evidence.length === 1 ? "" : "s"} ▾</summary>
+              <ul className="wp-tight" style={{ marginTop: 8 }}>{oc.evidence.map((e) => <li key={e.step}><span><b>{e.step}:</b> {e.text}</span></li>)}</ul>
+            </details>
+          ) : null}
+          {f.others.length ? (
+            <details className="wp-oc-more">
+              <summary className="wp-more">Also considered · {f.others.length} ▾</summary>
+              <ul className="wp-tight" style={{ marginTop: 8 }}>{f.others.map((o) => <li key={o.text}><span>{o.text}{o.confidence !== null ? ` (${o.confidence.toFixed(2)})` : ""}</span></li>)}</ul>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
+      {oc.produced.length || oc.counts.length ? (
+        <div data-testid={`${testid}-produced`}>
+          <h3 className="wp-k">{num()}Produced</h3>
+          {oc.counts.length ? (
+            <div className="wp-oc-counts" data-testid={`${testid}-counts`}>
+              {oc.counts.map((c) => <div key={c.label} className="wp-kpi">{c.label}<b>{c.value.toLocaleString()}</b></div>)}
+            </div>
+          ) : null}
+          <ul className="wp-tight" style={{ marginTop: oc.counts.length ? 12 : 0 }}>
+            {oc.produced.map((p) => <li key={p.step}><span><b>{p.step}:</b> {p.text}</span></li>)}
+          </ul>
+        </div>
+      ) : null}
+      {oc.remediation.length ? (
+        <div data-testid={`${testid}-remediation`}>
+          <h3 className="wp-k">{num()}{oc.shape === "investigation" ? "Remediation" : "Decisions"}</h3>
+          <ol className="wp-oc-list">{oc.remediation.map((e, i) => <Entry key={`${e.step}-${i}`} e={e} testid={`${testid}-rem`} />)}</ol>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/** Where its outputs are: the links its steps recorded and the run itself. */
+function OutputsCard({ oc, w, testid }: { oc: WorkOutcome; w: WorkItem; testid: string }) {
+  const run = oc.run_href || w.links.workflow_run;
+  if (!oc.links.length && !run) return null;
+  return (
+    <section className="wp-card wp-box" aria-label="Outputs" data-testid={`${testid}-outputs`}>
+      <h2 className="wp-box-h"><LinkSimple size={16} aria-hidden />Outputs</h2>
+      <ul className="wp-oc-links">
+        {oc.links.map((l) => <li key={l.href}><a href={pxHref(l.href)} data-testid={`${testid}-out-link`}>{l.label} <ArrowRight size={12} aria-hidden /></a></li>)}
+        {run ? <li><a href={pxHref(run)} data-testid={`${testid}-out-run`}>The run, step by step, with every output <ArrowRight size={12} aria-hidden /></a></li> : null}
+      </ul>
     </section>
   );
 }
@@ -502,7 +614,31 @@ export function WorkPanel({ ctx, w, story, deployments, extra, testid = "px-wp" 
   ctx: PxCtx; w: WorkItem; story: WorkStory | null; deployments: Deployments | null; extra?: React.ReactNode; testid?: string;
 }) {
   const { next, nodes } = useFlow(ctx, w, story, deployments);
-  const noProdHost = !(deployments?.environments ?? []).some((e) => e.key === "production");
+  const code = isCodeWork(w);
+  const noProdHost = code && !(deployments?.environments ?? []).some((e) => e.key === "production");
+  if (!code) {
+    // WORK THAT CHANGES NO APP (an investigation, a job): its workflow's own steps, then what it
+    // found or produced. No preview, change, merge, deployments or prod host — it deploys nothing.
+    const oc = w.outcome ?? null;
+    return (
+      <div className="wp wp-page" data-testid={testid} data-shape={w.shape}>
+        <Header ctx={ctx} w={w} story={story} next={next} testid={testid} />
+        {extra}
+        <WhoDidWhat nodes={nodes} logHref={w.links.workflow_run} logLabel="The run, step by step" testid={testid} />
+        <div className="wp-grid">
+          <div className="wp-col">
+            {oc ? <Outcome w={w} oc={oc} testid={testid} /> : null}
+          </div>
+          <aside className="wp-col" aria-label="Evidence">
+            {oc ? <OutputsCard oc={oc} w={w} testid={testid} /> : null}
+            <Attempts ctx={ctx} w={w} testid={testid} />
+            <CostCard w={w} testid={testid} />
+          </aside>
+        </div>
+        <HelmDock ctx={ctx} w={w} noProdHost={false} testid={testid} />
+      </div>
+    );
+  }
   return (
     <div className="wp wp-page" data-testid={testid}>
       <Header ctx={ctx} w={w} story={story} next={next} testid={testid} />
@@ -535,7 +671,8 @@ export function WorkPanelShort({ ctx, w, story, deployments, extra, onOpen, test
     <div className="wp wp-short" data-testid={`${testid}-short`}>
       <Header ctx={ctx} w={w} story={story} next={next} short testid={testid} />
       {extra}
-      <WhoDidWhat nodes={nodes} logHref={w.links.log || w.links.build} vertical testid={testid} />
+      {isCodeWork(w) ? <WhoDidWhat nodes={nodes} logHref={w.links.log || w.links.build} vertical testid={testid} />
+        : <WhoDidWhat nodes={nodes} logHref={w.links.workflow_run} logLabel="The run, step by step" vertical testid={testid} />}
       <button type="button" className="wp-btn" onClick={onOpen} data-testid={`${testid}-open`}><Hammer size={14} aria-hidden /> Open the whole page <ArrowRight size={12} aria-hidden /></button>
     </div>
   );
