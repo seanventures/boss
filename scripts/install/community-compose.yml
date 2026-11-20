@@ -343,6 +343,7 @@ services:
       secrets:
         - boss_build_ca
       args:
+        BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
         # Build toolchains (docs/community/TOOLCHAINS.md): java,go unless .env says otherwise (none, or a
@@ -747,6 +748,7 @@ services:
       secrets:
         - boss_build_ca
       args:
+        BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
         # Build toolchains (docs/community/TOOLCHAINS.md): java,go unless .env says otherwise (none, or a
@@ -1044,6 +1046,7 @@ services:
       secrets:
         - boss_build_ca
       args:
+        BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
         # Build toolchains (docs/community/TOOLCHAINS.md): java,go unless .env says otherwise (none, or a
@@ -1096,6 +1099,7 @@ services:
       secrets:
         - boss_build_ca
       args:
+        BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
         BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-java,go}
@@ -1136,6 +1140,7 @@ services:
       secrets:
         - boss_build_ca
       args:
+        BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
         # Build toolchains (docs/community/TOOLCHAINS.md): java,go unless .env says otherwise (none, or a
@@ -1270,6 +1275,7 @@ services:
       secrets:
         - boss_build_ca
       args:
+        BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
         BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-java,go}
@@ -1329,6 +1335,7 @@ services:
       secrets:
         - boss_build_ca
       args:
+        BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
         # THE PORT IS DECLARED ONCE, ABOVE, AND EVERYTHING DERIVES FROM IT.
         #
         # This defaulted to a literal :8000 while the api publishes on ${BOSS_API_PORT}. An

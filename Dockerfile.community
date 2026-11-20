@@ -199,6 +199,7 @@ print("toolchains:", ", ".join(sorted(merged)) or "none")
 PY
 
 FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS python-runtime
+ARG BOSS_NPM_REGISTRY=
 
 COPY EXPORT_CANDIDATE_STATUS.json /tmp/community-export-status.json
 RUN python -c 'import json; assert json.load(open("/tmp/community-export-status.json"))["mechanically_complete"], "Community source export is blocked"'
@@ -402,6 +403,7 @@ EXPOSE 8765 8770 8771
 CMD ["python", "-m", "tools.mcp_tools_mux"]
 
 FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS web-builder
+ARG BOSS_NPM_REGISTRY=
 WORKDIR /app
 COPY scripts/install/node-build-with-ca.sh /usr/local/libexec/boss-node-build-with-ca
 COPY EXPORT_CANDIDATE_STATUS.json /tmp/community-export-status.json
@@ -426,6 +428,7 @@ RUN --mount=type=secret,id=boss_build_ca \
     sh /usr/local/libexec/boss-node-build-with-ca pnpm --filter boss-web build
 
 FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS web
+ARG BOSS_NPM_REGISTRY=
 COPY scripts/install/node-build-with-ca.sh /usr/local/libexec/boss-node-build-with-ca
 ARG NEXT_PUBLIC_BOSS_API_URL=
 ARG NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
