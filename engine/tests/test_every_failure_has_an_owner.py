@@ -594,3 +594,30 @@ def test_a_workflow_whose_authority_ended_is_the_person_s_and_one_from_before_a_
         rows[expired]["cause_code"] == "approval_expired"
     assert rows[before]["state"] == "needs_person" and "before BOSS last started" in \
         rows[before]["reason"]
+
+
+def test_a_step_a_person_rejected_is_their_answer_never_retried_or_self_fixed(eng, project, stubbed):  # noqa: F811
+    # Laptop 2026-11-20: a person rejected a staging deploy approval; the loop read "you
+    # rejected it" as BOSS's own failure and re-ran the step, asking them the same question
+    # twice more. A refusal is an answer: the run is settled, no retry, no card, no self-fix.
+    with eng.begin() as c:
+        wr = _workflow(c, project, step_error="you rejected it",
+                       step_output={"decision_id": "dec_x", "outcome": "rejected",
+                                    "rejected_by_approver": True})
+        expired = _workflow(c, project, step_error="the approval expired before anybody answered",
+                            step_output={"decision_id": "dec_y", "outcome": "expired",
+                                         "rejected_by_approver": False})
+    fo.sweep(eng, _settings(), project_id=project)
+    with eng.begin() as c:
+        row = _owner(c, "workflow_run", wr)
+        other = _owner(c, "workflow_run", expired)
+        recs = c.execute(text("SELECT signature FROM boss_recommendations WHERE project_id = :p"),
+                         {"p": project}).scalars().all()
+        cards = _cards(c, project)
+    assert ("workflow_run", wr, "platform") not in stubbed and \
+        all(item != wr for _, item, _ in stubbed), "BOSS never re-asks a person who said no"
+    assert row["state"] == "resolved" and "rejected" in row["words"]
+    assert not any(wr in s for s in recs)
+    assert all((k["recommendation"] or {}).get("items", [{}])[0].get("id") != wr for k in cards)
+    # An approval nobody answered is still the person's action item, not settled.
+    assert other["state"] == "needs_person" and other["cause_code"] == "approval_expired"

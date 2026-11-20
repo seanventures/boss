@@ -472,6 +472,14 @@ class CodeTasks(Surface):
         return True
 
 
+def _refused_by_a_person(output: Any) -> Any:
+    """The decision id (or True) when a workflow step failed because a person answered its
+    approval NO (`workflows._refuse_step` writes `rejected_by_approver`), else None."""
+    if not isinstance(output, dict) or not output.get("rejected_by_approver"):
+        return None
+    return str(output.get("decision_id") or "") or True
+
+
 class WorkflowRuns(Surface):
     """A workflow run that failed or was dead-lettered (its builds and deploys are its own)."""
 
@@ -508,8 +516,22 @@ class WorkflowRuns(Surface):
                             str(r["title"]), str(r["last_error"] or r["error"] or ""),
                             _aware(r["updated_at"]),
                             {"step_id": r["step_id"], "step_status": r["step_status"],
-                             "recovery": last if isinstance(last, dict) else {}}))
+                             "recovery": last if isinstance(last, dict) else {},
+                             "refused": _refused_by_a_person(output)}))
         return out
+
+    def settled(self, c, item):
+        # A PERSON'S "NO" IS AN ANSWER, NOT A FAILURE (laptop 2026-11-20): a staging approval a
+        # person rejected left the step `failed` (workflows._refuse_step), the words "you
+        # rejected it" matched no cause, so the loop called it BOSS's own failure and re-ran
+        # the step — which asked the same person the same question again, twice, and would
+        # have filed a self-fix after that. The run stopped on their decision; nothing is owed.
+        refused = item.hints.get("refused")
+        if refused:
+            return Said(RESOLVED, "A person rejected its approval; the run stopped on their "
+                                  "answer.", by="its approver",
+                        decision_id=refused if isinstance(refused, str) else None)
+        return None
 
     def moving(self, c, item):
         live = c.execute(text(
