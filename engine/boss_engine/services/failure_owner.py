@@ -928,8 +928,17 @@ _JOB_KINDS_OWNED_ELSEWHERE = ("code.task", "deployment.stack_apply", "deployment
 #: Kinds whose dedupe key is per attempt (a model check, a docs update per event): their lineage
 #: is what they keep doing — the role's model, the docs subscription, the repository binding.
 #: 334 proofs of one project's model, each its own dedupe key, are ONE thing failing.
-_JOB_LINEAGE = {"connection.proof": "role", "docs.update": "subscription_id",
-                "knowledge.repository.index": "binding_id"}
+#: A model check's lineage is its role AND the model source it proves (`step_id`: claude_code,
+#: codex, setup-anthropic …): laptop 2026-11-20, an Anthropic API key failing every proof with
+#: HTTP 401 shared one lineage with Claude Code and Codex, so (a) each passing Claude Code proof
+#: "superseded" it and withdrew its card, which came back on the next project an hour later,
+#: and (b) its card said "Sign in to the model again" without naming which model.
+_JOB_LINEAGE: dict[str, tuple[str, ...]] = {
+    "connection.proof": ("role", "step_id"), "docs.update": ("subscription_id",),
+    "knowledge.repository.index": ("binding_id",)}
+#: How a model check's card names the source it proves.
+_PROOF_SOURCE = {"claude_code": "Claude Code", "codex": "Codex",
+                 "setup-anthropic": "Anthropic API key", "setup-openai": "OpenAI API key"}
 #: Payload fields that name what a job is about, for the lineage of a job with no dedupe key.
 _JOB_SUBJECT = ("pull_request_url", "run_id", "conversation_id", "binding_id", "repo",
                 "entity_id", "workflow_run_id", "target_id", "connection_id")
@@ -961,12 +970,12 @@ class Jobs(Surface):
             payload = _json(r["payload"], {}) or {}
             subject = next((str(payload[k]) for k in _JOB_SUBJECT if payload.get(k)), "")
             by_field = _lineage_field(str(r["kind"]), payload)
-            lineage = (f"{by_field[0]}:{by_field[1]}" if by_field else
+            lineage = ("|".join(f"{f}:{v}" for f, v in by_field) if by_field else
                        _job_lineage(c, str(r["id"]), r["dedupe_key"], payload))
             err = _json(r["last_error"], {}) if r["last_error"] is not None else {}
             words = (err.get("message") if isinstance(err, dict) else None) or r["reason"] or ""
             out.append(Item(self.key, f"{r['kind']}:{lineage}"[:400], str(r["dl_id"]),
-                            r["project_id"], _job_title(str(r["kind"])), str(words),
+                            r["project_id"], _job_title(str(r["kind"]), payload), str(words),
                             _aware(r["created_at"]),
                             {"job_id": r["id"], "kind": r["kind"], "dedupe_key": r["dedupe_key"],
                              "subject": subject, "payload": payload,
@@ -981,7 +990,7 @@ class Jobs(Surface):
         h = item.hints
         by_field = _lineage_field(h["kind"], h["payload"] or {})
         if by_field:
-            clause, params = f"payload->>'{by_field[0]}' = :lf", {"lf": by_field[1]}
+            clause, params = _lineage_clause(by_field, "payload")
         elif h.get("dedupe_key"):
             clause, params = "dedupe_key = :k", {"k": h["dedupe_key"]}
         elif h.get("subject"):
@@ -1057,7 +1066,7 @@ class Jobs(Surface):
     def _dead_count(self, c, item) -> int:
         """Dead letters of this lineage within reach (each one an attempt that failed)."""
         by_field = _lineage_field(item.hints["kind"], item.hints["payload"] or {})
-        clause, params = ((f"j.payload->>'{by_field[0]}' = :lf", {"lf": by_field[1]}) if by_field
+        clause, params = (_lineage_clause(by_field, "j.payload") if by_field
                           else ("COALESCE(j.dedupe_key, '') = :dk",
                                 {"dk": item.hints.get("dedupe_key") or ""}))
         return int(c.execute(text(
@@ -1112,9 +1121,16 @@ class Jobs(Surface):
 
     def still_failed(self, c, ref):
         row = c.execute(text(
-            "SELECT d.status, j.status AS requeued FROM deadletters d LEFT JOIN jobs j "
-            "ON j.id = d.requeued_job_id WHERE d.id = :d"), {"d": ref["id"]}).mappings().first()
+            "SELECT d.status, j.status AS requeued, src.payload->>'step_id' AS source "
+            "FROM deadletters d LEFT JOIN jobs j ON j.id = d.requeued_job_id "
+            "LEFT JOIN jobs src ON src.id = d.source_id WHERE d.id = :d"),
+            {"d": ref["id"]}).mappings().first()
         if row is None or row["status"] == "resolved":
+            return False
+        key = str(ref.get("key") or "")
+        if key.startswith("connection.proof:") and "|step_id:" not in key and row["source"]:
+            # Owned under the role-only lineage from before a model check was keyed by its
+            # source: the per-source row owns this dead letter now, so this one stands down.
             return False
         if row["status"] == "open":
             return True
@@ -1188,13 +1204,28 @@ def _job_lineage(c: Any, job_id: str, dedupe_key: Any, payload: Mapping[str, Any
     return str(dedupe_key or subject or job_id)
 
 
-def _lineage_field(kind: str, payload: Mapping[str, Any]) -> Optional[tuple[str, str]]:
-    field_name = _JOB_LINEAGE.get(kind)
-    value = payload.get(field_name) if field_name else None
-    return (field_name, str(value)) if value else None
+def _lineage_field(kind: str, payload: Mapping[str, Any]) -> Optional[list[tuple[str, str]]]:
+    """The (field, value) pairs that name a job's lineage, or None when its first field is
+    absent. A later field a job does not carry (an older proof with no `step_id`) is left out,
+    so its lineage is what it was before."""
+    fields = _JOB_LINEAGE.get(kind) or ()
+    if not fields or not payload.get(fields[0]):
+        return None
+    return [(f, str(payload[f])) for f in fields if payload.get(f)]
 
 
-def _job_title(kind: str) -> str:
+def _lineage_clause(pairs: list[tuple[str, str]], column: str) -> tuple[str, dict[str, str]]:
+    """SQL matching the same lineage, by every field named (each field is a fixed name from
+    _JOB_LINEAGE, never input; the values are bound)."""
+    clause = " AND ".join(f"{column}->>'{f}' = :lf{i}" for i, (f, _v) in enumerate(pairs))
+    return f"({clause})", {f"lf{i}": v for i, (_f, v) in enumerate(pairs)}
+
+
+def _job_title(kind: str, payload: Optional[Mapping[str, Any]] = None) -> str:
+    if kind == "connection.proof":
+        source = str((payload or {}).get("step_id") or "").strip()
+        if source:
+            return f"Model connection check · {_PROOF_SOURCE.get(source, source)}"
     return {"connection.proof": "Model connection check", "docs.update": "Docs update",
             "knowledge.repository.index": "Repository index", "meeting.step": "Panel step",
             "github.pull_request.merge": "Merge", "agent.conversation": "Agent reply",

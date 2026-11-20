@@ -621,3 +621,32 @@ def test_a_step_a_person_rejected_is_their_answer_never_retried_or_self_fixed(en
     assert all((k["recommendation"] or {}).get("items", [{}])[0].get("id") != wr for k in cards)
     # An approval nobody answered is still the person's action item, not settled.
     assert other["state"] == "needs_person" and other["cause_code"] == "approval_expired"
+
+
+def test_a_model_check_is_owned_per_source_and_its_card_names_the_source(eng, project):  # noqa: F811
+    # Laptop 2026-11-20: an Anthropic API key failed every proof with HTTP 401 while Claude
+    # Code and Codex passed. One role-only lineage let each passing Claude Code proof
+    # "supersede" the key's failure (card withdrawn, back an hour later on another project),
+    # and the card said "Sign in to the model again" without naming which model.
+    err = "RuntimeError: HTTP 401"
+    with eng.begin() as c:
+        _dead_job(c, project, "connection.proof", err, dedupe=f"job:connection:{project}:a1",
+                  payload={"role": "primary", "step_id": "setup-anthropic"}, at=_ago(minutes=30))
+        c.execute(text(
+            "INSERT INTO jobs (id, project_id, kind, status, payload, dedupe_key, created_at, "
+            "updated_at) VALUES (:i, :p, 'connection.proof', 'succeeded', CAST(:pl AS JSONB), "
+            ":d, now(), now())"),
+            {"i": f"job_{uuid4().hex[:20]}", "p": project, "d": f"job:connection:{project}:c1",
+             "pl": json.dumps({"role": "primary", "step_id": "claude_code"})})
+    fo.sweep(eng, _settings(), project_id=project)
+    key = "connection.proof:role:primary|step_id:setup-anthropic"
+    with eng.begin() as c:
+        row = _owner(c, "job", key)
+        cards = _cards(c, project)
+    assert row is not None and row["state"] == "needs_person", \
+        "another source passing is not this source fixed"
+    assert row["cause_code"] == "model_login"
+    assert any("Anthropic API key" in k["question"] for k in cards)
+    assert fo._job_title("connection.proof", {"step_id": "codex"}) == \
+        "Model connection check · Codex"
+    assert fo._job_title("connection.proof", {}) == "Model connection check"
