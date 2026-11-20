@@ -194,7 +194,7 @@ describe("talking to one agent", () => {
     });
     await settle();
     const note = q('[data-testid="ag-talk-action-handoff"]')!;
-    expect(note.textContent).toContain("cannot inspect live logs or execute repairs");
+    expect(note.textContent).toContain("Advice only — no repair tools.");
     const before = calls.length;
     await act(async () => { note.querySelector<HTMLButtonElement>("button")!.click(); });
     const params = new URL(window.location.href).searchParams;

@@ -72,7 +72,9 @@ export function TalkSheet({ projectId, actor, conversationId, greet, draft, book
         <div className="ag-talk-body" ref={scroller} data-testid="ag-talk-body">
           {!plan && conversation ? (
             <div role="note" data-testid="ag-talk-action-handoff">
-              <p>This conversation gives advice; it cannot inspect live logs or execute repairs.</p>
+              <p title="This conversation gives advice; it cannot inspect live logs or execute repairs.">
+                Advice only — no repair tools.
+              </p>
               {conversationInvestigation(conversation.context) ? (
                 <button type="button" className="ag-btn" disabled={busy}
                         onClick={() => {
@@ -84,7 +86,7 @@ export function TalkSheet({ projectId, actor, conversationId, greet, draft, book
                   Investigate with BOSS
                 </button>
               ) : null}
-              <p>Recovery uses BOSS's existing permissions and approval checks.</p>
+              <p>Permissions and approval checks still apply.</p>
             </div>
           ) : null}
           <RateScope.Provider value={{ projectId, actor }}>
