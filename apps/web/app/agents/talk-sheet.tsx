@@ -18,6 +18,8 @@ import {
   useStickToBottom,
 } from "./converse-parts";
 import type { SeatInfo } from "../../lib/agent-converse";
+import { conversationInvestigation } from "../../lib/conversation-investigation";
+import { openDockAbout } from "../../lib/dock-subject";
 
 export function TalkSheet({ projectId, actor, conversationId, greet, draft, book, onClose, onPlan, onNew }: {
   projectId: string; actor: string; conversationId: string;
@@ -68,6 +70,23 @@ export function TalkSheet({ projectId, actor, conversationId, greet, draft, book
                   onPlan={onPlan && conversation && !plan ? () => onPlan(roleKey, conversation) : undefined}
                   onNew={onNew && roleKey ? () => onNew(roleKey) : undefined} />
         <div className="ag-talk-body" ref={scroller} data-testid="ag-talk-body">
+          {!plan && conversation ? (
+            <div role="note" data-testid="ag-talk-action-handoff">
+              <p>This conversation gives advice; it cannot inspect live logs or execute repairs.</p>
+              {conversationInvestigation(conversation.context) ? (
+                <button type="button" className="ag-btn" disabled={busy}
+                        onClick={() => {
+                          const opening = conversationInvestigation(conversation.context);
+                          if (!opening) return;
+                          onClose();
+                          openDockAbout(opening);
+                        }}>
+                  Investigate with BOSS
+                </button>
+              ) : null}
+              <p>Recovery uses BOSS's existing permissions and approval checks.</p>
+            </div>
+          ) : null}
           <RateScope.Provider value={{ projectId, actor }}>
           {(conversation?.turns ?? []).map((turn) => (
             <TurnItem key={turn.turnId} turn={turn} live={busy && turn.status === "streaming"}

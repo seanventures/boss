@@ -186,6 +186,25 @@ describe("the stream reader", () => {
 // ── 1:1 ──────────────────────────────────────────────────────────────────────────────────────
 
 describe("talking to one agent", () => {
+  it("hands a scoped investigation to BOSS without executing a repair in the advisory chat", async () => {
+    await mountHost();
+    await act(async () => {
+      converse.openTalk("qa", { from: "run_step", workflowRunId: "wfr_owned", stepId: "preview" },
+        { draft: "Why did preview fail?", fresh: true });
+    });
+    await settle();
+    const note = q('[data-testid="ag-talk-action-handoff"]')!;
+    expect(note.textContent).toContain("cannot inspect live logs or execute repairs");
+    const before = calls.length;
+    await act(async () => { note.querySelector<HTMLButtonElement>("button")!.click(); });
+    const params = new URL(window.location.href).searchParams;
+    expect(params.get("agent")).toBe("workflow_step:wfr_owned:preview");
+    expect(params.get("dock_ask")).toContain("create a human action item");
+    expect(q('[data-testid="ag-talk"]')).toBeNull();
+    expect(calls).toHaveLength(before);
+    window.history.replaceState(null, "", "/");
+  });
+
   it("opens from a door, greets through a real turn, and the face is truthful while it does", async () => {
     await mountHost();
     await act(async () => { converse.openTalk("qa", { from: "passport" }); });
