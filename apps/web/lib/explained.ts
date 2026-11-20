@@ -67,9 +67,16 @@ export function criteriaWords(about: Pick<About, "criteria" | "counts">): string
 }
 
 export type FileGroup = { purpose: string; files: string[]; count: number };
+export type MustHave = { n: number; text: string; verdict: CriterionStatus; evidence: string | null };
 export type Built = {
   buildId: string; title: string; number: number | null; status: string;
   bullets: string[]; groups: FileGroup[]; filesChanged: number; followUps: string[];
+  /** One plain sentence about the user-visible change (engine explained.summary_of), or null. */
+  summary: string | null;
+  /** The must-haves with their verdicts from the build's acceptance check (empty when none). */
+  mustHaves: MustHave[];
+  tests: { files: number; passed: boolean | null; count: number | null };
+  review: { rounds: number; raised: number };
 };
 export type Discussed = { decisions: string[]; openQuestions: string[]; dissent: string | null; seats: number; href: string };
 export type Explained = {
@@ -93,6 +100,15 @@ export function parseExplained(v: unknown): Explained | null {
     groups: a(b.groups).map((g) => { const y = o(g); return { purpose: s(y.purpose), files: strs(y.files), count: num(y.count) || strs(y.files).length }; })
       .filter((g) => g.purpose && g.count),
     filesChanged: num(b.files_changed), followUps: strs(b.follow_ups),
+    summary: sn(b.summary),
+    mustHaves: a(o(b.acceptance).items).map((m, i) => {
+      const y = o(m);
+      return { n: num(y.n) || i + 1, text: s(y.text), verdict: STATUSES.includes(y.verdict as CriterionStatus) ? (y.verdict as CriterionStatus) : "unchecked",
+               evidence: sn(y.evidence) };
+    }).filter((m) => m.text),
+    tests: { files: a(o(b.tests).files).length, passed: typeof o(b.tests).passed === "boolean" ? (o(b.tests).passed as boolean) : null,
+             count: typeof o(b.tests).count === "number" ? (o(b.tests).count as number) : null },
+    review: { rounds: num(o(b.review).rounds), raised: num(o(b.review).raised) },
   } : null;
   const later = a(x.later).map((l) => { const y = o(l); return { buildId: s(y.build_id), title: s(y.title), number: typeof y.number === "number" ? y.number : null, line: s(y.line) }; })
     .filter((l) => l.buildId);

@@ -7,6 +7,13 @@
  *   decide   the engine's action label ("Approve deploy", "Approve plan", "Decide")
  *
  * null when the work does not wait on a person.
+ *
+ * TWO HONEST MERGES (the Work panel wireframe, park-bench-map run #2):
+ *   - a later attempt still fixing the same change (merge_pr.fixing): "BOSS is fixing 4 findings
+ *     on change #3 — merge now or wait"; Merge stays offered, but as the SECOND choice
+ *     (`secondary`), and the first is watching the fix (`wait`).
+ *   - no must-have fully met (merge_pr.acceptance.met == 0): never "Ready to merge"; it says
+ *     what is partial ("0 of 4 must-haves met, 4 partly").
  */
 import { changeHref, changeRef, isLocalChangeUrl } from "./repo-links";
 import type { WorkItem } from "./project-experience";
@@ -23,7 +30,21 @@ export type NextStep = {
   href: string;
   /** The href leaves the console (a GitHub pull request). */
   external: boolean;
+  /** Merge is offered second: BOSS is still fixing this change (merge_pr.fixing). */
+  secondary?: boolean;
+  /** The first choice while BOSS fixes it: watch the fix (its live log). */
+  wait?: { label: string; href: string } | null;
 };
+
+type Acceptance = { met: number; partial: number; missing: number; total: number };
+
+/** "0 of 4 must-haves met, 4 partly" — what is partial, in words. */
+export function mustHaveWords(acc: Acceptance): string {
+  const bits = [`${acc.met} of ${acc.total} must-have${acc.total === 1 ? "" : "s"} met`];
+  if (acc.partial) bits.push(`${acc.partial} partly`);
+  if (acc.missing) bits.push(`${acc.missing} not met`);
+  return bits.join(", ");
+}
 
 type MergePr = NonNullable<WorkItem["links"]["merge_pr"]>;
 
@@ -46,15 +67,23 @@ export function workNextStep(w: Pick<WorkItem, "state" | "links" | "action_label
   const mp = mergeWaitOf(w);
   if (mp) {
     const local = isLocalChangeUrl(mp.external_url);
+    const ref = changeRef(mp.external_url, mp.number, true);
+    const fix = mp.fixing ?? null;
+    const acc = mp.acceptance ?? null;
+    const noneMet = !!acc && acc.total > 0 && acc.met === 0;
     const words = mp.failed ? `Merge failed: ${mp.failed}`
+      : fix ? `BOSS is fixing ${fix.findings ? `${fix.findings} finding${fix.findings === 1 ? "" : "s"}` : "it"} on ${ref} — merge now or wait`
+      : noneMet ? `${ref[0].toUpperCase()}${ref.slice(1)} is open · ${mustHaveWords(acc!)}`
       : mp.follow_up_of ? `Follow-up fix after #${mp.follow_up_of} · ready to merge`
       : mp.followups?.words ? `Ready to merge · ${mp.followups.words}` : "Ready to merge";
     const hint = shipsAfter(w) ? "deploys to staging after" : "";
+    const wait = fix ? { label: "Watch the fix", href: l.log || l.build || "" } : null;
+    const extra = fix ? { secondary: true, wait } : {};
     if (l.decision) {
-      return { kind: "merge", label: `Merge ${changeRef(mp.external_url, mp.number, true)}`, words, hint, href: l.decision, external: false };
+      return { kind: "merge", label: `Merge ${ref}`, words, hint, href: l.decision, external: false, ...extra };
     }
-    return { kind: "merge", words, hint, href: changeHref(mp.external_url) ?? "", external: !local,
-             label: local ? `Open ${changeRef(mp.external_url, mp.number, true)}` : `Merge ${changeRef(mp.external_url, mp.number)} ↗` };
+    return { kind: "merge", words, hint, href: changeHref(mp.external_url) ?? "", external: !local, ...extra,
+             label: local ? `Open ${ref}` : `Merge ${changeRef(mp.external_url, mp.number)} ↗` };
   }
   const words = w.why?.who === "you" ? w.why.words : "Waiting on you";
   const label = w.action_label || "Decide";

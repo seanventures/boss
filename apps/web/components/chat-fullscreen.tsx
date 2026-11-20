@@ -16,9 +16,9 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ArrowsIn, ArrowsOut } from "@phosphor-icons/react";
 
-export function useChatFullscreen(): { full: boolean; toggle: () => void; exit: () => void;
+export function useChatFullscreen(initial = false): { full: boolean; toggle: () => void; exit: () => void;
                                        attr: { "data-chat-full"?: "1" } } {
-  const [full, setFull] = useState(false);
+  const [full, setFull] = useState(initial);
   const toggle = useCallback(() => setFull((v) => !v), []);
   const exit = useCallback(() => setFull(false), []);
   useEffect(() => {

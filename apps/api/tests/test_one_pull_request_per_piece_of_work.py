@@ -149,8 +149,11 @@ def test_a_follow_up_after_the_merge_is_shown_as_one_beside_the_merge(engine):
     assert item["state"] == "needs_you" and item["action_label"] == "Merge"
     # The PR shown is the one in question — never the run's first PR beside #237's question.
     assert item["links"]["pr"]["number"] == 237
-    assert item["links"]["merge_pr"] == {"number": 237, "external_url": f"{REPO}/pull/237",
-                                         "follow_up_of": 236, "failed": None}
+    mp = item["links"]["merge_pr"]
+    assert {k: mp[k] for k in ("number", "external_url", "follow_up_of", "failed")} == {
+        "number": 237, "external_url": f"{REPO}/pull/237", "follow_up_of": 236, "failed": None}
+    # The Work panel's fields: the build that opened it; nothing fixing it, no check on record.
+    assert mp["build_id"] and mp["fixing"] is None and mp["acceptance"] is None
 
     from boss_engine.services.project_experience.work_story import story
 

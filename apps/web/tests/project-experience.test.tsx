@@ -458,15 +458,21 @@ describe("Work (screens 5, 5b)", () => {
     await press(tid("px-compose-start"));
     expect(calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/work`)?.body).toEqual({ kind: "bug", text: "SLA ignores weekends" });
     expect(tid("px-said")!.textContent).toMatch(/Started/);
-    // BOSSAPP-954: a GitHub PR opens BOSS's change page for it (GitHub when it is in no project).
-    expect(tid("px-work-pr-wi_visual")!.getAttribute("href")).toBe("/changes/github/paramg/helpdesk-ai-demo/3");
-    expect(tid("px-work-run-wi_visual")!.getAttribute("href")).toContain("area=delivery_workflows");
+    // A CLEAN ROW (operator 2026-11-19): title, one line of state, a compact flow, ONE action —
+    // the run / build / change chips are the Work panel's now.
+    expect(tid("px-work-flow-wi_visual")!.querySelectorAll("i").length).toBe(5);
+    expect(tid("px-work-pr-wi_visual")).toBeNull();
+    expect(tid("px-work-run-wi_visual")).toBeNull();
     await press(tid("px-work-act-wi_visual"));
+    // The row lands on the Work panel's whole page.
     expect(tid("px-drawer-work")).not.toBeNull();
-    // The real steps only (a skipped station is not a step), each with its face (screen 05b).
-    expect($$("[data-testid='px-drawer-work-steps'] .px-step").length).toBe(6);
+    expect(params().get("wp")).toBe("full");
+    expect($$("[data-testid='px-drawer-work-flow'] .wp-node").length).toBe(6);
     expect(tid("px-drawer-work-merge")!.textContent).toContain("Merge PR #3");
-    expect(tid("px-drawer-link-build")!.getAttribute("href")).toContain("area=code_tasks");
+    // BOSSAPP-954: a GitHub PR opens BOSS's change page for it (the panel's "see the change").
+    expect(tid("px-drawer-work-see-change")!.getAttribute("href")).toBe("/changes/github/paramg/helpdesk-ai-demo/3");
+    expect(tid("px-drawer-work-link-run")!.getAttribute("href")).toContain("area=delivery_workflows");
+    expect(tid("px-drawer-work-link-build")!.getAttribute("href")).toContain("area=code_tasks");
     await press(tid("px-work-board"));
     expect(tid("px-work-columns")).not.toBeNull();
   });
@@ -534,7 +540,6 @@ describe("Work (screens 5, 5b)", () => {
     expect(tid("px-work-open-crun_aml")!.textContent).toBe("AML flagged line by kind");
     expect(row.textContent).not.toContain("Follow-up: checks failing");
     // Human words, never the raw source.
-    expect(row.textContent).toContain("Build");
     expect(row.textContent).not.toContain("code_task");
     expect(tid("px-work-stalled-crun_aml")!.textContent).toMatch(/^Stalled · since /);
     expect(row.getAttribute("data-s")).toBe("stalled");
@@ -546,32 +551,27 @@ describe("Work (screens 5, 5b)", () => {
     await press(tid("px-work-f-stalled"));
     expect($$("[data-testid='px-work-rows'] .px-wk").length).toBe(1);
     await press(tid("px-work-f-all"));
-    // The pill expands the attempts, newest first, each labelled and openable.
-    const pill = tid("px-work-attempts-crun_aml")!;
-    expect(pill.textContent).toContain("7 attempts");
-    expect(pill.getAttribute("aria-expanded")).toBe("false");
-    expect((tid("px-work-attempts-list-crun_aml") as HTMLElement).hidden).toBe(true);
-    await press(pill);
-    expect(pill.getAttribute("aria-expanded")).toBe("true");
-    expect((tid("px-work-attempts-list-crun_aml") as HTMLElement).hidden).toBe(false);
-    const labels = $$("[data-testid='px-work-attempts-list-crun_aml'] .px-att b").map((b) => b.textContent);
+    // The attempts are the Work panel's: one line, expandable, newest first, each openable.
+    await press(tid("px-work-open-crun_aml"));
+    const att = tid("px-drawer-work-attempts")!;
+    expect(att.textContent).toContain("7 attempts");
+    const labels = $$("[data-testid='px-drawer-work-attempts'] .wp-att > span:nth-child(2)").map((b) => b.textContent);
     expect(labels).toEqual(["Follow-up 3 · checks failing", "Follow-up 2 · retry 1", "Follow-up 2 · checks failing",
                             "Follow-up 1 · retry 1", "Follow-up 1 · checks failing", "Retry 1", "Build"]);
-    expect(tid("px-attempt-crun_aml_f3")!.textContent).toContain("Stalled");
-    expect(tid("px-attempt-crun_aml_f2")!.textContent).toContain("Earlier attempt");
-    expect(tid("px-attempt-pr-crun_aml_r1")!.getAttribute("href")).toMatch(/\/6$/);
-    // An attempt opens as itself in the drawer.
-    await press(tid("px-attempt-open-crun_aml_r1"));
+    expect(tid("px-drawer-work-attempt-crun_aml_f3")!.textContent).toContain("Stalled");
+    expect(tid("px-drawer-work-attempt-crun_aml_f2")!.textContent).toContain("Earlier attempt");
+    // An attempt opens as itself.
+    await press(tid("px-drawer-work-attempt-crun_aml_r1"));
     expect(params().get("drawer")).toBe("work:crun_aml_r1");
     expect(tid("px-drawer-work")!.textContent).toContain("Retry 1");
-    expect(tid("px-drawer-link-build")!.getAttribute("href")).toContain("build=crun_aml_r1");
+    expect(tid("px-drawer-work-link-build")!.getAttribute("href")).toContain("build=crun_aml_r1");
   });
 
   it("the group's drawer says it is stalled and lists every attempt; the board shows the pill", async () => {
     engine();
-    await openProject("&tab=work&drawer=build:crun_aml");
+    await openProject("&tab=work&drawer=build:crun_aml&wp=full");
     expect(tid("px-drawer-work-stalled")!.textContent).toMatch(/Stalled since/);
-    expect($$("[data-testid='px-drawer-work-attempts'] .px-li").length).toBe(7);
+    expect($$("[data-testid='px-drawer-work-attempts'] .wp-att").length).toBe(7);
     unmount();
     engine();
     await openProject("&tab=work");

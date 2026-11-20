@@ -151,26 +151,31 @@ describe("Ask the captain (screen 09)", () => {
 });
 
 describe("the work drawer (screen 05b)", () => {
-  it("tells how it went in words with each proof, the one action, preview and cost", async () => {
+  it("is the Work panel's short preview — header, who did what, the one action — and opens the whole page", async () => {
     engine();
     await open("&tab=work&drawer=work:wi_visual");
     const d = tid("px-drawer-work")!;
     expect(d).not.toBeNull();
-    expect(tid("px-drawer-work-number")!.textContent).toBe("Run #43");
-    expect(d.textContent).toContain("$2.10");
-    expect(d.textContent).toContain("31 min");
-    expect(tid("px-drawer-work-expand")!.getAttribute("href")).toContain("area=code_tasks");
+    expect(tid("px-drawer-work-number")!.textContent).toContain("run #43");
     expect(tid("px-drawer-work-merge")!.textContent).toContain("Merge PR #3");
-    expect($$("[data-testid='px-drawer-work-steps'] .px-step").map((r) => r.querySelector("b")!.textContent))
-      .toEqual(["Plan", "You approved", "Build", "Review & test", "Merge", "Staging"]);
-    expect(tid("px-drawer-step-plan")!.textContent).toContain("PRD agreed");
-    expect(tid("px-drawer-step-link-plan")!.getAttribute("href")).toContain("area=meetings");
-    expect(tid("px-drawer-step-link-build")!.getAttribute("href")).toBe("https://github.com/paramg/helpdesk-ai-demo/pull/3/files");
-    expect(tid("px-drawer-step-link-pr")!.getAttribute("target")).toBe("_blank");
-    expect(tid("px-drawer-step-pr")!.textContent).toContain("Only a person merges");
-    expect(tid("px-drawer-work-preview")!.getAttribute("href")).toBe("http://203.0.113.20:8104");
-    expect(tid("px-drawer-work-cost")!.querySelectorAll("span").length).toBe(3);
-    expect(d.textContent).toContain("Plan · Build · Review");
+    // WHO DID WHAT replaces "How it went": six nodes, a person on Merge.
+    expect($$("[data-testid='px-drawer-work-flow'] .wp-nm").map((n) => n.textContent))
+      .toEqual(["Spec", "Build", "Review & tests", "Merge", "Staging", "Production"]);
+    expect(tid("px-drawer-work-node-spec")!.textContent).toContain("PRD agreed");
+    expect(tid("px-drawer-work-node-merge")!.textContent).toContain("Only a person merges");
+    expect(tid("px-drawer-work-node-merge")!.getAttribute("data-s")).toBe("wait");
+    // The old drawer's Links block and How it went list are gone; the run and the build page
+    // are in the ⋯ menu.
+    expect(tid("px-drawer-work-links")).toBeNull();
+    expect(tid("px-drawer-work-steps")).toBeNull();
+    expect(tid("px-drawer-work-link-build")!.getAttribute("href")).toContain("area=code_tasks");
+    // Open → the whole page over the screen, with the rail.
+    await press(tid("px-drawer-work-open"));
+    expect(tid("px-drawer-work")!.getAttribute("data-chat-full")).toBe("1");
+    expect(tid("px-drawer-work-kpis")!.textContent).toContain("31 m");
+    expect(tid("px-drawer-work-cost")!.textContent).toContain("$2.10");
+    expect(tid("px-drawer-work-helm")).not.toBeNull();
+    expect(tid("px-drawer-work-preview-card")).not.toBeNull();
   });
 });
 

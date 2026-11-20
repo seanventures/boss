@@ -257,8 +257,8 @@ export function PxLink({ href, children, className, testid, title, onOpen }: {
 }
 
 /** Open a drawer in place (deep-linkable `&drawer=kind:id`; Back closes it). */
-export const openDrawer = (kind: string, id: string) => {
-  writePxUrl({ drawer: `${kind}:${id}` });
+export const openDrawer = (kind: string, id: string, extra: Record<string, string | null> = {}) => {
+  writePxUrl({ drawer: `${kind}:${id}`, ...extra });
   // Mark the entry this drawer pushed, so closing it can step back over it (PX-33).
   try { window.history.replaceState({ ...(window.history.state ?? {}), pxDrawer: true }, "", window.location.href); } catch { /* non-browser */ }
 };
@@ -268,7 +268,7 @@ export const closeDrawer = () => {
   try {
     if ((window.history.state as { pxDrawer?: boolean } | null)?.pxDrawer) { window.history.back(); return; }
   } catch { /* non-browser */ }
-  writePxUrl({ drawer: null, cap_ask: null }, "replace");
+  writePxUrl({ drawer: null, cap_ask: null, wp: null }, "replace");
 };
 
 /** A side drawer: focus moves in, Esc and the scrim close it, focus returns to where it was. */
