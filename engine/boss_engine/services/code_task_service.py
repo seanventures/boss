@@ -2340,7 +2340,13 @@ def retry_code_task(
     with _transaction(engine) as c:
         prev = load_code_task_run(c, run_id)
         prev_gates_failed = _recorded_failed_gates(c, run_id) if prev is not None else []
-        failed_at = _failed_at(c, run_id) if (prev is not None and automatic) else None
+        # THE RESTART GUARD IS FOR BUILDS THAT DIED. A build that COMPLETED (it opened its pull
+        # request) did not die before a restart: BOSS starting a NEW repair attempt of it — a
+        # merge conflict handed to its builder, with the conflict note — is not a blind re-run
+        # of crashed work (northgate-gateway #9, crun_2bc5ad4b…, refused 2026-11-21 17:45).
+        failed_at = (_failed_at(c, run_id)
+                     if (prev is not None and automatic
+                         and str(prev.get("status") or "") != "completed") else None)
     if prev is None:
         raise ValueError(f"code task run not found: {run_id}")
     if (automatic and not after_update and failed_at is not None

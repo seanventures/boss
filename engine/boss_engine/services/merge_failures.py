@@ -65,6 +65,41 @@ def is_local_change(url: Any = None, message: Any = None) -> bool:
     return "://boss-local/" in u or "/local_" in u or "does not merge cleanly" in str(message or "")
 
 
+#: Words a merge failure used to store before reason_words knew a local repository (#264).
+_GITHUB_WORDS = ((" so GitHub would not merge it", " so BOSS could not merge it on this machine"),
+                 ("GitHub did not answer just now", "the repository did not answer just now"),
+                 ("GitHub will not merge it", "BOSS cannot merge it on this machine"))
+
+
+def local_words(said: Any, url: Any) -> Any:
+    """What a STORED merge-failure sentence says, rendered for the repository it is about: a
+    change kept on this machine never reads "GitHub would not merge it" (northgate-gateway #9's
+    card, stored before #264). Display-time, from the URL's kind; non-strings pass through."""
+    if not isinstance(said, str) or not is_local_change(url):
+        return said
+    from .repo_links import local_words as _change_words
+
+    for github, local in _GITHUB_WORDS:
+        said = said.replace(github, local)
+    return _change_words(said)                  # "PR #9" → "change #9" (BOSSAPP-946's words)
+
+
+def for_display(rec: Any) -> Any:
+    """A merge card's recommendation with every stored merge-failure sentence in local wording
+    when its change is local (summary, merge_failed.reason / next)."""
+    if not isinstance(rec, dict):
+        return rec
+    url = rec.get("pull_request_url") or rec.get("url")
+    if not is_local_change(url):
+        return rec
+    out = dict(rec)
+    if isinstance(out.get("summary"), str):
+        out["summary"] = local_words(out["summary"], url)
+    if isinstance(out.get(KEY), dict):
+        out[KEY] = {k: local_words(v, url) for k, v in out[KEY].items()}
+    return out
+
+
 def reason_words(kind: str, message: str, number: Any, url: Any = None) -> str:
     local = is_local_change(url, message)
     pr = (f"Change #{number}" if local else f"PR #{number}") if number else (

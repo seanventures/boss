@@ -264,6 +264,21 @@ def test_another_owner_s_question_is_closed_once_the_remedy_started_never_an_app
     assert got[ask] == "withdrawn" and got[deploy] == "pending"
 
 
+def test_a_stored_github_sentence_is_said_in_local_words_at_display_time():
+    """#9's card stored "PR #9 conflicts with its base branch, so GitHub would not merge it"
+    before #264; it is rendered from the repository's kind, whatever was stored."""
+    url = "http://boss-local/local_northgate-gateway/northgate-gateway/pull/9"
+    stored = "PR #9 conflicts with its base branch, so GitHub would not merge it"
+    rec = {"pull_request_url": url, "summary": f"Merge failed: {stored}. Retry the build.",
+           "merge_failed": {"kind": "not_mergeable", "reason": stored}}
+    shown = merge_failures.for_display(rec)
+    for said in (shown["summary"], shown["merge_failed"]["reason"],
+                 merge_failures.local_words(f"Merge failed: {stored}.", url)):
+        assert "GitHub" not in said and "PR #" not in said and "change #9" in said.lower()
+    gh = {**rec, "pull_request_url": "https://github.com/acme/web/pull/9"}
+    assert merge_failures.for_display(gh)["merge_failed"]["reason"] == stored, "GitHub stays"
+
+
 def test_the_loop_never_withdraws_a_card_it_did_not_create(eng, project):  # noqa: F811
     from boss_engine.services.core import create_blocking_decision
 

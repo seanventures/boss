@@ -3391,6 +3391,12 @@ def decision_card_from_row(row, connection=None, project_id: Optional[str] = Non
     from boss_engine.services.core import decision_reason_from_payload
 
     rec = row.get("recommendation") or {}
+    # A MERGE FAILURE IS SAID FOR ITS REPOSITORY'S KIND at display time: a local change never
+    # reads "GitHub would not merge it", whatever an older version stored.
+    from boss_engine.services import merge_failures as _merge_failures
+
+    rec = _merge_failures.for_display(rec)
+    _merge_url = rec.get("pull_request_url") if isinstance(rec, dict) else None
     # A MEETING'S PRD carries its record (BOSSAPP-929): every surface reading this card shows
     # the PRD, the panel that argued it and its file in the repository from one source.
     prd = (prd_record.links(connection, {**dict(row), "project_id": row.get("project_id") or project_id})
@@ -3405,7 +3411,7 @@ def decision_card_from_row(row, connection=None, project_id: Optional[str] = Non
     return DecisionCard(
         id=row["id"],
         task_id=row.get("task_id"),
-        question=row["question"],
+        question=_merge_failures.local_words(row["question"], _merge_url),
         status=row["status"],
         risk_tier=row["risk_tier"],
         default_action=row["default_action"],
@@ -3428,7 +3434,7 @@ def decision_card_from_row(row, connection=None, project_id: Optional[str] = Non
         ),
         executed_by=row.get("executed_by"),
         executed_at=row["executed_at"].isoformat() if row.get("executed_at") else None,
-        resolution_note=row.get("resolution_note"),
+        resolution_note=_merge_failures.local_words(row.get("resolution_note"), _merge_url),
         external_ref=row.get("external_ref"),
         message=row.get("noop_message"),
         via_delegate=row.get("via_delegate"),

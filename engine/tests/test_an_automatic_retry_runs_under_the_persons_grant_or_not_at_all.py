@@ -259,6 +259,34 @@ def test_a_follow_up_boss_starts_does_not_ride_a_this_build_only_grant():
     assert "same_build" in inspect.signature(consent.carry_retry_authority).parameters
 
 
+def test_a_merge_conflict_on_a_completed_build_is_handed_to_its_builder_after_a_restart(
+        env, staffed, monkeypatch):  # noqa: F811
+    """northgate-gateway #9 (2026-11-21 17:45): crun_2bc5ad4b COMPLETED and opened its change;
+    BOSS restarted; the merge then conflicted. Handing the conflict to the builder is a NEW
+    repair with the conflict note — not a blind re-run of a build that died before a restart —
+    so the restart guard never refuses it."""
+    from boss_engine.services import merge_failures
+
+    _, crun, _ = _workflow_build(env)
+    url = f"http://boss-local/local_{env.project}/{env.project}/pull/9"
+    with env.engine.begin() as c:
+        c.execute(text("UPDATE code_task_runs SET status='completed', pull_request_url=:u, "
+                       "updated_at = now() - interval '2 hours' WHERE id=:r"), {"u": url, "r": crun})
+    monkeypatch.setattr(cts, "PROCESS_STARTED_AT", cts.PROCESS_STARTED_AT.__class__.now(
+        cts.PROCESS_STARTED_AT.tzinfo) - timedelta(minutes=30))   # restarted AFTER it completed
+    note = merge_failures.conflict_note(9, url, "boss/code/x does not merge cleanly into main: "
+                                        "config/tenants/lumen-pay.yaml conflict.")
+    with lineage.acting(WORKER_KEY):
+        new = cts.retry_code_task(env.engine, get_settings(), _Jobs(), crun, automatic=True,
+                                  fix_note=note)
+    assert new.get("run_id") and new["run_id"] != crun and new.get("created") is not False
+    assert _children(env, crun) == 1
+    with env.engine.begin() as c:
+        fx = c.execute(text("SELECT finalize_ctx FROM code_task_runs WHERE id=:r"),
+                       {"r": new["run_id"]}).scalar()
+    assert "conflicts with its base branch" in fx["feedback_history"][-1]["fix_note"]
+
+
 def test_a_build_that_failed_before_boss_started_is_not_retried_automatically(env, staffed, monkeypatch):  # noqa: F811
     """crun_566f8767 died (dead-lettered, 05:52); after the upgrade the shepherd retried it (06:57)."""
     _, crun, _ = _workflow_build(env)

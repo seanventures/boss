@@ -25,7 +25,7 @@ from typing import Any, Iterable, Mapping, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .. import checks_failing
+from .. import checks_failing, merge_failures
 from . import work_outcome
 from .new_work import issue_of
 from .titles import prd_title, short_title
@@ -844,7 +844,7 @@ def _merge_links(members: list[dict[str, Any]], merge: Optional[Mapping[str, Any
         out["merge_pr"] = {"number": merge.get("pull_request_number") or pr_number(url),
                            "external_url": url, "follow_up_of": after,
                            # Its last merge failed (merge_failures): said, never "Ready".
-                           "failed": merge.get("merge_failed") or None,
+                           "failed": merge_failures.local_words(merge.get("merge_failed"), url) or None,
                            # Opened with its checks failing (checks_failing.py): said, never
                            # "Ready" — the same record its merge card shows.
                            "checks_failing": checks_failing.for_work(merge.get("checks_failing"))}
