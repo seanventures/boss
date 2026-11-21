@@ -20,6 +20,21 @@ def thread_is_working(connection, project_id: str, thread_id: str) -> bool:
     if not (thread_id or "").strip():
         return False
     params = {"t": thread_id.strip(), "p": project_id}
+    # THE TURN'S OWN RECORD FIRST (chat_turns): a durable turn says it is running until it
+    # lands or fails, and one whose process died is swept to failed after its heartbeat bound.
+    if connection.execute(
+        sql(
+            """
+            SELECT 1 FROM agent_chat_turns
+            WHERE thread_id = :t AND project_id = :p
+              AND status IN ('queued', 'running')
+              AND heartbeat_at > now() - interval '15 minutes'
+            LIMIT 1
+            """
+        ),
+        params,
+    ).first():
+        return True
     # Progress after the last committed assistant row is this turn: earlier
     # rows belong to a turn that already answered. The 15-minute bound is so a
     # crashed turn does not stay "working" forever.

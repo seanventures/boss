@@ -69,7 +69,10 @@ describe("a role's conversation survives closing the panel", () => {
     // load to the starters effect.
     const mount = UI.slice(UI.indexOf('view: "workspace", project_id: projectId, actor'),
                            UI.indexOf('view: "starters"'));
-    expect(mount).toContain("ths.find((t) => (t.external_ref ?? null) === roleRef)");
+    expect(mount).toContain("ths.filter((t) => (t.external_ref ?? null) === roleRef)");
+    // The conversation, not an empty twin: the thread with messages wins (the server's lookup
+    // prefers it the same way — agent_service._find_role_thread).
+    expect(mount).toContain("message_count");
     expect(mount).toContain('view: "messages"');
   });
 

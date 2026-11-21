@@ -248,6 +248,10 @@ export async function askBossAction(
     // THE DOCK'S "Investigate further" / "Do the fix": the full tool loop, on request. Unset, a
     // question about a record is answered first in one call (subject_answer.py).
     depth: String(formData.get("depth") ?? "").trim() === "investigate" ? "investigate" : undefined,
+    // ANSWER IN THE BACKGROUND (services/chat_turns.py): the API commits the message and a turn
+    // record, answers 202 {thread_id, turn_id}, and the dock polls the turn (lib/chat-turn.ts).
+    // The message is kept whatever happens to the answer, and a reload resumes the wait.
+    background: String(formData.get("background") ?? "") === "1" ? true : undefined,
   });
 }
 

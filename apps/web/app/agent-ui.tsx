@@ -5,6 +5,7 @@ import { HERO_BRIEF_PARAM } from "./url-intent";
 import React, { useCallback, useEffect, useState, useTransition, useRef} from "react";
 
 import { landingAnswerArrived } from "../lib/chat-landing";
+import { awaitTurn, resumeFrom, startedTurnOf, type TurnRead } from "../lib/chat-turn";
 import { CitedAnswer } from "./agents/cited-answer";
 import { RateIt } from "./improve/rate-it";
 import { notifyChanged } from "./changed";
@@ -632,6 +633,16 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
    * one, so it is organised the way a chat app is: sessions, newest first, and a New chat
    * button that does not overwrite the last one.
    */
+  // A TURN STILL RUNNING WHEN THE THREAD WAS OPENED (a reload mid-turn, a reopened drawer):
+  // the thread read carries it (`turn`), and the landing watch waits for its answer instead of
+  // leaving the operator's question hanging with nothing coming (lib/chat-turn.ts).
+  const resumeIfRunning = useCallback((d: unknown) => {
+    const running = resumeFrom(d);
+    if (!running || !running.waitingFor) return;
+    landingFor.current = running.waitingFor;
+    setLanding(true);
+  }, []);
+
   const openSession = useCallback((threadId: string | null) => {
     setSel(GENERAL);
     setMessages([]); setContext(null); setPendingPlan(null); setProposed([]); setNextSteps([]);
@@ -644,9 +655,10 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         setMessages((d.messages as Msg[]) ?? []);
         setPendingPlan((d.pending_confirmation as Record<string, unknown>) ?? null);
         setProposed(Array.isArray(d.proposed_actions) ? (d.proposed_actions as ProposedAction[]) : []);
+        resumeIfRunning(d);
       }
     }).finally(() => setLoadingThread(false));
-  }, [projectId, actor]);
+  }, [projectId, actor, resumeIfRunning]);
 
   const openThreadAndContext = useCallback((id: string, list: Thread[]) => {
     // Proposals are cleared with everything else. Left behind, an offer from the PREVIOUS
@@ -665,6 +677,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           setMessages((d.messages as Msg[]) ?? []);
           setPendingPlan((d.pending_confirmation as Record<string, unknown>) ?? null);
         setProposed(Array.isArray(d.proposed_actions) ? (d.proposed_actions as ProposedAction[]) : []);
+          resumeIfRunning(d);
         }
       }));
     }
@@ -675,7 +688,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       }));
     }
     Promise.all(jobs).finally(() => setLoadingThread(false));
-  }, [projectId, actor, threadFor]);
+  }, [projectId, actor, threadFor, resumeIfRunning]);
 
   // Load the workspace (tasks + threads, last 10 days) on mount, then open the initial selection.
   //
@@ -704,7 +717,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       // on the same (subject, role) key the turn uses, wins; the role's general thread is for a
       // door with no subject.
       if (initialTaskId && !fresh) { openThreadAndContext(initialTaskId, ths); return; }
-      const mine = roleRef ? ths.find((t) => (t.external_ref ?? null) === roleRef) : undefined;
+      // THE CONVERSATION, NOT AN EMPTY TWIN. Before the server resolved a role one way for
+      // every door, a drawer could hold an empty thread beside the real one on the same ref;
+      // the one with messages is the conversation (the server's lookup prefers it the same way).
+      const mine = roleRef
+        ? ths.filter((t) => (t.external_ref ?? null) === roleRef)
+            .sort((x, y) => Number((y.message_count ?? 0) > 0) - Number((x.message_count ?? 0) > 0))[0]
+        : undefined;
       if (mine?.thread_id) {
         setThreadId(mine.thread_id);
         read<Record<string, unknown>>(
@@ -716,6 +735,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
             setPendingPlan((d.pending_confirmation as Record<string, unknown>) ?? null);
             setProposed(Array.isArray(d.proposed_actions)
               ? (d.proposed_actions as ProposedAction[]) : []);
+            resumeIfRunning(d);
           }
         }).finally(() => { if (alive) setLoadingThread(false); });
         return;
@@ -727,7 +747,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       openThreadAndContext(initialTaskId || GENERAL, ths);
     });
     return () => { alive = false; };
-  }, [projectId, actor, initialTaskId, roleRef, fresh, openThreadAndContext]);
+  }, [projectId, actor, initialTaskId, roleRef, fresh, openThreadAndContext, resumeIfRunning]);
 
   // WHAT TO ASK *THIS* ROLE.
   //
@@ -871,16 +891,33 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       // Measured on the live system: the operator's message was never recorded, the thread
       // still held four messages, while the console showed a turn in flight.
       let r: Awaited<ReturnType<typeof askBossAction>> | typeof stalled;
-      try {
-        const turn = () => Promise.race([
+      // THE TURN IS KEPT, AND POLLED (lib/chat-turn.ts). The send answers at once with the
+      // turn's id (the message and the turn record are committed before any model is called);
+      // the answer is read from GET /v1/agent/turns/{id}. Polled until the stall bound, then the
+      // landing watch takes over, and a reload resumes it from the thread.
+      fd.set("background", "1");
+      let stopPolling = false;
+      const sendAndWait = async (): Promise<Awaited<ReturnType<typeof askBossAction>>> => {
         // NOT agentChatAction: that one calls revalidatePath("/"), so the transition stays
         // pending while the entire 8 MB console re-renders. The answer painted and the
         // "Working…" bubble kept spinning for another 15 seconds underneath it. Nothing on the
         // page depends on a question having been asked; the thread list is refreshed
         // explicitly below.
-          callAction(askBossAction, undefined, "assistant:chat")(null, fd),
+        const sent = await callAction(askBossAction, undefined, "assistant:chat")(null, fd);
+        const started = sent.ok ? startedTurnOf(sent.data) : null;
+        if (!started) return sent;
+        if (started.threadId) { live = started.threadId; setThreadId(started.threadId); }
+        const ended = await awaitTurn(
+          (id) => read<TurnRead>({ view: "turn", project_id: projectId, actor, turn_id: id }, 8_000),
+          started.turnId, { shouldStop: () => stopPolling });
+        return (ended ?? sent) as Awaited<ReturnType<typeof askBossAction>>;
+      };
+      try {
+        const turn = () => Promise.race([
+          sendAndWait(),
         new Promise<typeof stalled>((res) =>
-          window.setTimeout(() => res(stalled), AGENT_STALL_SECONDS * 1000)),
+          window.setTimeout(() => { stopPolling = true; res(stalled); },
+                            AGENT_STALL_SECONDS * 1000)),
         ]);
         r = await turn();
         // THE AGENT ACTS ON YOUR BEHALF, SO IT ASKS FIRST. A turn that needs a grant the

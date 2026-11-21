@@ -280,6 +280,7 @@ def clean_tables(engine):
             "agent_test_runs",
             "agent_versions",
             "agent_definitions",
+            "agent_chat_turns",
             "agent_messages",
             "agent_threads",
             "cloud_worker_enrollments",

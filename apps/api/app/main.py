@@ -13867,7 +13867,12 @@ def agent_turn(payload: AgentChatRequest, request: Request, *, endpoint: str) ->
     (/v1/engine/agent/chat and its deprecated alias) and the Metatron terminal
     (/v1/metatron/session) — sends its natural-language turn here: one brain (AgentService.chat →
     IntentRouter), one thread model, one set of actions, one consent path. A fix to the agent is
-    made once. test_one_agent_turn enforces that no surface grows a second decision path."""
+    made once. test_one_agent_turn enforces that no surface grows a second decision path.
+
+    DURABLE (services/chat_turns.py): the operator's message and the turn's record are committed
+    before the first model call, and the answer runs on short transactions — a turn that fails,
+    a worker that restarts or an idle-in-transaction timeout leaves the message where it was and
+    the turn marked failed in words. `background` answers 202 {thread_id, turn_id} at once."""
     _enforce_high_cost_rate_limit(
         request, payload.project_id, payload.actor, endpoint=endpoint
     )
@@ -13878,44 +13883,64 @@ def agent_turn(payload: AgentChatRequest, request: Request, *, endpoint: str) ->
             payload.actor,
             "agent_chat",
         )
-        try:
-            result = orchestration_agent.chat(
-                connection,
-                project_id=payload.project_id,
-                actor=payload.actor,
-                thread_id=payload.thread_id,
-                message=payload.message,
-                confirm_plan_id=payload.confirm_plan_id,
-                surface=payload.surface,
-                external_ref=payload.external_ref,
-                role=payload.role,
-                mode=payload.mode,
-                depth=payload.depth,
-                context=payload.context,
-                new_thread=payload.new_thread,
-                attachments=[
-                    {"name": a.name, "media_type": a.media_type, "kind": a.kind,
-                     "data": a.data}
-                    for a in (payload.attachments or [])
-                ],
-            )
-        except AgentThreadNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except AgentThreadOwnershipError as error:
-            raise HTTPException(status_code=403, detail=str(error)) from error
-        except HTTPException:
-            raise
-        except Exception as error:  # noqa: BLE001
-            # "Internal Server Error" IS THE FAILURE THIS WHOLE AREA IS ABOUT — and so is its
-            # opposite. Five words that name nothing could not be acted on; the replacement,
-            # the exception's class and text, put "IntegrityError: (psycopg.errors.
-            # UniqueViolation) duplicate key value … [SQL: INSERT INTO agent_threads …" in the
-            # dock on an existing install. One explainer (model_failures.explain_turn_failure) turns any
-            # failure into a sentence; the technical line rides along for a collapsed Details,
-            # and the whole traceback goes to the log.
-            LOGGER.exception("agent chat failed on %s", endpoint)
-            raise AgentTurnFailed(error) from error
-        return AgentChatResponse(**result)
+    try:
+        result = orchestration_agent.chat_durably(
+            engine,
+            background=bool(payload.background),
+            project_id=payload.project_id,
+            actor=payload.actor,
+            thread_id=payload.thread_id,
+            message=payload.message,
+            confirm_plan_id=payload.confirm_plan_id,
+            surface=payload.surface,
+            external_ref=payload.external_ref,
+            role=payload.role,
+            mode=payload.mode,
+            depth=payload.depth,
+            context=payload.context,
+            new_thread=payload.new_thread,
+            attachments=[
+                {"name": a.name, "media_type": a.media_type, "kind": a.kind,
+                 "data": a.data}
+                for a in (payload.attachments or [])
+            ],
+        )
+    except AgentThreadNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except AgentThreadOwnershipError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except HTTPException:
+        raise
+    except Exception as error:  # noqa: BLE001
+        # "Internal Server Error" IS THE FAILURE THIS WHOLE AREA IS ABOUT — and so is its
+        # opposite. Five words that name nothing could not be acted on; the replacement,
+        # the exception's class and text, put "IntegrityError: (psycopg.errors.
+        # UniqueViolation) duplicate key value … [SQL: INSERT INTO agent_threads …" in the
+        # dock on an existing install. One explainer (model_failures.explain_turn_failure) turns any
+        # failure into a sentence; the technical line rides along for a collapsed Details,
+        # and the whole traceback goes to the log. The turn's record already says failed.
+        LOGGER.exception("agent chat failed on %s", endpoint)
+        raise AgentTurnFailed(error) from error
+    if payload.background:
+        return JSONResponse(status_code=202, content=result)
+    return AgentChatResponse(**result)
+
+
+@app.get("/v1/agent/turns/{turn_id}")
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(query="project_id"))
+def agent_turn_status_endpoint(turn_id: str, project_id: str, actor: str) -> dict:
+    """One chat turn: running, done (with the response the turn would have returned) or failed
+    (with the sentence). What the console polls after a background send, and what it resumes
+    after a reload. A turn whose process died is marked failed here (chat_turns.sweep_orphans)."""
+    from boss_engine.services import chat_turns
+
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "agent_chat")
+        turn = chat_turns.read(connection, turn_id)
+        if turn is None or turn["project_id"] != project_id:
+            raise HTTPException(status_code=404, detail="No such turn.")
+        require_agent_thread_owner(connection, turn["thread_id"], actor)
+    return turn
 
 
 @app.post("/v1/engine/agent/action", response_model=AgentActionRunResponse)
@@ -14263,7 +14288,11 @@ def review_memory_endpoint(memory_id: str, payload: open_bodies.MemoryReviewBody
 @app.post("/v1/memory/{memory_id}/forget")
 @permit(P.MEMORY_MANAGE, scope=Scope.project(body="project_id"))
 def forget_memory_endpoint(memory_id: str, payload: open_bodies.MemoryForgetBody) -> dict:
-    """Retire a memory that is wrong or no longer true. Retired, never deleted."""
+    """Retire a memory that is wrong or no longer true. Retired, never deleted.
+
+    A knowledge-graph lesson, rule or fact (a kgn_… id) is retired in the graph with a `reason`
+    (KnowledgeService.retire): closed on the database's clock, audited in kg_audit, dropped
+    from the AGE mirror — the same retire the agent's `forget` tool does."""
     payload = payload.payload()
     from boss_engine.services.agent_memory import MemoryError_, forget
 
@@ -14273,6 +14302,22 @@ def forget_memory_endpoint(memory_id: str, payload: open_bodies.MemoryForgetBody
         raise HTTPException(status_code=400, detail="project_id and actor are required")
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "agent_chat")
+        if memory_id.startswith("kgn_"):
+            from boss_engine.services.knowledge.service import KnowledgeService
+
+            try:
+                return KnowledgeService().retire(
+                    connection, project_id=project_id, node_id=memory_id,
+                    reason=str(payload.get("reason") or ""), actor_kind="person",
+                    actor_ref=actor)
+            except LookupError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except PermissionError as error:
+                # Another project's node reads as not found, never as "it exists elsewhere".
+                raise HTTPException(status_code=404, detail="no such knowledge node in this "
+                                                            "project") from error
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
         try:
             return forget(connection, project_id=project_id, memory_id=memory_id, actor=actor)
         except MemoryError_ as error:
@@ -14468,8 +14513,13 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
         # showed after that was a promise it had no basis for.
         #
         # Console chat commits progress independently of its final messages.
+        from boss_engine.services import chat_turns
         from boss_engine.services.agent_turn_status import thread_is_working
 
+        # THE TURN STILL IN FLIGHT, BY ID (chat_turns): a console that reloaded mid-turn
+        # resumes polling it rather than showing a question with no answer coming. Swept first,
+        # so a turn whose process died reads as failed here, never as running.
+        running = chat_turns.running_turn(connection, project_id, thread_id)
         working = thread_is_working(connection, project_id, thread_id)
         history = orchestration_agent.list_messages(connection, thread_id)
         # THE BUTTONS COME BACK WITH THE CONVERSATION.
@@ -14498,6 +14548,7 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
             "proposed_actions": offers,
             "next_steps": next_steps,
             "working": working,
+            "turn": running,
         }
 
 

@@ -57,7 +57,7 @@ export const API_READ_OPS: Readonly<Record<string, ApiRead>> = {
   "/api/agent": byView({
     workspace: ["tasks", "agent/threads"], messages: "agent/threads/{}/messages", roles: "roles",
     starters: "agent/role-starters", briefing: "agent/briefing", progress: "agent/threads/{}/progress",
-    "task-context": ["tasks/{}", "code-tasks"],
+    turn: "agent/turns/{}", "task-context": ["tasks/{}", "code-tasks"],
   }),
   "/api/agent-card/{}": one("agents/{}/passport"),
   "/api/agent-thread": one("agent/threads/{}/ledger"),

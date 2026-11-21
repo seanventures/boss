@@ -7296,9 +7296,16 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "forget",
-        "Retire a memory that is wrong or no longer true, by id (from recall). Retired, not "
-        "deleted — a rule that shaped past answers stays auditable.",
-        _obj({"memory_id": {"type": "string"}, "project_id": {"type": "string"}},
+        "Retire something BOSS remembers that is wrong or no longer true, by id: a memory "
+        "(from recall) or a knowledge-graph lesson, rule or fact (a kgn_… id, from recall's "
+        "knowledge or a search). Retired, not deleted — what it shaped stays auditable. For a "
+        "graph lesson, say why in `reason`; it is recorded in the knowledge audit and the "
+        "lesson leaves the graph at once.",
+        _obj({"memory_id": {"type": "string",
+                            "description": "a memory id, or a knowledge node id (kgn_…)"},
+              "reason": {"type": "string",
+                         "description": "why it is wrong (required for a kgn_… id)"},
+              "project_id": {"type": "string"}},
              ["memory_id"]),
         kind="write",
         reversibility="safe", permission="memory:manage",
@@ -7307,12 +7314,25 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         from ..services.agent_memory import MemoryError_, forget as _forget
 
         pid = args.get("project_id") or project_id
+        target = str(args.get("memory_id") or "").strip()
+        if target.startswith("kgn_"):
+            # A KNOWLEDGE LESSON IS RETIRED IN THE GRAPH (KnowledgeService.retire): closed on
+            # the database's clock, audited with the reason, gone from the AGE mirror. An agent
+            # may retire what agents inferred; a rule a person approved is a person's to retire.
+            from ..services.knowledge.service import KnowledgeService
+
+            try:
+                with ctx.begin() as c:
+                    return {"ok": True, **KnowledgeService().retire(
+                        c, project_id=pid, node_id=target,
+                        reason=str(args.get("reason") or "").strip(),
+                        actor_kind="agent", actor_ref=actor)}
+            except (LookupError, PermissionError, ValueError) as error:
+                return {"ok": False, "error": str(error)}
         try:
             with ctx.begin() as c:
                 return {"ok": True,
-                        **_forget(c, project_id=pid,
-                                  memory_id=str(args.get("memory_id") or "").strip(),
-                                  actor=actor)}
+                        **_forget(c, project_id=pid, memory_id=target, actor=actor)}
         except MemoryError_ as error:
             return {"ok": False, "error": str(error)}
 

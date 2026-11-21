@@ -848,6 +848,11 @@ class AgentChatRequest(BaseModel):
     #: needs its own ask. True ignores any `thread_id` on this turn and starts a new one, which
     #: becomes the current conversation for the next turn that does not ask for one either.
     new_thread: bool = False
+    #: ANSWER IN THE BACKGROUND. The operator's message and the turn's record are committed
+    #: either way; true answers 202 {thread_id, turn_id, status: "running"} at once and the
+    #: client polls GET /v1/agent/turns/{turn_id} (the console does, and resumes it after a
+    #: reload). False waits for the answer, as every API client always has.
+    background: bool = False
 
     @model_validator(mode="after")
     def validate_turn(self):
@@ -924,6 +929,10 @@ class AgentActionRunResponse(BaseModel):
 
 class AgentChatResponse(BaseModel):
     thread_id: str
+    #: THE TURN'S RECORD (services/chat_turns.py): the operator's message and this row were
+    #: committed before the answer started, so the turn can be polled, resumed after a reload,
+    #: and read back as failed rather than vanishing.
+    turn_id: Optional[str] = None
     reply: str
     actions: list[AgentAction] = Field(default_factory=list)
     pending_confirmation: Optional[AgentPendingConfirmation] = None

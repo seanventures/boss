@@ -90,6 +90,8 @@ def captain_session_turn(payload: AgentChatRequest, request: Request) -> AgentCh
     from apps.api.app.main import agent_turn
 
     reply = agent_turn(payload, request, endpoint="/v1/metatron/session")
+    if payload.background:
+        return reply  # still running: there is no answer to remember yet
     _remember_turn(payload, reply)
     return reply
 

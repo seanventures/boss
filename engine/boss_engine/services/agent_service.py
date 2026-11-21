@@ -62,6 +62,32 @@ def readable_reply(reply: Any, tool_calls: Any = None) -> str:
     ])
 
 
+def thread_role(connection: Connection, project_id: str, role: Optional[str]) -> str:
+    """THE KEY A CONVERSATION WITH AN AGENT IS FILED UNDER — one resolution for every door.
+
+    The project's agent by any name it goes by ("Helm", "Engineering Captain",
+    "engineering_captain" → its role key, agent_identity.addressed), else what was said,
+    lower-cased; '' for BOSS in general. /v1/agent/threads/ensure, the chat turn and every
+    other caller of start_or_load_thread go through it, so the thread the drawer opens is the
+    thread the reply lands in."""
+    raw = (role or "").strip()
+    if not raw:
+        return ""
+    from . import agent_identity
+
+    try:
+        if hasattr(connection, "begin_nested"):
+            with connection.begin_nested():
+                speaker = agent_identity.addressed(connection, project_id, raw)
+        else:
+            speaker = agent_identity.addressed(connection, project_id, raw)
+    except Exception:  # noqa: BLE001 — no roster to resolve against: the name as said
+        return raw.lower()
+    if speaker.get("addressed"):
+        return str(speaker.get("agent_role") or "").strip().lower() or raw.lower()
+    return raw.lower()
+
+
 class AgentThreadNotFoundError(ValueError):
     pass
 
@@ -91,7 +117,15 @@ class AgentService:
         # asking the Program Manager and then asking QA on the same task resolved to ONE thread
         # and the second agent read the first's turns as its own. Normalised the same way the
         # role is matched everywhere else, or "QA" and "qa" would be two conversations.
-        agent_role = (agent_role or "").strip().lower()
+        #
+        # AND RESOLVED THE SAME WAY BY EVERY DOOR (thread_role). The drawer asked
+        # /threads/ensure for "helm" and got a "helm" thread; the turn resolved "helm" to the
+        # captain's key and opened ANOTHER — so the reply landed in a thread the drawer never
+        # opened, and it reopened empty. One resolution, here, for ensure, the turn and every
+        # other caller; `alias` is what the caller said, so a conversation stored under it
+        # before this fix is still found (`_find_role_thread` prefers the one with messages).
+        alias = (agent_role or "").strip().lower()
+        agent_role = thread_role(connection, project_id, agent_role)
         # AN EXPLICIT "NEW CONVERSATION" (the Metatron /new, and whatever asks for one).
         #
         # The key above is (project, actor, surface, role) — the verified principal under
@@ -164,24 +198,9 @@ class AgentService:
                     return dict(row)
 
         if external_ref and not new_thread:
-            row = connection.execute(
-                text(
-                    """
-                    SELECT id, project_id, actor, surface, external_ref, status,
-                           agent_role, pending_plan_id, pending_plan_summary,
-                           created_at, updated_at
-                    FROM agent_threads
-                    WHERE project_id = :project_id AND surface = :surface
-                      AND external_ref = :external_ref AND agent_role = :agent_role
-                    """
-                ),
-                {
-                    "project_id": project_id,
-                    "surface": surface,
-                    "external_ref": external_ref,
-                    "agent_role": agent_role,
-                },
-            ).mappings().first()
+            row = self._find_role_thread(
+                connection, project_id=project_id, surface=surface, agent_role=agent_role,
+                alias=alias, external_ref=external_ref)
             if row:
                 # Shared per-task thread (unique per project+surface+external_ref). Any authorized
                 # project actor may post — do NOT reject on actor mismatch (that broke task chat when
@@ -196,23 +215,9 @@ class AgentService:
         # is asking and who is being asked, so switching agent in the console lands in that
         # agent's own conversation rather than the previous one's.
         if not external_ref and not new_thread:
-            row = connection.execute(
-                text(
-                    """
-                    SELECT id, project_id, actor, surface, external_ref, status,
-                           agent_role, pending_plan_id, pending_plan_summary,
-                           created_at, updated_at
-                    FROM agent_threads
-                    WHERE project_id = :project_id AND actor = :actor
-                      AND surface = :surface AND agent_role = :agent_role
-                      AND external_ref IS NULL AND status = 'active'
-                    ORDER BY updated_at DESC
-                    LIMIT 1
-                    """
-                ),
-                {"project_id": project_id, "actor": actor, "surface": surface,
-                 "agent_role": agent_role},
-            ).mappings().first()
+            row = self._find_role_thread(
+                connection, project_id=project_id, surface=surface, agent_role=agent_role,
+                alias=alias, actor=actor)
             if row:
                 return dict(row)
 
@@ -261,6 +266,37 @@ class AgentService:
             {"surface": surface, "external_ref": external_ref},
         )
         return dict(row)
+
+    @staticmethod
+    def _find_role_thread(connection: Connection, *, project_id: str, surface: str,
+                          agent_role: str, alias: str, external_ref: Optional[str] = None,
+                          actor: Optional[str] = None):
+        """This agent's conversation on this subject (`external_ref`, shared) or this person's
+        own (`actor`, private): under the resolved key, or under the name the caller used
+        before keys were resolved alike. THE ONE WITH MESSAGES WINS — a split left an empty
+        thread under one key and the real conversation under the other, and the drawer must
+        open the conversation, not the empty one; then the resolved key, then the newest."""
+        where = ("external_ref = :external_ref" if external_ref
+                 else "actor = :actor AND external_ref IS NULL AND status = 'active'")
+        return connection.execute(
+            text(
+                f"""
+                SELECT id, project_id, actor, surface, external_ref, status,
+                       agent_role, pending_plan_id, pending_plan_summary,
+                       created_at, updated_at
+                FROM agent_threads t
+                WHERE project_id = :project_id AND surface = :surface
+                  AND agent_role IN (:agent_role, :alias) AND {where}
+                ORDER BY CASE WHEN EXISTS (SELECT 1 FROM agent_messages m
+                                           WHERE m.thread_id = t.id) THEN 0 ELSE 1 END,
+                         CASE WHEN agent_role = :agent_role THEN 0 ELSE 1 END,
+                         updated_at DESC
+                LIMIT 1
+                """
+            ),
+            {"project_id": project_id, "surface": surface, "agent_role": agent_role,
+             "alias": alias, "external_ref": external_ref, "actor": actor},
+        ).mappings().first()
 
     @staticmethod
     def _existing_shared_thread(connection: Connection, *, project_id: str, surface: str,
@@ -862,6 +898,90 @@ class AgentService:
         #: thread for this same project+actor+surface+role, ignoring any held `thread_id`.
         new_thread: bool = False,
     ) -> dict[str, Any]:
+        """THE ONE AGENT TURN on a connection the caller holds (the CLI, wakeups): `open_turn`
+        then `answer_turn` in the caller's transaction. The API's turn is `chat_durably`, the
+        same two steps with the question committed before the answer starts."""
+        opened = self.open_turn(
+            connection, project_id=project_id, actor=actor, message=message,
+            thread_id=thread_id, confirm_plan_id=confirm_plan_id, surface=surface,
+            external_ref=external_ref, role=role, attachments=attachments,
+            new_thread=new_thread)
+        return self.answer_turn(connection, opened, confirm_plan_id=confirm_plan_id,
+                                mode=mode, depth=depth, context=context)
+
+    def chat_durably(self, engine: Any, *, background: bool = False,
+                     on_started: Any = None, **turn: Any) -> dict[str, Any]:
+        """THE ONE AGENT TURN, kept whatever happens to its answer (services/chat_turns.py).
+
+        1. The operator's message and the turn's record are committed before any model call —
+           a failure, a restart or an idle-in-transaction timeout can no longer roll the
+           question back (the console's "It has not been dropped" is now true).
+        2. The answer runs on a connection that commits at every step, never holding a
+           transaction while a model thinks.
+        3. The reply lands with the turn marked done; a failure marks it failed in words, and
+           re-raises for a caller that waited.
+
+        `background` returns {thread_id, turn_id, status: "running"} at once and answers on a
+        daemon thread (the console polls GET /v1/agent/turns/{turn_id}, and a reloaded console
+        finds the running turn on the thread). Otherwise it waits and returns the turn's
+        response, as `chat` does, with its `turn_id`."""
+        import contextvars
+        import threading
+
+        from ..db import begin
+        from . import chat_turns
+
+        answer_keys = ("confirm_plan_id", "mode", "depth", "context")
+        open_args = {k: v for k, v in turn.items() if k not in ("mode", "depth", "context")}
+        answer_args = {k: turn[k] for k in answer_keys if k in turn}
+        with begin(engine) as connection:
+            opened = self.open_turn(connection, durable=True, **open_args)
+        if on_started is not None:
+            on_started(opened)
+
+        def run() -> dict[str, Any]:
+            try:
+                with chat_turns.committing_between_calls(engine, opened["turn_id"]) as connection:
+                    return self.answer_turn(connection, opened, **answer_args)
+            except BaseException as error:
+                chat_turns.mark_failed(engine, opened["turn_id"], error)
+                raise
+
+        if not background:
+            return run()
+
+        def in_background() -> None:
+            try:
+                run()
+            except BaseException:  # noqa: BLE001 — recorded on the turn by run(); logged here
+                LOGGER.exception("chat turn %s failed in the background", opened["turn_id"])
+
+        # The request's context (who is asking, the identity the turn acts under) goes with it.
+        request_context = contextvars.copy_context()
+        threading.Thread(target=request_context.run, args=(in_background,), daemon=True,
+                         name=f"chat-turn-{opened['turn_id']}").start()
+        return {"thread_id": opened["thread"]["id"], "turn_id": opened["turn_id"],
+                "status": "running"}
+
+    def open_turn(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        actor: str,
+        message: str,
+        thread_id: Optional[str] = None,
+        confirm_plan_id: Optional[str] = None,
+        surface: str = "chat",
+        external_ref: Optional[str] = None,
+        role: Optional[str] = None,
+        attachments: Optional[list[dict[str, Any]]] = None,
+        new_thread: bool = False,
+        #: Write the turn's record (chat_turns) beside the message: the API's durable turn.
+        durable: bool = False,
+    ) -> dict[str, Any]:
+        """The question, written: the thread it belongs to, the operator's message and files, and
+        (durable) the turn's record. Nothing here calls a model."""
         # WHO IS SPOKEN TO, resolved once: the project's agent by any name it goes by ("Site
         # Reliability Engineer", "site_reliability_engineer" → `sre`), or BOSS itself. What the
         # turn records (rules, learnings, decisions) carries it as its provenance.
@@ -906,6 +1026,34 @@ class AgentService:
         stored = self._store_attachments(
             connection, project_id=project_id, thread_id=thread["id"],
             message_id=written["id"], attachments=attachments or [])
+        turn_id = None
+        if durable:
+            from . import chat_turns
+
+            turn_id = chat_turns.open_row(connection, project_id=project_id,
+                                          thread_id=thread["id"], actor=actor,
+                                          agent_role=role or "", user_message_id=written["id"])
+        return {"project_id": project_id, "actor": actor, "thread": thread, "role": role,
+                "speaker": speaker, "user_content": user_content, "written": written,
+                "stored": stored, "turn_id": turn_id}
+
+    def answer_turn(
+        self,
+        connection: Connection,
+        opened: dict[str, Any],
+        *,
+        confirm_plan_id: Optional[str] = None,
+        mode: str = "operate",
+        depth: Optional[str] = None,
+        context: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        """The answer to a question `open_turn` wrote: the router's turn, the reply, its cards."""
+        from . import agent_identity, chat_turns
+
+        project_id, actor = opened["project_id"], opened["actor"]
+        thread, role, speaker = opened["thread"], opened["role"], opened["speaker"]
+        user_content, written, stored = opened["user_content"], opened["written"], opened["stored"]
+        turn_id = opened.get("turn_id")
         messages = self.list_messages(connection, thread["id"])
         if stored:
             # ONLY ON THE NEWEST TURN. The files belong to the message the operator just sent;
@@ -918,6 +1066,7 @@ class AgentService:
         act_id = self._open_chat_act(connection, project_id=project_id, actor=actor, role=role,
                                      thread_id=thread["id"], message=user_content,
                                      context=context)
+        chat_turns.note_act(connection, turn_id, act_id)
         # Build exactly once for the turn. The router receives the resolved
         # object and never reaches back into the feature catalog per tool call.
         manifest = build_manifest(connection, self.settings, project_id)
@@ -1029,8 +1178,11 @@ class AgentService:
             action_count=len(turn.actions),
             pending_plan_id=active_pending_id,
         )
-        return {
+        result = {
             "thread_id": thread["id"],
+            # THE TURN'S RECORD (chat_turns), when it has one: what a console polls, and what a
+            # console that reloaded mid-turn resumes from.
+            "turn_id": turn_id,
             "reply": turn.reply,
             "actions": turn.actions,
             "pending_confirmation": pending,
@@ -1050,6 +1202,8 @@ class AgentService:
             "proposal": cards.get("proposal"),
             "citations": cards.get("citations") or [],
         }
+        chat_turns.mark_done(connection, turn_id, reply_message_id=assistant["id"], result=result)
+        return result
 
     @staticmethod
     def _turn_cards(connection: Connection, *, project_id: str, turn: Any, message: str,

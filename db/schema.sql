@@ -7136,6 +7136,35 @@ CREATE TABLE IF NOT EXISTS agent_progress (
 CREATE INDEX IF NOT EXISTS idx_agent_progress_thread
   ON agent_progress(thread_id, id DESC);
 
+-- ONE CHAT TURN, DURABLY (services/chat_turns.py). The operator's message and this row are
+-- committed BEFORE the first model call, so a turn that fails, a worker that restarts or a
+-- Postgres idle-in-transaction timeout can no longer roll the question back. The turn itself
+-- runs on short transactions; its reply (and `result`, the response a console that reloaded
+-- reads back) lands with status 'done', a failure with status 'failed' and a plain sentence in
+-- `error`. `heartbeat_at` moves at every step: a 'running' row whose heartbeat stopped is a
+-- turn whose process died, and the sweeper marks it failed.
+CREATE TABLE IF NOT EXISTS agent_chat_turns (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  agent_role TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'running'
+    CHECK (status IN ('queued', 'running', 'done', 'failed')),
+  user_message_id TEXT,
+  reply_message_id TEXT,
+  act_id TEXT,
+  error TEXT,
+  result JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_agent_chat_turns_thread
+  ON agent_chat_turns(thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_chat_turns_live
+  ON agent_chat_turns(project_id, heartbeat_at) WHERE status IN ('queued', 'running');
+
 -- BOSS debugging the way an engineer debugs: a real Claude Code session with a shell, the
 -- app's repo, read-only SQL and a way onto the fleet. See services/investigation.py for why
 -- the chat agent's 73 fixed-shape tools could not do this and never would.
