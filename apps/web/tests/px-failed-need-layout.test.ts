@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const css = readFileSync("app/projects/px.css", "utf8");
@@ -24,5 +24,28 @@ describe("failed project alerts keep their message readable", () => {
     expect(actions).toContain("max-width: 100%");
     expect(actions).toContain("white-space: normal");
     expect(actions).toContain("overflow-wrap: anywhere");
+  });
+});
+
+describe("every failed card with actions takes the same layout", () => {
+  it("each px-ny card holding FailedActions is px-ny-failed, its text in px-ny-b", () => {
+    const dir = "app/projects";
+    for (const f of readdirSync(dir).filter((n) => n.endsWith(".tsx"))) {
+      const src = readFileSync(`${dir}/${f}`, "utf8");
+      let at = src.indexOf("<FailedActions");
+      while (at >= 0) {
+        // The card that holds it: the nearest `<div className="px-ny…">` (not -ico / -b) above.
+        const before = src.slice(0, at);
+        const cards = [...before.matchAll(/<div className="([^"]*)"/g)]
+          .filter((m) => m[1].split(/\s+/)[0] === "px-ny");
+        const last = cards[cards.length - 1];
+        if (last && before.lastIndexOf("footer=") < (last.index ?? 0)) {
+          const card = src.slice(last.index, at);
+          expect(last[1], `${f}: a failed card with actions`).toContain("px-ny-failed");
+          expect(card, `${f}: its text column`).toContain('className="px-ny-b"');
+        }
+        at = src.indexOf("<FailedActions", at + 1);
+      }
+    }
   });
 });
