@@ -236,10 +236,12 @@ _HAS_ATTEMPTS = frozenset({"workflow_run", "workflow_step", "code_task"})
 _ACTING_RULES = (
     "Any action (a retry, a fix, a deploy) goes through a proposal the operator consents to; "
     "do not act without it.",
-    "Never say a repair ran, or worked, unless a tool result in this turn shows it.",
-    "A change to the host, the network or a security policy (sandbox, TLS, a registry, a "
-    "proxy) is a person's action item: say what to change, the evidence for it and how to "
-    "check it. Never weaken such a control to get past a failure.",
+    # Evidence on record counts: a newer attempt that already recovered the run is said so.
+    "Never say a repair ran, or worked, unless a tool result or the evidence above shows it.",
+    # Security controls only: a redeploy or a host action BOSS can take is a proposal (above).
+    "Never weaken a security control (sandbox, TLS, a registry, a proxy) to get past a failure; "
+    "changing one is a person's action item: say what to change, the evidence for it and how "
+    "to check it.",
 )
 _ATTEMPT_RULE = ("Before proposing a retry, check the run's newer attempts: one may already "
                  "have recovered it.")

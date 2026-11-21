@@ -166,7 +166,7 @@ describe("Claim this BOSS", () => {
     const el = await mount(<ClaimFlow options={options({ path: "setup_token", origin: null, expires_at: null, seats: [], link_over_api: true })} />);
     const note = el.querySelector("[data-testid='claim-no-token']")?.textContent ?? "";
     expect(note).toContain("whoever holds this install's admin key");
-    expect(note).toContain("in a terminal on this computer");
+    expect(note).toContain("in a terminal on the computer where BOSS is installed");
     expect(el.textContent).toContain("boss identity setup-link");
     accessible(el);
   });
@@ -290,11 +290,12 @@ describe("Claim this BOSS", () => {
     }
   });
 
-  it("on localhost BOSS runs on this computer: no server, no SSH", async () => {
+  it("on localhost (a laptop install, or an SSH tunnel's end) the step names neither this computer nor a server", async () => {
     window.history.replaceState(null, "", "/claim");
     const el = await mount(<ClaimFlow options={options({ path: "setup_token", paths: ["setup_token"], network: null, origin: null, expires_at: null, seats: [] })} />);
     const step = el.querySelector("[data-testid='claim-terminal-step']")?.textContent ?? "";
-    expect(step).toBe("Run this in a terminal on this computer.");
+    expect(step).toBe("Run this in a terminal on the computer where BOSS is installed.");
+    expect(step).not.toMatch(/this computer/);
     expect(el.querySelector("[data-testid='claim-no-token']")?.textContent).not.toMatch(/SSH|server where/);
   });
 

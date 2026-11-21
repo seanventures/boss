@@ -314,7 +314,7 @@ def test_the_incidents_context_opens_with_the_steps_error_and_an_answer_contract
     # The acting rules ride on the subject, not in the door's question.
     assert "check the run's newer attempts" in first_block
     assert "a proposal the operator consents to" in first_block
-    assert "unless a tool result in this turn shows it" in first_block
+    assert "unless a tool result or the evidence above shows it" in first_block
     # Not the old framing that sent it to the PRD.
     assert "Call read_spec with this run id FIRST" not in system
 
@@ -873,8 +873,13 @@ def test_every_ask_door_gets_the_acting_rules(kind):
     these rules into its question, so only that door had them. Every subject's contract does."""
     contract = answer_contract(SubjectRef(kind, "x_1"))
     assert "a proposal the operator consents to" in contract
-    assert "Never say a repair ran, or worked, unless a tool result in this turn shows it" in contract
+    # A recovery already on record may be said: the evidence counts, not only this turn's tools.
+    assert "Never say a repair ran, or worked, unless a tool result or the evidence above shows it" in contract
+    assert "in this turn" not in contract
+    # Only security controls are a person's: a redeploy or host action BOSS can take is a proposal.
+    assert "Never weaken a security control (sandbox, TLS, a registry, a proxy)" in contract
     assert "a person's action item" in contract and "how to check it" in contract
+    assert "change to the host" not in contract and "the network" not in contract
     attempts = kind in ("workflow_run", "workflow_step", "code_task")
     assert ("check the run's newer attempts" in contract) is attempts
     # Numbered in order, nothing skipped.

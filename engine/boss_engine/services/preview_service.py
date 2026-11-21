@@ -4513,6 +4513,28 @@ PREVIEW_FORWARD_HOST_ENV = "BOSS_PREVIEW_FORWARD_HOST"
 _PUBLIC_HOST = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*(?::\d{1,5})?", re.I)
 
 
+def _preview_parents() -> dict[str, str]:
+    """The hosts BOSS serves previews under (`<label>.<parent>`), each with the scheme a browser
+    reaches it by ("" when the request's own scheme says): localhost always; BOSS_PREVIEW_ORIGIN's
+    host; and BOSS_PUBLIC_URL's host (no preview origin set: previews are on the console's host,
+    on the preview port). Anything else is not BOSS's to vouch for."""
+    out: dict[str, str] = {"localhost": ""}
+    configured = configured_preview_origin()
+    candidates = [configured]
+    try:
+        from ..config import get_settings
+
+        candidates.append(str(get_settings().public_url or ""))
+    except Exception:  # noqa: BLE001 — no settings: localhost and the configured origin stand
+        pass
+    for raw in candidates:
+        parts = urllib.parse.urlsplit(raw or "")
+        name = (parts.hostname or "").lower()
+        if name and parts.scheme in ("http", "https") and not _ipv4(name) and ":" not in name:
+            out.setdefault(name, parts.scheme)
+    return out
+
+
 def preview_public_host_headers(incoming: Optional[dict], preview_id: str, *,
                                 scheme: str = "http") -> dict[str, str]:
     """WHAT THE APP IS TOLD ABOUT WHERE THE BROWSER IS, on the preview origin (contributed from
@@ -4532,8 +4554,14 @@ def preview_public_host_headers(incoming: Optional[dict], preview_id: str, *,
         sent: preview_origin.stripped_headers), which most frameworks honour;
       - Host itself only for a `<label>.localhost` host, which every such allowlist accepts, or
         when BOSS_PREVIEW_FORWARD_HOST=1 opts in for a custom preview origin;
-      - nothing at all unless the host is a plain hostname[:port] whose first label is THIS
-        preview's (defence in depth: `prev-abc.attacker.example` is not passed on)."""
+      - nothing at all unless the WHOLE host is this preview's own: a plain hostname[:port]
+        whose first label is THIS preview's and whose parent is one BOSS serves previews under
+        (`_preview_parents`: localhost, BOSS_PREVIEW_ORIGIN's host, BOSS_PUBLIC_URL's host).
+        `prev-abc.attacker.example` passes the preview origin's first-label check, and an app
+        that honours X-Forwarded-Host would build its links on it: it gets neither header.
+
+    X-Forwarded-Proto is the configured origin's scheme when the host is under it (a TLS proxy
+    in front of the preview port), else `scheme`."""
     host = next((str(v).strip() for k, v in (incoming or {}).items()
                  if str(k).lower() == "host" and v is not None), "")
     label = preview_host_label(preview_id)
@@ -4543,8 +4571,11 @@ def preview_public_host_headers(incoming: Optional[dict], preview_id: str, *,
     first, dot, parent = name.partition(".")
     if first != label or not dot:
         return {}
-    out = {"X-Forwarded-Host": host,
-           "X-Forwarded-Proto": scheme if scheme in ("http", "https") else "http"}
+    parents = _preview_parents()
+    if parent not in parents:
+        return {}
+    proto = parents[parent] or (scheme if scheme in ("http", "https") else "http")
+    out = {"X-Forwarded-Host": host, "X-Forwarded-Proto": proto}
     opted_in = (os.environ.get(PREVIEW_FORWARD_HOST_ENV) or "").strip().lower() in (
         "1", "true", "yes", "on")
     if parent == "localhost" or opted_in:

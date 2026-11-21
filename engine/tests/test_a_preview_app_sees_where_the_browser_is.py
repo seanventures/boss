@@ -118,11 +118,17 @@ def test_a_localhost_preview_saves_same_origin_writes(upstream):
     assert _post(host, "http://untrusted.example") == 403
 
 
-def test_a_hostname_preview_keeps_a_host_the_dev_server_accepts(upstream):
+ORIGIN = "https://boss.example.com:3001"
+
+
+def test_a_hostname_preview_keeps_a_host_the_dev_server_accepts(upstream, monkeypatch):
     """No 403 regression for Vite-style allowlists: the app still sees a loopback Host, and is
-    told the public one in X-Forwarded-Host, so its same-origin check still passes."""
+    told the public one in X-Forwarded-Host, so its same-origin check still passes. Behind a TLS
+    proxy the request reaches BOSS as http; the configured origin says https, and so does the
+    app's X-Forwarded-Proto."""
+    monkeypatch.setenv(preview_service.PREVIEW_ORIGIN_ENV, ORIGIN)
     host = "prev-abc123.boss.example.com:3001"
-    assert _post(host, f"https://{host}", scheme="https") == 200
+    assert _post(host, f"https://{host}", scheme="http") == 200
     seen = _Upstream.seen[-1]
     assert seen["host"].startswith("127.0.0.1:")
     assert seen["x-forwarded-host"] == host
@@ -130,6 +136,7 @@ def test_a_hostname_preview_keeps_a_host_the_dev_server_accepts(upstream):
 
 
 def test_the_opt_in_sends_the_public_host_for_a_custom_preview_origin(upstream, monkeypatch):
+    monkeypatch.setenv(preview_service.PREVIEW_ORIGIN_ENV, ORIGIN)
     monkeypatch.setenv(preview_service.PREVIEW_FORWARD_HOST_ENV, "1")
     host = "prev-abc123.boss.example.com:3001"
     _post(host, f"http://{host}")
@@ -148,11 +155,26 @@ def test_a_host_that_is_not_this_previews_tells_the_app_nothing(upstream, host):
     assert preview_service.preview_public_host_headers({"host": host}, PREVIEW) == {}
 
 
-def test_an_attacker_parent_is_never_sent_as_host(upstream):
+@pytest.mark.parametrize("opt_in", ["", "1"])
+def test_an_attacker_parent_is_never_sent_as_host_or_forwarded_host(upstream, monkeypatch, opt_in):
     """`prev-abc123.attacker.example` passes the origin's first-label check; the app must not be
-    handed it as Host (host-header poisoning of links it builds)."""
-    _post("prev-abc123.attacker.example", "http://prev-abc123.attacker.example")
-    assert _Upstream.seen[-1]["host"].startswith("127.0.0.1:")
+    handed it as Host, nor as X-Forwarded-Host, which Next.js, Express (trust proxy), Django and
+    Rails build links and same-origin checks from (host-header poisoning)."""
+    monkeypatch.setenv(preview_service.PREVIEW_ORIGIN_ENV, ORIGIN)
+    monkeypatch.setenv(preview_service.PREVIEW_FORWARD_HOST_ENV, opt_in)
+    for host in ("prev-abc123.attacker.example", "prev-abc123.example.com:3001",
+                 "prev-abc123.boss.example.com.attacker.example"):
+        _post(host, f"http://{host}")
+        seen = _Upstream.seen[-1]
+        assert seen["host"].startswith("127.0.0.1:"), host
+        assert "x-forwarded-host" not in seen, host
+        assert "x-forwarded-proto" not in seen, host
+
+
+def test_a_hostname_boss_was_never_told_about_is_not_vouched_for(upstream, monkeypatch):
+    monkeypatch.delenv(preview_service.PREVIEW_ORIGIN_ENV, raising=False)
+    assert preview_service.preview_public_host_headers(
+        {"Host": "prev-abc123.boss.example.com:3001"}, PREVIEW) == {}
 
 
 def test_through_the_console_path_nothing_is_added(upstream):
