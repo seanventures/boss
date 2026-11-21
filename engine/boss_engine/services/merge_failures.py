@@ -74,7 +74,11 @@ _GITHUB_WORDS = ((" so GitHub would not merge it", " so BOSS could not merge it 
 def local_words(said: Any, url: Any) -> Any:
     """What a STORED merge-failure sentence says, rendered for the repository it is about: a
     change kept on this machine never reads "GitHub would not merge it" (northgate-gateway #9's
-    card, stored before #264). Display-time, from the URL's kind; non-strings pass through."""
+    card, stored before #264). Display-time, from the URL's kind. A `merge_failed` record (a
+    dict: reason / next / …) is rendered field by field, as for_display does; other values pass
+    through."""
+    if isinstance(said, dict):
+        return {k: local_words(v, url) for k, v in said.items()}
     if not isinstance(said, str) or not is_local_change(url):
         return said
     from .repo_links import local_words as _change_words
@@ -275,44 +279,44 @@ def hand_off_conflict(connection: Any, settings: Any, project_id: str, decision_
     return new_run
 
 
-def hand_to_builder(connection: Any, settings: Any, run_id: str, note: str) -> Optional[str]:
+def hand_to_builder(connection: Any, settings: Any, run_id: str, note: str,
+                    why: Optional[list[str]] = None) -> Optional[str]:
     """Start the next attempt of the build's lineage to update its branch (it pushes to the
     same pull request). The new run's id, or None when BOSS may not start it by itself."""
     from .code_task_service import retry_code_task
     from .jobs import JobLeaseService
 
-    global LAST_REFUSAL
-    LAST_REFUSAL = ""
+    # WHY IT STARTED NOTHING goes back to THIS caller (`why`), never through shared state: two
+    # sweeps at once each record their own reason.
+    why = why if why is not None else []
     engine = getattr(connection, "engine", None)
     if engine is None:
-        LAST_REFUSAL = "no engine to start the build on"
+        why.append("no engine to start the build on")
         return None
     try:
         out = retry_code_task(engine, settings, JobLeaseService(settings), run_id,
                               fix_note=note, automatic=True)
     except Exception as error:  # noqa: BLE001 — refused: the person is asked instead
         log.warning("merge conflict hand-off refused for %s: %s", run_id, error)
-        LAST_REFUSAL = str(error)[:500]
+        why.append(str(error)[:500])
         return None
     new_run = str(out.get("run_id") or "")
     if not new_run or new_run == run_id or out.get("created") is False:
         # Not a NEW attempt (another run already owns the branch, or nothing started): it is
         # not a hand-off, so the person's card is never withdrawn on it.
         log.warning("merge conflict hand-off for %s started no new build (%s)", run_id, out)
-        LAST_REFUSAL = f"no new build started ({str(out)[:300]})"
+        why.append(f"no new build started ({str(out)[:300]})")
         return None
     return new_run
 
 
-#: Why the last hand_to_builder call started nothing (BOSS's own refusal, in its words).
-LAST_REFUSAL = ""
 #: A hand-off BOSS itself refused is tried again by the sweep this many more times, this far
 #: apart (minutes), before the reopened card is the person's alone.
 HANDOFF_RETRIES = 2
 HANDOFF_BACKOFF_MINUTES = (10, 60)
 
 
-def _mark_refused(connection: Any, decision_id: str, *, attempts: int) -> None:
+def _mark_refused(connection: Any, decision_id: str, *, attempts: int, why: str = "") -> None:
     """The card was reopened because BOSS's OWN hand-off was refused: said so, distinctly
     (`merge_failed.handoff_refused`: why, how many tries, when the next is due), so the sweep
     retries it itself — and a card a person cancelled (no such marker) is never touched."""
@@ -325,7 +329,7 @@ def _mark_refused(connection: Any, decision_id: str, *, attempts: int) -> None:
     connection.execute(text(
         "UPDATE decisions SET recommendation = jsonb_set(recommendation, "
         "'{merge_failed,handoff_refused}', CAST(:m AS jsonb)) WHERE id = :d"),
-        {"d": decision_id, "m": json.dumps({"why": LAST_REFUSAL or "the build did not start",
+        {"d": decision_id, "m": json.dumps({"why": why or "the build did not start",
                                             "attempts": attempts, "next_at": due})})
 
 
@@ -385,14 +389,16 @@ def retry_refused_handoffs(engine: Any, settings: Any, *, project_id: Optional[s
             runs = _pr_runs(c, pid, url, decision_id, rec.get("branch_name"))
             if not change_open(c, pid, url, settings=settings) or _lineage_stopped(c, runs):
                 continue
-            new_run = _hand_off_locked(c, settings, pid, decision_id, rec, runs)
+            refused: list[str] = []
+            new_run = _hand_off_locked(c, settings, pid, decision_id, rec, runs, why=refused)
             if new_run:
                 _withdraw(c, pid, decision_id,
                           f"BOSS handed it to the build agent ({new_run}) to update the branch; "
                           "you will be asked again when it can merge.",
                           {"kind": "merge_conflict_handed_off", "run_id": new_run})
             else:
-                _mark_refused(c, decision_id, attempts=tried + 1)
+                _mark_refused(c, decision_id, attempts=tried + 1,
+                              why=refused[-1] if refused else "")
             emit_event(c, pid, "merge.handoff_retried", "boss", "decision", decision_id,
                        {"handed_to": new_run, "attempt": tried + 1})
         done.append({"decision_id": decision_id, "handed_to": new_run})
@@ -460,7 +466,9 @@ def handle(service: Any, connection: Any, project_id: str, decision_id: str, num
             return {**base, "status": "superseded", "message": words}
         runs = _pr_runs(connection, project_id, url, decision_id, branch_name)
         note = conflict_note(number, url, message)
-        new_run = hand_to_builder(connection, service.settings, runs[0], note) if runs else None
+        refused: list[str] = []
+        new_run = hand_to_builder(connection, service.settings, runs[0], note,
+                                  why=refused) if runs else None
         if new_run:
             words = (f"Merge failed: {reason}. BOSS handed it to the build agent ({new_run}) "
                      "to update the branch; you will be asked again when it can merge.")
@@ -472,7 +480,8 @@ def handle(service: Any, connection: Any, project_id: str, decision_id: str, num
             return {**base, "status": "needs_rebase", "message": words}
         _mark(connection, decision_id, reason, conflict_steps(runs), kind, reopen=True)
         if runs:                       # a build existed and BOSS's own hand-off was refused
-            _mark_refused(connection, decision_id, attempts=1)
+            _mark_refused(connection, decision_id, attempts=1,
+                          why=refused[-1] if refused else "")
         return {**base, "status": "failed", "message": f"Merge failed: {reason}."}
     _mark(connection, decision_id, reason, "Fix that, then press Merge to try again.", kind,
           reopen=True)
@@ -604,13 +613,15 @@ def recover_orphaned_conflicts(engine: Any, settings: Any, *, project_id: Option
                     {"r": later, "d": decision_id})
                 done.append({"decision_id": decision_id, "linked": str(later)})
                 continue
-            new_run = _hand_off_locked(c, settings, pid, decision_id, rec, runs)
+            refused = []
+            new_run = _hand_off_locked(c, settings, pid, decision_id, rec, runs, why=refused)
             if new_run is None:
                 failed = rec.get(KEY) or {}
                 _mark(c, decision_id, str(failed.get("reason") or "a conflict"),
                       conflict_steps(runs), NOT_MERGEABLE, reopen=True)
                 if runs:
-                    _mark_refused(c, decision_id, attempts=1)
+                    _mark_refused(c, decision_id, attempts=1,
+                                  why=refused[-1] if refused else "")
             emit_event(c, pid, "merge.conflict_orphan_recovered", "boss", "decision",
                        decision_id, {"handed_to": new_run, "reopened": new_run is None})
         done.append({"decision_id": decision_id, "handed_to": new_run,
@@ -619,7 +630,8 @@ def recover_orphaned_conflicts(engine: Any, settings: Any, *, project_id: Option
 
 
 def _hand_off_locked(c: Any, settings: Any, project_id: str, decision_id: str,
-                     rec: dict[str, Any], runs: list[str]) -> Optional[str]:
+                     rec: dict[str, Any], runs: list[str],
+                     why: Optional[list[str]] = None) -> Optional[str]:
     """The hand-off for a question this transaction already holds locked."""
     if not runs:
         return None
@@ -627,7 +639,7 @@ def _hand_off_locked(c: Any, settings: Any, project_id: str, decision_id: str,
     url = str(rec.get("pull_request_url") or "")
     number = rec.get("pull_request_number") or url.rstrip("/").rsplit("/", 1)[-1]
     new_run = hand_to_builder(c, settings, runs[0],
-                              conflict_note(number, url, failed.get("reason")))
+                              conflict_note(number, url, failed.get("reason")), why=why)
     if not new_run:
         return None
     _mark(c, decision_id, str(failed.get("reason") or "conflict"),
