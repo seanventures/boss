@@ -513,6 +513,25 @@ def rename_raw_run(connection: Connection, project_id: str, node_id: str, ref: s
 
 
 # --- the write ------------------------------------------------------------------------------------
+#: The learned kinds that teach a METHOD (what to do next time): one that copies an answer
+#: file is refused (``copied_answer_method``).
+METHOD_KINDS = frozenset({"fix", "workaround", "resolved_pattern"})
+
+
+def copied_answer_method(kind: str, title: Any, statement: Any,
+                         detail: Mapping[str, Any] | None) -> Optional[str]:
+    """The reference-answer file (``*.good.yaml``, golden/expected fixtures —
+    input_fidelity.is_answer_path) a method-teaching learning reads, else None."""
+    if str(kind or "").strip().lower() not in METHOD_KINDS:
+        return None
+    from ..input_fidelity import answer_paths_in
+
+    body = " ".join([str(title or ""), str(statement or ""),
+                     json.dumps(dict(detail or {}), default=str)])
+    found = answer_paths_in(body)
+    return found[0] if found else None
+
+
 def record(
     connection: Connection,
     *,
@@ -553,6 +572,12 @@ def record(
     kind = str(learning_kind or "").strip().lower()
     if kind not in LEARNING_KINDS:
         raise LearningRefused(f"learning_kind is one of {', '.join(sorted(LEARNING_KINDS))}.")
+    copied = copied_answer_method(kind, title, statement, detail)
+    if copied:
+        # A COPIED ANSWER IS NOT A LESSON (input_fidelity): "cp examples/x.good.yaml …" worked
+        # only because the answer was in the repo. Stored, the next build would be taught to copy.
+        raise LearningRefused(f"its method reads a reference answer file ({copied}); "
+                              "copying an answer is never a reusable lesson.")
     title = _clean(title, field="title", limit=MAX_TITLE, required=True)
     statement = _clean(statement, field="statement", limit=MAX_STATEMENT, required=True)
     clean_detail = _detail(kind, detail)

@@ -234,7 +234,10 @@ CAPABILITIES: dict[str, Capability] = {
             # commits on the same PR (Incremental Build's later increments). `increment`: which
             # increment of the PRD's plan this build builds (workflow_catalogue.increment_brief).
             optional_inputs=("acceptance_criteria", "test_commands", "task_id", "repository",
-                             "reference_links", "spec_markdown", "extend", "increment"),
+                             "reference_links", "spec_markdown", "extend", "increment",
+                             # `remediate`: {input, output, answer_files, validator} — the
+                             # build fixes ONE input file and is held to it (input_fidelity).
+                             "remediate"),
             produces=("code_task_run_id", "pull_request_url"),
             requires_project=("repository",),
             skills=("github.create_pr_real", "software_factory.sandbox_validation"),

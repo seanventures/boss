@@ -58,7 +58,9 @@ SEAT_OF_GATE: dict[str, tuple[str, str]] = {
     "acceptance_met": ("acceptance_check", "acceptance_summary"),
 }
 #: The gates that never open a pull request past themselves (see the module docstring).
-HELD_GATES = frozenset({"template_tests", "no_committed_secrets"})
+#: `input_fidelity` (input_fidelity.py): a remediation whose output is a copied answer or adds
+#: what the input never had is not a draft to merge later — it is the wrong file.
+HELD_GATES = frozenset({"template_tests", "no_committed_secrets", "input_fidelity"})
 #: How much of one seat's prose is carried when it wrote no FINDING lines.
 MAX_SEAT_CHARS = 3_000
 MAX_FINDINGS = 40
