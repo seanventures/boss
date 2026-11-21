@@ -152,6 +152,129 @@ def classify(output: Any, *, boss_service: bool = False) -> Optional[dict[str, A
             "owner": "boss" if ours else "environment"}
 
 
+# ── Could the INSTALL run? The same question, one step earlier ──────────────────────────────
+#
+# THE CASE (an enterprise install, 2026-11). Behind a TLS-intercepting proxy without its CA,
+# `npm install` failed UNABLE_TO_VERIFY_LEAF_SIGNATURE (or stalled to the install timeout); an
+# internal registry answered E401 without the token the sandbox lacked. BOSS read each as a
+# dependency conflict: the coder was told to "resolve the dependency conflict", repair rounds
+# ran on tests that never ran, the slow install re-ran several times per build, and a coder
+# could pin or drop packages to "fix" a certificate. One classifier, for the suite's failures
+# above and for every package manager's install here (npm, pnpm, yarn, pip, Go, Maven), says
+# which install failures no code change can fix.
+#
+# Kinds (`classify_install`):
+#   tls               the registry's certificate is not trusted here (an intercepting proxy's CA)
+#   network           DNS / connect / reset — `transient`: one backoff retry may clear it
+#   registry_auth     the registry or a proxy wants a credential the sandbox does not hold
+#                     (npm E401, proxy E407 / 407, pnpm ERR_PNPM_FETCH_401, yarn/pip/Maven/Go 401)
+#   registry_forbidden the registry (or BOSS's egress proxy) refuses the registry itself: 403 on
+#                     its root or metadata, a CONNECT tunnel refused
+#   registry_policy_blocked  a package-curation firewall (Artifactory Curation, Nexus Firewall,
+#                     and the like) refused ONE package version: NOT environmental — the coder
+#                     picks a version the registry allows
+#   timeout           the install hit its time limit; environmental only with network evidence
+#
+# `environment` says whether the failure is the install's environment (no code change helps).
+
+#: Each kind's words: (kind, pattern). Ordered: the first match wins; a curation block is read
+#: before a plain 403, a proxy's 407 before a registry's 401.
+_INSTALL_SIGNALS: tuple[tuple[str, str], ...] = (
+    ("registry_policy_blocked",
+     r"curation|nexus (?:repository )?firewall|firewall (?:policy|blocked|quarantin)|quarantin"
+     r"|blocked by (?:the )?(?:\w+ ){0,3}(?:policy|policies)|polic(?:y|ies) violated"
+     r"|violat\w* (?:the )?(?:following )?polic"),
+    ("tls",
+     r"UNABLE_TO_VERIFY_LEAF_SIGNATURE|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_GET_ISSUER_CERT"
+     r"|CERT_HAS_EXPIRED|DEPTH_ZERO_SELF_SIGNED_CERT|ERR_TLS_CERT_ALTNAME_INVALID"
+     r"|CERTIFICATE_VERIFY_FAILED|SSLCertVerificationError|certificate verify failed"
+     r"|x509: certificate|PKIX path building failed|unable to find valid certification path"
+     r"|self[- ]signed certificate"),
+    ("registry_auth",
+     r"\bE40[17]\b|ERR_PNPM_FETCH_40[17]|\b407 Proxy Authentication|proxy authentication required"
+     r"|Request failed \"40[17]|status code:? 40[17]\b|HTTP error 40[17]|40[17] Client Error"
+     r"|\b40[17] Unauthorized|\bUnauthorized\b.{0,40}\b401\b|\b401\b.{0,40}\bUnauthorized"
+     r"|authentication (?:is )?required|not authorized\b|ERR_PNPM_FETCH_407"),
+    ("registry_forbidden",
+     r"\bE403\b|ERR_PNPM_FETCH_403|\b403 Forbidden|status code:? 403\b|HTTP error 403"
+     r"|403 Client Error|Request failed \"403|statusCode=403|tunneling socket could not be "
+     r"established"),
+    ("network",
+     r"\b(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH"
+     r"|ESOCKETTIMEDOUT|ECONNABORTED)\b|ERR_PNPM_META_FETCH_FAIL|socket hang up"
+     r"|Temporary failure in name resolution|Name or service not known|NewConnectionError"
+     r"|Max retries exceeded|Could not resolve host|no such host|i/o timeout"
+     r"|dial tcp\b|connection (?:refused|reset|timed out)|UnknownHostException"
+     r"|Connect to \S+ failed|network timeout|network is unreachable|fetch failed"),
+)
+#: A 403/401 naming ONE package version (a tarball, a wheel, a jar, a Go module zip): a
+#: curation firewall's refusal even when it does not say "curation".
+_VERSION_ARTIFACT = re.compile(
+    r"/(?P<npmpkg>(?:@[\w.-]+/)?[\w.-]+)/-/[\w.-]+?-(?P<npmver>\d[\w.+-]*?)\.tgz"
+    r"|/(?P<gomod>[\w.-]+(?:/[\w.-]+)*)/@v/(?P<gover>v[\w.+-]+?)\.(?:zip|mod)\b"
+    r"|(?P<file>[\w.-]+-\d[\w.+!-]*?\.(?:whl|tar\.gz|zip|jar|pom))\b", re.I)
+#: What package@version a curation refusal names, when it says so.
+_NAMED_PACKAGE = re.compile(r"(?P<pkg>(?:@[\w.-]+/)?[\w.-]+(?:/[\w.-]+)*)@(?P<ver>v?\d[\w.+-]*)")
+
+
+def _artifact_name(found: "re.Match[str]") -> str:
+    if found.group("npmpkg"):
+        return f"{found.group('npmpkg')}@{found.group('npmver')}"
+    if found.group("gomod"):
+        return f"{found.group('gomod')}@{found.group('gover')}"
+    return found.group("file") or ""
+#: Network words inside a timed-out install: the slow part was the network, not the code.
+_TIMEOUT_NETWORK = re.compile(
+    r"network|fetch|registry|proxy|ETIMEDOUT|ESOCKETTIMEDOUT|socket|retry|retrying|timeout",
+    re.I)
+
+_INSTALL_REASON = {
+    "tls": "the package registry's certificate is not trusted in BOSS's sandbox (a TLS-"
+           "intercepting proxy needs its CA installed)",
+    "network": "the package registry could not be reached from BOSS's sandbox",
+    "registry_auth": "the package registry (or a proxy) wants a credential BOSS's builds do not "
+                     "hold",
+    "registry_forbidden": "the package registry (or BOSS's egress proxy) refused access to the "
+                          "registry itself",
+    "registry_policy_blocked": "the package registry's policy blocked a specific package version",
+    "timeout": "the install did not finish in time, and the registry was slow or unreachable",
+}
+
+
+def classify_install(output: Any, *, timed_out: bool = False) -> Optional[dict[str, Any]]:
+    """Why an install failed, when it is one of the kinds above, else None (a dependency
+    conflict, a missing version, a failing build script: the code's). {kind, reason,
+    environment, transient, evidence, package}."""
+    text = str(output or "")
+    for kind, pattern in _INSTALL_SIGNALS:
+        hit = re.search(pattern, text, re.I)
+        if hit is None:
+            continue
+        line_start = text.rfind("\n", 0, hit.start()) + 1
+        line_end = text.find("\n", hit.end())
+        evidence = text[line_start:line_end if line_end >= 0 else len(text)].strip()[:300]
+        refused = [ln for ln in text.splitlines() if re.search(r"\b403\b|E403|_403", ln)]
+        if kind == "registry_forbidden" and any(_VERSION_ARTIFACT.search(ln) for ln in refused):
+            kind = "registry_policy_blocked"     # 403 on one version's artifact, not the registry
+        package = ""
+        if kind == "registry_policy_blocked":
+            artifact = next((m for ln in refused or text.splitlines()
+                             if (m := _VERSION_ARTIFACT.search(ln))), None)
+            named = _NAMED_PACKAGE.search(evidence)
+            package = (f"{named.group('pkg')}@{named.group('ver')}" if named else
+                       _artifact_name(artifact) if artifact else "")
+        return {"kind": kind, "reason": _INSTALL_REASON[kind],
+                "environment": kind != "registry_policy_blocked",
+                "transient": kind == "network", "evidence": evidence, "package": package or ""}
+    if timed_out:
+        networky = bool(_TIMEOUT_NETWORK.search(text))
+        return {"kind": "timeout", "reason": _INSTALL_REASON["timeout"] if networky else
+                "the install did not finish in time",
+                "environment": networky, "transient": True,
+                "evidence": (text.strip().splitlines() or [""])[-1][:300], "package": ""}
+    return None
+
+
 # ── BOSS owns it: the build, and the Self-fixes list ─────────────────────────────────────
 
 EVENT = "code_task.suite_could_not_run"
@@ -227,4 +350,5 @@ def failed_check(env: Mapping[str, Any], command: str = "") -> dict[str, Any]:
 
 
 __all__ = ["EVENT", "ONE_CAUSE_SHARE", "after_verify", "classify", "classify_code",
+           "classify_install",
            "failed_check", "failures", "report", "signature"]

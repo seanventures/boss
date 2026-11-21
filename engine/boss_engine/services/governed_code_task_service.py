@@ -7293,16 +7293,27 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         def _boss_install(app_cwd, prep):
             """BOSS's one install (NPM_INSTALL_CMD), the command every gate runs."""
             command = str(prep.get("install_command") or verification_target.NPM_INSTALL_CMD)
+            # BOUNDED RETRIES, KEYED ON THE MANIFEST AND LOCKFILES (InstallCircuitBreaker): a
+            # timeout gets one retry with double the time, a transient network failure one
+            # backoff retry; an environment failure is not re-run on the same files this build.
+            retried_before = len(_install_circuit.retries)
             install, reused = _install_circuit.run(
                 command, app_cwd,
-                lambda: sandbox.run(command, cwd=str(app_cwd), timeout=_install_timeout()),
+                lambda limit=None: sandbox.run(command, cwd=str(app_cwd),
+                                               timeout=limit or _install_timeout()),
+                timeout=_install_timeout(),
             )
             if reused:
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.install_retry_suppressed", "boss",
                                "code_task_run", run_id, {"command": command,
-                               "reason": "prior installation timeout or infrastructure failure"})
+                               "reason": "prior installation timeout or infrastructure failure "
+                                         "on the same manifest and lockfiles"})
             else:
+                for retry in _install_circuit.retries[retried_before:]:
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.install_retried", "boss",
+                                   "code_task_run", run_id, {"command": command, **retry})
                 _emit_cmd("install dependencies", install)
             return install
 
