@@ -141,20 +141,22 @@ a `go.mod`, the one most of its source is written in decides (Java on a tie).
 
 - Maven and Gradle reach the internet only through boss-egress's CONNECT proxy. They ignore
   `HTTPS_PROXY`, so at run start BOSS writes the proxy into the run's own `~/.m2/settings.xml`
-  and `~/.gradle/gradle.properties`. The default allowlist (`BOSS_EGRESS_CONNECT_ALLOW`) gains
+  and `~/.gradle/gradle.properties`. The built-in allowlist gains
   these hosts and nothing else: `repo.maven.apache.org`, `repo1.maven.org`,
   `plugins.gradle.org` and `plugins-artifacts.gradle.org` (only on an install with Java). A project that needs another
-  repository (a company Nexus, JitPack) has to be added to the allowlist by the operator.
+  repository (a company Nexus, JitPack) has to be allowed by the operator (`BOSS_EGRESS_CONNECT_ALLOW`,
+  or `BOSS_MAVEN_MIRROR` for a mirror of everything: [Enterprise network](ENTERPRISE_NETWORK.md)).
 - Go honours `HTTPS_PROXY`, so it needs no config file. Each run gets
   `GOPROXY=https://proxy.golang.org` (no `direct`: a module is never fetched from its source
   host) and `GOSUMDB=sum.golang.org`, and the allowlist gains exactly those two hosts. The proxy
-  serves module zips itself, so `storage.googleapis.com` is not needed. Private modules are not
-  supported in the sandbox: nothing may skip the proxy or the checksum database.
+  serves module zips itself, so `storage.googleapis.com` is not needed. Nothing may skip the
+  proxy. A company module proxy replaces both (`BOSS_GOPROXY`, `BOSS_GOSUMDB`), and its internal
+  modules can be named in `BOSS_GONOSUMDB` ([Enterprise network](ENTERPRISE_NETWORK.md)).
 - **Toolchain hosts open only with the toolchain.** boss-egress reads the image's manifest: the
   Maven and Gradle hosts are allowed only when Java is installed, the Go hosts only when Go is.
   Every allowed host is also a way out: a module proxy fetches any public path it is asked for,
   so a run could encode data into its requests. An install that doesn't build Go doesn't open the
-  Go proxy at all. `BOSS_EGRESS_CONNECT_ALLOW` still replaces the whole list.
+  Go proxy at all. `BOSS_EGRESS_CONNECT_ALLOW` adds hosts to this list (`BOSS_EGRESS_CONNECT_DEFAULTS=off` drops the built-in hosts).
 - **Caches are kept per project.** When a build ends, BOSS copies the run's `~/.m2/repository`
   and `~/.gradle/caches/modules-2` (Java), or `~/go/pkg/mod` (`GOMODCACHE`) and
   `~/.cache/go-build` (`GOCACHE`) (Go), into `/var/lib/boss/toolchain-cache/<hash of project id>`.

@@ -25,7 +25,7 @@ Credentials stay on the machine. A call to a hosted model sends that provider th
 4. Connect a model.
 5. Open one pull request.
 
-The [quickstart](docs/community/QUICKSTART.md) is those steps. A hostname and TLS are in the [hostname guide](docs/community/hostname.md). Passkeys, passwords, and an SSH tunnel are in [sign-in](docs/community/CONSOLE_AUTH.md).
+The [quickstart](docs/community/QUICKSTART.md) is those steps. A hostname and TLS are in the [hostname guide](docs/community/hostname.md). Passkeys, passwords, and an SSH tunnel are in [sign-in](docs/community/CONSOLE_AUTH.md). A company network (a proxy, TLS inspection, internal package mirrors) is in [enterprise network](docs/community/ENTERPRISE_NETWORK.md), and a Mac without Docker Desktop in [Colima](docs/community/COLIMA.md).
 
 You need Git on the install machine. If GitHub asks you to sign in, use an account that can read the repository. On Ubuntu or Debian without Git, first run `sudo apt-get update && sudo apt-get install -y git`.
 
