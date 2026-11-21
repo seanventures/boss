@@ -18,13 +18,19 @@ PAGE = {"accept": "text/html,application/xhtml+xml", "sec-fetch-mode": "navigate
 
 class _Gateway(http.server.BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
+        if self.path == "/metrics":          # a slow route: longer than any probe timeout
+            import time
+            time.sleep(4)
         ok = self.path in ("/healthz", "/readyz")
         body = b"ok" if ok else b"unmatched"
         self.send_response(200 if ok else 404)
         self.send_header("Content-Type", "text/plain")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except BrokenPipeError:              # the probe gave up on the slow route, as it should
+            pass
 
     def log_message(self, *args):
         pass
@@ -80,3 +86,22 @@ def test_a_preview_that_does_not_exist_gets_a_plain_404_not_a_landing(client, un
     assert "x-boss-preview-landing" not in got.headers
     assert "This app is an API" not in got.text
     assert unknown not in preview_landing._CACHE
+
+
+def _status(engine, pid):
+    with engine.connect() as db:
+        return db.execute(text("SELECT status FROM app_previews WHERE id = :i"), {"i": pid}).scalar()
+
+
+def test_a_slow_route_never_stops_a_healthy_preview(engine, client, api_preview):
+    """A timeout is not proof the process died: the landing's probe of a slow /metrics, and a
+    plain proxy read that times out, answer 504 and leave the preview running."""
+    from boss_engine.services.preview_service import proxy_preview
+
+    status, _ctype, _data, _h = proxy_preview(engine, api_preview, "metrics", "GET", timeout=0.5)
+    assert status == 504
+    assert _status(engine, api_preview) == "running"
+    got = client.get(f"/v1/previews/{api_preview}/web/", headers=PAGE)
+    assert got.headers.get("x-boss-preview-landing") == "api"
+    assert "href='metrics'" not in got.text
+    assert _status(engine, api_preview) == "running"

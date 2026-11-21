@@ -4609,7 +4609,8 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
                   app_cookie_header: Optional[str] = None,
                   serve_at_root: bool = False,
                   public_scheme: str = "http",
-                  timeout: float = 25):
+                  timeout: float = 25,
+                  self_heal: bool = True):
     """Reverse-proxy a request to a running preview's loopback port → (status, content_type, bytes,
     headers). Only the api can reach the preview's 127.0.0.1 port, so this exposes it via the api's
     own (tailnet-routed) URL. HTML responses get the root-relative path-rewrite shim.
@@ -4689,6 +4690,14 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
             response_headers["Location"] = e.headers["Location"]
         _cookies_of(e.headers)
     except Exception as e:  # noqa: BLE001 — process gone (e.g. after an api restart): self-heal
+        # A TIMEOUT IS NEVER PROOF THE PROCESS DIED. A slow route (/metrics, /docs) under a short
+        # probe timeout raised here and the preview was marked stopped while healthy. 504, and
+        # the row is not touched. Nor is it when the caller only probes (self_heal=False).
+        if _is_timeout(e):
+            return 504, "text/plain; charset=utf-8", (
+                b"The preview did not answer in time. It is still running; try again."), {}
+        if not self_heal:
+            return 502, "text/plain; charset=utf-8", f"preview did not answer: {e}"[:300].encode(), {}
         try:
             with begin(engine) as c2:
                 c2.execute(text("UPDATE app_previews SET status='stopped', error=COALESCE(error, "
@@ -4714,6 +4723,20 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     elif "text/html" in (ctype or ""):
         data = _inject_shim(data, f"/v1/previews/{preview_id}/web", at_root=serve_at_root)
     return status, ctype, data, response_headers
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    """A read or connect that ran out of time (TimeoutError / socket.timeout, or a URLError whose
+    reason is one) — never evidence that the previewed process ended."""
+    import socket
+    import urllib.error
+
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        return isinstance(reason, (TimeoutError, socket.timeout)) or "timed out" in str(reason)
+    return False
 
 
 class PreviewBodyTooLarge(Exception):

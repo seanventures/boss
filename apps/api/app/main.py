@@ -12435,7 +12435,7 @@ async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
                 fetch=lambda route: proxy_preview(
                     engine, preview_id, route.lstrip("/"), "GET", "", None, None,
                     settings.sandbox_token, incoming_headers={"accept": "*/*"},
-                    timeout=preview_landing.PROBE_TIMEOUT_SECONDS)[0],
+                    timeout=preview_landing.PROBE_TIMEOUT_SECONDS, self_heal=False)[0],
                 link_prefix=preview_landing.link_prefix_for(request.url.path))
             if page is not None:
                 return Response(content=page, status_code=200,
