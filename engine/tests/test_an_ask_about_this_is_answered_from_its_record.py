@@ -97,6 +97,10 @@ def db(tmp_path):
             "CREATE TABLE deployment_health_samples (id TEXT, project_id TEXT,"
             " deployment_target_id TEXT, checked_at TEXT, ok BOOLEAN, status_code INTEGER,"
             " latency_ms INTEGER, error TEXT, observed_version TEXT)",
+            # Readers count samples through this view (db/schema.sql). A target with no probe
+            # signature yet counts every sample, which is the case these rows model.
+            "CREATE VIEW counted_health_samples AS SELECT s.* FROM deployment_health_samples s"
+            " JOIN deployment_targets t ON t.id = s.deployment_target_id",
         ):
             c.execute(text(ddl))
         c.execute(text(
@@ -488,6 +492,7 @@ def _agent(adapter):
 
     agent = EngineAgent.__new__(EngineAgent)
     agent._adapter = adapter
+    agent.ctx = None  # no database: a suspended turn has nowhere durable to go
     agent._notes = []
     agent.ambient = {}
     # propose_action IS IN THE REAL REGISTRY, ALWAYS. The budget tests ran without it, so the
@@ -640,6 +645,8 @@ def threads(monkeypatch):
             " agent_role TEXT DEFAULT '', pending_plan_id TEXT, pending_plan_summary TEXT,"
             " created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
             " updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"))
+        # The thread lookup prefers the thread that HAS messages, as the real schema allows.
+        c.execute(text("CREATE TABLE agent_messages (id TEXT PRIMARY KEY, thread_id TEXT)"))
     with engine.begin() as conn:
         svc = agent_service.AgentService.__new__(agent_service.AgentService)
         yield svc, conn

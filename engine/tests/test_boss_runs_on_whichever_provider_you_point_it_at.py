@@ -401,8 +401,19 @@ def test_both_coding_clis_are_in_the_image() -> None:
     if not dockerfile.exists():  # pragma: no cover - engine installed standalone
         pytest.skip("Dockerfile not in this checkout")
     text = dockerfile.read_text()
-    assert "@anthropic-ai/claude-code" in text
-    assert "@openai/codex" in text
+    # The image installs the CLIs from a committed lockfile (scripts/install/cli-lock), so the
+    # names live there; the image must still install that lock and link both binaries.
+    import json
+
+    lock = Path("scripts/install/cli-lock")
+    assert "COPY scripts/install/cli-lock/package.json scripts/install/cli-lock/package-lock.json" in text
+    assert "npm ci --prefix /opt/boss-clis" in text
+    assert "claude codex" in text, "both binaries are linked onto PATH"
+    wanted = json.loads((lock / "package.json").read_text())["dependencies"]
+    locked = json.loads((lock / "package-lock.json").read_text())["packages"]
+    for cli in ("@anthropic-ai/claude-code", "@openai/codex"):
+        assert cli in wanted
+        assert f"node_modules/{cli}" in locked, f"{cli} is not pinned in the lockfile"
 
 
 def test_the_image_ships_no_credential() -> None:

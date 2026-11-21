@@ -420,6 +420,11 @@ def _runtime_stage_executables() -> set[str]:
     stage = text.split(" AS python-runtime", 1)[1].split("\nFROM ", 1)[0]
     provided = {"python", "python3", "pip", "pip3", "node"}
     provided.update(re.findall(r"ln -s \S+ /usr/local/bin/([\w.-]+)", stage))
+    # The coding CLIs and pnpm come from the committed lock (scripts/install/cli-lock), linked
+    # in a loop: `for b in claude codex pnpm; do ln -s ".../$b" "/usr/local/bin/$b"; done`.
+    for _var, names in re.findall(
+            r"for (\w+) in ([\w. -]+); do ln -s \S+ \"?/usr/local/bin/\$\1\"?", stage):
+        provided.update(names.split())
     joined = stage.replace("\\\n", " ")
     for line in re.findall(r"npm install (?:-g|--global) ([^&\n]+)", joined):
         for package in line.split():

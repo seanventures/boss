@@ -2984,8 +2984,13 @@ def _argument_problem(reg: Any, name: str, args: dict) -> str:
         problems.append(f"it needs {', '.join(missing)}")
     if not problems:
         return ""
+    # A MISSING VALUE IS LOOKED UP, NOT FILLED IN. Told only the names, a model that put a
+    # domain where run_id belongs re-offers with run_id="crun_placeholder"; say where the real
+    # value comes from, as the invented-argument refusal does.
+    lookup = (" Look up the real value of each missing one first (list_code_tasks or "
+              "get_code_task for a run) — never invent it." if missing else "")
     return ("; ".join(problems) + f". {name} takes: {', '.join(sorted(props)) or 'nothing'}. "
-            "Offer it again with exactly those names.")
+            "Offer it again with exactly those names." + lookup)
 
 
 def _placeholder_argument(args: dict, ctx: Any = None) -> str:

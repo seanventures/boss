@@ -840,11 +840,25 @@ class TestTheOperatorCanSeeItThinking:
 
     def test_reporting_can_never_break_the_work(self):
         """A progress indicator that can fail the thing it reports on is worse than none."""
-        from boss_engine.services import code_agent
+        from boss_engine.services import code_agent, harness_failures
 
-        body = inspect.getsource(code_agent)
-        i = body.index("if on_turn:")
-        assert "except Exception" in body[i:i + 260]
+        # The engines hand their turns over through one path (harness_failures.deliver_turns),
+        # and every caller callback runs through _best_effort there.
+        assert "harness_failures.deliver_turns(" in inspect.getsource(code_agent)
+        deliver = inspect.getsource(harness_failures.deliver_turns)
+        assert "_best_effort(on_turn, turn)" in deliver
+        assert "_best_effort(self.inner, turn)" in inspect.getsource(harness_failures.TurnSink)
+        # Behaviour, not only source: a callback that raises does not stop delivery.
+        seen = []
+
+        def broken(turn):
+            seen.append(turn)
+            raise RuntimeError("the progress line failed")
+
+        harness_failures.deliver_turns([{"direction": "assistant", "content": "a"},
+                                        {"direction": "assistant", "content": "b"}],
+                                       broken, engine=None)
+        assert len(seen) == 2
 
     def test_the_investigation_reports_into_the_thread_that_asked(self):
         from boss_engine.services.debug_session import run_investigation
