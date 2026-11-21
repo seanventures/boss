@@ -16496,3 +16496,21 @@ CREATE INDEX IF NOT EXISTS idx_failure_owners_open ON failure_owners (project_id
   WHERE state <> 'resolved';
 CREATE INDEX IF NOT EXISTS idx_failure_owners_decision ON failure_owners (decision_id)
   WHERE decision_id IS NOT NULL;
+
+-- WHICH PROBE TOOK EACH SAMPLE (fix/slo-ignores-samples-from-a-different-probe). A probe bug —
+-- a GET of "/" on an API that declared /healthz, or "no connector for target_kind" — recorded
+-- failures that were never downtime, and the 24 h SLO kept reading them after the probe was
+-- fixed. Each sample now carries the signature of the probe that took it (what was asked), the
+-- target carries the signature it is measured with now and since when, and every reader of
+-- availability, SLO, incidents and alerts reads `counted_health_samples`: only samples taken by
+-- the target's current probe. Rows from before this column (NULL) count until the target has
+-- a current signature — i.e. until its first sample under the new code — and never after.
+ALTER TABLE deployment_health_samples ADD COLUMN IF NOT EXISTS probe_signature TEXT;
+ALTER TABLE deployment_targets ADD COLUMN IF NOT EXISTS probe_signature TEXT;
+ALTER TABLE deployment_targets ADD COLUMN IF NOT EXISTS probe_signature_since TIMESTAMPTZ;
+CREATE OR REPLACE VIEW counted_health_samples AS
+  SELECT s.id, s.project_id, s.deployment_target_id, s.checked_at, s.ok, s.status_code,
+         s.latency_ms, s.error, s.observed_version, s.probe_signature
+  FROM deployment_health_samples s
+  JOIN deployment_targets t ON t.id = s.deployment_target_id
+  WHERE t.probe_signature IS NULL OR s.probe_signature = t.probe_signature;

@@ -268,6 +268,53 @@ STACK_OPEN_URL_COLUMN = (
     " AND sd.status = 'healthy' ORDER BY sd.created_at DESC LIMIT 1) AS stack_open_url")
 
 
+#: Where every reader of availability, SLO, incidents and alerts reads samples: only those
+#: taken by the target's CURRENT probe (db/schema.sql). A probe bug's history — "/" on an API
+#: that declared /healthz, "no connector for target_kind" — was never downtime, and must not be
+#: read as such once the probe is fixed. Writers, retention and the due-check use the table.
+COUNTED_SAMPLES = "counted_health_samples"
+
+
+def probe_signature(checks: list[dict]) -> Optional[str]:
+    """What a probe ASKED, as one comparable string: each check's method, URL and expected
+    status (or its socket). Two samples with the same signature measured the same thing; a
+    changed declared check, port or fallback is a different signature, and starts a new record."""
+    import hashlib
+
+    parts = []
+    for c in checks:
+        if c.get("skipped"):
+            continue
+        if c.get("url"):
+            parts.append(f"GET {c['url']} expect {c.get('expected')}")
+        elif c.get("socket"):
+            parts.append(f"TCP {c['socket']}")
+    if not parts:
+        return None
+    sig = " | ".join(sorted(parts))
+    return sig if len(sig) <= 400 else "sha1:" + hashlib.sha1(sig.encode()).hexdigest()
+
+
+def record_sample(connection, target: dict, sample: dict, at: datetime) -> None:
+    """Write one sample, with the probe that took it, and move the target's current probe
+    signature (and "measured since") when the probe changed. The ONE writer of a sample, so the
+    sweep and "Probe now" cannot record differently."""
+    sig = sample.get("probe_signature")
+    connection.execute(
+        sql("INSERT INTO deployment_health_samples "
+            "(id, project_id, deployment_target_id, checked_at, ok, status_code, "
+            " latency_ms, error, probe_signature) "
+            "VALUES (:id,:p,:t,:at,:ok,:sc,:ms,:err,:sig)"),
+        {"id": make_id("dhs"), "p": target["project_id"], "t": target["id"], "at": at,
+         "ok": sample["ok"], "sc": sample["status_code"], "ms": sample["latency_ms"],
+         "err": sample["error"], "sig": sig})
+    if sig:
+        connection.execute(
+            sql("UPDATE deployment_targets SET probe_signature = :sig, probe_signature_since = :at "
+                "WHERE id = :t AND probe_signature IS DISTINCT FROM :sig"),
+            {"sig": sig, "at": at, "t": target["id"]})
+
+
 def probe(target: dict, settings: Settings) -> dict[str, Any]:
     """One health sample for one target. Never raises — unreachable IS the measurement."""
     from .deployment_connectors import connector_for
@@ -279,7 +326,10 @@ def probe(target: dict, settings: Settings) -> dict[str, Any]:
     try:
         health = conn.observe(target, settings)
     except Exception as exc:  # noqa: BLE001 — a probe that throws is a failed probe
-        return {"ok": False, "status_code": None,
+        # Counted against the probe the target is measured with: a throwing probe is still
+        # that probe failing, not a different one.
+        return {"probe_signature": target.get("probe_signature"),
+                "ok": False, "status_code": None,
                 "latency_ms": int((time.monotonic() - started) * 1000),
                 "error": f"{type(exc).__name__}: {exc}"[:200]}
 
@@ -296,6 +346,7 @@ def probe(target: dict, settings: Settings) -> dict[str, Any]:
                 "error": str(health.get("reason") or "nothing was probed")[:200]}
     ok = bool(health.get("healthy"))
     return {
+        "probe_signature": probe_signature(checks),
         "ok": ok,
         "status_code": first.get("status"),
         "latency_ms": latency_ms,
@@ -357,14 +408,7 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
                               {"t": t["id"]})
                 continue
             with begin(engine) as c:
-                c.execute(
-                    sql("INSERT INTO deployment_health_samples "
-                        "(id, project_id, deployment_target_id, checked_at, ok, status_code, "
-                        " latency_ms, error) "
-                        "VALUES (:id,:p,:t,:at,:ok,:sc,:ms,:err)"),
-                    {"id": make_id("dhs"), "p": t["project_id"], "t": t["id"], "at": now,
-                     "ok": sample["ok"], "sc": sample["status_code"],
-                     "ms": sample["latency_ms"], "err": sample["error"]})
+                record_sample(c, t, sample, now)
             probed += 1
             if not sample["ok"]:
                 failed += 1
@@ -408,7 +452,8 @@ def health_view(connection, project_id: str, *, now: Optional[datetime] = None,
     """
     now = now or datetime.now(timezone.utc)
     targets = [dict(r) for r in connection.execute(
-        sql("SELECT id, app_name, environment, repo, target_kind, target_ref, domains, status "
+        sql("SELECT id, app_name, environment, repo, target_kind, target_ref, domains, status, "
+            "       probe_signature, probe_signature_since "
             "FROM deployment_targets WHERE project_id = :p AND status = 'active' "
             "ORDER BY app_name"), {"p": project_id}).mappings().all()]
 
@@ -416,7 +461,7 @@ def health_view(connection, project_id: str, *, now: Optional[datetime] = None,
     for t in targets:
         samples = [dict(r) for r in connection.execute(
             sql("SELECT checked_at, ok, status_code, latency_ms, error "
-                "FROM deployment_health_samples WHERE deployment_target_id = :t "
+                "FROM " + COUNTED_SAMPLES + " WHERE deployment_target_id = :t "
                 "AND checked_at >= :cut ORDER BY checked_at DESC LIMIT 2000"),
             {"t": t["id"], "cut": now - timedelta(days=7)}).mappings().all()]
 
@@ -443,6 +488,11 @@ def health_view(connection, project_id: str, *, now: Optional[datetime] = None,
             "last_latency_ms": latest["latency_ms"] if latest else None,
             "last_error": latest["error"] if latest else None,
             "sample_count": len(samples),
+            # Uptime and SLO are measured with the target's CURRENT probe only; this is when
+            # that began (None = since before probes were recorded).
+            "measured_with": t.get("probe_signature"),
+            "measured_since": (t["probe_signature_since"].isoformat()
+                               if t.get("probe_signature_since") else None),
             # Oldest-first so the graph reads left to right like time does.
             "series": [{"at": s["checked_at"].isoformat(), "ok": s["ok"],
                         "ms": s["latency_ms"]} for s in reversed(samples[:points])],

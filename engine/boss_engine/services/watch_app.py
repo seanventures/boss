@@ -219,7 +219,7 @@ def signals(connection, target: dict) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 — no monitored service yet
         fams = []
     probes = connection.execute(sql(
-        "SELECT count(*) FROM deployment_health_samples WHERE deployment_target_id = :t AND "
+        "SELECT count(*) FROM counted_health_samples WHERE deployment_target_id = :t AND "
         "checked_at > now() - interval '7 days'"), {"t": target["id"]}).scalar() or 0
     logs = str(target.get("target_kind") or "") in ("ssh", "docker", "local", "compose")
     found = bool(fams)

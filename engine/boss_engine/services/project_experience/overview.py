@@ -747,7 +747,7 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
     targets: dict[str, list[dict[str, Any]]] = {}
     for r in connection.execute(text(
             "SELECT t.project_id, t.id, t.environment, t.domains, t.public_url, "
-            "(SELECT ok FROM deployment_health_samples s WHERE s.deployment_target_id = t.id "
+            "(SELECT ok FROM counted_health_samples s WHERE s.deployment_target_id = t.id "
             " ORDER BY checked_at DESC LIMIT 1) AS ok, "
             "(SELECT open_url FROM stack_deployments s WHERE s.target_id = t.id "
             " AND s.status = 'healthy' ORDER BY created_at DESC LIMIT 1) AS open_url, "

@@ -1218,7 +1218,7 @@ def _observed_monitoring(
             text(
                 """
                 SELECT ok, checked_at, status_code, latency_ms, error
-                FROM deployment_health_samples
+                FROM counted_health_samples
                 WHERE deployment_target_id = :t
                 ORDER BY checked_at DESC LIMIT 1
                 """
