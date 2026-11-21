@@ -58,6 +58,14 @@ def _local_change_set(c, pid, run):
                "b": "boss/code/x", "run": run})
 
 
+def _orphaned(c, pid, card, *, by=merge_failures.ORPHAN_ACTOR, why=merge_failures.ORPHAN_WHY):
+    """Withdrawn as the owner loop's old stale-card cleanup did it on #9 (its event and why)."""
+    from boss_engine.services.core import emit_event
+
+    c.execute(text("UPDATE decisions SET status = 'withdrawn' WHERE id = :d"), {"d": card})
+    emit_event(c, pid, "decision.withdrawn", by, "decision", card, {"why": why, "key": "k"})
+
+
 def _status(eng, card):  # noqa: F811
     with eng.begin() as c:
         return c.execute(text("SELECT status, recommendation FROM decisions WHERE id = :d"),
@@ -112,7 +120,7 @@ def test_an_orphaned_conflict_is_picked_up_again(eng, project, monkeypatch):  # 
     with eng.begin() as c:
         url, runs, card, _reason = _local_change_9(c, project)
         _local_change_set(c, project, runs[-1])
-        c.execute(text("UPDATE decisions SET status = 'withdrawn' WHERE id = :d"), {"d": card})
+        _orphaned(c, project, card)
         c.execute(text("UPDATE deadletters SET status = 'resolved' WHERE project_id = :p"),
                   {"p": project})
     report = fo.sweep(eng, _settings(), project_id=project)
@@ -129,7 +137,7 @@ def test_an_orphan_the_builder_cannot_take_is_reopened_for_the_person_with_steps
     with eng.begin() as c:
         url, runs, card, _reason = _local_change_9(c, project)
         _local_change_set(c, project, runs[-1])
-        c.execute(text("UPDATE decisions SET status = 'withdrawn' WHERE id = :d"), {"d": card})
+        _orphaned(c, project, card)
     fo.sweep(eng, _settings(), project_id=project)
     status, rec = _status(eng, card)
     assert status == "pending" and "keeping both sides" in rec["merge_failed"]["next"]
@@ -143,9 +151,117 @@ def test_a_merged_change_is_not_an_orphan(eng, project, monkeypatch):  # noqa: F
         _local_change_set(c, project, runs[-1])
         c.execute(text("UPDATE local_change_sets SET state = 'merged' WHERE project_id = :p"),
                   {"p": project})
-        c.execute(text("UPDATE decisions SET status = 'withdrawn' WHERE id = :d"), {"d": card})
+        _orphaned(c, project, card)
     fo.sweep(eng, _settings(), project_id=project)
     assert _status(eng, card)[0] == "withdrawn"
+
+
+@pytest.mark.parametrize("who, why", [
+    ("user:ceo", "the person cancelled it"),                     # a person / withdraw_with_run
+    ("boss", "its pull request was settled"),                    # cleared_causes, stale builds
+])
+def test_a_card_withdrawn_on_purpose_is_never_revived(eng, project, monkeypatch, who, why):  # noqa: F811
+    monkeypatch.setattr(merge_failures, "hand_to_builder",
+                        lambda *a, **k: pytest.fail("withdrawn on purpose: never revived"))
+    with eng.begin() as c:
+        url, runs, card, _reason = _local_change_9(c, project)
+        _local_change_set(c, project, runs[-1])
+        _orphaned(c, project, card, by=who, why=why)
+    fo.sweep(eng, _settings(), project_id=project)
+    assert _status(eng, card)[0] == "withdrawn"
+
+
+def test_a_cancelled_lineage_is_never_revived(eng, project, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(merge_failures, "hand_to_builder",
+                        lambda *a, **k: pytest.fail("cancelled: never revived"))
+    with eng.begin() as c:
+        url, runs, card, _reason = _local_change_9(c, project)
+        _local_change_set(c, project, runs[-1])
+        c.execute(text("UPDATE code_task_runs SET status = 'cancelled' WHERE id = :r"),
+                  {"r": runs[-1]})
+        _orphaned(c, project, card)
+    fo.sweep(eng, _settings(), project_id=project)
+    assert _status(eng, card)[0] == "withdrawn"
+
+
+@pytest.mark.parametrize("state, is_open", [("open", True), ("closed", False),
+                                            ("merged", False), (None, False)])
+def test_a_github_pr_closed_without_merging_is_not_open(eng, project, monkeypatch, state,  # noqa: F811
+                                                        is_open):
+    monkeypatch.setattr(merge_failures, "PR_STATE_READER",
+                        lambda c, pid, repo, n, settings: state)
+    with eng.begin() as c:
+        assert merge_failures.change_open(
+            c, project, "https://github.com/acme/web/pull/12") is is_open
+
+
+def test_two_concurrent_sweeps_hand_an_orphan_off_once_and_never_reopen_it(
+        eng, project, monkeypatch):  # noqa: F811
+    import threading
+    import time
+
+    calls = []
+
+    def slow_builder(conn, settings, run_id, note):
+        calls.append(run_id)
+        time.sleep(1.5)
+        return "crun_only_one"
+
+    monkeypatch.setattr(merge_failures, "hand_to_builder", slow_builder)
+    with eng.begin() as c:
+        url, runs, card, _reason = _local_change_9(c, project)
+        _local_change_set(c, project, runs[-1])
+        _orphaned(c, project, card)
+    out = []
+    threads = [threading.Thread(target=lambda: out.append(merge_failures.recover_orphaned_conflicts(
+        eng, _settings(), project_id=project))) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    status, rec = _status(eng, card)
+    assert calls == [runs[-1]], "one hand-off, whoever sweeps"
+    assert status == "withdrawn" and rec["merge_failed"]["handed_to"] == "crun_only_one"
+
+
+def test_a_later_attempt_is_linked_only_when_it_was_told_the_conflict(eng, project, monkeypatch):  # noqa: F811
+    handed = []
+    monkeypatch.setattr(merge_failures, "hand_to_builder",
+                        lambda conn, s, run_id, note: handed.append(run_id) or "crun_new")
+    with eng.begin() as c:
+        url, runs, card, _reason = _local_change_9(c, project)
+        _local_change_set(c, project, runs[-1])
+        c.execute(text("UPDATE code_task_runs SET finalize_ctx = jsonb_build_object("
+                       "'root_run_id', :root) WHERE id = ANY(:ids) AND id <> :root"),
+                  {"root": runs[0], "ids": runs})
+        unrelated = f"crun_{uuid4().hex[:20]}"
+        c.execute(text("INSERT INTO code_task_runs (id, project_id, title, status, finalize_ctx) "
+                       "VALUES (:i, :p, 'more tests', 'completed', CAST(:f AS JSONB))"),
+                  {"i": unrelated, "p": project, "f": json.dumps(
+                      {"root_run_id": runs[0], "feedback_history": [{"fix_note": "add tests"}]})})
+        _orphaned(c, project, card)
+    fo.sweep(eng, _settings(), project_id=project)
+    assert handed == [runs[-1]], "an unrelated later attempt is not the hand-off"
+    assert _status(eng, card)[1]["merge_failed"]["handed_to"] == "crun_new"
+
+
+def test_another_owner_s_question_is_closed_once_the_remedy_started_never_an_approval(
+        eng, project):  # noqa: F811
+    from boss_engine.services.core import create_blocking_decision
+
+    with eng.begin() as c:
+        ask = create_blocking_decision(c, project, None, "Re-authorize the run?",
+                                       {"action": "step_recovery_ask", "agent": "Pilot"}, {},
+                                       "needs_human", default_action="hold")
+        deploy = create_blocking_decision(c, project, None, "Deploy to production?",
+                                          {"action": "deploy_stack"}, {}, "deploy",
+                                          default_action="hold")
+        item = fo.Item("workflow_run", "wfr_x", "wfr_x", project, "t", "", None, {})
+        fo._close_other_owners_card(c, item, ask, "running its 'deploy' step again")
+        fo._close_other_owners_card(c, item, deploy, "running it again")
+        got = dict(c.execute(text("SELECT id, status FROM decisions WHERE id = ANY(:i)"),
+                             {"i": [ask, deploy]}).all())
+    assert got[ask] == "withdrawn" and got[deploy] == "pending"
 
 
 def test_the_loop_never_withdraws_a_card_it_did_not_create(eng, project):  # noqa: F811

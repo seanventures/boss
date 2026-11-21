@@ -210,12 +210,16 @@ def hand_off_conflict(connection: Any, settings: Any, project_id: str, decision_
     """A merge question whose merge failed on a conflict and went back to a person: hand it to
     the build agent now (failure_owner's remedy for an open merge-conflict card). The new run's
     id (and the question withdrawn), or None."""
+    # ONE HAND-OFF PER QUESTION, WHOEVER SWEEPS: the question is locked (a concurrent sweep
+    # holding it skips, doing nothing) and re-read inside the lock — already handed off, nothing.
     row = connection.execute(text(
-        "SELECT recommendation FROM decisions WHERE id = :d AND project_id = :p"),
-        {"d": decision_id, "p": project_id}).scalar()
+        "SELECT recommendation FROM decisions WHERE id = :d AND project_id = :p "
+        "FOR UPDATE SKIP LOCKED"), {"d": decision_id, "p": project_id}).scalar()
+    if row is None:
+        return None
     rec = row if isinstance(row, dict) else json.loads(row or "{}")
     failed = rec.get(KEY) if isinstance(rec.get(KEY), dict) else {}
-    if failed.get("kind") != NOT_MERGEABLE:
+    if failed.get("kind") != NOT_MERGEABLE or failed.get("handed_to"):
         return None
     url = str(rec.get("pull_request_url") or rec.get("url") or "")
     number = rec.get("pull_request_number") or str(url).rstrip("/").rsplit("/", 1)[-1]
@@ -394,74 +398,174 @@ __all__ = ["FAILED", "HEAD_CHANGED", "KEY", "NOT_MERGEABLE", "TRANSIENT", "class
            "is_local_change", "handle", "on_job_deadlettered", "reason_words"]
 
 
+#: The marker the owner loop's stale-card cleanup left on the cards it withdrew before #270
+#: (failure_owner._withdraw_own_card, `decision.withdrawn` by agent:shepherd with this why).
+#: ONLY those are orphans: a card a person, a cancelled run, cleared_causes or a stale-build
+#: sweep withdrew was withdrawn on purpose and is never revived.
+ORPHAN_ACTOR = "agent:shepherd"
+ORPHAN_WHY = "BOSS's agent fixes it itself"
+#: What a builder told to resolve a conflict was told (conflict_note): an existing later attempt
+#: is linked as the hand-off only when it was given this.
+CONFLICT_NOTE_MARK = "conflicts with its base branch"
+
+
 def recover_orphaned_conflicts(engine: Any, settings: Any, *, project_id: Optional[str] = None,
                                limit: int = 3, reach_days: int = 14) -> list[dict[str, Any]]:
-    """A MERGE CONFLICT LEFT WITH NO OWNER IS PICKED UP AGAIN (northgate-gateway #9, 21 Nov).
+    """A MERGE CONFLICT THE OWNER LOOP ORPHANED IS PICKED UP AGAIN (northgate-gateway #9).
 
-    A merge question whose merge failed on a conflict, withdrawn WITHOUT a builder run linked to
-    it (`merge_failed.handed_to`), on a change that is still open, is an orphan: nobody builds
-    it and nobody is asked. Each one is handed to the build agent now; when that cannot start,
-    the question is reopened for the person with the exact steps. Run by the failure owner's
-    sweep. Returns what it did, per question."""
+    Only a merge question the owner loop's stale-card cleanup withdrew (its `decision.withdrawn`
+    event, ORPHAN_ACTOR / ORPHAN_WHY), whose merge failed on a conflict, with no builder linked
+    (`merge_failed.handed_to`), on a change still OPEN (a closed PR or change set is a person's
+    "no"), whose build lineage was not cancelled. Each is locked (FOR UPDATE SKIP LOCKED: a
+    concurrent sweep does nothing) and re-checked inside the lock; then an existing later
+    attempt that was told the conflict note is linked, or the conflict is handed to the build
+    agent, or — when it cannot start — the question is reopened with the exact steps."""
     from .core import emit_event
 
     done: list[dict[str, Any]] = []
     with engine.begin() as c:
-        rows = c.execute(text(
-            "SELECT id, project_id, recommendation FROM decisions WHERE status = 'withdrawn' "
-            "AND recommendation->'merge_failed'->>'kind' = :k "
-            "AND recommendation->'merge_failed'->>'handed_to' IS NULL "
-            "AND updated_at > now() - make_interval(days => :d) "
-            "AND (CAST(:p AS text) IS NULL OR project_id = :p) ORDER BY updated_at DESC LIMIT :n"),
-            {"k": NOT_MERGEABLE, "d": reach_days, "p": project_id, "n": limit}).mappings().all()
-    for row in rows:
-        rec = row["recommendation"] if isinstance(row["recommendation"], dict) else \
-            json.loads(row["recommendation"] or "{}")
-        url = str(rec.get("pull_request_url") or "")
-        if not _still_open(engine, str(row["project_id"]), url):
-            continue
+        ids = c.execute(text(
+            "SELECT d.id FROM decisions d WHERE d.status = 'withdrawn' "
+            "AND d.recommendation->'merge_failed'->>'kind' = :k "
+            "AND d.recommendation->'merge_failed'->>'handed_to' IS NULL "
+            "AND d.updated_at > now() - make_interval(days => :days) "
+            "AND (CAST(:p AS text) IS NULL OR d.project_id = :p) "
+            "AND EXISTS (SELECT 1 FROM events e WHERE e.project_id = d.project_id "
+            "  AND e.entity_id = d.id AND e.event_type = 'decision.withdrawn' "
+            "  AND e.actor = :who AND e.data->>'why' = :why) "
+            "ORDER BY d.updated_at DESC LIMIT :n"),
+            {"k": NOT_MERGEABLE, "days": reach_days, "p": project_id, "n": limit,
+             "who": ORPHAN_ACTOR, "why": ORPHAN_WHY}).scalars().all()
+    for decision_id in ids:
         with engine.begin() as c:
-            # Withdrawn by a hand-off made before handed_to was recorded: its builder exists (a
-            # newer attempt of the change's lineage) — link it, never start a second one.
-            runs = _pr_runs(c, str(row["project_id"]), url, str(row["id"]), rec.get("branch_name"))
+            row = c.execute(text(
+                "SELECT id, project_id, recommendation FROM decisions WHERE id = :d "
+                "AND status = 'withdrawn' "
+                "AND recommendation->'merge_failed'->>'handed_to' IS NULL "
+                "FOR UPDATE SKIP LOCKED"), {"d": decision_id}).mappings().first()
+            if row is None:
+                continue                      # another sweep has it, or it was handed off
+            pid = str(row["project_id"])
+            rec = row["recommendation"] if isinstance(row["recommendation"], dict) else \
+                json.loads(row["recommendation"] or "{}")
+            url = str(rec.get("pull_request_url") or "")
+            runs = _pr_runs(c, pid, url, decision_id, rec.get("branch_name"))
+            if not change_open(c, pid, url, settings=settings) or _lineage_stopped(c, runs):
+                continue
             later = c.execute(text(
                 "SELECT n.id FROM code_task_runs n, code_task_runs o WHERE o.id = :newest AND "
                 "n.project_id = o.project_id AND COALESCE(n.finalize_ctx->>'root_run_id', n.id) = "
                 "COALESCE(o.finalize_ctx->>'root_run_id', o.id) AND n.created_at > o.created_at "
-                "AND n.id <> ALL(:runs) ORDER BY n.created_at DESC LIMIT 1"),
-                {"runs": runs or [""], "newest": (runs or [""])[0]}).scalar()
+                "AND n.id <> ALL(:runs) AND (n.finalize_ctx->'feedback_history'->-1->>'fix_note') "
+                "LIKE :mark ORDER BY n.created_at DESC LIMIT 1"),
+                {"runs": runs or [""], "newest": (runs or [""])[0],
+                 "mark": f"%{CONFLICT_NOTE_MARK}%"}).scalar()
             if later:
                 c.execute(text(
                     "UPDATE decisions SET recommendation = jsonb_set(recommendation, "
                     "'{merge_failed,handed_to}', to_jsonb(CAST(:r AS text))) WHERE id = :d"),
-                    {"r": later, "d": row["id"]})
-                done.append({"decision_id": str(row["id"]), "linked": str(later)})
+                    {"r": later, "d": decision_id})
+                done.append({"decision_id": decision_id, "linked": str(later)})
                 continue
-            new_run = hand_off_conflict(c, settings, str(row["project_id"]), str(row["id"]))
+            new_run = _hand_off_locked(c, settings, pid, decision_id, rec, runs)
             if new_run is None:
-                runs = _pr_runs(c, str(row["project_id"]), url, str(row["id"]),
-                                rec.get("branch_name"))
                 failed = rec.get(KEY) or {}
-                _mark(c, str(row["id"]), str(failed.get("reason") or "a conflict"),
+                _mark(c, decision_id, str(failed.get("reason") or "a conflict"),
                       conflict_steps(runs), NOT_MERGEABLE, reopen=True)
-            emit_event(c, str(row["project_id"]), "merge.conflict_orphan_recovered", "boss",
-                       "decision", str(row["id"]),
-                       {"handed_to": new_run, "reopened": new_run is None})
-        done.append({"decision_id": str(row["id"]), "handed_to": new_run,
+            emit_event(c, pid, "merge.conflict_orphan_recovered", "boss", "decision",
+                       decision_id, {"handed_to": new_run, "reopened": new_run is None})
+        done.append({"decision_id": decision_id, "handed_to": new_run,
                      "reopened": new_run is None})
     return done
 
 
-def _still_open(engine: Any, project_id: str, url: str) -> bool:
+def _hand_off_locked(c: Any, settings: Any, project_id: str, decision_id: str,
+                     rec: dict[str, Any], runs: list[str]) -> Optional[str]:
+    """The hand-off for a question this transaction already holds locked."""
+    if not runs:
+        return None
+    failed = rec.get(KEY) or {}
+    url = str(rec.get("pull_request_url") or "")
+    number = rec.get("pull_request_number") or url.rstrip("/").rsplit("/", 1)[-1]
+    new_run = hand_to_builder(c, settings, runs[0],
+                              conflict_note(number, url, failed.get("reason")))
+    if not new_run:
+        return None
+    _mark(c, decision_id, str(failed.get("reason") or "conflict"),
+          f"BOSS handed it to the build agent to update the branch ({new_run}); you will be "
+          "asked again when it can merge.", NOT_MERGEABLE, reopen=False, handed_to=new_run)
+    return new_run
+
+
+def _lineage_stopped(c: Any, runs: list[str]) -> bool:
+    """A person (or BOSS) cancelled the change's build lineage or its workflow run: on purpose."""
+    if not runs:
+        return False
+    newest = c.execute(text(
+        "SELECT n.status, n.finalize_ctx->>'workflow_run_id' AS wfr FROM code_task_runs n, "
+        "code_task_runs o WHERE o.id = :r AND n.project_id = o.project_id AND "
+        "COALESCE(n.finalize_ctx->>'root_run_id', n.id) = COALESCE(o.finalize_ctx->>'root_run_id', "
+        "o.id) ORDER BY n.created_at DESC LIMIT 1"), {"r": runs[0]}).mappings().first()
+    if newest is None:
+        return False
+    if str(newest["status"]) in ("cancelled", "rejected"):
+        return True
+    if newest["wfr"]:
+        status = c.execute(text("SELECT status FROM workflow_runs WHERE id = :w"),
+                           {"w": newest["wfr"]}).scalar()
+        return str(status or "") in ("cancelled", "rejected")
+    return False
+
+
+#: How a GitHub pull request's state is read: (connection, project_id, owner/repo, number,
+#: settings) -> "open" | "merged" | "closed" | None (unknown). One seam; tests replace it.
+def _read_github_pr_state(c: Any, project_id: str, owner_repo: str, number: int,
+                          settings: Any) -> Optional[str]:
+    from .software_factory import SoftwareFactoryService
+
+    if settings is None:
+        from ..config import get_settings
+
+        settings = get_settings()
+    owner, repo = owner_repo.split("/", 1)
+    factory = SoftwareFactoryService(settings, owner=owner, repo=repo)
+    try:
+        factory.bind_project_github(c, project_id, owner=owner, repo=repo)
+    except Exception:  # noqa: BLE001 — the env-default adapter may still answer
+        log.debug("orphan check could not bind the project's GitHub", exc_info=True)
+    try:
+        settled = factory._pull_request_settled(int(number))  # noqa: SLF001 — the one read
+        if settled is not None:
+            return str(settled.get("state") or "") or None
+        read = getattr(factory.github, "pull_request_state", None)
+        if callable(read):
+            return str((read(int(number)) or {}).get("state") or "") or None
+    except Exception:  # noqa: BLE001 — unknown
+        log.info("orphan check could not read %s#%s", owner_repo, number, exc_info=True)
+    return None
+
+
+PR_STATE_READER = _read_github_pr_state
+
+
+def _still_open(engine: Any, project_id: str, url: str, settings: Any = None) -> bool:
     with engine.begin() as c:
-        return change_open(c, project_id, url)
+        return change_open(c, project_id, url, settings=settings)
 
 
-def change_open(c: Any, project_id: str, url: str) -> bool:
-    """Is the change still waiting to merge? A local change set says so itself; otherwise no
-    build of it has a merged sha."""
+def change_open(c: Any, project_id: str, url: str, *, settings: Any = None) -> bool:
+    """Is the change still waiting to merge? A local change set says so itself; a GitHub pull
+    request is READ (merged or closed — a person closing it without merging is a "no" — is not
+    open, and a state BOSS cannot read is not assumed open); a build of it with a merged sha
+    settles it either way."""
     repo = repository_of(url)
     number = str(url or "").rstrip("/").rsplit("/", 1)[-1]
+    merged = c.execute(text(
+        "SELECT 1 FROM code_task_runs WHERE project_id = :p AND pull_request_url = :u AND "
+        "finalize_ctx->'merge'->>'sha' IS NOT NULL LIMIT 1"), {"p": project_id, "u": url}
+    ).scalar()
+    if not url or merged:
+        return False
     if is_local_change(url) and repo and number.isdigit():
         try:
             with c.begin_nested():
@@ -471,10 +575,9 @@ def change_open(c: Any, project_id: str, url: str) -> bool:
                     {"p": project_id, "r": repo, "n": int(number)}).scalar()
             if state is not None:
                 return state == "open"
-        except Exception:  # noqa: BLE001 — no local change sets here: read the builds
+        except Exception:  # noqa: BLE001 — no local change sets here
             pass
-    merged = c.execute(text(
-        "SELECT 1 FROM code_task_runs WHERE project_id = :p AND pull_request_url = :u AND "
-        "finalize_ctx->'merge'->>'sha' IS NOT NULL LIMIT 1"), {"p": project_id, "u": url}
-    ).scalar()
-    return bool(url) and not merged
+        return False
+    if not repo or not number.isdigit():
+        return False
+    return PR_STATE_READER(c, project_id, repo, int(number), settings) == "open"

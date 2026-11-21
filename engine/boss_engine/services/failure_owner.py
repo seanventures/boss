@@ -1158,29 +1158,6 @@ _JOB_SUBJECT = ("pull_request_url", "run_id", "conversation_id", "binding_id", "
                 "entity_id", "workflow_run_id", "target_id", "connection_id")
 
 
-def merge_settled_by_withdrawal(c: Any, decision_id: Any) -> bool:
-    """A WITHDRAWN merge question settles its dead merge job only when the withdrawal did what
-    it promised: the change was superseded (its work already merged), or a builder run was
-    really started and linked to it (`merge_failed.handed_to`). A conflict withdrawn with no
-    builder is an orphan, not a resolution (merge_failures.recover_orphaned_conflicts)."""
-    rec = _json(c.execute(text("SELECT recommendation FROM decisions WHERE id = :d"),
-                          {"d": decision_id}).scalar(), {}) or {}
-    failed = rec.get("merge_failed") if isinstance(rec.get("merge_failed"), dict) else {}
-    if not failed:
-        return True                                   # withdrawn for another reason entirely
-    if failed.get("kind") == "superseded":
-        return True
-    from .merge_failures import change_open
-
-    if not change_open(c, str(c.execute(text("SELECT project_id FROM decisions WHERE id = :d"),
-                                        {"d": decision_id}).scalar() or ""),
-                       str(rec.get("pull_request_url") or "")):
-        return True                                   # merged or closed since: nothing owed
-    run = failed.get("handed_to")
-    return bool(run) and bool(c.execute(text("SELECT 1 FROM code_task_runs WHERE id = :r"),
-                                        {"r": run}).scalar())
-
-
 class Jobs(Surface):
     """A background job that ran out of attempts (an open dead letter): a model-connection
     proof, a docs update, a repository index, a panel step, a merge, an agent turn."""
@@ -1253,8 +1230,12 @@ class Jobs(Surface):
             decision = (item.hints["payload"] or {}).get("decision_id")
             status = c.execute(text("SELECT status FROM decisions WHERE id = :d"),
                                {"d": decision}).scalar() if decision else None
-            if status in ("executed", "rejected") or (
-                    status == "withdrawn" and merge_settled_by_withdrawal(c, decision)):
+            # A WITHDRAWN question settles its dead merge job: withdrawn by a hand-off (its
+            # builder is linked, merge_failed.handed_to), by a person, a cancelled run or a
+            # superseded change — on purpose. The one withdrawal that was not (the owner
+            # loop's old stale-card cleanup, #9) is owned by merge_failures.
+            # recover_orphaned_conflicts, never re-acted here, so two paths never both act.
+            if status in ("executed", "rejected", "withdrawn"):
                 self._close(c, item, f"its merge question was {status}")
                 return Said(RESOLVED, f"Its merge question was {status} since.")
         return None
@@ -2036,7 +2017,33 @@ def _own(engine: Any, settings: Any, jobs: Any, surface: Surface, item: Item, no
                words=fixing_words(attempt, doing, limit), attempts=attempt, max_attempts=limit,
                next_attempt_at=now + timedelta(seconds=wait),
                note={"attempt": attempt, "started": True, "doing": doing, "class": cls}, now=now)
+        _close_other_owners_card(c, item, (row or {}).get("decision_id"), doing)
     return FIXING
+
+
+def _close_other_owners_card(c: Any, item: Item, decision_id: Any, doing: str) -> None:
+    """THE REMEDY STARTED, SO THE OTHER OWNER'S QUESTION IS ANSWERED. A card another owner raised
+    for this item (a step-recovery "re-authorize" ask, the Shepherd's stuck-work question) is
+    closed in ITS owner's name, saying what the agent started — once the agent's remedy really
+    began, never before. A merge question is never closed here: only a linked builder closes it
+    (merge_failures.hand_off_conflict)."""
+    from .run_decisions import _withdraw_with_note
+
+    card = _open_decision(c, decision_id)
+    if not card or not item.project_id:
+        return
+    rec = _json(c.execute(text("SELECT recommendation FROM decisions WHERE id = :d"),
+                          {"d": card}).scalar(), {}) or {}
+    action = str(rec.get("action") or "")
+    if action in (CARD_ACTION, "review_pull_request", "approve_change_set") or \
+            rec.get("merge_failed") or any(w in action for w in ("deploy", "approve", "budget",
+                                                                  "merge", "waive")):
+        return                    # an approval is a person's answer: never closed by an agent
+    owner = str(rec.get("asked_by") or rec.get("agent") or action or "its owner")
+    _withdraw_with_note(c, card, str(item.project_id),
+                        f"Answered by BOSS's agent: {doing}.", actor=ACTOR,
+                        why={"why": "the agent's remedy started", "owner": owner,
+                             "key": item.key})
 
 
 def _plan(cls: str) -> str:
