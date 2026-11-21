@@ -110,20 +110,14 @@ def check_confined(rules: Iterable[Confine], values: RequestValues, *, org_id: s
                    project_id: Optional[str], db: Any = None) -> None:
     """Raise Confined when any confined id names an object in another project or org.
 
-    `project_id` None (an org-level check) confines to the org only."""
+    `project_id` None (an org-level check) confines to the org only. ONE RULE with the central
+    check (`_confine_one`), org-shared kinds included: this copy of it confined a shared
+    deployment host to the project that added it, so every tool declaring `host_id` (deploy_app,
+    create_config_target, create_deployment_target, retarget_app …) was refused "not_found" for
+    the org's own verified host from any other project (laptop 2026-11-20)."""
     for rule in rules:
         for object_id in read_values(values, rule.where, rule.name):
-            found_any = False
-            for kind in rule.kinds:
-                found = load_object(kind, db, object_id)
-                if found is None:
-                    continue
-                found_any = True
-                if found[0] == org_id and (project_id is None or found[1] == project_id):
-                    break
-            else:
-                if found_any:
-                    raise Confined(rule, object_id)
+            _confine_one(rule, object_id, org_id=org_id, project_id=project_id, db=db)
 
 
 # ---- central confinement (F2 / M9, M5): every id a request names, by its name ------------------------
