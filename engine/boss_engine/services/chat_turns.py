@@ -124,6 +124,7 @@ def committing_between_calls(engine: Any, turn_id: str) -> Iterator[Any]:
             try:
                 connection.execute(text("UPDATE agent_chat_turns SET heartbeat_at = now() "
                                         "WHERE id = :t AND status = 'running'"), {"t": turn_id})
+                _promote(connection, turn_id)
                 connection.commit()
             except Exception:  # noqa: BLE001 — a step that already broke its transaction
                 LOGGER.warning("chat turn %s: checkpoint could not commit", turn_id,
@@ -135,8 +136,8 @@ def committing_between_calls(engine: Any, turn_id: str) -> Iterator[Any]:
         this_turn = _TURN.set((engine, turn_id))
         try:
             yield connection
-            if connection.in_transaction():
-                connection.commit()
+            _promote(connection, turn_id)
+            connection.commit()
         except BaseException:
             if connection.in_transaction():
                 connection.rollback()
@@ -162,7 +163,10 @@ def note_action(tool: str, result: dict[str, Any]) -> None:
            if isinstance(v, str) and v and (k == "id" or k.endswith("_id"))][:3]
     said = next((str(result.get(k)) for k in ("summary", "message", "status")
                  if isinstance(result.get(k), str) and result.get(k)), "")
-    entry = {"tool": tool, "ids": ids, "said": said[:200]}
+    # PENDING until the turn commits: a write on the turn's own connection is not done until
+    # then (the next checkpoint, or the end, promotes it — `_promote`); a failure lists only
+    # what was promoted.
+    entry = {"tool": tool, "ids": ids, "said": said[:200], "state": "pending"}
     try:
         from ..db import begin
 
@@ -171,6 +175,15 @@ def note_action(tool: str, result: dict[str, Any]) -> None:
                            "WHERE id = :t"), {"t": turn_id, "a": json.dumps([entry])})
     except Exception:  # noqa: BLE001 — a record of the work never breaks the work
         LOGGER.warning("chat turn %s: could not record %s", turn_id, tool, exc_info=True)
+
+
+def _promote(connection: Any, turn_id: str) -> None:
+    """Mark the turn's pending writes done, in the transaction that commits them."""
+    connection.execute(text(
+        "UPDATE agent_chat_turns SET actions = COALESCE((SELECT jsonb_agg(CASE "
+        "WHEN e->>'state' = 'pending' THEN e || CAST(:done AS JSONB) ELSE e END) "
+        "FROM jsonb_array_elements(actions) e), CAST('[]' AS JSONB)) WHERE id = :t"),
+        {"t": turn_id, "done": '{"state": "done"}'})
 
 
 def by_key(connection: Any, *, project_id: str, actor: str, key: str) -> Optional[dict[str, Any]]:
@@ -288,16 +301,23 @@ def failure_words(sentence: str, actions: Any) -> str:
     """The line a failed turn leaves in its thread. What it ALREADY DID stands — a checkpoint
     committed it — so it is named, and a retry is offered only for the rest; "ask again" over
     a turn that had started a build would start a second one."""
-    done = [a for a in (json.loads(actions) if isinstance(actions, str) else (actions or []))
-            if isinstance(a, dict) and a.get("tool")]
+    every = [a for a in (json.loads(actions) if isinstance(actions, str) else (actions or []))
+             if isinstance(a, dict) and a.get("tool")]
+    done = [a for a in every if a.get("state", "done") == "done"]
+    unsure = sorted({str(a["tool"]) for a in every if a.get("state") == "pending"})
     head = f"That turn did not finish. {sentence}".strip()
+    # A write the turn never committed is not claimed as done — nor as not done.
+    doubt = ([f"It had also started {', '.join(unsure)}, which may or may not have been "
+              "saved; check before asking for it again."] if unsure else [])
     if not done:
+        if doubt:
+            return " ".join([head, *doubt, "Your message is kept above."])
         return f"{head} Nothing was changed. Your message is kept above; ask again to retry."
     lines = [f"- {a['tool']}" + (f" ({', '.join(a.get('ids') or [])})" if a.get("ids") else "")
              + (f": {a['said']}" if a.get("said") else "") for a in done[:12]]
     return "\n".join([
         head, "", "Before it stopped it had already done this, and it stands:", *lines, "",
-        "Your message is kept above. Do not ask for these again; ask again only for what is "
+        *doubt, "Your message is kept above. Do not ask for these again; ask again only for what is "
         "not listed."])
 
 

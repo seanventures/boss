@@ -951,8 +951,8 @@ class AgentService:
                                          key=key)
             if seen is None:
                 return None
-            if seen["status"] == "done" and not background and seen.get("result"):
-                return seen["result"]
+            if seen["status"] == "done" and seen.get("result"):
+                return seen["result"]            # finished: its reply, whatever was asked
             return {"thread_id": seen["thread_id"], "turn_id": seen["turn_id"],
                     "status": seen["status"], "replayed": True}
 

@@ -13940,7 +13940,7 @@ def agent_turn(payload: AgentChatRequest, request: Request, *, endpoint: str) ->
         # and the whole traceback goes to the log. The turn's record already says failed.
         LOGGER.exception("agent chat failed on %s", endpoint)
         raise AgentTurnFailed(error) from error
-    if payload.background or "reply" not in result:
+    if "reply" not in result:
         # Running (or a replayed key whose turn is still running): the turn to poll.
         return JSONResponse(status_code=202, content=result)
     return AgentChatResponse(**result)

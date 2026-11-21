@@ -293,18 +293,27 @@ def test_the_heartbeat_moves_while_a_tool_blocks(client, engine, monkeypatch):
     assert _wait_for(client, turn_id)["status"] == "done"
 
 
-def test_a_failed_turn_names_what_it_already_did(client, engine, monkeypatch):
+def _writes_then_dies(engine, *, checkpoint: bool):
     from apps.api.app.config import get_settings
     from boss_engine.context import EngineContext
+    from boss_engine.services import chat_turns
     from boss_engine.tools import build_default_registry
 
-    def writes_then_dies(*_a, project_id, actor, **_k):
+    def route(*_a, project_id, actor, **_k):
         ctx = EngineContext(settings=get_settings(), engine=engine)
         made = build_default_registry().invoke(
             "remember", ctx, project_id=project_id, actor=actor,
             args={"kind": "project", "body": "the nightly job runs at 02:00"})
         assert made.get("ok") is not False, made
+        if checkpoint:
+            chat_turns.checkpoint()            # the next model call's commit
         raise RuntimeError("the model connection dropped")
+
+    return route
+
+
+def test_a_failed_turn_names_what_it_already_did(client, engine, monkeypatch):
+    writes_then_dies = _writes_then_dies(engine, checkpoint=True)
 
     _stub(monkeypatch, writes_then_dies)
     thread = _ensure(client, "")
@@ -329,7 +338,9 @@ def test_the_same_idempotency_key_is_the_same_turn(client, monkeypatch):
     assert again.status_code == 200, again.text
     assert again.json()["turn_id"] == first.json()["turn_id"]
     replay = client.post("/v1/engine/agent/chat", json={**body, "background": True})
-    assert replay.status_code == 202 and replay.json()["turn_id"] == first.json()["turn_id"]
+    # Finished: the replay is that turn's reply, never an empty "running".
+    assert replay.status_code == 200 and replay.json()["turn_id"] == first.json()["turn_id"]
+    assert replay.json()["reply"] == "Once."
     assert [m["content"] for m in _messages(client, thread)["messages"]] == ["only once", "Once."]
 
 
@@ -354,3 +365,76 @@ def test_start_up_fails_the_turns_of_a_dead_process_at_once(client, engine):
     assert failed == [dead]
     assert _turn(client, dead)["status"] == "failed"
     assert _turn(client, mine)["status"] == "running"
+
+
+def test_a_write_the_turn_never_committed_is_not_claimed_done(client, engine, monkeypatch):
+    _stub(monkeypatch, _writes_then_dies(engine, checkpoint=False))
+    thread = _ensure(client, "")
+    said = client.post("/v1/engine/agent/chat", json={
+        "project_id": PROJECT, "actor": ACTOR, "thread_id": thread, "message": "Remember this"})
+    assert said.status_code == 500
+    line = _messages(client, thread)["messages"][-1]["content"]
+    assert "already done this, and it stands" not in line
+    assert "may or may not have been saved" in line and "remember" in line
+    with engine.begin() as c:
+        [entry] = c.execute(text("SELECT actions FROM agent_chat_turns WHERE thread_id = :t"),
+                            {"t": thread}).scalar()
+    assert entry["tool"] == "remember" and entry["state"] == "pending"
+
+
+def test_a_resend_of_a_finished_turn_returns_its_reply(client, monkeypatch):
+    _stub(monkeypatch, lambda *_a, **_k: _reply("Finished."))
+    thread = _ensure(client, "")
+    body = {"project_id": PROJECT, "actor": ACTOR, "thread_id": thread,
+            "message": "once", "idempotency_key": "press-done", "background": True}
+    turn_id = client.post("/v1/engine/agent/chat", json=body).json()["turn_id"]
+    assert _wait_for(client, turn_id)["status"] == "done"
+    again = client.post("/v1/engine/agent/chat", json=body)
+    assert again.status_code == 200, again.text
+    assert again.json()["turn_id"] == turn_id and again.json()["reply"] == "Finished."
+
+
+def test_a_database_from_the_first_cut_upgrades(engine):
+    """A database that applied adcacdc42 (agent_chat_turns without actions/client_key/owner)
+    gains them from the current schema."""
+    import re
+    import subprocess
+    import uuid
+    from pathlib import Path
+
+    from sqlalchemy import create_engine
+
+    root = Path(__file__).resolve().parents[3]
+    old = subprocess.run(["git", "-C", str(root), "show", "adcacdc42:db/schema.sql"],
+                         capture_output=True, text=True, check=True).stdout
+    new = (root / "db/schema.sql").read_text()
+
+    def turns_block(sql: str) -> str:
+        start = sql.index("CREATE TABLE IF NOT EXISTS agent_chat_turns")
+        end = sql.index("-- BOSS debugging the way an engineer debugs", start)
+        return re.sub(r"REFERENCES projects\(id\) ON DELETE CASCADE", "", sql[start:end])
+
+    name = f"turns_up_{uuid.uuid4().hex[:8]}"
+    admin = create_engine(engine.url, isolation_level="AUTOCOMMIT")
+    with admin.connect() as c:
+        c.execute(text(f'CREATE SCHEMA "{name}"'))
+    scoped = create_engine(engine.url, connect_args={"options": f"-csearch_path={name}"})
+    try:
+        with scoped.begin() as c:
+            c.exec_driver_sql(turns_block(old))
+        with scoped.begin() as c:
+            c.exec_driver_sql(turns_block(new))
+            cols = set(c.execute(text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = :s AND table_name = 'agent_chat_turns'"),
+                {"s": name}).scalars())
+            idx = c.execute(text("SELECT 1 FROM pg_indexes WHERE schemaname = :s AND "
+                                 "indexname = 'idx_agent_chat_turns_client_key'"),
+                            {"s": name}).scalar()
+        assert {"actions", "client_key", "owner"} <= cols
+        assert idx == 1
+    finally:
+        scoped.dispose()
+        with admin.connect() as c:
+            c.execute(text(f'DROP SCHEMA IF EXISTS "{name}" CASCADE'))
+        admin.dispose()

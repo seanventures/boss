@@ -7167,6 +7167,10 @@ CREATE TABLE IF NOT EXISTS agent_chat_turns (
   heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   finished_at TIMESTAMPTZ
 );
+-- A database that created this table before these columns existed gains them here.
+ALTER TABLE agent_chat_turns ADD COLUMN IF NOT EXISTS actions JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE agent_chat_turns ADD COLUMN IF NOT EXISTS client_key TEXT;
+ALTER TABLE agent_chat_turns ADD COLUMN IF NOT EXISTS owner TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_chat_turns_client_key
   ON agent_chat_turns(project_id, actor, client_key) WHERE client_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_agent_chat_turns_thread
