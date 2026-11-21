@@ -193,3 +193,28 @@ def test_the_install_classifier_extends_the_suite_classifier():
 
 def test_go_module_download_is_an_install():
     assert vt.is_install_command("go mod download")
+
+
+# ── The app's own service is the app's (review of #258) ──────────────────────────────────────
+
+@pytest.mark.parametrize("output", [
+    # a postinstall that migrates against the app's own database
+    "> app@1.0.0 postinstall\n> prisma migrate deploy\nError: connect ECONNREFUSED 127.0.0.1:5432\n"
+    "npm error code 1\nnpm error command sh -c prisma migrate deploy",
+    "npm error Error: connect ECONNREFUSED localhost:5432\nnpm error code 1",
+    "npm error request to http://[::1]:8080/seed failed, reason: connect ECONNREFUSED ::1:8080",
+    # a test or script of the app that says "not authorized" about its own API
+    "> postinstall\n> node seed.js\nError: not authorized to seed the demo tenant\nnpm error code 1",
+])
+def test_an_app_service_failure_in_a_postinstall_gets_its_repair_round(output):
+    failure = vt.install_failure(result(stderr=output))
+    assert not vt.install_environment_failure(failure), se.classify_install(output)
+    asked = []
+    vt.install_rounds(lambda: (failure, output), lambda p: asked.append(p) or True, rounds=1)
+    assert asked                                  # the coder is asked to fix it
+
+
+def test_a_registry_outage_is_still_infrastructure():
+    out = ("npm error code ECONNREFUSED\nnpm error request to https://registry.example.com/x "
+           "failed, reason: connect ECONNREFUSED 10.0.0.5:443")
+    assert vt.install_environment_failure(vt.install_failure(result(stderr=out)))

@@ -241,18 +241,44 @@ _INSTALL_REASON = {
 }
 
 
+#: A line the package manager itself wrote (its error prefix or code) or that names a registry:
+#: only those say the REGISTRY was unreachable or refused a credential. The same words printed
+#: by the app's own postinstall or test (a `prisma migrate` to its database) are the app's.
+_MANAGER_LINE = re.compile(
+    r"^\s*(?:npm (?:error|ERR!|warn|WARN)\b|\s*ERR_PNPM_|\u2009?ERR_PNPM_|error (?:An unexpected|"
+    r"Error: https?://)|(?:ERROR|WARNING): (?:Could not|HTTP error|Retrying|Cannot)|go: |"
+    r"\[(?:ERROR|WARNING)\] )|registry|pypi|/simple/|maven2?|artifactory|nexus|goproxy|"
+    r"proxy\.golang|\.tgz\b|\.whl\b|/@v/", re.I)
+#: An address on this machine: the app's own service (its database, its dev server), not the
+#: registry. Never infrastructure, whoever printed it.
+_LOCAL_ADDRESS = re.compile(r"\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0)\b|\[?::1\]?:\d", re.I)
+
+
+def _line_of(text: str, hit: "re.Match[str]") -> str:
+    start = text.rfind("\n", 0, hit.start()) + 1
+    end = text.find("\n", hit.end())
+    return text[start:end if end >= 0 else len(text)]
+
+
+def _counts(kind: str, line: str) -> bool:
+    """Whether a line's words may decide `kind`: the network and credential kinds only on the
+    package manager's own lines (or a registry's), and never about a local address."""
+    if kind in ("network", "registry_auth"):
+        return bool(_MANAGER_LINE.search(line)) and not _LOCAL_ADDRESS.search(line)
+    return True
+
+
 def classify_install(output: Any, *, timed_out: bool = False) -> Optional[dict[str, Any]]:
     """Why an install failed, when it is one of the kinds above, else None (a dependency
     conflict, a missing version, a failing build script: the code's). {kind, reason,
     environment, transient, evidence, package}."""
     text = str(output or "")
     for kind, pattern in _INSTALL_SIGNALS:
-        hit = re.search(pattern, text, re.I)
+        hit = next((m for m in re.finditer(pattern, text, re.I)
+                    if _counts(kind, _line_of(text, m))), None)
         if hit is None:
             continue
-        line_start = text.rfind("\n", 0, hit.start()) + 1
-        line_end = text.find("\n", hit.end())
-        evidence = text[line_start:line_end if line_end >= 0 else len(text)].strip()[:300]
+        evidence = _line_of(text, hit).strip()[:300]
         refused = [ln for ln in text.splitlines() if re.search(r"\b403\b|E403|_403", ln)]
         if kind == "registry_forbidden" and any(_VERSION_ARTIFACT.search(ln) for ln in refused):
             kind = "registry_policy_blocked"     # 403 on one version's artifact, not the registry
