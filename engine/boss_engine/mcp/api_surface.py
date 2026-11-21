@@ -107,6 +107,9 @@ _EXCLUDED_EXACT = {
     # The worker hands its leased project.onboarding job to the API, which holds the GitHub
     # credential, the graph and the dossier (project_experience/onboarding.py): a worker protocol.
     "/v1/projects/onboarding/execute": "onboarding_worker_lease_protocol",
+    # The worker hands its leased engine.check job (Setup's write check, engine_policy) to the
+    # API, which runs it under a build's sandbox identity: a worker protocol.
+    "/v1/setup/engine-check/execute": "engine_check_worker_lease_protocol",
     # The demo users' passwords: a secret's value, revealed to a stepped-up owner in the console
     # (project_experience/demo_logins.reveal), never to an agent's tool call.
     "/v1/projects/{project_id}/demo-logins/reveal": "secret_reveal_returns_raw_material",

@@ -162,8 +162,12 @@ def test_today_s_mode_is_kept_without_a_proved_managed_policy(codex):
 
 def test_a_managed_login_with_a_proved_sandbox_writes_in_workspace_write(codex, tmp_path):
     agent, tree, _, calls = codex
-    agent.engine_policy = {"managed": True, "writer_mode": "workspace-write",
-                           "sandbox_proven": True, "network": True}
+    proved = {"managed": True, "writer_mode": "workspace-write", "sandbox_proven": True,
+              "network": True}
+    agent.engine_policy = proved                       # proved, but NOT where builds run
+    agent.run_role("Implement it.", tree)
+    assert "danger-full-access" in calls()[-1]["argv"]
+    agent.engine_policy = {**proved, "proved_in": {"job": True, "isolated": True}}
     agent.run_role("Implement it.", tree)
     argv = calls()[-1]["argv"]
     assert argv[argv.index("--sandbox") + 1] == "workspace-write"
@@ -245,7 +249,8 @@ def test_a_managed_codex_with_a_proved_sandbox_is_recorded_workspace_write():
     policy = ep.check_engine(get_settings(), "codex", agent_factory=factory,
                              sandbox_prover=lambda: {"sandbox_proven": True, "network": True,
                                                      "writable_roots": ["/h/.npm"],
-                                                     "missing_roots": []})
+                                                     "missing_roots": []},
+                             proved_in={"job": True, "isolated": True, "uid": 61001})
     assert policy["managed"] and policy["writer_mode"] == "workspace-write"
     assert policy["can_write"] and ep.uses_workspace_write(policy)
     assert policy["downgrades"] and "disallowed by requirements" in policy["downgrades"][0]
@@ -269,10 +274,36 @@ def test_a_managed_codex_whose_sandbox_is_not_proved_fails_setup_and_keeps_its_m
     assert ep.codex_writer_mode(policy)["mode"] == "danger-full-access"
 
 
+def test_a_policy_proved_outside_the_engine_check_job_never_selects_workspace_write():
+    writers = []
+
+    def factory():
+        writers.append(_Writer(_managed_codex))
+        return writers[-1]
+
+    policy = ep.check_engine(get_settings(), "codex", agent_factory=factory,
+                             sandbox_prover=lambda: {"sandbox_proven": True, "network": True,
+                                                     "missing_roots": []})
+    assert policy["proved_in"] == {"job": False}
+    assert not ep.uses_workspace_write(policy)
+    assert ep.codex_writer_mode(policy)["mode"] == "danger-full-access"
+
+
+def test_diagnostics_are_redacted_before_anything_keeps_them():
+    token = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+
+    def said(cwd, on_turn, policy):
+        return {"summary": "x", "diagnostics": [f"MCP server https://x:{token}@h.example.com 401"]}
+
+    check = ep.writer_check(get_settings(), "codex", agent=_Writer(said))
+    assert token not in json.dumps(check)
+
+
+# ── Connect queues the check; the check runs where builds run ────────────────────────────────
+
 @pytest.fixture
 def connecting(monkeypatch):
-    """connect_coding_agent with the CLI, the governed proof and the broker faked: the governed
-    proof RUNS the prove callable it is given, as the real one does inside its reservation."""
+    """connect_coding_agent with the CLI, the governed proof and the broker faked."""
     from types import SimpleNamespace
 
     from boss_engine.services import cli_harness, setup_service
@@ -280,60 +311,140 @@ def connecting(monkeypatch):
     monkeypatch.setattr(cli_harness, "detect", lambda *_a, **_kw: {
         "installed": True, "authenticated": True, "version": "grok 1.0.40",
         "auth_detail": "Available models", "ready": True})
-    governed = []
-
-    def fake_governed(engine, settings, project_id, provider, actor, prove=None, **kw):
-        governed.append(provider)
-        return prove()
-
-    monkeypatch.setattr(setup_service, "governed_proof", fake_governed)
-    monkeypatch.setattr(setup_service, "prove_coding_agent",
-                        lambda settings, provider: {"ok": True, "exit_code": 0,
-                                                    "replied": "BOSS_OK"})
+    monkeypatch.setattr(setup_service, "governed_proof",
+                        lambda *a, **kw: {"ok": True, "exit_code": 0, "replied": "BOSS_OK"})
     monkeypatch.setattr("boss_engine.services.entitlements.EntitlementBrokerService",
                         lambda _settings: SimpleNamespace(upsert_source=lambda *a, **k: None))
-    recorded = []
-    monkeypatch.setattr(ep, "record", lambda conn, source, policy: recorded.append(
+    started, ran = [], []
+    monkeypatch.setattr(ep, "start_check", lambda conn, project, provider, source, actor: (
+        started.append((project, provider, source, actor)) or {"state": "checking",
+                                                               "job_id": "job_1"}))
+    monkeypatch.setattr(ep, "check_engine", lambda *a, **kw: ran.append(a) or {})
+
+    class _Conn:
+        engine = object()
+
+        def begin_nested(self):
+            import contextlib
+
+            return contextlib.nullcontext()
+
+    def connect():
+        return setup_service.connect_coding_agent(
+            _Conn(), SimpleNamespace(boss_edition="enterprise"), "project", "grok",
+            actor="member")
+
+    return connect, started, ran
+
+
+def test_connect_queues_the_check_and_returns_at_once(connecting):
+    connect, started, ran = connecting
+    out = connect()
+    assert out["ok"] and out["engine_check"] == {"state": "checking", "job_id": "job_1"}
+    assert started == [("project", "grok", "xai_grok_build", "member")]
+    assert not ran                                   # nothing ran inside the request
+
+
+class _Ident:
+    uid = 61007
+
+    def __init__(self, root):
+        self.run_dir = root
+
+    def workspace(self, prefix):
+        path = self.run_dir / f"{prefix}x"
+        path.mkdir()
+        return path
+
+
+@pytest.fixture
+def job(monkeypatch, tmp_path):
+    """run_check with the sandbox identity, the governed proof and the record faked."""
+    import contextlib
+
+    from boss_engine.services import owned_process, sandbox_identity
+
+    seen = {"owners": [], "governed": [], "recorded": []}
+    ident = _Ident(tmp_path)
+
+    @contextlib.contextmanager
+    def bind(owner_id, project_id=None):
+        seen["owners"].append((owned_process.current_owner().kind, owner_id, project_id))
+        yield ident
+
+    monkeypatch.setattr(sandbox_identity, "bind", bind)
+    monkeypatch.setattr(sandbox_identity, "network_fenced", lambda: True)
+    monkeypatch.setattr(ep, "record", lambda conn, source, policy: seen["recorded"].append(
         (source, policy)))
 
-    def connect(check):
-        monkeypatch.setattr(ep, "check_engine", lambda settings, provider: check())
-        return setup_service.connect_coding_agent(
-            SimpleNamespace(engine=object()), SimpleNamespace(boss_edition="enterprise"),
-            "project", "grok")
+    def governed(engine, settings, project_id, provider, actor, prove=None, amount=None, **kw):
+        seen["governed"].append(amount)
+        return prove()
 
-    return connect, governed, recorded
+    class _Engine:
+        def begin(self):
+            return contextlib.nullcontext(object())
 
+    def run(check, **kw):
+        return ep.run_check(_Engine(), get_settings(), job_id="j1", project_id="p",
+                            provider=kw.get("provider", "codex"), source_id="openai_codex_chatgpt",
+                            actor="ceo", check=check, governed=governed)
 
-CHECK_ENGINE = ep.check_engine
-
-
-def test_setup_refuses_a_login_that_cannot_write_in_one_sentence(connecting):
-    from boss_engine.services import setup_service
-
-    connect, governed, recorded = connecting
-    with pytest.raises(setup_service.SetupError, match="cannot write here"):
-        connect(lambda: CHECK_ENGINE(get_settings(), "grok",
-                                     agent_factory=lambda: _Writer(_read_only_fs)))
-    assert governed == ["grok"] and not recorded       # one governed proof; nothing recorded
+    return run, seen, ident
 
 
-def test_setup_records_the_policy_per_login_under_the_same_governed_proof(connecting):
-    connect, governed, recorded = connecting
-    out = connect(lambda: CHECK_ENGINE(get_settings(), "grok",
-                                       agent_factory=lambda: _Writer(_wrote)))
-    assert out["ok"] and out["engine_policy"]["can_write"]
-    assert governed == ["grok"]                          # the check ran inside the one proof
-    assert recorded and recorded[0][0] == "xai_grok_build"
+def test_the_check_runs_under_a_builds_sandbox_identity_and_records_per_login(job):
+    run, seen, ident = job
+    got = {}
+
+    def check(settings, provider, *, workdir, proved_in):
+        got["dir"], got["where"] = workdir(), proved_in
+        return {"engine": provider, "state": "ok", "writer_mode": "default"}
+
+    out = run(check)
+    assert out["state"] == "ok"
+    assert seen["owners"] == [("engine_check", "engchk_j1", "p")]
+    assert got["where"] == {"job": True, "isolated": True, "uid": 61007, "network_fenced": True}
+    assert got["dir"].parent == ident.run_dir         # inside the run's own directory
+    assert seen["recorded"][0][0] == "openai_codex_chatgpt"
+    assert seen["governed"] == [0]                    # a subscription reserves $0
 
 
-def test_a_check_that_could_not_run_never_fails_a_working_proof(connecting):
-    connect, _, recorded = connecting
+def test_a_metered_login_reserves_the_checks_spend(job, monkeypatch):
+    run, seen, _ = job
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    run(lambda settings, provider, **kw: {"state": "ok"})
+    assert seen["governed"] == [ep.CHECK_ESTIMATE_USD_MICROS]
 
-    def broken():
+
+def test_a_check_that_could_not_run_is_recorded_as_not_checked(job):
+    run, seen, _ = job
+
+    def broken(settings, provider, **kw):
         raise RuntimeError("engine not installed in this image")
 
-    assert connect(broken)["ok"] and not recorded
+    assert run(broken)["state"] == "not_checked"
+    policy = seen["recorded"][0][1]
+    assert policy["state"] == "not_checked" and "not installed" in policy["error"]
+    assert ep.summary(policy)["label"] == "Not checked"
+
+
+def test_setup_shows_checking_then_the_result():
+    assert ep.summary({"state": "checking"})["label"] == "Checking…"
+    refused = ep.summary({"engine": "opencode", "state": "cannot_write",
+                          "writer_check": {"refusal": "Read-only file system"}}, "opencode")
+    assert refused["tone"] == "red" and "cannot write here" in refused["tip"]
+    assert ep.summary({}) is None
+
+
+def test_the_engine_check_job_is_wired_from_worker_to_api():
+    from boss_engine.identity.job_permissions import JOB_KIND_PERMISSIONS
+
+    runner = (Path(__file__).resolve().parents[2] / "apps/worker/boss_worker/runner.py").read_text()
+    assert '"engine.check"' in runner and "client.run_engine_check(" in runner
+    assert ep.JOB_KIND in JOB_KIND_PERMISSIONS
+    setup_router = (Path(__file__).resolve().parents[2] / "apps/api/app/routers/setup.py").read_text()
+    assert '"/v1/setup/engine-check/execute"' in setup_router
 
 
 def test_the_codex_sandbox_proof_reads_write_caches_and_network(tmp_path):

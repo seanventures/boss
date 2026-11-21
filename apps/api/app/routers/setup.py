@@ -12,6 +12,7 @@ from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, 
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 
 from boss_engine.db import begin
 
@@ -20,6 +21,14 @@ from ..schemas_setup import (
     RepositoryTokenBody, RoutingBody, SetupView, SignInBody, SignInCodeBody, SignInSession,
     SourceModelBody, TryBody, dump,
 )
+
+
+class EngineCheckJobBody(BaseModel):
+    """The worker's leased `engine.check` job."""
+
+    job_id: str
+    worker_id: str
+    lease_token: str
 
 
 def build_setup_router(
@@ -274,6 +283,19 @@ def build_setup_router(
                 fail(error)
         mirror(target)
         return fresh_view(body.project_id)
+
+    @router.post("/v1/setup/engine-check/execute")
+    @permit(P.WORKER_LEASE)
+    def engine_check_execute(body: EngineCheckJobBody) -> dict[str, Any]:
+        """The worker hands its leased `engine.check` job here: the CLIs and the sandbox helper
+        are in this container. The check runs under a build's sandbox uid (engine_policy),
+        fenced by the lease; it holds no transaction while it runs."""
+        from apps.api.app.main import require_worker_principal
+        from boss_engine.services import engine_policy
+
+        require_worker_principal()
+        return engine_policy.execute_job(engine, get_settings(), job_id=body.job_id,
+                                         worker_id=body.worker_id, lease_token=body.lease_token)
 
     # ── Subscription sign-in inside the BOSS server (subscription_sign_in) ────────────────────
     # The ONE subscription route: the provider's own login runs here as the API process user;

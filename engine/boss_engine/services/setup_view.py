@@ -733,13 +733,19 @@ def source_entry(row: Any, *, by_entitlement: dict[str, str], now: datetime,
     from . import proof_schedule
 
     schedule = proof_schedule.stored(metadata)
-    return _model_entry(
+    from .engine_policy import summary as _write_check
+
+    entry = _model_entry(
         source_id=source_id, provider=provider, kind=kind, model=model, state=state,
         checked_at=checked_at, retry_at=retry_at, source="connected", now=now,
         host=last.get("host") or "", latency_ms=last.get("latency_ms"),
         base_url=str(metadata.get("base_url") or ""), budget_period=budget_period,
         minutes_left=minutes_left, credential=claude,
         next_check_at=schedule.get("next_at"), next_check_why=schedule.get("why"))
+    # SETUP'S WRITE CHECK (engine_policy): "Checking…" while the queued job runs where builds
+    # run, then whether this login can write there.
+    entry["write_check"] = _write_check(metadata.get("engine_policy"), provider)
+    return entry
 
 
 def _claude_summary(connection: Connection, project_id: str) -> Optional[dict[str, Any]]:

@@ -220,9 +220,10 @@ class CodexCodeAgent(GenericCliCodeAgent):
         # readonly_guard are the boundary, Codex's own cannot start in a container. A login
         # whose organisation forbids full access, with Codex's own sandbox PROVED at Setup,
         # writes (and reviews a copy) in `workspace-write` instead (engine_policy).
-        from .engine_policy import codex_writer_mode
+        from .engine_policy import codex_writer_mode, workload_env
 
-        writer = codex_writer_mode(self._policy(), env)
+        # The roots are the WORKLOAD's: under a build's sandbox identity its own HOME.
+        writer = codex_writer_mode(self._policy(), workload_env(env) if env is not None else None)
         if read_only and not by_copy:
             mode, extra = "read-only", []
         else:

@@ -18,7 +18,8 @@ An engine's login can carry its ORGANISATION's policy into BOSS's container:
 Setup's old proof ran one read-only "reply with BOSS_OK" turn in an empty directory: it never
 asked for the writer's mode and never ran a command, so it passed under every one of these.
 
-WHAT THIS DOES (every engine, through the same contract a build uses)
+WHAT THIS DOES (every coding-CLI login, through the same contract a build uses, run WHERE BUILDS
+RUN: a queued job under a build's sandbox identity — see "The check runs WHERE BUILDS RUN")
   * `writer_check` — one writer session in an empty directory that must WRITE a file and RUN a
     command (`printf BOSS_PROBE_OK > .boss-probe && cat .boss-probe`). BOSS checks the file on
     disk and the command's output in the turn stream, not the model's claim.
@@ -39,6 +40,7 @@ under the default seccomp profile) and undoes BOSSAPP-1350's review seats.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -176,10 +178,12 @@ def codex_workspace_config(*, network: bool, roots: list[str]) -> list[str]:
 
 
 def uses_workspace_write(policy: Optional[Mapping[str, Any]]) -> bool:
-    """THE RULE: managed login, sandbox proved here, network reachable from it."""
+    """THE RULE: managed login, sandbox proved WHERE BUILDS RUN (the engine-check job, under a
+    build's sandbox identity — never the API request), network reachable from it."""
     p = policy or {}
+    proved_in = p.get("proved_in") if isinstance(p.get("proved_in"), Mapping) else {}
     return bool(p.get("managed") and p.get("sandbox_proven") and p.get("network")
-                and p.get("writer_mode") == "workspace-write")
+                and p.get("writer_mode") == "workspace-write" and proved_in.get("job"))
 
 
 def codex_writer_mode(policy: Optional[Mapping[str, Any]],
@@ -191,9 +195,30 @@ def codex_writer_mode(policy: Optional[Mapping[str, Any]],
             "config": codex_workspace_config(network=True, roots=cache_roots(env))}
 
 
+def workload_env(env: Optional[Mapping[str, str]] = None) -> dict[str, str]:
+    """The environment a workload spawned now actually gets: under a build's sandbox identity
+    its own HOME and caches (sandbox_identity.env), else `env` (or this process's)."""
+    from . import sandbox_identity
+
+    ident = sandbox_identity.current()
+    if ident is not None:
+        return ident.env(dict(env) if env is not None else None)
+    return dict(env if env is not None else os.environ)
+
+
 def prepare_cache_roots(env: Optional[Mapping[str, str]] = None) -> None:
-    """Codex makes a writable root writable only when it exists: create them first."""
-    for root in cache_roots(env):
+    """Codex makes a writable root writable only when it exists: create them first — AS the
+    workload (a build's sandbox uid), so that uid can write in them."""
+    from . import owned_process, sandbox_identity
+
+    roots = cache_roots(workload_env(env))
+    if sandbox_identity.current() is not None:
+        try:
+            owned_process.run(["mkdir", "-p", *roots], timeout=30, capture_output=True)
+        except Exception:  # noqa: BLE001 — a root that cannot be made is reported by the proof
+            pass
+        return
+    for root in roots:
         try:
             os.makedirs(root, exist_ok=True)
         except OSError:
@@ -215,13 +240,19 @@ def codex_downgrades(text: object) -> list[str]:
 
 def codex_sandbox_proof(binary: str = "codex", *, env: Optional[Mapping[str, str]] = None,
                         timeout: int = 60,
-                        run: Callable[..., Any] = subprocess.run) -> dict[str, Any]:
+                        run: Optional[Callable[..., Any]] = None) -> dict[str, Any]:
     """Codex's own workspace-write sandbox, proved here with no model: it must start, write in
     its workspace, write every toolchain cache and reach the package registry the installs use.
     {sandbox_proven, network, writable_roots, missing_roots, error}."""
-    env = dict(env if env is not None else os.environ)
-    roots = cache_roots(env)
-    prepare_cache_roots(env)
+    from . import owned_process
+
+    # Under a build's sandbox identity the command runs AS that uid with ITS environment (HOME,
+    # the egress CONNECT proxy): the roots are that HOME's. `run` here is owned_process.run,
+    # which wraps the spawn for the bound identity.
+    spawn_env = None if env is None else dict(env)
+    real = workload_env(spawn_env)
+    roots = cache_roots(real)
+    prepare_cache_roots(spawn_env)
     lines = [f"printf ok > {PROBE_FILE} && echo BOSS_WRITE_OK"]
     for root in roots:
         q = shlex.quote(root)
@@ -232,9 +263,11 @@ def codex_sandbox_proof(binary: str = "codex", *, env: Optional[Mapping[str, str
     script = "; ".join(lines)
     argv = [binary, "sandbox", "-c", 'sandbox_mode="workspace-write"',
             *codex_workspace_config(network=True, roots=roots), "--", "sh", "-c", script]
+    run = run or owned_process.run
     with tempfile.TemporaryDirectory(prefix="boss-sandbox-proof-") as work:
         try:
-            done = run(argv, cwd=work, env=env, capture_output=True, text=True, timeout=timeout)
+            done = run(argv, cwd=work, env=spawn_env, capture_output=True, text=True,
+                       timeout=timeout)
             out = f"{getattr(done, 'stdout', '') or ''}\n{getattr(done, 'stderr', '') or ''}"
         except subprocess.TimeoutExpired:
             return {"sandbox_proven": False, "network": False, "writable_roots": [],
@@ -305,7 +338,8 @@ def _first_line(text: str) -> str:
 
 
 def writer_check(settings: Any, provider: str, *, agent: Any = None,
-                 policy: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+                 policy: Optional[Mapping[str, Any]] = None,
+                 workdir: Optional[Callable[[], Path]] = None) -> dict[str, Any]:
     """One writer session that must write `.boss-probe` and run a command.
 
     {state: ok | cannot_write | unproven, wrote, ran, verdict, managed, diagnostics, error}.
@@ -327,7 +361,14 @@ def writer_check(settings: Any, provider: str, *, agent: Any = None,
     out: dict[str, Any] = {}
     verdict = None
     error = ""
-    with tempfile.TemporaryDirectory(prefix="boss-writer-check-") as work:
+    import shutil
+
+    # In the engine-check job the directory is inside the build sandbox's run directory (a
+    # directory outside it would become the sandbox's HOME and the probe would land there).
+    made = workdir() if workdir is not None else Path(tempfile.mkdtemp(prefix="boss-writer-check-"))
+    with contextlib.ExitStack() as cleanup:
+        cleanup.callback(shutil.rmtree, str(made), True)
+        work = str(made)
         try:
             out = agent.run_role(PROBE_PROMPT, Path(work), read_only=False,
                                  on_turn=lambda t: turns.append(dict(t))) or {}
@@ -344,7 +385,10 @@ def writer_check(settings: Any, provider: str, *, agent: Any = None,
     results = [t for t in turns if t.get("direction") == "tool_result"]
     said = "\n".join(str(t.get("content") or "")[:2000] for t in results)
     ran = PROBE_TOKEN in said or (wrote and PROBE_TOKEN in str(out.get("summary") or ""))
-    diagnostics = [str(d)[:300] for d in (out.get("diagnostics") or [])]
+    from ..identity.redaction import redact_text
+
+    # Redacted before anything keeps them: a CLI diagnostic can quote a URL with a token in it.
+    diagnostics = [redact_text(str(d))[:300] for d in (out.get("diagnostics") or [])]
     if verdict is not None:
         diagnostics.append(verdict.message)
     managed = bool((verdict is not None and verdict.kind == "policy_denied")
@@ -359,7 +403,8 @@ def writer_check(settings: Any, provider: str, *, agent: Any = None,
     return {"state": state, "wrote": wrote, "ran": ran, "managed": managed,
             "verdict": verdict.as_dict() if verdict is not None else None,
             "diagnostics": list(dict.fromkeys(diagnostics))[:5],
-            "refusal": _first_line(said) if refused else "", "error": error}
+            "refusal": _first_line(said) if refused else "",
+            "error": redact_text(error)[:300] if error else ""}
 
 
 def _now() -> str:
@@ -369,15 +414,20 @@ def _now() -> str:
 
 
 def check_engine(settings: Any, provider: str, *, agent_factory: Optional[Callable[[], Any]] = None,
-                 sandbox_prover: Optional[Callable[[], dict]] = None) -> dict[str, Any]:
+                 sandbox_prover: Optional[Callable[[], dict]] = None,
+                 workdir: Optional[Callable[[], Path]] = None,
+                 proved_in: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """The policy for one engine's login, proved: what Setup records and the engine reads.
 
-    {engine, checked_at, managed, writer_mode, can_write, writer_check, ...}."""
+    {engine, checked_at, managed, writer_mode, can_write, writer_check, proved_in, ...}.
+    `proved_in`: where it ran ({"job": True, "isolated": …} from the engine-check job); a
+    policy proved anywhere else never selects workspace-write (uses_workspace_write)."""
     make = agent_factory or (lambda: None)
-    first = writer_check(settings, provider, agent=make(), policy={})
+    where = dict(proved_in or {"job": False})
+    first = writer_check(settings, provider, agent=make(), policy={}, workdir=workdir)
     policy: dict[str, Any] = {"engine": provider, "checked_at": _now(),
                               "managed": first["managed"], "writer_mode": "default",
-                              "writer_check": first}
+                              "writer_check": first, "proved_in": where}
     if provider == "claude_code":
         managed = claude_managed_settings()
         policy["managed_settings"] = managed
@@ -398,7 +448,8 @@ def check_engine(settings: Any, provider: str, *, agent_factory: Optional[Callab
                       downgrades=codex_downgrades("\n".join(first.get("diagnostics") or [])))
         if policy["sandbox_proven"] and policy["network"]:
             policy["writer_mode"] = "workspace-write"
-            final = writer_check(settings, provider, agent=make(), policy=policy)
+            final = writer_check(settings, provider, agent=make(), policy=policy,
+                                 workdir=workdir)
             policy["writer_check"] = final
             if final["state"] != "ok":
                 policy["writer_mode"] = "unavailable"
@@ -448,7 +499,151 @@ def setup_sentence(provider: str, policy: Mapping[str, Any]) -> Optional[str]:
             f"({check.get('refusal') or 'no detail'}). See {DOC} (\"Managed engine policies\").")
 
 
-__all__ = ["CLAUDE_MANAGED_PATHS", "CODEX_SOURCE", "DOC", "MANAGED_MARKER", "POLICY_KEY",
+# ── The check runs WHERE BUILDS RUN: a leased job, a build's sandbox identity ─────────────────
+#
+# Not in the HTTP request (review of #258): there it ran in the API's process, as the API's uid,
+# with the API's environment (DATABASE_URL, provider keys) — the boundary IDENTITY.md §7.6 keeps
+# every build's writer behind — and it proved the API's seccomp, HOME and network, not a build's.
+# Connect records "checking" and queues this job; the worker leases it and hands it to the API
+# container (where the sandbox helper and the CLIs are), which runs it under owned_process +
+# sandbox_identity exactly as a build's writer runs: the per-run uid, its own HOME, boss-egress's
+# CONNECT proxy, the agent allow-list environment. No DB transaction is held while it runs.
+
+JOB_KIND = "engine.check"
+OWNER_KIND = "engine_check"
+#: What one check may spend on a METERED login (a writer session, two for a managed Codex
+#: login), reserved through the governed proof before any model call. A subscription: $0.
+CHECK_ESTIMATE_USD_MICROS = 250_000
+
+_STATE_WORDS = {
+    "checking": ("Checking…", "grey", "BOSS is running one writer session where builds run: it "
+                                      "must write a file and run a command."),
+    "ok": ("Can write", "green", "A writer session wrote a file and ran a command where builds "
+                                 "run."),
+    "unproven": ("Write not proven", "amber", "The check's session did not run its command; "
+                                              "nothing is assumed. Re-check to try again."),
+    "cannot_write": ("Cannot write", "red", ""),
+    "not_checked": ("Not checked", "amber", "The write check could not run."),
+}
+
+
+def summary(policy: Any, provider: str = "") -> Optional[dict[str, Any]]:
+    """What Setup shows for a login's write check: {state, label, tone, tip}, or None."""
+    if not isinstance(policy, Mapping) or not policy.get("state"):
+        return None
+    state = str(policy.get("state"))
+    label, tone, tip = _STATE_WORDS.get(state, ("Not checked", "amber", ""))
+    if state == "cannot_write":
+        tip = setup_sentence(provider or str(policy.get("engine") or ""), policy) or ""
+    elif state == "not_checked":
+        tip = str(policy.get("error") or tip)[:300]
+    return {"state": state, "label": label, "tone": tone, "tip": tip,
+            "checked_at": policy.get("checked_at"),
+            "writer_mode": policy.get("writer_mode")}
+
+
+def _is_metered(settings: Any, provider: str) -> bool:
+    """Whether this engine's login bills a key (its spec passes an *_API_KEY that is set)."""
+    try:
+        from .cli_harness import load_specs
+
+        spec = load_specs(settings).get(provider)
+    except Exception:  # noqa: BLE001
+        return False
+    names = [n for n in (getattr(spec, "env_passthrough", ()) or ()) if n.endswith("_API_KEY")]
+    return any((os.environ.get(n) or "").strip() for n in names)
+
+
+def start_check(connection: Any, project_id: str, provider: str, source_id: Optional[str],
+                actor: str) -> dict[str, Any]:
+    """Record "checking" for the login and queue the engine-check job. Returns at once."""
+    from .jobs import enqueue_job
+
+    record(connection, source_id, {"engine": provider, "state": "checking",
+                                   "requested_at": _now()})
+    job = enqueue_job(connection, project_id, JOB_KIND,
+                      {"provider": provider, "source_id": source_id, "actor": actor},
+                      max_attempts=1,
+                      dedupe_key=f"{JOB_KIND}:{source_id}:{int(time.time() // 60)}")
+    return {"state": "checking", "job_id": (job or {}).get("id")}
+
+
+def execute_job(engine: Any, settings: Any, *, job_id: str, worker_id: str,
+                lease_token: str) -> dict[str, Any]:
+    """The worker's leased `engine.check` job, run in the API container (the CLIs and the sandbox
+    helper are there), fenced by the lease."""
+    from .jobs import JobLeaseService, LeaseNotFoundError
+
+    with engine.begin() as c:                          # a short transaction: the lease only
+        try:
+            job = JobLeaseService(settings).require_active_lease(c, worker_id, job_id, lease_token)
+        except LeaseNotFoundError as exc:
+            return {"status": "failed", "retry": False, "error": f"lease: {exc}"}
+    payload = job.get("payload") if isinstance(job.get("payload"), dict) else \
+        json.loads(job.get("payload") or "{}")
+    return run_check(engine, settings, job_id=str(job_id), project_id=str(job["project_id"]),
+                     provider=str(payload.get("provider") or ""),
+                     source_id=payload.get("source_id"),
+                     actor=str(payload.get("actor") or "ceo"))
+
+
+def run_check(engine: Any, settings: Any, *, job_id: str, project_id: str, provider: str,
+              source_id: Optional[str], actor: str, check: Optional[Callable[..., dict]] = None,
+              governed: Optional[Callable[..., dict]] = None) -> dict[str, Any]:
+    """The check itself, under a build's owner and sandbox identity, spend governed like the
+    connection proof. Records the policy (or why it could not run) on the login."""
+    from . import owned_process, sandbox_identity
+
+    owner_id = f"engchk_{job_id}"
+    held: dict[str, Any] = {}
+    error = ""
+    try:
+        with owned_process.owner_scope(OWNER_KIND, owner_id, project_id=project_id, fresh=True):
+            with sandbox_identity.bind(owner_id, project_id=project_id) as ident:
+                where = {"job": True, "isolated": ident is not None,
+                         "uid": ident.uid if ident is not None else None,
+                         "network_fenced": sandbox_identity.network_fenced()}
+                workdir = ((lambda: ident.workspace("engine-check-")) if ident is not None
+                           else None)
+
+                def prove() -> dict[str, Any]:
+                    try:
+                        held["policy"] = (check or check_engine)(
+                            settings, provider, workdir=workdir, proved_in=where)
+                    except Exception as exc:  # noqa: BLE001 — a check that could not run
+                        held["error"] = f"{type(exc).__name__}: {exc}"
+                    return {"ok": True, "exit_code": 0, "replied": PROBE_TOKEN, "error": None}
+
+                if governed is None:
+                    from .setup_service import governed_proof as governed
+                amount = CHECK_ESTIMATE_USD_MICROS if _is_metered(settings, provider) else 0
+                proof = governed(engine, settings, project_id, provider, actor, prove=prove,
+                                 amount=amount, intent=f"engine-check:{job_id}")
+                if "policy" not in held and not held.get("error"):
+                    held["error"] = (str((proof or {}).get("error") or "")
+                                     or "the governed check did not run")
+    except sandbox_identity.SandboxUnavailable as exc:
+        error = f"the build sandbox is unavailable: {exc}"
+    except Exception as exc:  # noqa: BLE001 — recorded, never a crashed job
+        _log.exception("engine check %s failed", job_id)
+        error = f"{type(exc).__name__}: {exc}"
+    policy = held.get("policy")
+    if not policy:
+        from ..identity.redaction import redact_text
+
+        policy = {"engine": provider, "state": "not_checked", "checked_at": _now(),
+                  "error": redact_text(error or held.get("error") or "")[:300]}
+    try:
+        with engine.begin() as c:
+            record(c, source_id, policy)
+    except Exception:  # noqa: BLE001
+        _log.warning("engine check %s could not be recorded", job_id, exc_info=True)
+    return {"status": "done", "state": policy.get("state"),
+            "writer_mode": policy.get("writer_mode")}
+
+
+__all__ = ["CHECK_ESTIMATE_USD_MICROS", "JOB_KIND", "execute_job", "run_check", "start_check",
+           "summary", "workload_env", "CLAUDE_MANAGED_PATHS", "CODEX_SOURCE", "DOC", "MANAGED_MARKER", "POLICY_KEY",
            "PROBE_COMMAND", "PROBE_FILE", "PROBE_PROMPT", "PROBE_TOKEN", "cache_roots",
            "check_engine", "claude_managed_settings", "codex_downgrades", "codex_sandbox_proof",
            "codex_workspace_config", "codex_writer_mode", "forget", "prepare_cache_roots",
