@@ -1,5 +1,5 @@
-"""The GitHub poller on Postgres (AMEX-G1, BOSSAPP-1175) and the pull-request file filter it
-serves (AMEX-G11, BOSSAPP-1169), against a fake GitHub API.
+"""The GitHub poller on Postgres (BOSSAPP-1175) and the pull-request file filter it
+serves (BOSSAPP-1169), against a fake GitHub API.
 
 A laptop install listens on 127.0.0.1, so GitHub's webhook never reaches it. A `poll` connection
 is read by ONE poller at a time (its cursor row is locked for the poll), on its interval; each

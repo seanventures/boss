@@ -12,12 +12,12 @@ self       sender.login == our bot login (connection `bot_login`, else the insta
 push       `data.changed_files` is built from the commits in the payload when GitHub sent them
            all; a truncated payload (> 20 commits) fetches the compare lazily in `enrich`, in
            the processor, never in the request — and only when the connection holds a token.
-pull_request  `data.changed_files` is fetched LAZILY (AMEX-G11, BOSSAPP-1169): `enrich` marks it
+pull_request  `data.changed_files` is fetched LAZILY (BOSSAPP-1169): `enrich` marks it
            pending, and the router asks `load_lazy` for it only when a route's filter reads it —
            GET /pulls/{n}/files, paginated, capped at MAX_CHANGED_FILES, with the connection's
            API token or the project's binding of that repository — so a route can filter
            `{"field": "data.changed_files", "op": "glob", "value": "tenants/*.yaml"}`.
-poll       (AMEX-G1, BOSSAPP-1175) for an install GitHub cannot reach: `poll` lists the
+poll       (BOSSAPP-1175) for an install GitHub cannot reach: `poll` lists the
            repository's open pull requests and branch heads since the cursor and turns each new
            head commit into a delivery IDENTICAL in shape to the webhook's (`pull_request`
            opened / synchronize, `push`), so parse, enrich, loop prevention and every route
@@ -359,7 +359,7 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
         ev.data["changed_files_source"] = "pulls_api"
         return ev
 
-    # -- PULL (AMEX-G1) ---------------------------------------------------------------------------
+    # -- PULL (BOSSAPP-1175) ---------------------------------------------------------------------------
 
     def poll(self, conn: IntakeConnection, cursor: Cursor, limit: int) -> PollResult:
         """New head commits since `cursor`, as webhook-shaped deliveries.

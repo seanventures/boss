@@ -154,7 +154,7 @@ class SandboxIdentity:
     uid: int
     run_dir: Path
     _lock_fd: Optional[int] = field(default=None, repr=False)
-    #: A workload that must hold no model credential (an authored skill's command, AMEX-G2):
+    #: A workload that must hold no model credential (an authored skill's command, BOSSAPP-1138):
     #: no CLI login was seeded into its HOME, and env() withholds every model-shaped name.
     credential_free: bool = False
     #: A uid of the SEALED sub-pool (loopback only): env() gives it no proxy, and git in it reads

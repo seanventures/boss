@@ -1407,7 +1407,7 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
                                        "WHERE id = :id AND attempts > 0"), {"id": event_id})
                         return {"id": event_id, "status": "received",
                                 "reason": f"deferred behind {earlier['id']}"}
-                # THE SAME COMMIT BY WEBHOOK AND BY POLL is one event (AMEX-G1). The source
+                # THE SAME COMMIT BY WEBHOOK AND BY POLL is one event (BOSSAPP-1175). The source
                 # names the commit (`data.head_key`); a copy that arrived the OTHER way and was
                 # already processed wins. Same-way copies are the inbox's dedupe key's job, and
                 # a forced replay always runs.
@@ -1563,7 +1563,7 @@ def process_due(engine: Any, settings: Any = None, *, limit: int = PROCESSOR_BAT
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
-# The poller (AMEX-G1, BOSSAPP-1175): sources BOSS reads, for an install nobody can reach
+# The poller (BOSSAPP-1175): sources BOSS reads, for an install nobody can reach
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 
 #: `poll_seconds` on a connection: how often it is polled (GitHub: 2-4 conditional requests a

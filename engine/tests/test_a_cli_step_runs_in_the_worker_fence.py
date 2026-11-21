@@ -1,4 +1,4 @@
-"""AMEX-G2 (BOSSAPP-1138): a CLI step runs WITHOUT a microVM, in the worker's own per-run fence.
+"""BOSSAPP-1138: a CLI step runs WITHOUT a microVM, in the worker's own per-run fence.
 
 `skill.sandboxed_command` refused on every `runtime: local` install, so the onboarding workflow
 could not run `gwlint validate tenant.yaml`. The `local_fenced` provider runs the command as a
@@ -310,7 +310,7 @@ def test_the_executor_runs_a_declared_skill_in_the_fence_and_labels_the_run(fenc
     kept: list = []
     monkeypatch.setattr(local_fenced, "keep_produced",
                         lambda *a, **kw: kept.append(kw["produced"]) or {"report": "art_report"})
-    context = SimpleNamespace(settings=_settings(), connection=None, project_id="p_amex",
+    context = SimpleNamespace(settings=_settings(), connection=None, project_id="p_onboarding",
                               created_by_job_id=None)
     out = skill_executors.execute_sandboxed_command(
         context, {"_skill_key": "gwlint.validate", "files": {"tenant_yaml": "tenant: lumen-pay\n"}})
@@ -333,7 +333,7 @@ def test_the_executor_runs_a_declared_skill_in_the_fence_and_labels_the_run(fenc
             context, {"_skill_key": "gwlint.validate", "files": {"tenant_yaml": "x"}})
 
 
-# ── AMEX-G12 (BOSSAPP-1170): the pinned image is not what runs; declared local CLIs are ──────
+# ── BOSSAPP-1170: the pinned image is not what runs; declared local CLIs are ──────
 
 def _gwlint_tree(tmp_path):
     """A stand-in CLI tree, as the read-only /opt/northgate/gwlint mount would hold it."""
@@ -356,7 +356,7 @@ def _run_gwlint(monkeypatch, settings, declared, command="gwlint validate *.yaml
     monkeypatch.setattr(skill_definitions, "get_skill", lambda c, p, k: dict(skill))
     monkeypatch.setattr(skill_executors, "_as_held", lambda context, s: s)
     monkeypatch.setattr(local_fenced, "keep_produced", lambda *a, **kw: {})
-    context = SimpleNamespace(settings=settings, connection=None, project_id="p_amex",
+    context = SimpleNamespace(settings=settings, connection=None, project_id="p_onboarding",
                               created_by_job_id=None)
     return skill_executors.execute_sandboxed_command(
         context, {"_skill_key": "gwlint_validate", "files": {"lumen-pay.yaml": "id: lumen\n"}})

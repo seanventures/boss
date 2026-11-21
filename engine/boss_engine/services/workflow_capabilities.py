@@ -774,7 +774,7 @@ CAPABILITIES: dict[str, Capability] = {
         _cap(
             key="config_deploy",
             family="deploy",
-            # CONFIGURATION, NOT A BUILT APP (AMEX-G4, BOSSAPP-1140): the validated tenant YAML
+            # CONFIGURATION, NOT A BUILT APP (BOSSAPP-1140): the validated tenant YAML
             # into the gateway's config directory. Same hands as a deploy: a ChangeSet, the
             # environment's policy or a person, a receipt, previous versions kept for rollback.
             captain="deployment_manager",
@@ -805,7 +805,7 @@ CAPABILITIES: dict[str, Capability] = {
                     "production's approval rules.",
             tool="promote_config",
             risk_tier=3,
-            # BOUND TO ITS OWN STAGING STEP (AMEX-G9, BOSSAPP-1167): `deployment_id` comes from
+            # BOUND TO ITS OWN STAGING STEP (BOSSAPP-1167): `deployment_id` comes from
             # this run's config_deploy step and is required — no "latest staging deploy for the
             # app" fallback, which crossed two tenants in flight. The runner checks the id is one
             # this run deployed and passes that step's bundle_sha256 for the tool to verify.
@@ -1285,7 +1285,7 @@ def stops_for_a_person(capability_key: str, requested: Optional[str] = None,
 #: start preflight checks (an SMTP server, a Mattermost bot).
 NOTIFY_CHANNEL_KINDS = {"email": "email", "mattermost": "mattermost",
                         # github:<owner/repo>#<n> or github:#<n> (the primary repository): the
-                        # outcome goes on the pull request or issue (AMEX-G5).
+                        # outcome goes on the pull request or issue (BOSSAPP-1141).
                         "github": "repository"}
 
 

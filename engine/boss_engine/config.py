@@ -1741,7 +1741,7 @@ class Settings(BaseSettings):
     #             sandbox-service; the control plane commits each stage's diff to the
     #             work branch (git is the state carrier) and keeps ALL judgment —
     #             design, review panel, gates, Decision, PR — host-side.
-    #   local_fenced = OPT-IN for a `runtime: local` install (AMEX-G2, BOSSAPP-1138): the
+    #   local_fenced = OPT-IN for a `runtime: local` install (BOSSAPP-1138): the
     #             build stages run exactly as `local`, and an authored `sandboxed_command`
     #             skill runs in the worker's own per-run fence (sandbox_identity: a pool uid,
     #             deny-by-default egress except the loopback relays, a per-run directory).
@@ -1751,14 +1751,14 @@ class Settings(BaseSettings):
     governed_sandbox_provider: str = Field(
         default="local", alias="BOSS_GOVERNED_SANDBOX_PROVIDER"
     )
-    # LOCAL CLIs UNDER local_fenced (AMEX-G12, BOSSAPP-1170): `local_fenced` runs a skill's command
+    # LOCAL CLIs UNDER local_fenced (BOSSAPP-1170): `local_fenced` runs a skill's command
     # on the worker's own filesystem, so the skill's pinned `image` is NOT what runs. A skill
     # declares the worker paths it runs (`local_binaries`, e.g. /opt/northgate/gwlint), and each
     # must sit under one of these operator-set roots (comma-, colon- or newline-separated
     # absolute paths; typically a read-only mount). Empty (the default): a skill that declares
     # local binaries is refused under local_fenced.
     local_fenced_binaries: str = Field(default="", alias="BOSS_LOCAL_FENCED_BINARIES")
-    # CONFIG DEPLOYS (config_deploy, AMEX-G4): the directory roots a config_dir target may write
+    # CONFIG DEPLOYS (config_deploy, BOSSAPP-1140): the directory roots a config_dir target may write
     # under, comma-separated absolute paths. Empty (the default): no config target can be made.
     config_deploy_roots: str = Field(default="", alias="BOSS_CONFIG_DEPLOY_ROOTS")
     # The exact reload commands a config_dir target may run after writing its files, one per

@@ -182,14 +182,14 @@ EXPECTED_PER_SURFACE = {
     # (BOSSAPP-1047 B2: ticket_get/search/browse/import/comment/transition), 2026-11-13.
     # +7 drift already on main at f2348b85c (storage_inspect/plan/propose_rule/report/run_step,
     # work_hold_set/release: chat, agent_step and mcp), never pinned.
-    # +3 github_comment, github_open_fix_pr, contract_test (AMEX-G5/G6/G7, 2026-11-14): chat,
+    # +3 github_comment, github_open_fix_pr, contract_test (BOSSAPP-1141 / 1142 / 1143, 2026-11-14): chat,
     # agent_step and mcp — a workflow agent comments on the PR it is validating.
     # +3 close_local_change, reopen_local_change (BOSSAPP-955) and recheck_change (#168): chat
     # and mcp (default Exposure). Measured by diffing each surface's names at the last pin
     # (5e27cf499) against main f375ca7f6: nothing else moved, nothing was removed.
     # +3 confluence_search, confluence_read_page, confluence_publish_page (BOSSAPP-1384): chat,
     # agent_step and mcp. NOTE: main was already +1 over the pin on chat and mcp before this.
-    "chat": 218,  # +3 create_config_target, deploy_config, promote_config (AMEX-G4; chat and mcp)   # +1 transfer_to_agent (AP-P7 handoffs); +5: list/create/link/complete_work_item and ask_human (BOSSAPP-830/832); +2 wiki_read, wiki_propose (BOSSAPP-891)
+    "chat": 218,  # +3 create_config_target, deploy_config, promote_config (BOSSAPP-1140; chat and mcp)   # +1 transfer_to_agent (AP-P7 handoffs); +5: list/create/link/complete_work_item and ask_human (BOSSAPP-830/832); +2 wiki_read, wiki_propose (BOSSAPP-891)
     "mcp": 217,
     # find_tools; agent steps join when K4 moves them onto the kernel. +6 the ticket tools,
     # offered to workflow agents through the tickets.read / tickets.write skills (BOSSAPP-1047 B2).

@@ -474,7 +474,7 @@ def _decided(route: Mapping[str, Any], conn: IntakeConnection, event_row: Mappin
 def _load_lazy_fields(conn: IntakeConnection, event: IntakeEvent,
                       routes: list[Mapping[str, Any]]) -> IntakeEvent:
     """Fields the adapter fills only on demand (`lazy_fields`, e.g. a GitHub pull request's
-    changed files, AMEX-G11), loaded when — and only when — some route's filter reads them.
+    changed files, BOSSAPP-1169), loaded when — and only when — some route's filter reads them.
     A failed load leaves the field empty with its error; the event still routes."""
     from ..connectors.intake import REGISTRY
 

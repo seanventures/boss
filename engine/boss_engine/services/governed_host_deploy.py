@@ -828,7 +828,7 @@ def apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
     with pinned(engine, host_id) as pin:
         # A REMOVAL (app_removal) is a deployment run of kind `remove`: same lease, ChangeSet,
         # pinned host key and receipt, a different phase two. A CONFIG deployment
-        # (config_deploy, AMEX-G4) is one of kind `config`: files into a directory, kept
+        # (config_deploy, BOSSAPP-1140) is one of kind `config`: files into a directory, kept
         # previous versions, reload, health check, restore on failure — the same governance.
         if is_removal(row):
             outcome = remove_on_host(engine, settings, row=row, governance=governance)

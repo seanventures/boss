@@ -374,7 +374,7 @@ def _compile_leaf(node: Mapping[str, Any], counter: dict) -> Callable[[Mapping[s
 
 
 # ---------------------------------------------------------------------------------------------
-# Path globs (AMEX-G11): `tenants/*.yaml` over a pull request's changed files
+# Path globs (BOSSAPP-1169): `tenants/*.yaml` over a pull request's changed files
 # ---------------------------------------------------------------------------------------------
 
 def _paths(value: Any) -> list[str]:

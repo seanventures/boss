@@ -749,7 +749,7 @@ def _isolation_available(settings: Settings) -> tuple[bool, str]:
     the box that holds every project's credentials, so this refuses rather than degrades. A
     refusal an operator can read beats a capability that quietly runs in the wrong place.
 
-    `local_fenced` (AMEX-G2) is the worker's own per-run fence — a pool uid, deny-by-default
+    `local_fenced` (BOSSAPP-1138) is the worker's own per-run fence — a pool uid, deny-by-default
     egress except the loopback relays, a per-run directory — and is accepted when that fence is
     actually up (local_fenced.fence_problem), never on an install marked untrusted. It is NOT
     strong isolation, and `isolation_grade` says so.
@@ -805,7 +805,7 @@ def execute_sandboxed_command(
         raise SandboxIsolationUnavailable(
             f"{skill_key} runs a command and cannot be executed here: {grade['why']}")
 
-    # FILES, NOT ONLY STRINGS (AMEX-G2). `files` maps an input name to content (a string, or
+    # FILES, NOT ONLY STRINGS (BOSSAPP-1138). `files` maps an input name to content (a string, or
     # {text|content|base64}); each is written into the workdir and the input's placeholder
     # becomes that file's path, so a skill whose command reads `{tenant_yaml}` is handed a
     # file, not a 4 KB argument. A `files` entry counts as the input being present.
@@ -826,7 +826,7 @@ def execute_sandboxed_command(
         from .local_fenced import (LocalFenceUnavailable, LocalFencedSandbox,
                                    binaries_changed, check_local_binaries, keep_produced)
 
-        # THE PINNED IMAGE IS NOT USED HERE (AMEX-G12): the command runs on the worker's own
+        # THE PINNED IMAGE IS NOT USED HERE (BOSSAPP-1170): the command runs on the worker's own
         # filesystem. The CLIs it needs are declared (`local_binaries`) and checked against the
         # operator's allow-list before anything runs; the run records which ran, with hashes.
         try:

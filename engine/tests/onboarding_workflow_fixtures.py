@@ -1,4 +1,4 @@
-"""A project to test the API-onboarding gaps in (AMEX-G3/G5/G6/G7), on ANY test database.
+"""A project to test the API-onboarding gaps in (BOSSAPP-1139 / 1141 / 1142 / 1143), on ANY test database.
 
 The shared `project` fixture of test_workflow_custom_steps skips when the database has no
 workspace — which is the bench database's state, so the GitHub and failure-path tests skipped
@@ -14,8 +14,8 @@ from sqlalchemy import text
 
 from .test_workflow_custom_steps import eng  # noqa: F401 — re-exported fixture
 
-ORG = "org_amex_tests"
-WORKSPACE = "ws_amex_tests"
+ORG = "org_onboarding_tests"
+WORKSPACE = "ws_onboarding_tests"
 
 _CLEANUP = ("workflow_step_runs", "workflow_runs", "workflow_custom_steps", "workflow_mappings",
             "workflow_versions", "workflow_definitions", "project_skills", "skill_versions",
@@ -28,9 +28,9 @@ def _workspace(c) -> str:
     found = c.execute(text("SELECT id FROM workspaces ORDER BY created_at LIMIT 1")).scalar()
     if found:
         return str(found)
-    c.execute(text("INSERT INTO orgs (id, name) VALUES (:o, 'amex tests') "
+    c.execute(text("INSERT INTO orgs (id, name) VALUES (:o, 'onboarding tests') "
                    "ON CONFLICT (id) DO NOTHING"), {"o": ORG})
-    c.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES (:w, :o, 'amex tests') "
+    c.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES (:w, :o, 'onboarding tests') "
                    "ON CONFLICT (id) DO NOTHING"), {"w": WORKSPACE, "o": ORG})
     return WORKSPACE
 
@@ -40,7 +40,7 @@ def project(eng):  # noqa: F811
     pid = f"p_{uuid.uuid4().hex[:10]}"
     with eng.begin() as c:
         c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) "
-                       "VALUES (:i, :w, 'amex gaps test', :s)"),
+                       "VALUES (:i, :w, 'onboarding gaps test', :s)"),
                   {"i": pid, "w": _workspace(c), "s": pid})
     yield pid
     with eng.begin() as c:

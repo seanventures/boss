@@ -435,7 +435,7 @@ def _run_context(connection: Connection, run_id: str) -> dict[str, Any]:
     #   produced a value; a later step must not be told it was skipped. Ordered as
     #   `workflow_run_actions.latest_attempts` orders them: created, then iteration.
     #
-    # A FAILED STEP THAT TOOK ITS `on_error` PATH is read too (AMEX-G10, BOSSAPP-1168). Its
+    # A FAILED STEP THAT TOOK ITS `on_error` PATH is read too (BOSSAPP-1168). Its
     # evidence — a command's `exit_code`, `log_tail`, what it produced — is exactly what the
     # error path needs: the validator's report, the failing test's table. It is stamped
     # `step_status: failed`, so a reader can tell it from a result. Only a TERMINAL failure that
@@ -4380,7 +4380,7 @@ def _perform_capability(
         if built:
             inputs = {**inputs, "code_task_run_id": built}
     if key == "promote_config":
-        # PROMOTED IS WHAT THIS RUN STAGED (AMEX-G9, BOSSAPP-1167). Never "the latest staging
+        # PROMOTED IS WHAT THIS RUN STAGED (BOSSAPP-1167). Never "the latest staging
         # deploy for the app": with two tenants in flight that is the other tenant's bundle.
         inputs = _bound_promotion(connection, context, inputs)
     # Under the run's recorded authority (the step's agent for that person), never the worker's.
@@ -5550,7 +5550,7 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     # on the deployment run, like a build waits on its code task.
     "deploy": ("deployment", ("deployment_id", "deployment_run_id", "id")),
     "redeploy": ("deployment", ("deployment_id", "deployment_run_id", "id")),
-    # A CONFIG deployment (config_deploy, AMEX-G4) is a deployment run too: planned is not
+    # A CONFIG deployment (config_deploy, BOSSAPP-1140) is a deployment run too: planned is not
     # shipped, and promoted is not live until production's health check passed.
     "config_deploy": ("deployment", ("deployment_id", "deployment_run_id", "id")),
     "promote_config": ("deployment", ("deployment_id", "deployment_run_id", "id")),
@@ -9013,7 +9013,7 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
                     # minutes to arrive at the same sentence.
                     retryable=not isinstance(error, SettledCapabilityError),
                     # What the work returned before it was judged (a command's exit_code and
-                    # log_tail, AMEX-G3), when the error carries it. None keeps the old path.
+                    # log_tail, BOSSAPP-1139), when the error carries it. None keeps the old path.
                     output=(getattr(error, "output", None)
                             if isinstance(getattr(error, "output", None), dict) else None),
                     exception=error,
