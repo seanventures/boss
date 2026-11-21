@@ -55,6 +55,22 @@ def model(monkeypatch):
         rt = getattr(auth, "run_token", None)
         seen["run_token"] = rt
         if rt is not None:
+            # EVERY TOOL OFFERED IS CALLABLE UNDER THE TOKEN (#257 review): decided by the same
+            # gate a real call passes, as this token.
+            from boss_engine.tools import build_discuss_read_registry
+            from boss_engine.tools.registry import identity_gate
+
+            registry = build_discuss_read_registry()
+            names = [t["function"]["name"] if "function" in t else t.get("name")
+                     for t in (tools or [])]
+            seen["offered"] = names
+            seen["refused"] = {}
+            for name in names:
+                if name == "installed_binaries":
+                    continue
+                refused = identity_gate(registry.get(name), auth, project_id, {})
+                if refused is not None:
+                    seen["refused"][name] = refused.get("permission")
             with connection.engine.begin() as db:
                 try:
                     runs.authorize_tool("deployment:create", project_id, db=db)
@@ -91,6 +107,10 @@ def test_the_steps_agent_reads_with_a_read_only_token_nested_under_the_run(
     assert set(rt.scope) <= read_permissions() and "deployment:create" not in rt.scope
     assert model["write"] != "allowed", model
     assert model["tools"], "the read tools were withheld from an agent holding a read token"
+    assert model["refused"] == {}, f"offered but refused under the token: {model['refused']}"
+    for never in ("read_app_logs", "diagnose_setup", "list_harnesses", "get_config",
+                  "list_running_work", "factory_briefing"):
+        assert never not in model["offered"], never   # person-only keys: never offered
     assert entry["reads"]["tools"] is True and entry["reads"]["as"] == "release_manager"
     assert CURRENT_TOOL_AUTH.get() is None
 
@@ -103,7 +123,35 @@ def test_a_step_with_no_agent_decides_from_evidence_never_as_the_person(
     entry, _state, _agent = _begin(env, run, output={"ran_as": {"agent": ALICE, "how": "run_actor"}})
     assert model["tools"] is None and model["run_token"] is None
     assert model["principal"] != ALICE, model
-    assert entry["reads"]["tools"] is False and entry["reads"]["why"]
+    assert entry["reads"]["tools"] is False
+    assert "no agent to read as" in entry["reads"]["why"] and "its person" in entry["reads"]["why"]
+
+
+def test_inside_another_run_the_reason_says_so(env, staffed, model, monkeypatch):  # noqa: F811
+    """No token is minted inside a delegated run; the recorded reason says that, not 'no
+    Passport'."""
+    _enforce(env, monkeypatch)
+    run = _run(env, captain="release_manager")
+    ctx = types.SimpleNamespace(engine=env.engine, settings=None)
+    with env.engine.begin() as c:
+        with runner._step_authority(ctx, c, env.project, {"run_id": run["id"]},
+                                    {"id": "deploy"}, "release_manager"):
+            entry, _state, _agent = runner._recovery_begin(
+                c, ctx, project_id=env.project, run_id=run["id"], step_id="deploy",
+                kind="deploy", output={}, evidence={"failure": {"why": "the host refused"}})
+    assert entry["reads"]["tools"] is False and model["tools"] is None
+    assert "inside another delegated run" in entry["reads"]["why"], entry["reads"]
+
+
+def test_an_agent_without_a_passport_is_named_in_the_reason(env, staffed, model, monkeypatch):  # noqa: F811
+    _enforce(env, monkeypatch)
+    run = _run(env, captain="release_manager")
+    from boss_engine.identity import runs as _runs
+
+    monkeypatch.setattr(_runs, "agent_for_role", lambda *a, **k: None)
+    entry, _state, _agent = _begin(env, run)
+    assert entry["reads"]["tools"] is False
+    assert entry["reads"]["why"] == "release_manager has no Passport in this project"
 
 
 def _revoke(env, run):  # noqa: F811

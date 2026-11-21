@@ -4839,9 +4839,19 @@ def _recovery_authority(ctx: Any, connection: Connection, *, project_id: str, ru
         role = str(role or "").strip().lower()
         if role and role != step_agents.HUMAN and not role.startswith("usr_") and role not in roles:
             roles.append(role)
-    why = "no agent of this step holds a Passport the run's grant names"
+    from boss_engine.identity import lineage as _lineage
+
+    # Why nothing could be read with, said for THIS case (P3 review of #257): each refusal below
+    # replaces it with its own reason.
+    why = ("this step has no agent to read as (no approver, captain or named agent"
+           + (", and it ran as its person" if ran.get("how") == "run_actor" else "") + ")")
     if not scope:
         why = "none of the read tools' permissions can be delegated to an agent"
+        roles = []
+    ambient = _lineage.current()
+    if roles and ambient is not None and ambient.chain:
+        why = ("this recovery runs inside another delegated run, which it keeps; no separate "
+               "read-only token is minted inside a run")
         roles = []
     for role in roles:
         held = contextlib.ExitStack()
@@ -4855,10 +4865,16 @@ def _recovery_authority(ctx: Any, connection: Connection, *, project_id: str, ru
             continue
         if decided is None or getattr(decided, "run_token", None) is None:
             held.close()
+            try:
+                has_passport = bool(_runs.agent_for_role(connection, project_id, role))
+            except Exception:  # noqa: BLE001
+                has_passport = False
+            why = (f"{role} has no Passport in this project" if not has_passport else
+                   f"the run's grant gives {role} no read-only token")
             continue
         with held:
             yield {"tools": True, "as": role, "agent_id": decided.principal.id,
-                   "scope": sorted(scope)}
+                   "scope": sorted(decided.run_token.scope)}
         return
     yield {"tools": False, "why": why}
 

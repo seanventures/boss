@@ -1089,7 +1089,7 @@ def agent_of(connection: Connection, project_id: str, step: Mapping[str, Any]) -
     return {"role": role, "name": str(name or row["display_name"] or role)}
 
 
-def _read_tools(connection: Connection, settings: Any, project_id: str
+def _read_tools(connection: Connection, settings: Any, project_id: str, scope: Any = None
                 ) -> tuple[Optional[list[dict[str, Any]]], Optional[Callable[[str, dict], dict]]]:
     """BOSS's fundamentals READS every agent holds (logs, run history, diagnoses, config, code,
     the deployments and hosts) — the pre-check agent's set, read-only. None when unavailable:
@@ -1098,7 +1098,7 @@ def _read_tools(connection: Connection, settings: Any, project_id: str
         from ..context import EngineContext
         from .workflow_precheck_agent import read_tools
 
-        schemas, run = read_tools(settings)
+        schemas, run = read_tools(settings, scope=scope)
         ctx = EngineContext(settings=settings, engine=getattr(connection, "engine", None))
         return schemas, (lambda name, args: run(ctx, project_id, name, args))
     except Exception as error:  # noqa: BLE001
@@ -1166,7 +1166,11 @@ def decide(connection: Connection, settings: Any, *, project_id: str, run_id: st
             if reads is not None and not reads.get("tools"):
                 schemas, run_tool = None, None
             else:
-                schemas, run_tool = _read_tools(connection, settings, project_id)
+                # Only the tools the read-only token can call (its own scope).
+                held = (reads or {}).get("scope")
+                schemas, run_tool = _read_tools(
+                    connection, settings, project_id,
+                    scope=frozenset(held) if held is not None else None)
             left = max(1, int(caps["budget_usd_micros"]) - spent(connection, state))
             result = ask_model(adapter, raw_adapter=raw, agent=agent.get("name") or "BOSS",
                                evidence=evidence, allowed=allowed, last=last,

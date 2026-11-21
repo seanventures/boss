@@ -400,9 +400,12 @@ def read_permissions(settings: Any = None) -> frozenset[str]:
     return frozenset(keys) & frozenset(catalogue.delegable())
 
 
-def read_tools(settings: Any = None) -> tuple[list[dict[str, Any]], Callable[..., dict]]:
+def read_tools(settings: Any = None, scope: Optional[Any] = None
+               ) -> tuple[list[dict[str, Any]], Callable[..., dict]]:
     """(the OpenAI-shaped schemas, a runner) for the fundamentals reads, from the project-pinned
-    discuss registry. A tool that is missing or not `kind == "read"` is not offered."""
+    discuss registry. A tool that is missing or not `kind == "read"` is not offered. With
+    `scope` (a run token's keys), a tool whose permission the token does not hold is not
+    offered either: offering it would only be refused on every call."""
     from ..tools import build_discuss_read_registry
 
     registry = build_discuss_read_registry(
@@ -413,7 +416,7 @@ def read_tools(settings: Any = None) -> tuple[list[dict[str, Any]], Callable[...
             spec = registry.get(name)
         except Exception:  # noqa: BLE001 — not in this edition
             continue
-        if spec.kind == "read":
+        if spec.kind == "read" and (scope is None or str(spec.permission or "") in scope):
             specs.append(spec)
     schemas = [s.openai() for s in specs] + [_BINARIES_SCHEMA]
     allowed = {s.name for s in specs}
