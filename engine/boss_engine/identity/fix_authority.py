@@ -34,7 +34,8 @@ on first need and widened only to what a recovery of that person's work needs:
 
 THE SWITCH. Default ON for every org and project, and ON for existing installs on upgrade (a
 missing policy key reads as the default). Off per org: Identity › Policy
-`agents_fix_failures = false`; off per project: the project setting `agents_fix_failures = 0`.
+`agents_fix_failures = false`; off per project: the project setting `agents_fix_failures = 0`,
+drawn in the console at Govern › More › Advanced limits › Each failed step.
 Off means the old behaviour: the work stops and a person's card asks for a grant.
 
 HARD LIMITS (things an agent literally cannot or must not do, kept whatever this says): typing
@@ -205,7 +206,8 @@ def ensure(db: Any, *, person_id: Optional[str], project_id: Optional[str],
     org = _org_of_project(db, project_id)
     if not enabled(db, project_id, org_id=org, settings=settings):
         return no("agents fixing failures with the starter's authority is turned off for this "
-                  "project (Settings › agents_fix_failures, or the org's Identity policy)")
+                  "project (Govern › More › Advanced limits › Each failed step › Agents fix "
+                  "failures with your authority, or the org's Identity policy)")
     person = _person(db, person_id)
     if person is None:
         return no(f"{person_id} is not an active person, so there is no one's authority to use")

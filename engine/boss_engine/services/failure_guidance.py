@@ -47,9 +47,10 @@ _STEPS: dict[str, tuple[tuple[str, ...], str]] = {
     "model_login": (("Open Setup › Models.",
                      "On the model the cause names, sign in again (or paste a working API key) "
                      "and press Test.", RETRY), AFTER),
-    "grant": (("Open Settings and set 'Agents fix failures with your authority' to 1 (or, if "
-               "you turned it off on purpose, open My account › Agents acting for me and let "
-               "the agent act for you on this project).", RETRY), AFTER),
+    "grant": (("Open Govern › More › Advanced limits › Each failed step for this project and "
+               "turn 'Agents fix failures with your authority' On (or, if you turned it off on "
+               "purpose, open My account › Agents acting for me and let the agent act for you "
+               "on this project).", RETRY), AFTER),
     "approval_expired": ((RETRY + " The step asks for its approval again.",
                           "Open Approvals and answer it before it expires."),
                          "BOSS carries on from that step as soon as you approve."),

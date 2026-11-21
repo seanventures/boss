@@ -21,7 +21,8 @@ from boss_engine.services.budget import BudgetGovernor, intensity_envelope
 
 PROJECT = "boss-dogfood"
 KNOB_KEYS = ("code_agent_max_concurrency", "code_agent_max_turns",
-             "captain_leads_projects", "code_review_inrun_max_rounds")
+             "captain_leads_projects", "code_review_inrun_max_rounds",
+             "agents_fix_failures", "step_recovery", "open_pr_when_checks_fail")
 
 
 @pytest.fixture
@@ -100,6 +101,31 @@ def test_pace_and_its_caps_say_where_they_came_from(client, clean):
     assert controls["daily_cap"]["source"] == "pace"
     assert controls["max_workers_total"]["value_effective"] == 15
     assert controls["max_workers_total"]["source"] == "pace"
+
+
+def test_every_board_key_is_a_control_and_the_agent_switches_are_on(client, clean):
+    """v1.0-rc10.32: `agents_fix_failures`, `step_recovery` and `open_pr_when_checks_fail` were
+    listed and never drawn. Every key of every section GET /v1/govern returns is a control in
+    that same answer, and a fresh project shows the agent switches On under Each failed step."""
+    body = client.get("/v1/govern", params={"project_id": PROJECT}).json()
+    controls = {c["key"]: c for c in body["controls"]}
+    sections = {s["key"]: s["keys"] for s in body["sections"]}
+    assert [s["key"] for s in body["sections"]] == [s for s, _n, _k in govern_view.BOARD]
+    for section, keys in sections.items():
+        for key in keys:
+            assert key in controls, f"{key} is listed under {section} and not built"
+            assert controls[key]["section"] == section
+    for key in govern_view.SWITCHES:
+        assert controls[key]["unit"] == "switch", key
+        assert controls[key]["write"] == {"method": "PUT", "path": f"/v1/settings/{key}"}
+    fix = controls["agents_fix_failures"]
+    assert fix["section"] == "each_failed_step" and fix["value_effective"] == 1
+    assert fix["name"] == "Agents fix failures with your authority"
+    assert "starter's authority" in fix["explain"]
+    assert controls["step_recovery"]["value_effective"] == 1
+    assert controls["open_pr_when_checks_fail"]["section"] == "each_build"
+    assert controls["quality_bar"]["unit"] == "choice"
+    assert controls["quality_bar"]["bounds"]["choices"] == ["prototype", "standard", "production"]
 
 
 def test_every_control_names_its_enforcer_and_only_token_guides_are_advisory(client, clean):
