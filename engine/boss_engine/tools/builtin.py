@@ -2938,6 +2938,34 @@ def _is_real_record(ctx: Any, key: str, value: str) -> bool:
         return False
 
 
+#: Arguments every offer may carry whatever its tool declares: the console scopes the press.
+_OFFER_SCOPE_ARGS = frozenset({"project_id", "project"})
+
+
+def _argument_problem(reg: Any, name: str, args: dict) -> str:
+    """Why `args` cannot be the arguments of tool `name` as its schema declares them, or "":
+    a name the tool does not take (when its schema is closed), or a required one missing."""
+    try:
+        spec = reg.get(name)
+    except Exception:  # noqa: BLE001 — an unknown tool is refused elsewhere, in its own words
+        return ""
+    schema = getattr(spec, "parameters", None) or {}
+    props = schema.get("properties") or {}
+    problems = []
+    if schema.get("additionalProperties") is False and props:
+        unknown = sorted(k for k in args if k not in props and k not in _OFFER_SCOPE_ARGS)
+        if unknown:
+            problems.append(f"it does not take {', '.join(unknown)}")
+    missing = [r for r in (schema.get("required") or [])
+               if args.get(r) is None or (isinstance(args.get(r), str) and not args[r].strip())]
+    if missing:
+        problems.append(f"it needs {', '.join(missing)}")
+    if not problems:
+        return ""
+    return ("; ".join(problems) + f". {name} takes: {', '.join(sorted(props)) or 'nothing'}. "
+            "Offer it again with exactly those names.")
+
+
 def _placeholder_argument(args: dict, ctx: Any = None) -> str:
     """The first argument that looks invented, described for the model, or ''.
 
@@ -3510,6 +3538,16 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                     "error": "a draft_workflow button must name its workflow_key (or version_of "
                              "for a new version of an existing one) so the button shows exactly "
                              "what it will publish."}
+        wrong = _argument_problem(reg, name, call_args)
+        if wrong:
+            # A BUTTON WHOSE ARGUMENTS ITS TOOL DOES NOT TAKE IS A BUTTON THAT CANNOT RUN.
+            #
+            # Laptop 2026-11-20: create_config_target was offered with `host` and `reload`
+            # (the tool takes `host_id`, `reload_command`, `reload_url`). The console rendered it
+            # unpressable, and had it run, the host would have been dropped and the target made
+            # on the BOSS machine instead. Refused here, the model re-offers with the real names.
+            return {"ok": False, "proposed": False,
+                    "error": f"cannot propose {name!r} with these arguments: {wrong}"}
         unavailable = action_unavailable(name, getattr(ctx, "settings", None))
         if unavailable:
             return {"ok": False,
