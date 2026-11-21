@@ -911,6 +911,12 @@ def probe_app(engine: Any, settings: Any, project_id: str, target_id: str) -> di
         return {"word": w["word"], "tone": w["tone"], "checked_at": None, "probed": False}
     sample = probe(target, settings)                # outside a transaction: network I/O
     at = _now()
+    if sample["ok"] is None:
+        # Nothing could be asked (no connector, no declared check): unknown, never a failure
+        # sample — the same rule the sweep follows.
+        w = _health_word("unknown")
+        return {"word": w["word"], "tone": w["tone"], "checked_at": _iso(at), "probed": False,
+                "ok": None, "reason": sample["error"]}
     with begin(engine) as c:
         c.execute(text(
             "INSERT INTO deployment_health_samples (id, project_id, deployment_target_id, "

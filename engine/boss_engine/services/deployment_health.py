@@ -192,14 +192,23 @@ def incidents(samples_newest_first: list[dict]) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 # Probe: ask the destination, through the connector the deploy gate already uses.
 # --------------------------------------------------------------------------- #
+def declares_checks(target: dict) -> bool:
+    """Did this target declare any health check at all?"""
+    return any(isinstance(c, dict) for c in (target.get("health_checks") or []))
+
+
 class StackHealthProbe:
-    """Health for a stack target: an HTTP GET of the address it serves on.
+    """Health for a stack target: its DECLARED checks, else an HTTP GET of the address it serves on.
 
     A stack target has no deployment connector — it is deployed by stack_deploy over SSH with
     an approval — but once it is up it is just a web app at its public URL (or the URL its
     newest healthy deploy opened). The probe never SSHes: it asks the app, from outside, the
     way a visitor would. Kept out of the connector table on purpose, so deploy routing for
     stack targets is unchanged.
+
+    DECLARED CHECKS FIRST. This GET'd "/" and ignored the target's own `health_checks`, so an
+    API gateway with no page at "/" (404) and a 200 on its declared /healthz read "Down" for as
+    long as it ran. "/" is only the fallback for a target that declared nothing.
     """
 
     kind = "stack"
@@ -207,6 +216,11 @@ class StackHealthProbe:
     def observe(self, target: dict, settings: Settings) -> dict:
         import urllib.error
         import urllib.request
+
+        if declares_checks(target):
+            from .deployment_connectors import observe_declared
+
+            return observe_declared(target, timeout=5)
 
         url = str(target.get("public_url") or target.get("stack_open_url")
                   or (target.get("domains") or [""])[0] or "").strip()
@@ -226,6 +240,28 @@ class StackHealthProbe:
         return {"healthy": 200 <= status < 400, "checks": [{**check, "status": status}]}
 
 
+class DeclaredChecksProbe:
+    """Health for a target kind with NO deployment connector (config_dir, and any kind added
+    to the schema before its connector): the checks it declared, asked from outside.
+
+    "No connector for target_kind 'config_dir'" was recorded as a FAILED sample on every sweep,
+    so a target whose /readyz answered 200 read "Down" forever and paged its owner. Having no
+    connector says nothing about whether the app serves; its declared checks do. A target with
+    no connector AND no declared check is unknown — never a failure.
+    """
+
+    kind = "declared"
+
+    def observe(self, target: dict, settings: Settings) -> dict:
+        if not declares_checks(target):
+            return {"healthy": None,
+                    "reason": (f"no health check declared and no connector for target_kind "
+                               f"{target.get('target_kind')!r}")}
+        from .deployment_connectors import observe_declared
+
+        return observe_declared(target, timeout=5)
+
+
 #: A stack target's newest healthy deploy URL, for StackHealthProbe when no public_url is set.
 STACK_OPEN_URL_COLUMN = (
     "(SELECT sd.open_url FROM stack_deployments sd WHERE sd.target_id = {alias}.id "
@@ -237,10 +273,7 @@ def probe(target: dict, settings: Settings) -> dict[str, Any]:
     from .deployment_connectors import connector_for
 
     conn = StackHealthProbe() if str(target.get("target_kind") or "").lower() == "stack" \
-        else connector_for(target)
-    if conn is None:
-        return {"ok": False, "status_code": None, "latency_ms": None,
-                "error": f"no connector for target_kind {target.get('target_kind')!r}"}
+        else (connector_for(target) or DeclaredChecksProbe())
 
     started = time.monotonic()
     try:
@@ -251,9 +284,16 @@ def probe(target: dict, settings: Settings) -> dict[str, Any]:
                 "error": f"{type(exc).__name__}: {exc}"[:200]}
 
     latency_ms = int((time.monotonic() - started) * 1000)
-    checks = health.get("checks") or []
-    first = checks[0] if checks else {}
-    # `healthy` is None when the target declares no check — unknown, not healthy.
+    checks = [c for c in (health.get("checks") or []) if not c.get("skipped")]
+    # The check that FAILED explains the sample; the first one may well have passed.
+    first = next((c for c in checks if c.get("ok") is False or c.get("error")),
+                 checks[0] if checks else {})
+    # `healthy` is None when nothing could be asked — UNKNOWN, not healthy and not a failure.
+    # `ok: None` tells the sweep to record nothing: an unknown target must never accumulate
+    # failure samples, read "Down", fire a health alert or start a recovery agent.
+    if health.get("healthy") is None:
+        return {"ok": None, "status_code": None, "latency_ms": None,
+                "error": str(health.get("reason") or "nothing was probed")[:200]}
     ok = bool(health.get("healthy"))
     return {
         "ok": ok,
@@ -285,7 +325,7 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
     from ..db import begin
 
     now = now or datetime.now(timezone.utc)
-    probed, skipped, failed = 0, 0, 0
+    probed, skipped, failed, unknown = 0, 0, 0, 0
     try:
         with begin(engine) as c:
             from . import projects_archive    # an archived project's apps are not probed
@@ -304,6 +344,18 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
                     skipped += 1
                     continue
             sample = probe(t, settings)          # outside the transaction: it does network I/O
+            if sample["ok"] is None:
+                # UNKNOWN IS NOT A FAILURE. Nothing could be asked (no connector, no declared
+                # check), so no sample is written — and the failure samples an older probe wrote
+                # for the same non-reason ("no connector for target_kind …") are withdrawn: they
+                # were never observations of the app, yet they kept it "Down".
+                unknown += 1
+                with begin(engine) as c:
+                    c.execute(sql("DELETE FROM deployment_health_samples "
+                                  "WHERE deployment_target_id = :t AND NOT ok "
+                                  "AND error LIKE 'no connector for target_kind%'"),
+                              {"t": t["id"]})
+                continue
             with begin(engine) as c:
                 c.execute(
                     sql("INSERT INTO deployment_health_samples "
@@ -325,7 +377,7 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
                 c.execute(sql("DELETE FROM deployment_health_samples WHERE checked_at < :cut"),
                           {"cut": now - timedelta(days=RETENTION_DAYS)})
     except Exception as exc:  # noqa: BLE001
-        return {"probed": probed, "skipped": skipped, "failed": failed,
+        return {"probed": probed, "skipped": skipped, "failed": failed, "unknown": unknown,
                 "error": f"{type(exc).__name__}: {exc}"[:200]}
     # The app's OWN metrics ride the same cadence and the same deployed-target list: an app
     # that declares `metrics:` in boss.deploy.yaml is scraped when due (app_metrics.sweep never
@@ -340,7 +392,8 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
     # ALERT RULES ARE NOT EVALUATED HERE ANY MORE (BOSSAPP-598, R1.9): the monitor scheduler
     # (monitor_scheduler.tick, on its own clock and leases) evaluates every rule group. This
     # sweep only probes and scrapes, so a slow probe never delays an alert and vice versa.
-    return {"probed": probed, "skipped": skipped, "failed": failed, **scraped, **signals}
+    return {"probed": probed, "skipped": skipped, "failed": failed, "unknown": unknown,
+            **scraped, **signals}
 
 
 # --------------------------------------------------------------------------- #
