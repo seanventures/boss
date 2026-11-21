@@ -16,6 +16,13 @@
 # String replacement in ARG values needs the dockerfile:1.7 frontend this file pins (line 1).
 # An unknown name fails the build in the `toolchains` stage, in words.
 ARG BOSS_TOOLCHAINS=java,go
+# THE ENTERPRISE NETWORK (docs/community/ENTERPRISE_NETWORK.md). Every RUN that reaches the
+# network sources scripts/install/build-network.sh (bind-mounted, never copied into an image) with
+# the extra CA as the BuildKit secret `boss_build_ca` (never a layer, never `docker history`) and
+# a tmpfs for the combined trust bundle. The registry mirrors and the outbound proxy are ARGs
+# declared just before the step that uses them (so a change rebuilds only from there); the
+# wrapper refuses one carrying a credential, because an ARG value is kept in the image history.
+# There is no option to turn TLS verification off.
 ARG _TC_LIST=",${BOSS_TOOLCHAINS},"
 ARG _TC_JAVA_HIT=${_TC_LIST/*,java,*/java}
 ARG TC_JAVA=${_TC_JAVA_HIT/,*/none}
@@ -27,7 +34,12 @@ ARG TC_SECURITY=${_TC_SECURITY_HIT/,*/none}
 # THE SANDBOX HELPER (IDENTITY.md §7.6): the one privileged binary, built here so the runtime image
 # carries no compiler. scripts/sandbox/boss-sandbox-exec.c says what it may do (and nothing more).
 FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS sandbox-helper
-RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
 COPY scripts/sandbox/boss-sandbox-exec.c /tmp/boss-sandbox-exec.c
 RUN gcc -O2 -Wall -Wextra -Werror -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE -pie \
       -o /tmp/boss-sandbox-exec /tmp/boss-sandbox-exec.c
@@ -48,7 +60,12 @@ ARG MAVEN_VERSION=3.9.16
 ARG MAVEN_SHA512=831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6
 ARG GRADLE_VERSION=8.14.6
 ARG GRADLE_SHA256=7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd24
-RUN set -eu; \
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && set -eu; \
     case "${TARGETARCH:-amd64}" in \
       amd64) arch=x64; jdk_sum="$JDK_SHA256_AMD64" ;; \
       arm64) arch=aarch64; jdk_sum="$JDK_SHA256_ARM64" ;; \
@@ -97,7 +114,13 @@ ARG ZAP_VERSION=2.17.0
 ARG ZAP_SHA256=efe799aaa3627db683b43f00c9c210aea0b75c00cc8f0a0f0434d12bb3ddde5a
 COPY engine/boss_engine/security_scan/semgrep-requirements.lock /tmp/semgrep.lock
 COPY engine/boss_engine/security_scan/rulepack.py /tmp/rulepack.py
-RUN set -eu; \
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+ARG BOSS_PIP_INDEX_URL=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && set -eu; \
     case "${TARGETARCH:-amd64}" in \
       amd64) osv_arch=amd64; osv_sum="$OSV_SCANNER_SHA256_AMD64" ;; \
       arm64) osv_arch=arm64; osv_sum="$OSV_SCANNER_SHA256_ARM64" ;; \
@@ -145,7 +168,12 @@ ARG TARGETARCH
 ARG GO_VERSION=1.27.4
 ARG GO_SHA256_AMD64=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
 ARG GO_SHA256_ARM64=3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92
-RUN set -eu; \
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && set -eu; \
     case "${TARGETARCH:-amd64}" in \
       amd64) go_sum="$GO_SHA256_AMD64" ;; \
       arm64) go_sum="$GO_SHA256_ARM64" ;; \
@@ -199,7 +227,6 @@ print("toolchains:", ", ".join(sorted(merged)) or "none")
 PY
 
 FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS python-runtime
-ARG BOSS_NPM_REGISTRY=
 
 COPY EXPORT_CANDIDATE_STATUS.json /tmp/community-export-status.json
 RUN python -c 'import json; assert json.load(open("/tmp/community-export-status.json"))["mechanically_complete"], "Community source export is blocked"'
@@ -228,9 +255,12 @@ COPY --from=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e3395
 # build-essential: a C/C++ toolchain for npm packages that compile on install (better-sqlite3,
 # bcrypt: node-gyp needs make and g++). About 300 MB; agents had been told to avoid such packages
 # (BOSSAPP-515, test_the_build_image_can_compile_native_modules).
-COPY scripts/install/node-build-with-ca.sh /usr/local/libexec/boss-node-build-with-ca
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
 RUN --mount=type=secret,id=boss_build_ca \
-    ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -239,31 +269,50 @@ RUN --mount=type=secret,id=boss_build_ca \
     && addgroup --system boss \
     && adduser --system --ingroup boss --home /home/boss boss \
     && mkdir -p /home/boss/.codex /home/boss/.claude /var/lib/boss/artifacts /var/lib/boss/identity \
-       /var/lib/boss/sandboxes /run/boss-shim \
+       /var/lib/boss/sandboxes /run/boss-shim /var/lib/boss/trust \
     && chown -R boss:boss /home/boss /var/lib/boss/artifacts /var/lib/boss/identity /var/lib/boss/sandboxes /run/boss-shim \
+       /var/lib/boss/trust \
     && chmod 700 /var/lib/boss/identity /home/boss && chmod 750 /var/lib/boss/artifacts \
-    && chmod 711 /var/lib/boss/sandboxes /run/boss-shim \
+    && chmod 711 /var/lib/boss/sandboxes /run/boss-shim && chmod 755 /var/lib/boss/trust \
     && chmod 700 /home/boss/.codex /home/boss/.claude \
-    && sh /usr/local/libexec/boss-node-build-with-ca npm install -g @anthropic-ai/claude-code@2.1.197 @openai/codex@0.158.0 @xai-official/grok@1.0.41 \
-       pnpm@9.15.0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# THE CODING CLIS AND pnpm, FROM A LOCKFILE (scripts/install/cli-lock): every package, the
+# platform binaries included, is checked against the sha512 integrity committed there, so a
+# registry mirror or an intercepting gateway cannot substitute a CLI that runs with model
+# credentials. To change a version: edit cli-lock/package.json, then
+# `npm install --package-lock-only` in that directory, and review the lockfile diff.
+COPY scripts/install/cli-lock/package.json scripts/install/cli-lock/package-lock.json /opt/boss-clis/
+ARG BOSS_NPM_REGISTRY=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && npm ci --prefix /opt/boss-clis --omit=dev --no-audit --no-fund \
+    && for b in claude codex grok pnpm pnpx; do ln -s "/opt/boss-clis/node_modules/.bin/$b" "/usr/local/bin/$b"; done \
+    && for b in claude codex grok pnpm; do test -x "$(readlink -f "/usr/local/bin/$b")"; done \
     && npm cache clean --force \
-    && rm -rf /home/boss/.npm /home/boss/.cache /var/lib/apt/lists/*
+    && rm -rf /root/.npm /home/boss/.npm /home/boss/.cache
 
 # The sandbox helper: executable by the boss group only, with exactly the capabilities it needs.
 # A sandbox uid (61000-61999) is never in the boss group, so it cannot run it.
 COPY --from=sandbox-helper /tmp/boss-sandbox-exec /usr/local/libexec/boss/boss-sandbox-exec
 COPY scripts/sandbox/entrypoint.sh /usr/local/bin/boss-entrypoint
 COPY scripts/install/recovery_guard.py /usr/local/libexec/boss/recovery_guard.py
+COPY scripts/install/with-extra-ca.sh /usr/local/libexec/boss/with-extra-ca
 RUN chown root:boss /usr/local/libexec/boss/boss-sandbox-exec \
     && chmod 0750 /usr/local/libexec/boss/boss-sandbox-exec \
     && setcap cap_setuid,cap_setgid,cap_chown,cap_fowner+ep /usr/local/libexec/boss/boss-sandbox-exec \
-    && chmod 0755 /usr/local/bin/boss-entrypoint /usr/local/libexec/boss/recovery_guard.py
+    && chmod 0755 /usr/local/bin/boss-entrypoint /usr/local/libexec/boss/recovery_guard.py \
+       /usr/local/libexec/boss/with-extra-ca
 # Separate from identity/key state; Compose mounts this root read-only in every backend role.
 RUN mkdir -p /var/lib/boss/recovery && chmod 0755 /var/lib/boss/recovery
 # SCHEDULED SELF-BACKUPS (BOSSAPP-838, services/backup_scheduler.py): pg_dump/pg_restore of the
 # SAME major version as BOSS's Postgres 16 (Debian bookworm ships 15, which refuses a 16 server),
 # from the PostgreSQL project's apt repository; and the backups volume's mount point, boss-owned.
-RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/keyrings/pgdg.asc \
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/keyrings/pgdg.asc \
     && echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
        > /etc/apt/sources.list.d/pgdg.list \
     && apt-get -o Acquire::Retries=5 update \
@@ -274,12 +323,19 @@ RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors https://www.postgres
 
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 COPY apps/worker/requirements.txt /tmp/worker-requirements.txt
-RUN pip install --no-cache-dir --upgrade pip \
+ARG BOSS_PIP_INDEX_URL=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r /tmp/api-requirements.txt -r /tmp/worker-requirements.txt
 
 # Download the browser revision matched to the pinned Python Playwright package.
+ARG BOSS_PLAYWRIGHT_DOWNLOAD_HOST=
 RUN --mount=type=secret,id=boss_build_ca \
-    sh /usr/local/libexec/boss-node-build-with-ca python -m playwright install --with-deps chromium \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && python -m playwright install --with-deps chromium \
     && chmod -R a+rX /opt/pw-browsers \
     && rm -rf /var/lib/apt/lists/*
 
@@ -367,7 +423,9 @@ USER boss
 RUN python -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); b.close(); p.stop()'
 RUN grok --version >/dev/null
 
-# Non-API roles check the common hold before importing any application code.
+# Non-API roles check the common hold before importing any application code. The guard (and the
+# API's boss-entrypoint) then start the role through /usr/local/libexec/boss/with-extra-ca: the
+# install's enterprise network (extra CA, outbound proxy) for everything the role runs.
 ENTRYPOINT ["python3", "/usr/local/libexec/boss/recovery_guard.py"]
 
 FROM python-runtime AS api
@@ -403,18 +461,25 @@ EXPOSE 8765 8770 8771
 CMD ["python", "-m", "tools.mcp_tools_mux"]
 
 FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS web-builder
-ARG BOSS_NPM_REGISTRY=
 WORKDIR /app
-COPY scripts/install/node-build-with-ca.sh /usr/local/libexec/boss-node-build-with-ca
 COPY EXPORT_CANDIDATE_STATUS.json /tmp/community-export-status.json
 RUN node -e 'if (!require("/tmp/community-export-status.json").mechanically_complete) throw Error("Community source export is blocked")'
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+ARG BOSS_NPM_REGISTRY=
+COPY scripts/install/cli-lock/pnpm/package.json scripts/install/cli-lock/pnpm/package-lock.json /opt/boss-pnpm/
 RUN --mount=type=secret,id=boss_build_ca \
-    sh /usr/local/libexec/boss-node-build-with-ca npm install --global pnpm@9.15.0
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && npm ci --prefix /opt/boss-pnpm --omit=dev --no-audit --no-fund \
+    && ln -s /opt/boss-pnpm/node_modules/.bin/pnpm /usr/local/bin/pnpm && pnpm --version
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json ./apps/web/package.json
 COPY packages/api-client/package.json ./packages/api-client/package.json
 RUN --mount=type=secret,id=boss_build_ca \
-    sh /usr/local/libexec/boss-node-build-with-ca pnpm install --frozen-lockfile
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && pnpm install --frozen-lockfile
 
 ARG NEXT_PUBLIC_BOSS_API_URL=
 ARG NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
@@ -425,11 +490,11 @@ COPY packages/api-client ./packages/api-client
 RUN test -n "$NEXT_PUBLIC_BOSS_API_URL" \
     || { echo 'NEXT_PUBLIC_BOSS_API_URL is required for the Community web build' >&2; exit 1; }
 RUN --mount=type=secret,id=boss_build_ca \
-    sh /usr/local/libexec/boss-node-build-with-ca pnpm --filter boss-web build
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && pnpm --filter boss-web build
 
 FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS web
-ARG BOSS_NPM_REGISTRY=
-COPY scripts/install/node-build-with-ca.sh /usr/local/libexec/boss-node-build-with-ca
 ARG NEXT_PUBLIC_BOSS_API_URL=
 ARG NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
 # Only a host whose network/SSO already decides who gets in builds with "network"
@@ -441,8 +506,16 @@ ENV NODE_ENV=production \
     NEXT_PUBLIC_BOSS_API_URL=$NEXT_PUBLIC_BOSS_API_URL \
     NEXT_PUBLIC_BOSS_PROJECT_ID=$NEXT_PUBLIC_BOSS_PROJECT_ID
 WORKDIR /app
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+ARG BOSS_NPM_REGISTRY=
+COPY scripts/install/cli-lock/pnpm/package.json scripts/install/cli-lock/pnpm/package-lock.json /opt/boss-pnpm/
 RUN --mount=type=secret,id=boss_build_ca \
-    sh /usr/local/libexec/boss-node-build-with-ca npm install --global pnpm@9.15.0 \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && npm ci --prefix /opt/boss-pnpm --omit=dev --no-audit --no-fund \
+    && ln -s /opt/boss-pnpm/node_modules/.bin/pnpm /usr/local/bin/pnpm && pnpm --version \
+    && npm cache clean --force && rm -rf /root/.npm \
     && addgroup --system boss \
     && adduser --system --ingroup boss boss
 COPY --chown=boss:boss LICENSE ./LICENSE

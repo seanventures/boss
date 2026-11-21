@@ -4,23 +4,45 @@ A sandboxed process (scripts/sandbox/entrypoint.sh) can reach loopback, the BOSS
 boss-egress, nothing else. Its model calls (the coding CLI), package installs and browser
 downloads go through here as `HTTPS_PROXY=http://egress:8091`:
 
-* CONNECT only, to port 443 only, to a host on the allowlist (exact names, or `*.suffix`);
+* CONNECT only, to a host on the allowlist (exact names, or `*.suffix`), on port 443 unless the
+  entry names another port (`host:8443`);
 * the name is resolved HERE and every address must be public: an allowlisted name that resolves
   to the database, the API, a link-local metadata service or any private range is refused, so the
-  allowlist can never become a way back into BOSS's own network;
+  allowlist can never become a way back into BOSS's own network. The one opt-in exception is
+  BOSS_EGRESS_PRIVATE_ALLOW: exact host names (an internal package registry) that may resolve to
+  a private address, still never to loopback, link-local (cloud metadata), multicast, or one of
+  this container's own networks (where BOSS's services live);
 * the tunnel is opaque TLS: no MITM, no CA to inject, nothing decrypted.
 
-`BOSS_EGRESS_CONNECT_ALLOW` replaces the default allowlist (comma-separated); GitHub is never on
-it — GitHub goes through the credential-injecting proxy, under the run's rules.
+THE ALLOWLIST (docs/community/ENTERPRISE_NETWORK.md) is the built-in hosts below, PLUS the hosts
+of the registries the operator configured (BOSS_NPM_REGISTRY, BOSS_PIP_INDEX_URL, BOSS_GOPROXY,
+BOSS_MAVEN_MIRROR, BOSS_PLAYWRIGHT_DOWNLOAD_HOST: enterprise_network.registry_endpoints), PLUS
+`BOSS_EGRESS_CONNECT_ALLOW` (comma-separated; it ADDS to the built-in list. It used to replace
+it, so a missed model host silently broke model calls). `BOSS_EGRESS_CONNECT_DEFAULTS=off` drops
+the built-in list for an operator who wants only their own. GitHub is never on it — GitHub goes
+through the credential-injecting proxy, under the run's rules.
+
+A REFUSAL SAYS WHY, IN THE TOOL'S OWN ERROR. The 403's reason phrase names the host and the
+setting to change; npm, pip and Go print the reason phrase (npm otherwise says "E403 forbidden by
+your security policy", which reads exactly like a registry token problem). It is logged with the
+host, port and reason.
+
+AN UPSTREAM PROXY (BOSS_UPSTREAM_PROXY) is used for every allowed host that is not in
+BOSS_UPSTREAM_NO_PROXY: the tunnel is chained with a CONNECT to it, for networks with no direct
+route out. A name the company DNS cannot resolve is then left to the proxy to resolve; a name it
+does resolve is still held to the address rules above.
 """
 from __future__ import annotations
 
 import ipaddress
 import logging
 import os
+import re
 import socket
+import ssl
+import struct
 import threading
-from typing import Iterable, Optional
+from typing import Iterable, NamedTuple, Optional, Union
 
 log = logging.getLogger("boss.egress.connect")
 
@@ -56,6 +78,10 @@ TOOLCHAIN_ALLOW = {
     "go": ("proxy.golang.org", "sum.golang.org"),
 }
 
+ALLOW_ENV = "BOSS_EGRESS_CONNECT_ALLOW"
+DEFAULTS_ENV = "BOSS_EGRESS_CONNECT_DEFAULTS"
+PRIVATE_ENV = "BOSS_EGRESS_PRIVATE_ALLOW"
+
 
 def toolchain_hosts() -> tuple[str, ...]:
     """The hosts of the opt-in toolchains this image carries (none when the manifest is absent)."""
@@ -90,13 +116,43 @@ def _model_hosts() -> tuple[str, ...]:
     return MODEL_HOSTS
 
 
-def allowlist() -> tuple[str, ...]:
-    raw = (os.environ.get("BOSS_EGRESS_CONNECT_ALLOW") or "").strip()
-    hosts = (tuple(h.strip().lower() for h in raw.split(",") if h.strip()) if raw
-             else DEFAULT_ALLOW + toolchain_hosts())
+def _defaults_on() -> bool:
+    return (os.environ.get(DEFAULTS_ENV) or "on").strip().lower() not in ("off", "0", "false", "no")
+
+
+def _enterprise():
+    from boss_engine.services import enterprise_network
+
+    return enterprise_network
+
+
+class Rule(NamedTuple):
+    pattern: str            # exact host or *.suffix
+    port: int               # the one port this rule opens (443 unless the entry named one)
+    private: bool = False   # BOSS_EGRESS_PRIVATE_ALLOW: may resolve to a private address
+
+
+def allow_rules() -> tuple[Rule, ...]:
+    """Every rule the fence applies, from all four sources (see the module docstring)."""
+    rules: list[Rule] = []
+    if _defaults_on():
+        rules += [Rule(h, 443) for h in DEFAULT_ALLOW + toolchain_hosts()]
+    try:
+        en = _enterprise()
+        rules += [Rule(h, p) for h, p in en.registry_endpoints(os.environ)]
+        rules += [Rule(h, p or 443) for h, p in en.allow_entries(os.environ, ALLOW_ENV)]
+        rules += [Rule(h, p or 443, True) for h, p in en.allow_entries(os.environ, PRIVATE_ENV)]
+    except Exception as exc:  # noqa: BLE001 — fail closed: only the built-in list
+        log.warning("could not read the enterprise network settings; built-in hosts only: %s", exc)
     if strict_secrets():
-        hosts = tuple(h for h in hosts if not _matches(h, _model_hosts()) and h not in _model_hosts())
-    return hosts
+        models = _model_hosts()
+        rules = [r for r in rules if not _matches(r.pattern, models) and r.pattern not in models]
+    return tuple(dict.fromkeys(rules))
+
+
+def allowlist() -> tuple[str, ...]:
+    """The allowed host patterns (any port)."""
+    return tuple(dict.fromkeys(r.pattern for r in allow_rules()))
 
 
 def _matches(host: str, patterns: Iterable[str]) -> bool:
@@ -109,13 +165,50 @@ def _matches(host: str, patterns: Iterable[str]) -> bool:
     return False
 
 
-def host_allowed(host: str) -> bool:
-    return _matches(host, allowlist()) and not _matches(host, NEVER)
+def _rules_for(host: str) -> list[Rule]:
+    if _matches(host, NEVER):
+        return []
+    return [r for r in allow_rules() if _matches(host, (r.pattern,))]
+
+
+def host_allowed(host: str, port: int = 443) -> bool:
+    return any(r.port == port for r in _rules_for(host))
 
 
 def _public(addr: str) -> bool:
     ip = ipaddress.ip_address(addr)
     return ip.is_global and not ip.is_multicast
+
+
+def own_networks() -> list[ipaddress.IPv4Network]:
+    """This container's directly attached networks (where BOSS's own services are reachable),
+    read from the kernel's routing table exactly as the sandbox fence reads them."""
+    nets: list[ipaddress.IPv4Network] = []
+    try:
+        with open("/proc/net/route") as fh:
+            next(fh)
+            for line in fh:
+                f = line.split()
+                dest, mask = int(f[1], 16), int(f[7], 16)
+                if dest == 0 or mask == 0:
+                    continue
+                nets.append(ipaddress.ip_network(
+                    f"{socket.inet_ntoa(struct.pack('<I', dest))}/{bin(mask).count('1')}", strict=False))
+    except (OSError, ValueError, StopIteration):
+        pass
+    return nets
+
+
+def _private_target_ok(addr: str) -> bool:
+    """A private address an opted-in internal host may use: never loopback, link-local (the cloud
+    metadata service), multicast, unspecified or reserved, never one of this container's own
+    networks (BOSS's database, API and other services)."""
+    ip = ipaddress.ip_address(addr)
+    if getattr(ip, "ipv4_mapped", None):
+        ip = ip.ipv4_mapped
+    if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved:
+        return False
+    return not any(ip in net for net in own_networks())
 
 
 def resolve_public(host: str, port: int) -> Optional[tuple]:
@@ -145,20 +238,129 @@ def parse_connect(head: bytes) -> Optional[tuple[str, int]]:
     return host.lower(), int(port)
 
 
-def decide(head: bytes) -> tuple[Optional[tuple], str]:
-    """(address to dial, "") or (None, reason)."""
+class Upstream(NamedTuple):
+    """Chain this tunnel through the operator's proxy (BOSS_UPSTREAM_PROXY)."""
+    proxy_host: str
+    proxy_port: int
+    tls: bool
+    host: str
+    port: int
+
+
+Route = Union[tuple, Upstream]
+
+
+def _upstream_for(host: str) -> Optional[Upstream]:
+    raw = (os.environ.get("BOSS_UPSTREAM_PROXY") or "").strip()
+    if not raw:
+        return None
+    try:
+        en = _enterprise()
+        hp = en.upstream_proxy(os.environ)
+        if hp is None or en.bypasses_proxy(host, os.environ):
+            return None
+    except Exception as exc:  # noqa: BLE001 — a refused proxy URL: dial directly, say so
+        log.warning("BOSS_UPSTREAM_PROXY is not usable (%s); dialling directly", exc)
+        return None
+    return Upstream(hp[0], hp[1], raw.lower().startswith("https://"), host, 0)
+
+
+def decide(head: bytes) -> tuple[Optional[Route], str]:
+    """(where to dial, "") or (None, reason). Reasons: not_a_connect, host_not_allowed,
+    port_not_allowed, unresolvable, not_a_public_address."""
     target = parse_connect(head)
     if target is None:
         return None, "not_a_connect"
     host, port = target
-    if port != 443:
-        return None, "port_not_allowed"
-    if not host_allowed(host):
+    rules = _rules_for(host)
+    if not rules:
         return None, "host_not_allowed"
-    info = resolve_public(host, port)
-    if info is None:
+    rules = [r for r in rules if r.port == port]
+    if not rules:
+        return None, "port_not_allowed"
+    private_ok = any(r.private for r in rules)
+    upstream = _upstream_for(host)
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError:
+        infos = []
+    if not infos:
+        # The company DNS may not resolve outside names on a proxy-only network: the proxy does.
+        if upstream is not None:
+            return upstream._replace(port=port), ""
+        return None, "unresolvable"
+    for info in infos:
+        addr = info[4][0]
+        if _public(addr):
+            continue
+        if private_ok and _private_target_ok(addr):
+            continue
         return None, "not_a_public_address"
-    return info, ""
+    if upstream is not None:
+        return upstream._replace(port=port), ""
+    return infos[0], ""
+
+
+_SAFE_HOST = re.compile(r"[^a-z0-9.*-]")
+
+
+def refusal_reason(host: str, port: int, reason: str) -> str:
+    """The 403's reason phrase: ASCII, one line, names the host and the setting to change."""
+    host = _SAFE_HOST.sub("", host.lower())[:200] or "this host"
+    where = host if port == 443 else f"{host}:{port}"
+    fence = "Blocked by BOSS network fence"
+    if reason == "host_not_allowed" and _matches(host, NEVER):
+        return f"{fence}: {host} is reached through BOSS's GitHub proxy, not this tunnel"
+    if reason == "host_not_allowed":
+        return (f"{fence}: {host} is not on the egress allowlist. An operator can add {where} "
+                "to BOSS_EGRESS_CONNECT_ALLOW in .env (see docs/community/ENTERPRISE_NETWORK.md)")
+    if reason == "port_not_allowed":
+        return (f"{fence}: port {port} is not open for {host}. An operator can add {where} "
+                "to BOSS_EGRESS_CONNECT_ALLOW in .env")
+    if reason == "not_a_public_address":
+        return (f"{fence}: {host} resolves to a private address. If it is an internal registry, "
+                f"an operator can add {where} to BOSS_EGRESS_PRIVATE_ALLOW in .env")
+    if reason == "unresolvable":
+        return (f"{fence}: {host} does not resolve from BOSS. Check DNS, or set "
+                "BOSS_UPSTREAM_PROXY in .env if this network only reaches out through a proxy")
+    return f"{fence}: not a CONNECT request"
+
+
+def _refuse(client: socket.socket, status: str, phrase: str) -> None:
+    body = (phrase + "\n").encode("ascii", "replace")
+    client.sendall(f"HTTP/1.1 {status} {phrase}\r\nContent-Type: text/plain\r\n"
+                   f"X-Boss-Fence: refused\r\nContent-Length: {len(body)}\r\n"
+                   "Connection: close\r\n\r\n".encode("ascii", "replace") + body)
+
+
+def _peer(client: socket.socket) -> str:
+    try:
+        return str(client.getpeername()[0])
+    except (OSError, IndexError):
+        return "?"
+
+
+def _dial_upstream(route: Upstream) -> tuple[Optional[socket.socket], bytes, str]:
+    """Open the chained tunnel. (socket, bytes already read past the proxy's answer, "") or
+    (None, b"", the proxy's status line)."""
+    sock = socket.create_connection((route.proxy_host, route.proxy_port), timeout=30)
+    if route.tls:
+        sock = ssl.create_default_context().wrap_socket(sock, server_hostname=route.proxy_host)
+    target = f"{route.host}:{route.port}"
+    sock.sendall(f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n".encode("ascii"))
+    answer = b""
+    while b"\r\n\r\n" not in answer and len(answer) < MAX_HEADER:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        answer += chunk
+    head, _, rest = answer.partition(b"\r\n\r\n")
+    status = head.split(b"\r\n", 1)[0].decode("latin-1", "replace")
+    parts = status.split(" ", 2)
+    if len(parts) < 2 or parts[1] != "200":
+        sock.close()
+        return None, b"", status or "no answer"
+    return sock, rest, ""
 
 
 def _pipe(src: socket.socket, dst: socket.socket) -> None:
@@ -187,16 +389,31 @@ def handle(client: socket.socket) -> None:
             if not chunk:
                 return
             head += chunk
-        info, reason = decide(head)
-        if info is None:
-            log.info("connect refused: %s", reason)
-            client.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        route, reason = decide(head)
+        target = parse_connect(head) or ("", 0)
+        if route is None:
+            log.warning("connect refused: %s host=%s port=%s peer=%s",
+                        reason, target[0] or "-", target[1] or "-", _peer(client))
+            _refuse(client, "403", refusal_reason(target[0], target[1], reason))
             return
-        upstream = socket.socket(info[0], info[1], info[2])
-        upstream.settimeout(30)
-        upstream.connect(info[4])
-        client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         rest = head.split(b"\r\n\r\n", 1)[1]
+        if isinstance(route, Upstream):
+            upstream, early, status = _dial_upstream(route)
+            if upstream is None:
+                log.warning("connect failed: upstream proxy said %r host=%s port=%s peer=%s",
+                            status[:80], route.host, route.port, _peer(client))
+                _refuse(client, "502", f"BOSS egress: the upstream proxy (BOSS_UPSTREAM_PROXY) "
+                        f"refused {_SAFE_HOST.sub('', route.host)}:{route.port}: "
+                        f"{status[:80].encode('ascii', 'replace').decode()}")
+                return
+        else:
+            upstream = socket.socket(route[0], route[1], route[2])
+            upstream.settimeout(30)
+            upstream.connect(route[4])
+            early = b""
+        client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        if early:
+            client.sendall(early)
         if rest:
             upstream.sendall(rest)
         client.settimeout(None)
@@ -215,6 +432,21 @@ def handle(client: socket.socket) -> None:
             pass
 
 
+def explain(entries: Iterable[str]) -> list[str]:
+    """What the fence would do with each host[:port] (boss doctor's enterprise check)."""
+    out = []
+    for entry in entries:
+        host, _, port = entry.partition(":")
+        port_n = int(port) if port.isdigit() else 443
+        route, reason = decide(f"CONNECT {host}:{port_n} HTTP/1.1\r\n\r\n".encode("ascii", "replace"))
+        if route is None:
+            out.append(f"bad {refusal_reason(host, port_n, reason)}")
+        else:
+            via = " via the upstream proxy" if isinstance(route, Upstream) else ""
+            out.append(f"ok {host}:{port_n} is allowed{via}")
+    return out
+
+
 def serve_forever(host: str, port: int) -> None:  # pragma: no cover — exercised by the A51 container test
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -223,3 +455,12 @@ def serve_forever(host: str, port: int) -> None:  # pragma: no cover — exercis
     while True:
         conn, _ = srv.accept()
         threading.Thread(target=handle, args=(conn,), daemon=True).start()
+
+
+if __name__ == "__main__":  # pragma: no cover — `boss doctor` runs it inside the egress container
+    import sys
+
+    if sys.argv[1:2] == ["explain"]:
+        targets = sys.argv[2:] or [f"{h}:{p}" for h, p in _enterprise().registry_endpoints(os.environ)]
+        for line in explain(targets):
+            print(line)

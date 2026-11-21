@@ -33,6 +33,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlsplit
+from xml.sax.saxutils import escape as xml_escape
 
 log = logging.getLogger("boss.toolchains")
 
@@ -231,15 +232,21 @@ def sandbox_env(home: Path | str) -> dict[str, str]:
     download a go.mod `toolchain` line asks for; a module cache the run can delete."""
     if not has("go"):
         return {}
+    from .enterprise_network import go_environment
+
     home = str(home)
     return {"GOPATH": f"{home}/go", "GOMODCACHE": f"{home}/go/pkg/mod",
-            "GOCACHE": f"{home}/.cache/go-build", "GOPROXY": GOPROXY, "GOSUMDB": GOSUMDB,
+            "GOCACHE": f"{home}/.cache/go-build",
             "GOTOOLCHAIN": "local", "GOFLAGS": "-modcacherw",
             # Nothing skips the proxy or the checksum database, whatever a project's own
             # environment or go.work says. Empty, not unset: an empty value overrides go env -w.
             # Not -mod=readonly: building a Go change means `go get` / `go mod tidy` updating
             # go.mod and go.sum, and every added module is still checked against GOSUMDB.
-            **{name: "" for name in GO_PRIVATE_VARS}}
+            **{name: "" for name in GO_PRIVATE_VARS},
+            # The operator's module proxy and checksum database (BOSS_GOPROXY, BOSS_GOSUMDB) when
+            # set, else the public ones; BOSS_GONOSUMDB is the operator's own list of internal
+            # module paths (still fetched through the proxy, never directly from a VCS host).
+            **go_environment(os.environ, default_proxy=GOPROXY, default_sumdb=GOSUMDB)}
 
 
 #: The variables that would let a module skip GOPROXY or GOSUMDB (or fetch over plain HTTP).
@@ -341,11 +348,20 @@ def _proxy_host_port(proxy_url: str) -> Optional[tuple[str, int]]:
 NON_PROXY = "localhost|127.0.0.1|[::1]|api|egress"
 
 
-def maven_settings_xml(host: str, port: int) -> str:
+def maven_settings_xml(host: str, port: int, mirror: str = "") -> str:
+    """Maven's settings for a sandboxed run. `mirror` (BOSS_MAVEN_MIRROR, already validated:
+    https, no credentials) replaces every remote repository a project names."""
+    mirrors = ""
+    if mirror:
+        mirrors = ("  <mirrors>\n"
+                   "    <mirror><id>boss-enterprise-mirror</id><mirrorOf>*</mirrorOf>"
+                   f"<url>{xml_escape(mirror)}</url></mirror>\n"
+                   "  </mirrors>\n")
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         "<!-- Written by BOSS for this sandboxed run: every download goes through boss-egress. -->\n"
         '<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0">\n'
+        f"{mirrors}"
         "  <proxies>\n"
         f"    <proxy><id>boss-egress</id><active>true</active><protocol>https</protocol>"
         f"<host>{host}</host><port>{port}</port><nonProxyHosts>{NON_PROXY}</nonProxyHosts></proxy>\n"
@@ -355,12 +371,32 @@ def maven_settings_xml(host: str, port: int) -> str:
         "</settings>\n")
 
 
-def gradle_properties(host: str, port: int) -> str:
+def gradle_properties(host: str, port: int, trust_store: str = "") -> str:
+    trust = (f"systemProp.javax.net.ssl.trustStore={trust_store}\n"
+             "systemProp.javax.net.ssl.trustStorePassword=changeit\n") if trust_store else ""
     return ("# Written by BOSS for this sandboxed run: every download goes through boss-egress.\n"
             f"systemProp.https.proxyHost={host}\nsystemProp.https.proxyPort={port}\n"
             f"systemProp.http.proxyHost={host}\nsystemProp.http.proxyPort={port}\n"
             f"systemProp.http.nonProxyHosts={NON_PROXY}\n"
+            f"{trust}"
             "org.gradle.daemon=false\n")
+
+
+#: The JVM trust store with the install's extra CA added (scripts/install/with-extra-ca.sh
+#: writes it at container start when BOSS_EXTRA_CA_PEM_B64 is set and the image has a JDK).
+#: Java ignores SSL_CERT_FILE, so Maven and Gradle are pointed at it in their own config.
+JAVA_TRUST_STORE_ENV = "BOSS_JAVA_TRUST_STORE"
+
+
+def java_trust_store() -> str:
+    path = (os.environ.get(JAVA_TRUST_STORE_ENV) or "").strip()
+    return path if path and os.path.isfile(path) else ""
+
+
+def mavenrc(trust_store: str) -> str:
+    return ("# Written by BOSS for this sandboxed run: the install's extra CA for Maven's JVM.\n"
+            f'MAVEN_OPTS="$MAVEN_OPTS -Djavax.net.ssl.trustStore={trust_store} '
+            '-Djavax.net.ssl.trustStorePassword=changeit"\n')
 
 
 def _mkdirs(base: Path, rel: str) -> Path:
@@ -383,8 +419,14 @@ def write_proxy_config(home: Path, proxy_url: Optional[str]) -> bool:
     hp = _proxy_host_port(proxy_url)
     if hp is None:
         return False
-    for rel, text in ((".m2/settings.xml", maven_settings_xml(*hp)),
-                      (".gradle/gradle.properties", gradle_properties(*hp))):
+    from .enterprise_network import maven_mirror
+
+    trust = java_trust_store()
+    files = [(".m2/settings.xml", maven_settings_xml(*hp, mirror=maven_mirror(os.environ))),
+             (".gradle/gradle.properties", gradle_properties(*hp, trust_store=trust))]
+    if trust:
+        files.append((".mavenrc", mavenrc(trust)))
+    for rel, text in files:
         target = _mkdirs(home, str(Path(rel).parent)) / Path(rel).name
         target.write_text(text, encoding="utf-8")
         os.chmod(target, 0o644)

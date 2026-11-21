@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Optional
 
 from .agent_env import agent_environment
+from .enterprise_network import CA_ENV_KEYS, PACKAGE_ENV_KEYS, PROXY_ENV_KEYS
 from . import owned_process
 
 WORKSPACE_ROOT = Path(os.getenv("BOSS_AGENT_WORKSPACE_ROOT", "/tmp/boss-agent-ws"))
@@ -49,8 +50,8 @@ _SHELL_ENV_KEYS = frozenset({
     "HOSTNAME", "CI", "LANG", "LC_ALL", "LC_CTYPE", "SSL_CERT_FILE",
     "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "CURL_CA_BUNDLE",
     "GIT_TERMINAL_PROMPT", "npm_config_cache", "PLAYWRIGHT_BROWSERS_PATH",
-    "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "npm_config_registry", "npm_config_strict_ssl",
-})
+    "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
+}) | frozenset(PACKAGE_ENV_KEYS) | frozenset(CA_ENV_KEYS) | frozenset(PROXY_ENV_KEYS)
 
 
 def _shell_environment(workspace: Path) -> dict[str, str]:

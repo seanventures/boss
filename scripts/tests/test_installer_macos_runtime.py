@@ -39,17 +39,22 @@ install_vm_deps
 
 def test_stopped_macos_runtime_reports_start_instructions_before_sudo_fallback():
     source = (ROOT / "install.sh").read_text()
+    hint = "boss_docker_unavailable_hint() {" + source.split("boss_docker_unavailable_hint() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
     check = source.split("if ! docker info >/dev/null 2>&1; then", 1)[1]
     check = check.split('ui_ok "Docker daemon is running"', 1)[0]
     script = """
 OS=Darwin
-docker() { return 1; }
+uname() { echo Darwin; }
+docker() { if [ "$1" = context ]; then echo colima-boss; return 0; fi; return 1; }
 die() { printf '%s\\n' "$*"; exit 1; }
 boss_sudo_scope_safe() { echo unexpected-sudo-fallback; return 1; }
+""" + hint + """
 if ! docker info >/dev/null 2>&1; then
 """ + check
     result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=5)
+    output = result.stdout + result.stderr
     assert result.returncode == 1
-    assert "colima start boss" in result.stdout
-    assert "docker context ls" in result.stdout
-    assert "unexpected-sudo-fallback" not in result.stdout
+    assert "colima start <profile>" in output and "Docker Desktop" in output
+    assert "(colima-boss)" in output
+    assert "docker context ls" in output
+    assert "unexpected-sudo-fallback" not in output

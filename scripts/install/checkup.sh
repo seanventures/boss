@@ -371,6 +371,29 @@ else
   ok "sharing: daily heartbeat to the collector in .env — opt out in Govern › Sharing or BOSS_TELEMETRY=off"
 fi
 
+# 10. THE ENTERPRISE NETWORK (docs/community/ENTERPRISE_NETWORK.md): every setting of the block
+# is valid (the rule the installer applies before it saves .env), and the sandbox fence, asked
+# INSIDE boss-egress (its DNS, its allowlist), lets each configured registry through. A registry
+# the fence refuses fails every sandboxed install with a 403, so it is a FAIL, named by host.
+_enterprise="$HERE/../../engine/boss_engine/services/enterprise_network.py"
+if [ -f "$_enterprise" ] && [ -f "$ENV_FILE" ]; then
+  while IFS= read -r _line; do
+    case "$_line" in
+      ok\ *) ok "${_line#ok }" ;;
+      bad\ *) bad "${_line#bad }" enterprise_network ;;
+    esac
+  done < <(python3 "$_enterprise" summary "$ENV_FILE" 2>/dev/null)
+  if [ "${#DOCKER[@]}" -gt 0 ] &&
+     "${DOCKER[@]}" ps --format '{{.Names}}' 2>/dev/null | grep -qx "${STACK}-egress-1"; then
+    while IFS= read -r _line; do
+      case "$_line" in
+        ok\ *) ok "fence: ${_line#ok }" ;;
+        bad\ *) bad "fence: ${_line#bad }" enterprise_network ;;
+      esac
+    done < <("${DOCKER[@]}" exec "${STACK}-egress-1" python -m apps.egress.boss_egress.connect explain 2>/dev/null)
+  fi
+fi
+
 printf "\n"
 if [ "$fail" -ne 0 ]; then printf "  ${R}${B}Not ready.${N} Fix the FAIL lines above, then run this again.\n\n"
 elif [ "$warns" -eq 0 ]; then printf "  ${G}${B}BOSS is ready.${N}  Mission Control: %s\n\n" "$CONSOLE_URL"
@@ -421,6 +444,7 @@ has env_quote && MANUAL+=(".env line $_env_bad: close the quote (or remove the l
 has console_loopback && MANUAL+=("console address: rebuild web for its public address — scripts/install/README.md (public URL)")
 has chat_silent && MANUAL+=("models: ${BOSS_COMMAND:-boss} connect (or Setup) to sign the model in again")
 has repository && MANUAL+=("repository: Setup › Test access, then fix what it names")
+has enterprise_network && MANUAL+=("enterprise network: fix the setting named above in .env, then ${BOSS_COMMAND:-boss} upgrade — docs/community/ENTERPRISE_NETWORK.md")
 has sandbox_fence && MANUAL+=("sandbox: docs/community/SANDBOX.md — turning the fence off is a security choice, never made for you")
 describe() {
   case "$1" in

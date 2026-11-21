@@ -344,7 +344,9 @@ The BOSS source URL the installer uses is not an operator repository binding. Fr
 
 - Fresh VM: Ubuntu 22.04/24.04 or Debian 12/13, 64-bit, with `sudo` or root access
 - Existing Linux/macOS host: `git`, `curl`, running Docker Engine/Desktop and Compose
+- macOS without Docker Desktop: [Colima](../../docs/community/COLIMA.md) (profile sizing, the credential helper, the Docker context the installer saves)
 - Existing distro Docker packages are not removed automatically; upgrade those manually
+- A company network (outbound proxy, TLS inspection, internal npm/PyPI/Go/Maven mirrors, internal hosts for the sandbox fence): [Enterprise network](../../docs/community/ENTERPRISE_NETWORK.md). The installer checks those settings before it saves `.env`, and checks for TLS inspection before it builds
 
 ### Sizing
 

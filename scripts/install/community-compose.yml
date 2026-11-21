@@ -16,6 +16,39 @@ x-boss-logging: &boss-logging
     max-size: ${BOSS_LOG_MAX_SIZE:-50m}
     max-file: "${BOSS_LOG_MAX_FILES:-3}"
 
+# THE ENTERPRISE NETWORK (docs/community/ENTERPRISE_NETWORK.md, engine/boss_engine/services/
+# enterprise_network.py). One block, in every BOSS service built from python-runtime and every
+# image build, so all of them agree: registry mirrors, the outbound proxy, the extra CA, and the
+# sandbox fence's additions. Empty everywhere is a stock install. The installer validates every
+# value before it writes .env (no credential in any URL).
+x-boss-enterprise-env: &boss-enterprise-env
+  # The company's CA, base64 PEM (public, not a secret; the installer writes it from
+  # BOSS_EXTRA_CA_FILE). scripts/install/with-extra-ca.sh adds it to every role's trust.
+  BOSS_EXTRA_CA_PEM_B64: ${BOSS_EXTRA_CA_PEM_B64:-}
+  BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
+  BOSS_PIP_INDEX_URL: ${BOSS_PIP_INDEX_URL:-}
+  BOSS_GOPROXY: ${BOSS_GOPROXY:-}
+  BOSS_GOSUMDB: ${BOSS_GOSUMDB:-}
+  BOSS_GONOSUMDB: ${BOSS_GONOSUMDB:-}
+  BOSS_MAVEN_MIRROR: ${BOSS_MAVEN_MIRROR:-}
+  BOSS_PLAYWRIGHT_DOWNLOAD_HOST: ${BOSS_PLAYWRIGHT_DOWNLOAD_HOST:-}
+  BOSS_UPSTREAM_PROXY: ${BOSS_UPSTREAM_PROXY:-}
+  BOSS_UPSTREAM_NO_PROXY: ${BOSS_UPSTREAM_NO_PROXY:-}
+  # The sandbox fence (apps/egress/boss_egress/connect.py): extra hosts (ADDED to the built-in
+  # list), whether to keep that list, and internal hosts allowed on a private address.
+  BOSS_EGRESS_CONNECT_ALLOW: ${BOSS_EGRESS_CONNECT_ALLOW:-}
+  BOSS_EGRESS_CONNECT_DEFAULTS: ${BOSS_EGRESS_CONNECT_DEFAULTS:-on}
+  BOSS_EGRESS_PRIVATE_ALLOW: ${BOSS_EGRESS_PRIVATE_ALLOW:-}
+
+# What an image build gets (Dockerfile.community, scripts/install/build-network.sh). The extra
+# CA goes as the BuildKit secret boss_build_ca (bottom of this file), never as an argument.
+x-boss-enterprise-build-args: &boss-enterprise-build-args
+  BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
+  BOSS_PIP_INDEX_URL: ${BOSS_PIP_INDEX_URL:-}
+  BOSS_PLAYWRIGHT_DOWNLOAD_HOST: ${BOSS_PLAYWRIGHT_DOWNLOAD_HOST:-}
+  BOSS_UPSTREAM_PROXY: ${BOSS_UPSTREAM_PROXY:-}
+  BOSS_UPSTREAM_NO_PROXY: ${BOSS_UPSTREAM_NO_PROXY:-}
+
 services:
   db:
     # PostgreSQL 16 on Alpine with pgvector and Apache AGE compiled in (db-image/Dockerfile;
@@ -343,7 +376,7 @@ services:
       secrets:
         - boss_build_ca
       args:
-        BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
+        <<: *boss-enterprise-build-args
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
         # Build toolchains (docs/community/TOOLCHAINS.md): java,go unless .env says otherwise (none, or a
@@ -387,6 +420,7 @@ services:
       db:
         condition: service_healthy
     environment:
+      <<: *boss-enterprise-env
       DATABASE_URL: postgresql+psycopg://boss:${BOSS_DB_PASSWORD:?set BOSS_DB_PASSWORD (install.sh generates it; never the old default)}@db:5432/boss
       # Self-fix runs apps/api tests against its OWN disposable database on the same server
       # (created on first use by self_fix_build._api_suite); never the live one.
@@ -395,7 +429,6 @@ services:
       # Where this install's `boss` command lives (empty: the default): the claim page names a
       # second install's own launcher, never plain `boss`, which is the first install there.
       BOSS_BIN_DIR: ${BOSS_BIN_DIR:-}
-      BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
       # BOSS FIXES ITSELF (docs/product/BOSS_FIXES_ITSELF.md §6): the head of the local stack of
       # installed self-fixes over the release (written by the host self-installer; empty = the
       # release as it is), and BOSS's own source, mirrored read-only for its fix builds.
@@ -748,7 +781,7 @@ services:
       secrets:
         - boss_build_ca
       args:
-        BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
+        <<: *boss-enterprise-build-args
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
         # Build toolchains (docs/community/TOOLCHAINS.md): java,go unless .env says otherwise (none, or a
@@ -775,6 +808,7 @@ services:
       api:
         condition: service_healthy
     environment:
+      <<: *boss-enterprise-env
       DATABASE_URL: postgresql+psycopg://boss:${BOSS_DB_PASSWORD:?set BOSS_DB_PASSWORD (install.sh generates it; never the old default)}@db:5432/boss
       # Self-fix runs apps/api tests against its OWN disposable database on the same server
       # (created on first use by self_fix_build._api_suite); never the live one.
@@ -809,7 +843,6 @@ services:
       BOSS_DB_STATEMENT_TIMEOUT_SECONDS: ${BOSS_WORKER_DB_STATEMENT_TIMEOUT_SECONDS:-1800}
       BOSS_CONTROL_PLANE_URL: http://api:8000
       BOSS_WORKER_ID: community-worker-1
-      BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
       # KG P6b: same reasoning as the api service above — the external_agent step refuses to
       # run without a configured Knowledge-Graph MCP endpoint.
       BOSS_KG_MCP_URL: http://kg-mcp:8790/mcp
@@ -1046,7 +1079,7 @@ services:
       secrets:
         - boss_build_ca
       args:
-        BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
+        <<: *boss-enterprise-build-args
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
         # Build toolchains (docs/community/TOOLCHAINS.md): java,go unless .env says otherwise (none, or a
@@ -1067,6 +1100,7 @@ services:
     mem_limit: 512m
     oom_score_adj: -100
     environment:
+      <<: *boss-enterprise-env
       BOSS_EDITION: community
       BOSS_DOC_RENDER_DIR: /var/lib/boss/artifacts/rendered
       BOSS_ARTIFACTS_DIR: /var/lib/boss/artifacts
@@ -1099,7 +1133,7 @@ services:
       secrets:
         - boss_build_ca
       args:
-        BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
+        <<: *boss-enterprise-build-args
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
         BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-java,go}
@@ -1115,6 +1149,7 @@ services:
       db:
         condition: service_healthy
     environment:
+      <<: *boss-enterprise-env
       DATABASE_URL: postgresql+psycopg://boss:${BOSS_DB_PASSWORD:?set BOSS_DB_PASSWORD (install.sh generates it; never the old default)}@db:5432/boss
       BOSS_EDITION: community
       # Not on loopback, so the server refuses to start without it (crash-looped 210 times on
@@ -1140,7 +1175,7 @@ services:
       secrets:
         - boss_build_ca
       args:
-        BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
+        <<: *boss-enterprise-build-args
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
         # Build toolchains (docs/community/TOOLCHAINS.md): java,go unless .env says otherwise (none, or a
@@ -1160,6 +1195,7 @@ services:
       api:
         condition: service_healthy
     environment:
+      <<: *boss-enterprise-env
       DATABASE_URL: postgresql+psycopg://boss:${BOSS_DB_PASSWORD:?set BOSS_DB_PASSWORD (install.sh generates it; never the old default)}@db:5432/boss
       # Self-fix runs apps/api tests against its OWN disposable database on the same server
       # (created on first use by self_fix_build._api_suite); never the live one.
@@ -1173,7 +1209,6 @@ services:
       BOSS_EGRESS_SERVICE_KEY_FILE: /var/lib/boss/identity/egress-service.key
       BOSS_EGRESS_PORT: "8090"
       BOSS_EGRESS_CONNECT_PORT: "8091"
-      BOSS_EGRESS_CONNECT_ALLOW: ${BOSS_EGRESS_CONNECT_ALLOW:-}
       # STRICT-SECRETS MODE (P8b S10, LLD §3.11): "1" removes the model providers from the
       # CONNECT allowlist, so the only path to a model is the injecting model gateway. Set it
       # on an install whose agents run on strict microVM hosts; the local lane's coding CLIs
@@ -1227,6 +1262,7 @@ services:
       api:
         condition: service_healthy
     environment:
+      <<: *boss-enterprise-env
       DATABASE_URL: postgresql+psycopg://boss:${BOSS_DB_PASSWORD:?set BOSS_DB_PASSWORD (install.sh generates it; never the old default)}@db:5432/boss
       BOSS_EDITION: community
       PYTHONPATH: /app:/app/engine:/app/apps/model-gateway
@@ -1275,7 +1311,7 @@ services:
       secrets:
         - boss_build_ca
       args:
-        BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
+        <<: *boss-enterprise-build-args
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
         BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-java,go}
@@ -1297,6 +1333,7 @@ services:
       api:
         condition: service_healthy
     environment:
+      <<: *boss-enterprise-env
       BOSS_EDITION: community
       BOSS_RUNNER_API_URL: http://api:8000
       BOSS_RUNNER_STATE_DIR: /var/lib/boss/runner
@@ -1335,7 +1372,7 @@ services:
       secrets:
         - boss_build_ca
       args:
-        BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
+        <<: *boss-enterprise-build-args
         # THE PORT IS DECLARED ONCE, ABOVE, AND EVERYTHING DERIVES FROM IT.
         #
         # This defaulted to a literal :8000 while the api publishes on ${BOSS_API_PORT}. An
@@ -1395,8 +1432,10 @@ services:
 # helper reports one it could not as "unlabelled BOSS volume — needs relabel".
 # steward.REBUILDABLE_COMPOSE_VOLUMES lists the rebuildable ones; a guard test keeps both equal.
 secrets:
+  # The extra CA for image builds (BOSS_EXTRA_CA_FILE; BOSS_BUILD_CA_FILE is its earlier name).
+  # Compose reads the file on this machine; /dev/null is an empty secret, which the build ignores.
   boss_build_ca:
-    file: ${BOSS_BUILD_CA_FILE:-/dev/null}
+    file: ${BOSS_EXTRA_CA_FILE:-${BOSS_BUILD_CA_FILE:-/dev/null}}
 
 volumes:
   boss_community_cli_home:

@@ -45,8 +45,14 @@ case "$BSVC_PORT" in
 esac
 MODE="${BOSS_SANDBOX_NETWORK:-enforce}"
 
+# The install's enterprise network (extra CA, outbound proxy: scripts/install/with-extra-ca.sh),
+# for the service and everything it starts. Fixed path in this image; absent, the service starts
+# directly.
+NETWORK_WRAPPER=/usr/local/libexec/boss/with-extra-ca
+[ -x "$NETWORK_WRAPPER" ] || NETWORK_WRAPPER=
+
 if [ "$(id -u)" != "0" ]; then
-  exec "$@"
+  exec $NETWORK_WRAPPER "$@"
 fi
 
 ipv6_unavailable() {
@@ -282,4 +288,4 @@ if [ -n "${BOSS_BUILD_SERVICES_PG_PASSWORD_FILE:-}" ]; then
 fi
 
 exec setpriv --reuid=boss --regid=boss --init-groups --inh-caps=-all \
-  --bounding-set=-all,+setuid,+setgid,+chown,+fowner -- "$@"
+  --bounding-set=-all,+setuid,+setgid,+chown,+fowner -- $NETWORK_WRAPPER "$@"
