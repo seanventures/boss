@@ -1,6 +1,6 @@
 #include <tunables/global>
 
-profile boss-codex flags=(attach_disconnected,mediate_deleted) {
+profile boss-engine flags=(attach_disconnected,mediate_deleted) {
   #include <abstractions/base>
   network,
   capability,
@@ -28,6 +28,6 @@ profile boss-codex flags=(attach_disconnected,mediate_deleted) {
   signal (receive) peer=unconfined,
   signal (receive) peer=runc,
   signal (receive) peer=crun,
-  signal (send,receive) peer=boss-codex,
-  ptrace (trace,tracedby,read,readby) peer=boss-codex,
+  signal (send,receive) peer=boss-engine,
+  ptrace (trace,tracedby,read,readby) peer=boss-engine,
 }

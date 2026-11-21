@@ -108,8 +108,10 @@ containers, disable host AppArmor, or disable Codex's sandbox. Allowing namespac
 and mount operations increases the container's kernel attack surface; review
 the profiles before enabling them, especially on managed laptops.
 
-The seccomp generator extends Moby's default-deny profile pinned at
-`2ab3e516a3b49550c35b5e4511a0a7d136a02c8d` and verifies its SHA-256 before use.
+The seccomp profile (`scripts/sandbox/engine-seccomp.json`) extends Moby's default-deny
+profile pinned at `2ab3e516a3b49550c35b5e4511a0a7d136a02c8d`, vendored in
+`scripts/sandbox/vendor/` with its license; the generator verifies its SHA-256 and never
+fetches anything.
 The AppArmor profile retains the Docker default profile's proc/sys restrictions,
 allowing mounts and pivot_root for the nested sandbox. Source and license:
 https://github.com/moby/profiles (Apache-2.0).
@@ -117,14 +119,13 @@ https://github.com/moby/profiles (Apache-2.0).
 From the checkout, with the BOSS Colima profile running:
 
 ```bash
-mkdir -p "$HOME/.config/boss"
-python3 scripts/sandbox/codex_seccomp.py > "$HOME/.config/boss/codex-seccomp.json"
-colima --profile boss ssh -- sudo tee /etc/apparmor.d/boss-codex < scripts/sandbox/boss-codex.apparmor >/dev/null
-colima --profile boss ssh -- sudo apparmor_parser -r /etc/apparmor.d/boss-codex
+python3 scripts/sandbox/engine_seccomp.py --check   # the committed profile, regenerated offline
+colima --profile boss ssh -- sudo tee /etc/apparmor.d/boss-engine < scripts/sandbox/boss-engine.apparmor >/dev/null
+colima --profile boss ssh -- sudo apparmor_parser -r /etc/apparmor.d/boss-engine
 ```
 
-Set `BOSS_CODEX_SECCOMP_FILE` in the installation's `.env` to that file's absolute
-Mac path (no `~`). `boss start` and other `boss` lifecycle commands then include
+Set `BOSS_CODEX_SECCOMP_FILE` in the installation's `.env` to the absolute Mac path of
+`scripts/sandbox/engine-seccomp.json` in the install (no `~`). `boss start` and other `boss` lifecycle commands then include
 `scripts/install/community-codex-sandbox.yml`. Direct Compose commands must pass
 both `-f scripts/install/community-compose.yml` and
 `-f scripts/install/community-codex-sandbox.yml` with `--env-file .env`. Recreate
@@ -134,7 +135,7 @@ the profiles automatically when a future CLI version needs new syscalls.
 
 Rollback: remove `BOSS_CODEX_SECCOMP_FILE` from `.env`, recreate API and worker
 with the base Compose file, then remove the unused AppArmor profile with
-`colima --profile boss ssh -- sudo apparmor_parser -R /etc/apparmor.d/boss-codex`
+`colima --profile boss ssh -- sudo apparmor_parser -R /etc/apparmor.d/boss-engine`
 and remove its VM file. No host sysctl changes are needed.
 
 ## When Docker is not running
