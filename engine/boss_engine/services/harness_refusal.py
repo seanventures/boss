@@ -44,8 +44,15 @@ _PROVIDER_TRANSPORT = re.compile(
 
 def is_provider_refusal(verdict: Any) -> bool:
     """Only the CLI's own stderr (`transport_text`) is read — never the agent's summary or the
-    verdict's message, which can quote an app's 401 or be cut before the real line."""
-    return bool(_PROVIDER_TRANSPORT.search(getattr(verdict, "transport_text", "") or ""))
+    verdict's message, which can quote an app's 401 or be cut before the real line. A line that
+    names an MCP server or a package registry is never the provider's transport, whatever else
+    it carries: Codex logs an MCP server's 401 through its own client (an enterprise install,
+    2026-11), and that must not mark a working subscription "Sign-in expired"."""
+    from .harness_failures import _NOT_THE_LOGIN
+
+    text = getattr(verdict, "transport_text", "") or ""
+    return any(_PROVIDER_TRANSPORT.search(line) and not _NOT_THE_LOGIN.search(line)
+               for line in text.splitlines())
 
 
 def source_for(engine: str, settings: Any) -> Optional[str]:

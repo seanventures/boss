@@ -569,11 +569,28 @@ class ContractedAgent:
             if copy is not None:
                 shutil.rmtree(copy.parent, ignore_errors=True)
             raise EngineSessionFailed(f"{self.engine} not started: {problem}")
+        # THE ONE TURN PATH (harness_failures.TurnSink): every streaming engine's turns are
+        # checked for the harness answering in a tool's place — its sandbox that cannot start,
+        # an organisation's policy holding a writer to read-only — whatever driver produced
+        # them. A driver that swallowed the sink's error still stops here.
+        from . import harness_failures
+
+        sink = harness_failures.TurnSink(kwargs.get("on_turn"), engine=self.engine,
+                                         writer=not read_only)
+        kwargs["on_turn"] = sink
         try:
             raw = _call(self._inner.run_role, run_prompt, work, kwargs)
+        except harness_failures.HarnessFailure:
+            raise
+        except Exception as exc:
+            if sink.failure is not None:
+                raise sink.failure from exc
+            raise
         finally:
             if copy is not None:
                 shutil.rmtree(copy.parent, ignore_errors=True)
+        if sink.failure is not None:
+            raise sink.failure
         result = normalise_result(raw, engine=self.engine, model=model, caps=caps)
         if kwargs.get("max_budget_usd") is not None:
             # THE CEILING THIS SESSION RAN UNDER, on its result: a session stopped by it says

@@ -569,6 +569,13 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
             Next check {lt.full(entry.next_check_at)}
           </Tip>
         ) : null}
+        {entry?.write_check && entry.write_check.state !== "ok" ? (
+          <Tip tip={entry.write_check.tip || "Whether this login can write where builds run."}
+               className={entry.write_check.state === "cannot_write" ? "su-src-said" : "su-faint"}
+               testid="su-model-write-check">
+            {entry.write_check.label}
+          </Tip>
+        ) : null}
         {capacityWord ? <Tip tip="The capacity this source last reported." className="su-faint">{capacityWord}</Tip> : null}
         <span className="su-spacer" />
         {primary}
@@ -596,6 +603,10 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
           {entry?.next_check_at ? <><dt>Next check</dt><dd>
             <Tip tip={entry.next_check_why ?? "BOSS proves this connection again then; Re-check tries now."}>
               {lt.full(entry.next_check_at)}
+            </Tip></dd></> : null}
+          {entry?.write_check ? <><dt>Write check</dt><dd>
+            <Tip tip={entry.write_check.tip || "Whether this login can write where builds run."}>
+              {entry.write_check.label}
             </Tip></dd></> : null}
           {entry?.scope === "org" ?<><dt>Scope</dt><dd><Tip tip="The org's connection: set once, every project in this org uses it." testid="su-model-scope">All projects</Tip></dd></> : null}
           {entry?.source === "install" ? <><dt>Set by</dt><dd><Tip tip="Set in the server's settings file. Replace here to manage it in BOSS.">The install</Tip></dd></> : null}

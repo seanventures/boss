@@ -1106,6 +1106,21 @@ def connect_coding_agent(
             record["entitlement_recorded"] = True
         except Exception as exc:  # noqa: BLE001 - the agent works either way; say what failed
             record["entitlement_error"] = f"{type(exc).__name__}: {exc}"[:200]
+        if prove and prove_with is None and record["entitlement_recorded"]:
+            # CAN THIS LOGIN WRITE WHERE BUILDS RUN? (engine_policy) The proof above is one
+            # read-only reply; a login whose organisation holds the engine to read-only, or
+            # whose own sandbox cannot start where builds run, passed it and then failed every
+            # build at its first command. One writer session, as a build's writer runs (a
+            # queued job, a build's sandbox uid), says so — Setup shows "Checking…" and then
+            # the result. Connect returns now; it never waits for the check.
+            from . import engine_policy
+
+            try:
+                with connection.begin_nested():      # a failure never poisons the connect
+                    record["engine_check"] = engine_policy.start_check(
+                        connection, project_id, provider, spec.entitlement_source_id, actor)
+            except Exception as exc:  # noqa: BLE001 — the connect stands; say what failed
+                record["engine_check_error"] = f"{type(exc).__name__}: {exc}"[:200]
     return {
         "ok": True,
         "provider": provider,

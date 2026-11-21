@@ -71,6 +71,10 @@ export type ModelEntry = {
   /** Claude Code only: what it runs on — "long-lived subscription token (renews …)" or
    *  "CLI login (expires in X h)". Never a secret. */
   credential?: { kind: "long_lived_token" | "cli_login"; label: string; expires_at: string | null } | null;
+  /** Setup's write check: one writer session where builds run must write a file and run a
+   *  command. "Checking…" while it runs; then whether this login can write there. */
+  write_check?: { state: "checking" | "ok" | "unproven" | "cannot_write" | "not_checked";
+                  label: string; tone: string; tip: string; checked_at?: string | null } | null;
 };
 
 /** Subscriptions: signed_in | needs_sign_in | not_on_server (nothing is pasted any more). Local:

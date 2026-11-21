@@ -385,6 +385,10 @@ def classify_gate_faults(
     seat_of = {"code_review_passed": "review_code", "consistent": "consistency_check",
                "security_clean": "security_check", "no_security_findings": "security_check"}
     for gate in failing:
+        if gate == "written_tests_pass" and verification_target.install_environment_failure(
+                evidence.get("install_failure")):
+            faults[gate] = "HARNESS"
+            continue
         if seat_of.get(gate) in hollow:
             faults[gate] = "HARNESS"
             continue
@@ -4591,13 +4595,15 @@ def write_tests_exhausted_message(*, stronger_lane: bool) -> str:
     if stronger_lane:
         return (
             "Test author produced no test files even after escalating to a frontier "
-            "model — likely an ambiguous task or a repo without a test setup. Review "
-            "the spec/acceptance criteria and retry."
+            "model. No recognized test-file changes were found in the run workspace. "
+            "The cause is not established: inspect the test-author tool output and "
+            "changed paths before retrying. No application test result is available."
         )
     return (
-        "Test author produced no test files. No stronger lane is configured — "
-        "likely an ambiguous task or a repo without a test setup. Review the "
-        "spec/acceptance criteria and retry."
+        "Test author produced no test files. No stronger lane is configured. "
+        "No recognized test-file changes were found in the run workspace. "
+        "The cause is not established: inspect the test-author tool output and "
+        "changed paths before retrying. No application test result is available."
     )
 
 
@@ -7364,14 +7370,33 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         def _install_timeout() -> int:
             return max(300, int(getattr(settings, "sandbox_validation_timeout_seconds", 120) or 120))
 
+        _install_circuit = verification_target.InstallCircuitBreaker()
+
         def _boss_install(app_cwd, prep):
             """BOSS's one install (NPM_INSTALL_CMD), the command every gate runs."""
-            install = sandbox.run(
-                str(prep.get("install_command") or verification_target.NPM_INSTALL_CMD),
-                cwd=str(app_cwd),
+            command = str(prep.get("install_command") or verification_target.NPM_INSTALL_CMD)
+            # BOUNDED RETRIES, KEYED ON THE MANIFEST AND LOCKFILES (InstallCircuitBreaker): a
+            # timeout gets one retry with double the time, a transient network failure one
+            # backoff retry; an environment failure is not re-run on the same files this build.
+            retried_before = len(_install_circuit.retries)
+            install, reused = _install_circuit.run(
+                command, app_cwd,
+                lambda limit=None: sandbox.run(command, cwd=str(app_cwd),
+                                               timeout=limit or _install_timeout()),
                 timeout=_install_timeout(),
             )
-            _emit_cmd("install dependencies", install)
+            if reused:
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.install_retry_suppressed", "boss",
+                               "code_task_run", run_id, {"command": command,
+                               "reason": "prior installation timeout or infrastructure failure "
+                                         "on the same manifest and lockfiles"})
+            else:
+                for retry in _install_circuit.retries[retried_before:]:
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.install_retried", "boss",
+                                   "code_task_run", run_id, {"command": command, **retry})
+                _emit_cmd("install dependencies", install)
             return install
 
         def _qa_static_check(files) -> list[str]:
@@ -8347,6 +8372,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                         "engine"),
                                     "model": (stage_routes.get("write_tests") or {}).get(
                                         "model")})
+            # THE ENGINE COULD NOT RUN (harness_failures): a test author whose sandbox did not
+            # start, or whose organisation's policy held it to read-only, wrote nothing because
+            # it COULD not. That ends the build with the harness verdict and its evidence — never
+            # "no test files", and never the existing suite standing in for tests nobody could
+            # write (an enterprise install, 2026-11: every command died in bubblewrap).
+            _stop_on_harness_failure("write_tests")
             if not test_files and _app_tests:
                 # THE APP'S OWN SUITE STANDS when the test author, given its stronger retry,
                 # still judged no new test file was needed — the repair rule above, for every
@@ -8441,7 +8472,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     emit_event(c, project_id, "code_task.step_exhausted", "boss",
                                "code_task_run", run_id,
                                {"step": "write_tests",
-                                "reason": "no_test_files_after_escalation"})
+                                "reason": ("no_test_files_after_escalation"
+                                           if _tests_escalation["stronger"]
+                                           else "no_test_files_no_stronger_lane")})
                     _release(budget, c, project_id, reservation_id, "no independent tests authored", run_id=run_id)
                 _rescue_pr("the test author produced no test files")
                 with _transaction(engine) as c:
@@ -9032,6 +9065,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                     **escalation_route_record(_before, r2),
                                     "instead": "warm_fix_round"})
             repair_attempts += 1
+            if verification_target.install_environment_failure(_install_fail[0]):
+                break
             # Evidence for the router: the next implement boundary may move up a tier
             # (Smart mode's escalation rules; Fixed mode ignores the ledger).
             stage_router.signal("implement", "tests_failed")
@@ -10555,6 +10590,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                         template_evidence=_tpl_evidence(),
                                         coder_owned_secrets=_coder_owned_secrets())
             _fix_rounds_run = 0
+            if verification_target.install_environment_failure(_install_fail[0]):
+                inrun_max = 0
             if _recheck:
                 inrun_max = 0          # a re-check reports; it never runs a fix round
             # THE LIGHT LANE: at most one fix round below production (quality_bar.fix_rounds).
@@ -11094,6 +11131,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             max_repair_rounds = _quality_bar.fix_rounds(getattr(gates, "bar", _qbar),
                                                         max_repair_rounds)
             gate_faults = classify_gate_faults(failing=failing, evidence=evidence)
+            if verification_target.install_environment_failure(_install_fail[0]):
+                evidence["install_failure"] = _install_fail[0]
+                gate_faults = classify_gate_faults(failing=failing, evidence=evidence)
             # Non-final decomposition slices suppress the PR and advance the chain on
             # completed_no_pr. They must NOT take ship_with_dissent: that path marks the
             # slice completed, skips the deferred-findings follow-up (spawned only after a
@@ -11242,6 +11282,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     fix_round_ran=_fix_rounds_run > 0,
                     open_pr_when_failing=_open_when_failing,
                 )
+            if action == "inconclusive" and verification_target.install_environment_failure(
+                    _install_fail[0]):
+                action = "block"
             if action == "inconclusive":
                 # The checks never finished, so nothing is known about the code. Re-run the
                 # CHECK with an escalated budget — never the coding agent. Bounded; if it is
@@ -11414,6 +11457,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # card a person answers with a reason. Both terminals record it: a PR with
                 # failing checks is one thing, whichever rule let it open.
                 _details = {}
+                if verification_target.install_environment_failure(_install_fail[0]):
+                    _details["written_tests_pass"] = verification_target.install_repair_evidence(
+                        _install_fail[0])[:700]
                 if "app_serves" in failing:
                     _details["app_serves"] = _app_serves_sentence(app_serves_record)[:700]
                 if _blockers:

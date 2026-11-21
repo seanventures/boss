@@ -77,6 +77,9 @@ class ModelEntry(_Open):
     retry_at: Optional[str] = None
     # Claude Code only: {kind: long_lived_token | cli_login, label, expires_at}. Never a secret.
     credential: Optional[dict[str, Any]] = None
+    # Setup's write check (engine_policy.summary): {state: checking | ok | unproven |
+    # cannot_write | not_checked, label, tone, tip, checked_at, writer_mode}.
+    write_check: Optional[dict[str, Any]] = None
 
 
 class Detected(_Open):
