@@ -5743,6 +5743,32 @@ _REASON_COLUMN: dict[str, str] = {"decisions": "resolution_note", "ci_waits": "s
                                   "security_scans": "counts->>'error'"}
 
 
+def deployed_url_of(domains: Any, target_kind: Any = None) -> str:
+    """Where a deployment is live, for a later step's base URL (contract_test, smoke_test).
+
+    A target's first domain — except a CONFIG DIRECTORY's: create_config_target records its
+    health URL there ("http://host:8080/readyz"), so the step after Deploy config got
+    `deployed_url` = the health path and a contract test hit /readyz/v1/payments (laptop
+    2026-11-21, Northgate API onboarding). A config deploy is live at the service that loads
+    the files: the health URL's origin."""
+    if isinstance(domains, str):
+        try:
+            domains = json.loads(domains)
+        except ValueError:
+            domains = [domains]
+    first = next((str(d).strip() for d in (domains or []) if str(d).strip()), "")
+    if not first:
+        return ""
+    url = first if "://" in first else f"http://{first}"
+    if str(target_kind or "").strip().lower() == "config_dir":
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(url)
+        if parts.scheme and parts.netloc:
+            return f"{parts.scheme}://{parts.netloc}"
+    return url
+
+
 def _terminal_evidence(
     connection: Connection, kind: str, awaited_id: str
 ) -> dict[str, Any]:
@@ -5865,18 +5891,14 @@ def _terminal_evidence(
             if not row:
                 return {}
             evidence = {"deployment_id": awaited_id, "deployment_status": row["status"]}
-            domains = connection.execute(
-                text("SELECT domains FROM deployment_targets WHERE id = :t"),
+            target = connection.execute(
+                text("SELECT domains, target_kind FROM deployment_targets WHERE id = :t"),
                 {"t": row["deployment_target_id"]},
-            ).scalar()
-            if isinstance(domains, str):
-                try:
-                    domains = json.loads(domains)
-                except ValueError:
-                    domains = [domains]
-            first = next((str(d) for d in (domains or []) if str(d).strip()), "")
-            if first:
-                evidence["deployed_url"] = first if "://" in first else f"http://{first}"
+            ).mappings().first()
+            url = deployed_url_of(target["domains"] if target else None,
+                                  target["target_kind"] if target else None)
+            if url:
+                evidence["deployed_url"] = url
             return evidence
         if kind == "ci_wait":
             row = connection.execute(
