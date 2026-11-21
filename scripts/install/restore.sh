@@ -220,7 +220,16 @@ import os, sys
 os.link(sys.argv[1], sys.argv[2])
 PY
 OVERRIDE="$INSTALL_DIR/.boss-restore-images.json"
-COMPOSE=("${DOCKER[@]}" compose -p "$PROJECT" -f "$COMPOSE_FILE" -f "$OVERRIDE" --env-file "$INSTALL_DIR/.env" --profile web --profile secrets)
+# The one compose-file resolver (compose_files.sh): adds the engine inner-sandbox overlay when
+# .env opts in, so this path never recreates containers without it. Not offline: that base is
+# the database alone, and the overlay names api, worker and runner.
+BOSS_COMPOSE_FILES=(-f "$COMPOSE_FILE")
+if [[ "$OFFLINE" -eq 0 && -f "$INSTALL_DIR/scripts/install/compose_files.sh" ]]; then
+  # shellcheck source=compose_files.sh
+  source "$INSTALL_DIR/scripts/install/compose_files.sh"
+  boss_compose_files "$INSTALL_DIR" "$INSTALL_DIR/.env" || exit 1
+fi
+COMPOSE=("${DOCKER[@]}" compose -p "$PROJECT" "${BOSS_COMPOSE_FILES[@]}" -f "$OVERRIDE" --env-file "$INSTALL_DIR/.env" --profile web --profile secrets)
 RESTORE_KINDS=(identity artifacts)
 if python3 -c 'import json,sys; sys.exit(0 if "repos.tar" in json.load(open(sys.argv[1]))["files"] else 1)' "$BACKUP/manifest.json"; then
   RESTORE_KINDS+=(repos)

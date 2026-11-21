@@ -1577,10 +1577,25 @@ set_build_metadata
 # parallel limit alone does not prevent a single multi-service build from
 # exporting several large images at once. Keep normal cache/platform behavior.
 # Parse config in memory only: it contains resolved credentials, never log it.
+# ---- compose files ---------------------------------------------------------
+# THE ONE COMPOSE-FILE RESOLVER (scripts/install/compose_files.sh), shared with boss, upgrade,
+# rollback, restore, remote update and the self-fix installer: the base file, plus the engine
+# inner-sandbox overlay when .env opts in (BOSS_ENGINE_INNER_SANDBOX; off by default). Relative
+# paths: this runs in the install directory. Every compose call below reads it as
+# ${COMPOSE_FILES:--f scripts/install/community-compose.yml}, so a block run on its own (tests)
+# still has the base file.
+_compose_files="-f scripts/install/community-compose.yml"
+if [[ -f scripts/install/compose_files.sh ]]; then
+  _compose_files="$(bash scripts/install/compose_files.sh . "$ENV_FILE")" ||
+    die "BOSS_ENGINE_INNER_SANDBOX in .env is not valid (above); fix it and run the installer again."
+fi
+COMPOSE_FILES="$(printf '%s' "$_compose_files" | tr '\n' ' ')"
+unset _compose_files
+# ---- end compose files -----------------------------------------------------
 # ---- serial image builds --------------------------------------------------
 # shellcheck disable=SC2086
 if ! BUILD_SERVICES="$("${COMPOSE[@]}" \
-  -f scripts/install/community-compose.yml \
+  ${COMPOSE_FILES:--f scripts/install/community-compose.yml} \
   --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES \
   config --format json </dev/null 2>/dev/null | python3 -c '
@@ -1604,7 +1619,7 @@ while IFS= read -r _build_service; do
   ui_info "Building $_build_service (one image at a time)"
   # Pass observed metadata as build arguments: sudo may reset exported variables.
   # shellcheck disable=SC2086
-  "${COMPOSE[@]}" -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+  "${COMPOSE[@]}" ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
     $COMPOSE_PROFILES build \
     --build-arg "BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA" \
     --build-arg "BOSS_BUILT_AT=$BOSS_BUILT_AT" "$_build_service" </dev/null
@@ -1616,14 +1631,14 @@ done <<< "$BUILD_SERVICES"
 # On a first install there is no worker to stop.
 # shellcheck disable=SC2086
 RUNNING_SERVICES="$(${COMPOSE[@]} \
-  -f scripts/install/community-compose.yml \
+  ${COMPOSE_FILES:--f scripts/install/community-compose.yml} \
   --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES \
   ps --status running --services </dev/null)"
 if printf '%s\n' "$RUNNING_SERVICES" | grep -qx worker; then
   ui_info "Pausing the existing worker until the project is seeded"
   # shellcheck disable=SC2086
-  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+  ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
     $COMPOSE_PROFILES stop worker </dev/null
 fi
 
@@ -1659,12 +1674,12 @@ fi
 # Start only the database and API for bootstrap. A fresh worker cannot poll
 # before the default project and its actor memberships exist.
 # shellcheck disable=SC2086
-if ! ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+if ! ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES up -d --no-build db api </dev/null; then
   ui_err "Database or API did not start."
   ui_info "Recent database and API logs:"
   # shellcheck disable=SC2086
-  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+  ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
     $COMPOSE_PROFILES logs --tail 40 db api </dev/null || true
   die "The stack did not start. On Docker Desktop the virtual disk can be full while the host still has free space; the log above names the cause."
 fi
@@ -1678,7 +1693,7 @@ if [[ "$SECRET_STORE" == "infisical" ]]; then
   # Infisical needs its own services before bootstrap, but the worker must
   # remain stopped until the project seed below has succeeded.
   # shellcheck disable=SC2086
-  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+  ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
     $COMPOSE_PROFILES up -d --no-build infisical-redis infisical </dev/null
   if [[ -f "$INSTALL_DIR/scripts/install/bootstrap_infisical.sh" ]]; then
     if COMPOSE_FILE=scripts/install/community-compose.yml \
@@ -1690,7 +1705,7 @@ if [[ "$SECRET_STORE" == "infisical" ]]; then
       # .env when it CREATES a container. API was created before those values existed, so
       # recreate it. The worker has not started yet and will read them after seeding.
       # shellcheck disable=SC2086
-      ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+      ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
         $COMPOSE_PROFILES up -d --no-deps --no-build --force-recreate api </dev/null >/dev/null 2>&1 \
         || die "could not restart API with the provisioned secret store; installation is incomplete"
       ui_ok "Secret store provisioned — BOSS will reference credentials rather than hold them"
@@ -1736,7 +1751,7 @@ wait_for_api_health() {
 if ! wait_for_api_health; then
   ui_info "Recent API and database logs:"
   # shellcheck disable=SC2086
-  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+  ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
     $COMPOSE_PROFILES logs --tail 40 api db </dev/null || true
   exit 1
 fi
@@ -1746,13 +1761,13 @@ ui_ok "API healthy at ${API_URL}/health"
 ui_step "Seeding Community project (roles, packs, demo project)"
 SEED_ERR="$(mktemp)"
 set +e
-${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" exec -T api \
+${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" exec -T api \
   python -c "from boss_engine.bootstrap import seed; seed()" </dev/null 2>"$SEED_ERR"
 SEED_RC=$?
 set -e
 if [[ "$SEED_RC" -ne 0 ]]; then
   ui_warn "Seed returned $SEED_RC — trying alternate entrypoint"
-  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" exec -T api \
+  ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" exec -T api \
     python -m boss_engine.bootstrap </dev/null 2>>"$SEED_ERR" ||
     die "Seed failed. API may be up but the project is not ready; see $SEED_ERR."
 else
@@ -1785,7 +1800,7 @@ if [[ -n "${_place_project}" && "${_place_agent_state}" == "installed" ]]; then
   _place_host="$(hostname 2>/dev/null || printf '%s' localhost)"
   _place_arch="$(uname -m 2>/dev/null || printf '%s' unknown)"
   _place_os="$(uname -s 2>/dev/null || printf '%s' unknown)"
-  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" exec -T \
+  ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" exec -T \
     -e "BOSS_PLACE_PROJECT_ID=${_place_project}" \
     -e "BOSS_PLACE_HOSTNAME=${_place_host}" \
     -e "BOSS_PLACE_ARCH=${_place_arch}" \
@@ -1799,24 +1814,24 @@ fi
 # Start the worker and optional console only after the project and actors are
 # available. The same order applies to a first install, rerun, and upgrade.
 # shellcheck disable=SC2086
-${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES up -d --no-build </dev/null
 # The CA mount source was a directory and is now a file: a container created over the directory
 # fails its next restart, so recreate the running ones that mount it, now.
 if [[ "${_RECREATE_CA_MOUNT:-0}" -eq 1 ]]; then
   # shellcheck disable=SC2086
-  _ca_running="$(${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+  _ca_running="$(${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
     $COMPOSE_PROFILES ps --status running --services </dev/null | grep -xE 'api|worker|runner|egress|model-gateway|mcp-tools|kg-mcp' | tr '\n' ' ' || true)"
   if [[ -n "$_ca_running" ]]; then
     # shellcheck disable=SC2086
-    ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+    ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
       $COMPOSE_PROFILES up -d --no-deps --no-build --force-recreate $_ca_running </dev/null
   fi
 fi
 if [[ "$WITH_WEB" -eq 0 ]]; then
   # Switching an existing install to headless must stop a previously running
   # console. Compose does not stop services omitted from the active profile.
-  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+  ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
     --profile web stop web </dev/null
 fi
 ui_ok "Containers started"

@@ -203,7 +203,7 @@ else
   if [ -z "$missing" ]; then
     ok "containers: $running running (db, api, worker required; web and secrets are optional)"
   else
-    bad "containers: missing —$missing  (cd $(dirname "$ENV_FILE") && docker compose -f scripts/install/community-compose.yml --env-file .env up -d)" containers_missing
+    bad "containers: missing —$missing  (${BOSS_COMMAND:-boss} start)" containers_missing
   fi
 fi
 
@@ -312,6 +312,27 @@ if [ "${#DOCKER[@]}" -gt 0 ] &&
    "${DOCKER[@]}" exec "${STACK}-api-1" test -f /run/boss-shim/.network-unfenced 2>/dev/null; then
   bad "sandbox: this host cannot fence the build network, so builds are held — see docs/community/SANDBOX.md (or set BOSS_SANDBOX_NETWORK=off in .env and restart)" sandbox_fence
 fi
+# ENGINE INNER-SANDBOX SUPPORT (docs/community/ENGINE_SANDBOX.md), only when .env opts in: the
+# containers must have been created with it, run under the AppArmor profile when asked for (the
+# label proves the profile is loaded on the Docker host), and Codex's own sandbox must start in
+# the worker. The failing layer is named, with its fix.
+engine_mode="$(env_value BOSS_ENGINE_INNER_SANDBOX | tr -d "\"' " | tr '[:upper:]' '[:lower:]')"
+case "$engine_mode" in
+  ""|0|off|false|no|none) engine_mode="" ;;
+  apparmor+seccomp) engine_mode="seccomp+apparmor" ;;
+esac
+if [ -n "$engine_mode" ] && [ "${#DOCKER[@]}" -gt 0 ]; then
+  case "$engine_mode" in
+    seccomp|seccomp+apparmor)
+      _inner="$("${DOCKER[@]}" exec -u boss "${STACK}-worker-1" python -m boss_engine.services.engine_inner_sandbox --expect "$engine_mode" 2>/dev/null | tail -n 1)"
+      case "$_inner" in
+        ok\ *) ok "engine sandbox: ${_inner#ok }" ;;
+        bad\ *) bad "engine sandbox: ${_inner#bad }" engine_sandbox ;;
+        *) bad "engine sandbox: the worker could not run the check (is it running? ${BOSS_COMMAND:-boss} logs worker)" engine_sandbox ;;
+      esac ;;
+    *) bad "engine sandbox: BOSS_ENGINE_INNER_SANDBOX=$engine_mode in .env is not one of: seccomp, seccomp+apparmor" engine_sandbox ;;
+  esac
+fi
 case "$claim" in
   unclaimed)
     # BOSSAPP-813: from the server's own network the console's https address is the claim itself.
@@ -417,14 +438,23 @@ COMPOSE_FILE="$INSTALL_ROOT/scripts/install/community-compose.yml"
 # Compose as `boss` runs it (boss.sh compose): the install's profiles, its project name and image
 # tag. --no-build --pull never: only images already on this host, so nothing is rebuilt and the
 # prev-<tag> images kept for `boss rollback` are left exactly as they are.
+# The one compose-file resolver (compose_files.sh): the engine inner-sandbox overlay when .env
+# opts in, so a repair never starts the containers without it.
+BOSS_COMPOSE_FILES=(-f "$COMPOSE_FILE")
+if [ -f "$INSTALL_ROOT/scripts/install/compose_files.sh" ]; then
+  # shellcheck source=compose_files.sh
+  . "$INSTALL_ROOT/scripts/install/compose_files.sh"
+  boss_compose_files "$INSTALL_ROOT" "$ENV_FILE" || BOSS_COMPOSE_FILES=()
+fi
 repair_compose() {
+  [ "${#BOSS_COMPOSE_FILES[@]}" -gt 0 ] || return 1
   local profiles=()
   [ "$(env_value BOSS_COMMUNITY_WEB_ENABLED)" = 0 ] || profiles+=(--profile web)
   [ "$(env_value BOSS_COMMUNITY_SECRET_STORE)" != infisical ] || profiles+=(--profile secrets)
   [ -z "$(env_value BOSS_EMAIL_DEV_INBOX)" ] || profiles+=(--profile mail)
   COMPOSE_PROJECT_NAME="$STACK" \
   BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-$(env_value BOSS_COMMUNITY_IMAGE_TAG)}" \
-    "${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
+    "${DOCKER[@]}" compose "${BOSS_COMPOSE_FILES[@]}" --env-file "$ENV_FILE" \
     ${profiles[@]+"${profiles[@]}"} "$@" </dev/null
 }
 wait_for_api() {
@@ -446,6 +476,7 @@ has console_loopback && MANUAL+=("console address: rebuild web for its public ad
 has chat_silent && MANUAL+=("models: ${BOSS_COMMAND:-boss} connect (or Setup) to sign the model in again")
 has repository && MANUAL+=("repository: Setup › Test access, then fix what it names")
 has enterprise_network && MANUAL+=("enterprise network: fix the setting named above in .env, then ${BOSS_COMMAND:-boss} upgrade — docs/community/ENTERPRISE_NETWORK.md")
+has engine_sandbox && MANUAL+=("engine sandbox: the Fix named above — docs/community/ENGINE_SANDBOX.md (a host profile is never loaded for you)")
 has sandbox_fence && MANUAL+=("sandbox: docs/community/SANDBOX.md — turning the fence off is a security choice, never made for you")
 describe() {
   case "$1" in

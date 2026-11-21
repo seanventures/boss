@@ -99,6 +99,25 @@ Stopping keeps the VM and its volumes. Deleting the profile deletes BOSS's data:
 (`./scripts/install/backup.sh --dir "$PWD"`, see the
 [installer guide](../../scripts/install/README.md)) before you delete or replace a profile.
 
+## Engine inner-sandbox support
+
+Only when a coding engine must use its own sandbox (a Codex login whose organisation forbids full
+access) and it fails with `bwrap: No permissions to create a new namespace`. The Colima VM is
+Ubuntu with AppArmor, so it needs both layers. From the install directory, with the profile
+running:
+
+```bash
+colima --profile boss ssh -- sudo "$PWD/scripts/sandbox/load_apparmor.sh"
+echo 'BOSS_ENGINE_INNER_SANDBOX=seccomp+apparmor' >> .env
+boss start      # recreates api and worker with the profiles; run it when no build is running
+boss doctor     # the "engine sandbox" line proves Codex's own sandbox starts
+```
+
+The install must be under `$HOME` (above), so the VM sees the loader at the same path. The
+profile is installed in the VM's `/etc/apparmor.d`, so it is loaded again when the VM restarts. It
+is gone if the profile is deleted and recreated: load it again then. What it allows, the attack
+surface it opens, and how to turn it off: [Engine sandbox](ENGINE_SANDBOX.md#engine-inner-sandbox-support).
+
 ## When Docker is not running
 
 With the Colima profile (or Docker Desktop) stopped, the installer and every `boss` command stop

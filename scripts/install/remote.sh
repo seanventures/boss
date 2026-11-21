@@ -551,8 +551,11 @@ cmd_update() {
   [[ "$runner_running" -eq 1 ]] && profiles="$profiles --profile runner"
   local update_started
   update_started=$(rshq "date -u +%s")
-  local compose_build="$REMOTE_DOCKER compose -f scripts/install/community-compose.yml --env-file $next_env $profiles"
-  local compose="$REMOTE_DOCKER compose -f scripts/install/community-compose.yml --env-file .env $profiles"
+  # THE ONE COMPOSE-FILE RESOLVER (scripts/install/compose_files.sh), run ON the host in the new
+  # source: the engine inner-sandbox overlay when that install's .env opts in. Relative paths
+  # (no spaces), expanded by the remote shell.
+  local compose_build="$REMOTE_DOCKER compose \$(bash scripts/install/compose_files.sh . $next_env) --env-file $next_env $profiles"
+  local compose="$REMOTE_DOCKER compose \$(bash scripts/install/compose_files.sh . .env) --env-file .env $profiles"
 
   say "building — this takes a few minutes"
   ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" \

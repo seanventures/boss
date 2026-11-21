@@ -1,0 +1,109 @@
+# BOSS engine inner-sandbox support (docs/community/ENGINE_SANDBOX.md).
+#
+# The container profile follows Docker's docker-default (moby/profiles apparmor/template.go,
+# Apache-2.0): `deny mount`, the same /proc and /sys rules. Unlike docker-default it declares
+# `abi <abi/4.0>`. docker-default declares no ABI, and AppArmor 4 then does not mediate user
+# namespaces for it at all (`unshare -U` succeeds under it on Ubuntu 24.04). With the 4.0 ABI
+# they are mediated, and refused here. Only a coding engine's own sandbox helper (Codex's bundled
+# bubblewrap) gets more: executing it moves the process into the child profile `engine_sandbox`,
+# the one place that may create user namespaces, mount and pivot_root. Repository code that never
+# goes through the helper (a postinstall script, a test suite) is refused user namespaces at this
+# layer.
+#
+# AppArmor 3 hosts have neither the 4.0 ABI nor a `userns` rule (the 3.x parser rejects both) and
+# do not mediate user namespaces; load this file with scripts/sandbox/load_apparmor.sh, which
+# drops both lines there instead of failing.
+#
+# This narrows, it is not a boundary: any process in the container may still execute the helper.
+# The guards that remain are the seccomp profile (namespaces only with a new user namespace), no
+# added capability, the per-build uid and the egress fence.
+
+abi <abi/4.0>,
+
+#include <tunables/global>
+
+profile boss-engine flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  network,
+  capability,
+  file,
+  umount,
+
+  # Codex's bundled bubblewrap (npm @openai/codex-linux-<arch>, scripts/install/cli-lock) and a
+  # system bwrap. Exact paths, no globs: an exact path outranks the `file,` rule's inherit-exec,
+  # where a glob would conflict with it.
+  /opt/boss-clis/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl/codex-resources/bwrap Cx -> engine_sandbox,
+  /opt/boss-clis/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-resources/bwrap Cx -> engine_sandbox,
+  # Images built before scripts/install/cli-lock installed Codex globally with npm.
+  /usr/local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl/codex-resources/bwrap Cx -> engine_sandbox,
+  /usr/local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-resources/bwrap Cx -> engine_sandbox,
+  /usr/bin/bwrap Cx -> engine_sandbox,
+
+  signal (receive) peer=unconfined,
+  signal (receive) peer=runc,
+  signal (receive) peer=crun,
+  signal (receive) peer=dockerd-default,
+  signal (send,receive) peer=boss-engine,
+  signal (send,receive) peer=boss-engine//engine_sandbox,
+
+  deny @{PROC}/* w,
+  deny @{PROC}/{[^1-9/],[^1-9/][^0-9/],[^1-9s/][^0-9y/][^0-9s/],[^1-9/][^0-9/][^0-9/][^0-9/]*}/** w,
+  deny @{PROC}/sys/[^k]** w,
+  deny @{PROC}/sys/kernel/{?,??,[^s][^h][^m]**} w,
+  deny @{PROC}/sysrq-trigger rwklx,
+  deny @{PROC}/kcore rwklx,
+
+  deny mount,
+
+  deny /sys/[^f]*/** wklx,
+  deny /sys/f[^s]*/** wklx,
+  deny /sys/fs/[^c]*/** wklx,
+  deny /sys/fs/c[^g]*/** wklx,
+  deny /sys/fs/cg[^r]*/** wklx,
+  deny /sys/firmware/** rwklx,
+  deny /sys/devices/virtual/powercap/** rwklx,
+  deny /sys/kernel/security/** rwklx,
+
+  ptrace (trace,read,tracedby,readby) peer=boss-engine,
+  ptrace (trace,read,tracedby,readby) peer=boss-engine//engine_sandbox,
+
+  # The engine's command sandbox: what bubblewrap needs, and everything it runs inherits it.
+  profile engine_sandbox flags=(attach_disconnected,mediate_deleted) {
+    #include <abstractions/base>
+
+    network,
+    capability,
+    file,
+    umount,
+    mount,
+    pivot_root,
+    userns,
+
+    signal (receive) peer=unconfined,
+    signal (receive) peer=runc,
+    signal (receive) peer=crun,
+    signal (receive) peer=dockerd-default,
+    signal (send,receive) peer=boss-engine,
+    signal (send,receive) peer=boss-engine//engine_sandbox,
+
+    deny @{PROC}/* w,
+    deny @{PROC}/{[^1-9/],[^1-9/][^0-9/],[^1-9s/][^0-9y/][^0-9s/],[^1-9/][^0-9/][^0-9/][^0-9/]*}/** w,
+    deny @{PROC}/sys/[^k]** w,
+    deny @{PROC}/sys/kernel/{?,??,[^s][^h][^m]**} w,
+    deny @{PROC}/sysrq-trigger rwklx,
+    deny @{PROC}/kcore rwklx,
+
+    deny /sys/[^f]*/** wklx,
+    deny /sys/f[^s]*/** wklx,
+    deny /sys/fs/[^c]*/** wklx,
+    deny /sys/fs/c[^g]*/** wklx,
+    deny /sys/fs/cg[^r]*/** wklx,
+    deny /sys/firmware/** rwklx,
+    deny /sys/devices/virtual/powercap/** rwklx,
+    deny /sys/kernel/security/** rwklx,
+
+    ptrace (trace,read,tracedby,readby) peer=boss-engine,
+    ptrace (trace,read,tracedby,readby) peer=boss-engine//engine_sandbox,
+  }
+}

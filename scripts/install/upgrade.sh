@@ -169,6 +169,16 @@ INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd -P)"
 [[ -z "$(git -C "$INSTALL_DIR" status --porcelain --untracked-files=no)" ]] ||
   { echo 'Tracked local changes need to be committed or moved before upgrade; nothing changed.' >&2; exit 1; }
 
+# The one compose-file resolver (compose_files.sh): the engine inner-sandbox overlay when .env
+# opts in. The installer this runs recreates the containers through the same resolver.
+upgrade_compose_files() {
+  BOSS_COMPOSE_FILES=(-f "$INSTALL_DIR/scripts/install/community-compose.yml")
+  [[ -f "$INSTALL_DIR/scripts/install/compose_files.sh" ]] || return 0
+  # shellcheck source=compose_files.sh
+  source "$INSTALL_DIR/scripts/install/compose_files.sh"
+  boss_compose_files "$INSTALL_DIR" "$INSTALL_DIR/.env"
+}
+
 OLD_COMMIT="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
 CURRENT_REF="$(installed_ref "$INSTALL_DIR")"
 if [[ -n "$CHANNEL" ]]; then
@@ -281,7 +291,8 @@ keep_previous_images() {
   # the resume's backup would refuse. Leave the rollback point that still names the running image.
   local tag_id="" run_id="" prev_id="" cid=""
   tag_id="$("${d[@]}" image inspect --format '{{.Id}}' "boss-community-api:$tag" 2>/dev/null || true)"
-  cid="$("${d[@]}" compose -f "$INSTALL_DIR/scripts/install/community-compose.yml" --env-file "$INSTALL_DIR/.env" ps -q api 2>/dev/null || true)"
+  upgrade_compose_files || true
+  cid="$("${d[@]}" compose "${BOSS_COMPOSE_FILES[@]}" --env-file "$INSTALL_DIR/.env" ps -q api 2>/dev/null || true)"
   [[ -z "$cid" ]] || run_id="$("${d[@]}" inspect --format '{{.Image}}' "$cid" 2>/dev/null || true)"
   prev_id="$("${d[@]}" image inspect --format '{{.Id}}' "boss-community-api:prev-$tag" 2>/dev/null || true)"
   if [[ -n "$run_id" && -n "$tag_id" && -n "$prev_id" && "$run_id" == "$prev_id" && "$run_id" != "$tag_id" && -f "$INSTALL_DIR/.boss-rollback" ]]; then
@@ -442,7 +453,8 @@ fi
 test_db_compose() {
   local d=(docker)
   docker info >/dev/null 2>&1 || d=(sudo -n docker)
-  "${d[@]}" compose -f "$INSTALL_DIR/scripts/install/community-compose.yml" \
+  upgrade_compose_files || return 1
+  "${d[@]}" compose "${BOSS_COMPOSE_FILES[@]}" \
     --env-file "$INSTALL_DIR/.env" --profile dev "$@"
 }
 test_db_running() {
