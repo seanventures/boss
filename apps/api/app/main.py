@@ -12419,6 +12419,23 @@ async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
         woken = _preview_wake_answer(request, preview_id, path, isolation)
         if woken is not None:
             return woken
+    # AN API HAS NO PAGE AT "/" (preview_landing): a browser opening a running preview's root
+    # that the app answers "nothing here" sees BOSS's landing — "This app is an API" and the
+    # routes that answer, as links — rather than a bare 404 that reads as a broken preview.
+    from boss_engine.services import preview_landing
+    if preview_landing.wants_landing(request.method, path, status, request.headers):
+        try:
+            page = preview_landing.landing_for(
+                engine, preview_id, root_status=status, root_body=data or b"",
+                fetch=lambda route: proxy_preview(
+                    engine, preview_id, route.lstrip("/"), "GET", "", None, None,
+                    settings.sandbox_token, incoming_headers={"accept": "*/*"})[0],
+                link_prefix=preview_landing.link_prefix_for(request.url.path))
+            return Response(content=page, status_code=200, media_type="text/html; charset=utf-8",
+                            headers={**isolation, "Cache-Control": "no-store",
+                                     "X-Boss-Preview-Landing": "api"})
+        except Exception:  # noqa: BLE001 — the app's own answer stands
+            LOGGER.warning("preview %s: API landing failed", preview_id, exc_info=True)
     set_cookies = list((headers or {}).pop("Set-Cookie", None) or [])
     # The previewed app's own CSP / CORS answers never replace the isolation.
     headers = {k: v for k, v in (headers or {}).items()
