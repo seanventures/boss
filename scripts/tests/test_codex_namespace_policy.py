@@ -67,3 +67,37 @@ def test_apparmor_keeps_host_control_paths_denied():
     assert "userns," in policy
     assert "deny /sys/kernel/security/** rwklx," in policy
     assert "deny @{PROC}/sysrq-trigger rwklx," in policy
+
+
+# ── the seccomp additions are as narrow as seccomp allows ────────────────────────────────────
+
+def _added():
+    base = json.loads((ROOT / "scripts/sandbox/vendor/moby-seccomp-default.json").read_bytes())
+    full = json.loads((ROOT / "scripts/sandbox/engine-seccomp.json").read_text())
+    assert full["syscalls"][:len(base["syscalls"])] == base["syscalls"]   # Docker's rules unchanged
+    assert {k: v for k, v in full.items() if k != "syscalls"} == \
+        {k: v for k, v in base.items() if k != "syscalls"}                # default-deny unchanged
+    return full["syscalls"][len(base["syscalls"]):]
+
+
+def test_only_the_namespace_calls_bubblewrap_needs_are_added():
+    names = {n for rule in _added() for n in rule["names"]}
+    assert names == {"mount", "umount2", "pivot_root", "unshare", "clone"}
+    # Codex 0.158's bubblewrap passes neither --unshare-uts nor --hostname.
+    assert not names & {"sethostname", "setdomainname", "setns", "clone3", "keyctl", "bpf",
+                        "ptrace", "umount"}
+
+
+def test_unshare_and_clone_need_a_new_user_namespace():
+    rules = {tuple(rule["names"]): rule for rule in _added()}
+    for name in ("unshare", "clone"):
+        (arg,) = rules[(name,)]["args"]
+        assert arg == {"index": 0, "value": 0x10000000, "valueTwo": 0x10000000,
+                       "op": "SCMP_CMP_MASKED_EQ"}
+
+
+def test_no_added_rule_grants_or_depends_on_a_capability():
+    for rule in _added():
+        assert rule["action"] == "SCMP_ACT_ALLOW"
+        assert "caps" not in json.dumps(rule.get("includes", {}))
+        assert "caps" not in json.dumps(rule.get("excludes", {}))

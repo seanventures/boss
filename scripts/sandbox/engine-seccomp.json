@@ -1251,11 +1251,10 @@
       "names": [
         "mount",
         "umount2",
-        "pivot_root",
-        "sethostname",
-        "setdomainname"
+        "pivot_root"
       ],
-      "action": "SCMP_ACT_ALLOW"
+      "action": "SCMP_ACT_ALLOW",
+      "comment": "BOSS engine inner sandbox: the kernel still requires CAP_SYS_ADMIN in the owning user namespace"
     },
     {
       "names": [
@@ -1265,11 +1264,12 @@
       "args": [
         {
           "index": 0,
-          "value": 2180907007,
-          "valueTwo": 0,
+          "value": 268435456,
+          "valueTwo": 268435456,
           "op": "SCMP_CMP_MASKED_EQ"
         }
-      ]
+      ],
+      "comment": "BOSS engine inner sandbox: only with CLONE_NEWUSER"
     },
     {
       "names": [
@@ -1283,7 +1283,14 @@
           "valueTwo": 268435456,
           "op": "SCMP_CMP_MASKED_EQ"
         }
-      ]
+      ],
+      "comment": "BOSS engine inner sandbox: only with CLONE_NEWUSER",
+      "excludes": {
+        "arches": [
+          "s390",
+          "s390x"
+        ]
+      }
     }
   ]
 }
