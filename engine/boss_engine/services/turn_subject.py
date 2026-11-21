@@ -955,7 +955,7 @@ def _resolve_deployment(connection, project_id: str, ref: SubjectRef) -> Subject
     # is part of this record; without it the answer had to come from lookups, and the gate that
     # counts lookups was switched off for any subject that merely resolved.
     samples = _rows(connection,
-                    "SELECT ok, status_code, error, checked_at FROM deployment_health_samples "
+                    "SELECT ok, status_code, error, checked_at FROM counted_health_samples "
                     "WHERE deployment_target_id = :t AND project_id = :p "
                     "ORDER BY checked_at DESC LIMIT 1", {"t": target_id, "p": project_id})
     if samples:

@@ -874,7 +874,7 @@ def strips(connection: Any, target_ids: list[str], *, now: Optional[datetime] = 
             "SELECT deployment_target_id AS t, "
             "       floor(extract(epoch FROM (checked_at - :f)) / :c)::int AS b, "
             "       count(*) AS n, sum(CASE WHEN ok THEN 1 ELSE 0 END) AS ok "
-            "FROM deployment_health_samples "
+            "FROM counted_health_samples "
             "WHERE deployment_target_id = ANY(:ids) AND checked_at >= :f AND checked_at < :e "
             "GROUP BY 1, 2"),
             {"ids": list(target_ids), "f": start, "e": end, "c": cell_s}).mappings():
@@ -907,7 +907,7 @@ def health_states(connection: Any, target_ids: list[str], *,
             "SELECT t.id AS t, s.checked_at, s.ok, s.latency_ms "
             "FROM unnest(CAST(:ids AS text[])) AS t(id) "
             "CROSS JOIN LATERAL ("
-            "  SELECT checked_at, ok, latency_ms FROM deployment_health_samples "
+            "  SELECT checked_at, ok, latency_ms FROM counted_health_samples "
             "  WHERE deployment_target_id = t.id AND checked_at >= :cut "
             "  ORDER BY checked_at DESC LIMIT 20) s "
             "ORDER BY t.id, s.checked_at DESC"),
@@ -936,7 +936,7 @@ def health_states(connection: Any, target_ids: list[str], *,
                 "       max(checked_at) FILTER (WHERE NOT ok) AS last_bad, "
                 "       max(checked_at) FILTER (WHERE ok) AS last_good, "
                 "       min(checked_at) AS first "
-                "FROM deployment_health_samples "
+                "FROM counted_health_samples "
                 "WHERE deployment_target_id = ANY(:ids) AND checked_at >= :cut GROUP BY 1"),
                 {"ids": deeper, "cut": now - timedelta(days=7)}).mappings():
             edge = r["last_bad"] if verdicts[r["t"]] == "up" else r["last_good"]

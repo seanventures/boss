@@ -256,10 +256,10 @@ def _unhealthy(connection, project_id: str) -> list[dict[str, Any]]:
     rows = connection.execute(
         sql("SELECT t.id, t.app_name, t.environment, t.domains, t.health_checks, "
             "       t.target_ref, t.public_url, t.required_resources, "
-            "       (SELECT s.ok FROM deployment_health_samples s "
+            "       (SELECT s.ok FROM counted_health_samples s "
             "         WHERE s.deployment_target_id = t.id "
             "         ORDER BY s.checked_at DESC LIMIT 1) AS last_ok, "
-            "       (SELECT s.error FROM deployment_health_samples s "
+            "       (SELECT s.error FROM counted_health_samples s "
             "         WHERE s.deployment_target_id = t.id "
             "         ORDER BY s.checked_at DESC LIMIT 1) AS last_error "
             "FROM deployment_targets t "

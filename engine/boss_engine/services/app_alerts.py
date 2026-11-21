@@ -839,7 +839,7 @@ def _target_store(connection, target: dict, now: datetime, range_ms: int) -> pq.
         add("http_request_duration_seconds_count", {}, t, snap.get("hist_count"))
         add("http_request_duration_seconds_sum", {}, t, snap.get("hist_sum"))
     for r in connection.execute(sql(
-            "SELECT checked_at, ok, latency_ms FROM deployment_health_samples "
+            "SELECT checked_at, ok, latency_ms FROM counted_health_samples "
             "WHERE deployment_target_id = :t AND checked_at > :a AND checked_at <= :z "
             "ORDER BY checked_at"), {"t": target["id"], "a": start, "z": now}).mappings().all():
         t = _ms(r["checked_at"])
