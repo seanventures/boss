@@ -99,44 +99,24 @@ Stopping keeps the VM and its volumes. Deleting the profile deletes BOSS's data:
 (`./scripts/install/backup.sh --dir "$PWD"`, see the
 [installer guide](../../scripts/install/README.md)) before you delete or replace a profile.
 
-### Optional Codex nested sandbox support
+## Engine inner-sandbox support
 
-If Codex reports a bubblewrap namespace denial, an administrator can opt this
-installation into the scoped profiles below. They allow nested user/mount
-namespaces for the API and worker only. They do not add SYS_ADMIN, privileged
-containers, disable host AppArmor, or disable Codex's sandbox. Allowing namespace
-and mount operations increases the container's kernel attack surface; review
-the profiles before enabling them, especially on managed laptops.
-
-The seccomp profile (`scripts/sandbox/engine-seccomp.json`) extends Moby's default-deny
-profile pinned at `2ab3e516a3b49550c35b5e4511a0a7d136a02c8d`, vendored in
-`scripts/sandbox/vendor/` with its license; the generator verifies its SHA-256 and never
-fetches anything.
-The AppArmor profile retains the Docker default profile's proc/sys restrictions,
-allowing mounts and pivot_root for the nested sandbox. Source and license:
-https://github.com/moby/profiles (Apache-2.0).
-
-From the checkout, with the BOSS Colima profile running:
+Only when a coding engine must use its own sandbox (a Codex login whose organisation forbids full
+access) and it fails with `bwrap: No permissions to create a new namespace`. The Colima VM is
+Ubuntu with AppArmor, so it needs both layers. From the install directory, with the profile
+running:
 
 ```bash
-python3 scripts/sandbox/engine_seccomp.py --check   # the committed profile, regenerated offline
-colima --profile boss ssh -- sudo tee /etc/apparmor.d/boss-engine < scripts/sandbox/boss-engine.apparmor >/dev/null
-colima --profile boss ssh -- sudo apparmor_parser -r /etc/apparmor.d/boss-engine
+colima --profile boss ssh -- sudo "$PWD/scripts/sandbox/load_apparmor.sh"
+echo 'BOSS_ENGINE_INNER_SANDBOX=seccomp+apparmor' >> .env
+boss start      # recreates api and worker with the profiles; run it when no build is running
+boss doctor     # the "engine sandbox" line proves Codex's own sandbox starts
 ```
 
-Set `BOSS_CODEX_SECCOMP_FILE` in the installation's `.env` to the absolute Mac path of
-`scripts/sandbox/engine-seccomp.json` in the install (no `~`). `boss start` and other `boss` lifecycle commands then include
-`scripts/install/community-codex-sandbox.yml`. Direct Compose commands must pass
-both `-f scripts/install/community-compose.yml` and
-`-f scripts/install/community-codex-sandbox.yml` with `--env-file .env`. Recreate
-API and worker only when no builds are running. Confirm the profile remains
-loaded after a VM reboot; if needed, run the parser command again. Do not widen
-the profiles automatically when a future CLI version needs new syscalls.
-
-Rollback: remove `BOSS_CODEX_SECCOMP_FILE` from `.env`, recreate API and worker
-with the base Compose file, then remove the unused AppArmor profile with
-`colima --profile boss ssh -- sudo apparmor_parser -R /etc/apparmor.d/boss-engine`
-and remove its VM file. No host sysctl changes are needed.
+The install must be under `$HOME` (above), so the VM sees the loader at the same path. The
+profile is installed in the VM's `/etc/apparmor.d`, so it is loaded again when the VM restarts. It
+is gone if the profile is deleted and recreated: load it again then. What it allows, the attack
+surface it opens, and how to turn it off: [Engine sandbox](ENGINE_SANDBOX.md#engine-inner-sandbox-support).
 
 ## When Docker is not running
 

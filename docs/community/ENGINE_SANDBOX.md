@@ -30,10 +30,49 @@ BOSS treats this as the engine being unable to run, on every engine that streams
 What to do:
 
 - Most installs never see this. BOSS runs Codex writers and review seats without Codex's inner sandbox, because BOSS's own sandbox is the boundary.
-- If it appears, a host administrator must allow the engine's sandbox at both layers (seccomp, and AppArmor where the host has it). Do not disable the engine's managed policy, run privileged containers, or turn off AppArmor host-wide. Test any scoped profile in a disposable container that holds no credentials before applying it to BOSS's services.
-- Scoped profiles that BOSS ships and checks are planned (BOSSAPP-1414). Until then, treat any profile as host configuration you own.
+- If it appears (in practice: a Codex login whose organisation forbids full access, so Codex's own sandbox must start), a host administrator turns on [engine inner-sandbox support](#engine-inner-sandbox-support) below. Do not disable the engine's managed policy, run privileged containers, or turn off AppArmor host-wide.
 
 References: [Docker seccomp](https://docs.docker.com/engine/security/seccomp/) and [Ubuntu AppArmor](https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/).
+
+## Engine inner-sandbox support
+
+Off by default, and nothing changes for an install that does not turn it on. It lets a coding engine's own sandbox (today: Codex's bubblewrap) create the namespaces it needs inside BOSS's containers, without `--privileged`, without adding a capability, and without turning AppArmor off. Turn it on only when an engine must use its own sandbox, which is when a Codex login's organisation forbids full access.
+
+It is one line in the install's `.env`. The shell's environment is never read for it:
+
+| Docker host | Set | What applies |
+|---|---|---|
+| Docker Desktop (Mac, Windows) | `BOSS_ENGINE_INNER_SANDBOX=seccomp` | BOSS's seccomp profile. Docker Desktop's VM has no AppArmor. |
+| Colima (Mac) | `BOSS_ENGINE_INNER_SANDBOX=seccomp+apparmor` | seccomp, plus the AppArmor profile `boss-engine` loaded in the Colima VM ([Colima](COLIMA.md#engine-inner-sandbox-support)). |
+| Ubuntu 24.04, native Docker | `BOSS_ENGINE_INNER_SANDBOX=seccomp+apparmor` | seccomp, plus `boss-engine` loaded on the host. |
+| Linux with AppArmor 3 (Ubuntu 22.04 and older) | `BOSS_ENGINE_INNER_SANDBOX=seccomp+apparmor` | The same; AppArmor 3 does not mediate user namespaces, so the loader leaves that rule out. |
+| Linux without AppArmor | `BOSS_ENGINE_INNER_SANDBOX=seccomp` | seccomp only. |
+
+### Turn it on
+
+From the install directory:
+
+1. With AppArmor (Colima, Ubuntu), load the profile on the Docker host first. Native Linux: `sudo scripts/sandbox/load_apparmor.sh`. Colima: `colima --profile boss ssh -- sudo "$PWD/scripts/sandbox/load_apparmor.sh"`. It installs `/etc/apparmor.d/boss-engine`, so it is loaded again after a reboot. With `--check` it only reports.
+2. Add the line from the table to `.env`.
+3. `boss start`. It recreates api and worker with the profiles. The agent-host `runner` gets them too whenever it is started with the files below. Do it when no build is running.
+4. `boss doctor`. The `engine sandbox` line runs Codex's own sandbox in the worker, with no model, and names the layer that stops it, with the fix. The Setup engine check does the same where builds run, and shows the result on the login's row.
+
+Every lifecycle command applies it: `boss`, the installer and `boss upgrade`, `boss rollback`, restore, `remote.sh update`, `boss doctor --repair` and BOSS's self-fix installs all take their compose files from `scripts/install/compose_files.sh`. To run Compose by hand, use the files it prints: `bash scripts/install/compose_files.sh .`.
+
+To turn it off, remove the line from `.env`, run `boss start`, then unload the profile: `sudo scripts/sandbox/load_apparmor.sh --remove` (Colima: through `colima ssh`, as above). No host sysctl changes.
+
+### What it allows
+
+- **seccomp** (`scripts/sandbox/engine-seccomp.json`). This is Docker's default profile ([moby/profiles](https://github.com/moby/profiles), Apache-2.0, vendored in `scripts/sandbox/vendor/` and checked by hash; nothing is downloaded at install time) plus three rules. `clone` and `unshare` are allowed only when they create a new user namespace. `mount`, `umount2` and `pivot_root` are allowed. Their arguments are pointers that seccomp cannot inspect, so the remaining guard is the kernel: each needs CAP_SYS_ADMIN in the user namespace that owns the mount, which a container process has only inside a user namespace it created itself. `sethostname`, `setns`, `clone3`, `bpf`, `keyctl` and every capability stay as in Docker's default.
+- **AppArmor** (`scripts/sandbox/boss-engine.apparmor`). The container profile is Docker's `docker-default`: mounts denied, no user namespaces, the same `/proc` and `/sys` rules. Only executing Codex's bundled bubblewrap (or `/usr/bin/bwrap`) moves a process into the child profile `engine_sandbox`, which may create user namespaces, mount and pivot_root.
+
+### The honest attack surface
+
+Unprivileged user namespaces are a real kernel attack surface. Bugs in overlayfs, nf_tables and the mount API have each let a process inside one become root. With this on, a process in api, worker or runner can reach that surface. Those containers run builds, so that includes repository code (an npm postinstall script, a test suite). On Docker Desktop and on hosts without AppArmor, seccomp is the only gate, and it is the same for every process in the container. With AppArmor the grant goes through the helper's path. That narrows the surface, but it is not a boundary: any process may execute that helper.
+
+What still holds: no capability is added, each build runs as its own unprivileged uid, a new network namespace has no route out, so the per-build egress fence still applies, and on a Mac the Colima or Docker Desktop VM separates all of it from the Mac. What a kernel exploit from inside would reach: the container's root, which has NET_ADMIN to manage that fence, and the API's environment. Keep the host kernel patched. Turn it on only when an engine needs it, and review the two profiles before you do.
+
+When a future Codex release needs a call these profiles do not allow, the check in `boss doctor` and Setup fails and names it. BOSS never widens the profiles on its own.
 
 ## Managed engine policies
 
