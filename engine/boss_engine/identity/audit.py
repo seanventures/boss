@@ -77,6 +77,9 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "agent.passport.flagged",
     "delegation.created", "delegation.used_first", "delegation.narrowed", "delegation.revoked",
     "delegation.expired", "delegation.suspended", "delegation.extended",
+    # fix_authority: the org default "agents fix failures with the starter's authority" widened
+    # a person's fixer grant or moved a run onto it
+    "delegation.org_default_applied",
     "token.issued", "token.exchanged", "token.denied", "credential.handed_out",
     "egress.denied",
     # vault

@@ -127,6 +127,16 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "ask you one question. 1 on, 0 to send every failure to a person.",
         "kind": "int", "min": 0, "max": 1,
     },
+    # AGENTS FIX FAILURES WITH THE STARTER'S AUTHORITY (identity/fix_authority.py): on by
+    # default; off sends a failure that needs the starter's authority back to them as a card.
+    "agents_fix_failures": {
+        "attr": "agents_fix_failures",
+        "label": "Agents fix failures with your authority",
+        "help": "When work you started fails, BOSS's agents fix it with your own authority (never "
+                "merge, production deploy, secrets or approvals) without asking you for a grant "
+                "again. Recorded in the audit log. 1 on, 0 to be asked each time.",
+        "kind": "int", "min": 0, "max": 1,
+    },
     "recovery_budget_cents": {
         "attr": "recovery_budget_cents",
         "label": "Recovery budget (cents)",

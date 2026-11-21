@@ -30,6 +30,17 @@ def test_an_ended_authority_is_not_retried_as_a_fresh_build():
     assert "repair build could not be started" not in str(choice)
 
 
+def test_an_authority_the_org_default_renewed_is_simply_run_again():
+    """identity/fix_authority (operator 2026-11-21): when the run is live again on its person's
+    fixer authority, the work that died of the ended grant is RETRIED — no person asked."""
+    failure = {"error": ENDED, "headline": ENDED, "why": ENDED}
+    signature, pattern = step_recovery.cause_signature("build", failure)
+    choice = step_recovery.coded_decision(
+        "build", {"failure": failure, "authority_renewed": True}, signature=signature,
+        pattern=pattern, last={}, allowed=step_recovery.KINDS["build"])
+    assert choice["action"] == step_recovery.RETRY
+
+
 def test_a_recovery_build_is_not_started_when_the_authority_has_ended(monkeypatch):
     monkeypatch.setattr(consent, "recorded_authority", lambda *_a, **_k: object())
     monkeypatch.setattr(consent, "acting_for_workflow_run", lambda *_a, **_k: None)

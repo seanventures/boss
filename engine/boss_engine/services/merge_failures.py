@@ -58,14 +58,25 @@ def classify(message: str) -> str:
     return FAILED
 
 
-def reason_words(kind: str, message: str, number: Any) -> str:
-    pr = f"PR #{number}" if number else "The pull request"
+def is_local_change(url: Any = None, message: Any = None) -> bool:
+    """A change set BOSS keeps on this machine (local_repo: `http://boss-local/local_<p>/…`, a
+    LocalMergeConflict's "does not merge cleanly"), not a GitHub pull request."""
+    u = str(url or "")
+    return "://boss-local/" in u or "/local_" in u or "does not merge cleanly" in str(message or "")
+
+
+def reason_words(kind: str, message: str, number: Any, url: Any = None) -> str:
+    local = is_local_change(url, message)
+    pr = (f"Change #{number}" if local else f"PR #{number}") if number else (
+        "The change" if local else "The pull request")
+    where = "BOSS could not merge it on this machine" if local else "GitHub would not merge it"
     if kind == NOT_MERGEABLE:
-        return f"{pr} conflicts with its base branch, so GitHub would not merge it"
+        return f"{pr} conflicts with its base branch, so {where}"
     if kind == HEAD_CHANGED:
         return f"{pr} changed while it was being merged"
     if kind == TRANSIENT:
-        return "GitHub did not answer just now"
+        return ("the repository did not answer just now" if local
+                else "GitHub did not answer just now")
     from .software_factory import _github_words
 
     try:
@@ -102,10 +113,100 @@ def _withdraw(connection: Any, project_id: str, decision_id: str, note: str,
                    decision_id, {**why, "why": note})
 
 
-def _pr_runs(connection: Any, project_id: str, url: str) -> list[str]:
-    return [str(r) for r in connection.execute(text(
+def _pr_runs(connection: Any, project_id: str, url: str, decision_id: Optional[str] = None,
+             branch_name: Optional[str] = None) -> list[str]:
+    """The builds behind a pull request or a LOCAL change set, newest first: by its URL, by the
+    run its merge question names (`recommendation.run_id`), by the local change set's own run
+    and branch (local_change_sets.run_id / branch), and by a `boss/code/<run>` branch. A local
+    change set's URL is BOSS's own (`http://boss-local/…`); the URL alone is not the only
+    record of which build a change belongs to (northgate-gateway #9, 2026-11-21)."""
+    found: list[str] = []
+
+    def add(rows: Any) -> None:
+        for r in rows:
+            if r and str(r) not in found:
+                found.append(str(r))
+
+    add(connection.execute(text(
         "SELECT id FROM code_task_runs WHERE project_id = :p AND pull_request_url = :u "
-        "ORDER BY created_at DESC"), {"p": project_id, "u": url}).scalars().all()]
+        "ORDER BY created_at DESC"), {"p": project_id, "u": url}).scalars().all())
+    if decision_id:
+        add([connection.execute(text(
+            "SELECT recommendation->>'run_id' FROM decisions WHERE id = :d AND project_id = :p"),
+            {"d": decision_id, "p": project_id}).scalar()])
+    if is_local_change(url) or branch_name:
+        number = str(url or "").rstrip("/").rsplit("/", 1)[-1]
+        try:
+            with connection.begin_nested():
+                add(connection.execute(text(
+                    "SELECT run_id FROM local_change_sets WHERE project_id = :p AND "
+                    "(CAST(number AS text) = :n OR branch = :b) ORDER BY updated_at DESC"),
+                    {"p": project_id, "n": number if number.isdigit() else "",
+                     "b": branch_name or ""}).scalars().all())
+        except Exception:  # noqa: BLE001 — an install without local change sets
+            pass
+    if branch_name and branch_name.startswith("boss/code/"):
+        add([branch_name[len("boss/code/"):]])
+    if not found:
+        return []
+    rows = connection.execute(text(
+        "SELECT id FROM code_task_runs WHERE project_id = :p AND id = ANY(:ids) "
+        "ORDER BY created_at DESC"), {"p": project_id, "ids": found}).scalars().all()
+    return [str(r) for r in rows]
+
+
+def conflict_note(number: Any, url: Any, message: Any) -> str:
+    """What the build agent is told about a conflict: keep both sides' intent, test, re-ask."""
+    local = is_local_change(url, message)
+    what = f"Change #{number}" if local else f"PR #{number}"
+    files = ""
+    said = str(message or "")
+    if ": " in said and " conflict" in said:
+        files = (" Conflicting files: "
+                 + said.split(": ", 1)[1].split(" conflict", 1)[0][:300].rstrip(".") + ".")
+    return (f"{what} conflicts with its base branch, so it cannot be merged.{files} Update this "
+            "branch from the base branch and resolve every conflict keeping BOTH the base's "
+            "changes and this change's intent (never drop either side to make it merge), run "
+            "the tests, and open it for merging again.")
+
+
+def conflict_steps(runs: list[str]) -> str:
+    """The exact steps for a person when BOSS could not hand the conflict over itself."""
+    where = f"build {runs[0]}" if runs else "the build that made this change"
+    return (f"BOSS could not start the build agent on this itself. Open {where}, press Retry "
+            "with the note 'Update from the base branch and resolve the conflict, keeping both "
+            "sides', and BOSS asks you to merge again when it passes.")
+
+
+def hand_off_conflict(connection: Any, settings: Any, project_id: str, decision_id: str,
+                      message: str = "") -> Optional[str]:
+    """A merge question whose merge failed on a conflict and went back to a person: hand it to
+    the build agent now (failure_owner's remedy for an open merge-conflict card). The new run's
+    id (and the question withdrawn), or None."""
+    row = connection.execute(text(
+        "SELECT recommendation FROM decisions WHERE id = :d AND project_id = :p"),
+        {"d": decision_id, "p": project_id}).scalar()
+    rec = row if isinstance(row, dict) else json.loads(row or "{}")
+    failed = rec.get(KEY) if isinstance(rec.get(KEY), dict) else {}
+    if failed.get("kind") != NOT_MERGEABLE:
+        return None
+    url = str(rec.get("pull_request_url") or rec.get("url") or "")
+    number = rec.get("pull_request_number") or str(url).rstrip("/").rsplit("/", 1)[-1]
+    runs = _pr_runs(connection, project_id, url, decision_id, rec.get("branch_name"))
+    if not runs:
+        return None
+    new_run = hand_to_builder(connection, settings, runs[0],
+                              conflict_note(number, url, message or failed.get("reason")))
+    if not new_run:
+        return None
+    words = (f"Merge failed: {failed.get('reason') or 'a conflict'}. BOSS handed it to the build "
+             f"agent ({new_run}) to update the branch; you will be asked again when it can merge.")
+    _mark(connection, decision_id, str(failed.get("reason") or "conflict"),
+          f"BOSS handed it to the build agent to update the branch ({new_run}); you will be "
+          "asked again when it can merge.", NOT_MERGEABLE, reopen=False)
+    _withdraw(connection, project_id, decision_id, words,
+              {"kind": "merge_conflict_handed_off", "run_id": new_run})
+    return new_run
 
 
 def hand_to_builder(connection: Any, settings: Any, run_id: str, note: str) -> Optional[str]:
@@ -135,7 +236,7 @@ def handle(service: Any, connection: Any, project_id: str, decision_id: str, num
 
     github = service.github
     kind = classify(message)
-    reason = reason_words(kind, message, number)
+    reason = reason_words(kind, message, number, url)
     service.receipts.mark_failed(connection, receipt_id, {"message": message, "kind": kind})
     service.events.emit(connection, project_id, "software_factory.pull_request_merge_failed",
                         "release_manager", "receipt", receipt_id,
@@ -185,10 +286,8 @@ def handle(service: Any, connection: Any, project_id: str, decision_id: str, num
                                 "release_manager", "receipt", receipt_id,
                                 {"pull_request_url": url, "words": words})
             return {**base, "status": "superseded", "message": words}
-        runs = _pr_runs(connection, project_id, url)
-        note = (f"PR #{number} conflicts with its base branch and GitHub will not merge it. "
-                "Update this branch from the base branch, resolve every conflict keeping both "
-                "the base's changes and this pull request's intent, and run the tests.")
+        runs = _pr_runs(connection, project_id, url, decision_id, branch_name)
+        note = conflict_note(number, url, message)
         new_run = hand_to_builder(connection, service.settings, runs[0], note) if runs else None
         if new_run:
             words = (f"Merge failed: {reason}. BOSS handed it to the build agent ({new_run}) "
@@ -199,8 +298,7 @@ def handle(service: Any, connection: Any, project_id: str, decision_id: str, num
             _withdraw(connection, project_id, decision_id, words,
                       {"kind": "merge_conflict_handed_off", "run_id": new_run})
             return {**base, "status": "needs_rebase", "message": words}
-        _mark(connection, decision_id, reason, "Retry the build to update its branch from the "
-              "base branch, then merge again.", kind, reopen=True)
+        _mark(connection, decision_id, reason, conflict_steps(runs), kind, reopen=True)
         return {**base, "status": "failed", "message": f"Merge failed: {reason}."}
     _mark(connection, decision_id, reason, "Fix that, then press Merge to try again.", kind,
           reopen=True)
@@ -245,7 +343,8 @@ def on_job_deadlettered(connection: Any, job_row: dict[str, Any], error: dict[st
         return
     message = str((error or {}).get("message") or "the merge job failed")
     kind = classify(message)
-    reason = reason_words(kind, message, payload.get("pull_request_number"))
+    reason = reason_words(kind, message, payload.get("pull_request_number"),
+                          payload.get("pull_request_url"))
     _mark(connection, decision_id, reason,
           "The merge job stopped after its last attempt (dead-lettered). "
           "Press Merge to try again.", kind, reopen=True)
@@ -257,4 +356,5 @@ def on_job_deadlettered(connection: Any, job_row: dict[str, Any], error: dict[st
 
 
 __all__ = ["FAILED", "HEAD_CHANGED", "KEY", "NOT_MERGEABLE", "TRANSIENT", "classify",
-           "hand_to_builder", "handle", "on_job_deadlettered", "reason_words"]
+           "conflict_note", "conflict_steps", "hand_off_conflict", "hand_to_builder",
+           "is_local_change", "handle", "on_job_deadlettered", "reason_words"]

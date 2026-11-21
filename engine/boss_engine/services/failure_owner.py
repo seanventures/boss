@@ -61,8 +61,24 @@ log = logging.getLogger("boss.failure_owner")
 REACH_DAYS = 14
 #: BOSS re-runs work by itself only when it failed this recently.
 ACT_HOURS = 72
-#: BOSS's own attempts per item before it hands it to a person, with the reason.
+#: BOSS's own attempts per item before it hands it to a person, with the reason: a BLIND retry
+#: (the same work again, BOSS's own side).
 MAX_ATTEMPTS = 2
+#: ...and when each attempt is a REAL FIX (a repair build that changes code or tests, a bad case
+#: dropped, an authority renewed, a conflict handed to the builder): one more is worth it.
+MAX_FIX_ATTEMPTS = 3
+#: Person-side causes an agent remedies itself with the starter's authority, by the org default
+#: (identity/fix_authority.py, operator 2026-11-21) — never handed to a person while it applies.
+AGENT_REMEDIES = {
+    "grant": "renews the run's authority from its person's fixer authority and runs it again",
+    "merge_conflict": "hands the conflict to the build agent (keep both sides, test, re-ask)",
+}
+
+
+def limit_for(cls: str, cause_code: str = "") -> int:
+    """How many attempts BOSS makes itself before a person is asked."""
+    base = str(cause_code or "").split(":", 1)[0]
+    return MAX_FIX_ATTEMPTS if cls == APP or base in AGENT_REMEDIES else MAX_ATTEMPTS
 #: Seconds before attempt n (1-based) may start, after the last failure.
 BACKOFF_SECONDS = (60, 600)
 #: Attempts started per tick (each may be a real build): bounded spend.
@@ -150,12 +166,15 @@ class Said:
 
 
 class NeedsPerson(Exception):
-    """BOSS cannot do this attempt itself: `reason` says why, `action` what a person does."""
+    """BOSS cannot do this attempt itself: `reason` says why, `action` what a person does, and
+    `exit` names the needs-person exit (needs_person_exits.EXITS) this is — a guard test fails a
+    raise that names none, so a new way to hand work to a person is never added silently."""
 
-    def __init__(self, reason: str, action: str = ""):
+    def __init__(self, reason: str, action: str = "", exit: str = ""):  # noqa: A002
         super().__init__(reason)
         self.reason = reason
         self.action = action
+        self.exit = exit
 
 
 # ─────────────────────────────── classification ───────────────────────────────
@@ -171,7 +190,11 @@ _PLATFORM_FIRST = re.compile(
     # A credential asked for NO repository ("for /": empty owner and name) is BOSS's own bug —
     # it never resolved the project's repository — not a repository a person must connect
     # (docs.update on a project whose code is on this machine, laptop 2026-11-18).
-    r"No GitHub credentials for /[:\s]", re.I)
+    r"No GitHub credentials for /[:\s]|"
+    # A project whose code is ON THIS MACHINE (`local_<project>/…`) never needs GitHub: asking
+    # for GitHub credentials for it is BOSS's own wrong turn, not a repository a person must
+    # connect (recipe-box, helpdesk-laptop cards, 2026-11-21).
+    r"No GitHub credentials for local_", re.I)
 
 #: (cause_code, pattern, what a person does) — ordered; the first match wins.
 _PERSON_RULES: tuple[tuple[str, str, str], ...] = (
@@ -224,12 +247,17 @@ _PERSON_RULES: tuple[tuple[str, str, str], ...] = (
      "Fix the host it names (access, sudo or disk) in Setup › Hosts, then press Done — retry."),
 )
 
+_PERSON_RULES_BY_CODE = {code: action for code, _pattern, action in _PERSON_RULES}
+
 #: The work's own fault: BOSS fixes it with a repair on the item's own lineage.
 _APP = re.compile(
     r"tests? failed|failed its checks|quality gate|ERR_MODULE_NOT_FOUND|Cannot find (?:module|package)|"
     r"SyntaxError|TypeError|exited \(code|exit(?:ed)? (?:code|status) [1-9]|returned 404|"
     r"no page at the site root|command not found|npm ERR|build failed|compile|"
-    r"health check|did not answer as expected", re.I)
+    r"health check|did not answer as expected|"
+    # A contract test's case failed: the app (or the case itself) is the work's to fix, never
+    # "BOSS's own side" (northgate-gateway API onboarding, 2026-11-20: contract_remedy).
+    r"contract case\(s\) failed|contract did not hold", re.I)
 
 #: Why BOSS cannot fix a person-side cause itself, in one line.
 _WHY_PERSON = {
@@ -241,12 +269,14 @@ _WHY_PERSON = {
     "registry_access": "The registry credential is the organisation's; a person provisions it on "
                        "the BOSS host.",
     "connector_login": "Only the connector's owner can sign in to it again.",
-    "grant": "Only a person can let an agent act for them.",
-    "approval_expired": "The step waited for a person's approval and nobody answered; only a "
-                        "person can give it.",
-    "merge_conflict": "Merging needs a choice about whose change wins; BOSS does not pick for you.",
+    "grant": "BOSS's agents act with the starter's authority by default, but that default is "
+             "turned off here (or the person revoked it), so the agent may not continue.",
+    "approval_expired": "The step waited for a person's approval and nobody answered; an "
+                        "approval is a person's answer, never an agent's.",
+    "merge_conflict": "BOSS could not start the build agent to resolve the conflict itself.",
     "host": "The host is yours: BOSS does not change its access, sudo or disk by itself.",
-    "needs_human": "Only a person can do what it needs.",
+    "needs_human": "The work stopped on something its agent cannot supply itself (an input "
+                   "only you have); the steps name it.",
 }
 
 
@@ -265,7 +295,8 @@ def classify(error: Any, *, failure_class: Any = None, reason_code: Any = None
         if re.search(pattern, raw, re.I):
             return PERSON, code, action
     if fc == "needs_human":
-        return PERSON, "needs_human", "Do what its page says it needs, then press Done — retry."
+        return PERSON, "needs_human", ("Open the work and follow the 'What to do' it shows (it "
+                                       "names the missing input), then press Done — retry.")
     if _APP.search(raw):
         return APP, "app", ""
     return PLATFORM, "platform", ""
@@ -309,12 +340,14 @@ class Surface:
     def retry(self, engine: Any, settings: Any, jobs: Any, item: Item, *, cls: str,
               attempt: int, note: str) -> str:
         """BOSS's own attempt. Returns what it started, in words; raises NeedsPerson."""
-        raise NeedsPerson("BOSS has no safe way to run this again by itself.")
+        raise NeedsPerson("BOSS has no safe way to run this again by itself.",
+                          exit="surface_has_no_retry")
 
     def person_retry(self, engine: Any, settings: Any, jobs: Any, ref: Mapping[str, Any],
                      actor: str) -> str:
         """The person's "Done — retry", run as that person."""
-        raise NeedsPerson("This cannot be run again from here; start it again from its page.")
+        raise NeedsPerson("This cannot be run again from here; start it again from its page.",
+                          exit="surface_has_no_person_retry")
 
     def still_failed(self, c: Any, ref: Mapping[str, Any]) -> Optional[bool]:
         """For an open owner row not seen failing this tick: True still failed, False it is
@@ -454,17 +487,23 @@ class CodeTasks(Surface):
     def retry(self, engine, settings, jobs, item, *, cls, attempt, note):
         from .code_task_service import RetryNeedsPerson, retry_code_task
 
+        # A build that failed before BOSS last restarted ran older code; with the org default
+        # (agents fix failures with the starter's authority) BOSS runs it again itself on the
+        # code it has now, within ACT_HOURS, instead of waiting for a person to press Retry.
+        restarted = _fix_default(engine, item.project_id)
         try:
             if cls == APP:
                 got = retry_code_task(engine, settings, jobs, item.id, automatic=True,
-                                      fix_note=note)
+                                      fix_note=note, after_update=restarted)
             else:
                 got = retry_code_task(engine, settings, jobs, item.id, automatic=True,
-                                      platform_retry=True, auto_retry_attempt=attempt)
+                                      platform_retry=True, auto_retry_attempt=attempt,
+                                      after_update=restarted)
         except RetryNeedsPerson as withheld:
-            raise NeedsPerson(str(withheld), "Press Done — retry to let it run again.") from None
+            raise NeedsPerson(str(withheld), "Press Done — retry to let it run again.",
+                              exit="build_retry_withheld") from None
         except ValueError as refused:
-            raise NeedsPerson(_words(refused, 280)) from None
+            raise NeedsPerson(_words(refused, 280), exit="build_retry_refused") from None
         new_id = str(got.get("run_id") or item.id)
         if new_id != item.id:
             with engine.begin() as c2:
@@ -488,6 +527,32 @@ class CodeTasks(Surface):
         if newest["status"] in _BUILD_LIVE:
             return None
         return True
+
+
+def _fix_default(engine_or_c: Any, project_id: Optional[str]) -> bool:
+    """Is the org default "agents fix failures with the starter's authority" on here?"""
+    if not project_id:
+        return False
+    from ..identity import fix_authority
+
+    try:
+        if hasattr(engine_or_c, "execute"):
+            with engine_or_c.begin_nested():
+                return fix_authority.enabled(engine_or_c, str(project_id))
+        with engine_or_c.begin() as c:
+            return fix_authority.enabled(c, str(project_id))
+    except Exception:  # noqa: BLE001 — unreadable: the default (on)
+        return True
+
+
+def _workflow_build(engine: Any, project_id: Any, run_id: str) -> Optional[str]:
+    """The newest build of a workflow run's lineage (the app its later steps check)."""
+    with engine.begin() as c:
+        found = c.execute(text(
+            "SELECT id FROM code_task_runs WHERE project_id = :p AND "
+            "finalize_ctx->>'workflow_run_id' = :r ORDER BY created_at DESC LIMIT 1"),
+            {"p": project_id, "r": run_id}).scalar()
+    return str(found) if found else None
 
 
 def _refused_by_a_person(output: Any) -> Any:
@@ -535,7 +600,9 @@ class WorkflowRuns(Surface):
                             _aware(r["updated_at"]),
                             {"step_id": r["step_id"], "step_status": r["step_status"],
                              "recovery": last if isinstance(last, dict) else {},
-                             "refused": _refused_by_a_person(output)}))
+                             "refused": _refused_by_a_person(output),
+                             "capability": str(output.get("capability") or ""),
+                             "output": output}))
         return out
 
     def settled(self, c, item):
@@ -578,7 +645,12 @@ class WorkflowRuns(Surface):
     def classify(self, c, item):
         last = item.hints.get("recovery") or {}
         if str(last.get("action") or "") == "ask_person" and last.get("question"):
-            # THE STEP'S OWN RECOVERY AGENT ALREADY DECIDED (step_recovery): only a person can.
+            # THE STEP'S OWN RECOVERY AGENT ALREADY DECIDED (step_recovery). When what it asks
+            # for is authority ("re-authorize", "grant … expired"), that is no longer a person's
+            # to give: BOSS's agents act with the starter's authority by default (AGENT_REMEDIES).
+            asked = f"{last.get('question') or ''} {last.get('reasoning') or ''} {item.error}"
+            if classify(asked)[1] == "grant" and _fix_default(c, item.project_id):
+                return PERSON, "grant", _PERSON_RULES_BY_CODE["grant"]
             return PERSON, "asked_by_" + str(last.get("agent") or "agent").lower(), \
                 f"{str(last['question']).rstrip('?.')}? Then press Done — retry."
         return super().classify(c, item)
@@ -586,14 +658,90 @@ class WorkflowRuns(Surface):
     def retry(self, engine, settings, jobs, item, *, cls, attempt, note):
         from .code_task_service import PROCESS_STARTED_AT
 
-        if item.failed_at is not None and item.failed_at < _aware(PROCESS_STARTED_AT):
+        fix_default = _fix_default(engine, item.project_id)
+        if item.failed_at is not None and item.failed_at < _aware(PROCESS_STARTED_AT) \
+                and not fix_default:
             # The same rule as a build's automatic retry: a step that failed before BOSS last
-            # started (an upgrade or a restart) ran other code, and is a person's to re-run.
+            # started (an upgrade or a restart) ran other code, and is a person's to re-run —
+            # unless the org default lets BOSS's agents re-run the starter's work themselves.
             raise NeedsPerson("It failed before BOSS last started (an upgrade or a restart), and "
                               "BOSS re-runs work from before a restart only when a person asks.",
-                              "Press Done — retry to run its failed step again.")
-        return self._retry(engine, item.project_id, item.id, item.hints.get("step_id"),
-                           actor=ACTOR, note=note)
+                              "Press Done — retry to run its failed step again.",
+                              exit="workflow_failed_before_restart")
+        renewed = ""
+        if fix_default:
+            # THE RUN'S GRANT ENDED? Its person's fixer authority continues it (the org default).
+            from ..identity import fix_authority
+
+            gap: list[str] = []
+            with engine.begin() as c:
+                from ..identity import consent
+
+                if consent.recorded_authority(c, item.id) is not None and \
+                        consent.acting_for_workflow_run(c, item.id) is None:
+                    if fix_authority.renew_run(c, project_id=str(item.project_id),
+                                               run_id=item.id, gap=gap) is None:
+                        raise NeedsPerson(
+                            "The authority this run was started under has ended and BOSS could "
+                            "not continue it with its person's authority: " + "; ".join(gap),
+                            exit="workflow_authority_not_renewable")
+                    renewed = "renewed the run's authority from its person's (org default), "
+        remedy = self._remedy(engine, settings, jobs, item, note)
+        if remedy is not None:
+            return renewed + remedy
+        return renewed + self._retry(engine, item.project_id, item.id, item.hints.get("step_id"),
+                                     actor=ACTOR, note=note)
+
+    def _remedy(self, engine, settings, jobs, item, note) -> Optional[str]:
+        """A step whose failure an agent can diagnose and FIX (not just re-run): a contract test's
+        unpassable case dropped with its reason, or the app repaired for the cases it fails
+        (contract_remedy). None: no remedy for this step, a plain retry."""
+        if item.hints.get("capability") != "contract_test":
+            return None
+        from . import contract_remedy, workflows
+        from .core import emit_event
+
+        output = item.hints.get("output") or {}
+        step_id = str(item.hints.get("step_id") or "")
+        with engine.begin() as c:
+            step = workflows._step_map(workflows._run_spec(c, item.id)).get(step_id) or {}  # noqa: SLF001
+            spec_cases = ((step.get("binding") or {}).get("inputs") or {}).get("cases")
+            plan = contract_remedy.diagnose(output, spec_cases if isinstance(spec_cases, list)
+                                            else None)
+            if plan["drop"] and not plan["fix_app"]:
+                amendment = {"drop": plan["drop"], "by": ACTOR, "at": _now().isoformat(),
+                             "why": "the case can never pass as written (light lane: a "
+                                    "non-production check is fixed by an agent, with the reason)"}
+                c.execute(text(
+                    "UPDATE workflow_step_runs SET output = COALESCE(output, '{}'::jsonb) || "
+                    "jsonb_build_object(CAST(:k AS text), CAST(:a AS jsonb)), updated_at = now() "
+                    "WHERE id = (SELECT id FROM workflow_step_runs WHERE workflow_run_id = :r AND "
+                    "step_id = :s ORDER BY updated_at DESC LIMIT 1)"),
+                    {"k": contract_remedy.AMENDMENT_KEY, "a": json.dumps(amendment),
+                     "r": item.id, "s": step_id})
+                emit_event(c, str(item.project_id), contract_remedy.EVENT, ACTOR, "workflow_run",
+                           item.id, {"step_id": step_id, "dropped": plan["drop"]})
+        if plan["drop"] and not plan["fix_app"]:
+            names = ", ".join(d["name"] for d in plan["drop"])
+            why = plan["drop"][0]["reason"]
+            self._retry(engine, item.project_id, item.id, step_id, actor=ACTOR,
+                        note=f"BOSS dropped {names}: {why}")
+            return f"dropped the case it can never pass ({names}) with the reason, and is " \
+                   f"running '{step_id}' again"
+        build = _workflow_build(engine, item.project_id, item.id)
+        if not build:
+            return None
+        from .code_task_service import RetryNeedsPerson, retry_code_task
+
+        try:
+            got = retry_code_task(engine, settings, jobs, build, automatic=True,
+                                  fix_note=contract_remedy.repair_note(plan["fix_app"]),
+                                  after_update=_fix_default(engine, item.project_id))
+        except (RetryNeedsPerson, ValueError) as refused:
+            raise NeedsPerson(_words(refused, 280), "Press Done — retry to let it run again.",
+                              exit="contract_repair_refused") from None
+        return (f"building a fix for the cases the API fails (build {got.get('run_id') or ''}); "
+                f"'{step_id}' runs again after it")
 
     @staticmethod
     def _retry(engine, project_id, run_id, step_id, *, actor, note):
@@ -601,17 +749,19 @@ class WorkflowRuns(Surface):
 
         if not step_id:
             raise NeedsPerson("BOSS could not tell which step failed, so it cannot retry one.",
-                              "Open the run and retry its failed step.")
+                              "Open the run and retry its failed step.",
+                              exit="workflow_step_unknown")
         try:
             with engine.begin() as c:
                 workflows.retry_failed_step(c, project_id=str(project_id), run_id=str(run_id),
                                             step_id=str(step_id), actor=actor, note=note[:900])
         except workflows.WorkflowError as refused:
-            raise NeedsPerson(_words(refused, 280)) from None
+            raise NeedsPerson(_words(refused, 280), exit="workflow_retry_refused") from None
         except Exception as exc:  # noqa: BLE001 — a consent refusal and the like
             if type(exc).__name__ in ("ConsentRequired", "ConsentNeeded"):
                 raise NeedsPerson("Running the step again needs your grant.",
-                                  "Press Done — retry and accept the grant it asks for.") from None
+                                  "Press Done — retry and accept the grant it asks for.",
+                                  exit="workflow_retry_consent") from None
             raise
         return f"running its '{step_id}' step again"
 
@@ -737,10 +887,22 @@ class Deployments(Surface):
     def retry(self, engine, settings, jobs, item, *, cls, attempt, note):
         if item.hints.get("workflow_run_id"):
             raise NeedsPerson("Its workflow run's deploy step retries it; that step is not "
-                              "retryable now.", "Open the run and retry its deploy step.")
+                              "retryable now.", "Open the run and retry its deploy step.",
+                              exit="deploy_owned_by_its_run")
         if item.hints.get("kind") != "stack":
-            raise NeedsPerson("A deploy to your host changes what runs there; BOSS re-plans it "
-                              "only when you ask.")
+            if _fix_default(engine, item.project_id) and not _production(engine, item):
+                # A NON-PRODUCTION host deploy is re-PLANNED by the agent with the starter's
+                # authority (the org default): a new run and ChangeSet, held for approval by
+                # its target's own rule — never executed here, never production.
+                from .delivery_pipeline import redeploy
+
+                got = redeploy(engine, settings, item.id, actor=ACTOR, execute=False)
+                return (f"planning the deploy again (deploy "
+                        f"{got.get('id') or got.get('deployment_run_id') or ''}, held by its "
+                        "target's approval rule)")
+            raise NeedsPerson("A deploy to your host changes what runs there; BOSS re-plans a "
+                              "production deploy only when you ask.",
+                              exit="production_host_deploy")
         return self._plan(engine, settings, item.project_id, item.hints, actor=ACTOR)
 
     @staticmethod
@@ -778,6 +940,16 @@ class Deployments(Surface):
         return True if status == "failed" else False
 
 
+def _production(engine: Any, item: Item) -> bool:
+    """Is this host deploy's environment production (or unknown: then it is treated as one)?"""
+    with engine.begin() as c:
+        env = c.execute(text(
+            "SELECT COALESCE(r.environment, t.environment) FROM deployment_runs r LEFT JOIN "
+            "deployment_targets t ON t.id = r.deployment_target_id WHERE r.id = :i"),
+            {"i": item.id}).scalar()
+    return str(env or "production").strip().lower() in ("production", "prod", "live")
+
+
 #: deploy_repair.underway's states in which an agent is genuinely acting on the deployment.
 _UNDERWAY_ACTIVE = ("fixing", "retrying", "looking", "deploying_fix")
 
@@ -810,12 +982,14 @@ def require_deploy_permission(c: Any, settings: Any, project_id: str, actor: str
         from ..identity.scope import ResolvedScope
 
         if ctx is None:
-            raise NeedsPerson("Only a signed-in person who may deploy here can redeploy it.")
+            raise NeedsPerson("Only a signed-in person who may deploy here can redeploy it.",
+                              exit="redeploy_needs_signed_in_person")
         decision = authz.check(ctx, P.DEPLOYMENT_CREATE,
                                ResolvedScope.in_project(ctx.principal.org_id, project_id), db=c)
         if not decision.allowed:
             raise NeedsPerson("You may not deploy in this project; ask someone who may "
-                              "(deployment:create) to press Done — retry.")
+                              "(deployment:create) to press Done — retry.",
+                              exit="redeploy_not_permitted")
         return
     from .members import (MemberDirectoryService, ProjectMemberNotFoundError,
                           ProjectMemberPermissionError)
@@ -824,7 +998,8 @@ def require_deploy_permission(c: Any, settings: Any, project_id: str, actor: str
         MemberDirectoryService(settings).require_member(c, project_id, actor,
                                                         permission="providerops_manage")
     except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as refused:
-        raise NeedsPerson(f"You may not deploy in this project: {refused}") from None
+        raise NeedsPerson(f"You may not deploy in this project: {refused}",
+                          exit="redeploy_not_permitted") from None
 
 
 class Previews(Surface):
@@ -889,10 +1064,10 @@ class Previews(Surface):
                 got = retry_code_task(engine, settings, jobs, run_id, automatic=True,
                                       fix_note=note)
             except RetryNeedsPerson as withheld:
-                raise NeedsPerson(str(withheld), "Press Done — retry to let it run again.") \
-                    from None
+                raise NeedsPerson(str(withheld), "Press Done — retry to let it run again.",
+                                  exit="build_retry_withheld") from None
             except ValueError as refused:
-                raise NeedsPerson(_words(refused, 280)) from None
+                raise NeedsPerson(_words(refused, 280), exit="build_retry_refused") from None
             return f"building a fix so the app starts (build {got.get('run_id') or ''})"
         from .preview_service import start_preview_async
 
@@ -1060,6 +1235,10 @@ class Jobs(Surface):
                                     "(1 h, 2 h, 4 h … up to a day apart)", by="proof_schedule")
         if kind == "github.pull_request.merge":
             card = _open_decision(c, (item.hints["payload"] or {}).get("decision_id"))
+            if card and self._conflict_is_agents(c, item, card):
+                # A CONFLICT IS THE BUILD AGENT'S (northgate-gateway #9, 2026-11-21): not held
+                # by the merge card — the loop hands it to the builder (AGENT_REMEDIES).
+                card = None
             if card:
                 return Said(NEEDS_PERSON, "Its merge card says why the merge failed; Merge "
                             "there runs it again.", by="merge_failures", decision_id=card,
@@ -1105,16 +1284,54 @@ class Jobs(Surface):
         from ..identity.lineage import DELEGATED_JOB_KINDS
         from .deadletters import is_boss_principal
 
+        if item.hints["kind"] == "github.pull_request.merge":
+            return self._merge_conflict(engine, settings, item)
+        for_its_person = False
         if not is_boss_principal(item.hints.get("principal")) or \
                 item.hints["kind"] in DELEGATED_JOB_KINDS:
-            raise NeedsPerson("This job ran for a person, so BOSS runs it again only when they "
-                              "say so.", "Press Done — retry to run it again as you.")
+            if not _fix_default(engine, item.project_id):
+                raise NeedsPerson("This job ran for a person, so BOSS runs it again only when they "
+                                  "say so.", "Press Done — retry to run it again as you.",
+                                  exit="job_ran_for_a_person")
+            # THE ORG DEFAULT: re-run as exactly the person (and grant) it ran for.
+            for_its_person = True
         delay = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS)) - 1]
         return self._requeue(engine, settings, item.id, actor=ACTOR, as_boss=True,
-                             run_after_seconds=delay)
+                             run_after_seconds=delay, for_its_person=for_its_person)
 
     @staticmethod
-    def _requeue(engine, settings, deadletter_id, *, actor, as_boss, run_after_seconds=0):
+    def _conflict_is_agents(c, item, card: str) -> bool:
+        """The merge card's merge failed on a conflict, the org default applies, and BOSS has
+        not spent its attempts handing it to the builder."""
+        rec = c.execute(text("SELECT recommendation FROM decisions WHERE id = :d"),
+                        {"d": card}).scalar()
+        rec = _json(rec, {}) or {}
+        failed = rec.get("merge_failed") if isinstance(rec.get("merge_failed"), dict) else {}
+        if failed.get("kind") != "not_mergeable" or not _fix_default(c, item.project_id):
+            return False
+        row = _row(c, item.surface, item.key) or {}
+        return int(row.get("attempts") or 0) < limit_for(PERSON, "merge_conflict")
+
+    @staticmethod
+    def _merge_conflict(engine, settings, item) -> str:
+        """A merge that failed on a conflict: the build agent updates the branch, keeping both
+        sides, runs the tests and the person is asked to merge again (merge_failures)."""
+        from . import merge_failures
+
+        decision = str((item.hints.get("payload") or {}).get("decision_id") or "")
+        with engine.begin() as c:
+            new_run = merge_failures.hand_off_conflict(c, settings, str(item.project_id),
+                                                       decision, item.error) if decision else None
+        if not new_run:
+            raise NeedsPerson("BOSS could not start the build agent to update the branch.",
+                              merge_failures.conflict_steps([]),
+                              exit="merge_conflict_not_handed_off")
+        return (f"handing the conflict to the build agent ({new_run}) to update the branch; "
+                "you are asked to merge again when it passes")
+
+    @staticmethod
+    def _requeue(engine, settings, deadletter_id, *, actor, as_boss, run_after_seconds=0,
+                 for_its_person=False):
         from .deadletters import DeadletterRemediationBlocked, DeadletterRemediationService
 
         try:
@@ -1123,9 +1340,9 @@ class Jobs(Surface):
                 got = DeadletterRemediationService(settings).requeue_job_deadletter(
                     c, deadletter_id=deadletter_id, actor=actor,
                     reason="failure_owner_retry", run_after_seconds=run_after_seconds,
-                    as_boss=as_boss)
+                    as_boss=as_boss, for_its_person=for_its_person)
         except (DeadletterRemediationBlocked, ValueError) as refused:
-            raise NeedsPerson(_words(refused, 280)) from None
+            raise NeedsPerson(_words(refused, 280), exit="job_requeue_refused") from None
         return (f"{reopened}running it again (job {got.get('requeued_job_id') or ''})")
 
     def person_retry(self, engine, settings, jobs, ref, actor):
@@ -1182,20 +1399,20 @@ def _reopen_panel(c: Any, run_id: str) -> str:
                     {"r": run_id}).mappings().first()
     if row is None:
         raise NeedsPerson("Its panel no longer exists, so there is nothing to run again.",
-                          "Start a new panel from the project's page.")
+                          "Start a new panel from the project's page.", exit="panel_gone")
     status, error = str(row["status"] or ""), str(row["error"] or "")
     if status == "running":
         return ""
     if status == "completed":
         raise NeedsPerson("Its panel already finished, so there is nothing to run again.",
-                          "Open the panel from the project's page to read its PRD.")
+                          "Open the panel from the project's page to read its PRD.", exit="panel_finished")
     if status == "cancelled" and "built from the brief" in error.lower():
         raise NeedsPerson("Its workflow already went on without this panel (BOSS built from "
                           "the brief), so running the panel again would change nothing.",
-                          "Start a new panel from the project's page if you want a spec.")
+                          "Start a new panel from the project's page if you want a spec.", exit="panel_superseded")
     if status not in ("failed", "cancelled"):
         raise NeedsPerson(f"Its panel is {status or 'in an unknown state'}, so it cannot be "
-                          "resumed from here.", "Open the panel from the project's page.")
+                          "resumed from here.", "Open the panel from the project's page.", exit="panel_unknown_state")
     c.execute(text(
         "UPDATE meeting_runs SET status = 'running', error = NULL, updated_at = now(), "
         "state = (COALESCE(state, '{}'::jsonb) - 'failure_class' - 'reason_code') || "
@@ -1304,7 +1521,7 @@ class Meetings(Surface):
             status = c.execute(text("SELECT status FROM meeting_runs WHERE id = :r"),
                                {"r": run_id}).scalar()
             if status != "failed":
-                raise NeedsPerson("The panel is no longer failed, so there is nothing to resume.")
+                raise NeedsPerson("The panel is no longer failed, so there is nothing to resume.", exit="panel_not_failed")
             _reopen_panel(c, run_id)
             job = jobs.create_job(c, project_id=str(project_id), task_id=task_id,
                                   kind="meeting.step", payload={"run_id": run_id})
@@ -1398,10 +1615,77 @@ class GitHubConnections(Surface):
                          {"i": ref["id"]}).scalar() == "error"
 
 
+class ConnectionHolds(Surface):
+    """A model-connection proof whose provider outcome is unknown, its spend HELD on a
+    "Reconcile connection proof" card (connection_spend). Held, Connect for that model is stuck.
+
+    THE CASE (northgate-gateway, dec_c22f866208d046649986, 2026-11-20): Claude Code answered
+    "You've hit your weekly limit" with no HTTP status, BOSS could not tell whether the call was
+    billed, and the card asked the person to reconcile a receipt. The provider's own words say it
+    served nothing: BOSS's agent settles it REFUSED at $0 itself (connection_spend.agent_settle);
+    a truly unknown outcome is released at the conservative estimate, within what was held."""
+
+    key = "connection_hold"
+    tables = ("receipts",)
+    noun = "Model connection check"
+
+    def failed(self, c, since, pid=None):
+        rows = c.execute(text(
+            "SELECT id, project_id, question, cost_summary->>'receipt_id' AS receipt_id, "
+            "cost_summary->>'message' AS message, created_at FROM decisions "
+            "WHERE status = ANY(:open) AND recommendation->>'action' = 'connection_reconciliation' "
+            "AND created_at >= :since AND (CAST(:pid AS text) IS NULL OR project_id = :pid) "
+            "ORDER BY created_at DESC LIMIT :n"),
+            {"open": _open_list(), "since": since, "pid": pid, "n": MAX_ITEMS_PER_SURFACE}
+        ).mappings().all()
+        return [Item(self.key, f"hold:{r['receipt_id'] or r['id']}", str(r["id"]), r["project_id"],
+                     str(r["question"] or "Reconcile connection proof")[:120],
+                     str(r["message"] or "Connection provider outcome is unknown."),
+                     _aware(r["created_at"]), {"receipt_id": r["receipt_id"]}) for r in rows]
+
+    def classify(self, c, item):
+        return PLATFORM, "platform:held_proof", ""
+
+    def retry(self, engine, settings, jobs, item, *, cls, attempt, note):
+        from .connection_spend import HoldRefused, agent_settle
+
+        receipt = str(item.hints.get("receipt_id") or "")
+        if not receipt:
+            raise NeedsPerson("The card names no receipt, so BOSS cannot tell which hold it is.",
+                              "Open Setup › Models › Held checks and release it there.",
+                              exit="held_proof_unnamed")
+        try:
+            with engine.begin() as c:
+                agent_settle(c, settings, str(item.project_id), receipt, actor=ACTOR)
+                c.execute(text("UPDATE decisions SET status = 'resolved', resolution_note = "
+                               "'Settled by BOSS''s agent (failure owner)', updated_at = now() "
+                               "WHERE id = :d AND status = ANY(:open)"),
+                          {"d": item.id, "open": _open_list()})
+        except HoldRefused as refused:
+            if refused.status == 409 and "already settled" in str(refused):
+                with engine.begin() as c:
+                    c.execute(text("UPDATE decisions SET status = 'resolved', resolution_note = "
+                                   "'Already settled', updated_at = now() WHERE id = :d "
+                                   "AND status = ANY(:open)"), {"d": item.id, "open": _open_list()})
+                return "closing its card: the proof was already settled"
+            raise NeedsPerson(str(refused), "Open Setup › Models › Held checks and release it.",
+                              exit="held_proof_not_settled") from None
+        return "settling the held proof itself (the provider's outcome decides the charge)"
+
+    def person_retry(self, engine, settings, jobs, ref, actor):
+        return self.retry(engine, settings, jobs, Item(self.key, ref["key"], ref["id"],
+                                                       ref.get("project_id"), "", "", None,
+                                                       ref.get("hints") or {}),
+                          cls=PLATFORM, attempt=1, note="")
+
+    def still_failed(self, c, ref):
+        return _open_decision(c, ref["id"]) is not None
+
+
 #: THE REGISTRY, in processing order (a workflow run before the deployments it owns).
 SURFACES: dict[str, Surface] = {s.key: s for s in (
     CodeTasks(), WorkflowRuns(), Deployments(), Previews(), Jobs(), Meetings(), Backups(),
-    GitHubConnections())}
+    GitHubConnections(), ConnectionHolds())}
 
 #: Tables the code writes a failure state to that are NOT a surface of their own, and why their
 #: failures still have an owner. The invariant guard fails on a table in neither place.
@@ -1447,7 +1731,8 @@ def _write(c: Any, item: Item, *, state: str, words: str, by: str = "failure_own
            cls: Optional[str] = None, cause_code: Optional[str] = None, cause: str = "",
            reason: str = "", action: str = "", decision_id: Optional[str] = None,
            attempts: Optional[int] = None, next_attempt_at: Optional[datetime] = None,
-           note: Optional[dict[str, Any]] = None, now: Optional[datetime] = None) -> None:
+           note: Optional[dict[str, Any]] = None, now: Optional[datetime] = None,
+           max_attempts: Optional[int] = None) -> None:
     """Upsert the item's owner row; `note` (an attempt, a hand-off) is appended to its history
     and said as an event when the state or the words changed."""
     from .core import emit_event, make_id
@@ -1474,7 +1759,7 @@ def _write(c: Any, item: Item, *, state: str, words: str, by: str = "failure_own
         " class = COALESCE(EXCLUDED.class, failure_owners.class), "
         " cause_code = COALESCE(EXCLUDED.cause_code, failure_owners.cause_code), "
         " cause = CASE WHEN EXCLUDED.cause <> '' THEN EXCLUDED.cause ELSE failure_owners.cause END, "
-        " owned_by = EXCLUDED.owned_by, attempts = COALESCE(CAST(:at AS int), failure_owners.attempts), "
+        " owned_by = EXCLUDED.owned_by, max_attempts = EXCLUDED.max_attempts, attempts = COALESCE(CAST(:at AS int), failure_owners.attempts), "
         " next_attempt_at = EXCLUDED.next_attempt_at, words = EXCLUDED.words, "
         " reason = EXCLUDED.reason, action = EXCLUDED.action, decision_id = EXCLUDED.decision_id, "
         " hints = EXCLUDED.hints, failed_at = COALESCE(EXCLUDED.failed_at, failure_owners.failed_at), "
@@ -1483,7 +1768,7 @@ def _write(c: Any, item: Item, *, state: str, words: str, by: str = "failure_own
         " resolved_at = CASE WHEN EXCLUDED.state = 'resolved' THEN CAST(:now AS timestamptz) END"),
         {"id": make_id("fown"), "s": item.surface, "k": item.key, "i": item.id,
          "p": item.project_id, "t": item.title[:200], "st": state, "cl": cls, "cc": cause_code,
-         "ca": cause[:500], "ow": AGENT, "by": by, "at": attempts, "mx": MAX_ATTEMPTS,
+         "ca": cause[:500], "ow": AGENT, "by": by, "at": attempts, "mx": max_attempts or MAX_ATTEMPTS,
          "na": next_attempt_at, "w": words[:600], "r": reason[:800], "ac": action[:600],
          "d": decision_id, "h": json.dumps(hints, default=str), "hist": json.dumps([entry],
                                                                                   default=str),
@@ -1495,12 +1780,13 @@ def _write(c: Any, item: Item, *, state: str, words: str, by: str = "failure_own
                                          **(note or {})})
 
 
-def fixing_words(attempt: int, doing: str) -> str:
-    return f"BOSS is fixing this: attempt {attempt} of {MAX_ATTEMPTS} — {doing}."
+def fixing_words(attempt: int, doing: str, limit: int = MAX_ATTEMPTS) -> str:
+    return f"BOSS is fixing this: attempt {attempt} of {max(limit, attempt)} — {doing}."
 
 
 def _card(c: Any, item: Item, *, cls: str, cause_code: str, cause: str, action: str,
-          reason: str) -> Optional[str]:
+          reason: str, guidance: Optional[Mapping[str, Any]] = None,
+          exit: str = "") -> Optional[str]:  # noqa: A002
     """ONE action item per cause per surface per project: a second item failing the same way
     joins the first card (its `items`), so 28 docs updates that need a repository are one card."""
     from .core import create_blocking_decision
@@ -1526,13 +1812,17 @@ def _card(c: Any, item: Item, *, cls: str, cause_code: str, cause: str, action: 
         return str(found)
     noun = SURFACES[item.surface].noun
     what = item.title if item.title.lower() != noun.lower() else noun
-    question = _clip(f"{noun} · {what}: {cause.rstrip('.')}. {action}", 280)
+    guidance = dict(guidance or {})
+    first = (guidance.get("steps") or [action])[0]
+    question = _clip(f"{noun} · {what}: {cause.rstrip('.')}. Do: {first}", 280)
     return create_blocking_decision(
         c, str(pid), None, question,
         {"action": CARD_ACTION, "surface": item.surface, "items": [ref],
          "cause_code": cause_code, "class": cls, "cause": cause, "what_to_do": action,
          "recommended": action, "why": reason, "why_a_person": reason, "why_not": reason,
-         "title": item.title, "asked_by": None},
+         "title": item.title, "asked_by": None, "exit": exit or None,
+         "what_failed": guidance.get("what_failed"), "steps": guidance.get("steps"),
+         "after": guidance.get("after")},
         {}, CARD_REASON, default_action="hold")
 
 
@@ -1578,21 +1868,33 @@ def _own(engine: Any, settings: Any, jobs: Any, surface: Surface, item: Item, no
         cls, cause_code, action = surface.classify(c, item)
         cause = _words(item.error, 200)
         made = surface.attempts_made(c, item, int((row or {}).get("attempts") or 0))
+        old = item.failed_at is not None and now - item.failed_at > timedelta(hours=ACT_HOURS)
+        # AN AGENT REMEDIES IT WITH THE STARTER'S AUTHORITY (AGENT_REMEDIES, the org default):
+        # a cause that used to be a person's (an ended grant, a merge conflict) is the agent's.
+        agent_remedy = cls == PERSON and cause_code in AGENT_REMEDIES and \
+            _fix_default(c, item.project_id)
+        limit = limit_for(cls, cause_code)
         if row and row["state"] == NEEDS_PERSON and _open_decision(c, row.get("decision_id")) \
                 and row.get("item_id") == item.id:
-            return NEEDS_PERSON                 # its card stands until it is answered
+            if not _now_agents(row, cls, agent_remedy, made, limit, old):
+                return NEEDS_PERSON             # its card stands until it is answered
+            # THE CARD IS STALE: what it asked a person for is an agent's to do now (the org
+            # default, a re-classification: a contract case is the work's, not the host's).
+            _withdraw_own_card(c, item, str(row["decision_id"]),
+                               "Withdrawn: BOSS's agent can fix this itself now — "
+                               + (AGENT_REMEDIES.get(cause_code) or "it builds a fix") + ".")
         if row and row.get("owned_by") == "person" and row["state"] == FIXING and \
                 (_aware(row.get("updated_at")) or now) > now - timedelta(minutes=PERSON_GRACE_MINUTES):
             return FIXING                       # a person just said it is done: give it time
-        old = item.failed_at is not None and now - item.failed_at > timedelta(hours=ACT_HOURS)
-        if cls == PERSON:
-            reason = _WHY_PERSON.get(cause_code, "Only a person can do what it needs.")
+        if cls == PERSON and not agent_remedy:
+            reason = _WHY_PERSON.get(cause_code, "Its agent cannot supply what it needs itself.")
             if cause_code.startswith("asked_by_"):
                 rec = item.hints.get("recovery") or {}
                 reason = _clip(f"{rec.get('agent') or 'Its agent'} looked into it: "
                                f"{rec.get('reasoning') or cause}", 600)
             return _hand_over(c, item, cls=cls, cause_code=cause_code, cause=cause,
-                              action=action, reason=reason, attempts=made, now=now)
+                              action=action, reason=reason, attempts=made, now=now,
+                              exit=f"person_cause:{cause_code}")
         if old:
             # OLD WORK IS NEVER RE-RUN BY ITSELF, whatever was tried before (review #232).
             return _hand_over(
@@ -1600,20 +1902,18 @@ def _own(engine: Any, settings: Any, jobs: Any, surface: Surface, item: Item, no
                 action="Press Done — retry to run it again now.",
                 reason=(f"It failed {_ago(item.failed_at, now)} ago. BOSS re-runs work by itself "
                         f"only within {ACT_HOURS} hours of a failure, because what it was for "
-                        "may have changed since."), attempts=made, now=now)
-        if made >= MAX_ATTEMPTS:
+                        "may have changed since."), attempts=made, now=now, exit="old_work")
+        if made >= limit:
             if cls == PLATFORM:
                 _self_fix(c, settings, item, cause_code, cause)
             return _hand_over(
                 c, item, cls=cls, cause_code=f"{cause_code}:spent", cause=cause,
-                action=("Check what it names, then press Done — retry." if cls == APP else
-                        "Check the BOSS host is healthy (Infra › Doctor), then press Done — "
-                        "retry."),
+                action=action or "Press Done — retry to run it again.",
                 reason=(f"BOSS tried {made} time{'s' if made != 1 else ''} and it failed the same "
-                        "way each time" + (" on BOSS's own side; BOSS filed a fix for itself."
-                                           if cls == PLATFORM else
-                                           ": the fix needs a person's judgement.")),
-                attempts=made, now=now)
+                        "way each time" + (" on BOSS's own side; BOSS recorded it as its own bug "
+                                           "to fix." if cls == PLATFORM else
+                                           ": its agent could not fix it.")),
+                attempts=made, now=now, exit="attempts_spent")
         due = _aware((row or {}).get("next_attempt_at"))
         attempt = made + 1
         if (due is not None and due > now) or budget.acts <= 0:
@@ -1622,35 +1922,42 @@ def _own(engine: Any, settings: Any, jobs: Any, surface: Surface, item: Item, no
             later = (f"{_plan(cls)} at {due:%H:%M} UTC" if due is not None and due > now
                      else f"{_plan(cls)} on its next pass")
             _write(c, item, state=FIXING, cls=cls, cause_code=cause_code, cause=cause,
-                   words=fixing_words(attempt, later), attempts=made,
+                   words=fixing_words(attempt, later, limit), attempts=made,
                    next_attempt_at=due if due is not None and due > now else None, now=now)
             return FIXING
     # ACT, outside the read transaction: an attempt opens its own.
     budget.acts -= 1
     note = _fix_note(surface, item, cause)
+    # An agent remedy of a build's person-side cause (an ended grant) is a FIX of the work that
+    # failed under it: the build is retried told what failed, under the starter's authority.
+    act_cls = (APP if surface.key in ("code_task", "preview") else PLATFORM) \
+        if agent_remedy else cls
     try:
-        doing = surface.retry(engine, settings, jobs, item, cls=cls, attempt=attempt, note=note)
+        doing = surface.retry(engine, settings, jobs, item, cls=act_cls, attempt=attempt,
+                              note=note)
     except NeedsPerson as np:
         with begin(engine) as c:
             return _hand_over(c, item, cls=cls, cause_code=f"{cause_code}:withheld", cause=cause,
                               action=np.action or "Press Done — retry to run it again.",
-                              reason=np.reason, attempts=made, now=now)
+                              reason=np.reason, attempts=made, now=now, exit=np.exit)
     except Exception as exc:  # noqa: BLE001 — an attempt that could not start is still an attempt
         log.warning("failure owner: attempt %s on %s %s did not start", attempt, surface.key,
                     item.key, exc_info=True)
         wait = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS)) - 1]
         with begin(engine) as c:
             _write(c, item, state=FIXING, cls=cls, cause_code=cause_code, cause=cause,
+                   max_attempts=limit,
                    words=fixing_words(attempt, f"the attempt could not start ({_words(exc, 120)}); "
                                                f"BOSS tries again at "
-                                               f"{now + timedelta(seconds=wait):%H:%M} UTC"),
+                                               f"{now + timedelta(seconds=wait):%H:%M} UTC",
+                                      limit),
                    attempts=attempt, next_attempt_at=now + timedelta(seconds=wait),
                    note={"attempt": attempt, "started": False, "error": _words(exc, 200)}, now=now)
         return FIXING
     wait = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS)) - 1]
     with begin(engine) as c:
         _write(c, item, state=FIXING, cls=cls, cause_code=cause_code, cause=cause,
-               words=fixing_words(attempt, doing), attempts=attempt,
+               words=fixing_words(attempt, doing, limit), attempts=attempt, max_attempts=limit,
                next_attempt_at=now + timedelta(seconds=wait),
                note={"attempt": attempt, "started": True, "doing": doing, "class": cls}, now=now)
     return FIXING
@@ -1674,13 +1981,42 @@ def _fix_note(surface: Surface, item: Item, cause: str) -> str:
 
 
 def _hand_over(c: Any, item: Item, *, cls: str, cause_code: str, cause: str, action: str,
-               reason: str, attempts: int, now: datetime) -> str:
+               reason: str, attempts: int, now: datetime, exit: str = "") -> str:  # noqa: A002
+    """ONE card for a person, with exact guidance (failure_guidance: what failed, why, the
+    steps, what BOSS does after) and the needs-person exit it is (needs_person_exits)."""
+    from . import failure_guidance
+
+    guidance = failure_guidance.build(cause_code=cause_code, cls=cls, title=item.title,
+                                      cause=cause, action=action, reason=reason, hints=item.hints)
     card = _card(c, item, cls=cls, cause_code=cause_code, cause=cause, action=action,
-                 reason=reason)
+                 reason=reason, guidance=guidance, exit=exit)
     _write(c, item, state=NEEDS_PERSON, cls=cls, cause_code=cause_code, cause=cause,
-           words=f"Needs you: {action}", reason=reason, action=action, decision_id=card,
-           attempts=attempts, note={"handed_over": True, "why": reason[:300]}, now=now)
+           words=f"Needs you: {guidance['steps'][0]}", reason=reason, action=action,
+           decision_id=card, attempts=attempts,
+           note={"handed_over": True, "why": reason[:300], "exit": exit or None}, now=now)
     return NEEDS_PERSON
+
+
+def _now_agents(row: Mapping[str, Any], cls: str, agent_remedy: bool, made: int, limit: int,
+                old: bool) -> bool:
+    """An open card that asks a person for what BOSS's agents may now do themselves: the cause is
+    an agent remedy (the org default), or it was handed over as BOSS's own side spent and the
+    failure now reads as the work's own (a real fix, with an attempt left)."""
+    if old or made >= limit:
+        return False
+    was = str(row.get("cause_code") or "")
+    if agent_remedy:
+        return True
+    return cls != PERSON and was.endswith(":spent") and str(row.get("class") or "") != cls
+
+
+def _withdraw_own_card(c: Any, item: Item, decision_id: str, note: str) -> None:
+    from .run_decisions import _withdraw_with_note
+
+    if not item.project_id:
+        return
+    _withdraw_with_note(c, decision_id, str(item.project_id), note, actor=ACTOR,
+                        why={"why": "BOSS's agent fixes it itself", "key": item.key})
 
 
 def _self_fix(c: Any, settings: Any, item: Item, cause_code: str, cause: str) -> None:
@@ -1857,7 +2193,7 @@ def on_answered(connection: Any, settings: Any, jobs: Any, decision: Mapping[str
                                 cause=ref.get("cause") or np.reason,
                                 action=np.action or "Start it again from its page.",
                                 reason=f"Could not run it again: {np.reason}",
-                                attempts=0, now=_now())
+                                attempts=0, now=_now(), exit=np.exit or "person_retry_refused")
                         continue
                     except Exception:  # noqa: BLE001 — at least say so on the item, below
                         log.warning("failure owner: could not hand back %s", ref["key"],
@@ -1892,7 +2228,8 @@ def public(row: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
         return None
     return {"state": row["state"], "words": row["words"], "reason": row.get("reason") or "",
             "action": row.get("action") or "", "decision_id": row.get("decision_id"),
-            "attempts": int(row.get("attempts") or 0), "max_attempts": MAX_ATTEMPTS,
+            "attempts": int(row.get("attempts") or 0),
+            "max_attempts": int(row.get("max_attempts") or MAX_ATTEMPTS),
             "owner": row.get("owner") or AGENT, "by": row.get("owned_by") or "",
             "class": row.get("class"), "at": (row.get("updated_at").isoformat()
                                               if isinstance(row.get("updated_at"), datetime)

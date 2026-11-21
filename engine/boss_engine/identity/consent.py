@@ -105,6 +105,87 @@ def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, proje
                           by_boss: bool = False, workflow_run_id: Optional[str] = None,
                           gap: Optional[list[str]] = None,
                           same_build: bool = False) -> Optional[Acting]:
+    """`_carry_retry_authority` (the grant the parent ran under, when it still covers), then —
+    for a retry BOSS itself decided — the ORG DEFAULT (identity/fix_authority.py, operator
+    2026-11-21): BOSS's fixing agents continue the work with its person's own delegable
+    authority, never wider than that person ∩ the agents' ceilings. The grant a build ran under
+    ending with its run (a workflow's "this run only" grant) or for "that build only" is no
+    longer a reason to stop: northgate-gateway #9's merge conflict was never handed to its
+    builder for exactly that."""
+    role_keys, permissions, repos = list(role_keys), list(permissions), list(repos)
+    own_gap: list[str] = []
+    carried = _carry_retry_authority(
+        db, parent_run_id=parent_run_id, new_run_id=new_run_id, project_id=project_id,
+        role_keys=role_keys, permissions=permissions, repos=repos, by_boss=by_boss,
+        workflow_run_id=workflow_run_id, gap=own_gap, same_build=same_build)
+    if carried is not None or not by_boss or not project_id:
+        if gap is not None:
+            gap.extend(own_gap)
+        return carried
+    fixer_gap: list[str] = []
+    renewed = _fixer_retry_authority(db, parent_run_id=parent_run_id, new_run_id=new_run_id,
+                                     project_id=project_id, role_keys=role_keys,
+                                     permissions=permissions, repos=repos, gap=fixer_gap)
+    if renewed is None and gap is not None:
+        # The LAST entry is what the blocked build says: why its own grant did not carry, and
+        # why the org default could not either.
+        gap.extend(own_gap + fixer_gap)
+        if own_gap and fixer_gap:
+            gap.append(f"{own_gap[-1]}; and {fixer_gap[-1]}")
+    return renewed
+
+
+def _fixer_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, project_id: str,
+                           role_keys: list[str], permissions: list[str], repos: list[str],
+                           gap: list[str]) -> Optional[Acting]:
+    """The person behind the lineage (the build's own, else the nearest person-started
+    ancestor's) lends BOSS's fixing agents their authority by the org default. A lineage a KEY
+    or BOSS itself started has no signed-in person behind it and stays as it was (always-on work
+    runs on the project's Captain authority instead); a grant its person REVOKED is their "no"."""
+    from . import fix_authority, grants, runs
+
+    parent = runs.original_build_authority(db, parent_run_id)
+    origin = parent_run_id
+    if _carries_nothing(parent):
+        origin, parent = _lineage_person(db, parent_run_id)
+        origin = origin or parent_run_id
+    person = None
+    if parent is not None and not getattr(parent, "system", False) \
+            and not str(parent.principal_id or "").startswith("sys_"):
+        person = parent.principal_id
+    if not person:
+        gap.append("no signed-in person started this work (a key or BOSS itself did), so there "
+                   "is no one's authority for its agents to use")
+        return None
+    ran_under = grants.load(parent.grant_id, db=db) if parent.grant_id else None
+    if ran_under is not None and getattr(ran_under.status, "value", ran_under.status) in (
+            "revoked", "suspended"):
+        gap.append(f"grant {ran_under.id}, which the work ran under, was revoked; that is its "
+                   "person's no, so BOSS's agents do not continue it")
+        return None
+    agent_ids = []
+    for rk in role_keys:
+        aid = runs.agent_for_role(db, project_id, rk)
+        if not aid:
+            gap.append(f"its builder ({rk}) has no Passport in this project")
+            return None
+        agent_ids.append(aid)
+    grant = fix_authority.ensure(db, person_id=person, project_id=project_id, agent_ids=agent_ids,
+                                 permissions=permissions, repos=repos,
+                                 why=f"BOSS retries build {parent_run_id} to fix it",
+                                 ref=f"run_ct:{parent_run_id}", gap=gap)
+    if grant is None:
+        return None
+    base = (parent.run_id if parent is not None and parent.run_id else f"run_ct:{origin}")
+    return Acting(principal_id=grant.user_principal_id, org_id=grant.org_id, grant_id=grant.id,
+                  run_id=f"{base}/retry:{new_run_id}")
+
+
+def _carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, project_id: Optional[str],
+                           role_keys: Iterable[str], permissions: Iterable[str], repos: Iterable[str] = (),
+                           by_boss: bool = False, workflow_run_id: Optional[str] = None,
+                           gap: Optional[list[str]] = None,
+                           same_build: bool = False) -> Optional[Acting]:
     """A RETRY KEEPS ITS GRANT (R2): the authority the parent build was started under (its first
     code.task job), carried to the retry as a child run of the parent's (`<parent run>/retry:<new>`),
     so a task-bound grant covers the retry exactly as it covered the parent — and nothing else.
@@ -1114,7 +1195,7 @@ def require_for_schedule(db: Any, *, project_id: str, spec: Any, input_data: Any
         return None
     needed = frozenset(k for k in needed if catalogue.is_known(k) and catalogue.meta(k).delegable)
     standing = [g for g in grants.for_person(ctx.principal.id, db=db)
-                if not g.task_run_id and not grants.is_captain_authority(g) and grants.covers(g, agent_ids=[p.agent_id for p in agents], permissions=needed,
+                if not g.task_run_id and not grants.is_boss_kept_authority(g) and grants.covers(g, agent_ids=[p.agent_id for p in agents], permissions=needed,
                                                        project_id=project_id, repos=repos, run_id=None)]
     if not standing:
         raise ConsentRequired(_consent_body(db, ctx_person=ctx.principal.id, org_id=ctx.principal.org_id, agents=agents,

@@ -1337,6 +1337,11 @@ class Settings(BaseSettings):
     # spent: a cost ceiling in cents (its model turns plus the repair builds it starts) and a
     # wall-time ceiling in minutes. 0 turns the agent off (failures go to a person as before).
     step_recovery: int = Field(default=1, alias="BOSS_STEP_RECOVERY")
+    # AGENTS FIX FAILURES WITH THE STARTER'S AUTHORITY (identity/fix_authority.py): BOSS's
+    # recovery agents continue a person's failing work with that person's own delegable
+    # authority (an org default, recorded in the audit log). 1 on (the default), 0 off: the work
+    # then stops on a card asking that person for a grant, as before.
+    agents_fix_failures: int = Field(default=1, alias="BOSS_AGENTS_FIX_FAILURES")
     # BUILDS RECOVER THEMSELVES (governed_code_task_service._retry_after_infra_failure): a build
     # that stops on BOSS's own platform error (failure_class `infra`, never a needs_human one: a
     # login, a toolchain, a budget) is retried by BOSS, resuming its saved work, up to this many

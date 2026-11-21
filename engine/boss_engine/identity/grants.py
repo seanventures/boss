@@ -114,6 +114,16 @@ def is_captain_authority(grant: Optional[DelegationGrant]) -> bool:
     return grant is not None and grant.authority_kind == CAPTAIN_AUTHORITY
 
 
+#: identity_delegation_grants.authority_kind of a person's fixer authority (fix_authority.py).
+FIXER_AUTHORITY = "fixer"
+
+
+def is_boss_kept_authority(grant: Optional[DelegationGrant]) -> bool:
+    """An authority BOSS keeps for its own agents (the Captain's, a person's fixer authority):
+    never a person's consent for NEW work, so consent, schedules and find_covering skip it."""
+    return grant is not None and grant.authority_kind in (CAPTAIN_AUTHORITY, FIXER_AUTHORITY)
+
+
 def load(grant_id: Optional[str], *, db: Any) -> Optional[DelegationGrant]:
     from sqlalchemy import text
 
@@ -743,7 +753,7 @@ def find_covering(person_id: str, *, agent_ids: Iterable[str], permissions: froz
 
     agent_ids, repos = list(agent_ids), list(repos)
     # The project's Captain authority is never a person's consent: a person's own start asks them.
-    found = [g for g in for_person(person_id, db=db) if not is_captain_authority(g)
+    found = [g for g in for_person(person_id, db=db) if not is_boss_kept_authority(g)
              and covers(g, agent_ids=agent_ids, permissions=permissions, project_id=project_id, repos=repos, run_id=run_id)]
     found.sort(key=lambda g: (0 if g.task_run_id and not g.task_run_id.startswith(PENDING_PREFIX)
                               else 1 if not g.task_run_id else 2))

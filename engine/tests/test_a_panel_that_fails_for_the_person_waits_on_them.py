@@ -160,8 +160,12 @@ def test_done_retry_that_cannot_rerun_says_so_and_keeps_the_item_open(
         row = _owner(c, "job", key)
         assert _status(c, "deadletters", dl) == "open", "nothing was re-queued"
         assert _status(c, "meeting_runs", rid) == status
+        # An OPEN card holds it. (BOSS now tries the re-run itself first, as its person — the
+        # org default — so the person's card already says the same thing and is the one that
+        # stays open; here on_answered is called without closing it, as no approve route ran.)
+        assert fo._open_decision(c, row["decision_id"])
     assert row["state"] == "needs_person", "never Resolved when nothing ran"
-    assert said in row["reason"] and row["decision_id"] != card["id"]
+    assert said in row["reason"]
 
 
 @pytest.mark.parametrize("ended", ["failed", "cancelled", "completed"])

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from threading import Event, Thread
 from time import monotonic
 from types import SimpleNamespace
@@ -936,6 +937,48 @@ def release_hold(c, settings, project_id, receipt_id, *, actor, reason):
     fact["status"] = "succeeded" if settle["succeeded"] else "failed"
     fact["released"] = released
     return fact
+
+
+#: A provider's own words that it served nothing: a usage or rate limit, no credit, a refusal.
+#: Claude Code says "You've hit your weekly limit · resets 6pm (UTC)" with no HTTP status
+#: (northgate-gateway, dec_c22f866208d046649986, 2026-11-20).
+_NOT_SERVED = re.compile(
+    r"hit your (?:weekly|daily|session|usage)? ?limit|usage limit|rate[ _-]?limit|"
+    r"\bquota\b|credit balance|insufficient (?:credit|funds|quota)|\b429\b|too many requests|"
+    r"not logged in|invalid api key|authentication", re.I)
+
+
+def agent_settle(c, settings, project_id: str, receipt_id: str, *, actor: str) -> dict:
+    """BOSS's agent settles a held proof itself (failure_owner, the org default that agents fix
+    failures with the starter's authority): when the provider's own words say it served nothing
+    (a usage limit, a rate limit, no credit, a rejected login), the proof is settled REFUSED at
+    $0; otherwise it is released at the conservative estimate Review shows (never above the
+    amount already held, so never above the budget that admitted it). Recorded with the reason.
+    Raises HoldRefused when there is nothing to settle."""
+    from .receipts import ReceiptService
+
+    rows = _hold_rows(c, project_id, receipt_id, lock=True)
+    if not rows:
+        raise HoldRefused("BOSS has no connection proof with this receipt.", 404)
+    fact = _facts(c, project_id, rows[0])
+    if fact["status"] != "in_progress":
+        raise HoldRefused(f"This proof is already settled ({fact['status']}); nothing is held.")
+    outcome = dict(fact["outcome"] or {})
+    said = f"{outcome.get('provider_error') or ''} {outcome.get('summary') or ''}"
+    if outcome.get("kind") == "unknown" and _NOT_SERVED.search(said):
+        prior = _result_of(dict(rows[0]))
+        outcome.update(kind="refused", summary=describe_outcome({**outcome, "kind": "refused"},
+                                                                fact["provider_label"]))
+        ReceiptService().merge_result(c, receipt_id, {**prior, "connection_outcome": outcome})
+        reason = (f"BOSS's agent settled this itself: {fact['provider_label']} said "
+                  f"\"{str(outcome.get('provider_error') or '')[:120]}\", so it served nothing "
+                  "and nothing was billed ($0).")
+    else:
+        reason = (f"BOSS's agent settled this itself at the conservative estimate "
+                  f"(${(fact['release']['cost_usd_micros'] or 0) / 1e6:.4f}, within the "
+                  f"${fact['held_usd_micros'] / 1e6:.4f} already held): the provider's outcome "
+                  "is unknown, and a held proof blocks Connect for this model.")
+    return release_hold(c, settings, project_id, receipt_id, actor=actor, reason=reason)
 
 
 def _require_principal_holds(c, project_id: str, principal_id: str) -> None:
