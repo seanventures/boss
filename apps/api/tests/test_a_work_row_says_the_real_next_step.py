@@ -57,7 +57,9 @@ def _id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
 
-def _seed(db, pid: str, *, with_prd: bool = True, preview_status: str = "running") -> dict:
+def _seed(db, pid: str, *, with_prd: bool = True, preview_status: str = "running",
+          card_checks: dict | None = None, run_checks: dict | None = None,
+          more_status: str = "running") -> dict:
     now = datetime.now(timezone.utc)
     at = now - timedelta(minutes=40)
     did, vid, rid = _id("wfd"), _id("wfv"), _id("wfr")
@@ -82,7 +84,8 @@ def _seed(db, pid: str, *, with_prd: bool = True, preview_status: str = "running
         "INSERT INTO decisions (id, project_id, question, recommendation, status, risk_tier, "
         "created_at) VALUES (:i, :p, 'Merge change #3?', CAST(:r AS JSONB), 'pending', 2, :t)"),
         {"i": merge_dec, "p": pid, "t": at + timedelta(minutes=10),
-         "r": json.dumps({"action": "review_pull_request", "pull_request_url": LOCAL_URL})})
+         "r": json.dumps({"action": "review_pull_request", "pull_request_url": LOCAL_URL,
+                          **({"checks_failing": card_checks} if card_checks else {})})})
     build, more = _id("crun"), _id("crun")
     status = {"meeting": "succeeded", "build": "succeeded", "preview": "succeeded",
               "pass_2": "succeeded", "report": "succeeded", "more_tests": "waiting",
@@ -112,12 +115,13 @@ def _seed(db, pid: str, *, with_prd: bool = True, preview_status: str = "running
         "pull_request_number, decision_id, finalize_ctx, created_at, updated_at) VALUES "
         "(:i, :p, 'completed', 'done', 'The bubble present', :u, 3, :d, CAST(:f AS JSONB), :at, :at)"),
         {"i": build, "p": pid, "u": LOCAL_URL, "d": merge_dec, "at": at + timedelta(minutes=2),
-         "f": json.dumps({"workflow_run_id": rid, "completed_stages": ["write_tests"]})})
+         "f": json.dumps({"workflow_run_id": rid, "completed_stages": ["write_tests"],
+                          **({"checks_failing": run_checks} if run_checks else {})})})
     db.execute(text(
         "INSERT INTO code_task_runs (id, project_id, status, phase, title, finalize_ctx, "
-        "created_at, updated_at) VALUES (:i, :p, 'running', 'write_tests', 'More tests', "
+        "created_at, updated_at) VALUES (:i, :p, :st, 'write_tests', 'More tests', "
         "CAST(:f AS JSONB), :at, :now)"),
-        {"i": more, "p": pid, "at": at + timedelta(minutes=6), "now": now,
+        {"i": more, "p": pid, "st": more_status, "at": at + timedelta(minutes=6), "now": now,
          "f": json.dumps({"workflow_run_id": rid, "root_run_id": build, "attempt": "2"})})
     prev = _id("prev")
     db.execute(text(
@@ -212,3 +216,38 @@ def test_a_workflow_build_is_named_from_its_prd():
     # A step that names its build keeps it; no PRD, nothing changes.
     assert build_named_from_prd(ctx, {"title": "Fix the login"})["title"] == "Fix the login"
     assert build_named_from_prd({"input": {"title": "X"}, "steps": {}}, {"title": "X"}) == {"title": "X"}
+
+
+#: A merge card's checks-failing record (checks_failing.collect), as the governed build writes it.
+CHECKS = {"gates": [{"gate": "tests_pass", "label": "Tests pass", "security": False},
+                    {"gate": "security_clean", "label": "Security clean", "security": True}],
+          "findings": [], "security": True}
+
+
+def test_a_change_opened_with_failing_checks_is_never_ready(engine, project):
+    """Contributed from an enterprise install (2026-11-20): the merge card said CHECKS FAILING,
+    the Work row said "Ready to merge" with Review green. The row reads the card's own record."""
+    with engine.begin() as db:
+        got = _seed(db, project, card_checks=CHECKS, more_status="completed")
+    row = _row(engine, project, got["run_id"])
+    mp = row["links"]["merge_pr"]
+    assert mp["checks_failing"] == {"gates": ["security_clean", "tests_pass"], "security": True,
+                                    "words": "Security clean, Tests pass"}
+    # Merge stays the person's action; Review & tests is red, not a tick.
+    assert row["action_label"] == "Merge"
+    assert {s["key"]: s["state"] for s in row["stages"]}["review"] == "failed"
+
+
+def test_the_runs_own_record_counts_when_the_card_has_none(engine, project):
+    with engine.begin() as db:
+        got = _seed(db, project, run_checks=CHECKS, more_status="completed")
+    mp = _row(engine, project, got["run_id"])["links"]["merge_pr"]
+    assert mp["checks_failing"]["gates"] == ["security_clean", "tests_pass"]
+
+
+def test_passing_checks_say_nothing_about_failing(engine, project):
+    with engine.begin() as db:
+        got = _seed(db, project, more_status="completed")
+    row = _row(engine, project, got["run_id"])
+    assert row["links"]["merge_pr"]["checks_failing"] is None
+    assert {s["key"]: s["state"] for s in row["stages"]}["review"] != "failed"

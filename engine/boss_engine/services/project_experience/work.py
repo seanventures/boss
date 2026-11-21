@@ -25,6 +25,7 @@ from typing import Any, Iterable, Mapping, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .. import checks_failing
 from . import work_outcome
 from .new_work import issue_of
 from .titles import prd_title, short_title
@@ -159,6 +160,16 @@ def _decided(strip: list[dict[str, str]], steps: Mapping[str, Mapping[str, Any]]
     return [{**st, "state": state} if st["key"] == "design" else
             {**st, "state": plan} if st["key"] == "plan" and plan and st["state"] in ("waiting", "now")
             else st for st in strip]
+
+
+def _checks_failing_review(strip: list[dict[str, Any]], merge_pr: Optional[Mapping[str, Any]]
+                           ) -> list[dict[str, Any]]:
+    """A CHANGE OPENED WITH ITS CHECKS FAILING DID NOT PASS REVIEW & TESTS: that station is
+    failed (red) while its merge waits, never a green tick beside "checks failing". A later
+    attempt still fixing it (merge_pr.fixing) is BOSS at work there, so it is left alone."""
+    if not merge_pr or not merge_pr.get("checks_failing") or merge_pr.get("fixing"):
+        return strip
+    return [{**s, "state": "failed"} if s["key"] == "review" else s for s in strip]
 
 
 def _with_merge(strip: list[dict[str, str]], merge_open: bool) -> list[dict[str, str]]:
@@ -390,7 +401,9 @@ def _attempt_sql() -> str:
         "dd.recommendation->'merge_failed'->>'reason' AS merge_failed, "
         "dd.recommendation->'followups' AS followups, "
         "c.state->'deferred_findings' AS deferred_list, "
-        "c.finalize_ctx->'checks_failing' AS checks_failing, "
+        # What the merge card leads with (checks_failing.for_work), else the run's own record.
+        "COALESCE(dd.recommendation->'checks_failing', c.finalize_ctx->'checks_failing') "
+        "AS checks_failing, "
         f"{LAST_ACTIVITY_SQL} AS last_activity, {live_job_sql('c')} AS live_job "
         "FROM code_task_runs c LEFT JOIN decisions dd ON dd.id = c.decision_id ")
 
@@ -832,7 +845,9 @@ def _merge_links(members: list[dict[str, Any]], merge: Optional[Mapping[str, Any
                            "external_url": url, "follow_up_of": after,
                            # Its last merge failed (merge_failures): said, never "Ready".
                            "failed": merge.get("merge_failed") or None,
-                           "checks_failing": bool(merge.get("checks_failing"))}
+                           # Opened with its checks failing (checks_failing.py): said, never
+                           # "Ready" — the same record its merge card shows.
+                           "checks_failing": checks_failing.for_work(merge.get("checks_failing"))}
         # Ready WITH follow-ups (quality_bar.merge_followups): still "Ready to merge", with how
         # many BOSS is fixing after it. Only when there are some.
         _f = _followups_of(merge.get("followups"))
@@ -1025,11 +1040,11 @@ def _run_items(connection: Connection, project_id: str, limit: int,
             "updated_at": iso(r["updated_at"]),
             "last_attempt_at": iso((latest or {}).get("created_at")) or iso(r["created_at"]),
             "stalled_since": iso(since),
-            "stages": _with_station_facts(_merge_held_ship(_built(_reviewed_in_build(
-                _with_merge(_decided(stages(spec, run_steps, has_pr=bool(pr_url) and merge is None,
-                                            finished=finished), run_steps), merge is not None),
-                members), spec, run_steps, members), merge_held), spec, run_steps, roster, now,
-                members),
+            "stages": _checks_failing_review(_with_station_facts(_merge_held_ship(_built(
+                _reviewed_in_build(_with_merge(_decided(stages(
+                    spec, run_steps, has_pr=bool(pr_url) and merge is None, finished=finished),
+                    run_steps), merge is not None), members), spec, run_steps, members),
+                merge_held), spec, run_steps, roster, now, members), merge_links["merge_pr"]),
             # The one action a person takes here, named for what it does (never "Merge" on a
             # deploy approval): Merge · Approve deploy · Approve plan · Decide.
             "action_label": ("Merge" if merge is not None and gate is None
@@ -1117,7 +1132,9 @@ def _build_items(connection: Connection, project_id: str,
                                           reverse=True) if m.get("pull_request_url")), None)
         pr_url = (shown or {}).get("external_url") or (
             with_pr["pull_request_url"] if with_pr else None)
-        strip = _build_strip({**latest, "merge_open": bool(merge)}, latest["_state"])
+        strip = _checks_failing_review(
+            _build_strip({**latest, "merge_open": bool(merge)}, latest["_state"]),
+            merge_links["merge_pr"])
         if waits is not None:
             # Not a failure: it waits on a merge (PR amber) or its cause is gone (quiet).
             strip = ([{**st, "state": "skipped"} for st in strip] if waits.get("resolved")
