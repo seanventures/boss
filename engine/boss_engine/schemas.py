@@ -853,6 +853,9 @@ class AgentChatRequest(BaseModel):
     #: client polls GET /v1/agent/turns/{turn_id} (the console does, and resumes it after a
     #: reload). False waits for the answer, as every API client always has.
     background: bool = False
+    #: THE SAME KEY IS THE SAME TURN: a resent send (a dropped response, a double press)
+    #: returns the turn it already started — no second message, no second answer.
+    idempotency_key: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_turn(self):

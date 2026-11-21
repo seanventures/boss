@@ -7156,10 +7156,19 @@ CREATE TABLE IF NOT EXISTS agent_chat_turns (
   act_id TEXT,
   error TEXT,
   result JSONB,
+  -- The writes its tools made, recorded as they happened (chat_turns.note_action): a failed
+  -- turn names them as done, so "ask again" never repeats them.
+  actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  -- The client's idempotency key: the same key is the same turn, never a second message.
+  client_key TEXT,
+  -- host:pid:token of the process answering it; start-up fails a dead owner's turns at once.
+  owner TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   finished_at TIMESTAMPTZ
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_chat_turns_client_key
+  ON agent_chat_turns(project_id, actor, client_key) WHERE client_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_agent_chat_turns_thread
   ON agent_chat_turns(thread_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_chat_turns_live

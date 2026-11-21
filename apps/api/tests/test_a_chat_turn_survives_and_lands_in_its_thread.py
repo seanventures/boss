@@ -229,3 +229,128 @@ def test_another_actors_turn_is_not_readable(client, monkeypatch):
     other = client.get(f"/v1/agent/turns/{turn_id}",
                        params={"project_id": "northpeak-bank-b", "actor": ACTOR})
     assert other.status_code in (403, 404)
+
+
+# ── review round: a swept turn that finishes, what a failed turn already did, replays ─────────
+
+
+def test_a_turn_swept_while_working_then_finishing_is_a_labelled_late_answer(client, engine,
+                                                                          monkeypatch):
+    release = threading.Event()
+
+    def slow(*_a, **_k):
+        assert release.wait(20)
+        return _reply("Here is what I found.")
+
+    _stub(monkeypatch, slow)
+    thread = _ensure(client, "")
+    turn_id = client.post("/v1/engine/agent/chat", json={
+        "project_id": PROJECT, "actor": ACTOR, "thread_id": thread,
+        "message": "A long one", "background": True}).json()["turn_id"]
+    with engine.begin() as c:
+        c.execute(text("UPDATE agent_chat_turns SET heartbeat_at = now() - INTERVAL '1 hour' "
+                       "WHERE id = :t"), {"t": turn_id})
+    assert _turn(client, turn_id)["status"] == "failed"          # swept
+    release.set()
+    deadline = time.monotonic() + 20
+    contents: list = []
+    while time.monotonic() < deadline:
+        contents = [m["content"] for m in _messages(client, thread)["messages"]]
+        if len(contents) == 3:
+            break
+        time.sleep(0.1)
+    assert contents[0] == "A long one"
+    assert contents[1].startswith("That turn did not finish.")
+    assert contents[2].startswith("**Late answer.**")
+    assert contents[2].endswith("Here is what I found.")
+    assert _turn(client, turn_id)["status"] == "failed"          # never flips back to done
+
+
+def test_the_heartbeat_moves_while_a_tool_blocks(client, engine, monkeypatch):
+    from boss_engine.services import chat_turns
+
+    monkeypatch.setattr(chat_turns, "HEARTBEAT_SECONDS", 0.2)
+    release = threading.Event()
+
+    def blocks(*_a, **_k):
+        assert release.wait(20)
+        return _reply("ok")
+
+    _stub(monkeypatch, blocks)
+    thread = _ensure(client, "")
+    turn_id = client.post("/v1/engine/agent/chat", json={
+        "project_id": PROJECT, "actor": ACTOR, "thread_id": thread,
+        "message": "block", "background": True}).json()["turn_id"]
+    with engine.begin() as c:
+        c.execute(text("UPDATE agent_chat_turns SET heartbeat_at = now() - INTERVAL '14 minutes' "
+                       "WHERE id = :t"), {"t": turn_id})
+    time.sleep(1.0)
+    with engine.begin() as c:
+        fresh = c.execute(text("SELECT heartbeat_at > now() - INTERVAL '1 minute' "
+                               "FROM agent_chat_turns WHERE id = :t"), {"t": turn_id}).scalar()
+    release.set()
+    assert fresh is True
+    assert _wait_for(client, turn_id)["status"] == "done"
+
+
+def test_a_failed_turn_names_what_it_already_did(client, engine, monkeypatch):
+    from apps.api.app.config import get_settings
+    from boss_engine.context import EngineContext
+    from boss_engine.tools import build_default_registry
+
+    def writes_then_dies(*_a, project_id, actor, **_k):
+        ctx = EngineContext(settings=get_settings(), engine=engine)
+        made = build_default_registry().invoke(
+            "remember", ctx, project_id=project_id, actor=actor,
+            args={"kind": "project", "body": "the nightly job runs at 02:00"})
+        assert made.get("ok") is not False, made
+        raise RuntimeError("the model connection dropped")
+
+    _stub(monkeypatch, writes_then_dies)
+    thread = _ensure(client, "")
+    said = client.post("/v1/engine/agent/chat", json={
+        "project_id": PROJECT, "actor": ACTOR, "thread_id": thread, "message": "Remember this"})
+    assert said.status_code == 500
+    line = _messages(client, thread)["messages"][-1]["content"]
+    assert "already done this, and it stands" in line
+    assert "- remember" in line
+    assert "ask again only for what is not listed" in line
+    assert "Nothing was changed" not in line
+
+
+def test_the_same_idempotency_key_is_the_same_turn(client, monkeypatch):
+    _stub(monkeypatch, lambda *_a, **_k: _reply("Once."))
+    thread = _ensure(client, "")
+    body = {"project_id": PROJECT, "actor": ACTOR, "thread_id": thread,
+            "message": "only once", "idempotency_key": "press-1"}
+    first = client.post("/v1/engine/agent/chat", json=body)
+    assert first.status_code == 200, first.text
+    again = client.post("/v1/engine/agent/chat", json=body)
+    assert again.status_code == 200, again.text
+    assert again.json()["turn_id"] == first.json()["turn_id"]
+    replay = client.post("/v1/engine/agent/chat", json={**body, "background": True})
+    assert replay.status_code == 202 and replay.json()["turn_id"] == first.json()["turn_id"]
+    assert [m["content"] for m in _messages(client, thread)["messages"]] == ["only once", "Once."]
+
+
+def test_start_up_fails_the_turns_of_a_dead_process_at_once(client, engine):
+    import os
+    import socket
+
+    from boss_engine.services import chat_turns
+
+    thread = _ensure(client, "")
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO agent_messages (id, thread_id, role, content) "
+                       "VALUES ('amsg_dead', :t, 'user', 'asked of a dead worker')"), {"t": thread})
+        dead = chat_turns.open_row(c, project_id=PROJECT, thread_id=thread, actor=ACTOR,
+                                   agent_role="", user_message_id="amsg_dead")
+        mine = chat_turns.open_row(c, project_id=PROJECT, thread_id=thread, actor=ACTOR,
+                                   agent_role="", user_message_id="amsg_dead")
+        # The dead process had our pid (a restarted container reuses it) and its own token.
+        c.execute(text("UPDATE agent_chat_turns SET owner = :o WHERE id = :t"),
+                  {"o": f"{socket.gethostname()}:{os.getpid()}:deadbeef0000", "t": dead})
+        failed = chat_turns.sweep_dead_owners(c)
+    assert failed == [dead]
+    assert _turn(client, dead)["status"] == "failed"
+    assert _turn(client, mine)["status"] == "running"

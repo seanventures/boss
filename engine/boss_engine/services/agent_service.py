@@ -366,12 +366,15 @@ class AgentService:
                 """
                 INSERT INTO agent_messages (
                     id, thread_id, role, content, tool_calls, actions, proposed_actions,
-                    next_steps, agent_role
+                    next_steps, agent_role, created_at
                 )
                 VALUES (
                     :id, :thread_id, :role, :content,
                     CAST(:tool_calls AS JSONB), CAST(:actions AS JSONB),
-                    CAST(:proposed AS JSONB), CAST(:next_steps AS JSONB), :agent_role
+                    CAST(:proposed AS JSONB), CAST(:next_steps AS JSONB), :agent_role,
+                    -- WHEN IT WAS SAID, not when its transaction began: a turn's reply can be
+                    -- written in a transaction older than lines written meanwhile (a sweep's).
+                    clock_timestamp()
                 )
                 RETURNING id, role, content, tool_calls, actions, proposed_actions,
                           next_steps, agent_role, created_at
@@ -910,7 +913,8 @@ class AgentService:
                                 mode=mode, depth=depth, context=context)
 
     def chat_durably(self, engine: Any, *, background: bool = False,
-                     on_started: Any = None, **turn: Any) -> dict[str, Any]:
+                     on_started: Any = None, idempotency_key: Optional[str] = None,
+                     **turn: Any) -> dict[str, Any]:
         """THE ONE AGENT TURN, kept whatever happens to its answer (services/chat_turns.py).
 
         1. The operator's message and the turn's record are committed before any model call —
@@ -934,8 +938,35 @@ class AgentService:
         answer_keys = ("confirm_plan_id", "mode", "depth", "context")
         open_args = {k: v for k, v in turn.items() if k not in ("mode", "depth", "context")}
         answer_args = {k: turn[k] for k in answer_keys if k in turn}
-        with begin(engine) as connection:
-            opened = self.open_turn(connection, durable=True, **open_args)
+        key = (idempotency_key or "").strip()[:200] or None
+
+        def already() -> Optional[dict[str, Any]]:
+            # THE SAME KEY IS THE SAME TURN: a resent request (a retry after a dropped
+            # response, a double press) gets the turn it already started — never a second
+            # message, never a second answer.
+            if not key:
+                return None
+            with begin(engine) as c:
+                seen = chat_turns.by_key(c, project_id=turn["project_id"], actor=turn["actor"],
+                                         key=key)
+            if seen is None:
+                return None
+            if seen["status"] == "done" and not background and seen.get("result"):
+                return seen["result"]
+            return {"thread_id": seen["thread_id"], "turn_id": seen["turn_id"],
+                    "status": seen["status"], "replayed": True}
+
+        seen = already()
+        if seen is not None:
+            return seen
+        try:
+            with begin(engine) as connection:
+                opened = self.open_turn(connection, durable=True, client_key=key, **open_args)
+        except IntegrityError:
+            seen = already()                         # the same key, racing: that one won
+            if seen is None:
+                raise
+            return seen
         if on_started is not None:
             on_started(opened)
 
@@ -979,6 +1010,8 @@ class AgentService:
         new_thread: bool = False,
         #: Write the turn's record (chat_turns) beside the message: the API's durable turn.
         durable: bool = False,
+        #: The client's idempotency key for that record (chat_turns.by_key).
+        client_key: Optional[str] = None,
     ) -> dict[str, Any]:
         """The question, written: the thread it belongs to, the operator's message and files, and
         (durable) the turn's record. Nothing here calls a model."""
@@ -1032,7 +1065,8 @@ class AgentService:
 
             turn_id = chat_turns.open_row(connection, project_id=project_id,
                                           thread_id=thread["id"], actor=actor,
-                                          agent_role=role or "", user_message_id=written["id"])
+                                          agent_role=role or "", user_message_id=written["id"],
+                                          client_key=client_key)
         return {"project_id": project_id, "actor": actor, "thread": thread, "role": role,
                 "speaker": speaker, "user_content": user_content, "written": written,
                 "stored": stored, "turn_id": turn_id}
@@ -1202,7 +1236,13 @@ class AgentService:
             "proposal": cards.get("proposal"),
             "citations": cards.get("citations") or [],
         }
-        chat_turns.mark_done(connection, turn_id, reply_message_id=assistant["id"], result=result)
+        if chat_turns.mark_done(connection, turn_id, reply_message_id=assistant["id"],
+                                result=result):
+            # SWEPT WHILE IT WORKED: the thread already says it stopped, so the reply that did
+            # come back is labelled a late answer there and here, never a silent second reply.
+            late = chat_turns.LATE_PREFIX + result["reply"]
+            result = {**result, "reply": late, "late": True,
+                      "messages": [*messages, {**assistant, "content": late}]}
         return result
 
     @staticmethod

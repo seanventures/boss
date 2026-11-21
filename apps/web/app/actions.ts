@@ -252,6 +252,8 @@ export async function askBossAction(
     // record, answers 202 {thread_id, turn_id}, and the dock polls the turn (lib/chat-turn.ts).
     // The message is kept whatever happens to the answer, and a reload resumes the wait.
     background: String(formData.get("background") ?? "") === "1" ? true : undefined,
+    // ONE PRESS, ONE TURN: a resent send with the same key gets the turn it already started.
+    idempotency_key: String(formData.get("idempotency_key") ?? "").trim() || undefined,
   });
 }
 

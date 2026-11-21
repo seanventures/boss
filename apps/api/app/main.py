@@ -1270,6 +1270,23 @@ def _warm_read_paths() -> None:
         print(f"[lifespan] warm-up not started: {exc}")
 
 
+def _fail_turns_of_dead_processes() -> int:
+    """A CHAT TURN WHOSE PROCESS DIED SAYS SO AT ONCE (chat_turns.sweep_dead_owners): at
+    start-up the running turns of a dead process on this host are failed now, not after the
+    heartbeat bound. Never blocks boot."""
+    from boss_engine.services import chat_turns
+
+    try:
+        with begin(engine) as connection:
+            failed = chat_turns.sweep_dead_owners(connection)
+        if failed:
+            print(f"[lifespan] chat turns of a stopped process marked failed: {len(failed)}")
+        return len(failed)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] chat turn sweep skipped: {exc}")
+        return 0
+
+
 def _backfill_agent_identities() -> int:
     """EVERY PROJECT'S AGENTS ARE SOMEBODY, not only the default project's.
 
@@ -1515,6 +1532,7 @@ async def lifespan(_: FastAPI):
     _sync_builtin_templates()
     _seed_work_tracker_defaults()
     _backfill_agent_identities()
+    _fail_turns_of_dead_processes()
     _publish_agent_specs()
     _mirror_org_models()
     # REFUSED DEPLOYMENT PLANS LEFT NOTHING BEHIND ONCE, AND NOW NEVER DID. An unverified host
@@ -13887,6 +13905,7 @@ def agent_turn(payload: AgentChatRequest, request: Request, *, endpoint: str) ->
         result = orchestration_agent.chat_durably(
             engine,
             background=bool(payload.background),
+            idempotency_key=payload.idempotency_key,
             project_id=payload.project_id,
             actor=payload.actor,
             thread_id=payload.thread_id,
@@ -13921,7 +13940,8 @@ def agent_turn(payload: AgentChatRequest, request: Request, *, endpoint: str) ->
         # and the whole traceback goes to the log. The turn's record already says failed.
         LOGGER.exception("agent chat failed on %s", endpoint)
         raise AgentTurnFailed(error) from error
-    if payload.background:
+    if payload.background or "reply" not in result:
+        # Running (or a replayed key whose turn is still running): the turn to poll.
         return JSONResponse(status_code=202, content=result)
     return AgentChatResponse(**result)
 

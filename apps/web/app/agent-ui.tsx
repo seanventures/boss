@@ -903,6 +903,10 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         // "Working…" bubble kept spinning for another 15 seconds underneath it. Nothing on the
         // page depends on a question having been asked; the thread list is refreshed
         // explicitly below.
+        // ONE SEND, ONE KEY: a replay of this request (a retried round trip) gets the turn it
+        // already started; a deliberate second send (after consent) is a new one.
+        fd.set("idempotency_key", typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID() : `t${Date.now()}${Math.random().toString(36).slice(2)}`);
         const sent = await callAction(askBossAction, undefined, "assistant:chat")(null, fd);
         const started = sent.ok ? startedTurnOf(sent.data) : null;
         if (!started) return sent;
