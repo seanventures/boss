@@ -499,6 +499,24 @@ cmd_update() {
   rsh "cd '$DIR' && cp -p .env '$next_env' && chmod 600 '$next_env' && python3 scripts/install/reconcile_api_credentials.py --ensure-worker '$next_env'" \
     || { rsh "rm -f '$DIR/$next_env'"; die "could not bind separate owner and worker keys on $HOST; previous source remains at $DIR.prev"; }
 
+  # THE ENTERPRISE NETWORK, as install.sh does it: the one finalize every lifecycle path runs
+  # (engine/boss_engine/services/enterprise_network.py). It refuses an invalid setting, keeps a
+  # narrowed sandbox fence narrow (BOSS_EGRESS_CONNECT_DEFAULTS=off from the live .env), and
+  # writes .boss/extra-ca.pem, which compose mounts with create_host_path: false, BEFORE the
+  # build. "recreate-ca-mount": it replaced a directory there, so the services mounting it are
+  # force-recreated below whatever was rebuilt.
+  local finalize_out CA_RECREATE=0
+  # A shipped tree without the finalize is a tree problem, not refused settings: say so, with its
+  # own exit code (3), before anything is built.
+  if ! rshq "[ -f '$DIR/engine/boss_engine/services/enterprise_network.py' ]"; then
+    rsh "rm -f '$DIR/$next_env'"
+    printf "\n  ${R}✗ %s${N}\n\n" "this BOSS tree has no enterprise_network.py; update the tree first (previous source remains at $DIR.prev)" >&2
+    exit 3
+  fi
+  finalize_out="$(rsh "cd '$DIR' && python3 engine/boss_engine/services/enterprise_network.py finalize '$next_env' --previous .env")" \
+    || { rsh "rm -f '$DIR/$next_env'"; die "the enterprise network settings on $HOST were refused (above); previous source remains at $DIR.prev"; }
+  case "$finalize_out" in *recreate-ca-mount*) CA_RECREATE=1 ;; esac
+
   # api and worker, plus every other service whose image carries the toolchains (BOSS_TOOLCHAINS):
   # egress opens the Maven, Gradle and Go proxy hosts only when its OWN image has the toolchain
   # (apps/egress/boss_egress/connect.py). An update that rebuilt api and worker alone, after the
@@ -548,6 +566,13 @@ cmd_update() {
 
   # BUILD FIRST, THEN SWAP. A failed build above leaves the running install untouched, which is
   # the whole reason these are two steps rather than `up -d --build`.
+  if [[ "$CA_RECREATE" -eq 1 && -n "$services" ]]; then
+    # Containers created over the old directory mount fail their next restart: recreate every
+    # running service that mounts the CA, not only the rebuilt ones.
+    local ca_running
+    ca_running=$(rshq "cd '$DIR' && $compose ps --status running --services | grep -xE 'api|worker|runner|egress|model-gateway|mcp-tools|kg-mcp' | tr '\n' ' '" || true)
+    services="$(printf '%s\n' $services $ca_running | sort -u | tr '\n' ' ')"
+  fi
   say "recreating: ${services:-all}"
   ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" \
     "cd '$DIR' && $compose up -d --no-deps --force-recreate $services" \

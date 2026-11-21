@@ -115,9 +115,19 @@ boss_sudo_scope_safe() {
   _boss_docker_endpoint="$(docker context inspect default --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || return 1
   [ "$_boss_docker_endpoint" = unix:///var/run/docker.sock ]
 }
+# A Mac has no sudo fallback: there, "Docker is unavailable" means Docker Desktop or the Colima
+# profile is not running (or DOCKER_CONTEXT names another daemon). Say that, not the sudo text.
+# Prints the guidance and returns 0 on macOS; returns 1 elsewhere (the caller then goes on).
+boss_docker_unavailable_hint() {
+  [ "$(uname -s 2>/dev/null)" = Darwin ] || return 1
+  _boss_docker_context="$(docker context show 2>/dev/null || true)"
+  echo "Docker is not running for the selected context${_boss_docker_context:+ ($_boss_docker_context)}. Start Docker Desktop, or your Colima profile (colima start <profile>), check 'docker context ls' and 'docker info', then run this again. See docs/community/COLIMA.md." >&2
+  return 0
+}
 # ---- end scoped sudo Docker fallback --------------------------------------
 
 if ! docker info >/dev/null 2>&1; then
+  if boss_docker_unavailable_hint; then exit 1; fi
   boss_sudo_scope_safe "$ENV_FILE" || { echo "Cannot safely use sudo for this Docker selection. Use direct Docker access for custom projects, contexts or connection settings." >&2; exit 1; }
   if command -v sudo >/dev/null 2>&1 && sudo -n docker --host unix:///var/run/docker.sock info >/dev/null 2>&1; then
     DOCKER=(sudo -n docker --host unix:///var/run/docker.sock)

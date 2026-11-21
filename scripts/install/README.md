@@ -344,7 +344,9 @@ The BOSS source URL the installer uses is not an operator repository binding. Fr
 
 - Fresh VM: Ubuntu 22.04/24.04 or Debian 12/13, 64-bit, with `sudo` or root access
 - Existing Linux/macOS host: `git`, `curl`, running Docker Engine/Desktop and Compose
+- macOS without Docker Desktop: [Colima](../../docs/community/COLIMA.md) (profile sizing, the credential helper, the Docker context the installer saves)
 - Existing distro Docker packages are not removed automatically; upgrade those manually
+- A company network (outbound proxy, TLS inspection, internal npm/PyPI/Go/Maven mirrors, internal hosts for the sandbox fence): [Enterprise network](../../docs/community/ENTERPRISE_NETWORK.md). The installer checks those settings before it saves `.env`, and checks for TLS inspection before it builds
 
 ### Sizing
 
@@ -718,6 +720,7 @@ Every flag is optional. See `./install.sh --help` for the full list. Added for t
 | `--no-local-model` | Never offer the local model |
 | `--rebind-ollama` | Allow `--install-ollama` to move an Ollama you already had from `127.0.0.1` to the Docker bridge address (Linux) |
 | `--no-discover` | Skip looking for model keys and subscriptions |
+| `--use-shell-proxy` | Save this shell's `HTTPS_PROXY` / `NO_PROXY` as BOSS's outbound proxy (`BOSS_UPSTREAM_PROXY`). Without it the shell's proxy is never used ([enterprise network](../../docs/community/ENTERPRISE_NETWORK.md)) |
 | `--no-boss-command` | Do not install `boss` on `PATH` |
 
 `BOSS_BIN_DIR` chooses where `boss` goes. An installed `boss` always runs its own install; use `boss --dir PATH` to act on another one. `BOSS_INSTALL_DIR` only chooses where `install.sh` installs.

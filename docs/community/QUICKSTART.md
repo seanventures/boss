@@ -13,10 +13,12 @@ You need about 30 minutes, and for the last step a GitHub account (or code kept 
 The installer is written for one of these hosts:
 
 - Ubuntu 22.04 or 24.04, or Debian 12 or 13, with `curl` and `sudo`. It can install Git, Python 3, and Docker.
-- macOS with Docker Desktop running and Apple's command line tools (`xcode-select --install`).
+- macOS with a Docker runtime running ([Colima](COLIMA.md) or Docker Desktop) and Apple's command line tools (`xcode-select --install`).
 - Another Linux host that already has Git, `curl`, Python 3, and Docker Engine with Compose.
 
 A model key is optional. The control plane starts without one.
+
+On a company network (an outbound proxy, TLS inspection, or package registries that must come from an internal mirror), read [Enterprise network](ENTERPRISE_NETWORK.md) before you install. The installer checks for TLS inspection and tells you what to set.
 
 The installer warns when free disk is under 80 GB. The images include Java and Go by default (about 0.75 GB; [Toolchains](TOOLCHAINS.md) says how to turn them off). Docker Desktop keeps images on its own disk, which can fill while the host still looks fine. If Postgres fails to initialize, the installer prints the database log. Free space in Docker and run the installer again. A rerun keeps credentials it has already written. Sizing is in the [installer guide](https://github.com/seanventures/boss/blob/v1.0-rc10.31/scripts/install/README.md).
 

@@ -269,7 +269,11 @@ class TestARealDebuggingSession:
             parent, body = stages[stage]
             chain += body
             stage = parent
-        assert re.search(r"npm install -g[^\n]*@anthropic-ai/claude-code@", chain)
+        # The CLIs are installed from the committed lockfile (scripts/install/cli-lock).
+        assert re.search(r"COPY scripts/install/cli-lock/package\.json[^\n]*/opt/boss-clis/", chain)
+        assert "npm ci --prefix /opt/boss-clis" in chain
+        lock = pathlib.Path("scripts/install/cli-lock/package.json").read_text()
+        assert '"@anthropic-ai/claude-code"' in lock
         client = pathlib.Path("apps/worker/boss_worker/control_plane.py").read_text()
         assert "/v1/investigations/" in client
         main = pathlib.Path("apps/api/app/main.py").read_text()

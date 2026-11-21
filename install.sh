@@ -261,6 +261,8 @@ Options:
                           127.0.0.1 to the Docker bridge address (Linux). Without it an
                           unattended run leaves an existing Ollama alone and says how
   --no-discover           Do not look for model keys and subscriptions on this machine
+  --use-shell-proxy       Save this shell's HTTPS_PROXY / NO_PROXY as BOSS's outbound proxy
+                          (BOSS_UPSTREAM_PROXY). Without it, the shell's proxy is never used
   --no-boss-command       Do not install the \`boss\` command on PATH
   --discover-subscriptions  Check Claude, Codex and Grok CLIs on this VM (no credential transfer)
   --install-coding-clis  Install missing official Claude, Codex and Grok coding CLIs on this VM
@@ -322,6 +324,7 @@ while [[ $# -gt 0 ]]; do
     --no-local-model) NO_LOCAL_MODEL=1; shift ;;
     --rebind-ollama) REBIND_OLLAMA=1; shift ;;
     --no-discover) AUTO_DISCOVER=0; shift ;;
+    --use-shell-proxy) BOSS_USE_SHELL_PROXY=1; shift ;;
     --no-boss-command) INSTALL_BOSS_COMMAND=0; shift ;;
     --openai-key|--anthropic-key|--github-token|--openai-key=*|--anthropic-key=*|--github-token=*)
       die "Refusing a secret on the command line. It would be saved in shell history and process listings. Export OPENAI_API_KEY, ANTHROPIC_API_KEY, or BOSS_GITHUB_TOKEN, or paste the OpenAI key at the hidden prompt." ;;
@@ -484,13 +487,18 @@ ARCH="$(uname -m 2>/dev/null || echo unknown)"
 ui_info "OS: $OS  arch: $ARCH"
 
 install_vm_deps() {
-  [[ "$INSTALL_DEPS" -eq 1 ]] || die "Missing dependencies. Remove --no-install-deps to install them."
   if [[ "$OS" == Darwin ]]; then
     need_cmd git || ui_err "git is missing. Install Apple's command line tools: xcode-select --install"
-    need_cmd docker || ui_err "Docker is missing. Install Docker Desktop: https://docs.docker.com/desktop/setup/install/mac-install/"
+    need_cmd docker || ui_err "Docker CLI is missing. For Colima: brew install colima docker docker-compose docker-buildx"
+    if need_cmd docker && ! docker compose version >/dev/null 2>&1; then
+      ui_err "Docker Compose plugin is missing. Install docker-compose and follow Homebrew's CLI plugin instructions."
+    fi
     need_cmd python3 || ui_err "Python 3 is missing. xcode-select --install provides it."
-    die "Install the items above, start Docker Desktop, then run the same install command again."
+    need_cmd curl || ui_err "curl is missing. Install curl before continuing."
+    need_cmd openssl || ui_err "OpenSSL is missing. Install openssl before continuing."
+    die "Install the missing tools and start your Docker runtime (Colima or Docker Desktop), then rerun. See docs/community/COLIMA.md."
   fi
+  [[ "$INSTALL_DEPS" -eq 1 ]] || die "Missing dependencies. Remove --no-install-deps to install them."
   [[ "$OS" == Linux && -f /etc/os-release ]] || die "Automatic dependencies require Ubuntu or Debian Linux. Install git, curl, Docker Engine and Compose manually."
   # shellcheck disable=SC1091
   . /etc/os-release
@@ -554,6 +562,15 @@ fi
 
 # Adding the current user to the docker group would grant root-equivalent access and does
 # not take effect in this shell. Use sudo for this install when the socket requires it.
+# The Docker context this install was made with (BOSS_DOCKER_CONTEXT in .env), when this shell
+# names none: a rerun or upgrade reaches the same daemon (Colima beside Docker Desktop).
+if [ -z "${DOCKER_CONTEXT:-}${DOCKER_HOST:-}" ] && [ -f "$INSTALL_DIR/.env" ]; then
+  _saved_context="$(grep -E '^BOSS_DOCKER_CONTEXT=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+  if [ -n "$_saved_context" ]; then
+    export DOCKER_CONTEXT="$_saved_context"
+    ui_info "Docker context: $_saved_context (saved in .env as BOSS_DOCKER_CONTEXT)"
+  fi
+fi
 # ---- scoped sudo Docker fallback ------------------------------------------
 # Keep this small boundary identical in the installer and lifecycle helpers.
 # sudo resets selection variables and uses root's Docker configuration.
@@ -580,9 +597,19 @@ boss_sudo_scope_safe() {
   _boss_docker_endpoint="$(docker context inspect default --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || return 1
   [ "$_boss_docker_endpoint" = unix:///var/run/docker.sock ]
 }
+# A Mac has no sudo fallback: there, "Docker is unavailable" means Docker Desktop or the Colima
+# profile is not running (or DOCKER_CONTEXT names another daemon). Say that, not the sudo text.
+# Prints the guidance and returns 0 on macOS; returns 1 elsewhere (the caller then goes on).
+boss_docker_unavailable_hint() {
+  [ "$(uname -s 2>/dev/null)" = Darwin ] || return 1
+  _boss_docker_context="$(docker context show 2>/dev/null || true)"
+  echo "Docker is not running for the selected context${_boss_docker_context:+ ($_boss_docker_context)}. Start Docker Desktop, or your Colima profile (colima start <profile>), check 'docker context ls' and 'docker info', then run this again. See docs/community/COLIMA.md." >&2
+  return 0
+}
 # ---- end scoped sudo Docker fallback --------------------------------------
 
 if ! docker info >/dev/null 2>&1; then
+  if boss_docker_unavailable_hint; then exit 1; fi
   boss_sudo_scope_safe "$INSTALL_DIR/.env" || { echo "Cannot safely use sudo for this Docker selection. Use direct Docker access for custom projects, contexts or connection settings." >&2; exit 1; }
   if [[ "$OS" == Linux && "$(id -u)" -ne 0 ]] && need_cmd sudo && sudo -n docker --host unix:///var/run/docker.sock info >/dev/null 2>&1; then
     DOCKER=(sudo -n docker --host unix:///var/run/docker.sock)
@@ -1251,12 +1278,61 @@ PREVIEW_PORT="${BOSS_PREVIEW_PORT:-$_saved_preview_port}"
 [[ -z "$PREVIEW_PORT" || "$PREVIEW_PORT" =~ ^[0-9]{1,5}$ ]] || die "BOSS_PREVIEW_PORT must be a port number"
 case "$BOSS_BIN_DIR" in *$'\n'*|*' '*) die "BOSS_BIN_DIR must be a path without spaces" ;; esac
 
+# THE OUTBOUND PROXY is BOSS_UPSTREAM_PROXY, set explicitly. The shell's HTTPS_PROXY is used only
+# when the operator asks (--use-shell-proxy, or BOSS_USE_SHELL_PROXY=1): a developer's or VPN's
+# proxy in the shell must never be written over a saved company proxy on upgrade, or route a
+# stock install's containers through it. One with a login in it is never saved: a credential in
+# .env would reach every container's environment. A loopback proxy is refused later (finalize):
+# no container can reach the host's 127.0.0.1.
+if [ -z "${BOSS_UPSTREAM_PROXY:-}" ] && [ "${BOSS_USE_SHELL_PROXY:-0}" = 1 ]; then
+  _shell_proxy="${HTTPS_PROXY:-${https_proxy:-}}"
+  if [ -z "$_shell_proxy" ]; then
+    ui_warn "--use-shell-proxy: this shell exports no HTTPS_PROXY; nothing to save."
+  else
+    case "$_shell_proxy" in
+      *@*) ui_warn "Your shell's HTTPS_PROXY holds a user name or password; BOSS will not save it. Run a local authenticating proxy (cntlm, px) and set BOSS_UPSTREAM_PROXY to it. See docs/community/ENTERPRISE_NETWORK.md." ;;
+      *) BOSS_UPSTREAM_PROXY="$_shell_proxy"
+         BOSS_UPSTREAM_NO_PROXY="${BOSS_UPSTREAM_NO_PROXY:-${NO_PROXY:-${no_proxy:-}}}"
+         ui_info "Using this shell's HTTPS_PROXY for BOSS's containers (BOSS_UPSTREAM_PROXY)" ;;
+    esac
+  fi
+fi
+# The Docker context is remembered so `boss` reaches the same daemon later (Colima beside Docker
+# Desktop: without it, a lifecycle command run without DOCKER_CONTEXT acts on the other one).
+BOSS_DOCKER_CONTEXT="${BOSS_DOCKER_CONTEXT:-${DOCKER_CONTEXT:-}}"
+# BOSS_EGRESS_CONNECT_ALLOW used to REPLACE the fence's built-in host list; it now adds to it. An
+# install that set it to narrow the fence keeps that fence: enterprise_network.py finalize (below,
+# and in remote.sh update) writes BOSS_EGRESS_CONNECT_DEFAULTS=off from the previous .env.
+
 _new_env="$INSTALL_DIR/.env.writing.$$"
 cat > "$_new_env" <<EOF
 # BOSS Community — generated by install.sh $(date -u +%Y-%m-%dT%H:%MZ)
 # Keep this file private. Do not commit.
 
 BOSS_EDITION=community
+# ---- Enterprise network (docs/community/ENTERPRISE_NETWORK.md). All optional; empty keeps the
+# public registries, no proxy and the system CAs. A value exported when the installer runs
+# replaces the saved one; a run that exports nothing keeps it. Never a credential in a URL.
+# The company's root CA (PEM, absolute path): trusted by image builds and by every container.
+BOSS_EXTRA_CA_FILE=${BOSS_EXTRA_CA_FILE:-${BOSS_BUILD_CA_FILE:-}}
+BOSS_NPM_REGISTRY=${BOSS_NPM_REGISTRY:-}
+BOSS_PIP_INDEX_URL=${BOSS_PIP_INDEX_URL:-}
+BOSS_GOPROXY=${BOSS_GOPROXY:-}
+BOSS_GOSUMDB=${BOSS_GOSUMDB:-}
+BOSS_GONOSUMDB=${BOSS_GONOSUMDB:-}
+BOSS_MAVEN_MIRROR=${BOSS_MAVEN_MIRROR:-}
+BOSS_PLAYWRIGHT_DOWNLOAD_HOST=${BOSS_PLAYWRIGHT_DOWNLOAD_HOST:-}
+BOSS_UPSTREAM_PROXY=${BOSS_UPSTREAM_PROXY:-}
+BOSS_UPSTREAM_HTTP_PROXY=${BOSS_UPSTREAM_HTTP_PROXY:-}
+BOSS_UPSTREAM_NO_PROXY=${BOSS_UPSTREAM_NO_PROXY:-}
+# The sandbox fence: hosts ADDED to its built-in list (host, *.suffix, host:port); on/off for
+# that built-in list; internal registries allowed on a private address (exact host[:port]).
+BOSS_EGRESS_CONNECT_ALLOW=${BOSS_EGRESS_CONNECT_ALLOW:-}
+BOSS_EGRESS_CONNECT_DEFAULTS=${BOSS_EGRESS_CONNECT_DEFAULTS:-}
+BOSS_EGRESS_PRIVATE_ALLOW=${BOSS_EGRESS_PRIVATE_ALLOW:-}
+# The Docker context this install was made with (Colima, a remote engine); \`boss\` uses it.
+BOSS_DOCKER_CONTEXT=${BOSS_DOCKER_CONTEXT:-}
+# ---- end enterprise network
 # This install's Compose project: boss, upgrades and reruns act on it (a second install on this
 # machine has its own name, so it never touches this one's containers or volumes).
 COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
@@ -1348,6 +1424,29 @@ if ! python3 "$INSTALL_DIR/scripts/install/reconcile_api_credentials.py" "$_new_
   rm -f "$_new_env"
   die "could not bind separate owner and worker keys — left the existing $ENV_FILE unchanged"
 fi
+# THE ENTERPRISE NETWORK BLOCK IS CHECKED BEFORE IT IS SAVED (engine/boss_engine/services/
+# enterprise_network.py, run by path: standard library only). A registry URL carrying a
+# credential would otherwise be baked into every image's history; a CA file holding a private key
+# is refused. It also writes the containers' copy of the CA. Messages name the setting, never
+# the value.
+if [ ! -f "$INSTALL_DIR/engine/boss_engine/services/enterprise_network.py" ]; then
+  rm -f "$_new_env"
+  die "engine/boss_engine/services/enterprise_network.py is missing — left the existing $ENV_FILE unchanged"
+fi
+# One finalize for every lifecycle path (remote.sh update runs the same): it also keeps a narrowed
+# sandbox fence narrow (--previous: the live .env, not yet replaced) and writes .boss/extra-ca.pem,
+# which compose mounts with create_host_path: false. "recreate-ca-mount" means it replaced a
+# directory Docker had made there: those containers are force-recreated after the start below.
+if ! _finalize_out="$(python3 "$INSTALL_DIR/engine/boss_engine/services/enterprise_network.py" finalize "$_new_env" --previous "$ENV_FILE" </dev/null)"; then
+  rm -f "$_new_env"
+  die "stopped on the enterprise network problem above — fix it (export the corrected value, edit $ENV_FILE, or run the command it names) and run this again. Nothing was changed."
+fi
+_RECREATE_CA_MOUNT=0
+case "$_finalize_out" in *recreate-ca-mount*) _RECREATE_CA_MOUNT=1 ;; esac
+if [ -f "$ENV_FILE" ] && ! grep -qE '^BOSS_EGRESS_CONNECT_DEFAULTS=.+' "$ENV_FILE" &&
+   grep -qE '^BOSS_EGRESS_CONNECT_DEFAULTS=off$' "$_new_env"; then
+  ui_info "Kept your sandbox fence list as it was (BOSS_EGRESS_CONNECT_DEFAULTS=off). BOSS_EGRESS_CONNECT_ALLOW now ADDS to the built-in hosts; set BOSS_EGRESS_CONNECT_DEFAULTS=on in $ENV_FILE to use that."
+fi
 mv "$_new_env" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 ui_ok "Wrote $ENV_FILE (mode 600)"
@@ -1396,6 +1495,43 @@ if ! grep -qs '^INFISICAL_ENCRYPTION_KEY=' "$ENV_FILE"; then
     ui_ok "Generated the secret-store keys (back up $ENV_FILE — they are unrecoverable)"
   fi
 fi
+
+# ---- network preflight ----------------------------------------------------
+# Two failures that otherwise surface only deep into the image build: a TLS-intercepting gateway
+# BOSS has no CA for, and a Docker credential helper that is configured but missing.
+[ -f "$INSTALL_DIR/scripts/install/network_preflight.sh" ] ||
+  die "scripts/install/network_preflight.sh is missing from $INSTALL_DIR; fetch the source again"
+# shellcheck disable=SC1091
+. "$INSTALL_DIR/scripts/install/network_preflight.sh"
+CURRENT_STEP="Checking the network for the image build"
+boss_docker_credential_helper_check || die "Fix the Docker credential helper above, then run the same command again."
+_tls_targets=()
+while IFS= read -r _t; do [ -z "$_t" ] || _tls_targets+=("$_t"); done < <(python3 - "$ENV_FILE" <<'PY'
+import sys
+from urllib.parse import urlsplit
+env = {}
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    if "=" in line and not line.lstrip().startswith("#"):
+        k, v = line.rstrip("\n").split("=", 1)
+        env.setdefault(k.strip(), v.strip())
+hosts = []
+for key, default in (("BOSS_NPM_REGISTRY", "registry.npmjs.org"), ("BOSS_PIP_INDEX_URL", "pypi.org")):
+    value = env.get(key, "")
+    parts = urlsplit(value) if value else None
+    hosts.append(f"{parts.hostname}:{parts.port or 443}" if parts and parts.hostname else default)
+hosts.append("registry-1.docker.io")
+print("\n".join(dict.fromkeys(hosts)))
+PY
+)
+if ! NO_PROXY="$(env_value BOSS_UPSTREAM_NO_PROXY)" boss_tls_diagnose "$(env_value BOSS_EXTRA_CA_FILE)" \
+     "$(env_value BOSS_UPSTREAM_PROXY)" "${_tls_targets[@]}"; then
+  if [ "${BOSS_TLS_PREFLIGHT:-}" = warn ]; then
+    ui_warn "Continuing (BOSS_TLS_PREFLIGHT=warn): the image build will fail at its first download unless something else trusts this gateway."
+  else
+    die "Image builds cannot verify these downloads. Set BOSS_EXTRA_CA_FILE as shown above (or BOSS_TLS_PREFLIGHT=warn to try anyway)."
+  fi
+fi
+ui_ok "Network: TLS to the package registries verifies"
 
 ui_step "Building and starting Community stack (this can take several minutes the first time)"
 ui_info "Services: Postgres · API · worker$( [[ $WITH_WEB -eq 1 ]] && echo ' · Mission Control' )"
@@ -1665,6 +1801,18 @@ fi
 # shellcheck disable=SC2086
 ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES up -d --no-build </dev/null
+# The CA mount source was a directory and is now a file: a container created over the directory
+# fails its next restart, so recreate the running ones that mount it, now.
+if [[ "${_RECREATE_CA_MOUNT:-0}" -eq 1 ]]; then
+  # shellcheck disable=SC2086
+  _ca_running="$(${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+    $COMPOSE_PROFILES ps --status running --services </dev/null | grep -xE 'api|worker|runner|egress|model-gateway|mcp-tools|kg-mcp' | tr '\n' ' ' || true)"
+  if [[ -n "$_ca_running" ]]; then
+    # shellcheck disable=SC2086
+    ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+      $COMPOSE_PROFILES up -d --no-deps --no-build --force-recreate $_ca_running </dev/null
+  fi
+fi
 if [[ "$WITH_WEB" -eq 0 ]]; then
   # Switching an existing install to headless must stop a previously running
   # console. Compose does not stop services omitted from the active profile.

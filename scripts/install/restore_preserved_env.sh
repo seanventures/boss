@@ -35,7 +35,27 @@ BOSS_GITHUB_TOKEN
 BOSS_ACCOUNT_CONNECT_URL
 CODEX_AUTH_JSON
 CLAUDE_CODE_OAUTH_TOKEN
+BOSS_EXTRA_CA_FILE
+BOSS_NPM_REGISTRY
+BOSS_PIP_INDEX_URL
+BOSS_GOPROXY
+BOSS_GOSUMDB
+BOSS_GONOSUMDB
+BOSS_MAVEN_MIRROR
+BOSS_PLAYWRIGHT_DOWNLOAD_HOST
+BOSS_UPSTREAM_PROXY
+BOSS_UPSTREAM_HTTP_PROXY
+BOSS_UPSTREAM_NO_PROXY
+BOSS_EGRESS_CONNECT_ALLOW
+BOSS_EGRESS_CONNECT_DEFAULTS
+BOSS_EGRESS_PRIVATE_ALLOW
+BOSS_DOCKER_CONTEXT
 "
+# THE ENTERPRISE NETWORK BLOCK (docs/community/ENTERPRISE_NETWORK.md) is FILL_IF_BLANK, not
+# KEEP_PREVIOUS: `export BOSS_NPM_REGISTRY=<new>; ./install.sh` must REPLACE the saved registry
+# (it once silently kept the old one), and a run that exports nothing keeps what .env holds.
+# To clear one, empty it in .env. The containers' copy of the CA (.boss/extra-ca.pem) is written
+# from BOSS_EXTRA_CA_FILE after this script (enterprise_network.py finalize).
 
 # The previous value wins even when the new file already has a different one. The template
 # writes a single API key and gpt-4o-mini; a re-run must not drop a second key or a model the

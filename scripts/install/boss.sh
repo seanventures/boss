@@ -176,6 +176,12 @@ need_install() {
 
 # .env is data, not shell code.
 env_value() { grep -m 1 "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true; }
+# The Docker context this install was made with (install.sh saves BOSS_DOCKER_CONTEXT): a Mac with
+# Colima beside Docker Desktop otherwise acts on whichever daemon the shell happens to select.
+if [[ -z "${DOCKER_CONTEXT:-}${DOCKER_HOST:-}" ]]; then
+  _boss_saved_context="$(env_value BOSS_DOCKER_CONTEXT)"
+  [[ -z "$_boss_saved_context" ]] || export DOCKER_CONTEXT="$_boss_saved_context"
+fi
 
 # THIS INSTALL'S COMPOSE PROJECT comes from its own .env (install.sh writes it), and it wins over
 # whatever the shell exported: `boss` run for one install must never act on another's
@@ -213,11 +219,22 @@ boss_sudo_scope_safe() {
   _boss_docker_endpoint="$(docker context inspect default --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || return 1
   [ "$_boss_docker_endpoint" = unix:///var/run/docker.sock ]
 }
+# A Mac has no sudo fallback: there, "Docker is unavailable" means Docker Desktop or the Colima
+# profile is not running (or DOCKER_CONTEXT names another daemon). Say that, not the sudo text.
+# Prints the guidance and returns 0 on macOS; returns 1 elsewhere (the caller then goes on).
+boss_docker_unavailable_hint() {
+  [ "$(uname -s 2>/dev/null)" = Darwin ] || return 1
+  _boss_docker_context="$(docker context show 2>/dev/null || true)"
+  echo "Docker is not running for the selected context${_boss_docker_context:+ ($_boss_docker_context)}. Start Docker Desktop, or your Colima profile (colima start <profile>), check 'docker context ls' and 'docker info', then run this again. See docs/community/COLIMA.md." >&2
+  return 0
+}
 # ---- end scoped sudo Docker fallback --------------------------------------
 
 docker_cmd() {
   if docker info >/dev/null 2>&1; then
     DOCKER=(docker)
+  elif boss_docker_unavailable_hint; then
+    exit 1
   elif boss_sudo_scope_safe "$ENV_FILE" && command -v sudo >/dev/null 2>&1 && sudo -n docker --host unix:///var/run/docker.sock info >/dev/null 2>&1; then
     DOCKER=(sudo -n docker --host unix:///var/run/docker.sock)
   else
@@ -227,6 +244,9 @@ docker_cmd() {
 
 compose() {
   docker_cmd
+  # The company CA the containers mount read-only (installer's copy of BOSS_EXTRA_CA_FILE; empty
+  # when none). Present before Compose runs, or Docker would create a directory in its place.
+  [[ -e "$INSTALL_DIR/.boss/extra-ca.pem" ]] || { mkdir -p "$INSTALL_DIR/.boss" && : > "$INSTALL_DIR/.boss/extra-ca.pem" && chmod 644 "$INSTALL_DIR/.boss/extra-ca.pem"; } 2>/dev/null || true
   local profiles=()
   [[ "$(env_value BOSS_COMMUNITY_WEB_ENABLED)" == 0 ]] || profiles+=(--profile web)
   [[ "$(env_value BOSS_COMMUNITY_SECRET_STORE)" != infisical ]] || profiles+=(--profile secrets)

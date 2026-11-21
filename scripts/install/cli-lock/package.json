@@ -1,0 +1,11 @@
+{
+  "name": "boss-coding-clis",
+  "private": true,
+  "description": "The coding CLIs and pnpm the BOSS image installs, pinned with integrity by package-lock.json.",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.197",
+    "@openai/codex": "0.158.0",
+    "@xai-official/grok": "1.0.41",
+    "pnpm": "9.15.0"
+  }
+}

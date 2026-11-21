@@ -322,8 +322,12 @@ def test_installer_rerun_keeps_headless_choice_and_credentials(tmp_path: Path) -
     checkout = tmp_path / "checkout"
     helpers = checkout / "scripts/install"
     helpers.mkdir(parents=True)
-    for name in ("restore_preserved_env.sh", "reconcile_api_credentials.py", "post_check.sh"):
+    for name in ("restore_preserved_env.sh", "reconcile_api_credentials.py", "post_check.sh",
+                 "network_preflight.sh"):
         shutil.copy2(ROOT / "scripts/install" / name, helpers / name)
+    enterprise = checkout / "engine/boss_engine/services"
+    enterprise.mkdir(parents=True)
+    shutil.copy2(ROOT / "engine/boss_engine/services/enterprise_network.py", enterprise / "enterprise_network.py")
     (helpers / "community-compose.yml").write_text("name: boss-community\n")
     subprocess.run(["git", "init", "-q", str(checkout)], check=True)
     subprocess.run(["git", "-C", str(checkout), "add", "."], check=True)

@@ -85,12 +85,20 @@ wait_for_builds() { :; }
 """
 
 
+ENTERPRISE = "engine/boss_engine/services/enterprise_network.py"
+
+
 def _run(tmp_path: Path, cmd: str, host_env: str | None,
-         extra_env: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess, Path, str]:
+         extra_env: dict[str, str] | None = None,
+         ship_enterprise: bool = True) -> tuple[subprocess.CompletedProcess, Path, str]:
     host_dir = tmp_path / "host" / "boss"
     (host_dir / "scripts" / "install").mkdir(parents=True)
     (host_dir / "install.sh").write_text(FAKE_INSTALL)
     (host_dir / "scripts" / "install" / "reconcile_api_credentials.py").write_text("")
+    # The shipped tree carries the real enterprise-network finalize that `update` runs.
+    if ship_enterprise:
+        (host_dir / ENTERPRISE).parent.mkdir(parents=True)
+        (host_dir / ENTERPRISE).write_text((ROOT / ENTERPRISE).read_text())
     if host_env is not None:
         (host_dir / ".env").write_text(host_env)
         (host_dir / ".boss-shipped-commit").write_text("cafef00d\n")   # an existing install
@@ -210,3 +218,22 @@ def test_matching_toolchains_say_nothing(tmp_path: Path) -> None:
                                    "FAKE_MANIFEST_egress": go})
     assert result.returncode == 0, result.stdout + result.stderr
     assert "different build toolchains" not in result.stdout
+
+
+def test_an_update_onto_a_tree_without_the_enterprise_finalize_says_so_plainly(tmp_path: Path) -> None:
+    """A shipped tree that lacks enterprise_network.py is a tree problem, not refused settings:
+    remote.sh says so and exits with its own code (3), before any build."""
+    result, env_file, log = _run(tmp_path, "update", host_env="BOSS_EDITION=community\n",
+                                 ship_enterprise=False)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "this BOSS tree has no enterprise_network.py; update the tree first" in result.stderr
+    assert "refused" not in result.stderr
+    assert " build " not in log
+
+
+def test_an_update_writes_the_ca_file_and_keeps_a_narrowed_fence(tmp_path: Path) -> None:
+    result, env_file, log = _run(tmp_path, "update",
+                                 host_env="BOSS_EDITION=community\nBOSS_EGRESS_CONNECT_ALLOW=api.anthropic.com\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "BOSS_EGRESS_CONNECT_DEFAULTS=off" in env_file.read_text().splitlines()
+    assert (env_file.parent / ".boss" / "extra-ca.pem").is_file()

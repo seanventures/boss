@@ -28,8 +28,8 @@ def _runtime_stage() -> str:
 
 
 def installed_by_image(stage: str) -> dict[str, set[str]]:
-    """What the runtime stage installs: apt packages, global npm packages (version stripped),
-    and the paths it COPYs in."""
+    """What the runtime stage installs: apt packages, global npm packages (version stripped) and
+    the packages of a lockfile it `npm ci`s, and the paths it COPYs in."""
     apt: set[str] = set()
     for group in re.findall(r"apt-get install ((?:-\S+\s+)*)([^&\n]+)", stage):
         apt.update(p for p in group[1].split() if not p.startswith("-"))
@@ -40,6 +40,13 @@ def installed_by_image(stage: str) -> dict[str, set[str]]:
                 continue
             scoped = package.startswith("@")
             npm.add(package.rsplit("@", 1)[0] if package.count("@") > scoped else package)
+    # The coding CLIs come from a committed lockfile (scripts/install/cli-lock): `npm ci --prefix`
+    # of a directory the stage COPYs that lockfile into installs exactly its package.json.
+    for lock_dir, prefix in re.findall(r"^COPY\s+(scripts/install/\S+)/package\.json\s.*?(\S+?)/?\s*$", stage, re.M):
+        if f"npm ci --prefix {prefix}" in stage:
+            import json
+            manifest = json.loads((REPO / lock_dir / "package.json").read_text(encoding="utf-8"))
+            npm.update(manifest.get("dependencies", {}))
     copied = set(re.findall(r"^COPY\s.*?(\S+)\s*$", stage, re.M))
     return {"apt": apt, "npm": npm, "image": copied}
 

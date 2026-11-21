@@ -17,6 +17,7 @@ app.env
 **/__pycache__
 **/*.pyc
 .ruff_cache
+.local-logs
 .venv
 artifacts
 node_modules

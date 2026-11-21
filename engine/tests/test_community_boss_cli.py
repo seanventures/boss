@@ -23,7 +23,7 @@ HELPERS = (
     "community-compose.yml", "restore_preserved_env.sh", "reconcile_api_credentials.py",
     "boss.sh", "upgrade.sh", "uninstall.sh", "discover_models.py", "coding_subscriptions.py",
     "console_password.py", "connect_ollama.py", "model_status.py", "local_model.py",
-    "boss_refusal.py", "post_check.sh", "next_step.sh",
+    "boss_refusal.py", "post_check.sh", "next_step.sh", "network_preflight.sh",
 )
 # What `docker compose config --format json` would say about the build services (install.sh
 # builds them one image at a time from this answer). Kept equal to the real compose file below.
@@ -110,6 +110,10 @@ def _publish(upstream: Path) -> None:
         shutil.copy2(REPO / "scripts/install" / name, helpers / name)
     shutil.copy2(REPO / "scripts/store_subscription_token.py", upstream / "scripts")
     shutil.copy2(REPO / "install.sh", upstream / "install.sh")
+    # The enterprise network check the installer runs before it saves .env (by path, stdlib only).
+    (upstream / "engine/boss_engine/services").mkdir(parents=True)
+    shutil.copy2(REPO / "engine/boss_engine/services/enterprise_network.py",
+                 upstream / "engine/boss_engine/services/enterprise_network.py")
     _executable(
         helpers / "backup.sh",
         "#!/usr/bin/env bash\nset -euo pipefail\n"
