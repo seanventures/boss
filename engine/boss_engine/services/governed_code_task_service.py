@@ -2791,7 +2791,7 @@ def _fidelity_check(engine, run_id: str, root, remediation: dict, sandbox, *,
         except Exception:  # noqa: BLE001 — no tool log: claims are not judged
             _log_caught(logger)
         if executed is not None and test_cmd:
-            executed = [*executed, str(test_cmd)]   # BOSS ran the suite itself
+            executed["commands"].append(str(test_cmd))   # BOSS ran the suite itself
         result = _input_fidelity.check(
             root, remediation, findings=_input_fidelity.findings_for_check(validation),
             claims=[summary or ""], executed=executed)

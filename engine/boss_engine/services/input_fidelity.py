@@ -205,9 +205,16 @@ def infer(instructions: str, root: Path) -> Optional[dict]:
     if len(candidates) != 1:
         return None
     inp = candidates[0]
+    validator = _infer_validator(text, inp, root)
+    # ONLY A REAL REMEDIATION SHAPE: a fix verb and a YAML path are every config change ("fix the
+    # 404: add a /health route to config/routes.yaml"). The brief must also run a validator ON
+    # that input, or the input must have a reference answer beside it, or the result must go to
+    # a separate output path.
+    if not (validator or (output and output != inp) or sibling_answers(root, inp, output)):
+        return None
     return {"input": inp, "output": output or inp,
             "answer_files": [p for p in paths if is_answer_path(p)],
-            "validator": _infer_validator(text, inp, root), "source": "brief"}
+            "validator": validator, "source": "brief"}
 
 
 def sibling_answers(root: Path, input_path: str, output_path: str) -> list[str]:
@@ -290,7 +297,8 @@ def brief(c: Optional[Mapping[str, Any]]) -> str:
 # ── structural diff ────────────────────────────────────────────────────────────────────────────
 
 def parse(text: Optional[str], path: str) -> Any:
-    """YAML/JSON text → data. Raises ValueError when it does not parse."""
+    """YAML/JSON text → data; a multi-document YAML (k8s manifests) is the list of its
+    documents. Raises ValueError when it does not parse (a Helm template with ``{{ }}``)."""
     if text is None:
         raise ValueError("missing")
     if str(path).lower().endswith(".json"):
@@ -298,7 +306,8 @@ def parse(text: Optional[str], path: str) -> Any:
     import yaml
 
     try:
-        return yaml.safe_load(text)
+        docs = list(yaml.safe_load_all(text))
+        return docs[0] if len(docs) == 1 else docs
     except yaml.YAMLError as exc:
         raise ValueError(str(exc)) from exc
 
@@ -425,16 +434,14 @@ def _program(command: str) -> str:
 
 
 def _claim_tokens(claim: str) -> list[str]:
+    """What a claim's command must have run: its program and its flags. Never its file names —
+    the honest way to run a fixer is on a copy (`gwlint --fix /tmp/t.yaml`)."""
     try:
         argv = shlex.split(claim)
     except ValueError:
         argv = claim.split()
     toks = [_program(claim)] if _program(claim) else []
-    for tok in argv:
-        if tok.startswith("--"):
-            toks.append(tok.split("=", 1)[0].lower())
-        elif PurePosixPath(tok).suffix.lower() in DATA_EXTS:
-            toks.append(PurePosixPath(tok).name.lower())
+    toks += [tok.split("=", 1)[0].lower() for tok in argv if tok.startswith("--")]
     return [t for t in dict.fromkeys(toks) if t]
 
 
@@ -455,32 +462,86 @@ def claims_in(texts: Iterable[Any]) -> list[str]:
     return list(dict.fromkeys(out))
 
 
-def unbacked_claims(texts: Iterable[Any], executed: Sequence[str]) -> list[str]:
-    """Claims with no executed command containing their program, flags and file names."""
-    ran = [str(c or "").lower() for c in executed]
+_WRAPPER_RUNNERS = {"npm", "pnpm", "yarn", "npx"}
+_MAX_WRAPPER_CHARS = 200_000
+
+
+def _expand_wrappers(command: str, root: Optional[Path]) -> str:
+    """A command plus what it runs through a wrapper in the repo: the Makefile for `make`, the
+    package.json scripts for npm/pnpm/yarn, a script file it names (`sh scripts/lint.sh`,
+    `./fix.sh`). So `make fix-tenant` backs a claim that `gwlint --fix` ran."""
+    if root is None:
+        return command
+    try:
+        argv = shlex.split(command.replace("&&", " ; ").replace("||", " ; "))
+    except ValueError:
+        argv = command.split()
+    extra: list[str] = []
+    names = {PurePosixPath(t).name for t in argv}
+    if "make" in names or "gmake" in names:
+        extra += [str(_read(root / n) or "") for n in ("Makefile", "makefile", "GNUmakefile")]
+    if names & _WRAPPER_RUNNERS:
+        extra.append(str(_read(root / "package.json") or ""))
+    for tok in argv:
+        if tok.startswith("-") or len(tok) > 300:
+            continue
+        p = (root / tok.lstrip("./")) if not tok.startswith("/") else None
+        try:
+            if p is not None and p.is_file() and p.suffix.lower() in ("", ".sh", ".bash", ".mk"):
+                extra.append(str(_read(p) or ""))
+        except OSError:
+            continue
+    return "\n".join([command, *extra])[:_MAX_WRAPPER_CHARS]
+
+
+def unbacked_claims(texts: Iterable[Any], executed: Sequence[str], *,
+                    results: Sequence[str] = (), root: Optional[Path] = None) -> list[str]:
+    """Claims no execution backs. A claim is backed by a command (or the wrapper it went
+    through) that contains its program and its flags, or by a tool result that shows the
+    program's own output."""
+    ran = [_expand_wrappers(str(c or ""), root).lower() for c in executed]
+    shown = [str(r or "").lower() for r in results]
     missing = []
     for claim in claims_in(texts):
         toks = _claim_tokens(claim)
         if len(toks) < 2:
             continue
-        if not any(all(t in cmd for t in toks) for cmd in ran):
-            missing.append(claim)
+        if any(all(t in cmd for t in toks) for cmd in ran):
+            continue
+        if any(toks[0] in out for out in shown) and all(
+                any(f in cmd for cmd in ran) for f in toks[1:]):
+            continue
+        missing.append(claim)
     return missing
 
 
-def executed_commands(connection: Any, run_id: str) -> Optional[list[str]]:
-    """Every shell command the build's agents ran (agent_turns tool calls). None when the run
-    recorded no tool calls at all (turn capture off): unknown, never 'nothing ran'."""
+def executed_commands(connection: Any, run_id: str) -> Optional[dict]:
+    """The build's tool log: ``{"commands", "results", "complete"}`` from agent_turns. None when
+    the run recorded no tool calls at all (turn capture off). ``complete`` is False when a
+    stored turn was truncated or a stage hit the stored-turns cap: then a claim is UNKNOWN, never
+    violated."""
     from sqlalchemy import text as sql
 
+    from .agent_turns import max_turns_stored
+
     rows = connection.execute(sql(
-        "SELECT content FROM agent_turns WHERE code_task_run_id = :r "
-        "AND direction = 'tool_call' ORDER BY created_at"), {"r": run_id}).scalars().all()
-    if not rows:
+        "SELECT direction, content, truncated, stage FROM agent_turns "
+        "WHERE code_task_run_id = :r AND direction IN ('tool_call', 'tool_result') "
+        "ORDER BY created_at"), {"r": run_id}).mappings().all()
+    if not any(r["direction"] == "tool_call" for r in rows):
         return None
-    out = []
-    for content in rows:
-        raw = str(content or "")
+    commands: list[str] = []
+    results: list[str] = []
+    per_stage: dict[str, int] = {}
+    complete = True
+    for r in rows:
+        per_stage[str(r["stage"])] = per_stage.get(str(r["stage"]), 0) + 1
+        if r["truncated"]:
+            complete = False
+        raw = str(r["content"] or "")
+        if r["direction"] == "tool_result":
+            results.append(raw[:20_000])
+            continue
         try:
             data = json.loads(raw)
         except ValueError:
@@ -488,27 +549,32 @@ def executed_commands(connection: Any, run_id: str) -> Optional[list[str]]:
         if isinstance(data, Mapping):
             cmd = data.get("command") or data.get("cmd")
             if isinstance(cmd, str) and cmd.strip():
-                out.append(cmd.strip())
-    return out
+                commands.append(cmd.strip())
+    if any(n >= max_turns_stored() for n in per_stage.values()):
+        complete = False
+    return {"commands": commands, "results": results, "complete": complete}
 
 
-def _comment_lines(text: Optional[str]) -> str:
+def _new_comment_lines(text: Optional[str], input_text: Optional[str]) -> str:
+    """The output's comment lines the input did not already have: only the build's own words
+    are its claims."""
+    had = {line.strip() for line in str(input_text or "").splitlines()}
     return "\n".join(line.strip().lstrip("#").strip() for line in str(text or "").splitlines()
-                     if line.strip().startswith("#"))
+                     if line.strip().startswith("#") and line.strip() not in had)
 
 
 # ── the check ──────────────────────────────────────────────────────────────────────────────────
 
-def _norm_text(text: Optional[str]) -> str:
+def _norm_text(text: Optional[str], *, comments: bool = True) -> str:
     return "\n".join(line.rstrip() for line in str(text or "").strip().splitlines()
-                     if line.strip())
+                     if line.strip() and (comments or not line.strip().startswith("#")))
 
 
 def _same_data(a_text: Optional[str], b_text: Optional[str], path: str) -> bool:
     try:
         return parse(a_text, path) == parse(b_text, path)
     except ValueError:
-        return False
+        return _norm_text(a_text, comments=False) == _norm_text(b_text, comments=False)
 
 
 def _short(value: Any, limit: int = 160) -> str:
@@ -516,48 +582,73 @@ def _short(value: Any, limit: int = 160) -> str:
     return s if len(s) <= limit else s[: limit - 1] + "…"
 
 
+def _tool_log(executed: Any) -> Optional[dict]:
+    if executed is None:
+        return None
+    if isinstance(executed, Mapping):
+        return {"commands": list(executed.get("commands") or []),
+                "results": list(executed.get("results") or []),
+                "complete": bool(executed.get("complete", True))}
+    return {"commands": list(executed), "results": [], "complete": True}
+
+
 def check(root: Any, c: Mapping[str, Any], *,
           findings: Optional[Sequence[Mapping[str, Any]]] = None,
           claims: Iterable[Any] = (),
-          executed: Optional[Sequence[str]] = None) -> dict:
-    """Judge the output against the input. ``{"ok", "violations": [{code, message, path?,
-    source?}], "changes": [...], "input", "output", "answer_files"}``. Codes:
+          executed: Any = None) -> dict:
+    """Judge the output against the input. ``{"ok", "violations": [...], "advisories": [...],
+    "notes": [...], "changes": [...], "input", "output", "answer_files"}``. A violation fails
+    the attempt; an advisory is recorded and shown, never failing. Codes:
 
-    - ``missing_output`` / ``unparseable``: no output, or it is not YAML/JSON;
+    - ``missing_output``: no output; ``unparseable``: the output is not YAML/JSON while the
+      input is (an input that does not parse — a Helm template — skips the structural checks);
     - ``copied_answer``: the output equals (as text, or as data) an answer file;
     - ``copied_file``: the output's text equals another data file in the tree;
     - ``unchanged_preexisting``: the output existed before the build and is still the same
       data — nothing was derived from the input;
     - ``added_block``: an item added to a collection the input did not have, no finding asks;
     - ``added_key``: a key added no finding asks for (only when findings are known);
-    - ``unbacked_claim``: the agent says a command ran, the tool log has no such command.
+    - ``unbacked_claim``: the agent says a command ran and no execution backs it.
+
+    Additions BLOCK for a declared contract, and for a contract read from the brief only when
+    the validator ran and reported findings to judge them against; otherwise they are advisory.
+    Claims are UNKNOWN (a note) when the tool log is incomplete.
     """
     root = Path(root)
     inp, outp = str(c["input"]), str(c["output"])
     violations: list[dict] = []
+    advisories: list[dict] = []
+    notes: list[str] = []
     result = {"ok": False, "input": inp, "output": outp,
               "answer_files": list(c.get("answer_files") or []), "violations": violations,
-              "changes": []}
+              "advisories": advisories, "notes": notes, "changes": []}
     out_text = _read(root / outp)
     if out_text is None:
         violations.append({"code": "missing_output",
                            "message": f"The output `{outp}` was not written."})
         return result
+    changes: Optional[list[dict]] = None
     try:
         before = parse(c.get("_input_text"), inp)
-        after = parse(out_text, outp)
-    except ValueError as exc:
-        violations.append({"code": "unparseable",
-                           "message": f"`{outp}` does not parse: {str(exc)[:200]}"})
-        return result
-    changes = structural_diff(before, after)
-    result["changes"] = [{k: (_short(v) if k in ("value", "before", "after") else v)
-                          for k, v in ch.items()} for ch in changes[:_MAX_CHANGES]]
+    except ValueError:
+        notes.append(f"`{inp}` is not parseable YAML/JSON: the structural checks were skipped.")
+    else:
+        try:
+            after = parse(out_text, outp)
+        except ValueError as exc:
+            violations.append({"code": "unparseable",
+                               "message": f"`{outp}` does not parse: {str(exc)[:200]}"})
+            return result
+        changes = structural_diff(before, after)
+        result["changes"] = [{k: (_short(v) if k in ("value", "before", "after") else v)
+                              for k, v in ch.items()} for ch in changes[:_MAX_CHANGES]]
+    differs = bool(changes) if changes is not None else (
+        _norm_text(out_text, comments=False) != _norm_text(c.get("_input_text"), comments=False))
 
     # COPIED: an answer file, or any other data file, as the output.
     norm_out = _norm_text(out_text)
     for path, text in (c.get("_answer_texts") or {}).items():
-        if _norm_text(text) == norm_out or (_same_data(text, out_text, outp) and changes):
+        if _norm_text(text) == norm_out or (differs and _same_data(text, out_text, outp)):
             violations.append({"code": "copied_answer", "source": path, "message": (
                 f"`{outp}` is a copy of the reference answer `{path}`, not a remediation of "
                 f"`{inp}`. Start from `{inp}`, apply the fixer to a copy of it, and hand-edit "
@@ -573,31 +664,41 @@ def check(root: Any, c: Mapping[str, Any], *,
                     f"`{inp}`.")})
                 break
     base = c.get("_output_base")
-    if base is not None and changes and _same_data(base, out_text, outp):
+    if base is not None and differs and _same_data(base, out_text, outp):
         violations.append({"code": "unchanged_preexisting", "message": (
             f"`{outp}` already existed before this build and its content is unchanged (comments "
             f"aside) — nothing in it was derived from `{inp}`. Rebuild it from `{inp}`.")})
 
     # ADDED: content the input never had and no finding asks for.
-    for ch in changes:
+    additions_block = c.get("source") != "brief" or bool(findings)
+    for ch in changes or []:
         if ch["op"] != "added":
             continue
+        item = None
         if ch["kind"] == "item" and not justified(ch, findings):
-            violations.append({"code": "added_block", "path": ch["path"], "message": (
+            item = {"code": "added_block", "path": ch["path"], "message": (
                 f"`{outp}` adds {ch['path']} — `{inp}` has no such entry and no finding asks "
-                "for it. Remove it: a remediation keeps the partner's entries and adds none.")})
+                "for it. Remove it: a remediation keeps the input's entries and adds none.")}
         elif ch["kind"] == "key" and findings is not None and not justified(ch, findings):
-            violations.append({"code": "added_key", "path": ch["path"], "message": (
+            item = {"code": "added_key", "path": ch["path"], "message": (
                 f"`{outp}` adds `{ch['path']}`, which `{inp}` does not have and no validator "
-                "finding asks for. Remove it, or name the finding that requires it.")})
+                "finding asks for. Remove it, or name the finding that requires it.")}
+        if item:
+            (violations if additions_block else advisories).append(item)
 
-    # CLAIMED: a command the agent says ran must be in its tool log.
-    if executed is not None:
-        texts = [*claims, _comment_lines(out_text)]
-        for claim in unbacked_claims(texts, executed):
-            violations.append({"code": "unbacked_claim", "message": (
-                f"The build says `{claim}` ran, but no command in its tool log ran it. Run it, "
-                "or remove the claim.")})
+    # CLAIMED: a command the agent says ran must be backed by an execution.
+    log = _tool_log(executed)
+    if log is not None:
+        texts = [*claims, _new_comment_lines(out_text, c.get("_input_text"))]
+        missing = unbacked_claims(texts, log["commands"], results=log["results"], root=root)
+        if missing and not log["complete"]:
+            notes.append("The tool log is incomplete (truncated or capped): claims not judged: "
+                         + ", ".join(f"`{m}`" for m in missing))
+        else:
+            for claim in missing:
+                violations.append({"code": "unbacked_claim", "message": (
+                    f"The build says `{claim}` ran, but no command in its tool log ran it. Run "
+                    "it, or remove the claim.")})
     result["ok"] = not violations
     return result
 

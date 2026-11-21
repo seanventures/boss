@@ -373,6 +373,130 @@ def test_answer_paths_are_named_generically():
         assert not f.is_answer_path(p), p
 
 
+# ── no false positives on ordinary builds (review of #262) ─────────────────────────────────────
+
+ROUTES = "routes:\n  - path: /\n    to: home\n"
+
+
+def test_an_ordinary_config_fix_is_not_a_remediation(tmp_path):
+    """"Fix the 404 on /health: add a /health route to config/routes.yaml" adds a route on
+    purpose. No validator on the input, no answer sibling, no separate output: no contract."""
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "routes.yaml").write_text(ROUTES)
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    (tmp_path / ".github" / "workflows" / "ci.yml").write_text("jobs: {}\n")
+    (tmp_path / "docker-compose.yml").write_text("services: {}\n")
+    for brief in ("Fix the 404 on /health: add a /health route to config/routes.yaml.",
+                  "Fix CI: add a lint step to .github/workflows/ci.yml.",
+                  "Repair docker-compose.yml so the api waits for the db."):
+        assert f.contract({}, brief, tmp_path) is None, brief
+
+
+def test_an_inferred_contract_judges_additions_only_against_findings(tmp_path):
+    root = _repo(tmp_path)
+    (root / "examples" / "lumen-pay.good.yaml").unlink()     # no answer: added routes only
+    brief = "Fix examples/lumen-pay.bad.yaml and write the result to config/tenants/lumen-pay.yaml."
+    c = f.contract({}, brief, root)
+    assert c and c["source"] == "brief" and c["validator"] is None
+    _write(root, MINIMAL.replace("upstreams:\n", REFUNDS + "upstreams:\n"))
+    advisory = f.check(root, c, findings=None)
+    assert advisory["ok"] is True and [a["code"] for a in advisory["advisories"]] == ["added_block"]
+    assert _codes(f.check(root, c, findings=_findings())) == ["added_block"]   # validator ran
+
+
+K8S = """\
+apiVersion: v1
+kind: Service
+metadata: {name: api}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: api}
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          image: api:1.0
+"""
+
+
+def test_a_multi_document_manifest_is_diffed_per_document(tmp_path):
+    (tmp_path / "k8s").mkdir()
+    (tmp_path / "k8s" / "app.yaml").write_text(K8S)
+    c = f.contract({"remediate": {"input": "k8s/app.yaml"}}, "", tmp_path)
+    (tmp_path / "k8s" / "app.yaml").write_text(K8S.replace("api:1.0", "api:1.0.1"))
+    result = f.check(tmp_path, c)
+    assert result["ok"] is True, result["violations"]
+    assert [ch["path"] for ch in result["changes"]] == [
+        "[1].spec.template.spec.containers[name=api].image"]
+
+
+def test_an_input_that_does_not_parse_skips_the_structure_never_fails(tmp_path):
+    helm = "replicas: {{ .Values.replicas }}\nimage: {{ .Values.image }}\n"
+    (tmp_path / "chart.yaml").write_text(helm)
+    c = f.contract({"remediate": {"input": "chart.yaml"}}, "", tmp_path)
+    (tmp_path / "chart.yaml").write_text(helm + "resources: {{ .Values.resources }}\n")
+    result = f.check(tmp_path, c, executed=[])
+    assert result["ok"] is True and "structural checks were skipped" in result["notes"][0]
+
+
+def test_a_comment_the_input_already_had_is_not_the_builds_claim(tmp_path):
+    root = _repo(tmp_path)
+    c = _declared(root)
+    c["_input_text"] = "# gwlint --fix applied by the partner's CI\n" + BAD
+    _write(root, "# gwlint --fix applied by the partner's CI\n" + MINIMAL)
+    assert f.check(root, c, findings=_findings(), executed=[])["ok"] is True
+    _write(root, "# gwlint --fix applied by BOSS\n" + MINIMAL)
+    assert _codes(f.check(root, c, findings=_findings(), executed=[])) == ["unbacked_claim"]
+
+
+def test_a_fix_run_through_make_backs_the_claim(tmp_path):
+    root = _repo(tmp_path)
+    (root / "Makefile").write_text("fix-tenant:\n\tgo run ./cmd/gwlint --fix $(FILE)\n")
+    assert f.unbacked_claims(["gwlint --fix applied"], ["make fix-tenant FILE=/tmp/t.yaml"],
+                             root=root) == []
+    (root / "scripts").mkdir()
+    (root / "scripts" / "fix.sh").write_text("#!/bin/sh\ngwlint --fix \"$1\"\n")
+    assert f.unbacked_claims(["gwlint --fix applied"], ["sh scripts/fix.sh /tmp/t.yaml"],
+                             root=root) == []
+    assert f.unbacked_claims(["gwlint --fix applied"], ["make test"], root=None) == \
+        ["gwlint --fix"]
+
+
+def test_a_fixer_run_on_a_copy_backs_a_claim_naming_the_input():
+    said = ["Ran `gwlint --fix examples/lumen-pay.bad.yaml` and applied the result."]
+    assert f.unbacked_claims(said, ["cp examples/lumen-pay.bad.yaml /tmp/t.yaml && "
+                                    "gwlint --fix /tmp/t.yaml"]) == []
+
+
+def test_a_capped_or_truncated_tool_log_leaves_claims_unknown(tmp_path):
+    root = _repo(tmp_path)
+    c = _declared(root)
+    _write(root, "# gwlint --fix applied\n" + MINIMAL)
+    capped = {"commands": ["ls"], "results": [], "complete": False}
+    result = f.check(root, c, findings=_findings(), executed=capped)
+    assert result["ok"] is True and "claims not judged" in result["notes"][0]
+
+
+def test_the_fidelity_repairs_are_capped_and_then_say_exactly_what_to_do():
+    from boss_engine.services import failure_owner as fo
+
+    assert fo.MAX_ATTEMPTS == 2
+    src = inspect.getsource(fo._own)
+    capped = src.index("if made >= MAX_ATTEMPTS and cause_code in FIDELITY_CAUSES:")
+    assert capped < src.index("        if made >= MAX_ATTEMPTS:\n            if cls == PLATFORM:")
+    assert "action=FIDELITY_ACTION" in src[capped:capped + 600]
+    assert "item.error or cause" in src[capped:capped + 900]
+    assert "*.good.*" in fo.FIDELITY_ACTION and "edit of the named input file" in fo.FIDELITY_ACTION
+    # The repair build's brief states the violations whole, not a 200-character cut.
+    item = SimpleNamespace(error="Not a remediation of its input after 3 attempt(s). INPUT "
+                                 "FIDELITY FAILED …\n- [copied_answer] " + "x" * 400)
+    note = fo._fix_note(None, item, "short", "app:input_fidelity_failed")
+    assert "- [copied_answer]" in note and "without reading or copying" in note
+    assert len(note) > 400
+
+
 # ── the validator's record (step output `validation`) ──────────────────────────────────────────
 
 def test_the_validation_record_has_findings_before_fixes_and_after(tmp_path):
@@ -425,8 +549,9 @@ class _Engine:
         return False
 
     def execute(self, *_a, **_k):
-        return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [
-            json.dumps({"command": "cat examples/lumen-pay.good.yaml"})]))
+        rows = [{"direction": "tool_call", "stage": "implement", "truncated": False,
+                 "content": json.dumps({"command": "cat examples/lumen-pay.good.yaml"})}]
+        return SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: rows))
 
 
 def test_one_attempts_check_fails_a_copied_answer_with_its_record(tmp_path):

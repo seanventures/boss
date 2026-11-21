@@ -253,6 +253,12 @@ _WHY_PERSON = {
 #: Reason codes whose failure is the agents' to repair, whatever words the error carries
 #: (input_fidelity: the output was not a remediation of its input).
 AGENT_OWNED_REASONS = frozenset({"input_fidelity_failed"})
+#: Their cause codes (classify) and what a person does once the repair builds are spent.
+FIDELITY_CAUSES = frozenset({"app:input_fidelity_failed"})
+FIDELITY_ACTION = ("Read the violations: the output must be an edit of the named input file. "
+                   "Either correct the brief (name the right input and output, and remove any "
+                   "pointer to a reference answer such as a *.good.* file), or edit the output "
+                   "from the input by hand on the build's branch — then press Done — retry.")
 
 
 def classify(error: Any, *, failure_class: Any = None, reason_code: Any = None
@@ -1610,6 +1616,16 @@ def _own(engine: Any, settings: Any, jobs: Any, surface: Surface, item: Item, no
                 reason=(f"It failed {_ago(item.failed_at, now)} ago. BOSS re-runs work by itself "
                         f"only within {ACT_HOURS} hours of a failure, because what it was for "
                         "may have changed since."), attempts=made, now=now)
+        if made >= MAX_ATTEMPTS and cause_code in FIDELITY_CAUSES:
+            # THE CAP (MAX_ATTEMPTS fidelity repair builds per lineage), then EXACT guidance: what
+            # was violated, the evidence, what to do — never a loop, never a generic card.
+            return _hand_over(
+                c, item, cls=cls, cause_code=f"{cause_code}:spent", cause=cause,
+                action=FIDELITY_ACTION,
+                reason=_clip(f"BOSS built a fix {made} time{'s' if made != 1 else ''} and the "
+                             f"output was still not an edit of its input. "
+                             f"{item.error or cause}", 1500),
+                attempts=made, now=now)
         if made >= MAX_ATTEMPTS:
             if cls == PLATFORM:
                 _self_fix(c, settings, item, cause_code, cause)
@@ -1636,7 +1652,7 @@ def _own(engine: Any, settings: Any, jobs: Any, surface: Surface, item: Item, no
             return FIXING
     # ACT, outside the read transaction: an attempt opens its own.
     budget.acts -= 1
-    note = _fix_note(surface, item, cause)
+    note = _fix_note(surface, item, cause, cause_code)
     try:
         doing = surface.retry(engine, settings, jobs, item, cls=cls, attempt=attempt, note=note)
     except NeedsPerson as np:
@@ -1676,7 +1692,15 @@ def _ago(at: Optional[datetime], now: datetime) -> str:
     return f"{hours // 24} days" if hours >= 48 else f"{hours} hours"
 
 
-def _fix_note(surface: Surface, item: Item, cause: str) -> str:
+def _fix_note(surface: Surface, item: Item, cause: str, cause_code: str = "") -> str:
+    if cause_code in FIDELITY_CAUSES:
+        # THE REPAIR BRIEF STATES THE VIOLATIONS, whole: the build that failed already wrote
+        # them as its error (input_fidelity.repair_evidence).
+        return _clip(
+            "BOSS's failure owner started this build because the last one's output was not a "
+            "remediation of its input. Fix exactly these violations, starting again from the "
+            "input file, without reading or copying any reference answer:\n"
+            + str(item.error or cause), 1800)
     return _clip(
         f"BOSS's failure owner retried this after it failed: {cause} "
         "Find why it failed and fix that cause; do not work around it or weaken a check.", 900)
