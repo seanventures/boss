@@ -196,11 +196,11 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
       ) : null}
       {/* THE PROJECT'S FAILURE IS THIS WORK: the same answers as its Needs-you card. */}
       {failure && failure.id === w.id ? (
-        <div className="px-ny" data-tone="red" data-testid="px-drawer-work-failed" style={{ flexWrap: "wrap" }}>
+        <div className="px-ny px-ny-failed" data-tone="red" data-testid="px-drawer-work-failed">
           <span className="px-ny-ico" data-tone="red" aria-hidden>!</span>
-          <span style={{ flex: "1 1 240px", minWidth: 0 }}><b>{failure.word}</b>
+          <div className="px-ny-b"><b>{failure.word}</b>
             <small className="px-faint" style={{ display: "block" }}>{failure.reason}</small>
-            {failure.fix?.detail ? <small className="px-faint" style={{ display: "block" }}>{failure.fix.detail}</small> : null}</span>
+            {failure.fix?.detail ? <small className="px-faint" style={{ display: "block" }}>{failure.fix.detail}</small> : null}</div>
           <FailedActions retry={failure.retry} fix={failure.fix} retryReason={failure.retry_reason} seeHref={failure.see_href}
                          projectId={ctx.projectId} actor={ctx.actor} testid="px-drawer-work-failed"
                          onDone={() => { ctx.refreshWork(); ctx.refreshOverview?.(); }} />

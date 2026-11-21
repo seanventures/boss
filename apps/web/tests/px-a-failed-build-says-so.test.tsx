@@ -119,6 +119,9 @@ describe("the project page says a build failed", () => {
     engine();
     await openProject();
     const card = tid(`px-ov-ny-failed:${RUN}`)!;
+    expect(card.classList.contains("px-ny-failed")).toBe(true);
+    expect(card.querySelector(":scope > .px-ny-b")).not.toBeNull();
+    expect(tid(`px-ov-ny-failed:${RUN}-actions`)!.parentElement).toBe(card);
     expect(card.textContent).toContain("Build failed: Recipe box");
     expect(tid(`px-ov-ny-why-failed:${RUN}`)!.textContent).toBe(REASON);
     expect(card.textContent).not.toMatch(/substrate|fatal:/);

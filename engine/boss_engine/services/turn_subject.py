@@ -225,8 +225,31 @@ class SubjectEvidence:
         return "\n\n".join(lines)
 
 
+#: Subjects that are attempts at work: a newer attempt may already have recovered them.
+_HAS_ATTEMPTS = frozenset({"workflow_run", "workflow_step", "code_task"})
+
+#: THE RULES FOR ACTING, ON EVERY ASK DOOR (contributed from an enterprise install, 2026-11-20).
+#: They were first written as an instruction block stapled into one door's question (the
+#: advisory chat's "Investigate with BOSS"), so the other doors — a step's Ask, Infra, the
+#: Command Center — never had them, and the operator's composer showed prose they never wrote.
+#: Here every turn about a subject gets them, and the door sends only the question.
+_ACTING_RULES = (
+    "Any action (a retry, a fix, a deploy) goes through a proposal the operator consents to; "
+    "do not act without it.",
+    # Evidence on record counts: a newer attempt that already recovered the run is said so.
+    "Never say a repair ran, or worked, unless a tool result or the evidence above shows it.",
+    # Security controls only: a redeploy or a host action BOSS can take is a proposal (above).
+    "Never weaken a security control (sandbox, TLS, a registry, a proxy) to get past a failure; "
+    "changing one is a person's action item: say what to change, the evidence for it and how "
+    "to check it.",
+)
+_ATTEMPT_RULE = ("Before proposing a retry, check the run's newer attempts: one may already "
+                 "have recovered it.")
+
+
 def answer_contract(ref: SubjectRef) -> str:
     """The rules for a turn about one thing. Short, because it sits above a long persona."""
+    acting = ((_ATTEMPT_RULE,) if ref.kind in _HAS_ATTEMPTS else ()) + _ACTING_RULES
     return (
         "HOW TO ANSWER A QUESTION ABOUT THIS SUBJECT — these rules outrank everything below.\n"
         "1. Your FIRST SENTENCE answers the operator's question above, from the SUBJECT "
@@ -237,7 +260,8 @@ def answer_contract(ref: SubjectRef) -> str:
         f"3. Stay on {ref.label}. Do not answer about a different object — a deployment, "
         "another run, the host in general — unless the evidence above links to it.\n"
         "4. If you could not check something, say what and why, in one sentence. Do not keep "
-        "looking past the turn's budget to avoid saying it."
+        "looking past the turn's budget to avoid saying it.\n"
+        + "\n".join(f"{n}. {rule}" for n, rule in enumerate(acting, start=5))
     )
 
 

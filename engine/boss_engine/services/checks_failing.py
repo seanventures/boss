@@ -301,6 +301,38 @@ def headline(record: Optional[Mapping[str, Any]]) -> str:
     return ", ".join(labels)
 
 
+def for_work(raw: Any) -> Optional[dict[str, Any]]:
+    """THE WORK ROW'S AND PANEL'S VIEW OF THE SAME RECORD THE MERGE CARD SHOWS (enterprise
+    install 2026-11-20: the Work panel said "Ready to merge. Change #3 is built, tested and
+    reviewed." over a pull request opened with its checks failing, while its merge card said
+    CHECKS FAILING). The merge decision's `checks_failing` (what the card leads with), else the
+    run's own: {gates: [gate keys], security: bool, words: 'security, tests'}, or None when
+    nothing is failing. `words` names each gate as the check it is (factory_view.gate_noun),
+    security first: its pass-label ("Review passed") beside "failing" read as a success. Accepts
+    the stored JSON as text. Never raises."""
+    import json
+
+    rec = raw
+    if isinstance(rec, (str, bytes)):
+        try:
+            rec = json.loads(rec)
+        except ValueError:
+            return None
+    if not isinstance(rec, Mapping):
+        return None
+    entries = [g if isinstance(g, Mapping) else {"gate": str(g)}
+               for g in rec.get("gates") or [] if g]
+    names = [str(g.get("gate")) for g in entries if g.get("gate")]
+    if not names:
+        return None
+    from .factory_view import gate_noun
+
+    ordered = sorted(dict.fromkeys(names), key=lambda n: 0 if n in SECURITY_GATES else 1)
+    return {"gates": ordered,
+            "security": bool(rec.get("security")) or any(n in SECURITY_GATES for n in names),
+            "words": ", ".join(gate_noun(n) for n in ordered)}
+
+
 def tip(record: Optional[Mapping[str, Any]]) -> Optional[str]:
     """The Factory row's tooltip: what is failing, security flagged."""
     if not record or not record.get("gates"):

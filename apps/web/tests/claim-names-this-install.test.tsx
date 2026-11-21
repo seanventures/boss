@@ -60,6 +60,35 @@ describe("onLoopback", () => {
 });
 
 describe("the claim page without a link", () => {
+  it("labels the clipboard content as a command, not a setup link", async () => {
+    window.history.replaceState(null, "", "/claim");
+    const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    const el = await mount(<ClaimFlow options={options(null)} />);
+    const button = el.querySelector("[data-testid='claim-no-token'] button") as HTMLButtonElement;
+    expect(button.textContent).toBe("Copy command");
+    expect(el.querySelector("[data-testid='claim-copy-link']")).toBeNull();
+    await act(async () => button.click());
+    expect(writeText).toHaveBeenCalledWith("boss identity setup-link");
+    writeText.mockRestore();
+  });
+
+  it("never shows the Owner setup token: not as text, not in a button's name", async () => {
+    // Contributed "Copy setup link" drew the full /claim#t=<token> URL on the card and in its
+    // button's aria-label (screen shares, recordings, screen readers). The token stays in the
+    // address bar only, and forgetLinkToken clears it once spent.
+    const TOKEN = "bst_test_only_secret_value";
+    window.history.replaceState(null, "", `/claim#t=${TOKEN}`);
+    const el = await mount(<ClaimFlow options={options(null)} />);
+    expect(el.querySelector("[data-testid='claim-copy-link']")).toBeNull();
+    expect(el.textContent ?? "").not.toContain(TOKEN);
+    for (const node of Array.from(el.querySelectorAll("[aria-label], [title], [value]"))) {
+      for (const attr of ["aria-label", "title", "value"]) {
+        expect(node.getAttribute(attr) ?? "", attr).not.toContain(TOKEN);
+      }
+    }
+    window.history.replaceState(null, "", "/claim");
+  });
+
   it("names the second install's command and says nothing about the network on localhost", async () => {
     window.history.replaceState(null, "", "/claim");
     expect(onLoopback(window.location.hostname)).toBe(true);

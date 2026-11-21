@@ -49,7 +49,7 @@ function FailedNeed({ it, ctx, fresh }: { it: PxCtx["overview"]["needs_you"][num
   // A BOSS bug, fixed since, stopped it: said plainly (amber), never a red failure.
   const tone = it.tone === "info" ? "amber" : "red";
   return (
-    <div className="px-ny" data-tone={tone} data-testid={`px-ov-ny-${it.id}`} data-new={fresh ? "1" : undefined}
+    <div className="px-ny px-ny-failed" data-tone={tone} data-testid={`px-ov-ny-${it.id}`} data-new={fresh ? "1" : undefined}
          role="button" tabIndex={-1} onClick={(e) => { if ((e.target as HTMLElement).closest("button,a")) return; open(); }}>
       <span className="px-ny-ico" data-tone={tone} aria-hidden><Warning size={12} weight="bold" /></span>
       <div className="px-ny-b">

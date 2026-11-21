@@ -186,6 +186,38 @@ describe("the stream reader", () => {
 // ── 1:1 ──────────────────────────────────────────────────────────────────────────────────────
 
 describe("talking to one agent", () => {
+  it("hands a scoped investigation to BOSS without executing a repair in the advisory chat", async () => {
+    await mountHost();
+    await act(async () => {
+      converse.openTalk("qa", { from: "run_step", workflowRunId: "wfr_owned", stepId: "preview" },
+        { draft: "Why did preview fail?", fresh: true });
+    });
+    await settle();
+    const note = q('[data-testid="ag-talk-action-handoff"]')!;
+    // One button, its why in the tooltip; no prose beside it.
+    expect(note.querySelectorAll("p")).toHaveLength(0);
+    const button = note.querySelector<HTMLButtonElement>("button")!;
+    expect(button.textContent).toBe("Investigate with BOSS");
+    expect(button.title).toContain("BOSS can read the logs and act, with your approval");
+    const before = calls.length;
+    await act(async () => { button.click(); });
+    const params = new URL(window.location.href).searchParams;
+    expect(params.get("agent")).toBe("workflow_step:wfr_owned:preview");
+    // A short question in the person's words, never an instruction block.
+    expect(params.get("dock_ask")).toBe("Why did this step fail, and what can be done?");
+    expect(q('[data-testid="ag-talk"]')).toBeNull();
+    expect(calls).toHaveLength(before);
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("a talk with no run behind it shows no hand-off and no note", async () => {
+    await mountHost();
+    await act(async () => { converse.openTalk("qa", { from: "passport" }); });
+    await settle();
+    expect(q('[data-testid="ag-talk"]')).not.toBeNull();
+    expect(q('[data-testid="ag-talk-action-handoff"]')).toBeNull();
+  });
+
   it("opens from a door, greets through a real turn, and the face is truthful while it does", async () => {
     await mountHost();
     await act(async () => { converse.openTalk("qa", { from: "passport" }); });

@@ -62,7 +62,10 @@ TALK_CANNOT_ACT = (
     "push, deploy, approve or start anything. Never say or imply you are doing, have done or "
     "will now do something. If the operator asks for an action, say plainly that you cannot "
     "do it from here and name where it is done: the step's own button (for example Retry), or "
-    "Talk to BOSS, whose agent can act once the operator consents. [act:<id>] is ONLY for "
+    "the Investigate with BOSS button on a run-scoped conversation, or Talk to BOSS. "
+    "That agent can inspect current evidence and act within its permissions, requesting "
+    "approval or a human action item when necessary. Do not imply this advisory chat "
+    "automatically scheduled a repair or created an action item. [act:<id>] is ONLY for "
     "citing your own past work by its act id; never write it for an action.")
 
 KINDS = ("talk", "plan", "room")

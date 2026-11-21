@@ -118,6 +118,20 @@ def test_the_app_is_asked_for_identity_whatever_the_browser_accepts(upstream):
     assert _App.seen == ["identity"]
 
 
+def test_isolated_preview_preserves_same_origin_writes(upstream, monkeypatch):
+    def write(handler):
+        same_origin = handler.headers.get("Origin") == "http://" + handler.headers.get("Host", "")
+        handler.send_response(200 if same_origin else 403)
+        handler.end_headers()
+    monkeypatch.setattr(_App, "do_POST", write, raising=False)
+    host = "prev-abc123.localhost:3001"
+    for origin, expected in [(f"http://{host}", 200), ("http://untrusted.example", 403)]:
+        status, *_ = preview_service.proxy_preview(
+            None, "prev_abc123", "save", "POST", incoming_headers={"Host": host, "Origin": origin},
+            serve_at_root=True)
+        assert status == expected
+
+
 @pytest.mark.parametrize("path", ["/", "/deflate", "/raw-deflate", "/missing"])
 def test_compressed_html_is_decoded_before_the_shim_goes_in(upstream, path):
     status, ctype, data, headers = _proxy(path)

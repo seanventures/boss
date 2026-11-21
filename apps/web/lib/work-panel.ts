@@ -15,7 +15,7 @@
  */
 import type { Agent, Attempt, Deployments, StepState, WorkItem, WorkStage, WorkStory } from "./project-experience";
 import type { NextStep } from "./work-next-step";
-import { mergeWaitOf, mustHaveWords } from "./work-next-step";
+import { checksNotMet, mergeWaitOf, mustHaveWords } from "./work-next-step";
 import { changeRef } from "./repo-links";
 
 export type FlowState = "done" | "live" | "wait" | "todo" | "failed" | "skipped";
@@ -185,6 +185,11 @@ function codeNodes({ w, story, next, deployments, crew = [], nowMs = Date.now(),
              fix.label, durationWords(secondsBetween(fix.since, null, nowMs)) ? `${durationWords(secondsBetween(fix.since, null, nowMs))} in` : ""]
         .filter(Boolean).join(" · "),
     };
+  } else if (mp?.checks_failing) {
+    // OPENED WITH ITS CHECKS FAILING: Review & tests is red and says which checks were not met.
+    // The person's move (merge with a reason) is the Merge node's note, said once.
+    reviewState = "failed";
+    reviewNote = { tone: "you", title: "Checks failing", text: checksNotMet(mp.checks_failing) };
   } else if (r?.state === "failed" && w.why) {
     reviewNote = { tone: w.why.who === "you" ? "you" : "boss", title: w.why.who === "you" ? "Your move" : "BOSS is fixing", text: w.why.words };
   }
@@ -209,6 +214,7 @@ function codeNodes({ w, story, next, deployments, crew = [], nowMs = Date.now(),
     note: mergeState === "wait" && next?.kind === "merge" ? {
       tone: "you", title: "Your move",
       text: fix ? "Merge now, or wait for the follow-up to land its fixes"
+        : mp?.checks_failing ? "Merging needs your reason"
         : mp?.follow_up_of ? `Follow-up fix after #${mp.follow_up_of} — ${next.words}` : next.words,
     } : null,
   };
@@ -256,8 +262,8 @@ export function gateName(text: string): string {
   return m ? m[1] : text.split(" check")[0];
 }
 
-/** The header's state word and one sentence (never "Ready to merge" over a fix still running
- *  or over no must-have met: the words come from workNextStep). */
+/** The header's state word and one sentence (never "Ready to merge" over a fix still running,
+ *  over failing checks, over a failed station or over no must-have met). */
 export function stateSentence(w: WorkItem, next: NextStep | null): { lead: string; tone: "amber" | "mint" | "red" | "green" | "dim"; rest: string } {
   const mp = mergeWaitOf(w);
   if (w.state === "needs_you" && next) {
@@ -266,13 +272,25 @@ export function stateSentence(w: WorkItem, next: NextStep | null): { lead: strin
       const Ref = ref[0].toUpperCase() + ref.slice(1);
       if (mp?.fixing) {
         const n = mp.fixing.findings;
+        // Never "built and reviewed" over checks that failed: the merge card says they did.
         return { lead: "Merge now, or wait.", tone: "amber",
-                 rest: `${Ref} is built and reviewed; BOSS is still fixing ${n ? `${n} review finding${n === 1 ? "" : "s"}` : "it"} in ${mp.fixing.label}.` };
+                 rest: mp.checks_failing
+                   ? `${Ref} is open with ${checksNotMet(mp.checks_failing)}; BOSS is still fixing it in ${mp.fixing.label}.`
+                   : `${Ref} is built and reviewed; BOSS is still fixing ${n ? `${n} review finding${n === 1 ? "" : "s"}` : "it"} in ${mp.fixing.label}.` };
+      }
+      // Same precedence as the row's next step (workNextStep): checks failing before must-haves.
+      if (mp?.checks_failing && !mp.failed) {
+        return { lead: "Checks failing.", tone: "red",
+                 rest: `${Ref} is open with ${checksNotMet(mp.checks_failing)}. Merging needs your reason.` };
       }
       if (mp?.acceptance && mp.acceptance.total && mp.acceptance.met === 0) {
         return { lead: "Merge waiting.", tone: "amber", rest: `${Ref} is open, but ${mustHaveWords(mp.acceptance)} — read what is partial before merging.` };
       }
       if (mp?.failed) return { lead: "Merge failed.", tone: "red", rest: mp.failed };
+      // "Built, tested and reviewed" only when no station says otherwise.
+      if (w.stages.some((st) => st.state === "failed")) {
+        return { lead: "Merge waiting.", tone: "amber", rest: `${Ref} is open, but a check did not pass — read it before merging.` };
+      }
       return { lead: "Ready to merge.", tone: "amber", rest: `${Ref} is built, tested and reviewed.${mp?.followups?.words ? ` ${mp.followups.words}.` : ""}` };
     }
     return { lead: "Needs you.", tone: "amber", rest: next.words };
@@ -308,6 +326,7 @@ export function helmSuggestions(w: WorkItem, opts: { noProdHost?: boolean } = {}
     return Array.from(new Set(out)).slice(0, 3);
   }
   const mp = mergeWaitOf(w);
+  if (w.state === "needs_you" && mp?.checks_failing) out.push("Why are the checks failing?");
   if (w.state === "needs_you" && mp) out.push("Is it safe to merge now?");
   if (w.state === "running") out.push("What is BOSS doing right now?");
   if (w.state === "failed" || w.state === "stalled") out.push("Why did it stop?");

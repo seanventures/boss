@@ -511,6 +511,8 @@ services:
       # it at; empty means the console's own host on BOSS_PREVIEW_PORT. Set it behind TLS.
       BOSS_PREVIEW_PORT: ${BOSS_PREVIEW_PORT:-3001}
       BOSS_PREVIEW_ORIGIN: ${BOSS_PREVIEW_ORIGIN:-}
+      # 1: a previewed app gets the preview origin's Host too, not only X-Forwarded-Host.
+      BOSS_PREVIEW_FORWARD_HOST: ${BOSS_PREVIEW_FORWARD_HOST:-}
       BOSS_DEDICATED_HOST: ${BOSS_DEDICATED_HOST:-}
       # The install's id (install.sh / reconcile_api_credentials.py): the label every BOSS-made
       # container, image, volume and backup carries; the Infra Agent cleans labelled things only.

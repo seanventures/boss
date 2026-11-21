@@ -4506,6 +4506,83 @@ def forwarded_preview_headers(
     return out
 
 
+#: Opt-in: send the preview origin's public Host to the app for EVERY preview host, not only
+#: `<label>.localhost` ones (preview_public_host_headers). For a custom BOSS_PREVIEW_ORIGIN whose
+#: apps check Origin against Host and accept that hostname.
+PREVIEW_FORWARD_HOST_ENV = "BOSS_PREVIEW_FORWARD_HOST"
+_PUBLIC_HOST = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*(?::\d{1,5})?", re.I)
+
+
+def _preview_parents() -> dict[str, str]:
+    """The hosts BOSS serves previews under (`<label>.<parent>`), each with the scheme a browser
+    reaches it by ("" when the request's own scheme says): localhost always; BOSS_PREVIEW_ORIGIN's
+    host; and BOSS_PUBLIC_URL's host (no preview origin set: previews are on the console's host,
+    on the preview port). Anything else is not BOSS's to vouch for."""
+    out: dict[str, str] = {"localhost": ""}
+    configured = configured_preview_origin()
+    candidates = [configured]
+    try:
+        from ..config import get_settings
+
+        candidates.append(str(get_settings().public_url or ""))
+    except Exception:  # noqa: BLE001 — no settings: localhost and the configured origin stand
+        pass
+    for raw in candidates:
+        parts = urllib.parse.urlsplit(raw or "")
+        name = (parts.hostname or "").lower()
+        if name and parts.scheme in ("http", "https") and not _ipv4(name) and ":" not in name:
+            out.setdefault(name, parts.scheme)
+    return out
+
+
+def preview_public_host_headers(incoming: Optional[dict], preview_id: str, *,
+                                scheme: str = "http") -> dict[str, str]:
+    """WHAT THE APP IS TOLD ABOUT WHERE THE BROWSER IS, on the preview origin (contributed from
+    an enterprise install, 2026-11-20).
+
+    The browser sends `Origin: http://prev-abc.localhost:3001`; the app was reached with
+    `Host: 127.0.0.1:<port>` (urllib's default: `host` is never forwarded). An app that checks a
+    write as same-origin by comparing Origin with Host (CSRF origin checks, SvelteKit form
+    actions, Rails, Express middleware) refused every POST with 403.
+
+    But many dev servers allowlist Host (Vite's `allowedHosts`, webpack-dev-server
+    `allowedHosts: "auto"`, Angular, Django `ALLOWED_HOSTS`, Rails `config.hosts`) and accept
+    localhost, `*.localhost` and IPs only. Sending a hostname they do not know (a preview origin
+    on `prev-abc.boss.example.com`) would 403 every request instead. So:
+
+      - X-Forwarded-Host and X-Forwarded-Proto always (the preview origin strips any a client
+        sent: preview_origin.stripped_headers), which most frameworks honour;
+      - Host itself only for a `<label>.localhost` host, which every such allowlist accepts, or
+        when BOSS_PREVIEW_FORWARD_HOST=1 opts in for a custom preview origin;
+      - nothing at all unless the WHOLE host is this preview's own: a plain hostname[:port]
+        whose first label is THIS preview's and whose parent is one BOSS serves previews under
+        (`_preview_parents`: localhost, BOSS_PREVIEW_ORIGIN's host, BOSS_PUBLIC_URL's host).
+        `prev-abc.attacker.example` passes the preview origin's first-label check, and an app
+        that honours X-Forwarded-Host would build its links on it: it gets neither header.
+
+    X-Forwarded-Proto is the configured origin's scheme when the host is under it (a TLS proxy
+    in front of the preview port), else `scheme`."""
+    host = next((str(v).strip() for k, v in (incoming or {}).items()
+                 if str(k).lower() == "host" and v is not None), "")
+    label = preview_host_label(preview_id)
+    if not host or not label or not _PUBLIC_HOST.fullmatch(host):
+        return {}
+    name = host.rsplit(":", 1)[0].lower()
+    first, dot, parent = name.partition(".")
+    if first != label or not dot:
+        return {}
+    parents = _preview_parents()
+    if parent not in parents:
+        return {}
+    proto = parents[parent] or (scheme if scheme in ("http", "https") else "http")
+    out = {"X-Forwarded-Host": host, "X-Forwarded-Proto": proto}
+    opted_in = (os.environ.get(PREVIEW_FORWARD_HOST_ENV) or "").strip().lower() in (
+        "1", "true", "yes", "on")
+    if parent == "localhost" or opted_in:
+        out["Host"] = host
+    return out
+
+
 #: preview id → when its last_seen_at was last written. Idle-stop needs "seen in the last N
 #: minutes", not every request: one UPDATE a minute per preview at most.
 _SEEN_WRITTEN: dict[str, float] = {}
@@ -4530,7 +4607,8 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
                   sandbox_token: str = "",
                   incoming_headers: Optional[dict] = None,
                   app_cookie_header: Optional[str] = None,
-                  serve_at_root: bool = False):
+                  serve_at_root: bool = False,
+                  public_scheme: str = "http"):
     """Reverse-proxy a request to a running preview's loopback port → (status, content_type, bytes,
     headers). Only the api can reach the preview's 127.0.0.1 port, so this exposes it via the api's
     own (tailnet-routed) URL. HTML responses get the root-relative path-rewrite shim.
@@ -4541,7 +4619,8 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     preview's path, the ones naming a BOSS cookie or another path dropped.
 
     `serve_at_root`: the request came through the preview origin, so the app is shown at its own
-    paths (see `_inject_shim`)."""
+    paths (see `_inject_shim`), and is told the public host it was reached at
+    (preview_public_host_headers; `public_scheme` is the browser's scheme)."""
     from .preview_cookies import outbound_set_cookie
     import urllib.error
     with begin(engine) as c:
@@ -4566,6 +4645,11 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
         incoming_headers, content_type=content_type
     ).items():
         req.add_header(header_name, header_value)
+    if serve_at_root:
+        # WHERE THE BROWSER IS, told to the app (preview_public_host_headers).
+        for header_name, header_value in preview_public_host_headers(
+                incoming_headers, preview_id, scheme=public_scheme).items():
+            req.add_header(header_name, header_value)
     if app_cookie_header:
         req.add_header("Cookie", app_cookie_header)
     # THE APP ANSWERS UNCOMPRESSED (see _plain_body): the browser's Accept-Encoding is not ours

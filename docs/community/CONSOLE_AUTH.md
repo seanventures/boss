@@ -107,6 +107,7 @@ A preview runs an app BOSS built, which is code you have not reviewed yet, so it
 
 - `BOSS_PREVIEW_PORT` is the port (default `3001`). Set `0` to turn previews off.
 - `BOSS_PREVIEW_ORIGIN` is the address a browser opens previews at. Set it when the console is behind HTTPS or on a hostname, for example `https://previews.console.example`, and point your TLS proxy for that name at port 3001. Use a different hostname from the console's, never a path under it.
+- A previewed app is told where the browser is in `X-Forwarded-Host` and `X-Forwarded-Proto`. Its `Host` header is the preview's public host only on `<preview>.localhost`, because dev servers that allowlist hosts (Vite, webpack-dev-server, Django, Rails) accept that name. If your apps compare `Origin` with `Host` and accept your preview hostname, set `BOSS_PREVIEW_FORWARD_HOST=1`.
 - `BOSS_PREVIEW_BIND` is the interface the port is published on (default `127.0.0.1`).
 
 ## Requirements for remote HTTPS

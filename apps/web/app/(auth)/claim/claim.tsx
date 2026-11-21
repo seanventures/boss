@@ -291,9 +291,14 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
           {onLoopback(pageHost(pageOrigin))
             ? <p className="idn-s" data-copy="prose" data-testid="claim-why-link">Claiming needs a one-hour link from the server.</p>
             : <p className="idn-s" data-copy="prose" data-testid="claim-why-link">This browser isn&apos;t on the server&apos;s own network, so claiming needs a one-hour link from the server.</p>}
-          <p className="idn-s" data-copy="prose" data-testid="claim-terminal-step">Run this <b>in a terminal on the server where BOSS is installed</b> (over SSH). It&apos;s a command, not a web address.</p>
-          <CopyCommand command={setupLinkCommand(claim.host_command)} />
-          <p className="idn-s" data-copy="prose">It prints a link. Open that link in this browser to claim.</p>
+          {/* On localhost BOSS runs on this computer (a laptop install) or at the far end of an SSH
+              tunnel, and the page cannot tell which: say neither "this computer" nor "server"
+              (contributed from an enterprise install). */}
+          {onLoopback(pageHost(pageOrigin))
+            ? <p className="idn-s" data-copy="prose" data-testid="claim-terminal-step">Run this <b>in a terminal on the computer where BOSS is installed</b>.</p>
+            : <p className="idn-s" data-copy="prose" data-testid="claim-terminal-step">Run this <b>in a terminal on the machine BOSS runs on</b> (SSH to it first if it&apos;s another machine).</p>}
+          <CopyCommand command={setupLinkCommand(claim.host_command)} label="Copy command" />
+          <p className="idn-s" data-copy="prose">It prints a link. Open that link here.</p>
           {claim.link_over_api
             ? <p className="idn-fine" data-copy="prose">No shell there? Ask whoever holds this install&apos;s admin key to issue the link.</p>
             : null}

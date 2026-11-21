@@ -399,6 +399,41 @@ def gate_label(name: str) -> str:
     return key.replace("_", " ").capitalize()
 
 
+#: A failing gate named as the CHECK it is, never its pass-label: "Review passed" beside
+#: "failing" reads as a success (operator, 2026-11-21: "3 checks not met: review, consistency,
+#: must-haves"). The Work row and panel say these; the merge card keeps the labels.
+GATE_NOUNS: dict[str, str] = {
+    "code_written": "code",
+    "written_tests_pass": "new tests",
+    "existing_tests_intact": "old tests",
+    "tests_pass": "tests",
+    "tests_written_first": "tests first",
+    "coder_did_not_edit_tests": "untouched tests",
+    "brief_tests_written": "named tests",
+    "tests_strong_enough": "test strength",
+    "code_review_passed": "review",
+    "security_clean": "security",
+    "consistent": "consistency",
+    "acceptance_met": "must-haves",
+    "nothing_broke": "no regressions",
+    "app_serves": "app start",
+    "web_package_honest": "package",
+    "template_tests": "template tests",
+    "no_committed_secrets": "secrets",
+}
+def gate_noun(name: str) -> str:
+    """A failing gate in one or two lower-case words ("review", "must-haves", "infra: vpc")."""
+    key = str(name or "")
+    if key in GATE_NOUNS:
+        return GATE_NOUNS[key]
+    if key.startswith("iac_"):
+        return "infra: " + key[4:].replace("_", " ")
+    import re as _re
+
+    bare = _re.sub(r"\s+(?:pass(?:es|ed)?|met|clean|ok)$", "", key.replace("_", " "), flags=_re.I)
+    return bare.strip().lower() or key
+
+
 def gate_station(name: str) -> str:
     key = str(name or "")
     if key in GATE_LABELS:

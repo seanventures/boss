@@ -12408,6 +12408,10 @@ async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
         app_cookie_header=inbound_cookie_header(preview_id, request.headers.get("cookie")),
         # On the preview origin the app is shown at its own paths, so its router matches them.
         serve_at_root=bool((request.scope.get("state") or {}).get("boss_preview_origin")),
+        # Behind a TLS proxy the hop to BOSS is http; the proxy's own proto (else the configured
+        # preview origin's scheme, preview_public_host_headers) is what the browser used.
+        public_scheme=((request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+                       or request.url.scheme),
     )
     if status in (409, 502):
         # ASLEEP, NOT GONE (preview_wake): a preview BOSS stopped wakes on a page load and says
