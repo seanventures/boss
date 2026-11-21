@@ -267,6 +267,27 @@ class Host:
         return {"COMPOSE_PROJECT_NAME": project,
                 "BOSS_COMMUNITY_IMAGE_TAG": os.environ.get("BOSS_COMMUNITY_IMAGE_TAG") or project}
 
+    def compose_files(self, compose_file: Optional[Path] = None) -> list[str]:
+        """The `-f` arguments from THE ONE RESOLVER (scripts/install/compose_files.sh), which every
+        lifecycle path uses: the base file, plus the engine inner-sandbox overlay when this
+        install's .env opts in. Without it a self-fix install recreated api and worker on the
+        default profile and Codex's sandbox stopped again. A build from a worktree passes its own
+        base file; the overlay is still this install's."""
+        base = str(compose_file or self.dir / "scripts/install/community-compose.yml")
+        resolver = self.dir / "scripts/install/compose_files.sh"
+        if not resolver.exists():
+            return ["-f", base]
+        try:
+            done = subprocess.run(["bash", str(resolver), str(self.dir), str(self.env_file)],
+                                  text=True, capture_output=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError(f"compose_files.sh could not run: {error}") from error
+        if done.returncode != 0:
+            raise RuntimeError((done.stderr or done.stdout or "compose_files.sh failed").strip())
+        files = done.stdout.splitlines()
+        files[1] = base
+        return files
+
     def compose(self, *args: str, compose_file: Optional[Path] = None,
                 project_dir: Optional[Path] = None, env: Optional[dict[str, str]] = None
                 ) -> tuple[int, str]:
@@ -275,8 +296,11 @@ class Host:
             profiles += ["--profile", "web"]
         if self.env_value("BOSS_COMMUNITY_SECRET_STORE") == "infisical":
             profiles += ["--profile", "secrets"]
-        argv = [*self.docker, "compose", "-f",
-                str(compose_file or self.dir / "scripts/install/community-compose.yml"),
+        try:
+            files = self.compose_files(compose_file)
+        except RuntimeError as error:
+            return 1, str(error)
+        argv = [*self.docker, "compose", *files,
                 *(["--project-directory", str(project_dir)] if project_dir else []),
                 "--env-file", str(self.env_file), *profiles, *args]
         return self.run(argv, env={**self.compose_env(), **(env or {})})

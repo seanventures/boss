@@ -112,7 +112,15 @@ if [[ -n "$RESTORE_BACKUP" ]]; then
 fi
 
 export BOSS_COMMUNITY_IMAGE_TAG="$TAG"
-COMPOSE=("${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE")
+# The one compose-file resolver (compose_files.sh): adds the engine inner-sandbox overlay when
+# .env opts in, so this path never recreates containers without it.
+BOSS_COMPOSE_FILES=(-f "$COMPOSE_FILE")
+if [[ -f "$INSTALL_DIR/scripts/install/compose_files.sh" ]]; then
+  # shellcheck source=compose_files.sh
+  source "$INSTALL_DIR/scripts/install/compose_files.sh"
+  boss_compose_files "$INSTALL_DIR" "$ENV_FILE" || exit 1
+fi
+COMPOSE=("${DOCKER[@]}" compose "${BOSS_COMPOSE_FILES[@]}" --env-file "$ENV_FILE")
 RUNNING="$("${COMPOSE[@]}" --profile web --profile secrets --profile mail ps --status running --services 2>/dev/null || true)"
 # The test Postgres (db-test, label kind=test) holds no BOSS data: a rollback never stops or
 # recreates it, so agents' bench-DB test runs are not killed mid-suite (BOSSAPP-1335).

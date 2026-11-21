@@ -72,11 +72,14 @@ else:
         "ENV_FILE='private path/.env'\n"
         # What the build-metadata block (just above in install.sh) exports.
         "BOSS_SOURCE_SHA=0123456789abcdef0123456789abcdef01234567 BOSS_BUILT_AT=2026-10-15T00:00:00Z\n"
+        # The one compose-file resolver (scripts/install/compose_files.sh) sets COMPOSE_FILES.
+        + _installer_block("compose files")
         + _installer_block("serial image builds")
         + "\nprintf 'reached start phase\\n'\n"
     )
     trace = tmp_path / "trace"
     result = subprocess.run(["bash", str(script)], text=True, capture_output=True, timeout=10,
+                            cwd=ROOT,
                             env={**os.environ, "TRACE": str(trace), "CONFIG": str(config_path),
                                  "FAIL_SERVICE": fail, "CONFIG_FAIL": str(int(config_fail))})
     return result, [json.loads(line) for line in trace.read_text().splitlines()]

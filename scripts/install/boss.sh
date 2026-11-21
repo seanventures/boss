@@ -248,9 +248,13 @@ compose() {
   # when none). Present before Compose runs, or Docker would create a directory in its place.
   [[ -e "$INSTALL_DIR/.boss/extra-ca.pem" ]] || { mkdir -p "$INSTALL_DIR/.boss" && : > "$INSTALL_DIR/.boss/extra-ca.pem" && chmod 644 "$INSTALL_DIR/.boss/extra-ca.pem"; } 2>/dev/null || true
   local profiles=()
-  local compose_files=(-f "$COMPOSE_FILE")
-  if [[ -n "${BOSS_CODEX_SECCOMP_FILE:-$(env_value BOSS_CODEX_SECCOMP_FILE)}" ]]; then
-    compose_files+=(-f "$INSTALL_DIR/scripts/install/community-codex-sandbox.yml")
+  # The -f files come from the one resolver every lifecycle path uses (engine inner-sandbox
+  # overlay when .env opts in; docs/community/ENGINE_SANDBOX.md).
+  local BOSS_COMPOSE_FILES=(-f "$COMPOSE_FILE")
+  if [[ -f "$INSTALL_DIR/scripts/install/compose_files.sh" ]]; then
+    # shellcheck source=compose_files.sh
+    source "$INSTALL_DIR/scripts/install/compose_files.sh"
+    boss_compose_files "$INSTALL_DIR" "$ENV_FILE" || die "fix BOSS_ENGINE_INNER_SANDBOX in $ENV_FILE (above), then run this again."
   fi
   [[ "$(env_value BOSS_COMMUNITY_WEB_ENABLED)" == 0 ]] || profiles+=(--profile web)
   [[ "$(env_value BOSS_COMMUNITY_SECRET_STORE)" != infisical ]] || profiles+=(--profile secrets)
@@ -260,7 +264,7 @@ compose() {
   # default here Compose looks for boss-community-api:local, which was never built.
   COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME" \
   BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-$COMPOSE_PROJECT_NAME}" \
-    "${DOCKER[@]}" compose "${compose_files[@]}" --env-file "$ENV_FILE" ${profiles[@]+"${profiles[@]}"} "$@"
+    "${DOCKER[@]}" compose "${BOSS_COMPOSE_FILES[@]}" --env-file "$ENV_FILE" ${profiles[@]+"${profiles[@]}"} "$@"
 }
 
 api_url() {

@@ -203,7 +203,7 @@ else
   if [ -z "$missing" ]; then
     ok "containers: $running running (db, api, worker required; web and secrets are optional)"
   else
-    bad "containers: missing —$missing  (cd $(dirname "$ENV_FILE") && docker compose -f scripts/install/community-compose.yml --env-file .env up -d)" containers_missing
+    bad "containers: missing —$missing  (${BOSS_COMMAND:-boss} start)" containers_missing
   fi
 fi
 
@@ -417,14 +417,23 @@ COMPOSE_FILE="$INSTALL_ROOT/scripts/install/community-compose.yml"
 # Compose as `boss` runs it (boss.sh compose): the install's profiles, its project name and image
 # tag. --no-build --pull never: only images already on this host, so nothing is rebuilt and the
 # prev-<tag> images kept for `boss rollback` are left exactly as they are.
+# The one compose-file resolver (compose_files.sh): the engine inner-sandbox overlay when .env
+# opts in, so a repair never starts the containers without it.
+BOSS_COMPOSE_FILES=(-f "$COMPOSE_FILE")
+if [ -f "$INSTALL_ROOT/scripts/install/compose_files.sh" ]; then
+  # shellcheck source=compose_files.sh
+  . "$INSTALL_ROOT/scripts/install/compose_files.sh"
+  boss_compose_files "$INSTALL_ROOT" "$ENV_FILE" || BOSS_COMPOSE_FILES=()
+fi
 repair_compose() {
+  [ "${#BOSS_COMPOSE_FILES[@]}" -gt 0 ] || return 1
   local profiles=()
   [ "$(env_value BOSS_COMMUNITY_WEB_ENABLED)" = 0 ] || profiles+=(--profile web)
   [ "$(env_value BOSS_COMMUNITY_SECRET_STORE)" != infisical ] || profiles+=(--profile secrets)
   [ -z "$(env_value BOSS_EMAIL_DEV_INBOX)" ] || profiles+=(--profile mail)
   COMPOSE_PROJECT_NAME="$STACK" \
   BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-$(env_value BOSS_COMMUNITY_IMAGE_TAG)}" \
-    "${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
+    "${DOCKER[@]}" compose "${BOSS_COMPOSE_FILES[@]}" --env-file "$ENV_FILE" \
     ${profiles[@]+"${profiles[@]}"} "$@" </dev/null
 }
 wait_for_api() {
