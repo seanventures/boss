@@ -18,7 +18,6 @@ The guards here are classes, not instances:
 """
 from __future__ import annotations
 
-import base64
 import re
 import shutil
 import subprocess
@@ -66,7 +65,6 @@ def test_a_plain_mirror_url_is_accepted_and_a_proxy_may_be_http():
 @pytest.mark.parametrize("name,value,ok", [
     ("BOSS_EGRESS_CONNECT_ALLOW", "artifacts.example.com,*.example.org,nexus.example.com:8443", True),
     ("BOSS_EGRESS_CONNECT_ALLOW", "nexus.example.com:99999", False),
-    ("BOSS_EGRESS_CONNECT_ALLOW", "10.0.0.5", False),
     ("BOSS_EGRESS_PRIVATE_ALLOW", "nexus.corp.example.com:8081", True),
     ("BOSS_EGRESS_PRIVATE_ALLOW", "*.corp.example.com", False),       # exact names only
     ("BOSS_EGRESS_PRIVATE_ALLOW", "db", False),                       # never a BOSS service name
@@ -102,19 +100,60 @@ def test_the_ca_file_must_be_certificates_and_never_a_key(tmp_path):
     assert en.problems({"BOSS_EXTRA_CA_FILE": str(tmp_path / "missing.pem")})
 
 
-def test_finalize_derives_the_containers_copy_and_takes_over_the_earlier_name(tmp_path):
+def test_finalize_writes_the_containers_file_and_takes_over_the_earlier_name(tmp_path):
+    """The CA reaches the containers as a FILE beside .env (.boss/extra-ca.pem, mounted read-only),
+    never as an environment value: one env string is capped at 128 KiB, and a bigger bundle made
+    every role fail to exec (review B3)."""
     cert = _ca(tmp_path)
     env = tmp_path / ".env"
     env.write_text(f"A=1\nBOSS_EXTRA_CA_FILE=\nBOSS_EXTRA_CA_PEM_B64=stale\nBOSS_BUILD_CA_FILE={cert}\n")
     assert en.finalize(str(env)) == []
     values = en.read_env_file(str(env))
     assert values["BOSS_EXTRA_CA_FILE"] == str(cert)
-    assert base64.b64decode(values["BOSS_EXTRA_CA_PEM_B64"]) == cert.read_bytes()
+    assert "BOSS_EXTRA_CA_PEM_B64" not in values               # the old env copy is removed
+    copy = tmp_path / ".boss" / "extra-ca.pem"
+    assert copy.read_bytes() == cert.read_bytes() and oct(copy.stat().st_mode & 0o777) == "0o644"
     assert values["A"] == "1"
-    # Cleared in .env: the containers' copy goes too (a removed CA must stop being trusted).
-    env.write_text("BOSS_EXTRA_CA_FILE=\nBOSS_EXTRA_CA_PEM_B64=old\n")
+    # Cleared in .env: the containers' copy is emptied too (a removed CA must stop being trusted).
+    env.write_text("BOSS_EXTRA_CA_FILE=\n")
     assert en.finalize(str(env)) == []
-    assert en.read_env_file(str(env))["BOSS_EXTRA_CA_PEM_B64"] == ""
+    assert copy.read_bytes() == b""
+
+
+def test_a_200_kb_bundle_is_accepted_and_the_limit_is_what_a_build_secret_takes(tmp_path):
+    cert = _ca(tmp_path)
+    big = tmp_path / "bundle.pem"
+    pem = cert.read_bytes()
+    big.write_bytes(pem * (200 * 1024 // len(pem) + 1))
+    assert big.stat().st_size >= 200 * 1024
+    assert en.problems({"BOSS_EXTRA_CA_FILE": str(big)}) == []
+    huge = tmp_path / "huge.pem"
+    huge.write_bytes(pem * (en.CA_MAX_BYTES // len(pem) + 2))
+    assert "larger than" in en.problems({"BOSS_EXTRA_CA_FILE": str(huge)})[0]
+    assert en.CA_MAX_BYTES == 500 * 1024       # BuildKit's own limit for one secret
+
+
+def test_a_loopback_proxy_or_mirror_is_refused_because_no_container_can_reach_it():
+    for url in ("http://127.0.0.1:8888", "http://localhost:3128", "http://[::1]:3128", "http://127.1.2.3:80"):
+        found = en.problems({"BOSS_UPSTREAM_PROXY": url})
+        assert found and "host.docker.internal" in found[0], url
+    assert en.problems({"BOSS_NPM_REGISTRY": "https://localhost:4873/"})
+
+
+def test_an_old_allow_entry_is_kept_with_a_warning_and_never_stops_an_upgrade(tmp_path):
+    """BOSS_EGRESS_CONNECT_ALLOW used to take an IP address or `*`; an install with one must still
+    upgrade (review N1). The address keeps working; `*` never matched anything and still doesn't."""
+    env = {"BOSS_EGRESS_CONNECT_ALLOW": "203.0.113.5,*,registry.example.com"}
+    assert en.problems(env) == []
+    warned = " ".join(en.warnings(env))
+    assert "203.0.113.5" in warned and "'*'" in warned
+    assert ("203.0.113.5", None) in en.allow_entries(env, "BOSS_EGRESS_CONNECT_ALLOW")
+    f = tmp_path / ".env"
+    f.write_text("BOSS_EGRESS_CONNECT_ALLOW=203.0.113.5,*\n")
+    result = subprocess.run(["python3", str(REPO / "engine/boss_engine/services/enterprise_network.py"),
+                             "finalize", str(f)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0 and "warning" in result.stderr
+    assert "BOSS_EGRESS_CONNECT_ALLOW=203.0.113.5,*" in f.read_text()
 
 
 def test_finalize_refuses_without_echoing_and_the_cli_exits_non_zero(tmp_path):
@@ -216,10 +255,12 @@ def _compose() -> dict:
 
 def test_every_boss_container_built_from_the_api_image_sees_the_whole_block():
     services = _compose()["services"]
-    runtime = set(en.SETTINGS) - {"BOSS_EXTRA_CA_FILE"}      # the host path; containers get the copy
+    runtime = set(en.SETTINGS) - {"BOSS_EXTRA_CA_FILE"}      # the host path; containers get the file
     for name in PYTHON_RUNTIME_SERVICES:
         missing = runtime - set(services[name]["environment"])
         assert not missing, f"{name} does not get {sorted(missing)}"
+        assert "../../.boss/extra-ca.pem:/etc/boss/extra-ca.pem:ro" in services[name]["volumes"], name
+        assert not any("CA_PEM" in key for key in services[name]["environment"]), name
 
 
 def test_every_image_build_gets_the_build_settings_and_the_ca_secret_never_a_credential():
@@ -248,8 +289,7 @@ def test_the_installer_writes_and_the_upgrade_carries_every_setting_with_a_new_v
         assert re.search(rf"^{name}=", heredoc, re.M), f"install.sh does not write {name}"
         assert re.search(rf"^{name}=", example, re.M), f".env.example does not document {name}"
         assert name not in keep_previous, f"{name}: an exported new value must replace the saved one"
-        if name != "BOSS_EXTRA_CA_PEM_B64":            # derived by `finalize`, never carried
-            assert name in fill_if_blank, f"{name} is lost on upgrade"
+        assert name in fill_if_blank, f"{name} is lost on upgrade"
     # The settings are checked before the new .env replaces the live one.
     assert install.index("enterprise_network.py\" finalize") < install.index('mv "$_new_env" "$ENV_FILE"')
 

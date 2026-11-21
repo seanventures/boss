@@ -748,7 +748,7 @@ flowchart TD
 ### 7.3 Execution moves to the worker
 
 **What is actually missing (corrects the inventory).** main.py:8359 says builds run in the API "because the Claude Code CLI is installed in this image and not in the worker's". That is **no longer true of the image**:
-- `Dockerfile.community` installs `@anthropic-ai/claude-code@2.1.197 @openai/codex@0.158.0 @xai-official/grok` in the shared `python-runtime` stage (L122, L165);
+- `Dockerfile.community` installs `@anthropic-ai/claude-code`, `@openai/codex` and `@xai-official/grok` in the shared `python-runtime` stage, with `npm ci` from the lockfile in `scripts/install/cli-lock`;
 - both `api` (L268) and `worker` (L276) build `FROM python-runtime`;
 - compose already mounts the shared CLI homes into the worker (`boss_community_claude_home:/home/boss/.claude`, community-compose.yml:737; api mounts it at L498);
 - `model_proxy` already runs "in their own worker process" on remote hosts (model_proxy.py:38-39).

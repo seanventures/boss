@@ -23,7 +23,6 @@ settings at all. Errors name the setting, never the value. Empty means "today's 
 """
 from __future__ import annotations
 
-import base64
 import ipaddress
 import os
 import re
@@ -41,7 +40,10 @@ URL_SETTINGS: dict[str, str] = {
     "BOSS_PLAYWRIGHT_DOWNLOAD_HOST": "the Playwright browser download host",
 }
 PROXY_SETTINGS: dict[str, str] = {
-    "BOSS_UPSTREAM_PROXY": "the outbound HTTP(S) proxy BOSS's containers and boss-egress use",
+    "BOSS_UPSTREAM_PROXY": "the outbound proxy for HTTPS that BOSS's containers and boss-egress use",
+    # Plain-http traffic goes to a proxy only when the operator names one: previews, app
+    # sidecars and a LAN model server speak plain http to hosts no NO_PROXY list can predict.
+    "BOSS_UPSTREAM_HTTP_PROXY": "the outbound proxy for plain http (apt mirrors, for example)",
 }
 #: Comma-separated lists.
 LIST_SETTINGS: dict[str, str] = {
@@ -52,16 +54,15 @@ LIST_SETTINGS: dict[str, str] = {
 }
 OTHER_SETTINGS: dict[str, str] = {
     "BOSS_EXTRA_CA_FILE": "a PEM file of extra CA certificates (the company's root)",
-    "BOSS_EXTRA_CA_PEM_B64": "the same certificates, as the containers receive them",
     "BOSS_GOSUMDB": "the Go checksum database",
     "BOSS_EGRESS_CONNECT_DEFAULTS": "on (default) or off: keep the fence's built-in host list",
 }
 #: Every setting of the block, in the order .env.example and the installer write them.
 SETTINGS: tuple[str, ...] = (
-    "BOSS_EXTRA_CA_FILE", "BOSS_EXTRA_CA_PEM_B64",
+    "BOSS_EXTRA_CA_FILE",
     "BOSS_NPM_REGISTRY", "BOSS_PIP_INDEX_URL", "BOSS_GOPROXY", "BOSS_GOSUMDB", "BOSS_GONOSUMDB",
     "BOSS_MAVEN_MIRROR", "BOSS_PLAYWRIGHT_DOWNLOAD_HOST",
-    "BOSS_UPSTREAM_PROXY", "BOSS_UPSTREAM_NO_PROXY",
+    "BOSS_UPSTREAM_PROXY", "BOSS_UPSTREAM_HTTP_PROXY", "BOSS_UPSTREAM_NO_PROXY",
     "BOSS_EGRESS_CONNECT_ALLOW", "BOSS_EGRESS_CONNECT_DEFAULTS", "BOSS_EGRESS_PRIVATE_ALLOW",
 )
 #: Where every BOSS container (and so every sandboxed run) always reaches without a proxy.
@@ -70,6 +71,14 @@ BOSS_NO_PROXY: tuple[str, ...] = (
     "kg-mcp", "mcp-tools", "infisical", "build-services", "web", "registry", "prometheus",
     "grafana", "mailpit", "host.docker.internal",
 )
+#: The largest CA bundle BOSS takes: BuildKit's limit for one build secret (500 KiB). At run time
+#: the file is mounted read-only (CA_CONTAINER_PATH), never passed in the environment, where one
+#: string is capped at 128 KiB and a bigger value stops a process from starting at all.
+CA_MAX_BYTES = 500 * 1024
+#: Where every BOSS container sees the CA (compose mounts <install>/.boss/extra-ca.pem there).
+CA_CONTAINER_PATH = "/etc/boss/extra-ca.pem"
+#: The install's copy the containers mount, relative to the directory that holds .env.
+CA_INSTALL_COPY = os.path.join(".boss", "extra-ca.pem")
 _HOST_RE = re.compile(r"^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$")
 _GO_PATTERN_RE = re.compile(r"^[A-Za-z0-9._~*/-]+$")
 _PEM_CERT = re.compile(rb"-----BEGIN CERTIFICATE-----\s+[A-Za-z0-9+/=\s]+?-----END CERTIFICATE-----")
@@ -98,6 +107,11 @@ def check_url(name: str, value: str, *, allow_http: bool = False) -> None:
         raise SettingError(f"{name} ({what}) must start with {' or '.join(s + '://' for s in schemes)}")
     if not parts.hostname:
         raise SettingError(f"{name} ({what}) has no host name")
+    if _is_loopback(parts.hostname):
+        raise SettingError(
+            f"{name} ({what}) points at this machine's loopback address, which no BOSS container can "
+            "reach (inside a container it is the container itself). Use host.docker.internal or "
+            "the machine's network address")
     if parts.username is not None or parts.password is not None or "@" in parts.netloc:
         raise SettingError(
             f"{name} ({what}) must not contain a user name or password: a credential in a URL "
@@ -125,6 +139,16 @@ def parse_host_port(entry: str, *, default_port: int = 443) -> tuple[str, int]:
     return host, default_port
 
 
+def _is_loopback(host: str) -> bool:
+    host = host.lower().rstrip(".")
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _is_ip(value: str) -> bool:
     try:
         ipaddress.ip_address(value)
@@ -139,6 +163,8 @@ def _check_allow_entry(name: str, entry: str, *, private: bool) -> None:
     except ValueError as exc:
         raise SettingError(f"{name}: an entry has an invalid port") from exc
     bare = host[2:] if host.startswith("*.") and not private else host
+    if not private and (host == "*" or _is_ip(host)):
+        return            # an earlier release took these; warnings() says what they do now
     if private and ("*" in host or "." not in host):
         raise SettingError(
             f"{name}: each entry must be one exact host name with a dot (no wildcards, no BOSS "
@@ -149,21 +175,37 @@ def _check_allow_entry(name: str, entry: str, *, private: bool) -> None:
         raise SettingError(f"{name}: an entry is not a host name (host, *.suffix or host:port)")
 
 
+def warnings(env: Mapping[str, str]) -> list[str]:
+    """Values BOSS keeps but would not accept new: they never stop an install or an upgrade."""
+    out: list[str] = []
+    for entry in _split(_clean(env.get("BOSS_EGRESS_CONNECT_ALLOW"))):
+        host = entry.strip().lower()
+        if host == "*":
+            out.append("BOSS_EGRESS_CONNECT_ALLOW holds '*', which has never matched any host; it is "
+                       "kept but does nothing. Name the hosts (or *.suffix) instead")
+        elif _is_ip(parse_host_port(host)[0] if host.count(":") <= 1 else host):
+            out.append(f"BOSS_EGRESS_CONNECT_ALLOW holds the address {host}; it is kept and still works "
+                       "for a public address. A DNS name is clearer, and a private address needs "
+                       "BOSS_EGRESS_PRIVATE_ALLOW with a name")
+    return out
+
+
 def check_ca_file(path: str) -> None:
     """The file BOSS_EXTRA_CA_FILE names holds one or more PEM certificates and nothing secret."""
     if not os.path.isabs(path):
         raise SettingError("BOSS_EXTRA_CA_FILE must be an absolute path")
     try:
         with open(path, "rb") as fh:
-            data = fh.read(4 * 1024 * 1024 + 1)
+            data = fh.read(CA_MAX_BYTES + 1)
     except OSError as exc:
         raise SettingError(f"BOSS_EXTRA_CA_FILE cannot be read ({exc.strerror or 'unreadable'})") from exc
     _check_ca_bytes(data, "BOSS_EXTRA_CA_FILE")
 
 
 def _check_ca_bytes(data: bytes, name: str) -> None:
-    if len(data) > 4 * 1024 * 1024:
-        raise SettingError(f"{name} is larger than 4 MB; give only the CA certificates")
+    if len(data) > CA_MAX_BYTES:
+        raise SettingError(f"{name} is larger than {CA_MAX_BYTES // 1024} KB (the most an image build "
+                           "can take as a secret); give only the company's root CA, not a whole keychain")
     if b"PRIVATE KEY" in data:
         raise SettingError(
             f"{name} contains a PRIVATE KEY. Give only the CA's public certificate(s); never a key")
@@ -221,13 +263,6 @@ def problems(env: Mapping[str, str]) -> list[str]:
     defaults = _clean(env.get("BOSS_EGRESS_CONNECT_DEFAULTS")).lower()
     if defaults not in ("", "on", "off", "1", "0", "true", "false", "yes", "no"):
         out.append("BOSS_EGRESS_CONNECT_DEFAULTS must be on or off")
-    ca_b64 = _clean(env.get("BOSS_EXTRA_CA_PEM_B64"))
-    if ca_b64:
-        try:
-            _check_ca_bytes(base64.b64decode(ca_b64, validate=True), "BOSS_EXTRA_CA_PEM_B64")
-        except (SettingError, ValueError) as exc:
-            out.append(str(exc) if isinstance(exc, SettingError)
-                       else "BOSS_EXTRA_CA_PEM_B64 is not base64 (the installer writes it from BOSS_EXTRA_CA_FILE)")
     ca_path = _clean(env.get("BOSS_EXTRA_CA_FILE"))
     if ca_path:
         try:
@@ -273,8 +308,9 @@ PACKAGE_ENV_KEYS: tuple[str, ...] = (
 CA_ENV_KEYS: tuple[str, ...] = (
     "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "PIP_CERT", "GIT_SSL_CAINFO",
     "NODE_EXTRA_CA_CERTS")
-#: The outbound proxy, as the compose file passes it to BOSS's containers. Never a credential
-#: (check_url refuses one), so an unsandboxed run may see it; a sandboxed run's proxy is egress.
+#: The outbound proxy, as with-extra-ca exports it in BOSS's containers (HTTP_PROXY only when
+#: BOSS_UPSTREAM_HTTP_PROXY is set). Never a credential (check_url refuses one), so an
+#: unsandboxed run may see it; a sandboxed run's proxy is egress.
 PROXY_ENV_KEYS: tuple[str, ...] = (
     "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy")
 #: Names a package environment must replace, whatever spelling the inherited env used.
@@ -330,6 +366,8 @@ def allow_entries(env: Mapping[str, str], name: str) -> list[tuple[str, Optional
         try:
             _check_allow_entry(name, entry, private=name == "BOSS_EGRESS_PRIVATE_ALLOW")
         except SettingError:
+            continue
+        if entry.strip() == "*":
             continue
         host, port = parse_host_port(entry, default_port=0)
         out.append((host, port or None))
@@ -403,24 +441,44 @@ def set_env_line(path: str, key: str, value: str) -> None:
     os.replace(tmp, path)
 
 
+def remove_env_line(path: str, key: str) -> None:
+    with open(path, encoding="utf-8", errors="surrogateescape") as fh:
+        lines = [line for line in fh if not (line.split("=", 1)[0].strip() == key and "=" in line)]
+    tmp = f"{path}.enterprise.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8", errors="surrogateescape") as fh:
+        fh.writelines(lines)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
 def finalize(path: str) -> list[str]:
     """The installer's last step on a new .env, before it replaces the live one: refuse any
-    invalid value, take over the earlier name BOSS_BUILD_CA_FILE, and derive the containers' copy
-    of the CA (BOSS_EXTRA_CA_PEM_B64) from BOSS_EXTRA_CA_FILE — or clear it when none is set."""
+    invalid value, take over the earlier name BOSS_BUILD_CA_FILE, and write the containers' copy
+    of the CA (<install>/.boss/extra-ca.pem, which compose mounts read-only at CA_CONTAINER_PATH)
+    from BOSS_EXTRA_CA_FILE — or empty it when none is set, so a removed CA stops being trusted."""
     env = read_env_file(path)
     if not _clean(env.get("BOSS_EXTRA_CA_FILE")) and _clean(env.get("BOSS_BUILD_CA_FILE")):
         set_env_line(path, "BOSS_EXTRA_CA_FILE", _clean(env["BOSS_BUILD_CA_FILE"]))
         env = read_env_file(path)
-    env.pop("BOSS_EXTRA_CA_PEM_B64", None)
     found = problems(env)
     if found:
         return found
+    # An earlier build of this change passed the CA in the environment; never again.
+    remove_env_line(path, "BOSS_EXTRA_CA_PEM_B64")
     ca_path = _clean(env.get("BOSS_EXTRA_CA_FILE"))
-    encoded = ""
+    data = b""
     if ca_path:
         with open(ca_path, "rb") as fh:
-            encoded = base64.b64encode(fh.read()).decode("ascii")
-    set_env_line(path, "BOSS_EXTRA_CA_PEM_B64", encoded)
+            data = fh.read()
+    copy = os.path.join(os.path.dirname(os.path.abspath(path)), CA_INSTALL_COPY)
+    os.makedirs(os.path.dirname(copy), exist_ok=True)
+    if os.path.isdir(copy) and not os.listdir(copy):
+        os.rmdir(copy)      # a hand-run compose made the mount point a directory: replace it
+    tmp = f"{copy}.{os.getpid()}"
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+    os.chmod(tmp, 0o644)    # a CA certificate is public; every container role reads it
+    os.replace(tmp, copy)
     return []
 
 
@@ -446,6 +504,9 @@ def _main(argv: list[str]) -> int:
             return 2
         for message in found:
             print(message, file=sys.stderr)
+        if not found:
+            for message in warnings(read_env_file(path)):
+                print(f"warning: {message}", file=sys.stderr)
         return 1 if found else 0
     try:
         env = read_env_file(path)
@@ -461,7 +522,7 @@ def _main(argv: list[str]) -> int:
     if found:
         for message in found:
             print("bad " + message)
-    configured = [n for n in SETTINGS if _clean(env.get(n)) and n != "BOSS_EXTRA_CA_PEM_B64"
+    configured = [n for n in SETTINGS if _clean(env.get(n))
                   and not (n == "BOSS_EGRESS_CONNECT_DEFAULTS"
                            and _clean(env.get(n)).lower() in ("on", "1", "true", "yes"))]
     if not configured:
@@ -469,8 +530,12 @@ def _main(argv: list[str]) -> int:
         return 1 if found else 0
     hosts = ", ".join(f"{h}:{p}" for h, p in registry_endpoints(env)) or "none"
     print(f"ok enterprise network: {', '.join(configured)} set; registry hosts the fence allows: {hosts}")
-    if _clean(env.get("BOSS_EXTRA_CA_FILE")) and not _clean(env.get("BOSS_EXTRA_CA_PEM_B64")):
-        print("bad BOSS_EXTRA_CA_FILE is set but the containers have no copy of it: run `boss upgrade`")
+    copy = os.path.join(os.path.dirname(os.path.abspath(path)), CA_INSTALL_COPY)
+    if _clean(env.get("BOSS_EXTRA_CA_FILE")) and not (os.path.isfile(copy) and os.path.getsize(copy)):
+        print(f"bad BOSS_EXTRA_CA_FILE is set but the containers have no copy of it ({CA_INSTALL_COPY}): "
+              "run `boss upgrade`")
+    for message in warnings(env):
+        print("warn " + message)
     return 1 if found else 0
 
 

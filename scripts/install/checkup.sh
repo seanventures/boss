@@ -380,6 +380,7 @@ if [ -f "$_enterprise" ] && [ -f "$ENV_FILE" ]; then
   while IFS= read -r _line; do
     case "$_line" in
       ok\ *) ok "${_line#ok }" ;;
+      warn\ *) warn "${_line#warn }" ;;
       bad\ *) bad "${_line#bad }" enterprise_network ;;
     esac
   done < <(python3 "$_enterprise" summary "$ENV_FILE" 2>/dev/null)

@@ -383,7 +383,7 @@ def gradle_properties(host: str, port: int, trust_store: str = "") -> str:
 
 
 #: The JVM trust store with the install's extra CA added (scripts/install/with-extra-ca.sh
-#: writes it at container start when BOSS_EXTRA_CA_PEM_B64 is set and the image has a JDK).
+#: writes it at container start when the mounted CA file is not empty and the image has a JDK).
 #: Java ignores SSL_CERT_FILE, so Maven and Gradle are pointed at it in their own config.
 JAVA_TRUST_STORE_ENV = "BOSS_JAVA_TRUST_STORE"
 

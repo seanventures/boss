@@ -20,11 +20,11 @@ x-boss-logging: &boss-logging
 # enterprise_network.py). One block, in every BOSS service built from python-runtime and every
 # image build, so all of them agree: registry mirrors, the outbound proxy, the extra CA, and the
 # sandbox fence's additions. Empty everywhere is a stock install. The installer validates every
-# value before it writes .env (no credential in any URL).
+# value before it writes .env (no credential in any URL). The company CA is not here: it is a
+# FILE, <install>/.boss/extra-ca.pem (the installer's copy of BOSS_EXTRA_CA_FILE, empty when
+# none), mounted read-only at /etc/boss/extra-ca.pem in each of these services. An environment
+# value is capped at 128 KiB, and a bigger one stops the process from starting.
 x-boss-enterprise-env: &boss-enterprise-env
-  # The company's CA, base64 PEM (public, not a secret; the installer writes it from
-  # BOSS_EXTRA_CA_FILE). scripts/install/with-extra-ca.sh adds it to every role's trust.
-  BOSS_EXTRA_CA_PEM_B64: ${BOSS_EXTRA_CA_PEM_B64:-}
   BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
   BOSS_PIP_INDEX_URL: ${BOSS_PIP_INDEX_URL:-}
   BOSS_GOPROXY: ${BOSS_GOPROXY:-}
@@ -33,6 +33,7 @@ x-boss-enterprise-env: &boss-enterprise-env
   BOSS_MAVEN_MIRROR: ${BOSS_MAVEN_MIRROR:-}
   BOSS_PLAYWRIGHT_DOWNLOAD_HOST: ${BOSS_PLAYWRIGHT_DOWNLOAD_HOST:-}
   BOSS_UPSTREAM_PROXY: ${BOSS_UPSTREAM_PROXY:-}
+  BOSS_UPSTREAM_HTTP_PROXY: ${BOSS_UPSTREAM_HTTP_PROXY:-}
   BOSS_UPSTREAM_NO_PROXY: ${BOSS_UPSTREAM_NO_PROXY:-}
   # The sandbox fence (apps/egress/boss_egress/connect.py): extra hosts (ADDED to the built-in
   # list), whether to keep that list, and internal hosts allowed on a private address.
@@ -47,6 +48,7 @@ x-boss-enterprise-build-args: &boss-enterprise-build-args
   BOSS_PIP_INDEX_URL: ${BOSS_PIP_INDEX_URL:-}
   BOSS_PLAYWRIGHT_DOWNLOAD_HOST: ${BOSS_PLAYWRIGHT_DOWNLOAD_HOST:-}
   BOSS_UPSTREAM_PROXY: ${BOSS_UPSTREAM_PROXY:-}
+  BOSS_UPSTREAM_HTTP_PROXY: ${BOSS_UPSTREAM_HTTP_PROXY:-}
   BOSS_UPSTREAM_NO_PROXY: ${BOSS_UPSTREAM_NO_PROXY:-}
 
 services:
@@ -727,6 +729,7 @@ services:
       # The preview origin: preview capability paths only, every cookie and credential stripped.
       - "${BOSS_PREVIEW_BIND:-127.0.0.1}:${BOSS_PREVIEW_PORT:-3001}:${BOSS_PREVIEW_PORT:-3001}"
     volumes:
+      - ../../.boss/extra-ca.pem:/etc/boss/extra-ca.pem:ro
       - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_artifacts:/var/lib/boss/artifacts
       - boss_community_identity:/var/lib/boss/identity
@@ -1039,6 +1042,7 @@ services:
       # Token prices per model, e.g. a local model at zero. Empty uses BOSS's built-in table.
       BOSS_MODEL_PRICES_JSON: ${BOSS_MODEL_PRICES_JSON:-}
     volumes:
+      - ../../.boss/extra-ca.pem:/etc/boss/extra-ca.pem:ro
       - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_artifacts:/var/lib/boss/artifacts
       - boss_community_identity:/var/lib/boss/identity
@@ -1105,6 +1109,7 @@ services:
       BOSS_DOC_RENDER_DIR: /var/lib/boss/artifacts/rendered
       BOSS_ARTIFACTS_DIR: /var/lib/boss/artifacts
     volumes:
+      - ../../.boss/extra-ca.pem:/etc/boss/extra-ca.pem:ro
       - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_artifacts:/var/lib/boss/artifacts
     healthcheck:
@@ -1155,6 +1160,8 @@ services:
       # Not on loopback, so the server refuses to start without it (crash-looped 210 times on
       # 2026-10-31). Outside agents authenticate with their own scoped boss_ext_ keys.
       BOSS_MCP_HTTP_TOKEN: ${BOSS_KG_MCP_HTTP_TOKEN:-}
+    volumes:
+      - ../../.boss/extra-ca.pem:/etc/boss/extra-ca.pem:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8790/health', headers={'Authorization': 'Bearer ' + os.environ['BOSS_MCP_HTTP_TOKEN']}), timeout=5).read()"]
       interval: 10s
@@ -1227,6 +1234,7 @@ services:
       BOSS_TARGET_BITBUCKET_REPO: ${BOSS_TARGET_BITBUCKET_REPO:-}
       BOSS_BITBUCKET_REPOS: ${BOSS_BITBUCKET_REPOS:-}
     volumes:
+      - ../../.boss/extra-ca.pem:/etc/boss/extra-ca.pem:ro
       - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_identity:/var/lib/boss/identity:ro
     healthcheck:
@@ -1281,6 +1289,7 @@ services:
       AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
       AWS_REGION: ${AWS_REGION:-}
     volumes:
+      - ../../.boss/extra-ca.pem:/etc/boss/extra-ca.pem:ro
       - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_identity:/var/lib/boss/identity:ro
     # P8 log caps: a streaming service logs per call; never let its log fill the disk. The same
@@ -1344,6 +1353,7 @@ services:
       BOSS_BUILD_SERVICES_PG_PASSWORD_FILE: /run/boss-build-services/password
       BOSS_BUILD_SERVICES_SANDBOX_PORT: "5433"
     volumes:
+      - ../../.boss/extra-ca.pem:/etc/boss/extra-ca.pem:ro
       - boss_community_runner:/var/lib/boss/runner
       - boss_community_sandboxes:/var/lib/boss/sandboxes
       - boss_community_repos:/var/lib/boss/repos

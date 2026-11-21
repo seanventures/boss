@@ -244,6 +244,9 @@ docker_cmd() {
 
 compose() {
   docker_cmd
+  # The company CA the containers mount read-only (installer's copy of BOSS_EXTRA_CA_FILE; empty
+  # when none). Present before Compose runs, or Docker would create a directory in its place.
+  [[ -e "$INSTALL_DIR/.boss/extra-ca.pem" ]] || { mkdir -p "$INSTALL_DIR/.boss" && : > "$INSTALL_DIR/.boss/extra-ca.pem" && chmod 644 "$INSTALL_DIR/.boss/extra-ca.pem"; } 2>/dev/null || true
   local profiles=()
   [[ "$(env_value BOSS_COMMUNITY_WEB_ENABLED)" == 0 ]] || profiles+=(--profile web)
   [[ "$(env_value BOSS_COMMUNITY_SECRET_STORE)" != infisical ]] || profiles+=(--profile secrets)

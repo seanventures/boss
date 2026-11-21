@@ -35,6 +35,7 @@ ARG TC_SECURITY=${_TC_SECURITY_HIT/,*/none}
 # carries no compiler. scripts/sandbox/boss-sandbox-exec.c says what it may do (and nothing more).
 FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS sandbox-helper
 ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
 ARG BOSS_UPSTREAM_NO_PROXY=
 RUN --mount=type=secret,id=boss_build_ca \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
@@ -61,6 +62,7 @@ ARG MAVEN_SHA512=831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0ca
 ARG GRADLE_VERSION=8.14.6
 ARG GRADLE_SHA256=7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd24
 ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
 ARG BOSS_UPSTREAM_NO_PROXY=
 RUN --mount=type=secret,id=boss_build_ca \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
@@ -115,6 +117,7 @@ ARG ZAP_SHA256=efe799aaa3627db683b43f00c9c210aea0b75c00cc8f0a0f0434d12bb3ddde5a
 COPY engine/boss_engine/security_scan/semgrep-requirements.lock /tmp/semgrep.lock
 COPY engine/boss_engine/security_scan/rulepack.py /tmp/rulepack.py
 ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
 ARG BOSS_UPSTREAM_NO_PROXY=
 ARG BOSS_PIP_INDEX_URL=
 RUN --mount=type=secret,id=boss_build_ca \
@@ -169,6 +172,7 @@ ARG GO_VERSION=1.27.4
 ARG GO_SHA256_AMD64=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
 ARG GO_SHA256_ARM64=3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92
 ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
 ARG BOSS_UPSTREAM_NO_PROXY=
 RUN --mount=type=secret,id=boss_build_ca \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
@@ -256,6 +260,7 @@ COPY --from=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e3395
 # bcrypt: node-gyp needs make and g++). About 300 MB; agents had been told to avoid such packages
 # (BOSSAPP-515, test_the_build_image_can_compile_native_modules).
 ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
 ARG BOSS_UPSTREAM_NO_PROXY=
 RUN --mount=type=secret,id=boss_build_ca \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
@@ -465,6 +470,7 @@ WORKDIR /app
 COPY EXPORT_CANDIDATE_STATUS.json /tmp/community-export-status.json
 RUN node -e 'if (!require("/tmp/community-export-status.json").mechanically_complete) throw Error("Community source export is blocked")'
 ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
 ARG BOSS_UPSTREAM_NO_PROXY=
 ARG BOSS_NPM_REGISTRY=
 COPY scripts/install/cli-lock/pnpm/package.json scripts/install/cli-lock/pnpm/package-lock.json /opt/boss-pnpm/
@@ -507,6 +513,7 @@ ENV NODE_ENV=production \
     NEXT_PUBLIC_BOSS_PROJECT_ID=$NEXT_PUBLIC_BOSS_PROJECT_ID
 WORKDIR /app
 ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
 ARG BOSS_UPSTREAM_NO_PROXY=
 ARG BOSS_NPM_REGISTRY=
 COPY scripts/install/cli-lock/pnpm/package.json scripts/install/cli-lock/pnpm/package-lock.json /opt/boss-pnpm/

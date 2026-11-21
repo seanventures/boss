@@ -60,8 +60,11 @@ security find-certificate -a -c "Example Corp Root CA" -p /Library/Keychains/Sys
 ```
 
 Give BOSS the **root** CA (the top of the chain the gateway presents), as PEM, certificates only.
-A file holding a private key is refused. If you cannot find it, ask IT for "the root CA of the
-TLS inspection gateway". `BOSS_TLS_PREFLIGHT=warn` lets the installer continue past the check
+A file holding a private key is refused, and so is one over 500 KB (the most an image build can
+take as a secret): give the root, not a whole exported keychain. If you cannot find it, ask IT for "the root CA of the
+TLS inspection gateway". The check stops only when it actually read a certificate a public CA
+did not issue; a host it cannot reach, or a connection reset during the handshake, is reported
+as a note. `BOSS_TLS_PREFLIGHT=warn` lets the installer continue past the check
 (the build then fails at its first download unless something else trusts the gateway).
 
 **What trusts it.** `BOSS_EXTRA_CA_FILE` is ADDED to the public CAs, never a replacement, and
@@ -72,8 +75,9 @@ certificate and host name checks stay on everywhere:
   Every step that downloads uses it: apt, curl, pip, the JDK and Go downloads (Python urllib), npm
   and pnpm, and the Playwright browser download.
 * **every BOSS container built from the api image** (api, worker, runner, egress, model gateway,
-  MCP tools, knowledge graph): the installer stores a copy in `.env` (`BOSS_EXTRA_CA_PEM_B64`; a
-  CA certificate is public), and each role starts through `with-extra-ca`, which writes one
+  MCP tools, knowledge graph): the installer copies the file to `.boss/extra-ca.pem` in the
+  install directory (a CA certificate is public), Compose mounts it read-only at
+  `/etc/boss/extra-ca.pem`, and each role starts through `with-extra-ca`, which writes one
   combined bundle and exports it for every process the role runs: `SSL_CERT_FILE` (OpenSSL,
   Python, httpx, Go, Rust), `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO`,
   and `NODE_EXTRA_CA_CERTS` (Node and the coding CLIs). Sandboxed runs inherit them. With Java in
@@ -118,11 +122,19 @@ before relying on it.
 
 ## The outbound proxy
 
-`BOSS_UPSTREAM_PROXY` is the proxy BOSS's containers use to leave the network. When the shell
-that runs the installer already exports `HTTPS_PROXY` (and `NO_PROXY`), the installer uses those,
-unless `BOSS_UPSTREAM_PROXY` is set.
+`BOSS_UPSTREAM_PROXY` is the proxy BOSS's containers use for HTTPS to leave the network. Set it
+explicitly. The installer never takes the proxy your shell exports on its own (a developer or
+VPN proxy there would otherwise reroute every container, or replace a saved company proxy on
+upgrade). To save the shell's `HTTPS_PROXY` and `NO_PROXY`, run the installer with
+`--use-shell-proxy`. A proxy on `127.0.0.1` or `localhost` is refused: inside a container that
+address is the container itself. Use `host.docker.internal` or the machine's network address.
 
-* Image builds get `HTTP(S)_PROXY` and `NO_PROXY` for every download step.
+`BOSS_UPSTREAM_HTTP_PROXY` is the proxy for plain `http://`, and is used only if you set it (for
+example, when Debian's apt mirrors are reachable only through the proxy during the image build).
+Without it, plain http (previews, app sidecars, a model server on the LAN) never goes to the
+proxy.
+
+* Image builds get `HTTPS_PROXY`, `HTTP_PROXY` (when set) and `NO_PROXY` for every download step.
 * Every container gets them, with BOSS's own services (`api`, `egress`, `db` and the rest) and
   `localhost` always in `NO_PROXY`. Add internal hosts (a model server, a Git host) to
   `BOSS_UPSTREAM_NO_PROXY`: host names, `.domain` suffixes or CIDR ranges, comma-separated.
@@ -133,6 +145,11 @@ unless `BOSS_UPSTREAM_PROXY` is set.
 **A proxy that needs a login** (HTTP 407, NTLM, Kerberos) is not supported directly: the login
 would sit in `.env` and in every container's environment. Run a local authenticating proxy
 (cntlm, px) on the host and point `BOSS_UPSTREAM_PROXY` at it.
+
+**A TLS-inspecting gateway sees what passes through it.** That is what inspection means: the
+model API keys and subscription tokens, and the GitHub credentials BOSS sends, are visible to the
+gateway in clear. BOSS cannot prevent this; agree with your security team that the gateway is
+trusted with them, or exempt the model and GitHub hosts from inspection.
 
 ## The sandbox fence
 
@@ -148,8 +165,9 @@ address, so a run can never reach BOSS's own database or services.
 * **`BOSS_EGRESS_PRIVATE_ALLOW`** lets exact host names (an internal registry on `10.x`,
   optionally `:port`) through even though they resolve to a private address. It is an explicit
   opt-in: no wildcards and no bare service names, and the address is still refused when it is
-  loopback, link-local (the cloud metadata service), multicast, or on one of BOSS's own container
-  networks.
+  loopback, link-local (the cloud metadata service), multicast, IPv6 unique-local (`fc00::/7`,
+  where cloud metadata also lives), the Docker host (`host.docker.internal`, host-gateway, the
+  default gateway), or on one of BOSS's own container networks.
 * GitHub never goes through this tunnel: it goes through BOSS's credential-injecting proxy.
 
 **A refusal says so.** The fence answers with a 403 whose reason names the host and the setting
@@ -207,9 +225,13 @@ mirror avoids it.
 
 * `BOSS_BUILD_CA_FILE` (an earlier name) is taken over as `BOSS_EXTRA_CA_FILE` on the next
   install or upgrade.
-* `BOSS_EGRESS_CONNECT_ALLOW` now adds to the built-in hosts instead of replacing them. If you
-  used it to narrow the list, set `BOSS_EGRESS_CONNECT_DEFAULTS=off`; the installer warns when
-  it sees the old setting.
+* `BOSS_EGRESS_CONNECT_ALLOW` now adds to the built-in hosts instead of replacing them. An install
+  that already set it keeps exactly its fence: the upgrade writes `BOSS_EGRESS_CONNECT_DEFAULTS=off`.
+  Set it to `on` when you want the built-in hosts as well.
+* Older entries in `BOSS_EGRESS_CONNECT_ALLOW` that are IP addresses or `*` are kept as they were
+  and produce a warning (in the installer and `boss doctor`), never a failed upgrade. A public
+  address still works; `*` never matched anything and still does not.
+* The shell's `HTTPS_PROXY` is no longer adopted automatically (see `--use-shell-proxy`).
 
 ## Not covered yet
 

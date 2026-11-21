@@ -67,7 +67,7 @@ def _env(tmp_path, ca: Path, **extra) -> dict:
                  "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "PIP_CERT", "GIT_SSL_CAINFO", "HTTPS_PROXY",
                  "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "BOSS_NPM_REGISTRY",
                  "BOSS_PIP_INDEX_URL", "BOSS_UPSTREAM_PROXY", "BOSS_UPSTREAM_NO_PROXY",
-                 "BOSS_PLAYWRIGHT_DOWNLOAD_HOST", "npm_config_registry"):
+                 "BOSS_PLAYWRIGHT_DOWNLOAD_HOST", "npm_config_registry", "BOSS_UPSTREAM_HTTP_PROXY"):
         environment.pop(name, None)
     environment["BOSS_BUILD_CA_SECRET"] = str(ca)
     environment["BOSS_BUILD_NETWORK_DIR"] = str(tmp_path / "net")
@@ -138,7 +138,7 @@ def test_curl_trusts_the_ca_and_the_public_roots_are_kept(tls_endpoint, tmp_path
 
 
 @pytest.mark.parametrize("name", ["BOSS_NPM_REGISTRY", "BOSS_PIP_INDEX_URL", "BOSS_PLAYWRIGHT_DOWNLOAD_HOST",
-                                  "BOSS_UPSTREAM_PROXY"])
+                                  "BOSS_UPSTREAM_PROXY", "BOSS_UPSTREAM_HTTP_PROXY"])
 @pytest.mark.parametrize("value", [f"https://user:{SECRET}@mirror.example.com/x/",
                                    f"https://mirror.example.com/x/?token={SECRET}",
                                    f"ftp://mirror.example.com/{SECRET}/"])
@@ -161,7 +161,7 @@ def test_a_private_key_is_never_used_as_the_ca(tmp_path):
 def test_sourced_it_sets_the_mirrors_and_proxy_without_changing_the_shell(tmp_path):
     script = (f'. "{WRAPPER}" && case $- in *e*) echo errexit-leaked;; esac; '
               'echo "$npm_config_registry|$npm_config_strict_ssl|$PIP_INDEX_URL|$PLAYWRIGHT_DOWNLOAD_HOST|'
-              '$HTTPS_PROXY|$http_proxy|$NO_PROXY"; echo "${UNSET_VAR_OK:-unset-is-fine}"')
+              '$HTTPS_PROXY|${http_proxy-unset}|$NO_PROXY"; echo "${UNSET_VAR_OK:-unset-is-fine}"')
     env = _env(tmp_path, tmp_path / "none", BOSS_NPM_REGISTRY="https://npm.example.com/r/",
                BOSS_PIP_INDEX_URL="https://pypi.example.com/simple",
                BOSS_PLAYWRIGHT_DOWNLOAD_HOST="https://pw.example.com/",
@@ -170,7 +170,11 @@ def test_sourced_it_sets_the_mirrors_and_proxy_without_changing_the_shell(tmp_pa
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == [
         "https://npm.example.com/r/|true|https://pypi.example.com/simple|https://pw.example.com|"
-        "http://proxy.example.com:8080|http://proxy.example.com:8080|.example.com", "unset-is-fine"]
+        "http://proxy.example.com:8080|unset|.example.com", "unset-is-fine"]
+    explicit = subprocess.run(["sh", "-c", f'. "{WRAPPER}" && echo "$HTTP_PROXY|$http_proxy"'],
+                              env=_env(tmp_path, tmp_path / "none", BOSS_UPSTREAM_HTTP_PROXY="http://p.example.com:3128"),
+                              text=True, capture_output=True, timeout=10)
+    assert explicit.stdout.strip() == "http://p.example.com:3128|http://p.example.com:3128"
     empty = subprocess.run(["sh", "-c", f'. "{WRAPPER}" && echo "[${{HTTPS_PROXY-unset}}][${{npm_config_registry-unset}}]"'],
                            env=_env(tmp_path, tmp_path / "none"), text=True, capture_output=True, timeout=10)
     assert empty.stdout.strip() == "[unset][unset]"           # an empty setting never reaches a tool

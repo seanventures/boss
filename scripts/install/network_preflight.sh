@@ -35,7 +35,9 @@ boss_tls_diagnose() {
     curl -sS -o /dev/null --max-time 10 ${proxy:+--proxy "$proxy"} "https://$target/" >/dev/null 2>&1 || rc=$?
     case "$rc" in
       0|22) reached=1; continue ;;
-      60|77|35|51|58|83|90|91)
+      60|77|51|58|83|90|91)
+        # A certificate the public CAs do not vouch for. (35, a reset handshake, is not here: a
+        # firewall that drops the connection proves nothing about a gateway.)
         reached=1
         if [ -n "$ca" ] && curl -sS -o /dev/null --max-time 10 --cacert "$ca" ${proxy:+--proxy "$proxy"} \
              "https://$target/" >/dev/null 2>&1; then
@@ -43,6 +45,10 @@ boss_tls_diagnose() {
           continue
         fi
         issuer="$(boss_tls_issuer "$target" "$proxy")"
+        if [ -z "$issuer" ]; then
+          printf '  ! %s: TLS failed (curl exit %s) and no certificate could be read; check the network to it.\n' "$target" "$rc"
+          continue
+        fi
         intercepted+=("$target|$issuer")
         failed=1 ;;
       *)

@@ -21,6 +21,8 @@ sys.path.insert(0, str(ROOT))
 
 from apps.egress.boss_egress import connect  # noqa: E402
 
+REAL_HOST_GATEWAY_ADDRESSES = connect.host_gateway_addresses
+
 def _addr(ip: str, port: int = 443):
     return (socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))
 
@@ -34,6 +36,8 @@ def _clean(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(connect, "toolchain_hosts", lambda: ())
     monkeypatch.setattr(connect, "own_networks", lambda: [__import__("ipaddress").ip_network("172.18.0.0/16")])
+    if hasattr(connect, "host_gateway_addresses"):
+        monkeypatch.setattr(connect, "host_gateway_addresses", lambda: set())
 
 
 def _resolve(monkeypatch, table):
@@ -91,6 +95,37 @@ def test_an_internal_registry_on_a_private_address_is_an_explicit_exact_opt_in(m
     assert _decide("other.corp.example.com")[1] == "not_a_public_address"
     for never in ("meta.corp.example.com", "loop.corp.example.com", "boss.corp.example.com"):
         assert _decide(never)[1] == "not_a_public_address", never
+
+
+def test_a_private_opt_in_never_reaches_the_host_gateway_or_ipv6_ula(monkeypatch):
+    """host.docker.internal / host-gateway reach the host's own listeners, and fd00:ec2::254 is a
+    cloud metadata service: never through the private opt-in (review N4)."""
+    monkeypatch.setattr(connect, "host_gateway_addresses", lambda: {"192.168.65.254", "172.17.0.1"})
+    _resolve(monkeypatch, {"a.corp.example.com": ["192.168.65.254"], "b.corp.example.com": ["172.17.0.1"],
+                           "c.corp.example.com": ["fd00:ec2::254"], "d.corp.example.com": ["fe80::1"],
+                           "e.corp.example.com": ["10.9.9.9"]})
+    monkeypatch.setenv("BOSS_EGRESS_PRIVATE_ALLOW",
+                       "a.corp.example.com,b.corp.example.com,c.corp.example.com,d.corp.example.com,e.corp.example.com")
+    for host in "abcd":
+        assert _decide(f"{host}.corp.example.com")[1] == "not_a_public_address", host
+    assert _decide("e.corp.example.com")[1] == ""
+
+
+def test_the_host_gateway_is_found_from_the_routing_table_and_docker_names(monkeypatch, tmp_path):
+    route = tmp_path / "route"
+    route.write_text("Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\n"
+                     "eth0\t00000000\t010012AC\t0003\t0\t0\t0\t00000000\n")
+    monkeypatch.setattr(connect, "ROUTE_FILE", str(route))
+    monkeypatch.setattr(connect.socket, "gethostbyname_ex",
+                        lambda name: (name, [], ["192.168.65.254"]) if name == "host.docker.internal"
+                        else (_ for _ in ()).throw(socket.gaierror()))
+    assert {"172.18.0.1", "192.168.65.254"} <= REAL_HOST_GATEWAY_ADDRESSES()
+
+
+def test_an_old_ip_entry_still_works(monkeypatch):
+    _resolve(monkeypatch, {"93.184.216.34": ["93.184.216.34"]})
+    monkeypatch.setenv("BOSS_EGRESS_CONNECT_ALLOW", "93.184.216.34")
+    assert _decide("93.184.216.34")[1] == ""
 
 
 def test_a_wildcard_or_a_service_name_is_never_a_private_opt_in(monkeypatch):
@@ -177,6 +212,8 @@ def _unresolvable(monkeypatch, *names):
     def fake(host, port, *args, **kwargs):
         if host in names:
             raise socket.gaierror("no such host")
+        if host == "proxy.example.com":           # the fake upstream proxy listens on loopback
+            host = "127.0.0.1"
         return original(host, port, *args, **kwargs)
     monkeypatch.setattr(connect.socket, "getaddrinfo", fake)
 
@@ -185,7 +222,7 @@ def test_a_tunnel_is_chained_through_the_upstream_proxy(monkeypatch):
     proxy = _FakeProxy()
     _unresolvable(monkeypatch, "pkg.example.com")
     monkeypatch.setenv("BOSS_EGRESS_CONNECT_ALLOW", "pkg.example.com")
-    monkeypatch.setenv("BOSS_UPSTREAM_PROXY", f"http://127.0.0.1:{proxy.port}")
+    monkeypatch.setenv("BOSS_UPSTREAM_PROXY", f"http://proxy.example.com:{proxy.port}")
     route, reason = _decide("pkg.example.com")
     assert reason == "" and isinstance(route, connect.Upstream) and route.port == 443
     a, b = socket.socketpair()
@@ -208,7 +245,7 @@ def test_an_upstream_refusal_is_reported_as_the_proxy_s_not_the_registry_s(monke
     proxy = _FakeProxy(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
     _unresolvable(monkeypatch, "pkg.example.com")
     monkeypatch.setenv("BOSS_EGRESS_CONNECT_ALLOW", "pkg.example.com")
-    monkeypatch.setenv("BOSS_UPSTREAM_PROXY", f"http://127.0.0.1:{proxy.port}")
+    monkeypatch.setenv("BOSS_UPSTREAM_PROXY", f"http://proxy.example.com:{proxy.port}")
     answer = _serve_one(b"CONNECT pkg.example.com:443 HTTP/1.1\r\n\r\n")
     status = answer.split(b"\r\n", 1)[0].decode()
     assert status.startswith("HTTP/1.1 502 BOSS egress: the upstream proxy (BOSS_UPSTREAM_PROXY) refused")

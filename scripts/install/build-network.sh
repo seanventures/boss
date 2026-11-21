@@ -15,8 +15,9 @@
 #     BOSS_PLAYWRIGHT_DOWNLOAD_HOST (the browser download), each https with NO user name,
 #     password, query or fragment. A build argument is recorded in `docker history`, so a URL
 #     carrying a credential is refused HERE, at build time, as well as by the installer;
-#   * the outbound proxy: BOSS_UPSTREAM_PROXY / BOSS_UPSTREAM_NO_PROXY, as HTTP(S)_PROXY and
-#     NO_PROXY (exported only when set, so an empty value never reaches a tool);
+#   * the outbound proxy: BOSS_UPSTREAM_PROXY as HTTPS_PROXY, BOSS_UPSTREAM_HTTP_PROXY as
+#     HTTP_PROXY, BOSS_UPSTREAM_NO_PROXY as NO_PROXY (exported only when set, so an empty value
+#     never reaches a tool);
 #   * the extra CA (the company's root, for a TLS-intercepting gateway): ADDED to the system
 #     trust, never replacing it, for OpenSSL/Python/urllib (SSL_CERT_FILE), requests and pip
 #     (REQUESTS_CA_BUNDLE, PIP_CERT), curl (CURL_CA_BUNDLE), git (GIT_SSL_CAINFO), apt (its own
@@ -58,6 +59,7 @@ _bbn_url BOSS_NPM_REGISTRY "${BOSS_NPM_REGISTRY:-}" https
 _bbn_url BOSS_PIP_INDEX_URL "${BOSS_PIP_INDEX_URL:-}" https
 _bbn_url BOSS_PLAYWRIGHT_DOWNLOAD_HOST "${BOSS_PLAYWRIGHT_DOWNLOAD_HOST:-}" https
 _bbn_url BOSS_UPSTREAM_PROXY "${BOSS_UPSTREAM_PROXY:-}" "http https"
+_bbn_url BOSS_UPSTREAM_HTTP_PROXY "${BOSS_UPSTREAM_HTTP_PROXY:-}" "http https"
 
 if [ -n "${BOSS_NPM_REGISTRY:-}" ]; then
   export npm_config_registry="$BOSS_NPM_REGISTRY" npm_config_strict_ssl=true
@@ -69,11 +71,14 @@ if [ -n "${BOSS_PLAYWRIGHT_DOWNLOAD_HOST:-}" ]; then
   export PLAYWRIGHT_DOWNLOAD_HOST="${BOSS_PLAYWRIGHT_DOWNLOAD_HOST%/}"
 fi
 if [ -n "${BOSS_UPSTREAM_PROXY:-}" ]; then
-  export HTTPS_PROXY="$BOSS_UPSTREAM_PROXY" https_proxy="$BOSS_UPSTREAM_PROXY" \
-    HTTP_PROXY="$BOSS_UPSTREAM_PROXY" http_proxy="$BOSS_UPSTREAM_PROXY"
-  if [ -n "${BOSS_UPSTREAM_NO_PROXY:-}" ]; then
-    export NO_PROXY="$BOSS_UPSTREAM_NO_PROXY" no_proxy="$BOSS_UPSTREAM_NO_PROXY"
-  fi
+  export HTTPS_PROXY="$BOSS_UPSTREAM_PROXY" https_proxy="$BOSS_UPSTREAM_PROXY"
+fi
+# Plain http (apt's Debian mirrors) through a proxy only when the operator names one.
+if [ -n "${BOSS_UPSTREAM_HTTP_PROXY:-}" ]; then
+  export HTTP_PROXY="$BOSS_UPSTREAM_HTTP_PROXY" http_proxy="$BOSS_UPSTREAM_HTTP_PROXY"
+fi
+if [ -n "${BOSS_UPSTREAM_NO_PROXY:-}" ] && [ -n "${BOSS_UPSTREAM_PROXY:-}${BOSS_UPSTREAM_HTTP_PROXY:-}" ]; then
+  export NO_PROXY="$BOSS_UPSTREAM_NO_PROXY" no_proxy="$BOSS_UPSTREAM_NO_PROXY"
 fi
 
 _bbn_ca="${BOSS_BUILD_CA_SECRET:-/run/secrets/boss_build_ca}"

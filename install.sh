@@ -261,6 +261,8 @@ Options:
                           127.0.0.1 to the Docker bridge address (Linux). Without it an
                           unattended run leaves an existing Ollama alone and says how
   --no-discover           Do not look for model keys and subscriptions on this machine
+  --use-shell-proxy       Save this shell's HTTPS_PROXY / NO_PROXY as BOSS's outbound proxy
+                          (BOSS_UPSTREAM_PROXY). Without it, the shell's proxy is never used
   --no-boss-command       Do not install the \`boss\` command on PATH
   --discover-subscriptions  Check Claude, Codex and Grok CLIs on this VM (no credential transfer)
   --install-coding-clis  Install missing official Claude, Codex and Grok coding CLIs on this VM
@@ -322,6 +324,7 @@ while [[ $# -gt 0 ]]; do
     --no-local-model) NO_LOCAL_MODEL=1; shift ;;
     --rebind-ollama) REBIND_OLLAMA=1; shift ;;
     --no-discover) AUTO_DISCOVER=0; shift ;;
+    --use-shell-proxy) BOSS_USE_SHELL_PROXY=1; shift ;;
     --no-boss-command) INSTALL_BOSS_COMMAND=0; shift ;;
     --openai-key|--anthropic-key|--github-token|--openai-key=*|--anthropic-key=*|--github-token=*)
       die "Refusing a secret on the command line. It would be saved in shell history and process listings. Export OPENAI_API_KEY, ANTHROPIC_API_KEY, or BOSS_GITHUB_TOKEN, or paste the OpenAI key at the hidden prompt." ;;
@@ -1275,12 +1278,17 @@ PREVIEW_PORT="${BOSS_PREVIEW_PORT:-$_saved_preview_port}"
 [[ -z "$PREVIEW_PORT" || "$PREVIEW_PORT" =~ ^[0-9]{1,5}$ ]] || die "BOSS_PREVIEW_PORT must be a port number"
 case "$BOSS_BIN_DIR" in *$'\n'*|*' '*) die "BOSS_BIN_DIR must be a path without spaces" ;; esac
 
-# THE OUTBOUND PROXY: a shell that already exports HTTPS_PROXY (the usual corporate setup) gives
-# it to BOSS's containers too, unless BOSS_UPSTREAM_PROXY says otherwise. One with a login in it
-# is never saved: a credential in .env would reach every container's environment.
-if [ -z "${BOSS_UPSTREAM_PROXY:-}" ]; then
+# THE OUTBOUND PROXY is BOSS_UPSTREAM_PROXY, set explicitly. The shell's HTTPS_PROXY is used only
+# when the operator asks (--use-shell-proxy, or BOSS_USE_SHELL_PROXY=1): a developer's or VPN's
+# proxy in the shell must never be written over a saved company proxy on upgrade, or route a
+# stock install's containers through it. One with a login in it is never saved: a credential in
+# .env would reach every container's environment. A loopback proxy is refused later (finalize):
+# no container can reach the host's 127.0.0.1.
+if [ -z "${BOSS_UPSTREAM_PROXY:-}" ] && [ "${BOSS_USE_SHELL_PROXY:-0}" = 1 ]; then
   _shell_proxy="${HTTPS_PROXY:-${https_proxy:-}}"
-  if [ -n "$_shell_proxy" ]; then
+  if [ -z "$_shell_proxy" ]; then
+    ui_warn "--use-shell-proxy: this shell exports no HTTPS_PROXY; nothing to save."
+  else
     case "$_shell_proxy" in
       *@*) ui_warn "Your shell's HTTPS_PROXY holds a user name or password; BOSS will not save it. Run a local authenticating proxy (cntlm, px) and set BOSS_UPSTREAM_PROXY to it. See docs/community/ENTERPRISE_NETWORK.md." ;;
       *) BOSS_UPSTREAM_PROXY="$_shell_proxy"
@@ -1292,10 +1300,14 @@ fi
 # The Docker context is remembered so `boss` reaches the same daemon later (Colima beside Docker
 # Desktop: without it, a lifecycle command run without DOCKER_CONTEXT acts on the other one).
 BOSS_DOCKER_CONTEXT="${BOSS_DOCKER_CONTEXT:-${DOCKER_CONTEXT:-}}"
-# BOSS_EGRESS_CONNECT_ALLOW used to REPLACE the fence's built-in host list; it now adds to it.
+# BOSS_EGRESS_CONNECT_ALLOW used to REPLACE the fence's built-in host list; it now adds to it. An
+# install that set it to NARROW the fence keeps exactly that fence: the upgrade writes
+# BOSS_EGRESS_CONNECT_DEFAULTS=off (never a silent widening of a security policy). A new install,
+# or one that never set the list, gets the additive behaviour.
 if [ -f "$ENV_FILE" ] && grep -qE '^BOSS_EGRESS_CONNECT_ALLOW=.+' "$ENV_FILE" &&
    ! grep -qE '^BOSS_EGRESS_CONNECT_DEFAULTS=.+' "$ENV_FILE" && [ -z "${BOSS_EGRESS_CONNECT_DEFAULTS:-}" ]; then
-  ui_warn "BOSS_EGRESS_CONNECT_ALLOW now ADDS hosts to the sandbox fence's built-in list (it used to replace it). To keep only your list, set BOSS_EGRESS_CONNECT_DEFAULTS=off in $ENV_FILE."
+  BOSS_EGRESS_CONNECT_DEFAULTS=off
+  ui_info "Kept your sandbox fence list as it was (BOSS_EGRESS_CONNECT_DEFAULTS=off). BOSS_EGRESS_CONNECT_ALLOW now ADDS to the built-in hosts; set BOSS_EGRESS_CONNECT_DEFAULTS=on in $ENV_FILE to use that."
 fi
 
 _new_env="$INSTALL_DIR/.env.writing.$$"
@@ -1309,8 +1321,6 @@ BOSS_EDITION=community
 # replaces the saved one; a run that exports nothing keeps it. Never a credential in a URL.
 # The company's root CA (PEM, absolute path): trusted by image builds and by every container.
 BOSS_EXTRA_CA_FILE=${BOSS_EXTRA_CA_FILE:-${BOSS_BUILD_CA_FILE:-}}
-# Written by the installer from BOSS_EXTRA_CA_FILE (the containers' copy); do not edit.
-BOSS_EXTRA_CA_PEM_B64=
 BOSS_NPM_REGISTRY=${BOSS_NPM_REGISTRY:-}
 BOSS_PIP_INDEX_URL=${BOSS_PIP_INDEX_URL:-}
 BOSS_GOPROXY=${BOSS_GOPROXY:-}
@@ -1319,6 +1329,7 @@ BOSS_GONOSUMDB=${BOSS_GONOSUMDB:-}
 BOSS_MAVEN_MIRROR=${BOSS_MAVEN_MIRROR:-}
 BOSS_PLAYWRIGHT_DOWNLOAD_HOST=${BOSS_PLAYWRIGHT_DOWNLOAD_HOST:-}
 BOSS_UPSTREAM_PROXY=${BOSS_UPSTREAM_PROXY:-}
+BOSS_UPSTREAM_HTTP_PROXY=${BOSS_UPSTREAM_HTTP_PROXY:-}
 BOSS_UPSTREAM_NO_PROXY=${BOSS_UPSTREAM_NO_PROXY:-}
 # The sandbox fence: hosts ADDED to its built-in list (host, *.suffix, host:port); on/off for
 # that built-in list; internal registries allowed on a private address (exact host[:port]).

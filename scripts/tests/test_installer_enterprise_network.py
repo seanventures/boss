@@ -31,7 +31,7 @@ PRESERVE = ROOT / "scripts/install/restore_preserved_env.sh"
 PREFLIGHT = ROOT / "scripts/install/network_preflight.sh"
 
 
-@pytest.mark.parametrize("name", [n for n in en.SETTINGS if n != "BOSS_EXTRA_CA_PEM_B64"] + ["BOSS_DOCKER_CONTEXT"])
+@pytest.mark.parametrize("name", list(en.SETTINGS) + ["BOSS_DOCKER_CONTEXT"])
 def test_an_upgrade_keeps_each_setting_and_a_newly_exported_value_replaces_it(tmp_path, name):
     old, new = tmp_path / "old.env", tmp_path / "new.env"
     old.write_text(f"{name}=saved-value\n")
@@ -42,14 +42,6 @@ def test_an_upgrade_keeps_each_setting_and_a_newly_exported_value_replaces_it(tm
     subprocess.run(["sh", str(PRESERVE), str(old), str(new)], check=True, env=dict(os.environ), timeout=30)
     assert new.read_text().splitlines().count(f"{name}=exported-value") == 1
     assert "saved-value" not in new.read_text()
-
-
-def test_the_containers_copy_of_the_ca_is_never_carried_over_stale(tmp_path):
-    old, new = tmp_path / "old.env", tmp_path / "new.env"
-    old.write_text("BOSS_EXTRA_CA_PEM_B64=c3RhbGU=\n")
-    new.write_text("BOSS_EXTRA_CA_PEM_B64=\n")
-    subprocess.run(["sh", str(PRESERVE), str(old), str(new)], check=True, timeout=30)
-    assert "BOSS_EXTRA_CA_PEM_B64=\n" in new.read_text()
 
 
 # ---- the TLS check -----------------------------------------------------------------------------
@@ -117,6 +109,34 @@ def test_with_the_right_ca_the_check_passes_and_an_unreachable_host_only_notes(i
     assert "BOSS_UPSTREAM_PROXY" in result.stdout          # the unreachable one says what to check
 
 
+def test_a_reset_handshake_is_a_note_not_an_interception(tmp_path):
+    """A firewall that resets the connection (curl exit 35) proves nothing about a gateway: the
+    install goes on with a note instead of stopping (review N3)."""
+    import socket
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(8)
+    port = srv.getsockname()[1]
+
+    def reset():
+        import struct
+        while True:
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                return
+            conn.recv(1024)
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            conn.close()
+    threading.Thread(target=reset, daemon=True).start()
+    try:
+        result = _diagnose(tmp_path, "", f"localhost:{port}")
+    finally:
+        srv.close()
+    assert result.returncode == 0, result.stdout
+    assert "intercepted" not in result.stdout and "not reachable" in result.stdout
+
+
 def test_the_installer_runs_the_checks_before_the_build_and_never_offers_tls_off():
     install = (ROOT / "install.sh").read_text()
     build = install.index('ui_step "Building and starting Community stack')
@@ -151,20 +171,66 @@ def test_a_missing_credential_helper_is_caught_before_the_first_pull(tmp_path, s
 
 def _proxy_block() -> str:
     install = (ROOT / "install.sh").read_text()
-    return "#" + install.split("# THE OUTBOUND PROXY:", 1)[1].split("# The Docker context is remembered", 1)[0]
+    return "#" + install.split("# THE OUTBOUND PROXY", 1)[1].split("# The Docker context is remembered", 1)[0]
+
+
+def _run_proxy_block(env: dict) -> tuple[str, str]:
+    script = ("ui_warn() { echo \"WARN $*\"; }; ui_info() { :; }; die() { echo \"DIE $*\"; exit 1; }\n"
+              + _proxy_block() + '\necho "[${BOSS_UPSTREAM_PROXY:-}][${BOSS_UPSTREAM_NO_PROXY:-}]"')
+    result = subprocess.run(["bash", "-c", script], env={"PATH": "/usr/bin:/bin", **env},
+                            capture_output=True, text=True, timeout=10)
+    return result.stdout.strip().splitlines()[-1], result.stdout
+
+
+def test_the_shell_proxy_is_never_adopted_implicitly():
+    """A stock upgrade from a shell with a dev or VPN proxy exported must not route every BOSS
+    container through it, and must not replace a saved company proxy (review B1)."""
+    last, _ = _run_proxy_block({"HTTPS_PROXY": "http://proxy.example.com:8080", "NO_PROXY": ".example.com"})
+    assert last == "[][]"
 
 
 @pytest.mark.parametrize("shell_proxy,saved", [("http://proxy.example.com:8080", "http://proxy.example.com:8080"),
                                                ("http://me:pw@proxy.example.com:8080", "")])
-def test_the_shell_proxy_is_adopted_unless_it_holds_a_login(shell_proxy, saved):
-    script = ("ui_warn() { echo \"WARN $*\"; }; ui_info() { :; }\n" + _proxy_block()
-              + '\necho "[$BOSS_UPSTREAM_PROXY][$BOSS_UPSTREAM_NO_PROXY]"')
-    env = {"PATH": "/usr/bin:/bin", "HTTPS_PROXY": shell_proxy, "NO_PROXY": ".example.com"}
-    result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=10)
-    last = result.stdout.strip().splitlines()[-1]
+def test_the_shell_proxy_is_adopted_only_on_request_and_never_with_a_login(shell_proxy, saved):
+    last, out = _run_proxy_block({"BOSS_USE_SHELL_PROXY": "1", "HTTPS_PROXY": shell_proxy,
+                                  "NO_PROXY": ".example.com"})
     assert last == (f"[{saved}][.example.com]" if saved else "[][]")
     if not saved:
-        assert "WARN" in result.stdout and "me:pw" not in result.stdout
+        assert "WARN" in out and "me:pw" not in out
+
+
+def test_an_explicit_setting_wins_over_the_shell():
+    last, _ = _run_proxy_block({"BOSS_USE_SHELL_PROXY": "1", "HTTPS_PROXY": "http://other.example.com:1",
+                                "BOSS_UPSTREAM_PROXY": "http://proxy.example.com:8080"})
+    assert last.startswith("[http://proxy.example.com:8080]")
+
+
+def test_the_installer_offers_the_flag():
+    install = (ROOT / "install.sh").read_text()
+    assert "--use-shell-proxy)" in install and "--use-shell-proxy" in install.split("usage() {", 1)[1][:6000]
+
+
+def _defaults_block() -> str:
+    install = (ROOT / "install.sh").read_text()
+    return install.split("# BOSS_EGRESS_CONNECT_ALLOW used to REPLACE", 1)[1].split('_new_env="$INSTALL_DIR', 1)[0]
+
+
+@pytest.mark.parametrize("saved,expected", [
+    ("BOSS_EGRESS_CONNECT_ALLOW=api.anthropic.com\n", "off"),                 # a narrowed fence stays narrow
+    ("BOSS_EGRESS_CONNECT_ALLOW=api.anthropic.com\nBOSS_EGRESS_CONNECT_DEFAULTS=\n", "off"),
+    ("BOSS_EGRESS_CONNECT_ALLOW=api.anthropic.com\nBOSS_EGRESS_CONNECT_DEFAULTS=on\n", ""),   # already chosen
+    ("BOSS_EGRESS_CONNECT_ALLOW=\n", ""),                                       # nothing narrowed
+    ("", ""),                                                                   # a new install: additive
+])
+def test_an_upgrade_keeps_a_narrowed_fence_narrow(tmp_path, saved, expected):
+    env_file = tmp_path / ".env"
+    if saved:
+        env_file.write_text(saved)
+    script = ('ui_warn() { :; }; ui_info() { :; }\nENV_FILE="$1"\n#' + _defaults_block()
+              + '\necho "[${BOSS_EGRESS_CONNECT_DEFAULTS:-}]"')
+    result = subprocess.run(["bash", "-c", script, "-", str(env_file)], env={"PATH": "/usr/bin:/bin"},
+                            capture_output=True, text=True, timeout=10)
+    assert result.stdout.strip().splitlines()[-1] == f"[{expected}]", result.stdout + result.stderr
 
 
 # ---- a stopped Docker runtime on a Mac -----------------------------------------------------------

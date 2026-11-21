@@ -10,8 +10,9 @@ downloads go through here as `HTTPS_PROXY=http://egress:8091`:
   to the database, the API, a link-local metadata service or any private range is refused, so the
   allowlist can never become a way back into BOSS's own network. The one opt-in exception is
   BOSS_EGRESS_PRIVATE_ALLOW: exact host names (an internal package registry) that may resolve to
-  a private address, still never to loopback, link-local (cloud metadata), multicast, or one of
-  this container's own networks (where BOSS's services live);
+  a private address, still never to loopback, link-local (cloud metadata), multicast, IPv6
+  unique-local, the Docker host (host.docker.internal / host-gateway), or one of this container's
+  own networks (where BOSS's services live);
 * the tunnel is opaque TLS: no MITM, no CA to inject, nothing decrypted.
 
 THE ALLOWLIST (docs/community/ENTERPRISE_NETWORK.md) is the built-in hosts below, PLUS the hosts
@@ -176,16 +177,26 @@ def host_allowed(host: str, port: int = 443) -> bool:
 
 
 def _public(addr: str) -> bool:
-    ip = ipaddress.ip_address(addr)
+    ip = ipaddress.ip_address(addr.split("%", 1)[0])
     return ip.is_global and not ip.is_multicast
 
 
-def own_networks() -> list[ipaddress.IPv4Network]:
+ROUTE_FILE = "/proc/net/route"
+IPV6_ROUTE_FILE = "/proc/net/ipv6_route"
+#: Addresses that reach the Docker HOST itself (its localhost listeners), whatever this container's
+#: routes say: Docker's default bridge gateway, Docker Desktop's host address, Lima/Colima's host.
+#: Never a target, even for an opted-in private name.
+KNOWN_HOST_ADDRESSES = frozenset({"172.17.0.1", "192.168.65.254", "192.168.65.1", "192.168.65.2",
+                                  "192.168.5.2"})
+HOST_NAMES = ("host.docker.internal", "gateway.docker.internal", "host.lima.internal")
+
+
+def own_networks() -> list:
     """This container's directly attached networks (where BOSS's own services are reachable),
-    read from the kernel's routing table exactly as the sandbox fence reads them."""
-    nets: list[ipaddress.IPv4Network] = []
+    IPv4 and IPv6, read from the kernel's routing tables as the sandbox fence reads them."""
+    nets: list = []
     try:
-        with open("/proc/net/route") as fh:
+        with open(ROUTE_FILE) as fh:
             next(fh)
             for line in fh:
                 f = line.split()
@@ -194,21 +205,64 @@ def own_networks() -> list[ipaddress.IPv4Network]:
                     continue
                 nets.append(ipaddress.ip_network(
                     f"{socket.inet_ntoa(struct.pack('<I', dest))}/{bin(mask).count('1')}", strict=False))
-    except (OSError, ValueError, StopIteration):
+    except (OSError, ValueError, StopIteration, IndexError):
+        pass
+    try:
+        with open(IPV6_ROUTE_FILE) as fh:
+            for line in fh:
+                f = line.split()
+                dest, plen = f[0], int(f[1], 16)
+                if plen == 0 or len(dest) != 32:
+                    continue
+                addr = ipaddress.IPv6Address(bytes.fromhex(dest))
+                if addr.is_multicast:
+                    continue
+                nets.append(ipaddress.ip_network(f"{addr}/{plen}", strict=False))
+    except (OSError, ValueError, IndexError):
         pass
     return nets
 
 
+def host_gateway_addresses() -> set[str]:
+    """Every address that is the Docker host from here: this container's default gateway(s), the
+    names Docker and Colima give the host (host-gateway), and the known host addresses."""
+    found = set(KNOWN_HOST_ADDRESSES)
+    try:
+        with open(ROUTE_FILE) as fh:
+            next(fh)
+            for line in fh:
+                f = line.split()
+                if int(f[1], 16) == 0 and int(f[2], 16) != 0:
+                    found.add(socket.inet_ntoa(struct.pack("<I", int(f[2], 16))))
+    except (OSError, ValueError, StopIteration, IndexError):
+        pass
+    for name in HOST_NAMES:
+        try:
+            found.update(socket.gethostbyname_ex(name)[2])
+        except (OSError, UnicodeError):
+            continue
+    return found
+
+
+#: IPv6 unique-local space: cloud metadata (fd00:ec2::254) and host-internal networks live here.
+_ULA = ipaddress.ip_network("fc00::/7")
+
+
 def _private_target_ok(addr: str) -> bool:
     """A private address an opted-in internal host may use: never loopback, link-local (the cloud
-    metadata service), multicast, unspecified or reserved, never one of this container's own
-    networks (BOSS's database, API and other services)."""
-    ip = ipaddress.ip_address(addr)
+    metadata service), multicast, unspecified or reserved, never IPv6 unique-local, never the
+    Docker host (host.docker.internal / host-gateway, the default gateway), never one of this
+    container's own networks (BOSS's database, API and other services)."""
+    ip = ipaddress.ip_address(addr.split("%", 1)[0])
     if getattr(ip, "ipv4_mapped", None):
         ip = ip.ipv4_mapped
     if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved:
         return False
-    return not any(ip in net for net in own_networks())
+    if ip.version == 6 and ip in _ULA:
+        return False
+    if str(ip) in host_gateway_addresses():
+        return False
+    return not any(ip.version == net.version and ip in net for net in own_networks())
 
 
 def resolve_public(host: str, port: int) -> Optional[tuple]:
