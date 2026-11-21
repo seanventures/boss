@@ -351,7 +351,7 @@ def test_a_real_conflict_goes_to_the_build_agent_and_asks_again_only_when_mergea
 
     handed = []
     monkeypatch.setattr(merge_failures, "hand_to_builder",
-                        lambda c, s, run, note: handed.append((run, note)) or "crun_next")
+                        lambda c, s, run, note, why=None: handed.append((run, note)) or "crun_next")
     branch = f"boss/code/crun_{uuid4().hex[:8]}"
     did = _decision(engine, n=237, branch=branch, status="approved")
     run = _build(engine, n=237, did=did)
