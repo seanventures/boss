@@ -167,7 +167,10 @@ def _infer_validator(instructions: str, input_path: str, root: Path) -> Optional
         if base not in span:
             continue
         template = re.sub(r"(?:\.?/)?" + re.escape(input_path), "{file}", span)
-        if "{file}" not in template:
+        # A COMMAND, NOT A PATH: a bare backticked `config/routes.yaml` is the file, never a
+        # validator — the template needs a program of its own besides `{file}`.
+        if "{file}" not in template or template.strip().startswith("{file}") \
+                or not _program(template.replace("{file}", " ")):
             continue
         if "--fix" in span and fix is None:
             fix = _resolve_program(template, root)

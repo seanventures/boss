@@ -387,6 +387,9 @@ def test_an_ordinary_config_fix_is_not_a_remediation(tmp_path):
     (tmp_path / ".github" / "workflows" / "ci.yml").write_text("jobs: {}\n")
     (tmp_path / "docker-compose.yml").write_text("services: {}\n")
     for brief in ("Fix the 404 on /health: add a /health route to config/routes.yaml.",
+                  # A bare backticked path is the file, never a validator command.
+                  "Fix the 404: add a /health route to `config/routes.yaml`",
+                  "Fix the 404: add a /health route to `./config/routes.yaml`",
                   "Fix CI: add a lint step to .github/workflows/ci.yml.",
                   "Repair docker-compose.yml so the api waits for the db."):
         assert f.contract({}, brief, tmp_path) is None, brief
