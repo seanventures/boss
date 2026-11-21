@@ -147,7 +147,13 @@ def test_the_pipeline_holds_a_failed_delivery_instead_of_blocking_or_rebuilding(
     assert held < src.index('rescued = _rescue_pr(f"the pull-request step failed 3 times')
     assert 'if status not in ("created", "succeeded", "blocked", "reused"):' in src
     # The infra retry hands a delivery-only result straight back (same run, no new attempt).
-    assert 'if retried.get("delivery_only"):' in inspect.getsource(governed._retry_after_infra_failure)
+    # Since #270 the decision runs under the lineage lock: the public entry point delegates to
+    # the locked body, which holds the delivery-only branch.
+    outer = inspect.getsource(governed._retry_after_infra_failure)
+    assert "with _lineage_lock(" in outer and "return _retry_after_infra_failure_locked(" in outer
+    locked = inspect.getsource(governed._retry_after_infra_failure_locked)
+    assert 'if retried.get("delivery_only"):' in locked
+    assert locked.index('if retried.get("delivery_only"):') < locked.index('"code_task.auto_retried"')
 
 
 @pytest.mark.parametrize("detail,said", [
