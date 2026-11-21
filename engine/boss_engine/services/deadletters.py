@@ -883,8 +883,17 @@ class DeadletterRemediationService:
             # principal — sys_worker, the legacy system stamp). `on_behalf_system` is false on
             # every laptop row, so it is not the test. A job run for a person or a service
             # account is theirs to re-run, never BOSS's.
-            if not for_its_person and (not is_boss_principal(job.get("on_behalf_of")) or
-                                       job["kind"] in lineage.DELEGATED_JOB_KINDS):
+            if for_its_person:
+                # Defence in depth: whatever the caller decided, a kind whose effect no agent
+                # may cause, or that cannot be undone (a merge), is never re-run by BOSS.
+                from ..identity import fix_authority
+
+                ok, why_not = fix_authority.may_rerun_job(job["kind"])
+                if not ok:
+                    raise DeadletterRemediationBlocked(
+                        f"This job ran for a person and {why_not}.")
+            elif not is_boss_principal(job.get("on_behalf_of")) or \
+                    job["kind"] in lineage.DELEGATED_JOB_KINDS:
                 raise DeadletterRemediationBlocked(
                     "This job ran for a person; BOSS re-runs it only when that person asks.")
             try:

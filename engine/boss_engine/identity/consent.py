@@ -269,7 +269,7 @@ def _carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, proj
                    "and does not extend past it")             # "this build only": not past it
     if g is None or g.user_principal_id != parent.principal_id:
         return _no(f"grant {parent.grant_id}, which {whose} ran under, is gone")
-    if not grants.is_live(g):
+    if not grants.usable(g, db=db):
         return _no(f"grant {g.id}, which {whose} ran under, is "
                    f"{getattr(g.status, 'value', g.status)} or expired")
     agent_ids = []
@@ -955,7 +955,7 @@ def inherit_build_authority(db: Any, build: Acting, *, workflow_run_id: str, ctx
             or ambient.principal_id == build.principal_id):
         return None
     g = grants.load(build.grant_id, db=db)
-    if g is None or g.user_principal_id != build.principal_id or not grants.is_live(g):
+    if g is None or g.user_principal_id != build.principal_id or not grants.usable(g, db=db):
         return None
     wf_run = f"run_wf:{workflow_run_id}"
     if g.task_run_id and not grants.run_matches(g, wf_run):
@@ -1172,10 +1172,19 @@ def acting_for_workflow_run(db: Any, workflow_run_id: Optional[str]) -> Optional
     if acting is None or not acting.grant_id:
         return None
     g = grants.load(acting.grant_id, db=db)
-    if g is None or g.user_principal_id != acting.principal_id or not grants.is_live(g):
+    if g is None or g.user_principal_id != acting.principal_id or not grants.usable(g, db=db):
         return None
     if not (acting.run_id or "").startswith("run_wf:") or not grants.run_matches(g, acting.run_id):
         return None
+    if g.authority_kind == grants.FIXER_AUTHORITY:
+        # CHAINED TO THE GRANT THE RUN WAS STARTED UNDER (fix_authority.renew_run records it):
+        # a person who REVOKES that grant ends this run's fixer authority too.
+        snap = db.execute(text("SELECT policy_snapshot->>'fixer_from' FROM workflow_runs "
+                               "WHERE id = :i"), {"i": workflow_run_id}).scalar()
+        origin = grants.load(snap, db=db) if snap else None
+        if origin is not None and getattr(origin.status, "value", origin.status) in (
+                "revoked", "suspended"):
+            return None
     return acting
 
 
@@ -1231,6 +1240,6 @@ def schedule_acting(db: Any, schedule_row: Any) -> Optional[Acting]:
     g = grants.load(link.get("grant_id"), db=db)
     if g is None or g.user_principal_id != link.get("on_behalf_of") or g.task_run_id:
         raise AuthorityLost("grant_unknown")
-    if not grants.is_live(g):
+    if not grants.usable(g, db=db):
         raise AuthorityLost(f"grant_{g.status.value}")
     return Acting(principal_id=g.user_principal_id, org_id=g.org_id, grant_id=g.id)

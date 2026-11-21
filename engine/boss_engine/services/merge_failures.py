@@ -113,46 +113,72 @@ def _withdraw(connection: Any, project_id: str, decision_id: str, note: str,
                    decision_id, {**why, "why": note})
 
 
+def repository_of(url: Any) -> str:
+    """`owner/name` of a pull request or local change URL (`…/<owner>/<name>/pull/<n>`), or ''."""
+    parts = [x for x in str(url or "").split("/") if x]
+    if "pull" in parts:
+        i = parts.index("pull")
+        if i >= 2:
+            return f"{parts[i - 2]}/{parts[i - 1]}"
+    return ""
+
+
 def _pr_runs(connection: Any, project_id: str, url: str, decision_id: Optional[str] = None,
              branch_name: Optional[str] = None) -> list[str]:
-    """The builds behind a pull request or a LOCAL change set, newest first: by its URL, by the
-    run its merge question names (`recommendation.run_id`), by the local change set's own run
-    and branch (local_change_sets.run_id / branch), and by a `boss/code/<run>` branch. A local
-    change set's URL is BOSS's own (`http://boss-local/…`); the URL alone is not the only
-    record of which build a change belongs to (northgate-gateway #9, 2026-11-21)."""
-    found: list[str] = []
+    """The builds behind a pull request or a LOCAL change set, newest first — ONLY when the
+    match is certain, by the most exact evidence first (the first tier that finds any wins):
+      1. builds whose pull_request_url IS this URL;
+      2. the build its merge question names (`recommendation.run_id`), in this repository;
+      3. the local change set of THIS repository with this number or branch;
+      4. a `boss/code/<run>` branch's run, in this repository.
+    A multi-repository project has a #9 in each repository: a number or a branch alone never
+    picks another repository's build. No certain match: [] — the caller keeps the person's card
+    with its steps, never withdraws it (northgate-gateway #9, 2026-11-21; review of #264)."""
+    repo = repository_of(url).lower()
 
-    def add(rows: Any) -> None:
-        for r in rows:
-            if r and str(r) not in found:
-                found.append(str(r))
+    def in_repo(ids: list[Any]) -> list[str]:
+        ids = [str(i) for i in ids if i]
+        if not ids:
+            return []
+        rows = connection.execute(text(
+            "SELECT id, lower(COALESCE(spec->>'owner', '') || '/' || COALESCE(spec->>'repo', '')) "
+            "AS repo, pull_request_url FROM code_task_runs WHERE project_id = :p AND id = ANY(:ids) "
+            "ORDER BY created_at DESC"), {"p": project_id, "ids": ids}).mappings().all()
+        return [str(r["id"]) for r in rows
+                if repo and (r["repo"] == repo or repository_of(r["pull_request_url"]).lower() == repo)]
 
-    add(connection.execute(text(
+    exact = [str(r) for r in connection.execute(text(
         "SELECT id FROM code_task_runs WHERE project_id = :p AND pull_request_url = :u "
-        "ORDER BY created_at DESC"), {"p": project_id, "u": url}).scalars().all())
+        "ORDER BY created_at DESC"), {"p": project_id, "u": url}).scalars().all()] if url else []
+    if exact:
+        return exact
     if decision_id:
-        add([connection.execute(text(
+        named = in_repo([connection.execute(text(
             "SELECT recommendation->>'run_id' FROM decisions WHERE id = :d AND project_id = :p"),
             {"d": decision_id, "p": project_id}).scalar()])
-    if is_local_change(url) or branch_name:
+        if named:
+            return named
+    if repo:
         number = str(url or "").rstrip("/").rsplit("/", 1)[-1]
         try:
             with connection.begin_nested():
-                add(connection.execute(text(
+                local = connection.execute(text(
                     "SELECT run_id FROM local_change_sets WHERE project_id = :p AND "
-                    "(CAST(number AS text) = :n OR branch = :b) ORDER BY updated_at DESC"),
-                    {"p": project_id, "n": number if number.isdigit() else "",
-                     "b": branch_name or ""}).scalars().all())
+                    "lower(repository) = :r AND (CAST(number AS text) = :n OR branch = :b) "
+                    "ORDER BY updated_at DESC"),
+                    {"p": project_id, "r": repo, "n": number if number.isdigit() else "",
+                     "b": branch_name or ""}).scalars().all()
         except Exception:  # noqa: BLE001 — an install without local change sets
-            pass
+            local = []
+        found = connection.execute(text(
+            "SELECT id FROM code_task_runs WHERE project_id = :p AND id = ANY(:ids) "
+            "ORDER BY created_at DESC"), {"p": project_id, "ids": [str(x) for x in local if x]}
+        ).scalars().all() if local else []
+        if found:
+            return [str(x) for x in found]
     if branch_name and branch_name.startswith("boss/code/"):
-        add([branch_name[len("boss/code/"):]])
-    if not found:
-        return []
-    rows = connection.execute(text(
-        "SELECT id FROM code_task_runs WHERE project_id = :p AND id = ANY(:ids) "
-        "ORDER BY created_at DESC"), {"p": project_id, "ids": found}).scalars().all()
-    return [str(r) for r in rows]
+        return in_repo([branch_name[len("boss/code/"):]])
+    return []
 
 
 def conflict_note(number: Any, url: Any, message: Any) -> str:

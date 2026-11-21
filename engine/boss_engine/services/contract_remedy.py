@@ -46,9 +46,30 @@ def _expected(spec: Optional[Mapping[str, Any]]) -> list[int]:
     return []
 
 
-def diagnose(output: Mapping[str, Any], spec_cases: Optional[list[Mapping[str, Any]]] = None
-             ) -> dict[str, Any]:
-    """{"drop": [{"name", "reason"}], "fix_app": [{"name", "expected", "got", "failures"}]}."""
+#: An auth refusal: the request never reached the behaviour a case is about.
+AUTH_REFUSED = (401, 403)
+#: Headers that carry a credential: a case sending one is not "unauthenticated".
+_CREDENTIAL_HEADERS = ("authorization", "cookie", "x-api-key", "api-key", "x-auth-token",
+                       "proxy-authorization")
+
+
+def _carries_credentials(spec: Optional[Mapping[str, Any]],
+                         shared_headers: Optional[Mapping[str, Any]]) -> bool:
+    names = {str(k).lower() for k in ((spec or {}).get("headers") or {})}
+    names |= {str(k).lower() for k in (shared_headers or {})}
+    return any(h in names for h in _CREDENTIAL_HEADERS)
+
+
+def diagnose(output: Mapping[str, Any], spec_cases: Optional[list[Mapping[str, Any]]] = None,
+             shared_headers: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+    """{"drop": [{"name", "reason"}], "fix_app": [{"name", "expected", "got", "failures"}]}.
+
+    A case is dropped ONLY when the evidence shows its expectation is unreachable whatever the
+    app does: it sends NO credentials, it was refused auth (401/403) exactly as its identical
+    twins were (which expect that refusal), and it expects something past auth (a 429, a 2xx).
+    Auth runs before the behaviour it tests, so as written it can never get there. Everything
+    else — a duplicate POST answering 409, an 11th request with no limiter answering 200 — is
+    the app's to fix: a repair build, never a dropped case."""
     cases = [c for c in (output.get("cases") or []) if isinstance(c, Mapping)]
     specs = {str(s.get("name")): s for s in (spec_cases or []) if isinstance(s, Mapping)}
     passed = [c for c in cases if c.get("ok")]
@@ -62,17 +83,21 @@ def diagnose(output: Mapping[str, Any], spec_cases: Optional[list[Mapping[str, A
         got = case.get("status")
         twins = [p for p in passed if _signature(p, specs.get(str(p.get("name")))) == sig
                  and p.get("status") == got and got is not None]
-        if twins and got not in _expected(spec):
+        wanted = _expected(spec)
+        unreachable = (got in AUTH_REFUSED and bool(twins) and bool(wanted)
+                       and not any(w in AUTH_REFUSED for w in wanted)
+                       and not _carries_credentials(spec, shared_headers))
+        if unreachable:
             names = ", ".join(str(t.get("name")) for t in twins[:4])
             more = f" and {len(twins) - 4} more" if len(twins) > 4 else ""
             drop.append({"name": name, "reason": (
                 f"'{name}' sends exactly the same {sig[0]} {sig[1]} as {names}{more}, which "
-                f"answered {got} as they expect; nothing in it sets up the state it expects "
-                f"({', '.join(str(s) for s in _expected(spec)) or 'a different status'}) — for "
-                "example the service checks auth before its rate limiter, so an "
-                "unauthenticated request is refused before it is counted. As written it can "
-                "never pass, so it was dropped; add it back with the state it needs (a valid "
-                "token, a burst within the limiter's window) to test that behaviour.")})
+                f"answered {got} as they expect. It sends no credentials, so the service "
+                f"refuses it at auth before the behaviour it expects "
+                f"({', '.join(str(s) for s in wanted)}) is ever reached — auth runs before "
+                "the rate limiter, so an unauthenticated request is refused before it is "
+                "counted. As written it can never pass, so it was dropped; add it back with a "
+                "valid credential to test that behaviour.")})
         else:
             fix.append({"name": name, "expected": _expected(spec), "got": got,
                         "failures": list(case.get("failures") or [])[:4]})

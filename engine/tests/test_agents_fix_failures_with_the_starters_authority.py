@@ -288,19 +288,78 @@ def test_a_merge_conflict_on_a_local_change_goes_to_the_build_agent_not_the_pers
     assert row["state"] == "fixing" and "build agent" in row["words"]
 
 
-def test_a_local_change_set_s_builds_are_found_by_its_branch_and_run(eng, project):  # noqa: F811
+def test_in_a_multi_repo_project_a_number_never_picks_another_repository_s_build(
+        eng, project):  # noqa: F811
+    """Review of #264: repo A's change #9 must never go to repo B's #9 build. Only a CERTAIN
+    match (exact URL, the run the question names in this repository, this repository's local
+    change set, a boss/code/<run> branch in this repository) hands it over."""
+    repo_a, repo_b = f"local_{project}/alpha", f"local_{project}/beta"
     with eng.begin() as c:
-        rid = f"crun_{uuid4().hex[:20]}"
-        c.execute(text("INSERT INTO code_task_runs (id, project_id, title, status) VALUES "
-                       "(:i, :p, 'x', 'completed')"), {"i": rid, "p": project})
-        c.execute(text("INSERT INTO local_change_sets (id, project_id, repository, number, branch, "
-                       "base_branch, run_id) VALUES (:i, :p, :r, 12, :b, 'main', :run)"),
-                  {"i": f"lcs_{uuid4().hex[:12]}", "p": project, "r": f"local_{project}/{project}",
-                   "b": "feature/x", "run": rid})
-        found = merge_failures._pr_runs(c, project, f"http://boss-local/local_{project}/x/pull/12",
-                                        None, "feature/x")
-        by_branch = merge_failures._pr_runs(c, project, "", None, f"boss/code/{rid}")
-    assert found == [rid] and by_branch == [rid]
+        runs = {}
+        for repo in (repo_a, repo_b):
+            rid = f"crun_{uuid4().hex[:20]}"
+            owner, name = repo.split("/")
+            c.execute(text("INSERT INTO code_task_runs (id, project_id, title, status, spec) VALUES "
+                           "(:i, :p, 'x', 'completed', CAST(:s AS JSONB))"),
+                      {"i": rid, "p": project, "s": json.dumps({"owner": owner, "repo": name})})
+            c.execute(text("INSERT INTO local_change_sets (id, project_id, repository, number, "
+                           "branch, base_branch, run_id) VALUES (:i, :p, :r, 9, :b, 'main', :run)"),
+                      {"i": f"lcs_{uuid4().hex[:12]}", "p": project, "r": repo,
+                       "b": f"boss/code/{rid}", "run": rid})
+            runs[repo] = rid
+        url_a = f"http://boss-local/{repo_a}/pull/9"
+        assert merge_failures._pr_runs(c, project, url_a) == [runs[repo_a]]
+        assert merge_failures._pr_runs(c, project, url_a, None,
+                                       f"boss/code/{runs[repo_b]}") == [runs[repo_a]]
+        # Repo A's number with no change set of its own, and only repo B's evidence: nothing.
+        c.execute(text("DELETE FROM local_change_sets WHERE repository = :r"), {"r": repo_a})
+        assert merge_failures._pr_runs(c, project, url_a, None,
+                                       f"boss/code/{runs[repo_b]}") == []
+
+
+def test_with_no_certain_build_the_conflict_card_stays_with_its_steps(
+        eng, project, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(merge_failures, "hand_to_builder",
+                        lambda *a, **k: pytest.fail("no certain build: nothing is handed over"))
+    with eng.begin() as c:
+        _url, _runs, card, _reason = _local_change_9(c, project)
+        c.execute(text("UPDATE code_task_runs SET pull_request_url = NULL WHERE project_id = :p"),
+                  {"p": project})
+        c.execute(text("UPDATE decisions SET recommendation = recommendation - 'run_id' - "
+                       "'branch_name' WHERE id = :d"), {"d": card})
+    fo.sweep(eng, _settings(), project_id=project)
+    with eng.begin() as c:
+        status = c.execute(text("SELECT status FROM decisions WHERE id = :d"), {"d": card}).scalar()
+    assert status == "pending", "never withdrawn without a certain hand-off"
+
+
+def test_a_dead_merge_job_is_never_rerun_for_its_person(eng, project):  # noqa: F811
+    """Review of #264 (MUST): a change_set.merge (github:merge, IRREVERSIBLE) that died is never
+    re-queued by an agent "for its person"."""
+    from boss_engine.services.deadletters import (DeadletterRemediationBlocked,
+                                                  DeadletterRemediationService)
+
+    jid, dl = f"job_{uuid4().hex[:20]}", f"dlq_{uuid4().hex[:20]}"
+    with eng.begin() as c:
+        c.execute(text(
+            "INSERT INTO jobs (id, project_id, kind, status, payload, last_error, on_behalf_of, "
+            "on_behalf_system, created_at, updated_at) VALUES (:i, :p, 'change_set.merge', "
+            "'deadlettered', '{}'::jsonb, CAST(:e AS JSONB), 'usr_starter', false, :at, :at)"),
+            {"i": jid, "p": project, "at": _ago(minutes=5),
+             "e": json.dumps({"message": "HTTP 502 from the merge"})})
+        c.execute(text("INSERT INTO deadletters (id, project_id, source_kind, source_id, reason, "
+                       "created_at) VALUES (:d, :p, 'job', :j, 'HTTP 502', :at)"),
+                  {"d": dl, "p": project, "j": jid, "at": _ago(minutes=5)})
+    with eng.begin() as c, pytest.raises(DeadletterRemediationBlocked):
+        DeadletterRemediationService(_settings()).requeue_job_deadletter(
+            c, deadletter_id=dl, actor=fo.ACTOR, as_boss=True, for_its_person=True)
+    fo.sweep(eng, _settings(), project_id=project)
+    with eng.begin() as c:
+        status = c.execute(text("SELECT status FROM deadletters WHERE id = :d"), {"d": dl}).scalar()
+        row = c.execute(text("SELECT state, history FROM failure_owners WHERE surface = 'job' "
+                             "AND project_id = :p"), {"p": project}).mappings().one()
+    assert status == "open" and row["state"] == "needs_person"
+    assert row["history"][-1]["exit"] == "job_never_rerun_by_an_agent"
 
 
 def test_with_the_org_default_off_the_conflict_stays_on_its_card_with_exact_steps(
@@ -317,3 +376,74 @@ def test_with_the_org_default_off_the_conflict_stays_on_its_card_with_exact_step
         status = c.execute(text("SELECT status FROM decisions WHERE id = :d"), {"d": card}).scalar()
     assert status == "pending"
     assert "keeping both" in merge_failures.conflict_steps(["crun_x"]).lower()
+
+
+# ── review of #264: what is NOT dropped, said on the verdict, and not settled at $0 ─────────
+
+def test_a_duplicate_post_answering_409_is_the_app_s_to_fix_never_dropped():
+    spec = [{"name": "create_1", "method": "POST", "path": "/v1/tenants", "json": {"id": "a"},
+             "expect_status": 201},
+            {"name": "create_2", "method": "POST", "path": "/v1/tenants", "json": {"id": "a"},
+             "expect_status": 201}]
+    out = {"cases": [{"name": "create_1", "ok": True, "url": f"{BASE}/v1/tenants",
+                      "method": "POST", "status": 201},
+                     {"name": "create_2", "ok": False, "url": f"{BASE}/v1/tenants",
+                      "method": "POST", "status": 409, "failures": ["answered 409"]}]}
+    plan = contract_remedy.diagnose(out, spec)
+    assert plan["drop"] == [] and [f["name"] for f in plan["fix_app"]] == ["create_2"]
+
+
+def test_an_11th_request_with_no_limiter_is_the_app_s_to_fix_never_dropped():
+    for headers in ({"Authorization": {"secret_ref": "sref_x"}}, {}):
+        spec = [{"name": f"r{n}", "path": "/v1/payments", "method": "GET", "expect_status": 200,
+                 "headers": headers} for n in range(1, 11)]
+        spec.append({"name": "r11", "path": "/v1/payments", "method": "GET",
+                     "expect_status": 429, "headers": headers})
+        cases = [{"name": f"r{n}", "ok": True, "url": f"{BASE}/v1/payments", "method": "GET",
+                  "status": 200} for n in range(1, 11)]
+        cases.append({"name": "r11", "ok": False, "url": f"{BASE}/v1/payments", "method": "GET",
+                      "status": 200, "failures": ["answered 200, expected 429"]})
+        plan = contract_remedy.diagnose({"cases": cases}, spec)
+        assert plan["drop"] == [] and [f["name"] for f in plan["fix_app"]] == ["r11"], headers
+
+
+def test_an_auth_refused_case_that_carries_a_credential_is_never_dropped():
+    spec = [dict(s, headers={"Authorization": "Bearer x"}) for s in SPEC_CASES]
+    plan = contract_remedy.diagnose(_contract_output(), spec)
+    assert plan["drop"] == [] and plan["fix_app"]
+
+
+def test_the_dropped_case_is_said_on_the_step_s_own_verdict():
+    from boss_engine.services import workflow_outcomes
+
+    drop = contract_remedy.diagnose(_contract_output(), SPEC_CASES)["drop"]
+    result = {"ok": True, "total": 11, "passed": 11, "failed": 0, "dropped_cases": drop,
+              "recovery_amendment": {"drop": drop}}
+    out = workflow_outcomes.apply("contract_test", result, {})
+    assert out["verdict"] == "succeeded"
+    assert out["note"].startswith("11/12 — 1 case dropped: payments_rate_limited_11th:")
+    assert out["recovery_amendment"]["drop"] == drop, "kept when the step's output is replaced"
+
+
+def test_a_held_proof_that_was_served_is_never_settled_at_zero(eng, project, monkeypatch):  # noqa: F811
+    from boss_engine.services import connection_spend
+    from boss_engine.services.receipts import ReceiptService
+
+    released = []
+    monkeypatch.setattr(ReceiptService, "merge_result", lambda *a, **k: None)
+    monkeypatch.setattr(connection_spend, "release_hold",
+                        lambda c, s, p, r, *, actor, reason: released.append(reason) or {})
+    for outcome in (
+            {"kind": "unknown", "provider_error": "rate limit", "tokens": {"prompt_tokens": 12}},
+            {"kind": "unknown", "provider_error": "429 too many requests", "usage_present": True},
+            {"kind": "unknown", "provider_error": "", "summary": "Claude Code replied OK, but "
+             "BOSS could not settle its cost: rate limit"}):
+        held = {"receipt_id": "rcpt_x", "status": "in_progress", "created_at": _ago(hours=1),
+                "invocation_id": "inv", "held_usd_micros": 50_000, "source_id": "s",
+                "supported_models": ["claude_code"],
+                "result": {"connection_provider": "claude_code",
+                           "connection_outcome": {"model": "claude_code", **outcome}}}
+        monkeypatch.setattr(connection_spend, "_hold_rows", lambda *a, h=held, **k: [h])
+        with eng.begin() as c:
+            connection_spend.agent_settle(c, None, project, "rcpt_x", actor=fo.ACTOR)
+        assert "$0)" not in released[-1] and "conservative estimate" in released[-1], outcome

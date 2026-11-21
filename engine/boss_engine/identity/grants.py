@@ -147,6 +147,21 @@ def is_live(grant: Optional[DelegationGrant], *, now: Optional[datetime] = None)
     return grant.expires_at is None or grant.expires_at > (now or _now())
 
 
+def usable(grant: Optional[DelegationGrant], *, db: Any) -> bool:
+    """Live, and — for a person's FIXER authority (fix_authority.py) — its org default still on
+    for its project, read AT EVERY USE: turning `agents_fix_failures` off stops work already
+    standing on a fixer grant (a token mint, a run's authority, a carried retry), not only new
+    grants. Every place that decides whether a grant may still act asks this."""
+    if not is_live(grant):
+        return False
+    if grant.authority_kind == FIXER_AUTHORITY:
+        from . import fix_authority
+
+        project = grant.project_ids[0] if grant.project_ids else None
+        return fix_authority.enabled(db, project, org_id=grant.org_id)
+    return True
+
+
 def allows_as_user(grant_id: Optional[str], provider: str, *, db: Any) -> bool:
     """True only when the grant says "act as me on <provider>" explicitly."""
     grant = load(grant_id, db=db)
@@ -718,6 +733,16 @@ def narrow_grant(ctx: AuthContext, grant_id: str, permissions: frozenset[str], *
     if dropped:
         db.execute(text("DELETE FROM identity_delegation_grant_permissions WHERE grant_id = :g AND permission_key = ANY(:p)"),
                    {"g": g.id, "p": sorted(dropped)})
+        if g.authority_kind == FIXER_AUTHORITY:
+            # Remembered: BOSS never re-grants a key the person took off their fixer authority
+            # (fix_authority.ensure reads `resources.fixer.withheld`).
+            import json as _json
+
+            withheld = sorted(set(((g.resources or {}).get("fixer") or {}).get("withheld") or ())
+                              | set(dropped))
+            db.execute(text("UPDATE identity_delegation_grants SET resources = COALESCE(resources, "
+                            "'{}'::jsonb) || jsonb_build_object('fixer', CAST(:f AS jsonb)) "
+                            "WHERE id = :g"), {"g": g.id, "f": _json.dumps({"withheld": withheld})})
     after = load(g.id, db=db)
     lineage.grant_event(db, after, "delegation.narrowed", ctx=ctx, details={"removed": sorted(dropped)})
     return after

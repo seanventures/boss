@@ -73,7 +73,13 @@ EXITS: dict[str, Exit] = {
                                 "the person pressing Done — retry may not deploy here"),
     "job_ran_for_a_person": E("failure_owner.Jobs.retry", True,
                               "re-queued as exactly its person (deadletters for_its_person)"),
-    "job_requeue_refused": E("failure_owner.Jobs._requeue", False,
+    "job_never_rerun_by_an_agent": E("failure_owner.Jobs.retry", False,
+                                     "its effect is one no agent may cause or cannot be undone "
+                                     "(a merge, a sent message): fix_authority.may_rerun_job"),
+    "fidelity_spent": E("failure_owner._own", False,
+                        "the input-fidelity repair is capped at 2 paid builds (#262); the card "
+                        "names what was violated and the evidence"),
+    "job_requeue_refused":E("failure_owner.Jobs._requeue", False,
                              "the dead letter refuses a re-run in its own words"),
     "merge_conflict_not_handed_off": E("failure_owner.Jobs._merge_conflict", False,
                                        "the build agent could not be started (no build found, "

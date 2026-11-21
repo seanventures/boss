@@ -899,7 +899,10 @@ A grant that ends with its run, or covers one build only, no longer stops BOSS's
 - It is used by retries BOSS decides (`consent.carry_retry_authority`, `by_boss`), by workflow runs whose recorded grant ended (`fix_authority.renew_run`, the runner's `_live_run_authority`), and by dead jobs re-run as their own person.
 - It is never used as a person's consent for new work: `find_covering` and schedules skip it, as they skip the Captain authority.
 - When a person revokes it, or revokes the grant a run ran under, that counts as their "no", and BOSS does not re-create it.
-- It is on by default. It can be turned off per org (policy `agents_fix_failures`) or per project (setting `agents_fix_failures`).
+- It is on by default. It can be turned off per org (policy `agents_fix_failures`) or per project (setting `agents_fix_failures`). The switch is checked every time a fixer grant is used (`grants.usable`: token mint, a run's authority, a carried retry). Turning it off therefore stops work already running on a fixer grant, not just new grants. A read of the switch that fails counts as off.
+- A run remembers the grant it was started under (`policy_snapshot.fixer_from`). Revoking that grant ends the run's fixer authority.
+- A key a person removes from their fixer grant is never added back.
+- A dead job is never re-run for its person when its permission is one an agent may not hold, or when its effect is IRREVERSIBLE, such as a merge (`fix_authority.may_rerun_job`).
 - Audit events: `delegation.created` (details `authority: fixer`, `org_default: agents_fix_failures`) and `delegation.org_default_applied`.
 
 ---

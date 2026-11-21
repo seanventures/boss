@@ -488,7 +488,9 @@ def test_the_fidelity_repairs_are_capped_and_then_say_exactly_what_to_do():
     assert fo.MAX_ATTEMPTS == 2
     src = inspect.getsource(fo._own)
     capped = src.index("if made >= MAX_ATTEMPTS and cause_code in FIDELITY_CAUSES:")
-    assert capped < src.index("        if made >= MAX_ATTEMPTS:\n            if cls == PLATFORM:")
+    # The general cap (limit_for: 2 blind, 3 real fixes) comes after; fidelity stays at 2.
+    assert capped < src.index("        if made >= limit:\n            if cls == PLATFORM:")
+    assert fo.limit_for("app", "app:input_fidelity_failed") == fo.MAX_ATTEMPTS
     assert "action=FIDELITY_ACTION" in src[capped:capped + 600]
     assert "item.error or cause" in src[capped:capped + 900]
     assert "*.good.*" in fo.FIDELITY_ACTION and "edit of the named input file" in fo.FIDELITY_ACTION

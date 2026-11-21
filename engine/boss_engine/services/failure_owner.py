@@ -558,8 +558,8 @@ def _fix_default(engine_or_c: Any, project_id: Optional[str]) -> bool:
                 return fix_authority.enabled(engine_or_c, str(project_id))
         with engine_or_c.begin() as c:
             return fix_authority.enabled(c, str(project_id))
-    except Exception:  # noqa: BLE001 — unreadable: the default (on)
-        return True
+    except Exception:  # noqa: BLE001 — unreadable: OFF (fix_authority.enabled logs why)
+        return False
 
 
 def _workflow_build(engine: Any, project_id: Any, run_id: str) -> Optional[str]:
@@ -722,9 +722,11 @@ class WorkflowRuns(Surface):
         step_id = str(item.hints.get("step_id") or "")
         with engine.begin() as c:
             step = workflows._step_map(workflows._run_spec(c, item.id)).get(step_id) or {}  # noqa: SLF001
-            spec_cases = ((step.get("binding") or {}).get("inputs") or {}).get("cases")
+            bound = (step.get("binding") or {}).get("inputs") or {}
+            spec_cases = bound.get("cases")
+            shared = bound.get("headers") if isinstance(bound.get("headers"), dict) else None
             plan = contract_remedy.diagnose(output, spec_cases if isinstance(spec_cases, list)
-                                            else None)
+                                            else None, shared)
             if plan["drop"] and not plan["fix_app"]:
                 amendment = {"drop": plan["drop"], "by": ACTOR, "at": _now().isoformat(),
                              "why": "the case can never pass as written (light lane: a "
@@ -1310,7 +1312,15 @@ class Jobs(Surface):
                 raise NeedsPerson("This job ran for a person, so BOSS runs it again only when they "
                                   "say so.", "Press Done — retry to run it again as you.",
                                   exit="job_ran_for_a_person")
-            # THE ORG DEFAULT: re-run as exactly the person (and grant) it ran for.
+            # THE ORG DEFAULT: re-run as exactly the person (and grant) it ran for — never a job
+            # whose effect no agent may cause or cannot be undone (a merge, a sent message).
+            from ..identity import fix_authority
+
+            ok, why_not = fix_authority.may_rerun_job(item.hints["kind"])
+            if not ok:
+                raise NeedsPerson(f"This job ran for a person and {why_not}.",
+                                  "Press Done — retry to run it again as you.",
+                                  exit="job_never_rerun_by_an_agent")
             for_its_person = True
         delay = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS)) - 1]
         return self._requeue(engine, settings, item.id, actor=ACTOR, as_boss=True,
@@ -1326,6 +1336,12 @@ class Jobs(Surface):
         failed = rec.get("merge_failed") if isinstance(rec.get("merge_failed"), dict) else {}
         if failed.get("kind") != "not_mergeable" or not _fix_default(c, item.project_id):
             return False
+        from . import merge_failures
+
+        if not merge_failures._pr_runs(c, str(item.project_id),  # noqa: SLF001
+                                       str(rec.get("pull_request_url") or ""), card,
+                                       rec.get("branch_name")):
+            return False             # no CERTAIN build of this change: the card, with its steps
         row = _row(c, item.surface, item.key) or {}
         return int(row.get("attempts") or 0) < limit_for(PERSON, "merge_conflict")
 

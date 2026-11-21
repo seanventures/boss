@@ -80,6 +80,25 @@ def allowed(key: str) -> bool:
             and catalogue.is_known(key) and catalogue.meta(key).delegable)
 
 
+def may_rerun_job(kind: Any) -> tuple[bool, str]:
+    """May BOSS re-run a dead job of `kind` FOR ITS PERSON? Only when the permission that kind
+    needs is one this authority may ever carry, and a duplicate of it is not IRREVERSIBLE: a
+    merge (github:merge, change_set.merge), a sent message, a deleted server — never re-run by
+    an agent. An unknown kind is refused (fail closed)."""
+    from ..services.durable_operations import IRREVERSIBLE, side_effect_class
+    from .job_permissions import permission_for
+
+    kind = str(kind or "")
+    perm = permission_for(kind)
+    if perm is None:
+        return False, f"BOSS does not know what a '{kind}' job may do, so it is not re-run for a person"
+    if side_effect_class(kind) == IRREVERSIBLE:
+        return False, f"a '{kind}' job cannot be undone, so only its person runs it again"
+    if not allowed(perm):
+        return False, f"a '{kind}' job needs {perm}, which an agent never holds"
+    return True, ""
+
+
 def _has_column(db: Any) -> bool:
     return bool(db.execute(text(
         "SELECT 1 FROM information_schema.columns WHERE table_name = 'identity_delegation_grants' "
@@ -93,31 +112,37 @@ def _org_of_project(db: Any, project_id: str) -> Optional[str]:
 
 def enabled(db: Any, project_id: Optional[str], *, org_id: Optional[str] = None,
             settings: Any = None) -> bool:
-    """The org's policy AND the project's setting (both default ON). Never raises: an unreadable
-    setting reads as the default."""
-    if not project_id:
+    """The org's policy AND the project's setting. ON when the key is simply absent (the
+    default, and every existing install on upgrade); an UNREADABLE or erroring read is logged
+    and treated as OFF — authority is never assumed from a read that failed. Read at every use
+    of a fixer grant (grants.usable), so turning it off stops work already standing on one."""
+    if not project_id or db is None:
         return False
     try:
-        org = org_id or _org_of_project(db, project_id)
-        if org:
+        with db.begin_nested():
+            org = org_id or _org_of_project(db, project_id)
+            if not org:
+                log.warning("fix authority: project %s has no org; treated as off", project_id)
+                return False
             from .policy import get_policy
 
             if not bool(getattr(get_policy(org, db=db), POLICY_KEY, True)):
                 return False
-    except Exception:  # noqa: BLE001 — the default stands
-        log.debug("fix authority: org policy unreadable", exc_info=True)
-    try:
-        from ..services import project_settings
-
+            row = db.execute(text("SELECT value FROM project_settings WHERE project_id = :p "
+                                  "AND key = :k"), {"p": project_id, "k": KNOB}).first()
+    except Exception:  # noqa: BLE001 — unreadable: OFF, said in the log
+        log.warning("fix authority: the agents_fix_failures switch could not be read for %s; "
+                    "treated as off", project_id, exc_info=True)
+        return False
+    if row is None:
         if settings is None:
             from ..config import get_settings
 
             settings = get_settings()
-        with db.begin_nested():
-            value = project_settings.effective(db, project_id, settings, KNOB)
-        return str(1 if value in (None, "") else value).strip().lower() not in ("0", "false", "off")
-    except Exception:  # noqa: BLE001
-        return True
+        value = getattr(settings, KNOB, 1)
+    else:
+        value = row[0]
+    return str(1 if value in (None, "") else value).strip().lower() not in ("0", "false", "off")
 
 
 def get(db: Any, person_id: str, project_id: str):
@@ -201,10 +226,17 @@ def ensure(db: Any, *, person_id: Optional[str], project_id: Optional[str],
             ceilings.append(p.ceiling)
     if not agents:
         return no("no agent with a Passport would do the fix")
+    # A KEY THE PERSON REMOVED from their fixer authority (narrow_grant) is never re-granted.
+    withheld = frozenset(((getattr(existing, "resources", None) or {}).get("fixer") or {})
+                         .get("withheld") or ()) if existing is not None else frozenset()
     live = grants.person_live(db, person, project_id)
     union = frozenset().union(*ceilings)
     wanted = frozenset(k for k in permissions if catalogue.is_known(k) and catalogue.meta(k).delegable)
     usable = frozenset(k for k in wanted if allowed(k) and k in live and k in union)
+    removed = sorted(wanted & withheld)
+    if removed:
+        return no(f"{person_id} removed {', '.join(removed)} from their fixer authority; BOSS "
+                  "does not give it back")
     missing = sorted(wanted - usable)
     if missing:
         return no(f"the fix needs {', '.join(missing)}, which {person_id} cannot delegate here "
@@ -215,6 +247,8 @@ def ensure(db: Any, *, person_id: Optional[str], project_id: Optional[str],
                                           project_id=project_id, repos=repos, run_id=None):
         return base
     resources = _resources(db, project_id, repos, base)
+    if withheld:
+        resources["fixer"] = {"withheld": sorted(withheld)}
     gh = resources.get("github") or {}
     if gh and grants.repo_guard_active(org, db=db):
         try:
@@ -285,10 +319,14 @@ def renew_run(db: Any, *, project_id: str, run_id: str, why: str = "",
     if live is not None:
         return live
     current = grants.load(recorded.grant_id, db=db)
-    if current is not None and getattr(current.status, "value", current.status) in ("revoked", "suspended"):
-        if gap is not None:
-            gap.append(f"grant {current.id} was revoked by a person; BOSS does not act on that run")
-        return None
+    origin_id = db.execute(text("SELECT policy_snapshot->>'fixer_from' FROM workflow_runs "
+                                "WHERE id = :r"), {"r": run_id}).scalar()
+    origin = grants.load(origin_id, db=db) if origin_id else current
+    for g in (current, origin):
+        if g is not None and getattr(g.status, "value", g.status) in ("revoked", "suspended"):
+            if gap is not None:
+                gap.append(f"grant {g.id} was revoked by a person; BOSS does not act on that run")
+            return None
     row = db.execute(text("SELECT status, input, workflow_version_id FROM workflow_runs WHERE id = :r"),
                      {"r": run_id}).mappings().first()
     if row is None or str(row["status"]) in ("cancelled", "completed"):
@@ -305,8 +343,13 @@ def renew_run(db: Any, *, project_id: str, run_id: str, why: str = "",
                    gap=gap)
     if grant is None:
         return None
-    db.execute(text("UPDATE workflow_runs SET grant_id = :g, updated_at = now() WHERE id = :r"),
-               {"g": grant.id, "r": run_id})
+    # The run remembers the grant it was STARTED under (`fixer_from`): revoking that one ends
+    # this run's fixer authority too (consent.acting_for_workflow_run).
+    db.execute(text(
+        "UPDATE workflow_runs SET grant_id = :g, updated_at = now(), policy_snapshot = "
+        "COALESCE(policy_snapshot, '{}'::jsonb) || jsonb_build_object('fixer_from', "
+        "COALESCE(policy_snapshot->>'fixer_from', CAST(:o AS text))) WHERE id = :r"),
+        {"g": grant.id, "r": run_id, "o": origin_id or recorded.grant_id})
     from . import lineage
 
     lineage.grant_event(db, grant, ORG_DEFAULT_EVENT, details={

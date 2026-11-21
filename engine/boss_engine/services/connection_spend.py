@@ -964,8 +964,15 @@ def agent_settle(c, settings, project_id: str, receipt_id: str, *, actor: str) -
     if fact["status"] != "in_progress":
         raise HoldRefused(f"This proof is already settled ({fact['status']}); nothing is held.")
     outcome = dict(fact["outcome"] or {})
-    said = f"{outcome.get('provider_error') or ''} {outcome.get('summary') or ''}"
-    if outcome.get("kind") == "unknown" and _NOT_SERVED.search(said):
+    # $0 ONLY ON THE PROVIDER'S OWN WORDS that it served nothing, and NO sign it did: no usage
+    # or tokens came back, no 2xx, and it is not a reply that was OK but could not be settled
+    # (that one is "unknown" too, with "replied OK" in its summary — see prove()).
+    status = outcome.get("http_status")
+    served = (bool(outcome.get("usage_present")) or bool(outcome.get("tokens"))
+              or (isinstance(status, int) and 200 <= status < 300)
+              or "replied ok" in str(outcome.get("summary") or "").lower())
+    if outcome.get("kind") == "unknown" and not served \
+            and _NOT_SERVED.search(str(outcome.get("provider_error") or "")):
         prior = _result_of(dict(rows[0]))
         outcome.update(kind="refused", summary=describe_outcome({**outcome, "kind": "refused"},
                                                                 fact["provider_label"]))

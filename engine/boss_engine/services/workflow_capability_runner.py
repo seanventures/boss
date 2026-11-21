@@ -3028,8 +3028,9 @@ def _execute_step(
     inputs = _resolve_inputs(binding.get("inputs") or {}, context,
                              optional=frozenset(capability.optional_inputs or ()))
     inputs = _fill_optional_from_run_input(capability, inputs, context)
+    amendment = None
     if key == "contract_test":
-        inputs = _amended_inputs(connection, context, step, inputs)
+        inputs, amendment = _amended_inputs(connection, context, step, inputs)
 
     # EVERY CAPABILITY'S RESULT IS JUDGED BY ITS OWN VERDICT (services/workflow_outcomes.py).
     #
@@ -3038,16 +3039,18 @@ def _execute_step(
     # down went green because `http_probe` reports `{"status": 503}`, and a deploy went green on
     # `{"status": "planned"}` before anything had shipped. Each capability now says, in one
     # table beside the catalogue, what success, failure and "still going" look like for it.
-    return workflow_outcomes.apply(
-        key,
-        _perform_capability(connection, ctx, project_id=project_id, actor=actor, step=step,
-                            context=context, key=key, capability=capability, inputs=inputs),
-        inputs,
-    )
+    result = _perform_capability(connection, ctx, project_id=project_id, actor=actor, step=step,
+                                 context=context, key=key, capability=capability, inputs=inputs)
+    if amendment and isinstance(result, dict):
+        # THE AMENDMENT TRAVELS WITH THE RESULT: completing the step replaces its output, so
+        # what an agent dropped (and why) is carried on the result itself and said in its note.
+        result = {**result, "dropped_cases": list(amendment.get("drop") or []),
+                  "recovery_amendment": amendment}
+    return workflow_outcomes.apply(key, result, inputs)
 
 
 def _amended_inputs(connection: Connection, context: Optional[dict[str, Any]], step: Any,
-                    inputs: dict[str, Any]) -> dict[str, Any]:
+                    inputs: dict[str, Any]) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
     """A step's inputs with the amendment an agent recorded on it (contract_remedy: an
     unpassable case dropped, with why). The workflow's own definition is never edited."""
     from . import contract_remedy
@@ -3055,7 +3058,7 @@ def _amended_inputs(connection: Connection, context: Optional[dict[str, Any]], s
     run_id = str((context or {}).get("run_id") or "")
     step_id = str((step or {}).get("id") or "") if isinstance(step, dict) else ""
     if not run_id or not step_id:
-        return inputs
+        return inputs, None
     try:
         with connection.begin_nested():
             amendment = connection.execute(text(
@@ -3063,10 +3066,11 @@ def _amended_inputs(connection: Connection, context: Optional[dict[str, Any]], s
                 "WHERE workflow_run_id = :r AND step_id = :s ORDER BY updated_at DESC LIMIT 1"),
                 {"r": run_id, "s": step_id}).scalar()
     except Exception:  # noqa: BLE001 — no amendment readable: the step as defined
-        return inputs
+        return inputs, None
     if isinstance(amendment, str):
         amendment = json.loads(amendment or "null")
-    return contract_remedy.apply(inputs, amendment)
+    applied = contract_remedy.apply(inputs, amendment)
+    return applied, (amendment if applied is not inputs else None)
 
 
 #: What a multi-repo change set does itself, for every repository at once (multirepo/
