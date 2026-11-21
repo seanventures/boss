@@ -60,6 +60,7 @@ export function TalkSheet({ projectId, actor, conversationId, greet, draft, book
   const plan = conversation?.kind === "plan";
   const lastAgent = [...(conversation?.turns ?? [])].reverse().find((t) => t.speakerKind === "agent");
   const spoke = (conversation?.turns ?? []).some((t) => t.speakerKind === "person");
+  const handoff = conversation ? conversationInvestigation(conversation.context, conversation.turns) : null;
 
   return (
     <SeatBook.Provider value={merged}>
@@ -70,23 +71,15 @@ export function TalkSheet({ projectId, actor, conversationId, greet, draft, book
                   onPlan={onPlan && conversation && !plan ? () => onPlan(roleKey, conversation) : undefined}
                   onNew={onNew && roleKey ? () => onNew(roleKey) : undefined} />
         <div className="ag-talk-body" ref={scroller} data-testid="ag-talk-body">
-          {!plan && conversation ? (
-            <div role="note" data-testid="ag-talk-action-handoff">
-              <p title="This conversation gives advice; it cannot inspect live logs or execute repairs.">
-                Advice only — no repair tools.
-              </p>
-              {conversationInvestigation(conversation.context) ? (
-                <button type="button" className="ag-btn" disabled={busy}
-                        onClick={() => {
-                          const opening = conversationInvestigation(conversation.context);
-                          if (!opening) return;
-                          onClose();
-                          openDockAbout(opening);
-                        }}>
-                  Investigate with BOSS
-                </button>
-              ) : null}
-              <p>Permissions and approval checks still apply.</p>
+          {/* A talk about a run or step: one door to the agent that can act (it only advises
+              here). Nothing for a talk with no run behind it. */}
+          {!plan && handoff ? (
+            <div data-testid="ag-talk-action-handoff">
+              <button type="button" className="ag-btn" disabled={busy}
+                      title="This chat only advises. BOSS can read the logs and act, with your approval."
+                      onClick={() => { onClose(); openDockAbout(handoff); }}>
+                Investigate with BOSS
+              </button>
             </div>
           ) : null}
           <RateScope.Provider value={{ projectId, actor }}>

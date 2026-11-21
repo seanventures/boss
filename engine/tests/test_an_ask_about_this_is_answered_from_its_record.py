@@ -42,7 +42,7 @@ from sqlalchemy import create_engine, text
 from boss_engine.services import intent_router as ir
 from boss_engine.services.turn_budget import TurnBudget
 from boss_engine.services.turn_subject import (
-    RESOLVERS, SUBJECT_KINDS, SubjectRef, cites_the_record, parse_subject, resolve_subject,
+    RESOLVERS, SUBJECT_KINDS, SubjectRef, answer_contract, cites_the_record, parse_subject, resolve_subject,
     stays_on_subject, strays_from_subject,
 )
 
@@ -311,6 +311,10 @@ def test_the_incidents_context_opens_with_the_steps_error_and_an_answer_contract
     # And the contract that it be answered.
     assert "Your FIRST SENTENCE answers the operator's question above" in first_block
     assert "Do not answer about a different object" in first_block
+    # The acting rules ride on the subject, not in the door's question.
+    assert "check the run's newer attempts" in first_block
+    assert "a proposal the operator consents to" in first_block
+    assert "unless a tool result in this turn shows it" in first_block
     # Not the old framing that sent it to the PRD.
     assert "Call read_spec with this run id FIRST" not in system
 
@@ -861,3 +865,18 @@ def test_a_turn_that_ran_out_ends_with_one_press_to_continue(db, monkeypatch):
     assert turn.next_steps[0]["depth"] == "investigate"
     finished, _ = _router(monkeypatch, _Scripted(ANSWER))
     assert _ask(finished, db).next_steps == []
+
+
+@pytest.mark.parametrize("kind", SUBJECT_KINDS)
+def test_every_ask_door_gets_the_acting_rules(kind):
+    """Contributed from an enterprise install (2026-11-20): an advisory chat's hand-off stapled
+    these rules into its question, so only that door had them. Every subject's contract does."""
+    contract = answer_contract(SubjectRef(kind, "x_1"))
+    assert "a proposal the operator consents to" in contract
+    assert "Never say a repair ran, or worked, unless a tool result in this turn shows it" in contract
+    assert "a person's action item" in contract and "how to check it" in contract
+    attempts = kind in ("workflow_run", "workflow_step", "code_task")
+    assert ("check the run's newer attempts" in contract) is attempts
+    # Numbered in order, nothing skipped.
+    numbers = [int(m) for m in re.findall(r"^(\d+)\. ", contract, re.M)]
+    assert numbers == list(range(1, len(numbers) + 1))
