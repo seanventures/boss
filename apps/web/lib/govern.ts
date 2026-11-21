@@ -15,19 +15,23 @@ export type Evidence = { word: string; count_7d: number; log: { kind: string } }
 export type Control = {
   key: string;
   name: string;
-  section: "spend" | "agents";
-  value_effective: number | null;
+  /** The board section the engine puts this row in (GovernView.sections). */
+  section: string;
+  /** The visible one-line explanation under the row's name, when the engine gives one. */
+  explain?: string | null;
+  /** A number, or the chosen name for a `choice` control (the quality bar). */
+  value_effective: number | string | null;
   value_stored: unknown;
   default: unknown;
   source: "default" | "set" | "pace";
-  unit: "usd_micros" | "usd_micros_per_min" | "count" | "switch" | "intensity";
-  bounds: { min: number | null; max: number | null; step: number } | null;
+  unit: "usd_micros" | "usd_micros_per_min" | "count" | "switch" | "intensity" | "choice";
+  bounds: { min?: number | null; max?: number | null; step?: number; choices?: string[] } | null;
   editable_by: "self" | "pace" | "none";
   write: { method: string; path: string } | null;
   enforced: Enforced;
   evidence: Evidence;
   advisory: boolean;
-  note: { kind: "floor"; stored: number; floor: number } | { kind: "reads_as"; stored: number; reads_as: number } | { kind: "default" } | null;
+  note: { kind: "floor"; stored: number; floor: number } | { kind: "reads_as"; stored: number; reads_as: number } | { kind: "default" } | { kind: "org_off"; text: string } | null;
   /** What the engine runs right now when something limits it (review lanes under memory pressure). */
   running_now?: { value: number; reason: "memory" } | null;
   rule?: { kind: "floor"; floor: number; fallback: number } | { kind: "zero_reads_as"; value: number } | null;
@@ -86,6 +90,9 @@ export type GovernView = {
   project_id: string;
   meter: Meter;
   controls: Control[];
+  /** The board's sections in order, each naming its rows (engine govern_view.BOARD). Absent on an
+   *  older engine: the console then draws its own fixed rows. */
+  sections?: GovernSection[];
   thresholds: { key: string; label: string; pct: number; passed: boolean }[];
   token_guides: { advisory: boolean; enforced: Enforced; default: TokenPolicy | null; per_step: TokenPolicy[];
                   schema_ready: boolean };
@@ -96,6 +103,7 @@ export type GovernView = {
   /** BOSSAPP-869: spend BOSS cannot price — estimate (default) or block past a daily allowance. */
   unpriced?: UnpricedView;
 };
+export type GovernSection = { key: string; name: string; keys: string[] };
 export type UnpricedPolicy = "estimate" | "block";
 export type UnpricedView = { value: UnpricedPolicy; choices: UnpricedPolicy[]; default: UnpricedPolicy;
                              allowance_usd_micros: number; unpriced_today_usd_micros: number };

@@ -90,7 +90,75 @@ ENFORCED: dict[str, tuple[str, str]] = {
 
 #: The on/off controls (0 or 1), drawn as a switch.
 SWITCHES = frozenset({"captain_leads_projects", "captain_auto_improve", "step_recovery",
-                      "open_pr_when_checks_fail", "agents_fix_failures"})
+                      "open_pr_when_checks_fail", "agents_fix_failures",
+                      "workflow_precheck_agent"})
+
+#: A count whose unset (or 0) value the engine reads as a number, said as that number rather
+#: than `—` (build_streams.bounds: min `or 1`, max `or DEFAULT_MAX`).
+_READS_AS_WHEN_UNSET = {"build_streams_min": 1, "build_streams_max": None}
+
+#: What the agents switch row says when the org's Identity policy has it off.
+ORG_OFF = "Off for the whole organisation (Identity › Policy)"
+ORG_UNREADABLE = "Off: BOSS could not read the organisation's policy, so it treats it as off"
+
+#: THE BOARD (Govern › More › Advanced limits), section by section, row by row. build() renders
+#: exactly these, and the console draws the sections the API returns, so a control listed above
+#: is on the screen or is in ELSEWHERE naming the screen it is on. A test fails on any ENFORCED
+#: or SWITCHES key that is neither (v1.0-rc10.32: `Agents fix failures with your authority`,
+#: `Agents recover failed steps` and `Open the PR when checks fail` were listed and never drawn).
+BOARD: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("spend", "Spend caps", ("daily_cap", "monthly_cap", "burst", "pace")),
+    ("agents", "How hard agents work",
+     ("code_agent_max_concurrency", "code_agent_max_turns", "code_review_inrun_max_rounds",
+      "captain_leads_projects", "captain_auto_improve", "max_concurrent_jobs",
+      "max_workers_total")),
+    ("each_failed_step", "Each failed step",
+     ("agents_fix_failures", "step_recovery", "recovery_budget_cents", "recovery_max_minutes",
+      "deploy_fix_attempts")),
+    ("each_build", "Each build",
+     ("open_pr_when_checks_fail", "quality_bar", "build_test_budget",
+      "build_implement_budget_minutes", "build_streams_min", "build_streams_max")),
+    ("each_start", "Each start",
+     ("workflow_precheck_agent", "workflow_precheck_agent_max_cents",
+      "workflow_precheck_agent_max_turns", "workflow_precheck_agent_max_wait_seconds")),
+)
+
+#: Listed controls drawn on another screen, and where.
+ELSEWHERE: dict[str, str] = {
+    "budget_unpriced_allowance_usd_micros": "Govern › Limits › Spend BOSS cannot price",
+    "build_parallelism": "Setup › Build speed",
+    "token_default": "Govern › More › Advanced limits › Token guides",
+    "token_per_step": "Govern › More › Advanced limits › Token guides",
+}
+
+#: Where the agent switches live, said the same way by every card and note that names them.
+FIX_FAILURES_PLACE = "Govern › More › Advanced limits › Each failed step"
+
+#: The visible one-line explanation under a row's name (the older rows keep their tooltip).
+EXPLAIN: dict[str, str] = {
+    "agents_fix_failures": (
+        "Agents fix failures with the starter's authority — on by default. Never merges, deploys "
+        "to production, approves, or touches secrets. Set per project: this board sets the "
+        "project chosen at the top. Off: the starter is asked each time."),
+    "step_recovery": ("A failed step's agent reads the evidence and retries or fixes it — on by "
+                      "default. Off: every failure goes to a person."),
+    "recovery_budget_cents": "The most one failed step's recovery may spend before it asks you.",
+    "recovery_max_minutes": "How long one failed step's recovery may go on before it asks you.",
+    "deploy_fix_attempts": ("How many times BOSS fixes an app whose deploy failed and deploys "
+                            "again. 0: a person decides."),
+    "open_pr_when_checks_fail": ("Checks still failing after the repair rounds: the PR opens as "
+                                 "a draft listing them. Off: the build waits for a waiver."),
+    "quality_bar": "How strict every gate is: prototype, standard or production.",
+    "build_test_budget": "The most test cases one build writes.",
+    "build_implement_budget_minutes": "Minutes the implement stage may take. 0: no limit.",
+    "build_streams_min": "The fewest parallel streams a build stage runs.",
+    "build_streams_max": ("The most parallel streams a build stage runs. 0 or 1: the split is "
+                          "off (the default), one session."),
+    "workflow_precheck_agent": "A model checks a workflow can run before it starts.",
+    "workflow_precheck_agent_max_cents": "The most that check may spend.",
+    "workflow_precheck_agent_max_turns": "The most steps that check may take.",
+    "workflow_precheck_agent_max_wait_seconds": "How long a start waits for that check.",
+}
 
 #: The four thresholds, as the screen names them (key, label, budget_policies column).
 THRESHOLDS = (
@@ -173,8 +241,10 @@ def _seats_now(connection: Connection, effective: Optional[int]) -> Optional[dic
 
 
 def _knob_control(connection: Connection, settings: Any, project_id: str, key: str,
-                  chosen: dict[str, Any], counts: dict[str, int]) -> dict[str, Any]:
+                  chosen: dict[str, Any], counts: dict[str, int], *,
+                  section: str = "agents") -> dict[str, Any]:
     spec = ps.KNOBS[key]
+    choice = spec["kind"] == "choice"
     default = getattr(settings, spec["attr"], None)
     stored = chosen.get(key)
     raw = stored if stored not in (None, "") else default
@@ -192,24 +262,47 @@ def _knob_control(connection: Connection, settings: Any, project_id: str, key: s
             note = {"kind": "reads_as", "stored": 0, "reads_as": effective}
     elif key in SWITCHES:
         effective = 1 if int(raw or 0) else 0
+    elif choice:
+        effective = str(raw) if raw not in (None, "") else None
+    elif key in _READS_AS_WHEN_UNSET:
+        from .build_streams import DEFAULT_MAX
+
+        unset = _READS_AS_WHEN_UNSET[key] or DEFAULT_MAX
+        effective = int(raw or 0) or unset
     else:
         effective = int(raw) if raw not in (None, "") else None
     if not is_set:
         note = {"kind": "default"}
+    editable_by, write = "self", {"method": "PUT", "path": f"/v1/settings/{key}"}
+    if key == "agents_fix_failures":
+        # fix_authority.enabled() is the org policy AND this setting: the row says what it says.
+        from ..identity import fix_authority
+
+        try:
+            with connection.begin_nested():
+                allowed = fix_authority.org_allows(connection, project_id)
+            why = ORG_OFF
+        except Exception:  # noqa: BLE001 — enabled() treats an unreadable policy as off too
+            allowed, why = False, ORG_UNREADABLE
+        if not allowed:
+            effective, editable_by, write = 0, "none", None
+            note = {"kind": "org_off", "text": why}
     version, _who = ps.version_of(connection, project_id, key)
     word, effect = ENFORCED[key]
     return {
         "key": key,
-        "name": ps.GOVERN_NAMES[key],
-        "section": "agents",
+        "name": ps.GOVERN_NAMES.get(key) or spec["label"],
+        "section": section,
+        "explain": EXPLAIN.get(key),
         "value_effective": effective,
         "value_stored": stored,
         "default": default,
         "source": "set" if key in chosen else "default",
-        "unit": "switch" if key in SWITCHES else "count",
-        "bounds": {"min": spec.get("min"), "max": spec.get("max"), "step": 1},
-        "editable_by": "self",
-        "write": {"method": "PUT", "path": f"/v1/settings/{key}"},
+        "unit": "switch" if key in SWITCHES else "choice" if choice else "count",
+        "bounds": ({"choices": list(spec.get("choices") or ())} if choice else
+                   {"min": spec.get("min"), "max": spec.get("max"), "step": 1}),
+        "editable_by": editable_by,
+        "write": write,
         "enforced": {"word": word, "effect_key": effect},
         "evidence": _evidence_entry(key, counts),
         "advisory": False,
@@ -279,9 +372,11 @@ def build(connection: Connection, settings: Any, project_id: str, *,
         },
     ]
     chosen = ps.get_all(connection, project_id)
-    for key in ("code_agent_max_concurrency", "code_agent_max_turns",
-                "code_review_inrun_max_rounds", "captain_leads_projects", "captain_auto_improve"):
-        controls.append(_knob_control(connection, settings, project_id, key, chosen, counts))
+    for section, _name, keys in BOARD:
+        for key in keys:
+            if key in ps.KNOBS:
+                controls.append(_knob_control(connection, settings, project_id, key, chosen,
+                                              counts, section=section))
     for key, name in (("max_concurrent_jobs", "Jobs at once"), ("max_workers_total", "Workers")):
         word, effect = ENFORCED[key]
         value = policy.get(key)
@@ -308,6 +403,9 @@ def build(connection: Connection, settings: Any, project_id: str, *,
         "meter": meter(status, ledger_for(connection, project_id, status),
                        period_spent(connection, project_id, status)),
         "controls": controls,
+        # The board's sections in order, each with its rows' keys: the console draws these.
+        "sections": [{"key": section, "name": name, "keys": list(keys)}
+                     for section, name, keys in BOARD],
         "thresholds": thresholds,
         "token_guides": token_guides(connection, project_id),
         "pace": {"value": intensity, "envelope": pace},
