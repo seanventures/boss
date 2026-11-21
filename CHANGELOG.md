@@ -2,6 +2,23 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.32]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.32.md](docs/community/RELEASE_NOTES_v1.0-rc10.32.md).
+
+### Added
+
+- Enterprise networks: company CA at build and run time, registry mirrors, outbound proxy, an egress allowlist that adds to the built-in hosts, a lockfile for the coding CLIs, Colima guidance, and an opt-in engine inner sandbox (off by default). Much of it came from an enterprise contributor.
+- The Work panel: one landing page per piece of work, and a one-line Work row.
+
+### Changed
+
+- Agents fix failures with the starter's authority, on by default (merge, production deploy, approvals, secrets and host commands stay with people). Turn it off in Govern or per project with `agents_fix_failures`.
+- A remediation must ship an edit of its input; the validator's findings and fixes are recorded.
+- Failing checks never read "Ready to merge"; health probes use declared checks; API previews open on routes that answer.
+- Helm chat turns survive a reload or restart and land in their thread; `forget` retires knowledge-graph lessons.
+- The community candidate version is `1.0.0-rc.10.32`.
+
 ## [v1.0-rc10.31]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.31.md](docs/community/RELEASE_NOTES_v1.0-rc10.31.md).
