@@ -841,6 +841,9 @@ class MemoryForgetBody(OpenRequestBody):
 
     project_id: SkipValidation[str | None] = None
     actor: SkipValidation[str | None] = None
+    #: Why it is wrong — required when the id is a knowledge-graph lesson (kgn_…), recorded
+    #: in kg_audit with the retirement.
+    reason: SkipValidation[str | None] = None
 
 class AgentThreadEnsureBody(OpenRequestBody):
     model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'actor']})

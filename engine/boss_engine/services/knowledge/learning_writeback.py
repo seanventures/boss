@@ -632,8 +632,11 @@ def record(
             "last_seen_run": run_ref or old.get("last_seen_run"),
             "last_seen_at": prov["at"],
         }
+        # A LESSON SOMEONE RETIRED STAYS RETIRED (KnowledgeService.retire, `forget`): seeing it
+        # again adds evidence, never quietly serves it again. Any other closed lesson reopens.
         connection.execute(text(
-            "UPDATE kg_nodes SET attrs = attrs || CAST(:patch AS JSONB), last_seen = clock_timestamp(), valid_to = NULL "
+            "UPDATE kg_nodes SET attrs = attrs || CAST(:patch AS JSONB), last_seen = clock_timestamp(), "
+            "valid_to = CASE WHEN attrs ? 'retired_reason' THEN valid_to ELSE NULL END "
             "WHERE id = :id"), {"patch": json.dumps(patch), "id": node_id})
     else:
         attrs = {
@@ -821,7 +824,7 @@ def _contradicted(connection: Connection, project_id: str, node_id: str, kind: s
         else:
             targets += same_subject
     for old in dict.fromkeys(targets):
-        _STORE.close_validity(connection, project_id=project_id, valid_to=datetime.now(timezone.utc),
+        _STORE.close_validity(connection, project_id=project_id, valid_to=None,
                               actor_kind=actor_kind, node_id=old, superseded_by=node_id)
         connection.execute(text(
             "UPDATE kg_nodes SET attrs = attrs || CAST(:p AS JSONB) WHERE id = :id"),

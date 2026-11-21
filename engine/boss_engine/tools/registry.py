@@ -573,6 +573,13 @@ class ToolRegistry:
             result = {"result": result}
         result.setdefault("ok", True)
         result.setdefault("tool", name)
+        if spec.kind == "write" and result.get("ok") is not False \
+                and result.get("status") != "confirmation_required":
+            # A WRITE INSIDE A CHAT TURN IS RECORDED ON THE TURN AT ONCE (chat_turns): if the
+            # turn fails later, its failure line names this as done rather than "ask again".
+            from ..services.chat_turns import note_action
+
+            note_action(name, result)
         if ignored or result.get("ignored_args") == []:
             # A handler that checks its own extra args names what IT dropped; both lists show.
             own = result.get("ignored_args") if isinstance(result.get("ignored_args"), list) else []

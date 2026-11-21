@@ -58,7 +58,9 @@ def test_metatron_and_the_console_call_the_same_agent_turn():
     assert metatron <= {"agent_turn", "_remember_turn"}, metatron
     assert not (_calls(captain_router._remember_turn) & _SECOND_PATH)
     # And the one turn is the one brain.
-    assert "orchestration_agent.chat" in _calls(api_main.agent_turn)
+    # (chat_durably is AgentService.chat's two steps, open_turn + answer_turn, with the question
+    # committed before the answer starts — services/chat_turns.py.)
+    assert "orchestration_agent.chat_durably" in _calls(api_main.agent_turn)
 
 
 #: What a second decision path looks like in source. None of it may appear in Metatron's router

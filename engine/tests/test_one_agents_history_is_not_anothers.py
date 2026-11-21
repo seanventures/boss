@@ -122,9 +122,12 @@ def test_a_conversation_with_an_agent_continues_without_a_thread_id(connection):
 
     from boss_engine.services.agent_service import AgentService
 
-    src = inspect.getsource(AgentService.start_or_load_thread)
+    src = (inspect.getsource(AgentService.start_or_load_thread)
+           + inspect.getsource(AgentService._find_role_thread))
     assert "THE CONVERSATION YOU WERE ALREADY HAVING WITH THIS AGENT" in src
-    assert "AND agent_role = :agent_role" in src
+    # Keyed on the agent — its resolved key, or the name the caller used before every door
+    # resolved it alike (agent_service.thread_role).
+    assert "agent_role IN (:agent_role, :alias)" in src
     assert "external_ref IS NULL" in src
 
 

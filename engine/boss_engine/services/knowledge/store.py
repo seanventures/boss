@@ -548,12 +548,17 @@ class PostgresKnowledgeStore:
         connection: Connection,
         *,
         project_id: str,
-        valid_to,
         actor_kind: str,
+        valid_to=None,
         node_id: Optional[str] = None,
         edge_id: Optional[str] = None,
         superseded_by: Optional[str] = None,
     ) -> None:
+        """Close a node or an edge at `valid_to` — by default NOW ON THE DATABASE'S CLOCK
+        (clock_timestamp()), the clock the AGE projection reads validity with (age.py). An
+        application-clock "now" written inside a long transaction read as still valid to a
+        sync filtering on the transaction's own now(), and a retired lesson was mirrored back
+        into the graph (2026-11-21)."""
         self.ensure_schema(connection)
         if (node_id is None) == (edge_id is None):
             raise ValueError("close either a node or an edge")
@@ -573,14 +578,16 @@ class PostgresKnowledgeStore:
                 raise PermissionError(f"edge {edge_id} is not in project {project_id}")
             _assert_can_close(actor_kind, edge["trust_tier"])
             connection.execute(
-                text("UPDATE kg_edges SET valid_to = :valid_to WHERE id = :id"),
+                text("UPDATE kg_edges SET valid_to = "
+                     "COALESCE(CAST(:valid_to AS TIMESTAMPTZ), clock_timestamp()) WHERE id = :id"),
                 {"valid_to": valid_to, "id": edge_id},
             )
             return
         node = self._node_in_project(connection, project_id, node_id)
         _assert_can_close(actor_kind, node["trust_tier"])
         connection.execute(
-            text("UPDATE kg_nodes SET valid_to = :valid_to WHERE id = :id"),
+            text("UPDATE kg_nodes SET valid_to = "
+                 "COALESCE(CAST(:valid_to AS TIMESTAMPTZ), clock_timestamp()) WHERE id = :id"),
             {"valid_to": valid_to, "id": node_id},
         )
         if superseded_by is not None:

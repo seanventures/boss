@@ -803,6 +803,12 @@ def _progress_reporter(project_id: str, thread_id: Optional[str]):
         return None
 
     def report(label: str) -> None:
+        # A STEP IS A SAFE POINT (chat_turns.checkpoint): a durable chat turn commits what it
+        # has written and moves its heartbeat here, so it never holds one transaction for the
+        # whole turn. Outside one, nothing.
+        from .chat_turns import checkpoint
+
+        checkpoint()
         try:
             from ..db import get_engine
 

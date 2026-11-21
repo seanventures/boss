@@ -27,7 +27,8 @@ class _Rows:
 
 
 class FakeConn:
-    def __init__(self, *, progress=False, investigation=False, agent_run=False):
+    def __init__(self, *, progress=False, investigation=False, agent_run=False, turn=False):
+        self.turn = turn
         self.progress = progress
         self.investigation = investigation
         self.agent_run = agent_run
@@ -36,6 +37,8 @@ class FakeConn:
     def execute(self, statement, params=None):
         sql = " ".join(str(statement).split()).lower()
         self.seen.append(sql)
+        if "from agent_chat_turns" in sql:
+            return _Rows([{"ok": 1}] if self.turn else [])
         if "from agent_progress" in sql:
             return _Rows([{"ok": 1}] if self.progress else [])
         if "from investigations" in sql:
@@ -51,6 +54,11 @@ def test_progress_on_this_thread_means_working():
 
 def test_a_live_investigation_means_working():
     assert thread_is_working(FakeConn(investigation=True), "p", "thr_1") is True
+
+
+def test_a_running_turn_record_means_working():
+    # The durable turn (chat_turns) is the first signal: running until it lands or fails.
+    assert thread_is_working(FakeConn(turn=True), "p", "thr_1") is True
 
 
 def test_the_old_agent_loop_alone_is_not_this_turn():

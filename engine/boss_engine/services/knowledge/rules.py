@@ -983,7 +983,7 @@ def _merge_attrs(connection: Connection, rule_id: str, patch: Mapping[str, Any])
 def _supersede(connection: Connection, project_id: str, old_id: str, new_id: str, actor_ref: str) -> None:
     """Close ``old_id``, superseded by ``new_id`` (a ``supersedes`` edge, status superseded)."""
     _merge_attrs(connection, old_id, {"status": "superseded", "superseded_by": new_id})
-    _STORE.close_validity(connection, project_id=project_id, valid_to=datetime.now(timezone.utc),
+    _STORE.close_validity(connection, project_id=project_id, valid_to=None,
                           actor_kind="person", node_id=old_id, superseded_by=new_id)
     _STORE.audit(connection, project_id=project_id, action="knowledge.rule.supersede", entity_id=old_id,
                  actor_kind="person", actor_ref=actor_ref, detail={"superseded_by": new_id})
@@ -1172,7 +1172,7 @@ def reject_rule(
     rule = _rule_row(connection, project_id, rule_id)
     if rule.get("kind") == DQ_RULE_KIND:
         _thresholds_follow(connection, project_id, rule, "rejected", review)
-    _STORE.close_validity(connection, project_id=project_id, valid_to=datetime.now(timezone.utc),
+    _STORE.close_validity(connection, project_id=project_id, valid_to=None,
                           actor_kind="person", node_id=rule_id)
     _STORE.audit(connection, project_id=project_id, action="knowledge.rule.reject", entity_id=rule_id,
                  actor_kind="person", actor_ref=actor_ref,
@@ -1456,5 +1456,5 @@ def _thresholds_follow(connection: Connection, project_id: str, rule: Mapping[st
         else:
             _merge_attrs(connection, threshold_id, {"status": status, "review": dict(review)})
             _STORE.close_validity(connection, project_id=project_id,
-                                  valid_to=datetime.now(timezone.utc), actor_kind="person",
+                                  valid_to=None, actor_kind="person",
                                   node_id=threshold_id)

@@ -774,7 +774,13 @@ class GovernedChatAdapter:
         sfx_3ae11453 / sfx_be271156). It reserves in place, as before, only when a fresh
         connection cannot see the project yet (a project created in the caller's own open
         transaction — its first turn, or a test) or the connection has no engine (a double).
+
+        A CHAT TURN COMMITS HERE FIRST (chat_turns.checkpoint): what the turn wrote so far is
+        committed and no transaction is held while the model answers. A no-op elsewhere.
         """
+        from .chat_turns import checkpoint
+
+        checkpoint()
         engine = getattr(self._connection, "engine", None)
         if engine is not None:
             from sqlalchemy import text as _sql

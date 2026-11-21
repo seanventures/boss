@@ -377,7 +377,7 @@ class KnowledgeService:
             connection,
             project_id=project_id,
             node_id=fact_id,
-            valid_to=datetime.now(timezone.utc),
+            valid_to=None,
             actor_kind=actor_kind,
         )
         self.store.audit(
@@ -393,6 +393,51 @@ class KnowledgeService:
 
         after_write(connection, project_id)
         return {"id": fact_id, "closed": True}
+
+    def retire(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        node_id: str,
+        reason: str,
+        actor_kind: str,
+        actor_ref: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """RETIRE A LESSON THAT IS WRONG — the knowledge graph's own `forget`.
+
+        `forget` retired only recall memory (agent_memory); a lesson in the graph (a bad
+        "workaround" an agent recorded) could not be retired at all, and Helm had to supersede
+        it with another learning to stop it being served. This closes the node on the
+        database's clock (close_validity), says why on the node and in kg_audit, and drops it
+        from the AGE projection at once — kept, never deleted, so what it shaped stays
+        auditable. Scoped to the node's own project; an agent may retire only what agents
+        inferred, a person anything (store._assert_can_close)."""
+        reason = (reason or "").strip()
+        if not reason:
+            raise ValueError("say why this is being retired (reason)")
+        node = self.store._node_in_project(connection, project_id, node_id)
+        still_valid = connection.execute(
+            text("SELECT valid_to IS NULL OR valid_to > clock_timestamp() FROM kg_nodes "
+                 "WHERE id = :id"), {"id": node_id}).scalar()
+        if not still_valid:
+            raise LookupError(f"{node_id} is already retired")
+        self.store.close_validity(connection, project_id=project_id, node_id=node_id,
+                                  actor_kind=actor_kind)
+        connection.execute(
+            text("UPDATE kg_nodes SET attrs = attrs || CAST(:a AS JSONB) WHERE id = :id"),
+            {"id": node_id, "a": json.dumps({"retired_reason": reason[:1000],
+                                             "retired_by": actor_ref or actor_kind})})
+        audit_id = self.store.audit(
+            connection, project_id=project_id, action="knowledge.retire", entity_id=node_id,
+            actor_kind=actor_kind, actor_ref=actor_ref,
+            detail={"reason": reason[:1000], "kind": node["kind"], "name": node["name"],
+                    "trust_tier": node["trust_tier"]})
+        from .age import forget_vertex
+
+        forget_vertex(connection, project_id, node_id)
+        return {"id": node_id, "retired": True, "kind": node["kind"], "name": node["name"],
+                "reason": reason[:1000], "audit_id": audit_id}
 
     def forget(
         self,

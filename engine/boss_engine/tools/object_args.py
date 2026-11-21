@@ -43,7 +43,7 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "diagnose_run": {"run_id": CODE_TASK},
     "explain_run": {"run_id": CODE_TASK},
     "extend_code_task": {"run_id": CODE_TASK},
-    "forget": {"memory_id": "agent_memory"},
+    "forget": {"memory_id": ("agent_memory", "kg_node")},
     "get_code_task": {"run_id": CODE_TASK},
     "get_investigation": {"investigation_id": "investigation"},
     "get_meeting": {"meeting_id": "meeting"},

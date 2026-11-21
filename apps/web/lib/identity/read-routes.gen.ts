@@ -47,6 +47,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["agent/threads/{}/messages", "assistant:chat"],
   ["agent/threads/{}/progress", "assistant:chat"],
   ["agent/threads/{}/transcript", "agent:read"],
+  ["agent/turns/{}", "assistant:chat"],
   ["agent/wakeups", "autopilot:read"],
   ["agents", "agent:read"],
   ["agents/activity", "agent:read"],
