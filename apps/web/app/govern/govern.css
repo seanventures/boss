@@ -68,6 +68,8 @@
 @keyframes gv-ring { from { box-shadow: inset 0 0 0 6px var(--amber-soft);} to { box-shadow: inset 0 0 0 2px var(--amber);} }
 .gv-name { color: var(--ink); font-weight: 600; }
 .gv-row[data-advisory] .gv-name { color: var(--ink-soft); }
+/* The visible one line under a row's name (govern_view.EXPLAIN): plain words, not a tooltip only. */
+.gv-explain { display: block; margin-top: 2px; font-size: 0.74rem; font-weight: 400; color: var(--ink-soft); }
 .gv-value { display: flex; flex-direction: column; min-width: 0; }
 .gv-value-main { font-size: 1rem; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gv-row[data-advisory] .gv-value-main { font-size: 0.86rem; font-weight: 600; color: var(--ink-soft); white-space: normal; }
