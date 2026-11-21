@@ -569,7 +569,9 @@ def _run_authority(ctx: Any, connection: Connection, project_id: str, context: O
     """In-process step work under the workflow run's RECORDED authority (IDENTITY.md §7.14), not
     under whoever called in to advance the run (the worker). With an agent Passport for the step,
     a delegated run token (`run_wf:<run>/step:<step>`: person ∩ ceilings ∩ grant ∩ task); with
-    none, the person's own live principal. A run with no recorded authority runs as before."""
+    none, the person's own live principal. A run with no recorded authority runs as before.
+    Nested inside a delegated run, the block keeps that run's token (`runs.on_behalf`): it never
+    swaps an agent's narrower authority for the person's full rights."""
     import contextlib
     import re
 

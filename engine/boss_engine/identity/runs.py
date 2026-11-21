@@ -1330,10 +1330,20 @@ def on_behalf(engine: Any, acting: Any) -> Iterator[Optional[AuthContext]]:
     """In-process work under a RECORDED authority with no agent to delegate to (a built-in tool
     step of a person's workflow run): the person's live principal decides the tool calls (never
     the worker's), and jobs carry the recorded Acting. Yields None (nothing changes) when the
-    authority cannot be adopted here; raises TokenError when its person is no longer active."""
+    authority cannot be adopted here; raises TokenError when its person is no longer active.
+
+    NEVER WIDENS A DELEGATED RUN (X1): inside a delegated run (the ambient Acting carries a
+    chain) the run token already decides every tool call, bounded by person ∩ ceilings ∩ grant ∩
+    task. The ambient's principal_id is the person (`rt.sub`), so `_adoptable` alone would let
+    this block swap the agent's narrower token for the person's FULL principal. Nested work keeps
+    the run it is in: this yields the current context and changes nothing."""
     from . import lineage
 
-    if acting is None or not _adoptable(lineage.current(), acting):
+    ambient = lineage.current()
+    if ambient is not None and ambient.chain:
+        yield lineage.current_context()                     # already inside a run: keep it
+        return
+    if acting is None or not _adoptable(ambient, acting):
         yield None
         return
     with engine.begin() as db:
