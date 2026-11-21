@@ -69,6 +69,7 @@ _BLOCKS: dict[str, tuple[bool, bool, bool]] = {
     "code_review_passed": (False, True, True),
     "consistent": (False, True, True),
     "acceptance_met": (True, True, True),
+    "input_fidelity": (True, True, True),            # a remediation's output comes from its input
 }
 
 
@@ -89,7 +90,7 @@ RANK = {PROTOTYPE: 0, STANDARD: 1, PRODUCTION: 2}
 #: wrote, their integrity, security, secrets and an applied template. (Unknown gates block too.)
 FLOOR = frozenset({"code_written", "app_serves", "template_tests", "no_committed_secrets",
                    "security_clean", "web_package_honest", "written_tests_pass",
-                   "coder_did_not_edit_tests", "existing_tests_intact"})
+                   "coder_did_not_edit_tests", "existing_tests_intact", "input_fidelity"})
 
 
 class QualityBarOverrideRefused(PermissionError):

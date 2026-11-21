@@ -51,6 +51,7 @@ FAILED_WORDS: dict[str, str] = {
     "security_clean": "Security findings open",
     "consistent": "Not consistent with the code",
     "acceptance_met": "Must-haves not all met",
+    "input_fidelity": "Not derived from input",
     "nothing_broke": "Something broke",
     "app_serves": "App does not start",
     "web_package_honest": "Package not honest",

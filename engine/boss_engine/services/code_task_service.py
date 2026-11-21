@@ -586,6 +586,7 @@ def start_code_task(
     continuation: bool = False,
     outcome: Optional[dict] = None,
     run_after_seconds: int = 0,
+    remediate: Optional[dict] = None,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job.
 
@@ -814,7 +815,11 @@ def start_code_task(
         spec["model_config"] = model_config
     if isinstance(repair_retries, int):  # VAG Phase 3: per-run repair-loop budget override
         spec["repair_retries"] = repair_retries
-    bench = (finalize_ctx or {}).get("qa_benchmark") if isinstance((finalize_ctx or {}).get("qa_benchmark"), dict) else {}
+    if isinstance(remediate, dict) and str(remediate.get("input") or "").strip():
+        # A REMEDIATION (input_fidelity): its input, output, answer files and validator.
+        spec["remediate"] = {k: remediate[k] for k in ("input", "output", "answer_files",
+                                                       "validator") if remediate.get(k)}
+    bench =(finalize_ctx or {}).get("qa_benchmark") if isinstance((finalize_ctx or {}).get("qa_benchmark"), dict) else {}
     if bench.get("app_root"):
         spec["app_root"] = bench["app_root"]
     if bench.get("project_kind"):

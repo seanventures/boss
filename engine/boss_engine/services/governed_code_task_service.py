@@ -37,6 +37,7 @@ from typing import Any, Callable, Optional, Sequence
 from . import build_budget as _build_budget
 from . import brief_items as _brief_items
 from . import brief_tests as _brief_tests
+from . import input_fidelity as _input_fidelity
 from .work_hold import PauseAtCheckpoint as _PauseAtCheckpoint
 from . import repair_findings
 from . import parallel_build as _parallel_build
@@ -2769,6 +2770,41 @@ def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=
         + (_IAC_GUIDANCE if iac else "")
         + (design_prompts.design_impl_clause() if ui else "")  # APP-2: design axis for UI tasks
     )
+
+
+def _fidelity_check(engine, run_id: str, root, remediation: dict, sandbox, *,
+                    summary: Any = None, test_cmd: Any = None) -> dict:
+    """One attempt's input-fidelity verdict (input_fidelity.check), with the validator's record
+    under ``_validation``: the validator runs through the sandbox's allow-listed runner, its
+    findings on the input decide which added keys a finding asks for, and the build's own tool
+    log (agent_turns) backs or refutes what the agent says it ran. Never raises: a check that
+    could not run is a failed check, said."""
+    validation = None
+    try:
+        validation = _input_fidelity.run_validation(
+            root, remediation,
+            (lambda cmd: sandbox.run(cmd, timeout=180)) if sandbox is not None else None)
+        executed = None
+        try:
+            with engine.connect() as c:
+                executed = _input_fidelity.executed_commands(c, run_id)
+        except Exception:  # noqa: BLE001 — no tool log: claims are not judged
+            _log_caught(logger)
+        if executed is not None and test_cmd:
+            executed = [*executed, str(test_cmd)]   # BOSS ran the suite itself
+        result = _input_fidelity.check(
+            root, remediation, findings=_input_fidelity.findings_for_check(validation),
+            claims=[summary or ""], executed=executed)
+    except Exception as exc:  # noqa: BLE001
+        _log_caught(logger)
+        result = {"ok": False, "input": remediation.get("input"),
+                  "output": remediation.get("output"), "answer_files": [], "changes": [],
+                  "violations": [{"code": "check_failed",
+                                  "message": f"BOSS could not compare the output with the "
+                                             f"input: {type(exc).__name__}: {str(exc)[:200]}"}]}
+    result["_validation"] = (_input_fidelity.public_validation(validation)
+                             if validation is not None else None)
+    return result
 
 
 def _repair_prompt(base_prompt: str, evidence: str, attempt: int) -> str:
@@ -7126,6 +7162,27 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             use_microvm=use_microvm)
         if _runtime is not None:
             instructions = f"{instructions}\n\n{_runtime.brief()}"
+        # INPUT FIDELITY (input_fidelity): a build that remediates an input file is held to a
+        # minimal, evidenced edit of THAT file. The contract and its base snapshot (the input,
+        # the output as it stood, the answer files) are taken here, before any agent runs; every
+        # stage is told which files are answers it must not read; the implement loop checks.
+        _remediation = None
+        if not use_microvm:
+            try:
+                _remediation = _input_fidelity.contract(spec, instructions, root)
+            except Exception:  # noqa: BLE001 — an unreadable contract is no contract, said
+                _log_caught(logger)
+        if _remediation:
+            instructions = f"{instructions}{_input_fidelity.brief(_remediation)}"
+            with _transaction(engine) as c:
+                c.execute(sql(
+                    "UPDATE code_task_runs SET state=jsonb_set(COALESCE(state,'{}'::jsonb), "
+                    "'{remediation}', CAST(:r AS JSONB)), updated_at=now() WHERE id=:id"),
+                    {"r": json.dumps(_input_fidelity.public(_remediation)), "id": run_id})
+                emit_event(c, project_id, "code_task.remediation_contract", "boss",
+                           "code_task_run", run_id, _input_fidelity.public(_remediation))
+        _fidelity: Optional[dict] = None
+        _validation: Optional[dict] = None
         if _gate_plan0.source != "task":
             verify_commands = list(_gate_plan0.commands)
             test_cmd = ((verification_target.manifest_display(root, _pinned_manifest)
@@ -9002,9 +9059,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             gate_tests_passed = tests_passed or bool(
                 baseline_record is not None and not baseline_record.caused)
             ok = gate_tests_passed and tests_untouched and bool(impl_files)
+            # INPUT FIDELITY, EVERY ATTEMPT: the output against the input it must come from (a
+            # copied answer, an added block, a claim no command backs). A violation is this
+            # attempt's failure, sent back with its exact reasons — passing tests never excuse it.
+            _fidelity = None
+            if _remediation:
+                _fidelity = _fidelity_check(engine, run_id, root, _remediation, sandbox,
+                                            summary=r2.get("summary"), test_cmd=test_cmd)
+                _validation = _fidelity.pop("_validation", None)
+                ok = ok and bool(_fidelity.get("ok"))
             repair_log.append({"attempt": attempt, "tests_passed": tests_passed,
                                "tests_untouched": tests_untouched,
                                "impl_files": len(impl_files),
+                               **({"input_fidelity": [v["code"] for v in _fidelity["violations"]]}
+                                  if _fidelity is not None else {}),
                                "cost_usd_micros": int(r2.get("cost_usd_micros") or 0)})
             learning_writeback.observe(engine, project_id=project_id, hook="repair_checkpoint",
                                        run_id=run_id, attempt=attempt, passed=ok,
@@ -9084,6 +9152,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 if not use_microvm:
                     for p, content in tests_orig.items():
                         _ws_write(root / p, content)
+            elif gate_tests_passed and _fidelity is not None and not _fidelity.get("ok"):
+                # The tests pass; only the input fidelity failed. Its evidence is set below.
+                evidence_text = ""
             elif _install_fail[0] and not use_microvm:
                 # BOSS's clean install failed: nothing else ran. Said as that, with npm's error
                 # and what to do, not as failing tests to fix "in the implementation only".
@@ -9134,6 +9205,18 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                              + evidence_text)
                     except Exception:  # noqa: BLE001 — the warm fix runs with the plain evidence
                         _log_caught(logger)
+            if _fidelity is not None and not _fidelity.get("ok"):
+                # THE FIDELITY VIOLATION IS THE EVIDENCE when the tests pass (the tests' output
+                # would only say "ok"), and is added to it when they do not.
+                _fid_text = _input_fidelity.repair_evidence(_fidelity)
+                evidence_text = (_fid_text if gate_tests_passed and tests_untouched and impl_files
+                                 else f"{evidence_text}\n\n{_fid_text}".strip())
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.input_fidelity_failed", "boss",
+                               "code_task_run", run_id,
+                               {"attempt": attempt,
+                                "violations": [{k: v.get(k) for k in ("code", "path", "source")}
+                                               for v in _fidelity["violations"]][:20]})
 
         # The implement budget ends with the stage: later writing turns are not cut by it.
         set_llm_context(stage_deadline=None)
@@ -9947,6 +10030,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _qbar, _qover, _qinfo = _bar_for_run(engine, settings, project_id, spec, fctx, run_id)
         gates = _quality_bar.BarGates(_qbar, _qover, gates)
         gates.info = dict(_qinfo)
+        if _remediation and _fidelity is not None:
+            # A HELD GATE (checks_failing.HELD_GATES): a copied or invented output never opens
+            # a pull request past it, at any bar (quality_bar.FLOOR).
+            gates[_input_fidelity.GATE] = bool(_fidelity.get("ok"))
         if _qinfo.get("lowered_by"):
             # A bar BELOW the project's (or a per-gate map) was granted at the start door to a
             # person with settings:update: on the run's record, never silent.
@@ -10502,6 +10589,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # (0 = passed/failed first try) and the per-attempt outcome trail.
             "repair_attempts": repair_attempts, "repair_max": max_repair,
             "repair_log": repair_log, "impl_escalated_recovered": escalated_recovered,
+            # INPUT FIDELITY (input_fidelity): the last attempt's verdict and the validator's
+            # record (findings before, fixes, findings after) the step output carries.
+            **({_input_fidelity.STATE_KEY: _fidelity} if _fidelity is not None else {}),
+            **({_input_fidelity.VALIDATION_KEY: _validation} if _validation is not None else {}),
             "quality_passes": quality_passes_used,
             "ui_evidence": (workspace_evidence or {}).get("ui_evidence") or {},
             "ux_evidence": (workspace_evidence or {}).get("ux_evidence") or {},
