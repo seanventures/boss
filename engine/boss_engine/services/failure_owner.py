@@ -327,6 +327,8 @@ class Surface:
     that already acts on them; nothing here is a second engine."""
 
     key = ""
+    #: After an attempt was withheld (NeedsPerson), try again on a later pass (counted)?
+    retries_after_withheld = False
     #: The tables whose failure states this surface owns (the invariant guard reads it).
     tables: tuple[str, ...] = ()
     noun = "Work"
@@ -1228,7 +1230,12 @@ class Jobs(Surface):
             decision = (item.hints["payload"] or {}).get("decision_id")
             status = c.execute(text("SELECT status FROM decisions WHERE id = :d"),
                                {"d": decision}).scalar() if decision else None
-            if status in ("executed", "withdrawn", "rejected"):
+            # A WITHDRAWN question settles its dead merge job: withdrawn by a hand-off (its
+            # builder is linked, merge_failed.handed_to), by a person, a cancelled run or a
+            # superseded change — on purpose. The one withdrawal that was not (the owner
+            # loop's old stale-card cleanup, #9) is owned by merge_failures.
+            # recover_orphaned_conflicts, never re-acted here, so two paths never both act.
+            if status in ("executed", "rejected", "withdrawn"):
                 self._close(c, item, f"its merge question was {status}")
                 return Said(RESOLVED, f"Its merge question was {status} since.")
         return None
@@ -1660,6 +1667,9 @@ class ConnectionHolds(Surface):
 
     key = "connection_hold"
     tables = ("receipts",)
+    #: A settle that was refused (a lease race) is tried again on a later pass, counted, until
+    #: the attempts are spent — never one refusal and then a person's card for good.
+    retries_after_withheld = True
     noun = "Model connection check"
 
     def failed(self, c, since, pid=None):
@@ -1909,7 +1919,9 @@ def _own(engine: Any, settings: Any, jobs: Any, surface: Surface, item: Item, no
         limit = limit_for(cls, cause_code)
         if row and row["state"] == NEEDS_PERSON and _open_decision(c, row.get("decision_id")) \
                 and row.get("item_id") == item.id:
-            if not _now_agents(row, cls, agent_remedy, made, limit, old):
+            again = surface.retries_after_withheld and made < limit and not old \
+                and str(row.get("cause_code") or "").endswith(":withheld")
+            if not again and not _now_agents(row, cls, agent_remedy, made, limit, old):
                 return NEEDS_PERSON             # its card stands until it is answered
             # THE CARD IS STALE: what it asked a person for is an agent's to do now (the org
             # default, a re-classification: a contract case is the work's, not the host's).
@@ -1983,7 +1995,8 @@ def _own(engine: Any, settings: Any, jobs: Any, surface: Surface, item: Item, no
         with begin(engine) as c:
             return _hand_over(c, item, cls=cls, cause_code=f"{cause_code}:withheld", cause=cause,
                               action=np.action or "Press Done — retry to run it again.",
-                              reason=np.reason, attempts=made, now=now, exit=np.exit)
+                              reason=np.reason, now=now, exit=np.exit,
+                              attempts=attempt if surface.retries_after_withheld else made)
     except Exception as exc:  # noqa: BLE001 — an attempt that could not start is still an attempt
         log.warning("failure owner: attempt %s on %s %s did not start", attempt, surface.key,
                     item.key, exc_info=True)
@@ -2004,7 +2017,33 @@ def _own(engine: Any, settings: Any, jobs: Any, surface: Surface, item: Item, no
                words=fixing_words(attempt, doing, limit), attempts=attempt, max_attempts=limit,
                next_attempt_at=now + timedelta(seconds=wait),
                note={"attempt": attempt, "started": True, "doing": doing, "class": cls}, now=now)
+        _close_other_owners_card(c, item, (row or {}).get("decision_id"), doing)
     return FIXING
+
+
+def _close_other_owners_card(c: Any, item: Item, decision_id: Any, doing: str) -> None:
+    """THE REMEDY STARTED, SO THE OTHER OWNER'S QUESTION IS ANSWERED. A card another owner raised
+    for this item (a step-recovery "re-authorize" ask, the Shepherd's stuck-work question) is
+    closed in ITS owner's name, saying what the agent started — once the agent's remedy really
+    began, never before. A merge question is never closed here: only a linked builder closes it
+    (merge_failures.hand_off_conflict)."""
+    from .run_decisions import _withdraw_with_note
+
+    card = _open_decision(c, decision_id)
+    if not card or not item.project_id:
+        return
+    rec = _json(c.execute(text("SELECT recommendation FROM decisions WHERE id = :d"),
+                          {"d": card}).scalar(), {}) or {}
+    action = str(rec.get("action") or "")
+    if action in (CARD_ACTION, "review_pull_request", "approve_change_set") or \
+            rec.get("merge_failed") or any(w in action for w in ("deploy", "approve", "budget",
+                                                                  "merge", "waive")):
+        return                    # an approval is a person's answer: never closed by an agent
+    owner = str(rec.get("asked_by") or rec.get("agent") or action or "its owner")
+    _withdraw_with_note(c, card, str(item.project_id),
+                        f"Answered by BOSS's agent: {doing}.", actor=ACTOR,
+                        why={"why": "the agent's remedy started", "owner": owner,
+                             "key": item.key})
 
 
 def _plan(cls: str) -> str:
@@ -2063,9 +2102,20 @@ def _now_agents(row: Mapping[str, Any], cls: str, agent_remedy: bool, made: int,
 
 
 def _withdraw_own_card(c: Any, item: Item, decision_id: str, note: str) -> None:
+    """Withdraw a stale card THIS loop created (failure_owner.retry) — never another owner's.
+
+    THE CASE (northgate-gateway #9, 2026-11-21 16:55): the item was held by its MERGE card, the
+    row named that card, and this withdrew the person's merge question before any build was
+    started; the next tick read "its merge question was withdrawn" as resolved, and change #9
+    was orphaned. Another owner's card is closed only by that owner, after its remedy really
+    happened (merge_failures.hand_off_conflict withdraws it once a builder run exists)."""
     from .run_decisions import _withdraw_with_note
 
     if not item.project_id:
+        return
+    mine = c.execute(text("SELECT recommendation->>'action' FROM decisions WHERE id = :d"),
+                     {"d": decision_id}).scalar()
+    if mine != CARD_ACTION:
         return
     _withdraw_with_note(c, decision_id, str(item.project_id), note, actor=ACTOR,
                         why={"why": "BOSS's agent fixes it itself", "key": item.key})
@@ -2161,6 +2211,17 @@ def sweep(engine: Any, settings: Any, *, now: Optional[datetime] = None, jobs: A
     budget = _Budget(acts=max_acts)
     report: dict[str, Any] = {"items": 0, FIXING: 0, NEEDS_PERSON: 0, RESOLVED: 0, "errors": 0}
     seen: set[tuple[str, str]] = set()
+    if not only or "job" in only:
+        # A merge conflict whose question was withdrawn with no builder linked (an orphan, as
+        # #9 was): handed to the build agent now, or its question reopened with the steps.
+        try:
+            from . import merge_failures
+
+            report["orphaned_conflicts"] = merge_failures.recover_orphaned_conflicts(
+                engine, settings, project_id=project_id)
+        except Exception:  # noqa: BLE001 — one recovery never stops the sweep
+            log.exception("failure owner: orphaned merge conflicts")
+            report["errors"] += 1
     for key, surface in SURFACES.items():
         if only and key not in only:
             continue
