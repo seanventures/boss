@@ -86,10 +86,11 @@ def reason_words(kind: str, message: str, number: Any, url: Any = None) -> str:
 
 
 def _mark(connection: Any, decision_id: str, reason: str, next_step: str, kind: str, *,
-          reopen: bool) -> None:
+          reopen: bool, handed_to: Optional[str] = None) -> None:
     """Say it on the decision: the summary leads with it, the recommendation carries it, and
     (reopen) the question is unanswered again so it is in Needs you with Merge as the retry."""
-    patch = json.dumps({KEY: {"reason": reason, "next": next_step, "kind": kind}})
+    patch = json.dumps({KEY: {"reason": reason, "next": next_step, "kind": kind,
+                              **({"handed_to": handed_to} if handed_to else {})}})
     note = f"Merge failed: {reason}. {next_step}"
     connection.execute(text(
         "UPDATE decisions SET recommendation = COALESCE(recommendation, '{}'::jsonb) || "
@@ -229,7 +230,7 @@ def hand_off_conflict(connection: Any, settings: Any, project_id: str, decision_
              f"agent ({new_run}) to update the branch; you will be asked again when it can merge.")
     _mark(connection, decision_id, str(failed.get("reason") or "conflict"),
           f"BOSS handed it to the build agent to update the branch ({new_run}); you will be "
-          "asked again when it can merge.", NOT_MERGEABLE, reopen=False)
+          "asked again when it can merge.", NOT_MERGEABLE, reopen=False, handed_to=new_run)
     _withdraw(connection, project_id, decision_id, words,
               {"kind": "merge_conflict_handed_off", "run_id": new_run})
     return new_run
@@ -248,9 +249,15 @@ def hand_to_builder(connection: Any, settings: Any, run_id: str, note: str) -> O
         out = retry_code_task(engine, settings, JobLeaseService(settings), run_id,
                               fix_note=note, automatic=True)
     except Exception as error:  # noqa: BLE001 — refused: the person is asked instead
-        log.info("merge conflict hand-off refused for %s: %s", run_id, error)
+        log.warning("merge conflict hand-off refused for %s: %s", run_id, error)
         return None
-    return str(out.get("run_id") or "") or None
+    new_run = str(out.get("run_id") or "")
+    if not new_run or new_run == run_id or out.get("created") is False:
+        # Not a NEW attempt (another run already owns the branch, or nothing started): it is
+        # not a hand-off, so the person's card is never withdrawn on it.
+        log.warning("merge conflict hand-off for %s started no new build (%s)", run_id, out)
+        return None
+    return new_run
 
 
 def handle(service: Any, connection: Any, project_id: str, decision_id: str, number: int,
@@ -320,7 +327,7 @@ def handle(service: Any, connection: Any, project_id: str, decision_id: str, num
                      "to update the branch; you will be asked again when it can merge.")
             _mark(connection, decision_id, reason, "BOSS handed it to the build agent to "
                   f"update the branch ({new_run}); you will be asked again when it can merge.",
-                  kind, reopen=False)
+                  kind, reopen=False, handed_to=new_run)
             _withdraw(connection, project_id, decision_id, words,
                       {"kind": "merge_conflict_handed_off", "run_id": new_run})
             return {**base, "status": "needs_rebase", "message": words}
@@ -383,4 +390,91 @@ def on_job_deadlettered(connection: Any, job_row: dict[str, Any], error: dict[st
 
 __all__ = ["FAILED", "HEAD_CHANGED", "KEY", "NOT_MERGEABLE", "TRANSIENT", "classify",
            "conflict_note", "conflict_steps", "hand_off_conflict", "hand_to_builder",
+           "recover_orphaned_conflicts",
            "is_local_change", "handle", "on_job_deadlettered", "reason_words"]
+
+
+def recover_orphaned_conflicts(engine: Any, settings: Any, *, project_id: Optional[str] = None,
+                               limit: int = 3, reach_days: int = 14) -> list[dict[str, Any]]:
+    """A MERGE CONFLICT LEFT WITH NO OWNER IS PICKED UP AGAIN (northgate-gateway #9, 21 Nov).
+
+    A merge question whose merge failed on a conflict, withdrawn WITHOUT a builder run linked to
+    it (`merge_failed.handed_to`), on a change that is still open, is an orphan: nobody builds
+    it and nobody is asked. Each one is handed to the build agent now; when that cannot start,
+    the question is reopened for the person with the exact steps. Run by the failure owner's
+    sweep. Returns what it did, per question."""
+    from .core import emit_event
+
+    done: list[dict[str, Any]] = []
+    with engine.begin() as c:
+        rows = c.execute(text(
+            "SELECT id, project_id, recommendation FROM decisions WHERE status = 'withdrawn' "
+            "AND recommendation->'merge_failed'->>'kind' = :k "
+            "AND recommendation->'merge_failed'->>'handed_to' IS NULL "
+            "AND updated_at > now() - make_interval(days => :d) "
+            "AND (CAST(:p AS text) IS NULL OR project_id = :p) ORDER BY updated_at DESC LIMIT :n"),
+            {"k": NOT_MERGEABLE, "d": reach_days, "p": project_id, "n": limit}).mappings().all()
+    for row in rows:
+        rec = row["recommendation"] if isinstance(row["recommendation"], dict) else \
+            json.loads(row["recommendation"] or "{}")
+        url = str(rec.get("pull_request_url") or "")
+        if not _still_open(engine, str(row["project_id"]), url):
+            continue
+        with engine.begin() as c:
+            # Withdrawn by a hand-off made before handed_to was recorded: its builder exists (a
+            # newer attempt of the change's lineage) — link it, never start a second one.
+            runs = _pr_runs(c, str(row["project_id"]), url, str(row["id"]), rec.get("branch_name"))
+            later = c.execute(text(
+                "SELECT n.id FROM code_task_runs n, code_task_runs o WHERE o.id = :newest AND "
+                "n.project_id = o.project_id AND COALESCE(n.finalize_ctx->>'root_run_id', n.id) = "
+                "COALESCE(o.finalize_ctx->>'root_run_id', o.id) AND n.created_at > o.created_at "
+                "AND n.id <> ALL(:runs) ORDER BY n.created_at DESC LIMIT 1"),
+                {"runs": runs or [""], "newest": (runs or [""])[0]}).scalar()
+            if later:
+                c.execute(text(
+                    "UPDATE decisions SET recommendation = jsonb_set(recommendation, "
+                    "'{merge_failed,handed_to}', to_jsonb(CAST(:r AS text))) WHERE id = :d"),
+                    {"r": later, "d": row["id"]})
+                done.append({"decision_id": str(row["id"]), "linked": str(later)})
+                continue
+            new_run = hand_off_conflict(c, settings, str(row["project_id"]), str(row["id"]))
+            if new_run is None:
+                runs = _pr_runs(c, str(row["project_id"]), url, str(row["id"]),
+                                rec.get("branch_name"))
+                failed = rec.get(KEY) or {}
+                _mark(c, str(row["id"]), str(failed.get("reason") or "a conflict"),
+                      conflict_steps(runs), NOT_MERGEABLE, reopen=True)
+            emit_event(c, str(row["project_id"]), "merge.conflict_orphan_recovered", "boss",
+                       "decision", str(row["id"]),
+                       {"handed_to": new_run, "reopened": new_run is None})
+        done.append({"decision_id": str(row["id"]), "handed_to": new_run,
+                     "reopened": new_run is None})
+    return done
+
+
+def _still_open(engine: Any, project_id: str, url: str) -> bool:
+    with engine.begin() as c:
+        return change_open(c, project_id, url)
+
+
+def change_open(c: Any, project_id: str, url: str) -> bool:
+    """Is the change still waiting to merge? A local change set says so itself; otherwise no
+    build of it has a merged sha."""
+    repo = repository_of(url)
+    number = str(url or "").rstrip("/").rsplit("/", 1)[-1]
+    if is_local_change(url) and repo and number.isdigit():
+        try:
+            with c.begin_nested():
+                state = c.execute(text(
+                    "SELECT state FROM local_change_sets WHERE project_id = :p AND "
+                    "lower(repository) = lower(:r) AND number = :n"),
+                    {"p": project_id, "r": repo, "n": int(number)}).scalar()
+            if state is not None:
+                return state == "open"
+        except Exception:  # noqa: BLE001 — no local change sets here: read the builds
+            pass
+    merged = c.execute(text(
+        "SELECT 1 FROM code_task_runs WHERE project_id = :p AND pull_request_url = :u AND "
+        "finalize_ctx->'merge'->>'sha' IS NOT NULL LIMIT 1"), {"p": project_id, "u": url}
+    ).scalar()
+    return bool(url) and not merged

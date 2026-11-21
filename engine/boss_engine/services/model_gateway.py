@@ -946,8 +946,13 @@ class ModelGatewayService:
             text("SELECT id, status, lease_owner FROM jobs WHERE id=:id FOR UPDATE"),
             {"id": invocation["job_id"]},
         ).mappings().first()
-        if job and (job["status"] not in ("leased", "running")
-                    or job["lease_owner"] != lease["worker_id"]):
+        # TAKEN means another worker holds the job NOW (or it is queued to run again). A job that
+        # ENDED — failed, dead-lettered, cancelled, succeeded — is held by nobody: its call is
+        # settled here, never left for a person (northgate-gateway rcpt_da8c5f2e…, 2026-11-21:
+        # its proof job was dead-lettered, and every settle was refused as "taken").
+        if job and ((job["status"] in ("leased", "running")
+                     and job["lease_owner"] != lease["worker_id"])
+                    or job["status"] == "queued"):
             raise ModelGatewayLeaseError("The call's job was taken by another worker.")
         settled = self._record_settlement(
             connection, project_id, lease, invocation, worker_id=actor,

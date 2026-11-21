@@ -1,0 +1,243 @@
+"""WHAT #264 DID LIVE, AND WHAT IT MUST NOT (northgate-gateway, 2026-11-21 16:55 UTC).
+
+1. CHANGE #9 WAS ORPHANED. Its dead merge job was held by the person's merge card; the loop's
+   stale-card withdrawal closed THAT card (not one of its own) before any build started, and
+   the next tick read "its merge question was withdrawn" as resolved. No builder, no card.
+   Now: the loop withdraws only its own cards; a merge card is withdrawn only once a builder run
+   exists and is linked (`merge_failed.handed_to`); a withdrawn conflict with no builder on a
+   change still open is picked up again (handed off, or its card reopened with the steps).
+2. THE HELD PROOF WAS NEVER SETTLED: "The call's job was taken by another worker." — the proof's
+   job was DEAD-LETTERED (held by nobody), which the late-settle refused as if taken. A job that
+   ended is settled; a person's card is retried (counted) instead of standing for good.
+"""
+from __future__ import annotations
+
+import json
+from uuid import uuid4
+
+import pytest
+from sqlalchemy import text
+
+from boss_engine.services import failure_owner as fo, merge_failures
+
+from ._ambient_support import eng, make_project, purge  # noqa: F401
+from .test_agents_fix_failures_with_the_starters_authority import (  # noqa: F401
+    _TABLES, _ago, _local_change_9, _settings)
+
+
+@pytest.fixture()
+def project(eng):  # noqa: F811
+    pid = make_project(eng)
+    yield pid
+    with eng.begin() as c:
+        for table in _TABLES:
+            try:
+                with c.begin_nested():
+                    c.execute(text(f"DELETE FROM {table} WHERE project_id = :p"), {"p": pid})
+            except Exception:  # noqa: BLE001
+                pass
+    purge(eng, pid)
+
+
+def _held_by_its_merge_card(c, pid, url, card):
+    """The owner row exactly as it was at 16:55: needs_person, held by the merge card."""
+    key = f"github.pull_request.merge:{url}"
+    item = fo.Item("job", key, "x", pid, "Merge", "", _ago(minutes=5), {})
+    fo._write(c, item, state=fo.NEEDS_PERSON, words="Its merge card says why the merge failed",
+              by="merge_failures", reason="A merge runs only on your approval.", decision_id=card)
+    c.execute(text("UPDATE failure_owners SET item_id = (SELECT d.id FROM deadletters d JOIN jobs "
+                   "j ON j.id = d.source_id WHERE j.project_id = :p AND j.kind = "
+                   "'github.pull_request.merge' LIMIT 1) WHERE item_key = :k"), {"p": pid, "k": key})
+    return key
+
+
+def _local_change_set(c, pid, run):
+    c.execute(text("INSERT INTO local_change_sets (id, project_id, repository, number, branch, "
+                   "base_branch, run_id, state) VALUES (:i, :p, :r, 9, :b, 'main', :run, 'open')"),
+              {"i": f"lcs_{uuid4().hex[:12]}", "p": pid, "r": f"local_{pid}/{pid}",
+               "b": "boss/code/x", "run": run})
+
+
+def _status(eng, card):  # noqa: F811
+    with eng.begin() as c:
+        return c.execute(text("SELECT status, recommendation FROM decisions WHERE id = :d"),
+                         {"d": card}).one()
+
+
+def test_the_merge_card_is_never_withdrawn_when_no_builder_started(eng, project, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(merge_failures, "hand_to_builder", lambda *a, **k: None)
+    with eng.begin() as c:
+        url, _runs, card, _reason = _local_change_9(c, project)
+        _held_by_its_merge_card(c, project, url, card)
+    for _ in range(3):
+        fo.sweep(eng, _settings(), project_id=project)
+    status, _rec = _status(eng, card)
+    assert status == "pending", "no builder, so the person's card stays"
+
+
+def test_the_conflict_is_handed_over_and_only_then_the_card_withdrawn_and_linked(
+        eng, project, monkeypatch):  # noqa: F811
+    made = []
+
+    def builder(connection, settings, run_id, note):
+        new = f"crun_{uuid4().hex[:20]}"
+        with connection.engine.begin() as c2:
+            c2.execute(text("INSERT INTO code_task_runs (id, project_id, title, status, "
+                            "finalize_ctx) VALUES (:i, :p, 'fix', 'queued', CAST(:f AS JSONB))"),
+                       {"i": new, "p": project, "f": json.dumps({"root_run_id": run_id})})
+        made.append((run_id, new, note))
+        return new
+
+    monkeypatch.setattr(merge_failures, "hand_to_builder", builder)
+    with eng.begin() as c:
+        url, runs, card, _reason = _local_change_9(c, project)
+        key = _held_by_its_merge_card(c, project, url, card)
+    fo.sweep(eng, _settings(), project_id=project)
+    fo.sweep(eng, _settings(), project_id=project)
+    status, rec = _status(eng, card)
+    assert len(made) == 1 and made[0][0] == runs[-1] and "keeping BOTH" in made[0][2]
+    assert status == "withdrawn" and rec["merge_failed"]["handed_to"] == made[0][1]
+    with eng.begin() as c:
+        state = c.execute(text("SELECT state FROM failure_owners WHERE item_key = :k"),
+                          {"k": key}).scalar()
+    assert state == "resolved", "settled only because a linked builder exists"
+
+
+def test_an_orphaned_conflict_is_picked_up_again(eng, project, monkeypatch):  # noqa: F811
+    """The live #9 state after 16:55: card withdrawn, no handed_to, dead letter closed, change
+    set still open — the sweep hands it to the builder."""
+    made = []
+    monkeypatch.setattr(merge_failures, "hand_to_builder",
+                        lambda conn, s, run_id, note: made.append(run_id) or "crun_recovered")
+    with eng.begin() as c:
+        url, runs, card, _reason = _local_change_9(c, project)
+        _local_change_set(c, project, runs[-1])
+        c.execute(text("UPDATE decisions SET status = 'withdrawn' WHERE id = :d"), {"d": card})
+        c.execute(text("UPDATE deadletters SET status = 'resolved' WHERE project_id = :p"),
+                  {"p": project})
+    report = fo.sweep(eng, _settings(), project_id=project)
+    status, rec = _status(eng, card)
+    assert made == [runs[-1]] and report["orphaned_conflicts"][0]["handed_to"] == "crun_recovered"
+    assert rec["merge_failed"]["handed_to"] == "crun_recovered"
+    fo.sweep(eng, _settings(), project_id=project)
+    assert made == [runs[-1]], "linked once, never handed off twice"
+
+
+def test_an_orphan_the_builder_cannot_take_is_reopened_for_the_person_with_steps(
+        eng, project, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(merge_failures, "hand_to_builder", lambda *a, **k: None)
+    with eng.begin() as c:
+        url, runs, card, _reason = _local_change_9(c, project)
+        _local_change_set(c, project, runs[-1])
+        c.execute(text("UPDATE decisions SET status = 'withdrawn' WHERE id = :d"), {"d": card})
+    fo.sweep(eng, _settings(), project_id=project)
+    status, rec = _status(eng, card)
+    assert status == "pending" and "keeping both sides" in rec["merge_failed"]["next"]
+
+
+def test_a_merged_change_is_not_an_orphan(eng, project, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(merge_failures, "hand_to_builder",
+                        lambda *a, **k: pytest.fail("a merged change is never handed off"))
+    with eng.begin() as c:
+        url, runs, card, _reason = _local_change_9(c, project)
+        _local_change_set(c, project, runs[-1])
+        c.execute(text("UPDATE local_change_sets SET state = 'merged' WHERE project_id = :p"),
+                  {"p": project})
+        c.execute(text("UPDATE decisions SET status = 'withdrawn' WHERE id = :d"), {"d": card})
+    fo.sweep(eng, _settings(), project_id=project)
+    assert _status(eng, card)[0] == "withdrawn"
+
+
+def test_the_loop_never_withdraws_a_card_it_did_not_create(eng, project):  # noqa: F811
+    from boss_engine.services.core import create_blocking_decision
+
+    with eng.begin() as c:
+        other = create_blocking_decision(c, project, None, "Merge it?",
+                                         {"action": "review_pull_request"}, {},
+                                         "merge_decision_required", default_action="hold")
+        item = fo.Item("job", "k", "x", project, "t", "", None, {})
+        fo._withdraw_own_card(c, item, other, "x")
+        assert c.execute(text("SELECT status FROM decisions WHERE id = :d"),
+                         {"d": other}).scalar() == "pending"
+
+
+# ── 2. the held proof whose job ended ────────────────────────────────────────────────────────
+
+class _Rows:
+    def __init__(self, row):
+        self.row = row
+
+    def mappings(self):
+        return self
+
+    def first(self):
+        return self.row
+
+
+class _Conn:
+    def __init__(self, job):
+        self.job = job
+
+    def execute(self, stmt, params=None):
+        sql = str(stmt)
+        if "FROM model_gateway_invocations" in sql:
+            return _Rows({"id": "minv", "status": "in_progress", "model_gateway_lease_id": "l",
+                          "job_id": "job_proof", "receipt_id": "rcpt"})
+        if "FROM model_gateway_leases" in sql:
+            return _Rows({"id": "l", "status": "active", "worker_id": "setup:usr_x:abc"})
+        return _Rows(self.job)
+
+
+@pytest.mark.parametrize("job, settles", [
+    ({"id": "job_proof", "status": "deadlettered", "lease_owner": None}, True),
+    ({"id": "job_proof", "status": "failed_final", "lease_owner": None}, True),
+    ({"id": "job_proof", "status": "running", "lease_owner": "setup:usr_x:abc"}, True),
+    ({"id": "job_proof", "status": "running", "lease_owner": "worker-2"}, False),
+    ({"id": "job_proof", "status": "queued", "lease_owner": None}, False),
+])
+def test_a_proof_whose_job_ended_is_settled_not_called_taken(monkeypatch, job, settles):
+    from boss_engine.services import model_gateway
+
+    gw = model_gateway.ModelGatewayService(_settings())
+    monkeypatch.setattr(gw, "_record_settlement", lambda *a, **k: {"settled": True})
+    monkeypatch.setattr(gw.jobs, "close_abandoned", lambda *a, **k: None)
+    monkeypatch.setattr(model_gateway, "emit_event", lambda *a, **k: None)
+    call = lambda: gw.settle_retained_invocation(  # noqa: E731
+        _Conn(job), "p", "minv", actor="agent:shepherd", succeeded=False, provider_ref=None,
+        usage_units={}, actual_cost_usd_micros=0)
+    if settles:
+        assert call() == {"settled": True}
+    else:
+        with pytest.raises(model_gateway.ModelGatewayLeaseError, match="taken"):
+            call()
+
+
+def test_a_refused_settle_is_tried_again_counted_never_a_standing_card(
+        eng, project, monkeypatch):  # noqa: F811
+    from boss_engine.services import connection_spend
+    from boss_engine.services.core import create_blocking_decision
+
+    calls = []
+
+    def settle(c, settings, pid, receipt, *, actor):
+        calls.append(receipt)
+        if len(calls) == 1:
+            raise connection_spend.HoldRefused("BOSS could not settle this proof: The call's job "
+                                               "was taken by another worker.")
+        return {}
+
+    monkeypatch.setattr(connection_spend, "agent_settle", settle)
+    with eng.begin() as c:
+        card = create_blocking_decision(
+            c, project, None, "Reconcile connection proof setup:connection/claude_code",
+            {"action": "connection_reconciliation"}, {"receipt_id": "rcpt_live"},
+            "connection_reconciliation", default_action="hold")
+    fo.sweep(eng, _settings(), project_id=project)           # refused → a card, attempt 1 of 2
+    fo.sweep(eng, _settings(), project_id=project, now=None)  # tried again, settles
+    with eng.begin() as c:
+        status = c.execute(text("SELECT status FROM decisions WHERE id = :d"), {"d": card}).scalar()
+        own = c.execute(text("SELECT count(*) FROM decisions WHERE project_id = :p AND status = "
+                             "'pending' AND recommendation->>'action' = :a"),
+                        {"p": project, "a": fo.CARD_ACTION}).scalar()
+    assert calls == ["rcpt_live", "rcpt_live"]
+    assert status == "resolved" and own == 0, "the person's card went once the agent settled it"

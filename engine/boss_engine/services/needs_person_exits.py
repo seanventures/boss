@@ -165,7 +165,10 @@ EXITS: dict[str, Exit] = {
     "merge.handle": E("merge_failures.handle", False,
                       "a refused permission or protected branch; a conflict goes to the build "
                       "agent first and comes here only when it cannot start"),
-    "merge.on_job_deadlettered": E("merge_failures.on_job_deadlettered", False,
+    "merge.recover_orphaned_conflicts": E("merge_failures.recover_orphaned_conflicts", False,
+                                          "an orphaned conflict whose build agent could not "
+                                          "start is reopened for the person with exact steps"),
+    "merge.on_job_deadlettered":E("merge_failures.on_job_deadlettered", False,
                                    "merging is a person's approval (never an agent's)"),
     # ── connection proofs held for reconciliation ───────────────────────────────────────────
     "connection_reconciliation": E("failure_owner.ConnectionHolds", True,
