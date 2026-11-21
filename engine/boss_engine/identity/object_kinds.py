@@ -275,6 +275,8 @@ KINDS: tuple[ObjectKind, ...] = (
     AccessRequestKind(),
     # Build L: console deep links resolve a self-fix to its own project before rendering.
     ObjectKind("self_fix", "self_fixes"),
+    # A gap in BOSS filed for a self-fix (brec_…): one project's recommendation (request_self_fix).
+    ObjectKind("boss_recommendation", "boss_recommendations"),
 )
 
 _BY_KIND: dict[str, ObjectKind] = {}
