@@ -228,6 +228,12 @@ def smoke_deployment(connection: Connection, settings: Any, engine: Any, *,
             checks.append({"kind": "http", "scheme": scheme, "port": port, **check})
 
     conn = connector or connector_for(target)
+    if conn is None and checks:
+        # A kind with no connector (config_dir) is still asked through its declared checks —
+        # the same probe the health sweep uses — rather than refused.
+        from .deployment_health import DeclaredChecksProbe
+
+        conn = DeclaredChecksProbe()
     if conn is None:
         return {"ok": False, "error": f"no connector can reach {target.get('app_name')}'s target"}
     started = time.time()
