@@ -12408,6 +12408,7 @@ async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
         app_cookie_header=inbound_cookie_header(preview_id, request.headers.get("cookie")),
         # On the preview origin the app is shown at its own paths, so its router matches them.
         serve_at_root=bool((request.scope.get("state") or {}).get("boss_preview_origin")),
+        public_scheme=request.url.scheme,
     )
     if status in (409, 502):
         # ASLEEP, NOT GONE (preview_wake): a preview BOSS stopped wakes on a page load and says
