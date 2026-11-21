@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Validation Review Wireframe</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --canvas:#090D17;--panel:#0E1422;--surface:#141B2B;--border:#1E2940;--border-strong:#2C3A55;--edge:#253350;
+  --mint:#4FE3C1;--green:#58D68A;--amber:#F5B14C;--red:#F26D6D;--purple:#A78BFA;
+  --ink:#E6EDF5;--muted:#8D9AB5;--dim:#5A6785;--idle:#3E4D6B;
+  --sans:"Space Grotesk",ui-sans-serif,system-ui,sans-serif;--mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --r:8px;--rs:6px;
+  --p0:#F26D6D;--p1:#F5B14C;--p2:#8D9AB5;--p3:#5A6785;
+  --add-bg:rgba(88,214,138,.10);--del-bg:rgba(242,109,109,.10);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--canvas);color:var(--ink);font:14px/1.5 var(--sans)}
+a{color:var(--mint);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1400px;margin:0 auto;padding:24px 24px 80px}
+.screen-label{font:600 11px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--purple);margin:40px 0 10px;display:flex;gap:10px;align-items:center}
+.screen-label::after{content:"";flex:1;height:1px;background:var(--border)}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:var(--r);padding:18px}
+.mono{font-family:var(--mono)}
+.muted{color:var(--muted)}.dim{color:var(--dim)}
+.k{font:600 11px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+h1{font:600 24px var(--sans);margin:0}
+h2{font:600 17px var(--sans);margin:0}
+h3{font:600 14px var(--sans);margin:0}
+.pill{display:inline-flex;align-items:center;gap:6px;font:500 11px var(--mono);border:1px solid var(--border-strong);border-radius:999px;padding:2px 9px;color:var(--muted);white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.sev{display:inline-flex;align-items:center;justify-content:center;font:700 11px var(--mono);border-radius:4px;padding:1px 6px;min-width:28px}
+.sev.P0{background:rgba(242,109,109,.16);color:var(--p0);border:1px solid rgba(242,109,109,.45)}
+.sev.P1{background:rgba(245,177,76,.14);color:var(--p1);border:1px solid rgba(245,177,76,.45)}
+.sev.P2{background:rgba(141,154,181,.12);color:var(--p2);border:1px solid rgba(141,154,181,.35)}
+.kind{font:600 10px var(--mono);letter-spacing:.06em;text-transform:uppercase;border-radius:4px;padding:2px 6px;white-space:nowrap}
+.kind.auto{color:var(--mint);background:rgba(79,227,193,.10)}
+.kind.agent{color:var(--purple);background:rgba(167,139,250,.12)}
+.kind.human{color:var(--amber);background:rgba(245,177,76,.12)}
+.st{font:500 12px var(--mono);display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
+.st.fixed{color:var(--green)}.st.over{color:var(--purple)}.st.waived{color:var(--muted)}.st.open{color:var(--red)}
+.btn{font:500 12px var(--sans);border-radius:var(--rs);padding:5px 10px;border:1px solid var(--border-strong);background:var(--surface);color:var(--ink);cursor:pointer;white-space:nowrap}
+.btn.primary{background:var(--amber);color:#1a1205;border-color:var(--amber);font-weight:600}
+.btn.mint{background:var(--mint);color:#04211a;border-color:var(--mint);font-weight:600}
+.btn.ghost{background:transparent}
+.btn.danger{color:var(--red);border-color:rgba(242,109,109,.5);background:transparent}
+.btn:disabled{opacity:.45}
+.ref{font:500 11px var(--mono);color:var(--mint);background:rgba(79,227,193,.08);border:1px solid rgba(79,227,193,.25);border-radius:4px;padding:0 5px;white-space:nowrap}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.grow{flex:1}
+table{width:100%;border-collapse:collapse}
+th{font:600 10px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--dim);text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)}
+td{padding:8px;border-bottom:1px solid var(--border);vertical-align:top;font-size:13px}
+tr:last-child td{border-bottom:0}
+.packet td{word-break:break-word}.col-b td{padding:6px 4px;font-size:12px;white-space:nowrap}.col-b td.case{white-space:normal;word-break:break-all}
+code,.code{font:12px/1.55 var(--mono)}
+.note{font:12px var(--sans);color:var(--dim);border-left:2px solid var(--purple);padding:2px 0 2px 10px;margin-top:10px}
+.scroll-x{overflow-x:auto}
+
+/* A: Work panel header */
+.wp-head{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:start}
+.wp-links{display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;font:500 13px var(--sans)}
+.wp-links a{display:inline-flex;gap:5px;align-items:center}
+.wp-links .new{font:600 9px var(--mono);color:var(--purple);border:1px solid var(--purple);border-radius:3px;padding:0 3px;margin-left:2px}
+.kpis{display:flex;gap:28px;margin-top:14px;flex-wrap:wrap}
+.kpis div span{display:block;font:600 10px var(--mono);letter-spacing:.1em;color:var(--dim)}
+.kpis div b{font:600 15px var(--mono)}
+.story{display:grid;grid-template-columns:1fr 1fr 1.3fr;gap:0;margin-top:14px}
+.story > div{padding:14px;border-right:1px solid var(--border)}
+.story > div:last-child{border-right:0}
+.funnel{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font:500 12px var(--mono);margin:6px 0 10px}
+.funnel .n{font:700 16px var(--mono)}
+.funnel .arrow{color:var(--dim)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+
+/* B: flow view */
+.flow{display:grid;grid-template-columns:minmax(250px,.9fr) minmax(250px,1fr) minmax(320px,1.35fr) minmax(250px,.95fr);gap:12px;align-items:start}
+.col{background:var(--panel);border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
+.col-h{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center}
+.col-h .step{font:700 11px var(--mono);color:#04211a;background:var(--mint);border-radius:50%;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;flex:none}
+.col-b{padding:10px 12px}
+.file{font:12px/1.65 var(--mono);background:var(--canvas);border:1px solid var(--border);border-radius:var(--rs);padding:6px 0;overflow-x:auto}
+.ln{display:grid;grid-template-columns:14px 26px 1fr;gap:6px;padding:0 8px;white-space:pre}
+.ln .g{color:var(--dim);text-align:right}
+.ln.hit{background:rgba(242,109,109,.07)}
+.ln.hit1{background:rgba(245,177,76,.06)}
+.grp{margin-bottom:12px}
+.grp-h{display:flex;gap:8px;align-items:center;margin:4px 0 6px}
+.f{display:grid;grid-template-columns:38px 1fr auto;gap:8px;align-items:center;padding:7px 8px;border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;background:var(--surface)}
+.f .rid{font:500 12px var(--mono)}
+.f .line{font:12px var(--mono);color:var(--muted)}
+.f.sel{border-color:var(--mint);box-shadow:0 0 0 1px var(--mint) inset}
+.diff{border:1px solid var(--border);border-radius:var(--rs);margin-bottom:10px;background:var(--surface);overflow:hidden}
+.diff-h{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid var(--border)}
+.diff pre{margin:0;padding:6px 0;font:12px/1.6 var(--mono);overflow-x:auto;background:var(--canvas)}
+.diff pre span{display:block;padding:0 10px;white-space:pre}
+.diff .d{background:var(--del-bg);color:#f3a3a3}
+.diff .a{background:var(--add-bg);color:#9be8b9}
+.ov{display:flex;gap:6px;flex-wrap:wrap;padding:8px 10px;border-top:1px solid var(--border)}
+.ovrec{font:12px var(--sans);color:var(--muted);padding:8px 10px;border-top:1px dashed var(--border-strong);background:rgba(167,139,250,.05)}
+.ovrec b{color:var(--ink);font-weight:500}
+.edit{display:block;width:100%;font:12px var(--mono);background:var(--canvas);color:var(--ink);border:1px solid var(--mint);border-radius:4px;padding:6px 8px;margin-top:6px}
+.waive{display:grid;gap:6px;padding:8px 10px;border-top:1px solid var(--border)}
+.waive textarea{font:12px var(--sans);background:var(--canvas);color:var(--ink);border:1px solid var(--border-strong);border-radius:4px;padding:6px;min-height:44px;width:100%}
+.result{padding:14px;border-radius:var(--rs);background:rgba(88,214,138,.07);border:1px solid rgba(88,214,138,.35)}
+.big{font:700 28px var(--mono);color:var(--green)}
+
+/* C: packet */
+.packet{display:grid;gap:14px}
+.verdict{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px 14px;border-radius:var(--rs);background:rgba(88,214,138,.08);border:1px solid rgba(88,214,138,.4)}
+.verdict.invalid{background:rgba(242,109,109,.08);border-color:rgba(242,109,109,.45)}
+.sevbar{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.sevcell{border:1px solid var(--border);border-radius:var(--rs);padding:8px 10px;background:var(--surface)}
+.sevcell .num{font:700 20px var(--mono)}
+.sevcell .sub{font:12px var(--mono);color:var(--muted)}
+tr.p0 td:first-child{box-shadow:inset 3px 0 0 var(--p0)}
+tr.p1 td:first-child{box-shadow:inset 3px 0 0 var(--p1)}
+.ba{font:12px var(--mono)}
+.ba .b{color:#f3a3a3}.ba .x{color:#9be8b9}
+.prov{display:flex;gap:14px;flex-wrap:wrap;font:12px var(--mono);color:var(--muted);padding-top:10px;border-top:1px solid var(--border)}
+.two{align-items:start;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}.two>*,.flow>*{min-width:0}
+
+/* D: rules */
+.rules td input[type=text],.rules select{font:12px var(--mono);background:var(--canvas);color:var(--ink);border:1px solid var(--border-strong);border-radius:4px;padding:4px 6px}
+.toggle{width:30px;height:16px;border-radius:999px;background:var(--mint);position:relative;display:inline-block;vertical-align:middle}
+.toggle::after{content:"";position:absolute;right:2px;top:2px;width:12px;height:12px;border-radius:50%;background:#04211a}
+.toggle.off{background:var(--idle)}.toggle.off::after{left:2px;right:auto;background:var(--muted)}
+.guide{font:12px/1.5 var(--sans);color:var(--ink);background:var(--canvas);border:1px solid var(--border-strong);border-radius:4px;padding:6px 8px;min-height:36px}
+.guide.editing{border-color:var(--mint)}
+.lock{color:var(--amber);font:11px var(--mono)}
+
+@media (max-width:1100px){
+  .flow{grid-template-columns:1fr 1fr}
+}
+@media (max-width:760px){
+  .wrap{padding:16px 16px 60px}
+  .wp-head{grid-template-columns:1fr}
+  .story{grid-template-columns:1fr}
+  .story > div{border-right:0;border-bottom:1px solid var(--border)}
+  .flow{grid-template-columns:1fr}
+  .two{grid-template-columns:1fr}
+  .sevbar{grid-template-columns:repeat(2,1fr)}
+  .hide-sm{display:none}
+  h1{font-size:20px}
+  .kpis{gap:18px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="row" style="justify-content:space-between">
+  <div>
+    <div class="k" style="color:var(--purple)">Wireframe · validation &amp; review · v1 · 2026-11-21</div>
+    <h1>Lumen Pay → Northgate: what gwlint caught and how it was fixed</h1>
+    <p class="muted" style="margin:6px 0 0;max-width:820px">The gwlint data is real: <span class="mono">gwlint validate --json</span> and <span class="mono">--fix</span> were run on <span class="mono">examples/lumen-pay.bad.yaml</span>. The agent fixes and overrides show the target behaviour, which the current run does not yet produce.</p>
+  </div>
+</div>
+
+<!-- ============ A. WORK PANEL HEADER ============ -->
+<div class="screen-label">A · Work panel: header links + Built column</div>
+<section class="card">
+  <div class="wp-head">
+    <div>
+      <div class="row"><h2 style="font-size:20px">Lumen Pay tenant onboarding</h2></div>
+      <div class="row" style="margin-top:8px">
+        <span class="pill">Feature</span><span class="pill">API onboarding · v13</span>
+        <span class="pill" style="color:var(--amber);border-color:rgba(245,177,76,.5)"><span class="dot" style="background:var(--amber)"></span>Needs you</span>
+      </div>
+      <div class="wp-links" data-testid="wp-header-links">
+        <a href="#">↗ Workflow run #16<span class="new">NEW</span></a>
+        <a href="#">↗ Build crun_58aecc16<span class="new">NEW</span></a>
+        <a href="#">↗ Change #9</a>
+        <span class="muted mono" style="font-size:12px">ruleset northgate v3</span>
+      </div>
+      <p style="margin:12px 0 0"><b style="color:var(--amber)">Ready to merge.</b> <span class="muted">0 P0 open · 0 P1 open · 1 P2 waived.</span></p>
+      <div class="kpis">
+        <div><span>STARTED</span><b>12:27 AM</b></div><div><span>WAITING ON YOU</span><b>6 h 7 m</b></div>
+        <div><span>ELAPSED</span><b>25 m</b></div><div><span>COST</span><b>≈ $5.45</b></div><div><span>ATTEMPTS</span><b>3</b></div>
+      </div>
+    </div>
+    <div style="text-align:right">
+      <button class="btn primary">Merge change #9</button>
+      <div class="muted" style="font-size:12px;margin-top:6px">deploys to staging after</div>
+    </div>
+  </div>
+
+  <div class="story card" style="padding:0;background:var(--surface)">
+    <div>
+      <div class="k">1 · Asked</div>
+      <p style="margin:0;border-left:2px solid var(--border-strong);padding-left:10px">“Validate Lumen Pay’s tenant config (examples/lumen-pay.bad.yaml) with gwlint, fix what’s wrong, deploy it to staging, and run the contract test suite against it.”</p>
+    </div>
+    <div>
+      <div class="k">2 · Discussed</div>
+      <p class="dim" style="margin:0">No panel. It went straight to the build.</p>
+    </div>
+    <div data-testid="wp-built">
+      <div class="k">3 · Built <span class="dim">· build crun_58aecc16 (opened #9)</span></div>
+      <div class="funnel">
+        <span>gwlint</span><span class="n" style="color:var(--red)">9</span><span class="muted">found</span>
+        <span class="arrow">→</span><span class="kind auto">4 auto</span><span class="kind agent">3 agent</span><span class="kind human">1 you</span><span class="kind" style="color:var(--muted);background:rgba(141,154,181,.1)">1 waived</span>
+        <span class="arrow">→</span><span class="n" style="color:var(--green)">0</span><span class="muted">open</span>
+      </div>
+      <div class="chips" style="margin-bottom:10px">
+        <span class="sev P0">P0</span><span class="mono" style="font-size:12px">4 found · 0 open</span>
+        <span class="sev P1">P1</span><span class="mono" style="font-size:12px">4 found · 0 open</span>
+        <span class="sev P2">P2</span><span class="mono" style="font-size:12px">1 waived</span>
+      </div>
+      <table>
+        <tr><td class="muted" style="padding:4px 0">Contract</td><td class="mono" style="padding:4px 0;color:var(--green)">12 / 12 pass</td></tr>
+        <tr><td class="muted" style="padding:4px 0">Tests</td><td class="mono" style="padding:4px 0;color:var(--green)">go test ./... pass</td></tr>
+        <tr><td class="muted" style="padding:4px 0">Later builds</td><td style="padding:4px 0;font-size:12px">More tests (+172 test lines) · deferred review findings <span class="sev P1">P1</span> <a href="#">fixer.go:69</a></td></tr>
+      </table>
+      <a href="#B" style="display:inline-block;margin-top:8px;font-size:13px">See every fix →</a>
+    </div>
+  </div>
+  <div class="note">Removed: the coder’s <span class="mono">impl_summary</span> prose (“The implementation already correctly fixes F-273…”). The column reads the build that opened the change, never the newest follow-up. The ⋯ menu keeps only “What it learned” and “Copy ids”.</div>
+</section>
+
+<!-- ============ B. VALIDATION FLOW ============ -->
+<div class="screen-label" id="B">B · Change #9 › Validation tab: partner file → findings → fixes → re-run</div>
+<div class="row" style="margin-bottom:12px">
+  <span class="pill">validator <b style="color:var(--ink)">gwlint</b> 3b7747c</span>
+  <span class="pill">adapter gwlint-json</span>
+  <span class="pill">ruleset northgate v3</span>
+  <span class="grow"></span>
+  <button class="btn danger">↺ Revert all to partner’s original</button>
+</div>
+<div class="flow">
+
+  <!-- 1 partner file -->
+  <div class="col">
+    <div class="col-h"><span class="step">1</span><h3>Partner file</h3><span class="grow"></span><span class="mono dim" style="font-size:11px">sha 7c1e…</span></div>
+    <div class="col-b">
+      <div class="mono muted" style="font-size:12px;margin-bottom:8px">examples/lumen-pay.bad.yaml · from Lumen Pay · 37 lines</div>
+      <div class="file">
+<div class="ln hit1"><span class="dot" style="background:var(--p1);margin-top:6px"></span><span class="g">1</span><span>tenant: lumen-pay</span></div>
+<div class="ln"><span></span><span class="g">2</span><span>owner: "Lumen Pay Platform Team"</span></div>
+<div class="ln"><span></span><span class="g">4</span><span>tier: standard</span></div>
+<div class="ln"><span class="dot" style="background:var(--p2);margin-top:6px"></span><span class="g">5</span><span>data_classification: pii</span></div>
+<div class="ln"><span></span><span class="g">6</span><span>routes:</span></div>
+<div class="ln hit1"><span class="dot" style="background:var(--p1);margin-top:6px"></span><span class="g">7</span><span>  - path: /v1/payments</span></div>
+<div class="ln"><span></span><span class="g dim">⋮</span><span class="dim">  auth: type jwt, issuer, jwks_url…</span></div>
+<div class="ln hit"><span class="dot" style="background:var(--p0);margin-top:6px"></span><span class="g">17</span><span>      api_key: "sk_live_••••"</span></div>
+<div class="ln"><span></span><span class="g">18</span><span>    cors:</span></div>
+<div class="ln"><span></span><span class="g">19</span><span>      allow_origins: ["*"]</span></div>
+<div class="ln hit"><span class="dot" style="background:var(--p0);margin-top:6px"></span><span class="g">20</span><span>      allow_credentials: true</span></div>
+<div class="ln hit"><span class="dot" style="background:var(--p0);margin-top:6px"></span><span class="g">21</span><span>  - path: /v1/admin/accounts</span></div>
+<div class="ln"><span></span><span class="g dim">⋮</span><span class="dim">  …admin route body (L22–33)</span></div>
+<div class="ln"><span></span><span class="g">34</span><span>upstreams:</span></div>
+<div class="ln"><span></span><span class="g">35</span><span>  lumen-pay-core:</span></div>
+<div class="ln hit"><span class="dot" style="background:var(--p0);margin-top:6px"></span><span class="g">36</span><span>    url: "http://lumen-pay-…"</span></div>
+      </div>
+      <div class="mono dim" style="font-size:11px;margin-top:8px">The secret is masked before storage. gwlint reports the upstream URL at L35, the map key line.</div>
+    </div>
+  </div>
+
+  <!-- 2 findings -->
+  <div class="col">
+    <div class="col-h"><span class="step">2</span><h3>gwlint found 9</h3><span class="grow"></span><span class="mono" style="font-size:11px;color:var(--red)">exit 1</span></div>
+    <div class="col-b">
+      <div class="mono dim" style="font-size:11px;margin-bottom:10px">$ gwlint validate lumen-pay.yaml --json <span class="ref">E-1</span></div>
+      <div class="grp">
+        <div class="grp-h"><span class="sev P0">P0</span><span class="muted" style="font-size:12px">exposes data or credentials · blocks merge</span></div>
+        <div class="f sel"><span class="line">L17</span><div><div class="rid">no-inlined-secrets</div><span class="kind agent">agent</span></div><span class="st fixed">● fixed</span></div>
+        <div class="f"><span class="line">L20</span><div><div class="rid">cors-no-wildcard-with-credentials</div><span class="kind agent">agent</span></div><span class="st over">● overridden</span></div>
+        <div class="f"><span class="line">L21</span><div><div class="rid">no-sensitive-paths-exposed</div><span class="kind human">needs you</span></div><span class="st fixed">● fixed</span></div>
+        <div class="f"><span class="line">L35</span><div><div class="rid">upstream-https-required</div><span class="kind auto">auto</span></div><span class="st fixed">● fixed</span></div>
+      </div>
+      <div class="grp">
+        <div class="grp-h"><span class="sev P1">P1</span><span class="muted" style="font-size:12px">breaks availability or contract · blocks merge</span></div>
+        <div class="f"><span class="line">L1</span><div><div class="rid">tenant-rate-limit-required</div><span class="kind agent">agent</span></div><span class="st fixed">● fixed</span></div>
+        <div class="f"><span class="line">L7</span><div><div class="rid">rate-limit-required</div><span class="kind auto">auto</span></div><span class="st fixed">● fixed</span></div>
+        <div class="f"><span class="line">L7</span><div><div class="rid">request-size-capped</div><span class="kind auto">auto</span></div><span class="st fixed">● fixed</span></div>
+        <div class="f"><span class="line">L21</span><div><div class="rid">request-size-capped</div><span class="kind auto">auto</span></div><span class="st fixed">● fixed</span></div>
+      </div>
+      <div class="grp">
+        <div class="grp-h"><span class="sev P2">P2</span><span class="muted" style="font-size:12px">hygiene · does not block</span></div>
+        <div class="f"><span class="line">L5</span><div><div class="rid">pii-fields-declared</div><span class="kind agent">agent</span></div><span class="st waived">● waived</span></div>
+      </div>
+      <details style="font-size:12px"><summary class="muted" style="cursor:pointer">Why: no-inlined-secrets <span class="dim">(rules/api-guidelines.yaml)</span></summary>
+        <p style="margin:6px 0 0">A secret committed to a config repo is permanently compromised, because it stays in git history even after deletion.</p></details>
+    </div>
+  </div>
+
+  <!-- 3 fixes -->
+  <div class="col">
+    <div class="col-h"><span class="step">3</span><h3>Fixes, one per finding</h3><span class="grow"></span><span class="mono muted" style="font-size:11px">7 hunks · all explained</span></div>
+    <div class="col-b">
+
+      <div class="diff">
+        <div class="diff-h"><span class="sev P0">P0</span><span class="mono" style="font-size:12px">V-03 no-inlined-secrets · L17</span><span class="grow"></span><span class="kind agent">agent</span></div>
+        <pre><span class="d">-      api_key: "sk_live_••••"</span></pre>
+        <div class="mono dim" style="font-size:11px;padding:6px 10px">guide v3: route already authenticates with jwt → delete the key</div>
+        <div class="ov"><button class="btn mint">✓ Accept</button><button class="btn">Reject (revert hunk)</button><button class="btn">Edit line</button><button class="btn ghost">Waive…</button></div>
+      </div>
+
+      <div class="diff">
+        <div class="diff-h"><span class="sev P0">P0</span><span class="mono" style="font-size:12px">V-06 cors-no-wildcard-with-credentials · L19–20</span><span class="grow"></span><span class="st over">● overridden</span></div>
+        <pre><span class="d">-      allow_origins: ["*"]</span><span class="a">+      allow_origins: ["https://dashboard.lumenpay.example"]</span><span>       allow_credentials: true</span></pre>
+        <div class="ovrec">
+          <div><b>O-2 · Paramaguru</b> rejected the agent’s fix <span class="dim">(allow_credentials: false)</span> and edited the line by hand · 14:21</div>
+          <div style="margin-top:3px">Why: “Dashboard needs cookies. Partner named one origin in the brief.” <span class="ref">commit 9f2c1d0</span> <span class="ref">re-run E-4</span></div>
+        </div>
+        <div class="ov"><button class="btn">Edit again</button><button class="btn ghost">Reopen</button></div>
+      </div>
+
+      <div class="diff">
+        <div class="diff-h"><span class="sev P0">P0</span><span class="mono" style="font-size:12px">V-07 no-sensitive-paths-exposed · L21–33</span><span class="grow"></span><span class="kind human">needs you</span></div>
+        <pre><span class="d">-  - path: /v1/admin/accounts</span><span class="d">-    description: "Internal account admin surface…"</span><span class="d">-    …11 more lines</span></pre>
+        <div class="mono dim" style="font-size:11px;padding:6px 10px">ruleset: autofix = human (removing a route is a product decision)</div>
+        <div class="ovrec"><b>O-1 · Paramaguru</b> accepted the route removal · 14:19 <span class="ref">re-run E-3</span></div>
+      </div>
+
+      <div class="diff">
+        <div class="diff-h"><span class="sev P1">P1</span><span class="mono" style="font-size:12px">V-04 · V-05 rate-limit / size cap · L7</span><span class="grow"></span><span class="kind auto">auto · gwlint --fix</span></div>
+        <pre><span class="d">-  - path: /v1/payments</span><span class="a">+  - path: "/v1/payments"</span><span class="a">+    max_body_bytes: 1048576</span><span class="a">+    rate_limit:</span><span class="a">+      rps: 10</span><span class="a">+      burst: 10</span></pre>
+        <div class="ov"><button class="btn mint">✓ Accept</button><button class="btn">Reject (revert hunk)</button><button class="btn">Edit line</button></div>
+      </div>
+
+      <div class="diff">
+        <div class="diff-h"><span class="sev P0">P0</span><span class="mono" style="font-size:12px">V-09 upstream-https-required · L35</span><span class="grow"></span><span class="kind auto">auto</span></div>
+        <pre><span class="d">-    url: "http://lumen-pay-core.internal.example"</span><span class="a">+    url: "https://lumen-pay-core.internal.example"</span></pre>
+      </div>
+
+      <div class="diff">
+        <div class="diff-h"><span class="sev P2">P2</span><span class="mono" style="font-size:12px">V-02 pii-fields-declared · L5</span><span class="grow"></span><span class="st waived">● waived</span></div>
+        <div class="waive">
+          <div class="muted" style="font-size:12px">Waive reason <span class="dim">(required · recorded on the change)</span></div>
+          <textarea>No PII in query params; partner confirmed. Tracked in KAN-12.</textarea>
+          <div class="row"><span class="dim" style="font-size:11px">P2: no approver needed · P0 needs a second person</span><span class="grow"></span><button class="btn">Waive V-02</button></div>
+        </div>
+      </div>
+
+      <div class="mono dim" style="font-size:11px">+ V-01 tenant rate_limit (agent), V-08 size cap on removed route (auto)</div>
+    </div>
+  </div>
+
+  <!-- 4 rerun -->
+  <div class="col">
+    <div class="col-h"><span class="step">4</span><h3>Re-run</h3><span class="grow"></span><span class="mono" style="font-size:11px;color:var(--green)">exit 0</span></div>
+    <div class="col-b">
+      <div class="result">
+        <div class="row"><span class="big">0</span><span>open</span><span class="grow"></span><span class="mono muted" style="font-size:12px">1 waived</span></div>
+        <div class="mono dim" style="font-size:11px;margin-top:6px">$ gwlint validate lumen-pay.yaml --json<br>at head 9f2c1d0 · ruleset v3 · 1.2 s <span class="ref">E-4</span></div>
+      </div>
+      <div class="row" style="margin:10px 0 6px"><span class="dot" style="background:var(--mint);animation:none"></span><span class="muted" style="font-size:12px">Re-runs automatically after each override. Merge is disabled while a re-run is pending.</span></div>
+
+      <div class="k" style="margin-top:14px">Contract tests · staging 2.29.2.202</div>
+      <table>
+        <thead><tr><th>Case</th><th>Expect</th><th>Got</th><th>Covers</th></tr></thead>
+        <tbody>
+          <tr><td class="mono case">healthz</td><td class="mono">200</td><td class="mono" style="color:var(--green)">200</td><td></td></tr>
+          <tr><td class="mono case">payments_unauth ×10</td><td class="mono">401</td><td class="mono" style="color:var(--green)">401</td><td><span class="ref">auth</span></td></tr>
+          <tr><td class="mono case">payments_rate_limited_11th</td><td class="mono">429</td><td class="mono" style="color:var(--green)">429</td><td><span class="ref">V-04</span></td></tr>
+        </tbody>
+      </table>
+      <div class="mono" style="font-size:12px;color:var(--green);margin-top:8px">12 / 12 pass · 0.3–0.4 s each</div>
+      <div class="note">Each case lists the finding it proves. The 11th request returning 429 shows that the auto-added rate limit is in force.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ C. REVIEW PACKET ============ -->
+<div class="screen-label">C · Merge card / review packet v2 (replaces the one-sentence card)</div>
+<div class="two">
+<section class="card packet" data-testid="review-packet">
+  <div class="row"><span class="mono dim" style="font-size:12px">Control plane proposes · merge</span><span class="grow"></span><span class="mono dim" style="font-size:12px">packet v4 · head 9f2c1d0</span></div>
+  <h2>Merge change #9 · Lumen Pay tenant onboarding</h2>
+  <div class="verdict"><span class="dot" style="background:var(--green);width:10px;height:10px"></span><b>Ready</b><span class="muted">No P0 or P1 open · every claim has evidence</span></div>
+
+  <div class="sevbar">
+    <div class="sevcell"><span class="sev P0">P0</span><div class="num">0<span class="sub"> open</span></div><div class="sub">4 found · 3 fixed · 1 overridden</div></div>
+    <div class="sevcell"><span class="sev P1">P1</span><div class="num">0<span class="sub"> open</span></div><div class="sub">4 found · 4 fixed</div></div>
+    <div class="sevcell"><span class="sev P2">P2</span><div class="num">0<span class="sub"> open</span></div><div class="sub">1 waived</div></div>
+    <div class="sevcell"><span class="sev" style="color:var(--dim);border:1px solid var(--border)">P3</span><div class="num">0</div><div class="sub">—</div></div>
+  </div>
+
+  <div>
+    <div class="k">P0 / P1 · what changed vs the partner’s file</div>
+    <div class="scroll-x"><table>
+      <thead><tr><th>ID</th><th>Rule · line</th><th class="hide-sm">Partner → now</th><th>Fix</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr class="p0"><td class="mono">V-03</td><td class="mono">no-inlined-secrets · L17</td><td class="ba hide-sm"><span class="b">api_key: "sk_live_••••"</span> → <span class="x">(removed)</span></td><td><span class="kind agent">agent</span></td><td><span class="st fixed">● fixed</span></td></tr>
+        <tr class="p0"><td class="mono">V-06</td><td class="mono">cors-wildcard-creds · L19</td><td class="ba hide-sm"><span class="b">["*"]</span> → <span class="x">["https://dashboard.lumenpay.example"]</span></td><td><span class="kind human">you</span></td><td><span class="st over">● overridden</span> <span class="ref">O-2</span></td></tr>
+        <tr class="p0"><td class="mono">V-07</td><td class="mono">sensitive-path · L21</td><td class="ba hide-sm"><span class="b">/v1/admin/accounts</span> → <span class="x">(route removed)</span></td><td><span class="kind human">you</span></td><td><span class="st fixed">● fixed</span> <span class="ref">O-1</span></td></tr>
+        <tr class="p0"><td class="mono">V-09</td><td class="mono">upstream-https · L35</td><td class="ba hide-sm"><span class="b">http://</span> → <span class="x">https://</span></td><td><span class="kind auto">auto</span></td><td><span class="st fixed">● fixed</span></td></tr>
+        <tr class="p1"><td class="mono">V-01</td><td class="mono">tenant-rate-limit · L1</td><td class="ba hide-sm"><span class="b">(none)</span> → <span class="x">rps 50 · burst 50</span></td><td><span class="kind agent">agent</span></td><td><span class="st fixed">● fixed</span></td></tr>
+        <tr class="p1"><td class="mono">V-04</td><td class="mono">rate-limit · L7</td><td class="ba hide-sm"><span class="b">(none)</span> → <span class="x">rps 10 · burst 10</span></td><td><span class="kind auto">auto</span></td><td><span class="st fixed">● fixed</span></td></tr>
+        <tr class="p1"><td class="mono">V-05 V-08</td><td class="mono">request-size · L7, L21</td><td class="ba hide-sm"><span class="b">(none)</span> → <span class="x">1048576</span></td><td><span class="kind auto">auto</span></td><td><span class="st fixed">● fixed</span></td></tr>
+        <tr class="p1"><td class="mono">R-1</td><td class="mono">reviewer · fixer.go:69</td><td class="hide-sm" style="font-size:12px">--fix rewrites the tenant quota (a never-fix rule)</td><td><span class="kind" style="color:var(--muted)">follow-up</span></td><td><span class="st open">● deferred</span> <a href="#">#10</a></td></tr>
+      </tbody>
+    </table></div>
+  </div>
+
+  <div class="two" style="gap:10px">
+    <div>
+      <div class="k">Checks</div>
+      <table>
+        <tr><td class="mono">gwlint</td><td class="mono" style="color:var(--green)">9 → 0 open</td><td><span class="ref">E-4</span></td></tr>
+        <tr><td class="mono">go test ./...</td><td class="mono" style="color:var(--green)">pass</td><td><span class="ref">E-6</span></td></tr>
+        <tr><td class="mono">contract</td><td class="mono" style="color:var(--green)">12 / 12</td><td><span class="ref">C-1…12</span></td></tr>
+        <tr><td class="mono">security seat</td><td class="mono dim">not convened</td><td class="dim">lean</td></tr>
+      </table>
+    </div>
+    <div>
+      <div class="k">Overrides (3)</div>
+      <table>
+        <tr><td class="mono">O-1</td><td style="font-size:12px">accept V-07 · Paramaguru</td></tr>
+        <tr><td class="mono">O-2</td><td style="font-size:12px">reject+edit V-06 · Paramaguru</td></tr>
+        <tr><td class="mono">O-3</td><td style="font-size:12px">waive V-02 · “no PII in query params, KAN-12”</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div>
+    <div class="k">Open risks</div>
+    <div style="font-size:13px">CORS credentials kept for one dashboard origin <span class="ref">V-06</span> <span class="ref">O-2</span></div>
+    <div style="font-size:13px;margin-top:4px">Fixer can rewrite tenant quota (not hit by this file) <span class="ref">R-1</span></div>
+  </div>
+
+  <div class="prov"><a href="#">↗ Run #16</a><a href="#">↗ Build crun_58aecc16</a><a href="#">↗ Change #9</a><span>ruleset northgate v3 · a1b2c3d</span><span>14 facts</span></div>
+  <div class="row"><button class="btn mint">Approve and merge</button><button class="btn danger">Keep blocked</button><span class="grow"></span><span class="mono dim" style="font-size:11px">Request changes · hand to someone else</span></div>
+</section>
+
+<section class="card packet" data-testid="review-packet-invalid">
+  <div class="row"><span class="mono dim" style="font-size:12px">Same card when the packet fails validation (what the run would show today)</span></div>
+  <h2>Merge change #9 · Lumen Pay tenant onboarding</h2>
+  <div class="verdict invalid"><span class="dot" style="background:var(--red);width:10px;height:10px"></span><b style="color:var(--red)">Packet invalid</b><span class="muted">2 problems · merge disabled</span></div>
+  <table>
+    <thead><tr><th>Check</th><th>Problem</th></tr></thead>
+    <tbody>
+      <tr class="p0"><td class="mono">input_substituted</td><td style="font-size:13px">The target file equals the repo’s <span class="mono">config/tenants/lumen-pay.yaml</span>, not the partner’s file (sha 7c1e…).</td></tr>
+      <tr class="p0"><td class="mono">claim_without_evidence</td><td style="font-size:13px">Commit message says “--fix applied”, but the step recorded no <span class="mono">fixes[]</span> and no gwlint run.</td></tr>
+      <tr><td class="mono">counts</td><td style="font-size:13px" class="muted">gwlint before: missing · after: missing</td></tr>
+    </tbody>
+  </table>
+  <div class="note">Built only from typed step outputs. No paragraph is generated and nothing falls back to prose. A claim must cite a finding, evidence or override id, or the packet is rejected.</div>
+  <div class="row"><button class="btn mint">Rebuild packet</button><button class="btn" disabled>Approve and merge</button><button class="btn danger">Request changes</button></div>
+
+  <div style="margin-top:8px">
+    <div class="k">Today, for comparison</div>
+    <p class="dim" style="font-size:12px;margin:0;border-left:2px solid var(--idle);padding-left:10px">“Approve the code change “Follow-up: deferred review findings — Follow-up: More tests — Validate tenant config with gwlint”. Change set #9 is open in BOSS with the full diff to review. Automated checks: passed, No hosted CI… Based on kgn_a49175af0ee44a07a1fd, kgn_4d4e2e9f92e54144a107, …”</p>
+  </div>
+</section>
+</div>
+
+<!-- ============ D. RULES & GUIDES ============ -->
+<div class="screen-label">D · Project › Settings › Validators › gwlint ruleset</div>
+<section class="card">
+  <div class="row" style="margin-bottom:12px">
+    <h2>Ruleset northgate</h2><span class="pill">v3 · a1b2c3d · merged Nov 20 by Paramaguru</span>
+    <span class="grow"></span>
+    <span class="mono muted" style="font-size:12px">.boss/rulesets/northgate.yaml</span>
+    <button class="btn">History</button><button class="btn mint">Propose v4 (opens a change)</button>
+  </div>
+  <div class="scroll-x"><table class="rules">
+    <thead><tr><th>On</th><th>Rule</th><th>Level</th><th>Auto-fix</th><th style="min-width:280px">Guide the fixing agent follows</th></tr></thead>
+    <tbody>
+      <tr><td><span class="toggle"></span></td><td class="mono">no-inlined-secrets</td><td><select><option>P0</option></select></td><td><select><option>never</option></select></td><td><div class="guide">Delete the key if the route already authenticates another way; otherwise use api_key_secret_ref: vault://&lt;tenant&gt;/&lt;name&gt;.</div></td></tr>
+      <tr><td><span class="toggle"></span></td><td class="mono">cors-no-wildcard-with-credentials</td><td><select><option>P0</option></select></td><td><select><option>agent</option></select></td><td><div class="guide editing">Default to allow_credentials: false. Keep credentials only if the brief names exact origins.▍</div><div class="mono" style="font-size:11px;color:var(--amber);margin-top:4px">edited · will ship in v4</div></td></tr>
+      <tr><td><span class="toggle"></span></td><td class="mono">no-sensitive-paths-exposed</td><td><select><option>P0</option></select></td><td><select><option>human</option></select></td><td><div class="guide dim">Removing a route is a product decision; propose removal, a person accepts.</div></td></tr>
+      <tr><td><span class="toggle"></span></td><td class="mono">upstream-https-required</td><td><select><option>P0</option></select></td><td><select><option>mechanical</option></select></td><td><div class="guide dim">(gwlint --fix)</div></td></tr>
+      <tr><td><span class="toggle"></span></td><td class="mono">tenant-rate-limit-required</td><td><select><option>P1</option></select></td><td><select><option>agent</option></select></td><td><div class="guide">rps 50, burst 50 unless the brief names a quota.</div></td></tr>
+      <tr><td><span class="toggle"></span></td><td class="mono">rate-limit-required</td><td><select><option>P1</option></select></td><td><select><option>mechanical</option></select></td><td><div class="guide dim">(gwlint --fix)</div></td></tr>
+      <tr><td><span class="toggle off"></span></td><td class="mono dim">public-route-no-auth-block</td><td><select><option>P0</option></select></td><td><select><option>never</option></select></td><td><span class="mono" style="font-size:11px;color:var(--amber)">disabled → findings shown as “suppressed”</span></td></tr>
+      <tr><td><span class="toggle"></span></td><td class="mono">pii-fields-declared</td><td><select><option>P2</option></select></td><td><select><option>agent</option></select></td><td><div class="guide">List query params that carry personal data; ask the partner if unknown.</div></td></tr>
+      <tr><td><span class="toggle"></span></td><td><span class="mono">lumen-no-refund-without-schema</span><div><span class="kind agent">custom · agent-checked</span></div></td><td><select><option>P1</option></select></td><td><select><option>agent</option></select></td><td><div class="guide">A POST route under /v1/payments/refunds must declare request_schema.</div><div class="mono dim" style="font-size:11px;margin-top:4px">not executed by gwlint · applied by an agent reviewer</div></td></tr>
+    </tbody>
+  </table></div>
+  <div class="row" style="margin-top:12px">
+    <button class="btn">+ Add custom rule guide</button>
+    <span class="lock">🔒 Lowering a P0, or allowing auto-fix on one, needs a second approver</span>
+    <span class="grow"></span>
+    <span class="muted" style="font-size:12px">Who can change: <b style="color:var(--ink)">policy:manage</b> · why/fix text comes from rules/api-guidelines.yaml</span>
+  </div>
+</section>
+
+</div>
+</body>
+</html>
