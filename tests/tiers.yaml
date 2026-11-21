@@ -32,6 +32,17 @@ P0:
     - engine/tests/test_identity_f1_sandbox_boundary.py
     - engine/tests/test_sandbox_network_fence.py
     - engine/tests/test_a_build_fans_out_inside_its_sandbox.py
+    # The enterprise install lane, tier 1 (docs/community/ENTERPRISE_NETWORK.md): the one settings
+    # block and every consumer of it, no credential in a build argument, the extra CA trusted at
+    # build and run time against a real private-CA TLS server, no TLS-off switch, the fence's
+    # private/port/additive rules and its named refusals, the proxy chain, the installer's TLS and
+    # credential-helper checks, and a stopped Docker runtime on a Mac. No Docker, no network.
+    - engine/tests/test_enterprise_network.py
+    - engine/tests/test_egress_enterprise_fence.py
+    - scripts/tests/test_build_network.py
+    - scripts/tests/test_runtime_extra_ca.py
+    - scripts/tests/test_installer_enterprise_network.py
+    - scripts/tests/test_installer_macos_runtime.py
     # Build pipeline happy path. test_code_task_service.py was an empty file (pytest
     # "no tests ran"), which the P0 gate treated as a finished run (BOSSAPP-972).
     - engine/tests/test_a_build_proves_its_app_runs.py
