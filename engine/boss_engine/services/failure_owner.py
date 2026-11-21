@@ -1748,6 +1748,11 @@ EXEMPT: dict[str, str] = {
     "project_onboarding_runs": "onboarding ends needs_you with its own setup card (needs.setup_cards)",
     "task_copies": "a copy to an external tracker; ticket_sync retries it with backoff",
     "agent_conversation_turns": "one chat turn; the person sees the error in their thread and asks again",
+    # chat_turns.py (#267): a turn of the person's own chat with an agent. Its failure line in
+    # THEIR thread is the hand-over — the person who asked owns it and asks again; there is no
+    # work of BOSS's to re-run behind it (the same rule as agent_conversation_turns).
+    "agent_chat_turns": "one turn of a person's own chat; its failure line in their thread is "
+                        "the hand-over, and the person who asked owns it and asks again",
     "agent_runs": "a kernel agent run; its job (Jobs) or work item owns it",
     "agent_wakeups": "a timer for an agent; the agent's work item owns it",
     "webhook_deliveries": "an outbound webhook; delivered with backoff and dead-lettered as a job",
