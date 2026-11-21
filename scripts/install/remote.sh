@@ -506,6 +506,13 @@ cmd_update() {
   # build. "recreate-ca-mount": it replaced a directory there, so the services mounting it are
   # force-recreated below whatever was rebuilt.
   local finalize_out CA_RECREATE=0
+  # A shipped tree without the finalize is a tree problem, not refused settings: say so, with its
+  # own exit code (3), before anything is built.
+  if ! rshq "[ -f '$DIR/engine/boss_engine/services/enterprise_network.py' ]"; then
+    rsh "rm -f '$DIR/$next_env'"
+    printf "\n  ${R}✗ %s${N}\n\n" "this BOSS tree has no enterprise_network.py; update the tree first (previous source remains at $DIR.prev)" >&2
+    exit 3
+  fi
   finalize_out="$(rsh "cd '$DIR' && python3 engine/boss_engine/services/enterprise_network.py finalize '$next_env' --previous .env")" \
     || { rsh "rm -f '$DIR/$next_env'"; die "the enterprise network settings on $HOST were refused (above); previous source remains at $DIR.prev"; }
   case "$finalize_out" in *recreate-ca-mount*) CA_RECREATE=1 ;; esac
