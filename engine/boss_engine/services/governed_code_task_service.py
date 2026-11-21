@@ -4576,6 +4576,13 @@ def escalation_reached_a_stronger_lane(before: Optional[dict], after: Optional[d
     return (left.get("engine"), left.get("model")) != (right.get("engine"), right.get("model"))
 
 
+def existing_suite_stands(app_tests: list[str]) -> list[str]:
+    """The test files a build keeps as its oracle when its test author wrote none: the app's
+    own pre-existing suite (in the app's scope), unchanged. Empty when the app has no tests —
+    then, and only then, "no test files" is a real failure."""
+    return [str(p) for p in (app_tests or []) if str(p).strip()]
+
+
 def write_tests_exhausted_message(*, stronger_lane: bool) -> str:
     """What the operator reads when the test author wrote nothing.
 
@@ -8242,6 +8249,22 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                         "engine"),
                                     "model": (stage_routes.get("write_tests") or {}).get(
                                         "model")})
+            if not test_files and _app_tests:
+                # THE APP'S OWN SUITE STANDS when the test author, given its stronger retry,
+                # still judged no new test file was needed — the repair rule above, for every
+                # build. Laptop 2026-11-21: "Validate tenant config with gwlint" on a Go repo
+                # whose gwlint tests already cover validate/--fix wrote no file twice, and the
+                # build FAILED as needs_human ("is this repo set up with a test framework?") — a
+                # question about a repo that has one. The suite must still pass and every review
+                # still runs; only an app with NO tests at all fails here.
+                test_files = existing_suite_stands(_app_tests)
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.tests_reused", "boss",
+                               "code_task_run", run_id,
+                               {"step": "write_tests",
+                                "reason": "author_wrote_none_existing_suite_stands",
+                                "existing_tests": len(_app_tests),
+                                "note": "the app's existing suite is the oracle for this build"})
             # THE TEST BUDGET, COUNTED BY BOSS (test_budget). The prompt states the cap; a suite
             # that is still over gets ONE trim turn on the test author's own warm session, and
             # what remains over is recorded on the build, never passed silently.

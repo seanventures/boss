@@ -46,3 +46,17 @@ def test_the_write_tests_failure_uses_that_message():
     assert "write_tests_exhausted_message(" in source
     assert "escalation_reached_a_stronger_lane(" in source
     assert 'reason": "no_stronger_lane"' in source or "no_stronger_lane" in source
+
+
+def test_an_app_with_its_own_suite_keeps_it_when_the_author_writes_none():
+    """Laptop 2026-11-21: a gwlint task on a Go repo that already tests gwlint wrote no new test
+    file twice and failed needs_human. The app's own suite stands; only an app with no tests
+    fails for 'no test files'."""
+    assert g.existing_suite_stands(["cmd/gwlint/validate_test.go"]) == \
+        ["cmd/gwlint/validate_test.go"]
+    assert g.existing_suite_stands([]) == []
+    source = inspect.getsource(g._run_governed_code_task)
+    reuse = source.index("author_wrote_none_existing_suite_stands")
+    fail = source.index('reason_code="no_test_files"')
+    assert reuse < fail, "the existing suite is kept before 'no test files' can fail the build"
+    assert "existing_suite_stands(_app_tests)" in source
