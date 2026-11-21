@@ -232,7 +232,7 @@ def test_a_change_opened_with_failing_checks_is_never_ready(engine, project):
     row = _row(engine, project, got["run_id"])
     mp = row["links"]["merge_pr"]
     assert mp["checks_failing"] == {"gates": ["security_clean", "tests_pass"], "security": True,
-                                    "words": "“Security clean”, “Tests pass”"}
+                                    "words": "security, tests"}
     # Merge stays the person's action; Review & tests is red, not a tick.
     assert row["action_label"] == "Merge"
     assert {s["key"]: s["state"] for s in row["stages"]}["review"] == "failed"
@@ -250,4 +250,16 @@ def test_passing_checks_say_nothing_about_failing(engine, project):
         got = _seed(db, project, more_status="completed")
     row = _row(engine, project, got["run_id"])
     assert row["links"]["merge_pr"]["checks_failing"] is None
+    assert {s["key"]: s["state"] for s in row["stages"]}["review"] != "failed"
+
+
+def test_a_later_attempt_still_fixing_failing_checks_is_boss_at_work(engine, project):
+    """Checks failing while a later attempt still fixes the same change: the record still says
+    which checks failed (the panel names them), and Review & tests is BOSS at work, not red."""
+    with engine.begin() as db:
+        got = _seed(db, project, card_checks=CHECKS, more_status="running")
+    row = _row(engine, project, got["run_id"])
+    mp = row["links"]["merge_pr"]
+    assert mp["fixing"] is not None
+    assert mp["checks_failing"]["words"] == "security, tests"
     assert {s["key"]: s["state"] for s in row["stages"]}["review"] != "failed"

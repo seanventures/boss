@@ -9,10 +9,12 @@
  * built, tested and reviewed." with Review & tests green. Now the engine carries the card's own
  * record into the Work row (merge_pr.checks_failing) and every Work surface reads it:
  *
- *   - the row's / drawer's next step says "checks failing (…)" and Merge stays the button, going
- *     to the merge card that takes the reason;
+ *   - the row's / drawer's next step says "2 checks not met: security, tests" and Merge stays the
+ *     button, going to the merge card that takes the reason;
  *   - the panel's header says "Checks failing.", red, never "built, tested and reviewed";
- *   - Review & tests is red with "Your move";
+ *   - Review & tests is red and names the checks not met; the Merge node says the reason is needed;
+ *   - a gate is named as the check it is ("review"), never its pass-label ("Review passed"),
+ *     which beside "failing" read as a success (operator, 2026-11-21);
  *   - Helm's first question is "Why are the checks failing?".
  */
 import React from "react";
@@ -37,7 +39,7 @@ const CARD_RECORD = {
   findings: [], security: true, draft: true, label: "checks failing",
 };
 /** What the engine's work.py sends for the same record (checks_failing.for_work). */
-const WORK_RECORD = { gates: ["security_clean", "tests_pass"], security: true, words: "“Security clean”, “Tests pass”" };
+const WORK_RECORD = { gates: ["security_clean", "tests_pass"], security: true, words: "security, tests" };
 const RAW = {
   id: "wfr_recipes", label: "Recipe tags", title: "Recipe tags", kind: "feature", workflow: "Minor Feature",
   state: "needs_you", age: "1h", action_label: "Merge", created_at: "2026-11-20T09:00:00Z", updated_at: "2026-11-20T09:40:00Z",
@@ -69,7 +71,7 @@ describe("the Work row's next step", () => {
   it("says checks failing and keeps Merge, at the merge card that takes the reason", async () => {
     const { workNextStep } = await import("../lib/work-next-step");
     const next = workNextStep(await load())!;
-    expect(next.words).toBe("Change #3 is open · checks failing (“Security clean”, “Tests pass”)");
+    expect(next.words).toBe("Change #3 is open · 2 checks not met: security, tests");
     expect(next.words).not.toMatch(/ready/i);
     expect(next.kind).toBe("merge");
     expect(next.label).toBe("Merge change #3");
@@ -93,11 +95,49 @@ describe("the Work panel", () => {
     const w = await load();
     const next = workNextStep(w);
     expect(stateSentence(w, next)).toEqual({ lead: "Checks failing.", tone: "red",
-      rest: "Change #3 opened with failing checks: “Security clean”, “Tests pass”. Merging needs your reason." });
-    const review = flowNodes({ w, story: null, next }).find((n) => n.key === "review")!;
+      rest: "Change #3 is open with 2 checks not met: security, tests. Merging needs your reason." });
+    const nodes = flowNodes({ w, story: null, next });
+    const review = nodes.find((n) => n.key === "review")!;
     expect(review.state).toBe("failed");
-    expect(review.note).toMatchObject({ tone: "you", title: "Your move", text: "“Security clean”, “Tests pass”" });
+    expect(review.note).toMatchObject({ tone: "you", title: "Checks failing", text: "2 checks not met: security, tests" });
+    // The person's move is said once, on Merge, and does not repeat the list.
+    expect(nodes.find((n) => n.key === "merge")!.note).toMatchObject({ title: "Your move", text: "Merging needs your reason" });
     expect(helmSuggestions(w)[0]).toBe("Why are the checks failing?");
+  });
+
+  it("names each check, never a pass-label that reads as a success", async () => {
+    const { checksNotMet } = await import("../lib/work-next-step");
+    const one = { gates: ["code_review_passed"], security: false, words: "review" };
+    expect(checksNotMet(one)).toBe("1 check not met: review");
+    const three = { gates: ["code_review_passed", "consistent", "acceptance_met"], security: false,
+                    words: "review, consistency, must-haves" };
+    expect(checksNotMet(three)).toBe("3 checks not met: review, consistency, must-haves");
+    const { stateSentence, flowNodes } = await import("../lib/work-panel");
+    const { workNextStep } = await import("../lib/work-next-step");
+    const w = await load({ links: { ...RAW.links, merge_pr: { ...RAW.links.merge_pr, checks_failing: three } } });
+    const next = workNextStep(w)!;
+    const said = [next.words, stateSentence(w, next).rest,
+                  ...flowNodes({ w, story: null, next }).map((n) => n.note?.text ?? "")].join(" ");
+    expect(said).not.toMatch(/passed|“|Consistent|Must-haves met/);
+  });
+
+  it("a fix still running over failing checks never says built and reviewed", async () => {
+    const { stateSentence } = await import("../lib/work-panel");
+    const { workNextStep } = await import("../lib/work-next-step");
+    const w = await load({ links: { ...RAW.links, merge_pr: { ...RAW.links.merge_pr,
+      fixing: { attempt: "crun_2", label: "Follow-up 1", state: "running", since: "2026-11-20T09:41:00Z", findings: 2 } } } });
+    const said = stateSentence(w, workNextStep(w));
+    expect(said.rest).toBe("Change #3 is open with 2 checks not met: security, tests; BOSS is still fixing it in Follow-up 1.");
+  });
+
+  it("checks failing leads over no must-have met, as on the row", async () => {
+    const { stateSentence } = await import("../lib/work-panel");
+    const { workNextStep } = await import("../lib/work-next-step");
+    const w = await load({ links: { ...RAW.links, merge_pr: { ...RAW.links.merge_pr,
+      acceptance: { met: 0, partial: 2, missing: 1, total: 3 } } } });
+    const next = workNextStep(w)!;
+    expect(next.words).toContain("checks not met");
+    expect(stateSentence(w, next).lead).toBe("Checks failing.");
   });
 
   it("an older engine without the record but with a failed station never says built, tested and reviewed", async () => {

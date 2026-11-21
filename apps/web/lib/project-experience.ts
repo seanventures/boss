@@ -639,13 +639,14 @@ export function logOfBuild(build: string): string {
   return `${path}?${q.toString()}`;
 }
 /** A change opened with its checks failing, as the Work row reads it: the gate keys, whether a
- *  security gate is among them, and their names in words ("Security clean, Tests pass"). */
+ *  security gate is among them, and each named as the check it is ("security, review": engine
+ *  factory_view.gate_noun, never the pass-label "Review passed", which reads as a success). */
 export type ChecksFailingWork = { gates: string[]; security: boolean; words: string };
 export function parseChecksFailingWork(v: unknown): ChecksFailingWork | null {
   const c = o(v);
   const gates = a(c.gates).map((g) => (typeof g === "string" ? g : s(o(g).gate))).filter(Boolean);
   if (!gates.length) return null;
-  return { gates, security: c.security === true, words: s(c.words) || gates.join(", ") };
+  return { gates, security: c.security === true, words: s(c.words) || gates.map((g) => g.replace(/_/g, " ")).join(", ") };
 }
 export const parseWorkItem = (v: unknown): WorkItem => {
   const x = o(v); const l = o(x.links); const pr = o(l.pr); const mp = o(l.merge_pr); const md = o(l.merged_pr);

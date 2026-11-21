@@ -15,13 +15,20 @@
  *   - no must-have fully met (merge_pr.acceptance.met == 0): never "Ready to merge"; it says
  *     what is partial ("0 of 4 must-haves met, 4 partly").
  *   - opened with its checks failing (merge_pr.checks_failing, the record its merge card shows):
- *     "Change #3 is open · checks failing (Tests pass)". Merge stays the button and goes to the
+ *     "Change #3 is open · 2 checks not met: security, tests". Merge stays the button and goes to the
  *     merge card, which takes the person's reason (a forced merge, never a silent one).
  *
  * Precedence: failed > fixing > checks failing > no must-have met > follow-ups.
  */
 import { changeHref, changeRef, isLocalChangeUrl } from "./repo-links";
-import type { WorkItem } from "./project-experience";
+import type { ChecksFailingWork, WorkItem } from "./project-experience";
+
+/** "3 checks not met: review, consistency, must-haves" — the one phrase the Work row, the
+ *  panel's header and its Review & tests node all use for a change opened with failing checks. */
+export function checksNotMet(c: ChecksFailingWork): string {
+  const n = c.gates.length;
+  return `${n} check${n === 1 ? "" : "s"} not met: ${c.words}`;
+}
 
 export type NextStep = {
   kind: "merge" | "decide";
@@ -80,7 +87,7 @@ export function workNextStep(w: Pick<WorkItem, "state" | "links" | "action_label
     const failing = mp.checks_failing ?? null;
     const words = mp.failed ? `Merge failed: ${mp.failed}`
       : fix ? `BOSS is fixing ${fix.findings ? `${fix.findings} finding${fix.findings === 1 ? "" : "s"}` : "it"} on ${ref} — merge now or wait`
-      : failing ? `${Ref} is open · checks failing (${failing.words})`
+      : failing ? `${Ref} is open · ${checksNotMet(failing)}`
       : noneMet ? `${Ref} is open · ${mustHaveWords(acc!)}`
       : mp.follow_up_of ? `Follow-up fix after #${mp.follow_up_of} · ready to merge`
       : mp.followups?.words ? `Ready to merge · ${mp.followups.words}` : "Ready to merge";

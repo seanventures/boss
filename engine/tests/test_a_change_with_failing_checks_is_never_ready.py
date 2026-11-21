@@ -42,7 +42,9 @@ def test_merge_links_carry_the_failing_gates_in_words_security_first():
     assert got["number"] == 3
     assert got["checks_failing"]["gates"] == ["security_clean", "tests_pass"]
     assert got["checks_failing"]["security"] is True
-    assert got["checks_failing"]["words"].startswith("“Security")
+    # Each gate named as the check it is, security first; never a pass-label ("Tests pass")
+    # that beside "failing" reads as a success.
+    assert got["checks_failing"]["words"] == "security, tests"
     # Stored JSON text reads the same way.
     merge = _merge(json.dumps(CARD))
     assert work._merge_links([merge], merge)["merge_pr"]["checks_failing"] == got["checks_failing"]  # noqa: SLF001
@@ -79,3 +81,13 @@ def test_review_station_is_left_alone_when_nothing_fails_or_a_fix_runs():
     assert work._checks_failing_review(STRIP, {"checks_failing": None}) == STRIP  # noqa: SLF001
     fixing = {"checks_failing": checks_failing.for_work(CARD), "fixing": {"attempt": "crun_2"}}
     assert work._checks_failing_review(STRIP, fixing) == STRIP  # noqa: SLF001
+
+
+def test_a_gate_is_named_as_the_check_never_its_pass_label():
+    got = checks_failing.for_work(
+        {"gates": ["code_review_passed", "consistent", "acceptance_met"]})["words"]
+    assert got == "review, consistency, must-haves"
+    assert "passed" not in got
+    from boss_engine.services.factory_view import gate_noun
+    assert gate_noun("iac_vpc_flow") == "infra: vpc flow"
+    assert gate_noun("some_new_gate_passes") == "some new gate"
