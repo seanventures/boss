@@ -69,3 +69,14 @@ def test_a_script_and_a_missing_route_keep_the_app_s_own_404(client, api_preview
     assert fetched.status_code == 404 and "x-boss-preview-landing" not in fetched.headers
     missing = client.get(f"/v1/previews/{api_preview}/web/orders/7", headers=PAGE)
     assert missing.status_code == 404 and "x-boss-preview-landing" not in missing.headers
+
+
+@pytest.mark.parametrize("unknown", ["prv_doesnotexist0", "*", "prv_*"])
+def test_a_preview_that_does_not_exist_gets_a_plain_404_not_a_landing(client, unknown):
+    """The gateway's own "preview not found" is not an app's answer: no "preview is running"
+    page for an id nobody started, and nothing about it is remembered."""
+    got = client.get(f"/v1/previews/{unknown}/web/", headers=PAGE)
+    assert got.status_code == 404
+    assert "x-boss-preview-landing" not in got.headers
+    assert "This app is an API" not in got.text
+    assert unknown not in preview_landing._CACHE

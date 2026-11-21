@@ -4608,7 +4608,8 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
                   incoming_headers: Optional[dict] = None,
                   app_cookie_header: Optional[str] = None,
                   serve_at_root: bool = False,
-                  public_scheme: str = "http"):
+                  public_scheme: str = "http",
+                  timeout: float = 25):
     """Reverse-proxy a request to a running preview's loopback port → (status, content_type, bytes,
     headers). Only the api can reach the preview's 127.0.0.1 port, so this exposes it via the api's
     own (tailnet-routed) URL. HTML responses get the root-relative path-rewrite shim.
@@ -4669,7 +4670,7 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
                  b"This preview's answer is too large to show (over BOSS_PREVIEW_MAX_BODY_MB "
                  b"once decoded).", {})
     try:
-        resp = urllib.request.build_opener(_NoRedirect()).open(req, timeout=25)
+        resp = urllib.request.build_opener(_NoRedirect()).open(req, timeout=timeout)
         status = resp.status
         ctype = resp.headers.get("Content-Type", "application/octet-stream")
         data, encoding = _plain_body(resp.read(), resp.headers.get("Content-Encoding"))

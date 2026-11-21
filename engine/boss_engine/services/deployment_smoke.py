@@ -219,8 +219,14 @@ def smoke_deployment(connection: Connection, settings: Any, engine: Any, *,
     declared = declared_health(manifest_text) if manifest_text else []
     port = _app_port(target, default=0) or None
     scheme = next((str(c.get("scheme")) for c in checks if c.get("scheme")), "http")
-    seen = {(str(c.get("path") or "/"), int(c.get("expect_status") or c.get("expect") or 200))
-            for c in checks}
+    from urllib.parse import urlsplit
+
+    from .deployment_connectors import _expected_status
+
+    # Keyed on the PATH whichever shape declared it: a `{url, expected_status}` check names its
+    # path inside the URL, and keying on `path` alone let it duplicate a manifest check.
+    seen = {(str(c.get("path") or (urlsplit(str(c["url"])).path if c.get("url") else "") or "/"),
+             _expected_status(c)) for c in checks}
     for check in declared:
         key = (check["path"], check["expect_status"])
         if key not in seen:
