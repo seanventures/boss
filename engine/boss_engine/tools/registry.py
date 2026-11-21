@@ -787,6 +787,25 @@ def trusted_step_arg(name: str, default: Any = None) -> Any:
 TOOL_ROUTER_KEY = "mcp"
 
 
+#: The detail of a refusal made because the call carried NO verified identity at all.
+NO_IDENTITY_DETAIL = "no verified identity on this tool call"
+
+
+def not_evaluated_words(tool: str, detail: Any) -> str:
+    """What a NOT_EVALUATED refusal says. Never "permission missing": nothing was decided.
+
+    Only a call with truly no verified identity is told its identity is unavailable. Anything
+    else that left the permission undecided (the permission check itself raised) is BOSS's own
+    failure, said as such, so nobody goes looking for a grant that was never the problem."""
+    if str(detail or "") == NO_IDENTITY_DETAIL:
+        return (f"Cannot authorize '{tool}': verified identity is unavailable. Restore the "
+                "caller's scoped run identity before retrying; this does not establish that a "
+                "Passport permission is missing.")
+    return (f"Cannot authorize '{tool}': BOSS could not evaluate this permission (an internal "
+            "error in BOSS's permission check). This is BOSS's failure, not a missing grant; "
+            "nothing needs to be granted.")
+
+
 def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str],
                   args: Optional[dict] = None) -> Optional[dict]:
     """Decide one tool call (IDENTITY.md §6.4). Returns None to proceed, or the refusal result.
@@ -822,13 +841,13 @@ def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str],
             return None
         outcome = Outcome(False, DenyReason.NOT_EVALUATED, permission or "route",
                           f"tool:{getattr(spec, 'name', '?')}",
-                          detail="no verified identity on this tool call")
+                          detail=NO_IDENTITY_DETAIL)
     elif permission not in PERMISSION_META:
         outcome = Outcome(False, DenyReason.UNDECLARED_ROUTE, permission, "undeclared",
                           detail="tool declares no catalogue permission")
     elif auth is None:
         outcome = Outcome(False, DenyReason.NOT_EVALUATED, permission, f"tool:{permission}",
-                          detail="no verified identity on this tool call")
+                          detail=NO_IDENTITY_DETAIL)
     else:
         meta = PERMISSION_META[permission]
         org = auth.principal.org_id
@@ -880,7 +899,9 @@ def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str],
         return None
     body = outcome.error_body()
     needs = outcome.permission or permission
-    if outcome.reason == DenyReason.NOT_FOUND:
+    if outcome.reason == DenyReason.NOT_EVALUATED:
+        message = not_evaluated_words(getattr(spec, "name", "?"), getattr(outcome, "detail", ""))
+    elif outcome.reason == DenyReason.NOT_FOUND:
         message = (f"'{getattr(spec, 'name', '?')}': an id in the arguments names nothing in this "
                    "project.")
     else:

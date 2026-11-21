@@ -1089,7 +1089,7 @@ def agent_of(connection: Connection, project_id: str, step: Mapping[str, Any]) -
     return {"role": role, "name": str(name or row["display_name"] or role)}
 
 
-def _read_tools(connection: Connection, settings: Any, project_id: str
+def _read_tools(connection: Connection, settings: Any, project_id: str, scope: Any = None
                 ) -> tuple[Optional[list[dict[str, Any]]], Optional[Callable[[str, dict], dict]]]:
     """BOSS's fundamentals READS every agent holds (logs, run history, diagnoses, config, code,
     the deployments and hosts) — the pre-check agent's set, read-only. None when unavailable:
@@ -1098,7 +1098,7 @@ def _read_tools(connection: Connection, settings: Any, project_id: str
         from ..context import EngineContext
         from .workflow_precheck_agent import read_tools
 
-        schemas, run = read_tools(settings)
+        schemas, run = read_tools(settings, scope=scope)
         ctx = EngineContext(settings=settings, engine=getattr(connection, "engine", None))
         return schemas, (lambda name, args: run(ctx, project_id, name, args))
     except Exception as error:  # noqa: BLE001
@@ -1118,8 +1118,14 @@ def _triage_hint(triage: Mapping[str, Any]) -> str:
 
 def decide(connection: Connection, settings: Any, *, project_id: str, run_id: str,
            step_id: str, kind: str, evidence: dict[str, Any], state: dict[str, Any],
-           agent: Mapping[str, str], adapter: Any = None) -> dict[str, Any]:
-    """One decision, recorded on `state`. Never raises."""
+           agent: Mapping[str, str], adapter: Any = None,
+           reads: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+    """One decision, recorded on `state`. Never raises.
+
+    `reads` says what the agent may read with (the runner decides it under the run's authority,
+    `_recovery_authority`): {"tools": True, "as": <who>} for a read-only token, {"tools": False,
+    "why": <reason>} when nothing could be delegated — the agent then decides from the evidence
+    it was handed, and the entry records why. None (a direct caller): the read tools, as before."""
     allowed = KINDS[kind]
     signature, pattern = cause_signature(kind, evidence.get("failure") or {})
     evidence = {**evidence, "pattern": pattern}
@@ -1157,7 +1163,14 @@ def decide(connection: Connection, settings: Any, *, project_id: str, run_id: st
                                               ref=f"recovery:{run_id}:{step_id}")
             else:
                 raw = adapter
-            schemas, run_tool = _read_tools(connection, settings, project_id)
+            if reads is not None and not reads.get("tools"):
+                schemas, run_tool = None, None
+            else:
+                # Only the tools the read-only token can call (its own scope).
+                held = (reads or {}).get("scope")
+                schemas, run_tool = _read_tools(
+                    connection, settings, project_id,
+                    scope=frozenset(held) if held is not None else None)
             left = max(1, int(caps["budget_usd_micros"]) - spent(connection, state))
             result = ask_model(adapter, raw_adapter=raw, agent=agent.get("name") or "BOSS",
                                evidence=evidence, allowed=allowed, last=last,
@@ -1192,7 +1205,8 @@ def decide(connection: Connection, settings: Any, *, project_id: str, run_id: st
     decisions = list(state.get("decisions") or [])
     entry = {"n": len(decisions) + 1, "at": now_utc().isoformat(), "signature": signature,
              "pattern": pattern.get("pattern"), **decision, "by": by, "cost_usd_micros": cost,
-             "agent": agent.get("name")}
+             "agent": agent.get("name"),
+             **({"reads": dict(reads)} if reads is not None else {})}
     entry["sentence"] = sentence(agent.get("name") or "BOSS", entry)
     state.update({"spent_usd_micros": int(state.get("spent_usd_micros") or 0) + cost,
                   "decisions": (decisions + [entry])[-MAX_DECISIONS_KEPT:],
@@ -1203,7 +1217,7 @@ def decide(connection: Connection, settings: Any, *, project_id: str, run_id: st
                {"step_id": step_id, "action": entry["action"], "signature": signature,
                 "cause": entry.get("cause"), "reasoning": str(entry.get("reasoning") or "")[:500],
                 "by": by, "cost_usd_micros": cost, "sentence": entry["sentence"],
-                "decision": entry["n"]})
+                "decision": entry["n"], **({"reads": dict(reads)} if reads is not None else {})})
     return entry
 
 
