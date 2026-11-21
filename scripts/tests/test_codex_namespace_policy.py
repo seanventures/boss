@@ -69,6 +69,73 @@ def test_apparmor_keeps_host_control_paths_denied():
     assert "deny @{PROC}/sysrq-trigger rwklx," in policy
 
 
+# ── AppArmor: docker-default for the container, namespaces only through the engine's helper ──
+
+def _apparmor_parts():
+    text = (ROOT / "scripts/sandbox/boss-engine.apparmor").read_text()
+    rules = "\n".join(line.split("#", 1)[0] if not line.lstrip().startswith("#include") else line
+                      for line in text.splitlines())
+    start = rules.index("profile engine_sandbox")
+    child = rules[start:rules.rindex("}")]
+    return rules[:start], child
+
+
+def _rule_lines(block):
+    return {line.strip() for line in block.splitlines() if line.strip()}
+
+
+def test_the_container_profile_is_docker_default():
+    base, _ = _apparmor_parts()
+    lines = _rule_lines(base)
+    assert "deny mount," in lines
+    assert not lines & {"mount,", "pivot_root,", "userns,"}
+    for kept in ("deny /sys/kernel/security/** rwklx,", "deny @{PROC}/sysrq-trigger rwklx,",
+                 "deny @{PROC}/kcore rwklx,", "deny /sys/firmware/** rwklx,"):
+        assert kept in lines
+
+
+def test_namespaces_are_granted_only_in_the_helper_child_profile():
+    base, child = _apparmor_parts()
+    assert _rule_lines(child) >= {"userns,", "mount,", "pivot_root,"}
+    assert "deny /sys/kernel/security/** rwklx," in _rule_lines(child)
+    transitions = [line.strip() for line in base.splitlines() if "Cx -> engine_sandbox" in line]
+    # Exact paths only: a glob would conflict with `file,` (apparmor_parser: "conflicting x
+    # modifiers") and widen the transition.
+    assert transitions and all("*" not in t for t in transitions)
+
+
+def test_the_transition_covers_every_codex_platform_package_bundled():
+    lock = json.loads((ROOT / "scripts/install/cli-lock/package-lock.json").read_text())
+    triples = {"arm64": "aarch64-unknown-linux-musl", "x64": "x86_64-unknown-linux-musl"}
+    base, _ = _apparmor_parts()
+    for key in lock["packages"]:
+        if key.startswith("node_modules/@openai/codex-linux-"):
+            arch = key.rsplit("-", 1)[1]
+            path = (f"/opt/boss-clis/{key}/vendor/{triples[arch]}/codex-resources/bwrap")
+            assert f"{path} Cx -> engine_sandbox," in base
+
+
+def test_the_loader_drops_userns_on_apparmor_3_instead_of_failing():
+    loader = (ROOT / "scripts/sandbox/load_apparmor.sh").read_text()
+    assert "grep -v '^[[:space:]]*userns,[[:space:]]*$'" in loader
+    assert "features/namespaces/userns_create" in loader      # AA4 kernel + AA3 parser: say so
+    assert "AppArmor is not enabled on this host: nothing to load" in loader
+
+
+@pytest.mark.skipif(not __import__("shutil").which("apparmor_parser"),
+                    reason="apparmor_parser is not installed here")
+def test_the_profile_compiles(tmp_path):
+    import subprocess
+
+    src = ROOT / "scripts/sandbox/boss-engine.apparmor"
+    stripped = tmp_path / "boss-engine"
+    stripped.write_text("".join(l for l in src.read_text().splitlines(True)
+                                if l.strip() != "userns,"))
+    full = subprocess.run(["apparmor_parser", "-Q", "-K", str(src)], capture_output=True)
+    assert full.returncode == 0 or subprocess.run(
+        ["apparmor_parser", "-Q", "-K", str(stripped)], capture_output=True).returncode == 0
+
+
 # ── the seccomp additions are as narrow as seccomp allows ────────────────────────────────────
 
 def _added():
