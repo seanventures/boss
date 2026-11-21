@@ -201,7 +201,7 @@ def _first_line_of(path: Path, needle: str) -> str:
     return next(ln for ln in path.read_text(encoding="utf-8").splitlines() if needle in ln)
 
 
-@pytest.mark.parametrize("engine", ["codex", "claude_code", "gemini_cli"])
+@pytest.mark.parametrize("engine_name", ["codex", "claude_code", "gemini_cli"])
 @pytest.mark.parametrize("ok", [True, False])
 @pytest.mark.parametrize("output", [
     # `sed -n 34p` of a test that quotes the words in a constant
@@ -213,8 +213,8 @@ def _first_line_of(path: Path, needle: str) -> str:
     "curl: (22) The requested URL returned error: 403 - blocked by your organization's policy",
     "<html><title>Blocked</title> This site is blocked by enterprise policy of example.com",
 ])
-def test_ordinary_tool_output_never_stops_a_run(engine, ok, output):
-    assert hf.classify(output, engine=engine, where="tool_result", ok=ok, writer=True) is None
+def test_ordinary_tool_output_never_stops_a_run(engine_name, ok, output):
+    assert hf.classify(output, engine=engine_name, where="tool_result", ok=ok, writer=True) is None
 
 
 @pytest.mark.parametrize("needle", ["bwrap: No permissions", "is disallowed by requirements"])

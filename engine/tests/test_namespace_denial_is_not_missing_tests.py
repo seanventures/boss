@@ -7,14 +7,14 @@ from boss_engine.services.governed_code_task_service import write_tests_exhauste
 DENIAL = "bwrap: No permissions to create a new namespace, likely because the kernel does not allow non-privileged user namespaces."
 
 
-@pytest.mark.parametrize("engine", ["codex", "claude_code"])
+@pytest.mark.parametrize("engine_name", ["codex", "claude_code"])
 @pytest.mark.parametrize("message", [
     DENIAL,
     "bwrap: Creating new namespace failed: Operation not permitted",
     "bwrap: Creating new namespace failed: Permission denied",
 ])
-def test_namespace_denial_is_a_sandbox_failure(engine, message):
-    verdict = failures.classify(message, engine=engine, where="tool_result", ok=False)
+def test_namespace_denial_is_a_sandbox_failure(engine_name, message):
+    verdict = failures.classify(message, engine=engine_name, where="tool_result", ok=False)
     assert verdict is not None
     assert verdict.kind == "sandbox_unavailable"
     assert "seccomp and AppArmor" in verdict.fix

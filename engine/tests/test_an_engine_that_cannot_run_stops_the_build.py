@@ -77,7 +77,7 @@ def test_a_command_that_merely_prints_the_words_is_not_the_harness():
                        ok=False) is None
 
 
-@pytest.mark.parametrize("engine, text, kind", [
+@pytest.mark.parametrize("engine_name, text, kind", [
     ("claude_code", "claude code agent exited 1: Not logged in · Please run /login",
      "auth_refused"),
     ("claude_agent_sdk", "claude agent sdk session failed: Credit balance is too low",
@@ -86,8 +86,8 @@ def test_a_command_that_merely_prints_the_words_is_not_the_harness():
     ("claude_code", "claude CLI not found. Install Claude Code and ensure `claude` is on PATH.",
      "missing_runtime"),
 ])
-def test_the_engines_own_final_error_is_classified(engine, text, kind):
-    said = hf.classify(text, engine=engine, where="engine")
+def test_the_engines_own_final_error_is_classified(engine_name, text, kind):
+    said = hf.classify(text, engine=engine_name, where="engine")
     assert said is not None and said.kind == kind
 
 
