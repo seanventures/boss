@@ -4566,6 +4566,11 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
         incoming_headers, content_type=content_type
     ).items():
         req.add_header(header_name, header_value)
+    if serve_at_root:
+        public_host = next((str(value) for key, value in (incoming_headers or {}).items()
+                            if key.lower() == "host"), "")
+        if public_host and not any(char in public_host for char in "\r\n/\\@ "):
+            req.add_header("Host", public_host)
     if app_cookie_header:
         req.add_header("Cookie", app_cookie_header)
     # THE APP ANSWERS UNCOMPRESSED (see _plain_body): the browser's Accept-Encoding is not ours

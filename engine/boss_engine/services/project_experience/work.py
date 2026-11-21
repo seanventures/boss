@@ -390,6 +390,7 @@ def _attempt_sql() -> str:
         "dd.recommendation->'merge_failed'->>'reason' AS merge_failed, "
         "dd.recommendation->'followups' AS followups, "
         "c.state->'deferred_findings' AS deferred_list, "
+        "c.finalize_ctx->'checks_failing' AS checks_failing, "
         f"{LAST_ACTIVITY_SQL} AS last_activity, {live_job_sql('c')} AS live_job "
         "FROM code_task_runs c LEFT JOIN decisions dd ON dd.id = c.decision_id ")
 
@@ -830,7 +831,8 @@ def _merge_links(members: list[dict[str, Any]], merge: Optional[Mapping[str, Any
         out["merge_pr"] = {"number": merge.get("pull_request_number") or pr_number(url),
                            "external_url": url, "follow_up_of": after,
                            # Its last merge failed (merge_failures): said, never "Ready".
-                           "failed": merge.get("merge_failed") or None}
+                           "failed": merge.get("merge_failed") or None,
+                           "checks_failing": bool(merge.get("checks_failing"))}
         # Ready WITH follow-ups (quality_bar.merge_followups): still "Ready to merge", with how
         # many BOSS is fixing after it. Only when there are some.
         _f = _followups_of(merge.get("followups"))
