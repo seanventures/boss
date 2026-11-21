@@ -111,6 +111,18 @@ def _org_of_project(db: Any, project_id: str) -> Optional[str]:
                            "WHERE p.id = :p"), {"p": project_id}).scalar()
 
 
+def org_allows(db: Any, project_id: str) -> bool:
+    """The org half of `enabled`: False when the project's org turned the switch off in its
+    Identity policy. Govern draws the project row Off (and not editable) when this is False, so
+    the board never says On while enabled() refuses. Raises when the policy cannot be read."""
+    org = _org_of_project(db, project_id)
+    if not org:
+        return True
+    from .policy import get_policy
+
+    return bool(getattr(get_policy(org, db=db), POLICY_KEY, True))
+
+
 def enabled(db: Any, project_id: Optional[str], *, org_id: Optional[str] = None,
             settings: Any = None) -> bool:
     """The org's policy AND the project's setting. ON when the key is simply absent (the

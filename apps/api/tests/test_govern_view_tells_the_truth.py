@@ -22,7 +22,8 @@ from boss_engine.services.budget import BudgetGovernor, intensity_envelope
 PROJECT = "boss-dogfood"
 KNOB_KEYS = ("code_agent_max_concurrency", "code_agent_max_turns",
              "captain_leads_projects", "code_review_inrun_max_rounds",
-             "agents_fix_failures", "step_recovery", "open_pr_when_checks_fail")
+             "agents_fix_failures", "step_recovery", "open_pr_when_checks_fail",
+             "build_streams_min", "build_streams_max", "workflow_precheck_agent")
 
 
 @pytest.fixture
@@ -126,6 +127,30 @@ def test_every_board_key_is_a_control_and_the_agent_switches_are_on(client, clea
     assert controls["open_pr_when_checks_fail"]["section"] == "each_build"
     assert controls["quality_bar"]["unit"] == "choice"
     assert controls["quality_bar"]["bounds"]["choices"] == ["prototype", "standard", "production"]
+
+
+def test_the_agents_switch_reads_off_when_the_orgs_policy_is_off(client, clean, monkeypatch):
+    """fix_authority.enabled() is the org's Identity policy AND the project setting: with the
+    policy off, the row is Off whatever the project says, not editable, and says why."""
+    import dataclasses
+
+    from boss_engine.identity import fix_authority, policy
+
+    off = dataclasses.replace(policy.IdentityPolicy(), agents_fix_failures=False)
+    monkeypatch.setattr(fix_authority, "_org_of_project", lambda db, p: "org_policy_off")
+    monkeypatch.setattr(policy, "get_policy", lambda org, db=None: off)
+    controls = _controls(client)
+    fix = controls["agents_fix_failures"]
+    assert fix["value_effective"] == 0
+    assert fix["editable_by"] == "none" and fix["write"] is None
+    assert fix["note"] == {"kind": "org_off",
+                           "text": "Off for the whole organisation (Identity › Policy)"}
+    assert controls["step_recovery"]["value_effective"] == 1, "only the agents switch follows it"
+    # Defaults read as the engine reads them; the pre-check is a switch.
+    assert controls["build_streams_min"]["value_effective"] == 1
+    assert controls["build_streams_max"]["value_effective"] == 1
+    assert controls["workflow_precheck_agent"]["unit"] == "switch"
+    assert controls["workflow_precheck_agent"]["value_effective"] == 0
 
 
 def test_every_control_names_its_enforcer_and_only_token_guides_are_advisory(client, clean):

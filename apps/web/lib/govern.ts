@@ -31,7 +31,7 @@ export type Control = {
   enforced: Enforced;
   evidence: Evidence;
   advisory: boolean;
-  note: { kind: "floor"; stored: number; floor: number } | { kind: "reads_as"; stored: number; reads_as: number } | { kind: "default" } | null;
+  note: { kind: "floor"; stored: number; floor: number } | { kind: "reads_as"; stored: number; reads_as: number } | { kind: "default" } | { kind: "org_off"; text: string } | null;
   /** What the engine runs right now when something limits it (review lanes under memory pressure). */
   running_now?: { value: number; reason: "memory" } | null;
   rule?: { kind: "floor"; floor: number; fallback: number } | { kind: "zero_reads_as"; value: number } | null;

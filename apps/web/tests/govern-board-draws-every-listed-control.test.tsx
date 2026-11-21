@@ -91,6 +91,18 @@ describe("the board draws every control the API lists", () => {
     expect(write!.body).toMatchObject({ key: "agents_fix_failures", value: "0", project_id: "p1" });
   });
 
+  it("org policy off: the row reads Off, says why, and can't be edited", async () => {
+    const view = viewWithSections();
+    view.controls = view.controls.map((c) => c.key !== "agents_fix_failures" ? c : {
+      ...c, value_effective: 0, editable_by: "none", write: null,
+      note: { kind: "org_off", text: "Off for the whole organisation (Identity › Policy)" } });
+    g.view = view;
+    await mount(<GovernHome projectId="p1" actor="ceo" />);
+    expect($("[data-testid=gv-value-agents_fix_failures]")!.textContent).toBe("Off");
+    expect($("[data-testid=gv-note-agents_fix_failures]")!.textContent).toBe("Off for the whole organisation (Identity › Policy)");
+    expect($("[data-testid=gv-more-agents_fix_failures]")).toBeNull();
+  });
+
   it("the other switches and the quality bar are drawn too", async () => {
     await mount(<GovernHome projectId="p1" actor="ceo" />);
     expect($("[data-testid=gv-sec-each_failed_step] [data-testid=gv-value-step_recovery]")!.textContent).toBe("On");
