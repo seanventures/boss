@@ -413,10 +413,19 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def inner_sandbox_check(settings: Any) -> dict[str, Any]:
+    """Engine inner-sandbox support (engine_inner_sandbox): Codex's own sandbox probed where
+    this check runs (under the build's sandbox identity in the engine-check job)."""
+    from . import engine_inner_sandbox, owned_process
+
+    return engine_inner_sandbox.check(_codex_binary(settings), run=owned_process.run)
+
+
 def check_engine(settings: Any, provider: str, *, agent_factory: Optional[Callable[[], Any]] = None,
                  sandbox_prover: Optional[Callable[[], dict]] = None,
                  workdir: Optional[Callable[[], Path]] = None,
-                 proved_in: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+                 proved_in: Optional[Mapping[str, Any]] = None,
+                 inner_checker: Optional[Callable[[], dict]] = None) -> dict[str, Any]:
     """The policy for one engine's login, proved: what Setup records and the engine reads.
 
     {engine, checked_at, managed, writer_mode, can_write, writer_check, proved_in, ...}.
@@ -433,6 +442,13 @@ def check_engine(settings: Any, provider: str, *, agent_factory: Optional[Callab
         policy["managed_settings"] = managed
         policy["managed"] = policy["managed"] or managed["managed"]
     final = first
+    if provider == "codex":
+        from . import engine_inner_sandbox
+
+        # THE INSTALL OPTED IN (BOSS_ENGINE_INNER_SANDBOX): prove the inner sandbox starts here
+        # and, when it does not, name the layer that stops it (docs/community/ENGINE_SANDBOX.md).
+        if inner_checker is not None or engine_inner_sandbox.mode() != "off":
+            policy["inner_sandbox"] = (inner_checker or (lambda: inner_sandbox_check(settings)))()
     if provider == "codex" and first["managed"] and first["state"] != "ok":
         # THE LOGIN'S ORGANISATION FORBIDS FULL ACCESS. Its own sandbox is the only way left to
         # write: prove it starts here, with the network and the caches a writer needs.
@@ -476,7 +492,13 @@ def setup_sentence(provider: str, policy: Mapping[str, Any]) -> Optional[str]:
         return None
     check = policy.get("writer_check") or {}
     verdict = check.get("verdict") or {}
+    inner = policy.get("inner_sandbox") if isinstance(policy.get("inner_sandbox"), Mapping) else {}
     if provider == "codex" and policy.get("managed"):
+        if not policy.get("sandbox_proven") and inner and not inner.get("ok"):
+            # The install opted in to engine inner-sandbox support: say which layer stops it.
+            return (f"{provider} is signed in but cannot write here: its organisation's Codex "
+                    "requirements forbid the full access a BOSS writer runs with, and Codex's own "
+                    f"sandbox cannot start. {inner.get('sentence')} Fix: {inner.get('fix')}")
         if not policy.get("sandbox_proven"):
             why = ("its organisation's Codex requirements forbid the full access a BOSS writer "
                    "runs with, and Codex's own sandbox cannot start in this container ("
@@ -537,9 +559,18 @@ def summary(policy: Any, provider: str = "") -> Optional[dict[str, Any]]:
         tip = setup_sentence(provider or str(policy.get("engine") or ""), policy) or ""
     elif state == "not_checked":
         tip = str(policy.get("error") or tip)[:300]
-    return {"state": state, "label": label, "tone": tone, "tip": tip,
-            "checked_at": policy.get("checked_at"),
-            "writer_mode": policy.get("writer_mode")}
+    inner = policy.get("inner_sandbox") if isinstance(policy.get("inner_sandbox"), Mapping) else None
+    if inner and not inner.get("ok") and state != "cannot_write":
+        # The writer works without it, but the administrator turned it on: say it is not working.
+        tip = (f"{tip} Engine inner sandbox: {inner.get('sentence')} "
+               f"Fix: {inner.get('fix')}").strip()
+    out = {"state": state, "label": label, "tone": tone, "tip": tip,
+           "checked_at": policy.get("checked_at"),
+           "writer_mode": policy.get("writer_mode")}
+    if inner:
+        out["inner_sandbox"] = {"ok": bool(inner.get("ok")), "layer": inner.get("layer") or "",
+                                "mode": inner.get("mode") or ""}
+    return out
 
 
 def _is_metered(settings: Any, provider: str) -> bool:
@@ -646,5 +677,6 @@ __all__ = ["CHECK_ESTIMATE_USD_MICROS", "JOB_KIND", "execute_job", "run_check", 
            "summary", "workload_env", "CLAUDE_MANAGED_PATHS", "CODEX_SOURCE", "DOC", "MANAGED_MARKER", "POLICY_KEY",
            "PROBE_COMMAND", "PROBE_FILE", "PROBE_PROMPT", "PROBE_TOKEN", "cache_roots",
            "check_engine", "claude_managed_settings", "codex_downgrades", "codex_sandbox_proof",
-           "codex_workspace_config", "codex_writer_mode", "forget", "prepare_cache_roots",
+           "codex_workspace_config", "codex_writer_mode", "forget", "inner_sandbox_check",
+           "prepare_cache_roots",
            "record", "recorded", "setup_sentence", "uses_workspace_write", "writer_check"]

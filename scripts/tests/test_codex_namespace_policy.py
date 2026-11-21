@@ -142,8 +142,8 @@ def test_the_profile_compiles(tmp_path):
 
     src = ROOT / "scripts/sandbox/boss-engine.apparmor"
     stripped = tmp_path / "boss-engine"
-    stripped.write_text("".join(l for l in src.read_text().splitlines(True)
-                                if l.strip() != "userns,"))
+    stripped.write_text("".join(line for line in src.read_text().splitlines(True)
+                                if line.strip() != "userns,"))
     full = subprocess.run(["apparmor_parser", "-Q", "-K", str(src)], capture_output=True)
     assert full.returncode == 0 or subprocess.run(
         ["apparmor_parser", "-Q", "-K", str(stripped)], capture_output=True).returncode == 0

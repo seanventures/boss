@@ -312,6 +312,27 @@ if [ "${#DOCKER[@]}" -gt 0 ] &&
    "${DOCKER[@]}" exec "${STACK}-api-1" test -f /run/boss-shim/.network-unfenced 2>/dev/null; then
   bad "sandbox: this host cannot fence the build network, so builds are held — see docs/community/SANDBOX.md (or set BOSS_SANDBOX_NETWORK=off in .env and restart)" sandbox_fence
 fi
+# ENGINE INNER-SANDBOX SUPPORT (docs/community/ENGINE_SANDBOX.md), only when .env opts in: the
+# containers must have been created with it, run under the AppArmor profile when asked for (the
+# label proves the profile is loaded on the Docker host), and Codex's own sandbox must start in
+# the worker. The failing layer is named, with its fix.
+engine_mode="$(env_value BOSS_ENGINE_INNER_SANDBOX | tr -d "\"' " | tr '[:upper:]' '[:lower:]')"
+case "$engine_mode" in
+  ""|0|off|false|no|none) engine_mode="" ;;
+  apparmor+seccomp) engine_mode="seccomp+apparmor" ;;
+esac
+if [ -n "$engine_mode" ] && [ "${#DOCKER[@]}" -gt 0 ]; then
+  case "$engine_mode" in
+    seccomp|seccomp+apparmor)
+      _inner="$("${DOCKER[@]}" exec -u boss "${STACK}-worker-1" python -m boss_engine.services.engine_inner_sandbox --expect "$engine_mode" 2>/dev/null | tail -n 1)"
+      case "$_inner" in
+        ok\ *) ok "engine sandbox: ${_inner#ok }" ;;
+        bad\ *) bad "engine sandbox: ${_inner#bad }" engine_sandbox ;;
+        *) bad "engine sandbox: the worker could not run the check (is it running? ${BOSS_COMMAND:-boss} logs worker)" engine_sandbox ;;
+      esac ;;
+    *) bad "engine sandbox: BOSS_ENGINE_INNER_SANDBOX=$engine_mode in .env is not one of: seccomp, seccomp+apparmor" engine_sandbox ;;
+  esac
+fi
 case "$claim" in
   unclaimed)
     # BOSSAPP-813: from the server's own network the console's https address is the claim itself.
@@ -455,6 +476,7 @@ has console_loopback && MANUAL+=("console address: rebuild web for its public ad
 has chat_silent && MANUAL+=("models: ${BOSS_COMMAND:-boss} connect (or Setup) to sign the model in again")
 has repository && MANUAL+=("repository: Setup › Test access, then fix what it names")
 has enterprise_network && MANUAL+=("enterprise network: fix the setting named above in .env, then ${BOSS_COMMAND:-boss} upgrade — docs/community/ENTERPRISE_NETWORK.md")
+has engine_sandbox && MANUAL+=("engine sandbox: the Fix named above — docs/community/ENGINE_SANDBOX.md (a host profile is never loaded for you)")
 has sandbox_fence && MANUAL+=("sandbox: docs/community/SANDBOX.md — turning the fence off is a security choice, never made for you")
 describe() {
   case "$1" in
