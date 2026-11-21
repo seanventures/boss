@@ -1,4 +1,4 @@
-"""GitHub effects as tools (AMEX-G5 / G6, BOSSAPP-1141 / 1142): a comment on a pull request or
+"""GitHub effects as tools (BOSSAPP-1141 / 1142): a comment on a pull request or
 issue, and a lightweight fix pull request — on a repository bound to the project, through the
 binding's own adapter (services/github_actions.py). Never a token in an argument.
 

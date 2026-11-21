@@ -220,7 +220,7 @@ def validate_config(behaviour: str, config: dict[str, Any], inputs: Iterable[str
         # it was given, and most media work needs no network at all.
         "network": bool(given.get("network", False)),
         "outputs": outputs,
-        # A NON-ZERO EXIT FAILS THE STEP (AMEX-G3, BOSSAPP-1139). The executor returned
+        # A NON-ZERO EXIT FAILS THE STEP (BOSSAPP-1139). The executor returned
         # `exit_code` and the workflow runner read only the invocation's own status, so a
         # validator that exited 1 — "violations found", the one thing it exists to say — went
         # green and the run carried on to deploy. ON for every skill authored from here; a
@@ -236,7 +236,7 @@ MAX_LOCAL_BINARIES = 16
 
 
 def _local_binaries(value: Any) -> list[str]:
-    """`local_binaries` (AMEX-G12): absolute worker paths — a CLI's file or its install
+    """`local_binaries` (BOSSAPP-1170): absolute worker paths — a CLI's file or its install
     directory — the command runs when the skill executes under `local_fenced`, where the
     pinned image is not used. Checked against the operator's BOSS_LOCAL_FENCED_BINARIES at run
     time (local_fenced.check_local_binaries); here only their shape."""
@@ -548,7 +548,7 @@ def prepare_skill(
     config = dict(config or {})
     if behaviour == "sandboxed_command" and "fail_on_exit" not in config and exists:
         # AN EDIT KEEPS WHAT IS STORED. A form or a script that does not send the flag must not
-        # turn a backfilled `false` into the new-skill default `true` (AMEX-G3 review).
+        # turn a backfilled `false` into the new-skill default `true` (BOSSAPP-1139 review).
         stored = connection.execute(
             text("SELECT config->'fail_on_exit' FROM skill_definitions "
                  "WHERE project_id = :p AND skill_key = :k"),

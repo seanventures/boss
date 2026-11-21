@@ -3315,7 +3315,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "create_config_target",
-        "Give a system's CONFIGURATION somewhere to deploy to (AMEX-G4): a config directory on a "
+        "Give a system's CONFIGURATION somewhere to deploy to (BOSSAPP-1140): a config directory on a "
         "host — an API gateway's tenants/ folder, say — with how it is reloaded (a command run in "
         "the directory, or an HTTP hook; none when the system watches its directory) and the "
         "health URL BOSS checks after a reload. One target per app and environment, like any "
@@ -3363,7 +3363,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "deploy_config",
-        "Deploy CONFIGURATION FILES — not a built app — to a config_dir target (AMEX-G4): the "
+        "Deploy CONFIGURATION FILES — not a built app — to a config_dir target (BOSSAPP-1140): the "
         "validated tenant YAML into the gateway's staging directory, say. Each file is written "
         "to a temp name and renamed into place (atomic), the previous version is kept beside the "
         "directory for rollback, the target's reload runs, and its health URL is checked; a "
@@ -3419,13 +3419,13 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             code_task_run_id=(str(args["code_task_run_id"]) if args.get("code_task_run_id") else None),
             source_paths=args.get("source_paths"),
             # Which run deployed it, set by the runner on the server (never an argument), so a
-            # promotion can be checked against the run that staged it (AMEX-G9).
+            # promotion can be checked against the run that staged it (BOSSAPP-1167).
             workflow_run_id=WORKFLOW_RUN_ID.get() or None)
 
     @reg.tool(
         "promote_config",
         "Promote the EXACT configuration a succeeded config deployment shipped — the same bytes, "
-        "by sha256 — to the next environment's config_dir target (AMEX-G4): staging → "
+        "by sha256 — to the next environment's config_dir target (BOSSAPP-1140): staging → "
         "production by default. Name the source by deployment_run_id (or deployment_id) — "
         "it is never guessed; list_deployments shows them. Inside a workflow it must be the "
         "run's own staging deployment with its bundle_sha256; a mismatch is refused. Same "
@@ -3457,7 +3457,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         from ..services.github_actions import WORKFLOW_RUN_ID
 
         # `deployment_id` is what a config_deploy step's output calls it; it was silently
-        # ignored before, and the tool fell back to the app's latest staging deploy (AMEX-G9).
+        # ignored before, and the tool fell back to the app's latest staging deploy (BOSSAPP-1167).
         source = args.get("deployment_run_id") or args.get("deployment_id")
         return promote(
             ctx.engine, ctx.settings, project_id=project_id, actor=actor,
@@ -9751,7 +9751,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                     "ms": round((_time.time() - started) * 1000),
                     "error": f"{type(exc).__name__}: {exc}"[:300]}
 
-    # CONTRACT TESTS (AMEX-G7, BOSSAPP-1143). `http_probe` is one GET. An API that was just
+    # CONTRACT TESTS (BOSSAPP-1143). `http_probe` is one GET. An API that was just
     # given a tenant's routes has a contract: a valid token reaches the upstream, no token is a
     # 401, the eleventh request in a second is a 429, the rejected path stays rejected. Each is
     # a method, headers, a body, an expected status and a few JSON fields — a case — and the
@@ -9819,7 +9819,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         # WHERE IT MAY SEND: public hosts, and the private ones that are THIS project's own
         # deployment targets and hosts — read from the database, never from the arguments.
         #
-        # COMMUNITY (AMEX-G8, BOSSAPP-1166) used to refuse the tool outright: Community has no
+        # COMMUNITY (BOSSAPP-1166) used to refuse the tool outright: Community has no
         # egress network policy, so a URL probe could reach anywhere. Now every request — and
         # every redirect hop — must go to the exact scheme, host and port of a deployment
         # target a PERSON created (`project_origins`): not another port on that host, not a
@@ -10253,7 +10253,7 @@ def build_default_registry() -> ToolRegistry:
     from .confluence_tools import register_confluence_tools
 
     register_confluence_tools(reg)
-    # A PR comment and a fix PR on a repository bound to the project (AMEX-G5/G6,
+    # A PR comment and a fix PR on a repository bound to the project (BOSSAPP-1141 / 1142,
     # BOSSAPP-1141/1142): the API-onboarding workflow's two GitHub effects, as tools.
     from .github_tools import register_github_tools
 
@@ -10320,7 +10320,7 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # Each writes to the team's own ticket system as the person (or the connection's bot);
     # a write that would carry flagged ticket text waits for the person (low_trust).
     "ticket_import", "ticket_comment", "ticket_transition",
-    # GitHub from chat (AMEX-G5/G6): "comment the report on PR #12", "open a fix PR with this
+    # GitHub from chat (BOSSAPP-1141 / 1142): "comment the report on PR #12", "open a fix PR with this
     # file", "run the contract cases against staging". Each is receipted; a fix PR is a branch
     # of BOSS's own and merging stays a person's decision.
     "github_comment", "github_open_fix_pr", "contract_test",
@@ -10489,7 +10489,7 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # admitting it here does not by itself hand anybody a shell.
     "run_on_host",
     "redeploy",
-    # Configuration deploys (config_deploy, AMEX-G4): files into a config directory, governed
+    # Configuration deploys (config_deploy, BOSSAPP-1140): files into a config directory, governed
     # like a deploy; a promotion ships the same bytes to production under its rules.
     "deploy_config", "promote_config", "create_config_target",
     # Removing an app: a button the person presses, governed like a deploy (app_removal).

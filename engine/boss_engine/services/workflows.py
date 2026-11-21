@@ -1201,7 +1201,7 @@ def _runs_before(normalized: dict[str, Any], *,
     """For each reachable step, the steps that have certainly finished when it starts.
 
     `failed_counts`: a step reached by p's error path counts p as having run — p failed, and
-    its failed output is in the run context for that path (AMEX-G10). That is what a binding
+    its failed output is in the run context for that path (BOSSAPP-1168). That is what a binding
     may read (`binding_order_problems`); "finished" for a re-run (`workflow_test_runs`) still
     means completed.
 
@@ -1288,7 +1288,7 @@ def binding_order_problems(
     optional_for = optional_inputs or _capability_optional_inputs
     steps = _step_map(normalized)
     # A step on an error path may read the step that failed into it: its failed output (exit
-    # code, log tail) is in the run context for that path (AMEX-G10, BOSSAPP-1168).
+    # code, log tail) is in the run context for that path (BOSSAPP-1168).
     before = _runs_before(normalized, failed_counts=True)
     found: list[dict[str, Any]] = []
     for sid, step in steps.items():

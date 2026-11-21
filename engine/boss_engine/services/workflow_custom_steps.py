@@ -819,7 +819,7 @@ def execute(
             # invocation itself succeeded, so this is the only place the step learns the
             # command failed. Retryable: `on_error` and the step's retries apply exactly as
             # they do to a failed tool, and the sentence carries the code and the log tail
-            # (AMEX-G3, BOSSAPP-1139).
+            # (BOSSAPP-1139).
             raise CustomStepError(exited, output={
                 **redacted_output(result.get("result") or {}, run_id),
                 "_step": {"custom_step": key, "label": row["label"], "binding": "skill",

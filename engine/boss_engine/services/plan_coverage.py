@@ -184,7 +184,7 @@ def _security_block(block_sev: str, text: str) -> bool:
 
 
 def _required(block_sev: str, sev: str, security: bool = False) -> bool:
-    """A SECURITY MEDIUM IS REQUIRED (AMEX, AR-24 review): any finding of the security seat at
+    """A SECURITY MEDIUM IS REQUIRED (AR-24 review): any finding of the security seat at
     MEDIUM or above, whether it came in a `[SECURITY]` block or as its own bullet."""
     if block_sev == "SECURITY" or security:
         return sev in _SECURITY_REQUIRED

@@ -1,8 +1,8 @@
-"""Deploy CONFIGURATION, not a built app (AMEX-G4, BOSSAPP-1140): `deploy_config` and
+"""Deploy CONFIGURATION, not a built app (BOSSAPP-1140): `deploy_config` and
 `promote_config`.
 
 BOSS could deploy an app it had built — a commit to a host, through a ChangeSet, a person's
-approval, a receipt and a rollback — and nothing else. The AMEX onboarding workflow ends by
+approval, a receipt and a rollback — and nothing else. An API-onboarding workflow ends by
 putting ONE FILE in a directory: a validated `tenants/<tenant>.yaml` into the gateway's staging
 config dir, the gateway hot-reloads, a health check passes, and the same bytes go to production
 once a person agrees. This module is that primitive, built on the host deployment's governance
@@ -936,7 +936,7 @@ def promote(engine: Any, settings: Settings, *, project_id: str, actor: str,
     id — never "the latest for the app") planned to the next environment's config target.
 
     INSIDE A WORKFLOW RUN (`workflow_run_id`, set by the runner) the source is never guessed
-    (AMEX-G9, BOSSAPP-1167): the id AND the bundle hash its staging step recorded are
+    (BOSSAPP-1167): the id AND the bundle hash its staging step recorded are
     required, and a source that shipped other bytes is refused. "The latest staging deploy for
     the app" is how two tenants in flight promoted each other's file."""
     from ..db import begin

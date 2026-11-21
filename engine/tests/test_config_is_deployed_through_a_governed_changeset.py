@@ -1,4 +1,4 @@
-"""AMEX-G4 (BOSSAPP-1140): configuration is deployed through BOSS's own governance, end to end.
+"""BOSSAPP-1140: configuration is deployed through BOSS's own governance, end to end.
 
 A `config_dir` target on this machine (a temp directory) with a tiny HTTP "gateway" whose
 /readyz answers 200 or 503 as the test says and whose /-/reload counts the hooks it receives.
@@ -297,7 +297,7 @@ def test_the_plan_refuses_what_it_cannot_ship(eng, project, gateway, dirs):  # n
 
 
 def test_a_deploy_from_a_cli_steps_produced_artifact_ships_those_bytes(eng, project, gateway, dirs):  # noqa: F811
-    """The AMEX chain: gwlint --fix produced the corrected YAML in the fenced step; deploy_config
+    """The API-onboarding chain: gwlint --fix produced the corrected YAML in the fenced step; deploy_config
     ships that artifact's exact bytes under the path it was produced at."""
     from boss_engine.services.local_fenced import keep_produced
 
@@ -443,7 +443,7 @@ def test_config_targets_are_made_only_by_create_config_target(eng, project, gate
 
 
 def test_two_runs_in_flight_each_promote_only_what_they_staged(eng, project, gateway, dirs):  # noqa: F811
-    """AMEX-G9 (BOSSAPP-1167): promote_config is bound to its own run's staging step.
+    """BOSSAPP-1167: promote_config is bound to its own run's staging step.
 
     Two onboarding runs, A and B, each stage a different tenant file; B's staging deploy
     succeeds after A's. Before the fix A's promotion took "the latest succeeded staging deploy

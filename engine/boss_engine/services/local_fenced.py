@@ -1,8 +1,8 @@
-"""`local_fenced`: an authored command runs in the worker's own per-run fence (AMEX-G2, BOSSAPP-1138).
+"""`local_fenced`: an authored command runs in the worker's own per-run fence (BOSSAPP-1138).
 
 `skill.sandboxed_command` refused to run anywhere but a microVM substrate, because the `local`
 provider is a subprocess as the control plane's own uid: remote code execution against the box
-that holds every project's credentials. A `runtime: local` install has no microVM, so the AMEX
+that holds every project's credentials. A `runtime: local` install has no microVM, so an API-
 onboarding workflow could not run `gwlint validate tenant.yaml` at all.
 
 The worker already has a fence every code-task run stands in (sandbox_identity, IDENTITY.md
@@ -190,7 +190,7 @@ def _sha256_file(path: str) -> Optional[str]:
 
 
 def check_local_binaries(settings: Any, paths: Any) -> list[dict[str, Any]]:
-    """THE IMAGE IS NOT WHAT RUNS HERE (AMEX-G12, BOSSAPP-1170). Under `local_fenced` a skill's
+    """THE IMAGE IS NOT WHAT RUNS HERE (BOSSAPP-1170). Under `local_fenced` a skill's
     command runs on the worker's filesystem, so the CLIs it declares (`local_binaries`) must
     each resolve — symlinks followed — under a root the operator allow-listed
     (BOSS_LOCAL_FENCED_BINARIES) and exist; and NOTHING a run's sandbox user could change may

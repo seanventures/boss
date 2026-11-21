@@ -179,7 +179,7 @@ PHASED_APPLY_SKILLS: dict[str, str] = {
         "applies it (services/governed_host_deploy.py). It is never approved or applied "
         "through the ChangeSet routes."
     ),
-    # Configuration files into a config_dir target (AMEX-G4): the same decision, the same
+    # Configuration files into a config_dir target (BOSSAPP-1140): the same decision, the same
     # worker job, a different phase two (services/config_deploy.py).
     "config_dir.files.deploy": (
         "is a configuration deployment: approve its decision{decision} in Approvals and BOSS's "
@@ -2044,7 +2044,7 @@ class ResourcePlaneService:
         actor: str,
         config_target: bool = False,
     ) -> dict[str, Any]:
-        # A CONFIG DIRECTORY (config_deploy, AMEX-G4) is made only by create_config_target, which
+        # A CONFIG DIRECTORY (config_deploy, BOSSAPP-1140) is made only by create_config_target, which
         # enforces the operator's roots, the reload allowlists and a person for any reload. The
         # generic routes (POST /v1/deployments, the deployment.target.register skill) would
         # skip all three, so they are refused here, in the one place every caller passes.

@@ -1,5 +1,4 @@
-"""A workflow step that runs a command fails when the command exits non-zero (AMEX-G3,
-BOSSAPP-1139).
+"""A workflow step that runs a command fails when the command exits non-zero (BOSSAPP-1139).
 
 `skill.sandboxed_command` returned `exit_code` and the runner read only the invocation's own
 status, so a validator that exited 1 — "violations found", the one thing it exists to say — went
@@ -13,6 +12,7 @@ green and the run went on to deploy. Now:
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
 from pathlib import Path
@@ -26,7 +26,7 @@ from boss_engine.services import workflow_custom_steps as custom_steps
 from boss_engine.services import workflows
 
 from .test_workflow_capability_runner import RecordingRegistry, RecordingTool
-from .amex_workflow_fixtures import eng, project  # noqa: F401
+from .onboarding_workflow_fixtures import eng, project  # noqa: F401
 from .test_workflow_custom_steps import HOLDER, Ctx, _agent
 
 IMAGE = "ghcr.io/northgate/gwlint@sha256:" + "a" * 64
@@ -62,16 +62,21 @@ def test_fails_on_exit_reads_the_stored_config():
 
 # ── the backfill ───────────────────────────────────────────────────────────────────────────
 
-BACKFILL_KEY = "amex_g3_fail_on_exit_false"
+BACKFILL_KEY = "sandboxed_command_fail_on_exit_false"
+# The md5 of the key the marker was first written under. An install holding that marker has run
+# the backfill already; the schema's guard matches it by this digest (the old name is not kept).
+LEGACY_KEY_MD5 = "12368305bd947fc7cac0c3dd9173f951"
 
 
-def _backfill_block(key: str) -> str:
-    """The schema's one-time backfill, under `key` so the test does not depend on (or disturb)
-    the marker the real boot already wrote."""
+def _backfill_block(key: str, legacy: str | None = None) -> str:
+    """The schema's one-time backfill, under `key` (and `legacy` as its older key) so the test
+    does not depend on (or disturb) the marker the real boot already wrote."""
     sql = (REPO / "db" / "schema.sql").read_text(encoding="utf-8")
     match = re.search(r"DO \$\$\nDECLARE changed INTEGER;.*?END \$\$;", sql, re.S)
-    assert match and BACKFILL_KEY in match.group(0), "db/schema.sql lost the AMEX-G3 backfill"
-    return match.group(0).replace(BACKFILL_KEY, key)
+    assert match and BACKFILL_KEY in match.group(0), "db/schema.sql lost the BOSSAPP-1139 backfill"
+    assert LEGACY_KEY_MD5 in match.group(0), "the backfill no longer skips on its older key"
+    legacy_md5 = hashlib.md5((legacy or f"{key}_legacy").encode()).hexdigest()
+    return match.group(0).replace(BACKFILL_KEY, key).replace(LEGACY_KEY_MD5, legacy_md5)
 
 
 def _raw_skill(c, project_id, key, config):
@@ -109,6 +114,26 @@ def test_skills_authored_before_the_flag_keep_todays_behaviour_once(eng, project
     assert old["config"]["fail_on_exit"] is False and sd.fails_on_exit(old) is False
     assert new["config"]["fail_on_exit"] is True and sd.fails_on_exit(new) is True
     assert "fail_on_exit" not in later["config"], "the second boot rewrote a row"
+
+
+def test_an_install_that_ran_it_under_the_older_key_does_not_run_it_again(eng, project):
+    """Installs that applied the backfill before its key was renamed hold only the older marker:
+    the guard skips on it, so a key-less skill authored since is not rewritten."""
+    key, legacy = f"test_{uuid.uuid4().hex[:8]}", f"test_{uuid.uuid4().hex[:8]}_old"
+    block = _backfill_block(key, legacy)
+    try:
+        with eng.begin() as c:
+            c.execute(text("INSERT INTO schema_backfills (key) VALUES (:k)"), {"k": legacy})
+            _raw_skill(c, project, "since_lint", {"image": IMAGE, "command": "lint"})
+            c.exec_driver_sql(block)
+            since = sd.get_skill(c, project, "since_lint")
+            assert c.execute(text("SELECT count(*) FROM schema_backfills WHERE key=:k"),
+                             {"k": key}).scalar() == 0
+    finally:
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM schema_backfills WHERE key IN (:k, :l)"),
+                      {"k": key, "l": legacy})
+    assert "fail_on_exit" not in since["config"], "the older marker did not stop the backfill"
 
 
 def test_an_edit_that_does_not_send_the_flag_keeps_the_stored_value(eng, project):
@@ -277,7 +302,7 @@ def test_a_built_in_skill_that_reports_an_exit_code_is_judged_as_before(eng, pro
         assert custom_steps.exit_failure(c, project, "gwlint", "Run", "not a dict") is None
 
 
-# ── the error path reads what the failed step said (AMEX-G10, BOSSAPP-1168) ────────────────
+# ── the error path reads what the failed step said (BOSSAPP-1168) ────────────────
 
 def _publish_report_on_error(c, project_id, step_key):
     name = f"wf_{uuid.uuid4().hex[:6]}"

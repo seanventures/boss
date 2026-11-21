@@ -1,6 +1,5 @@
 """Contract tests: a list of HTTP cases, each with a method, headers, a body and what it must
-answer — run against a deployed thing, judged case by case, reported as a table (AMEX-G7,
-BOSSAPP-1143).
+answer — run against a deployed thing, judged case by case, reported as a table (BOSSAPP-1143).
 
 `smoke_test` asks one question: does GET / answer 2xx. An API gateway that was just given a new
 tenant's routes needs a dozen: does a valid JWT reach the upstream (200), does no token get a
@@ -98,7 +97,7 @@ def check_host(url: str, allowed_private: frozenset[str] = frozenset(), *,
     host is one of `allowed_private` (the project's own deployment targets and hosts, from the
     database, never from the arguments).
 
-    `project_only` (Community, AMEX-G8): Community has no egress network policy, so the guard
+    `project_only` (Community, BOSSAPP-1166): Community has no egress network policy, so the guard
     is the policy. The request's exact ORIGIN — scheme, host AND port — must be one of
     `origins`: the URLs of deployment targets a PERSON created (`project_origins`). Another
     port on the same host (the BOSS API on localhost), a public host, or a target an agent
@@ -546,7 +545,7 @@ def project_deployment_hosts(db: Any, project_id: str) -> frozenset[str]:
 
 
 def project_origins(db: Any, project_id: str) -> frozenset[tuple[str, str, int]]:
-    """COMMUNITY'S ALLOW-LIST (AMEX-G8): the exact (scheme, host, port) of the URLs of this
+    """COMMUNITY'S ALLOW-LIST (BOSSAPP-1166): the exact (scheme, host, port) of the URLs of this
     project's deployment targets that a PERSON created — health checks, domains, public URL.
     A target an agent created adds nothing: an agent that could add a target could otherwise
     point a contract test anywhere. A bare domain allows https:443 and http:80 on that name;

@@ -334,7 +334,7 @@ class Cursor:
 class PollResult:
     """What one poll found. `deliveries` are the source-shaped bodies the events were parsed
     from: the poller stores THOSE in the inbox, so a polled change is processed, replayed and
-    deduplicated exactly as a pushed one is (GitHub, AMEX-G1)."""
+    deduplicated exactly as a pushed one is (GitHub, BOSSAPP-1175)."""
 
     events: tuple[IntakeEvent, ...]
     next_cursor: Cursor

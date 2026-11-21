@@ -1,4 +1,4 @@
-"""THE PUBLIC TREE NAMES NO PRIVATE HOST, NETWORK, PROJECT OR HOME DIRECTORY (operator rule).
+"""THE PUBLIC TREE NAMES NO PRIVATE HOST, NETWORK, PROJECT, HOME DIRECTORY OR CUSTOMER (operator rule).
 
 BOSS is dogfooded on the owner's own machines. Incident notes, fixtures and test docstrings kept
 picking up the names of those machines: the self-hosted server, its tailnet address and name, the
@@ -8,10 +8,12 @@ public repository. Fixtures use neutral stand-ins instead: "the shared server", 
 
 The denylist (boss_engine/services/private_infra.py) holds SHA-256 digests of lowercase identifiers,
 never the identifiers themselves, so
-this file cannot reintroduce what it guards against. Each tracked text file is cut four ways and
+this file cannot reintroduce what it guards against. Each tracked text file is cut five ways and
 every piece is hashed and compared:
 
-  words      runs of [a-z0-9]                       a host name, a project-id fragment, a tailnet
+  words      runs of [a-z0-9]                       a host name, a project-id fragment, a tailnet,
+                                                    a customer's company name
+  phrases    two adjacent words                     a company name written as two words
   dotted     a.b.c names and IPv4 addresses, and    a private domain under any sub-host, an
              every dot-suffix of them               address of a real machine
   pairs      a/b path segment pairs, and the user   a private repository, a local checkout path,
@@ -33,8 +35,8 @@ from pathlib import Path
 # THE TABLES live in boss_engine/services/private_infra.py: one denylist, run here over the tree
 # and by the self-fix upstream path over everything a person sends to the BOSS team.
 from boss_engine.services import private_infra
-from boss_engine.services.private_infra import (DOTTED, EMAILS, HOME_USERS, PAIRS, SCOPED,
-                                                WORDS, _h, findings)
+from boss_engine.services.private_infra import (DOTTED, EMAILS, HOME_USERS, PAIRS, PHRASES,
+                                                SCOPED, WORDS, _h, findings)
 
 ROOT = Path(__file__).resolve().parents[2]
 MAX_BYTES = 2_000_000
@@ -55,6 +57,9 @@ def test_the_scanner_catches_each_shape_without_naming_it(monkeypatch):
     # Each table, proven with a neutral word swapped in for the real ones.
     for table, entry, text, want in [
         ("WORDS", "kestrelbox", "deploy to Kestrelbox failed", "w"),
+        ("WORDS", "acme", "the ACME-G3 gap (BOSSAPP-1)", "w"),
+        ("WORDS", "acme", "key 'acme_g3_fail_on_exit_false'", "w"),
+        ("PHRASES", "acme widgets", "for Acme  Widgets, Inc.", "f"),
         ("DOTTED", "corp.example", "https://plane.int.corp.example/api", "d"),
         ("DOTTED", "198.51.100.77", "ssh root@198.51.100.77:22", "d"),
         ("PAIRS", "work/acme", "cd ~/work/acme/boss-wt", "p"),
@@ -68,7 +73,11 @@ def test_the_scanner_catches_each_shape_without_naming_it(monkeypatch):
     assert findings("https://www.example.org/install.sh") == []
     assert findings("https://ops.example.org") == ["unpublished name under the owner's domain"]
     monkeypatch.undo()
-    for table in (WORDS, DOTTED, PAIRS, HOME_USERS, EMAILS, SCOPED, *SCOPED.values()):
+    # A word inside a longer one is not that word (a hash string, a longer company name).
+    monkeypatch.setattr(private_infra, "WORDS", {_h("acme"): "w"})
+    assert findings("sha512-xyzACMEq== and bigacme") == []
+    monkeypatch.undo()
+    for table in (WORDS, PHRASES, DOTTED, PAIRS, HOME_USERS, EMAILS, SCOPED, *SCOPED.values()):
         assert all(re.fullmatch(r"[0-9a-f]{64}", k) for k in table), "store digests, never words"
 
 

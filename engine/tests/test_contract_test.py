@@ -1,6 +1,5 @@
 """A contract-test step: HTTP cases with a method, headers, a body, an expected status and
-JSON-path assertions, reported as a table; one failed case fails the step (AMEX-G7,
-BOSSAPP-1143).
+JSON-path assertions, reported as a table; one failed case fails the step (BOSSAPP-1143).
 """
 from __future__ import annotations
 
@@ -15,7 +14,7 @@ from boss_engine.services import contract_tests as ct
 from boss_engine.services import workflow_capabilities as caps
 from boss_engine.services import workflow_outcomes as outcomes
 
-from .amex_workflow_fixtures import add_deployment_host, eng, project  # noqa: F401
+from .onboarding_workflow_fixtures import add_deployment_host, eng, project  # noqa: F401
 
 #: The local test gateway stands in for the project's own staging deployment.
 LOCAL = frozenset({"127.0.0.1"})
@@ -296,7 +295,7 @@ def _target(c, project_id, health_url, created_by):
 
 def test_community_reaches_only_the_exact_urls_of_targets_a_person_made(gateway, eng, project,
                                                                           dead_port):
-    """AMEX-G8 (BOSSAPP-1166): Community runs contract tests, bound to the project's targets.
+    """BOSSAPP-1166: Community runs contract tests, bound to the project's targets.
 
     Community has no egress network policy, so the guard is the policy: the exact scheme, host
     and port of a deployment target a PERSON created. Another port on the same host (the BOSS
