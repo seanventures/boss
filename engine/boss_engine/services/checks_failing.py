@@ -306,7 +306,7 @@ def for_work(raw: Any) -> Optional[dict[str, Any]]:
     install 2026-11-20: the Work panel said "Ready to merge. Change #3 is built, tested and
     reviewed." over a pull request opened with its checks failing, while its merge card said
     CHECKS FAILING). The merge decision's `checks_failing` (what the card leads with), else the
-    run's own: {gates: [gate keys], security: bool, words: "Security clean, Tests pass"}, or
+    run's own: {gates: [gate keys], security: bool, words: '“Security clean”, “Tests pass”'}, or
     None when nothing is failing. Accepts the stored JSON as text. Never raises."""
     import json
 
@@ -328,7 +328,9 @@ def for_work(raw: Any) -> Optional[dict[str, Any]]:
     ordered = sorted(zip(names, labels), key=lambda nl: 0 if nl[0] in SECURITY_GATES else 1)
     return {"gates": [n for n, _ in ordered],
             "security": bool(rec.get("security")) or any(n in SECURITY_GATES for n in names),
-            "words": ", ".join(lbl for _, lbl in ordered)}
+            # Quoted: a gate is named for what it checks ("Review passed"), and unquoted beside
+            # "failing" it reads as the opposite.
+            "words": ", ".join(f"“{lbl}”" for _, lbl in ordered)}
 
 
 def tip(record: Optional[Mapping[str, Any]]) -> Optional[str]:

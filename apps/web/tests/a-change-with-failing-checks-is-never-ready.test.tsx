@@ -37,7 +37,7 @@ const CARD_RECORD = {
   findings: [], security: true, draft: true, label: "checks failing",
 };
 /** What the engine's work.py sends for the same record (checks_failing.for_work). */
-const WORK_RECORD = { gates: ["security_clean", "tests_pass"], security: true, words: "Security clean, Tests pass" };
+const WORK_RECORD = { gates: ["security_clean", "tests_pass"], security: true, words: "“Security clean”, “Tests pass”" };
 const RAW = {
   id: "wfr_recipes", label: "Recipe tags", title: "Recipe tags", kind: "feature", workflow: "Minor Feature",
   state: "needs_you", age: "1h", action_label: "Merge", created_at: "2026-11-20T09:00:00Z", updated_at: "2026-11-20T09:40:00Z",
@@ -69,7 +69,7 @@ describe("the Work row's next step", () => {
   it("says checks failing and keeps Merge, at the merge card that takes the reason", async () => {
     const { workNextStep } = await import("../lib/work-next-step");
     const next = workNextStep(await load())!;
-    expect(next.words).toBe("Change #3 is open · checks failing (Security clean, Tests pass)");
+    expect(next.words).toBe("Change #3 is open · checks failing (“Security clean”, “Tests pass”)");
     expect(next.words).not.toMatch(/ready/i);
     expect(next.kind).toBe("merge");
     expect(next.label).toBe("Merge change #3");
@@ -93,10 +93,10 @@ describe("the Work panel", () => {
     const w = await load();
     const next = workNextStep(w);
     expect(stateSentence(w, next)).toEqual({ lead: "Checks failing.", tone: "red",
-      rest: "Change #3 opened with failing checks: Security clean, Tests pass. Merging needs your reason." });
+      rest: "Change #3 opened with failing checks: “Security clean”, “Tests pass”. Merging needs your reason." });
     const review = flowNodes({ w, story: null, next }).find((n) => n.key === "review")!;
     expect(review.state).toBe("failed");
-    expect(review.note).toMatchObject({ tone: "you", title: "Your move", text: "Checks failing: Security clean, Tests pass" });
+    expect(review.note).toMatchObject({ tone: "you", title: "Your move", text: "“Security clean”, “Tests pass”" });
     expect(helmSuggestions(w)[0]).toBe("Why are the checks failing?");
   });
 

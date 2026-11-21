@@ -232,7 +232,7 @@ def test_a_change_opened_with_failing_checks_is_never_ready(engine, project):
     row = _row(engine, project, got["run_id"])
     mp = row["links"]["merge_pr"]
     assert mp["checks_failing"] == {"gates": ["security_clean", "tests_pass"], "security": True,
-                                    "words": "Security clean, Tests pass"}
+                                    "words": "“Security clean”, “Tests pass”"}
     # Merge stays the person's action; Review & tests is red, not a tick.
     assert row["action_label"] == "Merge"
     assert {s["key"]: s["state"] for s in row["stages"]}["review"] == "failed"

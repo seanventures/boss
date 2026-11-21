@@ -188,7 +188,7 @@ function codeNodes({ w, story, next, deployments, crew = [], nowMs = Date.now(),
   } else if (mp?.checks_failing) {
     // OPENED WITH ITS CHECKS FAILING: Review & tests is red, and the move is the person's.
     reviewState = "failed";
-    reviewNote = { tone: "you", title: "Your move", text: `Checks failing: ${mp.checks_failing.words}` };
+    reviewNote = { tone: "you", title: "Your move", text: mp.checks_failing.words };
   } else if (r?.state === "failed" && w.why) {
     reviewNote = { tone: w.why.who === "you" ? "you" : "boss", title: w.why.who === "you" ? "Your move" : "BOSS is fixing", text: w.why.words };
   }

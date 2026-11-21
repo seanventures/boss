@@ -42,7 +42,7 @@ def test_merge_links_carry_the_failing_gates_in_words_security_first():
     assert got["number"] == 3
     assert got["checks_failing"]["gates"] == ["security_clean", "tests_pass"]
     assert got["checks_failing"]["security"] is True
-    assert got["checks_failing"]["words"].startswith("Security")
+    assert got["checks_failing"]["words"].startswith("“Security")
     # Stored JSON text reads the same way.
     merge = _merge(json.dumps(CARD))
     assert work._merge_links([merge], merge)["merge_pr"]["checks_failing"] == got["checks_failing"]  # noqa: SLF001
