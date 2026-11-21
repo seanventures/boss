@@ -1,6 +1,6 @@
 """A CONFIG DEPLOY OVER SSH READS THE HOST'S EXIT CODE (laptop 2026-11-21).
 
-The Northgate API onboarding's first config deploy to a Fleet host (2.29.2.202) failed at its
+The Northgate API onboarding's first config deploy to a Fleet host (203.0.113.10) failed at its
 first command: "'CommandResult' object has no attribute 'code'". SshShell read `.code` from
 stack_deploy.HostAccess.run, whose CommandResult carries `returncode`; only LocalShell had ever
 been exercised. This runs SshShell through the REAL HostAccess with a fake SSH adapter.

@@ -6,7 +6,7 @@ failed: the container had exited in its first second on `node server.js` →
 headline said "did not answer as expected … within 600s". Two minutes later the deploy step's
 agent (Pilot) decided fix_app; a repair build ran 02:54-03:00; the fixed version was planned at
 03:02 (sdep_5be0890e) and waited for approval on a card reading "Deploy
-local_recipe-box-fd3ab4a3/recipe-box@095121229a40 to 2.29.2.202 (/opt/boss-apps/recipe-box)?".
+local_recipe-box-fd3ab4a3/recipe-box@095121229a40 to 203.0.113.10 (/opt/boss-apps/recipe-box)?".
 Through all of it, every project surface said "Last deploy failed" in red, and the operator
 asked why no agent was fixing it.
 
@@ -59,14 +59,14 @@ Error: Cannot find module '/app/server.js'
 
 Node.js v22.23.5
 """
-URL = "http://2.29.2.202:8014"
+URL = "http://203.0.113.10:8014"
 
 
 # ── the crash, said and caught ───────────────────────────────────────────────────────────────
 
 def test_a_crash_on_start_is_said_in_the_apps_own_words_and_is_the_apps_to_fix():
     said = sd.explain_failure("health", 1, "BOSS_APP_EXITED 000\n" + RECIPE_HEALTH_LOG,
-                              host="2.29.2.202", url=URL, timeout=600)
+                              host="203.0.113.10", url=URL, timeout=600)
     assert said["cause"] == sd.CAUSE_APP
     assert said["headline"] == ("The app crashed on start (Error: Cannot find module "
                                 f"'/app/server.js'), so nothing answered at {URL}.")
@@ -164,10 +164,10 @@ def test_the_fixs_deploy_card_says_it_is_the_fix():
     asked = sd.fix_question(
         {"cause": "The app crashed on start (Error: Cannot find module '/app/server.js'), so "
                   f"nothing answered at {URL}.", "build_run_id": "crun_68a2"},
-        app="Recipe box", short="0951212", environment="staging", host="2.29.2.202")
+        app="Recipe box", short="0951212", environment="staging", host="203.0.113.10")
     assert asked == ("BOSS fixed the Recipe box deploy: the app crashed on start (Error: Cannot "
                      f"find module '/app/server.js'), so nothing answered at {URL}. Deploy the "
-                     "fix (0951212) to staging on 2.29.2.202?")
+                     "fix (0951212) to staging on 203.0.113.10?")
 
 
 # ── what BOSS is doing about it, on every surface ────────────────────────────────────────────
@@ -226,7 +226,7 @@ def _build(c, db, status) -> str:
 
 
 def _fix(deployment_id, build):
-    return {"host": "2.29.2.202", "phase": "apply", "attempt": 1, "build_run_id": build,
+    return {"host": "203.0.113.10", "phase": "apply", "attempt": 1, "build_run_id": build,
             "deployment_id": deployment_id, "from_build_run_id": "crun_first",
             "cause": "The app crashed on start (Error: Cannot find module '/app/server.js')"}
 

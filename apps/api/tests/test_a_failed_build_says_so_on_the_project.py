@@ -56,7 +56,7 @@ def test_a_failure_is_said_in_words_never_raw():
     ("FileNotFoundError: [Errno 2] No such file or directory: "
      "'/var/lib/boss/sandboxes/abc/crun_1/app/src/x.py'", "/var/lib/boss"),
     ("could not open /tmp/boss-build-7/cache/state.db", "/tmp/boss"),
-    ("could not read /Users/param/.config/boss/creds.json", "/Users/param"),
+    ("could not read /Users/me/.config/boss/creds.json", "/Users/me"),
     ("could not read /home/dev/.ssh/id_ed25519", "/home/dev"),
 ])
 def test_a_reason_never_carries_a_secret_or_a_host_path(raw, gone):

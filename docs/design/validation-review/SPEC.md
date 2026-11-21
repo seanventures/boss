@@ -234,7 +234,7 @@ custom:
 | 4:10 | Re-run | It starts automatically and shows `gwlint exit 0 · 0 open · 1 waived`. Packet v4. |
 | 4:40 | Rules & guides | Show the ruleset v3: P-levels and the CORS guide. Edit the guide text, and show that the edit opens "Ruleset v4" as a change rather than an invisible setting. |
 | 5:20 | Merge card | The packet shows Ready, the P0 row is green, and the overrides O-1…O-3 are listed with who and why. Merge. |
-| 6:00 | Staging | config_dir deploy to 2.29.2.202 (staging). |
+| 6:00 | Staging | config_dir deploy to 203.0.113.10 (staging). |
 | 6:30 | Contract tests | 12/12 pass, including `payments_rate_limited_11th → 429`, which covers V-04 (the auto-added rate limit). Close on the packet: every claim has a ref. |
 
 Before recording: the remediation defect (#9) must be fixed, and a dry run must show a non-empty `fixes[]`.
