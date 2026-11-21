@@ -135,7 +135,7 @@ def test_a_failure_is_classified_from_its_own_record_then_its_words(error, fc, r
 _OWN_TABLES = ("failure_owners", "boss_recommendations", "deadletters", "jobs", "app_previews",
                "stack_deployments", "deployment_targets", "meeting_runs", "code_task_runs",
                "workflow_step_runs", "workflow_runs", "workflow_versions",
-               "workflow_definitions", "events", "decisions")
+               "workflow_definitions", "events", "decisions", "project_settings")
 
 
 @pytest.fixture()
@@ -340,7 +340,9 @@ def test_many_jobs_failing_for_one_person_side_cause_are_one_card(eng, project, 
                                 "AND surface = 'job'"), {"p": project}).scalars().all()
     assert states == ["needs_person"] * 3
     assert len(cards) == 1 and len(cards[0]["recommendation"]["items"]) == 3
-    assert "Connect this project's repository" in cards[0]["question"]
+    # The card leads with the exact first step, and carries them all (failure_guidance).
+    assert "Open Setup › Repositories" in cards[0]["question"]
+    assert any("Connect the repository" in s for s in cards[0]["recommendation"]["steps"])
 
 
 def test_boss_s_own_background_job_is_requeued_by_boss_under_its_own_identity(eng, project):  # noqa: F811
@@ -515,7 +517,12 @@ def test_a_person_s_done_on_a_host_deploy_plans_it_and_needs_their_deploy_permis
     assert got[1]["id"] == "dep_old" and got[1]["execute"] is False
 
 
-def test_only_boss_s_own_dead_job_is_rerun_by_boss_a_person_s_is_their_item(eng, project):  # noqa: F811
+def test_a_person_s_dead_job_is_rerun_as_that_person_by_default_and_is_theirs_when_off(
+        eng, project):  # noqa: F811
+    """THE ORG DEFAULT (identity/fix_authority, 2026-11-21): BOSS re-runs a person's dead job AS
+    THAT PERSON (the dead job's own principal, never BOSS's); with the project's
+    agents_fix_failures off it stays the person's item, as before."""
+    from boss_engine.services import project_settings
     from boss_engine.services.deadletters import (DeadletterRemediationBlocked,
                                                   DeadletterRemediationService)
 
@@ -527,12 +534,27 @@ def test_only_boss_s_own_dead_job_is_rerun_by_boss_a_person_s_is_their_item(eng,
             c, deadletter_id=dl, actor=fo.ACTOR, as_boss=True)
     fo.sweep(eng, _settings(), project_id=project)
     with eng.begin() as c:
-        status = c.execute(text("SELECT status FROM deadletters WHERE id = :d"),
-                           {"d": dl}).scalar()
-        row = c.execute(text("SELECT state, reason FROM failure_owners WHERE project_id = :p "
+        status, requeued_by = c.execute(text(
+            "SELECT d.status, j.on_behalf_of FROM deadletters d LEFT JOIN jobs j "
+            "ON j.id = d.requeued_job_id WHERE d.id = :d"), {"d": dl}).one()
+        row = c.execute(text("SELECT state FROM failure_owners WHERE project_id = :p "
                              "AND surface = 'job'"), {"p": project}).mappings().first()
+    assert status == "requeued" and requeued_by == "usr_someone", "re-run as its own person"
+    assert row["state"] == "fixing"
+
+    with eng.begin() as c:
+        project_settings.set_one(c, project, "agents_fix_failures", 0)
+        _, dl2 = _dead_job(c, project, "knowledge.repository.index", "HTTP 500 again",
+                           dedupe=f"kg-index:{project}:q", principal="usr_someone")
+    fo.sweep(eng, _settings(), project_id=project)
+    with eng.begin() as c:
+        status = c.execute(text("SELECT status FROM deadletters WHERE id = :d"),
+                           {"d": dl2}).scalar()
+        reasons = c.execute(text("SELECT reason FROM failure_owners WHERE project_id = :p "
+                                 "AND surface = 'job' AND state = 'needs_person'"),
+                            {"p": project}).scalars().all()
     assert status == "open"
-    assert row["state"] == "needs_person" and "ran for a person" in row["reason"]
+    assert any("ran for a person" in r for r in reasons)
 
 
 @pytest.mark.parametrize("state, want", [("fixing", "fixing"), ("stuck", "needs_person")])
@@ -577,9 +599,12 @@ def test_an_old_build_is_never_rebuilt_whatever_was_tried_before(eng, project, s
 
 def test_a_workflow_whose_authority_ended_is_the_person_s_and_one_from_before_a_restart_is_not_rerun(
         eng, project, monkeypatch):  # noqa: F811
-    from boss_engine.services import code_task_service
+    """With the org default turned OFF for the project (agents_fix_failures = 0): the old
+    behaviour, a person's card for each."""
+    from boss_engine.services import code_task_service, project_settings
 
     with eng.begin() as c:
+        project_settings.set_one(c, project, "agents_fix_failures", 0)
         ended = _workflow(c, project, step_error="this run's authority has ended "
                           "(grant_does_not_name_agent:agt_x); renew it to continue.")
         expired = _workflow(c, project, step_error="the approval expired before anybody answered")

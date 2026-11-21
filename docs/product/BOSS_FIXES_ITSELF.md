@@ -88,6 +88,24 @@ What makes it feel excellent rather than like a feature:
 
 ## 2. What exists today
 
+### Who owns a failure (always on)
+
+Two owners run on every install, with no switch to turn on:
+
+- **The failure owner** (`services/failure_owner.py`, every monitor tick, all projects). Every failed build, workflow run, deploy, preview, dead job, panel, backup, GitHub connection and held model check ends in one of three states: an agent is fixing it, one card asks a person, or it is resolved. Blind retries stop after 2 attempts; real fixes (a repair build, a bad test case dropped with its reason, a conflict handed to the build agent) get 3.
+- **Step recovery** (`services/step_recovery.py`). A failed workflow step's own agent reads the evidence and retries, repairs the app, cleans up, or files a BOSS fix.
+
+The legacy Shepherd autopilot is not one of them and stays off by default.
+
+**Agents act with the starter's authority by default.** When work a signed-in person started fails, these agents continue it with that person's own delegable authority, without asking again (`identity/fix_authority.py`). That covers retrying, repair builds, editing tests and fixtures, re-running checks, restarting previews, re-planning non-production deploys, settling held model checks, and handing merge conflicts to the build agent. It is an org default recorded in the audit log (`delegation.created` / `delegation.org_default_applied`, authority `fixer`). It is on for every org and project, including existing installs after an upgrade. It can be turned off per org (Identity policy `agents_fix_failures`) or per project (setting `agents_fix_failures = 0`). A person can revoke their own fixer grant, and BOSS does not re-create it. Four hard limits always apply:
+
+- typing a password, token or one-time code;
+- a production deploy's approval when the org requires one;
+- spending above the org budget;
+- acting in another org.
+
+What still goes to a person, and why, is listed in `services/needs_person_exits.py`, and a test keeps that list complete. Every card a person gets says what failed, why, the exact steps to take, and what BOSS does next (`services/failure_guidance.py`).
+
 | Piece | File | What it gives the feature | What it lacks |
 |---|---|---|---|
 | Recovery loop | `engine/boss_engine/services/step_recovery.py` | `ACTIONS` (`retry`, `fix_app`, `clean_and_retry`, `wait_for_boss`, `ask_person`); `cause_signature()` (`deploy:port_held:8000`, `deploy:unwired:res-db`, `build:boss:<stem>`); model decision through the router with a coded fallback (`coded_decision`); evidence validation; per-step budget (`recovery_budget_cents`=500, `recovery_max_minutes`=120) | No confidence. No action that *builds* a BOSS fix. `boss_build()` hashes only `engine/boss_engine/**/*.py` |

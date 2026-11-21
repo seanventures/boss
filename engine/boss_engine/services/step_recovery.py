@@ -960,9 +960,16 @@ def coded_decision(kind: str, evidence: Mapping[str, Any], *, signature: str,
         asked = waiver_ask(failure, repeated=repeated) if kind_of == "open_findings" else \
             _ask(failure, host, repeated=repeated, cause=choice.get("cause"))
         choice = {**asked, "evidence": choice["evidence"]}
-    if authority_message(said):
+    if authority_message(said) and evidence.get("authority_renewed") and RETRY in allowed:
+        # THE ORG DEFAULT RENEWED IT (identity/fix_authority): the run acts again with its
+        # person's own authority, so the work that died of the ended grant simply runs again.
+        choice = {"action": RETRY, "backoff_seconds": 0, "cause": AUTHORITY_ENDED,
+                  "reasoning": "the run's grant had ended; BOSS's agents continue it with its "
+                               "person's authority by the org default, so it runs again",
+                  "evidence": [AUTHORITY_ENDED]}
+    elif authority_message(said):
         # After every other rule, including "one fresh attempt" of a first build failure.
-        # Renewing the authority is a person's act; the same run then continues.
+        # The org default could not renew it (off, revoked, another org): a person's act.
         choice = {"action": ASK_PERSON, "cause": AUTHORITY_ENDED,
                   "reasoning": "only a person can renew the authority this run was started under",
                   "question": AUTHORITY_ENDED,

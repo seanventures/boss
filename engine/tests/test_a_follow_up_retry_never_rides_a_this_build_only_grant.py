@@ -49,12 +49,43 @@ def _children(env, run_id):
 
 
 def test_a_boss_stamped_follow_up_retry_does_not_ride_the_parents_this_build_only_grant(env, staffed):  # noqa: F811
+    """With the org default OFF (agents_fix_failures = 0): refused, as before."""
+    from boss_engine.services import project_settings
+
     crun, _grant = _standalone_build(env)                   # person's build, "this build only"
     fup = _follow_up(env, crun)
-    with pytest.raises(cts.RetryNeedsPerson):
-        with lineage.acting(WORKER_KEY):
-            cts.retry_code_task(env.engine, get_settings(), _Jobs(), fup, automatic=True)
-    assert _children(env, fup) == 0
+    with env.engine.begin() as c:
+        project_settings.set_one(c, env.project, "agents_fix_failures", 0)
+    try:
+        with pytest.raises(cts.RetryNeedsPerson):
+            with lineage.acting(WORKER_KEY):
+                cts.retry_code_task(env.engine, get_settings(), _Jobs(), fup, automatic=True)
+        assert _children(env, fup) == 0
+    finally:
+        with env.engine.begin() as c:
+            project_settings.clear_one(c, env.project, "agents_fix_failures")
+
+
+def test_by_default_the_follow_up_retry_runs_on_the_persons_fixer_authority_not_the_one_build_grant(
+        env, staffed):  # noqa: F811
+    """THE ORG DEFAULT (identity/fix_authority, operator 2026-11-21): BOSS's retry of the person's
+    lineage runs with that person's own authority — on their FIXER grant (org default, audited),
+    never on the consent they gave for one other build."""
+    crun, grant = _standalone_build(env)
+    fup = _follow_up(env, crun)
+    with lineage.acting(WORKER_KEY):
+        new = cts.retry_code_task(env.engine, get_settings(), _Jobs(), fup, automatic=True)["run_id"]
+    with env.engine.begin() as c:
+        job = c.execute(text("SELECT on_behalf_of, grant_id FROM jobs WHERE kind='code.task' "
+                             "AND payload->>'run_id'=:r"), {"r": new}).mappings().one()
+        kind, purpose = c.execute(text("SELECT authority_kind, purpose FROM "
+                                       "identity_delegation_grants WHERE id = :g"),
+                                  {"g": job["grant_id"]}).one()
+    audited = sum(1 for e in env.world.events          # the audit log (faked in this world)
+                  if e.event_type == "delegation.created" and e.grant_id == job["grant_id"]
+                  and (e.details or {}).get("org_default") == "agents_fix_failures")
+    assert job["on_behalf_of"] == ALICE and job["grant_id"] != grant
+    assert kind == "fixer" and "org default" in purpose and audited == 1
 
 
 def test_under_a_standing_grant_boss_retries_the_follow_up_by_itself(env, staffed):  # noqa: F811

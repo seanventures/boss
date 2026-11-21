@@ -130,7 +130,7 @@ def live_state(db: Any, *, org_id: str, mode: RunMode, sub: str, chain: ActorCha
         grant = grants.load(grant_id, db=db)
         if grant is None or grant.org_id != org_id or grant.user_principal_id != sub:
             raise _invalid("grant_unknown")
-        if not grants.is_live(grant):
+        if not grants.usable(grant, db=db):
             raise _invalid("grant_inactive")
         if not agents or not grants.names_agent(grant, agents[0].agent_id):
             # WHICH agent, so the refusal a person reads can name it (an agent id is no secret).

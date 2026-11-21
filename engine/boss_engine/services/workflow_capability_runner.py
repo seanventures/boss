@@ -564,6 +564,35 @@ def _step_authority(ctx: Any, connection: Connection, project_id: str, context: 
             _IN_STEP_AUTHORITY.reset(marker)
 
 
+def _live_run_authority(connection: Connection, project_id: Optional[str], run_id: str) -> Any:
+    """The run's recorded authority while it is live — and, when its grant ended (a "this run
+    only" grant, an expiry), the ORG DEFAULT: its person's fixer authority
+    (identity/fix_authority.renew_run), so BOSS's agents keep fixing the run with that person's
+    own delegable authority instead of parking it for a renewal nobody asked them for. None:
+    nothing recorded, or the default does not apply (off, revoked by a person, another org).
+    Every call site that used to read "the authority has ended" asks this instead."""
+    from boss_engine.identity import consent as _consent
+
+    live = _consent.acting_for_workflow_run(connection, run_id)
+    if live is not None or not run_id:
+        return live
+    try:
+        with connection.begin_nested():
+            if project_id is None:
+                project_id = connection.execute(
+                    text("SELECT project_id FROM workflow_runs WHERE id = :r"),
+                    {"r": run_id}).scalar()
+            if not project_id:
+                return None
+            from boss_engine.identity import fix_authority
+
+            return fix_authority.renew_run(connection, project_id=str(project_id), run_id=run_id,
+                                           why="the run's grant ended; its agents keep fixing it")
+    except Exception as error:  # noqa: BLE001 — no renewal: the run parks as before
+        log.info("fix authority not applied to %s: %s", run_id, error)
+        return None
+
+
 def _run_authority(ctx: Any, connection: Connection, project_id: str, context: Optional[dict[str, Any]],
                    step: Optional[dict[str, Any]], role_key: Optional[str], scope: Optional[frozenset[str]] = None):
     """In-process step work under the workflow run's RECORDED authority (IDENTITY.md §7.14), not
@@ -580,7 +609,7 @@ def _run_authority(ctx: Any, connection: Connection, project_id: str, context: O
     from boss_engine.identity import runs as _runs
 
     run_id = str((context or {}).get("run_id") or "")
-    recorded = _consent.acting_for_workflow_run(connection, run_id) if run_id else None
+    recorded = _live_run_authority(connection, project_id, run_id) if run_id else None
     if recorded is None:
         if run_id and _consent.recorded_authority(connection, run_id) is not None:
             # The run HAS an authority and it is no longer live (grant revoked/expired, person
@@ -2999,6 +3028,9 @@ def _execute_step(
     inputs = _resolve_inputs(binding.get("inputs") or {}, context,
                              optional=frozenset(capability.optional_inputs or ()))
     inputs = _fill_optional_from_run_input(capability, inputs, context)
+    amendment = None
+    if key == "contract_test":
+        inputs, amendment = _amended_inputs(connection, context, step, inputs)
 
     # EVERY CAPABILITY'S RESULT IS JUDGED BY ITS OWN VERDICT (services/workflow_outcomes.py).
     #
@@ -3007,12 +3039,38 @@ def _execute_step(
     # down went green because `http_probe` reports `{"status": 503}`, and a deploy went green on
     # `{"status": "planned"}` before anything had shipped. Each capability now says, in one
     # table beside the catalogue, what success, failure and "still going" look like for it.
-    return workflow_outcomes.apply(
-        key,
-        _perform_capability(connection, ctx, project_id=project_id, actor=actor, step=step,
-                            context=context, key=key, capability=capability, inputs=inputs),
-        inputs,
-    )
+    result = _perform_capability(connection, ctx, project_id=project_id, actor=actor, step=step,
+                                 context=context, key=key, capability=capability, inputs=inputs)
+    if amendment and isinstance(result, dict):
+        # THE AMENDMENT TRAVELS WITH THE RESULT: completing the step replaces its output, so
+        # what an agent dropped (and why) is carried on the result itself and said in its note.
+        result = {**result, "dropped_cases": list(amendment.get("drop") or []),
+                  "recovery_amendment": amendment}
+    return workflow_outcomes.apply(key, result, inputs)
+
+
+def _amended_inputs(connection: Connection, context: Optional[dict[str, Any]], step: Any,
+                    inputs: dict[str, Any]) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """A step's inputs with the amendment an agent recorded on it (contract_remedy: an
+    unpassable case dropped, with why). The workflow's own definition is never edited."""
+    from . import contract_remedy
+
+    run_id = str((context or {}).get("run_id") or "")
+    step_id = str((step or {}).get("id") or "") if isinstance(step, dict) else ""
+    if not run_id or not step_id:
+        return inputs, None
+    try:
+        with connection.begin_nested():
+            amendment = connection.execute(text(
+                "SELECT output->'" + contract_remedy.AMENDMENT_KEY + "' FROM workflow_step_runs "
+                "WHERE workflow_run_id = :r AND step_id = :s ORDER BY updated_at DESC LIMIT 1"),
+                {"r": run_id, "s": step_id}).scalar()
+    except Exception:  # noqa: BLE001 — no amendment readable: the step as defined
+        return inputs, None
+    if isinstance(amendment, str):
+        amendment = json.loads(amendment or "null")
+    applied = contract_remedy.apply(inputs, amendment)
+    return applied, (amendment if applied is not inputs else None)
 
 
 #: What a multi-repo change set does itself, for every repository at once (multirepo/
@@ -4662,7 +4720,7 @@ def _start_recovery_build(
     from . import code_task_service as cts
 
     if _consent.recorded_authority(connection, run_id) is not None \
-            and _consent.acting_for_workflow_run(connection, run_id) is None:
+            and _live_run_authority(connection, project_id, run_id) is None:
         # The grant is gone. A repair build would be this run starting itself again.
         return "", step_recovery.AUTHORITY_ENDED
     settings = getattr(ctx, "settings", None) or get_settings()
@@ -4787,7 +4845,7 @@ def _authority_ended(connection: Connection, run_id: str) -> bool:
     from boss_engine.identity import consent as _consent
 
     return (_consent.recorded_authority(connection, run_id) is not None
-            and _consent.acting_for_workflow_run(connection, run_id) is None)
+            and _live_run_authority(connection, None, run_id) is None)
 
 
 @contextlib.contextmanager
@@ -4812,7 +4870,7 @@ def _recovery_authority(ctx: Any, connection: Connection, *, project_id: str, ru
     from boss_engine.identity import runs as _runs
     from .workflow_precheck_agent import read_permissions
 
-    recorded = _consent.acting_for_workflow_run(connection, run_id) if run_id else None
+    recorded = _live_run_authority(connection, project_id, run_id) if run_id else None
     if recorded is None:
         if run_id and _consent.recorded_authority(connection, run_id) is not None:
             raise CapabilityExecutionError(step_recovery.AUTHORITY_ENDED)
@@ -5071,10 +5129,14 @@ def _recover_awaited(
         return {"done": {"run_id": run_id, "step_id": step_id, "awaited": "authority",
                          "outcome": "parked", "error": step_recovery.AUTHORITY_ENDED}}
 
-    if step_recovery.failure_authority(failure) or _authority_ended(connection, run_id):
-        # The awaited work ended because the run's authority ended, or it has ended since:
-        # nobody decides anything under an authority that is gone.
+    if _authority_ended(connection, run_id):
+        # The run's authority has ended and the org default could not renew it (turned off,
+        # revoked by its person, another org): nobody decides anything under it.
         return park()
+    if step_recovery.failure_authority(failure):
+        # The awaited work died only because the authority ended, and the run is live again on
+        # its person's fixer authority (fix_authority): the agent runs it again, no person asked.
+        evidence = {**evidence, "authority_renewed": True}
     try:
         began = _recovery_begin(connection, ctx, project_id=project_id, run_id=run_id,
                                 step_id=step_id, kind=kind, output=output, evidence=evidence)
@@ -6282,7 +6344,7 @@ def follow_authority_park(connection, *, project_id: str, run_id: str, step) -> 
     message = step_recovery.AUTHORITY_ENDED
     step_id = str(step["step_id"])
     recorded = _consent.recorded_authority(connection, run_id)
-    live = (_consent.acting_for_workflow_run(connection, run_id)
+    live = (_live_run_authority(connection, project_id, run_id)
             if recorded is not None else None)
     if recorded is None or live is None:
         return {"run_id": run_id, "step_id": step_id, "outcome": "parked", "error": message}

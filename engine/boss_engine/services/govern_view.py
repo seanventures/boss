@@ -77,6 +77,9 @@ ENFORCED: dict[str, tuple[str, str]] = {
     # Read by every gate of a build (quality_bar.resolve_for_run) and by a production release.
     "quality_bar": ("Each build", "each_build"),
     "step_recovery": ("Each failed step", "each_failed_step"),
+    # Read whenever a recovery agent needs the starter's authority (identity/fix_authority):
+    # on, it continues with that person's delegable authority; off, the person is asked.
+    "agents_fix_failures": ("Each failed step", "each_failed_step"),
     "recovery_budget_cents": ("Each failed step", "each_failed_step"),
     "recovery_max_minutes": ("Each failed step", "each_failed_step"),
     "max_concurrent_jobs": ("Job queue", "job_queue"),
@@ -87,7 +90,7 @@ ENFORCED: dict[str, tuple[str, str]] = {
 
 #: The on/off controls (0 or 1), drawn as a switch.
 SWITCHES = frozenset({"captain_leads_projects", "captain_auto_improve", "step_recovery",
-                      "open_pr_when_checks_fail"})
+                      "open_pr_when_checks_fail", "agents_fix_failures"})
 
 #: The four thresholds, as the screen names them (key, label, budget_policies column).
 THRESHOLDS = (
