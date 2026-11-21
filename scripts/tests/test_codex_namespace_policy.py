@@ -352,7 +352,8 @@ def test_the_installer_block_uses_the_resolver(tmp_path):
     assert done.stdout.split() == ["-f", BASE, "-f", ".boss/engine-sandbox.compose.yml"]
     # Every compose call after the block uses it; none names the base file alone.
     after = source.split("# ---- end compose files ---", 1)[1]
-    assert "-f scripts/install/community-compose.yml" not in after
+    assert after.count("-f scripts/install/community-compose.yml") == \
+        after.count("${COMPOSE_FILES:--f scripts/install/community-compose.yml}") >= 10
 
 
 @pytest.mark.parametrize("path,needle", [
