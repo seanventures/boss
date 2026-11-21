@@ -147,3 +147,66 @@ def test_every_reader_of_health_samples_reads_the_counted_view():
         for m in re.finditer(r"FROM\s+deployment_health_samples", path.read_text(errors="ignore")):
             offenders.append(rel)
     assert not offenders, offenders
+
+
+def _new_target(eng, pid, name):
+    with eng.begin() as c:
+        return target(c, pid, f"{pid}_{name}", name)
+
+
+def test_a_probe_that_comes_back_does_not_bring_back_its_old_record(seeded):
+    """A → B → A: the first A's failures belong to an earlier record; what is counted starts
+    at "Measured since", exactly."""
+    eng, pid, _ids = seeded
+    tid = _new_target(eng, pid, "aba")
+    with eng.begin() as c:
+        now = c.execute(text("SELECT now()")).scalar()
+        for i in range(5):
+            dh.record_sample(c, _t(c, tid), _ok(HEALTHZ, ok=False), now - timedelta(minutes=30 - i))
+        dh.record_sample(c, _t(c, tid), _ok(READYZ), now - timedelta(minutes=10))
+        dh.record_sample(c, _t(c, tid), _ok(HEALTHZ), now)
+    with eng.connect() as c:
+        t = _t(c, tid)
+        counted = c.execute(text("SELECT min(checked_at), count(*) FROM counted_health_samples "
+                                 "WHERE deployment_target_id = :t"), {"t": tid}).one()
+        st = target_states(c, [tid])[tid]
+    assert counted[1] == 1 and counted[0] == t["probe_signature_since"]
+    assert st["health"] == "healthy" and st["uptime_pct"] == 100.0
+
+
+def test_a_probe_change_is_audited_with_the_availability_it_discarded(seeded):
+    """Editing a check must never silently erase an SLO breach: the change is an event naming
+    old → new and what stopped counting, and the target's health history shows it."""
+    eng, pid, _ids = seeded
+    tid = _new_target(eng, pid, "audited")
+    with eng.begin() as c:
+        now = c.execute(text("SELECT now()")).scalar()
+        for i in range(3):
+            sample(c, pid, tid, now - timedelta(minutes=30 - i), False, None, "got 404")
+        dh.record_sample(c, _t(c, tid), _ok(HEALTHZ, ok=True), now - timedelta(minutes=20))
+        dh.record_sample(c, _t(c, tid), _ok(HEALTHZ, ok=False), now - timedelta(minutes=15))
+        dh.record_sample(c, _t(c, tid), _ok(READYZ), now)
+    with eng.connect() as c:
+        events = [dict(r) for r in c.execute(text(
+            "SELECT actor, data FROM events WHERE entity_id = :t AND event_type = :e "
+            "ORDER BY created_at"), {"t": tid, "e": dh.PROBE_CHANGED_EVENT}).mappings()]
+        view = {x["target_id"]: x for x in dh.health_view(c, pid)["targets"]}[tid]
+    assert len(events) == 2, "legacy → HEALTHZ, then HEALTHZ → READYZ"
+    first, second = events[0]["data"], events[1]["data"]
+    assert first["old_signature"] is None and first["new_signature"] == HEALTHZ
+    assert first["discarded"]["samples"] == 3 and first["discarded"]["uptime_pct"] == 0.0
+    assert second["old_signature"] == HEALTHZ and second["new_signature"] == READYZ
+    assert (second["discarded"]["samples"], second["discarded"]["ok"],
+            second["discarded"]["uptime_pct"]) == (2, 1, 50.0)
+    assert events[1]["actor"] == "boss:health-probe"
+    assert [p["new_signature"] for p in view["probe_changes"]] == [READYZ, HEALTHZ]
+
+
+def test_a_brand_new_target_s_first_probe_is_not_an_audit_event(seeded):
+    eng, pid, _ids = seeded
+    tid = _new_target(eng, pid, "fresh")
+    with eng.begin() as c:
+        now = c.execute(text("SELECT now()")).scalar()
+        dh.record_sample(c, _t(c, tid), _ok(HEALTHZ), now)
+        n = c.execute(text("SELECT count(*) FROM events WHERE entity_id = :t"), {"t": tid}).scalar()
+    assert n == 0

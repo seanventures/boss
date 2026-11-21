@@ -16513,4 +16513,8 @@ CREATE OR REPLACE VIEW counted_health_samples AS
          s.latency_ms, s.error, s.observed_version, s.probe_signature
   FROM deployment_health_samples s
   JOIN deployment_targets t ON t.id = s.deployment_target_id
-  WHERE t.probe_signature IS NULL OR s.probe_signature = t.probe_signature;
+  WHERE t.probe_signature IS NULL
+     OR (s.probe_signature = t.probe_signature
+         -- A→B→A: the first A's samples belong to an earlier record, not this one, and
+         -- "Measured since" must say exactly what is counted.
+         AND (t.probe_signature_since IS NULL OR s.checked_at >= t.probe_signature_since));

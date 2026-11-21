@@ -295,11 +295,53 @@ def probe_signature(checks: list[dict]) -> Optional[str]:
     return sig if len(sig) <= 400 else "sha1:" + hashlib.sha1(sig.encode()).hexdigest()
 
 
+#: The audit event a probe change writes (and health_view reads back).
+PROBE_CHANGED_EVENT = "health.probe_changed"
+
+
+def _audit_probe_change(connection, target: dict, current: dict, new_sig: str,
+                        at: datetime) -> None:
+    """Record that the target's probe changed and what availability stops counting. Reads the
+    counted samples BEFORE the switch: exactly what SLO was built from until now."""
+    from .core import emit_event
+
+    row = connection.execute(
+        sql("SELECT count(*) AS n, count(*) FILTER (WHERE ok) AS okn, min(checked_at) AS first "
+            "FROM " + COUNTED_SAMPLES + " WHERE deployment_target_id = :t AND checked_at >= :cut"),
+        {"t": target["id"], "cut": at - timedelta(hours=24)}).mappings().first() or {}
+    n, okn = int(row.get("n") or 0), int(row.get("okn") or 0)
+    if not current.get("probe_signature") and not n:
+        return                                   # a brand-new target: nothing was discarded
+    since = current.get("probe_signature_since")
+    emit_event(connection, target["project_id"], PROBE_CHANGED_EVENT, "boss:health-probe",
+               "deployment_target", target["id"], {
+                   "old_signature": current.get("probe_signature"),
+                   "new_signature": new_sig,
+                   # Who changed what the probe asks: the target's declared checks (edited by a
+                   # person or an agent) or its address/port; the probe only noticed.
+                   "changed_by": target.get("updated_by") or target.get("created_by"),
+                   "measured_since_before": since.isoformat() if since else None,
+                   "discarded": {"window": "24h", "samples": n, "ok": okn,
+                                 "uptime_pct": round(okn * 100.0 / n, 2) if n else None,
+                                 "first": row["first"].isoformat() if row.get("first") else None},
+                   "at": at.isoformat()})
+
+
 def record_sample(connection, target: dict, sample: dict, at: datetime) -> None:
     """Write one sample, with the probe that took it, and move the target's current probe
     signature (and "measured since") when the probe changed. The ONE writer of a sample, so the
-    sweep and "Probe now" cannot record differently."""
+    sweep and "Probe now" cannot record differently.
+
+    A CHANGED PROBE IS AUDITED. Changing the probe starts a new record, which discards the old
+    one's availability from SLO — so editing a check must never silently erase a breach. The
+    change is an event (health.probe_changed: old → new signature, who, and the availability
+    that stopped counting), shown in the target's health history (health_view)."""
     sig = sample.get("probe_signature")
+    current = connection.execute(
+        sql("SELECT probe_signature, probe_signature_since FROM deployment_targets WHERE id = :t"),
+        {"t": target["id"]}).mappings().first() or {}
+    if sig and current.get("probe_signature") != sig:
+        _audit_probe_change(connection, target, current, sig, at)
     connection.execute(
         sql("INSERT INTO deployment_health_samples "
             "(id, project_id, deployment_target_id, checked_at, ok, status_code, "
@@ -493,6 +535,14 @@ def health_view(connection, project_id: str, *, now: Optional[datetime] = None,
             "measured_with": t.get("probe_signature"),
             "measured_since": (t["probe_signature_since"].isoformat()
                                if t.get("probe_signature_since") else None),
+            # Every time the probe changed and what availability stopped counting (audit).
+            "probe_changes": [
+                {"at": r["created_at"].isoformat(), **(r["data"] or {})}
+                for r in connection.execute(
+                    sql("SELECT created_at, data FROM events WHERE project_id = :p "
+                        "AND event_type = :e AND entity_type = 'deployment_target' "
+                        "AND entity_id = :t ORDER BY created_at DESC LIMIT 10"),
+                    {"p": project_id, "e": PROBE_CHANGED_EVENT, "t": t["id"]}).mappings()],
             # Oldest-first so the graph reads left to right like time does.
             "series": [{"at": s["checked_at"].isoformat(), "ok": s["ok"],
                         "ms": s["latency_ms"]} for s in reversed(samples[:points])],
