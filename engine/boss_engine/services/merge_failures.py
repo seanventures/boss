@@ -281,22 +281,122 @@ def hand_to_builder(connection: Any, settings: Any, run_id: str, note: str) -> O
     from .code_task_service import retry_code_task
     from .jobs import JobLeaseService
 
+    global LAST_REFUSAL
+    LAST_REFUSAL = ""
     engine = getattr(connection, "engine", None)
     if engine is None:
+        LAST_REFUSAL = "no engine to start the build on"
         return None
     try:
         out = retry_code_task(engine, settings, JobLeaseService(settings), run_id,
                               fix_note=note, automatic=True)
     except Exception as error:  # noqa: BLE001 — refused: the person is asked instead
         log.warning("merge conflict hand-off refused for %s: %s", run_id, error)
+        LAST_REFUSAL = str(error)[:500]
         return None
     new_run = str(out.get("run_id") or "")
     if not new_run or new_run == run_id or out.get("created") is False:
         # Not a NEW attempt (another run already owns the branch, or nothing started): it is
         # not a hand-off, so the person's card is never withdrawn on it.
         log.warning("merge conflict hand-off for %s started no new build (%s)", run_id, out)
+        LAST_REFUSAL = f"no new build started ({str(out)[:300]})"
         return None
     return new_run
+
+
+#: Why the last hand_to_builder call started nothing (BOSS's own refusal, in its words).
+LAST_REFUSAL = ""
+#: A hand-off BOSS itself refused is tried again by the sweep this many more times, this far
+#: apart (minutes), before the reopened card is the person's alone.
+HANDOFF_RETRIES = 2
+HANDOFF_BACKOFF_MINUTES = (10, 60)
+
+
+def _mark_refused(connection: Any, decision_id: str, *, attempts: int) -> None:
+    """The card was reopened because BOSS's OWN hand-off was refused: said so, distinctly
+    (`merge_failed.handoff_refused`: why, how many tries, when the next is due), so the sweep
+    retries it itself — and a card a person cancelled (no such marker) is never touched."""
+    from datetime import datetime, timedelta, timezone
+
+    due = None
+    if attempts <= HANDOFF_RETRIES:
+        wait = HANDOFF_BACKOFF_MINUTES[min(attempts, len(HANDOFF_BACKOFF_MINUTES)) - 1]
+        due = (datetime.now(timezone.utc) + timedelta(minutes=wait)).isoformat()
+    connection.execute(text(
+        "UPDATE decisions SET recommendation = jsonb_set(recommendation, "
+        "'{merge_failed,handoff_refused}', CAST(:m AS jsonb)) WHERE id = :d"),
+        {"d": decision_id, "m": json.dumps({"why": LAST_REFUSAL or "the build did not start",
+                                            "attempts": attempts, "next_at": due})})
+
+
+def retry_refused_handoffs(engine: Any, settings: Any, *, project_id: Optional[str] = None,
+                           limit: int = 3) -> list[dict[str, Any]]:
+    """A HAND-OFF BOSS ITSELF REFUSED IS TRIED AGAIN BY BOSS, never left for a "Done — retry"
+    (operator; #9 after #272). Only questions marked `merge_failed.handoff_refused` (reopened
+    because BOSS's own hand-off was refused), still open, not handed off, due, with tries left.
+    Each is locked FOR UPDATE SKIP LOCKED and re-checked inside the lock; the card is withdrawn
+    only once a builder run exists and is linked."""
+    from datetime import datetime, timezone
+
+    from .core import emit_event
+
+    done: list[dict[str, Any]] = []
+    now = datetime.now(timezone.utc).isoformat()
+    with engine.begin() as c:
+        # A CARD THE RECOVERY REOPENED BEFORE THIS MARKER EXISTED (#9 under #270: its event
+        # `merge.conflict_orphan_recovered` says reopened) is BOSS's own refusal too: marked,
+        # due now, so it is retried like any other — never left for "Done — retry".
+        c.execute(text(
+            "UPDATE decisions d SET recommendation = jsonb_set(d.recommendation, "
+            "'{merge_failed,handoff_refused}', jsonb_build_object('why', 'the hand-off was "
+            "refused before this was recorded', 'attempts', 1, 'next_at', CAST(:now AS text))) "
+            "WHERE d.status = 'pending' AND d.recommendation->'merge_failed'->>'kind' = :k "
+            "AND d.recommendation->'merge_failed'->'handoff_refused' IS NULL "
+            "AND d.recommendation->'merge_failed'->>'handed_to' IS NULL "
+            "AND (CAST(:p AS text) IS NULL OR d.project_id = :p) "
+            "AND EXISTS (SELECT 1 FROM events e WHERE e.project_id = d.project_id AND "
+            "e.entity_id = d.id AND e.event_type = 'merge.conflict_orphan_recovered' AND "
+            "e.data->>'reopened' = 'true')"), {"now": now, "k": NOT_MERGEABLE, "p": project_id})
+        ids = c.execute(text(
+            "SELECT id FROM decisions WHERE status = 'pending' "
+            "AND recommendation->'merge_failed'->>'kind' = :k "
+            "AND recommendation->'merge_failed'->'handoff_refused' IS NOT NULL "
+            "AND recommendation->'merge_failed'->>'handed_to' IS NULL "
+            "AND CAST(recommendation->'merge_failed'->'handoff_refused'->>'attempts' AS int) <= :n "
+            "AND COALESCE(recommendation->'merge_failed'->'handoff_refused'->>'next_at', '') <= :now "
+            "AND recommendation->'merge_failed'->'handoff_refused'->>'next_at' IS NOT NULL "
+            "AND (CAST(:p AS text) IS NULL OR project_id = :p) ORDER BY updated_at LIMIT :lim"),
+            {"k": NOT_MERGEABLE, "n": HANDOFF_RETRIES, "now": now, "p": project_id,
+             "lim": limit}).scalars().all()
+    for decision_id in ids:
+        with engine.begin() as c:
+            row = c.execute(text(
+                "SELECT project_id, recommendation FROM decisions WHERE id = :d AND status = "
+                "'pending' AND recommendation->'merge_failed'->>'handed_to' IS NULL "
+                "AND recommendation->'merge_failed'->'handoff_refused' IS NOT NULL "
+                "FOR UPDATE SKIP LOCKED"), {"d": decision_id}).mappings().first()
+            if row is None:
+                continue
+            pid = str(row["project_id"])
+            rec = row["recommendation"] if isinstance(row["recommendation"], dict) else \
+                json.loads(row["recommendation"] or "{}")
+            url = str(rec.get("pull_request_url") or "")
+            tried = int(((rec.get(KEY) or {}).get("handoff_refused") or {}).get("attempts") or 1)
+            runs = _pr_runs(c, pid, url, decision_id, rec.get("branch_name"))
+            if not change_open(c, pid, url, settings=settings) or _lineage_stopped(c, runs):
+                continue
+            new_run = _hand_off_locked(c, settings, pid, decision_id, rec, runs)
+            if new_run:
+                _withdraw(c, pid, decision_id,
+                          f"BOSS handed it to the build agent ({new_run}) to update the branch; "
+                          "you will be asked again when it can merge.",
+                          {"kind": "merge_conflict_handed_off", "run_id": new_run})
+            else:
+                _mark_refused(c, decision_id, attempts=tried + 1)
+            emit_event(c, pid, "merge.handoff_retried", "boss", "decision", decision_id,
+                       {"handed_to": new_run, "attempt": tried + 1})
+        done.append({"decision_id": decision_id, "handed_to": new_run})
+    return done
 
 
 def handle(service: Any, connection: Any, project_id: str, decision_id: str, number: int,
@@ -371,6 +471,8 @@ def handle(service: Any, connection: Any, project_id: str, decision_id: str, num
                       {"kind": "merge_conflict_handed_off", "run_id": new_run})
             return {**base, "status": "needs_rebase", "message": words}
         _mark(connection, decision_id, reason, conflict_steps(runs), kind, reopen=True)
+        if runs:                       # a build existed and BOSS's own hand-off was refused
+            _mark_refused(connection, decision_id, attempts=1)
         return {**base, "status": "failed", "message": f"Merge failed: {reason}."}
     _mark(connection, decision_id, reason, "Fix that, then press Merge to try again.", kind,
           reopen=True)
@@ -429,7 +531,7 @@ def on_job_deadlettered(connection: Any, job_row: dict[str, Any], error: dict[st
 
 __all__ = ["FAILED", "HEAD_CHANGED", "KEY", "NOT_MERGEABLE", "TRANSIENT", "classify",
            "conflict_note", "conflict_steps", "hand_off_conflict", "hand_to_builder",
-           "recover_orphaned_conflicts",
+           "recover_orphaned_conflicts", "retry_refused_handoffs",
            "is_local_change", "handle", "on_job_deadlettered", "reason_words"]
 
 
@@ -507,6 +609,8 @@ def recover_orphaned_conflicts(engine: Any, settings: Any, *, project_id: Option
                 failed = rec.get(KEY) or {}
                 _mark(c, decision_id, str(failed.get("reason") or "a conflict"),
                       conflict_steps(runs), NOT_MERGEABLE, reopen=True)
+                if runs:
+                    _mark_refused(c, decision_id, attempts=1)
             emit_event(c, pid, "merge.conflict_orphan_recovered", "boss", "decision",
                        decision_id, {"handed_to": new_run, "reopened": new_run is None})
         done.append({"decision_id": decision_id, "handed_to": new_run,

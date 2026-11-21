@@ -1343,6 +1343,8 @@ class Jobs(Surface):
         failed = rec.get("merge_failed") if isinstance(rec.get("merge_failed"), dict) else {}
         if failed.get("kind") != "not_mergeable" or not _fix_default(c, item.project_id):
             return False
+        if failed.get("handoff_refused"):
+            return False       # merge_failures.retry_refused_handoffs owns its retries (bounded)
         from . import merge_failures
 
         if not merge_failures._pr_runs(c, str(item.project_id),  # noqa: SLF001
@@ -2218,6 +2220,9 @@ def sweep(engine: Any, settings: Any, *, now: Optional[datetime] = None, jobs: A
             from . import merge_failures
 
             report["orphaned_conflicts"] = merge_failures.recover_orphaned_conflicts(
+                engine, settings, project_id=project_id)
+            # A hand-off BOSS itself refused (the card says so) is tried again by BOSS, bounded.
+            report["handoffs_retried"] = merge_failures.retry_refused_handoffs(
                 engine, settings, project_id=project_id)
         except Exception:  # noqa: BLE001 — one recovery never stops the sweep
             log.exception("failure owner: orphaned merge conflicts")
