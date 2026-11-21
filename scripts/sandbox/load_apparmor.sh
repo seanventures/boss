@@ -7,10 +7,11 @@
 #   sudo scripts/sandbox/load_apparmor.sh --check    # say whether it is loaded, change nothing
 #   sudo scripts/sandbox/load_apparmor.sh --remove   # unload and delete it
 #
-# AppArmor 4 (Ubuntu 24.04) mediates user namespaces and needs the profile's `userns,` rule.
-# AppArmor 3 has no such rule (the parser rejects it) and does not mediate user namespaces, so
-# there the rule is left out instead of the load failing. A host without AppArmor needs nothing:
-# Docker ignores the apparmor= option there.
+# AppArmor 4 (Ubuntu 24.04) mediates user namespaces for a profile that declares
+# `abi <abi/4.0>`, and allows them only where it says `userns,`. AppArmor 3 has neither (its
+# parser rejects both) and does not mediate user namespaces, so there both lines are left out
+# instead of the load failing (`--print-apparmor3` prints that variant). A host without AppArmor
+# needs nothing: Docker ignores the apparmor= option there.
 set -eu
 
 NAME=boss-engine
@@ -21,6 +22,10 @@ SECFS=/sys/kernel/security/apparmor
 MODE="${1:-load}"
 
 loaded() { [ -r "$SECFS/profiles" ] && grep -q "^$NAME (" "$SECFS/profiles"; }
+# The AppArmor 3 variant: without the 4.0 ABI line and the `userns,` rule.
+variant3() { grep -v -e '^[[:space:]]*userns,[[:space:]]*$' -e '^[[:space:]]*abi[[:space:]]' "$SRC"; }
+
+if [ "$MODE" = --print-apparmor3 ]; then variant3; exit 0; fi
 
 if [ ! -d "$SECFS" ]; then
   echo "AppArmor is not enabled on this host: nothing to load. Docker ignores apparmor=$NAME here;"
@@ -36,7 +41,7 @@ case "$MODE" in
     if [ -f "$DEST" ]; then apparmor_parser -R "$DEST" 2>/dev/null || true; rm -f "$DEST"; fi
     echo "removed: $NAME"; exit 0 ;;
   load|--load) ;;
-  *) echo "usage: $0 [--check|--remove]" >&2; exit 2 ;;
+  *) echo "usage: $0 [--check|--remove|--print-apparmor3]" >&2; exit 2 ;;
 esac
 
 [ "$(id -u)" = 0 ] || { echo "run as root (sudo $0)" >&2; exit 2; }
@@ -49,7 +54,7 @@ if apparmor_parser -Q -K "$SRC" >"$TMP.out" 2>&1; then
   cp "$SRC" "$TMP"
   echo "AppArmor with user-namespace rules: loading the full profile"
 else
-  grep -v '^[[:space:]]*userns,[[:space:]]*$' "$SRC" > "$TMP"
+  variant3 > "$TMP"
   if ! apparmor_parser -Q -K "$TMP" >"$TMP.out" 2>&1; then
     echo "apparmor_parser rejects the profile:" >&2; cat "$TMP.out" >&2; exit 1
   fi
@@ -59,7 +64,7 @@ else
     echo "to grant them (it has no 'userns' rule). Upgrade the apparmor package (4.0 or later)." >&2
     exit 1
   fi
-  echo "AppArmor 3 (user namespaces not mediated): loading the profile without the userns rule"
+  echo "AppArmor 3 (user namespaces not mediated): loading the profile without the abi 4.0 and userns lines"
 fi
 install -m 0644 "$TMP" "$DEST"
 apparmor_parser -r -W "$DEST"

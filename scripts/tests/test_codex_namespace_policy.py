@@ -97,8 +97,12 @@ def _rule_lines(block):
     return {line.strip() for line in block.splitlines() if line.strip()}
 
 
-def test_the_container_profile_is_docker_default():
+def test_the_container_profile_follows_docker_default_and_refuses_userns():
+    """docker-default's rules, plus the 4.0 ABI: without it AppArmor 4 does not mediate user
+    namespaces for the profile at all (measured on Ubuntu 24.04: `unshare -U` succeeded under
+    docker-default with BOSS's seccomp, and is refused under boss-engine)."""
     base, _ = _apparmor_parts()
+    assert re.search(r"^abi <abi/4\.0>,$", base, re.M)
     lines = _rule_lines(base)
     assert "deny mount," in lines
     assert not lines & {"mount,", "pivot_root,", "userns,"}
@@ -128,25 +132,34 @@ def test_the_transition_covers_every_codex_platform_package_bundled():
             assert f"{path} Cx -> engine_sandbox," in base
 
 
-def test_the_loader_drops_userns_on_apparmor_3_instead_of_failing():
+def _apparmor3_variant():
+    done = subprocess.run(["sh", str(ROOT / "scripts/sandbox/load_apparmor.sh"),
+                           "--print-apparmor3"], capture_output=True, text=True, timeout=30)
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def test_the_loader_drops_abi_and_userns_on_apparmor_3_instead_of_failing():
+    """AppArmor 3 has no abi/4.0 file and no `userns` rule; its parser rejects both."""
+    full = (ROOT / "scripts/sandbox/boss-engine.apparmor").read_text()
+    v3 = _apparmor3_variant()
+    assert not re.search(r"^\s*abi\s", v3, re.M) and "userns," not in v3
+    removed = [line for line in full.splitlines() if line not in v3.splitlines()]
+    assert sorted(line.strip() for line in removed) == ["abi <abi/4.0>,", "userns,"]
     loader = (ROOT / "scripts/sandbox/load_apparmor.sh").read_text()
-    assert "grep -v '^[[:space:]]*userns,[[:space:]]*$'" in loader
     assert "features/namespaces/userns_create" in loader      # AA4 kernel + AA3 parser: say so
     assert "AppArmor is not enabled on this host: nothing to load" in loader
 
 
-@pytest.mark.skipif(not __import__("shutil").which("apparmor_parser"),
+@pytest.mark.skipif(not shutil.which("apparmor_parser"),
                     reason="apparmor_parser is not installed here")
 def test_the_profile_compiles(tmp_path):
-    import subprocess
-
     src = ROOT / "scripts/sandbox/boss-engine.apparmor"
-    stripped = tmp_path / "boss-engine"
-    stripped.write_text("".join(line for line in src.read_text().splitlines(True)
-                                if line.strip() != "userns,"))
+    v3 = tmp_path / "boss-engine"
+    v3.write_text(_apparmor3_variant())
     full = subprocess.run(["apparmor_parser", "-Q", "-K", str(src)], capture_output=True)
     assert full.returncode == 0 or subprocess.run(
-        ["apparmor_parser", "-Q", "-K", str(stripped)], capture_output=True).returncode == 0
+        ["apparmor_parser", "-Q", "-K", str(v3)], capture_output=True).returncode == 0
 
 
 # ── the seccomp additions are as narrow as seccomp allows ────────────────────────────────────
