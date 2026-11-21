@@ -265,7 +265,7 @@ def test_a_merge_conflict_on_a_local_change_goes_to_the_build_agent_not_the_pers
         eng, project, monkeypatch):  # noqa: F811
     handed = []
 
-    def builder(connection, settings, run_id, note):
+    def builder(connection, settings, run_id, note, **_k):
         handed.append((run_id, note))
         return "crun_the_fix"
 

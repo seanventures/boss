@@ -1343,6 +1343,8 @@ class Jobs(Surface):
         failed = rec.get("merge_failed") if isinstance(rec.get("merge_failed"), dict) else {}
         if failed.get("kind") != "not_mergeable" or not _fix_default(c, item.project_id):
             return False
+        if failed.get("handoff_refused"):
+            return False       # merge_failures.retry_refused_handoffs owns its retries (bounded)
         from . import merge_failures
 
         if not merge_failures._pr_runs(c, str(item.project_id),  # noqa: SLF001
@@ -1746,6 +1748,11 @@ EXEMPT: dict[str, str] = {
     "project_onboarding_runs": "onboarding ends needs_you with its own setup card (needs.setup_cards)",
     "task_copies": "a copy to an external tracker; ticket_sync retries it with backoff",
     "agent_conversation_turns": "one chat turn; the person sees the error in their thread and asks again",
+    # chat_turns.py (#267): a turn of the person's own chat with an agent. Its failure line in
+    # THEIR thread is the hand-over — the person who asked owns it and asks again; there is no
+    # work of BOSS's to re-run behind it (the same rule as agent_conversation_turns).
+    "agent_chat_turns": "one turn of a person's own chat; its failure line in their thread is "
+                        "the hand-over, and the person who asked owns it and asks again",
     "agent_runs": "a kernel agent run; its job (Jobs) or work item owns it",
     "agent_wakeups": "a timer for an agent; the agent's work item owns it",
     "webhook_deliveries": "an outbound webhook; delivered with backoff and dead-lettered as a job",
@@ -2218,6 +2225,9 @@ def sweep(engine: Any, settings: Any, *, now: Optional[datetime] = None, jobs: A
             from . import merge_failures
 
             report["orphaned_conflicts"] = merge_failures.recover_orphaned_conflicts(
+                engine, settings, project_id=project_id)
+            # A hand-off BOSS itself refused (the card says so) is tried again by BOSS, bounded.
+            report["handoffs_retried"] = merge_failures.retry_refused_handoffs(
                 engine, settings, project_id=project_id)
         except Exception:  # noqa: BLE001 — one recovery never stops the sweep
             log.exception("failure owner: orphaned merge conflicts")

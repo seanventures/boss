@@ -87,7 +87,7 @@ def test_the_conflict_is_handed_over_and_only_then_the_card_withdrawn_and_linked
         eng, project, monkeypatch):  # noqa: F811
     made = []
 
-    def builder(connection, settings, run_id, note):
+    def builder(connection, settings, run_id, note, **_k):
         new = f"crun_{uuid4().hex[:20]}"
         with connection.engine.begin() as c2:
             c2.execute(text("INSERT INTO code_task_runs (id, project_id, title, status, "
@@ -116,7 +116,7 @@ def test_an_orphaned_conflict_is_picked_up_again(eng, project, monkeypatch):  # 
     set still open — the sweep hands it to the builder."""
     made = []
     monkeypatch.setattr(merge_failures, "hand_to_builder",
-                        lambda conn, s, run_id, note: made.append(run_id) or "crun_recovered")
+                        lambda conn, s, run_id, note, **_k: made.append(run_id) or "crun_recovered")
     with eng.begin() as c:
         url, runs, card, _reason = _local_change_9(c, project)
         _local_change_set(c, project, runs[-1])
@@ -202,7 +202,7 @@ def test_two_concurrent_sweeps_hand_an_orphan_off_once_and_never_reopen_it(
 
     calls = []
 
-    def slow_builder(conn, settings, run_id, note):
+    def slow_builder(conn, settings, run_id, note, **_k):
         calls.append(run_id)
         time.sleep(1.5)
         return "crun_only_one"
@@ -227,7 +227,7 @@ def test_two_concurrent_sweeps_hand_an_orphan_off_once_and_never_reopen_it(
 def test_a_later_attempt_is_linked_only_when_it_was_told_the_conflict(eng, project, monkeypatch):  # noqa: F811
     handed = []
     monkeypatch.setattr(merge_failures, "hand_to_builder",
-                        lambda conn, s, run_id, note: handed.append(run_id) or "crun_new")
+                        lambda conn, s, run_id, note, **_k: handed.append(run_id) or "crun_new")
     with eng.begin() as c:
         url, runs, card, _reason = _local_change_9(c, project)
         _local_change_set(c, project, runs[-1])
@@ -262,6 +262,127 @@ def test_another_owner_s_question_is_closed_once_the_remedy_started_never_an_app
         got = dict(c.execute(text("SELECT id, status FROM decisions WHERE id = ANY(:i)"),
                              {"i": [ask, deploy]}).all())
     assert got[ask] == "withdrawn" and got[deploy] == "pending"
+
+
+def _due_now(eng, card):  # noqa: F811
+    with eng.begin() as c:
+        c.execute(text("UPDATE decisions SET recommendation = jsonb_set(recommendation, "
+                       "'{merge_failed,handoff_refused,next_at}', to_jsonb(CAST(:t AS text))) "
+                       "WHERE id = :d"), {"t": _ago(minutes=1).isoformat(), "d": card})
+
+
+def test_a_refused_hand_off_is_retried_by_boss_and_the_card_withdrawn_once_linked(
+        eng, project, monkeypatch):  # noqa: F811
+    """#9 after #272's install: BOSS's own hand-off was refused (the restart guard), the card was
+    reopened — and must not wait for a person. The card says it was BOSS's refusal; the next due
+    sweep tries again itself and withdraws the card only once a builder is linked."""
+    refuse = {"on": True}
+    made = []
+
+    def builder(conn, settings, run_id, note, why=None):
+        if refuse["on"]:
+            why.append("it failed before BOSS last started")
+            return None
+        made.append(run_id)
+        return "crun_after_fix"
+
+    monkeypatch.setattr(merge_failures, "hand_to_builder", builder)
+    with eng.begin() as c:
+        url, runs, card, _reason = _local_change_9(c, project)
+        _local_change_set(c, project, runs[-1])
+        _orphaned(c, project, card)
+    fo.sweep(eng, _settings(), project_id=project)
+    status, rec = _status(eng, card)
+    marker = rec["merge_failed"]["handoff_refused"]
+    assert status == "pending" and marker["attempts"] == 1 and marker["next_at"]
+    assert marker["why"] == "it failed before BOSS last started", "this call's own reason"
+    fo.sweep(eng, _settings(), project_id=project)                     # not due yet: untouched
+    assert made == [] and _status(eng, card)[0] == "pending"
+    refuse["on"] = False                                                # the guard is fixed
+    _due_now(eng, card)
+    fo.sweep(eng, _settings(), project_id=project)
+    status, rec = _status(eng, card)
+    assert made == [runs[-1]] and status == "withdrawn"
+    assert rec["merge_failed"]["handed_to"] == "crun_after_fix"
+
+
+def test_a_refused_hand_off_is_retried_a_bounded_number_of_times(eng, project, monkeypatch):  # noqa: F811
+    tries = []
+    monkeypatch.setattr(merge_failures, "hand_to_builder",
+                        lambda *a, **k: tries.append(1) or None)
+    with eng.begin() as c:
+        url, runs, card, _reason = _local_change_9(c, project)
+        _local_change_set(c, project, runs[-1])
+        _orphaned(c, project, card)
+    fo.sweep(eng, _settings(), project_id=project)
+    for _ in range(5):
+        _due_now(eng, card)
+        fo.sweep(eng, _settings(), project_id=project)
+    assert len(tries) == 1 + merge_failures.HANDOFF_RETRIES, "then it is the person's"
+    assert _status(eng, card)[0] == "pending"
+
+
+def test_a_card_reopened_before_the_marker_existed_is_retried_and_a_plain_card_never(
+        eng, project, monkeypatch):  # noqa: F811
+    from boss_engine.services.core import emit_event
+
+    made = []
+    monkeypatch.setattr(merge_failures, "hand_to_builder",
+                        lambda conn, s, run_id, note, **_k: made.append(run_id) or "crun_x")
+    with eng.begin() as c:
+        url, runs, card, _reason = _local_change_9(c, project)
+        _local_change_set(c, project, runs[-1])
+        emit_event(c, project, "merge.conflict_orphan_recovered", "boss", "decision", card,
+                   {"handed_to": None, "reopened": True})
+    fo.sweep(eng, _settings(), project_id=project)
+    assert made == [runs[-1]] and _status(eng, card)[0] == "withdrawn"
+
+
+def test_a_pending_conflict_card_with_no_refusal_marker_is_never_touched(
+        eng, project, monkeypatch):  # noqa: F811
+    from boss_engine.services import project_settings
+
+    monkeypatch.setattr(merge_failures, "hand_to_builder",
+                        lambda *a, **k: pytest.fail("a person's card: never touched"))
+    with eng.begin() as c:
+        project_settings.set_one(c, project, "agents_fix_failures", 0)   # no Jobs-path remedy
+        _local_change_9(c, project)
+    fo.sweep(eng, _settings(), project_id=project)
+    assert merge_failures.retry_refused_handoffs(eng, _settings(), project_id=project) == []
+
+
+def test_a_stored_github_sentence_is_said_in_local_words_at_display_time():
+    """#9's card stored "PR #9 conflicts with its base branch, so GitHub would not merge it"
+    before #264; it is rendered from the repository's kind, whatever was stored."""
+    url = "http://boss-local/local_northgate-gateway/northgate-gateway/pull/9"
+    stored = "PR #9 conflicts with its base branch, so GitHub would not merge it"
+    rec = {"pull_request_url": url, "summary": f"Merge failed: {stored}. Retry the build.",
+           "merge_failed": {"kind": "not_mergeable", "reason": stored}}
+    shown = merge_failures.for_display(rec)
+    for said in (shown["summary"], shown["merge_failed"]["reason"],
+                 merge_failures.local_words(f"Merge failed: {stored}.", url)):
+        assert "GitHub" not in said and "PR #" not in said and "change #9" in said.lower()
+    gh = {**rec, "pull_request_url": "https://github.com/acme/web/pull/9"}
+    assert merge_failures.for_display(gh)["merge_failed"]["reason"] == stored, "GitHub stays"
+
+
+@pytest.mark.parametrize("stored", [
+    "PR #9 conflicts with its base branch, so GitHub would not merge it",
+    {"kind": "not_mergeable",
+     "reason": "PR #9 conflicts with its base branch, so GitHub would not merge it"},
+])
+def test_the_work_view_says_a_local_merge_failure_in_local_words(stored):
+    from boss_engine.services.project_experience import work
+
+    url = "http://boss-local/local_northgate-gateway/northgate-gateway/pull/9"
+    out = work._merge_links([], {"id": "crun_x", "pull_request_url": url, "pull_request_number": 9,
+                                 "merge_failed": stored})
+    failed = out["merge_pr"]["failed"]
+    said = failed if isinstance(failed, str) else failed["reason"]
+    assert "GitHub" not in said and "change #9" in said.lower()
+    gh = work._merge_links([], {"id": "crun_y", "pull_request_url": "https://github.com/acme/web/pull/9",
+                                "merge_failed": stored})
+    assert gh["merge_pr"]["failed"] == stored, "GitHub wording stays for GitHub"
 
 
 def test_the_loop_never_withdraws_a_card_it_did_not_create(eng, project):  # noqa: F811
