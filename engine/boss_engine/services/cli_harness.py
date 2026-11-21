@@ -69,7 +69,30 @@ CLAUDE_FAILURE_PATTERNS = (
                    r"sandbox is required but failed to initiali[sz]e",
                    "install what the Claude CLI's sandbox needs (bubblewrap and socat) on the "
                    "BOSS host or image, then retry"),
+    # An organisation's managed settings (server-managed, or managed-settings.json) refusing a
+    # writer's tool, in the CLI's own words (claude-code 2.1.197). A deny rule BOSS set itself
+    # says only "Permission to use … has been denied." and is not this.
+    FailurePattern("policy_denied",
+                   r"blocked by enterprise (?:managed )?policy"
+                   r"|by your organization's (?:policy|managed settings)",
+                   "this Claude Code login is managed by its organisation, whose policy refuses "
+                   "what a BOSS writer needs; ask the organisation's admin to allow it, or "
+                   "connect another login, then run the engine check in Setup › Models (see "
+                   "docs/community/ENGINE_SANDBOX.md, \"Managed engine policies\")",
+                   writer_only=True),
 )
+#: Codex's own words when its organisation's requirements take a sandbox mode away (codex-cli
+#: 0.154 and 0.158 binaries; engine_policy reads the same pattern at Setup).
+CODEX_DOWNGRADE_PATTERN = (
+    r"configured value for `(?:permission_profile|sandbox_mode|default_permissions)` is "
+    r"disallowed by requirements"
+    r"|configured value is disallowed by requirements; falling back to required value for\b"
+    r"|default sandbox policy is disallowed by requirements"
+    r"|cannot be used because requirements do not allow `sandbox_mode"
+    r"|`(?:sandbox_mode|permission_profile|default_permissions)[^`\n]{0,80}` is (?:disallowed|not "
+    r"allowed) by requirements"
+    r"|derived permission profile cannot be represented as a legacy sandbox policy; falling "
+    r"back to read-only")
 #: How the Codex CLI says its Linux sandbox (Landlock + seccomp) could not be applied.
 CODEX_FAILURE_PATTERNS = (
     FailurePattern("sandbox_unavailable",
@@ -78,6 +101,18 @@ CODEX_FAILURE_PATTERNS = (
                    r"|sandbox\((?:landlockrestrict|seccompinstall|seccompbackend)\)",
                    "run Codex on a kernel with Landlock and seccomp enabled (or give it a host "
                    "that has them), then retry"),
+    # AN ORGANISATION'S CODEX REQUIREMENTS (ChatGPT Enterprise/Business, cloud-managed or
+    # requirements.toml) forbidding the access BOSS asked for: Codex says so once and carries on
+    # READ-ONLY, so a writer writes nothing and every command dies in bubblewrap. The exact
+    # wordings, from the codex-cli 0.154 and 0.158 binaries (engine_policy.CODEX_DOWNGRADE).
+    FailurePattern("policy_denied", CODEX_DOWNGRADE_PATTERN,
+                   "this Codex login is managed by its organisation, whose requirements forbid "
+                   "the full access a BOSS writer runs with, so Codex fell back to read-only; "
+                   "run the engine check in Setup › Models so BOSS proves Codex's own "
+                   "workspace sandbox here and uses it, or ask the organisation's Codex admin "
+                   "to allow danger-full-access (see docs/community/ENGINE_SANDBOX.md, "
+                   "\"Managed engine policies\")",
+                   writer_only=True),
 )
 
 #: Scope under which BOSS's own API stores a subscription credential. One constant so the
@@ -2025,14 +2060,14 @@ class GenericCliCodeAgent:
         self._write_auth_file(content)
 
     def _raise_harness_verdict(self, *, stdout: str, stderr: str, summary: str,
-                               ok: bool) -> None:
+                               ok: bool, writer: Optional[bool] = None) -> None:
         """THE CLI COULD NOT RUN, IN ITS OWN WORDS (harness_failures: its sandbox, a runtime
         binary; on a failed exit also its login, its account, a crash). Not the agent's work:
         the stage stops with the harness verdict instead of handing on what it wrote blind."""
         from . import harness_failures
 
         verdict = harness_failures.classify(f"{stderr or ''}\n{stdout or ''}",
-                                            engine=self.engine, where="stream")
+                                            engine=self.engine, where="stream", writer=writer)
         if verdict is None and not ok:
             verdict = harness_failures.classify(f"{summary}\n{stderr or ''}",
                                                 engine=self.engine, where="engine")
@@ -2197,7 +2232,7 @@ class GenericCliCodeAgent:
         except Exception:  # noqa: BLE001 — a transcript never fails a build
             pass
         self._raise_harness_verdict(stdout=proc.stdout or "", stderr=proc.stderr or "",
-                                    summary=summary, ok=ok)
+                                    summary=summary, ok=ok, writer=not read_only)
         if not ok:
             _log.warning("%s exited %s: %s", self.spec.name, proc.returncode,
                          (proc.stderr or "")[:300])

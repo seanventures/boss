@@ -189,8 +189,23 @@ _PERSON_RULES: tuple[tuple[str, str, str], ...] = (
     ("toolchain", r"boss toolchains enable (\w+)",
      "Turn on the toolchain it names on the BOSS host (`boss toolchains enable …`), then press "
      "Done — retry."),
+    # SOMEONE ELSE'S 401 FIRST. A package registry's (npm E401, pnpm ERR_PNPM_FETCH_401, yarn,
+    # pip, Maven, the Go proxy) or a proxy's own 407 is the registry credential BOSS's builds
+    # lack; an MCP server's 401 is that connector's. Read by the bare-401 rule below, both sent
+    # the person to "Sign in to the model again" for a model that was fine.
+    ("registry_access", r"\bE40[17]\b|ERR_PNPM_FETCH_40[17]|\b407 Proxy Authentication|"
+                        r"proxy authentication required|"
+                        r"(?:registry|artifactory|nexus|pypi|maven|\.m2|proxy\.golang|goproxy)"
+                        r"[^\n]{0,160}?\b40[17]\b|"
+                        r"\b40[17]\b[^\n]{0,160}?(?:registry|artifactory|nexus|pypi|maven|"
+                        r"\.tgz|\.whl|\.jar|/@v/)",
+     "Give BOSS's builds the package registry's credential (or the proxy's) on the BOSS host "
+     "(docs/community/ENGINE_SANDBOX.md, \"Package registries\"), then press Done — retry."),
+    ("connector_login", r"\bmcp\b[^\n]{0,160}?\b401\b|\b401\b[^\n]{0,160}?\bmcp\b",
+     "Reconnect the MCP server or connector it names in Setup, then press Done — retry."),
     ("model_login", r"not logged in|re-?authenticate|failed to authenticate|token (?:has )?expired|"
-                    r"login rejected|HTTP 401|\b401\b|invalid api key|model_auth_rejected|"
+                    r"login rejected|HTTP 401|(?<![\w.])401(?![\w.])|invalid api key|"
+                    r"model_auth_rejected|"
                     r"plain http|credential_misdirected|harness_unavailable",
      "Sign in to the model again (or fix its key or address) in Setup › Models, then press "
      "Done — retry."),
@@ -223,6 +238,9 @@ _WHY_PERSON = {
     "repo_access": "Only the repository's owner can give BOSS's account access to it.",
     "toolchain": "Turning on a toolchain changes the BOSS host; a person does that.",
     "model_login": "Only a person can sign in to their model account or set its key.",
+    "registry_access": "The registry credential is the organisation's; a person provisions it on "
+                       "the BOSS host.",
+    "connector_login": "Only the connector's owner can sign in to it again.",
     "grant": "Only a person can let an agent act for them.",
     "approval_expired": "The step waited for a person's approval and nobody answered; only a "
                         "person can give it.",

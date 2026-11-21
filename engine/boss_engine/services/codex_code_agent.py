@@ -17,7 +17,12 @@ gives BOSS the same things it reads from Claude Code, from Codex's own interface
     login is metered: usage_is_included reads the stamp, never the engine's name).
   * EFFORT. BOSS's per-stage effort maps onto Codex's `model_reasoning_effort`.
   * READ-ONLY. A reviewer runs with `--sandbox read-only`; a writer with `danger-full-access`
-    inside BOSS's own sandbox (see the spec in cli_harness for why).
+    inside BOSS's own sandbox (see the spec in cli_harness for why) — unless Setup found this
+    login MANAGED by its organisation's Codex requirements (they can forbid full access, and
+    Codex then silently falls back to read-only) and PROVED Codex's own workspace sandbox starts
+    here, with the network and the toolchain caches it needs (engine_policy). Then, and only
+    then, the writer runs `workspace-write`. A managed downgrade seen mid-session stops a writer
+    with `policy_denied` (harness_failures), never "no test files".
   * THE DEADLINE. The stage's wall-time deadline bounds the process, as it bounds Claude's.
 
 The prompt goes on stdin (`-`), which survives a prompt larger than one argv entry may be.
@@ -60,6 +65,8 @@ class CodexStreamParser:
         self.usage: dict[str, Any] = {}
         self.final_message = ""
         self.error = ""
+        #: The CLI's own diagnostics (`error` events and items), in order. Never the model's words.
+        self.diagnostics: list[str] = []
         self.turns: list[dict[str, Any]] = []
         self.tool_calls = 0
         self.model_turns = 0
@@ -98,8 +105,16 @@ class CodexStreamParser:
             err = event.get("error")
             self.error = str((err or {}).get("message") if isinstance(err, dict)
                              else (err or event.get("message") or ""))[:500]
+            self.diagnostics.append(self.error)
         elif kind == "item.completed":
-            produced.extend(self._item(event.get("item") or {}))
+            item = event.get("item") or {}
+            if isinstance(item, dict) and str(item.get("type") or "") == "error":
+                # A NON-FATAL DIAGNOSTIC from the CLI itself (an org policy downgrading the
+                # sandbox, an MCP server that did not start). Not a turn: the harness reads it
+                # (harness_failures.check_stream), the transcript does not get an orphan row.
+                self.diagnostics.append(str(item.get("message") or "")[:500])
+            else:
+                produced.extend(self._item(item))
         return produced
 
     def _item(self, item: dict[str, Any]) -> list[dict[str, Any]]:
@@ -185,7 +200,8 @@ class CodexCodeAgent(GenericCliCodeAgent):
         return usage, cost
 
     def _codex_argv(self, *, read_only: bool, model: Optional[str], resume: Optional[str],
-                    final_path: str, by_copy: bool = False) -> list[str]:
+                    final_path: str, by_copy: bool = False,
+                    env: Optional[dict] = None) -> list[str]:
         from .code_agent import _current_effort
 
         binary = self._resolve_binary()
@@ -201,13 +217,30 @@ class CodexCodeAgent(GenericCliCodeAgent):
         if effort:
             common += ["-c", f'model_reasoning_effort="{effort}"']
         # A reviewer on BOSS's throwaway copy runs unsandboxed, as the writer does: the copy and
-        # readonly_guard are the boundary, Codex's own cannot start in a container.
-        mode = "read-only" if read_only and not by_copy else "danger-full-access"
+        # readonly_guard are the boundary, Codex's own cannot start in a container. A login
+        # whose organisation forbids full access, with Codex's own sandbox PROVED at Setup,
+        # writes (and reviews a copy) in `workspace-write` instead (engine_policy).
+        from .engine_policy import codex_writer_mode
+
+        writer = codex_writer_mode(self._policy(), env)
+        if read_only and not by_copy:
+            mode, extra = "read-only", []
+        else:
+            mode, extra = writer["mode"], list(writer["config"])
         if resume:
             # `exec resume` takes no --sandbox flag; the same policy goes in as config.
-            return [binary, "exec", "resume", *common, "-c", f'sandbox_mode="{mode}"',
+            return [binary, "exec", "resume", *common, "-c", f'sandbox_mode="{mode}"', *extra,
                     resume, "-"]
-        return [binary, "exec", "--color", "never", "--sandbox", mode, *common, "-"]
+        return [binary, "exec", "--color", "never", "--sandbox", mode, *extra, *common, "-"]
+
+    def _policy(self) -> dict[str, Any]:
+        """What Setup recorded for this login's organisation policy (engine_policy), or {}."""
+        held = getattr(self, "engine_policy", None)
+        if isinstance(held, dict):
+            return held
+        from .engine_policy import recorded
+
+        return recorded(self.spec.entitlement_source_id or self.engine)
 
     @tidies_workspace
     @_proxy_scoped
@@ -247,8 +280,17 @@ class CodexCodeAgent(GenericCliCodeAgent):
         except Exception:  # noqa: BLE001 — a transcript never fails a build
             pass
 
+        # A session that must write: a review seat on a copy runs in writer mode but is not one.
+        writer = not read_only
+
         def _on_line(line: str) -> None:
+            seen = len(parser.diagnostics)
             produced = parser.feed(line)
+            if len(parser.diagnostics) > seen:
+                # The CLI's own diagnostic (an `error` event or item): its sandbox could not
+                # start, or its organisation's requirements took the writer's access away. Read
+                # as the CLI's stream — never as a refused login (an MCP server's 401 is not).
+                harness_failures.check_stream(line, engine=self.engine, writer=writer)
             if not produced:
                 return
             try:
@@ -256,19 +298,25 @@ class CodexCodeAgent(GenericCliCodeAgent):
                                                           model=model or "") or 0)
             except Exception:  # noqa: BLE001
                 pass
-            for turn in produced:
-                harness_failures.check_turn(turn, engine=self.engine)
-                try:
-                    if on_turn:
-                        on_turn(turn)
-                except Exception:  # noqa: BLE001
-                    pass
+            # THE ONE SHARED TURN PATH (harness_failures.deliver_turns): a bwrap line in place of
+            # a command's output stops the session at its first occurrence.
+            harness_failures.deliver_turns(produced, on_turn, engine=self.engine, writer=writer)
+
+        def _on_err_line(line: str) -> None:
+            # Codex logs its requirements downgrade to stderr as well as the stream.
+            harness_failures.check_stream(line, engine=self.engine, writer=writer)
 
         def _attempt(resume_id: Optional[str],
                      text: Optional[str] = None) -> subprocess.CompletedProcess:
             argv = self._codex_argv(read_only=read_only, model=model, resume=resume_id,
                                     final_path=final_path,
-                                    by_copy=bool(_ignored.get("_contract_read_only_copy")))
+                                    by_copy=bool(_ignored.get("_contract_read_only_copy")),
+                                    env=env)
+            if "workspace-write" in argv or 'sandbox_mode="workspace-write"' in argv:
+                # Codex makes a writable root writable only when it exists (measured, 0.158).
+                from .engine_policy import prepare_cache_roots
+
+                prepare_cache_roots(env)
             child = owned_process.popen(
                 low_priority(argv), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, text=True, cwd=str(cwd), env=env)
@@ -279,7 +327,8 @@ class CodexCodeAgent(GenericCliCodeAgent):
                         child.stdin.write(prompt if text is None else text)
                     finally:
                         child.stdin.close()
-                out, err = _drain(child, timeout=timeout, on_line=_on_line)
+                out, err = _drain(child, timeout=timeout, on_line=_on_line,
+                                  on_err_line=_on_err_line)
             finally:
                 release_seat(child.pid)
             return subprocess.CompletedProcess(argv, child.returncode, out, err)
@@ -338,7 +387,7 @@ class CodexCodeAgent(GenericCliCodeAgent):
                         latency_ms=ms, turns=max(1, parser.model_turns), ok=ok,
                         error=None if ok else (parser.error or (proc.stderr or ""))[:400])
         self._raise_harness_verdict(stdout=proc.stdout or "", stderr=proc.stderr or "",
-                                    summary=summary, ok=ok)
+                                    summary=summary, ok=ok, writer=writer)
         if not ok:
             # The CLI's stderr can quote a credential back on an auth failure: only the status
             # and the event stream's own error travel.
@@ -355,6 +404,9 @@ class CodexCodeAgent(GenericCliCodeAgent):
             "session_id": parser.thread_id or resume,
             "stop_reason": "done",
             "exit_code": proc.returncode,
+            # The CLI's own diagnostics (a managed policy's downgrade on a review seat, which
+            # does not stop it): Setup's engine check reads these.
+            **({"diagnostics": parser.diagnostics[:20]} if parser.diagnostics else {}),
             # What the CLI itself printed for its tools (never the model's words): a seat whose
             # commands could not run is NOT RUN (review_tools).
             **({"tools_blocked": blocked} if (blocked := review_tools.blocked_by_transport(

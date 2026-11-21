@@ -9,6 +9,7 @@ model turn, reserved against the budget and receipted, in every edition.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path as pathlib_Path
 from typing import Any, Optional
@@ -18,6 +19,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+
+_log_setup = logging.getLogger("boss.setup")
 
 
 #: The providers the first screen offers, with everything needed to reach them.
@@ -1001,16 +1004,20 @@ def connect_coding_agent(
                 f"({restored.get('reason') or 'no stored credential for this install'})")
         found = detect(spec)
 
+    checked: dict[str, Any] = {}
     if not prove:
         proof = {"ok": True, "skipped": True}
     else:
         # EVERY EDITION, GOVERNED. One read-only turn, reserved (as a $0 gate: a subscription
-        # turn costs no money) and receipted before it is sent.
+        # turn costs no money) and receipted before it is sent — and, once it answered, the
+        # engine check (engine_policy) under the same reservation, leases and receipt.
         engine = getattr(connection, "engine", None)
         if engine is None:
             raise SetupError("the connection proof needs its own database connection.")
         proof = governed_proof(engine, settings, project_id, provider, actor,
-                               prove=prove_with, amount=0, intent=intent)
+                               prove=prove_with or (lambda: prove_and_check(
+                                   settings, provider, checked)),
+                               amount=0, intent=intent)
     if not proof.get("ok"):
         from .model_failures import explain, is_login_rejected, mark_login
 
@@ -1035,6 +1042,18 @@ def connect_coding_agent(
             f"the {provider} CLI is signed in but could not complete a turn: "
             f"{proof.get('error')}. Signed in is not the same as working — check the "
             f"subscription is active on this account.")
+
+    # CAN THIS LOGIN WRITE HERE? (engine_policy) The proof above is one read-only reply; a
+    # login whose organisation holds the engine to read-only, or whose own sandbox cannot start
+    # in this container, passed it and then failed every build at its first command. One
+    # writer session that must write a file and run a command says so now, in one sentence.
+    policy = checked.get("policy")
+    if policy:
+        from . import engine_policy
+
+        sentence = engine_policy.setup_sentence(provider, policy)
+        if sentence:
+            raise SetupError(sentence)
 
     stored_now: Optional[dict[str, Any]] = None
     if getattr(spec, "auth_file_secret", ""):
@@ -1106,6 +1125,17 @@ def connect_coding_agent(
             record["entitlement_recorded"] = True
         except Exception as exc:  # noqa: BLE001 - the agent works either way; say what failed
             record["entitlement_error"] = f"{type(exc).__name__}: {exc}"[:200]
+        if policy is not None:
+            # PER LOGIN: what its organisation's policy allows here, read by the engine at run
+            # time (Codex picks its writer's sandbox mode from it).
+            from . import engine_policy
+
+            try:
+                engine_policy.record(connection, spec.entitlement_source_id, policy)
+                record["engine_policy"] = {k: policy.get(k) for k in (
+                    "managed", "writer_mode", "can_write", "state", "sandbox_proven", "network")}
+            except Exception as exc:  # noqa: BLE001 — the connect stands; say what failed
+                record["engine_policy_error"] = f"{type(exc).__name__}: {exc}"[:200]
     return {
         "ok": True,
         "provider": provider,
@@ -1114,6 +1144,38 @@ def connect_coding_agent(
         "harness": provider,
         **record,
     }
+
+
+#: How long each engine-check session may run (the governed proof's wall bounds them all).
+ENGINE_CHECK_SECONDS = 90
+
+
+def prove_and_check(settings: Settings, provider: str, checked: dict[str, Any], *,
+                    prove=None, check=None) -> dict[str, Any]:
+    """The connection proof, then — when it answered — the engine check (engine_policy), whose
+    policy lands in `checked["policy"]`. The proof's own result is returned unchanged: the check
+    never turns a working proof into a failed one by raising (a check that could not run proves
+    nothing and records nothing)."""
+    import time as _time
+
+    from . import engine_policy
+    from .llm_telemetry import get_llm_context, set_llm_context
+
+    proof = (prove or (lambda: prove_coding_agent(settings, provider)))()
+    if not proof.get("ok"):
+        return proof
+    before = get_llm_context()
+    # Each writer session is bounded like a stage (code_agent._cap_to_deadline).
+    set_llm_context(stage="engine_check",
+                    stage_deadline=_time.time() + ENGINE_CHECK_SECONDS)
+    try:
+        checked["policy"] = (check or (lambda: engine_policy.check_engine(settings, provider)))()
+    except Exception as exc:  # noqa: BLE001
+        _log_setup.warning("engine check for %s could not run: %s", provider, exc)
+        checked["policy"] = None
+    finally:
+        set_llm_context(**{key: before.get(key) for key in ("stage", "stage_deadline")})
+    return proof
 
 
 def connected_basics(connection: Connection, settings: Settings, project_id: str

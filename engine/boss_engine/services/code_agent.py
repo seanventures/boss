@@ -1380,16 +1380,11 @@ class ClaudeCodeAgent:
                 # which is the specific impression this whole effort is trying to remove.
                 # Best-effort by construction: a progress indicator that can fail the work it
                 # is reporting on is worse than no indicator.
-                for turn in produced:
-                    try:
-                        if on_turn:
-                            on_turn(turn)
-                    except Exception:  # noqa: BLE001
-                        pass
                 # THE HARNESS ANSWERING IN THE COMMAND'S PLACE (a sandbox that did not start)
-                # stops the session here — raised through _drain, which ends the child.
-                for turn in produced:
-                    harness_failures.check_turn(turn, engine=self.engine)
+                # stops the session here — raised through _drain, which ends the child. The one
+                # shared turn path (harness_failures.deliver_turns) checks each turn once.
+                harness_failures.deliver_turns(produced, on_turn, engine=self.engine,
+                                               writer=not read_only)
 
             return _on_line, parser, written
 

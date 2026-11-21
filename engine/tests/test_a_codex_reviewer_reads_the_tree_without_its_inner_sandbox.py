@@ -9,7 +9,8 @@ died with `bwrap: No permissions to create a new namespace`; the judge then call
   2. BOSS watches the live tree (report-only): a change is reported, never reverted, and never
      fails the seat; one no concurrent verify explains marks the verdict suspect.
   3. A seat or judge whose tools could not run — the ENGINE's report, never the model's prose —
-     is NOT RUN with the reason, never a verdict.
+     is NOT RUN with the reason, never a verdict; the engine's own sandbox failure stops the run
+     (harness_failures), whichever seat saw it.
   4. A reviewer of a local repository is told there is no GitHub for it.
 
 The binary is a fake `codex`; no model is called.
@@ -165,11 +166,17 @@ def test_a_writer_is_not_copied_or_guarded(seat):
     assert os.path.realpath(calls()[-1]["cwd"]) == os.path.realpath(str(tree))
 
 
-def test_a_reviewer_whose_commands_died_in_the_sandbox_is_not_run(seat):
+def test_a_reviewer_whose_commands_died_in_the_sandbox_stops_the_run(seat):
+    """The engine's OWN words that its sandbox cannot start stop the run with the evidence
+    (harness_failures, every engine, every seat): a sandbox that cannot start fails every
+    command, so no seat of the run can work — it is not one seat's NOT RUN."""
+    from boss_engine.services.harness_failures import HarnessFailure
+
     agent, tree, behaviour, _ = seat
     behaviour.write_text("blind")
-    out = agent.run_role("Review it.", tree, read_only=True)
-    assert "namespace" in out["tools_blocked"]
+    with pytest.raises(HarnessFailure, match="namespace") as stopped:
+        agent.run_role("Review it.", tree, read_only=True)
+    assert stopped.value.verdict.kind == "sandbox_unavailable"
 
 
 def test_a_real_review_about_seccomp_and_namespaces_stays_a_verdict(seat):

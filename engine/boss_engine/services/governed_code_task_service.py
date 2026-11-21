@@ -8263,6 +8263,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                         "engine"),
                                     "model": (stage_routes.get("write_tests") or {}).get(
                                         "model")})
+            # THE ENGINE COULD NOT RUN (harness_failures): a test author whose sandbox did not
+            # start, or whose organisation's policy held it to read-only, wrote nothing because
+            # it COULD not. That ends the build with the harness verdict and its evidence — never
+            # "no test files", and never the existing suite standing in for tests nobody could
+            # write (an enterprise install, 2026-11: every command died in bubblewrap).
+            _stop_on_harness_failure("write_tests")
             if not test_files and _app_tests:
                 # THE APP'S OWN SUITE STANDS when the test author, given its stronger retry,
                 # still judged no new test file was needed — the repair rule above, for every
