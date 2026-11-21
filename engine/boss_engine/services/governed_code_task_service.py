@@ -2807,6 +2807,30 @@ def _fidelity_check(engine, run_id: str, root, remediation: dict, sandbox, *,
     return result
 
 
+#: The reason code of a remediation whose output still is not an edit of its input
+#: (failure_owner.AGENT_OWNED_REASONS: an autonomous repair, never a person's waiver).
+INPUT_FIDELITY_FAILED = "input_fidelity_failed"
+
+
+def _fail_input_fidelity(engine, run_id: str, project_id: str, fidelity: dict,
+                         validation: Optional[dict], *, attempts: int) -> dict:
+    """Fail the build with the violations as its error (the next build's brief), the verdict and
+    the validator's record kept on the run for the step to show."""
+    with _transaction(engine) as c:
+        for key, value in ((_input_fidelity.STATE_KEY, fidelity),
+                           (_input_fidelity.VALIDATION_KEY, validation)):
+            if value is not None:
+                c.execute(sql(
+                    "UPDATE code_task_runs SET state=jsonb_set(COALESCE(state,'{}'::jsonb), "
+                    "CAST(:k AS text[]), CAST(:v AS JSONB)), updated_at=now() WHERE id=:id"),
+                    {"k": "{" + key + "}", "v": json.dumps(value, default=str), "id": run_id})
+        return _fail(
+            c, run_id, project_id,
+            f"Not a remediation of its input after {attempts} attempt(s). "
+            + _input_fidelity.repair_evidence(fidelity),
+            failure_class="terminal", reason_code=INPUT_FIDELITY_FAILED)
+
+
 def _repair_prompt(base_prompt: str, evidence: str, attempt: int) -> str:
     """VAG Phase 3: re-issue the implement prompt with CONCRETE failing evidence appended.
     The bar is frozen — QA's tests are the spec and must not be touched; the frontier review
@@ -9229,6 +9253,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                       "budget_minutes": _impl_budget_s // 60,
                                       "failing_tests": failing_tests(fail_output)}),
                      "id": run_id})
+        if _remediation and _fidelity is not None and not _fidelity.get("ok"):
+            # STILL NOT A REMEDIATION OF ITS INPUT AFTER THE REPAIR ROUNDS: the build fails here,
+            # coded, before any review is spent on it. Never a draft PR (a copied answer must not
+            # ship) and never a waiver (agents own it): failure_owner reads input_fidelity_failed
+            # as the app's to fix and starts a new build with these violations as its brief.
+            return _fail_input_fidelity(engine, run_id, project_id, _fidelity, _validation,
+                                        attempts=repair_attempts + 1)
         # THE BRIEF'S ITEMS, CHECKED AGAINST WHAT CHANGED (BOSSAPP-1355). The frozen tests are a
         # floor: the implementer's FINAL report is read against the files it actually changed. A
         # FIXED no changed file backs, or no line at all, sends it back ONCE — after the loop, so

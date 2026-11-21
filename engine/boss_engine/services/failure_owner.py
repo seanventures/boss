@@ -250,6 +250,11 @@ _WHY_PERSON = {
 }
 
 
+#: Reason codes whose failure is the agents' to repair, whatever words the error carries
+#: (input_fidelity: the output was not a remediation of its input).
+AGENT_OWNED_REASONS = frozenset({"input_fidelity_failed"})
+
+
 def classify(error: Any, *, failure_class: Any = None, reason_code: Any = None
              ) -> tuple[str, str, str]:
     """(class, cause_code, what a person does when it is theirs). The record's own class wins:
@@ -257,6 +262,10 @@ def classify(error: Any, *, failure_class: Any = None, reason_code: Any = None
     first (a sandbox permission error is never the person's login)."""
     raw = f"{error or ''} {reason_code or ''}"
     fc = str(failure_class or "")
+    if str(reason_code or "") in AGENT_OWNED_REASONS:
+        # THE BUILD'S OWN WORK WAS WRONG (a copied answer, an invented block): a new build with
+        # the violations as its brief, never a person's waiver.
+        return APP, f"app:{reason_code}", ""
     if fc == "infra":
         return PLATFORM, f"platform:{str(reason_code or 'infra')}", ""
     if fc != "needs_human" and _PLATFORM_FIRST.search(raw):

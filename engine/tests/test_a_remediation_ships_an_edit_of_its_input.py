@@ -464,6 +464,58 @@ def test_the_implement_loop_sends_a_violation_to_repair_and_the_gate_holds():
     assert checks_failing.may_open([f.GATE]) is False
 
 
+def test_still_failing_after_the_rounds_fails_the_build_coded_never_a_waiver_or_a_draft():
+    """Agents own it: no waiver park, no draft PR. The build fails `input_fidelity_failed`
+    before any review is spent, and failure_owner hands it to a new build as the app's fix."""
+    src = inspect.getsource(g._run_governed_code_task)
+    end_of_loop = src.index("# The implement budget ends with the stage")
+    fail_at = src.index("return _fail_input_fidelity(engine, run_id, project_id, _fidelity,")
+    assert end_of_loop < fail_at < src.index("_brief_items.assess(_items")
+    assert fail_at < src.index("_review_gate_from_findings(")   # before review, PR or waiver
+
+    calls: list = []
+
+    class Conn:
+        def execute(self, sql, params=None):
+            calls.append((str(sql), params))
+
+    class Eng:
+        def begin(self):
+            return self
+
+        def __enter__(self):
+            return Conn()
+
+        def __exit__(self, *a):
+            return False
+
+    import boss_engine.services.governed_code_task_service as gm
+    recorded = {}
+    orig_fail, orig_tx = gm._fail, gm._transaction
+    gm._fail = lambda c, run_id, pid, reason, **kw: recorded.update(reason=reason, **kw) or {
+        "status": "failed", "done": True, **kw}
+    gm._transaction = lambda engine: Eng()
+    try:
+        verdict = {"ok": False, "input": "examples/lumen-pay.bad.yaml",
+                   "output": "config/tenants/lumen-pay.yaml",
+                   "answer_files": ["examples/lumen-pay.good.yaml"], "violations": [
+                       {"code": "copied_answer", "message": "copy of examples/lumen-pay.good.yaml"}]}
+        out = gm._fail_input_fidelity(Eng(), "crun_x", "p", verdict, {"before": []}, attempts=3)
+    finally:
+        gm._fail, gm._transaction = orig_fail, orig_tx
+    assert out["reason_code"] == "input_fidelity_failed" == g.INPUT_FIDELITY_FAILED
+    assert recorded["failure_class"] == "terminal"
+    assert "[copied_answer]" in recorded["reason"] and "after 3 attempt(s)" in recorded["reason"]
+    assert any("{input_fidelity}" == (p or {}).get("k") for _s, p in calls)
+
+    from boss_engine.services import failure_owner as fo
+
+    # The words would otherwise read as a person's (a login, a budget): the code decides.
+    cls, code, action = fo.classify("Budget exceeded; please sign in again",
+                                    failure_class="terminal", reason_code=g.INPUT_FIDELITY_FAILED)
+    assert (cls, code, action) == (fo.APP, "app:input_fidelity_failed", "")
+
+
 def test_the_step_output_carries_the_validation_record():
     record = {"validator": "gwlint", "before": [{"rule": "no-inlined-secrets"}], "fixes": [],
               "after": []}
