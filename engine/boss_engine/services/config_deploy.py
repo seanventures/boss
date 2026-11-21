@@ -1065,7 +1065,12 @@ class SshShell:
         result = self.access.run(script, timeout=timeout, write=write,
                                  changeset_id=self.changeset_id if write else None,
                                  stdin_text=stdin)
-        return ShellResult(int(result.code), str(result.stdout or ""), str(result.stderr or ""))
+        # stack_deploy.HostAccess.run answers a CommandResult whose exit status is `returncode`
+        # (laptop 2026-11-21: every SSH config deploy failed "'CommandResult' object has no
+        # attribute 'code'" at its first command, the preflight — only the local shell had
+        # ever run).
+        return ShellResult(int(result.returncode), str(result.stdout or ""),
+                           str(result.stderr or ""))
 
 
 def _q(value: str) -> str:
