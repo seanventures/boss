@@ -324,7 +324,7 @@ def _newest_samples(connection: Any, ids: list[str], now: datetime) -> dict[str,
         "       s.observed_version "
         "FROM unnest(CAST(:ids AS text[])) AS x(id) CROSS JOIN LATERAL ("
         "  SELECT checked_at, ok, status_code, latency_ms, error, observed_version "
-        "  FROM deployment_health_samples "
+        "  FROM counted_health_samples "
         "  WHERE deployment_target_id = x.id AND checked_at >= :cut "
         "  ORDER BY checked_at DESC LIMIT :lim) s"),
         {"ids": ids, "cut": now - STATE_LOOKBACK, "lim": STATE_SAMPLES}).mappings().all()
@@ -457,7 +457,7 @@ def _strips(connection: Any, ids: list[str], w: dict[str, Any]
         "FROM (SELECT t, ok, latency_ms, b, (NOT ok AND " + opened + ") AS opened "
         "      FROM (SELECT deployment_target_id AS t, ok, latency_ms, "
         f"                   {_bucket_sql('checked_at')} AS b, {lags} "
-        "            FROM deployment_health_samples "
+        "            FROM counted_health_samples "
         "            WHERE deployment_target_id = ANY(:ids) AND checked_at >= :a "
         "              AND checked_at < :z "
         "            WINDOW w AS (PARTITION BY deployment_target_id ORDER BY checked_at DESC)"
@@ -494,7 +494,7 @@ def probe_window(connection: Any, ids: list[str], *, win: str = P95_WINDOW,
             "       sum(CASE WHEN ok THEN 1 ELSE 0 END) AS okn, "
             "       percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) "
             "         FILTER (WHERE ok AND latency_ms IS NOT NULL) AS p95 "
-            "FROM deployment_health_samples WHERE deployment_target_id = ANY(:ids) "
+            "FROM counted_health_samples WHERE deployment_target_id = ANY(:ids) "
             "AND checked_at >= :a AND checked_at < :z GROUP BY deployment_target_id"),
             {"ids": list(ids), "a": w["start"], "z": w["end"]}).mappings():
         out[str(r["t"])] = {"uptime": _ratio(int(r["okn"] or 0), int(r["n"])),
@@ -782,7 +782,7 @@ def app_detail(connection: Any, settings: Any, project_id: str, target_id: str, 
     since_at = min(pw["start"], now - STATE_LOOKBACK)
     rows = [dict(r) for r in connection.execute(text(
         "SELECT checked_at, ok, status_code, latency_ms, error, observed_version "
-        "FROM deployment_health_samples WHERE deployment_target_id = :t "
+        "FROM counted_health_samples WHERE deployment_target_id = :t "
         "AND checked_at >= :a AND checked_at < :z ORDER BY checked_at DESC"),
         {"t": target_id, "a": since_at, "z": pw["end"]}).mappings().all()]
     for r in rows:
@@ -892,7 +892,6 @@ def probe_app(engine: Any, settings: Any, project_id: str, target_id: str) -> di
     """`Probe now` for ONE app (operator decision §11.5): probe it through the connector the
     sweep uses, record the sample, answer the state word it leaves the app in."""
     from ..db import begin
-    from .core import make_id
     from .deployment_health import probe
 
     with begin(engine) as c:
@@ -911,14 +910,16 @@ def probe_app(engine: Any, settings: Any, project_id: str, target_id: str) -> di
         return {"word": w["word"], "tone": w["tone"], "checked_at": None, "probed": False}
     sample = probe(target, settings)                # outside a transaction: network I/O
     at = _now()
+    if sample["ok"] is None:
+        # Nothing could be asked (no connector, no declared check): unknown, never a failure
+        # sample — the same rule the sweep follows.
+        w = _health_word("unknown")
+        return {"word": w["word"], "tone": w["tone"], "checked_at": _iso(at), "probed": False,
+                "ok": None, "reason": sample["error"]}
+    from .deployment_health import record_sample
+
     with begin(engine) as c:
-        c.execute(text(
-            "INSERT INTO deployment_health_samples (id, project_id, deployment_target_id, "
-            " checked_at, ok, status_code, latency_ms, error) "
-            "VALUES (:id, :p, :t, :at, :ok, :sc, :ms, :err)"),
-            {"id": make_id("dhs"), "p": project_id, "t": target_id, "at": at,
-             "ok": sample["ok"], "sc": sample["status_code"], "ms": sample["latency_ms"],
-             "err": sample["error"]})
+        record_sample(c, target, sample, at)     # the one writer: probe signature included
         state, _since = _state_of(_newest_samples(c, [target_id], at)[target_id], True)
     w = _health_word(state)
     # `Probe now` also scrapes the app's declared metrics, so one press refreshes both halves

@@ -1247,7 +1247,7 @@ def _observed_monitoring(
             text(
                 """
                 SELECT ok, checked_at, status_code, latency_ms, error
-                FROM deployment_health_samples
+                FROM counted_health_samples
                 WHERE deployment_target_id = :t
                 ORDER BY checked_at DESC LIMIT 1
                 """
@@ -5942,6 +5942,34 @@ def deployed_url_of(domains: Any, target_kind: Any = None) -> str:
     return url
 
 
+def _remediation_record(connection: Connection, code_task_run_id: str) -> dict[str, Any]:
+    """A remediation build's record for its step (input_fidelity): ``validation`` — the
+    validator's findings on the input, the fixes applied (line before/after, auto or manual), its
+    findings on the output — and ``input_fidelity`` — the verdict and its violations. Empty for
+    every other build. Never raises."""
+    from . import input_fidelity
+
+    try:
+        with connection.begin_nested():
+            row = connection.execute(
+                text("SELECT state->'validation' AS validation, "
+                     "state->'input_fidelity' AS fidelity FROM code_task_runs WHERE id = :r"),
+                {"r": code_task_run_id}).mappings().first()
+    except Exception:  # noqa: BLE001
+        log.info("remediation record not read for %s", code_task_run_id, exc_info=True)
+        return {}
+    if not row:
+        return {}
+    out: dict[str, Any] = {}
+    for key, col in ((input_fidelity.VALIDATION_KEY, "validation"),
+                     (input_fidelity.STATE_KEY, "fidelity")):
+        value = row[col]
+        value = json.loads(value) if isinstance(value, str) else value
+        if isinstance(value, dict):
+            out[key] = value
+    return out
+
+
 def _terminal_evidence(
     connection: Connection, kind: str, awaited_id: str
 ) -> dict[str, Any]:
@@ -5970,10 +5998,11 @@ def _terminal_evidence(
                      "WHERE id = :r"),
                 {"r": awaited_id},
             ).mappings().first()
+            remediation = _remediation_record(connection, awaited_id)
             if not row or not row["pull_request_url"]:
-                return {}
+                return remediation
             out = {"pull_request_url": row["pull_request_url"],
-                   "pull_request_number": row["pull_request_number"]}
+                   "pull_request_number": row["pull_request_number"], **remediation}
             checks = row["checks_failing"]
             checks = json.loads(checks) if isinstance(checks, str) else checks
             if isinstance(checks, dict) and checks.get("gates"):
@@ -6754,6 +6783,9 @@ def resume_awaited(
                         **({REJECTED_BY_APPROVER: True}
                            if kind in ("stack_deployment", "architecture", SPEC_DECISION_KIND)
                            and status == "rejected" else {}),
+                        # A remediation that failed its fidelity check says why, on the step.
+                        **(_remediation_record(connection, awaited_id)
+                           if kind == "code_task" else {}),
                         **((recovered or {}).get("output") or {})},
             )
             done.append({"run_id": run_id, "step_id": step["step_id"],

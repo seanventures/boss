@@ -447,7 +447,15 @@ def declarations(connection, target_ids: list[str]) -> dict[str, dict[str, Any]]
 # --------------------------------------------------------------------------- #
 def public_origin(target: dict) -> Optional[str]:
     """The origin the health probe asks, for this target (scheme://host[:port]), or None."""
-    if str(target.get("target_kind") or "").lower() == "stack":
+    from .deployment_connectors import _app_port, declared_health_probes
+
+    # The probe asks the DECLARED checks first (declared_health_probes), so the origin is
+    # theirs whenever the target declared one — whatever its kind.
+    declared = [p for p in declared_health_probes(target, app_port=_app_port(target, default=0)
+                                                  or None) if p.get("url")]
+    if declared:
+        url = declared[0]["url"]
+    elif str(target.get("target_kind") or "").lower() == "stack":
         url = str(target.get("public_url") or target.get("stack_open_url")
                   or (target.get("domains") or [""])[0] or "").strip()
         if not url:

@@ -50,6 +50,20 @@ DEFAULT_PORTS = {"grafana": 3006, "prometheus": 9091, "otel_http": 4318, "otel_m
 SCRAPE_INTERVAL_SECONDS = 60
 
 
+def _declared_path(target: dict) -> str:
+    """The path (and query) of the target's first declared HTTP health check, else "/" —
+    resolved by declared_health_probes, the one reader every probe path shares."""
+    from urllib.parse import urlsplit
+
+    from .deployment_connectors import declared_health_probes
+
+    for p in declared_health_probes(target):
+        if p.get("url"):
+            parts = urlsplit(p["url"])
+            return (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+    return "/"
+
+
 def scrape_targets(connection, project_id: Optional[str] = None) -> list[dict[str, Any]]:
     """Every DEPLOYED app, as something to scrape.
 
@@ -64,7 +78,7 @@ def scrape_targets(connection, project_id: Optional[str] = None) -> list[dict[st
     """
     rows = connection.execute(
         sql("SELECT t.id, t.project_id, t.app_name, t.environment, t.repo, t.target_ref, "
-            "       t.domains, t.required_resources "
+            "       t.domains, t.required_resources, t.health_checks "
             "FROM deployment_targets t "
             "WHERE t.status = 'active' AND " + _DEPLOYED.format(alias="t") + " "
             + (" AND t.project_id = :p" if project_id else "")
@@ -91,7 +105,9 @@ def scrape_targets(connection, project_id: Optional[str] = None) -> list[dict[st
             # WHAT A USER WOULD OPEN. The scrape url is the metrics endpoint on the host
             # gateway; this is the app's front door, and asking whether IT answers is the
             # question "is the website up" — a different one from "is it exporting metrics".
-            "probe_url": f"http://host.docker.internal:{port}/",
+            # The PATH is the target's declared health check when it has one: an API with no
+            # page at "/" answers 404 there, and probing "/" painted it down.
+            "probe_url": f"http://host.docker.internal:{port}{_declared_path(dict(r))}",
         })
     return out
 

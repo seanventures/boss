@@ -67,7 +67,7 @@ def hourly(connection: Connection, target_ids: list[str], now: Any = None
     for r in connection.execute(text(
             "SELECT deployment_target_id AS t, floor(extract(epoch FROM (checked_at - :s)) / 3600) "
             "AS h, count(*) AS n, sum(CASE WHEN ok THEN 1 ELSE 0 END) AS okn "
-            "FROM deployment_health_samples WHERE deployment_target_id = ANY(:ids) "
+            "FROM counted_health_samples WHERE deployment_target_id = ANY(:ids) "
             "AND checked_at >= :s AND checked_at < :e GROUP BY 1, 2"),
             {"ids": target_ids, "s": start, "e": end}).mappings():
         i = int(r["h"])

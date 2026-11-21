@@ -1443,6 +1443,26 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "new branch and PR), not a push onto the merged branch.",
                 },
                 "risk_tier": {"type": "integer", "minimum": 0, "maximum": 3},
+                "remediate": {
+                    "type": "object",
+                    "description": "the task REMEDIATES one input file (validate it, fix it): "
+                                   "the output must be a minimal edit of that input, and "
+                                   "BOSS checks it is (no copied reference answer, no added "
+                                   "blocks, no unbacked claims). `answer_files`: reference "
+                                   "answers for the same input the builder must not read "
+                                   "(siblings like *.good.yaml are found anyway). "
+                                   "`validator`: {name, check, fix} command templates with "
+                                   "{file}; its findings are recorded on the step.",
+                    "properties": {
+                        "input": {"type": "string"},
+                        "output": {"type": "string"},
+                        "answer_files": {"type": "array", "items": {"type": "string"}},
+                        "validator": {"type": "object", "properties": {
+                            "name": {"type": "string"}, "check": {"type": "string"},
+                            "fix": {"type": "string"}}},
+                    },
+                    "required": ["input"],
+                },
                 "profile": {
                     "type": "string",
                     "enum": ["lean", "balanced", "strict", "vag"],
@@ -1555,6 +1575,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 jobs=ctx.jobs,
                 risk_tier=risk_tier,
                 profile=args.get("profile"),
+                remediate=(args.get("remediate")
+                           if isinstance(args.get("remediate"), dict) else None),
             )
         return {
             "status": "queued",
