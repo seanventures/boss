@@ -62,7 +62,7 @@ def _ago(**kw):
 
 # ── 1. the contract case that can never pass ─────────────────────────────────────────────────
 
-BASE = "http://2.29.2.202:8080"
+BASE = "http://203.0.113.10:8080"
 SPEC_CASES = ([{"name": "healthz", "path": "/healthz", "method": "GET", "expect_status": 200}]
               + [{"name": f"payments_unauth_{n}", "path": "/v1/payments", "method": "GET",
                   "expect_status": 401} for n in range(1, 11)]

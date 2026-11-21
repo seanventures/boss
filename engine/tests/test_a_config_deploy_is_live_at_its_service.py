@@ -1,7 +1,7 @@
 """A CONFIG DEPLOY IS LIVE AT ITS SERVICE, NOT ITS HEALTH PATH (laptop 2026-11-21).
 
 create_config_target records the target's health URL as its domain, so the Deploy config step's
-`deployed_url` was "http://2.29.2.202:8080/readyz" and the contract test bound to it would have
+`deployed_url` was "http://203.0.113.10:8080/readyz" and the contract test bound to it would have
 requested /readyz/v1/payments. Northgate's API onboarding had to hard-code its base URL.
 """
 from __future__ import annotations
@@ -12,8 +12,8 @@ from boss_engine.services import workflow_capability_runner as w
 
 
 def test_a_config_target_is_live_at_its_health_url_s_origin():
-    assert w.deployed_url_of(["http://2.29.2.202:8080/readyz"], "config_dir") == \
-        "http://2.29.2.202:8080"
+    assert w.deployed_url_of(["http://203.0.113.10:8080/readyz"], "config_dir") == \
+        "http://203.0.113.10:8080"
     assert w.deployed_url_of('["https://gw.example/healthz"]', "config_dir") == \
         "https://gw.example"
 

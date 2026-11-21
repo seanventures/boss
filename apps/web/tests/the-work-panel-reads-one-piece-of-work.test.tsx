@@ -83,7 +83,7 @@ const STORY = {
   ] },
 };
 const DEPLOYMENTS = {
-  environments: [{ key: "staging", label: "Staging", host: "2.29.2.202:8015", health: "degraded", p95_ms: 542,
+  environments: [{ key: "staging", label: "Staging", host: "203.0.113.10:8015", health: "degraded", p95_ms: 542,
                    last_deploy: { commit: "97256c8aa", at: "2026-11-19T08:00:00Z", by: "", label: "", href: "", pr: 1, pr_url: "" } }],
   production: { state: "needs_host", action: { label: "Pick host", href: "?project_id=park&drawer=needs:dec_prodhost" } },
 };
@@ -135,7 +135,7 @@ describe("who did what (flowNodes)", () => {
     expect(review.note!.text).toBe("3 review findings + gate “Package honest” · Follow-up 1 · review findings · 21 m in");
     expect(merge).toMatchObject({ state: "wait", you: true, who: "Only a person merges" });
     expect(merge.note!.text).toBe("Merge now, or wait for the follow-up to land its fixes");
-    expect(staging.who).toBe("Harbor · 2.29.2.202:8015");
+    expect(staging.who).toBe("Harbor · 203.0.113.10:8015");
     expect(prod.sub).toBe("no host yet");
     expect(prod.note).toMatchObject({ tone: "you", text: "Pick a prod host", action: { label: "Pick host" } });
   });

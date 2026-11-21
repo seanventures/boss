@@ -1,8 +1,8 @@
 """A HOST THE PROJECT CAN SEE IS A HOST EVERY TOOL CAN FIND (2026-11-18).
 
-THE CASE: API onboarding on northgate-gateway. list_deployment_hosts showed 2.29.2.202 (a
+THE CASE: API onboarding on northgate-gateway. list_deployment_hosts showed 203.0.113.10 (a
 verified host registered in boss-dogfood, shared with the org) and BOSS's agent then got
-"no registered host '2.29.2.202'" from inspect_host and "no host matching" from
+"no registered host '203.0.113.10'" from inspect_host and "no host matching" from
 describe_deployment_host: those tools looked hosts up in the project's own rows only. Every
 id/name/address lookup now goes through deployment_fleet.match_host (org-shared, verified)."""
 from __future__ import annotations
@@ -53,7 +53,7 @@ def test_a_sibling_project_finds_the_shared_host_by_address_name_and_id(engine):
 
 
 # A host looked up by what a person or agent typed (id, name or address), scoped to the
-# project's own rows: the shape that hid 2.29.2.202. Every such lookup is match_host now.
+# project's own rows: the shape that hid 203.0.113.10. Every such lookup is match_host now.
 _OWN_ROWS_LOOKUP = re.compile(
     r"FROM deployment_hosts[^;]{0,200}?project_id\s*=\s*:p",
     re.S)
