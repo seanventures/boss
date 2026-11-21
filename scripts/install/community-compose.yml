@@ -729,7 +729,15 @@ services:
       # The preview origin: preview capability paths only, every cookie and credential stripped.
       - "${BOSS_PREVIEW_BIND:-127.0.0.1}:${BOSS_PREVIEW_PORT:-3001}:${BOSS_PREVIEW_PORT:-3001}"
     volumes:
-      - ../../.boss/extra-ca.pem:/etc/boss/extra-ca.pem:ro
+      # The company CA (installer's copy of BOSS_EXTRA_CA_FILE; empty when none). Never created
+      # by Docker: a missing file fails `up` loudly instead of becoming a directory that breaks
+      # this container's next restart. Every lifecycle path writes it (enterprise_network finalize).
+      - type: bind
+        source: ../../.boss/extra-ca.pem
+        target: /etc/boss/extra-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
       - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_artifacts:/var/lib/boss/artifacts
       - boss_community_identity:/var/lib/boss/identity
@@ -1042,7 +1050,15 @@ services:
       # Token prices per model, e.g. a local model at zero. Empty uses BOSS's built-in table.
       BOSS_MODEL_PRICES_JSON: ${BOSS_MODEL_PRICES_JSON:-}
     volumes:
-      - ../../.boss/extra-ca.pem:/etc/boss/extra-ca.pem:ro
+      # The company CA (installer's copy of BOSS_EXTRA_CA_FILE; empty when none). Never created
+      # by Docker: a missing file fails `up` loudly instead of becoming a directory that breaks
+      # this container's next restart. Every lifecycle path writes it (enterprise_network finalize).
+      - type: bind
+        source: ../../.boss/extra-ca.pem
+        target: /etc/boss/extra-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
       - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_artifacts:/var/lib/boss/artifacts
       - boss_community_identity:/var/lib/boss/identity
@@ -1109,7 +1125,15 @@ services:
       BOSS_DOC_RENDER_DIR: /var/lib/boss/artifacts/rendered
       BOSS_ARTIFACTS_DIR: /var/lib/boss/artifacts
     volumes:
-      - ../../.boss/extra-ca.pem:/etc/boss/extra-ca.pem:ro
+      # The company CA (installer's copy of BOSS_EXTRA_CA_FILE; empty when none). Never created
+      # by Docker: a missing file fails `up` loudly instead of becoming a directory that breaks
+      # this container's next restart. Every lifecycle path writes it (enterprise_network finalize).
+      - type: bind
+        source: ../../.boss/extra-ca.pem
+        target: /etc/boss/extra-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
       - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_artifacts:/var/lib/boss/artifacts
     healthcheck:
@@ -1161,7 +1185,15 @@ services:
       # 2026-10-31). Outside agents authenticate with their own scoped boss_ext_ keys.
       BOSS_MCP_HTTP_TOKEN: ${BOSS_KG_MCP_HTTP_TOKEN:-}
     volumes:
-      - ../../.boss/extra-ca.pem:/etc/boss/extra-ca.pem:ro
+      # The company CA (installer's copy of BOSS_EXTRA_CA_FILE; empty when none). Never created
+      # by Docker: a missing file fails `up` loudly instead of becoming a directory that breaks
+      # this container's next restart. Every lifecycle path writes it (enterprise_network finalize).
+      - type: bind
+        source: ../../.boss/extra-ca.pem
+        target: /etc/boss/extra-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
     healthcheck:
       test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8790/health', headers={'Authorization': 'Bearer ' + os.environ['BOSS_MCP_HTTP_TOKEN']}), timeout=5).read()"]
       interval: 10s
@@ -1234,7 +1266,15 @@ services:
       BOSS_TARGET_BITBUCKET_REPO: ${BOSS_TARGET_BITBUCKET_REPO:-}
       BOSS_BITBUCKET_REPOS: ${BOSS_BITBUCKET_REPOS:-}
     volumes:
-      - ../../.boss/extra-ca.pem:/etc/boss/extra-ca.pem:ro
+      # The company CA (installer's copy of BOSS_EXTRA_CA_FILE; empty when none). Never created
+      # by Docker: a missing file fails `up` loudly instead of becoming a directory that breaks
+      # this container's next restart. Every lifecycle path writes it (enterprise_network finalize).
+      - type: bind
+        source: ../../.boss/extra-ca.pem
+        target: /etc/boss/extra-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
       - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_identity:/var/lib/boss/identity:ro
     healthcheck:
@@ -1289,7 +1329,15 @@ services:
       AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
       AWS_REGION: ${AWS_REGION:-}
     volumes:
-      - ../../.boss/extra-ca.pem:/etc/boss/extra-ca.pem:ro
+      # The company CA (installer's copy of BOSS_EXTRA_CA_FILE; empty when none). Never created
+      # by Docker: a missing file fails `up` loudly instead of becoming a directory that breaks
+      # this container's next restart. Every lifecycle path writes it (enterprise_network finalize).
+      - type: bind
+        source: ../../.boss/extra-ca.pem
+        target: /etc/boss/extra-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
       - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_identity:/var/lib/boss/identity:ro
     # P8 log caps: a streaming service logs per call; never let its log fill the disk. The same
@@ -1353,7 +1401,15 @@ services:
       BOSS_BUILD_SERVICES_PG_PASSWORD_FILE: /run/boss-build-services/password
       BOSS_BUILD_SERVICES_SANDBOX_PORT: "5433"
     volumes:
-      - ../../.boss/extra-ca.pem:/etc/boss/extra-ca.pem:ro
+      # The company CA (installer's copy of BOSS_EXTRA_CA_FILE; empty when none). Never created
+      # by Docker: a missing file fails `up` loudly instead of becoming a directory that breaks
+      # this container's next restart. Every lifecycle path writes it (enterprise_network finalize).
+      - type: bind
+        source: ../../.boss/extra-ca.pem
+        target: /etc/boss/extra-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
       - boss_community_runner:/var/lib/boss/runner
       - boss_community_sandboxes:/var/lib/boss/sandboxes
       - boss_community_repos:/var/lib/boss/repos

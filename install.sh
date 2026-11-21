@@ -1301,14 +1301,8 @@ fi
 # Desktop: without it, a lifecycle command run without DOCKER_CONTEXT acts on the other one).
 BOSS_DOCKER_CONTEXT="${BOSS_DOCKER_CONTEXT:-${DOCKER_CONTEXT:-}}"
 # BOSS_EGRESS_CONNECT_ALLOW used to REPLACE the fence's built-in host list; it now adds to it. An
-# install that set it to NARROW the fence keeps exactly that fence: the upgrade writes
-# BOSS_EGRESS_CONNECT_DEFAULTS=off (never a silent widening of a security policy). A new install,
-# or one that never set the list, gets the additive behaviour.
-if [ -f "$ENV_FILE" ] && grep -qE '^BOSS_EGRESS_CONNECT_ALLOW=.+' "$ENV_FILE" &&
-   ! grep -qE '^BOSS_EGRESS_CONNECT_DEFAULTS=.+' "$ENV_FILE" && [ -z "${BOSS_EGRESS_CONNECT_DEFAULTS:-}" ]; then
-  BOSS_EGRESS_CONNECT_DEFAULTS=off
-  ui_info "Kept your sandbox fence list as it was (BOSS_EGRESS_CONNECT_DEFAULTS=off). BOSS_EGRESS_CONNECT_ALLOW now ADDS to the built-in hosts; set BOSS_EGRESS_CONNECT_DEFAULTS=on in $ENV_FILE to use that."
-fi
+# install that set it to narrow the fence keeps that fence: enterprise_network.py finalize (below,
+# and in remote.sh update) writes BOSS_EGRESS_CONNECT_DEFAULTS=off from the previous .env.
 
 _new_env="$INSTALL_DIR/.env.writing.$$"
 cat > "$_new_env" <<EOF
@@ -1439,9 +1433,19 @@ if [ ! -f "$INSTALL_DIR/engine/boss_engine/services/enterprise_network.py" ]; th
   rm -f "$_new_env"
   die "engine/boss_engine/services/enterprise_network.py is missing — left the existing $ENV_FILE unchanged"
 fi
-if ! python3 "$INSTALL_DIR/engine/boss_engine/services/enterprise_network.py" finalize "$_new_env" </dev/null; then
+# One finalize for every lifecycle path (remote.sh update runs the same): it also keeps a narrowed
+# sandbox fence narrow (--previous: the live .env, not yet replaced) and writes .boss/extra-ca.pem,
+# which compose mounts with create_host_path: false. "recreate-ca-mount" means it replaced a
+# directory Docker had made there: those containers are force-recreated after the start below.
+if ! _finalize_out="$(python3 "$INSTALL_DIR/engine/boss_engine/services/enterprise_network.py" finalize "$_new_env" --previous "$ENV_FILE" </dev/null)"; then
   rm -f "$_new_env"
-  die "the enterprise network settings above were refused — fix them (export the corrected value, or edit $ENV_FILE) and run this again. Nothing was changed."
+  die "stopped on the enterprise network problem above — fix it (export the corrected value, edit $ENV_FILE, or run the command it names) and run this again. Nothing was changed."
+fi
+_RECREATE_CA_MOUNT=0
+case "$_finalize_out" in *recreate-ca-mount*) _RECREATE_CA_MOUNT=1 ;; esac
+if [ -f "$ENV_FILE" ] && ! grep -qE '^BOSS_EGRESS_CONNECT_DEFAULTS=.+' "$ENV_FILE" &&
+   grep -qE '^BOSS_EGRESS_CONNECT_DEFAULTS=off$' "$_new_env"; then
+  ui_info "Kept your sandbox fence list as it was (BOSS_EGRESS_CONNECT_DEFAULTS=off). BOSS_EGRESS_CONNECT_ALLOW now ADDS to the built-in hosts; set BOSS_EGRESS_CONNECT_DEFAULTS=on in $ENV_FILE to use that."
 fi
 mv "$_new_env" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
@@ -1797,6 +1801,18 @@ fi
 # shellcheck disable=SC2086
 ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES up -d --no-build </dev/null
+# The CA mount source was a directory and is now a file: a container created over the directory
+# fails its next restart, so recreate the running ones that mount it, now.
+if [[ "${_RECREATE_CA_MOUNT:-0}" -eq 1 ]]; then
+  # shellcheck disable=SC2086
+  _ca_running="$(${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+    $COMPOSE_PROFILES ps --status running --services </dev/null | grep -xE 'api|worker|runner|egress|model-gateway|mcp-tools|kg-mcp' | tr '\n' ' ' || true)"
+  if [[ -n "$_ca_running" ]]; then
+    # shellcheck disable=SC2086
+    ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+      $COMPOSE_PROFILES up -d --no-deps --no-build --force-recreate $_ca_running </dev/null
+  fi
+fi
 if [[ "$WITH_WEB" -eq 0 ]]; then
   # Switching an existing install to headless must stop a previously running
   # console. Compose does not stop services omitted from the active profile.

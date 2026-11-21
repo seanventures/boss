@@ -18,6 +18,7 @@ The guards here are classes, not instances:
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -120,6 +121,70 @@ def test_finalize_writes_the_containers_file_and_takes_over_the_earlier_name(tmp
     assert copy.read_bytes() == b""
 
 
+def test_finalize_turns_an_empty_mount_directory_into_the_file_and_says_to_recreate(tmp_path):
+    """A hand-run compose (before create_host_path: false) could leave the mount source as an empty
+    DIRECTORY. finalize replaces it with the file and reports it, because a container created over
+    the directory fails its next restart once the source is a file (re-review R2)."""
+    (tmp_path / ".boss" / "extra-ca.pem").mkdir(parents=True)
+    env = tmp_path / ".env"
+    env.write_text("BOSS_EXTRA_CA_FILE=\n")
+    result = en.finalize_install(str(env))
+    assert result.problems == [] and result.recreate_ca_mount
+    assert (tmp_path / ".boss" / "extra-ca.pem").is_file()
+    again = en.finalize_install(str(env))
+    assert again.problems == [] and not again.recreate_ca_mount
+    out = subprocess.run(["python3", str(REPO / "engine/boss_engine/services/enterprise_network.py"),
+                          "finalize", str(env)], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0 and "recreate-ca-mount" not in out.stdout
+    (tmp_path / ".boss" / "extra-ca.pem").unlink()
+    (tmp_path / ".boss" / "extra-ca.pem").mkdir()
+    out = subprocess.run(["python3", str(REPO / "engine/boss_engine/services/enterprise_network.py"),
+                          "finalize", str(env)], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0 and out.stdout.strip() == "recreate-ca-mount"
+
+
+def test_a_root_owned_boss_directory_stops_with_the_one_command_that_fixes_it(tmp_path):
+    """Docker run as root can create .boss itself; finalize then names the exact fix instead of a
+    bare errno (re-review R3)."""
+    boss = tmp_path / ".boss"
+    boss.mkdir()
+    env = tmp_path / ".env"
+    env.write_text("BOSS_EXTRA_CA_FILE=\n")
+    boss.chmod(0o555)
+    try:
+        if os.access(boss, os.W_OK):
+            pytest.skip("running as root: the directory stays writable")
+        out = subprocess.run(["python3", str(REPO / "engine/boss_engine/services/enterprise_network.py"),
+                              "finalize", str(env)], capture_output=True, text=True, timeout=30)
+    finally:
+        boss.chmod(0o755)
+    assert out.returncode == 1
+    assert f'sudo chown -R "$(id -u):$(id -g)" {boss}' in out.stderr
+
+
+@pytest.mark.parametrize("previous,expected", [
+    ("BOSS_EGRESS_CONNECT_ALLOW=api.anthropic.com\n", "off"),            # a narrowed fence stays narrow
+    ("BOSS_EGRESS_CONNECT_ALLOW=api.anthropic.com\nBOSS_EGRESS_CONNECT_DEFAULTS=\n", "off"),
+    ("BOSS_EGRESS_CONNECT_ALLOW=api.anthropic.com\nBOSS_EGRESS_CONNECT_DEFAULTS=on\n", None),
+    ("BOSS_EGRESS_CONNECT_ALLOW=\n", None),
+    (None, None),                                                        # a new install: additive
+])
+def test_every_lifecycle_path_keeps_a_narrowed_fence_through_finalize(tmp_path, previous, expected):
+    """The B2 migration lives in finalize, so install.sh AND remote.sh update both get it."""
+    env = tmp_path / ".env.next"
+    env.write_text((previous or "BOSS_EGRESS_CONNECT_ALLOW=new.example.com\n"))
+    args = ["python3", str(REPO / "engine/boss_engine/services/enterprise_network.py"), "finalize", str(env)]
+    if previous is not None:
+        old = tmp_path / ".env"
+        old.write_text(previous)
+        args += ["--previous", str(old)]
+    assert subprocess.run(args, capture_output=True, text=True, timeout=30).returncode == 0
+    value = en.read_env_file(str(env)).get("BOSS_EGRESS_CONNECT_DEFAULTS") or None
+    if previous is not None and "DEFAULTS=on" in previous:
+        expected = "on"                       # the operator's own choice is never touched
+    assert value == expected
+
+
 def test_a_200_kb_bundle_is_accepted_and_the_limit_is_what_a_build_secret_takes(tmp_path):
     cert = _ca(tmp_path)
     big = tmp_path / "bundle.pem"
@@ -134,7 +199,10 @@ def test_a_200_kb_bundle_is_accepted_and_the_limit_is_what_a_build_secret_takes(
 
 
 def test_a_loopback_proxy_or_mirror_is_refused_because_no_container_can_reach_it():
-    for url in ("http://127.0.0.1:8888", "http://localhost:3128", "http://[::1]:3128", "http://127.1.2.3:80"):
+    for url in ("http://127.0.0.1:8888", "http://localhost:3128", "http://[::1]:3128", "http://127.1.2.3:80",
+                # every spelling inet_aton accepts, and the unspecified addresses
+                "http://127.1:3128", "http://2130706433:3128", "http://0x7f000001:3128", "http://0177.0.0.1:3128",
+                "http://0.0.0.0:3128", "http://[::]:3128", "http://0:3128"):
         found = en.problems({"BOSS_UPSTREAM_PROXY": url})
         assert found and "host.docker.internal" in found[0], url
     assert en.problems({"BOSS_NPM_REGISTRY": "https://localhost:4873/"})
@@ -259,7 +327,11 @@ def test_every_boss_container_built_from_the_api_image_sees_the_whole_block():
     for name in PYTHON_RUNTIME_SERVICES:
         missing = runtime - set(services[name]["environment"])
         assert not missing, f"{name} does not get {sorted(missing)}"
-        assert "../../.boss/extra-ca.pem:/etc/boss/extra-ca.pem:ro" in services[name]["volumes"], name
+        mounts = [v for v in services[name]["volumes"] if isinstance(v, dict) and v.get("target") == en.CA_CONTAINER_PATH]
+        # Long form, never created by Docker: a missing file fails loudly instead of becoming a
+        # directory that breaks the container's next restart (re-review R2).
+        assert mounts == [{"type": "bind", "source": "../../.boss/extra-ca.pem", "target": en.CA_CONTAINER_PATH,
+                           "read_only": True, "bind": {"create_host_path": False}}], name
         assert not any("CA_PEM" in key for key in services[name]["environment"]), name
 
 

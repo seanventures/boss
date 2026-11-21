@@ -26,9 +26,10 @@ from __future__ import annotations
 import ipaddress
 import os
 import re
+import socket
 import ssl
 import sys
-from typing import Iterable, Mapping, Optional
+from typing import Iterable, Mapping, NamedTuple, Optional
 from urllib.parse import urlsplit
 
 #: setting -> what it is (used in messages; never the value).
@@ -140,13 +141,22 @@ def parse_host_port(entry: str, *, default_port: int = 443) -> tuple[str, int]:
 
 
 def _is_loopback(host: str) -> bool:
-    host = host.lower().rstrip(".")
+    """True for a host no container can use to reach this machine: localhost names, loopback and
+    unspecified addresses in every spelling the C resolver accepts (127.1, 2130706433,
+    0x7f000001, 0177.0.0.1 — inet_aton semantics), and :: / 0.0.0.0."""
+    host = host.lower().rstrip(".").strip("[]")
     if host == "localhost" or host.endswith(".localhost"):
         return True
+    ip = None
     try:
-        return ipaddress.ip_address(host).is_loopback
+        ip = ipaddress.ip_address(host)
     except ValueError:
-        return False
+        if re.fullmatch(r"[0-9a-fx.]+", host):
+            try:
+                ip = ipaddress.IPv4Address(socket.inet_aton(host))
+            except (OSError, ValueError):
+                ip = None
+    return ip is not None and (ip.is_loopback or ip.is_unspecified)
 
 
 def _is_ip(value: str) -> bool:
@@ -451,18 +461,46 @@ def remove_env_line(path: str, key: str) -> None:
     os.replace(tmp, path)
 
 
-def finalize(path: str) -> list[str]:
-    """The installer's last step on a new .env, before it replaces the live one: refuse any
-    invalid value, take over the earlier name BOSS_BUILD_CA_FILE, and write the containers' copy
-    of the CA (<install>/.boss/extra-ca.pem, which compose mounts read-only at CA_CONTAINER_PATH)
-    from BOSS_EXTRA_CA_FILE — or empty it when none is set, so a removed CA stops being trusted."""
+class Finalized(NamedTuple):
+    problems: list
+    recreate_ca_mount: bool     # the mount source was a directory: recreate the services using it
+
+
+#: The services that mount the CA file (community-compose.yml); recreated when it was replaced.
+CA_MOUNT_SERVICES = ("api", "worker", "runner", "egress", "model-gateway", "mcp-tools", "kg-mcp")
+
+
+def _fix_boss_dir(directory: str) -> str:
+    return (f"{directory} is not writable by this user (Docker, run as root, may have created it). "
+            f'Run: sudo chown -R "$(id -u):$(id -g)" {directory}   then run this again')
+
+
+def finalize_install(path: str, previous: Optional[str] = None) -> Finalized:
+    """THE ONE STEP every lifecycle path runs on a new .env before it builds or replaces the live
+    one (install.sh, remote.sh update):
+
+    * take over the earlier name BOSS_BUILD_CA_FILE;
+    * keep a narrowed fence narrow: when the PREVIOUS .env set BOSS_EGRESS_CONNECT_ALLOW (which
+      used to replace the built-in hosts) and never chose BOSS_EGRESS_CONNECT_DEFAULTS, write
+      BOSS_EGRESS_CONNECT_DEFAULTS=off — an upgrade never silently widens a security policy;
+    * refuse any invalid value;
+    * write the containers' copy of the CA (<install>/.boss/extra-ca.pem, mounted read-only at
+      CA_CONTAINER_PATH with create_host_path: false) from BOSS_EXTRA_CA_FILE, or empty it when
+      none is set. A DIRECTORY there (left by an older compose run) is replaced by the file and
+      reported, because a container created over the directory fails its next restart: the
+      caller force-recreates CA_MOUNT_SERVICES."""
     env = read_env_file(path)
     if not _clean(env.get("BOSS_EXTRA_CA_FILE")) and _clean(env.get("BOSS_BUILD_CA_FILE")):
         set_env_line(path, "BOSS_EXTRA_CA_FILE", _clean(env["BOSS_BUILD_CA_FILE"]))
-        env = read_env_file(path)
+    if previous and os.path.isfile(previous):
+        old = read_env_file(previous)
+        if (_clean(old.get("BOSS_EGRESS_CONNECT_ALLOW")) and not _clean(old.get("BOSS_EGRESS_CONNECT_DEFAULTS"))
+                and not _clean(read_env_file(path).get("BOSS_EGRESS_CONNECT_DEFAULTS"))):
+            set_env_line(path, "BOSS_EGRESS_CONNECT_DEFAULTS", "off")
+    env = read_env_file(path)
     found = problems(env)
     if found:
-        return found
+        return Finalized(found, False)
     # An earlier build of this change passed the CA in the environment; never again.
     remove_env_line(path, "BOSS_EXTRA_CA_PEM_B64")
     ca_path = _clean(env.get("BOSS_EXTRA_CA_FILE"))
@@ -470,21 +508,41 @@ def finalize(path: str) -> list[str]:
     if ca_path:
         with open(ca_path, "rb") as fh:
             data = fh.read()
+    boss_dir = os.path.join(os.path.dirname(os.path.abspath(path)), os.path.dirname(CA_INSTALL_COPY))
     copy = os.path.join(os.path.dirname(os.path.abspath(path)), CA_INSTALL_COPY)
-    os.makedirs(os.path.dirname(copy), exist_ok=True)
-    if os.path.isdir(copy) and not os.listdir(copy):
-        os.rmdir(copy)      # a hand-run compose made the mount point a directory: replace it
-    tmp = f"{copy}.{os.getpid()}"
-    with open(tmp, "wb") as fh:
-        fh.write(data)
-    os.chmod(tmp, 0o644)    # a CA certificate is public; every container role reads it
-    os.replace(tmp, copy)
-    return []
+    recreate = False
+    try:
+        os.makedirs(boss_dir, exist_ok=True)
+        if os.path.isdir(copy) and not os.path.islink(copy):
+            if os.listdir(copy):
+                return Finalized([f"{copy} is a directory with files in it, where BOSS keeps the CA copy. "
+                                  f"Move it aside (sudo mv {copy} {copy}.old) and run this again"], False)
+            os.rmdir(copy)
+            recreate = True
+        tmp = f"{copy}.{os.getpid()}"
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        os.chmod(tmp, 0o644)    # a CA certificate is public; every container role reads it
+        os.replace(tmp, copy)
+    except PermissionError:
+        target = boss_dir if not os.access(boss_dir, os.W_OK) else copy
+        if target == copy:
+            return Finalized([f"{copy} cannot be replaced by this user. Run: sudo rm -r {copy}   "
+                              "then run this again"], False)
+        return Finalized([_fix_boss_dir(boss_dir)], False)
+    return Finalized([], recreate)
+
+
+def finalize(path: str, previous: Optional[str] = None) -> list[str]:
+    return finalize_install(path, previous).problems
 
 
 def _main(argv: list[str]) -> int:
-    usage = ("usage: enterprise_network.py check ENV_FILE | finalize ENV_FILE | "
+    usage = ("usage: enterprise_network.py check ENV_FILE | finalize ENV_FILE [--previous OLD_ENV] | "
              "check-ca PEM_FILE | summary ENV_FILE")
+    previous = None
+    if len(argv) == 4 and argv[0] == "finalize" and argv[2] == "--previous":
+        previous, argv = argv[3], argv[:2]
     if len(argv) != 2 or argv[0] not in ("check", "finalize", "check-ca", "summary"):
         print(usage, file=sys.stderr)
         return 2
@@ -498,16 +556,19 @@ def _main(argv: list[str]) -> int:
         return 0
     if command == "finalize":
         try:
-            found = finalize(path)
+            result = finalize_install(path, previous)
         except OSError as exc:
             print(f"cannot update {path}: {exc.strerror}", file=sys.stderr)
             return 2
-        for message in found:
+        for message in result.problems:
             print(message, file=sys.stderr)
-        if not found:
+        if not result.problems:
             for message in warnings(read_env_file(path)):
                 print(f"warning: {message}", file=sys.stderr)
-        return 1 if found else 0
+            if result.recreate_ca_mount:
+                # stdout, one word: install.sh and remote.sh force-recreate CA_MOUNT_SERVICES.
+                print("recreate-ca-mount")
+        return 1 if result.problems else 0
     try:
         env = read_env_file(path)
     except OSError as exc:

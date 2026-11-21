@@ -15,6 +15,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import ssl
 import subprocess
@@ -210,27 +211,41 @@ def test_the_installer_offers_the_flag():
     assert "--use-shell-proxy)" in install and "--use-shell-proxy" in install.split("usage() {", 1)[1][:6000]
 
 
-def _defaults_block() -> str:
+def test_every_lifecycle_path_finalizes_before_it_builds():
+    """install.sh and remote.sh update both write a new .env and build: both go through the one
+    finalize (validation, the narrowed-fence migration, the CA file), before the build, and both
+    force-recreate the CA-mounting services when finalize replaced a directory (re-review R1, R2)."""
     install = (ROOT / "install.sh").read_text()
-    return install.split("# BOSS_EGRESS_CONNECT_ALLOW used to REPLACE", 1)[1].split('_new_env="$INSTALL_DIR', 1)[0]
+    assert install.index('enterprise_network.py" finalize "$_new_env" --previous') < install.index("ui_step \"Building and starting")
+    # The migration is finalize's, not a second copy in the installer's shell.
+    assert "recreate-ca-mount" in install
+    assert not re.search(r"^\s*BOSS_EGRESS_CONNECT_DEFAULTS=off", install.split("cat > \"$_new_env\"")[0], re.M)
+    remote = (ROOT / "scripts/install/remote.sh").read_text()
+    update = remote.split("cmd_update() {", 1)[1].split("\n}\n", 1)[0]
+    assert "enterprise_network.py finalize" in update and "--previous .env" in update
+    assert update.index("enterprise_network.py finalize") < update.index("$compose_build build")
+    assert "recreate-ca-mount" in update
 
 
-@pytest.mark.parametrize("saved,expected", [
-    ("BOSS_EGRESS_CONNECT_ALLOW=api.anthropic.com\n", "off"),                 # a narrowed fence stays narrow
-    ("BOSS_EGRESS_CONNECT_ALLOW=api.anthropic.com\nBOSS_EGRESS_CONNECT_DEFAULTS=\n", "off"),
-    ("BOSS_EGRESS_CONNECT_ALLOW=api.anthropic.com\nBOSS_EGRESS_CONNECT_DEFAULTS=on\n", ""),   # already chosen
-    ("BOSS_EGRESS_CONNECT_ALLOW=\n", ""),                                       # nothing narrowed
-    ("", ""),                                                                   # a new install: additive
-])
-def test_an_upgrade_keeps_a_narrowed_fence_narrow(tmp_path, saved, expected):
-    env_file = tmp_path / ".env"
-    if saved:
-        env_file.write_text(saved)
-    script = ('ui_warn() { :; }; ui_info() { :; }\nENV_FILE="$1"\n#' + _defaults_block()
-              + '\necho "[${BOSS_EGRESS_CONNECT_DEFAULTS:-}]"')
-    result = subprocess.run(["bash", "-c", script, "-", str(env_file)], env={"PATH": "/usr/bin:/bin"},
-                            capture_output=True, text=True, timeout=10)
-    assert result.stdout.strip().splitlines()[-1] == f"[{expected}]", result.stdout + result.stderr
+def test_remote_update_finalize_step_on_a_fake_host(tmp_path):
+    """Run cmd_update's finalize step as the host would: the next .env gets the migration and the
+    CA file exists before the build."""
+    remote = (ROOT / "scripts/install/remote.sh").read_text()
+    step = remote.split("# THE ENTERPRISE NETWORK, as install.sh does it", 1)[1].split("# api and worker, plus every other", 1)[0]
+    host = tmp_path / "host"
+    (host / "engine/boss_engine/services").mkdir(parents=True)
+    shutil.copy2(ROOT / "engine/boss_engine/services/enterprise_network.py", host / "engine/boss_engine/services/")
+    (host / ".env").write_text("BOSS_EGRESS_CONNECT_ALLOW=api.anthropic.com\n")
+    (host / ".env.next").write_text("BOSS_EGRESS_CONNECT_ALLOW=api.anthropic.com\n")
+    script = ('set -euo pipefail\nDIR="$1"; next_env=.env.next\n'
+              'rsh() { sh -c "$*"; }; rshq() { sh -c "$*" 2>/dev/null; }; die() { echo "DIE $*"; exit 1; }\n'
+              'warn() { echo "WARN $*"; }; say() { :; }\n'
+              'step() {\n#' + step + '\necho "recreate=$CA_RECREATE"\n}\nstep')
+    result = subprocess.run(["bash", "-c", script, "-", str(host)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "BOSS_EGRESS_CONNECT_DEFAULTS=off" in (host / ".env.next").read_text()
+    assert (host / ".boss/extra-ca.pem").is_file()
+    assert "recreate=0" in result.stdout
 
 
 # ---- a stopped Docker runtime on a Mac -----------------------------------------------------------

@@ -77,7 +77,9 @@ certificate and host name checks stay on everywhere:
 * **every BOSS container built from the api image** (api, worker, runner, egress, model gateway,
   MCP tools, knowledge graph): the installer copies the file to `.boss/extra-ca.pem` in the
   install directory (a CA certificate is public), Compose mounts it read-only at
-  `/etc/boss/extra-ca.pem`, and each role starts through `with-extra-ca`, which writes one
+  `/etc/boss/extra-ca.pem` (the file always exists, empty when no CA is set; Docker never creates
+  it, so a missing file stops `up` with a clear error instead of mounting a directory — run
+  `boss upgrade` to write it), and each role starts through `with-extra-ca`, which writes one
   combined bundle and exports it for every process the role runs: `SSL_CERT_FILE` (OpenSSL,
   Python, httpx, Go, Rust), `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO`,
   and `NODE_EXTRA_CA_CERTS` (Node and the coding CLIs). Sandboxed runs inherit them. With Java in
