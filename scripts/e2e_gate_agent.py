@@ -8,7 +8,9 @@ boss-community-* stack: API http://localhost:8000, console http://localhost:3000
 through BOSS's API, the way the console starts it: signed in with email + password + the
 authenticator code, the consent sheet answered (a `task` grant for this build's repository on a
 409 consent_required), and a stale second factor stepped up on a 401 step_up_required. Nobody
-clicks anything.
+clicks anything. When the build's own delivery workflow asks its owner for the PRD approval
+(`spec_review`, kept for a person on an install that enforces identity), the gate approves it as
+that owner, as the person would on the Approvals page.
 
 It then watches the run every POLL_S seconds and fails FAST, with the reason, on: the run blocked,
 failed or cancelled; a pending decision for this build that the gate does not answer; no agent
@@ -394,8 +396,31 @@ def pending_for(run: Optional[dict], wf_id: Optional[str], title: str) -> list[d
                        "AND decision_id IS NOT NULL)")
     skip = f" AND id <> {_q(run['decision_id'])}" if run and run.get("decision_id") else ""
     skip += " AND question NOT LIKE 'Approve code change:%'"     # the merge question: expected
-    return sql_json(f"SELECT id, question FROM decisions WHERE status = 'pending' AND project_id = {_q(PROJECT)} "
+    return sql_json(f"SELECT id, question, recommendation->>'capability' AS capability, "
+                    f"recommendation->>'workflow_run_id' AS workflow_run_id "
+                    f"FROM decisions WHERE status = 'pending' AND project_id = {_q(PROJECT)} "
                     f"AND ({' OR '.join(clauses)}){skip} ORDER BY created_at")
+
+
+#: Workflow gates the person who started the build answers, as they would on the Approvals page.
+#: `spec_review` ("PRD approval"): on an install that enforces identity, a direct change's
+#: delivery workflow keeps a person's PRD sign-off (BOSS-482: auto-approval follows
+#: BOSS_AUTHZ_MODE). Since every build a person starts gets its delivery workflow (rc10.31), the
+#: gate's own build raises that card, and its owner approves it.
+PERSON_ANSWERS = frozenset({"spec_review"})
+
+
+def ours_to_answer(pending: list[dict], wf_id: Optional[str]) -> tuple[list[dict], list[dict]]:
+    """Split pending decisions into (the ones the gate's person approves, the rest). Only a gate
+    in PERSON_ANSWERS raised by THIS build's own workflow run is answered; anything else still
+    stops the gate."""
+    mine, rest = [], []
+    for d in pending:
+        if wf_id and d.get("workflow_run_id") == wf_id and d.get("capability") in PERSON_ANSWERS:
+            mine.append(d)
+        else:
+            rest.append(d)
+    return mine, rest
 
 
 def workflow_row(wf_id: str) -> Optional[dict]:
@@ -472,6 +497,7 @@ class Started:
     wf_id: Optional[str] = None
     title: str = ""
     notes: list[str] = field(default_factory=list)
+    answered: list[str] = field(default_factory=list)
 
 
 def start(person: Person, brief: dict, stamp: str) -> Started:
@@ -544,7 +570,20 @@ def main(argv: Optional[list[str]] = None) -> int:
                     print(f"  the workflow's build: run {started.run_id}", flush=True)
             run = run_row(started.run_id) if started.run_id else None
             turn = last_turn_epoch(started.run_id) if started.run_id else None
-            pending = pending_for(run, started.wf_id, started.title)
+            wf_of_run = started.wf_id or (run or {}).get("workflow_run_id")
+            answer, pending = ours_to_answer(pending_for(run, started.wf_id or wf_of_run, started.title),
+                                             wf_of_run)
+            for d in answer:
+                if d["id"] in started.answered:
+                    raise GateFail(f"the {d.get('capability')} decision {d['id']} is still pending after "
+                                   "the gate approved it")
+                status, out = person.call("POST", f"/v1/decisions/{d['id']}/approve",
+                                          {"actor": ACTOR, "note": "e2e gate: the build's owner approves its PRD"})
+                if status not in (200, 202):
+                    raise GateFail(f"approving {d['id']} ({d.get('question', '')[:80]}) was refused: "
+                                   f"{status} {str(out)[:300]}")
+                started.answered.append(d["id"])
+                print(f"  approved as the owner: {d['id']} — {d.get('question', '')[:100]} ({status})", flush=True)
             reason = watch_verdict(run=run, now=now, started=t0, last_turn=turn, budget_min=budget,
                                    pending=pending, wf=wf)
             line = f"{run['status']}/{run.get('phase')}" if run else "waiting for the build to start"

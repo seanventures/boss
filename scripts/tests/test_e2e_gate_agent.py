@@ -119,3 +119,15 @@ def test_the_gate_signs_in_only_to_localhost():
     gate._localhost_only("http://localhost:8000")
     with pytest.raises(gate.GateFail):
         gate._localhost_only("https://boss.example.com")
+
+
+def test_the_owner_answers_only_its_own_workflows_prd_approval():
+    prd = {"id": "dec_prd", "question": "PRD approval — X", "capability": "spec_review", "workflow_run_id": "wfr_1"}
+    other_run = {**prd, "id": "dec_other", "workflow_run_id": "wfr_2"}
+    other_gate = {**prd, "id": "dec_ux", "capability": "ux_review"}
+    loose = {"id": "dec_loose", "question": "X", "capability": None, "workflow_run_id": None}
+    mine, rest = gate.ours_to_answer([prd, other_run, other_gate, loose], "wfr_1")
+    assert [d["id"] for d in mine] == ["dec_prd"]
+    assert [d["id"] for d in rest] == ["dec_other", "dec_ux", "dec_loose"]
+    # Without a workflow run the gate answers nothing: every pending decision still stops it.
+    assert gate.ours_to_answer([prd], None) == ([], [prd])
