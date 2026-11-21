@@ -72,6 +72,25 @@ def test_no_verified_identity_is_refused_under_enforce(reg):
     assert out["ok"] is False and out["error"] == "identity_unavailable" and calls == []
     assert "scoped run identity" in out["message"]
     assert "Owner can grant" not in out["message"]
+    # An API-surface tool with no caller to forward is the same: no identity, not a grant.
+    api = r.invoke("api_x", None, project_id="p1", actor="x", args={})
+    assert api["ok"] is False and "scoped run identity" in api["message"]
+
+
+def test_a_crash_in_the_permission_check_is_boss_s_error_not_a_missing_identity(reg, monkeypatch):
+    """The identity WAS there; the check itself raised. Saying "identity unavailable" or
+    "permission missing" would send a person to fix something that was never the problem."""
+    r, calls = reg
+
+    def boom(ctx, permission, scope, **_):
+        raise RuntimeError("authz backend down")
+
+    monkeypatch.setattr(authz, "check", boom)
+    out = r.invoke("deploy", None, project_id="p1", actor="x", args={}, auth=ALICE)
+    assert out["ok"] is False and calls == []
+    assert "BOSS's failure" in out["message"] and "not a missing grant" in out["message"]
+    assert "identity is unavailable" not in out["message"]
+    assert "Owner can grant" not in out["message"]
 
 
 def test_the_context_var_carries_the_transports_identity(reg, monkeypatch):
