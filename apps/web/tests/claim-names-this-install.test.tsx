@@ -72,15 +72,20 @@ describe("the claim page without a link", () => {
     writeText.mockRestore();
   });
 
-  it("copies the actual URL only when a setup token is already present", async () => {
-    window.history.replaceState(null, "", "/claim#t=bst_test_only");
-    const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+  it("never shows the Owner setup token: not as text, not in a button's name", async () => {
+    // Contributed "Copy setup link" drew the full /claim#t=<token> URL on the card and in its
+    // button's aria-label (screen shares, recordings, screen readers). The token stays in the
+    // address bar only, and forgetLinkToken clears it once spent.
+    const TOKEN = "bst_test_only_secret_value";
+    window.history.replaceState(null, "", `/claim#t=${TOKEN}`);
     const el = await mount(<ClaimFlow options={options(null)} />);
-    const button = el.querySelector("[data-testid='claim-copy-link'] button") as HTMLButtonElement;
-    expect(button.textContent).toBe("Copy setup link");
-    await act(async () => button.click());
-    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/claim#t=bst_test_only`);
-    writeText.mockRestore();
+    expect(el.querySelector("[data-testid='claim-copy-link']")).toBeNull();
+    expect(el.textContent ?? "").not.toContain(TOKEN);
+    for (const node of Array.from(el.querySelectorAll("[aria-label], [title], [value]"))) {
+      for (const attr of ["aria-label", "title", "value"]) {
+        expect(node.getAttribute(attr) ?? "", attr).not.toContain(TOKEN);
+      }
+    }
     window.history.replaceState(null, "", "/claim");
   });
 

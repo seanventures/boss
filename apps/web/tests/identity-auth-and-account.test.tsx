@@ -166,7 +166,7 @@ describe("Claim this BOSS", () => {
     const el = await mount(<ClaimFlow options={options({ path: "setup_token", origin: null, expires_at: null, seats: [], link_over_api: true })} />);
     const note = el.querySelector("[data-testid='claim-no-token']")?.textContent ?? "";
     expect(note).toContain("whoever holds this install's admin key");
-    expect(note).toContain("server where BOSS is installed");
+    expect(note).toContain("in a terminal on this computer");
     expect(el.textContent).toContain("boss identity setup-link");
     accessible(el);
   });
@@ -269,16 +269,33 @@ describe("Claim this BOSS", () => {
   });
 
   it("public address (BOSSAPP-813): the setup-link step says it is a terminal command for the server, not an address", async () => {
+    const dom = (window as unknown as { happyDOM?: { setURL: (u: string) => void } }).happyDOM;
+    const was = window.location.href;
+    if (dom?.setURL) dom.setURL("https://boss.example.com/claim");
+    else window.history.replaceState(null, "", "https://boss.example.com/claim");
+    try {
+      const el = await mount(<ClaimFlow options={options({ path: "setup_token", paths: ["setup_token"], network: null, origin: null, expires_at: null, seats: [] })} />);
+      const step = el.querySelector("[data-testid='claim-no-token']")?.textContent ?? "";
+      expect(el.querySelector("form")).toBeNull();
+      expect(step).toContain("in a terminal on the machine BOSS runs on");
+      expect(step).toContain("SSH to it first");
+      // The button says what it copies: a command, never mistaken for a link to open.
+      expect(el.querySelector("[data-testid='claim-no-token'] button")?.textContent).toBe("Copy command");
+      expect(step).toContain("It prints a link");
+      expect(el.textContent).toContain("boss identity setup-link");
+      accessible(el);
+    } finally {
+      if (dom?.setURL) dom.setURL(was);
+      window.history.replaceState(null, "", "/claim");
+    }
+  });
+
+  it("on localhost BOSS runs on this computer: no server, no SSH", async () => {
     window.history.replaceState(null, "", "/claim");
     const el = await mount(<ClaimFlow options={options({ path: "setup_token", paths: ["setup_token"], network: null, origin: null, expires_at: null, seats: [] })} />);
-    const step = el.querySelector("[data-testid='claim-no-token']")?.textContent ?? "";
-    expect(el.querySelector("form")).toBeNull();
-    expect(step).toContain("in a terminal on the server where BOSS is installed");
-    expect(step).toContain("over SSH");
-    expect(step).toContain("not a web address");
-    expect(step).toContain("It prints a link");
-    expect(el.textContent).toContain("boss identity setup-link");
-    accessible(el);
+    const step = el.querySelector("[data-testid='claim-terminal-step']")?.textContent ?? "";
+    expect(step).toBe("Run this in a terminal on this computer.");
+    expect(el.querySelector("[data-testid='claim-no-token']")?.textContent).not.toMatch(/SSH|server where/);
   });
 
   it("the setup-link step does not contradict itself (BOSSAPP-655)", async () => {
@@ -287,7 +304,7 @@ describe("Claim this BOSS", () => {
     const text = el.textContent ?? "";
     expect(el.querySelector("form")).toBeNull();
     expect(text).toContain("boss identity setup-link");
-    expect(text).toContain("not a web address");
+    expect(el.querySelector("[data-testid='claim-no-token'] button")?.textContent).toBe("Copy command");
     // Off the network, this screen is not the form. Saying both is the page arguing with itself.
     expect(/not on the server's own network/.test(text) && /this page is the claim form/.test(text)).toBe(false);
   });

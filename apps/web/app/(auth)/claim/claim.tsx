@@ -291,9 +291,13 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
           {onLoopback(pageHost(pageOrigin))
             ? <p className="idn-s" data-copy="prose" data-testid="claim-why-link">Claiming needs a one-hour link from the server.</p>
             : <p className="idn-s" data-copy="prose" data-testid="claim-why-link">This browser isn&apos;t on the server&apos;s own network, so claiming needs a one-hour link from the server.</p>}
-          <p className="idn-s" data-copy="prose" data-testid="claim-terminal-step">Run this <b>in Terminal on the computer where BOSS is installed</b>. If BOSS is on another computer, connect to it over SSH first.</p>
+          {/* On localhost BOSS runs on this computer (a laptop install, or a tunnel's end): there
+              is no server to SSH to (contributed from an enterprise install). */}
+          {onLoopback(pageHost(pageOrigin))
+            ? <p className="idn-s" data-copy="prose" data-testid="claim-terminal-step">Run this <b>in a terminal on this computer</b>.</p>
+            : <p className="idn-s" data-copy="prose" data-testid="claim-terminal-step">Run this <b>in a terminal on the machine BOSS runs on</b> (SSH to it first if it&apos;s another machine).</p>}
           <CopyCommand command={setupLinkCommand(claim.host_command)} label="Copy command" />
-          <p className="idn-s" data-copy="prose">This copies a terminal command, not a link. Run it, then copy the full http:// or https:// link it prints and open that link in this browser. For your security, this page cannot issue an Owner setup link without proof that you control the installation.</p>
+          <p className="idn-s" data-copy="prose">It prints a link. Open that link here.</p>
           {claim.link_over_api
             ? <p className="idn-fine" data-copy="prose">No shell there? Ask whoever holds this install&apos;s admin key to issue the link.</p>
             : null}
@@ -313,12 +317,6 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
             ? "You'll be its first Owner. Being on this network proves you run it. From now on everyone signs in as themselves."
             : "You'll be its first Owner. The setup link proves you installed it. From now on everyone signs in as themselves."}
       </p>
-      {path === "setup_token" && token && pageOrigin ? (
-        <div data-testid="claim-copy-link">
-          <CopyCommand command={`${pageOrigin}/claim#t=${encodeURIComponent(token)}`} label="Copy setup link" />
-          <p className="idn-fine" data-copy="prose">Keep this link private. It grants Owner setup access and works once, within one hour of being issued.</p>
-        </div>
-      ) : null}
       <form onSubmit={(e) => { e.preventDefault(); setTried(true); if (ready) submit(); }} noValidate>
 
         {network ? (
