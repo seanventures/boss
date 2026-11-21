@@ -950,6 +950,9 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
                 "FROM app_previews p "
                 "JOIN code_task_runs r ON r.id = p.run_id "
                 "WHERE r.project_id = :p AND p.status = 'failed' "
+                "  AND NOT EXISTS (SELECT 1 FROM app_previews newer "
+                "                  WHERE newer.run_id = p.run_id AND newer.created_at > p.created_at "
+                "                  AND newer.status <> 'failed') "
                 "  AND NOT EXISTS (SELECT 1 FROM shepherd_escalations e "
                 "                  WHERE e.task_ref = p.run_id AND e.status = 'open') "
                 "GROUP BY p.run_id ORDER BY max(p.created_at) DESC LIMIT :l"),
@@ -957,7 +960,7 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
 
         for row in rows:
             run_id = row["run_id"]
-            if not run_id:
+            if not run_id or run_liveness.superseded_by(c, run_id):
                 continue
             # A REPEATED FAILURE IS EVIDENCE, NOT A REASON TO TRY AGAIN.
             #
@@ -1058,6 +1061,10 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
             continue
         try:
             result = act(engine, settings, jobs, run_id, actor=actor)
+            if not result.get("acted"):
+                deferred.append({"run_id": run_id, "remedy": proposal.get("remedy"),
+                                 "reason": result.get("refused_because") or "recovery did not execute"})
+                continue
             applied.append({"run_id": run_id, "remedy": proposal.get("remedy"),
                             "outcome": result.get("outcome")})
         except Exception as exc:  # noqa: BLE001
