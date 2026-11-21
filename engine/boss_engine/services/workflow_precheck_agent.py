@@ -380,6 +380,26 @@ _BINARIES_SCHEMA = {
 }
 
 
+def read_permissions(settings: Any = None) -> frozenset[str]:
+    """The Passport keys the fundamentals READS declare, limited to the ones an agent may hold
+    (delegable). The scope of a token minted only to read with these tools: a read tool whose
+    key is person-only (host:exec, settings:read …) is refused under it, never widened to."""
+    from ..identity import catalogue
+    from ..tools import build_discuss_read_registry
+
+    registry = build_discuss_read_registry(
+        edition=getattr(settings, "boss_edition", None) if settings is not None else None)
+    keys: set[str] = set()
+    for name in READ_TOOLS:
+        try:
+            spec = registry.get(name)
+        except Exception:  # noqa: BLE001 — not in this edition
+            continue
+        if spec.kind == "read" and spec.permission:
+            keys.add(str(spec.permission))
+    return frozenset(keys) & frozenset(catalogue.delegable())
+
+
 def read_tools(settings: Any = None) -> tuple[list[dict[str, Any]], Callable[..., dict]]:
     """(the OpenAI-shaped schemas, a runner) for the fundamentals reads, from the project-pinned
     discuss registry. A tool that is missing or not `kind == "read"` is not offered."""
@@ -754,7 +774,7 @@ def merge(report: dict[str, Any], result: Mapping[str, Any]) -> dict[str, Any]:
     return report
 
 
-__all__ = ["ACTOR", "READ_TOOLS", "ROUTE_TIER", "SOURCE", "VERDICTS", "caps_for",
+__all__ = ["ACTOR", "READ_TOOLS", "ROUTE_TIER", "SOURCE", "VERDICTS", "caps_for", "read_permissions",
            "compact_report", "deferred_wait", "evidence_pack", "grounded", "installed_binaries",
            "merge", "not_run", "parse_answer",
            "precheck_with_model", "read_tools", "recent_failures", "routed_adapter",

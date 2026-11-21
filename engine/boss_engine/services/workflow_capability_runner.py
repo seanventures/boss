@@ -604,8 +604,10 @@ def _run_authority(ctx: Any, connection: Connection, project_id: str, context: O
                     decided = stack.enter_context(_runs.on_behalf(engine, recorded))
             except TokenError as lost:
                 # Fail closed: the person or grant this run acts for is no longer live.
+                # The exact sentence step_recovery.AUTHORITY_ENDED, so the step PARKS on it
+                # (authority_message) like the recorded-authority check above, never fails.
                 raise CapabilityExecutionError(
-                    f"this run's authority has ended ({lost.reason}); renew it to continue.") from lost
+                    f"{step_recovery.AUTHORITY_ENDED} ({lost.reason})") from lost
             yield decided
 
     return under()
@@ -4770,12 +4772,95 @@ def _recovery_begin(connection: Connection, ctx: Any, *, project_id: str, run_id
             pass
     spec_step = workflows._step_map(workflows._run_spec(connection, run_id)).get(step_id) or {}
     agent = step_recovery.agent_of(connection, project_id, spec_step)
-    with _step_authority(ctx, connection, project_id, {"run_id": run_id},
-                         {"id": f"{step_id}.recovery"}, agent.get("role")):
+    with _recovery_authority(ctx, connection, project_id=project_id, run_id=run_id,
+                             step_id=step_id, spec_step=spec_step, agent=agent,
+                             settings=settings, output=output) as reads:
         entry = step_recovery.decide(connection, settings, project_id=project_id, run_id=run_id,
                                      step_id=step_id, kind=kind, evidence=evidence, state=state,
-                                     agent=agent)
+                                     agent=agent, reads=reads)
     return entry, state, agent
+
+
+def _authority_ended(connection: Connection, run_id: str) -> bool:
+    """The run HAS a recorded authority and it is no longer live (grant revoked or expired,
+    person gone)."""
+    from boss_engine.identity import consent as _consent
+
+    return (_consent.recorded_authority(connection, run_id) is not None
+            and _consent.acting_for_workflow_run(connection, run_id) is None)
+
+
+@contextlib.contextmanager
+def _recovery_authority(ctx: Any, connection: Connection, *, project_id: str, run_id: str,
+                        step_id: str, spec_step: dict[str, Any], agent: dict[str, str],
+                        settings: Any, output: Any = None):
+    """What the step-recovery agent READS with, under the run's recorded authority.
+
+    A model chooses these calls, so it never runs on the person's full principal (the
+    `on_behalf` fallback a built-in step gets): it gets a READ-ONLY run token for an agent of
+    the step — its own agent, else the agent it ran as, else the one it names — scoped to the
+    delegable keys of the read tools (person ∩ ceilings ∩ grant ∩ read keys), nested under the run
+    (`run_wf:<run>/step:<step>.recovery`), so revoking the run's grant halts it. When nothing
+    can be delegated (no agent with a Passport, the grant does not name one, or this code is
+    already inside another run) it gets NO tools and decides from the evidence it was handed;
+    the decision records why. Yields `reads` for step_recovery.decide.
+
+    A run whose authority has ENDED raises the exact parked-run sentence
+    (step_recovery.AUTHORITY_ENDED): the caller parks the step until a person renews it. A run
+    with no recorded authority (a legacy run) reads as before."""
+    from boss_engine.identity import consent as _consent
+    from boss_engine.identity import runs as _runs
+    from .workflow_precheck_agent import read_permissions
+
+    recorded = _consent.acting_for_workflow_run(connection, run_id) if run_id else None
+    if recorded is None:
+        if run_id and _consent.recorded_authority(connection, run_id) is not None:
+            raise CapabilityExecutionError(step_recovery.AUTHORITY_ENDED)
+        yield None
+        return
+    engine = getattr(ctx, "engine", None) or connection.engine
+    entity = (re.sub(r"[^A-Za-z0-9_.-]", "", f"{step_id}.recovery")[:60] or "step.recovery")
+    try:
+        scope = read_permissions(settings)
+    except Exception as error:  # noqa: BLE001 — no scope, no token: evidence only
+        log.info("recovery read scope unavailable: %s", error)
+        scope = frozenset()
+    # Who may read: the step's own agent (agent_of: its approver, else its captain), then the
+    # agent the step RAN as (`ran_as`, recorded when it ran: resolved once, no second model
+    # pick here), then the agent it names. A step that ran as its PERSON (#256: a person-only
+    # built-in step, `run_actor`) gives no agent: the recovery agent then reads nothing rather
+    # than as that person.
+    ran = (output or {}).get("ran_as") if isinstance(output, dict) else None
+    ran = ran if isinstance(ran, dict) else {}
+    roles: list[str] = []
+    for role in (agent.get("role"),
+                 ran.get("agent") if ran.get("how") != "run_actor" else "",
+                 step_agents.named_agent(spec_step)):
+        role = str(role or "").strip().lower()
+        if role and role != step_agents.HUMAN and not role.startswith("usr_") and role not in roles:
+            roles.append(role)
+    why = "no agent of this step holds a Passport the run's grant names"
+    if not scope:
+        why = "none of the read tools' permissions can be delegated to an agent"
+        roles = []
+    for role in roles:
+        held = contextlib.ExitStack()
+        try:
+            decided = held.enter_context(_runs.delegated(
+                engine, kind="step", entity_id=entity, project_id=project_id, role_key=role,
+                scope=scope, acting=recorded))
+        except Exception as refused:  # noqa: BLE001 — not delegable to this agent: next one
+            held.close()
+            why = f"a read-only token for {role} was refused ({getattr(refused, 'reason', None) or type(refused).__name__})"
+            continue
+        if decided is None or getattr(decided, "run_token", None) is None:
+            held.close()
+            continue
+        with held:
+            yield {"tools": True, "as": role, "agent_id": decided.principal.id,
+                   "scope": sorted(scope)}
+        return
+    yield {"tools": False, "why": why}
 
 
 def _park_for_recovery(connection: Connection, project_id: str, step_run_id: str,
@@ -4954,9 +5039,9 @@ def _recover_awaited(
     step now waits on what was decided, or {"ask": the error's words, "output": …} for the
     caller to fail the step for a person, with the agent's one question."""
     step_id = str(step["step_id"])
-    if step_recovery.failure_authority(failure):
-        # The awaited work ended because the run's authority ended. Leave it parked on that
-        # sentence. A repair build is not a person renewing the grant.
+
+    def park() -> dict[str, Any]:
+        # Leave it parked on the sentence. A repair build is not a person renewing the grant.
         _park_for_recovery(connection, project_id, step["id"],
                            {"kind": "authority", "then": "renew"},
                            {"note": step_recovery.AUTHORITY_ENDED})
@@ -4969,8 +5054,18 @@ def _recover_awaited(
             {"m": step_recovery.AUTHORITY_ENDED, "id": run_id})
         return {"done": {"run_id": run_id, "step_id": step_id, "awaited": "authority",
                          "outcome": "parked", "error": step_recovery.AUTHORITY_ENDED}}
-    began = _recovery_begin(connection, ctx, project_id=project_id, run_id=run_id,
-                            step_id=step_id, kind=kind, output=output, evidence=evidence)
+
+    if step_recovery.failure_authority(failure) or _authority_ended(connection, run_id):
+        # The awaited work ended because the run's authority ended, or it has ended since:
+        # nobody decides anything under an authority that is gone.
+        return park()
+    try:
+        began = _recovery_begin(connection, ctx, project_id=project_id, run_id=run_id,
+                                step_id=step_id, kind=kind, output=output, evidence=evidence)
+    except CapabilityExecutionError as error:
+        if step_recovery.authority_message(str(error)):
+            return park()
+        raise
     if began is None:
         return None
     entry, state, agent = began
