@@ -20,7 +20,9 @@ and nothing the agent does can fix them. This module is the one place that tells
   * `classify(text, engine=…, where=…)` — the generic words every engine's harness uses, plus
     the words each engine DECLARED for itself (harness_registry.FailurePattern, registered with
     the engine, the same idiom as its RuntimeBinary).
-  * `check_turn` — every engine's turn stream goes through it: a tool result that is the harness
+  * `check_turn` — every STREAMING engine's turns go through it (Claude Code CLI, Agent SDK,
+    Codex, the ACP engines; the native, azure and scripted engines stream no turns and run no
+    inner sandbox): a tool result that is the harness
     answering in the command's place stops the session at its FIRST occurrence (HarnessFailure).
     BY CONSTRUCTION, not by each driver remembering to: the engine contract hands every session
     a checked turn sink (`TurnSink`, engine_contract.ContractedAgent.run_role) and every driver
@@ -60,14 +62,18 @@ GENERIC_PATTERNS: tuple[FailurePattern, ...] = (
     # kernel that restricts unprivileged user namespaces (Ubuntu 24.04's AppArmor
     # `apparmor_restrict_unprivileged_userns`, which a Colima VM runs). Every command the engine's
     # own sandbox runs answers with this line instead of its output.
+    # ANCHORED: bubblewrap opens its own line with `bwrap:`, and only a FAILED tool result counts
+    # — a grep of this file, a sed of a test that quotes it, or a test log that mentions it
+    # succeeded or starts with its own words (review of #258).
     FailurePattern("sandbox_unavailable",
-                   r"\bbwrap: (?:No permissions to create a new namespace"
+                   r"(?m)^[ \t]*bwrap: (?:No permissions to create a new namespace"
                    r"|Creating new namespace failed: (?:Operation not permitted|Permission denied))",
                    "have the BOSS host administrator enable the engine's required nested "
                    "user namespaces in the container seccomp and AppArmor policies (see "
                    "docs/community/ENGINE_SANDBOX.md, \"Agent commands fail with a namespace "
                    "error\"); verify sandbox startup before retrying (changing the task or "
-                   "connecting a GitHub repository will not fix this)"),
+                   "connecting a GitHub repository will not fix this)",
+                   failed_results_only=True),
     FailurePattern("sandbox_unavailable",
                    r"failed to (?:initiali[sz]e|start|create) (?:the |its )?sandbox"
                    r"|sandbox (?:failed to (?:initiali[sz]e|start)|initiali[sz]ation failed)",
@@ -273,13 +279,21 @@ def classify(text: object, *, engine: Optional[str] = None, where: str = "engine
         scan = raw
     lowered = scan.lower()
     for pattern in patterns_for(engine):
-        if where != "engine" and not pattern.in_tool_results:
+        if where == "tool_result" and not pattern.in_tool_results:
+            continue
+        if where == "stream" and not (pattern.in_tool_results if pattern.in_stream is None
+                                      else pattern.in_stream):
             continue
         if pattern.writer_only and writer is not True:
+            continue
+        if where == "tool_result" and pattern.failed_results_only and ok is not False:
             continue
         hit = re.search(pattern.pattern, scan, re.I)
         if hit is None:
             continue
+        if where == "tool_result" and pattern.failed_results_only and hit.start() != len(
+                scan) - len(scan.lstrip()):
+            continue                     # the words must OPEN the result: nothing printed before
         if where == "tool_result" and ok is not False:
             body = re.sub(r"^error:?\s*", "", lowered.lstrip())
             if body.find(hit.group(0).lower()) not in range(0, _LEADING_SLACK + 1):

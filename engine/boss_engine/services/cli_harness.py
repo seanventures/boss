@@ -72,9 +72,12 @@ CLAUDE_FAILURE_PATTERNS = (
     # An organisation's managed settings (server-managed, or managed-settings.json) refusing a
     # writer's tool, in the CLI's own words (claude-code 2.1.197). A deny rule BOSS set itself
     # says only "Permission to use … has been denied." and is not this.
+    # ANCHORED to the CLI's own refusal line ("<Tool> is blocked by enterprise managed policy"):
+    # a proxy's "403 - blocked by your organization's policy" page, or a grep of a doc that
+    # quotes the words, is not Claude Code refusing its writer (review of #258).
     FailurePattern("policy_denied",
-                   r"blocked by enterprise (?:managed )?policy"
-                   r"|by your organization's (?:policy|managed settings)",
+                   r"(?m)^[ \t]*(?:Error:\s*)?(?:[\w()* -]{1,60} is )?blocked by enterprise "
+                   r"(?:managed )?policy\b",
                    "this Claude Code login is managed by its organisation, whose policy refuses "
                    "what a BOSS writer needs; ask the organisation's admin to allow it, or "
                    "connect another login, then run the engine check in Setup › Models (see "
@@ -112,7 +115,7 @@ CODEX_FAILURE_PATTERNS = (
                    "workspace sandbox here and uses it, or ask the organisation's Codex admin "
                    "to allow danger-full-access (see docs/community/ENGINE_SANDBOX.md, "
                    "\"Managed engine policies\")",
-                   writer_only=True),
+                   writer_only=True, in_tool_results=False, in_stream=True),
 )
 
 #: Scope under which BOSS's own API stores a subscription credential. One constant so the

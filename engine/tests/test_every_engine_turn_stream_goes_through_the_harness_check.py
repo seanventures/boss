@@ -1,4 +1,7 @@
-"""Every engine's turn stream goes through the harness check — by construction, not by memory.
+"""Every streaming engine's turns go through the harness check — by construction, not by memory.
+
+(The streaming drivers: Claude Code CLI, Agent SDK, Codex, ACP. The native, azure and scripted
+engines stream no turns and run no inner sandbox, so there is nothing of theirs to check.)
 
 An enterprise install (2026-11) ran Codex with its inner sandbox engaged: every command answered
 `bwrap: No permissions to create a new namespace`, the test author wrote nothing, and BOSS said
@@ -187,3 +190,52 @@ def test_someone_elses_401_is_not_the_models_login(error, code):
     from boss_engine.services import failure_owner
 
     assert failure_owner.classify(error)[1] == code
+
+
+# ── Ordinary tool output never stops a run (review of #258: the proven triggers) ─────────────
+
+REPO = Path(__file__).resolve().parents[2]
+
+
+def _first_line_of(path: Path, needle: str) -> str:
+    return next(ln for ln in path.read_text(encoding="utf-8").splitlines() if needle in ln)
+
+
+@pytest.mark.parametrize("engine", ["codex", "claude_code", "gemini_cli"])
+@pytest.mark.parametrize("ok", [True, False])
+@pytest.mark.parametrize("output", [
+    # `sed -n 34p` of a test that quotes the words in a constant
+    _first_line_of(REPO / "engine/tests/test_a_codex_reviewer_reads_the_tree_without_its_inner_"
+                          "sandbox.py", 'BWRAP = "bwrap'),
+    # a test log's first line that mentions them
+    "E   AssertionError: expected bwrap: No permissions to create a new namespace",
+    # a corporate proxy's policy page
+    "curl: (22) The requested URL returned error: 403 - blocked by your organization's policy",
+    "<html><title>Blocked</title> This site is blocked by enterprise policy of example.com",
+])
+def test_ordinary_tool_output_never_stops_a_run(engine, ok, output):
+    assert hf.classify(output, engine=engine, where="tool_result", ok=ok, writer=True) is None
+
+
+@pytest.mark.parametrize("needle", ["bwrap: No permissions", "is disallowed by requirements"])
+def test_a_grep_of_the_docs_never_stops_a_run(needle):
+    # `grep -h` of ENGINE_SANDBOX.md prints the doc's own line, at offset 0, and succeeds.
+    line = _first_line_of(REPO / "docs/community/ENGINE_SANDBOX.md", needle).strip()
+    for engine in ("codex", "claude_code"):
+        assert hf.classify(line, engine=engine, where="tool_result", ok=True,
+                           writer=True) is None
+
+
+def test_the_codex_downgrade_is_read_only_from_the_clis_own_diagnostics():
+    said = ("Configured value for `permission_profile` is disallowed by requirements; "
+            "falling back from `:danger-full-access` to `:read-only`")
+    for ok in (True, False):
+        assert hf.classify(said, engine="codex", where="tool_result", ok=ok, writer=True) is None
+    assert hf.classify(said, engine="codex", where="stream", writer=True).kind == "policy_denied"
+
+
+def test_bubblewraps_own_failure_still_stops_a_run():
+    verdict = hf.classify(BWRAP, engine="codex", where="tool_result", ok=False)
+    assert verdict.kind == "sandbox_unavailable"
+    assert hf.classify("Bash is blocked by enterprise managed policy", engine="claude_code",
+                       where="tool_result", ok=False, writer=True).kind == "policy_denied"

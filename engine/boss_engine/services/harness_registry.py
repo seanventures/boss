@@ -93,6 +93,13 @@ class FailurePattern:
     fix: str
     in_tool_results: bool = True
     writer_only: bool = False
+    #: Whether it may be believed in the CLI's own live output (stderr, its `error` events).
+    #: None: as `in_tool_results`. A diagnostic the CLI prints only about ITSELF (Codex's
+    #: requirements downgrade) is stream-only: a tool's output that quotes it is not it.
+    in_stream: Optional[bool] = None
+    #: In a tool result, believed only when the tool FAILED and the words open its first line
+    #: (bubblewrap's own `bwrap: …`). A grep or sed that prints them succeeded.
+    failed_results_only: bool = False
 
     def __post_init__(self) -> None:
         if self.kind not in FAILURE_KINDS:

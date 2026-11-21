@@ -569,10 +569,10 @@ class ContractedAgent:
             if copy is not None:
                 shutil.rmtree(copy.parent, ignore_errors=True)
             raise EngineSessionFailed(f"{self.engine} not started: {problem}")
-        # THE ONE TURN PATH (harness_failures.TurnSink): every engine's turns are checked for the
-        # harness answering in a tool's place — its sandbox that cannot start, an organisation's
-        # policy holding a writer to read-only — whatever driver produced them. A driver that
-        # swallowed the sink's error still stops here.
+        # THE ONE TURN PATH (harness_failures.TurnSink): every streaming engine's turns are
+        # checked for the harness answering in a tool's place — its sandbox that cannot start,
+        # an organisation's policy holding a writer to read-only — whatever driver produced
+        # them. A driver that swallowed the sink's error still stops here.
         from . import harness_failures
 
         sink = harness_failures.TurnSink(kwargs.get("on_turn"), engine=self.engine,
