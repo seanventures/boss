@@ -128,6 +128,17 @@ export function fileFormFields(schema: unknown): WorkflowInputField[] {
       : f.name === "title" ? { ...f, label: "Title", example: f.example === "Shift swap board" ? "" : f.example } : f));
 }
 
+/** WHERE AN UPLOADED FILE GOES, before anyone types it (dry run 4): the folder the target field's
+ *  own example names ("e.g. config/tenants/name.yaml") plus the uploaded file's name; the file's
+ *  name alone when the field names no folder. Never replaces a path already typed. */
+export function suggestedTarget(fileName: string, field: WorkflowInputField | undefined, current = ""): string {
+  if (current.trim()) return current;
+  const name = (fileName.split(/[\\/]/).pop() ?? "").trim();
+  if (!name) return current;
+  const hint = `${field?.example ?? ""} ${field?.help ?? ""}`.match(/([\w.-]+(?:\/[\w.-]+)*)\/[\w.<>-]+\.\w+/);
+  return hint ? `${hint[1]}/${name}` : name;
+}
+
 /** What a file workflow sends beyond its drawn fields: the uploaded text, and the brief its
  *  build reads, which is the workflow's own declared one (its default, else its example), never
  *  typed by the person. */

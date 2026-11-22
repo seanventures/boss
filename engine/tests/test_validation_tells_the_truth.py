@@ -158,7 +158,8 @@ def test_the_fixers_lines_are_auto_and_the_agents_are_agent_one_entry_per_findin
     assert auto == [("rate-limit-required", 7), ("request-size-capped", 7),
                     ("upstream-https-required", 35)]
     size21 = next(x for x in by["request-size-capped"] if x["location"]["partner_line"] == 21)
-    assert size21["fixed_by"] == "removed_with_block" and size21["fix_kind"] == "agent"
+    # It went with a block only a person may remove: the person's, never "fixed by agent".
+    assert size21["fixed_by"] == "removed_with_block" and size21["fix_kind"] == "human"
     assert by["tenant-rate-limit-required"][0]["fix_kind"] == "agent"
     assert by["cors-no-wildcard-with-credentials"][0]["fix_kind"] == "agent"
     # One entry per finding, its lines grouped by hunk — never one entry per changed line.

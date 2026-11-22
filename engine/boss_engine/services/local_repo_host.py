@@ -407,6 +407,20 @@ class LocalGitAdapter:
                 "url": change_set_url(self.repository_full_name, row["number"]),
                 "title": str(row["title"] or "")}
 
+    def open_pull_request_with_prefix(self, prefix: str) -> Optional[dict]:
+        """The newest open change set whose head branch starts with ``prefix``, or None."""
+        like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        with self._tx("open_pull_request_with_prefix", read=True) as c:
+            row = c.execute(text(
+                "SELECT number, title FROM local_change_sets WHERE repository = :r "
+                "AND branch LIKE :b AND state = 'open' ORDER BY number DESC LIMIT 1"),
+                {"r": self.repository_full_name, "b": like}).mappings().first()
+        if row is None:
+            return None
+        return {"number": int(row["number"]),
+                "url": change_set_url(self.repository_full_name, row["number"]),
+                "title": str(row["title"] or "")}
+
     def last_merged_pull_request(self, branch_name: str) -> Optional[dict]:
         """The newest MERGED change set from this branch, or None. A work branch outlives its
         first change set — the lineage's follow-ups keep committing to it — and the install's

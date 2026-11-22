@@ -115,7 +115,11 @@ const recordOf = (v: Validation, f: Finding): Override | null =>
  */
 function FindingDiff({ f, all }: { f: Finding; all: Fix[] }) {
   const own = all.filter((x) => x.finding === f.id);
-  const hunk = own.length ? own : f.hunk_id ? all.filter((x) => x.hunk_id === f.hunk_id) : [];
+  const inHunk = own.length ? own : f.hunk_id ? all.filter((x) => x.hunk_id === f.hunk_id) : [];
+  // A note shows ITS OWN lines: a finding that went with a removed block shows that block's
+  // removal, never the other findings' lines sharing the hunk (dry run 4, V-08 showed the CORS fix).
+  const atLine = own.length ? [] : inHunk.filter((x) => x.line != null && x.line === f.location.partner_line);
+  const hunk = atLine.length ? atLine : inHunk;
   const was = f.original && f.original !== "(none)" ? f.original : "";
   const closed = f.status === "fixed" || f.status === "overridden";
   if (!hunk.length && was && (f.fixed == null ? !closed : f.fixed.trim() === was.trim())) {

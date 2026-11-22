@@ -1252,6 +1252,116 @@ def refused_text(base_text: str, out_text: str, refuse: set) -> str:
     return "\n".join(res) + ("\n" if out_text.endswith("\n") and res else "")
 
 
+def _loose(line: str) -> str:
+    return re.sub(r"[\"'\s]", "", str(line or ""))
+
+
+def base_line(input_text: str, base: str, lm: Mapping[int, int], line: Any) -> Optional[int]:
+    """The partner's ``line`` (1-based) in ``base``: the unchanged line, else its counterpart in
+    the span the base REWORDED (the mechanical fixer quoted `- path: /v1/admin/accounts`; dry
+    run 4 then lost the route's block and the agent's deletion of it went through)."""
+    if not isinstance(line, int):
+        return None
+    if line in lm:
+        return lm[line]
+    import difflib
+
+    a, b = str(input_text or "").splitlines(), str(base or "").splitlines()
+    if not 0 < line <= len(a):
+        return None
+    want = _loose(a[line - 1])
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+        if tag == "replace" and i1 < line <= i2:
+            return next((j + 1 for j in range(j1, j2) if _loose(b[j]) == want), None)
+    return None
+
+
+def _held_findings(c: Mapping[str, Any], rec: Mapping[str, Any],
+                   ruleset: Optional[Mapping[str, Any]] = None) -> dict:
+    """{finding id: finding} of the input's findings whose rule's autofix is human / never."""
+    from . import validators as _v
+
+    rules = ((ruleset or c.get("ruleset") or {}).get("rules")) or {}
+    return {f["id"]: f for f in rec.get("findings") or []
+            if (f.get("source") or {}).get("kind") == "validator" and not f.get("introduced")
+            and (rules.get((f.get("source") or {}).get("rule_id")) or {}).get("autofix")
+            in _v.HUMAN_AUTOFIX}
+
+
+def _refusals(base: str, out_text: str, input_text: str, held: Mapping[str, Any],
+              hints: Sequence[Mapping[str, Any]]) -> tuple[set, list[dict]]:
+    """(refuse, mine): every change in ``out_text`` against ``base`` (what the agent started
+    from) on a held finding's lines — its BLOCK, or a line attributed to it."""
+    from . import validators as _v
+
+    base_lines = base.splitlines()
+    lm = _v.line_map(input_text, base)
+    hint = [{**h, "line": base_line(input_text, base, lm, h.get("line"))} for h in hints]
+    blocks = {}
+    for fid, f in held.items():
+        at = base_line(input_text, base, lm, (f.get("location") or {}).get("partner_line"))
+        if at:
+            blocks[fid] = _v.block(base_lines, at - 1)
+    refuse: set = set()
+    mine: list[dict] = []
+    for h in _v.hunks(base, out_text):
+        prev: Optional[str] = None
+        hunk_owner: Optional[str] = None
+        for k, old, new in _v._pairs(h):
+            fid = _v.attribute(h, old if old is not None else new or "", hint, prev,
+                               removed=old is not None and new is None)
+            prev = fid or prev
+            at = int(h["i1"]) + k if old is not None else None
+            owner = next((x for x, (lo, hi) in blocks.items()
+                          if (at is not None and lo <= at < hi)
+                          or (at is None and lo < int(h["i1"]) < hi)), None)
+            owner = owner or (fid if fid in held else None) or (
+                hunk_owner if old is None else None)
+            if owner:
+                hunk_owner = owner
+                refuse.add((h["id"], k))
+                mine.append({"finding": owner, "hunk": h["id"], "i1": int(h["i1"]),
+                             "old": old, "new": new})
+    return refuse, mine
+
+
+def record_refusals(rec: dict, base: str, held: Mapping[str, Any], mine: list[dict],
+                    rules: Mapping[str, Any]) -> dict:
+    """``rec`` (the validator's record of the reset file) with every refused finding left open
+    as "Needs you" and the agent's change kept on it as ``proposed``; ``refused`` lists them."""
+    from . import validators as _v
+
+    base_lines = base.splitlines()
+    proposals: dict[str, dict] = {}
+    for fid in dict.fromkeys(x["finding"] for x in mine):
+        pieces = []
+        for hid in dict.fromkeys(x["hunk"] for x in mine if x["finding"] == fid):
+            g = [x for x in mine if x["finding"] == fid and x["hunk"] == hid]
+            i1 = g[0]["i1"]
+            pieces.append({"remove": [_v.mask(x["old"]) for x in g if x["old"] is not None],
+                           "after": [_v.mask(x["new"]) for x in g if x["new"] is not None],
+                           "anchor": _v.mask(base_lines[i1 - 1]) if i1 > 0 else None})
+        news = [x["new"] for x in mine if x["finding"] == fid and x["new"] is not None]
+        proposals[fid] = {
+            "before": _v._joined(x["old"] for x in mine if x["finding"] == fid),
+            "after": _v._joined(news), "pieces": pieces,
+            # A proposal is re-applied from its stored (masked) lines, so only when masking
+            # left them as they were; else the person writes the line (Edit).
+            "applicable": all(_v.mask(x) == x for x in news)}
+    for f in rec.get("findings") or []:
+        if f["id"] in proposals:
+            f["proposed"] = proposals[f["id"]]
+            if f.get("status") == "open":
+                f["fix_kind"] = "human"
+    refused = [
+        {"finding": fid, "rule": held[fid]["source"]["rule_id"],
+         "autofix": (rules.get(held[fid]["source"]["rule_id"]) or {}).get("autofix"),
+         "lines": sum(1 for x in mine if x["finding"] == fid)} for fid in proposals]
+    known = {r["finding"] for r in rec.get("refused") or []}
+    rec["refused"] = list(rec.get("refused") or []) + [r for r in refused if r["finding"] not in known]
+    return rec
+
+
 def enforce_autofix(root: Any, c: Mapping[str, Any], rec: dict,
                     run: Optional[Callable[[str], Any]], *,
                     ruleset: Optional[Mapping[str, Any]] = None) -> dict:
@@ -1262,19 +1372,14 @@ def enforce_autofix(root: Any, c: Mapping[str, Any], rec: dict,
     output when BOSS seeded it, else the partner's file), the finding left open as "Needs you"
     with the agent's change kept as ``proposed`` (a person may accept it: finding_overrides
     applies it), and the validator run again on the reset file. ``refused`` lists them.
+    What it judged by is kept on ``c`` (``_held``, ``_agent_base``, ``_hints``): every commit of
+    the build is held to the same refusal (``guard_commit_text``).
     Returns the record (unchanged when nothing is refused). Never raises."""
-    from . import validators as _v
-
     try:
         rules = ((ruleset or c.get("ruleset") or {}).get("rules")) or {}
-        held = {f["id"]: f for f in rec.get("findings") or []
-                if (f.get("source") or {}).get("kind") == "validator" and not f.get("introduced")
-                and (rules.get((f.get("source") or {}).get("rule_id")) or {}).get("autofix")
-                in _v.HUMAN_AUTOFIX}
+        held = _held_findings(c, rec, ruleset)
         out_path = Path(root) / str(c["output"])
         out_text = _read(out_path)
-        if not held or out_text is None:
-            return rec
         input_text = str(c.get("_input_text") or "")
         seeded = c.get("_auto_seeded") is not None and rec.get("_auto_text") is not None
         # WHAT THIS BUILD'S AGENT STARTED FROM: a later build on the change (repair, follow-up,
@@ -1283,69 +1388,42 @@ def enforce_autofix(root: Any, c: Mapping[str, Any], rec: dict,
         start = c.get("_start_text")
         base = (str(start) if isinstance(start, str)
                 else str(rec["_auto_text"]) if seeded else input_text)
-        base_lines = base.splitlines()
-        lm = _v.line_map(input_text, base)
-        hint = [{**h, "line": lm.get(h["line"]) if isinstance(h.get("line"), int) else None}
-                for h in _hint_of(rec)]
-        blocks = {}
-        for fid, f in held.items():
-            at = lm.get((f.get("location") or {}).get("partner_line"))
-            if at:
-                blocks[fid] = _v.block(base_lines, at - 1)
-        refuse: set = set()
-        mine: list[dict] = []
-        for h in _v.hunks(base, out_text):
-            prev: Optional[str] = None
-            hunk_owner: Optional[str] = None
-            for k, old, new in _v._pairs(h):
-                fid = _v.attribute(h, old if old is not None else new or "", hint, prev,
-                                   removed=old is not None and new is None)
-                prev = fid or prev
-                at = int(h["i1"]) + k if old is not None else None
-                owner = next((x for x, (lo, hi) in blocks.items()
-                              if (at is not None and lo <= at < hi)
-                              or (at is None and lo < int(h["i1"]) < hi)), None)
-                owner = owner or (fid if fid in held else None) or (
-                    hunk_owner if old is None else None)
-                if owner:
-                    hunk_owner = owner
-                    refuse.add((h["id"], k))
-                    mine.append({"finding": owner, "hunk": h["id"], "i1": int(h["i1"]),
-                                 "old": old, "new": new})
+        if isinstance(c, dict):
+            c["_held"] = {k: {"id": f["id"], "source": f.get("source"),
+                              "location": f.get("location")} for k, f in held.items()}
+            c["_agent_base"] = base
+            c["_hints"] = _hint_of(rec)
+        if not held or out_text is None:
+            return rec
+        refuse, mine = _refusals(base, out_text, input_text, held, _hint_of(rec))
         if not mine:
             return rec
         out_path.write_text(refused_text(base, out_text, refuse))
-        proposals: dict[str, dict] = {}
-        for fid in dict.fromkeys(x["finding"] for x in mine):
-            pieces = []
-            for hid in dict.fromkeys(x["hunk"] for x in mine if x["finding"] == fid):
-                g = [x for x in mine if x["finding"] == fid and x["hunk"] == hid]
-                i1 = g[0]["i1"]
-                pieces.append({"remove": [_v.mask(x["old"]) for x in g if x["old"] is not None],
-                               "after": [_v.mask(x["new"]) for x in g if x["new"] is not None],
-                               "anchor": _v.mask(base_lines[i1 - 1]) if i1 > 0 else None})
-            news = [x["new"] for x in mine if x["finding"] == fid and x["new"] is not None]
-            proposals[fid] = {
-                "before": _v._joined(x["old"] for x in mine if x["finding"] == fid),
-                "after": _v._joined(news), "pieces": pieces,
-                # A proposal is re-applied from its stored (masked) lines, so only when masking
-                # left them as they were; else the person writes the line (Edit).
-                "applicable": all(_v.mask(x) == x for x in news)}
         new_rec = run_validation(root, c, run, ruleset=ruleset)
-        for f in new_rec.get("findings") or []:
-            if f["id"] in proposals:
-                f["proposed"] = proposals[f["id"]]
-                if f.get("status") == "open":
-                    f["fix_kind"] = "human"
-        new_rec["refused"] = [
-            {"finding": fid, "rule": held[fid]["source"]["rule_id"],
-             "autofix": (rules.get(held[fid]["source"]["rule_id"]) or {}).get("autofix"),
-             "lines": sum(1 for x in mine if x["finding"] == fid)} for fid in proposals]
-        return new_rec
+        return record_refusals(new_rec, base, held, mine, rules)
     except Exception:  # noqa: BLE001 — an enforcement that could not run is said on the record
         logger.info("input_fidelity: autofix policy not enforced", exc_info=True)
         rec["refused_error"] = "the autofix policy could not be enforced on this tree"
         return rec
+
+
+def guard_commit_text(c: Mapping[str, Any], text: Any) -> tuple[Any, list[dict]]:
+    """EVERY BUILD COMMIT IS HELD TO THE AUTOFIX POLICY: ``text`` (what a stage commit, a
+    checkpoint, the PR or a follow-up is about to write at the contract's target) with every
+    change to a held finding's lines put back to what the agent started from. Returns
+    (text, refused lines); the text unchanged when the build has no held finding yet (no check
+    ran) or touched none. Never raises."""
+    held = c.get("_held") if c else None
+    base = c.get("_agent_base") if c else None
+    if not held or not isinstance(text, str) or not isinstance(base, str):
+        return text, []
+    try:
+        refuse, mine = _refusals(base, text, str(c.get("_input_text") or ""), held,
+                                 c.get("_hints") or [])
+        return (refused_text(base, text, refuse), mine) if mine else (text, [])
+    except Exception:  # noqa: BLE001 — the guard never blocks a commit; the check still judges
+        logger.info("input_fidelity: commit guard not applied", exc_info=True)
+        return text, []
 
 
 # ── start from a file: the original is the change's first commit ──────────────────────────────

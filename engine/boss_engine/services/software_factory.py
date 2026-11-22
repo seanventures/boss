@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import functools
 import json
 import logging
@@ -87,6 +89,38 @@ def _without_lesson_ids(github: Any, branch: str, path: str, content: Any) -> An
         return content
 
 
+#: THE BUILD'S COMMIT GUARD (governed_code_task_service): ``guard(branch, path, content)`` →
+#: the content to commit. Set for one build's scope (``commit_guard_scope``); every commit the
+#: build makes through ``commit_change`` — stage commits, checkpoints, the partial or final PR,
+#: a follow-up's — passes through it. A person's own commit (finding_overrides) never does.
+_COMMIT_GUARD: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar(
+    "boss_commit_guard", default=None)
+
+
+@contextlib.contextmanager
+def commit_guard_scope():
+    """One build's scope: yields a holder whose ``guard`` the build sets once it knows it."""
+    holder: dict = {"guard": None}
+    token = _COMMIT_GUARD.set(holder)
+    try:
+        yield holder
+    finally:
+        _COMMIT_GUARD.reset(token)
+
+
+def _guarded(branch: str, path: str, content: Any) -> Any:
+    holder = _COMMIT_GUARD.get()
+    guard = (holder or {}).get("guard")
+    if guard is None:
+        return content
+    try:
+        return guard(branch, path, content)
+    except Exception:  # noqa: BLE001 — the guard never blocks a commit; the checks still judge
+        logging.getLogger(__name__).info("commit_change: guard failed on %s", path,
+                                          exc_info=True)
+        return content
+
+
 def commit_change(github: Any, branch: str, files: list[tuple[str, Any]], message: str,
                   per_file: Optional[Any] = None) -> list[str]:
     """ONE COMMIT PER STAGE where the repo host can (BOSSAPP-946). A host with a batch commit
@@ -104,6 +138,9 @@ def commit_change(github: Any, branch: str, files: list[tuple[str, Any]], messag
     # LESSON IDS NEVER LAND IN CODE (remediation_guards): an id a builder copied from "Learned
     # so far" into a comment is removed from the lines this commit adds.
     files = [(p, _without_lesson_ids(github, branch, p, c)) for p, c in files]
+    # THE RULESET'S AUTOFIX POLICY HOLDS ON EVERY BUILD COMMIT (dry run 4): a `human` / `never`
+    # rule's lines are put back before they reach the branch.
+    files = [(p, _guarded(branch, p, c)) for p, c in files]
     batch = getattr(github, "commit_files", None)
     if callable(batch):
         return [batch(branch, dict(files), message)]
@@ -2273,7 +2310,9 @@ class SoftwareFactoryService:
                     connection, project_id, "software_factory.monitoring_kept",
                     "coding_worker", "receipt", pr_receipt["id"],
                     {"kept": monitoring_kept, "branch": branch_name})
-            _changes = with_deletions(files, deleted_paths)
+            # Guarded here too, so "the branch holds what was judged" compares the guarded text.
+            _changes = [(p, _guarded(branch_name, p, c))
+                        for p, c in with_deletions(files, deleted_paths)]
             commit_shas = commit_change(
                 self.github, branch_name, _changes,
                 f"BOSS: {title}"[:200],

@@ -153,7 +153,17 @@ export function timelineOf(o: { steps: readonly InstalledStep[]; gates?: readonl
 ): TimelineStep[] {
   const words = o.mode === "add" ? { ...WORDS, ...addWords(o.app ?? "") } : WORDS;
   const out: TimelineStep[] = [];
+  // A WORKFLOW WITH ITS OWN MERGE STEP (Onboard a config file) is asked to merge THERE: never a
+  // second "Merge" drawn after the build, before Review, beside a lowercase "merge".
+  const ownMerge = o.steps.find((s) => s.id === "merge" || s.capability === "merge");
   for (const s of o.steps) {
+    if (s === ownMerge) {
+      // The build's merge question is the one this step asks; you, unless the server says BOSS.
+      const ask = o.asks?.find((a) => a.kind === "merge");
+      const m = mergeStep(ask?.who ?? "you", s.id);
+      out.push({ id: s.id, name: m.name, line: m.line, who: m.who });
+      continue;
+    }
     // THE SERVER'S ANSWER when it gave one: who is asked at this step (a gate, or the spec
     // approval, which is the panel's or yours by the project's setting). Else the catalogue's.
     const ask = o.asks?.find((a) => a.step_id === s.id && a.kind !== "merge");
@@ -180,7 +190,7 @@ export function timelineOf(o: { steps: readonly InstalledStep[]; gates?: readonl
     }
     if (o.mode === "add" && s.id === "build") out.push(KEEP_STEP);
     // EVERY BUILD ASKS TO MERGE. Listed where it is asked, so the count is every question.
-    const merge = o.asks ? o.asks.find((a) => a.kind === "merge" && a.step_id === s.id)
+    const merge = ownMerge ? undefined : o.asks ? o.asks.find((a) => a.kind === "merge" && a.step_id === s.id)
       : BUILDS.has(s.id) ? { who: "you" as const } : undefined;
     if (merge) out.push(mergeStep(merge.who, s.id));
   }
