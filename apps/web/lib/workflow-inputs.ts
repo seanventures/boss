@@ -103,7 +103,42 @@ export function workflowInputFields(schema: unknown): WorkflowInputField[] {
  */
 export function startsFromABrief(schema: unknown, workflowChosen = true): boolean {
   if (!workflowChosen) return true;
+  // A workflow that starts from a FILE is not a product brief, though its build reads one.
+  if (startsFromAFile(schema)) return false;
   return workflowInputFields(schema).some((f) => f.name === "directive");
+}
+
+/**
+ * "START FROM A FILE" (engine start_from_file; "Onboard a config file"): the run's input is a
+ * file, so its form asks for the file, where the fixed file goes and a name, and nothing an app
+ * build asks (stack, connectors, audience, the brief). Dry run 3 gap #5.
+ */
+export function startsFromAFile(schema: unknown): boolean {
+  return workflowInputFields(schema).some((f) => f.name === "start_from");
+}
+
+/** The fields a file workflow's form draws, in this order: the original file (an upload),
+ *  where it goes, its name. The upload fills `start_from` (its name) and `start_from_content`. */
+export const FILE_FORM_FIELDS = ["start_from", "target_path", "title"] as const;
+export function fileFormFields(schema: unknown): WorkflowInputField[] {
+  const all = workflowInputFields(schema);
+  return FILE_FORM_FIELDS.map((name) => all.find((f) => f.name === name))
+    .filter((f): f is WorkflowInputField => !!f)
+    .map((f) => (f.name === "start_from" ? { ...f, label: "Original file", required: true }
+      : f.name === "title" ? { ...f, label: "Title", example: f.example === "Shift swap board" ? "" : f.example } : f));
+}
+
+/** What a file workflow sends beyond its drawn fields: the uploaded text, and the brief its
+ *  build reads, which is the workflow's own declared one (its default, else its example), never
+ *  typed by the person. */
+export function fileStartExtras(schema: unknown, supplied: Record<string, string>): Record<string, string> {
+  const all = workflowInputFields(schema);
+  const out: Record<string, string> = {};
+  if ((supplied.start_from_content ?? "") !== "") out.start_from_content = supplied.start_from_content;
+  const directive = all.find((f) => f.name === "directive");
+  const brief = (supplied.directive ?? "").trim() || directive?.default || directive?.example || "";
+  if (directive && brief) out.directive = brief;
+  return out;
 }
 
 /** The starting values: each field's declared default, and "no" for a yes/no without one —
@@ -168,4 +203,17 @@ export function missingRequired(
   return fields
     .filter((f) => f.required && !(values[f.name] ?? "").trim())
     .map((f) => f.label);
+}
+
+/** A workflow's Start form in its project's Workflows area (`start=<key>`): where New work sends
+ *  a workflow a brief cannot start, such as one that starts from a file. */
+export function startFormHref(projectId: string, workflowKey: string): string {
+  return `/?${new URLSearchParams({ project_id: projectId, area: "delivery_workflows", start: workflowKey })}`;
+}
+
+/** The workflow a `start=` link asks to open the Start form on, or null. */
+export function startParam(search: string): string | null {
+  const params = new URLSearchParams(search);
+  if (params.get("area") !== "delivery_workflows") return null;
+  return params.get("start")?.trim() || null;
 }

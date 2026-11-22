@@ -34,10 +34,16 @@ export function envWords(e: Environment | undefined): { word: string; s: string 
   return HEALTH[e.health] ?? HEALTH.unknown;
 }
 
+/** Was this work deployed anywhere: its own deploy on record. A change never deployed → "Staging —". */
+export function deployedOf(w: Pick<WorkItem, "links">): boolean {
+  return !!w.links.deploy;
+}
+
 /** The one button a person presses, or null when nothing waits on them: the merge (the change,
  *  or BOSS's merge decision), else BOSS's decision. Never the run itself (we are on it). */
 export function yourMove(w: WorkItem, next: NextStep | null = workNextStep(w)): { label: string; href: string; external: boolean } | null {
-  if (!next || next.secondary) return null;
+  // A fix still running on the change is "merge now or wait": the merge stays the person's move.
+  if (!next) return null;
   const l = w.links;
   const href = next.kind === "merge" ? (l.decision ? pxHref(next.href || l.decision) : next.href) : l.decision ? pxHref(l.decision) : "";
   if (!href) return null;
@@ -71,8 +77,11 @@ export function RunWorkLineView({ w, deployments, validation = null, projectId =
   const chHref = ch ? changeHref(ch.external_url) : "";
   const preview = w.links.preview || w.preview_app?.href || "";
   const envs = deployments?.environments ?? [];
-  const stg = envWords(envs.find((e) => e.key === "staging"));
-  const prod = envWords(envs.find((e) => e.key === "production"));
+  // An environment's health is about THIS change only once it was deployed: never "Staging
+  // healthy" beside a change that never left its branch.
+  const deployed = deployedOf(w);
+  const stg = deployed ? envWords(envs.find((e) => e.key === "staging")) : envWords(undefined);
+  const prod = deployed ? envWords(envs.find((e) => e.key === "production")) : envWords(undefined);
   const move = yourMove(w);
   const checks = checkerWords(validation);
   const checksHref = chHref && !/^https?:\/\//.test(chHref) ? `${chHref}${chHref.includes("?") ? "&" : "?"}tab=checks` : "";

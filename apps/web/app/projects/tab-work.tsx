@@ -362,7 +362,7 @@ export function statusChip(w: WorkItem, local = false): Chip {
   }
   if (w.state === "running") { const at = whereNow(w, local).split(" · ")[0]; return { word: at ? `Running · ${at}` : "Running", tone: "teal", title: why }; }
   if (w.state === "stalled") return { word: "Stalled", title: w.stalled_since ? `No progress since ${stampLocal(w.stalled_since)}` : why };
-  if (w.state === "done") return { word: "Done", tone: "green" };
+  if (w.state === "done") return doneChip(w.status);
   if (w.state === "failed") return w.replaced_by ? { word: "Replaced", title: `Replaced by ${w.replaced_by.label}` } : { word: "Failed", tone: "red", title: why };
   // Planned: what it is, in one word — Next up, else where it came from (CI · Bug · from Roadmap).
   if (w.next_up) return { word: "Next up", tone: "blue", title: w.where || undefined };
@@ -375,6 +375,13 @@ function plannedTag(w: WorkItem): { label: string; tone?: "red" | "violet" } {
   if (w.origin === "ci" || w.origin === "bug") return { label: w.origin_label || (w.origin === "ci" ? "CI" : "Bug"), tone: "red" };
   if (w.origin === "roadmap" || (!w.origin && w.source === "roadmap")) return { label: "from Roadmap", tone: "violet" };
   return { label: KIND_WORDS[w.kind] ?? "Planned", tone: w.kind === "bug" || w.kind === "fix" ? "red" : undefined };
+}
+/** A finished row's word: a cancelled run reads "Cancelled", a closed one "Closed", never "Done". */
+export function doneChip(status: string | undefined): Chip {
+  const st = (status ?? "").toLowerCase();
+  if (/cancel/.test(st)) return { word: "Cancelled" };
+  if (/closed|abandon|rejected|dismissed/.test(st)) return { word: "Closed" };
+  return { word: "Done", tone: "green" };
 }
 const ITER_CHIP: Record<Attempt["state"], Chip> = {
   planned: { word: "Queued" }, running: { word: "Running", tone: "teal" }, stalled: { word: "Stalled" }, handed_on: { word: "Earlier attempt" },
@@ -403,22 +410,27 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
   const links = useMemo(() => workLinks(w).filter((l) => l.key !== "preview"), [w]);
   const iters = w.attempts.length > 1 ? w.attempts : [];
   const opens = setup || !!workOpenHref(w);
+  // ▸ EXPANDS THE ROW, never opens the workflow: the row's own click must not see it.
+  const toggle = (e: React.MouseEvent) => { e.stopPropagation(); e.preventDefault(); setOpen((v) => !v); };
   return (
     <>
       <div className="px-wk wl-row" data-s={w.state} data-fresh={fresh || undefined} data-testid={`px-work-${w.id}`} data-opens={opens || undefined}
            tabIndex={rank ? 0 : undefined} aria-label={rank ? `${w.label}, ${rank.position} of ${rank.total} in the rank. Alt+Up or Alt+Down moves it.` : undefined}
-           onClick={(e) => { if (!(e.target as HTMLElement).closest("a,button,input")) openItem(ctx, w); }}>
+           onClick={(e) => { if (!(e.target as HTMLElement).closest("a,button,input,.wl-caret-cell,.wl-n")) openItem(ctx, w); }}>
         <span className="wl-caret-cell">
           {iters.length ? (
             <button type="button" className="wl-caret" aria-expanded={open} aria-label={open ? "Hide iterations" : `Show ${iters.length} iterations`}
-                    title={open ? "Hide iterations" : `${iters.length} iterations`} onClick={() => setOpen(!open)} data-testid={`px-work-caret-${w.id}`}>
+                    title={open ? "Hide iterations" : `${iters.length} iterations`} onClick={toggle} data-testid={`px-work-caret-${w.id}`}>
               <CaretRight size={11} weight="bold" aria-hidden /></button>
           ) : null}
         </span>
         <span className="wl-title">
           <button type="button" className="wr-t" title={w.title && w.title !== w.label ? w.title : undefined} onClick={() => openItem(ctx, w)}
                   data-testid={`px-work-open-${w.id}`}>{w.label}</button>
-          {iters.length ? <span className="wl-n" data-testid={`px-work-iters-${w.id}`}>· {iters.length}</span> : null}
+          {iters.length ? (
+            <button type="button" className="wl-n" aria-expanded={open} aria-label={open ? "Hide iterations" : `Show ${iters.length} iterations`}
+                    onClick={toggle} data-testid={`px-work-iters-${w.id}`}>· {iters.length}</button>
+          ) : null}
           {w.issue ? (
             <a className="px-chip" href={w.issue.external_url} target="_blank" rel="noreferrer noopener" data-testid={`px-work-issue-${w.id}`}
                title={w.issue.provider === "github" ? `${w.issue.kind === "pr" ? "Pull request" : "Issue"} ${w.issue.label} on GitHub` : `Issue ${w.issue.label}`}
@@ -459,7 +471,7 @@ export function IterationRows({ w }: { w: WorkItem }) {
   return (
     <div className="wl-iters" role="list" aria-label={`Iterations of ${w.label}, latest first`} data-testid={`px-work-iterations-${w.id}`}>
       {w.attempts.map((t, i) => {
-        const chip = ITER_CHIP[t.state] ?? ITER_CHIP.done;
+        const chip = t.state === "done" ? doneChip(t.status) : ITER_CHIP[t.state] ?? ITER_CHIP.done;
         const links = iterationLinks(t);
         const go = t.build || workOpenHref(w);
         return (

@@ -207,6 +207,8 @@ export type MergeFixing = { attempt: string; label: string; state: string; since
 
 export type WorkItem = {
   id: string; label: string; kind: string; state: WorkState; age: string;
+  /** The run's or build's own status ("cancelled", "completed"): a cancelled `done` reads Cancelled. */
+  status?: string;
   /** A failed build a later build of the same app replaced (engine work._replaced): history,
    *  said "Replaced by a later build", never a red Failed. */
   replaced_by?: { id: string; label: string; href: string } | null;
@@ -653,6 +655,7 @@ export const parseWorkItem = (v: unknown): WorkItem => {
   const x = o(v); const l = o(x.links); const pr = o(l.pr); const mp = o(l.merge_pr); const md = o(l.merged_pr);
   return {
     id: s(x.id), label: s(x.label), kind: s(x.kind, "feature"), state: oneOf(x.state, WORK_STATES, "planned"), age: s(x.age),
+    ...(s(x.status) ? { status: s(x.status) } : {}),
     resolved: s(o(x.resolved).words) ? { words: s(o(x.resolved).words) } : null,
     replaced_by: s(o(x.replaced_by).id) ? { id: s(o(x.replaced_by).id), label: s(o(x.replaced_by).label), href: s(o(x.replaced_by).href) } : null,
     stages: a(x.stages).map((st) => ({ key: s(o(st).key), label: s(o(st).label), state: oneOf(o(st).state, STEP_STATES, "todo"),
@@ -761,7 +764,7 @@ const parseAttempt = (v: unknown): Attempt => {
 /** The work item an attempt opens in the drawer: the group's row, seen as that one attempt. */
 export function attemptAsItem(w: WorkItem, t: Attempt): WorkItem {
   return {
-    ...w, id: t.id, label: t.label, run_number: null, created_at: t.created_at, state: t.state === "handed_on" ? "failed" : t.state, cost_usd: t.cost_usd, list_usd: t.list_usd ?? null,
+    ...w, id: t.id, label: t.label, run_number: null, created_at: t.created_at, state: t.state === "handed_on" ? "failed" : t.state, status: t.status, cost_usd: t.cost_usd, list_usd: t.list_usd ?? null,
     stalled_since: t.stalled_since, detail: t.title || w.detail, attempts: [], attempt_count: 1, followups: 0, retries: 0,
     links: { ...w.links, build: t.build, pr: t.pr, preview: "", decision: t.state === "needs_you" ? w.links.decision : "" },
     href: t.href,
@@ -1382,7 +1385,9 @@ export function usePxRead<T>(url: string | null, parse: (raw: unknown) => T, opt
 
 export type PxWrite = { ok: boolean; status: number; body: R | null; error: string | null; demo?: boolean;
   /** A start the project isn't ready for (409 from THE start door): its checklist, for "Start anyway". */
-  readiness?: unknown };
+  readiness?: unknown;
+  /** The refusal's own body (e.g. a ruleset proposal's 409 `already_open` {change, url}). */
+  refusal?: unknown };
 
 /** One write. Sample mode sends nothing and says so. */
 export async function pxWrite(path: string, body: R, label: string): Promise<PxWrite> {
@@ -1392,7 +1397,8 @@ export async function pxWrite(path: string, body: R, label: string): Promise<PxW
   // A refusal's own sentence (`message` beside an `error` code) reads better than the code.
   const sentence = r.status === 401 || r.status === 403 ? "" : s(o(r.refusal).message) || s(refused.message);
   return { ok: r.ok, status: r.status, body: r.body, error: !r.ok && sentence ? sentence : r.error,
-           ...(!r.ok && refused.readiness ? { readiness: refused.readiness } : {}) };
+           ...(!r.ok && refused.readiness ? { readiness: refused.readiness } : {}),
+           ...(!r.ok && r.refusal ? { refusal: r.refusal } : {}) };
 }
 export type WorkKind = "feature" | "bug" | "ticket";
 export const toWorkKind = (v: unknown): WorkKind => (v === "bug" || v === "ticket" ? v : "feature");
@@ -1538,7 +1544,9 @@ export function navigateTo(href: string): void {
 
 // ── Helm's plan for new work (screen 05: GET /v1/projects/{id}/work/plan) ─────────────────────
 export type PlanNode = { key: string; label: string; type: "agent" | "you" | "todo"; agent: Agent | null };
-export type WorkflowOption = { key: string; name: string; detail: string; work_class: string; fits: boolean };
+export type WorkflowOption = { key: string; name: string; detail: string; work_class: string; fits: boolean;
+  /** Starts from a file (engine new_work.starts_from_file): picked, New work opens its own Start form. */
+  starts_from_file?: boolean };
 export type WorkPlan = {
   kind: WorkKind; planner: Agent | null;
   workflow: { key: string; name: string; chosen: "mapped" | "default" | "picked"; why: string; href: string } | null;
@@ -1558,7 +1566,7 @@ export const parseWorkPlan = (v: unknown): WorkPlan => {
     estimate: x.estimate ? { minutes: nn(e.minutes), minutes_basis: e.minutes_basis === "history" || e.minutes_basis === "typical" ? e.minutes_basis : null,
                              minutes_runs: n(e.minutes_runs), usd: nn(e.usd), usd_runs: n(e.usd_runs) } : null,
     options: a(x.options).map((z) => ({ key: s(o(z).key), name: s(o(z).name), detail: s(o(z).detail), work_class: s(o(z).work_class),
-                                        fits: o(z).fits === true })).filter((z) => z.key),
+                                        fits: o(z).fits === true, starts_from_file: o(z).starts_from_file === true })).filter((z) => z.key),
   };
 };
 /** "≈ $3" for a run of a few dollars, "≈ $0.90" under one. */

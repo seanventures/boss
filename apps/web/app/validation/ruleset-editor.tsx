@@ -17,7 +17,7 @@ import { GatedButton } from "../../components/gated";
 import { pxWrite, usePxRead } from "../../lib/project-experience";
 import {
   ADAPTERS, AUTOFIXES, isMissingRoute, NEEDS_LATEST, needsNewerEngine, needsSecondApprover, parseRulesets, parseValidatorsFile,
-  proposeRulesetPath, proposeValidatorsPath, rulesetCreateBody, rulesetDiff, rulesetIdFor, rulesetsPath, rulesetTemplate, SEVS, shortSha,
+  alreadyOpen, proposeRulesetPath, proposeValidatorsPath, rulesetCreateBody, rulesetDiff, rulesetIdFor, rulesetsPath, rulesetTemplate, SEVS, shortSha,
   validatorsBody, validatorsPath, validatorTemplate,
   type Autofix, type Ruleset, type RulesetRule, type Sev, type ValidatorDecl,
 } from "../../lib/validation-review";
@@ -81,6 +81,9 @@ export function RulesetEditor({ rs, projectId, testid = "vr-ruleset" }: { rs: Ru
     }, `Propose ruleset ${rs.id} v${next ?? ""}`);
     setBusy(false);
     if (!r.ok && isMissingRoute(r.status)) { setMissing(true); setSaid({ text: "Ruleset changes are not on this BOSS yet (the engine route is not deployed).", tone: "amber" }); return; }
+    // ONE OPEN PROPOSAL PER VERSION (dry run 3, gap 9): the open one is named and linked.
+    const open = !r.ok ? alreadyOpen(r.refusal, projectId) : null;
+    if (open) { setSaid({ text: open.text, tone: "amber", href: open.href }); return; }
     if (!r.ok) { setSaid({ text: r.error ?? "It did not open.", tone: "red" }); return; }
     if (r.demo) { setSaid({ text: "Sample mode — nothing was sent.", tone: "" }); return; }
     const ch = r.body && typeof r.body.change === "number" ? r.body.change : null;

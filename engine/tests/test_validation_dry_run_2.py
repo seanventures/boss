@@ -339,3 +339,23 @@ def test_a_proposal_whose_first_piece_is_on_the_branch_twice_is_gone_never_guess
         {"remove": ["  - path: /b"], "after": ["  - path: /b"]},
         {"remove": ["    upstream: core"], "after": ["    upstream: edge"]}]})
     assert got.splitlines()[2] == "    upstream: core" and got.splitlines()[4] == "    upstream: edge"
+
+
+def test_a_wrapped_flow_entry_keeps_its_wrap_when_one_value_changes():
+    """Dry run 3, gap 9: a `{…}` entry wrapped over two lines was rejoined onto one; only the
+    changed value moves now, the wrap and the guide line stay byte for byte."""
+    text = ("ruleset: n\nversion: 1\nrules:\n"
+            "  a-rule:   {severity: P0, autofix: never}\n"
+            "  pii-fields-declared:   {severity: P2, autofix: agent,\n"
+            "     guide: \"Declare the PII fields; ask when unsure.\"}\n")
+    base = rulesets.parse(text)
+    rules = [{"id": k, **r} for k, r in base["rules"].items()]
+    rules[1]["severity"] = "P1"
+    _full, new = rc.render(base, 2, rules)
+    out = rc.minimal_edit(text, base, new, 2)
+    assert out == text.replace("version: 1", "version: 2").replace("{severity: P2", "{severity: P1")
+    rules[1]["guide"] = 'Say "why"'
+    _full, new = rc.render(base, 2, rules)
+    out = rc.minimal_edit(text, base, new, 2)
+    assert out.splitlines()[5] == '     guide: "Say \\"why\\""}'
+    assert rulesets.parse(out)["rules"] == new["rules"]

@@ -320,6 +320,22 @@ export function blockingRows(p: ReviewPacket | null): string[] {
     .map((f) => `${f.severity} ${f.id} ${f.source.rule_id || f.source.name || ""}${lineWords(f) ? ` · ${lineWords(f)}` : ""}`.replace(/\s+/g, " ").trim());
 }
 
+/**
+ * THE ONE SOURCE every Checks surface reads (the Checks rows, the Checks tab badge, the packet
+ * card on the change page): the change's newest packet (GET …/validation; the engine writes the
+ * same packet onto the merge card, finding_overrides.refresh_decision), else the merge decision's
+ * packet, else the validation record's own findings. A packet, once there, is never mixed with
+ * the record's findings, so "gwlint 0 found" can never sit beside a packet with 2 open.
+ */
+export function checkSource(v: Validation | null, decisionPacket: ReviewPacket | null): { packet: ReviewPacket | null; findings: Finding[] } {
+  const packet = v?.packet ?? decisionPacket ?? null;
+  // A packet that counts nothing at all (no findings, every count 0, no validator found any)
+  // has no number to contradict: the record's findings are drawn.
+  const counts = !!packet && (packet.findings.length > 0 || packet.validators.some((x) => x.before > 0)
+    || SEVS.some((s) => packet.counts[s].found > 0) || (packet.counts.review?.found ?? 0) > 0);
+  return { packet, findings: counts ? packet!.findings : v?.findings ?? [] };
+}
+
 /** The work's run and build, from the packet (what was validated) — one source for the merge
  *  card, the change page and the Work panel. Empty when there is no packet. */
 export function workRefsOf(p: ReviewPacket | null): { run: string; run_no: number | null; build: string } {
@@ -661,6 +677,15 @@ export function validatorsBody(v: ValidatorDecl, baseSha: string | null): Record
 export const needsNewerEngine = (status: number, error: string | null) =>
   status === 404 || status === 405 || status === 501 || (status === 422 && /extra|not permitted|validator/i.test(error ?? ""));
 export const NEEDS_LATEST = "Needs the latest BOSS: this engine cannot create a ruleset or validators.yaml yet.";
+/** A ruleset proposal refused because this version is already open (engine 409 `already_open`):
+ *  "v2 is already open as change #15", with the change's link. Null for any other answer. */
+export function alreadyOpen(refusal: unknown, projectId: string): { text: string; change: number; href: string } | null {
+  const x = refusal && typeof refusal === "object" ? (refusal as R) : {};
+  if (x.error !== "already_open" || typeof x.change !== "number") return null;
+  const v = typeof x.version === "number" ? `v${x.version}` : "This version";
+  return { text: typeof x.message === "string" && x.message ? x.message : `${v} is already open as change #${x.change}.`,
+           change: x.change, href: `/changes/${enc(projectId)}/${x.change}` };
+}
 export const proposeRulesetPath = (projectId: string, id: string) => `${rulesetsPath(projectId)}/${enc(id)}/propose`;
 
 /** §4: lowering a P0, or turning on an auto-fix for one, needs a second approver. */

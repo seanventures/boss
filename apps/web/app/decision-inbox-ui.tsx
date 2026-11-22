@@ -13,7 +13,7 @@ import { ActionForm, DecisionResolveForm } from "./client-forms";
 import { ActionPreview, actionPreviewOf, previewLead } from "./action-preview";
 import { HeldArguments } from "./held-arguments";
 import { ArchitectureDoc } from "./architecture-doc";
-import { automatedChecksLine, ChecksFailing, checksFailingOf, FollowUps, followUpsOf, MustHaves, mustHavesOf } from "./checks-failing";
+import { automatedChecksLine, ChecksFailing, checksFailingOf, failingGateLabels, FollowUps, followUpsOf, MustHaves, mustHavesOf, OldTestsUnknown, splitChecksFailing } from "./checks-failing";
 import { architectureDocOf } from "../lib/architecture";
 import { AreaLink } from "./area-link";
 import { linkTo, navigate } from "./agents/live-util";
@@ -157,6 +157,21 @@ export function blockedPacketDecision(decision: DecisionFeedItem, packet: Review
     recommendation: { ...decision.recommendation, blocked_rows: rows,
       reason_prompt: "Why merge with these open? Recorded with the merge." },
   };
+}
+
+/**
+ * A MERGE WHOSE ONLY "FAILING" CHECK IS OLD TESTS NOBODY CAN NAME: the engine still wants the
+ * merge forced with a reason, but the button and the prompt never say "checks failing" — they say
+ * what is true, old tests unknown. Any other failing gate keeps the card as it is.
+ */
+export function oldTestsUnknownDecision(decision: DecisionFeedItem, split: { real: unknown; oldTestsUnknown: string | null }): DecisionFeedItem {
+  if (split.real || !split.oldTestsUnknown) return decision;
+  const offers = offeredActions(decision).map((o) => (o.action === "approve" && o.needs === "note" && /checks failing/i.test(o.label)
+    ? { ...o, label: "Merge" } : o));
+  return { ...decision, allowedActions: offers,
+    recommendation: { ...decision.recommendation,
+      reason_prompt: typeof decision.recommendation.reason_prompt === "string" ? decision.recommendation.reason_prompt
+        : "Old tests could not be named. Why merge? Recorded with the merge." } };
 }
 
 export function formatRecommendation(decision: DecisionFeedItem): string {
@@ -1079,20 +1094,24 @@ function DecisionInboxRow({
   const packet = packetOf(rec);
   if (packet) {
     const hold = packetHold(packet) ?? decision.held ?? null;
+    // ONE STORY: the packet's verdict and the checks-failing record never contradict each other
+    // ("Ready" beside "Checks failing"); old tests nobody can name read "Old tests: unknown".
+    const split = splitChecksFailing(checksFailingOf(rec));
     return (
       <article className="dq-row dq-row-packet" data-testid="decision-row" data-decision-status={decision.status}
                data-highlighted={highlighted || undefined} id={`decision-${decision.id}`}
                ref={(el) => { if (el && highlighted) el.scrollIntoView({ block: "center" }); }}>
         <ReviewPacketView packet={packet} projectId={projectId} fallbackTitle={typeof rec.title === "string" ? rec.title : ""}
                           eyebrow={`${who} proposes · merge`}
-                          compact
+                          compact failing={split.real ? failingGateLabels(rec) : ""}
                           actions={packet.verdict.state === "invalid" && isPending
                             ? <RebuildPacket projectId={projectId} change={packet.work.change} /> : null} />
         {/* What the merge card said before the packet, and still must: checks failing (security
             first), the must-haves, an expired wait. Follow-ups are the packet's R-n rows. */}
-        {checksFailingOf(rec) || mustHavesOf(rec) || expired ? (
+        {split.real || split.oldTestsUnknown || mustHavesOf(rec) || expired ? (
           <div className="dq-packet-extra" data-testid="decision-packet-extra">
-            {checksFailingOf(rec) ? <ChecksFailing record={checksFailingOf(rec)!} /> : null}
+            {split.real ? <ChecksFailing record={split.real} /> : null}
+            {split.oldTestsUnknown ? <OldTestsUnknown why={split.oldTestsUnknown} /> : null}
             {mustHavesOf(rec) ? <MustHaves data={mustHavesOf(rec)!} /> : null}
             {expired ? (
               <p className="dq-rationale" data-testid="decision-expired-note">
@@ -1105,7 +1124,7 @@ function DecisionInboxRow({
         ) : null}
         <div className="dq-foot">
           {isPending ? (
-            <DecisionActions decision={hold ? { ...decision, held: hold } : blockedPacketDecision(decision, packet)} projectId={projectId} actorId={actorId} />
+            <DecisionActions decision={hold ? { ...decision, held: hold } : oldTestsUnknownDecision(blockedPacketDecision(decision, packet), split)} projectId={projectId} actorId={actorId} />
           ) : (
             <>
               <span className={`dq-verdict ${isApproved || decision.status === "executed" ? "green" : decision.status === "rejected" ? "red" : "muted"}`}>
@@ -1148,7 +1167,9 @@ function DecisionInboxRow({
           </h3>
           {/* A PR that opened with its checks failing says so FIRST, security first: its merge
               is the person's stated decision, never a click (engine checks_failing.py). */}
-          {checksFailingOf(rec) ? <ChecksFailing record={checksFailingOf(rec)!} /> : null}
+          {splitChecksFailing(checksFailingOf(rec)).real ? <ChecksFailing record={splitChecksFailing(checksFailingOf(rec)).real!} /> : null}
+          {splitChecksFailing(checksFailingOf(rec)).oldTestsUnknown
+            ? <OldTestsUnknown why={splitChecksFailing(checksFailingOf(rec)).oldTestsUnknown!} /> : null}
           {/* Follow-ups only: a normal ready card, the list folded (engine quality_bar.py). */}
           {followUpsOf(rec) ? <FollowUps record={followUpsOf(rec)!} /> : null}
           {mustHavesOf(rec) ? <MustHaves data={mustHavesOf(rec)!} /> : null}
