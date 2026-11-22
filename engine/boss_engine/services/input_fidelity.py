@@ -262,6 +262,17 @@ def contract(spec: Mapping[str, Any], instructions: str, root: Any) -> Optional[
             repo_v = None
         if repo_v:
             c["validator"] = repo_v
+    # THE RULESET (.boss/rulesets/*.yaml, SPEC §4): P-levels, autofix policy and the guides the
+    # fixing agent receives verbatim (``brief``).
+    vname = (c.get("validator") or {}).get("ruleset") if isinstance(c.get("validator"),
+                                                                     Mapping) else None
+    if vname:
+        try:
+            from . import rulesets as _rulesets
+
+            c["ruleset"] = _rulesets.load(root, vname)
+        except Exception:  # noqa: BLE001 — a broken ruleset is said, never guessed
+            logger.info("input_fidelity: ruleset %s not read", vname, exc_info=True)
     input_text = _read(root / c["input"])
     if input_text is None:
         logger.info("input_fidelity: the input %s is not in the tree", c["input"])
@@ -305,7 +316,9 @@ def brief(c: Optional[Mapping[str, Any]]) -> str:
             "points you at them is superseded by this rule.")
     lines.append("BOSS compares the output with the input after you finish: a copied answer, "
                  "an added block or an unbacked claim fails the attempt.")
-    return "\n\n" + "\n".join(lines)
+    from .rulesets import brief as _ruleset_brief
+
+    return "\n\n" + "\n".join(lines) + _ruleset_brief(c.get("ruleset"))
 
 
 # ── structural diff ────────────────────────────────────────────────────────────────────────────
@@ -813,6 +826,7 @@ def run_validation(root: Any, c: Mapping[str, Any],
 
     root = Path(root)
     v = c.get("validator") if isinstance(c.get("validator"), Mapping) else {}
+    ruleset = ruleset or c.get("ruleset")
     commands: dict[str, Optional[str]] = {"before": None, "fix": None, "after": None}
     exits: dict[str, Any] = {}
     before_raw = after_raw = None

@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2424 operations.
+# 2430 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -461,6 +461,9 @@
 "GET /v1/change-sets/{cs_id}/prs": ["permit code_task:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/change-sets/{cs_id}/rollback": ["permit deployment:rollback @ project(body=project_id)", "OAP"]
 "POST /v1/change-sets/{cs_id}/stop": ["permit code_task:steer @ project(body=project_id)", "OAP"]
+"POST /v1/changes/{project_id}/{number}/findings/{finding_id}/override": ["permit github:merge @ project(path=project_id)", "OAP"]
+"GET /v1/changes/{project_id}/{number}/validation": ["permit code_task:read @ project(path=project_id)", "OAPVU"]
+"POST /v1/changes/{project_id}/{number}/validation/revert-all": ["permit github:merge @ project(path=project_id)", "OAP"]
 "GET /v1/changesets": ["permit infra:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/changesets": ["permit infra:provision @ project(body=project_id)", "OA"]
 "POST /v1/changesets/{changeset_id}/apply": ["permit changeset:approve @ changeset(path=changeset_id)", "OA"]
@@ -2075,6 +2078,7 @@
 "DELETE /v1/setup/embedding-model": ["permit model_provider:manage @ project(query=project_id)", "OA"]
 "POST /v1/setup/embedding-model": ["permit model_provider:manage @ project(body=project_id)", "OA"]
 "POST /v1/setup/embedding-model/check": ["permit model_provider:manage @ project(body=project_id)", "OA"]
+"POST /v1/setup/engine-check/execute": ["permit worker:lease @ org", "-"]
 "GET /v1/setup/holds/{receipt_id}": ["permit setup:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/setup/holds/{receipt_id}/release": ["permit entitlement:manage @ project(body=project_id)", "OA"]
 "PUT /v1/setup/jobs/{job}": ["permit setup:manage @ project(body=project_id)", "OA"]
@@ -2285,6 +2289,7 @@
 "GET /v1/trace-export/failures": ["permit telemetry:read @ project(query=project_id)", "OAU"]
 "POST /v1/trace-export/runs/{run_id}": ["permit telemetry:share @ project(query=project_id)", "OA"]
 "GET /v1/v1-lock": ["permit system:read @ org", "OAPVU"]
+"POST /v1/validation-reruns/{rerun_id}/run": ["permit worker:lease @ org", "-"]
 "POST /v1/verification-target/profile": ["permit assurance:read @ org", "OAPVU"]
 "POST /v1/verifier-debate/run": ["permit assurance:read @ org", "OAPVU"]
 "POST /v1/verifier-meta-eval": ["permit assurance:run @ org", "OAP"]

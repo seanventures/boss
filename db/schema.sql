@@ -16564,3 +16564,46 @@ CREATE OR REPLACE VIEW counted_health_samples AS
          -- A→B→A: the first A's samples belong to an earlier record, not this one, and
          -- "Measured since" must say exactly what is counted.
          AND (t.probe_signature_since IS NULL OR s.checked_at >= t.probe_signature_since));
+
+-- VALIDATION OVERRIDES AND RE-RUNS (docs/design/validation-review/SPEC.md §3, 2026-11-21). A
+-- person's accept / reject / edit / waive / reopen of one validator finding (or revert_all of
+-- the target file), shown in the review packet as O-n. reject / edit / revert_all write one
+-- commit to the change branch (commit_sha); before/after text is secret-masked. Every override
+-- queues a re-run of the validator at the new head (validation_reruns), whose boss.validation/v1
+-- record makes packet v(n+1). The validator's own output is never edited.
+CREATE TABLE IF NOT EXISTS finding_overrides (
+  id text PRIMARY KEY,
+  project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  change_number int NOT NULL,
+  finding_id text NOT NULL,
+  action text NOT NULL CHECK (action IN ('accept','reject','edit','waive','reopen','revert_all')),
+  actor text NOT NULL,
+  reason text,
+  approver text,
+  approved_at timestamptz,
+  expires_at timestamptz,
+  before_text text,
+  after_text text,
+  commit_sha text,
+  rerun_id text,
+  packet_version int NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_finding_overrides_change
+  ON finding_overrides (project_id, change_number, created_at);
+CREATE TABLE IF NOT EXISTS validation_reruns (
+  id text PRIMARY KEY,
+  project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  change_number int NOT NULL,
+  head_sha text,
+  finding_id text,
+  state text NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','running','done','failed')),
+  validation jsonb,
+  error text,
+  started_at timestamptz,
+  finished_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE validation_reruns ADD COLUMN IF NOT EXISTS finding_id text;
+CREATE INDEX IF NOT EXISTS idx_validation_reruns_change
+  ON validation_reruns (project_id, change_number, created_at);

@@ -337,10 +337,18 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
                 "hunk_id": None, "fix_kind": "none", "status": "open",
                 "evidence": [dict(ev["E-3"])], "override": None, "introduced": True})
             after_ids.append(f"V-{n:02d}")
+    findings += after_extra
+    # THE RULESET'S POLICY (§4): a disabled rule's findings are `suppressed` (still counted); an
+    # open finding whose rule a person must fix is `human` ("Needs you").
+    rules = (ruleset or {}).get("rules") or {}
     for f in findings:
         f.pop("_fix", None)
         f.pop("fixable", None)
-    findings += after_extra
+        rule = rules.get(f["source"]["rule_id"]) or {}
+        if rule.get("enabled") is False:
+            f["status"] = "suppressed"
+        elif f["status"] == "open" and rule.get("autofix") == "human":
+            f["fix_kind"] = "human"
     return {
         "schema": SCHEMA,
         "validator": {"id": validator.get("name"), "version": version,
