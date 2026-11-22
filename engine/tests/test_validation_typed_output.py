@@ -103,8 +103,10 @@ def test_the_partner_file_gives_9_findings_4_auto_fixes_and_5_open(tmp_path):
     url = next(x for x in rec["fixes"] if x["after"] and "https://lumen-pay-core" in x["after"])
     assert url["kind"] == "auto" and url["rule"] == "upstream-https-required"
     assert url["before"].strip() == 'url: "http://lumen-pay-core.internal.example"'
-    assert all(set(x) == {"finding", "rule", "file", "line", "before", "after", "kind", "hunk_id"}
-               for x in rec["fixes"])
+    assert all({"finding", "rule", "file", "line", "before", "after", "kind", "hunk_id", "hunks",
+                "lines"} <= set(x) for x in rec["fixes"])
+    # One entry per finding (#4), never one per line.
+    assert len({x["finding"] for x in rec["fixes"]}) == len(rec["fixes"])
     # Moved lines are followed: the secret on partner line 17 is line 21 of the target.
     secret = next(x for x in rec["findings"] if x["source"]["rule_id"] == "no-inlined-secrets")
     assert secret["location"] == {"file": TARGET, "line": 21, "partner_line": 17}

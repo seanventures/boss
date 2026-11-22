@@ -38,8 +38,17 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern]] = [
             (?:api[_\-]?key|access[_\-]?key|secret[_\-]?key|private[_\-]?key|[_\-]key
               |token|secret|password|passwd|pwd|credentials?|client[_\-]?secret))
         (?P<sep>["']?\s*[:=]\s*["']?)
-        (?P<value>(?!\[)[^\s"'&,;)}\]]{4,})""")),
+        (?P<value>(?!\[)(?!(?:true|false|null|none|yes|no|off)(?![^\s"'&,;)}\]]))
+                  [^\s"'&,;)}\]]{4,})""")),
 ]
+
+# A FLAG NAMED FOR CREDENTIALS IS NOT ONE: `allow_credentials`, `use_credentials`,
+# `with_credentials` say whether credentials travel, never what they are. Their values are
+# kept whatever they hold (a real credential under such a name still meets the shape patterns
+# above: `sk_live_…`, a JWT, a PEM block).
+_FLAG_NAME = re.compile(
+    r"(?i)(?:^|[_.\-])(?:allow|use|with|require|requires|send|include|enable|supports?)"
+    r"[_\-]?credentials?$")
 
 # (label, compiled pattern). Order matters: most-specific first so a token isn't half-masked.
 _PII_PATTERNS: list[tuple[str, re.Pattern]] = [
@@ -75,6 +84,9 @@ def _apply(text: str, patterns: list[tuple[str, re.Pattern]]) -> tuple[str, dict
             nonlocal count
             count += 1
             if "value" in m.re.groupindex:  # an assignment keeps its name
+                if _FLAG_NAME.search(m.group("name")):
+                    count -= 1
+                    return m.group(0)
                 return f"{m.group('name')}{m.group('sep')}[{_label}]"
             return f"[{_label}]"
 

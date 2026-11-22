@@ -2551,6 +2551,17 @@ class SoftwareFactoryService:
         if run_id:
             try:
                 with connection.begin_nested():
+                    # The build's validation ran on the tree this commit holds: its evidence head.
+                    _review_packet.stamp_evidence_head(connection, str(run_id), branch_head_sha)
+                    # A FOLLOW-UP BUILD'S COMMIT on a local change up for merge: when the change's
+                    # validation ran on an older head, it re-runs here ("stale → re-checking").
+                    from .local_repo_host import is_local_pr_url as _is_local_pr
+
+                    if _is_local_pr(getattr(pr, "url", None)) and branch_head_sha:
+                        from .finding_overrides import on_head_moved
+
+                        on_head_moved(connection, self.settings, project_id, int(pr.number),
+                                      branch_head_sha)
                     _packet = _review_packet.for_run(
                         connection, str(run_id), head_sha=branch_head_sha, change=pr.number,
                         project_id=project_id,

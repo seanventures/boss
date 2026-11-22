@@ -64,8 +64,10 @@ def test_a_packet_built_from_the_step_outputs_is_valid_and_computed(packet):
     assert packet["schema"] == "boss.review_packet/v2"
     assert set(rp.REQUIRED) <= set(packet)
     # No severity from a ruleset yet: gwlint's error → P1, warn → P2 (basis says so).
-    assert packet["counts"]["P1"] == {"found": 9, "open": 5, "waived": 0}
-    assert packet["counts"]["P2"] == {"found": 2, "open": 2, "waived": 0}
+    # The P-level counts are the checks' (#10): the review's follow-ups are counted apart.
+    assert packet["counts"]["P1"] == {"found": 8, "open": 4, "waived": 0}
+    assert packet["counts"]["P2"] == {"found": 1, "open": 1, "waived": 0}
+    assert packet["counts"]["review"] == {"found": 2, "open": 2, "deferred": 0, "blocking": 0}
     assert packet["verdict"]["state"] == "blocked"
     # Only the validator's open findings block; the review's P1 is a follow-up (light lane).
     assert "open_p1:R-1" not in packet["verdict"]["reasons"]
@@ -98,7 +100,8 @@ def test_a_follow_up_already_queued_is_listed_but_does_not_block():
     (r,) = rp.from_followups([FOLLOWUPS["items"][0]], "standard")
     r["deferred_to"] = "queued"
     p = rp.build_packet(work=WORK, head_sha="x", reviews=[r])
-    assert p["counts"]["P1"]["open"] == 1 and p["verdict"]["state"] == "ready"
+    assert p["counts"]["P1"]["open"] == 0 and p["counts"]["review"]["open"] == 1
+    assert p["counts"]["review"]["deferred"] == 1 and p["verdict"]["state"] == "ready"
 
 
 # ── rule 1: every field ────────────────────────────────────────────────────────────────────────
@@ -202,7 +205,8 @@ def test_a_rerun_in_progress_refuses_the_merge():
 
 def test_the_merge_gate_reads_the_packet():
     src = inspect.getsource(ci_gate.refuse_approval)
-    assert "blocks_merge(rec, force=force and not system_policy)" in src
+    assert "blocks_merge(rec, force=force and not system_policy," in src
+    assert "current_head=head_for_url(connection, rec.get(\"pull_request_url\"))" in src
 
 
 def test_a_substituted_input_blocks(tmp_path):
@@ -239,8 +243,9 @@ class _Rows:
 
 
 class _Conn:
-    def __init__(self, lineage):
+    def __init__(self, lineage, wfrs=None):
         self.lineage = lineage
+        self.wfrs = wfrs or {}
 
     def begin_nested(self):
         return self
@@ -257,28 +262,54 @@ class _Conn:
             return _Rows([])
         if "AS root" in q:
             return _Rows([{"id": params["r"], "root": "crun_root"}])
+        if "FROM workflow_runs WHERE id" in q:
+            w = self.wfrs.get(params["w"])
+            return _Rows([w] if w else [])
         return _Rows(self.lineage)
 
 
-def test_for_run_uses_the_root_build_and_the_newest_validation(tmp_path):
+def test_for_run_uses_the_producing_build_the_works_title_and_run(tmp_path):
+    """#10, #12: the packet's build is the one that produced the change (not the failed first
+    attempt); its title is the work's root title and its run is the work's own workflow run,
+    numbered as the Work panel numbers it."""
     rec = _validation(tmp_path)
     lineage = [
         {"id": "crun_root", "title": "Validate tenant config with gwlint", "created_at": 1,
-         "finalize_ctx": {"workflow_run_id": "wfr_1"}, "state": {"validation": rec}},
-        {"id": "crun_more", "title": "Follow-up: More tests — Validate tenant config with gwlint",
-         "created_at": 2, "finalize_ctx": {"root_run_id": "crun_root"}, "state": {}},
-        {"id": "crun_last", "title": "Follow-up: deferred review findings — Follow-up: More "
-                                      "tests — Validate tenant config with gwlint",
-         "created_at": 3, "finalize_ctx": {"root_run_id": "crun_root"},
+         "status": "failed", "pull_request_url": None,
+         "finalize_ctx": {"workflow_run_id": "wfr_step"}, "state": {}},
+        {"id": "crun_retry", "title": "Validate tenant config with gwlint · retry 1",
+         "created_at": 2, "status": "completed", "pull_request_url": "http://boss-local/a/b/pull/9",
+         "finalize_ctx": {"root_run_id": "crun_root"}, "state": {"validation": rec}},
+        {"id": "crun_last", "title": "Follow-up: deferred review findings — Validate tenant "
+                                      "config with gwlint · retry 1",
+         "created_at": 3, "status": "completed", "pull_request_url": "http://boss-local/a/b/pull/9",
+         "finalize_ctx": {"root_run_id": "crun_root"},
          "state": {"tests": TESTS, "impl_summary": "prose never shown"}},
     ]
-    p = rp.for_run(_Conn(lineage), "crun_last", head_sha="eaff448", change=9,
+    wfrs = {"wfr_step": {"id": "wfr_step", "parent_run_id": "wfr_work", "title": None},
+            "wfr_work": {"id": "wfr_work", "parent_run_id": None,
+                         "title": "Lumen Pay tenant onboarding"}}
+    p = rp.for_run(_Conn(lineage, wfrs), "crun_last", head_sha="eaff448", change=9,
                    followups=FOLLOWUPS)
-    assert p["work"] == {"title": "Validate tenant config with gwlint", "workflow_run": "wfr_1",
-                         "run_no": 16, "build": "crun_root",
-                         "later_builds": ["crun_more", "crun_last"], "change": 9}
+    assert p["work"] == {"title": "Lumen Pay tenant onboarding", "workflow_run": "wfr_work",
+                         "run_no": 16, "build": "crun_retry", "later_builds": ["crun_last"],
+                         "change": 9}
+    assert " · retry" not in str(p["work"])
     assert p["validators"][0]["id"] == "gwlint" and p["tests"][0]["suite"].startswith("go vet")
     assert "prose never shown" not in str(p) and rp.validate_packet(p) == []
+
+
+def test_the_run_number_counts_every_run_of_the_project_like_the_work_panel():
+    src = inspect.getsource(rp._run_no)
+    assert "workflow_definition_id" not in src and "w.project_id = me.project_id" in src
+
+
+def test_without_a_titled_workflow_run_the_title_is_the_builds_without_retry():
+    lineage = [{"id": "crun_root", "title": "Recipe box · retry 2", "created_at": 1,
+                "status": "completed", "pull_request_url": "u", "finalize_ctx": {},
+                "state": {"tests": TESTS}}]
+    p = rp.for_run(_Conn(lineage), "crun_root", head_sha="abc", change=3)
+    assert p["work"]["title"] == "Recipe box" and p["work"]["build"] == "crun_root"
 
 
 def test_the_merge_card_carries_the_packet_and_the_root_title():

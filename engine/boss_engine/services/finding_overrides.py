@@ -188,11 +188,15 @@ def validation_of(c: Any, ch: Change) -> Optional[dict]:
     """The newest boss.validation/v1 for the change: the last finished re-run's, else the
     lineage's."""
     rr = c.execute(text(
-        "SELECT validation FROM validation_reruns WHERE project_id = :p AND change_number = :n "
-        "AND state = 'done' ORDER BY finished_at DESC NULLS LAST LIMIT 1"),
+        "SELECT validation, head_sha FROM validation_reruns WHERE project_id = :p "
+        "AND change_number = :n AND state = 'done' ORDER BY finished_at DESC NULLS LAST LIMIT 1"),
         {"p": ch.project_id, "n": ch.number}).first()
     if rr is not None and _j(rr[0], None):
-        return _j(rr[0], None)
+        rec = _j(rr[0], None)
+        # The head the re-run checked (records before it stamped one: the head it was queued at).
+        if isinstance(rec.get("after"), dict) and not rec["after"].get("head_sha") and rr[1]:
+            rec["after"]["head_sha"] = rr[1]
+        return rec
     if not ch.run_id:
         return None
     for r in reversed(rp._lineage(c, ch.run_id)):
@@ -234,8 +238,28 @@ def apply(findings: list[dict], ovrs: Sequence[Mapping[str, Any]], *, now: Optio
                 expired = expires is not None and expires < now
                 if approved and not expired:
                     f["status"] = "waived"
-            elif action == "reopen" and f.get("status") in ("waived", "fixed", "reverted"):
+            elif action == "reopen" and f.get("status") in ("waived", "fixed", "reverted",
+                                                             "overridden"):
                 f["status"] = "open"
+            elif action == "accept" and (f.get("source") or {}).get("kind") == "guard" \
+                    and f.get("status") == "open":
+                # A person accepted the security change BOSS could not explain.
+                f["status"] = "overridden"
+    # HELD AND BLOCKED FIXES ARE RELEASED BY PEOPLE (validators.record): a `human` / `never`
+    # rule's fix counts once a person accepted (or wrote) it; a P0 whose hunk carried an
+    # unexplained security change, once that change is accepted, rejected or gone.
+    for f in findings:
+        if f.get("status") != "open" or not f.get("fixed_if_released"):
+            continue
+        last = f.get("override") or {}
+        if f.get("held") and last.get("action") not in ("accept", "edit"):
+            continue
+        if any((by_id.get(str(b)) or {}).get("status") in ("open", "reverted")
+               for b in f.get("blocked_by") or []):
+            continue
+        f["status"] = "fixed"
+        if f.get("held"):
+            f["fix_kind"] = "human"
     return findings
 
 
@@ -286,6 +310,8 @@ def refresh_decision(c: Any, ch: Change, p: Optional[Mapping[str, Any]]) -> Opti
 def state(c: Any, settings: Any, project_id: str, number: int) -> dict:
     """GET …/validation: boss.validation/v1 + overrides + re-run state (+ the current packet)."""
     ch = change(c, settings, project_id, number)
+    if ch.kind == "local":
+        on_head_moved(c, settings, project_id, number, ch.head())
     rr = latest_rerun(c, project_id, number)
     validation = validation_of(c, ch)
     if validation and (validation.get("input") or {}).get("file"):
@@ -371,6 +397,11 @@ def override(c: Any, settings: Any, project_id: str, number: int, *, action: str
               {"k": f"finding_overrides:{project_id}:{int(number)}"})
     c.execute(text("SELECT id FROM local_change_sets WHERE project_id = :p AND number = :n "
                    "FOR UPDATE"), {"p": project_id, "n": int(number)})
+    # IDEMPOTENT ON (finding, head, action): a replay (a retried request, the same click after a
+    # step-up) returns the override already made, and starts no second re-run.
+    replay = _replayed(c, ch, finding_id or "*", action, head_sha)
+    if replay is not None:
+        return replay
     head = ch.head()
     if not head_sha or head_sha != head:
         raise OverrideError(409, "stale_head", "The change moved on; review the newer packet.",
@@ -406,7 +437,16 @@ def override(c: Any, settings: Any, project_id: str, number: int, *, action: str
     from .validators import mask
 
     before_text = after_text = commit_sha = None
-    if action in COMMITS:
+    # ACCEPTING A "NEEDS YOU" PROPOSAL: the agent's change BOSS refused for a `human` / `never`
+    # rule (input_fidelity.enforce_autofix) is applied now, by this person, as one commit.
+    proposal = (finding or {}).get("proposed") if action == "accept" else None
+    if proposal and (finding or {}).get("status") != "open":
+        proposal = None
+    if proposal and not proposal.get("applicable"):
+        raise OverrideError(409, "edit_required",
+                            "The proposed line holds a value BOSS does not keep; write the line "
+                            "with Edit.")
+    if action in COMMITS or proposal:
         inp, target = (validation.get("input") or {}).get("file"), validation.get("target")
         input_text = ch.repo.read_text_file(ch.branch, inp)
         target_text = ch.repo.read_text_file(ch.branch, target)
@@ -422,6 +462,8 @@ def override(c: Any, settings: Any, project_id: str, number: int, *, action: str
                 raise OverrideError(409, "input_changed",
                                     f"`{inp}` on the branch is not the file the check received.")
             new_text = input_text
+        elif proposal:
+            new_text = apply_proposal(target_text, proposal)
         elif action == "reject":
             if anchor is None:
                 raise OverrideError(409, "no_fix", f"{finding_id} has no fix to reject.")
@@ -436,11 +478,13 @@ def override(c: Any, settings: Any, project_id: str, number: int, *, action: str
                                          _trailers(ref, finding_id or "*", action, actor, reason))
     c.execute(text(
         "INSERT INTO finding_overrides (id, project_id, change_number, finding_id, action, actor, "
-        "reason, approver, expires_at, before_text, after_text, commit_sha, packet_version) "
-        "VALUES (:i, :p, :n, :f, :a, :actor, :r, :ap, CAST(:e AS timestamptz), :bt, :at, :cs, :v)"),
+        "reason, approver, expires_at, before_text, after_text, commit_sha, packet_version, "
+        "head_sha) VALUES (:i, :p, :n, :f, :a, :actor, :r, :ap, CAST(:e AS timestamptz), :bt, "
+        ":at, :cs, :v, :h)"),
         {"i": oid, "p": project_id, "n": int(number), "f": finding_id or "*", "a": action,
          "actor": actor, "r": reason, "ap": approver_id, "e": expires_at, "bt": before_text,
-         "at": after_text, "cs": commit_sha, "v": int(current.get("packet_version") or 1) + 1})
+         "at": after_text, "cs": commit_sha, "v": int(current.get("packet_version") or 1) + 1,
+         "h": head})
     decision_id = None
     if p0_waive:
         from .core import create_blocking_decision
@@ -462,6 +506,56 @@ def override(c: Any, settings: Any, project_id: str, number: int, *, action: str
     return {"override": {"id": oid, "ref": ref, "action": action, "finding_id": finding_id,
                          "commit_sha": commit_sha, "approval_decision": decision_id},
             "rerun": {"id": rerun_id, "state": "pending"}, "packet": p, "decision": card}
+
+
+def _replayed(c: Any, ch: Change, finding_id: str, action: str, head_sha: Optional[str]
+              ) -> Optional[dict]:
+    """The response to a replayed override: the finding's LAST override, when it is this same
+    action at this same head (an accept → reopen → accept is three overrides, not a replay)."""
+    if not head_sha:
+        return None
+    rows = overrides(c, ch.project_id, ch.number)
+    mine = [o for o in rows if o.get("finding_id") == finding_id]
+    last = mine[-1] if mine else None
+    if last is None or last.get("action") != action or last.get("head_sha") != head_sha:
+        return None
+    rr = None
+    if last.get("rerun_id"):
+        rr = c.execute(text("SELECT id, state FROM validation_reruns WHERE id = :i"),
+                       {"i": last["rerun_id"]}).mappings().first()
+    d = _merge_decision(c, ch)
+    return {"override": {"id": last["id"], "ref": last["ref"], "action": action,
+                         "finding_id": finding_id, "commit_sha": last.get("commit_sha"),
+                         "approval_decision": None},
+            "rerun": ({"id": rr["id"], "state": rr["state"]} if rr else None),
+            "packet": packet(c, ch), "decision": (d or {}).get("id"), "replayed": True}
+
+
+def apply_proposal(target_text: str, proposal: Mapping[str, Any]) -> str:
+    """The target with a refused proposal applied: each piece's ``remove`` lines (found on the
+    target as one unique run, compared masked) replaced by its ``after`` lines, or ``after``
+    inserted after its ``anchor`` line. 409 when the lines are no longer there exactly once."""
+    from .validators import mask
+
+    b, nl = _lines(target_text)
+    for piece in proposal.get("pieces") or []:
+        masked = [mask(x) for x in b]
+        rem = [str(x) for x in piece.get("remove") or []]
+        new = [str(x) for x in piece.get("after") or []]
+        if rem:
+            at = [k for k in range(len(b) - len(rem) + 1) if masked[k:k + len(rem)] == rem]
+            if len(at) != 1:
+                raise OverrideError(409, "proposal_gone", "The lines this proposal changes are "
+                                    "no longer on the branch exactly once; use Edit.")
+            b[at[0]:at[0] + len(rem)] = new
+        else:
+            anchor = piece.get("anchor")
+            at = [k + 1 for k, x in enumerate(masked) if x == anchor] if anchor is not None else [0]
+            if len(at) != 1:
+                raise OverrideError(409, "proposal_gone", "The line this proposal follows is not "
+                                    "on the branch exactly once; use Edit.")
+            b[at[0]:at[0]] = new
+    return _join(b, nl)
 
 
 def approver_may_merge(c: Any, project_id: str, approver_id: str) -> bool:
@@ -507,6 +601,59 @@ def rebuild(c: Any, settings: Any, project_id: str, number: int, *, actor: str,
     emit_event(c, project_id, "validation.rebuild", actor, "validation_rerun", rid,
                {"change": int(number), "reason": (reason or "")[:300]})
     return {"rerun": {"id": rid, "state": "pending"}, "packet": p}
+
+
+def on_head_moved(c: Any, settings: Any, project_id: str, number: int, head: str) -> Optional[str]:
+    """A push to the change branch, or a follow-up build's commit, moved change #n to ``head``.
+    When its validation ran on another head, a re-run starts at this one — the packet says
+    "stale → re-checking" (``stale``, ``stale_evidence``) until it is done. The re-run id, or
+    None when nothing needed it. Never raises: a push is never refused for this."""
+    try:
+        with c.begin_nested():
+            ch = change(c, settings, project_id, int(number))
+            if ch.kind != "local" or not head:
+                return None
+            validation = validation_of(c, ch)
+            if not validation:
+                return None
+            rr = latest_rerun(c, project_id, int(number))
+            if rr and rr.get("head_sha") == head:
+                return None                      # already re-checked (or re-checking) there
+            ev = rp.evidence_head(validation)
+            if ev == head:
+                return None
+            if ev is None and rr is None:
+                # An older record with no stamped head: the merge card's head is its head; with
+                # neither, BOSS does not know it is stale and claims nothing.
+                d = _merge_decision(c, ch)
+                ev = ((d or {}).get("recommendation") or {}).get("head_sha")
+                if not ev or ev == head:
+                    return None
+            rid = start_rerun(c, ch, head=head, finding_id=None)
+            refresh_decision(c, ch, packet(c, ch, head_sha=head))
+            emit_event(c, project_id, "validation.stale_rerun", "boss", "validation_rerun", rid,
+                       {"change": int(number), "head_sha": head, "evidence_head": ev})
+            return rid
+    except Exception:  # noqa: BLE001 — the push stands; the merge gate still sees the head
+        log.info("stale re-run not started for %s #%s", project_id, number, exc_info=True)
+        return None
+
+
+def head_for_url(c: Any, url: Any) -> Optional[str]:
+    """A local change's current head, from its URL (``http://boss-local/<o>/<r>/pull/<n>``)."""
+    import re
+
+    m = re.search(r"://[^/]+/([^/]+/[^/]+)/pull/(\d+)", str(url or ""))
+    if not m:
+        return None
+    try:
+        with c.begin_nested():
+            return c.execute(text(
+                "SELECT head_sha FROM local_change_sets WHERE repository = :r AND number = :n "
+                "AND state = 'open' ORDER BY created_at DESC LIMIT 1"),
+                {"r": m.group(1), "n": int(m.group(2))}).scalar()
+    except Exception:  # noqa: BLE001 — no head known: the gate falls back to the packet's verdict
+        return None
 
 
 def start_rerun(c: Any, ch: Change, *, head: str, finding_id: Optional[str]) -> str:
@@ -569,6 +716,19 @@ def _sandbox_run(workdir: Path, env: Mapping[str, str]) -> Callable[[str], Any]:
                                  capture_output=True, text=True, env=dict(env))
         return SimpleNamespace(stdout=proc.stdout or "", exit_code=proc.returncode)
     return run
+
+
+def _tree_head(tree: Path) -> Optional[str]:
+    import subprocess
+
+    if not (Path(tree) / ".git").exists():
+        return None
+    try:
+        out = subprocess.run(["git", "-C", str(tree), "rev-parse", "HEAD"], capture_output=True,
+                             text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() or None if out.returncode == 0 else None
 
 
 def _safe_rel(path: Any) -> str:
@@ -665,6 +825,9 @@ def execute_rerun(engine: Any, settings: Any, rerun_id: str, *,
                         run = _sandbox_run(tree, tool_env(ident.home if ident else base))
                     rec = input_fidelity.public_validation(
                         input_fidelity.run_validation(tree, contract, run, ruleset=ruleset))
+                    # THE HEAD THIS EVIDENCE RAN ON (the packet claims no other).
+                    if isinstance(rec.get("after"), dict):
+                        rec["after"]["head_sha"] = _tree_head(tree) or row.get("head_sha")
                 finally:
                     if ident is None:
                         shutil.rmtree(base, ignore_errors=True)

@@ -16605,5 +16605,7 @@ CREATE TABLE IF NOT EXISTS validation_reruns (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE validation_reruns ADD COLUMN IF NOT EXISTS finding_id text;
+-- The head an override was made at: (finding, head, action) makes a replay idempotent.
+ALTER TABLE finding_overrides ADD COLUMN IF NOT EXISTS head_sha text;
 CREATE INDEX IF NOT EXISTS idx_validation_reruns_change
   ON validation_reruns (project_id, change_number, created_at);

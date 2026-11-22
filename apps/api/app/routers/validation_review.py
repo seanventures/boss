@@ -7,7 +7,9 @@ POST /v1/changes/{project_id}/{number}/findings/{finding_id}/override   accept|r
 POST /v1/changes/{project_id}/{number}/validation/revert-all            the target back to the partner's bytes
 POST /v1/changes/{project_id}/{number}/validation/rerun                 "Rebuild packet": re-run now
 GET  /v1/projects/{project_id}/rulesets                                 the base branch's rulesets
-POST /v1/projects/{project_id}/rulesets/{ruleset_id}/propose            a ruleset edit, as a change
+POST /v1/projects/{project_id}/rulesets/{ruleset_id}/propose            a ruleset edit (or a new one), as a change
+GET  /v1/projects/{project_id}/validators                               the base branch's .boss/validators.yaml
+POST /v1/projects/{project_id}/validators/propose                       add / edit it, as a change
 POST /v1/validation-reruns/{rerun_id}/run                               worker-invoked: one re-run
 """
 from __future__ import annotations
@@ -135,6 +137,8 @@ class ProposeBody(BaseModel):
     rules: list[dict[str, Any]] = Field(max_length=500)
     base_version: Optional[int] = None
     base_sha: Optional[str] = Field(default=None, max_length=80)
+    # Creating a ruleset (none on the base branch yet): the validator it layers on.
+    validator: Optional[str] = Field(default=None, max_length=100)
 
 
 @router.post("/v1/projects/{project_id}/rulesets/{ruleset_id}/propose")
@@ -150,7 +154,43 @@ def propose_ruleset(project_id: str, ruleset_id: str, request: Request,
             _require(c, project_id)
             return rc.propose(c, _settings, project_id, ruleset_id, rules=payload.rules,
                               base_version=payload.base_version, base_sha=payload.base_sha,
-                              actor=_actor(request))
+                              actor=_actor(request), validator=payload.validator)
+    except rc.RulesetChangeError as error:
+        return _refused(error)
+
+
+@router.get("/v1/projects/{project_id}/validators")
+@permit(P.CODE_TASK_READ, scope=Scope.project(path="project_id"))
+def project_validators(project_id: str) -> Any:
+    """The base branch's `.boss/validators.yaml` (``exists: false`` when there is none yet)."""
+    from boss_engine.services import ruleset_changes as rc
+
+    with begin(_engine) as c:
+        _require(c, project_id)
+        try:
+            return rc.list_validators(c, _settings, project_id)
+        except rc.RulesetChangeError as error:
+            return _refused(error)
+
+
+class ValidatorsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    validators: list[dict[str, Any]] = Field(max_length=50)
+    base_sha: Optional[str] = Field(default=None, max_length=80)
+
+
+@router.post("/v1/projects/{project_id}/validators/propose")
+@permit(P.POLICY_MANAGE, scope=Scope.project(path="project_id"))
+def propose_validators(project_id: str, request: Request, payload: ValidatorsBody) -> Any:
+    """Add or edit `.boss/validators.yaml` as a change a person merges."""
+    from boss_engine.services import ruleset_changes as rc
+
+    _people_only(request, "Changing the validators")
+    try:
+        with begin(_engine) as c:
+            _require(c, project_id)
+            return rc.propose_validators(c, _settings, project_id, validators=payload.validators,
+                                         base_sha=payload.base_sha, actor=_actor(request))
     except rc.RulesetChangeError as error:
         return _refused(error)
 

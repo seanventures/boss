@@ -1249,9 +1249,13 @@ def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
     if action in MERGE_ACTIONS:
         # THE REVIEW PACKET (review_packet.blocks_merge, SPEC §1.4 rule 6, §3): an invalid packet
         # or a re-run in progress refuses every merge; a blocked verdict needs a person's force.
+        from .finding_overrides import head_for_url
         from .review_packet import blocks_merge
 
-        refused = blocks_merge(rec, force=force and not system_policy)
+        # The change's head NOW (a local change): a packet whose evidence ran on another head
+        # never approves this one (stale → re-checking).
+        refused = blocks_merge(rec, force=force and not system_policy,
+                               current_head=head_for_url(connection, rec.get("pull_request_url")))
         if refused is not None:
             raise CiGateRefused(refused[0], refused[1])
         # PEOPLE'S COMMENTS HOLD A LOCAL MERGE (BOSSAPP-948, local_review.merge_hold): while a
