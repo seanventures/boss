@@ -110,10 +110,10 @@ export const VALIDATION_OPEN = {
 
 const done = (f: F, status: string, extra: F = {}): F => ({ ...f, status, evidence: [E1, { ...E2, id: "E-4", exit: 0 }], ...extra });
 const byId = Object.fromEntries(FINDINGS_OPEN.map((f) => [f.id as string, f]));
-const O1 = { id: "O-1", action: "accept", finding_id: "V-07", actor: "Paramaguru", reason: "Partner confirmed the admin route is internal-only.", created_at: "2026-11-21T14:19:00Z", rerun_id: "E-3" };
-const O2 = { id: "O-2", action: "edit", finding_id: "V-06", actor: "Paramaguru", reason: "Dashboard needs cookies. Partner named one origin in the brief.",
+const O1 = { id: "O-1", action: "accept", finding_id: "V-07", actor: "Owner", reason: "Partner confirmed the admin route is internal-only.", created_at: "2026-11-21T14:19:00Z", rerun_id: "E-3" };
+const O2 = { id: "O-2", action: "edit", finding_id: "V-06", actor: "Owner", reason: "Dashboard needs cookies. Partner named one origin in the brief.",
   created_at: "2026-11-21T14:21:00Z", commit_sha: "9f2c1d0", rerun_id: "E-4", before_text: "      allow_origins: [\"*\"]", after_text: "      allow_origins: [\"https://dashboard.lumenpay.example\"]" };
-const O3 = { id: "O-3", action: "waive", finding_id: "V-02", actor: "Paramaguru", reason: "no PII in query params, KAN-12", created_at: "2026-11-21T14:23:00Z" };
+const O3 = { id: "O-3", action: "waive", finding_id: "V-02", actor: "Owner", reason: "no PII in query params, KAN-12", created_at: "2026-11-21T14:23:00Z" };
 
 /** The end of the demo (wireframe C): every P0/P1 closed, one override each kind, packet v4. */
 export const PACKET_READY = {
@@ -161,7 +161,7 @@ export const PACKET_INVALID = {
 
 export const RULESET_NORTHGATE = {
   id: "northgate", version: 3, sha: "a1b2c3d", path: ".boss/rulesets/northgate.yaml", validator: "gwlint",
-  merged_at: "2026-11-20T10:00:00Z", merged_by: "Paramaguru", rules_doc: DOC,
+  merged_at: "2026-11-20T10:00:00Z", merged_by: "Owner", rules_doc: DOC,
   rules: [
     { id: "no-inlined-secrets", severity: "P0", autofix: "never", guide: "Delete the key if the route already authenticates another way; otherwise use api_key_secret_ref: vault://<tenant>/<name>." },
     { id: "cors-no-wildcard-with-credentials", severity: "P0", autofix: "agent", guide: "Default to allow_credentials: false. Keep credentials only if the brief names exact origins." },

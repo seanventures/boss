@@ -72,7 +72,7 @@ export type ReviewPacket = {
   findings: Finding[];
   vs_input: { file: string; hunks: number; added: number; removed: number; hunks_by_finding: Record<string, string[]>; unexplained_hunks: string[] };
   validators: { id: string; ruleset: string; before: number; after_open: number; after_waived: number; exit: number | null; evidence: string }[];
-  tests: { id: string; suite: string; passed: number; failed: number; evidence: string }[];
+  tests: { id: string; suite: string; passed: number; failed: number; evidence: string; ok: boolean | null }[];
   contract: ContractCase[];
   risks: { text: string; refs: string[] }[];
   claims: { text: string; refs: string[] }[];
@@ -127,7 +127,8 @@ export function parseFinding(v: unknown): Finding {
     evidence: a(x.evidence).map(parseEvidence), override: x.override ? parseOverride(x.override) : null,
     why: s(x.why), guide: s(x.guide),
     followup: x.followup ? { change: nn(fu.change), href: s(fu.href), build: "" }
-      : x.deferred_to ? { change: null, href: "", build: s(x.deferred_to) === "queued" ? "" : s(x.deferred_to) } : null,
+      // The engine's deferred_to is the follow-up build's id, or a word ("queued", "later"): only an id is shown.
+      : x.deferred_to ? { change: null, href: "", build: /^[a-z]+_[0-9a-z]+$/i.test(s(x.deferred_to)) ? s(x.deferred_to) : "" } : null,
     title: s(x.title), introduced: x.introduced === true,
   };
 }
@@ -198,7 +199,7 @@ export function parsePacket(v: unknown): ReviewPacket | null {
     findings,
     vs_input: { file: s(vi.file), hunks: n(vi.hunks), added: n(vi.added), removed: n(vi.removed), hunks_by_finding: hbf, unexplained_hunks: strs(vi.unexplained_hunks) },
     validators: a(x.validators).map((y) => { const z = o(y); return { id: s(z.id), ruleset: s(z.ruleset), before: n(z.before), after_open: n(z.after_open), after_waived: n(z.after_waived), exit: nn(z.exit), evidence: s(z.evidence) }; }),
-    tests: a(x.tests).map((y) => { const z = o(y); return { id: s(z.id), suite: s(z.suite), passed: n(z.passed), failed: n(z.failed), evidence: s(z.evidence) }; }),
+    tests: a(x.tests).map((y) => { const z = o(y); return { id: s(z.id), suite: s(z.suite), passed: n(z.passed), failed: n(z.failed), evidence: s(z.evidence), ok: typeof z.ok === "boolean" ? z.ok : null }; }),
     contract: a(x.contract).map(parseCase).filter((k) => k.case),
     risks: a(x.risks).map((y) => ({ text: s(o(y).text), refs: strs(o(y).refs) })).filter((r) => r.text),
     claims: a(x.claims).map((y) => ({ text: s(o(y).text), refs: strs(o(y).refs) })).filter((r) => r.text),

@@ -76,7 +76,14 @@ describe("the ready packet (wireframe C)", () => {
     expect(rows[0].textContent).toContain("fixer.go:69");
     expect(rows[0].textContent).toContain("deferred");
     expect(rows[0].querySelector('[data-testid="vr-followup"]')!.getAttribute("href")).toBe("/changes/northgate-gateway/10");
-    expect(rows.find((r) => r.getAttribute("data-finding") === "V-03")!.textContent).toContain("no-inlined-secrets · L17");
+    const v03 = rows.find((r) => r.getAttribute("data-finding") === "V-03")!;
+    expect(v03.querySelector(".vr-c-rule")!.getAttribute("title")).toBe("no-inlined-secrets · L17");
+    // Long values are clipped to one line each, and the whole value is the cell's tooltip.
+    const v06 = rows.find((r) => r.getAttribute("data-finding") === "V-06")!;
+    expect(v06.querySelector(".vr-c-ba")!.getAttribute("title")).toBe('["*"] → ["https://dashboard.lumenpay.example"]');
+    expect(v06.querySelectorAll(".vr-c-ba .vr-clip")).toHaveLength(2);
+    // Overrides name the person in words (a role here), never an id.
+    expect($$('[data-testid="vr-override-row"]').map((r) => r.textContent).join(" ")).toContain("accept V-07 · Owner");
     // The P2 waive is below, folded.
     expect($('[data-testid="vr-p23"]')!.textContent).toContain("P2 / P3 · 1");
     // Provenance: the run by its wfr_ id, the build, the change; 14 facts as one chip.

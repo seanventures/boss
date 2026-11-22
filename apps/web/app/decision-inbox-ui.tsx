@@ -1065,6 +1065,21 @@ function DecisionInboxRow({
                           eyebrow={`${who} proposes · merge`}
                           actions={packet.verdict.state === "invalid" && isPending
                             ? <RebuildPacket projectId={projectId} change={packet.work.change} /> : null} />
+        {/* What the merge card said before the packet, and still must: checks failing (security
+            first), the must-haves, an expired wait. Follow-ups are the packet's R-n rows. */}
+        {checksFailingOf(rec) || mustHavesOf(rec) || expired ? (
+          <div className="dq-packet-extra" data-testid="decision-packet-extra">
+            {checksFailingOf(rec) ? <ChecksFailing record={checksFailingOf(rec)!} /> : null}
+            {mustHavesOf(rec) ? <MustHaves data={mustHavesOf(rec)!} /> : null}
+            {expired ? (
+              <p className="dq-rationale" data-testid="decision-expired-note">
+                Waiting since{" "}
+                <ClientRelativeTime iso={decision.createdAt ?? decision.deadlineAt ?? decision.updatedAt} empty="" as="span" />.
+                Its deadline passed with nothing applied; the work may have moved on.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         <div className="dq-foot">
           {isPending ? (
             <DecisionActions decision={{ ...decision, held: hold }} projectId={projectId} actorId={actorId} />

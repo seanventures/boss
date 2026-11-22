@@ -183,3 +183,36 @@ button.vr-ref { line-height: 1.5; }
 }
 .vr td.vr-id { white-space: nowrap; }
 .vr-chip-pair { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; margin-right: 6px; }
+
+/* ── the packet's findings table: fixed columns, long values clipped (tooltip holds the whole) ── */
+.vr-ftable { table-layout: fixed; }
+.vr-ftable .vr-c-id { width: 3rem; }
+.vr-ftable .vr-c-rule { width: 34%; }
+.vr-ftable .vr-c-fix { width: 4.75rem; }
+.vr-ftable .vr-c-st { width: 10rem; }
+.vr .vr-ftable td { word-break: normal; overflow-wrap: normal; }
+.vr-ftable td.vr-c-rule, .vr-ftable td.vr-c-ba { overflow: hidden; }
+.vr-clip { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vr-clip2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.vr-where { display: block; color: var(--v2-muted); font-size: 0.57895rem; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vr-ftable td.vr-c-st .vr-st { white-space: normal; }
+/* A merge card with a packet takes the queue's full width when the queue is two abreast. */
+.dq > .dq-row-packet { grid-column: 1 / -1; }
+/* A narrow card (the queue two abreast, a tablet, a phone): each finding is a stacked row —
+   id · rule · fix, then partner → now, then status — never a squeezed five-column table. */
+.vr-packet { container-type: inline-size; }
+@container (max-width: 46rem) {
+  .vr-ftable, .vr-ftable tbody { display: block; width: 100%; }
+  .vr-ftable thead { display: none; }
+  .vr-ftable tr { display: grid; grid-template-columns: 2.6rem minmax(0, 1fr) auto; grid-template-areas: "id rule fix" "id ba ba" "id st st";
+    border-bottom: 1px solid var(--v2-border); padding: 4px 0; }
+  .vr-ftable tr:last-child { border-bottom: 0; }
+  .vr .vr-ftable td { border: 0; padding: 2px 6px; width: auto; }
+  .vr-ftable td.vr-c-id { grid-area: id; }
+  .vr-ftable td.vr-c-rule { grid-area: rule; }
+  .vr-ftable td.vr-c-fix { grid-area: fix; }
+  .vr-ftable td.vr-c-ba { grid-area: ba; }
+  .vr-ftable td.vr-c-st { grid-area: st; }
+}
+@container (max-width: 30rem) { .vr-sevbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.dq-packet-extra { padding: 0 1.15rem; display: grid; gap: 8px; }
