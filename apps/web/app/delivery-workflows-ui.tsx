@@ -1829,7 +1829,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
           </button>
         </header>
         {noticeFor(fullRun)}
-        <LearnedStrip projectId={projectId} actor={actor} runId={fullRun.id}
+        <LearnedStrip people projectId={projectId} actor={actor} runId={fullRun.id}
                       live={!/^(succeeded|completed|failed|cancelled|canceled|deadlettered)$/.test(fullRun.status)} />
         {pathFor(fullRun, true)}
       </div>
@@ -1947,7 +1947,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
               ) : null}
             </button>
             {noticeFor(run)}
-            {open ? <LearnedStrip projectId={projectId} actor={actor} runId={run.id} live={!/^(succeeded|completed|failed|cancelled|canceled|deadlettered)$/.test(run.status)} /> : null}
+            {open ? <LearnedStrip people projectId={projectId} actor={actor} runId={run.id} live={!/^(succeeded|completed|failed|cancelled|canceled|deadlettered)$/.test(run.status)} /> : null}
             {open ? pathFor(run) : null}
           </article>
         );

@@ -98,3 +98,16 @@ def test_a_host_that_fails_never_fails_the_build():
             raise RuntimeError("offline")
 
     assert input_fidelity.commit_original(Broken(), "b", "main", contract()) is None
+
+
+def test_a_masked_upload_says_so_on_its_first_commit(host: Host):
+    """Dry run 5: an upload's secrets are masked before they reach the branch, so its first
+    commit reads "Original file as given (secrets masked)" — never a byte-for-byte claim."""
+    from boss_engine.services.validators import sha256
+
+    c = contract(input_sha256=sha256(ORIGINAL + "# the true bytes differ\n"))
+    sha = input_fidelity.commit_original(host, "boss/code/crun_m", "main", c)
+    first = local_repo.commits_between(host.git_dir, "main", "boss/code/crun_m")[-1]
+    assert first["sha"] == sha
+    assert first["message"].startswith("Original file as given (secrets masked): ")
+    assert input_fidelity.original_masked_words(contract(input_sha256=sha256(ORIGINAL)), ORIGINAL) == ""

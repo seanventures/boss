@@ -234,7 +234,7 @@ describe("Files changed: each finding is a note on its line", () => {
     const again = engine();
     await mount(<NotesOn v={OPEN()} originalCommits={2} />);
     const head = $('[data-testid="harness-head"]')!;
-    expect(head.querySelector('[data-testid="vr-original-first"]')!.textContent).toBe("2 commits: original as given → fixes");
+    expect(head.querySelector('[data-testid="vr-original-first"]')!.textContent).toBe("2 commits: original as given (secrets masked) → fixes");
     await press(head.querySelector('[data-testid="vr-revert-all"]'));
     await type(head.querySelector('[data-testid="vr-revert-all-reason"]'), "start over from the original");
     await press(head.querySelector('[data-testid="vr-revert-all-send"]'));
@@ -340,6 +340,26 @@ describe("Remove lines and the agent's proposal (dry run 2)", () => {
     expect(posts(calls)[0]).toMatchObject({ path: "/v1/changes/northgate-gateway/14/findings/V-07/override",
       body: { action: "remove", reason: "Internal admin surface; never for tenants.", head_sha: "fa05ac2d6d71e40d29aa1160c5d2c3ade3656f5d" } });
     expect(card.querySelector('[data-testid="vr-row-said"]')!.textContent).toBe("V-07 removed · re-checking now.");
+  });
+
+  it("dry run 5: the button counts the block the remove deletes on the branch, never 'Remove 1 line'", async () => {
+    engine();
+    const block = ["  - path: \"/v1/admin/accounts\"", "    max_body_bytes: 1048576",
+      ...(DRY2 as { validation: { input: { text: string } } }).validation.input.text.split("\n").slice(21, 33)];
+    expect(block).toHaveLength(14);
+    const v = dry2({ before: block.join("\n"), after: null, applicable: true });
+    v.input.text = "";      // the partner's text not at hand: removalBlock falls back to one line
+    await mount(<NotesOn v={v} change={14} />);
+    const card = note("V-07");
+    await press(card.querySelector('[data-testid="vr-remove"]'));
+    expect(card.querySelectorAll('[data-testid="vr-remove-lines"] span')).toHaveLength(14);
+    expect(card.querySelector('[data-testid="vr-remove-send"]')!.textContent).toBe("Remove 14 lines");
+  });
+
+  it("dry run 5: a masked original says so — 'original as given (secrets masked)'", async () => {
+    engine();
+    await mount(<NotesOn v={dry2()} change={14} originalCommits={2} />);
+    expect($('[data-testid="vr-original-first"]')!.textContent).toBe("2 commits: original as given (secrets masked) → fixes");
   });
 
   it("an engine that took the empty edit instead: the same press falls back to {action: edit, text: ''}", async () => {
