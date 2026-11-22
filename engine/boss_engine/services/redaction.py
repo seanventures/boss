@@ -98,14 +98,62 @@ def redact_secrets(text: str) -> str:
     return _apply(text, _SECRET_PATTERNS)[0] if text else text
 
 
+_CODE_EXPR = re.compile(r"[()\[\]{}<>$%]|^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$")
+
+
+def _secret_value(value: str, quoted: bool) -> bool:
+    """A value after a secret-named key (or ``token``/``Bearer``) that LOOKS like a credential,
+    not code: ``password: string``, ``token = jwt.encode(…)``, ``sort_key=lambda``,
+    ``api_key = os.environ[…]`` are code a reviewer must read as written."""
+    v = value.strip()
+    if not v or _CODE_EXPR.search(v):
+        return False
+    digit = any(ch.isdigit() for ch in v)
+    if quoted:
+        return digit or len(v) >= 12
+    return digit and any(ch.isalpha() for ch in v) and len(v) >= 8
+
+
+def mask_display(text: str) -> str:
+    """``redact_secrets`` for SOURCE CODE SHOWN IN REVIEW (diffs, blobs, commits): every token
+    shape a provider issues, a PEM block, a JWT and a URL password are masked as everywhere; a
+    ``name = value`` assignment or a ``token …`` phrase only when the value looks like a
+    credential (``_secret_value``), so ordinary code in every project's diff reads unchanged."""
+    if not text:
+        return text
+    from .build_services import scrub as _scrub_live
+    from .run_secret_redaction import scrub as _scrub_known
+
+    out = _scrub_known(_scrub_live(text))
+    for label, pattern in _SECRET_PATTERNS:
+        loose = label == "BEARER" or ("value" in pattern.groupindex and "name" in pattern.groupindex
+                                      and not pattern.pattern.startswith("(?<=://)"))
+
+        def _sub(m, _label=label, _loose=loose):
+            if "value" in m.re.groupindex:
+                if _loose and not _secret_value(
+                        m.group("value"), m.group("sep").rstrip().endswith(("'", '"'))):
+                    return m.group(0)
+                return f"{m.group('name')}{m.group('sep')}[{_label}]"
+            if _loose:
+                token = m.group(0).split(None, 1)[-1]
+                if not _secret_value(token, False):
+                    return m.group(0)
+            return f"[{_label}]"
+
+        out = pattern.sub(_sub, out)
+    return out
+
+
 def mask_content(value):
     """EVERY READ VIEW OF FILE CONTENT OR A DIFF (a change's files, compare, commits, a blob, the
-    project history): each string in the payload with its credential-shaped values masked by
-    the one masker (``redact_secrets``), so a partner's key committed or diffed is never shown
+    project history): each string in the payload with its credential-shaped values masked
+    (``mask_display``: the one masker's patterns, held to values that look like credentials so
+    ordinary code is never corrupted), so a partner's key committed or diffed is never shown
     (validation-review SPEC: "never in stored data or artifacts"). Dicts and lists are walked;
     anything else is returned as is."""
     if isinstance(value, str):
-        return redact_secrets(value)
+        return mask_display(value)
     if isinstance(value, dict):
         return {k: mask_content(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):

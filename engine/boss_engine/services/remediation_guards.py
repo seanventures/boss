@@ -26,7 +26,7 @@ CONFIG_ONLY_TESTS_RULE = (
     "repository's validator and contract tests are its checks, and BOSS removes such a test.")
 
 LESSON_ID_RE = re.compile(r"[ \t]*[(\[]?\bkgn_[0-9a-f]{6,}\b[)\]]?[,;]?")
-_COMMENT_RE = re.compile(r"//|#|/\*|^\s*\*|--|<!--")
+_COMMENT_RE = re.compile(r"(?<!:)//|(?<![\w/])#|/\*|^\s*\*|(?<![\w-])--(?!-)|<!--")
 
 
 def strip_lesson_ids(text: str, base: Optional[str] = None) -> str:

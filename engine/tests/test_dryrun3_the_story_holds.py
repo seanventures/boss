@@ -84,7 +84,7 @@ def test_a_later_build_inherits_the_changes_contract():
     got = f.lineage_contract(_C(), "northgate", "crun_follow", "crun_first", "boss/code/x")
     assert got["run_id"] == "crun_first" and got["remediate"]["input"] == TARGET
     assert got["state"]["original_commit"] == "abc123"
-    assert seen["me"] == "crun_follow" and seen["b"] == "boss/code/x"
+    assert seen["me"] == "crun_follow" and seen["root"] == "crun_first" and "b" not in seen
 
 
 # ── #2 the story is computed against the original ─────────────────────────────────────────────
@@ -152,6 +152,30 @@ def test_every_file_and_diff_view_masks_secret_shaped_values():
                "content": f"api_key: {KEY}", "n": 3}
     out = mask_content(payload)
     assert KEY not in str(out) and out["n"] == 3 and out["files"][0]["path"] == TARGET
+
+
+def test_masking_a_diff_never_rewrites_ordinary_code():
+    """A false positive would corrupt every project's diff: code after a secret-named key reads
+    as written; only credential-shaped values are masked."""
+    code = ("+    password: string;\n+    token = jwt.encode(payload, key)\n"
+            "+    api_key = os.environ[\"API_KEY\"]\n+    items.sort(key=lambda r: r.id)\n"
+            "+    cache_key: user_id\n+    secret = settings.secret\n"
+            "+    // the token refreshTokenExpiresAt is read below\n"
+            "+    primary_key=True, sort_key=created_at\n")
+    assert mask_content(code) == code
+    leaked = ('+  api_key: "lp_9f8e7d6c5b4a"\n+  password = "hunter2"\n'
+              "+  Authorization: Bearer abcdef0123456789xyz\n+  db: postgres://u:pw@h/db\n")
+    out = mask_content(leaked)
+    for s in ("lp_9f8e7d6c5b4a", "hunter2", "abcdef0123456789xyz", ":pw@"):
+        assert s not in out, s
+
+
+def test_a_lesson_id_inside_a_url_or_an_expression_is_code_not_a_comment():
+    from boss_engine.services.remediation_guards import strip_lesson_ids
+
+    code = 'get("http://x/v1/kgn_0123abcd")\ni--; y = "kgn_0123abcd"\n'
+    assert strip_lesson_ids(code) == code
+    assert strip_lesson_ids("x := 1 // per kgn_0123abcd\n") == "x := 1 // per\n"
 
 
 # ── #4 unnamed failing tests are unknown, never "old tests broke" ─────────────────────────────

@@ -438,7 +438,8 @@ def lineage_contract(connection: Any, project_id: str, run_id: str, root_run_id:
     review-fix run or a retry carries no ``remediate`` of its own, yet it writes the same
     target on the same branch, so it is held to the first build's contract (its declared
     ``remediate``, and the original commit its record names). ``{run_id, remediate, state}`` of
-    the lineage's first build that declared one (same root, or the same work branch); None when
+    the lineage's first build that declared one (same root only; ``branch`` is not matched,
+    a reused branch name never carries a contract to unrelated work); None when
     the change has no contract."""
     from sqlalchemy import text as _text
 
@@ -446,12 +447,11 @@ def lineage_contract(connection: Any, project_id: str, run_id: str, root_run_id:
         "SELECT id, spec->'remediate' AS r, state->'remediation' AS s FROM code_task_runs "
         "WHERE project_id = :p AND id <> :me AND spec->'remediate' IS NOT NULL "
         "AND jsonb_typeof(spec->'remediate') = 'object' "
-        "AND (id = :root OR finalize_ctx->>'root_run_id' = :root "
-        "     OR (:b <> '' AND (finalize_ctx->>'branch_name' = :b "
-        "                       OR finalize_ctx->>'work_branch' = :b))) "
+        # THE SAME LINEAGE ONLY (one root): a branch NAME is reused by unrelated work (a
+        # person's pushed branch, a release branch), so it never carries a contract across.
+        "AND (id = :root OR finalize_ctx->>'root_run_id' = :root) "
         "ORDER BY created_at LIMIT 1"),
-        {"p": project_id, "me": run_id, "root": str(root_run_id or run_id),
-         "b": str(branch or "")}).mappings().first()
+        {"p": project_id, "me": run_id, "root": str(root_run_id or run_id)}).mappings().first()
     if row is None:
         return None
 
