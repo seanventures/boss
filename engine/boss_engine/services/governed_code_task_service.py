@@ -7199,7 +7199,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _remediation = None
         if not use_microvm:
             try:
-                _remediation = _input_fidelity.contract(spec, instructions, root)
+                def _base_file(path: str, _gh=sf.github, _ref=repo_base_branch):
+                    # The validator and ruleset are TRUSTED from the PR's base branch, never the
+                    # branch this build writes (input_fidelity.contract).
+                    try:
+                        return _gh.read_text_file(_ref, path) if _ref else None
+                    except Exception:  # noqa: BLE001 — unreadable base: no repo declaration
+                        return None
+
+                _remediation = _input_fidelity.contract(spec, instructions, root,
+                                                        trusted=_base_file)
             except Exception:  # noqa: BLE001 — an unreadable contract is no contract, said
                 _log_caught(logger)
         if _remediation:

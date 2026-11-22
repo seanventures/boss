@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 SCHEMA = "boss.review_packet/v2"
@@ -426,6 +426,22 @@ def for_run(connection: Any, run_id: str, *, head_sha: Optional[str],
                         apply_overrides=apply_overrides)
 
 
+#: A re-run with no result after this is overdue: a person's forced merge gets past it
+#: (finding_overrides fails it with the reason when it next reads it).
+RERUN_STALE_AFTER = timedelta(minutes=15)
+
+
+def _when(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        d = value if isinstance(value, datetime) else datetime.fromisoformat(
+            str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
 def blocks_merge(rec: Mapping[str, Any], *, force: bool) -> Optional[tuple[str, str]]:
     """(code, message) when the card's packet refuses this merge: an invalid packet or a
     re-run in progress always; a blocked verdict (open P0/P1, a substituted input, a failing
@@ -439,7 +455,12 @@ def blocks_merge(rec: Mapping[str, Any], *, force: bool) -> Optional[tuple[str, 
         return ("packet_invalid", f"Packet invalid: {len(reasons)} rule(s) failed. Rebuild the "
                                   "packet before merging.")
     if "rerun_pending" in reasons:
-        return ("rerun_pending", "Re-checking after an override; merge when the re-run is done.")
+        started = _when((packet.get("rerun") or {}).get("created_at"))
+        stale = started is not None and datetime.now(timezone.utc) - started > RERUN_STALE_AFTER
+        if not (stale and force):
+            return ("rerun_pending", "Re-checking after an override; merge when the re-run is "
+                                     "done." + (" It is overdue: a person may merge anyway with "
+                                                "a stated reason." if stale else ""))
     if v.get("state") == "blocked" and not force:
         return ("packet_blocked", "Blocked: " + ", ".join(reasons[:6])
                 + ". A person may merge anyway with a stated reason.")

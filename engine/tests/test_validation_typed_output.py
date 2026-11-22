@@ -237,3 +237,50 @@ def test_severity_is_the_rulesets_else_the_tools_word():
     assert v.severity("no-inlined-secrets", "error", rs) == ("P0", "ruleset northgate v3")
     assert v.severity("pii-fields-declared", "warn", rs) == ("P2", "native:warn")
     assert v.severity("x", "error") == ("P1", "native:error")
+
+
+# ── trust: the branch never picks its own validator or lowers its own P0 (review of #278) ─────
+
+RULESET = """\
+ruleset: northgate
+version: 3
+rules:
+  no-inlined-secrets: {severity: P0, autofix: never}
+"""
+
+
+def test_the_build_reads_validator_and_ruleset_from_the_base_branch(tmp_path):
+    root = _repo(tmp_path)
+    (root / ".boss" / "rulesets").mkdir()
+    (root / ".boss" / "rulesets" / "northgate.yaml").write_text(RULESET.replace("P0", "P3"))
+    base = {".boss/validators.yaml": (FIX / "validators.yaml").read_text(),
+            ".boss/rulesets/northgate.yaml": RULESET}
+    c = f.contract(SPEC, "", root, trusted=base.get)
+    assert c["ruleset"]["rules"]["no-inlined-secrets"]["severity"] == "P0"
+    assert c["pending_config"] == [{"ruleset": "northgate", "sha": v.sha256(
+        RULESET.replace("P0", "P3"))[:12], "version": 3, "applied": False}]
+    # No declaration on the base: the branch's own validators.yaml is not used.
+    assert f.contract(SPEC, "", root, trusted=lambda p: None)["validator"] is None
+
+
+def test_a_ruleset_symlink_out_of_the_repo_is_not_read(tmp_path):
+    from boss_engine.services import rulesets
+
+    root = _repo(tmp_path)
+    (root / ".boss" / "rulesets").mkdir()
+    outside = tmp_path / "elsewhere.yaml"
+    outside.write_text(RULESET)
+    (root / ".boss" / "rulesets" / "northgate.yaml").symlink_to(outside)
+    assert rulesets.load(root, "northgate") is None
+    assert rulesets.load(root, "../elsewhere") is None
+
+
+def test_a_parse_error_names_the_place_never_the_content():
+    from boss_engine.services import rulesets
+
+    with pytest.raises(rulesets.RulesetError) as err:
+        rulesets.parse("ruleset: x\nrules: {a: [sk_live_" + "9" * 16 + "\n", path="r.yaml")
+    assert "sk_live_" not in str(err.value) and "line" in str(err.value)
+    with pytest.raises(v.ValidatorsError) as err:
+        v.parse("validators: [{id: x, run: 'token=SECRETVALUE {file}'\n")
+    assert "SECRETVALUE" not in str(err.value)

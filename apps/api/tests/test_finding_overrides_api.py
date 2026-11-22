@@ -104,7 +104,7 @@ def change(engine, monkeypatch, tmp_path):
     files = _files()
     branch = Branch(files)
     rec = _validation(tmp_path, files)
-    number = 9000 + int(uuid.uuid4().hex[:3], 16) % 999
+    number = 100000 + int(uuid.uuid4().hex[:7], 16) % 900000
     rid = f"crun_{uuid.uuid4().hex[:16]}"
     url = f"http://boss-local/acme/northgate/pull/{number}"
     with engine.begin() as c:
@@ -226,8 +226,16 @@ def test_c_a_p0_waive_without_an_approver_is_403(client, change):
     assert got.status_code == 403 and got.json()["error"] == "approver_required"
 
 
+def test_c_an_approver_who_is_not_a_person_with_merge_is_403(client, change):
+    fid = _id(_get(client, change), "cors-no-wildcard-with-credentials")
+    got = _override(client, change, fid, action="waive", reason="dashboard needs cookies",
+                    approver_id="agt_some_agent")
+    assert got.status_code == 403 and got.json()["error"] == "approver_cannot_merge"
+
+
 def test_c_with_an_approver_it_creates_a_decision_and_stays_open_until_approved(
-        engine, client, change):
+        engine, client, change, monkeypatch):
+    monkeypatch.setattr(fo, "approver_may_merge", lambda c, p, a: a == "usr_security_lead")
     fid = _id(_get(client, change), "cors-no-wildcard-with-credentials")
     got = _override(client, change, fid, action="waive", reason="dashboard needs cookies",
                     approver_id="usr_security_lead")
@@ -316,3 +324,104 @@ def test_the_schema_declares_both_tables():
     schema = (Path(__file__).resolve().parents[3] / "db" / "schema.sql").read_text()
     assert "CREATE TABLE IF NOT EXISTS finding_overrides" in schema
     assert "CREATE TABLE IF NOT EXISTS validation_reruns" in schema
+
+
+# ── review fixes: trust, liveness, GitHub, nits ────────────────────────────────────────────────
+
+def test_overrides_on_a_github_pull_request_are_refused_up_front(engine, client, change):
+    change.ch.kind = "github"
+    fid = _id(_get(client, change), "pii-fields-declared")
+    got = _override(client, change, fid, action="waive", reason="x")
+    assert got.status_code == 422 and got.json()["message"] == fo.GITHUB_UNSUPPORTED
+    with engine.begin() as c:
+        n = c.execute(text("SELECT count(*) FROM validation_reruns WHERE project_id = :p "
+                           "AND change_number = :n"), {"p": PID, "n": change.number}).scalar()
+    assert n == 0
+
+
+def test_the_rerun_uses_the_original_checks_validator_and_ruleset_not_the_branchs(
+        engine, client, change):
+    """The agent's branch swaps the command for one that reports nothing and lowers every P0:
+    the re-run still runs the recorded gwlint with the recorded ruleset."""
+    change.branch.files[".boss/validators.yaml"] = (FIX / "validators.yaml").read_text().replace(
+        "go run ./cmd/gwlint validate {file} --json", "true {file}")
+    change.branch.files[".boss/rulesets/northgate.yaml"] = RULESET.replace("P0", "P3")
+    fid = _id(_get(client, change), "pii-fields-declared")
+    got = _override(client, change, fid, action="waive", reason="partner confirmed")
+    ran: list[str] = []
+
+    def make_run(tree):
+        inner = _gwlint(tree)
+        return lambda cmd: (ran.append(cmd), inner(cmd))[1]
+    out = fo.execute_rerun(engine, None, got.json()["rerun"]["id"],
+                           do_checkout=lambda ch, tree: _tree(tree, change.branch.files),
+                           make_run=make_run)
+    assert out["state"] == "done", out
+    assert ran and all(cmd.startswith("go run ./cmd/gwlint") for cmd in ran)
+    with engine.begin() as c:
+        p = fo.packet(c, change.ch)
+    assert p["counts"]["P0"]["found"] == 4
+
+
+def test_a_rerun_whose_change_is_gone_is_recorded_failed(engine, client, change, monkeypatch):
+    fid = _id(_get(client, change), "pii-fields-declared")
+    rid = _override(client, change, fid, action="waive", reason="x").json()["rerun"]["id"]
+
+    def gone(*_a):
+        raise fo.OverrideError(404, "no_change", "There is no change.")
+    monkeypatch.setattr(fo, "change", gone)
+    out = fo.execute_rerun(engine, None, rid)
+    assert out["state"] == "failed" and "no change" in out["error"]
+    with engine.begin() as c:
+        assert c.execute(text("SELECT state FROM validation_reruns WHERE id = :i"),
+                         {"i": rid}).scalar() == "failed"
+
+
+def test_a_rerun_refuses_a_path_outside_the_repository(engine, client, change):
+    fid = _id(_get(client, change), "pii-fields-declared")
+    rid = _override(client, change, fid, action="waive", reason="x").json()["rerun"]["id"]
+    with engine.begin() as c:
+        c.execute(text("UPDATE code_task_runs SET state = jsonb_set(state, '{validation,target}', "
+                       "'\"../../etc/passwd\"') WHERE id = :i"), {"i": change.run_id})
+    out = _finish_rerun(engine, change, rid)
+    assert out["state"] == "failed" and "not inside the repository" in out["error"]
+
+
+def test_a_stale_rerun_is_failed_with_a_reason_and_a_forced_merge_gets_past_it(
+        engine, client, change):
+    fid = _id(_get(client, change), "pii-fields-declared")
+    rid = _override(client, change, fid, action="waive", reason="x").json()["rerun"]["id"]
+    with engine.begin() as c:
+        c.execute(text("UPDATE validation_reruns SET created_at = now() - interval '20 minutes' "
+                       "WHERE id = :i"), {"i": rid})
+        card = c.execute(text("SELECT recommendation FROM decisions WHERE id = :i"),
+                         {"i": change.decision}).scalar()
+    card["packet"]["rerun"]["created_at"] = "2020-01-01T00:00:00+00:00"   # the card's snapshot
+    assert rp.blocks_merge(card, force=False)[0] == "rerun_pending"
+    assert rp.blocks_merge(card, force=True) is None
+    state = _get(client, change)
+    assert state["rerun"]["state"] == "failed" and "minutes" in state["rerun"]["error"]
+    assert "rerun_failed" in state["packet"]["verdict"]["reasons"]
+    assert rp.blocks_merge({"packet": state["packet"]}, force=True) is None
+
+
+def test_revert_all_refuses_when_the_input_is_not_the_checked_file(client, change):
+    change.branch.files[INPUT] = change.branch.files[INPUT] + "# edited\n"
+    got = client.post(f"/v1/changes/{PID}/{change.number}/validation/revert-all",
+                      json={"head_sha": change.branch.sha, "reason": "start over"})
+    assert got.status_code == 409 and got.json()["error"] == "input_changed"
+
+
+def test_a_waive_expiry_is_compared_as_a_time():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc)
+    f1 = {"id": "V-02", "severity": "P2", "status": "open", "source": {"kind": "validator"}}
+    past = (now - timedelta(hours=1)).astimezone(timezone(timedelta(hours=5)))  # +05:00 sorts later as text
+    fo.apply([f1], [{"ref": "O-1", "action": "waive", "finding_id": "V-02",
+                     "expires_at": past.isoformat()}], now=now)
+    assert f1["status"] == "open"
+    f2 = {"id": "V-02", "severity": "P2", "status": "open", "source": {"kind": "validator"}}
+    fo.apply([f2], [{"ref": "O-1", "action": "waive", "finding_id": "V-02",
+                     "expires_at": now + timedelta(days=1)}], now=now)
+    assert f2["status"] == "waived"

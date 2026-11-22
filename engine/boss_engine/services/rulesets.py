@@ -8,8 +8,7 @@ its sha. Per rule: ``severity`` (P0–P3, the packet's P-level), ``enabled`` (fa
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 DIR = ".boss/rulesets"
 AUTOFIX = ("mechanical", "agent", "human", "never")
@@ -26,7 +25,9 @@ def parse(text: str, *, path: str = DIR) -> dict:
     try:
         data = yaml.safe_load(text) or {}
     except yaml.YAMLError as exc:
-        raise RulesetError(f"{path} does not parse: {str(exc)[:200]}") from exc
+        from .validators import yaml_where
+
+        raise RulesetError(f"{path} does not parse{yaml_where(exc)}") from None
     if not isinstance(data, Mapping) or not data.get("ruleset"):
         raise RulesetError(f"{path} needs `ruleset:`")
     rules: dict[str, dict] = {}
@@ -50,24 +51,35 @@ def parse(text: str, *, path: str = DIR) -> dict:
             "sha": hashlib.sha256(text.encode()).hexdigest()[:12]}
 
 
-def load(root: Any, name: Optional[str]) -> Optional[dict]:
-    """The ruleset named ``name`` in the repo (by its ``ruleset:`` key, or its file name);
-    None when there is none."""
-    if not name:
+def load(root: Any, name: Optional[str], read: Optional[Callable[[str], Optional[str]]] = None
+         ) -> Optional[dict]:
+    """The ruleset ``name``: ``.boss/rulesets/<name>.yaml`` (or ``.yml``). ``read(path)`` reads
+    from a TRUSTED ref (the base branch) instead of the working tree; a symlink that leaves the
+    repository is not read. None when there is none."""
+    from .validators import read_in_repo
+
+    if not name or "/" in str(name) or ".." in str(name):
         return None
-    d = Path(root) / DIR
-    if not d.is_dir():
-        return None
-    for p in sorted([*d.glob("*.yaml"), *d.glob("*.yml")]):
-        try:
-            rs = parse(p.read_text(), path=f"{DIR}/{p.name}")
-        except (OSError, RulesetError):
-            if p.stem == name:
-                raise
-            continue
-        if rs["ruleset"] == name or p.stem == name:
-            return rs
+    for ext in (".yaml", ".yml"):
+        rel = f"{DIR}/{name}{ext}"
+        text = read(rel) if read is not None else read_in_repo(root, rel)
+        if text:
+            return parse(text, path=rel)
     return None
+
+
+def unapplied(root: Any, name: Optional[str], trusted: Optional[Mapping[str, Any]]) -> Optional[dict]:
+    """A ruleset the CHANGE BRANCH edits (its sha differs from the trusted one): a pending
+    ruleset change, shown, never applied to this branch's own packet — so a build cannot
+    downgrade or disable the P0 it is judged by."""
+    try:
+        mine = load(root, name)
+    except RulesetError:
+        return {"ruleset": name, "sha": None, "applied": False}
+    if mine is None or (trusted or {}).get("sha") == mine.get("sha"):
+        return None
+    return {"ruleset": name, "sha": mine.get("sha"), "version": mine.get("version"),
+            "applied": False}
 
 
 def guides(rs: Optional[Mapping[str, Any]]) -> list[dict]:

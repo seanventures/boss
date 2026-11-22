@@ -34,6 +34,11 @@ COMMITS = frozenset({"reject", "edit", "revert_all"})
 WAIVE_ACTION = "waive_finding"
 JOB_KIND = "validation.rerun"
 REASON_MAX = 1000
+#: A re-run still pending/running after this is failed with its reason (a dead worker, a lost
+#: job) — never a merge held forever.
+STALE_AFTER = rp.RERUN_STALE_AFTER
+GITHUB_UNSUPPORTED = ("Overrides on GitHub pull requests are not supported yet; use the local "
+                      "change.")
 
 
 class OverrideError(Exception):
@@ -72,6 +77,7 @@ class Change:
     local_git_dir: Optional[Path] = None
     owner: str = ""
     name: str = ""
+    kind: str = "local"          # local | github
 
 
 def change(c: Any, settings: Any, project_id: str, number: int) -> Change:
@@ -108,7 +114,7 @@ def change(c: Any, settings: Any, project_id: str, number: int) -> Change:
     bound = adapter_for_repository(c, settings, project_id, f"{owner}/{name}")
     return Change(project_id, int(number), str(run["id"]), branch, run["pull_request_url"],
                   bound.adapter, lambda: str(bound.adapter.branch_snapshot(branch).get("sha") or ""),
-                  owner=owner, name=name)
+                  owner=owner, name=name, kind="github")
 
 
 # ── records ────────────────────────────────────────────────────────────────────────────────────
@@ -128,7 +134,31 @@ def overrides(c: Any, project_id: str, number: int) -> list[dict]:
     return out
 
 
+def _parse_ts(value: Any) -> Optional[datetime]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        d = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def expire_stale(c: Any, project_id: str, number: int) -> int:
+    """Fail re-runs pending/running past STALE_AFTER, with the reason."""
+    return c.execute(text(
+        "UPDATE validation_reruns SET state = 'failed', finished_at = now(), "
+        "error = 'no result after ' || :m || ' minutes (the worker did not finish it)' "
+        "WHERE project_id = :p AND change_number = :n AND state IN ('pending', 'running') "
+        "AND created_at < now() - make_interval(mins => :mi)"),
+        {"p": project_id, "n": int(number), "m": str(int(STALE_AFTER.total_seconds() // 60)),
+         "mi": int(STALE_AFTER.total_seconds() // 60)}).rowcount or 0
+
+
 def latest_rerun(c: Any, project_id: str, number: int) -> Optional[dict]:
+    expire_stale(c, project_id, number)
     row = c.execute(text(
         "SELECT * FROM validation_reruns WHERE project_id = :p AND change_number = :n "
         "ORDER BY created_at DESC LIMIT 1"), {"p": project_id, "n": int(number)}).mappings().first()
@@ -195,8 +225,8 @@ def apply(findings: list[dict], ovrs: Sequence[Mapping[str, Any]], *, now: Optio
                 f["fix_kind"] = "human"
             elif action == "waive" and f.get("status") in ("open", "reverted"):
                 approved = f.get("severity") != "P0" or bool(o.get("approved_at"))
-                expires = o.get("expires_at")
-                expired = bool(expires) and str(expires) < now.isoformat()
+                expires = _parse_ts(o.get("expires_at"))
+                expired = expires is not None and expires < now
                 if approved and not expired:
                     f["status"] = "waived"
             elif action == "reopen" and f.get("status") in ("waived", "fixed", "reverted"):
@@ -216,7 +246,10 @@ def packet(c: Any, ch: Change, *, head_sha: Optional[str] = None) -> Optional[di
     p = rp.for_run(c, str(run_id), head_sha=head_sha or ch.head(), change=ch.number,
                    followups=followups, validation=validation_of(c, ch),
                    packet_version=1 + len(ovrs),
-                   rerun=({"id": rr["id"], "state": rr["state"]} if rr else None),
+                   rerun=({"id": rr["id"], "state": rr["state"],
+                           "created_at": _iso(rr.get("created_at")),
+                           **({"error": rr["error"]} if rr.get("error") else {})}
+                          if rr else None),
                    apply_overrides=lambda fs: apply(fs, ovrs),
                    overrides=[{"id": o["ref"], "finding": o.get("finding_id"),
                                "action": o["action"], "actor": o.get("actor"),
@@ -226,6 +259,10 @@ def packet(c: Any, ch: Change, *, head_sha: Optional[str] = None) -> Optional[di
                                "commit_sha": o.get("commit_sha"), "at": o.get("created_at")}
                               for o in ovrs])
     return p
+
+
+def _iso(value: Any) -> Any:
+    return value.isoformat() if hasattr(value, "isoformat") else value
 
 
 def refresh_decision(c: Any, ch: Change, p: Optional[Mapping[str, Any]]) -> Optional[str]:
@@ -308,6 +345,14 @@ def override(c: Any, settings: Any, project_id: str, number: int, *, action: str
     if action not in (*ACTIONS, "revert_all"):
         raise OverrideError(422, "bad_action", f"Unknown action {action!r}.")
     ch = change(c, settings, project_id, number)
+    if ch.kind != "local":
+        raise OverrideError(422, "github_unsupported", GITHUB_UNSUPPORTED)
+    # ONE OVERRIDE AT A TIME per change: the change row (and a lock on its key, for a change
+    # with no row yet) is held to the end of this transaction.
+    c.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+              {"k": f"finding_overrides:{project_id}:{int(number)}"})
+    c.execute(text("SELECT id FROM local_change_sets WHERE project_id = :p AND number = :n "
+                   "FOR UPDATE"), {"p": project_id, "n": int(number)})
     head = ch.head()
     if not head_sha or head_sha != head:
         raise OverrideError(409, "stale_head", "The change moved on; review the newer packet.",
@@ -331,6 +376,9 @@ def override(c: Any, settings: Any, project_id: str, number: int, *, action: str
     if p0_waive and (not approver_id or approver_id == actor):
         raise OverrideError(403, "approver_required",
                             "Waiving a P0 needs a second person to approve: name them.")
+    if p0_waive and not approver_may_merge(c, project_id, str(approver_id)):
+        raise OverrideError(403, "approver_cannot_merge",
+                            "The approver must be a person on this project who can merge.")
     if action == "waive" and (finding or {}).get("source", {}).get("kind") == "validator" \
             and finding.get("status") == "fixed":
         raise OverrideError(409, "already_fixed", f"{finding_id} is already fixed.")
@@ -350,6 +398,11 @@ def override(c: Any, settings: Any, project_id: str, number: int, *, action: str
                      if h.get("id") == (finding or {}).get("hunk_id")), None)
         anchor = int(hunk["line"]) if hunk else None
         if action == "revert_all":
+            from .validators import sha256 as _sha
+
+            if _sha(input_text) != (validation.get("input") or {}).get("sha256"):
+                raise OverrideError(409, "input_changed",
+                                    f"`{inp}` on the branch is not the file the check received.")
             new_text = input_text
         elif action == "reject":
             if anchor is None:
@@ -391,6 +444,27 @@ def override(c: Any, settings: Any, project_id: str, number: int, *, action: str
     return {"override": {"id": oid, "ref": ref, "action": action, "finding_id": finding_id,
                          "commit_sha": commit_sha, "approval_decision": decision_id},
             "rerun": {"id": rerun_id, "state": "pending"}, "packet": p, "decision": card}
+
+
+def approver_may_merge(c: Any, project_id: str, approver_id: str) -> bool:
+    """The named approver is a PERSON (a user principal, not an agent, key or service) who holds
+    `github:merge` on this project."""
+    try:
+        from ..identity import P
+        from ..identity.authz import effective_permissions
+        from ..identity.principal import PrincipalKind
+        from ..identity.scope import ResolvedScope
+        from ..identity.users import load_principal
+
+        principal = load_principal(c, approver_id)
+        if principal is None or principal.kind != PrincipalKind.USER:
+            return False
+        held = effective_permissions(principal, ResolvedScope.in_project(principal.org_id,
+                                                                         project_id), db=c)
+        return P.GITHUB_MERGE in held.permissions
+    except Exception:  # noqa: BLE001 — an approver BOSS cannot check is not an approver
+        log.info("approver %s not checked", approver_id, exc_info=True)
+        return False
 
 
 def start_rerun(c: Any, ch: Change, *, head: str, finding_id: Optional[str]) -> str:
@@ -452,28 +526,80 @@ def _sandbox_run(workdir: Path, env: Mapping[str, str]) -> Callable[[str], Any]:
     return run
 
 
+def _safe_rel(path: Any) -> str:
+    p = str(path or "")
+    if not p or p.startswith("/") or "\\" in p or ".." in Path(p).parts:
+        raise OverrideError(409, "bad_path", f"Refusing the path {p!r}: not inside the repository.")
+    return p
+
+
+def trusted_validator(rec: Mapping[str, Any]) -> tuple[dict, Optional[dict]]:
+    """The validator and ruleset AS THE ORIGINAL CHECK TRUSTED THEM (its record), never what the
+    change branch now declares: the agent's branch cannot swap the command or lower a P0."""
+    v = rec.get("validator") or {}
+    if not v.get("run"):
+        raise OverrideError(409, "no_validator_command",
+                            "The original check recorded no validator command to re-run.")
+    rs = rec.get("ruleset")
+    ruleset = ({"ruleset": rs.get("id"), "version": rs.get("version"), "sha": rs.get("sha"),
+                "rules": rs.get("rules") or {}, "custom": rs.get("custom") or []}
+               if isinstance(rs, Mapping) and rs.get("rules") is not None else None)
+    return ({"name": v.get("id"), "check": v.get("run"), "fix": v.get("fix"),
+             "adapter": None if v.get("adapter") in (None, "json") else v.get("adapter"),
+             "rules_doc": v.get("rules_doc"), "version": v.get("version")}, ruleset)
+
+
+def _record(engine: Any, rerun_id: str, state_: str, rec: Optional[dict], error: Optional[str],
+            ch: Optional[Change], row: Mapping[str, Any]) -> dict:
+    with engine.begin() as c:
+        c.execute(text(
+            "UPDATE validation_reruns SET state = :s, validation = CAST(:v AS JSONB), error = :e, "
+            "finished_at = now() WHERE id = :i"),
+            {"s": state_, "v": json.dumps(rec) if rec is not None else None,
+             "e": (error or (rec or {}).get("error") or None), "i": rerun_id})
+        p = None
+        if ch is not None:
+            try:
+                with c.begin_nested():
+                    p = packet(c, ch, head_sha=row["head_sha"])
+                    refresh_decision(c, ch, p)
+            except Exception:  # noqa: BLE001 — the re-run's result stands; the card catches up
+                log.warning("packet not refreshed after re-run %s", rerun_id, exc_info=True)
+        emit_event(c, row["project_id"], f"validation.rerun_{state_}", "system", "validation_rerun",
+                   rerun_id, {"change": int(row["change_number"]), "error": error,
+                              "packet_version": (p or {}).get("packet_version")})
+    return {"ok": state_ == "done", "state": state_, "error": error}
+
+
 def execute_rerun(engine: Any, settings: Any, rerun_id: str, *,
                   do_checkout: Optional[Callable[[Change, Path], None]] = None,
                   make_run: Optional[Callable[[Path], Callable[[str], Any]]] = None) -> dict:
-    """Run one queued re-run to its end. Idempotent: a finished one is returned as is.
+    """Run one queued re-run to its end. Idempotent: a finished one is returned as is. Every
+    way it can fail — the change gone, the checkout, the command, a bad path — is RECORDED as
+    `failed` with the reason (the card then lets a person force the merge). The validator and
+    ruleset come from the original check's record (``trusted_validator``).
     ``do_checkout`` / ``make_run`` are seams for tests (the real ones need the toolchain)."""
     from . import input_fidelity, owned_process, sandbox_identity
-    from . import rulesets as _rulesets
-    from . import validators as _validators
 
     with engine.begin() as c:
         row = c.execute(text("SELECT * FROM validation_reruns WHERE id = :i"),
                         {"i": rerun_id}).mappings().first()
         if row is None:
             return {"ok": False, "error": f"no such re-run: {rerun_id}"}
+        row = dict(row)
         if row["state"] in ("done", "failed"):
-            return {"ok": True, "state": row["state"]}
+            return {"ok": row["state"] == "done", "state": row["state"]}
         c.execute(text("UPDATE validation_reruns SET state = 'running', started_at = now() "
                        "WHERE id = :i"), {"i": rerun_id})
-        ch = change(c, settings, row["project_id"], int(row["change_number"]))
-        before = validation_of(c, ch) or {}
+    ch: Optional[Change] = None
     rec, error = None, None
     try:
+        with engine.begin() as c:
+            ch = change(c, settings, row["project_id"], int(row["change_number"]))
+            before = validation_of(c, ch) or {}
+        inp = _safe_rel((before.get("input") or {}).get("file"))
+        target = _safe_rel(before.get("target"))
+        v, ruleset = trusted_validator(before)
         owner_id = f"vrerun_{rerun_id}"
         with owned_process.owner_scope("sandbox", owner_id, project_id=row["project_id"], fresh=True):
             with sandbox_identity.bind(owner_id, project_id=row["project_id"]) as ident:
@@ -482,14 +608,10 @@ def execute_rerun(engine: Any, settings: Any, rerun_id: str, *,
                 try:
                     tree = base / "src"
                     (do_checkout or _checkout)(ch, tree)
-                    inp = (before.get("input") or {}).get("file")
-                    target = before.get("target")
                     input_text = (tree / inp).read_text(errors="replace")
-                    v = _validators.for_path(tree, target, inp) or {}
                     contract = {"input": inp, "output": target, "answer_files": [],
                                 "validator": v, "source": "rerun", "_input_text": input_text,
-                                "_output_base": None, "_answer_texts": {},
-                                "ruleset": _rulesets.load(tree, v.get("ruleset"))}
+                                "_output_base": None, "_answer_texts": {}, "ruleset": ruleset}
                     if make_run is not None:
                         run = make_run(tree)
                     else:
@@ -497,23 +619,14 @@ def execute_rerun(engine: Any, settings: Any, rerun_id: str, *,
 
                         run = _sandbox_run(tree, tool_env(ident.home if ident else base))
                     rec = input_fidelity.public_validation(
-                        input_fidelity.run_validation(tree, contract, run))
+                        input_fidelity.run_validation(tree, contract, run, ruleset=ruleset))
                 finally:
                     if ident is None:
                         shutil.rmtree(base, ignore_errors=True)
+    except OverrideError as exc:
+        error = exc.message
     except Exception as exc:  # noqa: BLE001 — a re-run that cannot run is FAILED, with why
         log.warning("validation re-run %s failed", rerun_id, exc_info=True)
         error = f"{type(exc).__name__}: {str(exc)[:300]}"
     state_ = "failed" if error or rec is None or rec.get("error") else "done"
-    with engine.begin() as c:
-        c.execute(text(
-            "UPDATE validation_reruns SET state = :s, validation = CAST(:v AS JSONB), error = :e, "
-            "finished_at = now() WHERE id = :i"),
-            {"s": state_, "v": json.dumps(rec) if rec is not None else None,
-             "e": error or (rec or {}).get("error"), "i": rerun_id})
-        p = packet(c, ch, head_sha=row["head_sha"])
-        refresh_decision(c, ch, p)
-        emit_event(c, row["project_id"], f"validation.rerun_{state_}", "system", "validation_rerun",
-                   rerun_id, {"change": int(row["change_number"]),
-                              "packet_version": (p or {}).get("packet_version")})
-    return {"ok": state_ == "done", "state": state_, "error": error}
+    return _record(engine, rerun_id, state_, rec, error, ch, row)
