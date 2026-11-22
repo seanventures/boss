@@ -24,14 +24,19 @@ export function ValidationBuilt({ v, tests, later, fixesHref, testid }: {
   const pass = v.contract.filter((k) => k.got != null && String(k.got) === String(k.expect)).length;
   return (
     <div className="vr" data-testid={`${testid}-validation`}>
-      <div className="vr-funnel" data-testid={`${testid}-funnel`} aria-label={`${v.validator.id}: ${f.found} found, ${f.auto} auto-fixed, ${f.agent} by an agent, ${f.human} by you, ${f.waived} waived, ${f.open} open`}>
+      {/* The merge card's checks row prints the same counts (validationCounts): guard findings
+          included, and the open ones only a person can close, as "2 need you". */}
+      <div className="vr-funnel" data-testid={`${testid}-funnel`}
+           aria-label={`${v.validator.id}: ${f.found} found${f.guard ? `, ${f.guard} by BOSS's guard` : ""}, ${f.auto} auto-fixed, ${f.agent} by an agent, ${f.human} by a person, ${f.waived} waived, ${f.open} open, ${f.needYou} need you`}>
         <span>{v.validator.id || "validator"}</span><span className="n" data-tone="red">{f.found}</span><span className="vr-muted">found</span>
+        {f.guard ? <span className="vr-kind" data-kind="human" title="BOSS's guard: a security change no finding explains" data-testid={`${testid}-guard`}>+ {f.guard} guard</span> : null}
         <span className="arrow">→</span>
         {f.auto ? <span className="vr-kind" data-kind="auto">{f.auto} auto</span> : null}
         {f.agent ? <span className="vr-kind" data-kind="agent">{f.agent} agent</span> : null}
-        {f.human ? <span className="vr-kind" data-kind="human">{f.human} you</span> : null}
+        {f.human ? <span className="vr-kind" title="Fixed by a person's edit">{f.human} by a person</span> : null}
         {f.waived ? <span className="vr-kind">{f.waived} waived</span> : null}
-        <span className="arrow">→</span><span className="n" data-tone={f.open ? "red" : "green"}>{f.open}</span><span className="vr-muted">open</span>
+        <span className="arrow">→</span><span className="n" data-tone={f.open ? "red" : "green"} data-testid={`${testid}-open`}>{f.open}</span><span className="vr-muted">open</span>
+        {f.needYou ? <span className="vr-kind" data-kind="human" data-testid={`${testid}-you`} title="Open findings only a person can close: remove, edit or waive them">{f.needYou} need{f.needYou === 1 ? "s" : ""} you</span> : null}
       </div>
       <div className="vr-chips" style={{ marginBottom: 10 }} data-testid={`${testid}-sev`}>
         {(["P0", "P1", "P2", "P3"] as Sev[]).filter((s) => c[s].found).map((s) => (

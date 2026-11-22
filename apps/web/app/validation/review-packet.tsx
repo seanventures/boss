@@ -10,11 +10,11 @@ import React, { useState } from "react";
 import { ArrowClockwise, ArrowSquareOut, GitDiff, Warning } from "@phosphor-icons/react";
 
 import {
-  NOT_DEPLOYED, packetStale, rerunPath, rerunPending, sendOverride, lineTitle, lineWords, packetTally, workRefsOf, reasonRows, refTarget, rootTitle, shortId, shortSha, SEVS, sortFindings,
+  countsWords, isGuardFinding, isReviewFinding, NOT_DEPLOYED, OVERRIDE_VERBS, packetStale, partnerNow, rerunPath, rerunPending, sendOverride, lineTitle, lineWords, packetTally,
+  validationCounts, workRefsOf, reasonRows, refTarget, rootTitle, shortId, shortSha, SEVS, sortFindings,
   type Finding, type ReviewPacket, type Sev,
 } from "../../lib/validation-review";
-import { actorWords } from "../../lib/actor-words";
-import { KindBadge, RefChip, SevChip, Status } from "./kit";
+import { ActorName, KindBadge, RefChip, SevChip, Status } from "./kit";
 
 export type PacketLinks = { run: string; build: string; change: string };
 
@@ -52,6 +52,8 @@ export function packetHold(p: ReviewPacket | null, pending = false, currentHead:
 /** The rule (or seat) and where, as two parts: the rule on one clipped line, the place below it. */
 function ruleParts(f: Finding): { rule: string; where: string } {
   if (f.source.kind === "validator" || !f.source.kind) return { rule: f.source.rule_id || f.id, where: lineWords(f) };
+  // A guard on the partner's file: its line is the partner's, like every validator row (gap 11).
+  if (isGuardFinding(f) && f.location.partner_line != null) return { rule: f.source.rule_id || f.source.name, where: lineWords(f) };
   const file = (f.location.file || "").split("/").pop() ?? "";
   return { rule: f.source.name || f.source.kind, where: file ? `${file}${f.location.line != null ? `:${f.location.line}` : ""}` : lineWords(f) };
 }
@@ -75,23 +77,25 @@ function StatusCell({ f }: { f: Finding }) {
 }
 
 function FindingRow({ f }: { f: Finding }) {
-  const kind = f.followup && !f.blocks ? "none" : f.override && (f.override.action === "edit" || f.override.action === "reject") ? "human" : f.fix_kind;
+  const kind = f.followup && !f.blocks ? "none" : f.override && (f.override.action === "edit" || f.override.action === "reject" || f.override.action === "remove") ? "human" : f.fix_kind;
   const { rule, where } = ruleParts(f);
   const reviewer = Boolean(f.source.kind && f.source.kind !== "validator");
-  const was = f.original ?? "(none)";
-  const now = f.fixed ?? "(removed)";
+  // Never "→ (removed)" for a line still on the branch (gap 7): partnerNow says what is true.
+  const pn = partnerNow(f);
+  const was = pn.before;
+  const now = pn.after;
   // Long values are clipped to one line each; the whole value is the cell's tooltip.
   return (
     <tr data-sev={f.severity} id={refTarget(f.id)} data-testid="vr-packet-row" data-finding={f.id}>
       <td className="vr-mono vr-id vr-c-id">{f.id}</td>
-      <td className="vr-mono vr-c-rule" title={[rule, where, f.location.line == null ? lineTitle(f) : ""].filter(Boolean).join(" · ")}>
+      <td className="vr-mono vr-c-rule" title={[rule, lineTitle(f) || where].filter(Boolean).join(" · ")}>
         <span className="vr-clip">{rule}</span>
         {where || f.unmapped ? <span className="vr-where">{where}{f.unmapped ? <> <span className="vr-kind" title="No rule or standard named: counted as P2">unmapped</span></> : null}</span> : null}
       </td>
       <td className="vr-ba vr-c-ba" title={reviewer ? f.title || f.original || "" : `${was} → ${now}`}>
         {reviewer
           ? <span className="vr-muted vr-clip2">{f.title || f.original}</span>
-          : <><span className="b vr-clip">{was}</span><span className="x vr-clip">→ {now}</span></>}
+          : <><span className="b vr-clip">{was}</span><span className="x vr-clip" data-kind={pn.kind} data-testid="vr-packet-now">→ {now}</span></>}
       </td>
       <td className="vr-c-fix">{f.followup && !f.blocks ? <span className="vr-kind">follow-up</span> : <KindBadge kind={kind} label={kind === "human" ? "you" : undefined} />}</td>
       <td className="vr-c-st"><StatusCell f={f} /></td>
@@ -186,18 +190,30 @@ function ChangedVsPartner({ p }: { p: ReviewPacket }) {
 
 function Checks({ p }: { p: ReviewPacket }) {
   const contractPass = p.contract.filter((c) => c.got != null && String(c.got) === String(c.expect)).length;
+  // THE SAME COUNT the Work panel's funnel shows (validationCounts), guard findings included; a
+  // thin packet with no findings keeps the engine's own row.
+  const counted = p.findings.some((f) => !isReviewFinding(f));
+  const rowOf = (id: string, i: number) => {
+    const mine = p.findings.filter((f) => !isReviewFinding(f) && ((!isGuardFinding(f) && (f.source.name === id || p.validators.length === 1)) || (isGuardFinding(f) && i === 0)));
+    return validationCounts(mine, p.validators[i]?.before ?? 0);
+  };
   if (!p.validators.length && !p.tests.length && !p.contract.length) return null;
   return (
     <div>
       <div className="vr-k">Checks</div>
       <table><tbody>
-        {p.validators.map((v) => (
-          <tr key={v.id} id={v.evidence ? refTarget(v.evidence) : undefined}>
-            <td className="vr-mono vr-id">{v.id}</td>
-            <td className="vr-mono" style={{ color: v.after_open ? "var(--v2-red)" : "var(--v2-green)" }}>{v.before} → {v.after_open} open{v.after_waived ? ` · ${v.after_waived} waived` : ""}</td>
-            <td>{v.evidence ? <RefChip id={v.evidence} /> : null}</td>
-          </tr>
-        ))}
+        {p.validators.map((v, i) => {
+          const c = counted ? rowOf(v.id, i) : null;
+          const open = c ? c.open : v.after_open;
+          const waived = c ? c.waived : v.after_waived;
+          return (
+            <tr key={v.id} id={v.evidence ? refTarget(v.evidence) : undefined} data-testid="vr-check-validator">
+              <td className="vr-mono vr-id">{v.id}</td>
+              <td className="vr-mono" style={{ color: open ? "var(--v2-red)" : "var(--v2-green)" }}>{c ? countsWords(c) : `${v.before} → ${v.after_open} open`}{waived ? ` · ${waived} waived` : ""}</td>
+              <td>{v.evidence ? <RefChip id={v.evidence} /> : null}</td>
+            </tr>
+          );
+        })}
         {p.tests.map((t) => (
           <tr key={t.id} id={refTarget(t.id)}>
             <td className="vr-mono vr-id">{t.suite}</td>
@@ -219,7 +235,6 @@ function Checks({ p }: { p: ReviewPacket }) {
 
 function Overrides({ p }: { p: ReviewPacket }) {
   if (!p.overrides.length) return null;
-  const verb: Record<string, string> = { accept: "accept", reject: "reject", edit: "reject+edit", waive: "waive", reopen: "reopen", revert_all: "revert all" };
   return (
     <div>
       <div className="vr-k">Overrides ({p.overrides.length})</div>
@@ -227,7 +242,7 @@ function Overrides({ p }: { p: ReviewPacket }) {
         {p.overrides.map((r) => (
           <tr key={r.id} id={refTarget(r.id)} data-testid="vr-override-row">
             <td className="vr-mono vr-id">{r.id}</td>
-            <td className="vr-small">{verb[r.action]}{r.finding_id ? ` ${r.finding_id}` : ""} · {actorWords(r.actor)}{r.action === "waive" && r.reason ? ` · “${r.reason}”` : ""}</td>
+            <td className="vr-small" data-action={r.action}><ActorName id={r.actor} name={r.actor_name} /> {OVERRIDE_VERBS[r.action]}{r.finding_id ? ` ${r.finding_id}` : ""}{(r.action === "waive" || r.action === "remove") && r.reason ? ` · “${r.reason}”` : ""}</td>
           </tr>
         ))}
       </tbody></table>

@@ -136,7 +136,7 @@ describe("the Work panel's Built column", () => {
   it("shows the gwlint funnel, the P0/P1 chips and See every fix — never prose", async () => {
     await mount(<ValidationBuilt v={parseValidation(VALIDATION_OPEN)!} tests={{ passed: true, count: null, label: "go test ./... pass" }}
                                  later={[{ key: "a", line: "More tests (+172 test lines)" }]} fixesHref="/changes/northgate-gateway/9?tab=validation" testid="wp" />);
-    expect($('[data-testid="wp-funnel"]')!.textContent).toBe("gwlint9found→4 auto→5open");
+    expect($('[data-testid="wp-funnel"]')!.textContent).toBe("gwlint9found→4 auto→5open1 needs you");
     expect($('[data-testid="wp-sev"]')!.textContent).toContain("4 found · 3 open");
     expect($('[data-testid="wp-see-fixes"]')!.getAttribute("href")).toBe("/changes/northgate-gateway/9?tab=validation");
   });
@@ -174,7 +174,7 @@ describe("the ruleset editor (§4)", () => {
     expect(post.body).toMatchObject({ base_version: 3, base_sha: "a1b2c3d" });
     const sent = (post.body!.rules as { id: string; guide: string }[]).find((r) => r.id === "cors-no-wildcard-with-credentials")!;
     expect(sent.guide).toBe("Default to allow_credentials: false. Keep credentials only if the partner named exact origins.");
-    expect($('[data-testid="vr-ruleset-said"]')!.textContent).toContain("change #11");
+    expect($('[data-testid="vr-ruleset-opened"]')!.textContent).toContain("opened as change #11");
   });
 
   it("lowering a P0 says it needs a second approver", async () => {

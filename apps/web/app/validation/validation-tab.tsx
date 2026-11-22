@@ -11,17 +11,16 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowCounterClockwise, Check, FileText, MagnifyingGlass, PencilSimple, ShieldCheck, ShieldWarning, X,
+  ArrowCounterClockwise, Check, FileText, MagnifyingGlass, PencilSimple, ShieldCheck, ShieldWarning, Trash, X,
 } from "@phosphor-icons/react";
 
 import { idGet, IdentityError, refusalSentence } from "../../lib/identity/api";
 import {
-  groupBySeverity, isMissingRoute, lineTitle, lineWords, NOT_DEPLOYED, STALE, overridePath, parseValidation, refTarget, revertAllPath,
-  SEV_WORDS, sendOverride, shortSha, sortFindings, validationPath,
-  type Finding, type Fix, type Override, type OverrideAction, type Validation,
+  groupBySeverity, isMissingRoute, isProposalGone, lineTitle, lineWords, NOT_DEPLOYED, OVERRIDE_VERBS, PROPOSAL_GONE, STALE, overridePath, parseValidation,
+  refTarget, removalBlock, revertAllPath, SEV_WORDS, sendOverride, sendRemove, shortSha, sortFindings, validationPath,
+  type Finding, type Fix, type Override, type OverrideAction, type OverrideResult, type Validation,
 } from "../../lib/validation-review";
-import { actorWords } from "../../lib/actor-words";
-import { KindBadge, RefChip, SevChip, Status, jumpToRef } from "./kit";
+import { ActorName, KindBadge, RefChip, SevChip, Status, jumpToRef } from "./kit";
 
 type ReadState = "loading" | "ready" | "missing" | "error";
 
@@ -161,7 +160,7 @@ function Findings({ v, picked, onPick }: { v: Validation; picked: string; onPick
 // ── 3 fixes, one per finding ────────────────────────────────────────────────────────────────
 
 /** What a press answers: ok, and the words shown NEXT TO THE ROW (never a line at the top). */
-export type Sent = { ok: boolean; text: string };
+export type Sent = { ok: boolean; text: string; code?: string };
 type Send = (f: Finding | null, action: OverrideAction, extra?: { text?: string; reason?: string; approver_id?: string; expires_at?: string }) => Promise<Sent>;
 
 const splitLines = (x: string | null | undefined) => (x == null || x === "" ? [] : x.split("\n"));
@@ -180,11 +179,28 @@ export function hunkLines(f: Finding, all: Fix[]): { partner: string[]; now: str
   return { partner: own.flatMap((x) => splitLines(x.before)), now: own.flatMap((x) => splitLines(x.after)) };
 }
 
-function DiffLines({ fixes, f }: { fixes: Fix[]; f: Finding }) {
+/**
+ * The finding's own change. Its fixes; else the hunk it points at (V-06's CORS fix is the
+ * allow_origins line in h-04, not its own allow_credentials line); else its line. A line still on
+ * the branch (an open finding, or one the fix left as it was) is CONTEXT, never a "-": an open
+ * P0 must not read as if its line were already deleted (dry run 2, gap 7).
+ */
+function DiffLines({ fixes, hunk, f }: { fixes: Fix[]; hunk: Fix[]; f: Finding }) {
   // One entry per changed line (engine), or one entry holding several lines (older records).
   const split = (x: string | null) => (x == null || x === "" ? [] : x.split("\n"));
-  const minus = fixes.length ? fixes.flatMap((x) => split(x.before)) : split(f.original && f.original !== "(none)" ? f.original : "");
-  const plus = fixes.length ? fixes.flatMap((x) => split(x.after)) : split(f.fixed ?? "");
+  const own = fixes.length ? fixes : hunk;
+  const was = f.original && f.original !== "(none)" ? f.original : "";
+  const closed = f.status === "fixed" || f.status === "overridden";
+  if (!own.length && was && (f.fixed == null ? !closed : f.fixed.trim() === was.trim())) {
+    return (
+      <pre data-testid="vr-diff-lines" data-kind="unchanged">
+        {split(was).map((l, i) => <span key={`c${i}`} className="c">  {l}</span>)}
+        <span className="vr-dim" data-testid="vr-diff-unchanged">{closed ? "unchanged on the branch" : "still on the branch · not fixed yet"}</span>
+      </pre>
+    );
+  }
+  const minus = own.length ? own.flatMap((x) => split(x.before)) : split(was);
+  const plus = own.length ? own.flatMap((x) => split(x.after)) : split(f.fixed ?? "");
   if (!minus.length && !plus.length) return null;
   return (
     <pre data-testid="vr-diff-lines">
@@ -195,26 +211,30 @@ function DiffLines({ fixes, f }: { fixes: Fix[]; f: Finding }) {
 }
 
 function OverrideRecord({ r }: { r: Override }) {
-  const verb: Record<string, string> = { accept: "accepted the fix", reject: "rejected the fix (hunk reverted)", edit: "edited the line by hand",
-    waive: "waived it", reopen: "reopened it", revert_all: "reverted the file to the partner's original" };
+  const verb: Record<OverrideAction, string> = { accept: "accepted the fix", reject: "rejected the fix (hunk reverted)", edit: "edited the lines",
+    waive: "waived it", reopen: "reopened it", revert_all: "reverted the file to the partner's original", remove: "removed the lines" };
   const at = r.at ? new Date(r.at) : null;
   return (
-    <div className="vr-ovrec" id={refTarget(r.id)} data-testid="vr-override-record">
-      <div><b>{r.id} · {actorWords(r.actor)}</b> {verb[r.action]}{at && !Number.isNaN(at.getTime()) ? ` · ${at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}</div>
+    <div className="vr-ovrec" id={refTarget(r.id)} data-testid="vr-override-record" data-action={r.action}>
+      <div><b>{r.id} · <ActorName id={r.actor} name={r.actor_name} /></b> {verb[r.action] ?? OVERRIDE_VERBS[r.action]}{at && !Number.isNaN(at.getTime()) ? ` · ${at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}</div>
       {r.reason || r.commit_sha || r.rerun_id ? (
         <div style={{ marginTop: 3 }}>{r.reason ? `Why: “${r.reason}”` : null} {r.commit_sha ? <span className="vr-ref">commit {shortSha(r.commit_sha)}</span> : null}{" "}
           {r.rerun_id ? (/^[A-Z]-\d+$/.test(r.rerun_id) ? <RefChip id={r.rerun_id} label={`re-run ${r.rerun_id}`} />
             : <span className="vr-muted vr-small">re-checked</span>) : null}</div>
       ) : null}
-      {r.approver && !r.approved_at ? <div style={{ marginTop: 3 }} className="vr-unexplained">Waiting on {actorWords(r.approver)} to approve the P0 waive</div> : null}
+      {r.approver && !r.approved_at ? <div style={{ marginTop: 3 }} className="vr-unexplained">Waiting on <ActorName id={r.approver} /> to approve the P0 waive</div> : null}
     </div>
   );
 }
 
-function FixCard({ f, fixes, hunk, record, send, disabled, disabledWhy, guideVersion }: {
-  f: Finding; fixes: Fix[]; hunk: { partner: string[]; now: string[] }; record: Override | null; send: Send; disabled: boolean; disabledWhy: string; guideVersion: string;
+function FixCard({ f, fixes, hunkFixes, hunk, record, send, disabled, disabledWhy, guideVersion, inputText, target }: {
+  f: Finding; fixes: Fix[]; hunkFixes: Fix[]; hunk: { partner: string[]; now: string[] }; record: Override | null; send: Send; disabled: boolean; disabledWhy: string; guideVersion: string;
+  /** The partner's bytes (for the block "Remove these lines" shows), and the branch's file name. */
+  inputText: string; target: string;
 }) {
-  const [mode, setMode] = useState<"" | "edit" | "waive" | "reject">("");
+  const [mode, setMode] = useState<"" | "edit" | "waive" | "reject" | "remove">("");
+  // The engine said the agent's proposal cannot be applied any more (409 proposal_gone).
+  const [gone, setGone] = useState(false);
   const startText = (hunk.now.length ? hunk.now : hunk.partner).join("\n");
   const [text, setText] = useState(startText);
   const [reason, setReason] = useState("");
@@ -231,6 +251,7 @@ function FixCard({ f, fixes, hunk, record, send, disabled, disabledWhy, guideVer
     setBusy(true); setSaid(null);
     try {
       const r = await send(f, action, extra);
+      if (!r.ok && action === "accept" && r.code && isProposalGone(r.code)) { setGone(true); return; }   // said once, on the proposal
       setSaid({ text: r.text, tone: r.ok ? "" : "red" });
       if (r.ok) { setMode(""); setReason(""); }
     } finally {
@@ -245,9 +266,14 @@ function FixCard({ f, fixes, hunk, record, send, disabled, disabledWhy, guideVer
   };
   const fix = fixes[0];
   const accepted = record?.action === "accept";
-  // The agent's refused change for a `human` / `never` rule: Accept commits it (engine).
+  // The agent's refused change for a `human` / `never` rule: Accept commits it (engine) — only
+  // while it can still be applied; otherwise the card says so and offers Edit or Remove.
   const refused = f.status === "open" ? f.proposed : null;
-  const proposed = (Boolean(fix || f.fixed != null) || !!refused?.applicable) && f.status === "open";
+  const refusedOk = !!refused?.applicable && !gone;
+  const proposed = f.status === "open" && (refused ? refusedOk : Boolean(fix || f.fixed != null));
+  // "Remove these lines": a "Needs you" finding still open (a route to drop, a secret to delete).
+  const block = f.status === "open" && f.fix_kind === "human" ? removalBlock(inputText, f) : null;
+  const span = (b: { from: number; to: number }) => (b.to > b.from ? `lines ${b.from}–${b.to}` : `line ${b.from}`);
   const waitingApproval = f.status === "open" && record?.action === "waive" && !record.approved_at;
   const settled = f.status === "overridden" || f.status === "waived" || f.status === "reverted";
   const off = disabled || busy;
@@ -267,10 +293,11 @@ function FixCard({ f, fixes, hunk, record, send, disabled, disabledWhy, guideVer
           : f.status === "open" ? <KindBadge kind={f.fix_kind} label={f.fix_kind === "auto" && fix ? "auto · --fix" : undefined} /> : <Status st={f.status} />}
       </div>
       {f.title ? <div className="vr-guide">{f.title}</div> : null}
-      <DiffLines fixes={fixes} f={f} />
+      <DiffLines fixes={fixes} hunk={hunkFixes} f={f} />
       {refused ? (
-        <div data-testid="vr-proposed">
-          <span className="vr-muted vr-small">Needs you · the agent proposed (not applied){refused.applicable ? "" : " · write it with Edit"}</span>
+        <div data-testid="vr-proposed" data-applicable={refusedOk ? "" : undefined}>
+          <span className="vr-muted vr-small">Needs you · the agent proposed (not applied)</span>
+          {refusedOk ? null : <span className="vr-said" data-tone="amber" role="note" style={{ display: "block", padding: "2px 10px" }} data-testid="vr-proposal-gone">{PROPOSAL_GONE}</span>}
           <pre data-testid="vr-proposed-lines">
             {(refused.before ?? "").split("\n").filter(Boolean).map((l, i) => <span key={`d${i}`} className="d">- {l}</span>)}
             {(refused.after ?? "").split("\n").filter(Boolean).map((l, i) => <span key={`a${i}`} className="a">+ {l}</span>)}
@@ -279,7 +306,21 @@ function FixCard({ f, fixes, hunk, record, send, disabled, disabledWhy, guideVer
       ) : null}
       {f.guide && f.status === "open" ? <div className="vr-guide">guide {guideVersion}: {f.guide}</div> : null}
       {record ? <OverrideRecord r={record} /> : null}
-      {mode === "edit" ? (
+      {mode === "remove" && block ? (
+        <form className="vr-form" onSubmit={(e) => { e.preventDefault(); if (reason.trim() && !off) void run("remove", { reason }); }} data-testid="vr-remove-form">
+          <span className="vr-muted vr-small" title={block.offset ? `On the branch: ${span({ from: block.from + block.offset, to: block.to + block.offset })} of ${target || "the target"}` : undefined}
+                data-testid="vr-remove-where">
+            Deletes {span(block)} of the partner&apos;s file{target ? ` from ${target}` : ""} · {block.lines.length} line{block.lines.length === 1 ? "" : "s"} · one commit on the change</span>
+          <pre className="vr-ref-lines vr-remove-lines" data-testid="vr-remove-lines">
+            {block.lines.map((l, i) => <span key={i} className="d">- {l}</span>)}
+          </pre>
+          <label className="vr-muted vr-small" htmlFor={`vr-remove-${f.id}`}>Why remove them? <span className="vr-dim">(required · recorded on the change)</span></label>
+          <textarea id={`vr-remove-${f.id}`} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Recorded on the change" data-testid="vr-remove-reason" />
+          <div className="vr-row"><span className="vr-grow" />{cancel}
+            <button type="submit" className="vr-btn" data-kind="danger" disabled={off || !reason.trim()} title={tip ?? (!reason.trim() ? "Write why first" : undefined)}
+                    data-testid="vr-remove-send"><Trash size={12} aria-hidden />Remove {block.lines.length} line{block.lines.length === 1 ? "" : "s"}</button></div>
+        </form>
+      ) : mode === "edit" ? (
         <form className="vr-form" onSubmit={(e) => { e.preventDefault(); if (!editWhy && !off) void run("edit", { text, reason }); }} data-testid="vr-edit-form">
           {hunk.partner.length ? (
             <>
@@ -333,6 +374,7 @@ function FixCard({ f, fixes, hunk, record, send, disabled, disabledWhy, guideVer
                 : proposed || f.status === "fixed" ? btn(<><Check size={12} aria-hidden />Accept</>, () => void run("accept"), "vr-accept", "mint") : null}
               {(fix || f.hunk_id) && f.fix_kind !== "none" ? btn(<><X size={12} aria-hidden />Reject (revert hunk)…</>, () => open("reject"), "vr-reject") : null}
               {btn(<><PencilSimple size={12} aria-hidden />Edit lines</>, () => open("edit"), "vr-edit")}
+              {block ? btn(<><Trash size={12} aria-hidden />Remove these lines…</>, () => open("remove"), "vr-remove", "danger") : null}
               {f.status === "open" ? btn("Waive…", () => open("waive"), "vr-waive", "ghost") : null}
             </>
           )}
@@ -424,15 +466,17 @@ export function ValidationFlow({ v, projectId, change, onChanged, testid = "vr-v
     flight.current = true;
     try {
       const path = f ? overridePath(projectId, change, f.id) : revertAllPath(projectId, change);
-      const r = await sendOverride(path, { ...(f ? { action } : {}), ...extra, head_sha: v.head_sha });
+      const r: OverrideResult = f && action === "remove"
+        ? await sendRemove(path, { reason: extra.reason ?? "", head_sha: v.head_sha })
+        : await sendOverride(path, { ...(f ? { action } : {}), ...extra, head_sha: v.head_sha });
       if (r.missing) { setMissing(true); return { ok: false, text: NOT_DEPLOYED }; }
       if (r.stale) { onChanged(); return { ok: false, text: STALE }; }
-      if (!r.ok) return { ok: false, text: r.error ?? "That did not go through." };
+      if (!r.ok) return { ok: false, text: r.error ?? "That did not go through.", code: r.code };
       const waitsOn = Boolean(r.body && (r.body as { decision?: unknown }).decision) && action === "waive" && f?.severity === "P0";
       setSentAt(v);
       onChanged();
       return { ok: true, text: waitsOn ? `${f!.id}: waive sent for approval · it stays open until they say yes.`
-        : `${f ? `${f.id}: ${action}` : "Reverted to the partner's original"} recorded · re-checking now.` };
+        : `${f ? `${f.id} ${OVERRIDE_VERBS[action]}` : "Reverted to the partner's original"} · re-checking now.` };
     } finally {
       flight.current = false;
     }
@@ -475,8 +519,9 @@ export function ValidationFlow({ v, projectId, change, onChanged, testid = "vr-v
             <span className="vr-mono vr-muted vr-tiny">{new Set(v.fixes.map((x) => x.hunk_id).filter(Boolean)).size} hunks</span></div>
           <div className="vr-col-b">
             {ordered.filter((f) => !extra.includes(f)).map((f) => (
-              <FixCard key={f.id} f={f} fixes={fixesBy.get(f.id) ?? []} hunk={hunkLines(f, v.fixes)} record={recordOf(f)} send={send} disabled={!!disabledWhy} disabledWhy={disabledWhy}
-                       guideVersion={v.ruleset.version != null ? `v${v.ruleset.version}` : ""} />
+              <FixCard key={f.id} f={f} fixes={fixesBy.get(f.id) ?? []} hunkFixes={f.hunk_id ? v.fixes.filter((x) => x.hunk_id === f.hunk_id) : []}
+                       hunk={hunkLines(f, v.fixes)} record={recordOf(f)} send={send} disabled={!!disabledWhy} disabledWhy={disabledWhy}
+                       guideVersion={v.ruleset.version != null ? `v${v.ruleset.version}` : ""} inputText={v.input.text} target={v.target} />
             ))}
             {unexplained.length ? (
               <div className="vr-diff" data-testid="vr-unexplained-fixes">

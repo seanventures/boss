@@ -224,7 +224,8 @@ describe("#11 a removed line shows the partner's line", () => {
     engine();
     await mount(<ValidationFlow v={val} projectId="northgate-gateway" change={11} onChanged={() => {}} />);
     const p0 = $$('[data-testid="vr-grp-P0"] [data-testid="vr-finding"] .line').map((e) => e.textContent);
-    expect(p0).toEqual(["L17", "L20", "L21", "L37"]);
+    // The partner's lines (dry run 2, gap 11): the upstream's branch line 37 is its partner line 35.
+    expect(p0).toEqual(["L17", "L20", "L21", "L35"]);
     expect(p0).not.toContain("—");
     expect(fix("V-05").textContent).toContain("· L17");
   });
