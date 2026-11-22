@@ -113,6 +113,131 @@ def render(base: Mapping[str, Any], version: int, rules: Sequence[Mapping[str, A
     return body, _rulesets.parse(body, path="proposal")
 
 
+# ── the smallest edit of the file a person changed ─────────────────────────────────────────────
+
+_ENTRY = re.compile(r"^(?P<indent>\s+)(?P<key>[^\s#:][^:#]*?)\s*:(?P<rest>.*)$")
+_TOP = re.compile(r"^(?P<key>[A-Za-z_][\w-]*)\s*:(?P<rest>.*)$")
+
+
+def _scalar(value: Any) -> str:
+    """A YAML scalar for a flow or block entry: a plain word when it is one, else JSON's double
+    quotes (valid YAML)."""
+    import json
+
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    text_ = str(value)
+    if re.fullmatch(r"[A-Za-z0-9_.-]+", text_) and text_.lower() not in (
+            "true", "false", "yes", "no", "null", "on", "off", "~"):
+        return text_
+    return json.dumps(text_, ensure_ascii=False)
+
+
+def _fields(rule: Mapping[str, Any]) -> list[tuple[str, Any]]:
+    out: list[tuple[str, Any]] = []
+    for k in ("severity", "autofix"):
+        if rule.get(k) is not None:
+            out.append((k, rule[k]))
+    if rule.get("enabled") is False:
+        out.append(("enabled", False))
+    if rule.get("guide"):
+        out.append(("guide", rule["guide"]))
+    return out
+
+
+def _entry_lines(rid: str, rule: Mapping[str, Any], *, indent: str, flow: bool, pad: str,
+                 child: str) -> list[str]:
+    pairs = _fields(rule)
+    if flow:
+        return [f"{indent}{rid}:{pad}{{" + ", ".join(f"{k}: {_scalar(v)}" for k, v in pairs) + "}"]
+    return [f"{indent}{rid}:"] + [f"{child}{k}: {_scalar(v)}" for k, v in pairs]
+
+
+def minimal_edit(text_: str, base: Mapping[str, Any], new: Mapping[str, Any],
+                 version: int) -> Optional[str]:
+    """The ruleset file with ONLY what changed rewritten: the `version:` value, each edited
+    rule's own entry (in the style it was written: a `{…}` flow map stays one, a block stays a
+    block, its column kept), a dropped rule's entry removed, a new rule appended. Every other
+    line — comments, alignment, quoting — is the base's, byte for byte. A console edit of one
+    guide rewrote the whole file (+35 −14, dry run 2, gap 12). None when the file's shape is not
+    one this can edit safely (the caller renders it whole); the result must parse to ``new``."""
+    lines = text_.splitlines()
+    nl = text_.endswith("\n")
+    if (base.get("custom") or []) != (new.get("custom") or []):
+        return None
+    ver = next((i for i, x in enumerate(lines) if _TOP.match(x)
+                and _TOP.match(x).group("key") == "version"), None)
+    rules_at = next((i for i, x in enumerate(lines) if _TOP.match(x)
+                     and _TOP.match(x).group("key") == "rules"), None)
+    if ver is None or rules_at is None:
+        return None
+    m = _TOP.match(lines[ver])
+    tail = re.match(r"\s*\S+(?P<c>\s+#.*)?$", m.group("rest"))
+    lines[ver] = f"version: {version}" + ((tail.group("c") or "") if tail else "")
+    # The rules map's entries: [start, end) spans, trailing blank/comment lines left outside.
+    end_of_rules = next((i for i in range(rules_at + 1, len(lines))
+                         if lines[i].strip() and not lines[i].startswith((" ", "\t", "#"))),
+                        len(lines))
+    entries: dict[str, tuple[int, int, Any]] = {}
+    indent_of = None
+    i = rules_at + 1
+    while i < end_of_rules:
+        em = _ENTRY.match(lines[i])
+        if not em or lines[i].lstrip().startswith("#"):
+            i += 1
+            continue
+        if indent_of is None:
+            indent_of = em.group("indent")
+        if em.group("indent") != indent_of:
+            i += 1
+            continue
+        j = i + 1
+        while j < end_of_rules and (not lines[j].strip() or
+                                    len(lines[j]) - len(lines[j].lstrip()) > len(indent_of)):
+            j += 1
+        k = j
+        while k > i + 1 and (not lines[k - 1].strip() or lines[k - 1].lstrip().startswith("#")):
+            k -= 1
+        entries[em.group("key").strip().strip("'\"")] = (i, k, em)
+        i = j
+    if indent_of is None:
+        return None
+    base_rules, new_rules = base.get("rules") or {}, new.get("rules") or {}
+    flow_style = any(e[2].group("rest").strip().startswith("{") for e in entries.values())
+    edits: list[tuple[int, int, list[str]]] = []
+    for rid, (i, k, em) in entries.items():
+        if rid not in new_rules:
+            edits.append((i, k, []))
+            continue
+        if new_rules[rid] == base_rules.get(rid):
+            continue
+        rest = em.group("rest")
+        flow = rest.strip().startswith("{")
+        pad = rest[:len(rest) - len(rest.lstrip())] or " "
+        child = (lines[i + 1][:len(lines[i + 1]) - len(lines[i + 1].lstrip())]
+                 if not flow and k > i + 1 else indent_of + "  ")
+        edits.append((i, k, _entry_lines(rid, new_rules[rid], indent=indent_of, flow=flow,
+                                         pad=pad, child=child)))
+    added = [rid for rid in new_rules if rid not in entries]
+    if added:
+        last = max((e[1] for e in entries.values()), default=rules_at + 1)
+        extra = [x for rid in added for x in _entry_lines(
+            rid, new_rules[rid], indent=indent_of, flow=flow_style, pad=" ",
+            child=indent_of + "  ")]
+        edits.append((last, last, extra))
+    for i, k, repl in sorted(edits, key=lambda e: e[0], reverse=True):
+        lines[i:k] = repl
+    out = "\n".join(lines) + ("\n" if nl else "")
+    try:
+        got = _rulesets.parse(out, path="proposal")
+    except _rulesets.RulesetError:
+        return None
+    if got["rules"] != new_rules or got.get("version") != version \
+            or got.get("custom") != (new.get("custom") or []):
+        return None
+    return out
+
+
 def propose(c: Any, settings: Any, project_id: str, ruleset_id: str, *,
             rules: Sequence[Mapping[str, Any]], base_version: Any, base_sha: Optional[str],
             actor: str, validator: Optional[str] = None) -> dict:
@@ -141,7 +266,8 @@ def propose(c: Any, settings: Any, project_id: str, ruleset_id: str, *,
         base = {"ruleset": ruleset_id, "version": 0, "rules": {}, "custom": [], "sha": None,
                 **({"validator": str(validator)} if validator else {})}
     else:
-        base = _rulesets.parse(adapter.read_text_file(branch, path) or "", path=path)
+        base_text = adapter.read_text_file(branch, path) or ""
+        base = _rulesets.parse(base_text, path=path)
     if not created and (base_sha != base.get("sha")
                         or (base_version is not None and base_version != base.get("version"))):
         raise RulesetChangeError(409, "stale_base", "The ruleset changed since you opened it.",
@@ -151,6 +277,11 @@ def propose(c: Any, settings: Any, project_id: str, ruleset_id: str, *,
         body, new = render(base, version, rules)
     except _rulesets.RulesetError as exc:
         raise RulesetChangeError(422, "bad_rules", str(exc)) from None
+    if not created:
+        # ONLY THE EDITED FIELDS CHANGE (minimal_edit): comments and layout are the base's.
+        small = minimal_edit(base_text, base, new, version)
+        if small is not None:
+            body, new = small, _rulesets.parse(small, path="proposal")
     weaker = p0_downgrades(base, new["rules"])
     title = f"Ruleset {ruleset_id} v{version}"
     work = f"boss/ruleset/{ruleset_id}-v{version}"

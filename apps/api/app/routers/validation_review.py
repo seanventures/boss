@@ -3,7 +3,8 @@ validator record, the people's overrides of its findings, and the automatic re-r
 
 GET  /v1/changes/{project_id}/{number}/validation                       boss.validation/v1 +
      overrides + re-run state + the current boss.review_packet/v2
-POST /v1/changes/{project_id}/{number}/findings/{finding_id}/override   accept|reject|edit|waive|reopen
+POST /v1/changes/{project_id}/{number}/findings/{finding_id}/override   accept|reject|edit|remove|waive|reopen
+     (`remove` deletes the finding's whole block; an `edit` with empty text is a `remove`)
 POST /v1/changes/{project_id}/{number}/validation/revert-all            the target back to the partner's bytes
 POST /v1/changes/{project_id}/{number}/validation/rerun                 "Rebuild packet": re-run now
 GET  /v1/projects/{project_id}/rulesets                                 the base branch's rulesets
@@ -39,7 +40,7 @@ def _refused(error: Any) -> JSONResponse:
 
 class OverrideBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    action: Literal["accept", "reject", "edit", "waive", "reopen"]
+    action: Literal["accept", "reject", "edit", "remove", "waive", "reopen"]
     head_sha: str = Field(min_length=4, max_length=80)
     text: Optional[str] = Field(default=None, max_length=4000)
     reason: Optional[str] = Field(default=None, max_length=1000)

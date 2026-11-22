@@ -7549,6 +7549,12 @@ def start_code_task_endpoint(payload: CodeTaskStartBody):
                     **(payload.get("finalize_ctx") or {}),
                     **({"workflow_version_id": payload["workflow_version_id"]}
                        if payload.get("workflow_version_id") else {}),
+                    # A DIRECT CHANGE: no workflow picked and no panel, discovery or decision
+                    # behind it. Its outer run ends with this one change (merged or closed)
+                    # and never builds past it (dry run 2, gap 9).
+                    **({"direct_change": True}
+                       if not payload.get("workflow_version_id")
+                       and not (payload.get("finalize_ctx") or {}).get("origin") else {}),
                 },
                 jobs=jobs,
                 profile=payload.get("profile"),

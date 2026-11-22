@@ -354,6 +354,9 @@ def _diff():
     _git(["add", "-A"], WORK)
     rc, numstat, _e = _git(["diff", "--cached", "--numstat"], WORK)
     files, adds, dels, paths = [], 0, 0, []
+    # A DELETED FILE IS PART OF THE DIFF: the control plane deletes it on the branch.
+    _rc, gone, _e = _git(["diff", "--cached", "--name-only", "--diff-filter=D"], WORK)
+    deleted = [p for p in (gone or "").splitlines() if p.strip()]
     for line in (numstat or "").strip().splitlines():
         parts = line.split("\t")
         if len(parts) != 3:
@@ -368,7 +371,8 @@ def _diff():
                 files.append({"path": p, "content": fp.read_text(encoding="utf-8")})
             except (UnicodeDecodeError, OSError):
                 pass
-    return files, {"files_changed": len(paths), "additions": adds, "deletions": dels, "paths": paths}
+    return files, {"files_changed": len(paths), "additions": adds, "deletions": dels,
+                   "paths": paths, "deleted": deleted}
 
 
 def main():
@@ -381,7 +385,8 @@ def main():
         files, dsum = _diff()
         out = {
             "status": "ok", "engine": spec.get("engine", "echo"), "summary": summary,
-            "diff": files, "diff_summary": dsum, "tests": tests, "tests_passed": passed,
+            "diff": files, "diff_summary": dsum, "deleted": dsum.get("deleted") or [],
+            "tests": tests, "tests_passed": passed,
         }
     except Exception as ex:  # noqa: BLE001
         out = {"status": "error", "error": str(ex)}

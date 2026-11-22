@@ -109,7 +109,9 @@ def test_the_partner_file_gives_9_findings_4_auto_fixes_and_5_open(tmp_path):
     assert len({x["finding"] for x in rec["fixes"]}) == len(rec["fixes"])
     # Moved lines are followed: the secret on partner line 17 is line 21 of the target.
     secret = next(x for x in rec["findings"] if x["source"]["rule_id"] == "no-inlined-secrets")
-    assert secret["location"] == {"file": TARGET, "line": 21, "partner_line": 17}
+    # One line basis (dry run 2, gap 11): `line` is the partner's, `target_line` the target's.
+    assert secret["location"] == {"file": TARGET, "line": 17, "partner_line": 17,
+                                  "target_line": 21}
     assert secret["source"]["rule_doc"] == "rules/api-guidelines.yaml#no-inlined-secrets"
     assert not (root / ".boss-validation").exists()
 

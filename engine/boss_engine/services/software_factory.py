@@ -68,15 +68,67 @@ def commit_change(github: Any, branch: str, files: list[tuple[str, Any]], messag
     (LocalGitAdapter.commit_files) writes every file of a stage as ONE commit with the stage's
     message; the local-first HelpDesk's change set had 52 commits, one per file, each named
     "BOSS proposal update: <file>". A host without one (GitHub's contents API) commits per file,
-    as before, with `per_file(path)` as each message when given. Returns the commit shas."""
+    as before, with `per_file(path)` as each message when given. Returns the commit shas.
+
+    A DELETION IS A CHANGE: content None deletes the path (the batch host's commit_files
+    already does; a per-file host through its `delete_file`). A host that cannot delete refuses
+    in words — never a "done" over a file that is still on the branch."""
     files = [(str(p), c) for p, c in files]
     if not files:
         return []
     batch = getattr(github, "commit_files", None)
     if callable(batch):
         return [batch(branch, dict(files), message)]
-    return [github.upsert_file(branch, path, content, per_file(path) if per_file else message)
-            for path, content in files]
+    shas: list[str] = []
+    for path, content in files:
+        msg = per_file(path) if per_file else message
+        if content is None:
+            delete = getattr(github, "delete_file", None)
+            if not callable(delete):
+                raise RuntimeError(f"This repository host cannot delete files, so {path} "
+                                   "would stay on the branch. Delete it by hand.")
+            sha = delete(branch, path, msg)
+            if sha:
+                shas.append(sha)
+            continue
+        shas.append(github.upsert_file(branch, path, content, msg))
+    return shas
+
+
+def with_deletions(files: Any, deleted: Any) -> list[tuple[str, Any]]:
+    """A stage's changes as commit_change takes them: each written file, then each deleted path
+    (content None) the run removed and did not write again."""
+    pairs = [(fc.path, fc.content) for fc in files or []]
+    written = {p for p, _ in pairs}
+    return pairs + [(str(p), None) for p in deleted or [] if str(p) not in written]
+
+
+def branch_mismatches(github: Any, branch: str, files: list[tuple[str, Any]], *,
+                      limit: int = 50) -> list[dict]:
+    """THE COMMITTED BRANCH, NOT THE SANDBOX TREE: read every path of a commit back from the
+    branch and list each one that does not hold what was judged (a deleted path still there, a
+    file with other content). Empty when the branch matches, or when the host cannot read files
+    (nothing to compare with). The acceptance and the gates judged the tree; this is what makes
+    their verdict true of the branch the person merges (dry run 2, gap 1)."""
+    read = getattr(github, "read_text_file", None)
+    if not callable(read):
+        return []
+    out: list[dict] = []
+    # Every deletion, and up to `limit` written files (a host read per file).
+    checked = ([x for x in files if x[1] is None]
+               + [x for x in files if x[1] is not None][:limit])
+    for path, content in checked:
+        try:
+            got = read(branch, path)
+        except Exception as exc:  # noqa: BLE001 — unreadable is a mismatch, said
+            out.append({"path": path, "why": f"unreadable: {type(exc).__name__}"})
+            continue
+        if content is None and got is not None:
+            out.append({"path": path, "why": "deleted in the build, still on the branch"})
+        elif content is not None and isinstance(content, str) and got != content:
+            out.append({"path": path, "why": ("missing on the branch" if got is None
+                                              else "the branch holds other content")})
+    return out
 
 
 def review_packet_file_summaries(files: list[FileChange]) -> list[dict[str, Any]]:
@@ -1945,8 +1997,13 @@ class SoftwareFactoryService:
         monitoring_removals: Optional[list[str]] = None,
         settle_run_id: Optional[str] = None,
         rescue_of_run: Optional[str] = None,
+        deleted_paths: Optional[list[str]] = None,
     ) -> dict:
         """Open the change's pull request and its merge decision.
+
+        ``deleted_paths``: files the build deleted. They are deleted on the branch in the same
+        commit, and the branch is READ BACK after the commit (branch_mismatches): a branch that
+        does not hold what the gates and the acceptance judged opens no pull request.
 
         THE BUILD'S MONEY SETTLES HERE, ONCE. For a build (`run_id`, or `settle_run_id` for a
         caller that does not pass `run_id`), the reservation is settled with the build's
@@ -2181,10 +2238,20 @@ class SoftwareFactoryService:
                     connection, project_id, "software_factory.monitoring_kept",
                     "coding_worker", "receipt", pr_receipt["id"],
                     {"kept": monitoring_kept, "branch": branch_name})
+            _changes = with_deletions(files, deleted_paths)
             commit_shas = commit_change(
-                self.github, branch_name, [(file.path, file.content) for file in files],
+                self.github, branch_name, _changes,
                 f"BOSS: {title}"[:200],
                 per_file=lambda path: f"BOSS proposal update: {path}")
+            # THE COMMITTED BRANCH IS WHAT WAS JUDGED (dry run 2, gap 1): the gates and the
+            # acceptance check ran on the sandbox tree; a branch that differs (a deletion that
+            # never landed) would make their "met" untrue of what a person merges.
+            _differs = branch_mismatches(self.github, branch_name, _changes)
+            if _differs:
+                raise IntegrationConfigurationError(
+                    "The change branch does not hold what BOSS checked: "
+                    + "; ".join(f"{d['path']} ({d['why']})" for d in _differs[:5])
+                    + ". BOSS did not open the pull request.")
             pr_body = "\n\n".join(
                 [
                     summary,

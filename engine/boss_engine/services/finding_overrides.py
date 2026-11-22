@@ -1,7 +1,9 @@
 """HUMAN OVERRIDES of validation findings, and the automatic re-run (SPEC §3).
 
 Per finding: accept · reject (that hunk back to the partner's exact lines) · edit (a hand-written
-replacement) · waive (reason; a P0 needs a second person's approval) · reopen. Per file:
+replacement) · remove (delete the finding's whole block — a route and its keys, a key's line; an
+edit with EMPTY text is a remove) · waive (reason; a P0 needs a second person's approval) ·
+reopen. Per file:
 revert-all (the target becomes the partner's bytes). ``head_sha`` is a precondition — a stale
 one is a 409 with the current packet. reject / edit / revert-all write ONE commit to the change
 branch with ``BOSS-Override:`` / ``On-behalf-of:`` / ``Reason:`` trailers; accept and waive change
@@ -29,8 +31,8 @@ from .core import emit_event, make_id
 
 log = logging.getLogger(__name__)
 
-ACTIONS = ("accept", "reject", "edit", "waive", "reopen")
-COMMITS = frozenset({"reject", "edit", "revert_all"})
+ACTIONS = ("accept", "reject", "edit", "remove", "waive", "reopen")
+COMMITS = frozenset({"reject", "edit", "remove", "revert_all"})
 WAIVE_ACTION = "waive_finding"
 #: A P0 waive needs ONE named second person (SPEC §3), so its decision uses a single-approval tier
 #: with no seat: tier 3 would ask for two people, and tier 2 for the CEO seat, while the waive names
@@ -129,14 +131,37 @@ def overrides(c: Any, project_id: str, number: int) -> list[dict]:
     rows = c.execute(text(
         "SELECT * FROM finding_overrides WHERE project_id = :p AND change_number = :n "
         "ORDER BY created_at, id"), {"p": project_id, "n": int(number)}).mappings().all()
+    names = _names(c, {str(r["actor"]) for r in rows} | {str(r["approver"]) for r in rows
+                                                         if r.get("approver")})
     out = []
     for i, r in enumerate(rows, start=1):
         d = dict(r)
         for k in ("approved_at", "expires_at", "created_at"):
             if hasattr(d.get(k), "isoformat"):
                 d[k] = d[k].isoformat()
+        # WHO, BY NAME (dry run 2, gap 7): the card said "· a person".
+        d["actor_name"] = names.get(str(d.get("actor")))
+        if d.get("approver"):
+            d["approver_name"] = names.get(str(d["approver"]))
         out.append({"ref": f"O-{i}", **d})
     return out
+
+
+def _names(c: Any, ids: set) -> dict:
+    """{principal id: display name} for the people named on overrides. {} when the identity
+    tables are not there (never fails the read)."""
+    ids = sorted(i for i in ids if i and i != "None")
+    if not ids:
+        return {}
+    try:
+        if c.execute(text("SELECT to_regclass('identity_principals')")).scalar() is None:
+            return {}
+        rows = c.execute(text("SELECT id, display_name FROM identity_principals "
+                              "WHERE id = ANY(:a)"), {"a": ids}).all()
+    except Exception:  # noqa: BLE001 — names are a convenience
+        log.info("override actor names unavailable", exc_info=True)
+        return {}
+    return {str(i): str(n) for i, n in rows if n}
 
 
 def _parse_ts(value: Any) -> Optional[datetime]:
@@ -219,7 +244,7 @@ def apply(findings: list[dict], ovrs: Sequence[Mapping[str, Any]], *, now: Optio
     by_id = {str(f["id"]): f for f in findings}
     for o in ovrs:
         ref = {"id": o["ref"], "action": o["action"], "actor": o.get("actor"),
-               "reason": o.get("reason"), "approver": o.get("approver"),
+               "actor_name": o.get("actor_name"), "reason": o.get("reason"), "approver": o.get("approver"),
                "approved_at": o.get("approved_at"), "expires_at": o.get("expires_at"),
                "commit_sha": o.get("commit_sha"), "at": o.get("created_at")}
         targets = ([f for f in findings if (f.get("source") or {}).get("kind") == "validator"]
@@ -230,7 +255,7 @@ def apply(findings: list[dict], ovrs: Sequence[Mapping[str, Any]], *, now: Optio
             action = o["action"]
             if action in ("reject", "revert_all") and f.get("status") == "open":
                 f["status"] = "reverted"
-            elif action == "edit":
+            elif action in ("edit", "remove"):
                 f["fix_kind"] = "human"
             elif action == "waive" and f.get("status") in ("open", "reverted"):
                 approved = f.get("severity") != "P0" or bool(o.get("approved_at"))
@@ -254,7 +279,7 @@ def apply(findings: list[dict], ovrs: Sequence[Mapping[str, Any]], *, now: Optio
         if f.get("status") != "open" or not f.get("fixed_if_released"):
             continue
         last = f.get("override") or {}
-        if f.get("held") and last.get("action") not in ("accept", "edit"):
+        if f.get("held") and last.get("action") not in ("accept", "edit", "remove"):
             continue
         if any((by_id.get(str(b)) or {}).get("status") in ("open", "reverted")
                for b in f.get("blocked_by") or []):
@@ -274,17 +299,20 @@ def packet(c: Any, ch: Change, *, head_sha: Optional[str] = None) -> Optional[di
     if not run_id:
         return None
     followups = ((decision or {}).get("recommendation") or {}).get("followups")
+    validation = validation_of(c, ch)
     p = rp.for_run(c, str(run_id), head_sha=head_sha or ch.head(), change=ch.number,
                    project_id=ch.project_id,
-                   followups=followups, validation=validation_of(c, ch),
+                   followups=followups, validation=validation,
                    packet_version=1 + len(ovrs),
                    rerun=({"id": rr["id"], "state": rr["state"],
                            "created_at": _iso(rr.get("created_at")),
                            **({"error": rr["error"]} if rr.get("error") else {})}
                           if rr else None),
                    apply_overrides=lambda fs: apply(fs, ovrs),
+                   explained_hunks=override_hunks(validation, ovrs),
                    overrides=[{"id": o["ref"], "finding": o.get("finding_id"),
                                "action": o["action"], "actor": o.get("actor"),
+                               "actor_name": o.get("actor_name"),
                                "reason": o.get("reason"), "approver": o.get("approver"),
                                "approved_at": o.get("approved_at"),
                                "expires_at": o.get("expires_at"),
@@ -295,6 +323,68 @@ def packet(c: Any, ch: Change, *, head_sha: Optional[str] = None) -> Optional[di
 
 def _iso(value: Any) -> Any:
     return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _override_lines(o: Mapping[str, Any]) -> tuple[list[str], list[str]]:
+    """The lines an override's commit added and removed (its masked before → after text)."""
+    import difflib
+
+    a = str(o.get("before_text") or "").splitlines()
+    b = str(o.get("after_text") or "").splitlines()
+    added: list[str] = []
+    removed: list[str] = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if tag in ("replace", "delete"):
+            removed += a[i1:i2]
+        if tag in ("replace", "insert"):
+            added += b[j1:j2]
+    return added, removed
+
+
+def override_hunks(validation: Optional[Mapping[str, Any]], ovrs: Sequence[Mapping[str, Any]]
+                   ) -> dict[str, list[str]]:
+    """{hunk id: [O-n]}: the hunks of the change (input → target) that a person's override
+    WROTE — every line the hunk adds is a line that override's commit added (or, for a hunk
+    that only removes, every line it removes is one the override removed). A person's own edit
+    is explained by that edit, never an "unexplained change" that blocks the merge (dry run 2,
+    gap 6: O-1's edit of the CORS origin came back as unexplained_hunk:h-04)."""
+    if not validation:
+        return {}
+    committed = [(o["ref"], *_override_lines(o)) for o in ovrs
+                 if o.get("commit_sha") and (o.get("before_text") or o.get("after_text"))]
+    if not committed:
+        return {}
+    out: dict[str, list[str]] = {}
+    for x in validation.get("fixes") or []:
+        for h in x.get("hunks") or []:
+            hid, after, before = str(h.get("id")), list(h.get("after") or []), \
+                list(h.get("before") or [])
+            for ref, added, removed in committed:
+                if (after and all(line in added for line in after)) or (
+                        not after and before and all(line in removed for line in before)):
+                    out.setdefault(hid, [])
+                    if ref not in out[hid]:
+                        out[hid].append(ref)
+    return out
+
+
+def explain_fixes(validation: Optional[dict], ovrs: Sequence[Mapping[str, Any]]) -> Optional[dict]:
+    """The record as the Validation tab shows it: a fixes[] entry whose hunks a person's
+    override wrote is that override's (``override``, kind ``human``) — the person's line, never
+    an agent's and never ``unexplained``."""
+    if not validation:
+        return validation
+    by_hunk = override_hunks(validation, ovrs)
+    if not by_hunk:
+        return validation
+    fixes = []
+    for x in validation.get("fixes") or []:
+        refs = sorted({r for h in x.get("hunks") or [] for r in by_hunk.get(str(h.get("id")), [])})
+        if refs:
+            x = {**{k: v for k, v in x.items() if k != "unexplained"}, "kind": "human",
+                 "override": refs[0], "overrides": refs}
+        fixes.append(x)
+    return {**validation, "fixes": fixes}
 
 
 def refresh_decision(c: Any, ch: Change, p: Optional[Mapping[str, Any]]) -> Optional[str]:
@@ -315,7 +405,8 @@ def state(c: Any, settings: Any, project_id: str, number: int) -> dict:
     if ch.kind == "local":
         on_head_moved(c, settings, project_id, number, ch.head())
     rr = latest_rerun(c, project_id, number)
-    validation = validation_of(c, ch)
+    ovrs = overrides(c, project_id, number)
+    validation = explain_fixes(validation_of(c, ch), ovrs)
     if validation and (validation.get("input") or {}).get("file"):
         # THE PARTNER'S FILE, masked, for the line gutter: its bytes as the check received them
         # (the input at the branch head when it still hashes to the record's sha256).
@@ -327,7 +418,7 @@ def state(c: Any, settings: Any, project_id: str, number: int) -> dict:
             body = None
         if body is not None and sha256(body) == validation["input"].get("sha256"):
             validation["input"] = {**validation["input"], "text": mask(body)}
-    return {"validation": validation, "overrides": overrides(c, project_id, number),
+    return {"validation": validation, "overrides": ovrs,
             "rerun": ({k: (v.isoformat() if hasattr(v, "isoformat") else v)
                        for k, v in rr.items() if k != "validation"} if rr else None),
             "head_sha": ch.head(), "packet": packet(c, ch)}
@@ -373,6 +464,43 @@ def edit_target(input_text: str, target_text: str, anchor: Optional[int], line: 
     raise OverrideError(409, "no_line", "There is no line to edit for that finding.")
 
 
+def finding_target_line(target_text: str, finding: Mapping[str, Any]) -> Optional[int]:
+    """The 1-based TARGET line a finding is on: its ``target_line`` when that line still reads
+    its ``original`` (masked compare), else the one target line that does. None when there is
+    no such line, or more than one and none recorded."""
+    from .validators import mask
+
+    b = target_text.splitlines()
+    loc = finding.get("location") or {}
+    orig = finding.get("original")
+    at = loc.get("target_line", loc.get("line"))
+    if orig is None:
+        return at if isinstance(at, int) and 0 < at <= len(b) else None
+    first = str(orig).splitlines()[0] if str(orig) else ""
+    if isinstance(at, int) and 0 < at <= len(b) and mask(b[at - 1]) == first:
+        return at
+    hits = [n for n, x in enumerate(b, start=1) if mask(x) == first]
+    return hits[0] if len(hits) == 1 else None
+
+
+def remove_block(target_text: str, finding: Mapping[str, Any]) -> str:
+    """The target without the finding's whole BLOCK (validators.block): a route's `- path:`
+    line and every key under it, or a key's own line (and anything nested under it). A person
+    removing `/v1/admin/accounts` deletes its 11 lines; edit_target only ever replaced one hunk
+    or one line (dry run 2, gap 2). 409 when the finding's line is not on the branch, or its
+    block would be the whole file."""
+    from .validators import block
+
+    b, nl = _lines(target_text)
+    at = finding_target_line(target_text, finding)
+    if at is None:
+        raise OverrideError(409, "no_line", "The finding's line is not on the branch; use Edit.")
+    lo, hi = block(b, at - 1)
+    if (lo, hi) == (0, len(b)):
+        raise OverrideError(409, "no_block", "That would remove the whole file; use Edit.")
+    return _join(b[:lo] + b[hi:], nl)
+
+
 def _trailers(ref: str, finding: str, action: str, actor: str, reason: Optional[str]) -> str:
     return (f"BOSS override {ref}: {action} {finding}\n\n"
             f"BOSS-Override: {ref} {finding} {action}\nOn-behalf-of: {actor}\n"
@@ -390,6 +518,10 @@ def override(c: Any, settings: Any, project_id: str, number: int, *, action: str
     second person, 422 a missing reason/text, 404 an unknown finding."""
     if action not in (*ACTIONS, "revert_all"):
         raise OverrideError(422, "bad_action", f"Unknown action {action!r}.")
+    if action == "edit" and not (text_ or "").strip():
+        # AN EDIT WITH NO TEXT REMOVES THE FINDING'S BLOCK (dry run 2, gap 2): recorded as
+        # what it is, `remove`, a person's fix with a commit.
+        action = "remove"
     ch = change(c, settings, project_id, number)
     if ch.kind != "local":
         raise OverrideError(422, "github_unsupported", GITHUB_UNSUPPORTED)
@@ -421,8 +553,6 @@ def override(c: Any, settings: Any, project_id: str, number: int, *, action: str
     reason = (reason or "").strip()[:REASON_MAX] or None
     if action in ("waive", "reject", "revert_all") and not reason:
         raise OverrideError(422, "reason_required", "Say why.")
-    if action == "edit" and not (text_ or "").strip():
-        raise OverrideError(422, "text_required", "Write the replacement line.")
     p0_waive = action == "waive" and (finding or {}).get("severity") == "P0"
     if p0_waive and (not approver_id or approver_id == actor):
         raise OverrideError(403, "approver_required",
@@ -475,9 +605,11 @@ def override(c: Any, settings: Any, project_id: str, number: int, *, action: str
             if anchor is None:
                 raise OverrideError(409, "no_fix", f"{finding_id} has no fix to reject.")
             new_text = reject_hunk(input_text, target_text, anchor)
+        elif action == "remove":
+            new_text = remove_block(target_text, finding or {})
         else:
             new_text = edit_target(input_text, target_text, anchor,
-                                   ((finding or {}).get("location") or {}).get("line"), text_ or "")
+                                   finding_target_line(target_text, finding or {}), text_ or "")
         if new_text == target_text:
             raise OverrideError(409, "no_change", "That would change nothing on the branch.")
         before_text, after_text = mask(target_text), mask(new_text)
@@ -545,23 +677,32 @@ def apply_proposal(target_text: str, proposal: Mapping[str, Any]) -> str:
     from .validators import mask
 
     b, nl = _lines(target_text)
+    # THE PIECES ARE IN FILE ORDER: each is looked for AFTER the previous one, so a line every
+    # route repeats (`upstream: lumen-pay-core`) is found in the right route. Matching each
+    # piece across the whole file made the real run's V-07 proposal "gone" (dry run 2, gap 2):
+    # its second piece's anchor appears once per route.
+    cursor = 0
     for piece in proposal.get("pieces") or []:
         masked = [mask(x) for x in b]
         rem = [str(x) for x in piece.get("remove") or []]
         new = [str(x) for x in piece.get("after") or []]
         if rem:
-            at = [k for k in range(len(b) - len(rem) + 1) if masked[k:k + len(rem)] == rem]
-            if len(at) != 1:
+            at = [k for k in range(cursor, len(b) - len(rem) + 1)
+                  if masked[k:k + len(rem)] == rem]
+            if not at:
                 raise OverrideError(409, "proposal_gone", "The lines this proposal changes are "
-                                    "no longer on the branch exactly once; use Edit.")
+                                    "no longer on the branch; use Edit.")
             b[at[0]:at[0] + len(rem)] = new
+            cursor = at[0] + len(new)
         else:
             anchor = piece.get("anchor")
-            at = [k + 1 for k, x in enumerate(masked) if x == anchor] if anchor is not None else [0]
-            if len(at) != 1:
+            at = ([k + 1 for k in range(cursor, len(b)) if masked[k] == anchor]
+                  if anchor is not None else [0])
+            if not at:
                 raise OverrideError(409, "proposal_gone", "The line this proposal follows is not "
-                                    "on the branch exactly once; use Edit.")
+                                    "on the branch; use Edit.")
             b[at[0]:at[0]] = new
+            cursor = at[0] + len(new)
     return _join(b, nl)
 
 

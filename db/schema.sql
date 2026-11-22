@@ -16576,7 +16576,7 @@ CREATE TABLE IF NOT EXISTS finding_overrides (
   project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   change_number int NOT NULL,
   finding_id text NOT NULL,
-  action text NOT NULL CHECK (action IN ('accept','reject','edit','waive','reopen','revert_all')),
+  action text NOT NULL CHECK (action IN ('accept','reject','edit','remove','waive','reopen','revert_all')),
   actor text NOT NULL,
   reason text,
   approver text,
@@ -16607,5 +16607,11 @@ CREATE TABLE IF NOT EXISTS validation_reruns (
 ALTER TABLE validation_reruns ADD COLUMN IF NOT EXISTS finding_id text;
 -- The head an override was made at: (finding, head, action) makes a replay idempotent.
 ALTER TABLE finding_overrides ADD COLUMN IF NOT EXISTS head_sha text;
+-- `remove`: a person deletes the finding's whole block (a route and its keys) with one commit.
+DO $$ BEGIN
+  ALTER TABLE finding_overrides DROP CONSTRAINT IF EXISTS finding_overrides_action_check;
+  ALTER TABLE finding_overrides ADD CONSTRAINT finding_overrides_action_check
+    CHECK (action IN ('accept','reject','edit','remove','waive','reopen','revert_all'));
+END $$;
 CREATE INDEX IF NOT EXISTS idx_validation_reruns_change
   ON validation_reruns (project_id, change_number, created_at);

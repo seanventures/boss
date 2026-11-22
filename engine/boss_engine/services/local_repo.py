@@ -256,7 +256,11 @@ def commit_files(git_dir: Path, branch: str, files: Mapping[str, Content], messa
             if not rel or ".." in Path(rel).parts:
                 raise LocalRepoError(f"Refusing a path outside the repository: {path!r}.")
             if content is None:
-                git(["update-index", "--force-remove", "--", rel], git_dir=git_dir, env=env)
+                # `--force-remove` needs a work tree and this is a BARE repository ("this
+                # operation must be run in a work tree"): every deletion failed the commit.
+                # Mode 0 through --index-info removes the entry with no work tree.
+                git(["update-index", "--index-info"], git_dir=git_dir, env=env,
+                    input=f"0 {_ZERO}\t{rel}\n".encode("utf-8"))
                 continue
             data = content.encode("utf-8") if isinstance(content, str) else bytes(content)
             blob = git(["hash-object", "-w", "--stdin"], git_dir=git_dir, input=data).strip()

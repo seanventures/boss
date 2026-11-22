@@ -142,6 +142,29 @@ def _read(path: Path) -> Optional[str]:
         return None
 
 
+def _scratch_write(root: Path, path: Path, text: str) -> None:
+    """A copy BOSS writes for the VALIDATOR to run on, writable by the run's uid.
+
+    The validator runs as the run's sandbox uid, which has no supplementary groups: a copy BOSS
+    wrote 0644 in a 0755 directory is read-only to it. `gwlint --fix` then failed to write its
+    fixes ("permission denied", exit 2, and `go run` reports exit 1), the copy came back
+    unchanged, and BOSS's mechanical fix pass never seeded the target: 0 `auto` fixes on the
+    real run (dry run 2, gap 4). Directories and the copy are opened to the run's uid, as
+    seed_workspace does: safe, the run directory is <uid>:boss 2770."""
+    from . import workspace_perms
+
+    root = Path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    d = path.parent
+    while d != root and root in d.parents:
+        try:
+            os.chmod(d, 0o2777)
+        except OSError:
+            pass
+        d = d.parent
+    workspace_perms.write_text(path, text)
+
+
 # ── the contract ───────────────────────────────────────────────────────────────────────────────
 
 def _resolve_program(command: str, root: Path) -> str:
@@ -324,6 +347,11 @@ def brief(c: Optional[Mapping[str, Any]]) -> str:
         "or localhost host, and never change a host the input names: a fix changes a scheme "
         "(http → https), never where a request or a token check goes. BOSS blocks any change "
         "to auth, jwks, issuer, upstream or tls keys that no finding asks for.",
+        "- \"Deploy to staging\" (or any environment) in the brief is where BOSS deploys the "
+        "change. It never changes a host, URL or origin in this file: never invent one, and "
+        "keep the partner's hosts and origins.",
+        "- Never write a comment that says a finding was fixed or removed. BOSS flags a comment "
+        "claiming a fix for a finding that is still open.",
     ]
     if c.get("_auto_seeded") is not None:
         fix = str(((c.get("validator") or {}).get("fix")) or "the validator's fixer")
@@ -858,9 +886,8 @@ def run_validation(root: Any, c: Mapping[str, Any],
         input_text = str(c.get("_input_text") or "")
         name = PurePosixPath(str(c["output"])).name
         if run is not None and (v.get("check") or v.get("fix")):
-            scratch.mkdir(exist_ok=True)
             copy = scratch / name
-            copy.write_text(input_text)
+            _scratch_write(root, copy, input_text)
             if v.get("check"):
                 cmd = str(v["check"]).replace("{file}", shlex.quote(str(copy.relative_to(root))))
                 commands["before"] = cmd
@@ -871,8 +898,7 @@ def run_validation(root: Any, c: Mapping[str, Any],
                     error = "the validator's output on the input is not a report"
             if v.get("fix"):
                 fixed = scratch / "fixed" / name
-                fixed.parent.mkdir(exist_ok=True)
-                fixed.write_text(input_text)
+                _scratch_write(root, fixed, input_text)
                 cmd = str(v["fix"]).replace("{file}", shlex.quote(str(fixed.relative_to(root))))
                 commands["fix"] = cmd
                 r = run(cmd)
@@ -958,27 +984,38 @@ def seed_auto_fix(root: Any, c: dict, run: Optional[Callable[[str], Any]]) -> Op
     the target is the input itself, or the fixer wrote nothing. Never raises."""
     v = c.get("validator") if isinstance(c.get("validator"), Mapping) else {}
     if run is None or not v.get("fix") or str(c.get("output")) == str(c.get("input")):
+        c["auto_fix_seed"] = {"seeded": False, "why": (
+            "no fixer declared" if not v.get("fix") else "no runner" if run is None
+            else "the output is the input")}
         return None
     root = Path(root)
     scratch = root / ".boss-validation" / "seed"
+    seed: dict = {"seeded": False}
     try:
-        scratch.mkdir(parents=True, exist_ok=True)
         copy = scratch / PurePosixPath(str(c["output"])).name
-        copy.write_text(str(c.get("_input_text") or ""))
+        _scratch_write(root, copy, str(c.get("_input_text") or ""))
         cmd = str(v["fix"]).replace("{file}", shlex.quote(str(copy.relative_to(root))))
-        run(cmd)
+        seed["command"] = cmd
+        r = run(cmd)
+        seed["exit"] = getattr(r, "exit_code", None)
         fixed = _read(copy)
         if not fixed or fixed == c.get("_input_text"):
+            # SAID, never silent: why the agent starts from the partner's file.
+            tail = (str(getattr(r, "stderr", "") or "") + str(getattr(r, "stdout", "") or ""))
+            seed["why"] = ("the fixer changed nothing" + (f": {tail.strip()[-200:]}"
+                                                          if seed.get("exit") else ""))
             return None
         target = root / str(c["output"])
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(fixed)
+        _scratch_write(root, target, fixed)
         c["_auto_seeded"] = fixed
+        seed["seeded"] = True
         return cmd
-    except Exception:  # noqa: BLE001 — no seed: the agent starts from the input, as before
+    except Exception as exc:  # noqa: BLE001 — no seed: the agent starts from the input, said
         logger.info("input_fidelity: the fixer did not seed the target", exc_info=True)
+        seed["why"] = f"{type(exc).__name__}: {str(exc)[:200]}"
         return None
     finally:
+        c["auto_fix_seed"] = seed
         shutil.rmtree(root / ".boss-validation", ignore_errors=True)
 
 

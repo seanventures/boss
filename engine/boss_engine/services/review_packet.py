@@ -59,10 +59,22 @@ def _j(value: Any, default: Any) -> Any:
 CHECKED = ("validator", "test", "contract", "guard")
 
 
+def needs_person(f: Mapping[str, Any]) -> bool:
+    """A finding only a person can close now: open (or put back) and either "Needs you" (a
+    `human` / `never` rule) or a BOSS guard waiting on a person's accept."""
+    kind = (f.get("source") or {}).get("kind")
+    return (kind in CHECKED and f.get("status") in ("open", "reverted")
+            and (f.get("fix_kind") == "human" or kind == "guard"))
+
+
 def count(findings: Sequence[Mapping[str, Any]]) -> dict:
+    """Per P-level found / open / waived over every CHECKED finding — validator, test,
+    contract AND guard (U-n), the same set everywhere (dry run 2, gap 12) — the review seats'
+    apart, and ``you``: the findings that need a person (needs_person)."""
     out: dict[str, Any] = {p: {"found": 0, "open": 0, "waived": 0} for p in PLEVELS}
     out["unmapped"] = 0
     out["review"] = {"found": 0, "open": 0, "deferred": 0, "blocking": 0}
+    out["you"] = sum(1 for f in findings if needs_person(f))
     for f in findings:
         if (f.get("source") or {}).get("kind") == "reviewer":
             r = out["review"]
@@ -125,6 +137,10 @@ def verdict(packet: Mapping[str, Any]) -> dict:
             reasons.append(f"contract_failed:{c['id']}")
     for h in (packet.get("vs_input") or {}).get("unexplained_hunks") or []:
         reasons.append(f"unexplained_hunk:{h}")
+    for cl in packet.get("comment_claims") or []:
+        # A COMMENT IN THE TARGET THAT CLAIMS A FIX FOR AN OPEN FINDING is a claim without
+        # evidence (SPEC §1.3/§1.4): it blocks until the comment or the finding is fixed.
+        reasons.append(f"unbacked_comment:{cl['finding']}")
     if packet.get("stale"):
         # THE EVIDENCE RAN ON AN OLDER HEAD: "stale → re-checking" until a re-run at the head.
         reasons.append("stale_evidence")
@@ -247,8 +263,7 @@ def from_validation(rec: Mapping[str, Any], prefix: str = "") -> tuple[list[dict
     row = {"id": (rec.get("validator") or {}).get("id"),
            "ruleset": (f"{ruleset.get('id')} v{ruleset.get('version')}" if ruleset else None),
            "before": len((rec.get("before") or {}).get("findings") or []),
-           "after_open": sum(1 for f in findings if f.get("status") == "open"),
-           "after_waived": sum(1 for f in findings if f.get("status") == "waived"),
+           **open_counts(findings),
            "exit": after.get("exit") if after else None,
            "evidence": _ns(prefix, "E-3") if after else None,
            "evidence_ids": [_ns(prefix, str(e["id"])) for e in rec.get("evidence") or []],
@@ -265,6 +280,47 @@ def from_validation(rec: Mapping[str, Any], prefix: str = "") -> tuple[list[dict
           "hunks_by_finding": {h: ids for h, ids in by_hunk.items() if ids},
           "unexplained_hunks": [str(h["id"]) for h in hunks if not by_hunk.get(str(h["id"]))]}
     return findings, row, vs
+
+
+def open_counts(findings: Sequence[Mapping[str, Any]]) -> dict:
+    """A validator row's open figures, ONE definition for the record and the overridden view:
+    ``after_open`` counts its open (or put back) findings AND the guards (U-n) it raised —
+    what the Work panel and the card both say — ``guards_open`` the guards alone, ``you`` the
+    ones that need a person."""
+    mine = [f for f in findings if (f.get("source") or {}).get("kind") in ("validator", "guard")]
+    return {"after_open": sum(1 for f in mine if f.get("status") in ("open", "reverted")),
+            "after_waived": sum(1 for f in mine if f.get("status") == "waived"),
+            "guards_open": sum(1 for f in mine if (f.get("source") or {}).get("kind") == "guard"
+                               and f.get("status") in ("open", "reverted")),
+            "you": sum(1 for f in mine if needs_person(f))}
+
+
+def comment_claims(rec: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]
+                   ) -> list[dict]:
+    """The target's comments that claim a fix (validators.comment_claims) for a finding that
+    is still open (or put back, or only waived): ``[{finding, rule, line, text}]``."""
+    out = []
+    for cl in rec.get("comment_claims") or []:
+        for f in findings:
+            if (f.get("source") or {}).get("kind") != "validator" or f.get("introduced"):
+                continue
+            named = cl.get("rule") and (f.get("source") or {}).get("rule_id") == cl["rule"]
+            if (named or cl.get("finding") == f.get("id")) \
+                    and f.get("status") in ("open", "reverted", "waived"):
+                out.append({"finding": f["id"], "rule": (f.get("source") or {}).get("rule_id"),
+                            "line": cl.get("line"), "text": cl.get("text")})
+                break
+    return out
+
+
+def explain_by_overrides(vs: dict, explained: Optional[Mapping[str, Sequence[str]]]) -> dict:
+    """A hunk a person's override wrote is EXPLAINED by that override (dry run 2, gap 6): it
+    leaves ``unexplained_hunks`` and is listed in ``hunks_by_override``."""
+    explained = {str(h): list(refs) for h, refs in (explained or {}).items() if refs}
+    vs["hunks_by_override"] = explained
+    vs["unexplained_hunks"] = [h for h in vs.get("unexplained_hunks") or []
+                               if str(h) not in explained]
+    return vs
 
 
 def from_followups(items: Iterable[Mapping[str, Any]], bar: Optional[str]) -> list[dict]:
@@ -337,7 +393,8 @@ def build_packet(*, work: Mapping[str, Any], head_sha: Optional[str],
                  packet_version: int = 1, rerun: Optional[Mapping[str, Any]] = None,
                  built_at: Optional[str] = None,
                  apply_overrides: Optional[Callable[[list], list]] = None,
-                 evidence_head: Optional[str] = None) -> dict:
+                 evidence_head: Optional[str] = None,
+                 explained_hunks: Optional[Mapping[str, Sequence[str]]] = None) -> dict:
     """The packet from step outputs (records only). ``validations`` are boss.validation/v1
     records; ``tests`` the build's test runs; ``reviews`` boss.finding/v1 reviewer findings.
 
@@ -358,11 +415,16 @@ def build_packet(*, work: Mapping[str, Any], head_sha: Optional[str],
             vs_input = vs
     findings += [dict(r) for r in reviews]
     if apply_overrides is not None:          # finding_overrides.apply: the people's overrides
+        from .validators import set_change
+
         findings = apply_overrides(findings)
+        for f in findings:
+            if (f.get("source") or {}).get("kind") in ("validator", "guard"):
+                set_change(f)                # the people's view of what changed (gap 7)
         for v in validators:
-            mine = [f for f in findings if (f.get("source") or {}).get("kind") == "validator"]
-            v["after_open"] = sum(1 for f in mine if f.get("status") in ("open", "reverted"))
-            v["after_waived"] = sum(1 for f in mine if f.get("status") == "waived")
+            v.update(open_counts(findings))
+    explain_by_overrides(vs_input, explained_hunks)
+    claims_in_comments = (comment_claims(validations[0], findings) if validations else [])
     test_rows = from_tests(tests, head_sha)
     stale = bool(validations and evidence_head and head_sha and evidence_head != head_sha)
     packet = {"schema": SCHEMA, "packet_version": int(packet_version),
@@ -372,7 +434,10 @@ def build_packet(*, work: Mapping[str, Any], head_sha: Optional[str],
               "findings": findings, "vs_input": vs_input, "validators": validators,
               "tests": test_rows, "contract": [dict(c) for c in contract],
               "overrides": [dict(o) for o in overrides],
-              "risks": [dict(r) for r in risks],
+              "risks": [dict(r) for r in risks] + [
+                  {"text": f"A comment in the file says {cl['finding']} is fixed; it is not"
+                           [:TEXT_MAX], "refs": [cl["finding"]]} for cl in claims_in_comments],
+              "comment_claims": claims_in_comments,
               "claims": _claims(findings, validators, test_rows),
               **({"rerun": dict(rerun)} if rerun else {})}
     return finalize(packet)
@@ -526,8 +591,9 @@ def _p0_lines(validation: Optional[Mapping[str, Any]]) -> set:
         if f.get("severity") != "P0":
             continue
         loc = f.get("location") or {}
-        if isinstance(loc.get("line"), int):
-            out.add(loc["line"])
+        at = loc.get("target_line", loc.get("line"))   # the TARGET's line (gap 11)
+        if isinstance(at, int):
+            out.add(at)
         h = hunks.get(f.get("hunk_id"))
         if h and isinstance(h.get("out_line"), int):
             out.update(range(h["out_line"], h["out_line"] + max(int(h.get("added") or 0), 1)))
@@ -560,7 +626,8 @@ def for_run(connection: Any, run_id: str, *, head_sha: Optional[str],
             rerun: Optional[Mapping[str, Any]] = None,
             validation: Optional[Mapping[str, Any]] = None,
             apply_overrides: Optional[Callable[[list], list]] = None,
-            project_id: Optional[str] = None) -> Optional[dict]:
+            project_id: Optional[str] = None,
+            explained_hunks: Optional[Mapping[str, Sequence[str]]] = None) -> Optional[dict]:
     """The packet for a build's merge card: the work is the lineage's ROOT build (its title
     without follow-up prefixes), the validation is the newest one in the lineage, the tests are
     this build's. None when the run is unknown."""
@@ -612,7 +679,8 @@ def for_run(connection: Any, run_id: str, *, head_sha: Optional[str],
                         validations=[validation] if validation else [],
                         tests=me["state"].get("tests") or [], reviews=reviews,
                         overrides=overrides, packet_version=packet_version, rerun=rerun,
-                        apply_overrides=apply_overrides, evidence_head=evidence_head(validation))
+                        apply_overrides=apply_overrides, evidence_head=evidence_head(validation),
+                        explained_hunks=explained_hunks)
 
 
 #: A re-run with no result after this is overdue: a person's forced merge gets past it

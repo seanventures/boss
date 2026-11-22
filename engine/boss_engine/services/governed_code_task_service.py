@@ -111,7 +111,7 @@ from .sandbox_provider import (
     MicroVMProvider,
     make_governed_sandbox_provider,
 )
-from .software_factory import SoftwareFactoryService, commit_change
+from .software_factory import SoftwareFactoryService, commit_change, with_deletions
 from .workspace_perms import write_text as _ws_write
 
 _DEFAULT_TEST_CMD = "python3 -m unittest discover -v"
@@ -1022,8 +1022,10 @@ def saved_workspace_files(run: Optional[dict]) -> list[dict]:
     saved = fctx.get("saved_workspace") if isinstance(fctx.get("saved_workspace"), dict) else {}
     for files in (saved.get("files"), fctx.get("pending_diff")):
         if isinstance(files, list) and files:
+            # A DELETION IS PART OF THE WORK: kept as {"path", "deleted": true}, and seeding
+            # removes the path again (seed_workspace), so a retry never brings it back.
             return [f for f in files if isinstance(f, dict) and workspace_keepable(f.get("path"))
-                    and isinstance(f.get("content"), str)]
+                    and (isinstance(f.get("content"), str) or f.get("deleted") is True)]
     return []
 
 
@@ -1174,6 +1176,15 @@ def seed_workspace(root: Path, files: list[dict]) -> int:
             continue
         target = (base / rel).resolve()
         if base != target and base not in target.parents:
+            continue
+        if f.get("deleted") is True:
+            # The attempt deleted it: the retry starts without it too.
+            try:
+                if target.is_file() or target.is_symlink():
+                    target.unlink()
+                    written += 1
+            except OSError:
+                pass
             continue
         # Directories and files the run's uid can write. The sandbox uid runs with NO
         # supplementary groups (boss-sandbox-exec), so group-writable is still read-only to it:
@@ -6136,6 +6147,23 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     identity_run = None
     guest_vm_ids: list[str] = []          # for release-on-success / retain-on-failure
     accumulated: dict[str, str] = {}      # path -> content committed so far (the PR diff)
+    #: Paths the build DELETED (micro-VM: from each guest's `deleted`), committed as deletions.
+    deleted_acc: set[str] = set()
+
+    def _sandbox_deleted() -> list[str]:
+        """The paths the local sandbox's tree deleted (sandbox.deleted_paths). [] on a sandbox
+        that cannot say; never raises."""
+        fn = getattr(sandbox, "deleted_paths", None)
+        if not callable(fn):
+            return []
+        try:
+            return list(fn())
+        except Exception:  # noqa: BLE001 — the written files still commit
+            _log_caught(logger)
+            return []
+
+    def _deleted_now() -> list[str]:
+        return sorted(deleted_acc) if use_microvm else _sandbox_deleted()
     _impl_ran = [False]                   # implement started (or the tree was seeded): save on failure
     guest_base = base_branch              # advances to work_branch once commits exist
     # THE TEMPLATE HOLD (template_push_hold): every push below asks _push_held first.
@@ -6284,19 +6312,24 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         except Exception:  # noqa: BLE001 — a note never fails the build
             _log_caught(logger)
 
-    def _commit_stage(files, message: str) -> None:
+    def _commit_stage(files, message: str, deleted=()) -> None:
         """Commit a stage's returned files to the work branch (control-plane-only git;
-        requires the task repo to be the deployment's configured target repo)."""
+        requires the task repo to be the deployment's configured target repo). `deleted`: the
+        paths the stage removed (the guest's `deleted`): they are deleted on the branch too."""
         nonlocal guest_base
-        if not files:
+        if not files and not deleted:
             return
         if _push_held("stage_commit"):
             return
         sf.github.ensure_branch(work_branch, base_branch)
         # One commit per stage where the host can (software_factory.commit_change).
-        commit_change(sf.github, work_branch, [(fc.path, fc.content) for fc in files], message)
-        for fc in files:
+        commit_change(sf.github, work_branch, with_deletions(files, deleted), message)
+        for fc in files or []:
             accumulated[fc.path] = fc.content
+            deleted_acc.discard(fc.path)
+        for p in deleted or []:
+            if p not in accumulated:
+                deleted_acc.add(str(p))
         guest_base = work_branch
         _record_work_branch("stage_commit")
 
@@ -6682,6 +6715,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             files = (list(accumulated.items()) if use_microvm
                      else [(fc.path, fc.content) for fc in sandbox.diff()])
             kept = [{"path": p, "content": c} for p, c in files if workspace_keepable(p)]
+            gone = sorted(deleted_acc) if use_microvm else _sandbox_deleted()
             redacted: list[str] = []
             dropped: list[str] = []
             if (_tpl_gates or {}).get("no_committed_secrets") is False:
@@ -6693,6 +6727,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     {f["path"]: f["content"] for f in kept if isinstance(f["content"], str)},
                     _found)
                 kept = [{"path": p, "content": c} for p, c in clean.items()]
+            kept += [{"path": p, "deleted": True} for p in gone
+                     if p not in {f["path"] for f in kept}]
             if not kept:
                 return 0
             with _transaction(engine) as c:
@@ -6755,6 +6791,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     files=([FileChange(path=p, content=content)
                             for p, content in accumulated.items()]
                            if use_microvm else sandbox.diff()),
+                    deleted_paths=_deleted_now(),
                     created_by_job_id=job_id, actual_usd_micros=cost,
                     pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
                     monitoring_removals=_monitoring_removals(spec))
@@ -6854,16 +6891,18 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             return 0
         try:
             files = sandbox.diff()
+            gone = _sandbox_deleted()
         except Exception:  # noqa: BLE001 — a dead sandbox must not mask the real failure
             _log_caught(logger)
             return 0
         _note_left_out(sandbox)
-        if not files:
+        if not files and not gone:
             return 0
         try:
             sf.github.ensure_branch(work_branch, base_branch)
-            # One commit per stage where the host can (software_factory.commit_change).
-            commit_change(sf.github, work_branch, [(fc.path, fc.content) for fc in files],
+            # One commit per stage where the host can (software_factory.commit_change); a
+            # deleted file is deleted on the branch (with_deletions).
+            commit_change(sf.github, work_branch, with_deletions(files, gone),
                           f"governed: checkpoint after {label} — {title[:50]}")
             for fc in files:
                 accumulated[fc.path] = fc.content
@@ -6875,8 +6914,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     {"b": work_branch, "s": label, "id": run_id})
                 emit_event(c, project_id, "code_task.work_checkpointed", "boss",
                            "code_task_run", run_id,
-                           {"after": label, "files": len(files), "branch": work_branch})
-            return len(files)
+                           {"after": label, "files": len(files), "branch": work_branch,
+                            **({"deleted": gone[:40]} if gone else {})})
+            return len(files) + len(gone)
         except Exception as exc:  # noqa: BLE001 — losing a checkpoint must not fail the run
             _log_caught(logger)
             with _transaction(engine) as c:
@@ -8932,7 +8972,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # Commit ONLY non-test changes (tamper edits are discarded); the next retry
                 # VM re-clones the frozen tests + this attempt's committed impl from the branch.
                 _commit_stage(impl_changes, f"governed: implement (SE) — {title[:60]}"
-                              + (f" [repair {attempt}]" if attempt else ""))
+                              + (f" [repair {attempt}]" if attempt else ""),
+                              deleted=[p for p in getattr(res2, "deleted", None) or []
+                                       if not _is_test_path(p)])
                 if not use_microvm:
                     _checkpoint("implement" + (f"-repair{attempt}" if attempt else ""))
                 # Same reason as the design above: state was only written at the END, so a
@@ -9472,7 +9514,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         stage_title=f"SE: quality — {title}",
                     )
                     q_changes = [fc for fc in qres.diff if not _is_test_path(fc.path)]
-                    _commit_stage(q_changes, f"governed: quality — {title[:60]}")
+                    _commit_stage(q_changes, f"governed: quality — {title[:60]}",
+                                  deleted=[p for p in getattr(qres, "deleted", None) or []
+                                           if not _is_test_path(p)])
                     q_ok = bool(qres.tests_passed)
                     if q_ok:
                         tests_passed = True
@@ -12075,6 +12119,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _pr_files = ([FileChange(path=p, content=content)
                           for p, content in accumulated.items()]
                          if use_microvm else sandbox.diff())
+            # A DELETION REACHES THE BRANCH (dry run 2, gap 1): what the tree removed is
+            # deleted on the change branch, and propose_pull_request reads the branch back.
+            _pr_deleted = _deleted_now()
             if _recheck:
                 # A RE-CHECK COMMITS NOTHING: whatever BOSS's own gate preparation touched in
                 # the checkout stays there; the PR gets the new verdict and card, not a commit.
@@ -12083,6 +12130,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                "code_task_run", run_id,
                                {"paths": [f.path for f in _pr_files][:40]})
                 _pr_files = []
+                _pr_deleted = []
             _pr_summary = _cf_section(_checks) + _generated_pr_summary(
                 engine, settings, run_id, project_id, title=title, evidence=evidence,
                 gates=gates, paths=[f.path for f in _pr_files], qg_id=qg_id)
@@ -12102,7 +12150,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 dedupe_key=f"code:task:{run_id}", title=_change_title,
                 branch_name=work_branch,
                 summary=_pr_summary + agent_acts.pr_trailers(c, run_id),
-                files=_pr_files,
+                files=_pr_files, deleted_paths=_pr_deleted,
                 created_by_job_id=job_id, actual_usd_micros=cost,
                 evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
                 pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
@@ -12154,7 +12202,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         dedupe_key=f"code:task:{run_id}", title=_change_title,
                         branch_name=work_branch,
                         summary=_pr_summary + agent_acts.pr_trailers(c, run_id),
-                        files=_pr_files,
+                        files=_pr_files, deleted_paths=_pr_deleted,
                         created_by_job_id=job_id, actual_usd_micros=cost,
                         evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
                         pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),

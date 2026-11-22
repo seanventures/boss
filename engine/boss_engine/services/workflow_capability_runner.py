@@ -3804,6 +3804,53 @@ def with_run_profile(inputs: dict[str, Any], run_input: Any) -> dict[str, Any]:
     return inputs
 
 
+def _direct_change_ended(connection: Connection, key: str,
+                         context: dict[str, Any]) -> Optional[str]:
+    """Why step `key` does nothing on a DIRECT CHANGE's outer run (run input `direct_change`,
+    set by POST /v1/code-tasks when no workflow was picked) whose adopted change is already
+    merged or closed — from BOSS's record alone. None otherwise (the adopted build's own step,
+    any other run, a change still open, or a record that cannot be read)."""
+    run_input = context.get("input") or {}
+    if not isinstance(run_input, dict) or not run_input.get("direct_change"):
+        return None
+    if _adopted_handle(key, context) is not None or connection is None:
+        return None
+    build = run_input.get("adopt_code_task_run_id")
+    if not isinstance(build, str) or not build.strip():
+        return None
+    from . import pr_merge
+    from .repo_links import change_ref
+
+    try:
+        with connection.begin_nested():
+            run = connection.execute(
+                text("SELECT project_id, pull_request_number, pull_request_url, finalize_ctx, "
+                     "decision_id FROM code_task_runs WHERE id = :i"),
+                {"i": build.strip()}).mappings().first()
+            if not run:
+                return None
+            decision = None
+            if run["decision_id"]:
+                decision = connection.execute(
+                    text("SELECT id, status FROM decisions WHERE id = :d"),
+                    {"d": run["decision_id"]}).mappings().first()
+                decision = dict(decision) if decision else None
+                if decision is not None:
+                    sha = pr_merge.merged_shas(connection, str(run["project_id"]),
+                                               [str(decision["id"])]).get(str(decision["id"]))
+                    if sha:
+                        decision["merged_sha"] = sha
+            state = pr_merge.state(dict(run), decision)
+    except Exception:  # noqa: BLE001 — unread: the step runs as it would have
+        return None
+    if state not in (pr_merge.MERGED, pr_merge.CLOSED):
+        return None
+    ref = change_ref(run["pull_request_url"], run["pull_request_number"])
+    done = "merged" if state == pr_merge.MERGED else "closed without merging"
+    return (f"{ref} is {done}. This run was started for that one direct change, so it ends "
+            "with it: nothing more is built, opened or deployed.")
+
+
 def _perform_capability(
     connection: Connection,
     ctx: Any,
@@ -3825,6 +3872,14 @@ def _perform_capability(
     monitoring_step = str(inputs.pop("monitoring_step", "") or "") if key == "deploy" else ""
     skip_without_host = key == "deploy" and str(
         inputs.pop("skip_without_host", "") or "").lower() in ("true", "1")
+    # A DIRECT CHANGE'S WRAPPER ENDS WITH ITS CHANGE (dry run 2, gap 9): a code task started
+    # straight through POST /v1/code-tasks is one already-specified change. Once that change is
+    # merged or closed, no later step of its outer run builds, extends, deploys or opens anything
+    # (wfr_eaf335b4 ran "Production launch readiness" after #10 merged and opened #13).
+    ended = _direct_change_ended(connection, key, context)
+    if ended:
+        return {"capability": key, "tool": None, "status": "not_applicable",
+                "direct_change_ended": True, "note": ended}
     # EASY MODE'S OWN RULES apply only on a run of the catalogue's Easy Mode MVP workflow (never
     # a copy, never a binding someone else wrote, never a caller's input).
     easy_mode = key == "deploy" and _is_easy_mode_run(connection, str(context.get("run_id") or ""))
