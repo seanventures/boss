@@ -2,7 +2,7 @@
 
 /**
  * THE REVIEW PACKET (SPEC §1.4–§1.5; wireframe C). Rendered on the merge card and on the change
- * page. Fixed order: verdict → severity chips → P0/P1 table → changed vs the partner's file →
+ * page. Fixed order: verdict → severity chips → P0/P1 table → changed vs the original file →
  * checks and overrides → open risks → provenance. One row per finding (rule · line · fix), never a
  * sentence joined to the next; fact ids are a count chip, never inline.
  */
@@ -76,7 +76,10 @@ function StatusCell({ f }: { f: Finding }) {
   return <><Status st={f.status} />{f.override ? <> <RefChip id={f.override.id} /></> : null}</>;
 }
 
-function FindingRow({ f }: { f: Finding }) {
+/** Jump to a finding's line in Files changed (the change page's Checks). */
+export type JumpLine = (f: Finding) => void;
+
+export function FindingRow({ f, onJump }: { f: Finding; onJump?: JumpLine }) {
   const kind = f.followup && !f.blocks ? "none" : f.override && (f.override.action === "edit" || f.override.action === "reject" || f.override.action === "remove") ? "human" : f.fix_kind;
   const { rule, where } = ruleParts(f);
   const reviewer = Boolean(f.source.kind && f.source.kind !== "validator");
@@ -90,7 +93,8 @@ function FindingRow({ f }: { f: Finding }) {
       <td className="vr-mono vr-id vr-c-id">{f.id}</td>
       <td className="vr-mono vr-c-rule" title={[rule, lineTitle(f) || where].filter(Boolean).join(" · ")}>
         <span className="vr-clip">{rule}</span>
-        {where || f.unmapped ? <span className="vr-where">{where}{f.unmapped ? <> <span className="vr-kind" title="No rule or standard named: counted as P2">unmapped</span></> : null}</span> : null}
+        {where || f.unmapped ? <span className="vr-where">{onJump && where
+          ? <a href="#" onClick={(e) => { e.preventDefault(); onJump(f); }} data-testid="vr-row-line">{where}</a> : where}{f.unmapped ? <> <span className="vr-kind" title="No rule or standard named: counted as P2">unmapped</span></> : null}</span> : null}
       </td>
       <td className="vr-ba vr-c-ba" title={reviewer ? f.title || f.original || "" : `${was} → ${now}`}>
         {reviewer
@@ -103,7 +107,30 @@ function FindingRow({ f }: { f: Finding }) {
   );
 }
 
-function SevBar({ p }: { p: ReviewPacket }) {
+/** The findings as rows: P0/P1 in the table, P2/P3 folded under it. */
+export function FindingsTable({ findings, onJump, testid = "vr-p01" }: { findings: Finding[]; onJump?: JumpLine; testid?: string }) {
+  const rows = sortFindings(findings);
+  const top = rows.filter((f) => f.severity === "P0" || f.severity === "P1");
+  const rest = rows.filter((f) => f.severity === "P2" || f.severity === "P3");
+  return (
+    <>
+      {top.length ? (
+        <div className="vr-scroll"><table className="vr-ftable" data-testid={testid}>
+          <thead><tr><th className="vr-c-id">ID</th><th className="vr-c-rule">Rule · line</th><th className="vr-c-ba">Original → now</th><th className="vr-c-fix">Fix</th><th className="vr-c-st">Status</th></tr></thead>
+          <tbody>{top.map((f) => <FindingRow key={f.id} f={f} onJump={onJump} />)}</tbody>
+        </table></div>
+      ) : null}
+      {rest.length ? (
+        <details data-testid="vr-p23">
+          <summary className="vr-small vr-muted" style={{ cursor: "pointer" }}>P2 / P3 · {rest.length} ({rest.filter((f) => f.status === "open").length} open)</summary>
+          <div className="vr-scroll"><table className="vr-ftable"><tbody>{rest.map((f) => <FindingRow key={f.id} f={f} onJump={onJump} />)}</tbody></table></div>
+        </details>
+      ) : null}
+    </>
+  );
+}
+
+export function SevBar({ p }: { p: ReviewPacket }) {
   // One count for every surface (packetTally): review follow-ups are their own cell, never P1.
   const t = packetTally(p);
   return (
@@ -132,10 +159,11 @@ function SevBar({ p }: { p: ReviewPacket }) {
   );
 }
 
-function Verdict({ p }: { p: ReviewPacket }) {
+function Verdict({ p, link = null }: { p: ReviewPacket; link?: React.ReactNode }) {
+  const chips = !link;
   if (p.verdict.state === "invalid") {
     const n = p.verdict.reasons.length;
-    return <div className="vr-verdict" data-state="invalid" data-testid="vr-verdict"><b>Packet invalid</b><span className="vr-muted">{n} problem{n === 1 ? "" : "s"} · merge disabled</span></div>;
+    return <div className="vr-verdict" data-state="invalid" data-testid="vr-verdict"><b>Packet invalid</b><span className="vr-muted">{n} problem{n === 1 ? "" : "s"} · merge disabled</span>{link}</div>;
   }
   if (p.verdict.state === "blocked") {
     const t = packetTally(p);
@@ -146,13 +174,14 @@ function Verdict({ p }: { p: ReviewPacket }) {
         <span className="vr-muted">{open ? `${open} open · merge waits on them` : rerunPending(p) ? "after your change · merge waits for the re-run"
           : p.verdict.reasons.includes("rerun_failed") ? "the re-run failed · rebuild the packet"
           : p.verdict.reasons.includes("stale_evidence") ? "the checks ran on an older commit · re-checking at the head"
-          : p.verdict.reasons.some((r) => r.startsWith("unexplained_hunk")) ? "an unexplained change in the partner's file" : "not ready"}</span>
-        {p.verdict.reasons.map((r) => { const id = r.split(":").pop() ?? r; return /^[A-Z]-\d+$/.test(id) ? <RefChip key={r} id={id} />
-          : r === "rerun_pending" ? <span key={r} className="vr-st" data-st="pending">re-checking…</span> : null; })}
+          : p.verdict.reasons.some((r) => r.startsWith("unexplained_hunk")) ? "an unexplained change in the original file" : "not ready"}</span>
+        {chips ? p.verdict.reasons.map((r) => { const id = r.split(":").pop() ?? r; return /^[A-Z]-\d+$/.test(id) ? <RefChip key={r} id={id} />
+          : r === "rerun_pending" ? <span key={r} className="vr-st" data-st="pending">re-checking…</span> : null; }) : null}
+        {link}
       </div>
     );
   }
-  return <div className="vr-verdict" data-state="ready" data-testid="vr-verdict"><b>Ready</b><span className="vr-muted">No P0 or P1 open · every claim has evidence</span></div>;
+  return <div className="vr-verdict" data-state="ready" data-testid="vr-verdict"><b>Ready</b><span className="vr-muted">No P0 or P1 open · every claim has evidence</span>{link}</div>;
 }
 
 export function InvalidProblems({ p }: { p: ReviewPacket }) {
@@ -173,7 +202,7 @@ function ChangedVsPartner({ p }: { p: ReviewPacket }) {
   if (!v.file && !v.hunks) return null;
   return (
     <div data-testid="vr-vs-input">
-      <div className="vr-k">Changed vs the partner&apos;s file</div>
+      <div className="vr-k">Changed vs the original file</div>
       <div className="vr-row vr-small">
         <GitDiff size={14} aria-hidden /><span className="vr-mono">{v.file}</span>
         <span className="vr-mono vr-muted">{v.hunks} hunks · <span style={{ color: "var(--v2-green)" }}>+{v.added}</span> <span style={{ color: "var(--v2-red)" }}>−{v.removed}</span></span>
@@ -233,7 +262,7 @@ function Checks({ p }: { p: ReviewPacket }) {
   );
 }
 
-function Overrides({ p }: { p: ReviewPacket }) {
+export function Overrides({ p }: { p: ReviewPacket }) {
   if (!p.overrides.length) return null;
   return (
     <div>
@@ -250,10 +279,26 @@ function Overrides({ p }: { p: ReviewPacket }) {
   );
 }
 
-export function ReviewPacketView({ packet: p, projectId, fallbackTitle = "", eyebrow = "Control plane proposes · merge", actions, testid = "review-packet" }: {
+export function ReviewPacketView({ packet: p, projectId, fallbackTitle = "", eyebrow = "Control plane proposes · merge", actions, testid = "review-packet", compact = false }: {
   packet: ReviewPacket; projectId: string; fallbackTitle?: string; eyebrow?: string; actions?: React.ReactNode; testid?: string;
+  /** THE MERGE CARD (workflow-library DESIGN decision 4): one verdict line and a link to the
+   *  change's Checks, where every checker and its findings are. Invalid still lists its problems. */
+  compact?: boolean;
 }) {
   const links = packetLinks(projectId, p);
+  if (compact) {
+    const checks = links.change ? <a className="vr-checks-link" href={`${links.change}?tab=checks`} data-testid="vr-checks-link">Checks ›</a> : null;
+    return (
+      <section className="vr vr-card vr-packet" data-compact="" data-testid={testid} data-verdict={p.verdict.state} aria-label="Review packet">
+        <div className="vr-row"><span className="vr-mono vr-dim vr-small">{eyebrow}</span><span className="vr-grow" />
+          {p.head_sha ? <span className="vr-mono vr-dim vr-small">head {shortSha(p.head_sha)}</span> : null}</div>
+        <h2 data-testid={`${testid}-title`}>{packetTitle(p, fallbackTitle)}</h2>
+        <Verdict p={p} link={checks} />
+        {p.verdict.state === "invalid" ? <InvalidProblems p={p} /> : <SevBar p={p} />}
+        {actions}
+      </section>
+    );
+  }
   const rows = sortFindings(p.findings);
   const top = rows.filter((f) => f.severity === "P0" || f.severity === "P1");
   const rest = rows.filter((f) => f.severity === "P2" || f.severity === "P3");
@@ -269,9 +314,9 @@ export function ReviewPacketView({ packet: p, projectId, fallbackTitle = "", eye
           <SevBar p={p} />
           {top.length ? (
             <div>
-              <div className="vr-k">P0 / P1 · what changed vs the partner&apos;s file</div>
+              <div className="vr-k">P0 / P1 · original → now</div>
               <div className="vr-scroll"><table className="vr-ftable" data-testid="vr-p01">
-                <thead><tr><th className="vr-c-id">ID</th><th className="vr-c-rule">Rule · line</th><th className="vr-c-ba">Partner → now</th><th className="vr-c-fix">Fix</th><th className="vr-c-st">Status</th></tr></thead>
+                <thead><tr><th className="vr-c-id">ID</th><th className="vr-c-rule">Rule · line</th><th className="vr-c-ba">Original → now</th><th className="vr-c-fix">Fix</th><th className="vr-c-st">Status</th></tr></thead>
                 <tbody>{top.map((f) => <FindingRow key={f.id} f={f} />)}</tbody>
               </table></div>
             </div>

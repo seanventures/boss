@@ -1,12 +1,11 @@
 // @vitest-environment happy-dom
 /**
- * THE VALIDATION TAB AND THE RULES (docs/design/validation-review/SPEC.md §2–§4, PR 4 web).
+ * GWLINT'S RULES, THE BUILT COLUMN AND THE ENGINE'S CONTRACT (validation-review SPEC §4–§5).
  *
- * Lumen Pay's partner file, as gwlint saw it: 9 findings (4 P0 · 4 P1 · 1 P2), 4 auto-fixed by
- * `gwlint --fix`, 5 open. The tab draws partner file → findings → fixes → re-run; every fix carries
- * the §3 override controls, and each control sends the §3 call with the head sha. A BOSS without
- * the override routes answers 404: the controls then show disabled, with the reason as a tooltip.
- * The ruleset editor opens a change rather than editing a hidden setting.
+ * Lumen Pay's file as gwlint saw it: 9 findings (4 P0 · 4 P1 · 1 P2). The Work panel's Built
+ * column shows the funnel; the ruleset editor opens a change rather than editing a hidden
+ * setting; GET …/validation's shape parses whole. The findings themselves are a checker on the
+ * change page (tests/validation-is-a-checker-on-the-change-page.test.tsx).
  */
 import React, { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +13,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { $, $$, mount, settle, unmount } from "./_helpers/live-render";
 import { parseRulesets, parseValidation } from "../lib/validation-review";
 import { RULESET_NORTHGATE, VALIDATION_OPEN } from "../lib/validation-review-fixtures";
-import { ValidationTab } from "../app/validation/validation-tab";
 import { RulesetEditor } from "../app/validation/ruleset-editor";
 import { ValidationBuilt } from "../app/validation/built-summary";
 import { parseChangeSet } from "../lib/repo-links";
@@ -48,89 +46,6 @@ const type = async (el: Element | null, value: string) => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 };
-const fix = (id: string) => $(`[data-testid="vr-fix"][data-finding="${id}"]`)!;
-
-describe("the Validation tab", () => {
-  it("draws partner file → findings → fixes → re-run from boss.validation/v1", async () => {
-    engine();
-    await mount(<ValidationTab projectId="northgate-gateway" change={9} />);
-    for (const col of ["partner", "findings", "fixes", "rerun"]) expect($(`[data-testid="vr-col-${col}"]`)).not.toBeNull();
-    expect($('[data-testid="vr-col-findings"] h3')!.textContent).toBe("gwlint found 9");
-    expect($$('[data-testid="vr-finding"]').length).toBe(9);
-    expect($$('[data-testid="vr-grp-P0"] [data-testid="vr-finding"]').length).toBe(4);
-    expect($$('[data-testid="vr-grp-P1"] [data-testid="vr-finding"]').length).toBe(4);
-    expect($$('[data-testid="vr-grp-P2"] [data-testid="vr-finding"]').length).toBe(1);
-    // 4 auto fixes, 5 open — the re-run says so; the partner's lines carry severity dots.
-    expect($$('[data-testid="vr-finding"] .vr-st[data-st="fixed"]').length).toBe(4);
-    expect($('[data-testid="vr-rerun-result"] .vr-big')!.textContent).toBe("5");
-    expect($$('[data-testid="vr-partner-hit"]').length).toBeGreaterThanOrEqual(6);
-    expect($('[data-testid="vr-col-partner"]')!.textContent).not.toContain("sk_live_4");
-    expect($('[data-testid="vr-contract"]')!.textContent).toContain("payments_rate_limited_11th");
-  });
-
-  it("accept, reject (revert hunk), edit and waive each send the §3 override with the head sha", async () => {
-    const calls = engine();
-    await mount(<ValidationTab projectId="northgate-gateway" change={9} />);
-    const posts = () => calls.filter((c) => c.method === "POST");
-    await press(fix("V-03").querySelector('[data-testid="vr-accept"]'));
-    expect(posts()[0]).toMatchObject({ path: "/v1/changes/northgate-gateway/9/findings/V-03/override", body: { action: "accept", head_sha: "eaff448" } });
-    // Reject asks why first, on that row.
-    await press(fix("V-06").querySelector('[data-testid="vr-reject"]'));
-    expect(posts().length).toBe(1);
-    await type(fix("V-06").querySelector('[data-testid="vr-reject-reason"]'), "Partner named one origin");
-    await press(fix("V-06").querySelector('[data-testid="vr-reject-send"]'));
-    expect(posts()[1].body).toMatchObject({ action: "reject", reason: "Partner named one origin" });
-    await press(fix("V-06").querySelector('[data-testid="vr-edit"]'));
-    await type(fix("V-06").querySelector('[data-testid="vr-edit-text"]'), '      allow_origins: ["https://dashboard.lumenpay.example"]');
-    await type(fix("V-06").querySelector('[data-testid="vr-edit-reason"]'), "Dashboard needs cookies");
-    await press(fix("V-06").querySelector('[data-testid="vr-edit-save"]'));
-    expect(posts()[2].body).toMatchObject({ action: "edit", text: '      allow_origins: ["https://dashboard.lumenpay.example"]', reason: "Dashboard needs cookies" });
-    // A P2 waive needs only a reason.
-    await press(fix("V-02").querySelector('[data-testid="vr-waive"]'));
-    expect((fix("V-02").querySelector('[data-testid="vr-waive-send"]') as HTMLButtonElement).disabled).toBe(true);
-    await type(fix("V-02").querySelector('[data-testid="vr-waive-reason"]'), "no PII in query params, KAN-12");
-    await press(fix("V-02").querySelector('[data-testid="vr-waive-send"]'));
-    expect(posts()[3].body).toMatchObject({ action: "waive", reason: "no PII in query params, KAN-12" });
-    expect(posts()[3].body).not.toHaveProperty("approver_id");
-  });
-
-  it("a P0 waive asks for an approver, and revert-all asks why", async () => {
-    const calls = engine();
-    await mount(<ValidationTab projectId="northgate-gateway" change={9} />);
-    await press(fix("V-07").querySelector('[data-testid="vr-waive"]'));
-    await type(fix("V-07").querySelector('[data-testid="vr-waive-reason"]'), "Partner needs it for a week");
-    const send = fix("V-07").querySelector('[data-testid="vr-waive-send"]') as HTMLButtonElement;
-    expect(send.disabled).toBe(true);
-    await type(fix("V-07").querySelector('[data-testid="vr-waive-approver"]'), "security-lead");
-    expect(send.textContent).toBe("Ask security-lead");
-    await press(send);
-    expect(calls.find((c) => c.method === "POST")!.body).toMatchObject({ action: "waive", approver_id: "security-lead" });
-    await press($('[data-testid="vr-revert-all"]'));
-    await type($('[data-testid="vr-revert-all-reason"]'), "start over from the partner's bytes");
-    await press($('[data-testid="vr-revert-all-send"]'));
-    expect(calls.filter((c) => c.method === "POST").at(-1)).toMatchObject({ path: "/v1/changes/northgate-gateway/9/validation/revert-all",
-      body: { reason: "start over from the partner's bytes", head_sha: "eaff448" } });
-  });
-
-  it("an engine without the override routes: controls disabled, with the reason as a tooltip", async () => {
-    engine(404);
-    await mount(<ValidationTab projectId="northgate-gateway" change={9} />);
-    await press(fix("V-03").querySelector('[data-testid="vr-accept"]'));
-    // Said next to the row that was pressed, never as a line at the top of the tab.
-    expect(fix("V-03").querySelector('[data-testid="vr-row-said"]')!.textContent).toContain("not on this BOSS yet");
-    expect($('[data-testid="vr-said"]')).toBeNull();
-    const accept = fix("V-01").querySelector('[data-testid="vr-accept"]') as HTMLButtonElement;
-    expect(accept.disabled).toBe(true);
-    expect(accept.getAttribute("title")).toContain("not deployed");
-    expect(($('[data-testid="vr-revert-all"]') as HTMLButtonElement).disabled).toBe(true);
-  });
-
-  it("no validation route on the engine: a clean empty state, never a crash or an id", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
-    await mount(<ValidationTab projectId="northgate-gateway" change={9} />);
-    expect($('[data-testid="vr-validation-missing"]')!.textContent).toContain("not on this BOSS yet");
-  });
-});
 
 describe("the Work panel's Built column", () => {
   it("shows the gwlint funnel, the P0/P1 chips and See every fix — never prose", async () => {
@@ -206,17 +121,6 @@ describe("the engine's contract (PRs #276–#278)", () => {
     expect(v.after!.evidence).toBe("E-3");
     expect(v.guard!.code).toBe("input_substituted");
     expect(v.packet!.verdict.reasons).toContain("rerun_pending");
-    const { ValidationFlow } = await import("../app/validation/validation-tab");
-    await mount(<ValidationFlow v={v} projectId="northgate-gateway" change={9} onChanged={() => {}} />);
-    expect($('[data-testid="vr-guard"]')!.textContent).toContain("input_substituted");
-    expect($('[data-testid="vr-unexplained-fixes"]')!.textContent).toContain("+ extra: 1");
-    expect(fix("V-09").querySelector('[data-testid="vr-diff-lines"]')!.textContent).toBe("- url: http://x+ url: https://x");
-    // A P0 waive still waiting on its approver stays open, "waive pending approval".
-    expect(fix("V-07").textContent).toContain("waive pending approval");
-    expect(fix("V-07").textContent).toContain("Waiting on a person to approve the P0 waive");
-    expect(fix("V-07").textContent).not.toMatch(/usr_/);
-    // Re-checking: every control waits.
-    expect((fix("V-01").querySelector('[data-testid="vr-accept"]') as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("a stale head says the change moved on; a 404 the route wrote is a real answer, not 'not deployed'", async () => {

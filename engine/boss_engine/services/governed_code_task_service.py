@@ -7297,6 +7297,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if _remediation:
             _validation_build[0] = True
             _remediation["_project_id"] = project_id
+            # THE ORIGINAL FILE FIRST: the input's bytes land on the target path as the change's
+            # first commit, so its history reads original → fixed. Never on a change already up
+            # for merge (its head must not move mid-build) nor through a held push.
+            if not _branch_up_for_merge() and not _push_held("original_file"):
+                _input_fidelity.commit_original(sf.github, work_branch, base_branch, _remediation)
             # THE MECHANICAL FIXER FIRST (gwlint --fix): the target starts as its output, so its
             # lines are the build's `auto` fixes and the agent hand-edits only what it left.
             _seed_cmd = _input_fidelity.seed_auto_fix(
