@@ -2984,6 +2984,8 @@ select.input:focus,
 }
 /* One fact per line: a merge card's words are rows, never sentences joined with spaces. */
 .dq-rationale .dq-line { display: block; }
+.dq-blocked-rows { margin: 0 0 6px; padding: 0; list-style: none; font-family: var(--v2-font-mono); font-size: 0.63158rem; color: var(--v2-red); }
+.dq-blocked-rows li + li { margin-top: 2px; }
 .dq-rationale .dq-line + .dq-line { margin-top: 2px; }
 .dq-evidence {
   display: flex;
