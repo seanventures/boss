@@ -33,7 +33,6 @@ Generic: no linter, tenant or file name is special here.
 
 from __future__ import annotations
 
-import difflib
 import json
 import logging
 import os
@@ -251,6 +250,18 @@ def contract(spec: Mapping[str, Any], instructions: str, root: Any) -> Optional[
         c = infer(str(instructions or ""), root)
     if not c:
         return None
+    # THE REPO'S OWN DECLARATION (.boss/validators.yaml, SPEC §2) names the validator for the
+    # target (or the input) unless the spec declared one: its command, adapter and ruleset.
+    if c.get("source") != "declared" or not c.get("validator"):
+        try:
+            from . import validators as _validators
+
+            repo_v = _validators.for_path(root, c["output"], c["input"])
+        except Exception:  # noqa: BLE001 — a broken file is said on the record, not raised
+            logger.info("input_fidelity: %s not read", ".boss/validators.yaml", exc_info=True)
+            repo_v = None
+        if repo_v:
+            c["validator"] = repo_v
     input_text = _read(root / c["input"])
     if input_text is None:
         logger.info("input_fidelity: the input %s is not in the tree", c["input"])
@@ -643,7 +654,9 @@ def check(root: Any, c: Mapping[str, Any], *,
                                "message": f"`{outp}` does not parse: {str(exc)[:200]}"})
             return result
         changes = structural_diff(before, after)
-        result["changes"] = [{k: (_short(v) if k in ("value", "before", "after") else v)
+        from .validators import mask
+
+        result["changes"] = [{k: (mask(_short(v)) if k in ("value", "before", "after") else v)
                               for k, v in ch.items()} for ch in changes[:_MAX_CHANGES]]
     differs = bool(changes) if changes is not None else (
         _norm_text(out_text, comments=False) != _norm_text(c.get("_input_text"), comments=False))
@@ -720,15 +733,19 @@ def repair_evidence(result: Mapping[str, Any]) -> str:
 # ── the validator's own record ─────────────────────────────────────────────────────────────────
 
 def validation_shape() -> dict:
-    """The ``validation`` record (step output and code_task_runs.state), documented."""
-    return {"validator": "str|None — the linter's program name",
-            "command": "str|None — the check command template ({file} = the file checked)",
-            "fix_command": "str|None — the auto-fix command template",
-            "input": "path", "output": "path",
-            "before": "[{rule, severity, file, line, message, fixable}] — findings on the input",
-            "fixes": "[{rule, file, line, before, after, kind: auto|manual, op}]",
-            "after": "[{rule, severity, file, line, message, fixable}] — findings on the output",
-            "exit": "{before, fix, after} — exit codes", "error": "str|None"}
+    """The ``validation`` record (step output and code_task_runs.state): ``boss.validation/v1``
+    (validators.record, SPEC §1.3), documented."""
+    return {"schema": "boss.validation/v1",
+            "validator": "{id, version, adapter}", "ruleset": "{id, version, sha}|None",
+            "input": "{file, sha256, from} — the bytes the run received",
+            "target": "path — the file the build writes",
+            "before": "{command, exit, findings: [V-n]} — the validator on the input",
+            "fix": "{command, exit}|None — the auto-fixer on a copy of the input",
+            "fixes": "[{finding, rule, file, line, before, after, kind: auto|agent, hunk_id}]",
+            "after": "{command, exit, findings: [V-n still open]}|None — on the target",
+            "findings": "[boss.finding/v1]", "hunks": "[{id, line, removed, added}]",
+            "evidence": "[{id: E-n, kind: command, cmd, exit}]",
+            "guard": "{code: input_substituted, source, why}|None", "error": "str|None"}
 
 
 _FINDING_LISTS = ("violations", "findings", "issues", "errors", "results", "problems",
@@ -782,111 +799,113 @@ def parse_findings(stdout: str, file: str) -> Optional[list[dict]]:
     return out
 
 
-def _rule_for(line_no: Optional[int], line_text: str, before: Sequence[Mapping[str, Any]]) -> Optional[str]:
-    if line_no is not None:
-        for f in before:
-            if f.get("line") == line_no:
-                return f.get("rule") or None
-    key = re.match(r"\s*-?\s*([\w-]+)\s*:", line_text or "")
-    if key:
-        # By the finding's own fix hint ("Add max_body_bytes to the route"), never its prose.
-        ch = {"kind": "key", "key": key.group(1)}
-        for f in before:
-            if justified(ch, [{"fix": f.get("fix") or f.get("message") or ""}]):
-                return f.get("rule") or None
-    return None
-
-
-def line_fixes(input_text: str, output_text: str, *, file: str,
-               before: Sequence[Mapping[str, Any]] = (),
-               auto_text: Optional[str] = None) -> list[dict]:
-    """The edits input → output, line by line: ``{rule, file, line, before, after, kind, op}``.
-    ``kind`` is ``auto`` when the auto-fixer produced the same line, else ``manual``."""
-    a = str(input_text or "").splitlines()
-    b = str(output_text or "").splitlines()
-    auto_lines = set(str(auto_text or "").splitlines()) - set(a) if auto_text is not None else set()
-    out: list[dict] = []
-    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
-        if tag == "equal":
-            continue
-        olds, news = a[i1:i2], b[j1:j2]
-        for k in range(max(len(olds), len(news))):
-            old = olds[k] if k < len(olds) else None
-            new = news[k] if k < len(news) else None
-            line_no = (i1 + k + 1) if old is not None else (i1 if i1 else 1)
-            out.append({"rule": _rule_for(line_no if old is not None else None,
-                                          old if old is not None else new or "", before),
-                        "file": file, "line": line_no, "before": old, "after": new,
-                        "kind": "auto" if new is not None and new in auto_lines else "manual",
-                        "op": "changed" if old is not None and new is not None
-                        else "removed" if new is None else "added"})
-            if len(out) >= _MAX_CHANGES:
-                return out
-    return out
-
-
 def run_validation(root: Any, c: Mapping[str, Any],
-                   run: Optional[Callable[[str], Any]]) -> dict:
-    """Run the validator on the input (before), the fixer on a copy of it, the validator on the
-    output (after), and diff input → output into fixes. ``run(command) -> result`` with
-    ``stdout``/``exit_code`` (the sandbox's allow-listed runner). Never raises."""
+                   run: Optional[Callable[[str], Any]], *,
+                   ruleset: Optional[Mapping[str, Any]] = None) -> dict:
+    """Run the validator on a copy of the input (before), the fixer on another copy, the
+    validator on the target (after), and record it all as ``boss.validation/v1``
+    (validators.record): findings V-n with P-levels, the fixes as hunks tied to findings, the
+    input-substitution guard. ``run(command) -> result`` with ``stdout``/``exit_code`` (the
+    sandbox's allow-listed runner). The copies carry the TARGET's file name (a linter may check
+    that a file is named for what it holds). Never raises."""
+    from . import validators as _v
+    from .validator_adapters import parse as _adapt
+
     root = Path(root)
     v = c.get("validator") if isinstance(c.get("validator"), Mapping) else {}
-    rec: dict = {"validator": v.get("name"), "command": v.get("check"),
-                 "fix_command": v.get("fix"), "input": c["input"], "output": c["output"],
-                 "before": [], "fixes": [], "after": [], "exit": {}, "error": None}
+    commands: dict[str, Optional[str]] = {"before": None, "fix": None, "after": None}
+    exits: dict[str, Any] = {}
+    before_raw = after_raw = None
+    auto_text = out_text = guard = error = None
     scratch = root / ".boss-validation"
-    auto_text = None
     try:
         input_text = str(c.get("_input_text") or "")
-        name = PurePosixPath(str(c["input"])).name
+        name = PurePosixPath(str(c["output"])).name
         if run is not None and (v.get("check") or v.get("fix")):
             scratch.mkdir(exist_ok=True)
             copy = scratch / name
             copy.write_text(input_text)
-            rel = str(copy.relative_to(root))
             if v.get("check"):
-                r = run(str(v["check"]).replace("{file}", shlex.quote(rel)))
-                rec["exit"]["before"] = getattr(r, "exit_code", None)
-                found = parse_findings(getattr(r, "stdout", "") or "", c["input"])
-                rec["before"] = [{**f, "file": c["input"]} for f in (found or [])]
-                if found is None:
-                    rec["error"] = "the validator's output on the input is not a JSON report"
+                cmd = str(v["check"]).replace("{file}", shlex.quote(str(copy.relative_to(root))))
+                commands["before"] = cmd
+                r = run(cmd)
+                exits["before"] = getattr(r, "exit_code", None)
+                before_raw = _adapt(v.get("adapter"), getattr(r, "stdout", "") or "", c["input"])
+                if before_raw is None:
+                    error = "the validator's output on the input is not a report"
             if v.get("fix"):
                 fixed = scratch / "fixed" / name
                 fixed.parent.mkdir(exist_ok=True)
                 fixed.write_text(input_text)
-                r = run(str(v["fix"]).replace("{file}", shlex.quote(str(fixed.relative_to(root)))))
-                rec["exit"]["fix"] = getattr(r, "exit_code", None)
+                cmd = str(v["fix"]).replace("{file}", shlex.quote(str(fixed.relative_to(root))))
+                commands["fix"] = cmd
+                r = run(cmd)
+                exits["fix"] = getattr(r, "exit_code", None)
                 auto_text = _read(fixed)
             if v.get("check") and (root / c["output"]).is_file():
-                r = run(str(v["check"]).replace("{file}", shlex.quote(str(c["output"]))))
-                rec["exit"]["after"] = getattr(r, "exit_code", None)
-                found = parse_findings(getattr(r, "stdout", "") or "", c["output"])
-                rec["after"] = [{**f, "file": c["output"]} for f in (found or [])]
+                cmd = str(v["check"]).replace("{file}", shlex.quote(str(c["output"])))
+                commands["after"] = cmd
+                r = run(cmd)
+                exits["after"] = getattr(r, "exit_code", None)
+                after_raw = _adapt(v.get("adapter"), getattr(r, "stdout", "") or "", c["output"])
         out_text = _read(root / c["output"])
-        if out_text is not None:
-            rec["fixes"] = line_fixes(input_text, out_text, file=c["output"],
-                                      before=rec["before"], auto_text=auto_text)
+        guard = _v.substituted(root, c, out_text, _data_files(root))
     except Exception as exc:  # noqa: BLE001 — a record that could not be made says why
         logger.info("input_fidelity: validation record failed", exc_info=True)
-        rec["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+        error = f"{type(exc).__name__}: {str(exc)[:200]}"
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+    rec = _v.record(c=c, validator=v, version=v.get("version") or _repo_tool_version(root, v),
+                    before_raw=before_raw,
+                    after_raw=after_raw, commands=commands, exits=exits, out_text=out_text,
+                    auto_text=auto_text, ruleset=ruleset, guard=guard, error=error)
+    # Justification only (check's added-key rule reads the fix hints); never stored.
+    rec["_hints"] = [{"rule": f.get("rule_id"), "severity": f.get("native_severity"),
+                      "file": c["input"], "line": f.get("line"), "message": f.get("title"),
+                      "fixable": f.get("fixable"),
+                      **({"fix": f["fix"]} if f.get("fix") else {}),
+                      **({"why": f["why"]} if f.get("why") else {})}
+                     for f in before_raw or []]
     return rec
+
+
+def _repo_tool_version(root: Path, v: Mapping[str, Any]) -> Optional[str]:
+    """A validator built from the repo (`go run ./cmd/gwlint …`) is versioned by the repo's
+    commit; a tool from PATH has no version BOSS can vouch for."""
+    if "./" not in str(v.get("check") or ""):
+        return None
+    import subprocess
+
+    try:
+        out = subprocess.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
+
+
+def guard_violation(validation: Optional[Mapping[str, Any]]) -> Optional[dict]:
+    """The input-substitution guard as a check violation (it fails the attempt)."""
+    g = (validation or {}).get("guard")
+    if not g:
+        return None
+    return {"code": "input_substituted", "source": g.get("source"), "message": (
+        f"`{(validation or {}).get('target')}` is not derived from the input the run received "
+        f"({g.get('why')}: `{g.get('source')}`). Rebuild it from the input.")}
 
 
 def findings_for_check(validation: Optional[Mapping[str, Any]]) -> Optional[list[dict]]:
     """The findings that may justify an addition: the validator's findings on the input, or None
     when no validator ran (then only added collection items are judged)."""
-    if not validation or not validation.get("command") or validation.get("error"):
+    if not validation or validation.get("error") \
+            or not (validation.get("before") or {}).get("command"):
         return None
-    return list(validation.get("before") or [])
+    return list(validation.get("_hints") or [])
 
 
 def public_validation(rec: Mapping[str, Any]) -> dict:
-    """The record without the justification-only fields."""
-    def strip(items):
-        return [{k: f.get(k) for k in ("rule", "severity", "file", "line", "message", "fixable")}
-                for f in items or []]
-    return {**rec, "before": strip(rec.get("before")), "after": strip(rec.get("after"))}
+    """The stored record: without the justification-only fields (its lines are already
+    secret-masked by validators.record)."""
+    return {k: v for k, v in rec.items() if not str(k).startswith("_")}

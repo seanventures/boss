@@ -1,0 +1,8 @@
+validators:
+  - id: gwlint
+    applies_to: ["config/tenants/*.yaml"]
+    run:   "go run ./cmd/gwlint validate {file} --json"
+    fix:   "go run ./cmd/gwlint --fix {file}"
+    output: {adapter: gwlint-json}
+    rules_doc: rules/api-guidelines.yaml
+    ruleset: northgate
