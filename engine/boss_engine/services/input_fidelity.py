@@ -1019,6 +1019,48 @@ def seed_auto_fix(root: Any, c: dict, run: Optional[Callable[[str], Any]]) -> Op
         shutil.rmtree(root / ".boss-validation", ignore_errors=True)
 
 
+ORIGINAL_COMMIT_PREFIX = "Original file as given"
+
+
+def commit_original(github: Any, branch: str, base_branch: Optional[str], c: dict) -> Optional[str]:
+    """THE ORIGINAL FILE IS THE CHANGE'S FIRST COMMIT ("fix a given file"): the input's bytes,
+    as given, written to the target path on the work branch BEFORE any fix. The change's own
+    history then reads original → fixed, and "Revert to original" is a plain file revert.
+
+    Only when the target is another path than the input, the build does not continue on the
+    branch itself (a repair or retry clones ``branch``: its tree's target is the earlier fix),
+    and the branch does not yet carry its own version of the target — judged against the BASE
+    branch's target, never the cloned tree's. Returns the commit sha, recorded as
+    c["original_commit"]; None when nothing was committed. Never raises."""
+    out, inp = str(c.get("output") or ""), str(c.get("input") or "")
+    text = c.get("_input_text")
+    if not out or out == inp or not isinstance(text, str) or not branch or branch == base_branch:
+        return None
+    try:
+        read = getattr(github, "read_text_file", None)
+
+        def _at(ref: Optional[str]) -> Optional[str]:
+            try:
+                return read(ref, out) if callable(read) and ref else None
+            except Exception:  # noqa: BLE001 — no branch / no file: nothing there
+                return None
+
+        on_branch = _at(branch)
+        if on_branch is not None and on_branch != _at(base_branch):
+            return None
+        github.ensure_branch(branch, base_branch)
+        from .software_factory import commit_change
+
+        shas = commit_change(github, branch, [(out, text)], f"{ORIGINAL_COMMIT_PREFIX}: {inp} → {out}")
+        sha = next((s for s in shas if s), None)
+        if sha:
+            c["original_commit"] = sha
+        return sha
+    except Exception:  # noqa: BLE001 — the build goes on from base; the diff is then whole-file
+        logger.info("input_fidelity: the original file was not committed first", exc_info=True)
+        return None
+
+
 def _hint_of(rec: Mapping[str, Any]) -> list[dict]:
     return [{"id": f"V-{n:02d}", "line": h.get("line"), "fix": h.get("fix"),
              "rule_id": h.get("rule")} for n, h in enumerate(rec.get("_hints") or [], start=1)]

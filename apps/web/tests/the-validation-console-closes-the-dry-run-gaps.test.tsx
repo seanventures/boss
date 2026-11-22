@@ -1,15 +1,14 @@
 // @vitest-environment happy-dom
 /**
  * THE DRY RUN'S CONSOLE GAPS (Lumen Pay → Northgate, change #11), each pinned:
- *   #6  Reject opens a reason field on its row; Send waits for a reason; errors are said on the row.
- *   #7  Edit opens the WHOLE hunk (every line), the partner's lines beside it for reference.
  *   #10 One count: review follow-ups are a "review" line, never P1 "found"; the badge, the card,
  *       the Built column and the Work panel's run/build read the same packet.
  *   #11 A finding whose line the fix removed shows the partner's line, never "—".
- *   #13 One override per press: a press after it succeeded (after "Confirm it's you") sends nothing.
  *   #14 The change page's Merge follows the packet: blocked → the reasoned "Merge anyway".
  *   #15 No ruleset / validators.yaml: Create ruleset and Add validator, pre-filled; a 404 says
  *       it needs the latest BOSS and keeps the buttons disabled.
+ * #6, #7 and #13 (the override controls) moved with the notes to
+ * tests/validation-is-a-checker-on-the-change-page.test.tsx.
  */
 import React, { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,7 +18,6 @@ import {
   blockingOpen, blockingRows, parseValidatorsFile, rulesetCreateBody, validatorsBody, lineWords, NEEDS_LATEST, packetTally, parsePacket, parseValidation, rulesetTemplate, validatorTemplate,
 } from "../lib/validation-review";
 import { VALIDATION_OPEN } from "../lib/validation-review-fixtures";
-import { ValidationFlow, ValidationTab } from "../app/validation/validation-tab";
 import { ReviewPacketView, packetHold } from "../app/validation/review-packet";
 import { ValidationBuilt } from "../app/validation/built-summary";
 import { CreateValidation } from "../app/validation/ruleset-editor";
@@ -57,7 +55,6 @@ const type = async (el: Element | null, value: string) => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 };
-const fix = (id: string) => $(`[data-testid="vr-fix"][data-finding="${id}"]`)!;
 const posts = (calls: Call[]) => calls.filter((c) => c.method === "POST");
 
 // The dry run's packet: 9 gwlint findings (4 P0 fixed, P1 V-03/V-08 open) and 5 review notes
@@ -78,72 +75,6 @@ const DRY_PACKET = {
              v("V-07", "P0", "fixed", null, 21), v("V-09", "P0", "fixed", 37, 35), v("V-01", "P1", "fixed", 9, 1), v("V-04", "P1", "fixed", 19, 7),
              v("V-02", "P2", "fixed", 13, 5), r("R-1"), r("R-2"), r("R-3"), r("R-4"), r("R-5")],
 };
-
-describe("#6 Reject asks why on its row, and every error is said beside the row", () => {
-  it("Reject opens a reason field; Send waits, with a tooltip, until a reason is typed", async () => {
-    const calls = engine();
-    await mount(<ValidationTab projectId="northgate-gateway" change={9} />);
-    await press(fix("V-06").querySelector('[data-testid="vr-reject"]'));
-    expect(posts(calls)).toHaveLength(0);
-    const send = fix("V-06").querySelector('[data-testid="vr-reject-send"]') as HTMLButtonElement;
-    expect(send.disabled).toBe(true);
-    expect(send.getAttribute("title")).toBe("Write why first");
-    await type(fix("V-06").querySelector('[data-testid="vr-reject-reason"]'), "Partner named one dashboard origin");
-    expect(send.disabled).toBe(false);
-    await press(send);
-    expect(posts(calls)[0]).toMatchObject({ path: "/v1/changes/northgate-gateway/9/findings/V-06/override",
-      body: { action: "reject", reason: "Partner named one dashboard origin", head_sha: "eaff448" } });
-  });
-
-  it("an engine refusal is said in full on that row, never as a small line at the top", async () => {
-    engine((c) => (c.method === "POST" ? { status: 422, body: { error: "reason_required", message: "Say why." } } : undefined));
-    await mount(<ValidationTab projectId="northgate-gateway" change={9} />);
-    await press(fix("V-02").querySelector('[data-testid="vr-waive"]'));
-    await type(fix("V-02").querySelector('[data-testid="vr-waive-reason"]'), "no PII in query params");
-    await press(fix("V-02").querySelector('[data-testid="vr-waive-send"]'));
-    const said = fix("V-02").querySelector('[data-testid="vr-row-said"]')!;
-    expect(said.getAttribute("role")).toBe("alert");
-    expect(said.textContent).toBe("Write why first. The reason is recorded on the change.");
-    expect($('[data-testid="vr-said"]')).toBeNull();
-    // The form stays open with what was typed, so the person can fix it there.
-    expect(fix("V-02").querySelector('[data-testid="vr-waive-form"]')).not.toBeNull();
-  });
-});
-
-describe("#7 Edit opens the whole hunk", () => {
-  const line = (finding: string, before: string | null, after: string | null) =>
-    ({ finding, rule: "cors-no-wildcard-with-credentials", file: "t.yaml", line: 18, before, after, kind: "agent", hunk_id: "h-06" });
-  const withHunk = (after3: string) => ({ ...VALIDATION_OPEN, fixes: [
-    line("V-06", "    cors:", null), line("V-06", "      allow_origins: [\"*\"]", null), line("V-06", "      allow_credentials: true", null),
-    line("V-06", null, "    cors:"), line("V-06", null, "      allow_origins: [\"*\"]"), line("V-06", null, after3),
-  ] });
-
-  it("every line of the hunk is editable (allow_origins too), with the partner's lines for reference", async () => {
-    const calls = engine(undefined, withHunk("      allow_credentials: false"));
-    await mount(<ValidationTab projectId="northgate-gateway" change={9} />);
-    await press(fix("V-06").querySelector('[data-testid="vr-edit"]'));
-    const box = fix("V-06").querySelector('[data-testid="vr-edit-text"]') as HTMLTextAreaElement;
-    expect(box.tagName).toBe("TEXTAREA");
-    expect(box.value).toBe("    cors:\n      allow_origins: [\"*\"]\n      allow_credentials: false");
-    expect(fix("V-06").querySelector('[data-testid="vr-edit-partner"]')!.textContent).toBe("    cors:\n      allow_origins: [\"*\"]\n      allow_credentials: true");
-    const hunk = "    cors:\n      allow_origins: [\"https://dashboard.lumenpay.example\"]\n      allow_credentials: true";
-    await type(box, hunk);
-    await type(fix("V-06").querySelector('[data-testid="vr-edit-reason"]'), "Dashboard needs cookies");
-    await press(fix("V-06").querySelector('[data-testid="vr-edit-save"]'));
-    expect(posts(calls)[0].body).toMatchObject({ action: "edit", text: hunk, reason: "Dashboard needs cookies" });
-  });
-
-  it("a masked value left in the lines is never committed: Save waits and says why", async () => {
-    engine(undefined, withHunk("      allow_credentials: [SECRET]"));
-    await mount(<ValidationTab projectId="northgate-gateway" change={9} />);
-    await press(fix("V-06").querySelector('[data-testid="vr-edit"]'));
-    await type(fix("V-06").querySelector('[data-testid="vr-edit-reason"]'), "why");
-    const save = fix("V-06").querySelector('[data-testid="vr-edit-save"]') as HTMLButtonElement;
-    expect(save.disabled).toBe(true);
-    expect(save.getAttribute("title")).toBe("Replace the masked value first");
-    expect(fix("V-06").querySelector('[data-testid="vr-edit-masked"]')).not.toBeNull();
-  });
-});
 
 describe("#10 one count, review follow-ups on their own line", () => {
   it("packetTally: P1 is 4 found · 2 open, review 5 — whatever the engine's counts said", () => {
@@ -206,51 +137,6 @@ describe("#10 one count, review follow-ups on their own line", () => {
 describe("#11 a removed line shows the partner's line", () => {
   it("lineWords falls back to partner_line; a P0 row never reads —", async () => {
     expect(lineWords({ location: { file: "", line: null, end_line: null, partner_line: 17 } })).toBe("L17");
-    const val = parseValidation({ ...VALIDATION_OPEN, findings: DRY_PACKET.findings.filter((f) => f.id.startsWith("V-")) })!;
-    engine();
-    await mount(<ValidationFlow v={val} projectId="northgate-gateway" change={11} onChanged={() => {}} />);
-    const p0 = $$('[data-testid="vr-grp-P0"] [data-testid="vr-finding"] .line').map((e) => e.textContent);
-    // The partner's lines (dry run 2, gap 11): the upstream's branch line 37 is its partner line 35.
-    expect(p0).toEqual(["L17", "L20", "L21", "L35"]);
-    expect(p0).not.toContain("—");
-    expect(fix("V-05").textContent).toContain("· L17");
-  });
-});
-
-describe("#13 one override per press", () => {
-  it("after a press succeeds, every control waits for the re-read: a second press sends nothing", async () => {
-    const calls = engine();
-    const val = parseValidation(VALIDATION_OPEN)!;
-    await mount(<ValidationFlow v={val} projectId="northgate-gateway" change={9} onChanged={() => {}} />);
-    const accept = fix("V-03").querySelector('[data-testid="vr-accept"]') as HTMLButtonElement;
-    await act(async () => { accept.click(); accept.click(); });
-    await settle();
-    expect(posts(calls)).toHaveLength(1);
-    // The step-up replay already sent it: the button the script pressed again is now held.
-    const again = fix("V-03").querySelector('[data-testid="vr-accept"]') as HTMLButtonElement;
-    expect(again.disabled).toBe(true);
-    expect(again.getAttribute("title")).toBe("Re-checking after the last change");
-    await press(again);
-    await press(fix("V-01").querySelector('[data-testid="vr-accept"]'));
-    expect(posts(calls)).toHaveLength(1);
-  });
-
-  it("Needs you: the agent's refused change is shown as a proposal, and Accept sends accept", async () => {
-    const needs = { id: "V-77", source: { kind: "validator", name: "gwlint", rule_id: "no-sensitive-paths-exposed" }, severity: "P0", status: "open",
-      fix_kind: "human", hunk_id: "", location: { file: "config/tenants/lumen-pay.yaml", line: 21, partner_line: 21 }, original: "  - path: /v1/admin/accounts", fixed: null,
-      held: { autofix: "human", by: "ruleset" }, proposed: { before: "  - path: /v1/admin/accounts", after: null, applicable: true, pieces: [] } };
-    const calls = engine(undefined, { ...VALIDATION_OPEN, findings: [...(VALIDATION_OPEN as { findings: unknown[] }).findings, needs] });
-    await mount(<ValidationTab projectId="northgate-gateway" change={9} />);
-    expect(fix("V-77").querySelector('[data-testid="vr-proposed-lines"]')!.textContent).toContain("- path: /v1/admin/accounts");
-    await press(fix("V-77").querySelector('[data-testid="vr-accept"]'));
-    expect(posts(calls)[0]).toMatchObject({ path: "/v1/changes/northgate-gateway/9/findings/V-77/override", body: { action: "accept" } });
-  });
-
-  it("an accepted fix shows 'accepted', not a second Accept", async () => {
-    engine(undefined, { ...VALIDATION_OPEN, overrides: [{ ref: "O-1", action: "accept", finding_id: "V-03", actor: "Owner" }] });
-    await mount(<ValidationTab projectId="northgate-gateway" change={9} />);
-    expect(fix("V-03").querySelector('[data-testid="vr-accept"]')).toBeNull();
-    expect(fix("V-03").querySelector('[data-testid="vr-controls"]')!.textContent).toContain("accepted");
   });
 });
 

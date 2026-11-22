@@ -15,7 +15,7 @@
  *
  * Every call names its change (ChangeAt), so a local change set and a GitHub PR are one page.
  */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   ArrowRight, CaretDown, CaretRight, ChatCircleDots, CheckCircle, CircleNotch, ClockCounterClockwise, Code,
   Columns, FolderOpen, GitBranch, GitCommit, GitMerge, PaperPlaneRight, Robot, Rows, ShieldCheck, Terminal, Wrench, X, XCircle,
@@ -37,6 +37,7 @@ import { whenLocal } from "../../../../lib/local-time";
 import { FileTree } from "./file-tree";
 import { AgentActions, CommentCode, CopyButton, ThreadView, WhereItLives, Who, useLineReview, type LineReview } from "./local-review";
 import { DockPane, FullScreenButton, useReviewLayout } from "./review-dock";
+import { PinsContext } from "./pins";
 
 type InlineNote = { path?: string; line?: number; body: string; author: string };
 
@@ -85,10 +86,19 @@ export function DiffTable({ file, inline, review, layout = "unified" }: {
   file: DiffFile; inline: Map<string, InlineNote[]>; review?: LineReview; layout?: "unified" | "split";
 }) {
   const lang = langOf(file.path);
+  // Notes pinned on lines (validation findings, ./pins): under their row, like a comment.
+  const pins = useContext(PinsContext);
+  const placed = useMemo(() => pins?.forFile(file) ?? null, [pins, file]);
+  const pinned = (cols: number, side: "new" | "old", line: number | null | undefined) => {
+    const n = placed && line != null ? placed.row(side, line) : null;
+    return n ? <tr className="cs-inline cs-pin" data-testid="change-set-pinned"><td colSpan={cols}>{n}</td></tr> : null;
+  };
+  const top = (cols: number) => (placed?.top ? <tr className="cs-inline cs-pin"><td colSpan={cols}>{placed.top}</td></tr> : null);
   if (layout === "split") {
     return (
       <div className="cs-diff" role="region" aria-label={`Diff of ${file.path}, side by side`} tabIndex={0} data-layout="split">
         <table className="gr-split"><tbody>
+          {top(4)}
           {file.hunks.map((h, hi) => (
             <React.Fragment key={hi}>
               <tr className="cs-hunk"><td colSpan={4}><span className="cs-mono">{h.header.replace(/ @@.*$/, " @@")}</span>{h.section ? <span className="cs-faint"> {h.section}</span> : null}</td></tr>
@@ -108,6 +118,8 @@ export function DiffTable({ file, inline, review, layout = "unified" }: {
                     </tr>
                     {notes ? <tr className="cs-inline"><td colSpan={4}>{notes.map((n, ni) => <InlineNote key={ni} author={n.author} body={n.body} />)}</td></tr> : null}
                     {under.map((a) => <tr key={`${a.side}${a.line}`} className="cs-inline"><td colSpan={4}>{review!.under(a)}</td></tr>)}
+                    {left ? pinned(4, "old", left.line) : null}
+                    {right ? pinned(4, "new", right.line) : null}
                   </React.Fragment>
                 );
               })}
@@ -121,6 +133,7 @@ export function DiffTable({ file, inline, review, layout = "unified" }: {
     <div className="cs-diff" role="region" aria-label={`Diff of ${file.path}`} tabIndex={0} data-layout="unified">
       <table>
         <tbody>
+          {top(3)}
           {file.hunks.map((h, hi) => (
             <React.Fragment key={hi}>
               <tr className="cs-hunk"><td colSpan={3}><span className="cs-mono">{h.header.replace(/ @@.*$/, " @@")}</span>{h.section ? <span className="cs-faint"> {h.section}</span> : null}</td></tr>
@@ -145,6 +158,7 @@ export function DiffTable({ file, inline, review, layout = "unified" }: {
                       </td></tr>
                     ) : null}
                     {threaded && review && anchor ? <tr className="cs-inline"><td colSpan={3}>{review.under(anchor)}</td></tr> : null}
+                    {anchor ? pinned(3, anchor.side, anchor.line) : null}
                   </React.Fragment>
                 );
               })}
@@ -197,6 +211,7 @@ export function DiffBrowser({ cs, at, files, diff, review, inline, layout, toolb
   focus?: { path: string; n: number } | null;
 }) {
   const dock = useReviewLayout();
+  const pins = useContext(PinsContext);
   const parsed = useMemo(() => parseUnifiedDiff(diff), [diff]);
   const [mode, setMode] = useState<"changed" | "all">("changed");
   const [filter, setFilter] = useState("");
@@ -210,8 +225,9 @@ export function DiffBrowser({ cs, at, files, diff, review, inline, layout, toolb
   }, [mode, all, at]);
   const rows = filterFiles(treeFiles(files, all?.items ?? null, cs.comments, mode), filter);
   const shown = filterFiles(files.map((f) => ({ ...f, diff: parsed.find((d) => d.path === f.path) ?? null })), filter);
-  const [open, setOpen] = useState<Set<string>>(() => new Set(files.slice(0, OPEN_FIRST).map((r) => r.path)));
-  useEffect(() => { setOpen(new Set(files.slice(0, OPEN_FIRST).map((r) => r.path))); }, [diff]); // eslint-disable-line react-hooks/exhaustive-deps
+  const first = () => new Set([...files.slice(0, OPEN_FIRST).map((r) => r.path), ...(pins?.open ?? [])]);
+  const [open, setOpen] = useState<Set<string>>(first);
+  useEffect(() => { setOpen(first()); }, [diff, pins?.open.join("\n")]); // eslint-disable-line react-hooks/exhaustive-deps
   const [current, setCurrent] = useState<string | null>(null);
   useEffect(() => {
     if (!focus) return;
@@ -281,6 +297,7 @@ export function DiffBrowser({ cs, at, files, diff, review, inline, layout, toolb
                       <i data-k="del" style={{ width: `${(r.deletions / max) * 100}%` }} />
                     </span>
                   </button>
+                  {pins?.head(r.path) ?? null}
                   {r.status !== "removed" && r.status !== "deleted" ? (
                     <button type="button" className="lr-link" data-testid="change-set-view-file" onClick={() => onViewFile(r.path)}
                             title="Open the whole file in the Code tab"><Code size={12} aria-hidden />View file</button>) : null}
@@ -635,9 +652,9 @@ export function checksWords(cs: ChangeSet): { tone: "green" | "red" | "amber" | 
   return { tone: "amber", label: s ? `Build ${s.replace(/_/g, " ")}` : "Checks —" };
 }
 
-export function ChecksTab({ cs, decision }: { cs: ChangeSet; decision: React.ReactNode }) {
-  const c = cs.checks;
-  const tests = c?.tests_passed;
+/** CHECKS: the decision, the fix round, then one row per checker (`rows`: build, tests, CI
+ *  runs, validators, scans, the reviewer — app/validation/checks-rows.tsx). */
+export function ChecksTab({ cs, decision, rows }: { cs: ChangeSet; decision: React.ReactNode; rows: React.ReactNode }) {
   const ck = checksWords(cs);
   return (
     <div className="gr-checks">
@@ -645,18 +662,7 @@ export function ChecksTab({ cs, decision }: { cs: ChangeSet; decision: React.Rea
       <AgentActions cs={cs} />
       <section className="cs-card" id="cs-checks" data-testid="change-set-checks" aria-label="Checks">
         <div className="cs-card-h"><ShieldCheck size={15} aria-hidden /><b>Checks</b><span className="cs-spacer" /><span className="cs-pill" data-tone={ck.tone}>{ck.label}</span></div>
-        {c ? (
-          <ul className="cs-checks">
-            {c.run_status != null ? <>
-              <li><span className="cs-dot" data-tone={/fail|error/i.test(c.run_status ?? "") ? "red" : c.run_status ? "green" : "grey"} aria-hidden />Build<span className="cs-spacer" /><span className="cs-faint">{(c.run_status ?? "—").replace(/_/g, " ")}</span></li>
-              <li><span className="cs-dot" data-tone={tests === "true" ? "green" : tests === "false" ? "red" : "grey"} aria-hidden />Tests<span className="cs-spacer" /><span className="cs-faint">{tests === "true" ? "passed" : tests === "false" ? "failed" : tests ?? "—"}</span></li>
-            </> : null}
-            {(c.items ?? []).map((i) => (
-              <li key={`${i.app}${i.name}`} data-testid="gr-check-run"><span className="cs-dot" data-tone={i.conclusion === "success" ? "green" : /fail|error|cancel|timed/.test(String(i.conclusion)) ? "red" : "amber"} aria-hidden />
-                {i.name}<span className="cs-spacer" /><span className="cs-faint">{i.conclusion ?? i.status ?? "—"}</span></li>))}
-            <li className="cs-faint cs-small">In {c.where}</li>
-          </ul>
-        ) : <p className="cs-empty">No build recorded for this change.</p>}
+        {rows}
       </section>
     </div>
   );

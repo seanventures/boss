@@ -1085,6 +1085,7 @@ function DecisionInboxRow({
                ref={(el) => { if (el && highlighted) el.scrollIntoView({ block: "center" }); }}>
         <ReviewPacketView packet={packet} projectId={projectId} fallbackTitle={typeof rec.title === "string" ? rec.title : ""}
                           eyebrow={`${who} proposes · merge`}
+                          compact
                           actions={packet.verdict.state === "invalid" && isPending
                             ? <RebuildPacket projectId={projectId} change={packet.work.change} /> : null} />
         {/* What the merge card said before the packet, and still must: checks failing (security

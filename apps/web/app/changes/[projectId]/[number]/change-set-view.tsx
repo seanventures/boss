@@ -7,7 +7,9 @@
  *
  *   header   two lines: title #n · state · branch → base · checks · open comments · Clone ·
  *            (Open on GitHub) · Request changes · Merge — then where it is (repository, sync)
- *   tabs     Conversation · Commits · Files changed · Code · Checks
+ *   tabs     Overview · Conversation · Commits · Files changed · Code · Checks — validation is a
+ *            checker: its row on Checks, its findings as notes on their lines in Files changed
+ *            (workflow-library DESIGN decision 4); an old ?tab=validation opens Checks
  *   panes    full width: the tab (Files changed: tree | diff) and the PR agent on the right;
  *            under 1100px the agent is a button; on a phone the diff alone
  *
@@ -44,14 +46,22 @@ import {
 import { DockPane, ReviewLayoutProvider, useReviewLayout } from "./review-dock";
 import { TicketSyncBadge } from "../../../projects/linked-ticket";
 import { blockingOpen, blockingRows, packetOf, packetTally, type ReviewPacket } from "../../../../lib/validation-review";
+import { originalCommit } from "../../../../lib/line-notes";
 import { ReviewPacketView, packetHold } from "../../../validation/review-packet";
-import { ValidationTab } from "../../../validation/validation-tab";
+import { useValidation, useValidationPins } from "../../../validation/line-notes";
+import { CheckRows } from "../../../validation/checks-rows";
+import { PinsContext } from "./pins";
 import "./change-set.css";
 
 export { InlineNote, Review };
 
-export type Tab = "overview" | "validation" | "conversation" | "commits" | "files" | "code" | "checks";
-const TABS: Tab[] = ["overview", "validation", "conversation", "commits", "files", "code", "checks"];
+export type Tab = "overview" | "conversation" | "commits" | "files" | "code" | "checks";
+const TABS: Tab[] = ["overview", "conversation", "commits", "files", "code", "checks"];
+/** A tab named in a link: the retired Validation tab is Checks now. */
+export function tabOf(t: string | null | undefined): Tab | null {
+  const x = t === "validation" ? "checks" : t;
+  return TABS.includes(x as Tab) ? (x as Tab) : null;
+}
 
 export function ChangeSetView({ projectId, number, repo = null, tab = null, commit = null, loc = null, me = null, org = null, project = null }: {
   projectId: string; number: string;
@@ -67,7 +77,7 @@ export function ChangeSetView({ projectId, number, repo = null, tab = null, comm
   return (
     <IdentityProvider me={me} org={org} project={project} projectId={projectId}>
       <ReviewLayoutProvider page="change">
-        <ChangeSetPage projectId={projectId} number={number} repo={repo} startTab={TABS.includes(tab as Tab) ? (tab as Tab) : null}
+        <ChangeSetPage projectId={projectId} number={number} repo={repo} startTab={tabOf(tab)}
                        startCommit={commit} startLoc={loc} />
       </ReviewLayoutProvider>
       <ConsentHost />
@@ -145,6 +155,14 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
 
   // EVERY TAB SWITCHES THE MAIN VIEW, AND THE URL KEEPS IT (?tab=…&commit=…): links and Back work.
   const [tab, setTabState] = useState<Tab>(startTab ?? (startCommit ? "commits" : "files"));
+  // ?tab=validation (old links): the page shows Checks, and the address says so.
+  useEffect(() => {
+    if (startTab !== "checks") return;
+    try {
+      const q = new URLSearchParams(window.location.search);
+      if (q.get("tab") === "validation") { q.set("tab", "checks"); window.history.replaceState(window.history.state, "", `${window.location.pathname}?${q}`); }
+    } catch { /* the view is right either way */ }
+  }, [startTab]);
   const [shownCommit, setShownCommit] = useState<string | null>(startCommit);
   const go = useCallback((t: Tab, commit: string | null = null) => {
     setTabState(t); setShownCommit(t === "commits" ? commit : null);
@@ -155,7 +173,7 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
   useEffect(() => {
     const back = () => {
       const r = readChangeUrl(window.location.pathname, window.location.search);
-      setTabState(TABS.includes(r.tab as Tab) ? (r.tab as Tab) : "files");
+      setTabState(tabOf(r.tab) ?? "files");
       setShownCommit(r.commit);
       if (r.loc) setFocus({ path: r.loc.path, n: Date.now() });
     };
@@ -163,6 +181,18 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
     return () => window.removeEventListener("popstate", back);
   }, []);
   const [range, setRange] = useState<Range>(WHOLE_CHANGE);
+  // VALIDATION IS A CHECKER: read once for the Checks rows and the notes on Files changed.
+  const validation = useValidation(projectId, cs ? cs.number || number : null);
+  const v = validation.state === "ready" ? validation.data : null;
+  // "FIX A GIVEN FILE": the original file is the change's first commit, so Files changed opens
+  // on original → fixed (that commit … head); the whole change stays one click away.
+  const original = useMemo(() => (v?.target ? originalCommit(commits) : null), [v?.target, commits]);
+  const rangeSet = useRef(false);
+  useEffect(() => {
+    if (!original || rangeSet.current) return;
+    rangeSet.current = true;
+    setRange((r) => (!r.base && !r.head ? { base: original.sha, head: null } : r));
+  }, [original]);
   // THE ONE SOURCE OF EVERY COUNT: the diff of the current base…head (the whole change, or the
   // range the person picked), read once here; the tab badge, tree, toolbar and summary read it.
   const whole = !range.base && !range.head;
@@ -190,6 +220,8 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
   // (faster) read say "resolved" while the thread and the header still said open.
   const reread = useCallback(() => { void read().catch(() => null).finally(() => setAgentKey((k) => k + 1)); }, [read]);
   const jump = useJumpTo();
+  const pins = useValidationPins(v, projectId, cs?.number || number, () => { validation.refresh(); reread(); },
+                                 original ? commits.indexOf(original) + 1 : 0);
   const inline = useMemo(() => commentsByLine<Note>((cs?.review ?? []).flatMap((n) =>
     n.comments.map((c) => ({ ...c, author: n.author })))), [cs?.review]);
   const lineReview = useLineReview({
@@ -208,10 +240,10 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
     }, 160);
   }, []);
   const onJumpLoc = useCallback((path: string, line?: number | null, side: "new" | "old" = "new") => {
-    setRange(WHOLE_CHANGE); setFocus({ path, n: Date.now() }); setTabState("files"); setShownCommit(null);
+    setRange(original ? { base: original.sha, head: null } : WHOLE_CHANGE); setFocus({ path, n: Date.now() }); setTabState("files"); setShownCommit(null);
     try { window.history.pushState({ tab: "files" }, "", changeUrl(asked, "files", null, { path, line, side })); } catch { /* the view still moves */ }
     scrollLoc(path, line, side);
-  }, [asked, scrollLoc]);
+  }, [asked, scrollLoc, original]);
   // A pasted ?file=&line= link: the page lands on that row once the diff is there.
   const landed = useRef(false);
   useEffect(() => {
@@ -290,46 +322,44 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
           </header>
           <nav className="cs-tabs gr-tabs" aria-label="Sections" role="tablist">
             <TabLink tab="overview" on={tab} set={setTab} icon={<Info size={13} aria-hidden />} label="Overview" n={activeCount || undefined} />
-            <TabLink tab="validation" on={tab} set={setTab} icon={<ListChecks size={13} aria-hidden />} label="Validation"
-                     n={packet ? blockingOpen(packetTally(packet)) || undefined : undefined} />
             <TabLink tab="conversation" on={tab} set={setTab} icon={<ChatCircleText size={13} aria-hidden />} label="Conversation" n={commentCount} />
             <TabLink tab="commits" on={tab} set={setTab} icon={<GitCommit size={13} aria-hidden />} label="Commits" n={commits.length || cs.commits.length} />
             <TabLink tab="files" on={tab} set={setTab} icon={<FileCode size={13} aria-hidden />} label="Files changed" n={files.length} />
             <TabLink tab="code" on={tab} set={setTab} icon={<Code size={13} aria-hidden />} label="Code" />
-            <TabLink tab="checks" on={tab} set={setTab} icon={<ShieldCheck size={13} aria-hidden />} label="Checks" n={checkCount || undefined} />
+            <TabLink tab="checks" on={tab} set={setTab} icon={<ListChecks size={13} aria-hidden />} label="Checks"
+                     n={(packet ? blockingOpen(packetTally(packet)) : 0) || checkCount || undefined} />
           </nav>
-          {/* The Validation tab's four columns need the page's width: no agent pane beside them. */}
-          <div className="gr-body" data-full={tab === "validation" || undefined}>
+          <div className="gr-body">
             <div className="gr-tab" data-tab={tab}>
               {tab === "files" ? (
+                <PinsContext.Provider value={range.head ? null : pins}>
                 <FilesTab cs={cs} at={at} commits={commits} files={files} diff={diffNow} loading={!whole && !ranged && !rangeErr} focus={focus}
                           error={rangeErr} review={lineReview} inline={inline} viewed={viewed}
                           onViewed={setViewedState} onViewFile={openCode} range={range} setRange={setRange} />
+                </PinsContext.Provider>
               ) : tab === "code" ? (
                 <div id="lr-code"><CodeTab cs={cs} at={at} startPath={codePath} onChanged={reread} commits={commits} /></div>
               ) : tab === "commits" ? (
                 <CommitsTab cs={cs} at={at} commits={commits} shown={shownCommit} onShow={(sha) => go("commits", sha)}
                             hrefFor={(sha) => changeUrl(asked, "commits", sha)} wholeFiles={wholeFiles} wholeDiff={cs.diff}
                             review={lineReview} inline={inline} onCompare={(r) => { setRange(r); setTab("files"); }} onViewFile={openCode} />
-              ) : tab === "validation" ? (
-                <ValidationTab projectId={projectId} change={cs.number || number} />
               ) : tab === "overview" ? (
                 <>
                 {packet ? <div style={{ marginBottom: 16 }}><ReviewPacketView packet={packet} projectId={projectId} fallbackTitle={cs.title}
-                                                                    eyebrow="Review packet" testid="change-packet" /></div> : null}
+                                                                    eyebrow="Review packet" testid="change-packet" compact /></div> : null}
                 <OverviewTab cs={cs} at={at} files={wholeFiles} commitHref={(sha) => changeUrl(asked, "commits", sha)} onChanged={reread}
                              onJump={onJump} onJumpLoc={onJumpLoc} onFiles={() => { setRange(WHOLE_CHANGE); setTab("files"); }} />
                 </>
               ) : tab === "conversation" ? (
                 <ConversationTab cs={cs} at={at} files={wholeFiles} commitHref={(sha) => changeUrl(asked, "commits", sha)} onChanged={reread} onJump={onJump} onFiles={() => { setRange(WHOLE_CHANGE); setTab("files"); }} />
               ) : (
-                <ChecksTab cs={cs} decision={<DecisionCard cs={cs} at={at} reread={read} />} />
+                <ChecksTab cs={cs} decision={<DecisionCard cs={cs} at={at} reread={read} />}
+                           rows={<CheckRows cs={cs} v={v} packet={packet} onJump={onJumpLoc} projectId={projectId} />} />
               )}
             </div>
-            {tab === "validation" ? null : (
             <DockPane pane="agent" label="Agent" icon={<Robot size={15} aria-hidden />} testid="gr-dock-agent">
               <AgentPane cs={cs} at={at} onJump={jumpId} commitHref={(sha) => changeUrl(asked, "commits", sha)} onChanged={reread} refreshKey={agentKey} />
-            </DockPane>)}
+            </DockPane>
           </div>
         </>
       ) : null}

@@ -11,6 +11,7 @@
  * are what the page's tree, Commits tab and agent pane render.
  */
 import { idGet, idPost } from "./identity/api";
+import { isOriginalCommit } from "./line-notes";
 import { withConsent } from "./identity/consent";
 
 /** Which change: a local change set (no repo) or a GitHub PR of the project (`owner/repo`). */
@@ -260,7 +261,8 @@ export function sinceMyReview(viewed: Viewed | null, head: string | null): Range
 /** How the range reads in the picker: "main … 9e4f1c2 · latest". */
 export function rangeLabel(range: Range, baseBranch: string, commits: Commit[]): string {
   const short = (s: string | null) => (s ? s.slice(0, 7) : "");
-  const base = range.base ? short(range.base) : baseBranch;
+  // The engine's "original file as given" commit (fix a given file) is named, never a sha.
+  const base = range.base ? (commits.some((c) => c.sha === range.base && isOriginalCommit(c.message)) ? "Original file" : short(range.base)) : baseBranch;
   const head = range.head ? short(range.head) : short(commits[0]?.sha ?? null);
   const latest = !range.head || range.head === commits[0]?.sha;
   return `${base} … ${head || "head"}${latest ? " · latest" : ""}`;

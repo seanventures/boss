@@ -12,6 +12,7 @@
  *       branch's line is the tooltip.
  *   #12 The Work panel's funnel and the merge card's checks row print the same counts, guard
  *       findings included, with "3 need you"; a ruleset propose says which change it opened.
+ * #2's controls and #7's notes moved to tests/validation-is-a-checker-on-the-change-page.test.tsx.
  */
 import React, { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,7 +23,6 @@ import {
   countsWords, funnelOf, lineTitle, lineWords, parsePacket, parseRulesets, parseValidation, partnerNow, removalBlock, validationCounts,
 } from "../lib/validation-review";
 import { RULESET_NORTHGATE } from "../lib/validation-review-fixtures";
-import { ValidationFlow } from "../app/validation/validation-tab";
 import { ReviewPacketView } from "../app/validation/review-packet";
 import { ValidationBuilt } from "../app/validation/built-summary";
 import { RulesetEditor } from "../app/validation/ruleset-editor";
@@ -63,7 +63,6 @@ const type = async (el: Element | null, value: string) => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 };
-const fix = (id: string) => $(`[data-testid="vr-fix"][data-finding="${id}"]`)!;
 const posts = (calls: Call[]) => calls.filter((c) => c.method === "POST");
 
 /** The run's answer, with the agent's refused proposal on V-07 (as the Validation tab showed it). */
@@ -72,62 +71,8 @@ function dry2(proposal: Record<string, unknown> | null = { before: "  - path: /v
   raw.validation.findings = raw.validation.findings.map((f) => (f.id === "V-07" ? { ...f, proposed: proposal } : f));
   return parseValidation(raw)!;
 }
-const flow = async (v = dry2()) => mount(<ValidationFlow v={v} projectId="northgate-gateway" change={14} onChanged={() => {}} />);
 
 describe("#2 Remove these lines", () => {
-  it("the admin route's block (partner lines 21–33) is shown; a reason is required; the engine's remove is sent", async () => {
-    const calls = engine();
-    await flow();
-    const card = fix("V-07");
-    expect(card.querySelector('[data-testid="vr-remove"]')).not.toBeNull();
-    // Not offered on a finding an agent fixes (only "Needs you").
-    expect(fix("V-09").querySelector('[data-testid="vr-remove"]')).toBeNull();
-    await press(card.querySelector('[data-testid="vr-remove"]'));
-    const lines = [...card.querySelectorAll('[data-testid="vr-remove-lines"] span')].map((e) => e.textContent);
-    expect(lines[0]).toBe("-   - path: /v1/admin/accounts");
-    expect(lines).toHaveLength(13);
-    expect(lines.at(-1)).toBe("-       burst: 10");
-    expect(card.querySelector('[data-testid="vr-remove-where"]')!.textContent).toContain("lines 21–33 of the partner's file");
-    expect(card.querySelector('[data-testid="vr-remove-where"]')!.getAttribute("title")).toBe("On the branch: lines 32–44 of config/tenants/lumen-pay.yaml");
-    const send = card.querySelector('[data-testid="vr-remove-send"]') as HTMLButtonElement;
-    expect(send.disabled).toBe(true);
-    expect(send.textContent).toBe("Remove 13 lines");
-    await type(card.querySelector('[data-testid="vr-remove-reason"]'), "Internal admin surface; never for tenants.");
-    await press(send);
-    const sent = posts(calls);
-    expect(sent).toHaveLength(1);
-    expect(sent[0].path).toBe("/v1/changes/northgate-gateway/14/findings/V-07/override");
-    expect(sent[0].body).toEqual({ action: "remove", reason: "Internal admin surface; never for tenants.", head_sha: "fa05ac2d6d71e40d29aa1160c5d2c3ade3656f5d" });
-    expect(card.querySelector('[data-testid="vr-row-said"]')!.textContent).toBe("V-07 removed · re-checking now.");
-  });
-
-  it("an engine that took the empty edit instead: the same press falls back to {action: edit, text: ''}", async () => {
-    const calls = engine((c) => (c.method === "POST" && c.body?.action === "remove"
-      ? { status: 422, body: { detail: [{ loc: ["body", "action"], msg: "Input should be 'accept', 'reject', 'edit', 'waive' or 'reopen'" }] } } : undefined));
-    await flow();
-    const card = fix("V-07");
-    await press(card.querySelector('[data-testid="vr-remove"]'));
-    await type(card.querySelector('[data-testid="vr-remove-reason"]'), "Drop the admin route.");
-    await press(card.querySelector('[data-testid="vr-remove-send"]'));
-    expect(posts(calls).map((c) => c.body)).toEqual([
-      { action: "remove", reason: "Drop the admin route.", head_sha: "fa05ac2d6d71e40d29aa1160c5d2c3ade3656f5d" },
-      { action: "edit", text: "", reason: "Drop the admin route.", head_sha: "fa05ac2d6d71e40d29aa1160c5d2c3ade3656f5d" },
-    ]);
-    expect(card.querySelector('[data-testid="vr-row-said"]')!.textContent).toBe("V-07 removed · re-checking now.");
-  });
-
-  it("an engine with neither says it needs the latest BOSS, on the row", async () => {
-    engine((c) => (c.method !== "POST" ? undefined : c.body?.action === "remove"
-      ? { status: 422, body: { error: "bad_action", message: "Unknown action 'remove'." } }
-      : { status: 422, body: { error: "text_required", message: "Write the replacement line." } }));
-    await flow();
-    const card = fix("V-07");
-    await press(card.querySelector('[data-testid="vr-remove"]'));
-    await type(card.querySelector('[data-testid="vr-remove-reason"]'), "x");
-    await press(card.querySelector('[data-testid="vr-remove-send"]'));
-    expect(card.querySelector('[data-testid="vr-row-said"]')!.textContent).toContain("Removing lines needs the latest BOSS");
-  });
-
   it("removalBlock: a single key line is one line; a list item takes everything nested under it", () => {
     const text = (DRY2 as { validation: { input: { text: string } } }).validation.input.text;
     expect(removalBlock(text, { location: { file: "", line: 28, end_line: null, partner_line: 17 }, original: null })!.lines).toEqual(['      api_key: "[SECRET]"']);
@@ -135,30 +80,6 @@ describe("#2 Remove these lines", () => {
     expect(removalBlock("", { location: { file: "", line: 9, end_line: null, partner_line: null }, original: "  x: 1" })).toMatchObject({ from: 9, to: 9, lines: ["  x: 1"] });
   });
 
-  it("Accept on the agent's proposal is shown only while it can be applied; a 409 proposal_gone hides it and says so", async () => {
-    const calls = engine((c) => (c.method === "POST" ? { status: 409, body: { error: "proposal_gone", message: "The lines this proposal changes are not on the branch." } } : undefined));
-    await flow();
-    const card = fix("V-07");
-    expect(card.querySelector('[data-testid="vr-proposal-gone"]')).toBeNull();
-    await press(card.querySelector('[data-testid="vr-accept"]'));
-    expect(posts(calls)[0].body).toMatchObject({ action: "accept" });
-    expect(card.querySelector('[data-testid="vr-accept"]')).toBeNull();
-    expect(card.querySelector('[data-testid="vr-proposal-gone"]')!.textContent).toBe("The agent's proposal is no longer valid; edit or remove instead.");
-    expect(card.querySelector('[data-testid="vr-row-said"]'), "said once, on the proposal").toBeNull();
-    // Edit and Remove are still there.
-    expect(card.querySelector('[data-testid="vr-edit"]')).not.toBeNull();
-    expect(card.querySelector('[data-testid="vr-remove"]')).not.toBeNull();
-  });
-
-  it("a proposal the engine marks not applicable never offers Accept", async () => {
-    engine();
-    await flow(dry2({ before: "x", after: "y", applicable: false }));
-    const card = fix("V-07");
-    expect(card.querySelector('[data-testid="vr-accept"]')).toBeNull();
-    expect(card.querySelector('[data-testid="vr-proposal-gone"]')!.textContent).toBe("The agent's proposal is no longer valid; edit or remove instead.");
-    await flow(dry2({ before: "x", after: "y", applicable: true, gone: true }));
-    expect($$('[data-testid="vr-fix"][data-finding="V-07"] [data-testid="vr-accept"]')).toHaveLength(0);
-  });
 });
 
 describe("#7 the merge card and the fix cards say what is true", () => {
@@ -183,20 +104,6 @@ describe("#7 the merge card and the fix cards say what is true", () => {
     expect(row).not.toContain("a person");
   });
 
-  it("on the Validation tab: open V-05's line is context (no '-'), V-06 shows its hunk's change, O-1 'Priya Raman · edited the lines'", async () => {
-    engine();
-    await flow();
-    const v05 = fix("V-05").querySelector('[data-testid="vr-diff-lines"]')!;
-    expect(v05.getAttribute("data-kind")).toBe("unchanged");
-    expect(v05.querySelector(".d")).toBeNull();
-    expect(v05.textContent).toContain("still on the branch · not fixed yet");
-    const v06 = fix("V-06").querySelector('[data-testid="vr-diff-lines"]')!;
-    expect([...v06.querySelectorAll(".d")].map((e) => e.textContent)).toEqual(['-       allow_origins: ["*"]']);
-    expect([...v06.querySelectorAll(".a")].map((e) => e.textContent)).toEqual(['+       allow_origins: ["https://dashboard.lumenpay.example"]']);
-    const rec = fix("V-06").querySelector('[data-testid="vr-override-record"]')!;
-    expect(rec.textContent).toContain("O-1 · Priya Raman");
-    expect(rec.textContent).toContain("edited the lines");
-  });
 });
 
 describe("#10 a step-up resumes the action on its first send", () => {
@@ -230,14 +137,7 @@ describe("#11 the partner's line is the number; the branch's is the tooltip", ()
     expect(lineWords({ location: { file: "x.go", line: 69, end_line: null, partner_line: null } })).toBe("L69");
   });
 
-  it("the Validation tab, the fix card and the merge card agree: secret L17, admin L21, guard L36", async () => {
-    engine();
-    await flow();
-    const p0 = $$('[data-testid="vr-grp-P0"] [data-testid="vr-finding"]').map((e) => `${e.getAttribute("data-finding")} ${e.querySelector(".line")!.textContent}`);
-    expect(p0).toEqual(["V-05 L17", "V-06 L20", "V-07 L21", "V-09 L35", "U-01 L36"]);
-    expect(fix("V-05").querySelector(".vr-diff-h .vr-mono")!.textContent).toBe("V-05 no-inlined-secrets · L17");
-    expect(fix("V-05").querySelector(".vr-diff-h .vr-mono")!.getAttribute("title")).toBe("Line 17 of the partner's file · line 28 on the branch");
-    unmount();
+  it("the merge card reads the original's line: secret L17, admin L21, guard L36", async () => {
     engine();
     await mount(<ReviewPacketView packet={parsePacket((DRY2 as { packet: unknown }).packet)!} projectId="northgate-gateway" />);
     const where = (id: string) => $(`[data-testid="vr-packet-row"][data-finding="${id}"] .vr-where`)!.textContent;
