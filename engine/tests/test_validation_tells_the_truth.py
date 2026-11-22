@@ -276,12 +276,40 @@ def test_an_unexplained_jwks_change_and_an_upstream_moved_to_a_mock_are_p0_guard
 
 def test_a_p0_counts_fixed_once_a_person_accepts_the_security_change():
     rec = _record(DRYRUN)
+    u2 = next(x for x in rec["findings"] if x["id"] == "U-02")
     out = fo.apply(json.loads(json.dumps(rec["findings"])),
-                   [{"ref": "O-1", "action": "accept", "finding_id": "U-02"}])
+                   [{"ref": "O-1", "action": "accept", "finding_id": "U-02",
+                     "before_text": u2["original"], "after_text": u2["fixed"]}])
     by = {x["id"]: x for x in out}
     assert by["U-02"]["status"] == "overridden"
     https = next(x for x in out if x["source"]["rule_id"] == "upstream-https-required")
     assert https["status"] == "fixed"
+
+
+def test_an_accepted_guard_does_not_carry_over_to_a_different_security_change():
+    # U-nn are numbered per record: after a push, U-02 may be ANOTHER change. The accept was
+    # for the lines the person saw, so a different U-02 stays open and keeps blocking its P0.
+    rec = _record(DRYRUN)
+    out = fo.apply(json.loads(json.dumps(rec["findings"])),
+                   [{"ref": "O-1", "action": "accept", "finding_id": "U-02",
+                     "before_text": "    url: https://lumen-pay-core.internal",
+                     "after_text": "    url: https://lumen-pay-core.internal:8443"}])
+    by = {x["id"]: x for x in out}
+    assert by["U-02"]["status"] == "open"
+    assert next(x for x in out if x["source"]["rule_id"] == "upstream-https-required"
+                )["status"] == "open"
+
+
+def test_a_host_move_is_guarded_under_a_renamed_or_nested_key():
+    inp = ("tenant: t\nroutes:\n  - path: /pay\n    policy:\n      jwksUrl: https://idp.t.com/k\n"
+           "    backend:\n      url: https://core.t.com\n")
+    out = inp.replace("https://idp.t.com/k", "https://mock-staging:9001/k") \
+             .replace("https://core.t.com", "https://mock-upstream:9001")
+    _, lines = v.changed_lines(inp, out, None, [])
+    got = {x["keys"][-1]: x["why"] for x in v.security_changes(inp, out, lines)}
+    assert "host_changed" in got["jwksUrl"] and "unexplained" in got["jwksUrl"]
+    assert got["url"] == ["host_changed"]
+    assert v.sensitive(["routes", "JWKS-URI"]) and v.sensitive(["upstreamURL"])
 
 
 def test_a_scheme_fix_that_keeps_the_host_is_not_a_security_change():
@@ -392,6 +420,8 @@ def test_allow_credentials_true_or_false_is_not_a_secret_and_a_live_key_still_is
         '      api_key: "[SECRET]"'
     assert redact_secrets("password: hunter2hunter2") == "password: [SECRET]"
     assert redact_secrets('credentials: "abcdefgh1234"') == 'credentials: "[SECRET]"'
+    # A flag's NAME never unmasks a value: only a boolean / null is kept.
+    assert redact_secrets("allow_credentials: hunter2hunter2") == "allow_credentials: [SECRET]"
     rec = _record(DRYRUN)
     cors = _by_rule(rec)["cors-no-wildcard-with-credentials"][0]
     assert cors["original"] == "      allow_credentials: true"
@@ -427,5 +457,8 @@ def test_no_checkpoint_commits_land_on_a_change_up_for_merge():
     src = inspect.getsource(g)
     i = src.index("def _checkpoint(label: str) -> int:")
     body = src[i:i + 3000]
-    assert body.index("if _branch_up_for_merge():") < body.index("commit_change(")
+    # Only a validation build skips them; every other build checkpoints (crash / pause resume).
+    assert body.index("if _validation_build[0] and _branch_up_for_merge():") \
+        < body.index("commit_change(")
+    assert "_validation_build[0] = True" in src
     assert "pull_request_url IS NOT NULL" in src and "FROM local_change_sets WHERE project_id" in src

@@ -242,7 +242,9 @@ def apply(findings: list[dict], ovrs: Sequence[Mapping[str, Any]], *, now: Optio
                                                              "overridden"):
                 f["status"] = "open"
             elif action == "accept" and (f.get("source") or {}).get("kind") == "guard" \
-                    and f.get("status") == "open":
+                    and f.get("status") == "open" \
+                    and o.get("before_text") == f.get("original") \
+                    and o.get("after_text") == f.get("fixed"):
                 # A person accepted the security change BOSS could not explain.
                 f["status"] = "overridden"
     # HELD AND BLOCKED FIXES ARE RELEASED BY PEOPLE (validators.record): a `human` / `never`
@@ -437,6 +439,11 @@ def override(c: Any, settings: Any, project_id: str, number: int, *, action: str
     from .validators import mask
 
     before_text = after_text = commit_sha = None
+    if action == "accept" and ((finding or {}).get("source") or {}).get("kind") == "guard":
+        # A GUARD IS ACCEPTED FOR ITS CONTENT, not its id: U-nn are numbered per record, so a
+        # later push's different security change may reuse U-01. apply() overrides the guard
+        # only while its lines are exactly the ones the person saw.
+        before_text, after_text = finding.get("original"), finding.get("fixed")
     # ACCEPTING A "NEEDS YOU" PROPOSAL: the agent's change BOSS refused for a `human` / `never`
     # rule (input_fidelity.enforce_autofix) is applied now, by this person, as one commit.
     proposal = (finding or {}).get("proposed") if action == "accept" else None

@@ -340,7 +340,9 @@ def key_path(lines: Sequence[str], idx: int) -> list[str]:
 
 
 def sensitive(path: Sequence[str]) -> bool:
-    return any(t in SENSITIVE_TOKENS for k in path for t in re.split(r"[_.\-]+", k.lower()) if t)
+    """A key path that decides who may call or where a request goes. Matched INSIDE each key
+    (separators and case ignored), so `jwksUrl`, `JWKS-URI`, `upstreamURL`, `oauth2` count."""
+    return any(t in re.sub(r"[^a-z0-9]+", "", k.lower()) for k in path for t in SENSITIVE_TOKENS)
 
 
 def hosts(text: Optional[str]) -> set[str]:
@@ -358,18 +360,22 @@ def security_changes(input_text: str, out_text: Optional[str], lines: Sequence[M
     out = []
     for ln in lines:
         path = key_path(b, ln["j"]) if ln["new"] is not None else key_path(a, ln["i"])
-        if not sensitive(path):
+        old_h, new_h = hosts(ln["old"]), hosts(ln["new"])
+        # A URL MOVED TO ANOTHER HOST is guarded under ANY key (`backend: {url: …}`, a renamed
+        # key): a fix changes a scheme, never where a request goes.
+        moved = bool(old_h and new_h and old_h != new_h)
+        on_sensitive = sensitive(path)
+        if not moved and not on_sensitive:
             continue
         why = []
         # The mechanical fixer's own lines are its rule's (it writes nothing else); only the
         # agent's can be unexplained.
-        if ln["finding"] is None and ln["kind"] != "auto" \
+        if on_sensitive and ln["finding"] is None and ln["kind"] != "auto" \
                 and (ln["old"] or "").strip() != (ln["new"] or "").strip():
             why.append("unexplained")
-        old_h, new_h = hosts(ln["old"]), hosts(ln["new"])
-        if old_h and new_h and old_h != new_h:
+        if moved:
             why.append("host_changed")
-        elif new_h - known:
+        elif on_sensitive and new_h - known:
             why.append("new_host")
         if why:
             out.append({**ln, "keys": path, "why": why})

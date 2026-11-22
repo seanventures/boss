@@ -6802,6 +6802,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     _ws_snapshot: list = [None]
 
     _up_for_merge: list = [None]
+    #: Set when this build carries a validation contract (_remediation below). Only such a build
+    #: skips mid-build checkpoints on a change up for merge; every other build keeps them, so a
+    #: lease reclaim or an Infra-Agent pause resumes from the branch exactly as before.
+    _validation_build: list = [False]
 
     def _branch_up_for_merge() -> bool:
         """The work branch already carries an open change (this lineage opened a PR, or a
@@ -6844,7 +6848,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _ws_snapshots.capture_best_effort(_ws_snapshot[0], sandbox, label)
         if _push_held(f"checkpoint:{label}"):
             return 0
-        if _branch_up_for_merge():
+        if _validation_build[0] and _branch_up_for_merge():
             # A CHANGE UP FOR MERGE GETS NO MID-BUILD COMMITS: a checkpoint would move its head
             # (and its packet) to a half-built tree. The build's one commit lands at the end.
             return 0
@@ -7248,6 +7252,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             except Exception:  # noqa: BLE001 — an unreadable contract is no contract, said
                 _log_caught(logger)
         if _remediation:
+            _validation_build[0] = True
             _remediation["_project_id"] = project_id
             # THE MECHANICAL FIXER FIRST (gwlint --fix): the target starts as its output, so its
             # lines are the build's `auto` fixes and the agent hand-edits only what it left.
