@@ -529,15 +529,17 @@ def test_the_validation_record_has_findings_before_fixes_and_after(tmp_path):
     secret = rec["findings"][4]
     assert (secret["source"]["rule_id"], secret["native_severity"], secret["location"]) == (
         "no-inlined-secrets", "error",
-        {"file": "config/tenants/lumen-pay.yaml", "line": None, "partner_line": 17})
+        # A removed line points at the partner's line (#11), and says so.
+        {"file": "config/tenants/lumen-pay.yaml", "line": 17, "partner_line": 17,
+         "line_from": "partner"})
     assert secret["title"] == "No API keys, tokens or passwords inlined in plaintext"
     by_after = {x["after"].strip(): x for x in rec["fixes"] if x["after"]}
     url = by_after['url: "https://lumen-pay-core.internal.example"']
     assert url["kind"] == "auto" and url["rule"] == "upstream-https-required"
     assert url["before"].strip() == 'url: "http://lumen-pay-core.internal.example"'
     assert by_after['api_key_hashed: "sha256:9f2c"']["kind"] == "agent"
-    assert all(set(x) == {"finding", "rule", "file", "line", "before", "after", "kind", "hunk_id"}
-               for x in rec["fixes"])
+    assert all({"finding", "rule", "file", "line", "before", "after", "kind", "hunk_id", "hunks",
+                "lines"} <= set(x) for x in rec["fixes"])
     # The input itself is never touched; the scratch copies are gone.
     assert (root / "examples" / "lumen-pay.bad.yaml").read_text() == BAD
     assert not (root / ".boss-validation").exists()

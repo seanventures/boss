@@ -592,8 +592,13 @@ def followup_items(evidence: Optional[Mapping[str, Any]], limit: int = 40
         where = _one_line(f.get("path"))
         if where and f.get("line"):
             where = f"{where}:{f.get('line')}"
+        seat = next((str(f[k]) for k in ("seat", "reviewer", "role", "lens")
+                     if isinstance(f.get(k), str) and f.get(k)), None)
         out.append({"tier": finding_tier(f), "severity": str(f.get("severity") or "major").lower(),
-                    "text": (f"{where} — {text}" if where and where not in text else text)[:400]})
+                    "text": (f"{where} — {text}" if where and where not in text else text)[:400],
+                    # Which seat raised it (a security reviewer's high on a P0 line is never
+                    # deferred: review_packet.for_run).
+                    **({"seat": seat} if seat else {})})
     out.sort(key=lambda i: 0 if i["tier"] == P1 else 1)
     return out[:limit]
 

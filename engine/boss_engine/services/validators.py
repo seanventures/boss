@@ -180,17 +180,20 @@ def _asks_for(line: str, finding: Mapping[str, Any]) -> bool:
 
 
 def attribute(hunk: Mapping[str, Any], line: str, before: Sequence[Mapping[str, Any]],
-              prev: Optional[str]) -> Optional[str]:
+              prev: Optional[str], *, removed: bool = False) -> Optional[str]:
     """The finding (id) one changed line of a hunk addresses: among the findings on the lines
     the hunk replaces (or the line it is inserted after), the one whose fix hint names the
     line's key; else the nearest finding above the hunk that names it; else the line before it
-    in the same hunk; else the hunk's only candidate."""
+    in the same hunk; else the hunk's only candidate. A REMOVED partner line belongs with the
+    line removed before it (a route's keys go with its `- path:`) before any finding above."""
     i1, i2 = int(hunk["i1"]), int(hunk["i2"])
     span = set(range(i1 + 1, i2 + 1)) if i2 > i1 else {i1}
     near = [f for f in before if f.get("line") in span]
     for f in near:
         if _asks_for(line, f):
             return str(f["id"])
+    if removed and prev:
+        return prev
     above = sorted((f for f in before if (f.get("line") or 0) <= max(span) and _asks_for(line, f)),
                    key=lambda f: -(f.get("line") or 0))
     if above:
@@ -234,10 +237,187 @@ def substituted(root: Any, c: Mapping[str, Any], out_text: Optional[str],
     return None
 
 
+# ── provenance: which changed line the fixer wrote, which the agent ────────────────────────────
+
+def _pairs(h: Mapping[str, Any]) -> list[tuple[int, Optional[str], Optional[str]]]:
+    """One hunk's changed lines, paired by position: ``(k, old, new)``."""
+    olds, news = h["before"], h["after"]
+    return [(k, olds[k] if k < len(olds) else None, news[k] if k < len(news) else None)
+            for k in range(max(len(olds), len(news)))]
+
+
+def changed_lines(input_text: str, out_text: Optional[str], auto_text: Optional[str],
+                  hint: Sequence[Mapping[str, Any]]) -> tuple[list[dict], list[dict]]:
+    """``(hunks of input → target, changed lines)``. Each line: ``{hunk_id, i, j, old, new,
+    finding, kind}`` (``i`` / ``j`` 0-based input / target indexes, None for an added / removed
+    line; texts UNMASKED — callers mask before storing).
+
+    ``kind`` is PROVENANCE, not a guess: a target line is ``auto`` when it is a line the
+    mechanical fixer wrote (``auto_text`` is the fixer's output on the partner's file) that
+    survived into the target; a removed input line is ``auto`` when the fixer removed it too.
+    Every other change is the agent's. An auto line's finding is read from the fixer's own diff
+    (its clean context); an agent line's from the target's diff (``attribute``)."""
+    if out_text is None:
+        return [], []
+    all_hunks = hunks(input_text, out_text)
+    written: dict[int, Optional[str]] = {}      # fixer's output line → finding
+    gone: dict[int, Optional[str]] = {}         # input line the fixer removed → finding
+    from_auto: dict[int, int] = {}              # target line → fixer's output line
+    if auto_text is not None:
+        for h in hunks(input_text, auto_text):
+            prev: Optional[str] = None
+            for k, old, new in _pairs(h):
+                fid = attribute(h, old if old is not None else new or "", hint, prev)
+                prev = fid or prev
+                if new is not None:
+                    written[int(h["j1"]) + k] = fid
+                if old is not None:
+                    gone[int(h["i1"]) + k] = fid
+        A, b = str(auto_text).splitlines(), str(out_text).splitlines()
+        for blk in difflib.SequenceMatcher(a=A, b=b, autojunk=False).get_matching_blocks():
+            for k in range(blk.size):
+                from_auto[blk.b + k] = blk.a + k
+    lines: list[dict] = []
+    for h in all_hunks:
+        prev = None
+        for k, old, new in _pairs(h):
+            i = int(h["i1"]) + k if old is not None else None
+            j = int(h["j1"]) + k if new is not None else None
+            if new is not None:
+                src = from_auto.get(j) if j is not None else None
+                auto = src is not None and src in written
+                fid = written[src] if auto else None
+            else:
+                auto = i in gone
+                fid = gone.get(i) if auto else None
+            if not auto:
+                fid = attribute(h, old if old is not None else new or "", hint, prev,
+                                removed=old is not None and new is None)
+            prev = fid or prev
+            lines.append({"hunk_id": h["id"], "i": i, "j": j, "old": old, "new": new,
+                          "anchor": int(h["i1"]), "finding": fid,
+                          "kind": "auto" if auto else "agent"})
+    return all_hunks, lines
+
+
+# ── security-sensitive changes (an unexplained one blocks as P0) ───────────────────────────────
+
+#: Key-name tokens whose values decide who may call the route and where it goes.
+SENSITIVE_TOKENS = frozenset({
+    "auth", "authn", "authz", "authentication", "authorization", "oauth", "oidc", "jwks", "jwt",
+    "issuer", "audience", "upstream", "upstreams", "tls", "mtls", "ssl", "cert", "certs",
+    "certificate", "certificates"})
+_KEY = re.compile(r"\s*(?:-\s+)?([\w.\-]+)\s*:")
+_URL_HOST = re.compile(r"\b[a-z][a-z0-9+.\-]*://(?:[^@/\s\"']*@)?([^/:\s\"'?#]+)", re.I)
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def key_path(lines: Sequence[str], idx: int) -> list[str]:
+    """The YAML key path of line ``idx`` (0-based), read by indentation: its ancestors' keys,
+    then its own (``routes › path › auth › jwks_url``; ``upstreams › core › url``)."""
+    if not 0 <= idx < len(lines):
+        return []
+    line = lines[idx]
+    m = _KEY.match(line)
+    path = [m.group(1)] if m else []
+    cur = _indent(line)
+    for j in range(idx - 1, -1, -1):
+        up = lines[j]
+        if not up.strip() or up.lstrip().startswith("#"):
+            continue
+        ind = _indent(up)
+        if ind < cur:
+            m = _KEY.match(up)
+            if m:
+                path.append(m.group(1))
+            cur = ind
+            if cur == 0:
+                break
+    return list(reversed(path))
+
+
+def sensitive(path: Sequence[str]) -> bool:
+    """A key path that decides who may call or where a request goes. Matched INSIDE each key
+    (separators and case ignored), so `jwksUrl`, `JWKS-URI`, `upstreamURL`, `oauth2` count."""
+    return any(t in re.sub(r"[^a-z0-9]+", "", k.lower()) for k in path for t in SENSITIVE_TOKENS)
+
+
+def hosts(text: Optional[str]) -> set[str]:
+    return {m.group(1).lower() for m in _URL_HOST.finditer(str(text or ""))}
+
+
+def security_changes(input_text: str, out_text: Optional[str], lines: Sequence[Mapping[str, Any]]
+                     ) -> list[dict]:
+    """The changed lines on security-sensitive keys (auth, jwks, issuer, upstream, tls…) that
+    nothing accounts for: ``[{line…, keys, why}]``, ``why`` one of ``unexplained`` (no finding
+    asks for the line), ``host_changed`` (a fix that moves a URL to another host: a scheme fix
+    keeps the host) or ``new_host`` (a host the partner's file never names)."""
+    a, b = str(input_text or "").splitlines(), str(out_text or "").splitlines()
+    known = hosts(input_text)
+    out = []
+    for ln in lines:
+        path = key_path(b, ln["j"]) if ln["new"] is not None else key_path(a, ln["i"])
+        old_h, new_h = hosts(ln["old"]), hosts(ln["new"])
+        # A URL MOVED TO ANOTHER HOST is guarded under ANY key (`backend: {url: …}`, a renamed
+        # key): a fix changes a scheme, never where a request goes.
+        moved = bool(old_h and new_h and old_h != new_h)
+        on_sensitive = sensitive(path)
+        if not moved and not on_sensitive:
+            continue
+        why = []
+        # The mechanical fixer's own lines are its rule's (it writes nothing else); only the
+        # agent's can be unexplained.
+        if on_sensitive and ln["finding"] is None and ln["kind"] != "auto" \
+                and (ln["old"] or "").strip() != (ln["new"] or "").strip():
+            why.append("unexplained")
+        if moved:
+            why.append("host_changed")
+        elif on_sensitive and new_h - known:
+            why.append("new_host")
+        if why:
+            out.append({**ln, "keys": path, "why": why})
+    return out
+
+
+# ── a finding's block: what "its lines" are ────────────────────────────────────────────────────
+
+def block(lines: Sequence[str], idx: int) -> tuple[int, int]:
+    """The 0-based half-open span of the YAML block line ``idx`` opens: the line and every
+    following line indented deeper (a route item `- path:` and its keys). A top-level key with
+    nothing under it (`tenant: x`, where a tool reports file-level findings) is the whole file."""
+    if not 0 <= idx < len(lines):
+        return (0, len(lines))
+    base = _indent(lines[idx])
+    end = idx + 1
+    while end < len(lines) and (not lines[end].strip() or _indent(lines[end]) > base
+                                or lines[end].lstrip().startswith("#")):
+        end += 1
+    if end == idx + 1 and base == 0:
+        return (0, len(lines))
+    return (idx, end)
+
+
+def _out_span(h: Mapping[str, Any]) -> range:
+    """A hunk's target lines (1-based), the line before a pure removal included."""
+    j1, j2 = int(h["j1"]), int(h["j2"])
+    return range(max(j1, 1), max(j2, j1 + 1) + 1) if j2 == j1 else range(j1 + 1, j2 + 1)
+
+
 # ── the record ─────────────────────────────────────────────────────────────────────────────────
 
 def _evidence(eid: str, cmd: Optional[str], exit_code: Any) -> dict:
     return {"id": eid, "kind": "command", "cmd": cmd, "exit": exit_code}
+
+
+HUMAN_AUTOFIX = ("human", "never")
+
+
+def _joined(texts: Iterable[Optional[str]]) -> Optional[str]:
+    kept = [mask(t) for t in texts if t is not None]
+    return "\n".join(x for x in kept if x is not None) if kept else None
 
 
 def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optional[str],
@@ -248,12 +428,27 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
            ruleset: Optional[Mapping[str, Any]] = None, guard: Optional[dict] = None,
            error: Optional[str] = None) -> dict:
     """``boss.validation/v1`` from one validation: the tool's findings on the partner's input
-    (V-01…), the fixes as hunks of input → target, its findings on the target. A finding is
-    ``fixed`` only with an after-run that no longer reports it AND a hunk that addresses it."""
+    (V-01…), the fixes as hunks of input → target, its findings on the target.
+
+    Truth rules (each has a test):
+    - a finding the after-run no longer reports is ``fixed``, tied to the hunk on its own line,
+      else the hunk that touches its block, else ``removed_with_block`` when its block is gone —
+      never left open;
+    - ``fixes[]`` is ONE entry per finding (its lines grouped, by hunk); changes no finding
+      accounts for are entries with ``finding: null, unexplained: true``, one per hunk;
+    - ``kind`` is provenance (``changed_lines``): the mechanical fixer's lines are ``auto``;
+    - a rule whose ruleset ``autofix`` is ``human`` or ``never`` is never agent-fixed: the
+      finding stays open as ``human`` ("Needs you"), ``held`` until a person accepts it;
+    - a changed line on an auth / jwks / issuer / upstream / tls key that nothing explains, or
+      that moves a URL to another host, is a P0 ``guard`` finding U-n ("unexplained security
+      change") until a person accepts it, and a P0 whose fix shares its hunk (or introduced a
+      new finding) is not fixed until then."""
     inp, target = str(c["input"]), str(c["output"])
     input_text = str(c.get("_input_text") or "")
     in_lines = input_text.splitlines()
+    out_lines = str(out_text or "").splitlines()
     rules_doc = validator.get("rules_doc")
+    rules = (ruleset or {}).get("rules") or {}
     evidence = []
     if commands.get("before"):
         evidence.append(_evidence("E-1", commands["before"], exits.get("before")))
@@ -262,8 +457,8 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
     after_ran = commands.get("after") is not None and after_raw is not None
     if commands.get("after"):
         evidence.append(_evidence("E-3", commands["after"], exits.get("after")))
-
     ev = {e["id"]: e for e in evidence}
+
     findings: list[dict] = []
     for n, f in enumerate(before_raw or [], start=1):
         rule = str(f.get("rule_id") or "")
@@ -282,43 +477,48 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
             "fixed": None, "hunk_id": None, "fix_kind": "none", "status": "open",
             "evidence": [dict(ev["E-1"])] if "E-1" in ev else [], "override": None,
             "_fix": f.get("fix"), "fixable": f.get("fixable")})
-
-    # Fixes: every changed line of input → target, tied to a hunk and a finding.
-    # AUTO: the same line the fixer wrote at the same place of the input (its own hunks), so a
-    # line the input already has elsewhere (`rate_limit:` on another route) still counts.
-    auto_added: set = set()
-    auto_removed: set = set()
-    for h in hunks(input_text, auto_text) if auto_text is not None else []:
-        auto_added |= {(h["i1"], line) for line in h["after"]}
-        auto_removed |= {(h["i1"] + k, line) for k, line in enumerate(h["before"])}
     by_id = {f["id"]: f for f in findings}
     hint = [{"id": f["id"], "line": f["location"]["partner_line"], "fix": f["_fix"],
              "rule_id": f["source"]["rule_id"]} for f in findings]
+    all_hunks, lines = changed_lines(input_text, out_text, auto_text, hint)
+    hunk_by_id = {h["id"]: h for h in all_hunks}
+
+    # FIXES: one entry per finding, its lines grouped by hunk; the rest, per hunk, unexplained.
+    def _entry(mine: list[dict], fid: Optional[str]) -> dict:
+        groups: dict[str, list[dict]] = {}
+        for ln in mine:
+            groups.setdefault(ln["hunk_id"], []).append(ln)
+        first = mine[0]
+        return {"finding": fid, "rule": by_id[fid]["source"]["rule_id"] if fid in by_id else None,
+                "file": target,
+                "line": first["i"] + 1 if first["old"] is not None else first["anchor"],
+                "before": _joined(x["old"] for x in mine),
+                "after": _joined(x["new"] for x in mine),
+                "kind": "auto" if all(x["kind"] == "auto" for x in mine) else "agent",
+                "hunk_id": first["hunk_id"],
+                "hunks": [{"id": hid, "line": int(hunk_by_id[hid]["i1"]) + 1,
+                           "before": [mask(x["old"]) for x in g if x["old"] is not None],
+                           "after": [mask(x["new"]) for x in g if x["new"] is not None],
+                           "kind": "auto" if all(x["kind"] == "auto" for x in g) else "agent"}
+                          for hid, g in groups.items()],
+                "lines": len(mine)}
+
     fixes: list[dict] = []
-    all_hunks = hunks(input_text, out_text) if out_text is not None else []
-    for h in all_hunks:
-        prev: Optional[str] = None
-        olds, news = h["before"], h["after"]
-        for k in range(max(len(olds), len(news))):
-            old = olds[k] if k < len(olds) else None
-            new = news[k] if k < len(news) else None
-            fid = attribute(h, old if old is not None else new or "", hint, prev)
-            prev = fid or prev
-            fixes.append({"finding": fid,
-                          "rule": by_id[fid]["source"]["rule_id"] if fid in by_id else None,
-                          "file": target, "line": h["i1"] + k + 1 if old is not None else h["i1"],
-                          "before": mask(old), "after": mask(new),
-                          "kind": "auto" if ((h["i1"], new) in auto_added if new is not None
-                                             else (h["i1"] + k, old) in auto_removed) else "agent",
-                          "hunk_id": h["id"]})
+    for fid in dict.fromkeys(ln["finding"] for ln in lines if ln["finding"]):
+        fixes.append(_entry([ln for ln in lines if ln["finding"] == fid], fid))
+    for hid in dict.fromkeys(ln["hunk_id"] for ln in lines if not ln["finding"]):
+        fixes.append({**_entry([ln for ln in lines if not ln["finding"] and ln["hunk_id"] == hid],
+                               None), "unexplained": True})
     for f in findings:
-        mine = [x for x in fixes if x["finding"] == f["id"]]
+        mine = [ln for ln in lines if ln["finding"] == f["id"]]
         if mine:
             f["hunk_id"] = mine[0]["hunk_id"]
-            f["fixed"] = next((x["after"] for x in mine if x["after"] is not None), None)
+            f["fixed"] = next((mask(x["new"]) for x in mine if x["new"] is not None), None)
             f["fix_kind"] = "auto" if all(x["kind"] == "auto" for x in mine) else "agent"
+            f["fixed_by"] = "line"
 
-    # After: still reported (same rule at the line the input line moved to) → open.
+    # AFTER: still reported (same rule at the line the input line moved to) → open; absent →
+    # fixed, always tied to the change that did it.
     moved = line_map(input_text, out_text) if out_text is not None else {}
     after_ids: list[str] = []
     after_extra: list[dict] = []
@@ -334,15 +534,20 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
                 remaining.remove(hit)
                 f["location"]["line"] = hit.get("line")
                 after_ids.append(f["id"])
-            elif f["hunk_id"]:
+                continue
+            if not f["hunk_id"]:
+                _attribute_by_block(f, all_hunks, lines, in_lines, out_lines, moved)
+            if f["hunk_id"]:
                 f["status"] = "fixed"
-                f["location"]["line"] = None if f["fixed"] is None else want
+                # A removed line has no target line: the partner's line says where it was.
+                f["location"]["line"] = want if want is not None else line
+                if want is None:
+                    f["location"]["line_from"] = "partner"
                 f["evidence"] = [*f["evidence"], {**ev["E-3"], "absent": True}]
         for n, a in enumerate(remaining, start=len(findings) + 1):   # new on the target
             rule = str(a.get("rule_id") or "")
             level, basis = severity(rule, a.get("native_severity"), ruleset)
             line = a.get("line")
-            out_lines = str(out_text or "").splitlines()
             after_extra.append({
                 "id": f"V-{n:02d}",
                 "source": {"kind": "validator", "name": validator.get("name"), "rule_id": rule,
@@ -358,17 +563,70 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
                 "evidence": [dict(ev["E-3"])], "override": None, "introduced": True})
             after_ids.append(f"V-{n:02d}")
     findings += after_extra
-    # THE RULESET'S POLICY (§4): a disabled rule's findings are `suppressed` (still counted); an
-    # open finding whose rule a person must fix is `human` ("Needs you").
-    rules = (ruleset or {}).get("rules") or {}
+
+    # THE RULESET'S AUTOFIX POLICY, ENFORCED (§4): a `human` / `never` rule is never agent-fixed.
+    # Its finding stays open as "Needs you"; when the agent's lines are on the target the fix is
+    # HELD — it becomes `fixed` only when a person accepts it (finding_overrides.apply).
+    for f in findings:
+        rule = rules.get(f["source"]["rule_id"]) or {}
+        if rule.get("autofix") not in HUMAN_AUTOFIX:
+            continue
+        if f["status"] == "fixed" and f["fix_kind"] != "auto":
+            f["status"] = "open"
+            f["held"] = {"autofix": rule["autofix"], "by": "ruleset"}
+            f["fixed_if_released"] = True
+        if f["status"] == "open":
+            f["fix_kind"] = "human"
+
+    # A FIX MAY NOT MAKE THE CONFIG LESS SAFE: unexplained / host-moving changes on security
+    # keys are P0 guard findings, and a P0 sharing their hunk (or one whose hunk introduced a new
+    # finding) is not fixed until a person accepts the change.
+    guards: list[dict] = []
+    sec = security_changes(input_text, out_text, lines)
+    for n, hid in enumerate(dict.fromkeys(x["hunk_id"] for x in sec), start=1):
+        mine = [x for x in sec if x["hunk_id"] == hid]
+        first = mine[0]
+        keys = sorted({".".join(x["keys"][-2:]) for x in mine})
+        guards.append({
+            "id": f"U-{n:02d}",
+            "source": {"kind": "guard", "name": "boss", "rule_id": "unexplained-security-change",
+                       "rule_doc": None},
+            "severity": "P0", "basis": "boss guard: a change to auth or upstream keys",
+            "native_severity": None,
+            "title": f"Unexplained security change: {', '.join(keys)}"[:200],
+            "location": {"file": target,
+                         "line": first["j"] + 1 if first["j"] is not None else first["anchor"],
+                         "partner_line": first["i"] + 1 if first["i"] is not None else None},
+            "original": _joined(x["old"] for x in mine), "fixed": _joined(x["new"] for x in mine),
+            "hunk_id": hid,
+            "fix_kind": "auto" if all(x["kind"] == "auto" for x in mine) else "agent",
+            "status": "open", "evidence": [], "override": None,
+            "security": {"keys": keys, "why": sorted({w for x in mine for w in x["why"]}),
+                         "findings": sorted({x["finding"] for x in mine if x["finding"]})}})
+    guard_by_hunk = {g["hunk_id"]: g["id"] for g in guards}
+    for f in findings:
+        if f["severity"] != "P0" or f.get("introduced") or not (
+                f["status"] == "fixed" or f.get("fixed_if_released")):
+            continue
+        mine_hunks = {ln["hunk_id"] for ln in lines if ln["finding"] == f["id"]} | {f["hunk_id"]}
+        by = [guard_by_hunk[h] for h in sorted(mine_hunks) if h in guard_by_hunk]
+        spans = [n for h in mine_hunks if h in hunk_by_id for n in _out_span(hunk_by_id[h])]
+        by += [x["id"] for x in after_extra if x["location"].get("line") in spans]
+        if by:
+            f["status"] = "open"
+            f["blocked_by"] = sorted(set(by))
+            f["fixed_if_released"] = True
+    for f in findings:
+        if f.get("fixed_if_released") and not any(e.get("absent") for e in f["evidence"]):
+            f["evidence"] = [*f["evidence"], {**ev["E-3"], "absent": True}]
+    findings += guards
+
+    # A disabled rule's findings are `suppressed` (still counted).
     for f in findings:
         f.pop("_fix", None)
         f.pop("fixable", None)
-        rule = rules.get(f["source"]["rule_id"]) or {}
-        if rule.get("enabled") is False:
+        if (rules.get(f["source"]["rule_id"]) or {}).get("enabled") is False:
             f["status"] = "suppressed"
-        elif f["status"] == "open" and rule.get("autofix") == "human":
-            f["fix_kind"] = "human"
     return {
         "schema": SCHEMA,
         # The commands and the ruleset are kept as they were TRUSTED for this check (declared,
@@ -384,16 +642,70 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
                   "from": str(c.get("from") or "partner")},
         "target": target,
         "before": {"command": commands.get("before"), "exit": exits.get("before"),
-                   "findings": [f["id"] for f in findings if not f.get("introduced")]},
-        "fix": ({"command": commands["fix"], "exit": exits.get("fix")}
+                   "findings": [f["id"] for f in findings
+                                if not f.get("introduced") and f["source"]["kind"] != "guard"]},
+        "fix": ({"command": commands["fix"], "exit": exits.get("fix"),
+                 **({"seeded": True} if c.get("_auto_seeded") is not None else {})}
                 if commands.get("fix") else None),
         "fixes": fixes,
         "after": {"command": commands.get("after"), "exit": exits.get("after"),
                   "findings": after_ids} if after_ran else None,
         "findings": findings,
-        "hunks": [{"id": h["id"], "line": h["i1"] + 1, "removed": len(h["before"]),
-                   "added": len(h["after"])} for h in all_hunks],
+        "hunks": [{"id": h["id"], "line": h["i1"] + 1, "out_line": h["j1"] + 1,
+                   "removed": len(h["before"]), "added": len(h["after"])} for h in all_hunks],
         "evidence": evidence,
         "guard": guard,
         "error": error or (guard or {}).get("code"),
     }
+
+
+def _attribute_by_block(f: dict, all_hunks: Sequence[Mapping[str, Any]],
+                        lines: Sequence[Mapping[str, Any]], in_lines: Sequence[str],
+                        out_lines: Sequence[str], moved: Mapping[int, int]) -> None:
+    """A finding the after-run no longer reports and no changed line names. When the line it is
+    on (a route's `- path:`) is gone from the target, its block went with it:
+    ``removed_with_block``, tied to the hunk that removed that line. Else the hunk that touches
+    its BLOCK (the route, the key) did it — the one with a line its fix hint asks for, else the
+    one changing most of the block — and ``fixed`` is what the block gained (lines new to it, or
+    moved in from elsewhere: a rate limit that now sits under the route). Else the nearest hunk."""
+    line = f["location"].get("partner_line")
+    if not isinstance(line, int) or not all_hunks:
+        return
+    if line not in moved:
+        h = next((x for x in all_hunks if int(x["i1"]) < line <= int(x["i2"])), None)
+        if h is not None:
+            f.update(hunk_id=h["id"], fixed=None, fixed_by="removed_with_block")
+            _kind_of_hunk(f, lines)
+            return
+    lo, hi = block(in_lines, line - 1)
+    hint = {"fix": f.get("_fix"), "rule_id": f["source"]["rule_id"]}
+
+    def _overlap(h: Mapping[str, Any]) -> int:
+        i1, i2 = int(h["i1"]), int(h["i2"])
+        return max(0, min(i2, hi) - max(i1, lo)) if i2 > i1 else int(lo < i1 <= hi)
+
+    def _asks(h: Mapping[str, Any]) -> bool:
+        return any(_asks_for(x, hint) for x in [*h["before"], *h["after"]] if x)
+
+    touching = [h for h in all_hunks if _overlap(h)]
+    if touching:
+        h = max(touching, key=lambda x: (_asks(x), _overlap(x), -int(x["i1"])))
+        mapped_in = {moved[i + 1] for i in range(lo, hi) if (i + 1) in moved}
+        start = moved.get(line, mapped_in and min(mapped_in))
+        olo, ohi = block(out_lines, int(start) - 1) if start else (0, 0)
+        from_outside = set(moved.values()) - mapped_in
+        gained = [out_lines[j] for j in range(olo, ohi) if (j + 1) not in mapped_in
+                  and ((j + 1) in from_outside or _asks_for(out_lines[j], hint))]
+        f.update(hunk_id=h["id"], fixed=_joined(gained) or (mask(out_lines[start - 1])
+                                                          if start else None),
+                 fixed_by="block")
+    else:
+        h = min(all_hunks, key=lambda x: abs(int(x["i1"]) + 1 - line))
+        f.update(hunk_id=h["id"], fixed=mask(out_lines[moved[line] - 1]) if line in moved
+                 else None, fixed_by="nearest")
+    _kind_of_hunk(f, lines)
+
+
+def _kind_of_hunk(f: dict, lines: Sequence[Mapping[str, Any]]) -> None:
+    mine = [ln for ln in lines if ln["hunk_id"] == f["hunk_id"]]
+    f["fix_kind"] = "auto" if mine and all(x["kind"] == "auto" for x in mine) else "agent"

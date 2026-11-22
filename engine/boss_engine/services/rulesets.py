@@ -95,13 +95,21 @@ def guides(rs: Optional[Mapping[str, Any]]) -> list[dict]:
 
 
 def brief(rs: Optional[Mapping[str, Any]]) -> str:
-    """The guides, word for word, for the fixing agent's prompt."""
+    """The guides, word for word, and the rules the agent must leave alone, for the fixing
+    agent's prompt."""
     items = guides(rs)
-    if not items:
+    held = [rid for rid, r in ((rs or {}).get("rules") or {}).items()
+            if r.get("enabled") and r.get("autofix") in ("human", "never")]
+    if not items and not held:
         return ""
     lines = [f"RULESET {rs.get('ruleset')} v{rs.get('version')} — follow each rule's guide when "
-             "you fix its findings. A rule with autofix `human` or `never` is not yours to fix: "
-             "leave it for a person."]
+             "you fix its findings.",
+             "A rule with autofix `human` or `never` is NOT YOURS TO FIX: do not edit, remove or "
+             "move the lines its findings are on. BOSS puts any edit of them back to the "
+             "partner's lines and leaves the finding for a person (\"Needs you\"); your change is "
+             "only shown to them as a proposal."]
+    if held:
+        lines.append("Leave for a person: " + ", ".join(f"`{r}`" for r in held) + ".")
     for g in items:
         tag = "agent-checked, not executed" if g["custom"] else f"autofix {g['autofix'] or '-'}"
         lines.append(f"- {g['rule']} [{g['severity'] or '-'}, {tag}]: {g['guide']}")

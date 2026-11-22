@@ -2781,9 +2781,19 @@ def _fidelity_check(engine, run_id: str, root, remediation: dict, sandbox, *,
     could not run is a failed check, said."""
     validation = None
     try:
-        validation = _input_fidelity.run_validation(
-            root, remediation,
-            (lambda cmd: sandbox.run(cmd, timeout=180)) if sandbox is not None else None)
+        _runner = (lambda cmd: sandbox.run(cmd, timeout=180)) if sandbox is not None else None
+        validation = _input_fidelity.run_validation(root, remediation, _runner)
+        # THE RULESET'S AUTOFIX POLICY, IN CODE: the agent's lines for a `human` / `never` rule
+        # are put back to the partner's and the finding stays "Needs you" (a proposal).
+        validation = _input_fidelity.enforce_autofix(root, remediation, validation, _runner)
+        if validation.get("refused"):
+            try:
+                with _transaction(engine) as c:
+                    emit_event(c, remediation.get("_project_id") or "", "code_task.autofix_refused",
+                               "boss", "code_task_run", run_id,
+                               {"refused": validation["refused"][:20]})
+            except Exception:  # noqa: BLE001 — the refusal holds whether or not it was recorded
+                _log_caught(logger)
         executed = None
         try:
             with engine.connect() as c:
@@ -2792,6 +2802,8 @@ def _fidelity_check(engine, run_id: str, root, remediation: dict, sandbox, *,
             _log_caught(logger)
         if executed is not None and test_cmd:
             executed["commands"].append(str(test_cmd))   # BOSS ran the suite itself
+        if executed is not None and remediation.get("_auto_seeded_cmd"):
+            executed["commands"].append(str(remediation["_auto_seeded_cmd"]))  # BOSS ran --fix
         result = _input_fidelity.check(
             root, remediation, findings=_input_fidelity.findings_for_check(validation),
             claims=[summary or ""], executed=executed)
@@ -6789,6 +6801,30 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # the knob off (the default) _checkpoint behaves exactly as before.
     _ws_snapshot: list = [None]
 
+    _up_for_merge: list = [None]
+    #: Set when this build carries a validation contract (_remediation below). Only such a build
+    #: skips mid-build checkpoints on a change up for merge; every other build keeps them, so a
+    #: lease reclaim or an Infra-Agent pause resumes from the branch exactly as before.
+    _validation_build: list = [False]
+
+    def _branch_up_for_merge() -> bool:
+        """The work branch already carries an open change (this lineage opened a PR, or a
+        person's pushed change is being fixed): checkpoints stay off it. Read once per run."""
+        if _up_for_merge[0] is None:
+            try:
+                with engine.connect() as c:
+                    _up_for_merge[0] = bool(c.execute(sql(
+                        "SELECT 1 FROM code_task_runs WHERE id <> :me AND (id = :root OR "
+                        "finalize_ctx->>'root_run_id' = :root) AND pull_request_url IS NOT NULL "
+                        "LIMIT 1"), {"me": run_id, "root": root_run}).first()) or bool(c.execute(
+                        sql("SELECT 1 FROM local_change_sets WHERE project_id = :p AND branch = :b "
+                            "AND state = 'open' LIMIT 1"),
+                        {"p": project_id, "b": work_branch}).first())
+            except Exception:  # noqa: BLE001 — unknown: keep checkpointing, as before
+                _log_caught(logger)
+                _up_for_merge[0] = False
+        return bool(_up_for_merge[0])
+
     def _checkpoint(label: str) -> int:
         """Push whatever the sandbox holds to the work branch. Best-effort, never fatal.
 
@@ -6811,6 +6847,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
             _ws_snapshots.capture_best_effort(_ws_snapshot[0], sandbox, label)
         if _push_held(f"checkpoint:{label}"):
+            return 0
+        if _validation_build[0] and _branch_up_for_merge():
+            # A CHANGE UP FOR MERGE GETS NO MID-BUILD COMMITS: a checkpoint would move its head
+            # (and its packet) to a half-built tree. The build's one commit lands at the end.
             return 0
         try:
             files = sandbox.diff()
@@ -7212,6 +7252,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             except Exception:  # noqa: BLE001 — an unreadable contract is no contract, said
                 _log_caught(logger)
         if _remediation:
+            _validation_build[0] = True
+            _remediation["_project_id"] = project_id
+            # THE MECHANICAL FIXER FIRST (gwlint --fix): the target starts as its output, so its
+            # lines are the build's `auto` fixes and the agent hand-edits only what it left.
+            _seed_cmd = _input_fidelity.seed_auto_fix(
+                root, _remediation,
+                (lambda cmd: sandbox.run(cmd, timeout=180)) if sandbox is not None else None)
+            if _seed_cmd:
+                _remediation["_auto_seeded_cmd"] = _seed_cmd
             instructions = f"{instructions}{_input_fidelity.brief(_remediation)}"
             with _transaction(engine) as c:
                 c.execute(sql(
@@ -12042,9 +12091,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if _acc_section:
                 _cf_lead = _cf_section(_checks)
                 _pr_summary = _cf_lead + _acc_section + _pr_summary[len(_cf_lead):]
+            # THE CHANGE IS TITLED FOR THE WORK ("Lumen Pay tenant onboarding"): its workflow
+            # run's own title, never this step build's, and never with "· retry N".
+            from . import pr_follow_up as _pr_fu, review_packet as _rp_title
+
+            _change_title = (_rp_title.work_root_title(c, run_id, fctx)
+                             or _pr_fu.work_name(title) or title)
             proposal = sf.propose_pull_request(
                 c, project_id, task_id, reservation_id=reservation_id,
-                dedupe_key=f"code:task:{run_id}", title=title,
+                dedupe_key=f"code:task:{run_id}", title=_change_title,
                 branch_name=work_branch,
                 summary=_pr_summary + agent_acts.pr_trailers(c, run_id),
                 files=_pr_files,
@@ -12096,7 +12151,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 try:
                     proposal = sf.propose_pull_request(
                         c, project_id, task_id, reservation_id=reservation_id,
-                        dedupe_key=f"code:task:{run_id}", title=title,
+                        dedupe_key=f"code:task:{run_id}", title=_change_title,
                         branch_name=work_branch,
                         summary=_pr_summary + agent_acts.pr_trailers(c, run_id),
                         files=_pr_files,

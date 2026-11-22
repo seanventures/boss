@@ -320,7 +320,16 @@ def brief(c: Optional[Mapping[str, Any]]) -> str:
         "- Derive the output FROM THE INPUT (run the fixer on a copy of it, then hand-edit). "
         "Never start from another file, and never leave a pre-existing output in place.",
         "- Only claim a command ran (\"--fix applied\", \"the linter passes\") if you ran it.",
+        "- Never point auth (issuer, jwks_url, audience) or an upstream at a mock, test, staging "
+        "or localhost host, and never change a host the input names: a fix changes a scheme "
+        "(http → https), never where a request or a token check goes. BOSS blocks any change "
+        "to auth, jwks, issuer, upstream or tls keys that no finding asks for.",
     ]
+    if c.get("_auto_seeded") is not None:
+        fix = str(((c.get("validator") or {}).get("fix")) or "the validator's fixer")
+        lines.insert(1, f"- BOSS ALREADY RAN THE MECHANICAL FIXER (`{fix}`) on the input: "
+                        f"`{c['output']}` starts as its output. Keep its lines; hand-edit only "
+                        "what it left.")
     if c.get("answer_files"):
         lines.append(
             "- ANSWER FILES ARE OFF LIMITS: do not open, read, copy or diff "
@@ -886,6 +895,7 @@ def run_validation(root: Any, c: Mapping[str, Any],
                     before_raw=before_raw,
                     after_raw=after_raw, commands=commands, exits=exits, out_text=out_text,
                     auto_text=auto_text, ruleset=ruleset, guard=guard, error=error)
+    rec["_auto_text"] = auto_text            # enforce_autofix reads it; never stored
     # Justification only (check's added-key rule reads the fix hints); never stored.
     rec["_hints"] = [{"rule": f.get("rule_id"), "severity": f.get("native_severity"),
                       "file": c["input"], "line": f.get("line"), "message": f.get("title"),
@@ -936,3 +946,155 @@ def public_validation(rec: Mapping[str, Any]) -> dict:
     """The stored record: without the justification-only fields (its lines are already
     secret-masked by validators.record)."""
     return {k: v for k, v in rec.items() if not str(k).startswith("_")}
+
+
+# ── the mechanical fixer first, and the ruleset's autofix policy enforced ──────────────────────
+
+def seed_auto_fix(root: Any, c: dict, run: Optional[Callable[[str], Any]]) -> Optional[str]:
+    """BOSS runs the validator's mechanical fixer (``gwlint --fix``) on the partner's file BEFORE
+    any agent, and the target starts as its output: the fixer's lines are then the build's
+    ``auto`` fixes (validators.changed_lines reads provenance from the same fixer output) and
+    the agent hand-edits only what it left. Returns the command, or None when there is no fixer,
+    the target is the input itself, or the fixer wrote nothing. Never raises."""
+    v = c.get("validator") if isinstance(c.get("validator"), Mapping) else {}
+    if run is None or not v.get("fix") or str(c.get("output")) == str(c.get("input")):
+        return None
+    root = Path(root)
+    scratch = root / ".boss-validation" / "seed"
+    try:
+        scratch.mkdir(parents=True, exist_ok=True)
+        copy = scratch / PurePosixPath(str(c["output"])).name
+        copy.write_text(str(c.get("_input_text") or ""))
+        cmd = str(v["fix"]).replace("{file}", shlex.quote(str(copy.relative_to(root))))
+        run(cmd)
+        fixed = _read(copy)
+        if not fixed or fixed == c.get("_input_text"):
+            return None
+        target = root / str(c["output"])
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(fixed)
+        c["_auto_seeded"] = fixed
+        return cmd
+    except Exception:  # noqa: BLE001 — no seed: the agent starts from the input, as before
+        logger.info("input_fidelity: the fixer did not seed the target", exc_info=True)
+        return None
+    finally:
+        shutil.rmtree(root / ".boss-validation", ignore_errors=True)
+
+
+def _hint_of(rec: Mapping[str, Any]) -> list[dict]:
+    return [{"id": f"V-{n:02d}", "line": h.get("line"), "fix": h.get("fix"),
+             "rule_id": h.get("rule")} for n, h in enumerate(rec.get("_hints") or [], start=1)]
+
+
+def refused_text(base_text: str, out_text: str, refuse: set) -> str:
+    """The target with the refused changes undone against ``base_text`` (what the agent started
+    from): a removed line put back, an added line dropped, every other change kept. ``refuse``
+    holds ``(hunk_id, k)`` pairs of ``validators.hunks(base_text, out_text)``."""
+    from . import validators as _v
+
+    b = out_text.splitlines()
+    res: list[str] = []
+    pos = 0
+    for h in _v.hunks(base_text, out_text):
+        res += b[pos:int(h["j1"])]
+        for k, old, new in _v._pairs(h):
+            if (h["id"], k) in refuse:
+                if old is not None:
+                    res.append(old)
+            elif new is not None:
+                res.append(new)
+        pos = int(h["j2"])
+    res += b[pos:]
+    return "\n".join(res) + ("\n" if out_text.endswith("\n") and res else "")
+
+
+def enforce_autofix(root: Any, c: Mapping[str, Any], rec: dict,
+                    run: Optional[Callable[[str], Any]], *,
+                    ruleset: Optional[Mapping[str, Any]] = None) -> dict:
+    """THE RULESET'S AUTOFIX POLICY, IN CODE (SPEC §4): a rule whose ``autofix`` is ``human`` or
+    ``never`` is not the agent's to fix. Every change the agent made to such a finding's lines —
+    its BLOCK (a route `- path:` and its keys; a key's own line), or a line attributed to it — is
+    REFUSED: undone on the target against what the agent started from (the mechanical fixer's
+    output when BOSS seeded it, else the partner's file), the finding left open as "Needs you"
+    with the agent's change kept as ``proposed`` (a person may accept it: finding_overrides
+    applies it), and the validator run again on the reset file. ``refused`` lists them.
+    Returns the record (unchanged when nothing is refused). Never raises."""
+    from . import validators as _v
+
+    try:
+        rules = ((ruleset or c.get("ruleset") or {}).get("rules")) or {}
+        held = {f["id"]: f for f in rec.get("findings") or []
+                if (f.get("source") or {}).get("kind") == "validator" and not f.get("introduced")
+                and (rules.get((f.get("source") or {}).get("rule_id")) or {}).get("autofix")
+                in _v.HUMAN_AUTOFIX}
+        out_path = Path(root) / str(c["output"])
+        out_text = _read(out_path)
+        if not held or out_text is None:
+            return rec
+        input_text = str(c.get("_input_text") or "")
+        seeded = c.get("_auto_seeded") is not None and rec.get("_auto_text") is not None
+        base = str(rec["_auto_text"]) if seeded else input_text
+        base_lines = base.splitlines()
+        lm = _v.line_map(input_text, base)
+        hint = [{**h, "line": lm.get(h["line"]) if isinstance(h.get("line"), int) else None}
+                for h in _hint_of(rec)]
+        blocks = {}
+        for fid, f in held.items():
+            at = lm.get((f.get("location") or {}).get("partner_line"))
+            if at:
+                blocks[fid] = _v.block(base_lines, at - 1)
+        refuse: set = set()
+        mine: list[dict] = []
+        for h in _v.hunks(base, out_text):
+            prev: Optional[str] = None
+            hunk_owner: Optional[str] = None
+            for k, old, new in _v._pairs(h):
+                fid = _v.attribute(h, old if old is not None else new or "", hint, prev,
+                                   removed=old is not None and new is None)
+                prev = fid or prev
+                at = int(h["i1"]) + k if old is not None else None
+                owner = next((x for x, (lo, hi) in blocks.items()
+                              if (at is not None and lo <= at < hi)
+                              or (at is None and lo < int(h["i1"]) < hi)), None)
+                owner = owner or (fid if fid in held else None) or (
+                    hunk_owner if old is None else None)
+                if owner:
+                    hunk_owner = owner
+                    refuse.add((h["id"], k))
+                    mine.append({"finding": owner, "hunk": h["id"], "i1": int(h["i1"]),
+                                 "old": old, "new": new})
+        if not mine:
+            return rec
+        out_path.write_text(refused_text(base, out_text, refuse))
+        proposals: dict[str, dict] = {}
+        for fid in dict.fromkeys(x["finding"] for x in mine):
+            pieces = []
+            for hid in dict.fromkeys(x["hunk"] for x in mine if x["finding"] == fid):
+                g = [x for x in mine if x["finding"] == fid and x["hunk"] == hid]
+                i1 = g[0]["i1"]
+                pieces.append({"remove": [_v.mask(x["old"]) for x in g if x["old"] is not None],
+                               "after": [_v.mask(x["new"]) for x in g if x["new"] is not None],
+                               "anchor": _v.mask(base_lines[i1 - 1]) if i1 > 0 else None})
+            news = [x["new"] for x in mine if x["finding"] == fid and x["new"] is not None]
+            proposals[fid] = {
+                "before": _v._joined(x["old"] for x in mine if x["finding"] == fid),
+                "after": _v._joined(news), "pieces": pieces,
+                # A proposal is re-applied from its stored (masked) lines, so only when masking
+                # left them as they were; else the person writes the line (Edit).
+                "applicable": all(_v.mask(x) == x for x in news)}
+        new_rec = run_validation(root, c, run, ruleset=ruleset)
+        for f in new_rec.get("findings") or []:
+            if f["id"] in proposals:
+                f["proposed"] = proposals[f["id"]]
+                if f.get("status") == "open":
+                    f["fix_kind"] = "human"
+        new_rec["refused"] = [
+            {"finding": fid, "rule": held[fid]["source"]["rule_id"],
+             "autofix": (rules.get(held[fid]["source"]["rule_id"]) or {}).get("autofix"),
+             "lines": sum(1 for x in mine if x["finding"] == fid)} for fid in proposals]
+        return new_rec
+    except Exception:  # noqa: BLE001 — an enforcement that could not run is said on the record
+        logger.info("input_fidelity: autofix policy not enforced", exc_info=True)
+        rec["refused_error"] = "the autofix policy could not be enforced on this tree"
+        return rec

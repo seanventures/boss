@@ -38,7 +38,10 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern]] = [
             (?:api[_\-]?key|access[_\-]?key|secret[_\-]?key|private[_\-]?key|[_\-]key
               |token|secret|password|passwd|pwd|credentials?|client[_\-]?secret))
         (?P<sep>["']?\s*[:=]\s*["']?)
-        (?P<value>(?!\[)[^\s"'&,;)}\]]{4,})""")),
+        # A boolean / null is a flag (`allow_credentials: true`), never a credential: kept.
+        # Any other value under a secret-ending name is masked, `allow_credentials` included.
+        (?P<value>(?!\[)(?!(?:true|false|null|none|yes|no|off)(?![^\s"'&,;)}\]]))
+                  [^\s"'&,;)}\]]{4,})""")),
 ]
 
 # (label, compiled pattern). Order matters: most-specific first so a token isn't half-masked.

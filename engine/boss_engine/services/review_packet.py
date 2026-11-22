@@ -53,10 +53,29 @@ def _j(value: Any, default: Any) -> Any:
 
 # ── counts and verdict (computed, never written) ───────────────────────────────────────────────
 
+#: The finding kinds the P-level counts and the verdict are about. A review seat's finding is
+#: counted apart (``counts.review``): the P1 "found" figure is what the validators, tests,
+#: contract cases and BOSS's guards found, never the review's follow-ups.
+CHECKED = ("validator", "test", "contract", "guard")
+
+
 def count(findings: Sequence[Mapping[str, Any]]) -> dict:
     out: dict[str, Any] = {p: {"found": 0, "open": 0, "waived": 0} for p in PLEVELS}
     out["unmapped"] = 0
+    out["review"] = {"found": 0, "open": 0, "deferred": 0, "blocking": 0}
     for f in findings:
+        if (f.get("source") or {}).get("kind") == "reviewer":
+            r = out["review"]
+            r["found"] += 1
+            if f.get("status") in ("open", "reverted"):
+                r["open"] += 1
+                if f.get("deferred_to"):
+                    r["deferred"] += 1
+                if f.get("blocks"):
+                    r["blocking"] += 1
+            if f.get("unmapped"):
+                out["unmapped"] += 1
+            continue
         p = f.get("severity") if f.get("severity") in PLEVELS else "P2"
         out[p]["found"] += 1
         if f.get("status") == "open":
@@ -86,10 +105,13 @@ def verdict(packet: Mapping[str, Any]) -> dict:
         # Only a validator, test or contract finding blocks; a review follow-up the quality bar
         # let through is listed, open, with where it went (deferred_to) — the light lane. A
         # REJECTED fix puts the finding back (status `reverted`): it blocks like an open one.
+        kind = (f.get("source") or {}).get("kind")
         if f.get("status") in ("open", "reverted") and f.get("severity") in ("P0", "P1") \
-                and (f.get("source") or {}).get("kind") in ("validator", "test", "contract") \
-                and not f.get("deferred_to"):
+                and kind in CHECKED and not f.get("deferred_to"):
             reasons.append(f"open_{str(f['severity']).lower()}:{f['id']}")
+        elif kind == "reviewer" and f.get("blocks") and f.get("status") in ("open", "reverted"):
+            # A SECURITY REVIEWER'S HIGH ON A P0 RULE'S LINES is never a follow-up.
+            reasons.append(f"security_review:{f['id']}")
     for v in packet.get("validators") or []:
         if v.get("guard"):
             reasons.append(f"input_substituted:{v['guard'].get('source')}")
@@ -103,6 +125,9 @@ def verdict(packet: Mapping[str, Any]) -> dict:
             reasons.append(f"contract_failed:{c['id']}")
     for h in (packet.get("vs_input") or {}).get("unexplained_hunks") or []:
         reasons.append(f"unexplained_hunk:{h}")
+    if packet.get("stale"):
+        # THE EVIDENCE RAN ON AN OLDER HEAD: "stale → re-checking" until a re-run at the head.
+        reasons.append("stale_evidence")
     if (packet.get("rerun") or {}).get("state") in ("pending", "running"):
         reasons.append("rerun_pending")
     elif (packet.get("rerun") or {}).get("state") == "failed":
@@ -291,7 +316,8 @@ def _claims(findings: Sequence[Mapping[str, Any]], validators: Sequence[Mapping[
             out.append({"text": f"{v['id']}: {v['before']} found, {len(fixed)} fixed, "
                                 f"{v['after_open']} open", "refs": [v["evidence"], *fixed][:20]})
     for p in ("P0", "P1"):
-        mine = [f for f in findings if f.get("severity") == p]
+        mine = [f for f in findings if f.get("severity") == p
+                and (f.get("source") or {}).get("kind") in CHECKED]
         closed = [f["id"] for f in mine if f.get("status") in ("fixed", "waived")]
         if mine and len(closed) == len(mine):
             out.append({"text": f"All {len(mine)} {p} findings closed", "refs": closed})
@@ -310,9 +336,14 @@ def build_packet(*, work: Mapping[str, Any], head_sha: Optional[str],
                  risks: Sequence[Mapping[str, Any]] = (),
                  packet_version: int = 1, rerun: Optional[Mapping[str, Any]] = None,
                  built_at: Optional[str] = None,
-                 apply_overrides: Optional[Callable[[list], list]] = None) -> dict:
+                 apply_overrides: Optional[Callable[[list], list]] = None,
+                 evidence_head: Optional[str] = None) -> dict:
     """The packet from step outputs (records only). ``validations`` are boss.validation/v1
-    records; ``tests`` the build's test runs; ``reviews`` boss.finding/v1 reviewer findings."""
+    records; ``tests`` the build's test runs; ``reviews`` boss.finding/v1 reviewer findings.
+
+    ``head_sha`` is the change's head now; ``evidence_head`` the head the validation ran on. The
+    packet's ``head_sha`` is the EVIDENCE's (it never claims a head its evidence did not run on);
+    ``branch_head`` is the change's, and ``stale`` says they differ ("stale → re-checking")."""
     findings: list[dict] = []
     validators: list[dict] = []
     vs_input: dict = {"file": None, "hunks": 0, "added": 0, "removed": 0,
@@ -333,7 +364,10 @@ def build_packet(*, work: Mapping[str, Any], head_sha: Optional[str],
             v["after_open"] = sum(1 for f in mine if f.get("status") in ("open", "reverted"))
             v["after_waived"] = sum(1 for f in mine if f.get("status") == "waived")
     test_rows = from_tests(tests, head_sha)
-    packet = {"schema": SCHEMA, "packet_version": int(packet_version), "head_sha": head_sha,
+    stale = bool(validations and evidence_head and head_sha and evidence_head != head_sha)
+    packet = {"schema": SCHEMA, "packet_version": int(packet_version),
+              "head_sha": evidence_head if validations and evidence_head else head_sha,
+              "branch_head": head_sha, "stale": stale,
               "built_at": built_at or _now(), "work": dict(work),
               "findings": findings, "vs_input": vs_input, "validators": validators,
               "tests": test_rows, "contract": [dict(c) for c in contract],
@@ -357,7 +391,8 @@ def _lineage(connection: Any, run_id: str) -> list[dict]:
         return []
     root = str(row["root"] or row["id"])
     rows = connection.execute(text(
-        "SELECT id, title, finalize_ctx, state, created_at FROM code_task_runs "
+        "SELECT id, title, finalize_ctx, state, created_at, status, pull_request_url "
+        "FROM code_task_runs "
         "WHERE id = :root OR finalize_ctx->>'root_run_id' = :root ORDER BY (id = :root) DESC, "
         "created_at"), {"root": root}).mappings().all()
     return [{**dict(r), "finalize_ctx": _j(r["finalize_ctx"], {}), "state": _j(r["state"], {})}
@@ -371,7 +406,35 @@ def work_title(title: Any) -> str:
     return work_name(title) or str(title or "")
 
 
+def _root_workflow_run(connection: Any, workflow_run_id: Optional[str]) -> Optional[dict]:
+    """The work's own workflow run: up the parent chain from the step's run (a validate step
+    may run in a child workflow). ``{id, title}``; None when unknown."""
+    if not workflow_run_id:
+        return None
+    from sqlalchemy import text
+
+    seen: set[str] = set()
+    cur: Optional[str] = str(workflow_run_id)
+    row = None
+    try:
+        with connection.begin_nested():
+            while cur and cur not in seen and len(seen) < 10:
+                seen.add(cur)
+                got = connection.execute(text(
+                    "SELECT id, parent_run_id, input->>'title' AS title FROM workflow_runs "
+                    "WHERE id = :w"), {"w": cur}).mappings().first()
+                if got is None:
+                    break
+                row = dict(got)
+                cur = row.get("parent_run_id")
+    except Exception:  # noqa: BLE001 — the title and number are labels
+        return None
+    return {"id": row["id"], "title": row.get("title")} if row else None
+
+
 def _run_no(connection: Any, workflow_run_id: Optional[str]) -> Optional[int]:
+    """The run's number as the Work panel shows it ("Run #18"): every workflow run of the
+    project up to this one (project_experience.work / work_story count the same way)."""
     if not workflow_run_id:
         return None
     from sqlalchemy import text
@@ -381,11 +444,114 @@ def _run_no(connection: Any, workflow_run_id: Optional[str]) -> Optional[int]:
             n = connection.execute(text(
                 "SELECT count(*) FROM workflow_runs w, workflow_runs me WHERE me.id = :w "
                 "AND w.project_id = me.project_id "
-                "AND w.workflow_definition_id = me.workflow_definition_id "
                 "AND w.created_at <= me.created_at"), {"w": workflow_run_id}).scalar()
     except Exception:  # noqa: BLE001 — the number is a label
         return None
     return int(n) if n else None
+
+
+def work_root_title(connection: Any, run_id: str, fctx: Optional[Mapping[str, Any]] = None
+                    ) -> Optional[str]:
+    """The work's root title for a build: its workflow run's own title ("Lumen Pay tenant
+    onboarding"), never the step build's ("Validate tenant config with gwlint · retry 1").
+    None when the build belongs to no titled workflow run."""
+    from sqlalchemy import text
+
+    if fctx is None:
+        try:
+            with connection.begin_nested():
+                fctx = _j(connection.execute(text(
+                    "SELECT finalize_ctx FROM code_task_runs WHERE id = :r"), {"r": run_id}
+                ).scalar(), {})
+        except Exception:  # noqa: BLE001 — no title: the caller keeps the build's
+            return None
+    wfr = _root_workflow_run(connection, (fctx or {}).get("workflow_run_id"))
+    title = work_title((wfr or {}).get("title")) if (wfr or {}).get("title") else ""
+    return title or None
+
+
+def _producing_build(lineage: Sequence[Mapping[str, Any]], me: Mapping[str, Any]) -> Mapping[str, Any]:
+    """The build that produced the change: the first in the lineage that opened it (has the pull
+    request) and did not fail — never a failed first attempt."""
+    for r in lineage:
+        if r.get("pull_request_url") and str(r.get("status") or "") != "failed":
+            return r
+    for r in lineage:
+        if str(r.get("status") or "") not in ("failed", ""):
+            return r
+    return me
+
+
+#: The security reviewer's word for a finding that is never deferred on a P0 rule's lines.
+_HIGH = ("high", "critical", "blocker", "severe")
+_HIGH_WORD = re.compile(r"\b(?:HIGH|CRITICAL|BLOCKER|SEVERE)\b")
+_FILE_LINE = re.compile(r"([\w./-]+\.\w+):(\d+)")
+
+
+def _same_file(name: Any, target: Optional[str]) -> bool:
+    n = str(name or "")
+    return not target or not n or n == target or str(target).endswith("/" + n.lstrip("./"))
+
+
+def security_high_line(r: Mapping[str, Any], target: Optional[str]) -> Optional[int]:
+    """The target line a SECURITY review finding of HIGH (or worse) is on, else None.
+
+    Read the way the real producers write it, not only as a seat-tagged item: the security
+    check's findings reach the follow-ups as ``{severity: "security", text: "(security_check)
+    HIGH — config/…yaml:29 — …"}`` with no seat and no leading path (checks_failing), and a
+    seat's own as ``{seat, severity: high, text: "path:line — …"}``."""
+    src = r.get("source") or {}
+    title = str(r.get("title") or "")
+    sev = str(r.get("native_severity") or "").lower()
+    security = ("security" in str(src.get("name") or "").lower() or sev == "security"
+                or title.lstrip().lower().startswith("(security"))
+    if not security or not (sev in _HIGH or _HIGH_WORD.search(title)):
+        return None
+    loc = r.get("location") or {}
+    if isinstance(loc.get("line"), int) and _same_file(loc.get("file"), target):
+        return int(loc["line"])
+    for m in _FILE_LINE.finditer(title):
+        if _same_file(m.group(1), target):
+            return int(m.group(2))
+    return None
+
+
+def _p0_lines(validation: Optional[Mapping[str, Any]]) -> set:
+    """The target lines a P0 finding (or a guard) is on, or its hunks touch."""
+    if not validation:
+        return set()
+    out: set = set()
+    hunks = {h.get("id"): h for h in validation.get("hunks") or []}
+    for f in validation.get("findings") or []:
+        if f.get("severity") != "P0":
+            continue
+        loc = f.get("location") or {}
+        if isinstance(loc.get("line"), int):
+            out.add(loc["line"])
+        h = hunks.get(f.get("hunk_id"))
+        if h and isinstance(h.get("out_line"), int):
+            out.update(range(h["out_line"], h["out_line"] + max(int(h.get("added") or 0), 1)))
+    return out
+
+
+def stamp_evidence_head(connection: Any, run_id: str, head_sha: Optional[str]) -> None:
+    """The build's own validation record learns the head its tree was pushed as (once)."""
+    if not head_sha:
+        return
+    from sqlalchemy import text
+
+    connection.execute(text(
+        "UPDATE code_task_runs SET state = jsonb_set(state, '{validation,after,head_sha}', "
+        "to_jsonb(CAST(:h AS text))) WHERE id = :r "
+        "AND jsonb_typeof(state->'validation'->'after') = 'object' "
+        "AND state->'validation'->'after'->>'head_sha' IS NULL"), {"h": head_sha, "r": run_id})
+
+
+def evidence_head(validation: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """The head a validation record's after-run ran on (stamped when the build pushed it, or
+    by the re-run); None for an older record."""
+    after = (validation or {}).get("after") or {}
+    return str(after["head_sha"]) if after.get("head_sha") else None
 
 
 def for_run(connection: Any, run_id: str, *, head_sha: Optional[str],
@@ -403,14 +569,23 @@ def for_run(connection: Any, run_id: str, *, head_sha: Optional[str],
         return None
     root = lineage[0]
     me = next((r for r in lineage if r["id"] == run_id), lineage[-1])
-    wfr = (me["finalize_ctx"] or {}).get("workflow_run_id") or \
+    step_wfr = (me["finalize_ctx"] or {}).get("workflow_run_id") or \
         (root["finalize_ctx"] or {}).get("workflow_run_id")
+    # THE WORK'S OWN RUN (its number as the Work panel shows it) and title, not the step's.
+    top = _root_workflow_run(connection, step_wfr)
+    wfr = (top or {}).get("id") or step_wfr
     validation = validation or next((r["state"].get("validation") for r in reversed(lineage)
                        if isinstance(r["state"].get("validation"), Mapping)
                        and r["state"]["validation"].get("schema") == "boss.validation/v1"), None)
-    work = {"title": work_title(root["title"]), "workflow_run": wfr,
-            "run_no": _run_no(connection, wfr), "build": root["id"],
-            "later_builds": [r["id"] for r in lineage[1:]], "change": change}
+    # THE BUILD THAT PRODUCED THE CHANGE (never a failed first attempt); later ones follow it.
+    build = _producing_build(lineage, me)
+    at = next(i for i, r in enumerate(lineage) if r["id"] == build["id"])
+    later = [r["id"] for r in lineage[at + 1:]
+             if r.get("pull_request_url") or str(r.get("status") or "") != "failed"]
+    title = work_title((top or {}).get("title")) if (top or {}).get("title") else ""
+    work = {"title": title or work_title(build["title"] or root["title"]), "workflow_run": wfr,
+            "run_no": _run_no(connection, wfr), "build": build["id"],
+            "later_builds": later, "change": change}
     reviews = from_followups((followups or {}).get("items") or [], (followups or {}).get("bar"))
     # THE QUALITY BAR DECIDES WHAT A REVIEW FINDING BLOCKS (operator 2026-11-18, light lane):
     # what reaches the card as a follow-up already passed the bar — queued, for the next pass, or
@@ -422,7 +597,14 @@ def for_run(connection: Any, run_id: str, *, head_sha: Optional[str],
     # Where it went: a follow-up build on THIS change's branch (queued, the next pass, the build
     # already on it) lands on the same change; "later" has no change yet.
     on_change = by != "later" and change is not None
+    p0_lines = _p0_lines(validation)
+    target = (validation or {}).get("target")
     for r in reviews:
+        # A SECURITY REVIEWER'S HIGH (or worse) ON A P0 RULE'S LINES IS NEVER DEFERRED: it is
+        # listed open and blocks the packet like the P0 it sits on.
+        if p0_lines and security_high_line(r, target) in p0_lines:
+            r["blocks"] = True
+            continue
         r["deferred_to"] = {"by": by, "number": change if on_change else None,
                             "href": (f"/changes/{project_id}/{change}" if on_change and project_id
                                      else None)}
@@ -430,7 +612,7 @@ def for_run(connection: Any, run_id: str, *, head_sha: Optional[str],
                         validations=[validation] if validation else [],
                         tests=me["state"].get("tests") or [], reviews=reviews,
                         overrides=overrides, packet_version=packet_version, rerun=rerun,
-                        apply_overrides=apply_overrides)
+                        apply_overrides=apply_overrides, evidence_head=evidence_head(validation))
 
 
 #: A re-run with no result after this is overdue: a person's forced merge gets past it
@@ -449,7 +631,8 @@ def _when(value: Any) -> Optional[datetime]:
     return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
 
 
-def blocks_merge(rec: Mapping[str, Any], *, force: bool) -> Optional[tuple[str, str]]:
+def blocks_merge(rec: Mapping[str, Any], *, force: bool,
+                 current_head: Optional[str] = None) -> Optional[tuple[str, str]]:
     """(code, message) when the card's packet refuses this merge: an invalid packet or a
     re-run in progress always; a blocked verdict (open P0/P1, a substituted input, a failing
     test…) unless a person forces it with a reason."""
@@ -458,16 +641,33 @@ def blocks_merge(rec: Mapping[str, Any], *, force: bool) -> Optional[tuple[str, 
         return None
     v = packet.get("verdict") or {}
     reasons = [str(r) for r in v.get("reasons") or []]
+    rr = packet.get("rerun") or {}
+    started = _when(rr.get("created_at"))
+    stuck = rr.get("state") == "failed" or (
+        started is not None and datetime.now(timezone.utc) - started > RERUN_STALE_AFTER)
+    if current_head and packet.get("validators") and packet.get("head_sha") \
+            and str(packet["head_sha"]) != str(current_head) and not (force and stuck):
+        # The change moved after its evidence ran (a push, a follow-up build's commit): the card
+        # is not about this head. A re-run starts on the push (finding_overrides.on_head_moved).
+        return ("packet_stale", f"Stale: the checks ran on {str(packet['head_sha'])[:8]}, the "
+                                f"change is at {str(current_head)[:8]}. Re-checking; merge when "
+                                "the re-run is done.")
     if v.get("state") == "invalid":
         return ("packet_invalid", f"Packet invalid: {len(reasons)} rule(s) failed. Rebuild the "
                                   "packet before merging.")
+    if "stale_evidence" in reasons and "rerun_pending" not in reasons and not force:
+        # Stale with nothing re-checking (a host BOSS cannot re-run on): a person's call.
+        return ("packet_stale", "Stale: the checks ran on an older head than the change's. A "
+                                "person may merge anyway with a stated reason.")
     if "rerun_pending" in reasons:
         started = _when((packet.get("rerun") or {}).get("created_at"))
         stale = started is not None and datetime.now(timezone.utc) - started > RERUN_STALE_AFTER
         if not (stale and force):
-            return ("rerun_pending", "Re-checking after an override; merge when the re-run is "
-                                     "done." + (" It is overdue: a person may merge anyway with "
-                                                "a stated reason." if stale else ""))
+            what = ("The change moved after its checks ran: stale → re-checking"
+                    if "stale_evidence" in reasons else "Re-checking after an override")
+            return ("rerun_pending", f"{what}; merge when the re-run is done."
+                    + (" It is overdue: a person may merge anyway with a stated reason."
+                       if stale else ""))
     if v.get("state") == "blocked" and not force:
         return ("packet_blocked", "Blocked: " + ", ".join(reasons[:6])
                 + ". A person may merge anyway with a stated reason.")

@@ -142,6 +142,10 @@ def open_or_update(c: Any, settings: Any, *, project_id: str, repository: str, b
                   {"h": head, "i": row["id"]})
         local_review.remap(c, settings, row, head)
         row = local_review.change_by_id(c, row["id"])
+        # A PUSH TO A CHANGE UP FOR MERGE re-runs its validation at the new head.
+        from .finding_overrides import on_head_moved
+
+        on_head_moved(c, settings, project_id, int(row["number"]), head)
     emit_event(c, project_id, "local_repo.branch_pushed", pusher, "local_change_set", row["id"],
                {"number": int(row["number"]), "branch": branch, "head_sha": head,
                 "opened": opened})
@@ -323,6 +327,9 @@ def reconcile(c: Any, settings: Any, project_id: str, *, jobs: Any = None) -> li
                 c.execute(text("UPDATE local_change_sets SET head_sha = :h, updated_at = now() "
                                "WHERE id = :i"), {"h": head, "i": row["id"]})
                 local_review.remap(c, settings, row, head)
+                from .finding_overrides import on_head_moved
+
+                on_head_moved(c, settings, project_id, int(row["number"]), head)
                 out.append({"branch": branch, "number": row["number"], "moved": True})
             continue
         if branch.startswith("boss/") or not head or not tip:

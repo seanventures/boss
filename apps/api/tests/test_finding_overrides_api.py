@@ -515,3 +515,93 @@ def test_the_validation_read_carries_the_partners_file_masked(client, change):
     assert inp["text"].splitlines()[0] == "tenant: lumen-pay"
     assert len(inp["text"].splitlines()) == len(change.branch.files[INPUT].splitlines())
     assert "sk_live_" not in inp["text"] and '[SECRET]' in inp["text"]
+
+
+# ── #13: an override is idempotent on (finding, head, action) ──────────────────────────────────
+
+def test_a_replayed_override_returns_the_first_and_starts_no_second_rerun(engine, client, change):
+    fid = _id(_get(client, change), "pii-fields-declared")
+    first = _override(client, change, fid, action="waive", reason="partner confirmed, KAN-12")
+    assert first.status_code == 200, first.text
+    again = _override(client, change, fid, action="waive", reason="partner confirmed, KAN-12")
+    assert again.status_code == 200, again.text
+    assert again.json()["replayed"] is True
+    assert again.json()["override"]["id"] == first.json()["override"]["id"]
+    assert again.json()["rerun"]["id"] == first.json()["rerun"]["id"]
+    with engine.begin() as c:
+        rows = c.execute(text("SELECT count(*) FROM finding_overrides WHERE project_id = :p "
+                              "AND change_number = :n"), {"p": PID, "n": change.number}).scalar()
+        reruns = c.execute(text("SELECT count(*) FROM validation_reruns WHERE project_id = :p "
+                                "AND change_number = :n"), {"p": PID, "n": change.number}).scalar()
+    assert rows == 1 and reruns == 1
+
+
+# ── #8: a push to the change re-runs the validator; the packet says stale meanwhile ────────────
+
+def test_a_push_to_the_change_starts_a_rerun_and_the_packet_never_claims_the_new_head(
+        engine, client, change):
+    old = change.branch.sha
+    with engine.begin() as c:
+        rp.stamp_evidence_head(c, change.run_id, old)
+    change.branch.upsert_file("b", TARGET, change.branch.files[TARGET] + "# a person's push\n",
+                              "follow-up")
+    new = change.branch.sha
+    with engine.begin() as c:
+        rid = fo.on_head_moved(c, None, PID, change.number, new)
+        assert rid is not None
+        assert fo.on_head_moved(c, None, PID, change.number, new) is None   # one re-run only
+        card = c.execute(text("SELECT recommendation FROM decisions WHERE id = :i"),
+                         {"i": change.decision}).scalar()
+    p = card["packet"]
+    assert p["stale"] is True and p["head_sha"] == old and p["branch_head"] == new
+    assert {"stale_evidence", "rerun_pending"} <= set(p["verdict"]["reasons"])
+    assert rp.blocks_merge(card, force=True)[0] == "rerun_pending"
+    assert _finish_rerun(engine, change, rid)["state"] == "done"
+    after = _get(client, change)["packet"]
+    assert after["stale"] is False and after["head_sha"] == new
+    assert "stale_evidence" not in after["verdict"]["reasons"]
+
+
+# ── #1 end to end: accepting "Needs you" applies the agent's refused proposal ─────────────────
+
+def test_accept_on_needs_you_commits_the_proposal_and_the_rerun_counts_it_fixed(
+        engine, client, monkeypatch, tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "truth", Path(__file__).resolve().parents[3] / "engine" / "tests"
+        / "test_validation_tells_the_truth.py")
+    truth = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(truth)
+    root, c_, _ = truth._seeded(tmp_path)
+    rec, run = truth._validate(root, c_, truth._agent(truth.FIXED))
+    rec = f.public_validation(f.enforce_autofix(root, c_, rec, run))
+    files = {**_files(), ".boss/rulesets/northgate.yaml": truth.RULESET,
+             TARGET: (root / TARGET).read_text()}
+    branch = Branch(files)
+    number = 100000 + int(uuid.uuid4().hex[:7], 16) % 900000
+    rid = f"crun_{uuid.uuid4().hex[:16]}"
+    url = f"http://boss-local/acme/northgate/pull/{number}"
+    with engine.begin() as c:
+        c.execute(text(
+            "INSERT INTO code_task_runs (id, project_id, status, phase, title, spec, finalize_ctx, "
+            "state, pull_request_url) VALUES (:i, :p, 'completed', 'done', 't', '{}'::jsonb, "
+            "'{}'::jsonb, CAST(:s AS JSONB), :u)"),
+            {"i": rid, "p": PID, "s": json.dumps({"validation": rec}), "u": url})
+    ch = fo.Change(PID, number, rid, "boss/code/x", url, branch, lambda: branch.sha)
+    monkeypatch.setattr(fo, "change", lambda c, s, p, n: ch)
+    admin = next(x for x in rec["findings"] if x["source"]["rule_id"] == "no-sensitive-paths-exposed")
+    assert admin["status"] == "open" and admin["fix_kind"] == "human" and admin["proposed"]
+    got = client.post(f"/v1/changes/{PID}/{number}/findings/{admin['id']}/override",
+                      json={"head_sha": branch.sha, "action": "accept"})
+    assert got.status_code == 200, got.text
+    assert got.json()["override"]["commit_sha"] == branch.sha
+    assert "/v1/admin/accounts" not in branch.files[TARGET]
+    assert branch.commits[-1].startswith("BOSS override O-1: accept " + admin["id"])
+    out = fo.execute_rerun(engine, None, got.json()["rerun"]["id"],
+                           do_checkout=lambda change_, tree: _tree(tree, branch.files),
+                           make_run=lambda tree: truth._gwlint(tree, []))
+    assert out["state"] == "done", out
+    p = client.get(f"/v1/changes/{PID}/{number}/validation").json()["packet"]
+    done = next(x for x in p["findings"] if x["id"] == admin["id"])
+    assert done["status"] == "fixed" and done["fix_kind"] == "human"
