@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import re
 from typing import Any, Optional
 
@@ -62,6 +63,30 @@ def _accepts_kwarg(func: Any, name: str) -> bool:
     return any(p.name == name or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
 
 
+def _without_lesson_ids(github: Any, branch: str, path: str, content: Any) -> Any:
+    """``content`` with lesson ids stripped from the comments of lines the branch does not
+    already hold (remediation_guards.strip_lesson_ids). The branch is read only when the
+    content carries an id at all. Never raises: on any error the content is kept as is."""
+    if not isinstance(content, str) or "kgn_" not in content:
+        return content
+    try:
+        from .remediation_guards import strip_lesson_ids
+
+        base = None
+        read = getattr(github, "read_text_file", None)
+        if callable(read):
+            try:
+                base = read(branch, path)
+            except Exception:  # noqa: BLE001 — a new file or a new branch: nothing to keep
+                base = None
+        cleaned = strip_lesson_ids(content, base if isinstance(base, str) else None)
+        if cleaned != content:
+            logging.getLogger(__name__).info("commit_change: lesson ids removed from %s", path)
+        return cleaned
+    except Exception:  # noqa: BLE001 — the guard never blocks a commit
+        return content
+
+
 def commit_change(github: Any, branch: str, files: list[tuple[str, Any]], message: str,
                   per_file: Optional[Any] = None) -> list[str]:
     """ONE COMMIT PER STAGE where the repo host can (BOSSAPP-946). A host with a batch commit
@@ -76,6 +101,9 @@ def commit_change(github: Any, branch: str, files: list[tuple[str, Any]], messag
     files = [(str(p), c) for p, c in files]
     if not files:
         return []
+    # LESSON IDS NEVER LAND IN CODE (remediation_guards): an id a builder copied from "Learned
+    # so far" into a comment is removed from the lines this commit adds.
+    files = [(p, _without_lesson_ids(github, branch, p, c)) for p, c in files]
     batch = getattr(github, "commit_files", None)
     if callable(batch):
         return [batch(branch, dict(files), message)]

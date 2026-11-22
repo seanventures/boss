@@ -3483,6 +3483,11 @@ def start_run(
         raise WorkflowValidationError(
             f"this workflow needs {len(absent)} input(s) it was not given: {named}")
     input_data = checked_capability_inputs(connection, project_id, spec, input_data)
+    # AN UPLOADED FILE'S SECRETS ARE NEVER STORED (start_from_file.mask_run_input): masked
+    # before the run's input is written, its true sha256 kept beside it.
+    from .start_from_file import mask_run_input
+
+    input_data = mask_run_input(input_data)
 
     run_id = make_id("wfr")
     root_run_id = run_id

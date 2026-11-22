@@ -18,6 +18,7 @@ import pytest
 
 from boss_engine.services import contract_tests, finding_overrides, input_fidelity as f
 from boss_engine.services import start_from_file as sff
+from boss_engine.services import validators as v
 from boss_engine.services import workflow_catalogue as wc
 from boss_engine.services import workflow_outcomes
 from boss_engine.services.workflow_capabilities import CAPABILITIES
@@ -81,7 +82,7 @@ def test_an_upload_becomes_an_in_place_remediation_at_its_target():
                      "start_from_content": "a: 1\n", "target_path": TARGET})
     assert set(out) == {"title", "remediate"}
     assert out["remediate"] == {"input": TARGET, "output": TARGET, "content": "a: 1\n",
-                                "start_from": True}
+                                "start_from": True, "content_sha256": v.sha256("a: 1\n")}
 
 
 def test_a_repo_path_is_fixed_in_place_unless_a_target_is_named():
@@ -119,7 +120,9 @@ def _gwlint(root: Path, ran: list):
                 (FIX / "lumen-pay.fixed.yaml").read_text())
             return SimpleNamespace(stdout="", exit_code=1)
         text = (root / cmd.split()[-2].strip("'")).read_text()
-        if text == (FIX / "lumen-pay.bad.yaml").read_text():
+        # The partner's file as given, or as BOSS keeps it (its secret masked: dry run 3 #3).
+        if text in ((FIX / "lumen-pay.bad.yaml").read_text(),
+                    sff.masked((FIX / "lumen-pay.bad.yaml").read_text())):
             return SimpleNamespace(stdout=(FIX / "gwlint.before.json").read_text(), exit_code=1)
         if text == (FIX / "lumen-pay.fixed.yaml").read_text():
             return SimpleNamespace(stdout=(FIX / "gwlint.after.json").read_text(), exit_code=1)
@@ -137,9 +140,11 @@ def _uploaded(tmp_path):
 
 def test_the_upload_is_the_original_and_is_placed_for_the_first_commit(tmp_path):
     root, c = _uploaded(tmp_path)
-    bad = (FIX / "lumen-pay.bad.yaml").read_text()
+    raw = (FIX / "lumen-pay.bad.yaml").read_text()
+    bad = sff.masked(raw)          # the upload's secret never reaches the branch (dry run 3 #3)
     assert c["in_place"] and c["input"] == c["output"] == TARGET and c["from"] == "upload"
-    assert c["_input_text"] == bad
+    assert c["_input_text"] == bad and "sk_live_" not in bad
+    assert c["input_sha256"] == v.sha256(raw)
     assert "content" not in f.public(c), "the uploaded text is not copied onto the run state"
     # A fresh change: the target is not on the base, so the original is placed (and committed).
     assert f.place_original(root, c, None) == bad
@@ -250,7 +255,8 @@ def test_an_upload_is_the_first_commit_through_the_same_function(tmp_path, host)
     _root, c = _uploaded(tmp_path)
     sha = f.commit_original(host, "boss/code/crun_1", "main", c)
     assert sha and c["original_commit"] == sha
-    assert host.read_text_file("boss/code/crun_1", TARGET) == (FIX / "lumen-pay.bad.yaml").read_text()
+    assert host.read_text_file("boss/code/crun_1", TARGET) == sff.masked(
+        (FIX / "lumen-pay.bad.yaml").read_text())
     # A follow-up on the same branch (the target now carries fixes) commits nothing more.
     host.commit_files("boss/code/crun_1", {TARGET: "fixed: true\n"}, "governed: implement")
     c2 = dict(c)

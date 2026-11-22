@@ -2451,6 +2451,8 @@ def gate_reason(name: str, ok: bool, evidence: Mapping[str, Any],
         caught = ev.get("mutation_caught")
         return None if caught is None else ("mutation caught" if caught else "mutation missed")
     if name == "nothing_broke":
+        if (ev.get("old_tests") or {}).get("state") == "unknown":
+            return "unknown: no failing test named"
         good = ev.get("regressions_ok")
         return None if good is None else ("no regressions" if good else "a regression")
     if name == "existing_tests_intact":

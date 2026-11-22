@@ -591,7 +591,7 @@ def test_the_implement_loop_sends_a_violation_to_repair_and_the_gate_holds():
     # ... sent back with its exact reasons as the repair evidence.
     assert "_input_fidelity.repair_evidence(_fidelity)" in loop
     # The contract is taken before any agent runs, and every stage is told.
-    assert src.index("_input_fidelity.contract(spec, _person_brief, root,") < src.index(
+    assert src.index("_input_fidelity.contract(_spec_c, _person_brief, root,") < src.index(
         "for attempt in range(max_repair + 2):")
     assert "_input_fidelity.brief(_remediation)" in src
     # The gate: judged, blocking at every bar, and never opened past.
