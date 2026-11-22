@@ -11,7 +11,7 @@
  * POST /v1/projects/{p}/rulesets/{id}/propose {rules, base_version, base_sha} → {change}.
  */
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowSquareOut, Lock, Plus, Scales } from "@phosphor-icons/react";
+import { ArrowSquareOut, Check, Lock, Plus, Scales } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import { pxWrite, usePxRead } from "../../lib/project-experience";
@@ -63,6 +63,11 @@ export function RulesetEditor({ rs, projectId, testid = "vr-ruleset" }: { rs: Ru
   const [said, setSaid] = useState<{ text: string; tone: string; href?: string } | null>(null);
   const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
+  // THE CHANGE A PROPOSE OPENED (dry run 2, gap 12: nothing on screen said change #15 opened).
+  // Shown under the header, beside the button, until the rules are edited again.
+  const [opened, setOpened] = useState<{ change: number | null; version: number | null; href: string; rules: string } | null>(null);
+  const rulesKey = JSON.stringify(rules);
+  const sameAsOpened = !!opened && opened.rules === rulesKey;
   const was = useMemo(() => Object.fromEntries(rs.rules.map((r) => [r.id, r])), [rs.rules]);
   const diff = rulesetDiff(rs, rules.filter((r) => r.id));
   const second = rules.filter((r) => was[r.id] && needsSecondApprover(was[r.id], r)).map((r) => r.id);
@@ -79,8 +84,8 @@ export function RulesetEditor({ rs, projectId, testid = "vr-ruleset" }: { rs: Ru
     if (!r.ok) { setSaid({ text: r.error ?? "It did not open.", tone: "red" }); return; }
     if (r.demo) { setSaid({ text: "Sample mode — nothing was sent.", tone: "" }); return; }
     const ch = r.body && typeof r.body.change === "number" ? r.body.change : null;
-    setSaid({ text: `Opened “Ruleset ${rs.id} v${next ?? ""}” as ${ch != null ? `change #${ch}` : "a change"}. It takes effect when it merges.`, tone: "",
-              href: ch != null ? `/changes/${encodeURIComponent(projectId)}/${ch}` : undefined });
+    const version = r.body && typeof r.body.version === "number" ? r.body.version : next;
+    setOpened({ change: ch, version, href: ch != null ? `/changes/${encodeURIComponent(projectId)}/${ch}` : "", rules: rulesKey });
   };
   const merged = rs.merged_at ? new Date(rs.merged_at) : null;
   return (
@@ -92,10 +97,19 @@ export function RulesetEditor({ rs, projectId, testid = "vr-ruleset" }: { rs: Ru
         {rs.validator ? <span className="vr-pill">validator <b>{rs.validator}</b></span> : null}
         <span className="vr-grow" />
         <span className="vr-mono vr-muted vr-small vr-hide-sm">{rs.path}</span>
-        <GatedButton permission="policy:manage" projectId={projectId} className="vr-btn" data-kind="mint" disabled={busy || !diff.length || missing}
-                     title={missing ? "Ruleset changes are not on this BOSS yet" : diff.length ? "Opens a change with the diff; it takes effect when merged" : "Change a rule first"}
-                     onClick={() => void propose()} data-testid={`${testid}-propose`}>{busy ? "Opening…" : `Propose v${next ?? "next"} (opens a change)`}</GatedButton>
+        <GatedButton permission="policy:manage" projectId={projectId} className="vr-btn" data-kind="mint" disabled={busy || !diff.length || missing || sameAsOpened}
+                     title={missing ? "Ruleset changes are not on this BOSS yet" : sameAsOpened ? "Already opened: edit a rule to propose again" : diff.length ? "Opens a change with the diff; it takes effect when merged" : "Change a rule first"}
+                     onClick={() => void propose()} data-testid={`${testid}-propose`}>{busy ? "Opening…" : sameAsOpened && opened?.change != null ? `Opened as change #${opened.change}` : `Propose v${next ?? "next"} (opens a change)`}</GatedButton>
       </div>
+      {opened ? (
+        <div className="vr-opened" role="status" data-testid={`${testid}-opened`}>
+          <Check size={14} aria-hidden />
+          <span><b>Ruleset {opened.version != null ? `v${opened.version}` : rs.id} opened as {opened.change != null ? `change #${opened.change}` : "a change"}</b>
+            <span className="vr-muted"> · takes effect when it merges</span></span>
+          <span className="vr-grow" />
+          {opened.href ? <a href={opened.href} data-testid={`${testid}-opened-link`}>Open change #{opened.change} <ArrowSquareOut size={11} aria-hidden /></a> : null}
+        </div>
+      ) : null}
       <div className="vr-scroll"><table className="vr-rules">
         <thead><tr><th>On</th><th>Rule</th><th>Level</th><th>Auto-fix</th><th>Guide the fixing agent follows</th></tr></thead>
         <tbody>{rules.map((r, i) => <RuleRow key={i} r={r} was={was[r.id]} onChange={set(i)} nextVersion={next} />)}</tbody>

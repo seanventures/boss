@@ -5,7 +5,17 @@
 import React from "react";
 
 import { KIND_WORDS, refTarget, STATUS_WORDS, type FindingStatus, type FixKind, type Sev } from "../../lib/validation-review";
+import { actorWords } from "../../lib/actor-words";
+import { useWho } from "../who";
 import "./validation-review.css";
+
+/** Who did it, by name: the name the record carries, else the directory's (useWho), said through
+ *  actorWords — "Paramaguru", never "a person" when BOSS knows who it was, never an id. */
+export function ActorName({ id, name }: { id: string; name?: string }) {
+  const given = name && name !== id ? name : "";
+  const w = useWho(given ? undefined : id);
+  return <span data-testid="vr-actor" title={id || undefined}>{actorWords(id, given || w.name)}</span>;
+}
 
 export function SevChip({ sev, title }: { sev: Sev; title?: string }) {
   return <span className="vr-sev" data-sev={sev} title={title}>{sev}</span>;

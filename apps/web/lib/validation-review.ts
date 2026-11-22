@@ -14,11 +14,13 @@ export type Sev = "P0" | "P1" | "P2" | "P3";
 export const SEVS: Sev[] = ["P0", "P1", "P2", "P3"];
 export type FixKind = "auto" | "agent" | "human" | "none";
 export type FindingStatus = "open" | "fixed" | "overridden" | "reverted" | "waived" | "suppressed";
-export type OverrideAction = "accept" | "reject" | "edit" | "waive" | "reopen" | "revert_all";
+export type OverrideAction = "accept" | "reject" | "edit" | "waive" | "reopen" | "revert_all" | "remove";
 
 export type Evidence = { id: string; kind: string; cmd: string; exit: number | null; artifact: string; absent: boolean };
 export type Override = {
-  id: string; action: OverrideAction; finding_id: string; actor: string; reason: string; approver: string;
+  id: string; action: OverrideAction; finding_id: string;
+  /** The actor's id, and the name the engine sent with it (empty: the directory names them). */
+  actor: string; actor_name: string; reason: string; approver: string;
   approved_at: string; expires_at: string; at: string; commit_sha: string; rerun_id: string;
   before_text: string; after_text: string;
 };
@@ -28,6 +30,9 @@ export type Finding = {
   severity: Sev; basis: string; unmapped: boolean; native_severity: string;
   location: { file: string; line: number | null; end_line: number | null; partner_line: number | null };
   original: string | null; fixed: string | null; hunk_id: string; fix_kind: FixKind; status: FindingStatus;
+  /** The engine's word for what happened to the finding's own line (validators.change_of):
+   *  none · edited · added · removed · elsewhere; "" from an engine that does not send it. */
+  change: string;
   evidence: Evidence[]; override: Override | null;
   /** The rulebook's why and the ruleset's guide for the fixing agent, when the engine sends them. */
   why: string; guide: string;
@@ -42,7 +47,8 @@ export type Finding = {
    *  blocks the merge like the P0 it sits on (engine `blocks`, verdict `security_review:R-n`). */
   blocks: boolean;
   /** "Needs you": the agent's change BOSS refused for a `human` / `never` rule (engine
-   *  `proposed`). Accept commits it (masked lines; `applicable` false → write it with Edit). */
+   *  `proposed`). Accept commits it only while `applicable` (an engine `gone`/`valid: false`, or
+   *  a 409 proposal_gone on Accept, makes it not): otherwise Edit or Remove. */
   proposed: { before: string | null; after: string | null; applicable: boolean } | null;
   /** The agent's lines are on the branch for a `human` / `never` rule: fixed only once a person accepts. */
   held: boolean;
@@ -115,8 +121,8 @@ export function parseOverride(v: unknown): Override {
   return {
     // The label is the per-change O-n (`ref` on GET …/validation, `id` in the packet); the
     // global ovr_… id is the API's and is never shown.
-    id: s(x.ref) || s(x.id), action: one(x.action, ["accept", "reject", "edit", "waive", "reopen", "revert_all"] as const, "accept"),
-    finding_id: s(x.finding_id) || s(x.finding), actor: s(x.actor_name) || s(x.actor), reason: s(x.reason), approver: s(x.approver_name) || s(x.approver),
+    id: s(x.ref) || s(x.id), action: one(x.action, ["accept", "reject", "edit", "waive", "reopen", "revert_all", "remove"] as const, "accept"),
+    finding_id: s(x.finding_id) || s(x.finding), actor: s(x.actor) || s(x.actor_name), actor_name: s(x.actor_name), reason: s(x.reason), approver: s(x.approver_name) || s(x.approver),
     approved_at: s(x.approved_at), expires_at: s(x.expires_at), at: s(x.created_at) || s(x.at), commit_sha: s(x.commit_sha),
     rerun_id: s(x.rerun_id), before_text: s(x.before_text), after_text: s(x.after_text),
   };
@@ -130,7 +136,12 @@ export function parseFinding(v: unknown): Finding {
   return {
     id: s(x.id), source: { kind: s(src.kind), name: s(src.name), rule_id: s(src.rule_id), rule_doc: s(src.rule_doc) },
     severity: isSev(sev) ? sev : "P2", basis: s(x.basis), unmapped, native_severity: s(x.native_severity),
-    location: { file: s(loc.file), line: nn(loc.line), end_line: nn(loc.end_line), partner_line: nn(loc.partner_line) },
+    // ONE LINE BASIS (engine #285, gap 11): an engine that sends `target_line` sends the
+    // PARTNER's line as `line`. Here `line` stays the branch's and `partner_line` the partner's.
+    location: "target_line" in loc
+      ? { file: s(loc.file), line: nn(loc.target_line), end_line: nn(loc.end_line), partner_line: nn(loc.partner_line) ?? nn(loc.line) }
+      : { file: s(loc.file), line: nn(loc.line), end_line: nn(loc.end_line), partner_line: nn(loc.partner_line) },
+    change: s(x.change),
     original: x.original == null ? null : s(x.original), fixed: x.fixed == null ? null : s(x.fixed),
     hunk_id: s(x.hunk_id), fix_kind: one(x.fix_kind, ["auto", "agent", "human", "none"] as const, "none"),
     status: one(x.status, ["open", "fixed", "overridden", "reverted", "waived", "suppressed"] as const, "open"),
@@ -145,7 +156,7 @@ export function parseFinding(v: unknown): Finding {
     proposed: x.proposed && typeof x.proposed === "object"
       ? { before: o(x.proposed).before == null ? null : s(o(x.proposed).before),
           after: o(x.proposed).after == null ? null : s(o(x.proposed).after),
-          applicable: o(x.proposed).applicable === true } : null,
+          applicable: o(x.proposed).applicable === true && o(x.proposed).gone !== true && o(x.proposed).valid !== false } : null,
     held: !!x.held,
   };
 }
@@ -253,7 +264,7 @@ export function sortFindings(list: Finding[]): Finding[] {
 export function groupBySeverity(list: Finding[]): { sev: Sev; items: Finding[] }[] {
   return SEVS.map((sev) => ({
     sev,
-    items: list.filter((f) => f.severity === sev).sort((x, y) => (x.location.line ?? x.location.partner_line ?? 0) - (y.location.line ?? y.location.partner_line ?? 0) || x.source.rule_id.localeCompare(y.source.rule_id)),
+    items: list.filter((f) => f.severity === sev).sort((x, y) => (x.location.partner_line ?? x.location.line ?? 0) - (y.location.partner_line ?? y.location.line ?? 0) || x.source.rule_id.localeCompare(y.source.rule_id)),
   })).filter((g) => g.items.length);
 }
 
@@ -317,16 +328,48 @@ export function workRefsOf(p: ReviewPacket | null): { run: string; run_no: numbe
            build: p.work.build.startsWith("crun_") ? p.work.build : "" };
 }
 
-/** The Built column's funnel (§5.3): found → auto · agent · you · waived → open. */
-export function funnelOf(v: Validation): { found: number; auto: number; agent: number; human: number; waived: number; open: number } {
-  const f = v.findings;
-  const fixedBy = (k: FixKind) => f.filter((x) => x.fix_kind === k && (x.status === "fixed" || x.status === "overridden")).length;
+/** A BOSS guard's finding (U-n: an unexplained security change): counted beside the validator's. */
+export const isGuardFinding = (f: Finding): boolean => f.source.kind === "guard";
+
+export type ValidationCounts = {
+  /** What the validator found (V-n), and what BOSS's guards added (U-n). */
+  found: number; guard: number;
+  /** Fixed, by who: the fixer (--fix), the agent, a person's override. */
+  auto: number; agent: number; human: number; waived: number;
+  /** Still open (validator + guard), and of those, the ones only a person can close ("needs you"). */
+  open: number; needYou: number;
+};
+
+/**
+ * THE ONE VALIDATION COUNT the Work panel's funnel and the merge card's checks row both show
+ * (dry run 2: the panel said "9 found → 6 open", the card "gwlint 9 → 5 open" — the guard's U-01
+ * was in one and not the other). Guard findings count; review-seat findings have their own line
+ * (packetTally). A record with no validator findings falls back to the step's `before` count.
+ */
+export function validationCounts(findings: Finding[], validatorFound = 0): ValidationCounts {
+  const f = findings.filter((x) => !isReviewFinding(x));
+  const fixedBy = (k: FixKind) => f.filter((x) => x.status === "fixed" || x.status === "overridden")
+    .filter((x) => (x.override && (x.override.action === "edit" || x.override.action === "remove" || x.override.action === "reject") ? "human" : x.fix_kind) === k).length;
+  const open = f.filter((x) => x.status === "open" || x.status === "reverted");
+  const validator = f.filter((x) => !isGuardFinding(x)).length;
   return {
-    found: v.before.findings.length || f.length,
+    found: validator || validatorFound, guard: f.filter(isGuardFinding).length,
     auto: fixedBy("auto"), agent: fixedBy("agent"), human: fixedBy("human"),
     waived: f.filter((x) => x.status === "waived").length,
-    open: f.filter((x) => x.status === "open").length,
+    // The engine's needs_person: a "Needs you" rule, or a BOSS guard waiting on a person.
+    open: open.length, needYou: open.filter((x) => x.fix_kind === "human" || isGuardFinding(x)).length,
   };
+}
+
+/** The Built column's funnel (§5.3): the validation's counts, from the packet when it is there
+ *  (the same findings the merge card reads), else from the step's own findings. */
+export function funnelOf(v: Validation): ValidationCounts {
+  return validationCounts(v.packet?.findings.length ? v.packet.findings : v.findings, v.before.findings.length);
+}
+
+/** "9 found + 1 guard → 6 open · 2 need you": the words both surfaces print. */
+export function countsWords(c: ValidationCounts): string {
+  return `${c.found} found${c.guard ? ` + ${c.guard} guard` : ""} → ${c.open} open${c.needYou ? ` · ${c.needYou} need${c.needYou === 1 ? "s" : ""} you` : ""}`;
 }
 
 export const SEV_WORDS: Record<Sev, string> = {
@@ -340,18 +383,84 @@ export const STATUS_WORDS: Record<FindingStatus, string> = {
   open: "open", fixed: "fixed", overridden: "overridden", reverted: "reverted", waived: "waived", suppressed: "suppressed",
 };
 
-/** "L17", "L19–20", or "" — never "Lnull". A finding whose line the fix removed (location.line
- *  null) shows the partner's line instead, so a P0 row never reads "—". */
+/** The line a person reads first: THE PARTNER'S (the file they sent, the gutter of the
+ *  Validation tab), so the merge card, the Findings column and the fix cards all say "L17" for
+ *  the same secret; the branch's line is the tooltip (lineTitle). A finding with no partner line
+ *  (a reviewer's, on another file) shows the branch's. "L21–31", or "" — never "Lnull". */
 export function lineWords(f: Pick<Finding, "location">): string {
   const { line, end_line, partner_line } = f.location;
-  if (line == null) return partner_line != null ? `L${partner_line}` : "";
-  return end_line && end_line !== line ? `L${line}–${end_line}` : `L${line}`;
+  const span = line != null && end_line && end_line > line ? end_line - line : 0;
+  const first = partner_line ?? line;
+  if (first == null) return "";
+  return span ? `L${first}–${first + span}` : `L${first}`;
 }
-/** The tooltip that says which file a line number is in. */
+/** The tooltip that says which file each number is in: the partner's line and the branch's. */
 export function lineTitle(f: Pick<Finding, "location">): string {
   const { line, partner_line } = f.location;
-  if (line == null && partner_line != null) return `Line ${partner_line} of the partner's file (removed on the branch)`;
-  return line != null ? `Line ${line} on the branch` : "";
+  if (partner_line == null) return line != null ? `Line ${line} on the branch` : "";
+  if (line == null) return `Line ${partner_line} of the partner's file (removed on the branch)`;
+  return `Line ${partner_line} of the partner's file · line ${line} on the branch`;
+}
+
+/**
+ * THE PARTNER → NOW CELL, said honestly (dry run 2: open V-05/V-07 read "→ (removed)", and V-06
+ * read "allow_credentials: true → allow_credentials: true"). "(removed)" only for a finding that
+ * is closed and whose line is gone; a line still on the branch is "unchanged"; a line the fix left
+ * as it was says so and names the hunk that did fix it.
+ */
+export function partnerNow(f: Pick<Finding, "original" | "fixed" | "status" | "hunk_id"> & { change?: string }): { before: string; after: string; kind: "changed" | "removed" | "unchanged" | "added" } {
+  const was = f.original && f.original !== "(none)" ? f.original : "";
+  const closed = f.status === "fixed" || f.status === "overridden";
+  // The engine's own word wins: it nulls `fixed` for `none` and `elsewhere` (never "removed").
+  if (f.change === "none" || f.change === "elsewhere") {
+    return { before: was || "(none)", after: closed && f.hunk_id ? `unchanged · fixed in ${f.hunk_id}` : "unchanged", kind: "unchanged" };
+  }
+  if (f.fixed == null) {
+    return closed ? { before: was || "(none)", after: "(removed)", kind: "removed" }
+      : { before: was || "(none)", after: "unchanged", kind: "unchanged" };
+  }
+  if (!was) return { before: "(none)", after: f.fixed, kind: "added" };
+  if (f.fixed.trim() === was.trim()) {
+    return { before: was, after: closed && f.hunk_id ? `unchanged · fixed in ${f.hunk_id}` : "unchanged", kind: "unchanged" };
+  }
+  return { before: was, after: f.fixed, kind: "changed" };
+}
+
+/** What a person did, in the past tense: the words every override record reads. */
+export const OVERRIDE_VERBS: Record<OverrideAction, string> = {
+  accept: "accepted", reject: "rejected", edit: "edited", waive: "waived", reopen: "reopened",
+  revert_all: "reverted the file", remove: "removed",
+};
+
+/**
+ * THE LINES "Remove these lines" DELETES, from the partner's file: the finding's line, and when it
+ * opens a block (a `- path:` list item, or a `key:` with children), every line nested under it.
+ * Line numbers are the partner's (lineWords); `offset` maps them onto the branch.
+ */
+export function removalBlock(inputText: string, f: Pick<Finding, "location" | "original">): { from: number; to: number; lines: string[]; offset: number } | null {
+  const { line, partner_line } = f.location;
+  const offset = line != null && partner_line != null ? line - partner_line : 0;
+  const all = inputText ? inputText.split("\n") : [];
+  if (partner_line == null || partner_line < 1 || partner_line > all.length) {
+    return f.original && f.original !== "(none)" && (partner_line ?? line) != null
+      ? { from: (partner_line ?? line)!, to: (partner_line ?? line)!, lines: f.original.split("\n"), offset } : null;
+  }
+  const indent = (t: string) => t.length - t.trimStart().length;
+  const head = all[partner_line - 1];
+  const item = /^\s*-\s/.test(head);
+  const opens = item || /:\s*$/.test(head);
+  // Everything nested under it: a list item's keys and a key's children sit deeper than it.
+  const base = indent(head);
+  let to = partner_line;
+  if (opens) {
+    for (let i = partner_line; i < all.length; i += 1) {
+      const t = all[i];
+      if (!t.trim()) continue;
+      if (indent(t) > base) { to = i + 1; continue; }
+      break;
+    }
+  }
+  return { from: partner_line, to, lines: all.slice(partner_line - 1, to), offset };
 }
 
 /** The title of the WORK, not of the newest follow-up: every "Follow-up: … — " prefix a follow-up
@@ -427,11 +536,34 @@ export async function sendOverride(path: string, body: R): Promise<OverrideResul
   }
 }
 export const STALE = "This change moved on; review the new version.";
+/** Accept on a "Needs you" proposal the engine cannot apply any more (409 proposal_gone). */
+export const PROPOSAL_GONE = "The agent's proposal is no longer valid; edit or remove instead.";
+export const REMOVE_NOT_DEPLOYED = "Removing lines needs the latest BOSS: this engine cannot delete lines yet.";
+/** The refusals that mean the proposal on screen cannot be applied. */
+export const isProposalGone = (code: string) => code === "proposal_gone" || code === "edit_required";
+
+/**
+ * "REMOVE THESE LINES" (dry run 2, gap 2: nothing in the console could delete the admin route).
+ * The engine takes it as `action: "remove"`, or — an engine that added the empty edit instead —
+ * as `action: "edit"` with empty text; either form works. An engine with neither answers the
+ * first with a 422 (an unknown action) and the second with `text_required`: then it says so.
+ */
+export async function sendRemove(path: string, body: { reason: string; head_sha: string }): Promise<OverrideResult> {
+  const first = await sendOverride(path, { action: "remove", ...body });
+  const unknownAction = !first.ok && first.status === 422 && (first.code === "bad_action" || !first.code);
+  if (!unknownAction) return first;
+  const second = await sendOverride(path, { action: "edit", text: "", ...body });
+  if (!second.ok && second.code === "text_required") return { ...second, error: REMOVE_NOT_DEPLOYED };
+  return second;
+}
 /** The engine's short refusals, said in full next to the row they belong to. */
 const CODE_WORDS: Record<string, string> = {
   reason_required: "Write why first. The reason is recorded on the change.",
   text_required: "Write the replacement lines first.",
   rerun_pending: "BOSS is re-checking the last change. Try again when it finishes.",
+  proposal_gone: PROPOSAL_GONE,
+  edit_required: PROPOSAL_GONE,
+  hunk_gone: "That change is no longer on the branch. Reload to see the newest version.",
 };
 export const NOT_DEPLOYED = "Overrides are not on this BOSS yet (the engine route is not deployed).";
 

@@ -76,6 +76,8 @@ button.vr-ref { line-height: 1.5; }
 .vr-ba { font-family: var(--v2-font-mono); font-size: 0.63158rem; }
 .vr-ba .b { color: color-mix(in srgb, var(--v2-red) 70%, var(--v2-ink)); }
 .vr-ba .x { color: color-mix(in srgb, var(--v2-green) 70%, var(--v2-ink)); }
+/* A line still on the branch is not a fix: muted, never the green of a change (dry run 2, gap 7). */
+.vr-ba .x[data-kind="unchanged"] { color: var(--v2-muted); }
 
 /* ── the review packet (§1.5) ─────────────────────────────────────────────────────────────── */
 .vr-packet { display: grid; gap: 14px; }
@@ -230,3 +232,15 @@ button.vr-ref { line-height: 1.5; }
   border: 1px solid var(--v2-border); border-radius: var(--v2-radius-sm); padding: 5px 6px; }
 .vr-create-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 @media (max-width: 760px) { .vr-create-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* A ruleset propose that opened a change: said beside the button, with the link (dry run 2, gap 12). */
+.vr-opened { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; padding: 8px 12px; border-radius: 8px;
+  font-size: 0.68421rem; border: 1px solid color-mix(in srgb, var(--v2-green) 45%, transparent);
+  background: color-mix(in srgb, var(--v2-green) 9%, transparent); color: var(--v2-ink); }
+.vr-opened > svg { color: var(--v2-green); flex: none; }
+.vr-opened b { font-weight: 600; }
+/* A line still on the branch, in a fix card: context, not a deletion. */
+.vr-diff .c { color: var(--v2-ink); }
+.vr-diff pre .vr-dim { font-family: var(--v2-font-sans, inherit); }
+.vr-remove-lines span { display: block; white-space: pre; }
+.vr-remove-lines .d { background: var(--vr-del); color: color-mix(in srgb, var(--v2-red) 55%, var(--v2-ink)); }
