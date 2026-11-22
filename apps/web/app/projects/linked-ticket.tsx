@@ -46,7 +46,8 @@ export const SYNC_STEPS = [
 export function useWorkItemOfRun(runId: string | null | undefined, workItemId?: string | null, projectId?: string | null): { id: string | null; done: boolean } {
   const [found, setFound] = useState<{ id: string | null; done: boolean }>({ id: workItemId ?? null, done: Boolean(workItemId) || !runId });
   useEffect(() => {
-    if (workItemId || !runId) { setFound({ id: workItemId ?? null, done: true }); return; }
+    // Only a workflow run is asked for (wfr_…): a build id (crun_…) there answered 404.
+    if (workItemId || !runId || !runId.startsWith("wfr_")) { setFound({ id: workItemId ?? null, done: true }); return; }
     let live = true;
     setFound({ id: null, done: false });
     // The run route is project-scoped: without ?project_id the API answers 422.

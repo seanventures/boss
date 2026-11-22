@@ -1,5 +1,5 @@
 
-import { changeHref, isLocalChangeUrl, linkTarget, prWhere } from "../lib/repo-links";
+import { changeHref, linkTarget } from "../lib/repo-links";
 import { networkTrustedConsole } from "../lib/console-session";
 import { accessForArea } from "../lib/identity/area-access";
 import { checkWith } from "../lib/identity/check";
@@ -209,7 +209,6 @@ import { KnowledgeMovedCard } from "./knowledge/moved-card";
 import { AskBossHero } from "./ask-boss-hero";
 import { ActionForm } from "./client-forms";
 import { actorWords } from "../lib/actor-words";
-import { automatedChecksLine } from "./checks-failing";
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
     return "n/a";
@@ -229,44 +228,8 @@ function metadataString(
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function formatRecommendation(decision: DecisionFeedItem): string {
-  const r = decision.recommendation || {};
-  const str = (k: string): string => (typeof r[k] === "string" ? (r[k] as string) : "");
-  const action = str("action");
-  const title = str("title");
-  const pr = str("pull_request_url");
-  const prNum = pr ? `#${pr.split("/").pop()}` : "";
-
-  // A code-change / PR review, spell out WHAT is being approved and its check status.
-  if (action === "review_pull_request") {
-    return [
-      title ? `Approve the code change “${title}”.` : "Approve this code change.",
-      pr ? `${isLocalChangeUrl(pr) ? "Change set" : "Pull request"} ${prNum} is open ${prWhere(pr)} with the full diff to review.` : "",
-      automatedChecksLine(r),
-      "Approving opens/merges the PR; rejecting keeps it blocked for changes.",
-    ]
-      .filter(Boolean)
-      .join(" ");
-  }
-  // A gated agent tool (e.g. publishing the PRD and kicking off the build).
-  if (action === "execute_agent_tool") {
-    const tool = str("tool");
-    if (tool === "publish_document") {
-      return `Publish the drafted document${title ? ` “${title}”` : ""}${
-        r["start_code_task"] ? " and start the build from it" : ""
-      }.`;
-    }
-    return `Run the gated agent action${tool ? `: ${tool.replaceAll("_", " ")}` : ""}.`;
-  }
-  if (action === "review_plan_draft") {
-    return `Review the drafted plan${title ? ` for “${title}”` : ""} before any code is written.`;
-  }
-  if (action === "review_deployment") {
-    return `Approve deploying${title ? ` “${title}”` : " this change"} to its target environment.`;
-  }
-  if (action) return action.replaceAll("_", " ");
-  return "review required";
-}
+// A decision's words come from decision-inbox-ui (recommendationLines): one place, one line
+// per fact, never sentences joined with spaces (validation-review SPEC §0 #1).
 
 function roleInitials(name: string): string {
   const words = name.replace(/[_-]+/g, " ").trim().split(/\s+/).filter(Boolean);

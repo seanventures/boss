@@ -43,6 +43,8 @@ import {
 } from "./review-panes";
 import { DockPane, ReviewLayoutProvider, useReviewLayout } from "./review-dock";
 import { TicketSyncBadge } from "../../../projects/linked-ticket";
+import { packetOf, type ReviewPacket } from "../../../../lib/validation-review";
+import { ReviewPacketView, packetHold } from "../../../validation/review-packet";
 import "./change-set.css";
 
 export { InlineNote, Review };
@@ -123,6 +125,21 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
     getViewed(at).then((v) => { if (alive) setViewedState(v); }).catch(() => null);
     return () => { alive = false; };
   }, [at, loaded]);
+
+  // THE REVIEW PACKET (validation-review SPEC §1.4): the merge decision's typed packet, read once
+  // the change names its decision. An invalid packet holds Merge in the header.
+  const decisionId = cs?.merge?.decision_id || cs?.decision?.id || "";
+  const [packet, setPacket] = useState<ReviewPacket | null>(null);
+  useEffect(() => {
+    if (!decisionId) { setPacket(null); return undefined; }
+    let alive = true;
+    idGet<unknown>(`/v1/decisions/${encodeURIComponent(decisionId)}?project_id=${encodeURIComponent(projectId)}`)
+      .then((d) => { if (alive) setPacket(packetOf((d as { recommendation?: Record<string, unknown> } | null)?.recommendation)); })
+      .catch(() => { if (alive) setPacket(null); });
+    return () => { alive = false; };
+  }, [decisionId, projectId, headSha]);
+  const hold = packetHold(packet);
+  const csHeld: ChangeSet | null = cs && hold && cs.merge ? { ...cs, merge: { ...cs.merge, held: hold } } : cs;
 
   // EVERY TAB SWITCHES THE MAIN VIEW, AND THE URL KEEPS IT (?tab=…&commit=…): links and Back work.
   const [tab, setTabState] = useState<Tab>(startTab ?? (startCommit ? "commits" : "files"));
@@ -239,7 +256,7 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
               <BranchChips cs={cs} />
               <ChecksPill cs={cs} />
               {/* The ticket this change is for (BOSSAPP-1047): its key and what BOSS wrote back. */}
-              {cs.run_id ? <TicketSyncBadge runId={cs.run_id} projectId={projectId} /> : null}
+              {cs.workflow_run_id ? <TicketSyncBadge runId={cs.workflow_run_id} projectId={projectId} /> : null}
               {cs.comment_summary.human_open ? (
                 <span className="cs-pill" data-tone="amber" title="Open line comments from people" data-testid="change-set-open-comments">
                   <ChatCircleDots size={12} aria-hidden />{cs.comment_summary.human_open} open</span>) : null}
@@ -261,7 +278,7 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
                   <button type="button" className="lr-btn gr-sheet-btn" data-kind="ghost" aria-expanded={dock.layout.agent === "overlay"}
                           onClick={() => dock.dispatch(dock.layout.agent === "overlay" ? { type: "close", pane: "agent" } : { type: "open", pane: "agent" })}
                           data-testid="gr-agent-toggle"><Robot size={14} aria-hidden />Agent</button>) : null}
-                <Decide cs={cs} projectId={projectId} number={String(cs.number)} at={at} reread={read} compact />
+                <Decide cs={csHeld ?? cs} projectId={projectId} number={String(cs.number)} at={at} reread={read} compact />
               </span>
             </div>
             <SourceLine cs={cs} />
@@ -290,8 +307,12 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
                             hrefFor={(sha) => changeUrl(asked, "commits", sha)} wholeFiles={wholeFiles} wholeDiff={cs.diff}
                             review={lineReview} inline={inline} onCompare={(r) => { setRange(r); setTab("files"); }} onViewFile={openCode} />
               ) : tab === "overview" ? (
+                <>
+                {packet ? <div style={{ marginBottom: 16 }}><ReviewPacketView packet={packet} projectId={projectId} fallbackTitle={cs.title}
+                                                                    eyebrow="Review packet" testid="change-packet" /></div> : null}
                 <OverviewTab cs={cs} at={at} files={wholeFiles} commitHref={(sha) => changeUrl(asked, "commits", sha)} onChanged={reread}
                              onJump={onJump} onJumpLoc={onJumpLoc} onFiles={() => { setRange(WHOLE_CHANGE); setTab("files"); }} />
+                </>
               ) : tab === "conversation" ? (
                 <ConversationTab cs={cs} at={at} files={wholeFiles} commitHref={(sha) => changeUrl(asked, "commits", sha)} onChanged={reread} onJump={onJump} onFiles={() => { setRange(WHOLE_CHANGE); setTab("files"); }} />
               ) : (

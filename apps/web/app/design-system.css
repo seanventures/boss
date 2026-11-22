@@ -2982,6 +2982,9 @@ select.input:focus,
   line-height: 1.55;
   margin: 0 0 12px;
 }
+/* One fact per line: a merge card's words are rows, never sentences joined with spaces. */
+.dq-rationale .dq-line { display: block; }
+.dq-rationale .dq-line + .dq-line { margin-top: 2px; }
 .dq-evidence {
   display: flex;
   align-items: center;

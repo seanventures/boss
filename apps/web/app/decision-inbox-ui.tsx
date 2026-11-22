@@ -52,6 +52,8 @@ import { GrantAccessCard, grantOf } from "./skills/grant-card";
 import { SecretProposalCard, secretProposalOf } from "./secret-proposal-card";
 import { MonitoringPackCard, monitoringPackOf } from "./workflows/monitoring-pack";
 import { plainSentence, plainTitle } from "../lib/plain-words";
+import { packetOf, rootTitle } from "../lib/validation-review";
+import { RebuildPacket, ReviewPacketView, packetHold } from "./validation/review-packet";
 
 /**
  * A decision-card excerpt (output/evidence/why) that never cuts mid-word or mid-sentence
@@ -112,11 +114,14 @@ function roleInitials(name: string): string {
   return initials.toUpperCase();
 }
 
-export function formatRecommendation(decision: DecisionFeedItem): string {
+/** What the card proposes, ONE FACT PER LINE (validation-review SPEC §0 #1): a merge card used to
+ *  read as one long sentence, four fragments joined with spaces. The card draws each line on its
+ *  own row; the title is the work's root title, never a chain of "Follow-up: … — " prefixes. */
+export function recommendationLines(decision: DecisionFeedItem): string[] {
   const r = decision.recommendation || {};
   const str = (k: string): string => (typeof r[k] === "string" ? (r[k] as string) : "");
   const action = str("action");
-  const title = plainTitle(str("title"));
+  const title = rootTitle(plainTitle(str("title")));
   const pr = str("pull_request_url");
   const prNum = pr ? `#${pr.split("/").pop()}` : "";
 
@@ -126,10 +131,21 @@ export function formatRecommendation(decision: DecisionFeedItem): string {
       pr ? `${isLocalChangeUrl(pr) ? "Change set" : "Pull request"} ${prNum} is open ${prWhere(pr)} with the full diff to review.` : "",
       automatedChecksLine(r),
       "Approving opens/merges the PR; rejecting keeps it blocked for changes.",
-    ]
-      .filter(Boolean)
-      .join(" ");
+    ].filter(Boolean);
   }
+  return [formatOne(decision)];
+}
+
+/** The lines as text, one per line (tests and plain-text surfaces). */
+export function formatRecommendation(decision: DecisionFeedItem): string {
+  return recommendationLines(decision).join("\n");
+}
+
+function formatOne(decision: DecisionFeedItem): string {
+  const r = decision.recommendation || {};
+  const str = (k: string): string => (typeof r[k] === "string" ? (r[k] as string) : "");
+  const action = str("action");
+  const title = plainTitle(str("title"));
   if (action === "execute_agent_tool") {
     const tool = str("tool");
     if (tool === "publish_document") {
@@ -1035,6 +1051,36 @@ function DecisionInboxRow({
     );
   }
 
+  // A MERGE WITH A REVIEW PACKET (validation-review SPEC §1.4–§1.5): the typed packet IS the card
+  // (verdict, P0/P1 rows, checks, overrides, provenance), never the prose subtitle. An invalid
+  // packet holds Approve, with its problems listed; only a rebuild moves it.
+  const packet = packetOf(rec);
+  if (packet) {
+    const hold = packetHold(packet) ?? decision.held ?? null;
+    return (
+      <article className="dq-row dq-row-packet" data-testid="decision-row" data-decision-status={decision.status}
+               data-highlighted={highlighted || undefined} id={`decision-${decision.id}`}
+               ref={(el) => { if (el && highlighted) el.scrollIntoView({ block: "center" }); }}>
+        <ReviewPacketView packet={packet} projectId={projectId} fallbackTitle={typeof rec.title === "string" ? rec.title : ""}
+                          eyebrow={`${who} proposes · merge`}
+                          actions={packet.verdict.state === "invalid" && isPending
+                            ? <RebuildPacket projectId={projectId} change={packet.work.change} /> : null} />
+        <div className="dq-foot">
+          {isPending ? (
+            <DecisionActions decision={{ ...decision, held: hold }} projectId={projectId} actorId={actorId} />
+          ) : (
+            <>
+              <span className={`dq-verdict ${isApproved || decision.status === "executed" ? "green" : decision.status === "rejected" ? "red" : "muted"}`}>
+                {decision.status.toUpperCase()}
+              </span>
+              <span className="dq-note">{decisionStatusDetail(decision)}</span>
+            </>
+          )}
+        </div>
+      </article>
+    );
+  }
+
   return (
     <article
       className="dq-row"
@@ -1084,7 +1130,9 @@ function DecisionInboxRow({
             </div>
           ) : (
             <p className="dq-rationale" data-testid="decision-subtitle">
-              {plainSentence(why || (preview ? previewLead(preview) : formatRecommendation(decision)))}
+              {why || preview ? plainSentence(why || previewLead(preview!))
+                : recommendationLines(decision).map((line, i) => (
+                  <span key={i} className="dq-line" data-testid="decision-subtitle-line">{plainSentence(line)}</span>))}
             </p>
           )}
           {gateCard && (gateCard.summary || gateCard.runId) ? (

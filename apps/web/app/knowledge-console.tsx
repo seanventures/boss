@@ -8,11 +8,15 @@
  */
 import React from "react";
 
+/** The facts a decision used, as ONE count chip ("Based on 14 facts"): the ids are graph
+ *  plumbing (`kgn_…`), so they sit in the tooltip, never inline in the card's type
+ *  (validation-review SPEC §0 #4, §1.5). */
 export function BasedOn({ factIds }: { factIds: string[] }) {
   if (factIds.length === 0) return null;
+  const n = factIds.length;
   return (
-    <p className="detail" data-testid="based-on">
-      Based on {factIds.join(", ")}
-    </p>
+    <span className="dq-ev" data-testid="based-on" title={factIds.join("\n")}>
+      Based on {n} fact{n === 1 ? "" : "s"}
+    </span>
   );
 }

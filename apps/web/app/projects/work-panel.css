@@ -122,7 +122,7 @@
 
 /* the vertical stepper: at phone width, and always in the drawer's preview */
 .wp-flow[data-vertical] .wp-lane { grid-template-columns: 1fr; }
-.wp-flow[data-vertical] .wp-node { display: grid; grid-template-columns: 46px minmax(0, 1fr); column-gap: 12px; text-align: left; padding: 0 0 18px; }
+.wp-flow[data-vertical] .wp-node { display: grid; grid-template-columns: 2.42105rem minmax(0, 1fr); column-gap: 12px; text-align: left; padding: 0 0 18px; }
 .wp-flow[data-vertical] .wp-ring { margin: 0; grid-row: 1 / span 5; }
 .wp-flow[data-vertical] .wp-nm { margin-top: 4px; }
 .wp-flow[data-vertical] .wp-note { margin: 6px 0 0; max-width: none; grid-column: 2; }
@@ -131,7 +131,7 @@
 .wp-flow[data-vertical] .wp-conn[data-s="todo"] { background: repeating-linear-gradient(180deg, var(--v2-idle) 0 3px, transparent 3px 7px); }
 
 /* ── body grid ── */
-.wp-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
+.wp-grid { display: grid; grid-template-columns: minmax(0, 1fr) 18.94737rem; gap: 16px; align-items: start; }
 .wp-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .wp-box { padding: 16px 18px; }
 .wp-box-h { font-size: 0.78947rem; font-weight: 600; display: flex; align-items: center; gap: 8px; margin: 0 0 10px; flex-wrap: wrap; }
@@ -183,7 +183,7 @@
 .wp-oc-counts { display: flex; gap: 22px; flex-wrap: wrap; }
 .wp-oc-counts .wp-kpi b { font-size: 1.05263rem; }
 .wp-oc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
-.wp-oc-e { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; align-items: start; }
+.wp-oc-e { display: grid; grid-template-columns: 1.15789rem minmax(0, 1fr); gap: 10px; align-items: start; }
 .wp-oc-mark { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 0.57895rem; font-weight: 700;
   background: color-mix(in srgb, var(--v2-green) 15%, transparent); color: var(--v2-green); }
 .wp-oc-e[data-s="live"] .wp-oc-mark { background: color-mix(in srgb, var(--v2-mint) 14%, transparent); color: var(--v2-mint); }
@@ -199,8 +199,21 @@
 .wp-cmt-body { font-size: 0.65789rem; flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .wp-cmt-src { font-family: var(--v2-font-mono); font-size: 0.55263rem; color: var(--v2-dim); margin-top: 2px; }
 .wp-sev { font-family: var(--v2-font-mono); font-size: 0.52632rem; padding: 1px 6px; border-radius: 4px; flex: none; text-transform: uppercase; }
-.wp-sev[data-s="P1"] { background: color-mix(in srgb, var(--v2-red) 12%, transparent); color: var(--v2-red); }
-.wp-sev[data-s="P2"], .wp-sev[data-s="P3"] { background: color-mix(in srgb, var(--v2-amber) 12%, transparent); color: var(--v2-amber); }
+/* severity colours as the validation review (P0 red, P1 amber, P2 muted, P3 dim) */
+.wp-sev[data-s="P0"] { background: color-mix(in srgb, var(--v2-red) 14%, transparent); color: var(--v2-red); }
+.wp-sev[data-s="P1"] { background: color-mix(in srgb, var(--v2-amber) 13%, transparent); color: var(--v2-amber); }
+.wp-sev[data-s="P2"] { background: color-mix(in srgb, var(--v2-muted) 12%, transparent); color: var(--v2-muted); }
+.wp-sev[data-s="P3"] { background: transparent; color: var(--v2-dim); border: 1px solid var(--v2-border); }
+/* P0/P1 first, each on a rail */
+.wp-cmt[data-s="P0"], .wp-cmt[data-s="P1"] { padding-left: 10px; box-shadow: inset 3px 0 0 var(--v2-red); }
+.wp-cmt[data-s="P1"] { box-shadow: inset 3px 0 0 var(--v2-amber); }
+.wp-deferred { color: var(--v2-amber); }
+.wp-sev-count { display: inline-flex; gap: 4px; align-items: center; margin-left: 8px; font-family: var(--v2-font-mono); }
+/* Run · Build · Change under the title (validation-review SPEC §5.1) */
+.wp-links { display: flex; gap: 6px 16px; flex-wrap: wrap; align-items: center; margin-top: 8px; font-weight: 500; font-size: 0.68421rem; }
+.wp-links a { display: inline-flex; gap: 5px; align-items: center; }
+.wp-links-rs { font-size: 0.63158rem; }
+.wp-k-sub { letter-spacing: 0; text-transform: none; font-weight: 400; }
 .wp-sev[data-s="gate"] { background: color-mix(in srgb, var(--v2-purple) 14%, transparent); color: var(--v2-purple); }
 .wp-cmt input[type="checkbox"] { margin-top: 2px; accent-color: var(--v2-mint); width: 16px; height: 16px; flex: none; }
 .wp-box-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--v2-border); flex-wrap: wrap; }
@@ -276,7 +289,7 @@
   .wp-kpis { gap: 14px; }
   .wp-flow { padding: 14px; }
   .wp-flow .wp-lane { grid-template-columns: minmax(0, 1fr); }
-  .wp-flow .wp-node { display: grid; grid-template-columns: 46px minmax(0, 1fr); column-gap: 12px; text-align: left; padding: 0 0 18px; }
+  .wp-flow .wp-node { display: grid; grid-template-columns: 2.42105rem minmax(0, 1fr); column-gap: 12px; text-align: left; padding: 0 0 18px; }
   .wp-flow .wp-ring { margin: 0; grid-row: 1 / span 5; }
   .wp-flow .wp-nm { margin-top: 4px; }
   .wp-flow .wp-note { margin: 6px 0 0; max-width: none; grid-column: 2; }
@@ -288,7 +301,7 @@
 }
 
 /* ── the Work list row: title, one-line state, a compact flow, ONE action (+ preview) ── */
-.px-wk.wr { grid-template-columns: 28px minmax(0, 1fr) auto auto; gap: 12px; padding: 11px 14px; cursor: pointer; font-family: var(--v2-font-display); }
+.px-wk.wr { grid-template-columns: 1.47368rem minmax(0, 1fr) auto auto; gap: 12px; padding: 11px 14px; cursor: pointer; font-family: var(--v2-font-display); }
 .wr-tile { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; background: var(--v2-surface); border: 1px solid var(--v2-border-strong); color: var(--v2-mint); }
 .wr[data-s="needs_you"] .wr-tile, .wr[data-s="stalled"] .wr-tile { color: var(--v2-amber); }
 .wr[data-s="failed"] .wr-tile { color: var(--v2-red); }
@@ -312,7 +325,7 @@
 .wr-act { display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
 @media (prefers-reduced-motion: reduce) { .wr-flow i { animation: none !important; } }
 @media (max-width: 640px) {
-  .px-wk.wr { grid-template-columns: 28px minmax(0, 1fr); row-gap: 8px; }
+  .px-wk.wr { grid-template-columns: 1.47368rem minmax(0, 1fr); row-gap: 8px; }
   .wr-flow { grid-column: 2; }
   .wr-act { grid-column: 1 / -1; justify-content: stretch; }
   .wr-act > * { flex: 1; }

@@ -8,7 +8,7 @@
 .ab-crit-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
 .ab-verdict { font-size: var(--fs-meta); color: var(--muted); }
 .ab-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-.ab-item { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 5px 8px;
+.ab-item { display: grid; grid-template-columns: 0.94737rem minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 5px 8px;
   border-radius: var(--r-sm); background: var(--surface-2); font-size: var(--fs-body); }
 .ab-text { min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.45; }
 .ab-mark { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; margin-top: 1px;

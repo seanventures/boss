@@ -907,7 +907,7 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 /* Stopped by a BOSS bug fixed since (build_restart_recovery): plain amber, never red. */
 .px-ny[data-tone="amber"] { background: color-mix(in srgb, var(--amber) 7%, var(--surface)); border-color: color-mix(in srgb, var(--amber) 30%, transparent); }
 .px-ny-ico[data-tone="amber"] { background: var(--amber); color: var(--bg); }
-.px-ny.px-ny-failed { display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: start; }
+.px-ny.px-ny-failed { display: grid; grid-template-columns: 1.15789rem minmax(0, 1fr); align-items: start; }
 .px-ny-failed > .px-ny-b { overflow-wrap: anywhere; }
 .px-ny-failed > .px-row { grid-column: 2; min-width: 0; max-width: 100%; }
 .px-ny-failed > .px-row > * { min-width: 0; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
