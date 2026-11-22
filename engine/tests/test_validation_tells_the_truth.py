@@ -365,7 +365,7 @@ class _Conn:
 def test_a_security_reviewers_high_on_a_p0_line_is_never_deferred():
     rec = _record(DRYRUN)
     p0 = next(x for x in rec["findings"] if x["id"] == "U-01")
-    line = p0["location"]["line"]
+    line = p0["location"]["target_line"]      # a reviewer cites the TARGET's line
     items = [{"text": f"{TARGET}:{line} — jwks_url points at a mock host anyone can mint for.",
               "tier": "P1", "severity": "high", "seat": "security"},
              {"text": f"{TARGET}:2 — owner string could be shorter.", "tier": "P2",
@@ -386,7 +386,7 @@ def test_the_security_checks_own_high_as_the_dry_run_carried_it_blocks_too():
     # The real producer (checks_failing.followup_findings): no seat, severity "security", the
     # level and the path:line inside the text. The dry run showed it "deferred → follow-up".
     rec = _record(DRYRUN)
-    line = next(x for x in rec["findings"] if x["id"] == "U-01")["location"]["line"]
+    line = next(x for x in rec["findings"] if x["id"] == "U-01")["location"]["target_line"]
     items = [{"text": f"(security_check) HIGH — {TARGET}:{line} — The route trusts the staging "
                       "mock's JWKS.", "tier": "P1", "severity": "security"},
              {"text": "(security_check) LOW — README.md:3 — wording.", "tier": "P2",

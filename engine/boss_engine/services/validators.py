@@ -532,15 +532,17 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
                        None)
             if hit is not None:
                 remaining.remove(hit)
-                f["location"]["line"] = hit.get("line")
+                # ONE LINE BASIS (dry run 2, gap 11): `line` is the PARTNER's line (SPEC §6),
+                # the target's line is `target_line`.
+                f["location"]["target_line"] = hit.get("line")
                 after_ids.append(f["id"])
                 continue
             if not f["hunk_id"]:
                 _attribute_by_block(f, all_hunks, lines, in_lines, out_lines, moved)
             if f["hunk_id"]:
                 f["status"] = "fixed"
-                # A removed line has no target line: the partner's line says where it was.
-                f["location"]["line"] = want if want is not None else line
+                # A removed line has no target line (target_line None).
+                f["location"]["target_line"] = want
                 if want is None:
                     f["location"]["line_from"] = "partner"
                 f["evidence"] = [*f["evidence"], {**ev["E-3"], "absent": True}]
@@ -555,7 +557,9 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
                 "severity": level, "basis": basis,
                 "native_severity": a.get("native_severity") or None,
                 "title": mask(a.get("title")) or None,
-                "location": {"file": target, "line": line, "partner_line": None},
+                # New on the target: the partner's file has no such line.
+                "location": {"file": target, "line": None, "partner_line": None,
+                             "target_line": line},
                 "original": None,
                 "fixed": mask(out_lines[line - 1]) if isinstance(line, int)
                 and 0 < line <= len(out_lines) else None,
@@ -595,8 +599,10 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
             "native_severity": None,
             "title": f"Unexplained security change: {', '.join(keys)}"[:200],
             "location": {"file": target,
-                         "line": first["j"] + 1 if first["j"] is not None else first["anchor"],
-                         "partner_line": first["i"] + 1 if first["i"] is not None else None},
+                         "line": first["i"] + 1 if first["i"] is not None else None,
+                         "partner_line": first["i"] + 1 if first["i"] is not None else None,
+                         "target_line": (first["j"] + 1 if first["j"] is not None
+                                         else first["anchor"])},
             "original": _joined(x["old"] for x in mine), "fixed": _joined(x["new"] for x in mine),
             "hunk_id": hid,
             "fix_kind": "auto" if all(x["kind"] == "auto" for x in mine) else "agent",
@@ -611,7 +617,7 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
         mine_hunks = {ln["hunk_id"] for ln in lines if ln["finding"] == f["id"]} | {f["hunk_id"]}
         by = [guard_by_hunk[h] for h in sorted(mine_hunks) if h in guard_by_hunk]
         spans = [n for h in mine_hunks if h in hunk_by_id for n in _out_span(hunk_by_id[h])]
-        by += [x["id"] for x in after_extra if x["location"].get("line") in spans]
+        by += [x["id"] for x in after_extra if x["location"].get("target_line") in spans]
         if by:
             f["status"] = "open"
             f["blocked_by"] = sorted(set(by))
@@ -627,6 +633,11 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
         f.pop("fixable", None)
         if (rules.get(f["source"]["rule_id"]) or {}).get("enabled") is False:
             f["status"] = "suppressed"
+        loc = f["location"]
+        if "target_line" not in loc:
+            p = loc.get("partner_line")
+            loc["target_line"] = moved.get(p) if isinstance(p, int) and moved else None
+        set_change(f)
     return {
         "schema": SCHEMA,
         # The commands and the ruleset are kept as they were TRUSTED for this check (declared,
@@ -645,7 +656,11 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
                    "findings": [f["id"] for f in findings
                                 if not f.get("introduced") and f["source"]["kind"] != "guard"]},
         "fix": ({"command": commands["fix"], "exit": exits.get("fix"),
-                 **({"seeded": True} if c.get("_auto_seeded") is not None else {})}
+                 # Whether BOSS's mechanical pass seeded the target before any agent, and
+                 # when it did not, why (input_fidelity.seed_auto_fix): never silent.
+                 "seeded": c.get("_auto_seeded") is not None,
+                 **({"seed": dict(c["auto_fix_seed"])}
+                    if isinstance(c.get("auto_fix_seed"), Mapping) else {})}
                 if commands.get("fix") else None),
         "fixes": fixes,
         "after": {"command": commands.get("after"), "exit": exits.get("after"),
@@ -656,6 +671,9 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
         "evidence": evidence,
         "guard": guard,
         "error": error or (guard or {}).get("code"),
+        # Comments in the target that SAY a finding was fixed (review_packet judges them
+        # against the findings' status: a claim for an open finding is a claim without evidence).
+        "comment_claims": comment_claims(out_lines, findings, in_lines=in_lines),
     }
 
 
@@ -704,6 +722,83 @@ def _attribute_by_block(f: dict, all_hunks: Sequence[Mapping[str, Any]],
         f.update(hunk_id=h["id"], fixed=mask(out_lines[moved[line] - 1]) if line in moved
                  else None, fixed_by="nearest")
     _kind_of_hunk(f, lines)
+
+
+#: A comment that says something was done…
+_CLAIM = re.compile(r"\b(remov|delet|fix|resolv|remediat|address|drop|clos|secur|strip|replac)"
+                    r"\w*", re.I)
+#: …unless it says it was NOT (left for a person, untouched, pending, "not removed").
+_NOT_DONE = re.compile(r"\b(?:(?:not|never|nothing)\s+(?:yet\s+|been\s+)?(?:remov|delet|fix|"
+                       r"resolv|remediat|address|drop|clos|chang|touch)\w*|left|leave|leaves|"
+                       r"untouched|pending|todo|unchanged|kept|needs?\s+a\s+(?:person|human)|"
+                       r"for\s+a\s+(?:person|human))\b", re.I)
+
+
+def comment_claims(out_lines: Sequence[str], findings: Sequence[Mapping[str, Any]],
+                   in_lines: Optional[Sequence[str]] = None) -> list[dict]:
+    """The target's comment lines that claim a finding's fix: a ``#`` comment naming a rule id
+    (or a finding id) with a done-word ("removed", "fixed", …) and no not-done word.
+    ``[{line, text, rule, finding}]`` (text masked). Whether the claim is TRUE is judged
+    against the findings' status in the packet (review_packet.comment_claims) — an agent wrote
+    "removed the inlined api_key" over a key that was still there (dry run 2, gap 8)."""
+    rules = sorted({str((f.get("source") or {}).get("rule_id") or "") for f in findings
+                    if (f.get("source") or {}).get("kind") == "validator"} - {""},
+                   key=len, reverse=True)
+    ids = {str(f.get("id")) for f in findings}
+    out: list[dict] = []
+    # Only comments the CHANGE wrote: a comment the partner sent is theirs, never a claim.
+    sent = {x.strip() for x in in_lines or ()}
+    for n, raw in enumerate(out_lines, start=1):
+        if raw.strip() in sent:
+            continue
+        at = raw.find("#")
+        if at < 0 or (raw[:at].strip() and raw[at - 1] not in " \t"):
+            continue
+        body = raw[at + 1:]
+        if not _CLAIM.search(body) or _NOT_DONE.search(body):
+            continue
+        rule = next((r for r in rules if r in body), None)
+        fid = next((i for i in re.findall(r"\b[VU]-\d{2}\b", body) if i in ids), None)
+        if rule or fid:
+            out.append({"line": n, "text": mask(raw.strip()), "rule": rule, "finding": fid})
+    return out
+
+
+def change_of(f: Mapping[str, Any]) -> str:
+    """WHAT HAPPENED TO THE FINDING'S OWN LINE (dry run 2, gap 7), so a card never reads a
+    `fixed: null` as "removed" on a finding nobody touched:
+    ``none`` — open, nothing changed for it; ``edited`` — its line now reads ``fixed``;
+    ``added`` — its line is kept and ``fixed`` holds the lines added for it (a rate limit under
+    a route); ``removed`` — its line (block) is gone; ``elsewhere`` — its own line is unchanged
+    and the fix is the hunk ``hunk_id`` (``fixed`` is None: never "true → true")."""
+    kind = (f.get("source") or {}).get("kind")
+    if f.get("introduced"):
+        return "added"          # new on the target: ``fixed`` is the line that brought it
+    if kind == "guard":
+        if f.get("original") is None:
+            return "added"
+        return "removed" if f.get("fixed") is None else "edited"
+    pending = bool(f.get("fixed_if_released") or f.get("held"))
+    if f.get("status") != "fixed" and not pending:
+        return "none"
+    if not f.get("hunk_id") and f.get("fixed") is None:
+        return "none"
+    if f.get("fixed_by") == "removed_with_block" or f.get("fixed") is None:
+        return "removed"
+    if f.get("original") is None:
+        return "added"
+    if (f.get("location") or {}).get("target_line") is not None:
+        return "elsewhere" if f.get("fixed") == f.get("original") else "added"
+    return "edited"
+
+
+def set_change(f: dict) -> dict:
+    """``change`` (change_of), and the ``fixed`` text it allows: none for ``none`` (an open
+    finding never carries a "removed" line) and for ``elsewhere``."""
+    f["change"] = change_of(f)
+    if f["change"] in ("none", "elsewhere"):
+        f["fixed"] = None
+    return f
 
 
 def _kind_of_hunk(f: dict, lines: Sequence[Mapping[str, Any]]) -> None:

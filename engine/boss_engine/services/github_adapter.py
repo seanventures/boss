@@ -642,6 +642,33 @@ class GitHubAdapter:
             branch_name, path, content.encode("utf-8"), message
         )
 
+    def delete_file(self, branch_name: str, path: str, message: str) -> Optional[str]:
+        """Delete a file on a branch (the contents API's DELETE, with the blob sha it needs).
+        A path the branch does not have is already deleted: None, no commit."""
+        from .agent_acts import sign_commit_message
+
+        try:
+            existing = self._request(
+                "GET",
+                f"/repos/{self.repository_full_name}/contents/{quote(path, safe='/')}"
+                f"?ref={quote(branch_name, safe='')}",
+            )
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 404:
+                return None
+            raise
+        if not isinstance(existing, dict) or not existing.get("sha"):
+            return None
+        response = self._send(
+            "DELETE",
+            f"{self.api_base_url}/repos/{self.repository_full_name}/contents/"
+            f"{quote(path, safe='/')}",
+            headers=self._headers(),
+            json={"message": sign_commit_message(message), "sha": existing["sha"],
+                  "branch": branch_name},
+        )
+        return (response.json().get("commit") or {}).get("sha")
+
     def read_text_file(self, branch_name: str, path: str) -> Optional[str]:
         """Read a UTF-8 repository file from a branch, returning ``None`` on 404."""
         try:

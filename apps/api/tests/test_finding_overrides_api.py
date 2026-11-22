@@ -605,3 +605,67 @@ def test_accept_on_needs_you_commits_the_proposal_and_the_rerun_counts_it_fixed(
     p = client.get(f"/v1/changes/{PID}/{number}/validation").json()["packet"]
     done = next(x for x in p["findings"] if x["id"] == admin["id"])
     assert done["status"] == "fixed" and done["fix_kind"] == "human"
+
+
+# ── dry run 2: a person removes lines; their own hunk is theirs; who did it, by name ───────────
+
+ADMIN_ROUTE = "  - path: /v1/admin/accounts"
+
+
+def _block_of(text_: str, first: str) -> list[str]:
+    from boss_engine.services.validators import block
+
+    lines = text_.splitlines()
+    lo, hi = block(lines, lines.index(first))
+    return lines[lo:hi]
+
+
+@pytest.mark.parametrize("body", [{"action": "remove"}, {"action": "edit", "text": "  "}])
+def test_a_person_removes_the_admin_routes_whole_block_as_a_human_fix(engine, client, change,
+                                                                      body):
+    state = _get(client, change)
+    fid = _id(state, "no-sensitive-paths-exposed")
+    route = _block_of(change.branch.files[TARGET], ADMIN_ROUTE)
+    assert len(route) > 5
+    got = _override(client, change, fid, reason="internal surface, never for tenants", **body)
+    assert got.status_code == 200, got.text
+    assert got.json()["override"]["action"] == "remove"          # an empty edit IS a remove
+    after = change.branch.files[TARGET]
+    assert ADMIN_ROUTE not in after and "  - path: /v1/payments" in after
+    removed = [x[2:] for x in __import__("difflib").ndiff(
+        (FIX / "lumen-pay.fixed.yaml").read_text().splitlines(), after.splitlines())
+        if x.startswith("- ")]
+    assert removed == route                                         # the block, nothing else
+    assert f"BOSS-Override: O-1 {fid} remove" in change.branch.commits[-1]
+    assert _finish_rerun(engine, change, got.json()["rerun"]["id"])["state"] == "done"
+    p = _get(client, change)["packet"]
+    done = next(x for x in p["findings"] if x["id"] == fid)
+    assert done["status"] == "fixed" and done["fix_kind"] == "human"
+    assert done["override"]["action"] == "remove"
+    assert p["overrides"][0]["action"] == "remove" and "actor_name" in p["overrides"][0]
+    assert rp.validate_packet(p) == []
+
+
+def test_a_persons_own_edit_is_explained_by_their_override_never_unexplained(
+        engine, client, change):
+    fid = _id(_get(client, change), "cors-no-wildcard-with-credentials")
+    line = next(x for x in change.branch.files[TARGET].splitlines() if "allow_origins" in x)
+    mine = line.split("allow_origins")[0] + 'allow_origins: ["https://dashboard.lumenpay.example"]'
+    got = _override(client, change, fid, action="edit", text=mine,
+                    reason="the partner named this origin")
+    assert got.status_code == 200, got.text
+    assert _finish_rerun(engine, change, got.json()["rerun"]["id"])["state"] == "done"
+    state = _get(client, change)
+    p = state["packet"]
+    hid = next(h for h, refs in p["vs_input"]["hunks_by_override"].items() if "O-1" in refs)
+    assert hid not in p["vs_input"]["unexplained_hunks"]
+    assert f"unexplained_hunk:{hid}" not in p["verdict"]["reasons"]
+    entry = next(x for x in state["validation"]["fixes"]
+                 if any(h["id"] == hid for h in x.get("hunks") or []))
+    assert entry["override"] == "O-1" and entry["kind"] == "human" and not entry.get("unexplained")
+
+
+def test_the_schema_allows_the_remove_action():
+    schema = (Path(__file__).resolve().parents[3] / "db" / "schema.sql").read_text()
+    assert "finding_overrides_action_check" in schema
+    assert "'edit','remove','waive'" in schema

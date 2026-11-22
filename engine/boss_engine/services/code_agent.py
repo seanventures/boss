@@ -670,6 +670,9 @@ class CodeAgentResult:
     transcript: str
     turns: int
     engine: str
+    #: Paths the stage deleted (tracked at its base, gone from its tree): a micro-VM guest's
+    #: `deleted`. The control plane deletes them on the work branch too.
+    deleted: list[str] = field(default_factory=list)
 
     def to_metadata(self) -> dict:
         """Governance metadata only — the summary BOSS keeps (never the patch)."""

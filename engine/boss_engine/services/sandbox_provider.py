@@ -376,9 +376,6 @@ class MicroVMProvider:
 
         import httpx
 
-        from ..schemas import FileChange
-        from .code_agent import CodeAgentResult
-        from .sandbox import CommandResult, DiffSummary
         from .sandbox_contract import is_terminal
 
         # Community GA honesty: never claim microVM execution while frozen.
@@ -444,27 +441,42 @@ class MicroVMProvider:
         if result.get("status") not in (None, "ok"):
             raise RuntimeError(result.get("error") or "guest agent reported failure")
 
-        diff = [FileChange(path=f["path"], content=f["content"]) for f in result.get("diff", [])]
-        ds = result.get("diff_summary") or {}
-        diff_summary = DiffSummary(
-            files_changed=ds.get("files_changed", 0), additions=ds.get("additions", 0),
-            deletions=ds.get("deletions", 0), paths=ds.get("paths", []),
-        )
-        tests = [
-            CommandResult(command=t.get("command", ""), argv=[], exit_code=t.get("exit_code"),
-                          duration_ms=t.get("duration_ms", 0), timed_out=t.get("timed_out", False),
-                          # The guest's captured test output IS the repair-loop evidence —
-                          # concrete failures fed back to the implementer on retry.
-                          stdout=(t.get("output") or "")[-4000:], stderr="")
-            for t in result.get("tests", [])
-        ]
-        return CodeAgentResult(
-            summary=result.get("summary", ""), diff=diff, diff_summary=diff_summary,
-            tests=tests, tests_passed=bool(result.get("tests_passed")),
-            cost_usd_micros=int(result.get("cost_usd_micros", 0)), usage=result.get("usage") or {},
-            transcript=result.get("summary", ""), turns=int(result.get("turns", 0)),
-            engine=result.get("engine", "openai"),
-        )
+        return code_agent_result(result)
+
+
+def code_agent_result(result: dict):
+    """The guest's /work/result.json as a CodeAgentResult: its text files, its DELETED paths
+    (dry run 2, gap 1: a deletion crosses back and is deleted on the branch), its tests."""
+    from ..schemas import FileChange
+    from .code_agent import CodeAgentResult
+    from .governed_code_task_service import workspace_keepable
+    from .sandbox import CommandResult, DiffSummary
+
+    diff = [FileChange(path=f["path"], content=f["content"]) for f in result.get("diff", [])]
+    ds = result.get("diff_summary") or {}
+    diff_summary = DiffSummary(
+        files_changed=ds.get("files_changed", 0), additions=ds.get("additions", 0),
+        deletions=ds.get("deletions", 0), paths=ds.get("paths", []),
+    )
+    tests = [
+        CommandResult(command=t.get("command", ""), argv=[], exit_code=t.get("exit_code"),
+                      duration_ms=t.get("duration_ms", 0), timed_out=t.get("timed_out", False),
+                      # The guest's captured test output IS the repair-loop evidence —
+                      # concrete failures fed back to the implementer on retry.
+                      stdout=(t.get("output") or "")[-4000:], stderr="")
+        for t in result.get("tests", [])
+    ]
+    return CodeAgentResult(
+        summary=result.get("summary", ""), diff=diff, diff_summary=diff_summary,
+        tests=tests, tests_passed=bool(result.get("tests_passed")),
+        cost_usd_micros=int(result.get("cost_usd_micros", 0)), usage=result.get("usage") or {},
+        transcript=result.get("summary", ""), turns=int(result.get("turns", 0)),
+        engine=result.get("engine", "openai"),
+        # A DELETION CROSSES BACK TOO (dry run 2, gap 1): the guest's removed paths.
+        # Dependencies and build output are never the work, deleted or not (as sandbox.py).
+        deleted=[str(p) for p in result.get("deleted") or []
+                 if isinstance(p, str) and p and workspace_keepable(p)],
+    )
 
 
 def build_echo_submit_body(*, task_id: str = ECHO_EXERCISE_TASK_ID) -> dict:

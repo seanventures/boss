@@ -1217,6 +1217,10 @@ def start_delivery_workflow(
                         "adopt_meeting_run_id": origin.get("meeting_run_id"),
                         "adopt_discovery_run_id": origin.get("discovery_run_id"),
                         "adopt_decision_id": origin.get("decision_id"),
+                        # A DIRECT CHANGE (POST /v1/code-tasks, no workflow picked): its outer
+                        # run ends when that change merges or closes (workflow_capability_runner.
+                        # _direct_change_ended), never building past it.
+                        **({"direct_change": True} if fctx.get("direct_change") else {}),
                     },
                     inherit_authority=identity_acting,
                 )

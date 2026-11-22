@@ -886,8 +886,9 @@ class EphemeralSandbox:
 
     def diff(self) -> list[FileChange]:
         """The changed tree as BOSS ``FileChange`` objects, ready to feed the
-        existing ``propose_pull_request`` path. Binary/deleted files are skipped
-        (the contents API path handles text upserts).
+        existing ``propose_pull_request`` path. Binary files are skipped (the contents API
+        path handles text upserts); a DELETED file is not a FileChange — `deleted_paths()`
+        lists those, and every commit path writes them as deletions.
 
         BUILD OUTPUT NEVER FAILS A BUILD (crun_332011ee, 2026-11-18: `go build` left a 9 MB
         `fixtureclock` binary in the repository root and the build failed reading it). A
@@ -964,6 +965,21 @@ class EphemeralSandbox:
             self._unstage(dropped)
             self._write_left_out_block(dropped)
         return changes
+
+    def deleted_paths(self) -> list[str]:
+        """THE FILES THIS RUN DELETED (tracked at its base, gone from the tree), so a deletion
+        reaches the change branch like any other change. `diff()` carries text files only: a
+        removed path raised FileNotFoundError there and was skipped, so a build told to delete
+        a file reported it done while the branch still had it (dry run 2, gap 1). Dependencies
+        and build output are never the work, deleted or not."""
+        self._require_provisioned()
+        self._stage_all()
+        base = getattr(self, "diff_base_sha", None)
+        out = self._git(["diff", "--cached", "--name-only", "--diff-filter=D", "-z",
+                         *([base] if base else [])], raw=True)
+        from .governed_code_task_service import workspace_keepable
+
+        return sorted(p for p in out.split("\0") if p and workspace_keepable(p))
 
     # -- build output ---------------------------------------------------------
     #: Executable headers: ELF and Mach-O (both byte orders, 32/64, fat). PE is checked apart.

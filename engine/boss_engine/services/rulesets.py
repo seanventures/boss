@@ -82,13 +82,36 @@ def unapplied(root: Any, name: Optional[str], trusted: Optional[Mapping[str, Any
             "applied": False}
 
 
+#: BOSS'S OWN GUIDES (dry run 2, gap 5): what every fixing agent is told for these rules, on top
+#: of the ruleset's guide. Twice an agent pointed the upstream at a staging mock and invented a
+#: CORS origin the partner never sent; the run's brief said "deploy it to staging".
+BUILTIN_GUIDES = {
+    "upstream-https-required": (
+        "Change only the scheme: `http://<host>` becomes `https://<the same host>`, with the same "
+        "port and path. Never invent a host, and never use a mock, staging, test or localhost "
+        "host, even when the brief says to deploy to staging."),
+    "cors-no-wildcard-with-credentials": (
+        "Never invent an origin: use only origins the partner's file or the brief names exactly. "
+        "When none is named, set `allow_credentials: false` and keep the partner's "
+        "`allow_origins` as sent. Never use a mock, staging, test or localhost origin."),
+}
+
+
 def guides(rs: Optional[Mapping[str, Any]]) -> list[dict]:
-    """The guides the fixing agent receives: ``[{rule, severity, autofix, guide, custom}]``."""
+    """The guides the fixing agent receives: ``[{rule, severity, autofix, guide, custom}]``;
+    a rule with a BOSS guide (BUILTIN_GUIDES) gets it after the ruleset's own."""
     if not rs:
         return []
+
+    def _guide(rid: str, r: Mapping[str, Any]) -> Optional[str]:
+        parts = [str(r["guide"])] if r.get("guide") else []
+        if rid in BUILTIN_GUIDES:
+            parts.append(f"BOSS: {BUILTIN_GUIDES[rid]}")
+        return " ".join(parts) or None
+
     out = [{"rule": rid, "severity": r.get("severity"), "autofix": r.get("autofix"),
-            "guide": r["guide"], "custom": False}
-           for rid, r in (rs.get("rules") or {}).items() if r.get("guide") and r.get("enabled")]
+            "guide": _guide(rid, r), "custom": False}
+           for rid, r in (rs.get("rules") or {}).items() if _guide(rid, r) and r.get("enabled")]
     out += [{"rule": c["id"], "severity": c["severity"], "autofix": "agent", "guide": c["guide"],
              "custom": True} for c in rs.get("custom") or [] if c.get("guide")]
     return out
