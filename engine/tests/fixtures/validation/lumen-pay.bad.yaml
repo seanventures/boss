@@ -1,0 +1,37 @@
+tenant: lumen-pay
+owner: "Lumen Pay Platform Team"
+contact: "platform@lumenpay.example"
+tier: standard
+data_classification: pii
+routes:
+  - path: /v1/payments
+    description: "List recent payments for the authenticated merchant."
+    methods: ["GET"]
+    upstream: lumen-pay-core
+    auth:
+      type: jwt
+      issuer: "https://issuer.lumenpay.example"
+      audience: "northgate"
+      scopes: ["payments.read"]
+      jwks_url: "https://issuer.lumenpay.example/.well-known/jwks.json"
+      api_key: "sk_live_4242424242424242"
+    cors:
+      allow_origins: ["*"]
+      allow_credentials: true
+  - path: /v1/admin/accounts
+    description: "Internal account admin surface, never meant for tenants."
+    methods: ["GET"]
+    upstream: lumen-pay-core
+    auth:
+      type: jwt
+      issuer: "https://issuer.lumenpay.example"
+      audience: "northgate"
+      scopes: ["admin.read"]
+      jwks_url: "https://issuer.lumenpay.example/.well-known/jwks.json"
+    rate_limit:
+      rps: 10
+      burst: 10
+upstreams:
+  lumen-pay-core:
+    url: "http://lumen-pay-core.internal.example"
+    timeout_ms: 2000

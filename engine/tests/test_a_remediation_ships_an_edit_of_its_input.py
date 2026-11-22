@@ -521,24 +521,27 @@ def test_the_validation_record_has_findings_before_fixes_and_after(tmp_path):
         return SimpleNamespace(stdout=REPORT_BAD, exit_code=1)
 
     rec = f.public_validation(f.run_validation(root, c, run))
-    assert set(rec) >= {"validator", "command", "fix_command", "before", "fixes", "after"}
-    assert rec["validator"] == "gwlint" and rec["error"] is None
-    assert len(rec["before"]) == 9 and rec["after"] == []
-    assert rec["before"][4] == {"rule": "no-inlined-secrets", "severity": "error",
-                                "file": "examples/lumen-pay.bad.yaml", "line": 17,
-                                "message": "No API keys, tokens or passwords inlined in "
-                                           "plaintext", "fixable": "never"}
+    # boss.validation/v1 (validators.record): the same key, the same producer, typed.
+    assert rec["schema"] == "boss.validation/v1"
+    assert set(rec) >= {"validator", "input", "target", "before", "fixes", "after", "findings"}
+    assert rec["validator"]["id"] == "gwlint" and rec["error"] is None
+    assert len(rec["before"]["findings"]) == 9 and rec["after"]["findings"] == []
+    secret = rec["findings"][4]
+    assert (secret["source"]["rule_id"], secret["native_severity"], secret["location"]) == (
+        "no-inlined-secrets", "error",
+        {"file": "config/tenants/lumen-pay.yaml", "line": None, "partner_line": 17})
+    assert secret["title"] == "No API keys, tokens or passwords inlined in plaintext"
     by_after = {x["after"].strip(): x for x in rec["fixes"] if x["after"]}
     url = by_after['url: "https://lumen-pay-core.internal.example"']
     assert url["kind"] == "auto" and url["rule"] == "upstream-https-required"
     assert url["before"].strip() == 'url: "http://lumen-pay-core.internal.example"'
-    assert by_after['api_key_hashed: "sha256:9f2c"']["kind"] == "manual"
-    assert all(set(x) == {"rule", "file", "line", "before", "after", "kind", "op"}
+    assert by_after['api_key_hashed: "sha256:9f2c"']["kind"] == "agent"
+    assert all(set(x) == {"finding", "rule", "file", "line", "before", "after", "kind", "hunk_id"}
                for x in rec["fixes"])
     # The input itself is never touched; the scratch copies are gone.
     assert (root / "examples" / "lumen-pay.bad.yaml").read_text() == BAD
     assert not (root / ".boss-validation").exists()
-    assert ran[0].startswith("go run ./cmd/gwlint validate --json")
+    assert ran[0].startswith("go run ./cmd/gwlint validate --json '.boss-validation/lumen-pay.yaml'")
 
 
 # ── the step: a violation goes to repair, the gate holds, the step carries the record ──────────
@@ -569,7 +572,9 @@ def test_one_attempts_check_fails_a_copied_answer_with_its_record(tmp_path):
                             summary="gwlint --fix applied", test_cmd="go test ./...")
     assert out["ok"] is False
     assert {"copied_answer", "unbacked_claim"} <= set(_codes(out))
-    assert len(out["_validation"]["before"]) == 9
+    assert len(out["_validation"]["before"]["findings"]) == 9
+    # The copied answer is also the input-substitution guard's (validators.substituted).
+    assert "input_substituted" in _codes(out)
 
 
 def test_the_implement_loop_sends_a_violation_to_repair_and_the_gate_holds():

@@ -2795,6 +2795,12 @@ def _fidelity_check(engine, run_id: str, root, remediation: dict, sandbox, *,
         result = _input_fidelity.check(
             root, remediation, findings=_input_fidelity.findings_for_check(validation),
             claims=[summary or ""], executed=executed)
+        # THE INPUT-SUBSTITUTION GUARD (validators.substituted, SPEC §1.3): a target that is
+        # another repo file byte for byte, or an input that is not the bytes the run received.
+        guarded = _input_fidelity.guard_violation(validation)
+        if guarded is not None:
+            result["violations"].append(guarded)
+            result["ok"] = False
     except Exception as exc:  # noqa: BLE001
         _log_caught(logger)
         result = {"ok": False, "input": remediation.get("input"),
