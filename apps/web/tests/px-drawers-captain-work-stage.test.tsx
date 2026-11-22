@@ -150,32 +150,27 @@ describe("Ask the captain (screen 09)", () => {
   });
 });
 
-describe("the work drawer (screen 05b)", () => {
-  it("is the Work panel's short preview — header, who did what, the one action — and opens the whole page", async () => {
+describe("an old work-drawer link (the Work panel is gone, design #287)", () => {
+  it("opens the work's latest Workflow run, full page with Work as the way back, and drops the drawer from history", async () => {
     engine();
-    await open("&tab=work&drawer=work:wi_visual");
-    const d = tid("px-drawer-work")!;
-    expect(d).not.toBeNull();
-    expect(tid("px-drawer-work-number")!.textContent).toContain("run #43");
-    expect(tid("px-drawer-work-merge")!.textContent).toContain("Merge PR #3");
-    // WHO DID WHAT replaces "How it went": six nodes, a person on Merge.
-    expect($$("[data-testid='px-drawer-work-flow'] .wp-nm").map((n) => n.textContent))
-      .toEqual(["Spec", "Build", "Review & tests", "Merge", "Staging", "Production"]);
-    expect(tid("px-drawer-work-node-spec")!.textContent).toContain("PRD agreed");
-    expect(tid("px-drawer-work-node-merge")!.textContent).toContain("Only a person merges");
-    expect(tid("px-drawer-work-node-merge")!.getAttribute("data-s")).toBe("wait");
-    // The old drawer's Links block and How it went list are gone; the run and the build page
-    // are in the ⋯ menu.
-    expect(tid("px-drawer-work-links")).toBeNull();
-    expect(tid("px-drawer-work-steps")).toBeNull();
-    expect(tid("px-drawer-work-link-build")!.getAttribute("href")).toContain("area=code_tasks");
-    // Open → the whole page over the screen, with the rail.
-    await press(tid("px-drawer-work-open"));
-    expect(tid("px-drawer-work")!.getAttribute("data-chat-full")).toBe("1");
-    expect(tid("px-drawer-work-kpis")!.textContent).toContain("31 m");
-    expect(tid("px-drawer-work-cost")!.textContent).toContain("$2.10");
-    expect(tid("px-drawer-work-helm")).not.toBeNull();
-    expect(tid("px-drawer-work-preview-card")).not.toBeNull();
+    const followed: string[] = [];
+    const spy = (e: Event) => {
+      const a = (e.target as HTMLElement).closest?.("a");
+      if (a && a.style.display === "none") { followed.push(a.getAttribute("href") ?? ""); e.preventDefault(); }
+    };
+    document.addEventListener("click", spy, true);
+    try {
+      await open("&tab=work&drawer=work:wi_visual&wp=full");
+      expect(tid("px-drawer-work")).toBeNull();
+      expect(followed.length).toBe(1);
+      const q = new URLSearchParams(followed[0].split("?")[1]);
+      expect(q.get("area")).toBe("delivery_workflows");
+      expect(q.get("wfr")).toBeTruthy();
+      expect(q.get("page")).toBe("full");
+      expect(q.get("from")).toBe("work");
+      expect(params().get("drawer")).toBeNull();
+      expect(params().get("wp")).toBeNull();
+    } finally { document.removeEventListener("click", spy, true); }
   });
 });
 

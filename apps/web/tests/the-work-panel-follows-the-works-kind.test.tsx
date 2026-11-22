@@ -147,84 +147,17 @@ describe("who did what follows the work", () => {
   });
 });
 
-describe("the panel draws only what the work produced", () => {
-  it("an investigation: Asked the incident, Found the root cause, Remediation — never the code pipeline", async () => {
-    const { WorkPanel } = await import("../app/projects/work-panel");
-    const { w, deployments } = await load(INVESTIGATION);
-    await mount(<WorkPanel ctx={ctx as never} w={w} story={null} deployments={deployments} testid="wp" />);
-    const page = $('[data-testid="wp"]')!;
-    expect($('[data-testid="wp-sentence"]')!.textContent).toBe("Done. Root cause: Source processing (0.84) · remediation approved.");
-    expect($$('[data-testid="wp-flow"] .wp-nm').map((n) => n.textContent)).toEqual(["Sentinel", "Root Cause Analysis", "Swimlane", "Corrective Action", "Human approval", "Retrospective"]);
-    // Asked: the incident and what triggered it — never the workflow's name.
-    expect($('[data-testid="wp-asked"] .wp-quote')!.textContent).toBe("“Investigate DQX-0588 v2 on COB 2026-10-05”");
-    expect($('[data-testid="wp-trigger"]')!.textContent).toContain("failed for 412 of 61220");
-    expect($('[data-testid="wp-asked"]')!.textContent).toContain("EXG-20261005-0003");
-    // Found: the cause, its confidence and evidence.
-    expect($('[data-testid="wp-cause"]')!.textContent).toBe(CAUSE);
-    expect($('[data-testid="wp-found"]')!.textContent).toContain("confidence 0.84");
-    expect($('[data-testid="wp-refs"]')!.textContent).toContain("CHG-7731");
-    expect($('[data-testid="wp-evidence"]')!.textContent).toContain("Past Incidents");
-    // Remediation: proposed → approved (who) → done.
-    const rem = $$('[data-testid="wp-rem"]');
-    expect(rem.map((r) => r.getAttribute("data-s"))).toEqual(["live", "done", "done", "done"]);
-    expect(rem[0].textContent).toContain("restore the F-01 job dependency");
-    expect(rem[1].textContent).toContain("Seed Owner");
-    // Outputs: the run, step by step.
-    expect($('[data-testid="wp-out-run"]')!.getAttribute("href")).toContain("wfr=wfr_50d5");
-    // Never the code pipeline's sections.
-    for (const gone of ["wp-preview-card", "wp-where", "wp-comments", "wp-story", "wp-discussed", "wp-built", "wp-produced"]) {
-      expect($(`[data-testid="${gone}"]`)).toBeNull();
-    }
-    for (const words of ["Pick a prod host", "Pick host", "Nothing built yet", "went straight to the build", "Production", "Preview of"]) {
-      expect(page.textContent).not.toContain(words);
-    }
-  });
-
-  it("a job: Asked → Produced with its counts and links; no empty Found or Remediation", async () => {
-    const { WorkPanel } = await import("../app/projects/work-panel");
-    const { w, deployments } = await load(JOB);
-    await mount(<WorkPanel ctx={ctx as never} w={w} story={null} deployments={deployments} testid="wp" />);
-    expect($$('[data-testid="wp-flow"] .wp-nm').map((n) => n.textContent)).toEqual(["Extract", "Review"]);
-    expect(($('[data-testid="wp-flow"] .wp-lane') as HTMLElement).style.getPropertyValue("--wp-n")).toBe("2");
-    expect($('[data-testid="wp-counts"]')!.textContent).toContain("Rules proposed96");
-    expect($('[data-testid="wp-produced"]')!.textContent).toContain("Approved by auto approval");
-    expect($('[data-testid="wp-out-link"]')!.getAttribute("href")).toContain("kg_scan=rbx_ee62447aa442");
-    expect($('[data-testid="wp-found"]')).toBeNull();
-    expect($('[data-testid="wp-remediation"]')).toBeNull();
-    expect($('[data-testid="wp-preview-card"]')).toBeNull();
-    expect($('[data-testid="wp"]')!.textContent).not.toContain("Pick a prod host");
-  });
-
-  it("code work keeps its preview, where it runs and the prod host", async () => {
-    const { WorkPanel } = await import("../app/projects/work-panel");
-    const { w, deployments } = await load(CODE);
-    await mount(<WorkPanel ctx={ctx as never} w={w} story={null} deployments={deployments} testid="wp" />);
-    expect($('[data-testid="wp-preview-card"]')).not.toBeNull();
-    expect($('[data-testid="wp-where"]')).not.toBeNull();
-    expect($('[data-testid="wp-story"]')).not.toBeNull();
-    expect($('[data-testid="wp-outcome"]')).toBeNull();
-  });
-});
 
 describe("the rows", () => {
-  it("an investigation's row: its steps as dots and its one-line outcome", async () => {
+  it("an investigation's row is the plain list row: Done, its times and its Workflow link", async () => {
     const { WorkRow } = await import("../app/projects/tab-work");
     const { w } = await load(INVESTIGATION);
     await mount(<WorkRow w={w} ctx={ctx as never} />);
-    const dots = $$('[data-testid="px-work-flow-wfr_50d5"] i');
-    expect(dots.length).toBe(6);
-    expect(dots.every((d) => d.getAttribute("data-s") === "done")).toBe(true);
-    expect($('[data-testid="px-work-flow-wfr_50d5"]')!.getAttribute("aria-label")).toContain("Root Cause Analysis done");
-    expect($('[data-testid="px-work-line-wfr_50d5"]')!.textContent).toContain("Done. Root cause: Source processing (0.84) · remediation approved.");
+    expect($('[data-testid="px-work-status-wfr_50d5"]')!.textContent).toBe("Done");
+    expect($('[data-testid="px-work-kicked-wfr_50d5"]')!.textContent).not.toBe("—");
+    expect($$('[data-testid="px-work-links-wfr_50d5"] a').map((a) => a.textContent)[0]).toMatch(/^Workflow/);
   });
 
-  it("a job's row: its own two steps, never five empty code dots", async () => {
-    const { WorkRow } = await import("../app/projects/tab-work");
-    const { w } = await load(JOB);
-    await mount(<WorkRow w={w} ctx={ctx as never} />);
-    expect($$('[data-testid="px-work-flow-wfr_f409"] i').length).toBe(2);
-    expect($('[data-testid="px-work-line-wfr_f409"]')!.textContent).toContain("proposed 96 rule(s)");
-  });
 
   it("the Work list has no letter legend", async () => {
     const { readFileSync } = await import("node:fs");

@@ -1,6 +1,6 @@
 /**
- * A PIECE OF WORK'S LINKS — Run · Build · Change · Preview — ONE SOURCE for the Work panel's
- * header, every Work row and the Work tab's "Latest" strip (operator 2026-11-21: "I dont see
+ * A PIECE OF WORK'S LINKS — Workflow · Build · Change · Preview — ONE SOURCE for every Work row,
+ * its iterations, the run screen's header line and the Work tab's "Latest" strip (operator 2026-11-21: "I dont see
  * any run, build, preview etc in the UI … we need to have individual run for every run that's
  * displayed in the work task … and overall run, build and change should be displayed at the
  * top whatever is latest").
@@ -9,7 +9,7 @@
  * state, a compact flow, ONE action"); they come back as compact chips with short labels — a
  * raw `crun_…` id is never the words, only the tooltip.
  */
-import type { WorkItem, WorkState } from "./project-experience";
+import type { Attempt, WorkItem, WorkState } from "./project-experience";
 import { changeHref, changeRef, isLocalChangeUrl } from "./repo-links";
 import { mergeWaitOf } from "./work-next-step";
 
@@ -37,7 +37,7 @@ function runIdOf(href: string): string {
 export type WorkLinkKey = "run" | "build" | "change" | "preview";
 export type WorkLink = {
   key: WorkLinkKey;
-  /** Short words: "Run #4", "Build", "PR #5" / "Change #5", "Preview". Never a raw id. */
+  /** Short words: "Workflow #4", "Build", "PR #5" / "Change #5", "Preview". Never a raw id. */
   label: string;
   href: string;
   /** The id lives here, on hover. */
@@ -45,13 +45,14 @@ export type WorkLink = {
   external: boolean;
 };
 
-/** A row's links, in order Run · Build · Change · Preview; only the ones that exist. */
+/** A row's links, in order Workflow · Build · Change · Preview; only the ones that exist. In
+ *  words a person reads, a workflow run is a "Workflow" (design #287). */
 export function workLinks(w: WorkItem): WorkLink[] {
   const out: WorkLink[] = [];
   const run = w.links.workflow_run;
   if (run) {
     const id = runIdOf(run);
-    out.push({ key: "run", label: w.run_number ? `Run #${w.run_number}` : "Run", href: run,
+    out.push({ key: "run", label: w.run_number ? `Workflow #${w.run_number}` : "Workflow", href: run,
                title: ["Workflow run", w.run_number ? `#${w.run_number}` : "", id ? `· ${id}` : ""].filter(Boolean).join(" "), external: false });
   }
   const build = rootBuildOf(w);
@@ -111,4 +112,44 @@ export function tidyIds(text: string): string {
     .replace(/\bcrun_([0-9a-f]{8})[0-9a-f]*\b/gi, "build $1")
     .replace(/\bwfr_([0-9a-z]{8})[0-9a-z]*\b/gi, "run $1")
     .replace(/\b([0-9a-f]{7})[0-9a-f]{5,33}\b/g, "$1");
+}
+
+/** WHERE A WORK ROW OPENS (design #287, decision 1): its latest Workflow run, full page, with
+ *  "← Work" back (`from=work`). Work with no workflow (a build on its own) opens its Build page;
+ *  nothing to open → "". The Work panel this replaces is gone; old drawer links come here too. */
+export function workOpenHref(w: Pick<WorkItem, "links" | "action_label">): string {
+  const run = w.links.workflow_run;
+  const id = run ? runIdOf(run) : "";
+  if (run && id) {
+    const q = new URLSearchParams(run.split("?")[1] ?? "");
+    for (const k of ["drawer", "wp", "step", "view", "wf"]) q.delete(k);
+    q.set("area", "delivery_workflows"); q.set("wfr", id); q.set("tab", "runs"); q.set("page", "full"); q.set("from", "work");
+    return `?${q}`;
+  }
+  return rootBuildOf(w)?.href || w.links.build || "";
+}
+
+/** One iteration's links (a re-run, a repair build, a follow-up): its Build and its Change. */
+export function iterationLinks(t: Pick<Attempt, "id" | "build" | "pr">): WorkLink[] {
+  const out: WorkLink[] = [];
+  if (t.build) out.push({ key: "build", label: "Build", href: t.build, title: `Build · ${t.id}`, external: false });
+  if (t.pr?.number) {
+    const href = changeHref(t.pr.external_url) || "";
+    if (href) out.push({ key: "change", label: changeRef(t.pr.external_url, t.pr.number), href,
+                         title: `${isLocalChangeUrl(t.pr.external_url) ? "Change set in BOSS" : "Pull request"} #${t.pr.number}`,
+                         external: /^https?:\/\//.test(href) });
+  }
+  return out;
+}
+
+/** When it finished: the last time it moved, for work that is over (done or failed); "" while
+ *  it is still going. */
+export function finishedAt(w: { state: string; updated_at?: string; created_at?: string }): string {
+  return w.state === "done" || w.state === "failed" || w.state === "handed_on" ? (w.updated_at || "") : "";
+}
+
+/** The piece of work a workflow run is: the item named by the run (its id, or its run link). */
+export function workForRun(items: WorkItem[], runId: string): WorkItem | null {
+  if (!runId) return null;
+  return items.find((w) => w.id === runId) ?? items.find((w) => runIdOf(w.links.workflow_run || "") === runId) ?? null;
 }

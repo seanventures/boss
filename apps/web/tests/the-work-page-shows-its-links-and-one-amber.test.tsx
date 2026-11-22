@@ -59,32 +59,26 @@ async function items() {
 const ctx = { projectId: "hd", actor: "ceo", refreshWork: () => {}, open: () => {}, overview: { project: { repos: [] } } };
 
 describe("every work row shows its own links", () => {
-  it("Run #N · Build · PR #N as short chips, the panel header's targets, ids only on hover", async () => {
+  it("Workflow #N · Build · PR #N as short chips, ids only on hover", async () => {
     const { WorkRow } = await import("../app/projects/tab-work");
-    const { workLinksOf } = await import("../app/projects/work-panel");
     const [w] = await items();
     await mount(<WorkRow w={w} ctx={ctx as never} />);
     const chips = $$('[data-testid="px-work-links-wfr_merge5"] a');
-    expect(chips.map((a) => a.textContent)).toEqual(["Run #7", "Build", "PR #5"]);
-    const panel = workLinksOf(w, null, null, "hd");
+    expect(chips.map((a) => a.textContent)).toEqual(["Workflow #7", "Build", "PR #5"]);
     expect($('[data-testid="px-work-run-wfr_merge5"]')!.getAttribute("href")).toContain("wfr=wfr_merge5");
-    expect(panel.run).toContain("wfr=wfr_merge5");
-    expect($('[data-testid="px-work-build-wfr_merge5"]')!.getAttribute("href")).toContain(`build=${panel.build!.id}`);
+    expect($('[data-testid="px-work-build-wfr_merge5"]')!.getAttribute("href")).toContain("build=crun_ad50ce9f01e14534b230");
     expect($('[data-testid="px-work-build-wfr_merge5"]')!.getAttribute("title")).toContain("crun_ad50ce9f01e14534b230");
     expect($('[data-testid="px-work-change-wfr_merge5"]')!.getAttribute("href")).toBe("/changes/github/acme-demo/helpdesk/5");
     // Never a raw id as words.
     expect($('[data-testid="px-work-links-wfr_merge5"]')!.textContent).not.toMatch(/crun_|wfr_/);
-    // The primary action stays on the right, after the chips.
-    const row = $('[data-testid="px-work-wfr_merge5"]')!;
-    const kids = Array.from(row.children);
-    expect(kids.indexOf(row.querySelector(".wr-links")!)).toBeLessThan(kids.indexOf(row.querySelector(".wr-act")!));
   });
 
   it("shows only the links that exist: a merged row says its merged PR and its preview; a planned row none", async () => {
     const { WorkRow } = await import("../app/projects/tab-work");
     const [, done, planned] = await items();
     await mount(<><WorkRow w={done} ctx={ctx as never} /><WorkRow w={planned} ctx={ctx as never} /></>);
-    expect($$('[data-testid="px-work-links-wfr_older"] a').map((a) => a.textContent)).toEqual(["Run #3", "Build", "PR #1", "Preview"]);
+    // The preview is the run screen's (its header line), not a row chip.
+    expect($$('[data-testid="px-work-links-wfr_older"] a').map((a) => a.textContent)).toEqual(["Workflow #3", "Build", "PR #1"]);
     expect($('[data-testid="px-work-links-wi_plan"]')).toBeNull();
   });
 });
@@ -96,9 +90,9 @@ describe("the Latest strip", () => {
     const strip = $('[data-testid="px-work-latest"]')!;
     expect(strip).not.toBeNull();
     const run = $('[data-testid="px-work-latest-run"]')!;
-    expect(run.textContent).toContain("Run #7");
+    expect(run.textContent).toContain("Workflow #7");
     expect(run.textContent).toContain("10m ago");
-    expect(run.textContent).not.toMatch(/Run Run/);
+    expect(run.textContent).not.toMatch(/Workflow Workflow/);
     expect(run.getAttribute("href")).toContain("wfr=wfr_merge5");
     expect(run.querySelector(".px-dot")!.getAttribute("data-s")).toBeNull();   // never amber: the tab badge is the one Needs-you signal
     expect($('[data-testid="px-work-latest-build"]')!.getAttribute("href")).toContain("crun_ad50ce9f01e14534b230");
@@ -202,17 +196,16 @@ describe("the project header's status", () => {
 });
 
 describe("one amber per view: the Needs-you signal only", () => {
-  it("a Needs-you row has no amber button, tag, tile or rail — its action is the normal primary", async () => {
+  it("a Needs-you row has no amber button, tag, tile or rail — its move is a neutral status chip (the button is on the run screen)", async () => {
     const { WorkRow } = await import("../app/projects/tab-work");
     const [w] = await items();
     await mount(<WorkRow w={w} ctx={ctx as never} />);
     const row = $('[data-testid="px-work-wfr_merge5"]')!;
     expect(row.querySelectorAll('[data-kind="amber"], [data-tone="amber"], [data-c="amber"]').length).toBe(0);
-    expect($('[data-testid="px-work-act-wfr_merge5"]')!.getAttribute("data-kind")).toBe("primary");
-    // The only amber kind left on a row is the flow's "waiting on you" dot.
-    const amberKinds = new Set(Array.from(row.querySelectorAll("[data-s]"))
-      .filter((el) => el !== row && el.getAttribute("data-s") === "wait").map((el) => el.tagName));
-    expect(amberKinds.size).toBeLessThanOrEqual(1);
+    const chip = $('[data-testid="px-work-status-wfr_merge5"]')!;
+    expect(chip.textContent).toBe("Merge PR #5");
+    expect(chip.getAttribute("data-tone")).toBeNull();
+    expect(row.querySelectorAll("[data-s]:not(.px-wk)").length).toBe(0);
   });
 
   it("the stylesheets: no amber rail or tint on a row, no Needs-you bar left to style", async () => {

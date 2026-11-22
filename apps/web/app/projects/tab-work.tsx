@@ -12,8 +12,7 @@
 import { changeWords, projectIsLocal } from "../../lib/repo-links";
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  ArrowDown, ArrowUp, Bug, Check, Compass, Database, DotsSixVertical, EnvelopeSimple, FlowArrow, GitMerge,
-  GithubLogo, HandWaving, Kanban, Lightning, ListBullets, Lock, PauseCircle, Play,
+  ArrowDown, ArrowUp, CaretRight, DotsSixVertical, GithubLogo, HandWaving, Kanban, ListBullets, Lock, Play,
   Ticket, Tray, TreeStructure, XCircle,
 } from "@phosphor-icons/react";
 import { WorkTreeView } from "./work-tree";
@@ -21,56 +20,22 @@ import { InboxView } from "./work-inbox";
 
 import { GatedButton, useGate } from "../../components/gated";
 import {
-  KIND_WORDS, WORK_ORDER, WORK_WORDS, attemptsPill, movePlanItem, needsYouCards,
-  pxHref, reRank, runAccept, startWork, waitingSinceWords, workWhen, writePxUrl,
-  type NeedsYou, type WorkItem, type WorkState,
+  KIND_WORDS, WORK_ORDER, WORK_WORDS, attemptsPill, movePlanItem, navigateTo, needsYouCards,
+  pxHref, reRank, runAccept, startWork, waitingSinceWords, writePxUrl,
+  type Attempt, type NeedsYou, type WorkItem, type WorkState,
 } from "../../lib/project-experience";
-import { stampLocal, whenLocal } from "../../lib/local-time";
-import { Empty, Face, Flow, Loading, Failed, EngineNotReady, PxLink, Said } from "./kit";
+import { localWith, stampLocal, whenLocal } from "../../lib/local-time";
+import { Empty, Flow, Loading, Failed, EngineNotReady, Said } from "./kit";
 import { NewWorkBar } from "./new-work";
 import { RowChipsProvider, RowTicket, TicketWorkBand, useRowChips, useTicketConnections, useTicketsParam } from "./ticket-work";
 import { TicketImportPage } from "./ticket-import";
 import type { Connection } from "../../lib/tickets";
 import type { PxCtx } from "./project-page";
-import { WhyLine } from "../../components/stuck-work";
 import { FailedActions } from "./build-failed";
 import { workNextStep } from "../../lib/work-next-step";
-import { stateSentence } from "../../lib/work-panel";
-import { WorkPreviewButton } from "./work-preview";
 import type { YourApp } from "../../lib/your-app";
-import { latestLinks, tidyIds, workLinks, type LatestLink, type WorkLink } from "../../lib/work-links";
+import { finishedAt, iterationLinks, latestLinks, tidyIds, workLinks, workOpenHref, type LatestLink, type WorkLink } from "../../lib/work-links";
 import "./work.css";
-import "./work-panel.css";
-
-/** The row's tile (05-29): what the work is waiting on, else what kind it is and where it came from. */
-function RowTile({ w }: { w: WorkItem }) {
-  const setup = w.kind === "setup";
-  const t: [React.ElementType, string | undefined, "bold" | "fill" | "regular"] =
-    setup ? (w.state === "needs_you" ? [HandWaving, undefined, "regular"] : w.state === "running" ? [Compass, "teal", "fill"]
-      : w.state === "failed" ? [XCircle, "red", "regular"] : [Check, "green", "bold"])
-    : w.state === "needs_you" ? [GitMerge, undefined, "bold"]
-    : w.state === "running" ? [Lightning, "teal", "fill"]
-    : w.state === "stalled" ? [PauseCircle, undefined, "fill"]
-    : w.state === "done" ? [Check, "green", "bold"]
-    : w.state === "failed" ? [XCircle, "red", "regular"]
-    : w.origin === "ci" || /^ci$/i.test(w.source) ? [XCircle, "red", "regular"]
-    : w.kind === "bug" || w.kind === "fix" || w.origin === "bug" ? [Bug, "red", "regular"]
-    : w.origin === "roadmap" ? [Database, "violet", "regular"]
-    : w.kind === "chore" ? [XCircle, "red", "regular"]
-    : w.source === "roadmap" && !w.origin ? [Database, "violet", "regular"]
-    : w.kind === "ticket" ? [Ticket, undefined, "regular"]
-    : [EnvelopeSimple, undefined, "regular"];
-  const [I, c, weight] = t;
-  return <span className="px-ico px-wk-ico" data-c={c} data-plain={c ? undefined : ""} aria-hidden><I size={12} weight={weight} /></span>;
-}
-
-/** The row's tag: CI · Bug · from Roadmap for planned work by where it came from, else its kind. */
-function rowTag(w: WorkItem): { label: string; tone?: "red" | "violet" } {
-  if (w.state === "planned" && (w.origin === "ci" || w.origin === "bug")) return { label: w.origin_label || (w.origin === "ci" ? "CI" : "Bug"), tone: "red" };
-  if (w.state === "planned" && (w.origin === "roadmap" || (!w.origin && w.source === "roadmap"))) return { label: "from Roadmap", tone: "violet" };
-  if (w.source === "roadmap" && !w.origin && w.state !== "planned") return { label: "from Roadmap", tone: "violet" };
-  return { label: KIND_WORDS[w.kind] ?? w.kind, tone: w.kind === "bug" || w.kind === "fix" ? "red" : undefined };
-}
 
 const STATION_NAME: Record<string, string> = { plan: "Plan", design: "Decide", build: "Build", review: "Review", pr: "PR", ship: "Staging" };
 /** "Build · 12m": where a running piece of work is, and for how long. */
@@ -80,8 +45,6 @@ const whereNow = (w: WorkItem, local = false) => {
   const name = !now ? "" : w.flow.length ? now.label : now.key === "pr" ? changeWords(local).station : STATION_NAME[now.key] ?? now.label;
   return [name, w.age].filter(Boolean).join(" · ");
 };
-/** A finished item's time: the one basis every surface uses (workWhen). */
-const doneDay = (w: WorkItem) => workWhen(w);
 
 // Amber is the Needs-you signal only (operator 2026-11-21): stalled work draws a neutral dot.
 const DOT: Record<WorkState, string | undefined> = { needs_you: "you", stalled: undefined, running: "now", done: "done", failed: "bad", planned: undefined };
@@ -190,6 +153,7 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
         <div className="px-card"><Empty icon={Kanban} title="No work yet" line="Press New work above (or N) to describe a feature or a bug. Helm plans it, you approve, the crew builds it to a PR." testid="px-work-empty" /></div>
       ) : view === "list" ? (
         <div className="px-list" data-testid="px-work-rows">
+          <div className="wl-head" aria-hidden><span /><span>Task</span><span>Status</span><span>Kicked off</span><span>Finished</span><span>Links</span></div>
           {WORK_ORDER.filter((k) => groupOf(k).length || (k === "needs_you" && showLoose && needs.loose.length)).map((k) => (
             <React.Fragment key={k}>
               <div className="px-list-g" data-g={k} data-testid={`px-work-g-${k}`} id={k === "needs_you" ? "px-work-needs" : undefined}><span className="px-dot" data-s={DOT[k]} aria-hidden />
@@ -239,11 +203,12 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
 
 const NO_CONNECTIONS: Connection[] = [];
 
-/** Opening a row: the work drawer (05b) in place; the onboarding row opens the onboarding page (screen 10). */
+/** Opening a row: its latest Workflow run, full page (design #287; the Work panel is gone); the
+ *  onboarding row opens the onboarding page (screen 10). Nothing to open (planned work): stay. */
 function openItem(ctx: PxCtx, w: WorkItem) {
-  if (w.kind === "setup" && w.source === "onboarding") writePxUrl({ tab: "onboarding", drawer: null });
-  // The row lands on the Work panel's whole page (the drawer's short preview is for other doors).
-  else ctx.open("work", w.id, { wp: "full" });
+  if (w.kind === "setup" && w.source === "onboarding") { writePxUrl({ tab: "onboarding", drawer: null }); return; }
+  const href = workOpenHref(w);
+  if (href) navigateTo(pxHref(href));
 }
 
 /** A Needs-you card that is no piece of work's (Pick a prod host, a setup gap): its own row, the
@@ -381,14 +346,49 @@ function RowDots({ w, local = false, testid = `px-work-flow-${w.id}` }: { w: Wor
   );
 }
 
-/** A WORK ROW: the title (short), one line of state, its own Run · Build · Change · Preview as
- *  compact muted chips (operator 2026-11-21: "at least before I could see the run, build etc."
- *  — #246 had moved them into the panel only), a compact flow, and ONE action on the right.
- *  Attempts, cost and faces are in the Work panel the row opens. */
+const DT: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false };
+/** "Nov 21, 10:05" in the viewer's zone; "" when unknown. */
+export const dateTime = (iso: string | null | undefined): string => (iso ? localWith(iso, DT) : "");
+
+type Chip = { word: string; tone?: "green" | "red" | "teal" | "blue" | "violet"; title?: string };
+/** THE ROW'S STATUS CHIP: one or two words. Never amber: the Work tab's badge and the group's dot
+ *  are the one Needs-you signal; a waiting row names the move ("Merge", "Approve prod"). */
+export function statusChip(w: WorkItem, local = false): Chip {
+  const setup = w.kind === "setup" && w.source === "onboarding";
+  const why = w.why?.words ? tidyIds(w.why.words) : undefined;
+  if (w.state === "needs_you") {
+    const next = setup ? null : workNextStep(w);
+    return { word: setup ? (w.action_label || "Decide") : next?.label || w.action_label || "Decide", title: next?.hint || why };
+  }
+  if (w.state === "running") { const at = whereNow(w, local).split(" · ")[0]; return { word: at ? `Running · ${at}` : "Running", tone: "teal", title: why }; }
+  if (w.state === "stalled") return { word: "Stalled", title: w.stalled_since ? `No progress since ${stampLocal(w.stalled_since)}` : why };
+  if (w.state === "done") return { word: "Done", tone: "green" };
+  if (w.state === "failed") return w.replaced_by ? { word: "Replaced", title: `Replaced by ${w.replaced_by.label}` } : { word: "Failed", tone: "red", title: why };
+  // Planned: what it is, in one word — Next up, else where it came from (CI · Bug · from Roadmap).
+  if (w.next_up) return { word: "Next up", tone: "blue", title: w.where || undefined };
+  const tag = plannedTag(w);
+  return { word: tag.label, tone: tag.tone, title: w.where || undefined };
+}
+
+/** A planned row's tag: CI · Bug · from Roadmap by where it came from, else its kind. */
+function plannedTag(w: WorkItem): { label: string; tone?: "red" | "violet" } {
+  if (w.origin === "ci" || w.origin === "bug") return { label: w.origin_label || (w.origin === "ci" ? "CI" : "Bug"), tone: "red" };
+  if (w.origin === "roadmap" || (!w.origin && w.source === "roadmap")) return { label: "from Roadmap", tone: "violet" };
+  return { label: KIND_WORDS[w.kind] ?? "Planned", tone: w.kind === "bug" || w.kind === "fix" ? "red" : undefined };
+}
+const ITER_CHIP: Record<Attempt["state"], Chip> = {
+  planned: { word: "Queued" }, running: { word: "Running", tone: "teal" }, stalled: { word: "Stalled" }, handed_on: { word: "Earlier attempt" },
+  needs_you: { word: "Waiting" }, done: { word: "Done", tone: "green" }, failed: { word: "Failed", tone: "red" },
+};
+
+/** A WORK ROW (design #287, screen 1): ▸ · title · status · Kicked off · Finished · Workflow #N ·
+ *  Build · Change #N. A click opens the task's latest Workflow run, full page (workOpenHref); ▸
+ *  lists every iteration, latest first, each with its own times and links. Planned work keeps
+ *  its Start now and its rank. */
 export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; ctx: PxCtx; fresh?: boolean; rank?: Rank | null }) {
   const [said, setSaid] = useState("");
+  const [open, setOpen] = useState(false);
   const setup = w.kind === "setup" && w.source === "onboarding";
-  const next = setup ? null : workNextStep(w);
   const local = projectIsLocal(ctx.overview?.project?.repos);
   const startNow = async () => {
     // A planned item starts as itself, through the body BOSS wrote for it (its title, the item it
@@ -399,20 +399,26 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
     setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : "Started.") : (r.error ?? "It didn't start."));
     if (r.ok && !r.demo) ctx.refreshWork();
   };
-  const said1 = setup ? null : stateSentence(w, next);
-  const tag = rowTag(w);
-  // The change's own preview stays the button beside the action (it starts one through the one
-  // write path); its chip would say the same thing twice.
-  const previewBtn = w.state === "needs_you" && !!w.preview_app;
-  const links = useMemo(() => workLinks(w).filter((l) => !(previewBtn && l.key === "preview")), [w, previewBtn]);
+  const chip = statusChip(w, local);
+  const links = useMemo(() => workLinks(w).filter((l) => l.key !== "preview"), [w]);
+  const iters = w.attempts.length > 1 ? w.attempts : [];
+  const opens = setup || !!workOpenHref(w);
   return (
-    <div className="px-wk wr" data-s={w.state} data-fresh={fresh || undefined} data-testid={`px-work-${w.id}`}
-         tabIndex={rank ? 0 : undefined} aria-label={rank ? `${w.label}, ${rank.position} of ${rank.total} in the rank. Alt+Up or Alt+Down moves it.` : undefined}
-         onClick={(e) => { if (!(e.target as HTMLElement).closest("a,button,input")) openItem(ctx, w); }}>
-      <RowTile w={w} />
-      <span className="wr-main">
-        <span className="px-row" style={{ gap: 6, flexWrap: "nowrap", minWidth: 0 }}>
-          <button type="button" className="wr-t" title={w.title && w.title !== w.label ? w.title : undefined} onClick={() => openItem(ctx, w)} data-testid={`px-work-open-${w.id}`}>{w.label}</button>
+    <>
+      <div className="px-wk wl-row" data-s={w.state} data-fresh={fresh || undefined} data-testid={`px-work-${w.id}`} data-opens={opens || undefined}
+           tabIndex={rank ? 0 : undefined} aria-label={rank ? `${w.label}, ${rank.position} of ${rank.total} in the rank. Alt+Up or Alt+Down moves it.` : undefined}
+           onClick={(e) => { if (!(e.target as HTMLElement).closest("a,button,input")) openItem(ctx, w); }}>
+        <span className="wl-caret-cell">
+          {iters.length ? (
+            <button type="button" className="wl-caret" aria-expanded={open} aria-label={open ? "Hide iterations" : `Show ${iters.length} iterations`}
+                    title={open ? "Hide iterations" : `${iters.length} iterations`} onClick={() => setOpen(!open)} data-testid={`px-work-caret-${w.id}`}>
+              <CaretRight size={11} weight="bold" aria-hidden /></button>
+          ) : null}
+        </span>
+        <span className="wl-title">
+          <button type="button" className="wr-t" title={w.title && w.title !== w.label ? w.title : undefined} onClick={() => openItem(ctx, w)}
+                  data-testid={`px-work-open-${w.id}`}>{w.label}</button>
+          {iters.length ? <span className="wl-n" data-testid={`px-work-iters-${w.id}`}>· {iters.length}</span> : null}
           {w.issue ? (
             <a className="px-chip" href={w.issue.external_url} target="_blank" rel="noreferrer noopener" data-testid={`px-work-issue-${w.id}`}
                title={w.issue.provider === "github" ? `${w.issue.kind === "pr" ? "Pull request" : "Issue"} ${w.issue.label} on GitHub` : `Issue ${w.issue.label}`}
@@ -421,36 +427,11 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
           ) : null}
           <RowTicket w={w} />
         </span>
-        <span className="wr-line" data-testid={`px-work-line-${w.id}`}>
-          {/* WAITING FOR WHAT, from the server (stuck_work.wait_reason), when the build is not working. */}
-          {w.why && w.state !== "needs_you" ? <WhyLine why={{ ...w.why, words: tidyIds(w.why.words) }} testId={`px-work-why-${w.id}`} compact />
-            : w.state === "stalled" ? <StalledTag w={w} />
-            : setup ? <span><span className="px-tag" data-testid={`px-work-tag-${w.id}`} style={{ marginRight: 6 }}>{tag.label}</span>
-                {w.state === "needs_you" && w.waiting.length ? `Waiting: ${w.waiting[0].label}` : w.detail}</span>
-            : w.state === "planned" ? <span className="px-row" style={{ gap: 6, flexWrap: "nowrap" }}>
-                <span className="px-tag" data-tone={tag.tone} data-testid={`px-work-tag-${w.id}`}>{tag.label}</span>
-                {w.next_up ? <><span data-testid={`px-work-next-${w.id}`}>Next up</span>
-                  {w.agents[0] ? <span className="px-faces" title={`${w.agents[0].name} plans it`}><Face agent={w.agents[0]} size={18} /></span> : null}</>
-                  : w.where ? <span className="px-mono" data-testid={`px-work-where-${w.id}`}>{w.where}</span> : null}</span>
-            : said1 ? <span>{/* The group heading already says "Needs you": a row never repeats it. */}
-                {said1.lead === "Needs you." ? null : <><b data-tone={said1.tone === "amber" ? undefined : said1.tone}>{said1.lead}</b>{" "}</>}
-                {w.state === "running" ? whereNow(w, local) : w.state === "done" || w.state === "failed" ? [said1.rest, doneDay(w)].filter(Boolean).join(" · ") : said1.rest}</span> : null}
-        </span>
-      </span>
-      <RowLinks links={links} id={w.id} />
-      <RowDots w={w} local={local} />
-      <span className="wr-act">
-        {previewBtn && w.preview_app ? (
-          <WorkPreviewButton app={w.preview_app} projectId={ctx.projectId} actor={ctx.actor} testid={`px-work-preview-${w.id}`} />
-        ) : null}
-        {w.state === "needs_you" ? (
-          // ONE NEXT STEP (workNextStep): the same words the panel's header says; while BOSS still
-          // fixes the change, Merge is offered but not as the primary call.
-          <button type="button" className="px-btn" data-kind={next?.secondary ? undefined : "primary"} data-size="s" data-testid={`px-work-act-${w.id}`} onClick={() => openItem(ctx, w)}
-                  title={next?.secondary ? next.words : next?.hint ? `${next.label} · ${next.hint}` : undefined}>
-            {setup ? (w.action_label || "Decide") : next?.label ?? "Decide"}</button>
-        ) : w.state === "planned" ? (
-          <>
+        <span className="wl-status"><span className="px-tag" data-tone={chip.tone} title={chip.title} data-testid={`px-work-status-${w.id}`}>{chip.word}</span></span>
+        <span className="wl-time" data-testid={`px-work-kicked-${w.id}`} title="Kicked off">{dateTime(w.created_at) || "—"}</span>
+        <span className="wl-time" data-testid={`px-work-finished-${w.id}`} title="Finished">{dateTime(finishedAt(w)) || "—"}</span>
+        {w.state === "planned" ? (
+          <span className="wr-act">
             {rank ? (
               <span className="px-rank" role="group" aria-label={`Rank of ${w.label}`}>
                 <span className="px-rank-handle px-hide-phone" title="Drag to re-rank" aria-hidden><DotsSixVertical size={13} /></span>
@@ -462,21 +443,42 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
             ) : null}
             <GatedButton permission="workflow_run:start" projectId={ctx.projectId} className="px-btn" data-size="s" data-testid={`px-work-start-${w.id}`}
                          onClick={() => void startNow()}><Play size={11} weight="fill" aria-hidden /> Start now</GatedButton>
-          </>
-        ) : (w.state === "running" || w.state === "stalled") && w.links.log ? (
-          // BOSS is working: the one thing to do is watch it (the build's own live log).
-          <PxLink href={w.links.log} title="This build's live log" testid={`px-work-log-${w.id}`}>Watch live</PxLink>
-        ) : setup ? (
-          <button type="button" className="px-chip" title="What the onboarding agent did, step by step" data-testid={`px-work-onb-${w.id}`}
-                  onClick={() => writePxUrl({ tab: "onboarding", drawer: null })}><FlowArrow size={11} aria-hidden /> Onboarding run</button>
-        ) : null}
-        <Said text={said} />
-      </span>
+            <Said text={said} />
+          </span>
+        ) : <RowLinks links={links} id={w.id} />}
+      </div>
+      {open ? <IterationRows w={w} /> : null}
+    </>
+  );
+}
+
+/** A TASK'S ITERATIONS, latest first (the work's `attempts`): each re-run, repair build or
+ *  follow-up with its own number, status, times and links. A click opens that iteration's build. */
+export function IterationRows({ w }: { w: WorkItem }) {
+  const n = w.attempts.length;
+  return (
+    <div className="wl-iters" role="list" aria-label={`Iterations of ${w.label}, latest first`} data-testid={`px-work-iterations-${w.id}`}>
+      {w.attempts.map((t, i) => {
+        const chip = ITER_CHIP[t.state] ?? ITER_CHIP.done;
+        const links = iterationLinks(t);
+        const go = t.build || workOpenHref(w);
+        return (
+          <div key={t.id} role="listitem" className="px-wk wl-row wl-iter" data-testid={`px-work-iter-${t.id}`}
+               onClick={(e) => { if (go && !(e.target as HTMLElement).closest("a,button")) navigateTo(pxHref(go)); }}>
+            <span className="wl-caret-cell" />
+            <span className="wl-title"><span className="wl-n">{n - i}</span><span className="px-ell" title={t.title || t.label}>{t.label}</span></span>
+            <span className="wl-status"><span className="px-tag" data-tone={chip.tone}>{chip.word}</span></span>
+            <span className="wl-time" title="Kicked off">{dateTime(t.created_at) || "—"}</span>
+            <span className="wl-time" title="Finished">{dateTime(finishedAt(t)) || "—"}</span>
+            <RowLinks links={links} id={t.id} />
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-/** The row's own links (lib workLinks, the Work panel header's targets): short muted chips,
+/** The row's own links (lib workLinks): Workflow #N · Build · Change #N as short muted chips,
  *  the ids on hover. Only the links that exist. */
 export function RowLinks({ links, id }: { links: WorkLink[]; id: string }) {
   if (!links.length) return <span className="wr-links" aria-hidden />;

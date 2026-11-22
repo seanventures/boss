@@ -93,7 +93,9 @@ describe("the project page says a build failed", () => {
     expect(chip.getAttribute("title")).toContain(REASON);
     expect(chip.textContent).not.toContain("Working");
     await press(chip);
-    expect(params().get("drawer")).toBe(`work:${RUN}`);
+    // It opens the build's work (its Workflow run, else its Build page); the Work panel is gone.
+    expect(params().get("drawer")).toBeNull();
+    expect(["delivery_workflows", "code_tasks"]).toContain(params().get("area"));
   });
 
   it("the journey's Working node is failed and the Running tile names the failure", async () => {
@@ -138,7 +140,9 @@ describe("the project page says a build failed", () => {
     expect(tid(`px-work-needs-failed:${RUN}-retry-said`)!.textContent).toBe("Attempt 2 started");
     // Its title opens the build's row, not an empty needs drawer.
     await press(card.querySelector("button.px-wk-t")!);
-    expect(params().get("drawer")).toBe(`work:${RUN}`);
+    // It opens the build's work (its Workflow run, else its Build page); the Work panel is gone.
+    expect(params().get("drawer")).toBeNull();
+    expect(["delivery_workflows", "code_tasks"]).toContain(params().get("area"));
   });
 });
 
@@ -232,16 +236,13 @@ describe("a completed build with a failed follow-up (the laptop's lineage)", () 
     expect(retry.mock.calls[0][0].get("run_id")).toBe(FOLLOW);
   });
 
-  it("the work drawer behind the pill offers Retry and See what happened, not just words", async () => {
+  it("the card's title opens the failed work itself, and Retry stays on the card", async () => {
     lineageEngine();
     await openProject("work");
+    expect(tid(`px-work-needs-failed:${ROOT}-see`)!.getAttribute("href")).toContain(`build=${FOLLOW}`);
     await press(tid(`px-work-needs-failed:${ROOT}`)!.querySelector("button.px-wk-t")!);
-    expect(params().get("drawer")).toBe(`work:${ROOT}`);
-    const box = tid("px-drawer-work-failed")!;
-    expect(box.textContent).toContain("Follow-up failed");
-    expect(tid("px-drawer-work-failed-see")!.getAttribute("href")).toContain(`build=${FOLLOW}`);
-    await press(tid("px-drawer-work-failed-retry"));
-    expect(retry.mock.calls[0][0].get("run_id")).toBe(FOLLOW);
+    expect(params().get("drawer")).toBeNull();
+    expect(["delivery_workflows", "code_tasks"]).toContain(params().get("area"));
   });
 
   it("a refusal whose cause is gone reads its words, faint, never a red Failed", async () => {

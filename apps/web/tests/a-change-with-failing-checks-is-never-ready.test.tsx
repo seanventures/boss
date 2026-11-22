@@ -149,19 +149,6 @@ describe("the Work panel", () => {
     expect(said.rest).not.toContain("built, tested and reviewed");
   });
 
-  it("draws it: red sentence, red review node, Merge still the button, the why chip", async () => {
-    const { WorkPanel } = await import("../app/projects/work-panel");
-    const w = await load();
-    await mount(<WorkPanel ctx={ctx as never} w={w} story={null} deployments={null} testid="wp" />);
-    const sentence = $('[data-testid="wp-sentence"]')!;
-    expect(sentence.textContent).toContain("Checks failing.");
-    expect(sentence.textContent).not.toMatch(/ready to merge|built, tested and reviewed/i);
-    expect(sentence.querySelector("b")!.getAttribute("data-tone")).toBe("red");
-    expect($('[data-testid="wp-node-review"]')!.getAttribute("data-s")).toBe("failed");
-    expect($('[data-testid="wp-merge"]')!.textContent).toContain("Merge change #3");
-    expect($$('[data-testid="wp-helm-chip"]').map((c) => c.textContent)[0]).toBe("Why are the checks failing?");
-    expect(document.body.textContent).not.toMatch(/ready to merge/i);
-  });
 });
 
 describe("one record for the card and the panel", () => {
