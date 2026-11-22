@@ -13,7 +13,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
-import { KIND_WORDS, WORK_ORDER, WORK_WORDS, navigateTo, needsYouCards, pxHref, runAccept, startOnboarding, workWhen, writePxUrl, type NextItem, type WorkItem } from "../../lib/project-experience";
+import { KIND_WORDS, WORK_ORDER, WORK_WORDS, navigateTo, needsYouCards, pxHref, waitingSinceWords, runAccept, startOnboarding, workWhen, writePxUrl, type NextItem, type WorkItem } from "../../lib/project-experience";
 import { Empty, Face, Flow, HEALTH_WORD, Ico, Journey, PxLink, REC_KIND_WORDS, Ring, Said, Spark, Stations, Tag, Timeline, Cost, CardFailed } from "./kit";
 import { notifyChanged } from "../changed";
 import { DemoLoginRow } from "./tab-settings";
@@ -207,6 +207,13 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
                  onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); openNeedsGroup(ctx); }}>
                 {needCount === 1 ? "1 item waits" : `${needCount} items wait`} on you <span className="px-faint">· open them in Work</span> <ArrowRight size={11} aria-hidden /></a>
             ) : <Empty icon={HandWaving} tone="green" title="All clear" line="Nothing is waiting on you. Helm asks here when it needs a person." />)}
+            {/* EXPIRED BUT STILL ANSWERABLE: never counted, never hidden — one quiet link to
+                Approvals' Expired view (the old bar above the tabs carried it on every screen). */}
+            {ov.still_answerable ? (
+              <a className="px-faint" href={pxHref(ov.still_answerable.href)} data-testid="px-ov-needs-older" style={{ fontSize: "var(--fs-meta)" }}
+                 title="Their deadline passed with nothing applied; you can still answer them in Approvals">
+                {ov.still_answerable.count} older · {waitingSinceWords(ov.still_answerable.since)}</a>
+            ) : null}
             {/* WAITING FOR GITHUB (BOSSAPP-922): an FYI, not a card — BOSS pushes it on its own,
                 so it is never counted in the badge and has no button. */}
             {(ov.github_waits ?? []).map((g) => (

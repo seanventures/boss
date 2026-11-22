@@ -111,6 +111,18 @@ describe("the Latest strip", () => {
     expect(strip.textContent).not.toMatch(/crun_|wfr_/);
   });
 
+  it("falls back to the project's own app preview when no work carries one; stalled work is never amber", async () => {
+    const { LatestStrip } = await import("../app/projects/tab-work");
+    const [merge] = await items();
+    const app = { run_id: "wfr_x", name: "HelpDesk", title: "", version: "main", version_label: "Main", version_words: "", pr_number: null, pr_url: "",
+                  preview_id: "prev_1", state: "running", words: "", href: "/api/previews/prev_1/open", error: "", recreate: false, live_url: "" };
+    await mount(<LatestStrip items={[{ ...merge, state: "stalled" }]} now={NOW} app={app as never} />);
+    const prev = $('[data-testid="px-work-latest-preview"]')!;
+    expect(prev.getAttribute("href")).toContain("prev_1");
+    expect(prev.querySelector(".px-dot")!.getAttribute("data-s")).toBe("done");
+    expect($('[data-testid="px-work-latest-run"] .px-dot')!.getAttribute("data-s")).toBeNull();
+  });
+
   it("is absent when no work has a link yet", async () => {
     const { LatestStrip } = await import("../app/projects/tab-work");
     const [, , planned] = await items();
@@ -151,8 +163,16 @@ describe("the project header's status", () => {
     expect(line.textContent).not.toContain("authority/permission gap");
     expect(words.length).toBeLessThanOrEqual(24); // repo · History · staging url · health · the status words
     expect($('[data-testid="px-head-deploy"]')!.textContent).toContain("Last deploy failed");
-    expect($('[data-testid="px-head-hint"]')!.textContent).toBe("Needs your grant");
+    // The next step is said inside the failure's Why, never as more words on the row.
+    expect($('[data-testid="px-head-hint"]')).toBeNull();
     expect($('[data-testid="px-head-failed"]')!.getAttribute("href")).toContain("wfr_x");
+    // Each chip and its Why? are one unit: they wrap together.
+    expect($('[data-testid="px-head-deploy-why"]')!.parentElement).toBe($('[data-testid="px-head-deploy"]')!.parentElement);
+    expect($('[data-testid="px-head-failed-why"]')!.parentElement!.className).toBe("px-hgroup");
+    await act(async () => { $('[data-testid="px-head-failed-why"]')!.click(); });
+    expect($('[data-testid="px-head-hint"]')!.textContent).toBe("Needs your grant");
+    expect($('[data-testid="px-head-why-block"]')!.textContent).toContain("Next: Needs your grant");
+    await act(async () => { $('[data-testid="px-head-failed-why"]')!.click(); });
     // No paragraph of engine prose anywhere in the header until Why? is pressed.
     expect($$('[data-testid="px-head"] p').length).toBe(0);
     expect($('[data-testid="px-head-why-block"]')).toBeNull();

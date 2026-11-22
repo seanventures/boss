@@ -906,11 +906,15 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 .px-wk-failed { color: var(--red); font-weight: 650; }
 
 /* The header's "Why?" toggles and the one reason they open: small, muted, below the chips. */
-.px-why-t { background: none; border: 0; padding: 0 2px; font: inherit; font-size: var(--fs-tag); color: var(--accent-text); cursor: pointer;
-  text-decoration: underline; text-underline-offset: 2px; }
+/* A chip and its Why? are one unit: they wrap together, never apart. */
+.px-hgroup { display: inline-flex; align-items: center; gap: 0.25rem; white-space: nowrap; min-width: 0; max-width: 100%; }
+.px-why-t { background: none; border: 0; padding: 0 0.125rem; font: inherit; font-size: var(--fs-tag); color: var(--faint); cursor: pointer;
+  text-decoration: underline dotted; text-underline-offset: 2px; }
+.px-why-t:hover, .px-why-t:focus-visible { color: var(--accent-text); }
 .px-why-t[aria-expanded="true"] { color: var(--ink); }
 .px-head-hint { font-size: var(--fs-meta); color: var(--muted); }
-.px-why-block { margin-top: 6px; max-width: 72ch; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border);
+.px-why-next { color: var(--ink); }
+.px-why-block { margin-top: 0.375rem; max-width: 72ch; padding: 0.375rem 0.625rem; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border);
   font-size: var(--fs-meta); line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
 
 /* Overview › Needs you: the count and ONE link to Work's Needs-you group (never the list again). */

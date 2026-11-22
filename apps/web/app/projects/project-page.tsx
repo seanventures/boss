@@ -328,9 +328,14 @@ function WhyToggle({ sentence, open, onToggle, testid }: { sentence: string | nu
 }
 
 /** The opened reason: small, muted, ids shortened ("build ad50ce9f", never `crun_…` in full). */
-export function HeaderWhyBlock({ sentence }: { sentence: string | null }) {
-  if (!sentence) return null;
-  return <div className="px-why-block" id="px-head-why-block" role="note" data-testid="px-head-why-block" data-user-text>{tidyIds(sentence)}</div>;
+export function HeaderWhyBlock({ sentence, next }: { sentence: string | null; next?: React.ReactNode }) {
+  if (!sentence && !next) return null;
+  return (
+    <div className="px-why-block" id="px-head-why-block" role="note" data-testid="px-head-why-block">
+      {sentence ? <span data-user-text>{tidyIds(sentence)}</span> : null}
+      {next ? <span className="px-why-next">{sentence ? " " : null}Next: {next}</span> : null}
+    </div>
+  );
 }
 
 /** The header's failure chip: the engine's word, except "Needs you" — that is the Work tab's
@@ -368,6 +373,11 @@ export function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean })
   const failedWhy = !onboarding && p.build_failed ? healthReasonSentence(p.build_failed.reason) : null;
   const hint = !onboarding && p.build_failed ? statusHint(p.build_failed.fix?.label) : "";
   const openWhy = why === "deploy" ? deployWhy : why === "health" ? healthReasonSentence(healthWhy) : why === "failed" ? failedWhy : null;
+  // The failure's next step (its fix's own label) is said inside its Why, never as more words on
+  // the status row (operator 2026-11-21: "Build failed · Open the action item" crowded it).
+  const hintEl = hint ? (p.build_failed?.fix?.href
+    ? <a className="px-head-hint" href={pxHref(p.build_failed.fix.href)} data-testid="px-head-hint">{hint}</a>
+    : <span className="px-head-hint" data-testid="px-head-hint">{hint}</span>) : null;
   return (
     <div className="px-head" data-testid="px-head">
       <span className="px-mark" aria-hidden title={p.name}>{p.initials}</span>
@@ -403,7 +413,7 @@ export function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean })
               for its approval, or the last one that failed — a link to the Deployments card
               that shows its steps and log live. */}
           {p.deploy && ["deploying", "waiting", "fixing", "failed"].includes(p.deploy.state) ? (
-            <>
+            <span className="px-hgroup">
               <a className="px-hchip px-hchip-deploy" data-s={p.deploy.state} data-testid="px-head-deploy"
                  href={pxHref(`?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=deployments`)}
                  onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); ctx.tab("deployments"); }}
@@ -414,11 +424,12 @@ export function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean })
                   : p.deploy.state === "fixing" ? (p.deploy.word || "BOSS is fixing the deploy")
                   : p.deploy.state === "waiting" ? (p.deploy.word.startsWith("Fixed") ? p.deploy.word : "Deploy waiting for approval") : "Last deploy failed"}</a>
               <DeployChipWhy sentence={deployWhy} open={why === "deploy"} onToggle={flip("deploy")} />
-            </>
+            </span>
           ) : null}
           {/* THE HEALTH CHIP, ON EVERY TAB (12-24): a link to this project's Health tab — the
               environments' word, or "No health yet" before anything is deployed (Health's own
               empty state says what comes next). */}
+          <span className="px-hgroup">
           <a className="px-hchip px-hchip-health" data-s={health}
              href={pxHref(`?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=health`)}
              data-testid="px-head-health" aria-current={url.tab === "health" ? "page" : undefined}
@@ -428,27 +439,27 @@ export function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean })
                      p95Words(staging?.p95_ms, staging?.window)].filter(Boolean).join(" · ") + " — opens Health"}>
             <span className="px-dot" data-s={health} data-round aria-hidden />{healthChipText(p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "No health yet", p95Words(staging?.p95_ms, staging?.window))}</a>
           <HealthWhy sentence={healthReasonSentence(healthWhy)} open={why === "health"} onToggle={flip("health")} />
+          </span>
           {/* A FAILED LATEST BUILD (engine build_failure): red "Build failed" / "Deploy failed", its
               reason on hover, a link to the build's row — never "Working" over a build that
               failed. ON A LIVE PROJECT it sits BESIDE the stage chip ("On staging" stays). */}
           {!onboarding && p.build_failed ? (
+            <span className="px-hgroup">
             <a className="px-tag" data-tone="red" data-testid={p.build_failed.beside ? "px-head-failed" : "px-head-status"} data-failed
                href={pxHref(p.build_failed.work_href || `?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=work`)}
                title={`${p.build_failed.label}: ${p.build_failed.reason} — opens the build`}
                onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); ctx.open("work", p.build_failed!.id); }}>
               <WarningCircle size={11} aria-hidden /> {failedWord(p.build_failed.word)}</a>
+            <WhyToggle sentence={failedWhy || (hint ? hint : null)} open={why === "failed"} onToggle={flip("failed")} testid="px-head-failed-why" />
+            </span>
           ) : null}
-          {hint ? (p.build_failed?.fix?.href
-            ? <a className="px-head-hint" href={pxHref(p.build_failed.fix.href)} data-testid="px-head-hint">{hint}</a>
-            : <span className="px-head-hint" data-testid="px-head-hint">{hint}</span>) : null}
-          {!onboarding && p.build_failed ? <WhyToggle sentence={failedWhy} open={why === "failed"} onToggle={flip("failed")} testid="px-head-failed-why" /> : null}
           {!onboarding && p.build_failed && !p.build_failed.beside ? null : (
           <span className="px-tag" data-tone={onboarding ? "blue" : "green"} data-testid="px-head-status" title="Project stage on the journey">{onboarding ? <><Compass size={11} aria-hidden /> Onboarding</>
             : <>{(() => { const I = STAGE_ICON[p.stage] ?? Compass; return <I size={11} aria-hidden />; })()} {p.status_label || "Ready"}</>}</span>
           )}
           {onboarding && elapsed ? <span className="px-mono px-faint" style={{ fontSize: "var(--fs-meta)" }} data-testid="px-head-elapsed">{clockWords(elapsed)}</span> : null}
         </div>
-        <HeaderWhyBlock sentence={openWhy} />
+        <HeaderWhyBlock sentence={openWhy} next={why === "failed" ? hintEl : null} />
       </div>
       <span className="px-spacer" />
       {captain ? (

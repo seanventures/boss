@@ -37,6 +37,7 @@ import { FailedActions } from "./build-failed";
 import { workNextStep } from "../../lib/work-next-step";
 import { stateSentence } from "../../lib/work-panel";
 import { WorkPreviewButton } from "./work-preview";
+import type { YourApp } from "../../lib/your-app";
 import { latestLinks, tidyIds, workLinks, type LatestLink, type WorkLink } from "../../lib/work-links";
 import "./work.css";
 import "./work-panel.css";
@@ -82,7 +83,8 @@ const whereNow = (w: WorkItem, local = false) => {
 /** A finished item's time: the one basis every surface uses (workWhen). */
 const doneDay = (w: WorkItem) => workWhen(w);
 
-const DOT: Record<WorkState, string | undefined> = { needs_you: "you", stalled: "stalled", running: "now", done: "done", failed: "bad", planned: undefined };
+// Amber is the Needs-you signal only (operator 2026-11-21): stalled work draws a neutral dot.
+const DOT: Record<WorkState, string | undefined> = { needs_you: "you", stalled: undefined, running: "now", done: "done", failed: "bad", planned: undefined };
 
 /** Needs you, from ONE source (lib needsYouCards — the header bar's own list): the work rows that
  *  wait on a person, plus the cards that are no row's (Pick a prod host). The count is the bar's. */
@@ -150,7 +152,7 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
     <div className="px-stack" data-testid="px-work">
       <NewWorkBar ctx={ctx} said={ctx.workSaid} />
       <TicketWorkBand ctx={ctx} conns={tickets.read} />
-      <LatestStrip items={raw} />
+      <LatestStrip items={raw} app={ctx.overview.app ?? null} />
       <div className="px-row px-wrap">
         <div className="px-filters" role="group" aria-label="Filter work">
           <button type="button" className="px-filter" aria-pressed={filter === "all"} onClick={() => setFilter("all")} data-testid="px-work-f-all">All <span className="px-mono">{items.length}</span></button>
@@ -492,17 +494,26 @@ export function RowLinks({ links, id }: { links: WorkLink[]; id: string }) {
 const LATEST_DOT: Record<WorkState, string | undefined> = { ...DOT, planned: undefined };
 
 /** LATEST, at the top of Work: the project's newest Run, Build, Change and Preview, each a link
- *  with its work's status dot and how long ago it moved. One row; it wraps on a phone. */
-export function LatestStrip({ items, now }: { items: WorkItem[]; now?: number }) {
-  const latest: LatestLink[] = useMemo(() => latestLinks(items, now), [items, now]);
+ *  with its work's status dot and how long ago it moved. One row; it wraps on a phone. When no
+ *  piece of work carries a preview link, the project's own app preview (Overview's Your app) is
+ *  the Preview. Dots: green, teal, red or neutral; amber only for what waits on the person. */
+export function LatestStrip({ items, now, app = null }: { items: WorkItem[]; now?: number; app?: YourApp | null }) {
+  const latest: LatestLink[] = useMemo(() => {
+    const out = latestLinks(items, now);
+    if (!out.some((l) => l.key === "preview") && app?.href && app.state !== "none" && app.state !== "failed") {
+      out.push({ key: "preview", label: "Preview", href: app.href, title: `The running preview · ${app.version_label}`, external: /^https?:\/\//.test(app.href),
+                 work_id: "", work_label: app.version_label, state: app.state === "running" ? "done" : "planned", at: "", ago: "" });
+    }
+    return out;
+  }, [items, now, app]);
   if (!latest.length) return null;
   return (
     <div className="wl-latest" role="group" aria-label="Latest" data-testid="px-work-latest">
       <span className="wl-k">Latest</span>
       {latest.map((l) => (
-        <a key={l.key} className="wl-item" href={pxHref(l.href)} title={`${l.title} — ${l.work_label} · ${WORK_WORDS[l.state]}`}
+        <a key={l.key} className="wl-item" href={pxHref(l.href)} title={l.work_id ? `${l.title} — ${l.work_label} · ${WORK_WORDS[l.state]}` : l.title}
            data-testid={`px-work-latest-${l.key}`} {...(l.external ? { target: "_blank", rel: "noreferrer noopener" } : {})}>
-          <span className="px-dot" data-round data-s={LATEST_DOT[l.state]} aria-label={WORK_WORDS[l.state]} />
+          <span className="px-dot" data-round data-s={LATEST_DOT[l.state]} aria-label={l.work_id ? WORK_WORDS[l.state] : l.state === "done" ? "Running" : "Not running"} />
           <b>{l.label}</b>
           {l.key === "build" || l.key === "preview" ? <span className="wl-what">{l.work_label}</span> : null}
           {l.ago ? <span className="wl-ago">· {l.ago}</span> : null}
