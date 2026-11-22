@@ -302,7 +302,7 @@ tr.p1 td:first-child{box-shadow:inset 3px 0 0 var(--p1)}
         <div class="diff-h"><span class="sev P0">P0</span><span class="mono" style="font-size:12px">V-06 cors-no-wildcard-with-credentials · L19–20</span><span class="grow"></span><span class="st over">● overridden</span></div>
         <pre><span class="d">-      allow_origins: ["*"]</span><span class="a">+      allow_origins: ["https://dashboard.lumenpay.example"]</span><span>       allow_credentials: true</span></pre>
         <div class="ovrec">
-          <div><b>O-2 · Paramaguru</b> rejected the agent’s fix <span class="dim">(allow_credentials: false)</span> and edited the line by hand · 14:21</div>
+          <div><b>O-2 · Owner</b> rejected the agent’s fix <span class="dim">(allow_credentials: false)</span> and edited the line by hand · 14:21</div>
           <div style="margin-top:3px">Why: “Dashboard needs cookies. Partner named one origin in the brief.” <span class="ref">commit 9f2c1d0</span> <span class="ref">re-run E-4</span></div>
         </div>
         <div class="ov"><button class="btn">Edit again</button><button class="btn ghost">Reopen</button></div>
@@ -312,7 +312,7 @@ tr.p1 td:first-child{box-shadow:inset 3px 0 0 var(--p1)}
         <div class="diff-h"><span class="sev P0">P0</span><span class="mono" style="font-size:12px">V-07 no-sensitive-paths-exposed · L21–33</span><span class="grow"></span><span class="kind human">needs you</span></div>
         <pre><span class="d">-  - path: /v1/admin/accounts</span><span class="d">-    description: "Internal account admin surface…"</span><span class="d">-    …11 more lines</span></pre>
         <div class="mono dim" style="font-size:11px;padding:6px 10px">ruleset: autofix = human (removing a route is a product decision)</div>
-        <div class="ovrec"><b>O-1 · Paramaguru</b> accepted the route removal · 14:19 <span class="ref">re-run E-3</span></div>
+        <div class="ovrec"><b>O-1 · Owner</b> accepted the route removal · 14:19 <span class="ref">re-run E-3</span></div>
       </div>
 
       <div class="diff">
@@ -409,8 +409,8 @@ tr.p1 td:first-child{box-shadow:inset 3px 0 0 var(--p1)}
     <div>
       <div class="k">Overrides (3)</div>
       <table>
-        <tr><td class="mono">O-1</td><td style="font-size:12px">accept V-07 · Paramaguru</td></tr>
-        <tr><td class="mono">O-2</td><td style="font-size:12px">reject+edit V-06 · Paramaguru</td></tr>
+        <tr><td class="mono">O-1</td><td style="font-size:12px">accept V-07 · Owner</td></tr>
+        <tr><td class="mono">O-2</td><td style="font-size:12px">reject+edit V-06 · Owner</td></tr>
         <tr><td class="mono">O-3</td><td style="font-size:12px">waive V-02 · “no PII in query params, KAN-12”</td></tr>
       </table>
     </div>
@@ -452,7 +452,7 @@ tr.p1 td:first-child{box-shadow:inset 3px 0 0 var(--p1)}
 <div class="screen-label">D · Project › Settings › Validators › gwlint ruleset</div>
 <section class="card">
   <div class="row" style="margin-bottom:12px">
-    <h2>Ruleset northgate</h2><span class="pill">v3 · a1b2c3d · merged Nov 20 by Paramaguru</span>
+    <h2>Ruleset northgate</h2><span class="pill">v3 · a1b2c3d · merged Nov 20 by Owner</span>
     <span class="grow"></span>
     <span class="mono muted" style="font-size:12px">.boss/rulesets/northgate.yaml</span>
     <button class="btn">History</button><button class="btn mint">Propose v4 (opens a change)</button>

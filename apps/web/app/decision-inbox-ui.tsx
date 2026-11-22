@@ -52,7 +52,7 @@ import { GrantAccessCard, grantOf } from "./skills/grant-card";
 import { SecretProposalCard, secretProposalOf } from "./secret-proposal-card";
 import { MonitoringPackCard, monitoringPackOf } from "./workflows/monitoring-pack";
 import { plainSentence, plainTitle } from "../lib/plain-words";
-import { packetOf, rootTitle } from "../lib/validation-review";
+import { lineWords, packetOf, rootTitle, type ReviewPacket } from "../lib/validation-review";
 import { RebuildPacket, ReviewPacketView, packetHold } from "./validation/review-packet";
 
 /**
@@ -137,6 +137,27 @@ export function recommendationLines(decision: DecisionFeedItem): string[] {
 }
 
 /** The lines as text, one per line (tests and plain-text surfaces). */
+/**
+ * A BLOCKED PACKET (an open P0/P1 from a validator or a seat) is merged only when a person forces
+ * it with a reason — the engine refuses a plain approve with `packet_blocked`. So its Approve is
+ * the reasoned forced-merge form "Merge with checks failing" uses, naming the open rows. An
+ * invalid packet and a pending re-run never reach here: they stay fully disabled (packetHold).
+ */
+export function blockedPacketDecision(decision: DecisionFeedItem, packet: ReviewPacket): DecisionFeedItem {
+  if (packet.verdict.state !== "blocked") return decision;
+  const open = packet.findings.filter((f) => f.status === "open" && !f.followup && (f.severity === "P0" || f.severity === "P1"));
+  const rows = open.map((f) => `${f.severity} ${f.id} ${f.source.rule_id || f.source.name || ""}${lineWords(f) ? ` · ${lineWords(f)}` : ""}`.trim());
+  const offers = offeredActions(decision).map((o) => (o.action === "approve"
+    ? { ...o, needs: "note" as const, label: "Merge anyway", tone: "reject" as const,
+        effect: `Merges with ${open.length || "its"} open P0/P1 finding${open.length === 1 ? "" : "s"}; your reason is recorded with the merge.` }
+    : o));
+  return {
+    ...decision, allowedActions: offers,
+    recommendation: { ...decision.recommendation, blocked_rows: rows,
+      reason_prompt: "Why merge with these open? Recorded with the merge." },
+  };
+}
+
 export function formatRecommendation(decision: DecisionFeedItem): string {
   return recommendationLines(decision).join("\n");
 }
@@ -1082,7 +1103,7 @@ function DecisionInboxRow({
         ) : null}
         <div className="dq-foot">
           {isPending ? (
-            <DecisionActions decision={{ ...decision, held: hold }} projectId={projectId} actorId={actorId} />
+            <DecisionActions decision={hold ? { ...decision, held: hold } : blockedPacketDecision(decision, packet)} projectId={projectId} actorId={actorId} />
           ) : (
             <>
               <span className={`dq-verdict ${isApproved || decision.status === "executed" ? "green" : decision.status === "rejected" ? "red" : "muted"}`}>
@@ -1470,6 +1491,12 @@ export function DecisionActions({ decision, projectId, actorId }: {
       {reasoned ? (
         <div className="dq-reasoned" data-testid="decision-reasoned-approve">
           {stageComment ? null : <input type="hidden" name="force" value="true" />}
+          {Array.isArray(decision.recommendation.blocked_rows) && decision.recommendation.blocked_rows.length ? (
+            // A blocked review packet: the open P0/P1 rows this merge goes past, one per line.
+            <ul className="dq-blocked-rows" data-testid="decision-blocked-rows">
+              {(decision.recommendation.blocked_rows as string[]).map((r) => <li key={r}>{r}</li>)}
+            </ul>
+          ) : null}
           <textarea
             aria-label={reasonPrompt ? `Your reason for ${decision.id}` : shipsUnreviewed
               ? `Why ship ${decision.id} with commits from rejected or unreviewed runs`

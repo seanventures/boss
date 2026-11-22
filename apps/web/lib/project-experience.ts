@@ -17,6 +17,7 @@ import { parsePrdRecord, type PrdRecord } from "./prd-record";
 import { parseCiHold, type CiHold } from "./ci-hold";
 import { parseYourApp, type YourApp } from "./your-app";
 import { parseAbout, parseExplained, type About, type Explained } from "./explained";
+import { parseValidation, type Validation } from "./validation-review";
 import { parseDiagnosis, parseWaitReason, type Diagnosis, type WaitReason } from "./stuck-work";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -838,12 +839,18 @@ export type WorkStory = {
   explained?: Explained | null;
   /** The review's comments, once each (engine explained.review_comments); `raw` before dedupe. */
   review_comments?: { items: ReviewComment[]; raw: number };
+  /** The change's validation (boss.validation/v1, validation-review SPEC §1.3), when the engine
+   *  puts it on the story; the Work panel's Built column reads it instead of prose. */
+  validation?: Validation | null;
 };
-export type ReviewComment = { key: string; text: string; severity: "gate" | "P1" | "P2" | "P3"; source: string; path: string; line: number | null; merged: number };
+export type ReviewComment = { key: string; text: string; severity: "gate" | "P0" | "P1" | "P2" | "P3"; source: string; path: string; line: number | null; merged: number;
+  /** A finding BOSS moved to a follow-up (SPEC §5.4): "Deferred → follow-up #n". */
+  deferred?: { number: number | null; href: string } | null };
 const parseComment = (v: unknown): ReviewComment => {
-  const x = o(v);
-  return { key: s(x.key), text: s(x.text), severity: oneOf(x.severity, ["gate", "P1", "P2", "P3"] as const, "P2"), source: s(x.source),
-           path: s(x.path), line: nn(x.line), merged: n(x.merged) || 1 };
+  const x = o(v); const d = o(x.deferred_to);
+  return { key: s(x.key), text: s(x.text), severity: oneOf(x.severity, ["gate", "P0", "P1", "P2", "P3"] as const, "P2"), source: s(x.source),
+           path: s(x.path), line: nn(x.line), merged: n(x.merged) || 1,
+           deferred: x.deferred_to ? { number: nn(d.number), href: s(d.href) } : null };
 };
 export const parseWorkStory = (v: unknown): WorkStory => {
   const x = o(v); const pr = o(x.pr);
@@ -859,6 +866,7 @@ export const parseWorkStory = (v: unknown): WorkStory => {
     prd: parsePrdRecord(x.prd),
     explained: parseExplained(x.explained),
     review_comments: { items: a(o(x.review_comments).items).map(parseComment).filter((c) => c.text), raw: n(o(x.review_comments).raw) },
+    validation: x.validation ? parseValidation(x.validation) : null,
   };
 };
 

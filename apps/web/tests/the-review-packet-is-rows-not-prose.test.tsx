@@ -150,3 +150,28 @@ describe("the change page asks for a workflow run only by its run id (SPEC §5.5
     expect(parseChangeSet({ number: 9, run_id: "crun_2bc5f2", workflow_run_id: "wfr_40229c5c" }).workflow_run_id).toBe("wfr_40229c5c");
   });
 });
+
+describe("a blocked packet merges only with a reason (engine packet_blocked)", () => {
+  it("Approve is the reasoned forced-merge form naming the open P0/P1 rows; invalid stays disabled", async () => {
+    const { blockedPacketDecision } = await import("../app/decision-inbox-ui");
+    const blocked = parsePacket({ verdict: { state: "blocked", reasons: ["open_p0:V-03"] }, findings: [
+      { id: "V-03", source: { kind: "validator", name: "gwlint", rule_id: "no-inlined-secrets" }, severity: "P0", location: { line: 17 }, status: "open", fix_kind: "agent" },
+      { id: "R-1", source: { kind: "reviewer", name: "security" }, severity: "P1", status: "open", deferred_to: "crun_2bc5" },
+      { id: "V-09", source: { kind: "validator", rule_id: "upstream-https-required" }, severity: "P0", status: "fixed" }] })!;
+    expect(packetHold(blocked)).toBeNull();
+    const base = {
+      id: "dec_9", question: "Merge change #9", status: "pending", riskTier: 2, recommendation: { action: "review_pull_request" },
+      options: [], costSummary: {}, createdAt: "2026-11-21T00:00:00Z", updatedAt: "2026-11-21T00:00:00Z",
+      allowedActions: [{ action: "approve", label: "Approve and merge", tone: "approve", effect: "" }, { action: "reject", label: "Keep blocked", tone: "reject", effect: "" }],
+    } as unknown as DecisionFeedItem;
+    await mount(<DecisionActions decision={blockedPacketDecision(base, blocked)} projectId="northgate-gateway" actorId="ceo" />);
+    const form = $('[data-testid="decision-reasoned-approve"]')!;
+    expect($('[data-testid="decision-blocked-rows"]')!.textContent).toBe("P0 V-03 no-inlined-secrets · L17");
+    expect((form.querySelector('input[name="force"]') as HTMLInputElement).value).toBe("true");
+    expect(form.querySelector('[data-testid="decision-reason"]')).not.toBeNull();
+    expect($('[data-testid="decision-approve"]')!.textContent).toBe("Merge anyway");
+    // A ready or invalid packet is unchanged.
+    expect(blockedPacketDecision(base, parsePacket(PACKET_READY)!)).toBe(base);
+    expect(blockedPacketDecision(base, parsePacket(PACKET_INVALID)!)).toBe(base);
+  });
+});

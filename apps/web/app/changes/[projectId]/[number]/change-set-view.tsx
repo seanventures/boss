@@ -17,7 +17,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft, ArrowSquareOut, ChatCircleDots, ChatCircleText, CircleNotch, Code, FileCode, GitCommit, GitMerge,
-  FolderOpen, GithubLogo, HardDrives, Info, PencilSimpleLine, Robot, ShieldCheck, Terminal, XCircle,
+  FolderOpen, GithubLogo, HardDrives, Info, ListChecks, PencilSimpleLine, Robot, ShieldCheck, Terminal, XCircle,
 } from "@phosphor-icons/react";
 
 import { BoxPop } from "../../../../components/box-pop";
@@ -45,12 +45,13 @@ import { DockPane, ReviewLayoutProvider, useReviewLayout } from "./review-dock";
 import { TicketSyncBadge } from "../../../projects/linked-ticket";
 import { packetOf, type ReviewPacket } from "../../../../lib/validation-review";
 import { ReviewPacketView, packetHold } from "../../../validation/review-packet";
+import { ValidationTab } from "../../../validation/validation-tab";
 import "./change-set.css";
 
 export { InlineNote, Review };
 
-export type Tab = "overview" | "conversation" | "commits" | "files" | "code" | "checks";
-const TABS: Tab[] = ["overview", "conversation", "commits", "files", "code", "checks"];
+export type Tab = "overview" | "validation" | "conversation" | "commits" | "files" | "code" | "checks";
+const TABS: Tab[] = ["overview", "validation", "conversation", "commits", "files", "code", "checks"];
 
 export function ChangeSetView({ projectId, number, repo = null, tab = null, commit = null, loc = null, me = null, org = null, project = null }: {
   projectId: string; number: string;
@@ -288,13 +289,16 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
           </header>
           <nav className="cs-tabs gr-tabs" aria-label="Sections" role="tablist">
             <TabLink tab="overview" on={tab} set={setTab} icon={<Info size={13} aria-hidden />} label="Overview" n={activeCount || undefined} />
+            <TabLink tab="validation" on={tab} set={setTab} icon={<ListChecks size={13} aria-hidden />} label="Validation"
+                     n={packet ? packet.counts.P0.open + packet.counts.P1.open || undefined : undefined} />
             <TabLink tab="conversation" on={tab} set={setTab} icon={<ChatCircleText size={13} aria-hidden />} label="Conversation" n={commentCount} />
             <TabLink tab="commits" on={tab} set={setTab} icon={<GitCommit size={13} aria-hidden />} label="Commits" n={commits.length || cs.commits.length} />
             <TabLink tab="files" on={tab} set={setTab} icon={<FileCode size={13} aria-hidden />} label="Files changed" n={files.length} />
             <TabLink tab="code" on={tab} set={setTab} icon={<Code size={13} aria-hidden />} label="Code" />
             <TabLink tab="checks" on={tab} set={setTab} icon={<ShieldCheck size={13} aria-hidden />} label="Checks" n={checkCount || undefined} />
           </nav>
-          <div className="gr-body">
+          {/* The Validation tab's four columns need the page's width: no agent pane beside them. */}
+          <div className="gr-body" data-full={tab === "validation" || undefined}>
             <div className="gr-tab" data-tab={tab}>
               {tab === "files" ? (
                 <FilesTab cs={cs} at={at} commits={commits} files={files} diff={diffNow} loading={!whole && !ranged && !rangeErr} focus={focus}
@@ -306,6 +310,8 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
                 <CommitsTab cs={cs} at={at} commits={commits} shown={shownCommit} onShow={(sha) => go("commits", sha)}
                             hrefFor={(sha) => changeUrl(asked, "commits", sha)} wholeFiles={wholeFiles} wholeDiff={cs.diff}
                             review={lineReview} inline={inline} onCompare={(r) => { setRange(r); setTab("files"); }} onViewFile={openCode} />
+              ) : tab === "validation" ? (
+                <ValidationTab projectId={projectId} change={cs.number || number} />
               ) : tab === "overview" ? (
                 <>
                 {packet ? <div style={{ marginBottom: 16 }}><ReviewPacketView packet={packet} projectId={projectId} fallbackTitle={cs.title}
@@ -319,9 +325,10 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
                 <ChecksTab cs={cs} decision={<DecisionCard cs={cs} at={at} reread={read} />} />
               )}
             </div>
+            {tab === "validation" ? null : (
             <DockPane pane="agent" label="Agent" icon={<Robot size={15} aria-hidden />} testid="gr-dock-agent">
               <AgentPane cs={cs} at={at} onJump={jumpId} commitHref={(sha) => changeUrl(asked, "commits", sha)} onChanged={reread} refreshKey={agentKey} />
-            </DockPane>
+            </DockPane>)}
           </div>
         </>
       ) : null}
