@@ -52,7 +52,9 @@ export function workLinks(w: WorkItem): WorkLink[] {
   const run = w.links.workflow_run;
   if (run) {
     const id = runIdOf(run);
-    out.push({ key: "run", label: w.run_number ? `Workflow #${w.run_number}` : "Workflow", href: run,
+    // The run itself, full page (workOpenHref): the bare `wfr=` link lands on the runs list,
+    // where a finished run further down is not the one shown (link walk 2026-11-22).
+    out.push({ key: "run", label: w.run_number ? `Workflow #${w.run_number}` : "Workflow", href: workOpenHref(w) || run,
                title: ["Workflow run", w.run_number ? `#${w.run_number}` : "", id ? `· ${id}` : ""].filter(Boolean).join(" "), external: false });
   }
   const build = rootBuildOf(w);
