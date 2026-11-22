@@ -13,6 +13,7 @@ import {
   NOT_DEPLOYED, rerunPath, rerunPending, sendOverride, countsOf, lineWords, reasonRows, refTarget, rootTitle, shortId, shortSha, SEVS, sortFindings,
   type Finding, type ReviewPacket, type Sev,
 } from "../../lib/validation-review";
+import { actorWords } from "../../lib/actor-words";
 import { KindBadge, RefChip, SevChip, Status } from "./kit";
 
 export type PacketLinks = { run: string; build: string; change: string };
@@ -44,11 +45,11 @@ export function packetHold(p: ReviewPacket | null, pending = false): { state: st
   return null;
 }
 
-function ruleCell(f: Finding): string {
-  const where = lineWords(f);
-  if (f.source.kind === "validator" || !f.source.kind) return [f.source.rule_id || f.id, where].filter(Boolean).join(" · ");
+/** The rule (or seat) and where, as two parts: the rule on one clipped line, the place below it. */
+function ruleParts(f: Finding): { rule: string; where: string } {
+  if (f.source.kind === "validator" || !f.source.kind) return { rule: f.source.rule_id || f.id, where: lineWords(f) };
   const file = (f.location.file || "").split("/").pop() ?? "";
-  return [f.source.name || f.source.kind, file ? `${file}${f.location.line != null ? `:${f.location.line}` : ""}` : where].filter(Boolean).join(" · ");
+  return { rule: f.source.name || f.source.kind, where: file ? `${file}${f.location.line != null ? `:${f.location.line}` : ""}` : lineWords(f) };
 }
 
 function StatusCell({ f }: { f: Finding }) {
@@ -67,17 +68,25 @@ function StatusCell({ f }: { f: Finding }) {
 
 function FindingRow({ f }: { f: Finding }) {
   const kind = f.followup ? "none" : f.override && (f.override.action === "edit" || f.override.action === "reject") ? "human" : f.fix_kind;
+  const { rule, where } = ruleParts(f);
+  const reviewer = Boolean(f.source.kind && f.source.kind !== "validator");
+  const was = f.original ?? "(none)";
+  const now = f.fixed ?? "(removed)";
+  // Long values are clipped to one line each; the whole value is the cell's tooltip.
   return (
     <tr data-sev={f.severity} id={refTarget(f.id)} data-testid="vr-packet-row" data-finding={f.id}>
-      <td className="vr-mono vr-id">{f.id}</td>
-      <td className="vr-mono">{ruleCell(f)}{f.unmapped ? <> <span className="vr-kind" title="No rule or standard named: counted as P2">unmapped</span></> : null}</td>
-      <td className="vr-ba vr-hide-sm">
-        {f.source.kind && f.source.kind !== "validator"
-          ? <span className="vr-muted">{f.title || f.original}</span>
-          : <><span className="b">{f.original ?? "(none)"}</span> → <span className="x">{f.fixed ?? "(removed)"}</span></>}
+      <td className="vr-mono vr-id vr-c-id">{f.id}</td>
+      <td className="vr-mono vr-c-rule" title={[rule, where].filter(Boolean).join(" · ")}>
+        <span className="vr-clip">{rule}</span>
+        {where || f.unmapped ? <span className="vr-where">{where}{f.unmapped ? <> <span className="vr-kind" title="No rule or standard named: counted as P2">unmapped</span></> : null}</span> : null}
       </td>
-      <td>{f.followup ? <span className="vr-kind">follow-up</span> : <KindBadge kind={kind} label={kind === "human" ? "you" : undefined} />}</td>
-      <td><StatusCell f={f} /></td>
+      <td className="vr-ba vr-c-ba" title={reviewer ? f.title || f.original || "" : `${was} → ${now}`}>
+        {reviewer
+          ? <span className="vr-muted vr-clip2">{f.title || f.original}</span>
+          : <><span className="b vr-clip">{was}</span><span className="x vr-clip">→ {now}</span></>}
+      </td>
+      <td className="vr-c-fix">{f.followup ? <span className="vr-kind">follow-up</span> : <KindBadge kind={kind} label={kind === "human" ? "you" : undefined} />}</td>
+      <td className="vr-c-st"><StatusCell f={f} /></td>
     </tr>
   );
 }
@@ -172,7 +181,7 @@ function Checks({ p }: { p: ReviewPacket }) {
         {p.tests.map((t) => (
           <tr key={t.id} id={refTarget(t.id)}>
             <td className="vr-mono vr-id">{t.suite}</td>
-            <td className="vr-mono" style={{ color: t.failed ? "var(--v2-red)" : "var(--v2-green)" }}>{t.failed ? `${t.failed} failing` : `${t.passed} pass`}</td>
+            <td className="vr-mono" style={{ color: t.failed || t.ok === false ? "var(--v2-red)" : "var(--v2-green)" }}>{t.failed ? `${t.failed} failing` : t.ok === false ? "failing" : t.passed ? `${t.passed} pass` : "pass"}</td>
             <td>{t.evidence ? <RefChip id={t.evidence} /> : null}</td>
           </tr>
         ))}
@@ -198,7 +207,7 @@ function Overrides({ p }: { p: ReviewPacket }) {
         {p.overrides.map((r) => (
           <tr key={r.id} id={refTarget(r.id)} data-testid="vr-override-row">
             <td className="vr-mono vr-id">{r.id}</td>
-            <td className="vr-small">{verb[r.action]} {r.finding_id} · {r.actor || "someone"}{r.action === "waive" && r.reason ? ` · “${r.reason}”` : ""}</td>
+            <td className="vr-small">{verb[r.action]}{r.finding_id ? ` ${r.finding_id}` : ""} · {actorWords(r.actor)}{r.action === "waive" && r.reason ? ` · “${r.reason}”` : ""}</td>
           </tr>
         ))}
       </tbody></table>
@@ -226,8 +235,8 @@ export function ReviewPacketView({ packet: p, projectId, fallbackTitle = "", eye
           {top.length ? (
             <div>
               <div className="vr-k">P0 / P1 · what changed vs the partner&apos;s file</div>
-              <div className="vr-scroll"><table data-testid="vr-p01">
-                <thead><tr><th>ID</th><th>Rule · line</th><th className="vr-hide-sm">Partner → now</th><th>Fix</th><th>Status</th></tr></thead>
+              <div className="vr-scroll"><table className="vr-ftable" data-testid="vr-p01">
+                <thead><tr><th className="vr-c-id">ID</th><th className="vr-c-rule">Rule · line</th><th className="vr-c-ba">Partner → now</th><th className="vr-c-fix">Fix</th><th className="vr-c-st">Status</th></tr></thead>
                 <tbody>{top.map((f) => <FindingRow key={f.id} f={f} />)}</tbody>
               </table></div>
             </div>
@@ -235,7 +244,7 @@ export function ReviewPacketView({ packet: p, projectId, fallbackTitle = "", eye
           {rest.length ? (
             <details data-testid="vr-p23">
               <summary className="vr-small vr-muted" style={{ cursor: "pointer" }}>P2 / P3 · {rest.length} ({rest.filter((f) => f.status === "open").length} open)</summary>
-              <div className="vr-scroll"><table><tbody>{rest.map((f) => <FindingRow key={f.id} f={f} />)}</tbody></table></div>
+              <div className="vr-scroll"><table className="vr-ftable"><tbody>{rest.map((f) => <FindingRow key={f.id} f={f} />)}</tbody></table></div>
             </details>
           ) : null}
           <ChangedVsPartner p={p} />

@@ -135,6 +135,17 @@ describe("a merge card whose checks are failing", () => {
     expect(labels).toContain("Approve and merge");
   });
 
+  it("a card that also carries a review packet keeps the banner and the reasoned merge", async () => {
+    const { PACKET_READY } = await import("../lib/validation-review-fixtures");
+    const item = card(CHECKS);
+    (item.recommendation as Record<string, unknown>).packet = PACKET_READY;
+    const row = mount(item);
+    expect(row.querySelector('[data-testid="review-packet"]')).not.toBeNull();
+    expect(row.querySelector('[data-testid="decision-checks-failing"]')).not.toBeNull();
+    const reasoned = row.querySelector('[data-testid="decision-reasoned-approve"]')!;
+    expect((reasoned.querySelector('input[name="force"]') as HTMLInputElement).value).toBe("true");
+  });
+
   it("reads only a record that names a gate", () => {
     expect(checksFailingOf({})).toBeNull();
     expect(checksFailingOf({ checks_failing: { gates: [] } })).toBeNull();
