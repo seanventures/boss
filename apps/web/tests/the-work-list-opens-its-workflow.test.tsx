@@ -4,8 +4,8 @@
  *
  *   - a Work row is title · status chip · Kicked off · Finished · Workflow #N · Build · Change #N;
  *   - ▸ lists the task's iterations, latest first, each with its own times and links;
- *   - a row click opens the task's latest Workflow run, full page, with Work as the way back; the
- *     Work panel is gone and an old drawer link lands on the same run;
+ *   - a row click opens the task's Work panel in the drawer (Work panel v2, which replaced the
+ *     redirect to the run);
  *   - the run screen carries ONE header line: Change · Preview · Staging · Prod · Your move, and a
  *     checker line "gwlint 9 → 0 open · Change #N › Checks" when the change has its packet.
  */
@@ -90,17 +90,13 @@ describe("the row", () => {
     expect($('[data-testid="px-work-caret-wfr_lumen"]')).toBeNull();
   });
 
-  it("a click opens the latest Workflow run, full page, with Work as the way back", async () => {
+  it("a click opens the task's Work panel in the drawer (Work panel v2)", async () => {
     const { WorkRow } = await import("../app/projects/tab-work");
     const w = await item();
-    await mount(<WorkRow w={w} ctx={ctx as never} />);
-    const f = follow();
-    try {
-      await act(async () => { ($('[data-testid="px-work-wfr_lumen"] .wl-time') as HTMLElement).click(); });
-      expect(f.hrefs.length).toBe(1);
-      const q = new URLSearchParams(f.hrefs[0].split("?")[1]);
-      expect([q.get("area"), q.get("wfr"), q.get("page"), q.get("from"), q.get("tab")]).toEqual(["delivery_workflows", "wfr_lumen", "full", "work", "runs"]);
-    } finally { f.stop(); }
+    const opened: string[][] = [];
+    await mount(<WorkRow w={w} ctx={{ ...ctx, open: (k: string, id: string) => { opened.push([k, id]); } } as never} />);
+    await act(async () => { ($('[data-testid="px-work-wfr_lumen"] .wl-time') as HTMLElement).click(); });
+    expect(opened).toEqual([["work", "wfr_lumen"]]);
   });
 });
 

@@ -353,6 +353,8 @@ describe("the Project page header, Needs you and tabs (screen 4)", () => {
     await openProject("&tab=deployments");
     // No bar above the tabs (operator 2026-11-21: "Needs you in lots of places … all yellow").
     expect(tid("px-needs-bar")).toBeNull();
+    // The merge and Pick a prod host (lib needsYouCount); the build stalled since Nov 4 has
+    // waited more than 7 days, so it is under Stopped.
     expect(tid("px-tab-work-needs")!.textContent).toBe("2");
     expect(tid("px-tab-work-needs")!.getAttribute("data-tone")).toBe("amber");
     window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project&tab=deployments&drawer=needs:dec_merge3`);
@@ -403,8 +405,9 @@ describe("Overview (screen 4)", () => {
     window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project`);
     await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
     await press(tid("px-tile-running"));
-    // The work drawer is gone (design #287): the tile's work opens its Workflow run, full page.
-    expect([params().get("area"), params().get("page"), params().get("drawer")]).toEqual(["delivery_workflows", "full", null]);
+    // The tile's work opens its Work panel in the drawer (Work panel v2).
+    expect([params().get("area"), params().get("drawer")]).toEqual(["project", "work:wi_search"]);
+    expect(tid("wp")).not.toBeNull();
     window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project`);
     await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
     await settle();
@@ -414,11 +417,12 @@ describe("Overview (screen 4)", () => {
     await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
     await settle();
     // Needs you: the count and ONE link to Work's group, never the list again.
+    // One count with the Work tab (lib needsYouCount): the merge and Pick a prod host.
     expect(tid("px-ov-needs-open")!.textContent).toContain("2 items wait on you");
     expect(tid("px-ov-ny-act-dec_merge3")).toBeNull();
     await press(tid("px-ov-work-wi_visual"));
-    // Recent work opens its Workflow run (the work drawer is gone, design #287).
-    expect([params().get("area"), params().get("page")]).toEqual(["delivery_workflows", "full"]);
+    // Recent work opens its Work panel in the drawer (Work panel v2).
+    expect([params().get("area"), params().get("drawer")]).toEqual(["project", "work:wi_visual"]);
     window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project`);
     await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
     await settle();
@@ -482,10 +486,10 @@ describe("Work (screens 5, 5b)", () => {
     await press(tid("px-work-board"));
     expect(tid("px-work-columns")).not.toBeNull();
     await press(tid("px-work-list"));
-    // A click on the row opens its latest Workflow run, full page, with Work as the way back.
-    const wfr = new URLSearchParams(rowRun.split("?")[1]).get("wfr");
+    // A click on the row opens its Work panel in the drawer (Work panel v2), its links the row's.
     await press(tid("px-work-open-wi_visual"));
-    expect([params().get("area"), params().get("wfr"), params().get("page"), params().get("from")]).toEqual(["delivery_workflows", wfr, "full", "work"]);
+    expect(params().get("drawer")).toBe("work:wi_visual");
+    expect(tid("wp-link-run")!.getAttribute("href")).toBe(rowRun);
   });
 
   // BOSSAPP-1038: list view reads the project-experience work store; the tree reads the
@@ -537,6 +541,7 @@ describe("Work (screens 5, 5b)", () => {
     expect(tid("px-nw-bar-input")!.getAttribute("aria-disabled")).toBe("true");
     await press(tid("px-nw-bar-input"));
     expect(tid("px-composer")).toBeNull();
+    await press(tid("px-work-f-planned"));
     expect(tid("px-work-start-wi_email")!.getAttribute("aria-disabled")).toBe("true");
     expect(tid("px-head-new-work")!.getAttribute("aria-disabled")).toBe("true");
   });
@@ -544,6 +549,8 @@ describe("Work (screens 5, 5b)", () => {
   it("a build, its retries and follow-ups are ONE row: clean title, attempt pill, Stalled since, never Running", async () => {
     engine();
     await openProject("&tab=work");
+    // Stalled since Nov 4, it has waited more than 7 days: it is under Stopped.
+    await press(tid("px-work-f-stopped"));
     // One row for the whole chain; no attempt is a row of its own.
     expect(tid("px-work-crun_aml")).not.toBeNull();
     for (const id of ["crun_aml_f3", "crun_aml_f2", "crun_aml_r1"]) expect(tid(`px-work-${id}`)).toBeNull();
@@ -554,14 +561,13 @@ describe("Work (screens 5, 5b)", () => {
     expect(row.textContent).not.toContain("code_task");
     expect(tid("px-work-status-crun_aml")!.textContent).toBe("Stalled");
     expect(row.getAttribute("data-s")).toBe("stalled");
-    // Counted as Stalled, not Running; the chips match the rows.
-    expect(tid("px-work-f-stalled")!.textContent).toContain("1");
-    expect(tid("px-work-f-running")!.textContent).toContain("1");
-    await press(tid("px-work-f-running"));
+    // Stalled is never BOSS working; the counts are the tabs' own rows.
+    expect(tid("px-work-rows")!.getAttribute("data-tab")).toBe("stopped");
+    expect(tid("px-work-n-working")!.textContent).toBe("1");
+    await press(tid("px-work-f-working"));
     expect(tid("px-work-crun_aml")).toBeNull();
-    await press(tid("px-work-f-stalled"));
     expect($$("[data-testid='px-work-rows'] .px-wk").length).toBe(1);
-    await press(tid("px-work-f-all"));
+    await press(tid("px-work-f-stopped"));
     // ▸ lists the iterations, latest first, each with its own status and Build link.
     expect(tid("px-work-iterations-crun_aml")).toBeNull();
     await press(tid("px-work-caret-crun_aml"));
@@ -576,9 +582,13 @@ describe("Work (screens 5, 5b)", () => {
   it("an old group drawer link opens its build (no workflow); the board shows the pill", async () => {
     engine();
     await openProject("&tab=work&drawer=build:crun_aml&wp=full");
-    expect(tid("px-drawer-work")).toBeNull();
-    expect(params().get("drawer")).toBeNull();
-    expect(params().get("area")).toBe("code_tasks");
+    // An rc10.32 panel link opens the panel again, over the whole screen; a build with no
+    // workflow draws its stations as the stages, and Build links its own page.
+    expect(tid("px-drawer-work")!.getAttribute("data-chat-full")).toBe("1");
+    expect(tid("wp-stage-build-link")!.getAttribute("href")).toContain("build=crun_aml_f3");
+    await press(tid("px-drawer-work-full"));
+    expect(params().get("wp")).toBeNull();
+    expect(tid("px-drawer-work")!.getAttribute("data-chat-full")).toBeNull();
     unmount();
     engine();
     await openProject("&tab=work");
@@ -597,9 +607,9 @@ describe("Work (screens 5, 5b)", () => {
   it("a drawer opened from a link lands open (deep link) and a stale one says so", async () => {
     engine();
     await openProject("&tab=work&drawer=work:wi_ui");
-    // An old work link opens the work, never a drawer (design #287).
-    expect(tid("px-drawer-work")).toBeNull();
-    expect(params().get("drawer")).toBeNull();
+    // A work link opens its Work panel in the drawer (Work panel v2).
+    expect(tid("px-drawer-work")).not.toBeNull();
+    expect(tid("wp-title")!.textContent).toBe("UI refresh");
     unmount();
     engine();
     await openProject("&tab=work&drawer=work:gone");
@@ -907,8 +917,9 @@ describe("the engine's own answers (what the API serves, not the sample)", () =>
   it("the engine's drawer links open: run:<id> is the work drawer, env:<target> the environment, section:<key> is Settings", async () => {
     realEngine();
     await openProject("&tab=work&drawer=run:wfr_run1");
-    // run:<id> opens that Workflow run, full page (the Work panel is gone, design #287).
-    expect([params().get("area"), params().get("page"), params().get("drawer")]).toEqual(["delivery_workflows", "full", null]);
+    // run:<id> opens that run's Work panel in the drawer (Work panel v2).
+    expect([params().get("area"), params().get("drawer")]).toEqual(["project", "run:wfr_run1"]);
+    expect(tid("wp")).not.toBeNull();
     unmount(); realEngine();
     await openProject("&tab=deployments&drawer=env:dept_1");
     expect(tid("px-drawer-env")).not.toBeNull();

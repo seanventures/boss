@@ -93,9 +93,9 @@ describe("the project page says a build failed", () => {
     expect(chip.getAttribute("title")).toContain(REASON);
     expect(chip.textContent).not.toContain("Working");
     await press(chip);
-    // It opens the build's work (its Workflow run, else its Build page); the Work panel is gone.
-    expect(params().get("drawer")).toBeNull();
-    expect(["delivery_workflows", "code_tasks"]).toContain(params().get("area"));
+    // It opens the build's work in the Work panel (v2), whose Build stage links the build.
+    expect(params().get("drawer")).toMatch(/^work:crun_/);
+    expect(tid("px-drawer-work")).not.toBeNull();
   });
 
   it("the journey's Working node is failed and the Running tile names the failure", async () => {
@@ -140,9 +140,9 @@ describe("the project page says a build failed", () => {
     expect(tid(`px-work-needs-failed:${RUN}-retry-said`)!.textContent).toBe("Attempt 2 started");
     // Its title opens the build's row, not an empty needs drawer.
     await press(card.querySelector("button.px-wk-t")!);
-    // It opens the build's work (its Workflow run, else its Build page); the Work panel is gone.
-    expect(params().get("drawer")).toBeNull();
-    expect(["delivery_workflows", "code_tasks"]).toContain(params().get("area"));
+    // It opens the build's work in the Work panel (v2), whose Build stage links the build.
+    expect(params().get("drawer")).toMatch(/^work:crun_/);
+    expect(tid("px-drawer-work")).not.toBeNull();
   });
 });
 
@@ -241,8 +241,8 @@ describe("a completed build with a failed follow-up (the laptop's lineage)", () 
     await openProject("work");
     expect(tid(`px-work-needs-failed:${ROOT}-see`)!.getAttribute("href")).toContain(`build=${FOLLOW}`);
     await press(tid(`px-work-needs-failed:${ROOT}`)!.querySelector("button.px-wk-t")!);
-    expect(params().get("drawer")).toBeNull();
-    expect(["delivery_workflows", "code_tasks"]).toContain(params().get("area"));
+    expect(params().get("drawer")).toMatch(/^work:crun_/);
+    expect(tid("px-drawer-work")).not.toBeNull();
   });
 
   it("a refusal whose cause is gone reads its words, faint, never a red Failed", async () => {

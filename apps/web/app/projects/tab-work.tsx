@@ -3,11 +3,10 @@
 /**
  * WORK (screen 5, contract §3/§14): the New work bar (it opens the New work modal, new-work.tsx:
  * Helm's understanding, the workflow's real steps, ≈ time and ≈ cost from this project's history,
- * the chips, Start or Add to Next) — then every task as a row: the station strip (the onboarding
- * row's own Discover → Ready → Backlog), who works it, its cost, its issue chip and every link,
- * grouped Needs you · Running · Planned · Done. Needs you is the header bar's own list (one
- * count); Planned is Marshal's rank, re-ranked by drag or Alt+↑/↓ and saved through the plan
- * route. A row opens its drawer in place. List or Board.
+ * the chips, Start or Add to Next) — then ONE ROW PER TASK (never per attempt: lib work-tasks),
+ * on tabs sorted by who acts, latest first: Needs you · BOSS working · Done · Stopped (· Planned,
+ * Marshal's rank, re-ranked by drag or Alt+↑/↓). The tab counts are the tabs' own lists. A row
+ * opens the Work panel (work-panel.tsx) in the drawer. List or Board.
  */
 import { changeWords, projectIsLocal } from "../../lib/repo-links";
 import React, { useEffect, useMemo, useState } from "react";
@@ -34,7 +33,8 @@ import type { PxCtx } from "./project-page";
 import { FailedActions } from "./build-failed";
 import { workNextStep } from "../../lib/work-next-step";
 import type { YourApp } from "../../lib/your-app";
-import { finishedAt, iterationLinks, latestLinks, tidyIds, workLinks, workOpenHref, type LatestLink, type WorkLink } from "../../lib/work-links";
+import { finishedAt, iterationLinks, latestLinks, tidyIds, workLinks, type LatestLink, type WorkLink } from "../../lib/work-links";
+import { TAB_WORDS, WORK_TABS, groupTasks, needsYouTab, type WorkTab as TaskTab, type WorkTask } from "../../lib/work-tasks";
 import "./work.css";
 
 const STATION_NAME: Record<string, string> = { plan: "Plan", design: "Decide", build: "Build", review: "Review", pr: "PR", ship: "Staging" };
@@ -49,21 +49,18 @@ const whereNow = (w: WorkItem, local = false) => {
 // Amber is the Needs-you signal only (operator 2026-11-21): stalled work draws a neutral dot.
 const DOT: Record<WorkState, string | undefined> = { needs_you: "you", stalled: undefined, running: "now", done: "done", failed: "bad", planned: undefined };
 
-/** Needs you, from ONE source (lib needsYouCards — the header bar's own list): the work rows that
- *  wait on a person, plus the cards that are no row's (Pick a prod host). The count is the bar's. */
+/** Needs you, from ONE source (lib needsYouTab, also the project's Work-tab badge): the tasks
+ *  that wait on a person, plus the cards that are no row's (Pick a prod host). */
 function useNeeds(ctx: PxCtx, items: WorkItem[]) {
   return useMemo(() => {
     const onboarding = ctx.overview.project.stage === "onboarding" ? ctx.onboarding : null;
     const cards = needsYouCards(ctx.overview.needs_you, onboarding, items);
-    const rows = items.filter((w) => w.state === "needs_you");
-    const rowIds = new Set(rows.map((w) => w.id));
-    const loose = cards.filter((c) => !c.work_id || !rowIds.has(c.work_id));
-    return { cards, rows, loose, count: cards.length };
+    return needsYouTab(items, cards);
   }, [ctx.overview.needs_you, ctx.overview.project.stage, ctx.onboarding, items]);
 }
 
 export function WorkTab({ ctx }: { ctx: PxCtx }) {
-  const [filter, setFilter] = useState<WorkState | "all">("all");
+  const [picked, setPicked] = useState<TaskTab | null>(null);
   const [view, setView] = useState<"list" | "board" | "tree" | "mine">("list");
   // The row a Start just made (the New work modal's): it slides in (150 ms) once the list has it.
   const fresh = ctx.freshWork ?? "";
@@ -82,8 +79,18 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
   // A fresh read from BOSS is the truth again.
   useEffect(() => { setOrder(null); }, [ctx.work]);
   const needs = useNeeds(ctx, items);
-  const counts = Object.fromEntries(WORK_ORDER.map((k) => [k, k === "needs_you" ? Math.max(needs.count, needs.rows.length) : items.filter((w) => w.state === k).length])) as Record<WorkState, number>;
-  const shown = items.filter((w) => filter === "all" || w.state === filter);
+  // ONE ROW PER TASK, ON TABS BY WHO ACTS (lib work-tasks): the counts are these same lists.
+  const tasks = useMemo(() => groupTasks(items), [items]);
+  // The tabs and the Needs-you count are ONE read (lib needsYouTab).
+  const tabs = needs.buckets;
+  const tabCount = (k: TaskTab) => (k === "needs_you" ? needs.count : tabs[k].length);
+  const tab: TaskTab = picked ?? (WORK_TABS.find((k) => tabCount(k)) ?? "needs_you");
+  const latestItems = useMemo(() => tasks.map((t) => t.latest), [tasks]);
+  // THE BOARD reads the same tasks: Needs you is the Needs you tab's; the rest by state.
+  const needsIds = useMemo(() => new Set(needs.tasks.map((t) => t.id)), [needs.tasks]);
+  const boardItem = (k: WorkState) => (k === "needs_you" ? needs.tasks.map((t) => t.latest)
+    : latestItems.filter((w) => w.state === k && !needsIds.has(w.id)));
+  const counts = Object.fromEntries(WORK_ORDER.map((k) => [k, boardItem(k).length])) as Record<WorkState, number>;
   const planned = items.filter((w) => w.state === "planned");
   const rankGate = useGate("work_item:manage", ctx.projectId);
   const rankable = rankGate.allowed && !ctx.demo && planned.some((w) => w.move);
@@ -102,9 +109,8 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
   // (an item never disappears because the board has no column for it).
   const boardCols = (["needs_you", "stalled", "running", "planned", "done", "failed"] as WorkState[])
     .filter((k) => (k !== "stalled" && k !== "failed") || counts[k]);
-  const groupOf = (k: WorkState) => shown.filter((w) => w.state === k);
+  const groupOf = boardItem;
   const boardDrag = useRankDrag(planned, rankable, (id, to) => void rank(id, to));
-  const showLoose = filter === "all" || filter === "needs_you";
   // TICKETS (BOSSAPP-1047 T5/T8/T9): the project's ticket systems, the Import page, row chips.
   const tickets = useTicketConnections(ctx.projectId, ctx.demo);
   const ticketsParam = useTicketsParam();
@@ -117,14 +123,11 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
       <TicketWorkBand ctx={ctx} conns={tickets.read} />
       <LatestStrip items={raw} app={ctx.overview.app ?? null} />
       <div className="px-row px-wrap">
-        <div className="px-filters" role="group" aria-label="Filter work">
-          <button type="button" className="px-filter" aria-pressed={filter === "all"} onClick={() => setFilter("all")} data-testid="px-work-f-all">All <span className="px-mono">{items.length}</span></button>
-          {WORK_ORDER.filter((k) => counts[k]).map((k) => (
-            <button key={k} type="button" className="px-filter" aria-pressed={filter === k} onClick={() => setFilter(k)} data-testid={`px-work-f-${k}`}
-                    title={k === "needs_you" ? "The same list as the Needs you bar at the top" : undefined}>
-              {/* The filters' dots are state colours; amber stays the tab's count and the group's dot. */}
-              <span className="px-dot" data-s={k === "needs_you" ? undefined : DOT[k]} aria-hidden />
-              {WORK_WORDS[k]} <span className="px-mono">{counts[k]}</span></button>
+        <div className="px-filters wl-tabs" role="tablist" aria-label="Work, by who acts">
+          {WORK_TABS.filter((k) => k !== "planned" || tabCount(k)).map((k) => (
+            <button key={k} type="button" role="tab" className="px-filter" aria-selected={tab === k} data-tab={k}
+                    onClick={() => setPicked(k)} data-testid={`px-work-f-${k}`} title={TAB_TITLE[k]}>
+              {TAB_WORDS[k]} <span className="px-mono" data-testid={`px-work-n-${k}`}>{tabCount(k)}</span></button>
           ))}
         </div>
         <span className="px-spacer" />
@@ -152,20 +155,24 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
       ) : !items.length && !needs.loose.length ? (
         <div className="px-card"><Empty icon={Kanban} title="No work yet" line="Press New work above (or N) to describe a feature or a bug. Helm plans it, you approve, the crew builds it to a PR." testid="px-work-empty" /></div>
       ) : view === "list" ? (
-        <div className="px-list" data-testid="px-work-rows">
+        <div className="px-list" data-testid="px-work-rows" data-tab={tab}>
           <div className="wl-head" aria-hidden><span /><span>Task</span><span>Status</span><span>Kicked off</span><span>Finished</span><span>Links</span></div>
-          {WORK_ORDER.filter((k) => groupOf(k).length || (k === "needs_you" && showLoose && needs.loose.length)).map((k) => (
-            <React.Fragment key={k}>
-              <div className="px-list-g" data-g={k} data-testid={`px-work-g-${k}`} id={k === "needs_you" ? "px-work-needs" : undefined}><span className="px-dot" data-s={DOT[k]} aria-hidden />
-                {WORK_WORDS[k]}{k === "needs_you" ? <NeedsHeadNote ctx={ctx} /> : k === "planned" ? <span className="px-faint" style={{ fontWeight: 400 }}> · ranked by Marshal{rankable ? <span className="px-hide-phone"> · drag to re-rank</span> : null}</span>
-                  : k === "stalled" ? <span className="px-faint" style={{ fontWeight: 400 }}> · nothing has moved; open one to retry or stop it</span> : null}
-                {k === "planned" ? <Said text={rankSaid.text} tone={rankSaid.tone} /> : null}</div>
-              {k === "planned" ? (
-                <PlannedRows rows={groupOf(k)} all={planned} ctx={ctx} rankable={rankable} onRank={(id, to) => void rank(id, to)} fresh={fresh} />
-              ) : groupOf(k).map((w) => <WorkRow key={w.id} w={w} ctx={ctx} fresh={fresh === w.id} />)}
-              {k === "needs_you" && showLoose ? needs.loose.map((c) => <NeedsCardRow key={c.id} card={c} ctx={ctx} />) : null}
-            </React.Fragment>
-          ))}
+          {tab === "planned" ? (
+            <>
+              <div className="px-list-g" data-g="planned" data-testid="px-work-g-planned"><span className="px-faint" style={{ fontWeight: 400 }}>Ranked by Marshal{rankable ? <span className="px-hide-phone"> · drag to re-rank</span> : null}</span>
+                <Said text={rankSaid.text} tone={rankSaid.tone} /></div>
+              <PlannedRows rows={planned} all={planned} ctx={ctx} rankable={rankable} onRank={(id, to) => void rank(id, to)} fresh={fresh} />
+            </>
+          ) : (
+            <>
+              {tab === "needs_you" && needs.count ? (
+                <div className="px-list-g" data-g="needs_you" data-testid="px-work-g-needs_you" id="px-work-needs"><NeedsHeadNote ctx={ctx} /></div>
+              ) : null}
+              {(tab === "needs_you" ? needs.tasks : tabs[tab]).map((t) => <WorkRow key={t.id} w={t.latest} task={t} ctx={ctx} fresh={fresh === t.id} quiet={tab !== "needs_you"} />)}
+              {tab === "needs_you" ? needs.loose.map((c) => <NeedsCardRow key={c.id} card={c} ctx={ctx} />) : null}
+              {!tabCount(tab) ? <p className="px-faint wl-empty" data-testid="px-work-tab-empty">{TAB_EMPTY[tab]}</p> : null}
+            </>
+          )}
         </div>
       ) : (
         <div className={`px-grid px-g${boardCols.length}`} data-testid="px-work-columns">
@@ -203,13 +210,25 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
 
 const NO_CONNECTIONS: Connection[] = [];
 
-/** Opening a row: its latest Workflow run, full page (design #287; the Work panel is gone); the
- *  onboarding row opens the onboarding page (screen 10). Nothing to open (planned work): stay. */
+/** Opening a row: the task's Work panel in the drawer (Work panel v2); the onboarding row opens
+ *  the onboarding page (screen 10). Planned work has nothing to open yet. */
 function openItem(ctx: PxCtx, w: WorkItem) {
   if (w.kind === "setup" && w.source === "onboarding") { writePxUrl({ tab: "onboarding", drawer: null }); return; }
-  const href = workOpenHref(w);
-  if (href) navigateTo(pxHref(href));
+  if (w.state === "planned" && !w.links.workflow_run && !w.links.build) return;
+  ctx.open("work", w.id);
 }
+
+const TAB_TITLE: Record<TaskTab, string> = {
+  needs_you: "Waiting on you, and work BOSS gave up on",
+  working: "BOSS is on these, including failures it is still retrying",
+  done: "Finished",
+  stopped: "Cancelled or replaced, and failed or unanswered work older than 7 days",
+  planned: "Not started yet, in Marshal's rank",
+};
+const TAB_EMPTY: Record<TaskTab, string> = {
+  needs_you: "Nothing needs you.", working: "BOSS is not working on anything right now.", done: "Nothing finished yet.",
+  stopped: "Nothing stopped.", planned: "Nothing planned.",
+};
 
 /** A Needs-you card that is no piece of work's (Pick a prod host, a setup gap): its own row, the
  *  bar's same item, opening the same drawer. */
@@ -392,7 +411,13 @@ const ITER_CHIP: Record<Attempt["state"], Chip> = {
  *  Build · Change #N. A click opens the task's latest Workflow run, full page (workOpenHref); ▸
  *  lists every iteration, latest first, each with its own times and links. Planned work keeps
  *  its Start now and its rank. */
-export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; ctx: PxCtx; fresh?: boolean; rank?: Rank | null }) {
+export function WorkRow({ w, ctx, fresh = false, rank = null, task = null, quiet = false }: {
+  w: WorkItem; ctx: PxCtx; fresh?: boolean; rank?: Rank | null;
+  /** The task this row is (its earlier attempts fold under ▸). */
+  task?: WorkTask | null;
+  /** Off the Needs-you tab: red never shows (a failure there is history, not an alarm). */
+  quiet?: boolean;
+}) {
   const [said, setSaid] = useState("");
   const [open, setOpen] = useState(false);
   const setup = w.kind === "setup" && w.source === "onboarding";
@@ -406,10 +431,12 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
     setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : "Started.") : (r.error ?? "It didn't start."));
     if (r.ok && !r.demo) ctx.refreshWork();
   };
-  const chip = statusChip(w, local);
+  const base = statusChip(w, local);
+  const chip = quiet && base.tone === "red" ? { ...base, tone: undefined } : base;
   const links = useMemo(() => workLinks(w).filter((l) => l.key !== "preview"), [w]);
-  const iters = w.attempts.length > 1 ? w.attempts : [];
-  const opens = setup || !!workOpenHref(w);
+  const runs = task && task.earlier.length ? [task.latest, ...task.earlier] : [];
+  const iters = runs.length ? runs : w.attempts.length > 1 ? w.attempts : [];
+  const opens = setup || !(w.state === "planned" && !w.links.workflow_run && !w.links.build);
   // ▸ EXPANDS THE ROW, never opens the workflow: the row's own click must not see it.
   const toggle = (e: React.MouseEvent) => { e.stopPropagation(); e.preventDefault(); setOpen((v) => !v); };
   return (
@@ -459,30 +486,53 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
           </span>
         ) : <RowLinks links={links} id={w.id} />}
       </div>
-      {open ? <IterationRows w={w} /> : null}
+      {open ? (runs.length ? <RunIterationRows runs={runs} ctx={ctx} label={w.label} id={w.id} /> : <IterationRows w={w} ctx={ctx} />) : null}
     </>
   );
 }
 
 /** A TASK'S ITERATIONS, latest first (the work's `attempts`): each re-run, repair build or
  *  follow-up with its own number, status, times and links. A click opens that iteration's build. */
-export function IterationRows({ w }: { w: WorkItem }) {
+export function IterationRows({ w, ctx }: { w: WorkItem; ctx?: PxCtx }) {
   const n = w.attempts.length;
   return (
     <div className="wl-iters" role="list" aria-label={`Iterations of ${w.label}, latest first`} data-testid={`px-work-iterations-${w.id}`}>
       {w.attempts.map((t, i) => {
         const chip = t.state === "done" ? doneChip(t.status) : ITER_CHIP[t.state] ?? ITER_CHIP.done;
         const links = iterationLinks(t);
-        const go = t.build || workOpenHref(w);
         return (
           <div key={t.id} role="listitem" className="px-wk wl-row wl-iter" data-testid={`px-work-iter-${t.id}`}
-               onClick={(e) => { if (go && !(e.target as HTMLElement).closest("a,button")) navigateTo(pxHref(go)); }}>
+               onClick={(e) => { if (!(e.target as HTMLElement).closest("a,button")) { if (ctx) ctx.open("work", t.id); else if (t.build) navigateTo(pxHref(t.build)); } }}>
             <span className="wl-caret-cell" />
             <span className="wl-title"><span className="wl-n">{n - i}</span><span className="px-ell" title={t.title || t.label}>{t.label}</span></span>
             <span className="wl-status"><span className="px-tag" data-tone={chip.tone}>{chip.word}</span></span>
             <span className="wl-time" title="Kicked off">{dateTime(t.created_at) || "—"}</span>
             <span className="wl-time" title="Finished">{dateTime(finishedAt(t)) || "—"}</span>
             <RowLinks links={links} id={t.id} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A TASK'S RUNS, latest first (Work panel v2: one row per task): each workflow run that tried
+ *  it, with its number, status, times and its own Workflow · Build · Change links. A click opens
+ *  that run's panel. */
+function RunIterationRows({ runs, ctx, label, id }: { runs: WorkItem[]; ctx: PxCtx; label: string; id: string }) {
+  return (
+    <div className="wl-iters" role="list" aria-label={`Attempts of ${label}, latest first`} data-testid={`px-work-iterations-${id}`}>
+      {runs.map((r, i) => {
+        const chip = statusChip(r);
+        return (
+          <div key={r.id} role="listitem" className="px-wk wl-row wl-iter" data-testid={`px-work-iter-${r.id}`}
+               onClick={(e) => { if (!(e.target as HTMLElement).closest("a,button")) ctx.open("work", r.id); }}>
+            <span className="wl-caret-cell" />
+            <span className="wl-title"><span className="wl-n">{runs.length - i}</span><span className="px-ell" title={r.title || r.label}>{r.run_number ? `Workflow #${r.run_number}` : r.label}{r.workflow ? <span className="px-faint"> · {r.workflow}</span> : null}</span></span>
+            <span className="wl-status"><span className="px-tag" data-tone={chip.tone === "red" ? undefined : chip.tone}>{chip.word}</span></span>
+            <span className="wl-time" title="Kicked off">{dateTime(r.created_at) || "—"}</span>
+            <span className="wl-time" title="Finished">{dateTime(finishedAt(r)) || "—"}</span>
+            <RowLinks links={workLinks(r).filter((l) => l.key !== "preview")} id={r.id} />
           </div>
         );
       })}

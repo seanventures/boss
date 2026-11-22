@@ -272,6 +272,11 @@ def test_code_work_keeps_its_stations(engine, project):
     assert w["shape"] == "code" and w["flow"] == [] and w["outcome"] is None
     assert [s["key"] for s in w["stages"]] == ["plan", "design", "build", "review", "pr", "ship"]
     assert w["kind"] == "feature"
+    # WORK PANEL V2: the workflow's own steps, each with its stage (Plan · Build · Ship · Live).
+    assert [(s["id"], s["capability"], s["stage"], s["state"]) for s in w["steps"]] == [
+        ("meeting", "meeting", "plan", "done"), ("build", "build", "build", "done"),
+        ("deploy", "deploy", "ship", "done")]
+    assert w["input_file"] is None and w["rerun_of"] is None
 
 
 def test_the_flow_condenses_by_least_work_and_never_mixes_people_with_agents():

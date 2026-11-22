@@ -5,6 +5,7 @@
  * health, cost), the captain card, recent work, what's next, try it, this week. Every tile, row
  * and node is a link: in place (a drawer) or to the tab that holds it.
  */
+import { needsYouCount } from "../../lib/work-tasks";
 import React, { useState } from "react";
 import {
   ArrowRight, CaretRight, ChatCircleDots, ClockCounterClockwise, Coins, Globe, HandWaving, Heartbeat, Key, Kanban, Lightbulb,
@@ -101,7 +102,7 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
   const ov = ctx.overview;
   const t = ov.tiles;
   // ONE count with the Work tab's badge and its Needs-you group (lib needsYouCards).
-  const needCount = needsYouCards(ov.needs_you, ov.project.stage === "onboarding" ? ctx.onboarding ?? null : null, ctx.work?.items ?? []).length;
+  const needCount = needsYouCount(needsYouCards(ov.needs_you, ov.project.stage === "onboarding" ? ctx.onboarding ?? null : null, ctx.work?.items ?? []), ctx.work?.items);
   // EACH CARD LOADS OR FAILS ON ITS OWN (04 states): a card BOSS couldn't read this time says
   // "Couldn't load · Retry" inside itself; every other card still shows.
   const failed = (card: string) => (ov.errors?.[card]
