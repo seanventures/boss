@@ -479,6 +479,18 @@ export function removalBlock(inputText: string, f: Pick<Finding, "location" | "o
   return { from: partner_line, to, lines: all.slice(partner_line - 1, to), offset };
 }
 
+/**
+ * THE LINES A REMOVE ACTUALLY DELETES (dry run 5): the server removes the finding's block ON THE
+ * BRANCH. When the partner's text is not at hand removalBlock falls back to the finding's one line,
+ * while the agent's refused proposal holds the whole block as the branch has it (the admin route's
+ * 14 lines) — those are the lines, and the count, the button says.
+ */
+export function removalLines(block: { lines: string[] }, f: Pick<Finding, "status" | "proposed">): string[] {
+  const proposal = f.status === "open" && f.proposed && !f.proposed.after?.trim()
+    ? String(f.proposed.before ?? "").split("\n").filter((l) => l.trim()) : [];
+  return proposal.length > block.lines.length ? proposal : block.lines;
+}
+
 /** The title of the WORK, not of the newest follow-up: every "Follow-up: … — " prefix a follow-up
  *  build adds to its parent's title is dropped (SPEC §0 #2). */
 export function rootTitle(title: string | null | undefined): string {

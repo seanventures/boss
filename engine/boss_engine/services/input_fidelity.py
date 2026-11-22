@@ -1178,6 +1178,16 @@ def seed_auto_fix(root: Any, c: dict, run: Optional[Callable[[str], Any]]) -> Op
 ORIGINAL_COMMIT_PREFIX = "Original file as given"
 
 
+def original_masked_words(c: Mapping[str, Any], text: str) -> str:
+    """" (secrets masked)" when the committed original is not the bytes as given: an upload's
+    secret values were masked (its true sha256 is ``input_sha256``), so the first commit never
+    claims to be the file byte for byte (dry run 5)."""
+    from .validators import sha256 as _sha256
+
+    true_sha = c.get("input_sha256")
+    return " (secrets masked)" if true_sha and str(true_sha) != _sha256(text) else ""
+
+
 def commit_original(github: Any, branch: str, base_branch: Optional[str], c: dict) -> Optional[str]:
     """THE ORIGINAL FILE IS THE CHANGE'S FIRST COMMIT ("fix a given file"): the input's bytes,
     as given, written to the target path on the work branch BEFORE any fix. The change's own
@@ -1215,7 +1225,8 @@ def commit_original(github: Any, branch: str, base_branch: Optional[str], c: dic
         github.ensure_branch(branch, base_branch)
         from .software_factory import commit_change
 
-        shas = commit_change(github, branch, [(out, text)], f"{ORIGINAL_COMMIT_PREFIX}: {inp} → {out}")
+        shas = commit_change(github, branch, [(out, text)],
+                             f"{ORIGINAL_COMMIT_PREFIX}{original_masked_words(c, text)}: {inp} → {out}")
         sha = next((s for s in shas if s), None)
         if sha:
             c["original_commit"] = sha

@@ -246,11 +246,26 @@ def validation_of(c: Any, ch: Change) -> Optional[dict]:
         # The head the re-run checked (records before it stamped one: the head it was queued at).
         if isinstance(rec.get("after"), dict) and not rec["after"].get("head_sha") and rr[1]:
             rec["after"]["head_sha"] = rr[1]
-        return rec
+        base = next((v for v in reversed(_lineage_records(c, ch)) if rp.same_input(v, orig)), None)
+        return keep_attribution(rec, base)
     for v in reversed(_lineage_records(c, ch)):
         if rp.same_input(v, orig):
             return v
     return orig
+
+
+def keep_attribution(rec: dict, base: Optional[Mapping[str, Any]]) -> dict:
+    """A FINDING'S FIX KEEPS WHO FIXED IT (dry run 5, V-08): when a person's override removes a
+    block (O-1 on V-07, the admin route), a re-run sees the findings inside it as
+    ``removed_with_block`` — but the tool had already fixed V-08 (its size cap) on the build.
+    Such a finding keeps the build's ``fix_kind``, so "4 tool · 3 agent · 2 you" stays put."""
+    prior = {str(f.get("id")): f for f in (base or {}).get("findings") or []}
+    for f in rec.get("findings") or []:
+        b = prior.get(str(f.get("id")))
+        if (f.get("fixed_by") == "removed_with_block" and b and b.get("status") == "fixed"
+                and b.get("fixed_by") != "removed_with_block" and b.get("fix_kind")):
+            f["fix_kind"] = b["fix_kind"]
+    return rec
 
 
 # ── applying overrides to the packet ───────────────────────────────────────────────────────────

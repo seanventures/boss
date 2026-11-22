@@ -18,7 +18,7 @@ import { ArrowCounterClockwise, Check, PencilSimple, Trash, X } from "@phosphor-
 import { idGet, IdentityError, refusalSentence } from "../../lib/identity/api";
 import {
   isMissingRoute, isProposalGone, lineTitle, NOT_DEPLOYED, OVERRIDE_VERBS, PROPOSAL_GONE, STALE, overridePath, parseValidation,
-  refTarget, removalBlock, revertAllPath, sendOverride, sendRemove, shortSha,
+  refTarget, removalBlock, removalLines, revertAllPath, sendOverride, sendRemove, shortSha,
   type Finding, type Fix, type Override, type OverrideAction, type OverrideResult, type Validation,
 } from "../../lib/validation-review";
 import { noteWords, placeNotes } from "../../lib/line-notes";
@@ -196,6 +196,7 @@ export function FindingNote({ f, v, send, disabled, disabledWhy }: {
   const proposed = f.status === "open" && (refused ? refusedOk : Boolean(fix || f.fixed != null));
   // "Remove lines": a "Needs you" finding still open (a route to drop, a secret to delete).
   const block = f.status === "open" && f.fix_kind === "human" ? removalBlock(v.input.text, f) : null;
+  const removing = block ? removalLines(block, f) : [];
   const span = (b: { from: number; to: number }) => (b.to > b.from ? `lines ${b.from}–${b.to}` : `line ${b.from}`);
   const settled = f.status === "overridden" || f.status === "waived" || f.status === "reverted";
   const off = disabled || busy;
@@ -238,15 +239,15 @@ export function FindingNote({ f, v, send, disabled, disabledWhy }: {
         <form className="vr-form" onSubmit={(e) => { e.preventDefault(); if (reason.trim() && !off) void run("remove", { reason }); }} data-testid="vr-remove-form">
           <span className="vr-muted vr-small" data-testid="vr-remove-where"
                 title={block.offset ? `On the branch: ${span({ from: block.from + block.offset, to: block.to + block.offset })} of ${v.target || "the target"}` : undefined}>
-            Deletes {span(block)} of the original file{v.target ? ` from ${v.target}` : ""} · one commit on the change</span>
+            Deletes {removing.length > block.lines.length ? `the block at line ${block.from}` : span(block)} of the original file{v.target ? ` from ${v.target}` : ""} · one commit on the change</span>
           <pre className="vr-ref-lines vr-remove-lines" data-testid="vr-remove-lines">
-            {block.lines.map((l, i) => <span key={i} className="d">- {l}</span>)}
+            {removing.map((l, i) => <span key={i} className="d">- {l}</span>)}
           </pre>
           <label className="vr-muted vr-small" htmlFor={`vr-remove-${f.id}`}>Why remove them? <span className="vr-dim">(required · recorded on the change)</span></label>
           <textarea id={`vr-remove-${f.id}`} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Recorded on the change" data-testid="vr-remove-reason" />
           <div className="vr-row"><span className="vr-grow" />{cancel}
             <button type="submit" className="vr-btn" data-kind="danger" disabled={off || !reason.trim()} title={tip ?? (!reason.trim() ? "Write why first" : undefined)}
-                    data-testid="vr-remove-send"><Trash size={12} aria-hidden />Remove {block.lines.length} line{block.lines.length === 1 ? "" : "s"}</button></div>
+                    data-testid="vr-remove-send"><Trash size={12} aria-hidden />Remove {removing.length} line{removing.length === 1 ? "" : "s"}</button></div>
         </form>
       ) : mode === "edit" ? (
         <form className="vr-form" onSubmit={(e) => { e.preventDefault(); if (!editWhy && !off) void run("edit", { text, reason }); }} data-testid="vr-edit-form">
@@ -315,7 +316,7 @@ export function FindingNote({ f, v, send, disabled, disabledWhy }: {
 }
 
 /** "Revert to original" on the target file's header: the original bytes back, as one commit. */
-export function RevertToOriginal({ send, disabledWhy, commits = 0 }: { send: Send; disabledWhy: string; commits?: number }) {
+export function RevertToOriginal({ send, disabledWhy, commits = 0, masked = false }: { send: Send; disabledWhy: string; commits?: number; masked?: boolean }) {
   const [asking, setAsking] = useState(false);
   const [why, setWhy] = useState("");
   const [said, setSaid] = useState<{ text: string; tone: string } | null>(null);
@@ -331,7 +332,7 @@ export function RevertToOriginal({ send, disabledWhy, commits = 0 }: { send: Sen
   };
   return (
     <span className="vr ln-revert" data-testid="vr-revert-original">
-      {commits ? <span className="vr-muted vr-small" data-testid="vr-original-first">{commits} commits: original as given → fixes</span> : null}
+      {commits ? <span className="vr-muted vr-small" data-testid="vr-original-first">{commits} commits: original as given{masked ? " (secrets masked)" : ""} → fixes</span> : null}
       {asking ? (
         <form className="vr-row" onSubmit={(e) => { e.preventDefault(); void go(); }}>
           <input className="vr-input" aria-label="Why revert to the original" placeholder="Why revert to the original?" value={why}
@@ -370,7 +371,7 @@ export function useValidationPins(v: Validation | null, projectId: string, chang
       },
       open: v.target ? [v.target] : [],
       head: (path: string) => (v.target && path === v.target
-        ? <RevertToOriginal send={stable} disabledWhy={disabledWhy} commits={originalCommits} /> : null),
+        ? <RevertToOriginal send={stable} disabledWhy={disabledWhy} commits={originalCommits} masked={v.input.from === "upload" || MASKED.test(v.input.text)} /> : null),
     };
   }, [v, disabledWhy, originalCommits]);
 }
